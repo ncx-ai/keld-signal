@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from typing import NoReturn
 
 import typer
