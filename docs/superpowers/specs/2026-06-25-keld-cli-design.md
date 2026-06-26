@@ -30,22 +30,22 @@ used in keld-atlas (`services/api/app/providers/`).
 
 Auth commands are **top-level** and shared across Keld product groups (so a
 future group needing auth reuses the same `keld login`). Telemetry onboarding
-lives under the **`keld atlas`** group, since the CLI will grow to cover more of
-Keld Atlas (and other products) than telemetry setup over time.
+lives under the **`keld signal`** group (Keld Signal is the telemetry product),
+since the CLI will grow to cover more than telemetry setup over time.
 
 | Command | Purpose |
 | --- | --- |
 | `keld login` | Authenticate via browser device flow; store credentials. |
 | `keld logout` | Delete stored credentials. |
 | `keld whoami` | Show the logged-in principal, org, and OTLP endpoint. |
-| `keld atlas setup` | The core flow: detect tools, diff, merge config, install hook. |
-| `keld atlas status` | Inspect local state per tool (configured? hook current?). |
-| `keld atlas doctor` | Diagnose problems (config validity, hook version, reachability). |
-| `keld atlas uninstall` | Reverse setup: strip Keld-managed entries, remove hook. |
+| `keld signal setup` | The core flow: detect tools, diff, merge config, install hook. |
+| `keld signal status` | Inspect local state per tool (configured? hook current?). |
+| `keld signal doctor` | Diagnose problems (config validity, hook version, reachability). |
+| `keld signal uninstall` | Reverse setup: strip Keld-managed entries, remove hook. |
 
 Implementation note: `login`/`logout`/`whoami` register on the root Typer app;
-`setup`/`status`/`doctor`/`uninstall` register on an `atlas` sub-Typer added via
-`app.add_typer(atlas_app, name="atlas")`. The command *functions* are unchanged
+`setup`/`status`/`doctor`/`uninstall` register on a `signal` sub-Typer added via
+`app.add_typer(signal_app, name="signal")`. The command *functions* are unchanged
 by the grouping.
 
 Out of scope for v1: managing provider Admin keys, viewing usage/spend, any
@@ -154,7 +154,7 @@ that contract and is independently testable with a mocked backend.
 - `GET  /v1/cli/onboarding` (auth: bearer access_token) → `{ endpoint, ingest_token, actor }`
 - Hook download (existing): `GET <endpoint>/v1/tool-context/hook.py?token=<ingest_token>`
 
-## 5. `keld atlas setup` Flow
+## 5. `keld signal setup` Flow
 
 1. **Ensure auth** (lazy): valid creds, else run device flow inline (unless
    `--no-login`).

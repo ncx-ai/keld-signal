@@ -1,4 +1,4 @@
-"""End-to-end coverage of the `keld atlas setup` / `keld atlas uninstall` CLI
+"""End-to-end coverage of the `keld signal setup` / `keld signal uninstall` CLI
 wrappers, invoked through the Typer app (the auth + onboarding plumbing the
 unit-level _run_setup/_run_uninstall tests bypass)."""
 import json
@@ -44,20 +44,20 @@ def _patch_wrappers(monkeypatch, cfg):
     monkeypatch.setattr(ClaudeAdapter, "config_path", lambda self: cfg)
 
 
-def test_atlas_setup_then_uninstall_round_trip_via_cli(keld_home, monkeypatch, tmp_path):
+def test_signal_setup_then_uninstall_round_trip_via_cli(keld_home, monkeypatch, tmp_path):
     cfg = tmp_path / ".claude" / "settings.json"
     _patch_wrappers(monkeypatch, cfg)
 
-    # `keld atlas setup --tool claude_code --yes`
-    result = runner.invoke(app, ["atlas", "setup", "--tool", "claude_code", "--yes"])
+    # `keld signal setup --tool claude_code --yes`
+    result = runner.invoke(app, ["signal", "setup", "--tool", "claude_code", "--yes"])
     assert result.exit_code == 0, result.output
     obj = json.loads(cfg.read_text())
     assert obj["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "https://ingest.keld.co"
     assert "claude_code" in Manifest.load().tools
     assert hook_path().exists()
 
-    # `keld atlas uninstall --yes` restores the pre-Keld state
-    result = runner.invoke(app, ["atlas", "uninstall", "--yes"])
+    # `keld signal uninstall --yes` restores the pre-Keld state
+    result = runner.invoke(app, ["signal", "uninstall", "--yes"])
     assert result.exit_code == 0, result.output
     assert not cfg.exists()  # config was Keld-created, now empty -> removed
     assert Manifest.load().tools == {}

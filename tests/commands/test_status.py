@@ -13,7 +13,7 @@ runner = CliRunner()
 def test_status_shows_auth_and_tools(keld_home):
     save_auth(AuthData(access_token="t", principal="dg@keld.co", org="Keld",
                        api_url="https://atlas.keld.co"))
-    result = runner.invoke(app, ["atlas", "status"])
+    result = runner.invoke(app, ["signal", "status"])
     assert result.exit_code == 0
     assert "dg@keld.co" in result.output
     for name in ["Claude Code", "Codex", "Gemini CLI"]:
@@ -21,13 +21,13 @@ def test_status_shows_auth_and_tools(keld_home):
 
 
 def test_status_not_logged_in(keld_home):
-    result = runner.invoke(app, ["atlas", "status"])
+    result = runner.invoke(app, ["signal", "status"])
     assert result.exit_code == 0
     assert "not logged in" in result.output.lower()
 
 
 def test_doctor_clean_when_nothing_configured(keld_home):
-    result = runner.invoke(app, ["atlas", "doctor"])
+    result = runner.invoke(app, ["signal", "doctor"])
     # nothing configured, nothing broken → exit 0
     assert result.exit_code == 0
 
@@ -44,7 +44,7 @@ def test_doctor_drift_exits_1(keld_home, monkeypatch, tmp_path):
         name="claude_code", config_path=str(cfg), managed={})
     manifest.save()
 
-    result = runner.invoke(app, ["atlas", "doctor"])
+    result = runner.invoke(app, ["signal", "doctor"])
     assert result.exit_code == 1
     assert "setup" in result.output.lower()
 
@@ -58,6 +58,6 @@ def test_doctor_missing_hook_exits_1(keld_home, tmp_path):
         sha256="abc123")
     manifest.save()
 
-    result = runner.invoke(app, ["atlas", "doctor"])
+    result = runner.invoke(app, ["signal", "doctor"])
     assert result.exit_code == 1
     assert "missing" in result.output.lower() or "setup" in result.output.lower()

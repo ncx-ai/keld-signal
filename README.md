@@ -20,18 +20,18 @@ system Python fails with `externally-managed-environment` on modern distros).
 ## Usage
 
 ```bash
-keld login            # authenticate (also happens automatically on first `atlas setup`)
+keld login             # authenticate (also happens automatically on first `signal setup`)
 
-keld atlas setup      # detect tools, show changes, configure telemetry + install hook
-keld atlas status     # see what's configured
-keld atlas doctor     # diagnose problems
-keld atlas uninstall  # cleanly remove everything Keld added
+keld signal setup      # detect tools, show changes, configure telemetry + install hook
+keld signal status     # see what's configured
+keld signal doctor     # diagnose problems
+keld signal uninstall  # cleanly remove everything Keld added
 ```
 
 Auth commands (`login`, `logout`, `whoami`) are top-level and shared across
-Keld product groups. Telemetry onboarding lives under the `keld atlas` group.
+Keld product groups. Telemetry onboarding lives under the `keld signal` group.
 
-`keld atlas setup` flags: `--tool claude_code,codex` (target specific tools),
+`keld signal setup` flags: `--tool claude_code,codex` (target specific tools),
 `--dry-run` (show changes only), `--yes` (skip confirmation),
 `--no-login` (fail instead of opening a browser, for CI).
 
