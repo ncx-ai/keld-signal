@@ -20,6 +20,7 @@ class Plan:
     managed: dict
     summary: list[str]
     changed: bool
+    conflict: str | None = None
 
 
 @dataclass

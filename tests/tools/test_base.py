@@ -27,3 +27,14 @@ def test_adapter_protocol_runtime_checkable():
         def status(self, current_text, managed): ...
 
     assert isinstance(Fake(), ToolAdapter)
+
+
+def test_plan_conflict_defaults_none_and_settable():
+    from pathlib import Path
+    from keld.tools.base import Plan
+    p = Plan(name="x", config_path=Path("/tmp/c"), after_text="", managed={},
+             summary=[], changed=False)
+    assert p.conflict is None
+    p2 = Plan(name="x", config_path=Path("/tmp/c"), after_text="", managed={},
+              summary=[], changed=False, conflict="boom")
+    assert p2.conflict == "boom"
