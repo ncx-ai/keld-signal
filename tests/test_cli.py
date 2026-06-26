@@ -6,13 +6,13 @@ from keld.cli import app
 def test_help_lists_top_level_commands():
     result = CliRunner().invoke(app, ["--help"])
     assert result.exit_code == 0
-    # Auth commands are top-level; Atlas onboarding lives under the `atlas` group.
-    for cmd in ["login", "logout", "whoami", "atlas"]:
+    # Auth commands are top-level; telemetry onboarding lives under the `signal` group.
+    for cmd in ["login", "logout", "whoami", "signal"]:
         assert cmd in result.output
 
 
-def test_atlas_group_lists_subcommands():
-    result = CliRunner().invoke(app, ["atlas", "--help"])
+def test_signal_group_lists_subcommands():
+    result = CliRunner().invoke(app, ["signal", "--help"])
     assert result.exit_code == 0
     for cmd in ["setup", "status", "doctor", "uninstall"]:
         assert cmd in result.output
