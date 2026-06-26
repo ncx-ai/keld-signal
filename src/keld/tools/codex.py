@@ -6,6 +6,7 @@ from .. import telemetry as t
 from ..config.merge import (
     has_keld_block, strip_keld_block, upsert_keld_block, validate_toml,
 )
+from ..errors import KeldError
 from ..paths import hook_path
 from .base import Plan, SetupParams, ToolStatus
 
@@ -23,7 +24,17 @@ class CodexAdapter:
     def apply(self, current_text: str | None, params: SetupParams) -> Plan:
         body = t.codex_block_body(params, t.hook_command(str(hook_path())))
         after = upsert_keld_block(current_text, body)
-        validate_toml(after)  # raises KeldError on duplicate-table conflict
+        try:
+            validate_toml(after)
+        except KeldError:
+            reason = ("your ~/.codex/config.toml already defines settings that "
+                      "conflict with Keld's (a duplicate [otel] table); "
+                      "Keld won't modify it.")
+            return Plan(
+                name=self.name, config_path=self.config_path(),
+                after_text=current_text or "", managed={}, summary=[],
+                changed=False, conflict=reason,
+            )
         return Plan(
             name=self.name, config_path=self.config_path(), after_text=after,
             managed={"block": True, "created": current_text is None},
