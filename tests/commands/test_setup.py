@@ -130,3 +130,14 @@ def test_replace_always_shows_diff(keld_home, monkeypatch, tmp_path, capsys):
                confirm=lambda msg: True, resolve_conflict=lambda adapter, plan: "replace",
                show_diff=False)
     assert "@@" in capsys.readouterr().out
+
+
+def test_malformed_json_treated_as_conflict_not_crash(keld_home, monkeypatch, tmp_path):
+    cfg = tmp_path / ".claude" / "settings.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("{ this is not valid json")
+    monkeypatch.setattr(ClaudeAdapter, "config_path", lambda self: cfg)
+    # --yes auto-skips conflicts; a malformed config must be a conflict, not a crash
+    manifest = _run_setup([ClaudeAdapter()], PARAMS, _client(), OB, dry_run=False, yes=True)
+    assert "claude_code" not in manifest.tools
+    assert cfg.read_text() == "{ this is not valid json"  # untouched
