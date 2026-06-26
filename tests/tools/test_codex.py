@@ -1,8 +1,5 @@
 import tomllib
 
-import pytest
-
-from keld.errors import KeldError
 from keld.tools.base import SetupParams
 from keld.tools.codex import CodexAdapter
 
