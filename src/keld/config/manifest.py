@@ -18,6 +18,7 @@ class ToolManifest:
     name: str
     config_path: str
     managed: dict = field(default_factory=dict)
+    backup_path: str | None = None
 
 
 @dataclass
