@@ -60,6 +60,25 @@ func TestMergeEnvJSONUpsertsExistingKey(t *testing.T) {
 	}
 }
 
+func TestDumpJSONDeepNestingNoEscape(t *testing.T) {
+	// Regression: value-form OrderedMaps from LoadJSON nested 3+ levels deep
+	// must still have HTML escaping disabled, matching Python json.dumps.
+	o, _ := LoadJSON(`{"a":{"b":{"c":"x&y<z>"}}}`)
+	got := DumpJSON(o)
+	if !strings.Contains(got, "x&y<z>") {
+		t.Fatalf("deep-nested special chars were escaped, dump:\n%s", got)
+	}
+}
+
+func TestDumpJSONTopLevelNoEscape(t *testing.T) {
+	o := orderedmap.New()
+	o.Set("k", "a&b<c>d")
+	got := DumpJSON(o)
+	if !strings.Contains(got, "a&b<c>d") {
+		t.Fatalf("top-level special chars were escaped, dump:\n%s", got)
+	}
+}
+
 func TestHasHookWithCommandJSONHandlesAmpersand(t *testing.T) {
 	// FIX 1 regression: marshalCompact must not HTML-escape '&'. Before the
 	// no-escape encoder, "a&b" became "a&b" and this search returned false.
