@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,6 +30,30 @@ func TestLoginPollsThenSucceeds(t *testing.T) {
 	got, err := Login(api.NewClient(srv.URL, ""), false, func(time.Duration) {}, func(string) error { return nil })
 	if err != nil || got.AccessToken != "AT" {
 		t.Fatalf("login %v %v", got, err)
+	}
+}
+
+func TestLoginContinuesWhenBrowserOpenFails(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/cli/device/start":
+			w.Write([]byte(`{"device_code":"dc","user_code":"UC","verification_url":"https://v","interval":1,"expires_in":10}`))
+		case "/v1/cli/device/poll":
+			w.Write([]byte(`{"access_token":"AT","principal":"p","org":"o"}`))
+		}
+	}))
+	defer srv.Close()
+	// openBrowser=true with an opener that always fails (e.g. headless/SSH/CI).
+	// Login must still proceed to poll and succeed.
+	got, err := Login(api.NewClient(srv.URL, ""), true, func(time.Duration) {}, func(string) error {
+		return errors.New("no browser available")
+	})
+	if err != nil {
+		t.Fatalf("login should not abort on browser-open failure: %v", err)
+	}
+	if got == nil || got.AccessToken != "AT" {
+		t.Fatalf("expected AuthData with AT, got %v", got)
 	}
 }
 

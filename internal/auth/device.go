@@ -28,9 +28,10 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 
 	if openBrowser {
 		console.Print("(Opening your browser…)")
-		if err := opener(ds.VerificationURL); err != nil {
-			return nil, err
-		}
+		// Best-effort: a headless/SSH/CI environment has no browser. The URL was
+		// already printed above, so the user can open it manually. Matches
+		// device_flow.py, which ignores the opener result. Do NOT abort login.
+		_ = opener(ds.VerificationURL)
 	}
 
 	waited := 0
@@ -40,10 +41,17 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 			return nil, err
 		}
 		if result != nil {
+			str := func(k string) (string, bool) { s, ok := result[k].(string); return s, ok }
+			at, ok1 := str("access_token")
+			pr, ok2 := str("principal")
+			org, ok3 := str("org")
+			if !ok1 || !ok2 || !ok3 {
+				return nil, errs.New("Atlas returned an unexpected device-poll response")
+			}
 			auth := AuthData{
-				AccessToken: result["access_token"].(string),
-				Principal:   result["principal"].(string),
-				Org:         result["org"].(string),
+				AccessToken: at,
+				Principal:   pr,
+				Org:         org,
 				APIURL:      c.BaseURL,
 			}
 			if err := Save(auth); err != nil {
