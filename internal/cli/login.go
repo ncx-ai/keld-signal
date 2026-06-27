@@ -8,18 +8,36 @@ import (
 	"github.com/ncx-ai/keld-cli/internal/auth"
 	"github.com/ncx-ai/keld-cli/internal/config"
 	"github.com/ncx-ai/keld-cli/internal/console"
-	"github.com/ncx-ai/keld-cli/internal/errs"
+	"github.com/ncx-ai/keld-cli/internal/paths"
 )
 
 func newLoginCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate to Keld.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO(Task 15): implement full device-flow login via RequireAuth.
-			return errs.New("login flow not yet implemented (Task 15)")
+			apiURL, _ := cmd.Flags().GetString("api-url")
+			noLogin, _ := cmd.Flags().GetBool("no-login")
+
+			if apiURL != "" {
+				paths.SetAPIBaseOverride(apiURL)
+			}
+
+			a, err := auth.RequireAuth(noLogin, true)
+			if err != nil {
+				return err
+			}
+			// Match login.py: print "Logged in as <principal> (org: <org>)" after
+			// require_auth returns. On a fresh login, Login() also prints this message
+			// (matching device_flow.py behaviour), so the line appears twice — faithful
+			// replication of Python.
+			console.Print(fmt.Sprintf("Logged in as %s (org: %s)", a.Principal, a.Org))
+			return nil
 		},
 	}
+	cmd.Flags().String("api-url", "", "Target a different Keld API base URL (e.g. http://localhost:8000) for local dev.")
+	cmd.Flags().Bool("no-login", false, "Fail instead of opening a browser.")
+	return cmd
 }
 
 func newLogoutCmd() *cobra.Command {
