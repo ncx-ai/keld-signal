@@ -240,7 +240,7 @@ func newSetupCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringSliceVar(&toolNames, "tool", nil, "Target specific tool(s) by name (e.g. claude, codex, gemini).")
+	cmd.Flags().StringSliceVar(&toolNames, "tool", nil, "Target specific tool(s) by name (e.g. claude_code, codex, gemini).")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview changes without writing anything.")
 	cmd.Flags().BoolVar(&showDiff, "diff", false, "Show a diff of each config change.")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompts.")

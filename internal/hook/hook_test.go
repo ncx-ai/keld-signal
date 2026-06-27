@@ -249,3 +249,22 @@ func TestNormalizeRemoteNoOp(t *testing.T) {
 		t.Errorf("NormalizeRemote(already normalized)=%q want github.com/acme/repo", got)
 	}
 }
+
+// panicReader is a test io.Reader whose Read method always panics.
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) { panic("boom") }
+
+// TestRunRecoverFromPanic verifies that Run catches an unexpected panic and
+// still returns 0, never blocking the host tool.
+func TestRunRecoverFromPanic(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	// Set endpoint+token so Run gets past the config gate and actually reads stdin.
+	t.Setenv("KELD_CTX_ENDPOINT", "http://localhost:19999") // no server; panic before dial
+	t.Setenv("KELD_CTX_TOKEN", "test-token")
+
+	code := Run("claude_code", panicReader{}, io.Discard, time.Now())
+	if code != 0 {
+		t.Fatalf("Run returned %d after panic; want 0 (never block host tool)", code)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/ncx-ai/keld-cli/internal/config"
 	"github.com/ncx-ai/keld-cli/internal/console"
 	"github.com/ncx-ai/keld-cli/internal/errs"
+	"github.com/ncx-ai/keld-cli/internal/paths"
 	"github.com/ncx-ai/keld-cli/internal/tools"
 )
 
@@ -115,11 +116,9 @@ func newDoctorCmd() *cobra.Command {
 				}
 			}
 
-			// TODO(Task 18): check hook.json presence; for Phase 1, skip file-exists
-			// check if path is empty.
-			if manifest.Hook != nil && manifest.Hook.Path != "" {
-				if _, err := os.Stat(manifest.Hook.Path); os.IsNotExist(err) {
-					problems = append(problems, "hook script is missing. Re-run `keld setup`.")
+			if manifest.Hook != nil {
+				if _, err := os.Stat(paths.HookConfigPath()); os.IsNotExist(err) {
+					problems = append(problems, "hook config (~/.keld/hook.json) is missing. Re-run `keld signal setup`.")
 				}
 			}
 

@@ -33,7 +33,7 @@ type ToolStatus struct {
 // Adapter is the interface that tool adapters (Claude Code, Codex, Gemini) must
 // implement to support keld integration.
 type Adapter interface {
-	// Name returns the tool's internal name (e.g., "claude", "codex", "gemini").
+	// Name returns the tool's internal name (e.g., "claude_code", "codex", "gemini").
 	Name() string
 
 	// DisplayName returns the human-readable display name of the tool.

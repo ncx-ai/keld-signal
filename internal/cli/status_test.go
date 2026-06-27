@@ -10,6 +10,7 @@ import (
 	"github.com/ncx-ai/keld-cli/internal/config"
 	"github.com/ncx-ai/keld-cli/internal/console"
 	"github.com/ncx-ai/keld-cli/internal/errs"
+	"github.com/ncx-ai/keld-cli/internal/paths"
 	"github.com/ncx-ai/keld-cli/internal/tools"
 )
 
@@ -46,6 +47,83 @@ func TestCollectStatusReadsRealConfigForUnmanagedTool(t *testing.T) {
 	}
 	if !rows[0].status.Configured {
 		t.Errorf("expected configured=true (config file read despite not being in manifest); got %+v", rows[0].status)
+	}
+}
+
+// TestDoctorReportsMissingHookConfig verifies that doctor reports a problem when
+// the manifest records a hook (Hook != nil) but hook.json does not exist on disk.
+func TestDoctorReportsMissingHookConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	// Save a manifest with Hook set but without writing hook.json.
+	manifest := &config.Manifest{
+		Tools: map[string]config.ToolManifest{},
+		Hook:  &config.HookRecord{Version: "x"},
+	}
+	if err := manifest.Save(); err != nil {
+		t.Fatalf("saving manifest: %v", err)
+	}
+
+	// Confirm hook.json is absent.
+	if _, err := os.Stat(paths.HookConfigPath()); !os.IsNotExist(err) {
+		t.Fatalf("hook.json should not exist yet; err=%v", err)
+	}
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newDoctorCmd()
+	err := cmd.RunE(cmd, nil)
+	if !errors.Is(err, errs.ErrSilentExit) {
+		t.Fatalf("doctor should return ErrSilentExit; got %v", err)
+	}
+
+	out := buf.String()
+	if !bytes.Contains([]byte(out), []byte("hook.json")) && !bytes.Contains([]byte(out), []byte("hook config")) {
+		t.Errorf("expected output to mention missing hook config; got: %s", out)
+	}
+}
+
+// TestDoctorNoHookProblemWhenHookJsonExists verifies that doctor does NOT report
+// a hook problem when hook.json is present on disk.
+func TestDoctorNoHookProblemWhenHookJsonExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	// Write hook.json so it exists.
+	hookPath := paths.HookConfigPath()
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(hookPath, []byte(`{"endpoint":"http://e","ingest_token":"t"}`), 0o644); err != nil {
+		t.Fatalf("write hook.json: %v", err)
+	}
+
+	manifest := &config.Manifest{
+		Tools: map[string]config.ToolManifest{},
+		Hook:  &config.HookRecord{Version: "x"},
+	}
+	if err := manifest.Save(); err != nil {
+		t.Fatalf("saving manifest: %v", err)
+	}
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newDoctorCmd()
+	err := cmd.RunE(cmd, nil)
+	if err != nil {
+		t.Fatalf("doctor should return nil (no problems); got %v", err)
+	}
+
+	out := buf.String()
+	if bytes.Contains([]byte(out), []byte("hook")) {
+		t.Errorf("expected no hook problem message; got: %s", out)
 	}
 }
 

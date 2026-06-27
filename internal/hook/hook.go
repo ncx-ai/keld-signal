@@ -66,7 +66,13 @@ func LoadConfig() (*Config, error) {
 
 // Run is the full hook implementation. It reads stdin, resolves context, deduplicates,
 // and POSTs a telemetry event. It always returns 0 (never blocks the tool).
-func Run(source string, stdin io.Reader, stderr io.Writer, now time.Time) int {
+func Run(source string, stdin io.Reader, stderr io.Writer, now time.Time) (code int) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Never block the host tool, even on an unexpected panic.
+			code = 0
+		}
+	}()
 	cfg, _ := LoadConfig()
 	if cfg.Endpoint == "" || cfg.IngestToken == "" {
 		return 0
