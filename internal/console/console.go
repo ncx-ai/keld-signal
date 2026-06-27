@@ -32,8 +32,11 @@ func Rule(title string) {
 	color.New(color.Faint).Fprintln(Out, line)
 }
 
+// Fail prints "Error: <msg>" to Err and returns errs.ErrSilentExit. Because Fail
+// has already printed the message, it returns the silent-exit sentinel so the
+// top-level Execute() exits non-zero WITHOUT printing the message a second time.
 func Fail(msg string) error {
 	color.New(color.FgRed, color.Bold).Fprint(Err, "Error: ")
 	fmt.Fprintln(Err, msg)
-	return errs.New("%s", msg)
+	return errs.ErrSilentExit
 }
