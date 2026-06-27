@@ -1,2 +1,5 @@
 /keld
 *.test
+
+# GoReleaser build output
+/dist/
