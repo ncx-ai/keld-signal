@@ -7,33 +7,51 @@ CLI) to send telemetry to Keld Atlas.
 
 `keld` is a single static binary — no Python, no runtime, no dependencies.
 
-**Mac / Linux (one-liner):**
+**macOS / Linux (one-liner):**
 
 ```bash
-curl -fsSL https://keld.co/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-cli/main/scripts/install.sh | sh
 ```
 
-**Windows (PowerShell):**
+This detects your OS and architecture, fetches the latest release from GitHub,
+and installs `keld` to `~/.local/bin`. Set `KELD_INSTALL_DIR` to override the
+destination. A vanity URL (`https://keld.co/install.sh`) is planned but not yet
+live; use the `raw.githubusercontent.com` form until then.
+
+> **macOS Gatekeeper:** because the binary is not yet notarized, macOS may show
+> a warning on first run. Go to **System Settings → Privacy & Security** and
+> click **Allow**. Code signing and notarization are a planned follow-up.
+
+**Windows (PowerShell 5.1+):**
 
 ```powershell
-irm https://keld.co/install.ps1 | iex
+irm https://raw.githubusercontent.com/ncx-ai/keld-cli/main/scripts/install.ps1 | iex
 ```
 
-**Direct download** — grab the binary for your platform from
-[GitHub Releases](https://github.com/ncx-ai/keld-cli/releases/latest):
+Installs `keld.exe` to `%LOCALAPPDATA%\Programs\keld`. Set `KELD_INSTALL_DIR`
+to override. A vanity URL (`https://keld.co/install.ps1`) is planned.
 
-| Platform      | Architecture | Asset                          |
-|---------------|--------------|--------------------------------|
-| macOS         | arm64        | `keld_darwin_arm64`            |
-| macOS         | amd64        | `keld_darwin_amd64`            |
-| Linux         | arm64        | `keld_linux_arm64`             |
-| Linux         | amd64        | `keld_linux_amd64`             |
-| Windows       | amd64        | `keld_windows_amd64.exe`       |
+> **Windows SmartScreen:** unsigned binaries trigger a SmartScreen warning.
+> Click **More info → Run anyway**. Code signing is a planned follow-up.
 
-Make the downloaded file executable (`chmod +x keld`) and place it on your `$PATH`.
+**Direct download** — grab the archive for your platform from
+[GitHub Releases](https://github.com/ncx-ai/keld-cli/releases/latest), extract
+the binary, and place it on your `$PATH`:
 
-> Install scripts and signed release artifacts land in Tasks 21–23; the URLs
-> above are the intended final form.
+| Platform | Architecture | Archive                          | Binary inside     |
+|----------|--------------|----------------------------------|-------------------|
+| macOS    | arm64        | `keld_darwin_arm64.tar.gz`       | `keld`            |
+| macOS    | amd64        | `keld_darwin_amd64.tar.gz`       | `keld`            |
+| Linux    | arm64        | `keld_linux_arm64.tar.gz`        | `keld`            |
+| Linux    | amd64        | `keld_linux_amd64.tar.gz`        | `keld`            |
+| Windows  | amd64        | `keld_windows_amd64.zip`         | `keld.exe`        |
+
+```bash
+# Example (macOS arm64):
+tar -xzf keld_darwin_arm64.tar.gz
+chmod +x keld
+sudo mv keld /usr/local/bin/
+```
 
 ## Usage
 
