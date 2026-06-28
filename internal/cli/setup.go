@@ -157,13 +157,14 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 	return manifest, nil
 }
 
-// stdinConfirm prompts the user with a [y/N] prompt and reads their answer.
+// stdinConfirm prompts the user with a [Y/n] prompt and reads their answer. Defaults to yes:
+// an empty response (just pressing Enter) confirms; only an explicit "n"/"no" declines.
 func stdinConfirm(prompt string) bool {
-	fmt.Fprintf(console.Out, "%s [y/N] ", prompt)
+	fmt.Fprintf(console.Out, "%s [Y/n] ", prompt)
 	var resp string
 	fmt.Fscanln(os.Stdin, &resp)
 	resp = strings.ToLower(strings.TrimSpace(resp))
-	return resp == "y" || resp == "yes"
+	return resp != "n" && resp != "no"
 }
 
 // stdinResolveConflict prompts the user to skip, replace, or abort for a conflict.
