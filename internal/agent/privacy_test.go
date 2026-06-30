@@ -18,9 +18,12 @@ func TestNoRawTextOrSecretInPublishedPayload(t *testing.T) {
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X"}
 	e := publish.Build(j, p, "dg@keld.co", false, time.Unix(0, 0).UTC())
 
-	b, _ := json.Marshal(e)
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
 	s := string(b)
-	for _, needle := range []string{"hunter2SuperSecretValue", "translate this and here is"} {
+	for _, needle := range []string{"hunter2SuperSecretValue", "translate this and here is", "a@b.com"} {
 		if strings.Contains(s, needle) {
 			t.Fatalf("payload leaked %q: %s", needle, s)
 		}
