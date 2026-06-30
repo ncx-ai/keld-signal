@@ -16,7 +16,7 @@ import (
 func TestBuildShapeAndNoRawText(t *testing.T) {
 	p := enrich.Run("key sk-live-ABCDEF0123456789 and write a function", "claude_code", enrich.NewDeterministic())
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X", SessionID: "S", Origin: "hook", Version: "2.1"}
-	e := Build(j, p, "dg@keld.co", time.Unix(0, 0).UTC())
+	e := Build(j, p, "dg@keld.co", false, time.Unix(0, 0).UTC())
 
 	b, _ := json.Marshal(e)
 	if strings.Contains(string(b), "sk-live-ABCDEF0123456789") {
@@ -58,5 +58,23 @@ func TestSendErrorsOn500(t *testing.T) {
 	defer srv.Close()
 	if err := New(srv.URL, "t", "a").Send(Enrichment{}); err == nil {
 		t.Fatal("expected error on 500")
+	}
+}
+
+func TestBuildDropsEntityTextWhenDisabled(t *testing.T) {
+	p := enrich.Profile{Entities: []enrich.Entity{{Label: "org", Text: "AcmeCorpSecret", Start: 0, End: 14}}}
+	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X"}
+	b, _ := json.Marshal(Build(j, p, "a", false, time.Unix(0, 0).UTC()))
+	if strings.Contains(string(b), "AcmeCorpSecret") {
+		t.Fatalf("entity text must be dropped when disabled: %s", b)
+	}
+}
+
+func TestBuildKeepsEntityTextWhenEnabled(t *testing.T) {
+	p := enrich.Profile{Entities: []enrich.Entity{{Label: "language", Text: "golang", Start: 0, End: 6}}}
+	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X"}
+	b, _ := json.Marshal(Build(j, p, "a", true, time.Unix(0, 0).UTC()))
+	if !strings.Contains(string(b), "golang") {
+		t.Fatalf("entity text should be present when enabled: %s", b)
 	}
 }

@@ -46,7 +46,15 @@ type Enrichment struct {
 }
 
 // Build maps a job + profile into the wire shape.
-func Build(j queue.Job, p enrich.Profile, actor string, now time.Time) Enrichment {
+func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, now time.Time) Enrichment {
+	entities := p.Entities
+	if !includeEntityText && len(entities) > 0 {
+		entities = make([]enrich.Entity, len(p.Entities))
+		for i, e := range p.Entities {
+			e.Text = "" // domain-entity surface text gated off by default (privacy)
+			entities[i] = e
+		}
+	}
 	return Enrichment{
 		Source:            Source{ID: j.Source, Origin: j.Origin, Version: j.Version},
 		Correlation:       Correlation{Scheme: j.Scheme, ID: j.ID, SessionID: j.SessionID},
@@ -54,7 +62,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, now time.Time) Enrichmen
 		TaskType:          p.TaskType,
 		TaskTypeAlt:       p.TaskTypeAlt,
 		Domain:            p.Domain,
-		Entities:          p.Entities,
+		Entities:          entities,
 		Sensitivity:       p.Sensitivity,
 		SensitivitySpans:  p.SensitivitySpans,
 		PipelineStatus:    p.PipelineStatus,
