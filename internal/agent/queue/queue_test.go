@@ -1,6 +1,9 @@
 package queue
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func job(id string) Job { return Job{Source: "claude_code", Scheme: "prompt_id", ID: id} }
 
@@ -41,5 +44,25 @@ func TestNextUnblocksOnClose(t *testing.T) {
 	go q.Close()
 	if _, ok := q.Next(); ok {
 		t.Fatal("Next after close should return ok=false")
+	}
+}
+
+func TestNextBlockedThenClose(t *testing.T) {
+	q := New(10)
+	done := make(chan bool, 1)
+	go func() {
+		_, ok := q.Next() // blocks: queue empty
+		done <- ok
+	}()
+	// give Next time to block, then close
+	time.Sleep(20 * time.Millisecond)
+	q.Close()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("Next should return ok=false after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next did not unblock on Close")
 	}
 }

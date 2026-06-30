@@ -37,25 +37,22 @@ func New(capacity int) *Queue {
 	return &Queue{ch: make(chan Job, capacity), inflight: map[string]bool{}}
 }
 
-// Offer enqueues a job. It returns false (and counts a drop) when the key is
-// already queued or the queue is full — never blocks.
+// Offer enqueues a job. It returns false (and counts a drop) when the queue is
+// full; it returns false WITHOUT counting a drop when the key is already queued.
+// It never blocks. The closed-check and send are done under the lock so Offer is
+// mutually exclusive with Close (no send-on-closed-channel panic).
 func (q *Queue) Offer(j Job) bool {
 	q.mu.Lock()
+	defer q.mu.Unlock()
 	if q.closed || q.inflight[j.Key()] {
-		q.mu.Unlock()
 		return false
 	}
-	q.inflight[j.Key()] = true
-	q.mu.Unlock()
-
 	select {
 	case q.ch <- j:
+		q.inflight[j.Key()] = true
 		return true
 	default:
-		q.mu.Lock()
-		delete(q.inflight, j.Key())
 		q.dropped++
-		q.mu.Unlock()
 		return false
 	}
 }
