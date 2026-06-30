@@ -40,3 +40,39 @@ func TestDeterministicClassifyFallsBackToOther(t *testing.T) {
 		t.Fatalf("unmatched should be 'other', got %+v", res["task_type"])
 	}
 }
+
+func TestCreditCardLuhnTruePositive(t *testing.T) {
+	m := NewDeterministic()
+	text := "please charge 4111 1111 1111 1111 for this order"
+	es := m.Entities(text, SensitiveEntityLabels)
+	if _, ok := findEntity(es, "credit_card"); !ok {
+		t.Fatalf("expected credit_card entity for valid Luhn number in %q, got %+v", text, es)
+	}
+}
+
+func TestCreditCardRejectsNonCardDigits(t *testing.T) {
+	m := NewDeterministic()
+	text := "timestamp 20240101120000 logged"
+	es := m.Entities(text, SensitiveEntityLabels)
+	if e, ok := findEntity(es, "credit_card"); ok {
+		t.Fatalf("expected no credit_card entity for timestamp, got %+v", e)
+	}
+}
+
+func TestPhoneMatchesRealNumber(t *testing.T) {
+	m := NewDeterministic()
+	text := "call 555-123-4567 for details"
+	es := m.Entities(text, SensitiveEntityLabels)
+	if _, ok := findEntity(es, "phone"); !ok {
+		t.Fatalf("expected phone entity in %q, got %+v", text, es)
+	}
+}
+
+func TestPhoneIgnoresStreetAddress(t *testing.T) {
+	m := NewDeterministic()
+	text := "123 Main St Apt 4"
+	es := m.Entities(text, SensitiveEntityLabels)
+	if e, ok := findEntity(es, "phone"); ok {
+		t.Fatalf("expected no phone entity for street address, got %+v", e)
+	}
+}
