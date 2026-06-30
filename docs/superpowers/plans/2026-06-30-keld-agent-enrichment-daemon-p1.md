@@ -2126,17 +2126,23 @@ git commit -m "feat(agent): loopback HTTP ingress (pointer/inline, secret, 202/4
 ### Task 12: Daemon assembly + `keld-agent run` + integration test
 
 **Files:**
+- Create: `internal/agent/settings/settings.go` (+ test) — daemon settings loaded at startup
 - Create: `internal/agent/daemon/daemon.go`
 - Create: `cmd/keld-agent/main.go`
 - Create: `internal/agentcli/agentcli.go` (cobra root for keld-agent)
 - Test: `internal/agent/daemon/daemon_test.go`
+- Modify: `internal/paths/paths.go` (add `AgentConfigPath` → `~/.keld/agent-config.json`)
+
+**Settings (added per the entity-text-policy decision):**
+- `settings.Settings{IncludeEntityText bool}`; `settings.Load() Settings` reads `~/.keld/agent-config.json`, returns zero-value defaults (so `IncludeEntityText` defaults to **false**) when absent/unreadable. This local file is the seam a future org-level remote control-plane plugs into (spec §12 P4).
 
 **Interfaces:**
-- Consumes: all prior packages + `hook.LoadConfig` (existing) + `agentcfg`.
+- Consumes: all prior packages + `hook.LoadConfig` (existing) + `agentcfg` + `settings`.
 - Produces:
-  - `daemon.Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string)` where `daemon.Sender` is an interface `Send(publish.Enrichment) error` (so tests inject a fake); worker loops `q.Next()`, resolves text (`resolve.Resolve`), runs `enrich.Run`, builds + sends.
-  - `daemon.Run(ctx context.Context) error` — wires queue, deterministic model, publisher from `hook.LoadConfig`, ingress server on `127.0.0.1:0`, writes `agentcfg`, starts the worker.
+  - `daemon.Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText bool)` where `daemon.Sender` is an interface `Send(publish.Enrichment) error` (so tests inject a fake); worker loops `q.Next()`, resolves text (`resolve.Resolve`), runs `enrich.Run`, calls `publish.Build(job, profile, actor, includeEntityText, time.Now())`, sends.
+  - `daemon.Run(ctx context.Context) error` — wires queue, deterministic model, publisher from `hook.LoadConfig`, loads `settings.Load()`, ingress server on `127.0.0.1:0`, writes `agentcfg`, starts the worker (passing `settings.IncludeEntityText`).
   - `agentcli.NewRootCmd()` with a `run` subcommand calling `daemon.Run`.
+- NOTE: the daemon test's `Worker(...)` call must pass the new `includeEntityText` arg (use `false`).
 
 - [ ] **Step 1: Write the failing test**
 

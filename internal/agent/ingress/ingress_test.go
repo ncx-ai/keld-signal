@@ -54,3 +54,13 @@ func TestBadBody400(t *testing.T) {
 		t.Fatalf("code = %d, want 400", rr.Code)
 	}
 }
+
+func TestNonPostReturns405(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/enrich", nil)
+	req.Header.Set("x-keld-agent-secret", "s")
+	rr := httptest.NewRecorder()
+	Handler(queue.New(10), "s").ServeHTTP(rr, req)
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("code = %d, want 405", rr.Code)
+	}
+}

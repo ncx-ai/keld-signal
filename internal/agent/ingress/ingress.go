@@ -52,6 +52,7 @@ func Handler(q *queue.Queue, secret string) http.Handler {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB cap
 		var req Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -67,6 +68,7 @@ func Handler(q *queue.Queue, secret string) http.Handler {
 		}
 		if req.Pointer != nil {
 			j.TranscriptPath = req.Pointer.TranscriptPath
+			j.Cwd = req.Pointer.Cwd
 			j.PromptID = req.Pointer.PromptID
 		}
 		if req.Inline != nil {

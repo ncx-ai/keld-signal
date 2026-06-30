@@ -261,7 +261,15 @@ different sources never collide and so consumers can segment by origin.
     transcript): text travels **over loopback only**, guarded by the per-user
     secret, and is never persisted beyond the in-memory job.
 - Only `{source, correlation, labels, schema_version, model_version, ts}` leave
-  the box — never prompt text.
+  the box — never the prompt text itself.
+- **Domain-entity surface text is admin-gated, default OFF.** Domain entities
+  (`language`/`framework`/`library`/`org`/`product`) are extracted *fragments* of
+  the prompt; `org`/`product` in particular can be proprietary. By default the
+  publisher sends only their `{label, start, end, confidence}` — the surface
+  `text` is cleared. An admin setting (`include_entity_text`, default `false`)
+  can enable sending the surface forms when the org wants richer segmentation.
+  `sensitivity_spans` are **always masked regardless of this setting** — they are
+  never gated and never carry raw values.
 - **Sensitive findings are doubly protected:** a detected secret/PII is reported
   as `{label, start, end, confidence, masked}` where `masked` is a redacted hint
   (e.g. `sk-…AB12`, `j***@acme.com`) computed locally. The **raw matched value
@@ -348,7 +356,9 @@ login (device flow opens browser)
 - **Idempotent upsert on `{source.id, correlation.scheme, correlation.id}`.**
 - Joins to existing telemetry rows by the same composite key; for Claude Code
   that reduces to `prompt_id`.
-- `domain` (named `entities`) is non-sensitive; `sensitivity` carries job-level
+- `domain` (named `entities`) is non-sensitive *labels*; the entity `text`
+  surface forms are sent only when the admin setting `include_entity_text` is on
+  (default off — see Privacy invariants). `sensitivity` carries job-level
   compliance class and `sensitivity_spans` carry **masked** findings only.
 - Enrichment coverage is **partial by design** (sampled under host load), so
   Atlas treats enrichments as optional augmentation, not 1:1 with every prompt.
@@ -386,10 +396,16 @@ wire contract is fixed here.)
 - **P3 — GUI installers.** `.pkg` + MSI + signing/notarization. (The
   launch-blocking deliverable, since the installer is the enforced path; P1–P2
   are validated headless first because that is faster.)
-- **P4 — more sources.** Agent-framework producers (LangChain / Mastra) and
-  Claude Desktop (chat / cowork) over the inline path; Codex/Gemini
-  `TranscriptReader`s as those tools expose prompt text to a hook; tray/menu-bar
-  status UI.
+- **P4 — more sources + org control plane.** Agent-framework producers
+  (LangChain / Mastra) and Claude Desktop (chat / cowork) over the inline path;
+  Codex/Gemini `TranscriptReader`s as those tools expose prompt text to a hook;
+  tray/menu-bar status UI. **Org-level remote settings:** an admin can push
+  settings to all running daemons connected to their org to globally toggle
+  behaviors — starting with `include_entity_text` — following one general
+  remote-settings pattern (poll/subscribe a per-org settings document; daemons
+  apply on next fetch). P1 ships the *local* settings file these later become a
+  remote source for; the daemon reads settings at startup so the control-plane is
+  a drop-in source later, not a rewrite.
 
 ## 13. Open risks
 

@@ -11,6 +11,7 @@ type Job struct {
 	ID             string
 	SessionID      string
 	TranscriptPath string
+	Cwd            string
 	PromptID       string
 	Inline         string
 	Origin         string
