@@ -15,6 +15,9 @@ func TestVocabNonEmpty(t *testing.T) {
 	if len(SensitiveEntityLabels) == 0 || len(DomainEntityLabels) == 0 {
 		t.Fatal("entity label maps must be non-empty")
 	}
+	if len(SensitivityFromEntity) == 0 {
+		t.Fatal("SensitivityFromEntity must be non-empty")
+	}
 }
 
 func TestSensitivityRuleOrderPHIBeforePII(t *testing.T) {

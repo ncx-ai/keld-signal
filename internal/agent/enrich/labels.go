@@ -13,11 +13,13 @@ var TaskTypes = []string{
 	"rag_qa", "classification", "reasoning", "agentic_tool_use", "other",
 }
 
+// Domains is the canonical domain-classification vocabulary.
 var Domains = []string{
 	"software", "legal", "medical", "finance", "science",
 	"business", "education", "creative", "general",
 }
 
+// Sensitivity is the canonical sensitivity-level vocabulary.
 var Sensitivity = []string{"none", "pii", "secrets", "phi", "pci", "proprietary"}
 
 // DomainEntityLabels: label -> natural-language description (non-sensitive).
