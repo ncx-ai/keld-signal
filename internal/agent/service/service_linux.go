@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 func unitPath() string {
@@ -35,6 +36,13 @@ func Uninstall() error {
 }
 
 func Status() (string, error) {
-	out, _ := exec.Command("systemctl", "--user", "is-active", "keld-agent.service").CombinedOutput()
-	return string(out), nil
+	out, err := exec.Command("systemctl", "--user", "is-active", "keld-agent.service").CombinedOutput()
+	s := strings.TrimSpace(string(out))
+	if s == "" {
+		if err != nil {
+			return "not running", nil
+		}
+		return "unknown", nil
+	}
+	return s, nil
 }
