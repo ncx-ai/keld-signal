@@ -30,11 +30,13 @@ type ClaudeHookEvent struct {
 func strPtr(s string) *string { return &s }
 
 // ClaudeHookEvents is the ordered list of hook events keld registers with
-// Claude Code: SessionStart/startup, SessionStart/resume, CwdChanged (no matcher).
+// Claude Code: SessionStart/startup, SessionStart/resume, CwdChanged (no matcher),
+// UserPromptSubmit (no matcher).
 var ClaudeHookEvents = []ClaudeHookEvent{
 	{Event: "SessionStart", Matcher: strPtr("startup")},
 	{Event: "SessionStart", Matcher: strPtr("resume")},
 	{Event: "CwdChanged", Matcher: nil},
+	{Event: "UserPromptSubmit", Matcher: nil},
 }
 
 // CodexHookEvents is the list of hook event names keld registers with Codex.

@@ -33,3 +33,15 @@ func TestCodexBlockBodyHasHooksAndOtel(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeHookEventsIncludeUserPromptSubmit(t *testing.T) {
+	found := false
+	for _, he := range ClaudeHookEvents {
+		if he.Event == "UserPromptSubmit" && he.Matcher == nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("ClaudeHookEvents must include UserPromptSubmit (no matcher)")
+	}
+}

@@ -78,7 +78,7 @@ func (a *ClaudeAdapter) Apply(currentText *string, p SetupParams, replace bool) 
 		Managed:    managed,
 		Summary: []string{
 			fmt.Sprintf("set %d OTEL env vars", len(envKeys)),
-			"add SessionStart + CwdChanged hooks",
+			"add SessionStart + CwdChanged + UserPromptSubmit hooks",
 		},
 		Changed: after != (text),
 	}

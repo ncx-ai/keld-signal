@@ -38,6 +38,16 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "keld __hook --source claude_code"
+          }
+        ]
+      }
     ]
   }
 }
