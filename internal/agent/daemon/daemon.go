@@ -56,7 +56,10 @@ func process(j queue.Job, m enrich.Model, pub Sender, actor string, includeEntit
 
 // Run starts the daemon: ingress on loopback, worker, agent.json discovery file.
 func Run(ctx context.Context) error {
-	cfg, _ := hook.LoadConfig()
+	cfg, err := hook.LoadConfig()
+	if err != nil {
+		log.Printf("keld-agent: hook config read error: %v", err)
+	}
 	if cfg.Endpoint == "" || cfg.IngestToken == "" {
 		return fmt.Errorf("keld-agent: not configured (run `keld login` / setup first)")
 	}
@@ -68,7 +71,6 @@ func Run(ctx context.Context) error {
 	set := settings.Load()
 	q := queue.New(256)
 	pub := publish.New(enrichEndpoint(cfg.Endpoint), cfg.IngestToken, "")
-	go Worker(q, enrich.NewDeterministic(), pub, "", set.IncludeEntityText)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -79,6 +81,8 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	log.Printf("keld-agent: listening on 127.0.0.1:%d", port)
+
+	go Worker(q, enrich.NewDeterministic(), pub, "", set.IncludeEntityText)
 
 	srv := &http.Server{Handler: ingress.Handler(q, secret)}
 	go func() {
