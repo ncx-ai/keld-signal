@@ -39,6 +39,7 @@ func AgentConfigPath() string { return filepath.Join(KeldHome(), "agent-config.j
 func DebugLogPath() string   { return filepath.Join(KeldHome(), "agent.log") }
 func StateDir() string       { return filepath.Join(KeldHome(), "state") }
 func BackupsDir() string     { return filepath.Join(KeldHome(), "backups") }
+func ModelsDir(model string) string { return filepath.Join(KeldHome(), "models", model) }
 
 func APIBase() string {
 	if apiOverrideSet {

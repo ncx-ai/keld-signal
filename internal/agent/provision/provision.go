@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -16,13 +17,19 @@ type Fetcher interface {
 	Fetch(ctx context.Context, destDir string) error
 }
 
+// fileSHA streams the file at path through SHA-256 without loading it into
+// memory — safe for multi-GB model files.
 func fileSHA(path string) (string, error) {
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:]), nil
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // EnsureModel makes dir contain a verified model. If already present and its
