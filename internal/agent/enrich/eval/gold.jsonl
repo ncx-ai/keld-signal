@@ -1,0 +1,8 @@
+{"text": "Write a Python function that reverses a linked list.", "task_type": "codegen", "domain": "software", "sensitivity": "none"}
+{"text": "Summarize the attached quarterly earnings report in three bullets.", "task_type": "summarization", "domain": "finance", "sensitivity": "none"}
+{"text": "Translate this paragraph from English to German.", "task_type": "translation", "domain": "general", "sensitivity": "none"}
+{"text": "My SSN is 123-45-6789, can you fill out the medical intake form?", "task_type": "extraction", "domain": "medical", "sensitivity": "phi"}
+{"text": "Here is my API key sk-live-9f8a7b6c, configure the deployment.", "task_type": "agentic_tool_use", "domain": "software", "sensitivity": "secrets"}
+{"text": "Classify these support tickets as bug, feature, or question.", "task_type": "classification", "domain": "software", "sensitivity": "none"}
+{"text": "Given these docs, answer: what is the refund policy?", "task_type": "rag_qa", "domain": "business", "sensitivity": "none"}
+{"text": "Prove that the square root of 2 is irrational.", "task_type": "reasoning", "domain": "science", "sensitivity": "none"}
