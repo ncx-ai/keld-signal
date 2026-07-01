@@ -1,0 +1,12 @@
+#!/bin/bash
+set -e
+# Payload staged to /usr/local/keld; symlink the CLIs onto PATH, keep the sidecar
+# beside keld-agent so sidecarBinPath() finds it (os.Executable() follows the symlink).
+PREFIX="/usr/local/keld"
+ln -sf "$PREFIX/keld" /usr/local/bin/keld
+ln -sf "$PREFIX/keld-agent" /usr/local/bin/keld-agent
+# Register the LaunchAgent in the logged-in user's GUI session (postinstall runs as root).
+uid=$(stat -f %u /dev/console)
+user=$(id -un "$uid")
+launchctl asuser "$uid" sudo -u "$user" "$PREFIX/keld-agent" install || true
+exit 0
