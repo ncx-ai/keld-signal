@@ -3,3 +3,7 @@
 
 # GoReleaser build output
 /dist/
+
+# Python bytecode
+__pycache__/
+*.pyc

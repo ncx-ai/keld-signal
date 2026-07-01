@@ -130,3 +130,50 @@ func TestHFFetcherResolveErrorPropagates(t *testing.T) {
 		t.Fatal("expected error for 500 resolve, got nil")
 	}
 }
+
+// TestHFFetcherRejectsPathTraversal verifies that Fetch rejects malicious
+// rfilename values like "../evil.txt" that attempt to write outside destDir.
+func TestHFFetcherRejectsPathTraversal(t *testing.T) {
+	const repo = "owner/repo"
+	const rev = "abc123"
+
+	// Stub returns a siblings list containing a path-traversal attempt.
+	mux := http.NewServeMux()
+	mux.HandleFunc(fmt.Sprintf("/api/models/%s/revision/%s", repo, rev),
+		func(w http.ResponseWriter, r *http.Request) {
+			type sibling struct {
+				Rfilename string `json:"rfilename"`
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"siblings": []sibling{
+					{Rfilename: "safe.txt"},
+					{Rfilename: "../evil.txt"},
+				},
+			})
+		})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("malicious content"))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	f := NewHFFetcher(repo, rev)
+	f.baseURL = srv.URL
+
+	dest := t.TempDir()
+	parent := filepath.Dir(dest)
+
+	// Fetch should return an error.
+	err := f.Fetch(context.Background(), dest)
+	if err == nil {
+		t.Fatal("expected error for path-traversal filename, got nil")
+	}
+
+	// Ensure no evil.txt was written to the parent directory.
+	evilPath := filepath.Join(parent, "evil.txt")
+	if _, err := os.Stat(evilPath); err == nil {
+		t.Fatalf("evil.txt was written outside destDir at %s", evilPath)
+	}
+}

@@ -57,7 +57,8 @@ func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEnt
 			}
 		}
 		if admit != nil && !admit() {
-			// shedding: host CPU busy, skip ML enrichment
+			// Governor overload shedding: intentionally DROP this ML job (no enrichment) —
+			// deterministic is the failure/timeout fallback, not the overload fallback.
 			continue
 		}
 		process(j, m, pub, actor, includeEntityText)

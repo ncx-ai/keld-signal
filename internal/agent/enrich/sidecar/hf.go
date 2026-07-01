@@ -77,6 +77,11 @@ func (f *HFFetcher) Fetch(ctx context.Context, destDir string) error {
 // fetchFile downloads a single rfilename from the resolve endpoint into
 // destDir/{rfilename}, writing atomically via a temp file.
 func (f *HFFetcher) fetchFile(ctx context.Context, destDir, rfilename string) error {
+	// Guard against path traversal attacks.
+	if !filepath.IsLocal(rfilename) {
+		return fmt.Errorf("refusing unsafe model file path %q", rfilename)
+	}
+
 	url := fmt.Sprintf("%s/%s/resolve/%s/%s", f.baseURL, f.repo, f.rev, rfilename)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
