@@ -7,6 +7,9 @@ name: installers
 on:
   release:
     types: [published]
+  # On-demand, credential-free dry run: builds UNSIGNED installers on all three
+  # OSes and uploads them as workflow artifacts (no release needed, no secrets).
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -107,10 +110,25 @@ jobs:
         run: |
           tar -C dist -czf "keld-agent-sidecar_linux_${{ matrix.goarch }}.tar.gz" keld-agent-sidecar
 
+      # Release runs attach the installers to the GitHub release.
       - name: Upload installers to release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            keld-*-*.pkg
+            installers/windows/Output/keld-setup.exe
+            keld-agent-sidecar_*.tar.gz
+
+      # Dry runs (workflow_dispatch) publish the unsigned installers as downloadable
+      # workflow artifacts instead — no release, no credentials required.
+      - name: Upload installers as artifacts (dry run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}-${{ matrix.goarch }}
+          if-no-files-found: ignore
+          path: |
             keld-*-*.pkg
             installers/windows/Output/keld-setup.exe
             keld-agent-sidecar_*.tar.gz
