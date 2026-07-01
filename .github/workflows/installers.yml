@@ -1,0 +1,108 @@
+name: installers
+
+# Freeze the GLiNER2 sidecar per-OS, package the native installers, sign+notarize
+# when the maintainer's secrets are present (unsigned otherwise), and attach the
+# artifacts to the published GitHub release. GoReleaser builds keld/keld-agent
+# separately; this workflow adds the frozen sidecar + installers.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14        # arm64
+            goarch: arm64
+          - os: macos-13        # x64
+            goarch: amd64
+          - os: windows-latest
+            goarch: amd64
+          - os: ubuntu-latest
+            goarch: amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Freeze sidecar
+        shell: bash
+        run: bash sidecar/build-freeze.sh
+
+      - name: Smoke the frozen sidecar
+        shell: bash
+        run: |
+          BIN="dist/keld-agent-sidecar/keld-agent-sidecar"
+          [ "${{ runner.os }}" = "Windows" ] && BIN="dist/keld-agent-sidecar/keld-agent-sidecar.exe"
+          "$BIN" --port 8399 --host 127.0.0.1 &
+          for i in $(seq 1 150); do
+            if curl -sf http://127.0.0.1:8399/health | grep -q '"ok":true'; then ok=1; break; fi
+            sleep 2
+          done
+          [ -n "${ok:-}" ] || { echo "sidecar did not become healthy"; exit 1; }
+
+      - name: Download release binaries into stage
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # keld/keld-agent for this OS/arch come from the GoReleaser archive on the same release.
+          case "${{ runner.os }}" in
+            macOS)   goos=darwin;  ext="" ;;
+            Windows) goos=windows; ext=".exe" ;;
+            Linux)   goos=linux;   ext="" ;;
+          esac
+          mkdir -p stage
+          arch="${{ matrix.goarch }}"
+          asset="keld_${goos}_${arch}.tar.gz"
+          [ "$goos" = "windows" ] && asset="keld_${goos}_${arch}.zip"
+          gh release download "$TAG" -p "$asset" -D stage_dl
+          if [ "$goos" = "windows" ]; then unzip -o "stage_dl/$asset" -d stage; else tar -xzf "stage_dl/$asset" -C stage; fi
+          cp -R dist/keld-agent-sidecar stage/ 2>/dev/null || cp -R dist/keld-agent-sidecar/* stage/
+
+      - name: Package macOS .pkg
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_APP: ${{ secrets.APPLE_DEVELOPER_ID_APP }}
+          APPLE_DEVELOPER_ID_INSTALLER: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+        run: |
+          # Flatten sidecar one-dir beside keld-agent in the payload.
+          bash installers/macos/build-pkg.sh "${{ github.event.release.tag_name }}" stage
+
+      - name: Package Windows installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          KELD_VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          Copy-Item -Recurse -Force dist\keld-agent-sidecar installers\windows\keld-agent-sidecar
+          Copy-Item stage\keld.exe, stage\keld-agent.exe installers\windows\
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installers\windows\keld-agent.iss
+          if ($env:WINDOWS_CERT_PFX) { Write-Host "signtool sign step (gated) would run here" }
+
+      - name: Package Linux sidecar tarball
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          tar -C dist -czf "keld-agent-sidecar_linux_${{ matrix.goarch }}.tar.gz" keld-agent-sidecar
+
+      - name: Upload installers to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            keld-*.pkg
+            installers/windows/Output/keld-setup.exe
+            keld-agent-sidecar_*.tar.gz
