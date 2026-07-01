@@ -42,7 +42,7 @@ type Sender interface {
 // admit is an optional load-shedding gate for the ML path: when non-nil and
 // returning false the job is skipped (CPU busy). Pass nil on the deterministic
 // path so it is never shed.
-func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText bool, ready func() bool, admit func() bool) {
+func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, admit func() bool) {
 	for {
 		j, ok := q.Next()
 		if !ok {
@@ -67,7 +67,7 @@ func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEnt
 	}
 }
 
-func process(j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText bool) {
+func process(j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("keld-agent: worker recovered: %v", r)
@@ -78,7 +78,7 @@ func process(j queue.Job, m enrich.Model, pub Sender, actor string, includeEntit
 		return // could not resolve prompt text; skip silently
 	}
 	profile := enrich.Run(text, j.Source, m)
-	e := publish.Build(j, profile, actor, includeEntityText, time.Now())
+	e := publish.Build(j, profile, actor, includeEntityText(), time.Now())
 	if err := pub.Send(e); err != nil {
 		log.Printf("keld-agent: publish failed for %s: %v", j.Key(), err)
 	}
@@ -202,7 +202,15 @@ func Run(ctx context.Context) error {
 	// when it cannot bring the sidecar up, so the caller has a single code path.
 	model, gate, admit := mlBackend(ctx, set)
 
-	go Worker(q, model, pub, actor, set.IncludeEntityText, gate, admit)
+	live := settings.NewLive(set)
+	pollInterval := 5 * time.Minute
+	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			pollInterval = d
+		}
+	}
+	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), cfg.IngestToken, 10*time.Second), live, pollInterval)
+	go Worker(q, model, pub, actor, live.IncludeEntityText, gate, admit)
 
 	return serve(ctx, ln, ingress.Handler(q, secret), q)
 }
@@ -350,4 +358,37 @@ func enrichEndpoint(ingest string) string {
 		return ingest[:i] + "/v1/enrichments"
 	}
 	return strings.TrimRight(ingest, "/") + "/v1/enrichments"
+}
+
+// settingsEndpoint derives the org-settings URL from the configured ingest
+// endpoint by swapping the trailing path segment for /v1/agent-settings.
+func settingsEndpoint(ingest string) string {
+	if i := strings.Index(ingest, "/v1/"); i >= 0 {
+		return ingest[:i] + "/v1/agent-settings"
+	}
+	return strings.TrimRight(ingest, "/") + "/v1/agent-settings"
+}
+
+// pollSettings fetches org settings on startup then on each tick of interval.
+// On any Fetch error it logs and keeps the last-known effective settings (non-fatal).
+// It returns when ctx is cancelled.
+func pollSettings(ctx context.Context, c *settings.Client, live *settings.Live, interval time.Duration) {
+	apply := func() {
+		if r, err := c.Fetch(ctx); err == nil {
+			live.Apply(r)
+		} else {
+			log.Printf("keld-agent: settings poll failed (keeping current): %v", err)
+		}
+	}
+	apply() // startup fetch
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			apply()
+		}
+	}
 }

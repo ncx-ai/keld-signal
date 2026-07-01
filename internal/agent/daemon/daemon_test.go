@@ -48,7 +48,7 @@ func (f *fakeSender) all() []publish.Enrichment {
 func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, enrich.NewDeterministic(), fs, "dg@keld.co", false, func() bool { return true }, nil)
+	go Worker(q, enrich.NewDeterministic(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
@@ -90,7 +90,7 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 func TestWorkerDeterministicMLOff(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", false, func() bool { return true }, nil)
+	go Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ML-OFF-1",
@@ -128,7 +128,7 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", false, neverReady, nil)
+		Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, neverReady, nil)
 		close(done)
 	}()
 
@@ -166,7 +166,7 @@ func TestWorkerAdmitFalseSheds(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(q, enrich.NewDeterministic(), fs, "shed@keld.co", false, func() bool { return true }, alwaysShed)
+		Worker(q, enrich.NewDeterministic(), fs, "shed@keld.co", func() bool { return false }, func() bool { return true }, alwaysShed)
 		close(done)
 	}()
 
@@ -200,7 +200,7 @@ func TestWorkerAdmitTruePublishes(t *testing.T) {
 	fs := &fakeSender{}
 	alwaysAdmit := func() bool { return true }
 
-	go Worker(q, enrich.NewDeterministic(), fs, "admit@keld.co", false, func() bool { return true }, alwaysAdmit)
+	go Worker(q, enrich.NewDeterministic(), fs, "admit@keld.co", func() bool { return false }, func() bool { return true }, alwaysAdmit)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ADMIT-1",
@@ -290,7 +290,7 @@ func TestWorkerWithSidecarStubPublishesViaRouter(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, router, fs, "sidecar-test@keld.co", false, gate, nil)
+	go Worker(q, router, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "SC-1",
@@ -388,7 +388,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, router, fs, "provision-test@keld.co", false, gate, admit)
+	go Worker(q, router, fs, "provision-test@keld.co", func() bool { return false }, gate, admit)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "PROV-1",
@@ -445,7 +445,7 @@ func TestMLBackendProvisionFailurePublishesViaDeterministic(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, router, fs, "fail-test@keld.co", false, gate, admit)
+	go Worker(q, router, fs, "fail-test@keld.co", func() bool { return false }, gate, admit)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "FAIL-1",
