@@ -84,48 +84,82 @@ func process(j queue.Job, m enrich.Model, pub Sender, actor string, includeEntit
 	}
 }
 
-// sidecarBinPath returns the path to the sidecar binary and whether it exists.
-// Resolution order: (1) KELD_SIDECAR_BIN env (if it exists); (2) keld-agent-sidecar
-// beside os.Executable(); (3) per-OS well-known locations.
-func sidecarBinPath() (string, bool) {
-	if p := os.Getenv("KELD_SIDECAR_BIN"); p != "" {
-		if statExists(p) {
-			return p, true
-		}
-	}
+// isRegularFile returns true if p exists and is a regular file (not a directory
+// or other special file).
+func isRegularFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// resolveSidecar probes dir for the sidecar binary in both the flat layout
+// (Windows Inno flattens it) and the one-dir subdir layout (macOS .pkg /
+// Linux install.sh keep the subdirectory):
+//
+//	flat:   dir/keld-agent-sidecar[.exe]
+//	nested: dir/keld-agent-sidecar/keld-agent-sidecar[.exe]
+//
+// Returns the path and true if a regular file is found; ("", false) otherwise.
+func resolveSidecar(dir string) (string, bool) {
 	name := "keld-agent-sidecar"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
+	for _, c := range []string{
+		filepath.Join(dir, name),
+		filepath.Join(dir, "keld-agent-sidecar", name),
+	} {
+		if isRegularFile(c) {
+			return c, true
+		}
+	}
+	return "", false
+}
+
+// sidecarBinPath returns the path to the sidecar binary and whether it exists.
+// Resolution order:
+//
+//	(1) KELD_SIDECAR_BIN env — returned only if it is a regular file (a
+//	    directory is rejected so a one-dir PyInstaller bundle is never mistaken
+//	    for the binary).
+//	(2) resolveSidecar beside os.Executable() — handles both flat (Windows)
+//	    and one-dir subdir layouts (macOS / Linux).
+//	(3) resolveSidecar on each per-OS well-known base directory.
+func sidecarBinPath() (string, bool) {
+	if p := os.Getenv("KELD_SIDECAR_BIN"); p != "" {
+		if isRegularFile(p) {
+			return p, true
+		}
+	}
 	// (2) beside the running keld-agent executable (how the installers lay it out).
 	if exe, err := os.Executable(); err == nil {
-		if p := filepath.Join(filepath.Dir(exe), name); statExists(p) {
+		if p, ok := resolveSidecar(filepath.Dir(exe)); ok {
 			return p, true
 		}
 	}
 	// (3) per-OS well-known fallback.
-	for _, p := range wellKnownSidecarPaths(name) {
-		if statExists(p) {
+	for _, base := range wellKnownSidecarDirs() {
+		if p, ok := resolveSidecar(base); ok {
 			return p, true
 		}
 	}
 	return "", false
 }
 
-func statExists(p string) bool { _, err := os.Stat(p); return err == nil }
-
-func wellKnownSidecarPaths(name string) []string {
+// wellKnownSidecarDirs returns per-OS base directories that are fed to
+// resolveSidecar. Each directory is a parent that may contain the sidecar in
+// either the flat or one-dir subdir layout.
+func wellKnownSidecarDirs() []string {
 	home, _ := os.UserHomeDir()
 	switch runtime.GOOS {
 	case "darwin":
-		return []string{"/usr/local/bin/" + name, filepath.Join(home, ".local/bin", name)}
+		return []string{"/usr/local/keld", "/usr/local/bin", filepath.Join(home, ".local/bin")}
 	case "windows":
 		if la := os.Getenv("LOCALAPPDATA"); la != "" {
-			return []string{filepath.Join(la, "Programs", "keld", name)}
+			return []string{filepath.Join(la, "Programs", "keld")}
 		}
 		return nil
 	default: // linux
-		return []string{filepath.Join(home, ".local/bin", name), "/usr/local/bin/" + name}
+		return []string{filepath.Join(home, ".local/bin"), "/usr/local/bin", "/usr/local/keld"}
 	}
 }
 
