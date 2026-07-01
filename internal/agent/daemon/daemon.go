@@ -37,7 +37,10 @@ type Sender interface {
 // panic-isolated per job so one bad prompt never kills the daemon.
 // ready is a readiness gate: Worker blocks before processing each job until
 // ready() returns true. The block exits promptly when the queue is closed.
-func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText bool, ready func() bool) {
+// admit is an optional load-shedding gate for the ML path: when non-nil and
+// returning false the job is skipped (CPU busy). Pass nil on the deterministic
+// path so it is never shed.
+func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText bool, ready func() bool, admit func() bool) {
 	for {
 		j, ok := q.Next()
 		if !ok {
@@ -52,6 +55,10 @@ func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEnt
 				return
 			case <-time.After(20 * time.Millisecond):
 			}
+		}
+		if admit != nil && !admit() {
+			// shedding: host CPU busy, skip ML enrichment
+			continue
 		}
 		process(j, m, pub, actor, includeEntityText)
 	}
@@ -127,9 +134,9 @@ func Run(ctx context.Context) error {
 	// deterministic when it is unhealthy); otherwise we use the deterministic
 	// model with an always-ready gate. mlBackend returns the deterministic pair
 	// when it cannot bring the sidecar up, so the caller has a single code path.
-	model, gate := mlBackend(ctx, set)
+	model, gate, admit := mlBackend(ctx, set)
 
-	go Worker(q, model, pub, actor, set.IncludeEntityText, gate)
+	go Worker(q, model, pub, actor, set.IncludeEntityText, gate, admit)
 
 	return serve(ctx, ln, ingress.Handler(q, secret), q)
 }
@@ -162,17 +169,18 @@ type mlBackendOpts struct {
 	healthFn func() bool
 }
 
-// mlBackend returns the enrichment model and the worker readiness gate.
+// mlBackend returns the enrichment model, the worker readiness gate, and the
+// admit function for ML-path load shedding.
 //
 // When ML is enabled and a sidecar binary is present it provisions the model,
 // spawns and supervises the sidecar, starts the governor sampling loop, and
 // returns a router (sidecar when healthy, else deterministic) with a gate that
 // holds the worker until the sidecar is ready, has fallen back, OR provisioning
 // has failed. In every other case (ML off, no binary, or a setup failure) it
-// returns the deterministic model with an always-ready gate.
-func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func() bool) {
-	deterministic := func() (enrich.Model, func() bool) {
-		return enrich.NewDeterministic(), func() bool { return true }
+// returns the deterministic model with an always-ready gate and nil admit.
+func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func() bool, func() bool) {
+	deterministic := func() (enrich.Model, func() bool, func() bool) {
+		return enrich.NewDeterministic(), func() bool { return true }, nil
 	}
 
 	binPath, hasBin := sidecarBinPath()
@@ -219,7 +227,7 @@ func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func()
 // mlBackendWithOpts is the testable core of mlBackend. It accepts all
 // dependencies explicitly so tests can inject stubs without touching the
 // real filesystem or spawning real processes.
-func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, func() bool) {
+func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, func() bool, func() bool) {
 	var provisionFailed atomic.Bool
 
 	// Provision the model BEFORE spawning the sidecar; on success start the
@@ -234,9 +242,11 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 		go opts.sup.Start(ctx)
 	}()
 
-	// Governor: observe host CPU every 5 s.
+	// Governor: observe host CPU every 5 s using a real CPUSampler.
+	// Dynamic-concurrency pooling is deferred (YAGNI for single-user daemon);
+	// the governor is used solely for Admit()-based ML-path shedding.
+	g := govern.New(govern.CPUSampler{}, 1)
 	go func() {
-		g := govern.New(nil, 4)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -254,8 +264,17 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 		return opts.sup.Ready() || opts.sup.FellBack() || provisionFailed.Load()
 	}
 
+	// admit gates ML-path jobs: when the sidecar is healthy the governor decides;
+	// when it has fallen back to deterministic we always admit (no ML cost).
+	admit := func() bool {
+		if opts.healthFn() {
+			return g.Admit()
+		}
+		return true
+	}
+
 	router := enrich.NewRouter(opts.client, enrich.NewDeterministic(), opts.healthFn)
-	return router, gate
+	return router, gate, admit
 }
 
 // enrichEndpoint derives the enrichments URL from the configured ingest endpoint
