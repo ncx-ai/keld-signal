@@ -1,6 +1,8 @@
 // Package govern is the adaptive host-load governor for the ML path.
 package govern
 
+import "sync"
+
 const (
 	alpha    = 0.3 // EWMA smoothing
 	highMark = 85.0
@@ -12,6 +14,7 @@ type Sampler interface{ CPUPercent() float64 }
 type Governor struct {
 	sampler Sampler
 	maxConc int
+	mu      sync.Mutex
 	ewma    float64
 	seen    bool
 	tick    uint64
@@ -25,6 +28,8 @@ func New(sampler Sampler, maxConc int) *Governor {
 }
 
 func (g *Governor) Observe(sample float64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if !g.seen {
 		g.ewma, g.seen = sample, true
 		return
@@ -34,6 +39,8 @@ func (g *Governor) Observe(sample float64) {
 
 // Concurrency scales from maxConc (<= lowMark) down to 1 (>= highMark).
 func (g *Governor) Concurrency() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	switch {
 	case g.ewma >= highMark:
 		return 1
@@ -53,6 +60,8 @@ func (g *Governor) Concurrency() int {
 // Admit sheds a fraction of work proportional to overload above highMark.
 // Admit rate = 1/keep, so a larger keep sheds more.
 func (g *Governor) Admit() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.ewma < highMark {
 		return true
 	}
@@ -68,6 +77,7 @@ func (g *Governor) Admit() bool {
 // Sample reads the host sampler (when configured) and updates the EWMA.
 func (g *Governor) Sample() {
 	if g.sampler != nil {
-		g.Observe(g.sampler.CPUPercent())
+		sample := g.sampler.CPUPercent()
+		g.Observe(sample)
 	}
 }

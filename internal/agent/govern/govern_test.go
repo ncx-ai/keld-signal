@@ -2,6 +2,14 @@ package govern
 
 import "testing"
 
+type fakeSampler struct {
+	load float64
+}
+
+func (f fakeSampler) CPUPercent() float64 {
+	return f.load
+}
+
 func TestConcurrencyDropsUnderLoad(t *testing.T) {
 	g := New(nil, 4)
 	for i := 0; i < 20; i++ {
@@ -56,4 +64,20 @@ func TestAdmitShedsMoreUnderHigherLoad(t *testing.T) {
 	if !(a99 < a88 && a88 < 100) {
 		t.Fatalf("severe load must shed more: admits@99=%d admits@88=%d (want a99<a88<100)", a99, a88)
 	}
+}
+
+func TestGovernorConcurrentSampleAndAdmit(t *testing.T) {
+	g := New(fakeSampler{load: 90}, 4)
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 1000; i++ {
+			g.Sample()
+		}
+		close(done)
+	}()
+	for i := 0; i < 1000; i++ {
+		_ = g.Admit()
+		_ = g.Concurrency()
+	}
+	<-done
 }
