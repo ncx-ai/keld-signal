@@ -5,13 +5,34 @@ child process (see ../serve.py) and talks to it over 127.0.0.1. It returns RAW
 spans (surface text + offsets); masking is enforced daemon-side by the
 enrichment pipeline, never here.
 """
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.adapter import normalize_classify, normalize_entities, normalize_extract
+from app.governor import Governor
+from app.runner import InferenceRunner, QueueFull
+
+# Cap input length as a guard: GLiNER2 is a transformer, so memory grows
+# roughly with the square of the sequence length. A pathologically long prompt
+# or transcript can allocate a huge tensor in a single call, which single-flight
+# execution (see runner.py) alone would not prevent. The cap is generous (only
+# clips outliers) and overridable via env. <= 0 disables clipping.
+_MAX_CHARS = int(os.environ.get("KELD_SIDECAR_MAX_CHARS", "20000"))
+
+
+def _clip(text: str) -> str:
+    """Truncate text to _MAX_CHARS to bound single-inference memory. Pure so it
+    is unit-testable without loading the model."""
+    if _MAX_CHARS > 0 and len(text) > _MAX_CHARS:
+        return text[:_MAX_CHARS]
+    return text
+
+
+_QUEUE_MAX = int(os.environ.get("KELD_SIDECAR_QUEUE_MAX", "64"))
 
 # Load from a locally-provisioned model directory when the daemon supplies one
 # (KELD_GLINER2_DIR); otherwise fall back to the pinned HF model id.
@@ -51,12 +72,30 @@ def _warmup(model) -> None:
         pass
 
 
+async def _sample_loop(governor: Governor, interval: float = 5.0) -> None:
+    while True:
+        governor.sample()
+        await asyncio.sleep(interval)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     model = _load_model()
     _warmup(model)
-    _state["model"] = model  # set last → /health reports ok only once warm & ready
+    governor = Governor()
+    runner = InferenceRunner(governor, _QUEUE_MAX)
+    runner.start()
+    sampler_task = asyncio.create_task(_sample_loop(governor))
+    _state["model"] = model
+    _state["governor"] = governor
+    _state["runner"] = runner  # set last → /health ok only once fully wired
     yield
+    sampler_task.cancel()
+    try:
+        await sampler_task
+    except asyncio.CancelledError:
+        pass
+    await runner.stop()
     _state.clear()
 
 
@@ -81,25 +120,46 @@ class ExtractIn(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": "model" in _state, "model": MODEL_NAME}
+    runner = _state.get("runner")
+    ok = "model" in _state and runner is not None and runner.ready
+    return {"ok": ok, "model": MODEL_NAME}
 
 
 @app.post("/entities")
-def entities(body: EntitiesIn):
-    raw = _state["model"].extract_entities(body.text, body.labels)
-    return {"entities": normalize_entities(raw, body.text)}
+async def entities(body: EntitiesIn):
+    text = _clip(body.text)
+    model = _state["model"]
+    try:
+        raw = await _state["runner"].submit(model.extract_entities, text, body.labels)
+    except QueueFull:
+        raise HTTPException(status_code=503, detail="overloaded")
+    return {"entities": normalize_entities(raw, text)}
 
 
 @app.post("/classify")
-def classify(body: ClassifyIn):
-    raw = _state["model"].classify_text(body.text, body.tasks)
+async def classify(body: ClassifyIn):
+    text = _clip(body.text)
+    model = _state["model"]
+    try:
+        raw = await _state["runner"].submit(model.classify_text, text, body.tasks)
+    except QueueFull:
+        raise HTTPException(status_code=503, detail="overloaded")
     return {"results": normalize_classify(raw)}
 
 
 @app.post("/extract")
-def extract(body: ExtractIn):
-    schema = _state["model"].create_schema().entities(body.labels)
-    for task, options in body.tasks.items():
-        schema = schema.classification(task, options)
-    raw = _state["model"].extract(body.text, schema)
-    return normalize_extract(raw, body.text, list(body.tasks.keys()))
+async def extract(body: ExtractIn):
+    text = _clip(body.text)
+    model = _state["model"]
+
+    def _run():
+        schema = model.create_schema().entities(body.labels)
+        for task, options in body.tasks.items():
+            schema = schema.classification(task, options)
+        return model.extract(text, schema)
+
+    try:
+        raw = await _state["runner"].submit(_run)
+    except QueueFull:
+        raise HTTPException(status_code=503, detail="overloaded")
+    return normalize_extract(raw, text, list(body.tasks.keys()))
