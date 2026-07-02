@@ -31,7 +31,7 @@ func TestPollSettingsAppliesRemoteOverLocal(t *testing.T) {
 }
 
 func TestSettingsEndpoint(t *testing.T) {
-	if got := settingsEndpoint("https://atlas.example/v1/ingest"); got != "https://atlas.example/v1/agent-settings" {
+	if got := settingsEndpoint("https://atlas.example/v1/ingest"); got != "https://atlas.example/v1/enrichment-settings" {
 		t.Fatalf("settingsEndpoint = %q", got)
 	}
 }

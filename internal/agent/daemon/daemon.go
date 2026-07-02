@@ -360,13 +360,14 @@ func enrichEndpoint(ingest string) string {
 	return strings.TrimRight(ingest, "/") + "/v1/enrichments"
 }
 
-// settingsEndpoint derives the org-settings URL from the configured ingest
-// endpoint by swapping the trailing path segment for /v1/agent-settings.
+// settingsEndpoint derives the org enrichment-settings URL from the configured
+// ingest endpoint by swapping the trailing path segment for
+// /v1/enrichment-settings.
 func settingsEndpoint(ingest string) string {
 	if i := strings.Index(ingest, "/v1/"); i >= 0 {
-		return ingest[:i] + "/v1/agent-settings"
+		return ingest[:i] + "/v1/enrichment-settings"
 	}
-	return strings.TrimRight(ingest, "/") + "/v1/agent-settings"
+	return strings.TrimRight(ingest, "/") + "/v1/enrichment-settings"
 }
 
 // pollSettings fetches org settings on startup then on each tick of interval.

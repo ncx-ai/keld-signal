@@ -31,7 +31,7 @@ func (c *Client) Fetch(ctx context.Context) (*Remote, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("agent-settings: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("enrichment-settings: status %d", resp.StatusCode)
 	}
 	var r Remote
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {

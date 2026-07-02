@@ -4,7 +4,7 @@
 
 **Goal:** keld-agent daemons poll a per-org settings document from keld-atlas and apply it live (remote overrides local per key), so an admin can govern daemon behavior org-wide — starting with `include_entity_text`.
 
-**Architecture:** Client-first. keld-cli gains a concurrency-safe live settings holder (replacing the static `includeEntityText` bool), an HTTP settings client, and a poller wired into `daemon.Run` (all local/TDD). Then keld-atlas gains a per-org settings model + `GET /v1/agent-settings` (token→org) + an admin set API/toggle.
+**Architecture:** Client-first. keld-cli gains a concurrency-safe live settings holder (replacing the static `includeEntityText` bool), an HTTP settings client, and a poller wired into `daemon.Run` (all local/TDD). Then keld-atlas gains a per-org settings model + `GET /v1/enrichment-settings` (token→org) + an admin set API/toggle.
 
 **Tech Stack:** Go (`github.com/ncx-ai/keld-cli`), stdlib `net/http`/`httptest`, `sync`; keld-atlas (FastAPI + async SQLAlchemy + Alembic + Next/Vitest, in Docker).
 
@@ -223,7 +223,7 @@ func (c *Client) Fetch(ctx context.Context) (*Remote, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("agent-settings: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("enrichment-settings: status %d", resp.StatusCode)
 	}
 	var r Remote
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
@@ -235,7 +235,7 @@ func (c *Client) Fetch(ctx context.Context) (*Remote, error) {
 
 - [ ] **Step 4: Run to verify pass** — `go test ./internal/agent/settings/ -v` → PASS; `go build ./... && go vet ./...`.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat(settings): HTTP client for GET /v1/agent-settings"`
+- [ ] **Step 5: Commit** — `git commit -m "feat(settings): HTTP client for GET /v1/enrichment-settings"`
 
 ---
 
@@ -245,7 +245,7 @@ func (c *Client) Fetch(ctx context.Context) (*Remote, error) {
 
 **Interfaces:**
 - Consumes: `settings.NewLive`, `settings.NewClient`, `settings.Live.Apply`/`IncludeEntityText` (Tasks 1–2).
-- Changes: `Worker`'s `includeEntityText bool` param becomes `includeEntityText func() bool`; `process` calls it per job. Adds `settingsEndpoint(ingest string) string` (mirrors `enrichEndpoint` → `<base>/v1/agent-settings`) and `pollSettings(ctx, *settings.Client, *settings.Live, time.Duration)`.
+- Changes: `Worker`'s `includeEntityText bool` param becomes `includeEntityText func() bool`; `process` calls it per job. Adds `settingsEndpoint(ingest string) string` (mirrors `enrichEndpoint` → `<base>/v1/enrichment-settings`) and `pollSettings(ctx, *settings.Client, *settings.Live, time.Duration)`.
 
 - [ ] **Step 1: Write the failing test** (stub settings server; local base true, remote false → effective false after poll)
 
@@ -282,7 +282,7 @@ func TestPollSettingsAppliesRemoteOverLocal(t *testing.T) {
 }
 
 func TestSettingsEndpoint(t *testing.T) {
-	if got := settingsEndpoint("https://atlas.example/v1/ingest"); got != "https://atlas.example/v1/agent-settings" {
+	if got := settingsEndpoint("https://atlas.example/v1/ingest"); got != "https://atlas.example/v1/enrichment-settings" {
 		t.Fatalf("settingsEndpoint = %q", got)
 	}
 }
@@ -296,9 +296,9 @@ func TestSettingsEndpoint(t *testing.T) {
      ```go
      func settingsEndpoint(ingest string) string {
          if i := strings.Index(ingest, "/v1/"); i >= 0 {
-             return ingest[:i] + "/v1/agent-settings"
+             return ingest[:i] + "/v1/enrichment-settings"
          }
-         return strings.TrimRight(ingest, "/") + "/v1/agent-settings"
+         return strings.TrimRight(ingest, "/") + "/v1/enrichment-settings"
      }
      ```
   2. `pollSettings`:
@@ -345,37 +345,37 @@ func TestSettingsEndpoint(t *testing.T) {
 
 ---
 
-### Task 4: keld-atlas — org_agent_settings model + migration (ATLAS; docker)
+### Task 4: keld-atlas — org_enrichment_settings model + migration (ATLAS; docker)
 
 **Repo:** keld-atlas. **Coordinate** (branch off atlas `main`; new files only). Tests run in Docker (never host Python 3.14).
 
-**Files:** Modify `services/api/app/models.py`; Create `services/api/alembic/versions/0027_org_agent_settings.py`; Test `services/api/tests/test_agent_settings.py`.
+**Files:** Modify `services/api/app/models.py`; Create `services/api/alembic/versions/0027_org_enrichment_settings.py`; Test `services/api/tests/test_agent_settings.py`.
 
 - [ ] **Step 1: Add the model** (`models.py`), mirroring existing org-scoped tables:
 ```python
-class OrgAgentSettings(Base):
-    __tablename__ = "org_agent_settings"
+class OrgEnrichmentSettings(Base):
+    __tablename__ = "org_enrichment_settings"
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True)
     include_entity_text: Mapped[bool] = mapped_column(default=False, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 ```
 (Match the exact `Mapped`/`mapped_column` import + column style already used in models.py.)
 
-- [ ] **Step 2: Alembic migration** `0027_org_agent_settings.py` — `down_revision = "0026_fix_anthropic_cost_cents"` (verify current head with `alembic heads` first); `create_table("org_agent_settings", ...)` with the columns above; `downgrade` drops it.
+- [ ] **Step 2: Alembic migration** `0027_org_enrichment_settings.py` — `down_revision = "0026_fix_anthropic_cost_cents"` (verify current head with `alembic heads` first); `create_table("org_enrichment_settings", ...)` with the columns above; `downgrade` drops it.
 
 - [ ] **Step 3: Test** (`test_agent_settings.py`) — apply migration + a round-trip: insert a row for an org, read it back; default `include_entity_text` is false when unset.
   Run: `docker compose exec -T -e KELD_TEST_DATABASE_URL=... -e KELD_TEST_REDIS_URL=... api sh -lc 'cd /app && alembic upgrade head && python -m pytest tests/test_agent_settings.py -q'`
 
-- [ ] **Step 4: Commit** — `git commit -m "feat(agent-settings): org_agent_settings model + migration"`
+- [ ] **Step 4: Commit** — `git commit -m "feat(enrichment-settings): org_enrichment_settings model + migration"`
 
 ---
 
-### Task 5: keld-atlas — GET /v1/agent-settings + admin set API (ATLAS; docker)
+### Task 5: keld-atlas — GET /v1/enrichment-settings + admin set API (ATLAS; docker)
 
 **Files:** Create `services/api/app/routers/agent_settings.py`; register it in the app; Test `services/api/tests/test_agent_settings_api.py`.
 
 **Interfaces:**
-- `GET /v1/agent-settings` — daemon-authed via the existing ingest-token resolver (mirror `routers/enrichments.py` / `otel.py`): resolve token→org, return `{"include_entity_text": <bool>}` (the org's row, or `false` default when no row). Org-scoped.
+- `GET /v1/enrichment-settings` — daemon-authed via the existing ingest-token resolver (mirror `routers/enrichments.py` / `otel.py`): resolve token→org, return `{"include_entity_text": <bool>}` (the org's row, or `false` default when no row). Org-scoped.
 - Admin: `GET /api/org-settings` + `PATCH /api/org-settings` (`Depends(require_admin)`, `current_org`) to read/set `include_entity_text` (upsert the row).
 
 - [ ] **Step 1: Write the failing tests** — (a) daemon GET with a valid ingest token returns the org's value (and default false when unset); (b) daemon GET with a bad/missing token → 401/403; (c) admin PATCH sets the value and the daemon GET reflects it; (d) cross-org isolation (org A's token never sees org B's value). Use the repo's existing token/admin fixtures.
@@ -386,7 +386,7 @@ class OrgAgentSettings(Base):
 
 - [ ] **Step 4: Run to verify pass** — `docker compose exec -T ... api sh -lc 'cd /app && python -m pytest tests/test_agent_settings_api.py -q'` → PASS; run the broader router suite to check no regression.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat(agent-settings): GET /v1/agent-settings + admin read/set API"`
+- [ ] **Step 5: Commit** — `git commit -m "feat(enrichment-settings): GET /v1/enrichment-settings + admin read/set API"`
 
 ---
 
