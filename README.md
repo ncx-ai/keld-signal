@@ -137,7 +137,23 @@ Key points:
   revocable from Keld, so a lost laptop can be cut off without rotating anything
   else.
 
+## Org enrichment settings (control plane)
+
+The local enrichment daemon (`keld-agent`) is governed **per organization** from
+Keld Atlas: an admin sets policy once and every running agent picks it up within
+one poll interval — remote overrides local, non-fatal if Atlas is unreachable.
+Today it governs `include_entity_text`; the mechanism is generic and extends to
+new keys without a protocol change.
+
+See [docs/enrichment-settings.md](docs/enrichment-settings.md) for the full
+subsystem: governance model, the HTTP API contract (`GET /v1/enrichment-settings`
+for the daemon, admin `GET`/`PATCH /api/enrichment-settings`), the data model,
+client behavior, and security.
+
 ## Environment
 
 - `KELD_HOME` — where credentials, the hook, and the manifest live (default `~/.keld`).
 - `KELD_API_URL` — Atlas base URL (default `https://atlas.keld.co`).
+- `KELD_SETTINGS_POLL` — how often `keld-agent` polls Atlas for org enrichment
+  settings (Go duration, default `5m`; for tests/local dev). See
+  [docs/enrichment-settings.md](docs/enrichment-settings.md).
