@@ -1,12 +1,11 @@
-"""Tests for the sidecar's load-protection guards: input clipping and the
-single-inference lock. These import app.main (light — fastapi/pydantic only;
-the GLiNER2 model is loaded lazily in lifespan, never at import) so they run
-without torch. Runnable under pytest OR standalone: `python app/test_main.py`.
+"""Tests for the sidecar's load-protection guards (input clipping) and the
+async endpoints that route inference through the governed InferenceRunner.
+These import app.main (light — fastapi/pydantic only; the GLiNER2 model is
+loaded lazily in lifespan, never at import) so they run without torch.
+Runnable under pytest OR standalone: `python app/test_main.py`.
 """
 import importlib
 import os
-import threading
-import time
 
 
 def _reload_main(max_chars: str | None):
@@ -41,41 +40,88 @@ def test_default_cap_is_generous():
     assert m._MAX_CHARS == 20000  # clips only pathological inputs
 
 
-def test_infer_lock_serializes():
-    """The lock must be a real mutex: a second acquire blocks while held."""
+import asyncio as _asyncio
+
+from app.governor import Governor
+from app.runner import InferenceRunner, QueueFull
+from fastapi import HTTPException
+
+
+class _FakeModel:
+    def classify_text(self, text, tasks):
+        return {t: opts[0] for t, opts in tasks.items()}  # top label = first option
+
+    def extract_entities(self, text, labels):
+        return {"entities": {}}
+
+    def create_schema(self):
+        return self
+
+    def entities(self, labels):
+        return self
+
+    def classification(self, task, options):
+        return self
+
+    def extract(self, text, schema):
+        return {"entities": {}}
+
+
+def _wire(main, queue_max=8):
+    gov = Governor(disabled=True)
+    runner = InferenceRunner(gov, queue_max=queue_max)
+    main._state.clear()
+    main._state["model"] = _FakeModel()
+    main._state["governor"] = gov
+    main._state["runner"] = runner
+    return runner
+
+
+def test_classify_endpoint_routes_through_runner():
     m = _reload_main(None)
-    assert m._infer_lock.acquire(blocking=False)
-    try:
-        got_it = m._infer_lock.acquire(blocking=False)
-        assert got_it is False, "lock allowed a concurrent holder"
-    finally:
-        m._infer_lock.release()
+    runner = _wire(m)
+
+    async def run():
+        runner.start()
+        try:
+            out = await m.classify(m.ClassifyIn(text="hello", tasks={"task_type": ["a", "b"]}))
+            assert out["results"]["task_type"][0]["label"] == "a"
+        finally:
+            await runner.stop()
+    _asyncio.run(run())
 
 
-def test_infer_lock_serializes_under_threads():
-    """Two threads contending for the model lock must not overlap in the
-    critical section (proves fan-out inference is serialized)."""
+def test_extract_endpoint_queue_full_returns_503():
     m = _reload_main(None)
-    overlaps = []
-    active = {"n": 0}
-    state_lock = threading.Lock()
+    runner = _wire(m, queue_max=1)
 
-    def worker():
-        with m._infer_lock:
-            with state_lock:
-                active["n"] += 1
-                if active["n"] > 1:
-                    overlaps.append(True)
-            time.sleep(0.02)
-            with state_lock:
-                active["n"] -= 1
+    async def run():
+        runner.start()
+        try:
+            import threading
+            release = threading.Event()
 
-    threads = [threading.Thread(target=worker) for _ in range(5)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert not overlaps, "model lock permitted concurrent inference"
+            def block(_):
+                release.wait(2.0)
+                return {"entities": {}}
+
+            # Occupy consumer + fill the single queue slot.
+            t1 = _asyncio.create_task(runner.submit(block, 0))
+            await _asyncio.sleep(0.05)
+            t2 = _asyncio.create_task(runner.submit(block, 1))
+            await _asyncio.sleep(0.05)
+            status = None
+            try:
+                await m.extract(m.ExtractIn(text="hi", labels={}, tasks={}))
+            except HTTPException as e:
+                status = e.status_code
+            assert status == 503
+            release.set()
+            await _asyncio.gather(t1, t2)
+        finally:
+            release.set()
+            await runner.stop()
+    _asyncio.run(run())
 
 
 if __name__ == "__main__":
