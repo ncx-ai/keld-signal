@@ -52,3 +52,25 @@ func (e passExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	top, alts := classifyPass(ctx, e.p.Name, e.p.Labels)
 	return map[string]any{e.p.Name: top, e.p.Name + "_alt": alts}, nil
 }
+
+// condPassExtractor runs AFTER Wave1; it reads the conditioning pass's id from
+// ctx and classifies over that condition's label subset.
+type condPassExtractor struct{ p Pass }
+
+func (e condPassExtractor) Name() string    { return e.p.Name }
+func (e condPassExtractor) Version() string { return versioned(e.p.Name) }
+
+func (e condPassExtractor) Run(ctx *JobContext) (map[string]any, error) {
+	var condID string
+	if out := ctx.Get(e.p.ConditionOn); out != nil {
+		if l, ok := out[e.p.ConditionOn].(Labeled); ok {
+			condID = l.Value
+		}
+	}
+	labels := e.p.LabelsByCond[condID]
+	if len(labels) == 0 {
+		return map[string]any{e.p.Name: Labeled{}, e.p.Name + "_alt": []Labeled(nil)}, nil
+	}
+	top, alts := classifyPass(ctx, e.p.Name, labels)
+	return map[string]any{e.p.Name: top, e.p.Name + "_alt": alts}, nil
+}

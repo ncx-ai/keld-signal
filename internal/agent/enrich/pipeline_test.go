@@ -37,6 +37,25 @@ func TestProfileHasActivityAndFunctionGuess(t *testing.T) {
 	}
 }
 
+func TestSubcategoryConditionsOnFunctionGuess(t *testing.T) {
+	// deterministic backend keys on "debug" -> eng.debug once function=eng.
+	p := Run("debug why this handler throws a 500 error", "eval", Meta{}, NewDeterministic())
+	if p.FunctionGuess.Value == "" {
+		t.Fatal("no function guess")
+	}
+	// subcategory id must belong to the guessed function
+	subs := Subcats[p.FunctionGuess.Value]
+	ok := false
+	for _, s := range subs {
+		if s.ID == p.Subcategory.Value {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Fatalf("subcategory %q not under function %q", p.Subcategory.Value, p.FunctionGuess.Value)
+	}
+}
+
 type panicModel struct{ Model }
 
 func (panicModel) Extract(string, map[string]string, map[string][]string) ExtractResult {

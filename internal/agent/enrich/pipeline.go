@@ -50,6 +50,15 @@ func Run(text, source string, meta Meta, m Model) Profile {
 		ctx.Set(r.name, r.out)
 	}
 
+	// Wave2: extractors that depend on Wave1 output (run after commit).
+	for _, ex := range Wave2() {
+		if out, ok := runStage(ex, ctx); ok {
+			ctx.Set(ex.Name(), out)
+		} else {
+			anyFailed = true
+		}
+	}
+
 	status := "enriched"
 	if anyFailed {
 		status = "partial"
@@ -70,8 +79,8 @@ func Run(text, source string, meta Meta, m Model) Profile {
 		Activity:          labeledFrom(ctx.Get("activity_type"), "activity_type", "activity_type"),
 		Personal:          labeledFrom(ctx.Get("personal"), "personal", "personal"),
 		FunctionGuess:     labeledFrom(ctx.Get("function_guess"), "function_guess", "function_guess"),
-		Subcategory:       Labeled{},
-		SubcategoryAlt:    nil,
+		Subcategory:       labeledFrom(ctx.Get("subcategory"), "subcategory", "subcategory"),
+		SubcategoryAlt:    altsNamed(ctx.Get("subcategory"), "subcategory_alt"),
 		PipelineStatus:    status,
 		ExtractorVersions: versions,
 		SchemaVersion:     SchemaVersion,
@@ -91,6 +100,15 @@ func labeledFrom(out map[string]any, key, producer string) Labeled {
 func altsFrom(out map[string]any) []Labeled {
 	if out != nil {
 		if a, ok := out["task_type_alt"].([]Labeled); ok {
+			return a
+		}
+	}
+	return nil
+}
+
+func altsNamed(out map[string]any, key string) []Labeled {
+	if out != nil {
+		if a, ok := out[key].([]Labeled); ok {
 			return a
 		}
 	}

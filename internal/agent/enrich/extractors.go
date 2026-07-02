@@ -23,6 +23,13 @@ func Wave1() []Extractor {
 	}
 }
 
+// Wave2 runs after Wave1 and may read Wave1 results (e.g. conditioning).
+func Wave2() []Extractor {
+	return []Extractor{
+		condPassExtractor{Pass{Name: "subcategory", ConditionOn: "function_guess", LabelsByCond: Subcats}},
+	}
+}
+
 // --- task_type ---
 
 type TaskTypeExtractor struct{}
