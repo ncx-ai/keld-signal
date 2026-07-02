@@ -48,7 +48,7 @@ func (f *fakeSender) all() []publish.Enrichment {
 func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, enrich.NewDeterministic(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil)
+	go Worker(q, enrich.NewDeterministic(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true })
 
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
@@ -90,7 +90,7 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 func TestWorkerDeterministicMLOff(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil)
+	go Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, func() bool { return true })
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ML-OFF-1",
@@ -128,7 +128,7 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, neverReady, nil)
+		Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, neverReady)
 		close(done)
 	}()
 
@@ -154,75 +154,6 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 	// Nothing should have been published (gate was never ready).
 	if got := len(fs.all()); got != 0 {
 		t.Fatalf("expected 0 published, got %d", got)
-	}
-}
-
-// TestWorkerAdmitFalseSheds verifies that when admit always returns false,
-// no jobs are published (all shed).
-func TestWorkerAdmitFalseSheds(t *testing.T) {
-	q := queue.New(10)
-	fs := &fakeSender{}
-	alwaysShed := func() bool { return false }
-
-	done := make(chan struct{})
-	go func() {
-		Worker(q, enrich.NewDeterministic(), fs, "shed@keld.co", func() bool { return false }, func() bool { return true }, alwaysShed)
-		close(done)
-	}()
-
-	// Offer a few jobs.
-	for i := 0; i < 3; i++ {
-		q.Offer(queue.Job{
-			Source: "claude_code", Scheme: "trace", ID: "SHED",
-			Inline: "test shed",
-		})
-	}
-
-	// Give the worker time to process them (all should be shed, not published).
-	time.Sleep(100 * time.Millisecond)
-	q.Close()
-
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		t.Fatal("worker did not exit after queue closed")
-	}
-
-	if got := len(fs.all()); got != 0 {
-		t.Fatalf("expected 0 published with admit=false, got %d", got)
-	}
-}
-
-// TestWorkerAdmitTruePublishes verifies that when admit always returns true,
-// jobs are processed and published normally.
-func TestWorkerAdmitTruePublishes(t *testing.T) {
-	q := queue.New(10)
-	fs := &fakeSender{}
-	alwaysAdmit := func() bool { return true }
-
-	go Worker(q, enrich.NewDeterministic(), fs, "admit@keld.co", func() bool { return false }, func() bool { return true }, alwaysAdmit)
-
-	q.Offer(queue.Job{
-		Source: "claude_code", Scheme: "trace", ID: "ADMIT-1",
-		Inline: "implement something",
-	})
-
-	deadline := time.After(2 * time.Second)
-	for {
-		if len(fs.all()) == 1 {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("worker with admit=true did not publish in time")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	q.Close()
-
-	e := fs.all()[0]
-	if e.Correlation.ID != "ADMIT-1" {
-		t.Fatalf("unexpected correlation: %+v", e.Correlation)
 	}
 }
 
@@ -290,7 +221,7 @@ func TestWorkerWithSidecarStubPublishesViaRouter(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, router, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil)
+	go Worker(q, router, fs, "sidecar-test@keld.co", func() bool { return false }, gate)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "SC-1",
@@ -377,7 +308,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 	sentinelSHA := sha256Hex(modelContent)
 
 	// Use the mlBackend test seam.
-	router, gate, admit := mlBackendWithOpts(ctx, mlBackendOpts{
+	router, gate := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   client,
 		modelDir: modelDir,
@@ -388,7 +319,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, router, fs, "provision-test@keld.co", func() bool { return false }, gate, admit)
+	go Worker(q, router, fs, "provision-test@keld.co", func() bool { return false }, gate)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "PROV-1",
@@ -434,7 +365,7 @@ func TestMLBackendProvisionFailurePublishesViaDeterministic(t *testing.T) {
 
 	modelDir := filepath.Join(t.TempDir(), "gliner2")
 
-	router, gate, admit := mlBackendWithOpts(ctx, mlBackendOpts{
+	router, gate := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   unhealthyClient,
 		modelDir: modelDir,
@@ -445,7 +376,7 @@ func TestMLBackendProvisionFailurePublishesViaDeterministic(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, router, fs, "fail-test@keld.co", func() bool { return false }, gate, admit)
+	go Worker(q, router, fs, "fail-test@keld.co", func() bool { return false }, gate)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "FAIL-1",
