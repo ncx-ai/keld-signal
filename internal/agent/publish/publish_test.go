@@ -78,3 +78,11 @@ func TestBuildKeepsEntityTextWhenEnabled(t *testing.T) {
 		t.Fatalf("entity text should be present when enabled: %s", b)
 	}
 }
+
+func TestBuildCarriesJobCategoryFields(t *testing.T) {
+	p := enrich.Run("write a python function", "claude_code", enrich.Meta{}, enrich.NewDeterministic())
+	e := Build(queue.Job{Source: "claude_code"}, p, "a@b.test", false, time.Now())
+	if e.Activity.Value == "" || e.FunctionGuess.Value == "" {
+		t.Fatalf("expected activity+function_guess on the wire, got %+v", e)
+	}
+}

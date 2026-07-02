@@ -51,3 +51,19 @@
 {"text": "Create a lesson plan for teaching fractions to fourth graders.", "task_type": "other", "domain": "education", "sensitivity": "none"}
 {"text": "Write a short science-fiction story about a lighthouse keeper on Mars.", "task_type": "other", "domain": "creative", "sensitivity": "none"}
 {"text": "Explain the difference between civil and criminal liability.", "task_type": "reasoning", "domain": "legal", "sensitivity": "none"}
+{"text": "write pytest unit tests for this date parser", "task_type": "codegen", "domain": "software", "sensitivity": "none", "activity_type": "generate", "subcategory": "eng.test"}
+{"text": "summarize this 40-minute meeting transcript into decisions and action items", "task_type": "summarization", "domain": "business", "sensitivity": "none", "activity_type": "transform", "subcategory": "gen.notes"}
+{"text": "Write a new REST endpoint for user profile updates in our Go service.", "task_type": "codegen", "domain": "software", "sensitivity": "none", "activity_type": "generate", "subcategory": "eng.dev"}
+{"text": "Debug why this Go goroutine leak causes steady memory growth in production.", "task_type": "codegen", "domain": "software", "sensitivity": "none", "activity_type": "analyze", "subcategory": "eng.debug"}
+{"text": "Run a cohort retention analysis on this signup dataset and summarize the trend.", "task_type": "reasoning", "domain": "business", "sensitivity": "none", "activity_type": "analyze", "subcategory": "data.analysis"}
+{"text": "Clean and normalize this messy CSV export before loading it into the warehouse.", "task_type": "extraction", "domain": "business", "sensitivity": "none", "activity_type": "transform", "subcategory": "data.prep"}
+{"text": "Review this vendor MSA and flag any one-sided indemnification clauses.", "task_type": "summarization", "domain": "legal", "sensitivity": "none", "activity_type": "review", "subcategory": "legal.contract"}
+{"text": "Research whether this data-sharing clause complies with GDPR Article 28.", "task_type": "rag_qa", "domain": "legal", "sensitivity": "none", "activity_type": "retrieve", "subcategory": "legal.research"}
+{"text": "Draft a cold outreach email to a VP of Engineering prospect at a target account.", "task_type": "other", "domain": "business", "sensitivity": "none", "activity_type": "generate", "subcategory": "sales.outreach"}
+{"text": "Analyze this list of leads and rank them by likelihood to convert this quarter.", "task_type": "classification", "domain": "business", "sensitivity": "none", "activity_type": "analyze", "subcategory": "sales.prospect"}
+{"text": "Help this customer troubleshoot why their app keeps crashing on login.", "task_type": "other", "domain": "business", "sensitivity": "none", "activity_type": "converse", "subcategory": "support.chat"}
+{"text": "Turn these five resolved support tickets into a knowledge-base article.", "task_type": "summarization", "domain": "business", "sensitivity": "none", "activity_type": "transform", "subcategory": "support.kb"}
+{"text": "Analyze this company's cash flow statement and flag any red flags.", "task_type": "reasoning", "domain": "finance", "sensitivity": "none", "activity_type": "analyze", "subcategory": "fin.analysis"}
+{"text": "Prepare the month-end close reconciliation summary from this ledger export.", "task_type": "summarization", "domain": "finance", "sensitivity": "none", "activity_type": "transform", "subcategory": "fin.close"}
+{"text": "Write a blog post announcing our new product launch next month.", "task_type": "other", "domain": "business", "sensitivity": "none", "activity_type": "generate", "subcategory": "mkt.content"}
+{"text": "Research what competitors are doing for their Q3 marketing campaigns.", "task_type": "rag_qa", "domain": "business", "sensitivity": "none", "activity_type": "retrieve", "subcategory": "mkt.research"}

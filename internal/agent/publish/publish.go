@@ -38,6 +38,11 @@ type Enrichment struct {
 	Entities          []enrich.Entity   `json:"entities,omitempty"`
 	Sensitivity       enrich.Labeled    `json:"sensitivity"`
 	SensitivitySpans  []enrich.Entity   `json:"sensitivity_spans,omitempty"`
+	Activity          enrich.Labeled    `json:"activity_type"`
+	Personal          enrich.Labeled    `json:"personal"`
+	FunctionGuess     enrich.Labeled    `json:"function_guess"`
+	Subcategory       enrich.Labeled    `json:"subcategory"`
+	SubcategoryAlt    []enrich.Labeled  `json:"subcategory_alt,omitempty"`
 	PipelineStatus    string            `json:"pipeline_status"`
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
@@ -65,6 +70,11 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		Entities:          entities,
 		Sensitivity:       p.Sensitivity,
 		SensitivitySpans:  p.SensitivitySpans,
+		Activity:          p.Activity,
+		Personal:          p.Personal,
+		FunctionGuess:     p.FunctionGuess,
+		Subcategory:       p.Subcategory,
+		SubcategoryAlt:    p.SubcategoryAlt,
 		PipelineStatus:    p.PipelineStatus,
 		ExtractorVersions: p.ExtractorVersions,
 		SchemaVersion:     p.SchemaVersion,

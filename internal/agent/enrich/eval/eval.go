@@ -15,11 +15,17 @@ import (
 var goldJSONL string
 
 // GoldRow is one labeled evaluation example.
+//
+// Activity and Subcategory are optional (schema-v2 facets, Tasks 4-5): older
+// rows leave them blank, and Score treats a blank gold value for a field as
+// "not scored" rather than counting it as a miss.
 type GoldRow struct {
 	Text        string `json:"text"`
 	TaskType    string `json:"task_type"`
 	Domain      string `json:"domain"`
 	Sensitivity string `json:"sensitivity"`
+	Activity    string `json:"activity_type"`
+	Subcategory string `json:"subcategory"`
 }
 
 // Pred is one model prediction for the scored fields.
@@ -27,6 +33,8 @@ type Pred struct {
 	TaskType    string
 	Domain      string
 	Sensitivity string
+	Activity    string
+	Subcategory string
 }
 
 // LoadGold parses the embedded gold set.
@@ -58,6 +66,10 @@ func fieldOf(x any, f string) string {
 			return v.Domain
 		case "sensitivity":
 			return v.Sensitivity
+		case "activity_type":
+			return v.Activity
+		case "subcategory":
+			return v.Subcategory
 		}
 	case Pred:
 		switch f {
@@ -67,6 +79,10 @@ func fieldOf(x any, f string) string {
 			return v.Domain
 		case "sensitivity":
 			return v.Sensitivity
+		case "activity_type":
+			return v.Activity
+		case "subcategory":
+			return v.Subcategory
 		}
 	}
 	return ""
@@ -74,24 +90,36 @@ func fieldOf(x any, f string) string {
 
 // Score computes per-field accuracy and, for "sensitivity", sensitive_recall
 // (recall over rows whose gold sensitivity != "none"; 1.0 when there are none).
+//
+// A blank gold value for a field is treated as "no label" and excluded from
+// that field's accuracy denominator — this lets optional facets (e.g.
+// activity_type, subcategory) coexist with older gold rows that predate them,
+// without those rows counting as misses. If a field has no labeled rows at
+// all, its accuracy is reported as 1.0 (vacuous), mirroring the
+// sensitive_recall convention below.
 func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]float64 {
 	metrics := map[string]map[string]float64{}
 	n := len(gold)
 	if len(pred) < n {
 		n = len(pred)
 	}
-	total := len(gold)
-	if total == 0 {
-		total = 1
-	}
 	for _, f := range fields {
-		correct := 0
+		correct, considered := 0, 0
 		for i := 0; i < n; i++ {
-			if fieldOf(gold[i], f) == fieldOf(pred[i], f) {
+			g := fieldOf(gold[i], f)
+			if g == "" {
+				continue
+			}
+			considered++
+			if g == fieldOf(pred[i], f) {
 				correct++
 			}
 		}
-		entry := map[string]float64{"accuracy": float64(correct) / float64(total)}
+		acc := 1.0
+		if considered > 0 {
+			acc = float64(correct) / float64(considered)
+		}
+		entry := map[string]float64{"accuracy": acc}
 		if f == "sensitivity" {
 			sens, hit := 0, 0
 			for i := 0; i < n; i++ {
@@ -123,6 +151,8 @@ func RunModel(m enrich.Model, gold []GoldRow) []Pred {
 			TaskType:    p.TaskType.Value,
 			Domain:      p.Domain.Value,
 			Sensitivity: p.Sensitivity.Value,
+			Activity:    p.Activity.Value,
+			Subcategory: p.Subcategory.Value,
 		})
 	}
 	return pred
