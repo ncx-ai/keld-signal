@@ -157,3 +157,7 @@ client behavior, and security.
 - `KELD_SETTINGS_POLL` — how often `keld-agent` polls Atlas for org enrichment
   settings (Go duration, default `5m`; for tests/local dev). See
   [docs/enrichment-settings.md](docs/enrichment-settings.md).
+
+The optional GLiNER2 ML sidecar has its own load-protection tuning knobs
+(`KELD_SIDECAR_MAX_CHARS`, `KELD_SIDECAR_QUEUE_MAX`, `KELD_GOV_*`) — see
+[sidecar/README.md](sidecar/README.md#tuning-env).
