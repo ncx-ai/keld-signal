@@ -6,12 +6,37 @@ spans (surface text + offsets); masking is enforced daemon-side by the
 enrichment pipeline, never here.
 """
 import os
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 from app.adapter import normalize_classify, normalize_entities, normalize_extract
+
+# Serialize ALL model inference. FastAPI runs these sync endpoints in a
+# threadpool, so several requests (e.g. the daemon's per-job extractor fan-out)
+# can otherwise hit the shared GLiNER2 model at once — each concurrent inference
+# allocates its own activation tensors, which is what OOM-killed the sidecar.
+# Holding this lock means the model only ever runs ONE inference at a time, so
+# resident memory is bounded to a single call's footprint. Extra requests block
+# (cheaply) in their threadpool thread until the lock frees.
+_infer_lock = threading.Lock()
+
+# Cap input length as a second guard: GLiNER2 is a transformer, so memory grows
+# roughly with the square of the sequence length. A pathologically long prompt
+# or transcript can allocate a huge tensor in a single call, which the inference
+# lock alone would not prevent. The cap is generous (only clips outliers) and
+# overridable via env. <= 0 disables clipping.
+_MAX_CHARS = int(os.environ.get("KELD_SIDECAR_MAX_CHARS", "20000"))
+
+
+def _clip(text: str) -> str:
+    """Truncate text to _MAX_CHARS to bound single-inference memory. Pure so it
+    is unit-testable without loading the model."""
+    if _MAX_CHARS > 0 and len(text) > _MAX_CHARS:
+        return text[:_MAX_CHARS]
+    return text
 
 # Load from a locally-provisioned model directory when the daemon supplies one
 # (KELD_GLINER2_DIR); otherwise fall back to the pinned HF model id.
@@ -86,20 +111,26 @@ def health():
 
 @app.post("/entities")
 def entities(body: EntitiesIn):
-    raw = _state["model"].extract_entities(body.text, body.labels)
-    return {"entities": normalize_entities(raw, body.text)}
+    text = _clip(body.text)
+    with _infer_lock:
+        raw = _state["model"].extract_entities(text, body.labels)
+    return {"entities": normalize_entities(raw, text)}
 
 
 @app.post("/classify")
 def classify(body: ClassifyIn):
-    raw = _state["model"].classify_text(body.text, body.tasks)
+    text = _clip(body.text)
+    with _infer_lock:
+        raw = _state["model"].classify_text(text, body.tasks)
     return {"results": normalize_classify(raw)}
 
 
 @app.post("/extract")
 def extract(body: ExtractIn):
-    schema = _state["model"].create_schema().entities(body.labels)
-    for task, options in body.tasks.items():
-        schema = schema.classification(task, options)
-    raw = _state["model"].extract(body.text, schema)
-    return normalize_extract(raw, body.text, list(body.tasks.keys()))
+    text = _clip(body.text)
+    with _infer_lock:
+        schema = _state["model"].create_schema().entities(body.labels)
+        for task, options in body.tasks.items():
+            schema = schema.classification(task, options)
+        raw = _state["model"].extract(text, schema)
+    return normalize_extract(raw, text, list(body.tasks.keys()))

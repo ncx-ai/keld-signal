@@ -6,8 +6,10 @@ import "fmt"
 type Extractor interface {
 	Name() string
 	Version() string
-	// Run is invoked concurrently (one goroutine per extractor); it MUST be
-	// read-only w.r.t. ctx (return output; never call ctx.Set).
+	// Run is invoked sequentially by the pipeline (Wave1 no longer fans out
+	// into goroutines — see pipeline.Run). It MUST still be read-only w.r.t.
+	// ctx (return output; never call ctx.Set) so Wave1 extractors stay
+	// order-independent and can safely be committed as a batch.
 	Run(ctx *JobContext) (map[string]any, error)
 }
 

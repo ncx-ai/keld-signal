@@ -1,7 +1,6 @@
 package enrich
 
 import (
-	"sync"
 	"time"
 )
 
@@ -19,7 +18,17 @@ func runStage(ex Extractor, ctx *JobContext) (out map[string]any, ok bool) {
 	return o, true
 }
 
-// Run executes the wave-1 extractors in parallel and assembles a Profile.
+// Run executes the wave-1 extractors sequentially and assembles a Profile.
+//
+// The extractors are run one at a time (never fanned out into goroutines) so a
+// single job issues at most ONE model inference to the sidecar at any moment.
+// This is deliberate load protection: concurrent inferences on the shared
+// GLiNER2 model each allocate their own activation tensors, and fanning out the
+// full wave multiplied peak memory enough to OOM-kill the sidecar. Serial
+// execution bounds the sidecar's footprint to a single inference. Wave1
+// extractors are independent (they never read each other's output), so results
+// are committed to ctx only after the whole wave completes — preserving the
+// original semantics regardless of order.
 func Run(text, source string, meta Meta, m Model) Profile {
 	ctx := NewJobContext(text, source, meta, m)
 	exs := Wave1()
@@ -30,16 +39,10 @@ func Run(text, source string, meta Meta, m Model) Profile {
 		ok   bool
 	}
 	results := make([]res, len(exs))
-	var wg sync.WaitGroup
 	for i, ex := range exs {
-		wg.Add(1)
-		go func(i int, ex Extractor) {
-			defer wg.Done()
-			out, ok := runStage(ex, ctx)
-			results[i] = res{name: ex.Name(), out: out, ok: ok}
-		}(i, ex)
+		out, ok := runStage(ex, ctx)
+		results[i] = res{name: ex.Name(), out: out, ok: ok}
 	}
-	wg.Wait()
 
 	anyFailed := false
 	for _, r := range results {
