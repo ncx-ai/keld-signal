@@ -30,7 +30,7 @@ class InferenceRunner:
         if self._consumer is None:
             self._consumer = asyncio.create_task(self._run())
 
-    async def submit(self, fn, *args):
+    async def submit(self, fn, *args, **kwargs):
         if self._stopped:
             # Shutting down: nothing will run this. Callers treat QueueFull as
             # "unavailable" (503), which is the right signal during shutdown.
@@ -38,7 +38,7 @@ class InferenceRunner:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         try:
-            self._queue.put_nowait((fn, args, future))
+            self._queue.put_nowait((fn, args, kwargs, future))
         except asyncio.QueueFull:
             raise QueueFull()
         return await future
@@ -46,10 +46,10 @@ class InferenceRunner:
     async def _run(self) -> None:
         loop = asyncio.get_running_loop()
         while True:
-            fn, args, future = await self._queue.get()
+            fn, args, kwargs, future = await self._queue.get()
             try:
                 await self._governor.await_slot()
-                result = await loop.run_in_executor(self._executor, lambda: fn(*args))
+                result = await loop.run_in_executor(self._executor, lambda: fn(*args, **kwargs))
                 if not future.cancelled():
                     future.set_result(result)
             except Exception as e:  # noqa: BLE001 - propagate to the awaiting caller
@@ -73,7 +73,7 @@ class InferenceRunner:
         # than leaving `await future` in submit() to hang forever.
         while True:
             try:
-                _fn, _args, future = self._queue.get_nowait()
+                _fn, _args, _kwargs, future = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
             if not future.cancelled():

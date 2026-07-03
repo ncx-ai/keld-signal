@@ -141,7 +141,7 @@ async def classify(body: ClassifyIn):
     text = _clip(body.text)
     model = _state["model"]
     try:
-        raw = await _state["runner"].submit(model.classify_text, text, body.tasks)
+        raw = await _state["runner"].submit(model.classify_text, text, body.tasks, include_confidence=True)
     except QueueFull:
         raise HTTPException(status_code=503, detail="overloaded")
     return {"results": normalize_classify(raw)}
@@ -156,7 +156,7 @@ async def extract(body: ExtractIn):
         schema = model.create_schema().entities(body.labels)
         for task, options in body.tasks.items():
             schema = schema.classification(task, options)
-        return model.extract(text, schema)
+        return model.extract(text, schema, include_confidence=True)
 
     try:
         raw = await _state["runner"].submit(_run)

@@ -24,6 +24,18 @@ def test_submit_runs_and_returns_result():
     asyncio.run(run())
 
 
+def test_submit_forwards_kwargs():
+    async def run():
+        r = InferenceRunner(_NoWaitGov(), queue_max=8)
+        r.start()
+        try:
+            out = await r.submit(lambda x, k=0: x + k, 1, k=41)
+            assert out == 42
+        finally:
+            await r.stop()
+    asyncio.run(run())
+
+
 def test_single_flight_never_overlaps():
     active = {"n": 0}
     overlaps = []

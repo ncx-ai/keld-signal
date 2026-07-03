@@ -48,7 +48,11 @@ from fastapi import HTTPException
 
 
 class _FakeModel:
-    def classify_text(self, text, tasks):
+    def classify_text(self, text, tasks, include_confidence=False):
+        # Mirror gliner2: with include_confidence it returns {"label","confidence"} dicts
+        # carrying the real score; without it, a bare label string (→ adapter fabricates 1.0).
+        if include_confidence:
+            return {t: {"label": opts[0], "confidence": 0.73} for t, opts in tasks.items()}
         return {t: opts[0] for t, opts in tasks.items()}  # top label = first option
 
     def extract_entities(self, text, labels):
@@ -63,7 +67,7 @@ class _FakeModel:
     def classification(self, task, options):
         return self
 
-    def extract(self, text, schema):
+    def extract(self, text, schema, include_confidence=False):
         return {"entities": {}}
 
 
@@ -86,6 +90,8 @@ def test_classify_endpoint_routes_through_runner():
         try:
             out = await m.classify(m.ClassifyIn(text="hello", tasks={"task_type": ["a", "b"]}))
             assert out["results"]["task_type"][0]["label"] == "a"
+            # real GLiNER2 score must survive — not the fabricated 1.0 from a bare-string label
+            assert out["results"]["task_type"][0]["confidence"] == 0.73
         finally:
             await runner.stop()
     _asyncio.run(run())
