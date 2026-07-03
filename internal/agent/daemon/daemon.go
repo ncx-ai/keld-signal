@@ -68,7 +68,11 @@ func process(j queue.Job, m enrich.Model, pub Sender, actor string, includeEntit
 	if !ok {
 		return // could not resolve prompt text; skip silently
 	}
-	profile := enrich.Run(text, j.Source, enrich.Meta{Repo: j.Cwd, Tool: j.Source}, m)
+	meta := enrich.Meta{Repo: j.Cwd, Tool: j.Source}
+	if enrich.ContextEligible(j.Source) {
+		meta = contextMeta(j)
+	}
+	profile := enrich.Run(text, j.Source, meta, m)
 	e := publish.Build(j, profile, actor, includeEntityText(), time.Now())
 	if err := pub.Send(e); err != nil {
 		log.Printf("keld-agent: publish failed for %s: %v", j.Key(), err)
