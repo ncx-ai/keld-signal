@@ -186,3 +186,42 @@ func TestLoginPollsDespiteBlockingOpener(t *testing.T) {
 		t.Fatal("Login blocked on the browser opener — the device-poll loop never ran")
 	}
 }
+
+// Stored creds carry the server the token belongs to (APIURL). Subsequent
+// commands must target that server, not the built-in default — otherwise a
+// local token is sent to atlas.keld.co and 401s. Regression for the
+// `keld signal setup` 401 after a local login.
+func TestRequireAuthTargetsStoredAPIURL(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	paths.SetAPIBaseOverride("") // no --api-url flag active
+	defer paths.SetAPIBaseOverride("")
+	if err := Save(AuthData{AccessToken: "T", Principal: "p", Org: "o", APIURL: "http://localhost:8000"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RequireAuth(false, false, false) // lazy
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.APIURL != "http://localhost:8000" {
+		t.Fatalf("APIURL = %q", got.APIURL)
+	}
+	if paths.APIBase() != "http://localhost:8000" {
+		t.Fatalf("APIBase should follow the stored token's server, got %q", paths.APIBase())
+	}
+}
+
+// An explicit --api-url override (set before RequireAuth) beats the stored URL.
+func TestRequireAuthFlagOverrideBeatsStoredAPIURL(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	paths.SetAPIBaseOverride("http://flag:9000")
+	defer paths.SetAPIBaseOverride("")
+	if err := Save(AuthData{AccessToken: "T", Principal: "p", Org: "o", APIURL: "http://localhost:8000"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RequireAuth(false, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if paths.APIBase() != "http://flag:9000" {
+		t.Fatalf("explicit flag override should win, got %q", paths.APIBase())
+	}
+}

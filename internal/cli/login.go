@@ -30,9 +30,8 @@ func newLoginCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Print "Logged in as <principal> (org: <org>)" after RequireAuth returns.
-			// On a fresh login, Login() also prints this message, so the line appears
-			// twice — intentional parity with the original Python CLI's behaviour.
+			// Sole "Logged in as …" confirmation (Login() no longer prints it), so the
+			// line appears exactly once whether we re-authed or returned stored creds.
 			console.Print(fmt.Sprintf("Logged in as %s (org: %s)", a.Principal, a.Org))
 			return nil
 		},

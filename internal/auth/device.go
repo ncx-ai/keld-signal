@@ -60,7 +60,8 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 			if err := Save(auth); err != nil {
 				return nil, err
 			}
-			console.Print(fmt.Sprintf("Logged in as %s (org: %s)", auth.Principal, auth.Org))
+			// The "Logged in as …" confirmation is printed by the command layer
+			// (login.go) so it appears exactly once regardless of entry path.
 			return &auth, nil
 		}
 		sleep(time.Duration(ds.Interval) * time.Second)
@@ -83,11 +84,19 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 // needs a browser): it falls back to the lazy path so `keld login --no-login`
 // still reports stored presence without opening a browser.
 func RequireAuth(noLogin bool, openBrowser bool, force bool) (*AuthData, error) {
+	existing, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	// A stored token is only valid at the server it was minted on (its APIURL).
+	// Unless an explicit --api-url flag already set an override, target that server
+	// for every subsequent command — and for a plain re-login — instead of the
+	// built-in default. Without this, `keld signal setup` sends a local token to
+	// atlas.keld.co and gets 401 "invalid CLI token".
+	if existing != nil && existing.APIURL != "" && paths.APIBaseOverride() == "" {
+		paths.SetAPIBaseOverride(existing.APIURL)
+	}
 	if !(force && !noLogin) {
-		existing, err := Load()
-		if err != nil {
-			return nil, err
-		}
 		if existing != nil {
 			return existing, nil
 		}
