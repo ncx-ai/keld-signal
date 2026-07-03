@@ -1,7 +1,13 @@
 # PyInstaller spec — build with: pyinstaller sidecar/keld-agent-sidecar.spec
 # One-dir keeps torch's shared libs + data files intact (one-file unpacks slowly
 # and is fragile with torch). Produces dist/keld-agent-sidecar/keld-agent-sidecar.
+import os
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+# PyInstaller resolves relative paths in a spec against the spec's own directory,
+# so anchor to SPECPATH (…/sidecar) to stay correct regardless of the invoking CWD.
+_here = SPECPATH
 
 datas, binaries, hiddenimports = [], [], []
 for pkg in ("torch", "gliner2", "transformers", "tokenizers", "safetensors", "huggingface_hub"):
@@ -12,8 +18,8 @@ for pkg in ("torch", "gliner2", "transformers", "tokenizers", "safetensors", "hu
 hiddenimports += collect_submodules("uvicorn")
 
 a = Analysis(
-    ["sidecar/serve.py"],
-    pathex=["sidecar"],
+    [os.path.join(_here, "serve.py")],
+    pathex=[_here],
     datas=datas,
     binaries=binaries,
     hiddenimports=hiddenimports,
