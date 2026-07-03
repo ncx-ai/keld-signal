@@ -5,6 +5,17 @@ object directly (not by module string) so it works both under a plain Python
 run and inside a PyInstaller-frozen binary.
 """
 import argparse
+import sys
+
+# gliner2 prints a 🧠 emoji when it loads the model; on Windows the default
+# cp1252 stream encoding raises UnicodeEncodeError and kills sidecar startup
+# (macOS/Linux default to UTF-8). Force UTF-8 on our streams so the frozen
+# binary starts wherever it's spawned.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
 
 import uvicorn
 

@@ -112,9 +112,12 @@ jobs:
         env:
           KELD_VERSION: ${{ github.event.release.tag_name }}
         run: |
+          if (-not $env:KELD_VERSION) { $env:KELD_VERSION = "0.0.0-dryrun" }
           Copy-Item -Recurse -Force dist\keld-agent-sidecar installers\windows\keld-agent-sidecar
           Copy-Item stage\keld.exe, stage\keld-agent.exe installers\windows\
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installers\windows\keld-agent.iss
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc installers\windows\keld-agent.iss
           if ($env:WINDOWS_CERT_PFX) { Write-Host "signtool sign step (gated) would run here" }
 
       - name: Package Linux sidecar tarball
