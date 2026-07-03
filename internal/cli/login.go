@@ -23,7 +23,10 @@ func newLoginCmd() *cobra.Command {
 				paths.SetAPIBaseOverride(apiURL)
 			}
 
-			a, err := auth.RequireAuth(noLogin, true)
+			// force=true: an explicit `keld login` always re-authenticates rather than
+			// trusting stored creds (which may be revoked/rotated). Falls back to the
+			// lazy path only under --no-login (no browser available).
+			a, err := auth.RequireAuth(noLogin, true, true)
 			if err != nil {
 				return err
 			}

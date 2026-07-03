@@ -74,18 +74,26 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 	return nil, errs.New("login timed out; please run `keld login` again")
 }
 
-// RequireAuth returns the stored auth if present. If no auth is stored and
-// noLogin is true it returns an error. Otherwise it runs the device-flow login.
-func RequireAuth(noLogin bool, openBrowser bool) (*AuthData, error) {
-	existing, err := Load()
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil {
-		return existing, nil
-	}
-	if noLogin {
-		return nil, errs.New("not logged in (run `keld login`; --no-login was set)")
+// RequireAuth returns usable auth. When force is false it is lazy: stored creds
+// are returned as-is if present (a caller's subsequent API call surfaces any
+// staleness). When force is true — the explicit `keld login` command — it always
+// runs a fresh device-flow login, replacing any stored creds, so an explicit
+// login never silently trusts cached credentials that may have been rotated or
+// invalidated server-side. force is ignored when noLogin is set (a fresh login
+// needs a browser): it falls back to the lazy path so `keld login --no-login`
+// still reports stored presence without opening a browser.
+func RequireAuth(noLogin bool, openBrowser bool, force bool) (*AuthData, error) {
+	if !(force && !noLogin) {
+		existing, err := Load()
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			return existing, nil
+		}
+		if noLogin {
+			return nil, errs.New("not logged in (run `keld login`; --no-login was set)")
+		}
 	}
 	return Login(
 		api.NewClient(paths.APIBase(), ""),

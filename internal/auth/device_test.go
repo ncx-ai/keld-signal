@@ -8,7 +8,78 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-cli/internal/api"
+	"github.com/ncx-ai/keld-cli/internal/paths"
 )
+
+// deviceServer returns an httptest server that completes the device flow on the
+// first poll, handing back the given token/principal/org, and records poll hits.
+func deviceServer(t *testing.T, token, principal, org string, hits *int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/cli/device/start":
+			w.Write([]byte(`{"device_code":"dc","user_code":"UC","verification_url":"https://v","interval":1,"expires_in":10}`))
+		case "/v1/cli/device/poll":
+			*hits++
+			w.Write([]byte(`{"access_token":"` + token + `","principal":"` + principal + `","org":"` + org + `"}`))
+		}
+	}))
+	return srv
+}
+
+// force=true makes `keld login` re-authenticate even when (possibly stale) creds
+// are already stored — it must NOT short-circuit on them, and it must persist the
+// fresh token. Regression test for stored creds surviving a server-side token
+// reset (e.g. a DB reseed) and being silently trusted.
+func TestRequireAuthForceReauthenticatesIgnoringStoredCreds(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	if err := Save(AuthData{AccessToken: "STALE", Principal: "old", Org: "old", APIURL: "http://old"}); err != nil {
+		t.Fatal(err)
+	}
+	hits := 0
+	srv := deviceServer(t, "FRESH", "admin@acme.test", "Acme", &hits)
+	defer srv.Close()
+	paths.SetAPIBaseOverride(srv.URL)
+	defer paths.SetAPIBaseOverride("")
+
+	got, err := RequireAuth(false, false, true) // force, no browser
+	if err != nil {
+		t.Fatalf("force login: %v", err)
+	}
+	if hits == 0 {
+		t.Fatal("force login short-circuited on stored creds — device flow never ran")
+	}
+	if got.AccessToken != "FRESH" {
+		t.Fatalf("expected FRESH token, got %q", got.AccessToken)
+	}
+	if reloaded, _ := Load(); reloaded == nil || reloaded.AccessToken != "FRESH" {
+		t.Fatalf("fresh creds not persisted: %v", reloaded)
+	}
+}
+
+// force=false stays lazy: stored creds are returned without a network round-trip.
+func TestRequireAuthLazyReturnsStoredCreds(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	if err := Save(AuthData{AccessToken: "STORED", Principal: "p", Org: "o", APIURL: "http://x"}); err != nil {
+		t.Fatal(err)
+	}
+	hits := 0
+	srv := deviceServer(t, "FRESH", "p", "o", &hits)
+	defer srv.Close()
+	paths.SetAPIBaseOverride(srv.URL)
+	defer paths.SetAPIBaseOverride("")
+
+	got, err := RequireAuth(false, false, false) // lazy
+	if err != nil {
+		t.Fatalf("lazy auth: %v", err)
+	}
+	if hits != 0 {
+		t.Fatal("lazy path hit the server — it should return stored creds directly")
+	}
+	if got.AccessToken != "STORED" {
+		t.Fatalf("expected STORED token, got %q", got.AccessToken)
+	}
+}
 
 func TestLoginPollsThenSucceeds(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())

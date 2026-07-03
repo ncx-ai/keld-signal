@@ -202,7 +202,9 @@ func newSetupCmd() *cobra.Command {
 				paths.SetAPIBaseOverride(apiURL)
 			}
 
-			a, err := auth.RequireAuth(noLogin, true)
+			// force=false: setup is lazy — reuse stored creds when present (it does not
+			// force a browser re-login just to configure telemetry).
+			a, err := auth.RequireAuth(noLogin, true, false)
 			if err != nil {
 				return err
 			}
