@@ -36,6 +36,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Freeze sidecar
         shell: bash
         run: bash sidecar/build-freeze.sh
@@ -60,13 +64,12 @@ jobs:
           done
           [ -n "${ok:-}" ] || { echo "sidecar did not become healthy"; exit 1; }
 
-      - name: Download release binaries into stage
+      - name: Stage keld/keld-agent binaries
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          # keld/keld-agent for this OS/arch come from the GoReleaser archive on the same release.
           case "${{ runner.os }}" in
             macOS)   goos=darwin;  ext="" ;;
             Windows) goos=windows; ext=".exe" ;;
@@ -74,10 +77,18 @@ jobs:
           esac
           mkdir -p stage
           arch="${{ matrix.goarch }}"
-          asset="keld_${goos}_${arch}.tar.gz"
-          [ "$goos" = "windows" ] && asset="keld_${goos}_${arch}.zip"
-          gh release download "$TAG" -p "$asset" -D stage_dl
-          if [ "$goos" = "windows" ]; then unzip -o "stage_dl/$asset" -d stage; else tar -xzf "stage_dl/$asset" -C stage; fi
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # Release: keld/keld-agent come from the GoReleaser archive on the same release.
+            asset="keld_${goos}_${arch}.tar.gz"
+            [ "$goos" = "windows" ] && asset="keld_${goos}_${arch}.zip"
+            gh release download "$TAG" -p "$asset" -D stage_dl
+            if [ "$goos" = "windows" ]; then unzip -o "stage_dl/$asset" -d stage; else tar -xzf "stage_dl/$asset" -C stage; fi
+          else
+            # Dry run (workflow_dispatch): no release to pull from, so build the
+            # binaries natively on this runner (runner arch == matrix arch, no cross-compile).
+            GOOS=$goos GOARCH=$arch go build -o "stage/keld${ext}" ./cmd/keld
+            GOOS=$goos GOARCH=$arch go build -o "stage/keld-agent${ext}" ./cmd/keld-agent
+          fi
           cp -R dist/keld-agent-sidecar stage/ 2>/dev/null || cp -R dist/keld-agent-sidecar/* stage/
 
       - name: Package macOS .pkg
@@ -91,7 +102,9 @@ jobs:
           APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
         run: |
           # Flatten sidecar one-dir beside keld-agent in the payload.
-          bash installers/macos/build-pkg.sh "${{ github.event.release.tag_name }}" stage "${{ matrix.goarch }}"
+          VER="${{ github.event.release.tag_name }}"
+          [ -z "$VER" ] && VER="0.0.0-dryrun"
+          bash installers/macos/build-pkg.sh "$VER" stage "${{ matrix.goarch }}"
 
       - name: Package Windows installer
         if: matrix.os == 'windows-latest'
