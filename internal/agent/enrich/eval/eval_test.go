@@ -1,6 +1,11 @@
 package eval
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/ncx-ai/keld-cli/internal/agent/enrich"
+)
 
 func TestScoreAccuracy(t *testing.T) {
 	gold := []GoldRow{{TaskType: "codegen"}, {TaskType: "summarization"}}
@@ -81,5 +86,36 @@ func TestLoadGoldReadsExpandedSet(t *testing.T) {
 		if !seen[want] {
 			t.Fatalf("gold set missing sensitivity class %q", want)
 		}
+	}
+}
+
+type captureModel struct{ lastClassify string }
+
+func (c *captureModel) Classify(text string, tasks map[string][]string) map[string][]enrich.Ranked {
+	c.lastClassify = text
+	out := map[string][]enrich.Ranked{}
+	for name, labels := range tasks {
+		if len(labels) > 0 {
+			out[name] = []enrich.Ranked{{Label: labels[0], Confidence: 1}}
+		}
+	}
+	return out
+}
+func (c *captureModel) Entities(string, map[string]string) []enrich.Entity { return nil }
+func (c *captureModel) Extract(string, map[string]string, map[string][]string) enrich.ExtractResult {
+	return enrich.ExtractResult{}
+}
+
+func TestRunModelWithContextFeedsRecentPrompts(t *testing.T) {
+	gold := []GoldRow{{Text: "ok do it", RecentPrompts: []string{"add the compliance flag"}, Repo: "keld-atlas", Branch: "feat/x", Project: "Keld"}}
+	aug := &captureModel{}
+	_ = RunModelWithContext(aug, gold)
+	if !strings.Contains(aug.lastClassify, "add the compliance flag") || !strings.Contains(aug.lastClassify, "Recent prompts") {
+		t.Fatalf("augmented run must feed recent prompts into the classifier; got %q", aug.lastClassify)
+	}
+	base := &captureModel{}
+	_ = RunModel(base, gold)
+	if strings.Contains(base.lastClassify, "add the compliance flag") {
+		t.Fatalf("baseline run must NOT include context; got %q", base.lastClassify)
 	}
 }

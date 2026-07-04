@@ -179,3 +179,18 @@ func RunModel(m enrich.Model, gold []GoldRow) []Pred {
 	}
 	return pred
 }
+
+// RunModelWithContext is RunModel but feeds each gold row's session context
+// (recent prompts, branch, project) into the classifier via GoldRow.Meta, so
+// augmented classification can be scored against the no-context baseline.
+func RunModelWithContext(m enrich.Model, gold []GoldRow) []Pred {
+	pred := make([]Pred, 0, len(gold))
+	for _, g := range gold {
+		p := enrich.Run(g.Text, "eval", g.Meta("claude_code"), m)
+		pred = append(pred, Pred{
+			TaskType: p.TaskType.Value, Domain: p.Domain.Value, Sensitivity: p.Sensitivity.Value,
+			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, Subcategory: p.Subcategory.Value,
+		})
+	}
+	return pred
+}

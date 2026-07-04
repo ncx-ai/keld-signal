@@ -65,4 +65,22 @@ func TestSidecarVsDeterministic(t *testing.T) {
 				f, side[f]["accuracy"], det[f]["accuracy"])
 		}
 	}
+
+	// Augmentation lift: feed each gold row's session context (recent prompts,
+	// branch, project) into the sidecar classifier and compare against the
+	// no-context baseline on the facets that actually flow through the
+	// preamble (function_guess, subcategory). This is the measurement the
+	// eval previously never took — GoldRow.Meta was built but never wired
+	// into a model run.
+	facets := []string{"function_guess", "subcategory"}
+	fBase := Score(gold, RunModel(sc, gold), facets)
+	fAug := Score(gold, RunModelWithContext(sc, gold), facets)
+	t.Logf("facets baseline:  %+v", fBase)
+	t.Logf("facets augmented: %+v", fAug)
+	for _, f := range facets {
+		// augmentation must not regress facet accuracy (small tolerance for run-to-run noise)
+		if fAug[f]["accuracy"]+0.01 < fBase[f]["accuracy"] {
+			t.Errorf("augmentation regressed %s: base=%.3f aug=%.3f", f, fBase[f]["accuracy"], fAug[f]["accuracy"])
+		}
+	}
 }
