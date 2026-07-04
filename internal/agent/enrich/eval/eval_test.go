@@ -29,6 +29,38 @@ func TestScoreSensitiveRecallAllNoneIsOne(t *testing.T) {
 	}
 }
 
+func TestGoldRowMetaFromContext(t *testing.T) {
+	r := GoldRow{
+		Text:          "ok do it",
+		RecentPrompts: []string{"add the compliance flag", "right-align the pills"},
+		Repo:          "keld-atlas", Branch: "feat/pills", Project: "Keld Atlas",
+	}
+	m := r.Meta("claude_code")
+	if m.Repo != "keld-atlas" || m.GitBranch != "feat/pills" || m.Project != "Keld Atlas" || m.Tool != "claude_code" {
+		t.Fatalf("meta base: %+v", m)
+	}
+	if len(m.RecentPrompts) != 2 || m.RecentPrompts[0] != "add the compliance flag" {
+		t.Fatalf("recent: %v", m.RecentPrompts)
+	}
+}
+
+func TestLoadGoldParsesContextFields(t *testing.T) {
+	rows, err := LoadGold()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range rows {
+		if len(r.RecentPrompts) > 0 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected at least one gold row with recent_prompts context")
+	}
+}
+
 func TestLoadGoldReadsExpandedSet(t *testing.T) {
 	g, err := LoadGold()
 	if err != nil {

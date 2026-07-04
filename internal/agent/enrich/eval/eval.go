@@ -20,13 +20,28 @@ var goldJSONL string
 // facets, Tasks 4-6): older rows leave them blank, and Score treats a blank
 // gold value for a field as "not scored" rather than counting it as a miss.
 type GoldRow struct {
-	Text          string `json:"text"`
-	TaskType      string `json:"task_type"`
-	Domain        string `json:"domain"`
-	Sensitivity   string `json:"sensitivity"`
-	Activity      string `json:"activity_type"`
-	FunctionGuess string `json:"function_guess"`
-	Subcategory   string `json:"subcategory"`
+	Text          string   `json:"text"`
+	RecentPrompts []string `json:"recent_prompts"` // optional preceding user prompts (newest-first)
+	Repo          string   `json:"repo"`
+	Branch        string   `json:"branch"`
+	Project       string   `json:"project"`
+	TaskType      string   `json:"task_type"`
+	Domain        string   `json:"domain"`
+	Sensitivity   string   `json:"sensitivity"`
+	Activity      string   `json:"activity_type"`
+	FunctionGuess string   `json:"function_guess"`
+	Subcategory   string   `json:"subcategory"`
+}
+
+// Meta builds the enrich.Meta an augmented run would see for this gold row.
+func (r GoldRow) Meta(source string) enrich.Meta {
+	return enrich.Meta{
+		Repo:          r.Repo,
+		Tool:          source,
+		GitBranch:     r.Branch,
+		Project:       r.Project,
+		RecentPrompts: r.RecentPrompts,
+	}
 }
 
 // Pred is one model prediction for the scored fields.
