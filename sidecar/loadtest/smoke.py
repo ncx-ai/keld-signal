@@ -95,6 +95,14 @@ def run(quick=True):
         fails += _report("S3 cpu-throttle", drop > 0.15 and ewma_max >= 60,
                          f"base={base_rate:.1f}/s stressed={st_rate:.1f}/s drop={drop:.0%} ewma_max={ewma_max:.0f}")
 
+        # --- S6: CPU thread scaling --- threads should drop below full cores under stress
+        thr = [s.metrics.get("governor", {}).get("cpu_threads") for s in rows_st]
+        thr = [t for t in thr if t is not None]
+        max_threads = os.cpu_count() or 1
+        thr_min = min(thr) if thr else max_threads
+        fails += _report("S6 cpu-thread-scaling", thr_min < max_threads,
+                         f"min_threads={thr_min} (< max {max_threads})")
+
         # --- S4: backpressure --- (n < 2*queue_max so the backlog drains quickly for S5)
         res_flood = flood(sc.base_url, n=100, target_len=8000)
         got_503 = sum(1 for r in res_flood if r.status == 503)

@@ -32,9 +32,9 @@ Sidecar eviction knobs: `KELD_SIDECAR_EVICT_AVAIL_PCT` (5),
 
 ## What each tier checks
 
-**smoke** — S1 no-leak (RSS slope) + peak-rss cap; S2 flat-vs-rate (memory is
-static); S3 CPU throttle under external stress; S4 backpressure (503s, bounded
-queue); S5 idle no-spin.
+**smoke** — S1 no-leak (RSS growth) + peak-rss cap; S2 flat-vs-rate (memory is
+static); S3 CPU throttle under external stress; S6 CPU thread-scaling (cores per
+inference drop under load); S4 backpressure (503s, bounded queue); S5 idle no-spin.
 
 **soak** — K1 slow-leak slope over a long run; K2 CPU stress sweep (throughput
 non-increasing + recovers); K4 real model unload/reload with the evict threshold
