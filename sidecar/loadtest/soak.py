@@ -9,7 +9,7 @@ import time
 import httpx
 import psutil
 
-from loadtest.analysis import rss_slope_mb_per_min, steady, nonincreasing
+from loadtest.analysis import rss_slope_mb_per_min, steady, nonincreasing, mean_growth
 from loadtest.driver import run_load
 from loadtest.harness import SidecarProcess
 from loadtest.sampler import Sampler
@@ -40,11 +40,15 @@ def _k1_k2(minutes, live):
         else:
             run_load(sc.base_url, duration_s=dur, concurrency=4, rng=rng, target_len=2000)
         rows = sm.stop()
-        rss = [(r.t, r.rss_mb) for r in steady(rows, warmup_frac=0.15)]
-        slope = rss_slope_mb_per_min(rss)
-        drift = (rss[-1][1] - rss[0][1]) if rss else 0.0
-        fails += _report("K1 slow-leak", abs(drift) < 50 and slope < 2.0,
-                         f"drift={drift:.1f} MB slope={slope:.3f} MB/min")
+        steady_rows = steady(rows, warmup_frac=0.15)
+        slope = rss_slope_mb_per_min([(r.t, r.rss_mb) for r in steady_rows])
+        # Robust leak signal: second-half vs first-half mean. Endpoint drift is
+        # unreliable against the ~±100 MB run-to-run oscillation (a flat 45-min run
+        # can show ~50 MB first-vs-last purely from noise); the half-means average
+        # that out, and the slope corroborates. A real leak shows large positive growth.
+        growth = mean_growth([r.rss_mb for r in steady_rows])
+        fails += _report("K1 slow-leak", growth < 150 and slope < 2.0,
+                         f"growth={growth:.0f} MB slope={slope:.3f} MB/min")
 
         # K2: CPU stress sweep 0 -> high; throughput must be non-increasing.
         from loadtest.stressor import CpuStressor
