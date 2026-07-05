@@ -76,6 +76,7 @@ def _wire(main, queue_max=8):
     runner = InferenceRunner(gov, queue_max=queue_max)
     main._state.clear()
     main._state["model"] = _FakeModel()
+    main._state["model_state"] = "loaded"
     main._state["governor"] = gov
     main._state["runner"] = runner
     return runner
@@ -128,6 +129,50 @@ def test_extract_endpoint_queue_full_returns_503():
             release.set()
             await runner.stop()
     _asyncio.run(run())
+
+
+def test_require_loaded_raises_503_when_not_loaded():
+    from fastapi import HTTPException
+    m = _reload_main(None)
+    m._state.clear()
+    m._state["model_state"] = "evicted"
+    try:
+        m._require_loaded()
+        assert False, "expected HTTPException"
+    except HTTPException as e:
+        assert e.status_code == 503
+
+
+def test_require_loaded_returns_model_when_loaded():
+    m = _reload_main(None)
+    m._state.clear()
+    m._state["model_state"] = "loaded"
+    m._state["model"] = _FakeModel()
+    assert m._require_loaded() is m._state["model"]
+
+
+def test_classify_sheds_503_and_counts_when_queue_full():
+    from app.metrics import Counts
+    m = _reload_main(None)
+    m._state.clear()
+    m._state["model_state"] = "loaded"
+    m._state["model"] = _FakeModel()
+    m._state["counts"] = Counts()
+
+    class _FullRunner:
+        async def submit(self, *a, **k):
+            from app.runner import QueueFull
+            raise QueueFull()
+    m._state["runner"] = _FullRunner()
+
+    from fastapi import HTTPException
+    body = m.ClassifyIn(text="hi", tasks={"task_type": ["codegen", "other"]})
+    try:
+        _asyncio.run(m.classify(body))
+        assert False, "expected 503"
+    except HTTPException as e:
+        assert e.status_code == 503
+    assert m._state["counts"].shed_503 == 1
 
 
 if __name__ == "__main__":
