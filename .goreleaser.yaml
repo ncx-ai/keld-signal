@@ -58,6 +58,11 @@ checksum:
   name_template: "checksums.txt"
 
 release:
+  # Tags with a prerelease segment (e.g. v0.3.0-rc.1) are flagged as GitHub
+  # pre-releases, so they're not served as "latest" (the install.sh one-liner
+  # resolves `releases/latest`, which excludes pre-releases). Unsigned installers
+  # are produced whenever the signing secrets are absent — the prerelease default.
+  prerelease: auto
   github:
     owner: ncx-ai
     name: keld-signal
