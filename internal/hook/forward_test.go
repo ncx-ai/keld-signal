@@ -13,6 +13,7 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
 	"github.com/ncx-ai/keld-signal/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
 func TestForwardPostsPointerWithSecret(t *testing.T) {
@@ -80,5 +81,29 @@ func TestForwardLogsNon2xxWithoutPromptText(t *testing.T) {
 	}
 	if strings.Contains(s, "/secret/transcript.jsonl") {
 		t.Fatalf("debug log must not contain the transcript path/content: %q", s)
+	}
+}
+
+func TestForwardSpoolsWhenDaemonUnreachable(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	// agent.json with a dead port -> POST fails -> must spool.
+	if err := agentcfg.Write(agentcfg.Info{Port: 1, Secret: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	forwardToAgent("claude_code", "S1", "Pspool", "/t/x.jsonl", "/cwd")
+
+	var ids []string
+	spool.Drain(func(p spool.Pointer) error { ids = append(ids, p.Correlation.ID); return nil })
+	if len(ids) != 1 || ids[0] != "Pspool" {
+		t.Fatalf("expected pointer Pspool spooled, got %v", ids)
+	}
+}
+
+func TestForwardSpoolsWhenNoDaemonInfo(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir()) // no agent.json at all
+	forwardToAgent("claude_code", "S1", "Pnoinfo", "/t/x.jsonl", "/cwd")
+	n, _ := spool.Drain(func(p spool.Pointer) error { return nil })
+	if n != 1 {
+		t.Fatalf("expected 1 spooled when daemon info missing, got %d", n)
 	}
 }
