@@ -142,6 +142,28 @@ func Drain(fn func(Pointer) error) (int, error) {
 	return n, nil
 }
 
+// Quarantine writes a pointer directly to spool/bad/ instead of the live spool,
+// so it is preserved for inspection but never drained/retried again. The daemon
+// uses this for a job that has repeatedly exceeded its deadline — bounding
+// re-spool so one un-enrichable job can't retry forever.
+func Quarantine(p Pointer) error {
+	bad := filepath.Join(paths.SpoolDir(), "bad")
+	if err := os.MkdirAll(bad, 0o700); err != nil {
+		return err
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	final := filepath.Join(bad, fileName(p))
+	tmp := final + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	debuglog.Append("spool: quarantined un-enrichable pointer %s", filepath.Base(final))
+	return os.Rename(tmp, final)
+}
+
 func quarantine(dir, path string) {
 	bad := filepath.Join(dir, "bad")
 	if os.MkdirAll(bad, 0o700) == nil {

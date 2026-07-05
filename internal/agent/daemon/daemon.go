@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -43,7 +44,12 @@ type Sender interface {
 // panic-isolated per job so one bad prompt never kills the daemon.
 // ready is a readiness gate: Worker blocks before processing each job until
 // ready() returns true. The block exits promptly when the queue is closed.
-func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool) {
+//
+// ctx is the daemon-lifetime context; each job runs under a child context that
+// is cancelled on timeout so a hung/slow enrichment's in-flight sidecar calls
+// are reclaimed (not left retrying forever — the death-spiral root cause).
+func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool) {
+	ledger := newRetryLedger()
 	for {
 		j, ok := q.Next()
 		if !ok {
@@ -60,20 +66,70 @@ func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEnt
 			}
 		}
 		to := jobTimeout()
-		if !runWithTimeout(to, func() { process(j, m, pub, actor, includeEntityText) }) {
-			// The job exceeded its deadline — the sidecar is unavailable/reloading and
-			// the client is still waiting. Re-spool the pointer so it retries on
-			// GLiNER2 later (NEVER degrade to deterministic, never lose it), and move
-			// on so one stuck job can't wedge the single worker. The abandoned attempt
-			// finishes in the background if the sidecar recovers; Atlas dedups on
-			// dedup_key, so a double-publish is harmless.
-			if err := spool.Write(pointerFromJob(j)); err != nil {
-				log.Printf("keld-agent: job %s exceeded %s and re-spool failed: %v", j.Key(), to, err)
+		// Per-job context: cancelling it aborts the job's in-flight sidecar calls
+		// (client.WithContext) so a timed-out attempt stops consuming the
+		// single-flight sidecar instead of leaking a retry loop.
+		jobCtx, cancel := context.WithCancel(ctx)
+		jobModel := withJobCtx(m, jobCtx)
+		finished := runWithTimeout(to, func() { process(jobCtx, j, jobModel, pub, actor, includeEntityText) })
+		cancel() // always: on timeout this reclaims the abandoned attempt; on success it just releases resources.
+
+		if finished {
+			ledger.reset(j.Key())
+			continue
+		}
+		// The job exceeded its deadline (sidecar reloading/overloaded). Re-spool
+		// so it retries on GLiNER2 later (NEVER degrade to deterministic, never
+		// lose it) and move on so one stuck job can't wedge the single worker —
+		// but bound the retries: after maxAttempts, quarantine it so a genuinely
+		// un-enrichable job can't loop forever (the amplification that saturated
+		// the sidecar). Atlas dedups on dedup_key, so a late double-publish from
+		// a recovering attempt is harmless.
+		if ledger.exhausted(j.Key(), maxAttempts()) {
+			if err := spool.Quarantine(pointerFromJob(j)); err != nil {
+				log.Printf("keld-agent: job %s exhausted retries and quarantine failed: %v", j.Key(), err)
 			} else {
-				log.Printf("keld-agent: job %s exceeded %s, re-spooled for retry", j.Key(), to)
+				log.Printf("keld-agent: job %s exceeded %s on %d attempts — quarantined", j.Key(), to, maxAttempts())
 			}
+			continue
+		}
+		if err := spool.Write(pointerFromJob(j)); err != nil {
+			log.Printf("keld-agent: job %s exceeded %s and re-spool failed: %v", j.Key(), to, err)
+		} else {
+			log.Printf("keld-agent: job %s exceeded %s, re-spooled for retry", j.Key(), to)
 		}
 	}
+}
+
+// retryLedger counts per-job re-spool attempts so the worker can cap them. It is
+// owned by the single Worker goroutine, so it needs no locking.
+type retryLedger struct{ n map[string]int }
+
+func newRetryLedger() *retryLedger { return &retryLedger{n: map[string]int{}} }
+
+// exhausted records one failed attempt for key and reports whether the job has
+// reached max attempts. On exhaustion the counter is cleared so a job that is
+// later re-delivered (e.g. after a daemon restart) gets a fresh budget.
+func (r *retryLedger) exhausted(key string, max int) bool {
+	r.n[key]++
+	if r.n[key] >= max {
+		delete(r.n, key)
+		return true
+	}
+	return false
+}
+
+// reset clears a job's attempt count (called when it finally succeeds).
+func (r *retryLedger) reset(key string) { delete(r.n, key) }
+
+// withJobCtx binds m to a per-job context when it is the sidecar client, so the
+// job's timeout can cancel its in-flight calls. The deterministic backend has no
+// network calls to cancel, so it passes through unchanged.
+func withJobCtx(m enrich.Model, ctx context.Context) enrich.Model {
+	if c, ok := m.(*sidecar.Client); ok {
+		return c.WithContext(ctx)
+	}
+	return m
 }
 
 // jobTimeout bounds how long the worker spends on one enrichment before it
@@ -88,9 +144,22 @@ func jobTimeout() time.Duration {
 	return 30 * time.Second
 }
 
+// maxAttempts bounds how many times a timed-out job is re-spooled before it is
+// quarantined. Default 4 (a couple of reload/transient windows); override with
+// KELD_ENRICH_MAX_ATTEMPTS.
+func maxAttempts() int {
+	if v := os.Getenv("KELD_ENRICH_MAX_ATTEMPTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 4
+}
+
 // runWithTimeout runs fn in a goroutine and reports whether it finished within d.
-// On timeout the goroutine is left to finish on its own (its sidecar client stops
-// on daemon shutdown); the caller decides what to do with the un-finished job.
+// The goroutine keeps the worker unblocked on timeout; the caller cancels the
+// job context so fn's sidecar calls abort and the goroutine unwinds promptly
+// (rather than leaking a live retry loop).
 func runWithTimeout(d time.Duration, fn func()) bool {
 	done := make(chan struct{})
 	go func() { defer close(done); fn() }()
@@ -116,7 +185,7 @@ func pointerFromJob(j queue.Job) spool.Pointer {
 	return p
 }
 
-func process(j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool) {
+func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("keld-agent: worker recovered: %v", r)
@@ -131,6 +200,12 @@ func process(j queue.Job, m enrich.Model, pub Sender, actor string, includeEntit
 		meta = contextMeta(j)
 	}
 	profile := enrich.Run(text, j.Source, meta, m)
+	// If the job's deadline fired mid-enrichment its sidecar calls were cancelled,
+	// leaving a partial/empty profile — don't publish that. The worker re-spools
+	// (bounded) so it retries on a healthy sidecar.
+	if ctx.Err() != nil {
+		return
+	}
 	e := publish.Build(j, profile, actor, includeEntityText(), time.Now())
 	if err := pub.Send(e); err != nil {
 		log.Printf("keld-agent: publish failed for %s: %v", j.Key(), err)
@@ -263,7 +338,7 @@ func Run(ctx context.Context) error {
 		}
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), cfg.IngestToken, 10*time.Second), live, pollInterval)
-	go Worker(q, model, pub, actor, live.IncludeEntityText, gate)
+	go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate)
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
 	// sweeping for ones spooled during brief unavailability. Idempotent:

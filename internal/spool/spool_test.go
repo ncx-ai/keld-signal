@@ -86,3 +86,25 @@ func TestDrainQuarantinesPoison(t *testing.T) {
 		t.Fatalf("poison file should be quarantined to spool/bad/: %v", err)
 	}
 }
+
+func TestQuarantineMovesPointerToBad(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	sp := filepath.Join(os.Getenv("KELD_HOME"), "spool")
+	p := Pointer{Correlation: Correlation{Scheme: "trace", ID: "STUCK-1"}, Inline: &Inline{Text: "x"}}
+	if err := Quarantine(p); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	// Landed in spool/bad/, NOT the live spool (so it is never drained again).
+	if _, err := os.Stat(filepath.Join(sp, "bad", "STUCK-1.json")); err != nil {
+		t.Fatalf("quarantined pointer should be in spool/bad/: %v", err)
+	}
+	files, _ := filepath.Glob(filepath.Join(sp, "*.json"))
+	if len(files) != 0 {
+		t.Fatalf("quarantined pointer must not remain in live spool, got %v", files)
+	}
+	// And a quarantined pointer is invisible to Drain.
+	n, _ := Drain(func(Pointer) error { return nil })
+	if n != 0 {
+		t.Fatalf("Drain must not see quarantined pointers, drained %d", n)
+	}
+}

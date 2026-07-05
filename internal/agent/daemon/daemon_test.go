@@ -49,7 +49,7 @@ func (f *fakeSender) all() []publish.Enrichment {
 func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, enrich.NewDeterministic(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true })
+	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true })
 
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
@@ -91,7 +91,7 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 func TestWorkerDeterministicMLOff(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, func() bool { return true })
+	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, func() bool { return true })
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ML-OFF-1",
@@ -129,7 +129,7 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, neverReady)
+		Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, neverReady)
 		close(done)
 	}()
 
@@ -222,7 +222,7 @@ func TestWorkerWithSidecarStubPublishesViaRouter(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, router, fs, "sidecar-test@keld.co", func() bool { return false }, gate)
+	go Worker(context.Background(), q, router, fs, "sidecar-test@keld.co", func() bool { return false }, gate)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "SC-1",
@@ -320,7 +320,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, router, fs, "provision-test@keld.co", func() bool { return false }, gate)
+	go Worker(context.Background(), q, router, fs, "provision-test@keld.co", func() bool { return false }, gate)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "PROV-1",
@@ -377,7 +377,7 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, model, fs, "fail-test@keld.co", func() bool { return false }, gate)
+	go Worker(context.Background(), q, model, fs, "fail-test@keld.co", func() bool { return false }, gate)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "FAIL-1",
@@ -393,6 +393,33 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 		t.Fatalf("enrichment must wait, not degrade: expected 0 publishes, got %d", n)
 	}
 	q.Close()
+}
+
+// TestRetryLedgerBoundsAttempts pins the re-spool cap policy: a job re-spools
+// until it has exhausted maxAttempts, then it must be quarantined (not retried
+// forever) — the safety cap that prevents one un-enrichable job from looping.
+func TestRetryLedgerBoundsAttempts(t *testing.T) {
+	r := newRetryLedger()
+	// max=3: attempts 1 and 2 re-spool (false), attempt 3 exhausts (true).
+	if r.exhausted("k", 3) {
+		t.Fatal("attempt 1 should re-spool, not quarantine")
+	}
+	if r.exhausted("k", 3) {
+		t.Fatal("attempt 2 should re-spool, not quarantine")
+	}
+	if !r.exhausted("k", 3) {
+		t.Fatal("attempt 3 should exhaust the budget → quarantine")
+	}
+	// Exhaustion clears the counter so a freshly delivered job starts over.
+	if r.exhausted("k", 3) {
+		t.Fatal("after exhaustion the count resets; next delivery re-spools again")
+	}
+	// A success (reset) also clears the counter.
+	r.exhausted("k2", 3)
+	r.reset("k2")
+	if r.exhausted("k2", 3) {
+		t.Fatal("after reset, next attempt is attempt 1 → re-spool")
+	}
 }
 
 // blockModel simulates a sidecar that never answers (client waiting through a
@@ -420,7 +447,7 @@ func TestWorkerTimesOutAndRespools(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true })
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true })
 
 	q.Offer(queue.Job{Source: "claude_code", Scheme: "trace", ID: "SLOW-1", Inline: "write code"})
 
@@ -435,6 +462,48 @@ func TestWorkerTimesOutAndRespools(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timed-out job was not re-spooled — worker likely wedged")
 		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if len(fs.all()) != 0 {
+		t.Fatalf("a hung job must not publish; got %d", len(fs.all()))
+	}
+	q.Close()
+}
+
+// TestWorkerQuarantinesAfterMaxAttempts: a job that keeps exceeding its deadline
+// must NOT re-spool forever (the amplification that saturated the sidecar) — after
+// maxAttempts it is quarantined to spool/bad/ and never retried again.
+func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("KELD_ENRICH_JOB_TIMEOUT", "80ms")
+	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "2")
+
+	bm := blockModel{release: make(chan struct{})}
+	defer close(bm.release)
+
+	q := queue.New(10)
+	fs := &fakeSender{}
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true })
+
+	// Deliver once, then mirror the daemon's sweep: drain each re-spooled pointer
+	// and re-deliver it. With max=2, attempt 1 re-spools and attempt 2 exhausts
+	// the budget → quarantine to spool/bad/ (never re-spooled again).
+	job := queue.Job{Source: "claude_code", Scheme: "trace", ID: "STUCK-1", Inline: "write code"}
+	q.Offer(job)
+
+	badFile := filepath.Join(os.Getenv("KELD_HOME"), "spool", "bad", "STUCK-1.json")
+	deadline := time.After(6 * time.Second)
+	for {
+		if _, err := os.Stat(badFile); err == nil {
+			break
+		}
+		// Sweep: a re-spooled pointer is drained (removing the live file) and
+		// re-delivered — exactly what the daemon does periodically.
+		spool.Drain(func(spool.Pointer) error { q.Offer(job); return nil })
+		select {
+		case <-deadline:
+			t.Fatal("hung job was never quarantined — re-spool is unbounded")
+		case <-time.After(30 * time.Millisecond):
 		}
 	}
 	if len(fs.all()) != 0 {
