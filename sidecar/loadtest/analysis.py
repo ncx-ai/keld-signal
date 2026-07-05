@@ -29,6 +29,19 @@ def rss_slope_mb_per_min(samples):
     return slope(xs, ys) * 60.0
 
 
+def mean_growth(ys):
+    """mean(second half) - mean(first half). Robust leak signal: a real leak grows
+    sustainedly (large positive), while stationary noise cancels to ~0. Preferred
+    over a least-squares slope on short, noisy, contended windows."""
+    n = len(ys)
+    if n < 2:
+        return 0.0
+    h = n // 2
+    first = ys[:h]
+    second = ys[h:]
+    return (sum(second) / len(second)) - (sum(first) / len(first))
+
+
 def relative_drop(baseline, stressed):
     """Fraction by which `stressed` fell below `baseline` (0..1)."""
     if baseline <= 0:

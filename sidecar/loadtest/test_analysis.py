@@ -1,5 +1,5 @@
 """Run: cd sidecar && PYTHONPATH=. ~/.keld/sidecar-venv/bin/python loadtest/test_analysis.py"""
-from loadtest.analysis import slope, steady, rss_slope_mb_per_min, relative_drop, nonincreasing
+from loadtest.analysis import slope, steady, rss_slope_mb_per_min, relative_drop, nonincreasing, mean_growth
 
 
 def test_slope_of_flat_is_zero():
@@ -21,6 +21,14 @@ def test_rss_slope_per_minute():
 
 def test_relative_drop():
     assert abs(relative_drop(100.0, 25.0) - 0.75) < 1e-9
+
+
+def test_mean_growth_flat_is_near_zero():
+    assert abs(mean_growth([100, 102, 98, 101, 99, 100])) < 3.0
+
+
+def test_mean_growth_detects_sustained_rise():
+    assert mean_growth([100, 100, 100, 200, 200, 200]) == 100.0
 
 
 def test_nonincreasing_within_tolerance():

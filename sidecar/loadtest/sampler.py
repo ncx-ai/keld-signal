@@ -26,8 +26,14 @@ class Sampler:
         self._t0 = None
 
     def _loop(self):
-        self._proc.cpu_percent(None)  # prime
+        self._proc.cpu_percent(None)  # prime the CPU baseline
         while not self._stop.is_set():
+            # Wait first so cpu_percent(None) always has a real, non-zero interval
+            # to divide by (calling it immediately after priming yields a bogus
+            # near-infinite reading from a ~0s dt).
+            self._stop.wait(self._interval)
+            if self._stop.is_set():
+                break
             try:
                 rss = self._proc.memory_info().rss / (1024.0 * 1024.0)
                 cpu = self._proc.cpu_percent(None)
@@ -39,7 +45,6 @@ class Sampler:
             except Exception:
                 pass
             self._rows.append(Sample(time.monotonic() - self._t0, rss, cpu, metrics))
-            self._stop.wait(self._interval)
 
     def start(self):
         self._t0 = time.monotonic()
