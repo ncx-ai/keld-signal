@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 func stub(t *testing.T) *httptest.Server {
@@ -71,6 +73,57 @@ func TestClassifyRetriesThrough503ThenSucceeds(t *testing.T) {
 	}
 	if calls < 3 {
 		t.Fatalf("expected >=3 calls (2 x 503 + success), got %d", calls)
+	}
+}
+
+// TestWithContextCancelAbortsInFlight is the anti-wedge keystone: a per-job
+// context (bound via WithContext) must abort an in-flight sidecar call the
+// moment it is cancelled — not merely stop the retry backoff, and not wait out
+// the http.Client timeout. Before the fix, postOnce used c.hc.Post (request not
+// bound to c.ctx), so a slow/hung call ran to the 5s http timeout and the
+// per-job deadline could not reclaim it — leaking work that kept retrying.
+func TestWithContextCancelAbortsInFlight(t *testing.T) {
+	// Handler hangs (request in flight) until teardown. started signals the call
+	// reached the server; serverDone lets the handler return so srv.Close() never
+	// blocks. defer order (LIFO) closes serverDone BEFORE srv.Close().
+	started := make(chan struct{})
+	serverDone := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-serverDone
+	}))
+	defer srv.Close()
+	defer close(serverDone)
+
+	// Long http timeout so ONLY ctx cancellation can end the call.
+	base := New(srv.URL, 30*time.Second)
+	jobCtx, cancel := context.WithCancel(context.Background())
+	c := base.WithContext(jobCtx)
+
+	done := make(chan map[string][]enrich.Ranked, 1)
+	go func() { done <- c.Classify("x", map[string][]string{"task_type": {"codegen"}}) }()
+
+	// Wait until the request is genuinely in flight at the server.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request never reached server")
+	}
+	// It must not return on its own before we cancel.
+	select {
+	case <-done:
+		t.Fatal("Classify returned before ctx cancel — call not actually in flight")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case got := <-done:
+		if got != nil {
+			t.Fatalf("cancelled call must yield no result, got %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Classify did not abort promptly on ctx cancel — in-flight request not bound to ctx")
 	}
 }
 

@@ -35,6 +35,18 @@ func NewCtx(ctx context.Context, baseURL string, timeout time.Duration) *Client 
 	return &Client{base: baseURL, hc: &http.Client{Timeout: timeout}, ctx: ctx}
 }
 
+// WithContext returns a shallow copy bound to ctx (sharing the underlying
+// http.Client, which is concurrency-safe). The daemon uses this to give each
+// job its own deadline: cancelling ctx aborts any in-flight request AND stops
+// the retry loop, so a timed-out job's sidecar work is reclaimed instead of
+// leaking and retrying forever (the death-spiral root cause). Mirrors
+// http.Request.WithContext.
+func (c *Client) WithContext(ctx context.Context) *Client {
+	cp := *c
+	cp.ctx = ctx
+	return &cp
+}
+
 // postOnce performs one POST. ok=true means a 200 was decoded into out.
 // retryable=true means the sidecar is temporarily unavailable (transport error
 // or 503) and the caller should wait and try again rather than degrade.
@@ -43,7 +55,17 @@ func (c *Client) postOnce(path string, body any, out any) (ok bool, retryable bo
 	if err != nil {
 		return false, false
 	}
-	resp, err := c.hc.Post(c.base+path, "application/json", bytes.NewReader(b))
+	// Bind the request to c.ctx so cancelling the per-job context aborts the
+	// call in flight — not just the retry backoff. Without this the request ran
+	// to the http.Client timeout and a timed-out job's work could not be
+	// reclaimed. A cancelled request surfaces as a transport error below; the
+	// retry loop's own ctx.Done() check turns that into a clean stop.
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.base+path, bytes.NewReader(b))
+	if err != nil {
+		return false, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.hc.Do(req)
 	if err != nil {
 		return false, true // transport error: sidecar down/restarting — wait+retry
 	}
@@ -63,6 +85,9 @@ func (c *Client) postOnce(path string, body any, out any) (ok bool, retryable bo
 func (c *Client) post(path string, body any, out any) bool {
 	backoff := 200 * time.Millisecond
 	for {
+		if c.ctx.Err() != nil {
+			return false // per-job deadline/shutdown — stop immediately, don't degrade
+		}
 		ok, retryable := c.postOnce(path, body, out)
 		if ok {
 			return true
