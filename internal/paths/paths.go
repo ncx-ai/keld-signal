@@ -31,14 +31,14 @@ func KeldHome() string {
 	return filepath.Join(home, ".keld")
 }
 
-func AuthPath() string       { return filepath.Join(KeldHome(), "auth.json") }
-func ManifestPath() string   { return filepath.Join(KeldHome(), "manifest.json") }
-func HookConfigPath() string { return filepath.Join(KeldHome(), "hook.json") }
-func AgentInfoPath() string   { return filepath.Join(KeldHome(), "agent.json") }
-func AgentConfigPath() string { return filepath.Join(KeldHome(), "agent-config.json") }
-func DebugLogPath() string   { return filepath.Join(KeldHome(), "agent.log") }
-func StateDir() string       { return filepath.Join(KeldHome(), "state") }
-func BackupsDir() string     { return filepath.Join(KeldHome(), "backups") }
+func AuthPath() string              { return filepath.Join(KeldHome(), "auth.json") }
+func ManifestPath() string          { return filepath.Join(KeldHome(), "manifest.json") }
+func HookConfigPath() string        { return filepath.Join(KeldHome(), "hook.json") }
+func AgentInfoPath() string         { return filepath.Join(KeldHome(), "agent.json") }
+func AgentConfigPath() string       { return filepath.Join(KeldHome(), "agent-config.json") }
+func DebugLogPath() string          { return filepath.Join(KeldHome(), "agent.log") }
+func StateDir() string              { return filepath.Join(KeldHome(), "state") }
+func BackupsDir() string            { return filepath.Join(KeldHome(), "backups") }
 func ModelsDir(model string) string { return filepath.Join(KeldHome(), "models", model) }
 
 func APIBase() string {

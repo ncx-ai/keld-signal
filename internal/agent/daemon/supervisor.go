@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	maxRestarts     = 3
+	maxRestarts        = 3
 	healthPollInterval = 200 * time.Millisecond
 )
 

@@ -88,6 +88,8 @@ func (c *Client) Healthy(ctx context.Context) bool {
 		return false
 	}
 	defer resp.Body.Close()
-	var h struct{ Ok bool `json:"ok"` }
+	var h struct {
+		Ok bool `json:"ok"`
+	}
 	return resp.StatusCode == http.StatusOK && json.NewDecoder(resp.Body).Decode(&h) == nil && h.Ok
 }

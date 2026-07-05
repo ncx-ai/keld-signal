@@ -52,13 +52,13 @@ func NewDeterministic() Model {
 		},
 		keywords: map[string]map[string][]string{
 			"task_type": {
-				"codegen":         {"write", "function", "code", "implement", "class", "refactor"},
-				"summarization":   {"summarize", "summary", "tldr"},
-				"translation":     {"translate", "translation"},
-				"extraction":      {"extract", "parse", "pull out"},
-				"rag_qa":          {"according to", "based on the", "what does the doc"},
-				"classification":  {"classify", "categorize", "label"},
-				"reasoning":       {"why", "explain", "reason", "prove"},
+				"codegen":          {"write", "function", "code", "implement", "class", "refactor"},
+				"summarization":    {"summarize", "summary", "tldr"},
+				"translation":      {"translate", "translation"},
+				"extraction":       {"extract", "parse", "pull out"},
+				"rag_qa":           {"according to", "based on the", "what does the doc"},
+				"classification":   {"classify", "categorize", "label"},
+				"reasoning":        {"why", "explain", "reason", "prove"},
 				"agentic_tool_use": {"run the", "use the tool", "call the api"},
 			},
 			"domain": {

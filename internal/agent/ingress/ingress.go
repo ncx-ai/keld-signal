@@ -34,10 +34,10 @@ type inline struct {
 
 // Request is the POST /enrich body.
 type Request struct {
-	Source      source       `json:"source"`
-	Correlation correlation  `json:"correlation"`
-	Pointer     *pointer     `json:"pointer"`
-	Inline      *inline      `json:"inline"`
+	Source      source      `json:"source"`
+	Correlation correlation `json:"correlation"`
+	Pointer     *pointer    `json:"pointer"`
+	Inline      *inline     `json:"inline"`
 }
 
 // Handler returns the daemon's HTTP handler.

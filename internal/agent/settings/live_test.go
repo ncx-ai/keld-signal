@@ -30,7 +30,17 @@ func TestLiveConcurrentApplyAndRead(t *testing.T) {
 	l := NewLive(Settings{IncludeEntityText: true})
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); for i := 0; i < 1000; i++ { l.Apply(&Remote{IncludeEntityText: ptrBool(i%2 == 0)}) } }()
-	go func() { defer wg.Done(); for i := 0; i < 1000; i++ { _ = l.IncludeEntityText() } }()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			l.Apply(&Remote{IncludeEntityText: ptrBool(i%2 == 0)})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			_ = l.IncludeEntityText()
+		}
+	}()
 	wg.Wait()
 }

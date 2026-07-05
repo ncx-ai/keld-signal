@@ -51,8 +51,8 @@ func TestCondPassExtractorSwitchesLabelSetByFunction(t *testing.T) {
 		funcID   string
 		wantSubc string // readable text of a subcat under this function
 	}{
-		{"eng", "debugging and troubleshooting existing code"},      // eng.debug
-		{"legal", "contract drafting and review"},                  // legal.contract
+		{"eng", "debugging and troubleshooting existing code"}, // eng.debug
+		{"legal", "contract drafting and review"},              // legal.contract
 	}
 
 	for _, tt := range tests {
