@@ -47,11 +47,14 @@ type Enrichment struct {
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
 	ModelVersion      string            `json:"model_version"`
-	TS                string            `json:"ts"`
+	// PromptChars is the resolved (typed) prompt length in Unicode code points —
+	// a derived integer, never the prompt text. Omitted when 0 (unknown).
+	PromptChars int    `json:"prompt_chars,omitempty"`
+	TS          string `json:"ts"`
 }
 
 // Build maps a job + profile into the wire shape.
-func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, now time.Time) Enrichment {
+func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, promptChars int, now time.Time) Enrichment {
 	entities := p.Entities
 	if !includeEntityText && len(entities) > 0 {
 		entities = make([]enrich.Entity, len(p.Entities))
@@ -79,6 +82,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		ExtractorVersions: p.ExtractorVersions,
 		SchemaVersion:     p.SchemaVersion,
 		ModelVersion:      "deterministic-v1",
+		PromptChars:       promptChars,
 		TS:                now.UTC().Format(time.RFC3339),
 	}
 }

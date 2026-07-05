@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -206,7 +207,9 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	if ctx.Err() != nil {
 		return
 	}
-	e := publish.Build(j, profile, actor, includeEntityText(), time.Now())
+	// Derived integer only — the resolved prompt's length in code points, never its text.
+	promptChars := utf8.RuneCountInString(text)
+	e := publish.Build(j, profile, actor, includeEntityText(), promptChars, time.Now())
 	if err := pub.Send(e); err != nil {
 		log.Printf("keld-agent: publish failed for %s: %v", j.Key(), err)
 	}

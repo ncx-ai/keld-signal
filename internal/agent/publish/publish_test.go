@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,10 +14,34 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 )
 
+func TestBuildIncludesPromptChars(t *testing.T) {
+	e := Build(queue.Job{Source: "claude_code"}, enrich.Profile{}, "who@x.test", false, 71, time.Unix(0, 0))
+	if e.PromptChars != 71 {
+		t.Fatalf("PromptChars = %d, want 71", e.PromptChars)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"prompt_chars":71`)) {
+		t.Fatalf("wire missing prompt_chars: %s", b)
+	}
+}
+
+func TestBuildOmitsZeroPromptChars(t *testing.T) {
+	b, err := json.Marshal(Build(queue.Job{Source: "claude_code"}, enrich.Profile{}, "who@x.test", false, 0, time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte("prompt_chars")) {
+		t.Fatalf("zero count should be omitted: %s", b)
+	}
+}
+
 func TestBuildShapeAndNoRawText(t *testing.T) {
 	p := enrich.Run("key sk-live-ABCDEF0123456789 and write a function", "claude_code", enrich.Meta{}, enrich.NewDeterministic())
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X", SessionID: "S", Origin: "hook", Version: "2.1"}
-	e := Build(j, p, "dg@keld.co", false, time.Unix(0, 0).UTC())
+	e := Build(j, p, "dg@keld.co", false, 0, time.Unix(0, 0).UTC())
 
 	b, _ := json.Marshal(e)
 	if strings.Contains(string(b), "sk-live-ABCDEF0123456789") {
@@ -64,7 +89,7 @@ func TestSendErrorsOn500(t *testing.T) {
 func TestBuildDropsEntityTextWhenDisabled(t *testing.T) {
 	p := enrich.Profile{Entities: []enrich.Entity{{Label: "org", Text: "AcmeCorpSecret", Start: 0, End: 14}}}
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X"}
-	b, _ := json.Marshal(Build(j, p, "a", false, time.Unix(0, 0).UTC()))
+	b, _ := json.Marshal(Build(j, p, "a", false, 0, time.Unix(0, 0).UTC()))
 	if strings.Contains(string(b), "AcmeCorpSecret") {
 		t.Fatalf("entity text must be dropped when disabled: %s", b)
 	}
@@ -73,7 +98,7 @@ func TestBuildDropsEntityTextWhenDisabled(t *testing.T) {
 func TestBuildKeepsEntityTextWhenEnabled(t *testing.T) {
 	p := enrich.Profile{Entities: []enrich.Entity{{Label: "language", Text: "golang", Start: 0, End: 6}}}
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X"}
-	b, _ := json.Marshal(Build(j, p, "a", true, time.Unix(0, 0).UTC()))
+	b, _ := json.Marshal(Build(j, p, "a", true, 0, time.Unix(0, 0).UTC()))
 	if !strings.Contains(string(b), "golang") {
 		t.Fatalf("entity text should be present when enabled: %s", b)
 	}
@@ -94,7 +119,7 @@ func TestBuildCarriesJobCategoryFields(t *testing.T) {
 			{Value: "eng.test", Confidence: 0.4},
 		},
 	}
-	e := Build(queue.Job{Source: "claude_code"}, p, "a@b.test", false, time.Now())
+	e := Build(queue.Job{Source: "claude_code"}, p, "a@b.test", false, 0, time.Now())
 
 	if e.Activity != p.Activity {
 		t.Errorf("Activity = %+v, want %+v", e.Activity, p.Activity)
