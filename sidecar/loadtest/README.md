@@ -4,6 +4,15 @@ Sidecar-direct load tests proving resource safety (no leak / no runaway CPU) and
 governor soundness (CPU throttle + RAM/idle eviction). See the design spec:
 `docs/superpowers/specs/2026-07-05-keld-agent-loadtest-and-memory-eviction-design.md`.
 
+## Contents
+
+- [Run](#run)
+- [Tunable env](#tunable-env)
+- [What each tier checks](#what-each-tier-checks)
+- [What the load test simulates — the production enrichment sweeps](#what-the-load-test-simulates--the-production-enrichment-sweeps)
+- [Resource-safety mechanisms (what these tests validate)](#resource-safety-mechanisms-what-these-tests-validate)
+- [Validation results](#validation-results)
+
 ## Run
 
 ```bash
