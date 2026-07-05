@@ -151,6 +151,41 @@ def test_stop_fails_queued_submit():
     asyncio.run(run())
 
 
+def test_queue_capacity_reported():
+    r = InferenceRunner(_NoWaitGov(), queue_max=7)
+    assert r.queue_max == 7
+    assert r.queue_depth == 0
+    assert r.inflight == 0
+
+
+def test_inflight_is_one_during_execution():
+    import time as _time
+    release = threading.Event()
+    started = threading.Event()
+    seen = {}
+
+    def blocker():
+        started.set()
+        while not release.is_set():
+            _time.sleep(0.005)
+        return "ok"
+
+    async def run():
+        r = InferenceRunner(_NoWaitGov(), queue_max=4)
+        r.start()
+        fut = asyncio.ensure_future(r.submit(blocker))
+        while not started.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.02)  # let the runner mark inflight before we read it
+        seen["inflight"] = r.inflight
+        release.set()
+        assert await fut == "ok"
+        await r.stop()
+
+    asyncio.run(run())
+    assert seen["inflight"] == 1
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

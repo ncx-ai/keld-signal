@@ -21,10 +21,23 @@ class InferenceRunner:
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._consumer = None
         self._stopped = False
+        self._inflight = 0
 
     @property
     def ready(self) -> bool:
         return self._consumer is not None and not self._consumer.done()
+
+    @property
+    def queue_depth(self) -> int:
+        return self._queue.qsize()
+
+    @property
+    def queue_max(self) -> int:
+        return self._queue.maxsize
+
+    @property
+    def inflight(self) -> int:
+        return self._inflight
 
     def start(self) -> None:
         if self._consumer is None:
@@ -49,7 +62,11 @@ class InferenceRunner:
             fn, args, kwargs, future = await self._queue.get()
             try:
                 await self._governor.await_slot()
-                result = await loop.run_in_executor(self._executor, lambda: fn(*args, **kwargs))
+                self._inflight = 1
+                try:
+                    result = await loop.run_in_executor(self._executor, lambda: fn(*args, **kwargs))
+                finally:
+                    self._inflight = 0
                 if not future.cancelled():
                     future.set_result(result)
             except Exception as e:  # noqa: BLE001 - propagate to the awaiting caller
