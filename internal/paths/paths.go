@@ -41,6 +41,10 @@ func StateDir() string              { return filepath.Join(KeldHome(), "state") 
 func BackupsDir() string            { return filepath.Join(KeldHome(), "backups") }
 func ModelsDir(model string) string { return filepath.Join(KeldHome(), "models", model) }
 
+// SpoolDir is the on-disk queue of undelivered enrich pointers (hook writes,
+// daemon drains). Sibling of models/ under KELD_HOME.
+func SpoolDir() string { return filepath.Join(KeldHome(), "spool") }
+
 func APIBase() string {
 	if apiOverrideSet {
 		return apiOverride
