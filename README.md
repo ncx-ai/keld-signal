@@ -158,6 +158,15 @@ client behavior, and security.
   settings (Go duration, default `5m`; for tests/local dev). See
   [docs/enrichment-settings.md](docs/enrichment-settings.md).
 
-The optional GLiNER2 ML sidecar has its own load-protection tuning knobs
-(`KELD_SIDECAR_MAX_CHARS`, `KELD_SIDECAR_QUEUE_MAX`, `KELD_GOV_*`) — see
-[sidecar/README.md](sidecar/README.md#tuning-env).
+### On-device resource safety (GLiNER2 sidecar)
+
+The optional GLiNER2 ML sidecar is built to be an **invisible good citizen** on the
+user's own machine: it throttles CPU two ways (a rate governor *and* dynamic
+per-inference thread scaling), evicts the model under memory pressure or after
+inactivity (returning its ~2.6 GB to the OS), and is load-tested to prove it does
+not leak or run away with CPU.
+
+📄 **See [sidecar/loadtest/README.md](sidecar/loadtest/README.md)** for the
+resource-safety mechanisms, the enrichment "sweep" pipeline (with examples), the
+tuning knobs (`KELD_SIDECAR_*`, `KELD_GOV_*`), and the measured validation results.
+General sidecar setup lives in [sidecar/README.md](sidecar/README.md).
