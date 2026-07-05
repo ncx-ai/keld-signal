@@ -57,6 +57,31 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Auto-generated release-body changelog: group by conventional-commit type and
+# drop docs/test/chore/ci/style/merge noise. (The curated human changelog lives
+# in CHANGELOG.md.)
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs"
+      - "^test"
+      - "^chore"
+      - "^style"
+      - "^ci"
+      - "^build"
+      - "^Merge "
+      - "go mod tidy"
+  groups:
+    - title: Features
+      regexp: "^.*feat(\\(.+\\))?:"
+      order: 0
+    - title: Fixes
+      regexp: "^.*fix(\\(.+\\))?:"
+      order: 1
+    - title: Other changes
+      order: 999
+
 release:
   # Tags with a prerelease segment (e.g. v0.3.0-rc.1) are flagged as GitHub
   # pre-releases, so they're not served as "latest" (the install.sh one-liner
