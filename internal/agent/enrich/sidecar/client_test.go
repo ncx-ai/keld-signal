@@ -51,3 +51,43 @@ func TestHealthy(t *testing.T) {
 		t.Fatal("unreachable sidecar must be unhealthy")
 	}
 }
+
+func TestClassifyRetriesThrough503ThenSucceeds(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= 2 { // simulate idle-evicted sidecar: 503 twice, then loaded
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte(`{"results":{"task_type":[{"label":"codegen","confidence":0.9}]}}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, 2*time.Second)
+	got := c.Classify("x", map[string][]string{"task_type": {"codegen"}})
+	if got["task_type"][0].Label != "codegen" {
+		t.Fatalf("expected retry through 503 to succeed on GLiNER2, got %+v (calls=%d)", got, calls)
+	}
+	if calls < 3 {
+		t.Fatalf("expected >=3 calls (2 x 503 + success), got %d", calls)
+	}
+}
+
+func TestClassifyDoesNotSpinOnGenuineError(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError) // real error, not availability
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, 2*time.Second)
+	got := c.Classify("x", map[string][]string{"task_type": {"codegen"}})
+	if got != nil {
+		t.Fatalf("500 should return nil (no degrade, no spin), got %+v", got)
+	}
+	if calls != 1 {
+		t.Fatalf("500 is non-retryable; expected exactly 1 call, got %d", calls)
+	}
+}

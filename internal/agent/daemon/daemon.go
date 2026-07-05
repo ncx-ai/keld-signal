@@ -302,7 +302,7 @@ func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func()
 	scLn.Close() // Release; sidecar will bind it.
 
 	scBaseURL := fmt.Sprintf("http://127.0.0.1:%d", scPort)
-	scClient := sidecar.New(scBaseURL, 5*time.Second)
+	scClient := sidecar.NewCtx(ctx, scBaseURL, 5*time.Second)
 	healthFn := func() bool { return scClient.Healthy(ctx) }
 
 	modelDir := paths.ModelsDir("gliner2-large-v1")
@@ -346,13 +346,16 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 		go opts.sup.Start(ctx)
 	}()
 
-	// Gate: open when sidecar is ready, has fallen back, OR provisioning failed.
-	gate := func() bool {
-		return opts.sup.Ready() || opts.sup.FellBack() || provisionFailed.Load()
-	}
-
-	router := enrich.NewRouter(opts.client, enrich.NewDeterministic(), opts.healthFn)
-	return router, gate
+	// Enrichment never degrades to deterministic: the worker waits until the
+	// sidecar has loaded at least once, then the client itself waits+retries
+	// through idle-eviction (503) and transient restarts. If the model can't be
+	// provisioned/started, the gate stays closed and jobs stay queued/spooled
+	// (durable) until the sidecar recovers — rather than producing degraded
+	// deterministic enrichment. (Deterministic is used only when ML is disabled
+	// outright — see mlBackend's early return.) provisionFailed is still set by
+	// the provisioning goroutine for logging; it no longer opens a fallback gate.
+	gate := func() bool { return opts.sup.Ready() }
+	return opts.client, gate
 }
 
 // enrichEndpoint derives the enrichments URL from the configured ingest endpoint

@@ -345,15 +345,15 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 	}
 }
 
-// TestMLBackendProvisionFailurePublishesViaDeterministic exercises the path
-// where provisioning fails — the gate must open via provisionFailed so the
-// worker publishes via the deterministic model.
-func TestMLBackendProvisionFailurePublishesViaDeterministic(t *testing.T) {
-	// A sidecar that is never healthy (we never spawn it).
+// TestMLBackendProvisionFailureDoesNotDegradeToDeterministic asserts the current
+// contract: enrichment NEVER silently degrades to the deterministic backend. When
+// provisioning fails, the gate stays closed so jobs wait (queue/spool) until the
+// sidecar recovers, rather than publishing lower-fidelity deterministic results.
+func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 	unhealthyClient := sidecar.New("http://127.0.0.1:1", 50*time.Millisecond)
 	healthFn := func() bool { return false }
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	sup := NewSupervisor(
@@ -365,7 +365,7 @@ func TestMLBackendProvisionFailurePublishesViaDeterministic(t *testing.T) {
 
 	modelDir := filepath.Join(t.TempDir(), "gliner2")
 
-	router, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	model, gate := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   unhealthyClient,
 		modelDir: modelDir,
@@ -376,28 +376,20 @@ func TestMLBackendProvisionFailurePublishesViaDeterministic(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(q, router, fs, "fail-test@keld.co", func() bool { return false }, gate)
+	go Worker(q, model, fs, "fail-test@keld.co", func() bool { return false }, gate)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "FAIL-1",
 		Inline: "write a function",
 	})
 
-	deadline := time.After(5 * time.Second)
-	for {
-		if len(fs.all()) == 1 {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("worker with failed provisioning did not publish via deterministic in time")
-		case <-time.After(20 * time.Millisecond):
-		}
+	// Let provisioning fail; the gate must stay closed and nothing may publish.
+	time.Sleep(1500 * time.Millisecond)
+	if gate() {
+		t.Fatal("gate must stay closed on provision failure — no deterministic fallback")
+	}
+	if n := len(fs.all()); n != 0 {
+		t.Fatalf("enrichment must wait, not degrade: expected 0 publishes, got %d", n)
 	}
 	q.Close()
-
-	e := fs.all()[0]
-	if e.Correlation.ID != "FAIL-1" {
-		t.Fatalf("unexpected correlation: %+v", e.Correlation)
-	}
 }

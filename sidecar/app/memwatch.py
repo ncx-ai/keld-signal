@@ -50,8 +50,11 @@ class MemoryWatch:
                            if reload_margin_mb is None else reload_margin_mb)
         self._hold_s = (float(os.environ.get("KELD_SIDECAR_RESTORE_HOLD_S", "60"))
                         if restore_hold_s is None else restore_hold_s)
-        # Idle-unload timeout in seconds; <= 0 disables idle eviction.
-        self._idle_timeout_s = (float(os.environ.get("KELD_SIDECAR_IDLE_UNLOAD_S", "120"))
+        # Idle-unload timeout in seconds (default 10 min); <= 0 disables idle
+        # eviction. On reload the daemon's sidecar client wakes+waits (never
+        # degrades to the deterministic backend), so idle eviction only ever
+        # delays the first post-idle enrichment — it never drops fidelity.
+        self._idle_timeout_s = (float(os.environ.get("KELD_SIDECAR_IDLE_UNLOAD_S", "600"))
                                 if idle_timeout_s is None else idle_timeout_s)
         self._disabled = (os.environ.get("KELD_SIDECAR_EVICT_DISABLED", "0") == "1"
                           if disabled is None else disabled)
