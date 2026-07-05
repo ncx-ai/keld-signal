@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -27,7 +28,11 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/hook"
 	"github.com/ncx-ai/keld-signal/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/spool"
 )
+
+// errQueueFull signals a spool drain to keep the file for the next sweep.
+var errQueueFull = errors.New("queue full")
 
 // Sender publishes an enrichment (real publisher or a test fake).
 type Sender interface {
@@ -206,6 +211,37 @@ func Run(ctx context.Context) error {
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), cfg.IngestToken, 10*time.Second), live, pollInterval)
 	go Worker(q, model, pub, actor, live.IncludeEntityText, gate)
+
+	// Drain enrich pointers the hook spooled while the daemon was down, then keep
+	// sweeping for ones spooled during brief unavailability. Idempotent:
+	// delete-after-enqueue + Atlas dedups on dedup_key.
+	drainSpool := func() {
+		spool.Drain(func(p spool.Pointer) error {
+			if q.Offer(ingress.JobFrom(p)) {
+				return nil
+			}
+			return errQueueFull // queue full: keep the file, retry next sweep
+		})
+	}
+	drainSpool()
+	go func() {
+		iv := 30 * time.Second
+		if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				iv = d
+			}
+		}
+		t := time.NewTicker(iv)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				drainSpool()
+			}
+		}
+	}()
 
 	return serve(ctx, ln, ingress.Handler(q, secret), q)
 }
