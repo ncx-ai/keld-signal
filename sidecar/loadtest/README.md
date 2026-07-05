@@ -90,5 +90,11 @@ soak** + **smoke** (relative-to-baseline asserts; see the design spec §6).
 | **CPU sweep monotonic** | Throughput non-increasing as stressor workers rise 0→10→20→40 (0.8/0.8/0.8/0.4 req/s) and recovers. |
 | **Idle eviction** | loaded → (idle) → evicted → request 503 → reload → 200 (verified live). |
 
-Net: **no memory leak, no runaway CPU/GPU**, both CPU good-citizen levers work,
-and memory/idle eviction genuinely release the model's footprint.
+Net: **no memory leak, no runaway CPU**, both CPU good-citizen levers work, and
+memory/idle eviction genuinely release the model's footprint.
+
+**Scope — CPU + RAM only.** GPU/VRAM is explicitly out of scope (see design spec
+§2). The sidecar runs on CPU by default (`SIDECAR_QUANTIZE`/`SIDECAR_COMPILE` off),
+and every fairness lever here is CPU-specific: the governor samples host **CPU**
+load and the scaler caps torch **CPU** intra-op threads. On a GPU deployment none
+of these bound VRAM or GPU utilization — that would need separate work.
