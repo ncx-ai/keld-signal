@@ -15,13 +15,16 @@ class QueueFull(Exception):
 
 
 class InferenceRunner:
-    def __init__(self, governor, queue_max: int):
+    def __init__(self, governor, queue_max: int, pre_run=None):
         self._governor = governor
         self._queue = asyncio.Queue(maxsize=queue_max)
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._consumer = None
         self._stopped = False
         self._inflight = 0
+        # Optional hook run (on the loop thread) right before each inference, after
+        # governor pacing — used to scale torch's thread count to current host load.
+        self._pre_run = pre_run
 
     @property
     def ready(self) -> bool:
@@ -62,6 +65,11 @@ class InferenceRunner:
             fn, args, kwargs, future = await self._queue.get()
             try:
                 await self._governor.await_slot()
+                if self._pre_run is not None:
+                    try:
+                        self._pre_run()
+                    except Exception:
+                        pass
                 self._inflight = 1
                 try:
                     result = await loop.run_in_executor(self._executor, lambda: fn(*args, **kwargs))

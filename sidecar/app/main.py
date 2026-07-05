@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.adapter import normalize_classify, normalize_entities, normalize_extract
+from app.cpuscale import CpuScaler
 from app.governor import Governor
 from app.memwatch import MemoryWatch, LOADED, EVICTED, RELOADING, DORMANT
 from app.metrics import Counts, build_metrics
@@ -155,6 +156,20 @@ def _count(field: str) -> None:
         setattr(c, field, getattr(c, field) + 1)
 
 
+def _apply_threads():
+    """Scale torch's intra-op thread count to current host load before an inference,
+    so a single enrichment never monopolizes a busy host (idle ⇒ all cores,
+    saturated ⇒ a floor). Runs on the loop thread just before dispatch."""
+    scaler = _state.get("scaler")
+    governor = _state.get("governor")
+    if not scaler or not governor:
+        return
+    import torch
+    n = scaler.threads_for(governor.ewma)
+    torch.set_num_threads(n)
+    _state["cpu_threads"] = n
+
+
 async def _mem_watch_loop(watch, interval: float):
     from app.memwatch import EVICT, EVICT_IDLE, RELOAD
     while True:
@@ -180,10 +195,11 @@ async def _mem_watch_loop(watch, interval: float):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     governor = Governor()
-    runner = InferenceRunner(governor, _QUEUE_MAX)
-    runner.start()
+    scaler = CpuScaler()
+    runner = InferenceRunner(governor, _QUEUE_MAX, pre_run=_apply_threads)
     watch = MemoryWatch()
     _state["governor"] = governor
+    _state["scaler"] = scaler
     _state["runner"] = runner
     _state["watch"] = watch
     _state["counts"] = Counts()
@@ -191,6 +207,8 @@ async def lifespan(app: FastAPI):
     _state["model_cost_mb"] = None
     _state["last_activity"] = time.monotonic()
     _state["evict_reason"] = None
+    _state["cpu_threads"] = scaler.max_threads  # full cores until load says otherwise
+    runner.start()
     _set_state(DORMANT)
 
     # Load only when there is headroom. model_cost is unknown at first boot, so the
@@ -264,6 +282,7 @@ def metrics():
         reload_margin_mb=_RELOAD_MARGIN_MB,
         uptime_s=time.monotonic() - started,
         evict_reason=_state.get("evict_reason"),
+        cpu_threads=_state.get("cpu_threads"),
     )
 
 

@@ -154,11 +154,28 @@ seam: an injectable `avail_sampler() -> (avail_pct, avail_mb)` and injectable
 deterministically — **no real host pressure required**, so the dangerous path
 (driving the box toward true OOM) is never exercised in automated tests.
 
-### 4.4 Governor — unchanged
+### 4.4 CPU levers: temporal governor (unchanged) + spatial thread scaler (new)
 
-The governor keeps pacing on CPU EWMA only (`KELD_GOV_HIGH`=85, `KELD_GOV_LOW`=60,
-`KELD_GOV_MAX_INTERVAL_MS`=2000). No behavioral change; the load test validates
-its existing behavior.
+The CPU good-citizen story has **two** levers over the same host-load EWMA:
+
+- **Temporal — the rate governor (unchanged):** paces *how often* inference runs
+  via a min-interval between invocation starts (`KELD_GOV_HIGH`=85,
+  `KELD_GOV_LOW`=60, `KELD_GOV_MAX_INTERVAL_MS`=2000). No behavioral change.
+- **Spatial — the CPU thread scaler (`sidecar/app/cpuscale.py`, new):** scales
+  *how many cores* each inference may use. torch otherwise defaults to **all**
+  cores (`intra-op = n_cores`), so even a fully-paced inference briefly pegs the
+  whole machine. `CpuScaler.threads_for(load)` maps the governor's EWMA to a
+  thread count — `≤ KELD_GOV_LOW` ⇒ full cores (`KELD_SIDECAR_MAX_THREADS`,
+  default `os.cpu_count()`); `≥ KELD_GOV_HIGH` ⇒ a floor
+  (`KELD_SIDECAR_MIN_THREADS`, default 1); linear ramp between. Applied via
+  `torch.set_num_threads(n)` in a `pre_run` hook the `InferenceRunner` calls on
+  the loop thread just before each single-flight inference (after governor
+  pacing). `KELD_SIDECAR_CPU_SCALE_DISABLED=1` pins full cores. The current
+  target is surfaced as `governor.cpu_threads` in `/metrics`.
+
+Together: under host pressure the sidecar runs **less often** *and* **narrower**,
+so a single enrichment never monopolizes a busy machine. Pure `threads_for` is
+table-tested (`app/test_cpuscale.py`); no timers, no model.
 
 ## 5. Load-test harness (`sidecar/loadtest/`, standalone Python)
 

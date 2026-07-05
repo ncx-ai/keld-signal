@@ -17,7 +17,7 @@ class Counts:
 
 def build_metrics(*, model_state, state_since, governor, runner, watch, counts,
                   model_cost_mb, reload_margin_mb, uptime_s, evict_reason=None,
-                  clock=time.monotonic):
+                  cpu_threads=None, clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     headroom = (round(model_cost_mb + reload_margin_mb, 1)
                 if model_cost_mb else None)
@@ -28,6 +28,7 @@ def build_metrics(*, model_state, state_since, governor, runner, watch, counts,
         "governor": {
             "cpu_ewma": round(governor.ewma, 2) if governor else None,
             "current_interval_ms": interval_ms,
+            "cpu_threads": cpu_threads,
             "disabled": getattr(governor, "_disabled", None) if governor else None,
         },
         "memory": {
