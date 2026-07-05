@@ -114,7 +114,13 @@ EVICTED ──(avail_mb ≥ model_cost+margin, held ≥ hold)──▶ RELOADING
 (startup with no headroom) ─────────────────────▶ DORMANT ≈ EVICTED
 ```
 
-- **Evict trigger:** `avail_pct ≤ evict_mark` (default 5%, `KELD_SIDECAR_EVICT_AVAIL_PCT`).
+- **Evict trigger (memory):** `avail_pct ≤ evict_mark` (default 5%, `KELD_SIDECAR_EVICT_AVAIL_PCT`).
+- **Evict trigger (idle):** LOADED with no request for `KELD_SIDECAR_IDLE_UNLOAD_S`
+  (default 120 s / 2 min) → unload to free the footprint when there's nothing to
+  process. Distinct reload rule: an **idle**-evicted model reloads **on demand** —
+  the next request records activity and the watcher reloads immediately (given
+  headroom), no dwell, so resumed enrichment isn't stalled. (A **memory**-evicted
+  model instead waits for the headroom dwell below.) `<= 0` disables idle eviction.
 - **Reload gate (hysteresis + hold):** reload only when `avail_mb ≥ model_cost +
   margin` (`KELD_SIDECAR_RELOAD_MARGIN_MB`, default 1024) **held continuously**
   for `KELD_SIDECAR_RESTORE_HOLD_S` (default 60 s). The gap between the low

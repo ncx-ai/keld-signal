@@ -16,12 +16,14 @@ class Counts:
 
 
 def build_metrics(*, model_state, state_since, governor, runner, watch, counts,
-                  model_cost_mb, reload_margin_mb, uptime_s, clock=time.monotonic):
+                  model_cost_mb, reload_margin_mb, uptime_s, evict_reason=None,
+                  clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     headroom = (round(model_cost_mb + reload_margin_mb, 1)
                 if model_cost_mb else None)
     return {
         "model_state": model_state,
+        "evict_reason": evict_reason,
         "seconds_in_state": round(clock() - state_since, 1),
         "governor": {
             "cpu_ewma": round(governor.ewma, 2) if governor else None,

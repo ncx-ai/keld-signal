@@ -17,7 +17,8 @@
 - **Memory levers:** CPU → proportional throttle (existing governor); RAM → eviction only.
 - **Reload gate is absolute bytes:** reload only when `available_mb ≥ model_cost_mb + reload_margin_mb`, held continuously for `restore_hold_s`.
 - **Dormancy is indefinite** on chronically-constrained hosts (best-effort; telemetry path is separate and unaffected).
-- **New env vars (defaults):** `KELD_SIDECAR_EVICT_AVAIL_PCT=5`, `KELD_SIDECAR_RELOAD_MARGIN_MB=1024`, `KELD_SIDECAR_RESTORE_HOLD_S=60`, `KELD_SIDECAR_MEM_POLL_S=2`, `KELD_SIDECAR_EVICT_DISABLED=0`.
+- **New env vars (defaults):** `KELD_SIDECAR_EVICT_AVAIL_PCT=5`, `KELD_SIDECAR_RELOAD_MARGIN_MB=1024`, `KELD_SIDECAR_RESTORE_HOLD_S=60`, `KELD_SIDECAR_MEM_POLL_S=2`, `KELD_SIDECAR_IDLE_UNLOAD_S=120`, `KELD_SIDECAR_EVICT_DISABLED=0`.
+- **Idle eviction (added post-plan):** LOADED + no request for `KELD_SIDECAR_IDLE_UNLOAD_S` → unload; reloads on-demand when a request resumes activity (records `last_activity`, watcher reloads given headroom, no dwell). Memory eviction keeps the headroom-dwell reload. Implemented in `MemoryWatch` (`EVICT_IDLE` action + `poll(..., last_activity, evicted_at, evict_reason)`) and wired in `main.py` (`_unload_model(reason)`, activity recorded in `_require_loaded`).
 - **Injectable seams:** `MemoryWatch` takes `clock` and `sampler` params (mirrors `Governor`) so eviction is tested deterministically with no real RAM pressure.
 - **Load-test asserts are relative to a same-run baseline** with generous margins; steady-state windows discard warmup.
 - **RAM stressor has a hard available-RAM floor** and aborts rather than risk OOM. The real-eviction test configures the evict threshold just below measured baseline — never drives the true host to 5%.

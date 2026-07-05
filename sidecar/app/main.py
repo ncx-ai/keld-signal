@@ -56,7 +56,10 @@ _state: dict = {}
 
 def _require_loaded():
     """Return the live model, or raise 503 when the model is unloaded (memory
-    pressure / dormant / mid-reload). Every inference endpoint gates on this."""
+    pressure / idle / dormant / mid-reload). Every inference endpoint gates on
+    this. Recording activity here (even on a 503) lets the watcher bring an
+    idle-evicted model back on demand as soon as work resumes."""
+    _state["last_activity"] = time.monotonic()
     if _state.get("model_state") == LOADED and "model" in _state:
         return _state["model"]
     raise HTTPException(status_code=503, detail="unavailable — memory pressure")
@@ -114,9 +117,12 @@ def _set_state(state: str) -> None:
     _state["state_since"] = time.monotonic()
 
 
-async def _unload_model():
+async def _unload_model(reason: str = "memory"):
     """Move to EVICTED, drain the single in-flight inference, drop the model, and
-    return its RSS to the OS. Endpoints already 503 once model_state != LOADED."""
+    return its RSS to the OS. `reason` ("memory" | "idle") decides how it reloads:
+    memory waits for headroom to hold; idle reloads on demand when work resumes.
+    Endpoints already 503 once model_state != LOADED."""
+    _state["evict_reason"] = reason
     _set_state(EVICTED)
     runner = _state.get("runner")
     for _ in range(500):  # ~5s cap waiting for the single in-flight job to finish
@@ -136,6 +142,8 @@ async def _reload_model():
     model = await loop.run_in_executor(None, _load_model)
     _warmup(model)
     _state["model"] = model
+    _state["last_activity"] = time.monotonic()  # fresh, so it isn't re-evicted as idle
+    _state["evict_reason"] = None
     _set_state(LOADED)
     _count("reloaded")
 
@@ -148,13 +156,21 @@ def _count(field: str) -> None:
 
 
 async def _mem_watch_loop(watch, interval: float):
-    from app.memwatch import EVICT, RELOAD
+    from app.memwatch import EVICT, EVICT_IDLE, RELOAD
     while True:
         try:
-            action = watch.poll(_state.get("model_state"), _state.get("model_cost_mb"))
-            if action == EVICT and _state.get("model_state") == LOADED:
-                await _unload_model()
-            elif action == RELOAD and _state.get("model_state") in (EVICTED, DORMANT):
+            state = _state.get("model_state")
+            action = watch.poll(
+                state, _state.get("model_cost_mb"),
+                last_activity=_state.get("last_activity"),
+                evicted_at=_state.get("state_since"),
+                evict_reason=_state.get("evict_reason"),
+            )
+            if action == EVICT and state == LOADED:
+                await _unload_model(reason="memory")
+            elif action == EVICT_IDLE and state == LOADED:
+                await _unload_model(reason="idle")
+            elif action == RELOAD and state in (EVICTED, DORMANT):
                 await _reload_model()
         except Exception:
             pass
@@ -173,6 +189,8 @@ async def lifespan(app: FastAPI):
     _state["counts"] = Counts()
     _state["started_at"] = time.monotonic()
     _state["model_cost_mb"] = None
+    _state["last_activity"] = time.monotonic()
+    _state["evict_reason"] = None
     _set_state(DORMANT)
 
     # Load only when there is headroom. model_cost is unknown at first boot, so the
@@ -187,6 +205,7 @@ async def lifespan(app: FastAPI):
         _state["model_cost_mb"] = max(0.0, _rss_mb() - before)
         _warmup(model)
         _state["model"] = model
+        _state["last_activity"] = time.monotonic()
         _set_state(LOADED)
 
     sampler_task = asyncio.create_task(_sample_loop(governor))
@@ -244,6 +263,7 @@ def metrics():
         model_cost_mb=_state.get("model_cost_mb"),
         reload_margin_mb=_RELOAD_MARGIN_MB,
         uptime_s=time.monotonic() - started,
+        evict_reason=_state.get("evict_reason"),
     )
 
 

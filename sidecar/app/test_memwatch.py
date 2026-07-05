@@ -2,13 +2,14 @@
   cd sidecar && PYTHONPATH=. ~/.keld/sidecar-venv/bin/python app/test_memwatch.py
 """
 from app.memwatch import (
-    MemoryWatch, LOADED, EVICTED, RELOADING, DORMANT, NONE, EVICT, RELOAD,
+    MemoryWatch, LOADED, EVICTED, RELOADING, DORMANT, NONE, EVICT, EVICT_IDLE, RELOAD,
 )
 
 
-def _watch(samples, *, evict_pct=5.0, margin=1024.0, hold=60.0):
+def _watch(samples, *, evict_pct=5.0, margin=1024.0, hold=60.0, idle=0.0):
     """A MemoryWatch driven by a scripted (avail_pct, avail_mb) sequence and a
-    fake clock that advances 1s per poll."""
+    fake clock that advances 1s per poll. `idle=0.0` disables idle eviction so the
+    memory-only tests are deterministic regardless of the environment."""
     t = {"now": 0.0}
     seq = list(samples)
 
@@ -21,7 +22,7 @@ def _watch(samples, *, evict_pct=5.0, margin=1024.0, hold=60.0):
         return v
 
     return MemoryWatch(evict_pct=evict_pct, reload_margin_mb=margin,
-                       restore_hold_s=hold, disabled=False,
+                       restore_hold_s=hold, idle_timeout_s=idle, disabled=False,
                        clock=clock, sampler=sampler)
 
 
@@ -80,6 +81,44 @@ def test_poll_records_last_sample():
     w.poll(LOADED, 2000.0)
     assert w.last_avail_pct == 12.5
     assert w.last_avail_mb == 777.0
+
+
+def test_idle_evict_after_timeout():
+    w = _watch([(50.0, 9000.0)], idle=0.5)  # RAM fine; only idle should fire
+    assert w.poll(LOADED, 2000.0, last_activity=0.0) == EVICT_IDLE  # now=1.0, elapsed 1.0>=0.5
+
+
+def test_no_idle_evict_when_recent_activity():
+    w = _watch([(50.0, 9000.0)], idle=5.0)
+    assert w.poll(LOADED, 2000.0, last_activity=0.9) == NONE  # now=1.0, elapsed 0.1<5
+
+
+def test_idle_disabled_when_zero():
+    w = _watch([(50.0, 9000.0)], idle=0.0)
+    assert w.poll(LOADED, 2000.0, last_activity=-100.0) == NONE
+
+
+def test_memory_evict_beats_idle():
+    w = _watch([(3.0, 500.0)], idle=0.5, evict_pct=5.0)
+    assert w.poll(LOADED, 2000.0, last_activity=-100.0) == EVICT  # pressure wins over idle
+
+
+def test_idle_evicted_reloads_on_resumed_activity():
+    w = _watch([(50.0, 9000.0)], idle=0.5)
+    assert w.poll(EVICTED, 2000.0, last_activity=5.0, evicted_at=0.0,
+                  evict_reason="idle") == RELOAD
+
+
+def test_idle_evicted_stays_without_activity():
+    w = _watch([(50.0, 9000.0)], idle=0.5)
+    assert w.poll(EVICTED, 2000.0, last_activity=0.0, evicted_at=3.0,
+                  evict_reason="idle") == NONE
+
+
+def test_idle_evicted_no_reload_without_headroom():
+    w = _watch([(50.0, 2000.0)], idle=0.5)  # 2000 < 2000+1024 -> no headroom
+    assert w.poll(EVICTED, 2000.0, last_activity=5.0, evicted_at=0.0,
+                  evict_reason="idle") == NONE
 
 
 if __name__ == "__main__":
