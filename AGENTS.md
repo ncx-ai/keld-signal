@@ -48,7 +48,9 @@ flowchart LR
 `ingress` (loopback HTTP intake, per-user secret, bounded `queue`) → `resolve`
 (read prompt text + tail recent prompts from the transcript) → `enrich`
 (the pipeline) → `mask` → `publish` (Atlas). Panic-isolated per job; a readiness
-gate holds work until the backend is up.
+gate holds work until the backend is up. Delivery is durable: the hook writes a
+prompt *pointer* (never text) to the on-disk `spool` when the daemon is
+unreachable, and the daemon drains it on startup + a periodic sweep.
 
 **Enrichment pipeline (`internal/agent/enrich/`).** A staged registry of
 extractors ("sweeps") run over a swappable `Model` backend, producing a `Profile`.
@@ -64,12 +66,26 @@ a time. Two waves, up to 7 model calls per prompt:
   `Meta.Preamble()` (repo/branch/tool/recent prompts) so context informs the guess.
 
 **Model backends.**
-- `deterministic.go` — pure-Go, zero-dependency. The **default and permanent
-  fallback**; the daemon is fully functional without the sidecar.
+- `deterministic.go` — pure-Go, zero-dependency. Used **only when ML is disabled
+  or no sidecar binary is present** (the daemon is fully functional without the
+  sidecar). When ML is *enabled*, enrichment never silently degrades to it — see
+  Delivery reliability.
 - `sidecar/` — HTTP client to the GLiNER2 sidecar (`/classify`, `/extract`,
   `/entities`); used when the sidecar binary is provisioned and healthy. Model
   provisioning (`provision/`) fetches weights (`hf.go`) into `~/.keld/models`.
   Why a bundled sidecar over in-process ONNX: `docs/keld-agent-p2-onnx-decision.md`.
+
+**Delivery reliability (never degrade, never wedge).** When ML is enabled,
+enrichment always runs on GLiNER2 — an idle-evicted or restarting sidecar is
+waited out (client wake + retry), never swapped for deterministic. Each job runs
+under a deadline (`KELD_ENRICH_JOB_TIMEOUT`, default 30s) as a **child of the
+daemon context**; on timeout the worker **cancels it**, which aborts the job's
+in-flight sidecar calls (`Client.WithContext`) so an abandoned attempt is
+reclaimed instead of leaking a retry loop that saturates the single-flight
+sidecar. A timed-out job re-spools for a later retry, **bounded** by
+`KELD_ENRICH_MAX_ATTEMPTS` (default 4) — an exhausted job is `spool.Quarantine`'d
+to `spool/bad/` rather than retried forever. Atlas dedups on `dedup_key`, so a
+late double-publish from a recovering attempt is harmless.
 
 **Control plane.** Enrichment is governed per-org from Atlas
 (`settings/`, `agentcfg/`); the daemon polls `GET /v1/enrichment-settings`
@@ -102,7 +118,7 @@ internal/
   agentcli/          keld-agent cobra commands (run/install/uninstall/...)
   agent/
     ingress/         loopback /enrich intake (auth + bounded queue)
-    queue/           bounded job queue (backpressure)
+    queue/           bounded, key-deduping job queue (backpressure)
     resolve/         read prompt text + recent-prompt tail from transcripts
     enrich/          the pipeline: extractors, passes, labels, mask, meta, router
       deterministic.go   pure-Go Model (default/fallback)
@@ -113,6 +129,7 @@ internal/
     settings/ agentcfg/  per-org control-plane polling
     service/         OS service install (darwin/linux/windows)
     daemon/          wires it all together; spawns/superwises the sidecar
+  spool/             durable on-disk pointer queue (hook fallback + re-spool/quarantine)
   auth/ cli/ tools/ diffview/ hook/ paths/ telemetry/ config/ console/ ...
 sidecar/
   serve.py           entrypoint the daemon spawns (uvicorn on 127.0.0.1)

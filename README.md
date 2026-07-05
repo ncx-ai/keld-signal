@@ -72,6 +72,16 @@ spans, activity, function, subcategory — that's synced to Atlas. Sensitive spa
   *and* dynamic per-inference thread scaling), evicts the model under memory
   pressure or after inactivity (returning its ~2.6 GB to the OS), and is
   load-tested to prove it neither leaks nor runs away with CPU.
+- **Reliable, GLiNER2-only delivery.** Enrichment never silently degrades to the
+  deterministic backend. The hook writes each prompt *pointer* (never the prompt
+  text) to a durable on-disk **spool**, so work survives daemon downtime and is
+  drained on startup and a periodic sweep. Each job runs under a deadline
+  (`KELD_ENRICH_JOB_TIMEOUT`) that **cancels its in-flight sidecar calls** on
+  timeout — so a slow/reloading model can't leak self-amplifying retries — then
+  re-spools for a later GLiNER2 retry. Retries are **bounded**: after
+  `KELD_ENRICH_MAX_ATTEMPTS` a job is quarantined to `~/.keld/spool/bad/` rather
+  than retried forever. An idle-evicted or briefly-restarting model is waited out
+  (wake + retry), not substituted.
 
 📄 **Deep dive:** [sidecar/loadtest/README.md](sidecar/loadtest/README.md) — the
 sweep pipeline (with worked examples), the resource-safety mechanisms, tuning
@@ -275,6 +285,14 @@ client behavior, and security.
 - `KELD_SETTINGS_POLL` — how often `keld-agent` polls Atlas for org enrichment
   settings (Go duration, default `5m`; for tests/local dev). See
   [docs/enrichment-settings.md](docs/enrichment-settings.md).
+- `KELD_ENRICH_JOB_TIMEOUT` — per-job enrichment deadline (Go duration, default
+  `30s`). On timeout the job's in-flight sidecar calls are cancelled and the
+  pointer re-spools for a later GLiNER2 retry.
+- `KELD_ENRICH_MAX_ATTEMPTS` — how many times a timed-out job re-spools before it
+  is quarantined to `~/.keld/spool/bad/` (default `4`) — bounds retries so one
+  un-enrichable prompt can't loop forever.
+- `KELD_SPOOL_MAX` — cap on spooled pointers before the oldest are dropped
+  (default `500`).
 
 The GLiNER2 sidecar has load-protection + resource-safety knobs
 (`KELD_SIDECAR_*`, `KELD_GOV_*`) documented, with the mechanisms and validation,

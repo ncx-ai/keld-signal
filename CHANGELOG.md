@@ -5,6 +5,43 @@ All notable changes to **keld-signal** (the Keld client — the `keld` CLI + the
 follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 semantic-ish versioning during `0.x`.
 
+## [Unreleased]
+
+Enrichment **delivery reliability** — the arc that makes enrichment actually land
+on every prompt, always on GLiNER2, without wedging.
+
+### Added
+- **Durable spool.** The hook writes each prompt *pointer* (never text) to an
+  on-disk spool when the daemon is unreachable; the daemon drains it on startup
+  and a periodic sweep. No more silently-lost enrichments during daemon downtime.
+
+### Fixed
+- **Never silently degrade to deterministic.** An idle-evicted or restarting
+  sidecar is now waited out (client wake + retry) so every enrichment runs on
+  GLiNER2 — instead of falling back to the deterministic backend (which abstains
+  on job-category), which had produced "PHI flagged but no job category" results.
+- **Enrichment death-spiral / stalled delivery.** The per-job timeout was an
+  illusion: it stopped *waiting* but couldn't cancel the work, and sidecar calls
+  ran on the daemon-lifetime context, so they retried `503`s forever. Every
+  re-spool stacked another set of immortal retry loops until the single-flight
+  sidecar saturated and shed everything — no enrichments published. Jobs now run
+  under a per-job context that **cancels in-flight sidecar calls on timeout**
+  (`sidecar.Client.WithContext` + requests bound to the context), so an abandoned
+  attempt is reclaimed instead of leaking.
+
+### Changed
+- **Per-job deadline + bounded re-spool.** Each job runs under
+  `KELD_ENRICH_JOB_TIMEOUT` (default 30s); on timeout it re-spools for a GLiNER2
+  retry, but only up to `KELD_ENRICH_MAX_ATTEMPTS` (default 4) — an exhausted job
+  is quarantined to `~/.keld/spool/bad/` rather than retried forever.
+- **Idle model-unload default 2m → 10m** (`KELD_SIDECAR_IDLE_UNLOAD_S`), so a
+  brief pause doesn't evict the model and pay a reload on the next prompt.
+
+### Env
+- `KELD_ENRICH_MAX_ATTEMPTS` (new, default 4) — re-spool cap before quarantine.
+- `KELD_ENRICH_JOB_TIMEOUT` (default 30s) and `KELD_SPOOL_MAX` (default 500) —
+  now documented in the README.
+
 ## [0.3.0-rc.1] — 2026-07-05 (internal prerelease)
 
 First release under the **keld-signal** name. This turns the client into a full

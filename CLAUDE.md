@@ -23,8 +23,12 @@ source of truth:
   `sidecar/loadtest/README.md`.
 - **Don't fan out inference.** Single-flight in the sidecar is deliberate load
   protection; RAM is bounded by eviction, CPU by the governor + thread scaler.
-- **Deterministic backend is the permanent fallback** — the daemon must stay fully
-  functional without the sidecar.
+- **Never silently degrade to deterministic.** The daemon stays fully functional
+  without the sidecar (ML disabled ⇒ deterministic), but when ML is *enabled*
+  enrichment must always run on GLiNER2 — wait out a reloading/evicted sidecar,
+  never substitute deterministic. Bound per-job work with a cancellable deadline +
+  re-spool cap (see AGENTS.md → Delivery reliability); don't reintroduce a
+  health-gated fallback.
 - **Use the superpowers workflow** (brainstorm → plan → TDD → systematic
   debugging) for non-trivial changes; no ad-hoc edits.
 - **Latest models:** Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / Fable 5. Use the official
