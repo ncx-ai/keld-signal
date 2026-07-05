@@ -46,6 +46,71 @@ unload/reload with the evict threshold configured just below baseline (never dri
 the true host to 5%). Deterministic eviction transitions (K3, incl. idle) are
 covered by `app/test_memwatch.py`.
 
+## What the load test simulates — the production enrichment sweeps
+
+The load test drives the same endpoints (`/classify`, `/extract`, `/entities`)
+and label schemas the real pipeline uses. In production, every eligible prompt is
+enriched by a fixed sequence of classification/extraction **sweeps** (the code
+calls them *extractors*, `internal/agent/enrich/`). They run against the GLiNER2
+sidecar when it's provisioned, otherwise the pure-Go deterministic fallback.
+
+**Sequencing — two waves, single-flight.** Each prompt makes **up to 7 model
+calls**, one at a time (never concurrent — that's the load-protection guarantee
+the tests verify):
+
+- **Wave 1 — six independent sweeps**, run serially and committed as a batch (they
+  never read each other):
+  1. `task_type` — *classify* the kind of task (`codegen`, `summarization`,
+     `extraction`, `translation`, `rag_qa`, `classification`, `reasoning`,
+     `agentic_tool_use`, `other`).
+  2. `sensitivity` — *extract* sensitive entities (`email`, `phone`, `ssn`,
+     `credit_card`, `api_key`, `secret`, `person`, `address`) **and** classify a
+     level (`none`/`pii`/`secrets`/`phi`/`pci`/`proprietary`); a hard span
+     override wins (an `api_key` ⇒ `secrets`, an `ssn` ⇒ `phi`). Spans are
+     **masked** here — the raw text is dropped.
+  3. `domain_entities` — *extract* domain entities (`language`, `framework`,
+     `library`, `org`, `product`) **and** classify a `domain` (`software`,
+     `legal`, `medical`, `finance`, …).
+  4. `activity_type` — *classify* the cognitive operation (`generate`,
+     `transform`, `analyze`, `retrieve`, `converse`, `review`).
+  5. `personal` — `work` vs `personal`.
+  6. `function_guess` — which of the **12 business functions** (`eng`, `prod`,
+     `data`, `mkt`, `sales`, `support`, `delivery`, `fin`, `legal`, `hr`, `it`,
+     `gen`).
+- **Wave 2 — one conditioned sweep**, run after Wave 1 commits:
+  7. `subcategory` — *conditioned on* `function_guess`: it classifies only within
+     that function's subcategories (e.g. `function=eng` ⇒ `eng.dev` / `eng.debug`
+     / `eng.test` / `eng.review` / `eng.devops` / `eng.docs`).
+
+Every classify call is prefixed with a **context preamble** (`Meta.Preamble()`:
+repo, branch, project, tool, and recent prompts) so the surrounding work informs
+the guess — e.g. the same prompt in a `finance` repo leans toward `fin`.
+
+**What a production enrichment consists of** (the `Profile`, minus raw text):
+`task_type` (+ ranked alternates), `domain` + `entities`, `sensitivity` +
+**masked** `sensitivity_spans`, `activity`, `personal` (work/personal),
+`function_guess`, `subcategory` (+ alternates), plus each producer's version,
+pipeline status (`enriched`/`partial`), schema version, and timestamp. Only this
+derived, masked profile is synced to Atlas — **the prompt text never leaves the
+machine.**
+
+**Intuitive examples** (illustrative — real outputs vary with the model):
+
+- *"Refactor this Django view to use the ORM efficiently and add pagination."*
+  → `task_type=codegen`, `domain=software` (entity `framework=Django`),
+  `activity=transform`, `personal=work`, `function=eng`, `subcategory=eng.review`,
+  `sensitivity=none`.
+- *"Draft an email to jane@acme.com sharing our API key sk-live-abc123."*
+  → entities `email`, `api_key`; `sensitivity=secrets` (hard override from the
+  `api_key`, conf 1.0) with both spans **masked**; `task_type=generate`,
+  `activity=generate`, `function=gen`, `subcategory=gen.comms`.
+- *"Build a Q3 revenue forecast model in the finance workbook."*
+  → `task_type=reasoning`, `domain=finance`, `activity=analyze`, `function=fin`,
+  `subcategory=fin.fpa`, `sensitivity=none`.
+
+The load-test corpus (`corpus.py`) sends these same task/label schemas at varied
+text lengths, so the tests exercise the real inference shapes and sizes.
+
 ## Resource-safety mechanisms (what these tests validate)
 
 The sidecar holds a ~2.6 GB DeBERTa/GLiNER2 model and does CPU-bound inference.
