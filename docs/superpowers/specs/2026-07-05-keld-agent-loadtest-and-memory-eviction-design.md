@@ -154,7 +154,15 @@ The governor keeps pacing on CPU EWMA only (`KELD_GOV_HIGH`=85, `KELD_GOV_LOW`=6
 `KELD_GOV_MAX_INTERVAL_MS`=2000). No behavioral change; the load test validates
 its existing behavior.
 
-## 5. Load-test harness (`sidecar/loadtest/`, Python + pytest)
+## 5. Load-test harness (`sidecar/loadtest/`, standalone Python)
+
+> **Test convention.** The sidecar has no pytest; existing tests are standalone
+> scripts (`python app/test_*.py`, each with a `__main__` runner that runs every
+> `test_*` function) executed with `~/.keld/sidecar-venv/bin/python` (`psutil`,
+> `httpx` present). This plan follows that convention: unit tests are standalone
+> `test_*.py`; load tiers are runnable modules under `sidecar/loadtest/` invoked
+> explicitly (`python -m loadtest smoke|soak`). Nothing auto-runs them, which is
+> the gating the spec's "out of the default suite" intends.
 
 Self-contained; no external service. Four small, independently-testable units:
 
@@ -197,7 +205,7 @@ a same-run baseline** (measured on the same host in the same run) with generous
 margins; **steady-state windows discard warmup/ramp**. Absolute numbers below are
 configurable defaults / starting points, not hard contract.
 
-**Smoke tier** (~2–3 min, few hundred requests; `-m loadtest`):
+**Smoke tier** (~2–3 min, few hundred requests; `python -m loadtest smoke`):
 - **S1 Leak (gross):** RSS slope over the steady window ≈ 0 (< ~5 MB/min);
   peak RSS < cap (default 6 GB, configurable).
 - **S2 Flat-vs-rate:** run at low rate then high rate; steady-state RSS is
@@ -209,8 +217,7 @@ configurable defaults / starting points, not hard contract.
   `queue_depth` never exceeds `queue_max`, no crash, all non-503 succeed.
 - **S5 Idle:** between requests, sidecar CPU ≈ 0 (no busy-spin) and interval ≈ 0.
 
-**Soak tier** (opt-in, 30+ min / thousands of requests; `-m soak` or
-`KELD_LOADTEST_SOAK=1`):
+**Soak tier** (opt-in, 30+ min / thousands of requests; `python -m loadtest soak`):
 - **K1 Slow leak:** RSS slope over the full run below a tight threshold
   (default < 50 MB total drift after warmup); no monotonic creep.
 - **K2 CPU sweep:** stress 0 → high in steps; completion rate is **non-increasing**
@@ -232,24 +239,31 @@ configurable defaults / starting points, not hard contract.
 
 ```
 sidecar/
-  app/                     # + /metrics, memory watcher/eviction, counters
+  app/
+    memwatch.py  test_memwatch.py    # eviction state machine (pure policy)
+    metrics.py   test_metrics.py     # /metrics builder + counts
+    main.py                          # + /metrics route, eviction wiring, 503 guard
+    runner.py                        # + queue_depth/queue_max/inflight
   loadtest/
-    __init__.py
-    conftest.py            # sidecar_process fixture, markers
-    driver.py  sampler.py  stressor.py  corpus.py  analysis.py
-    test_smoke.py          # S1–S5   (@pytest.mark.loadtest)
-    test_soak.py           # K1–K4   (@pytest.mark.soak)
-    __main__.py            # CLI: ad-hoc soak with live RSS/CPU/interval print
+    __init__.py  __main__.py         # CLI: python -m loadtest smoke|soak
+    corpus.py    test_corpus.py      # realistic payloads
+    analysis.py  test_analysis.py    # slope / steady-window / relative-drop math
+    sampler.py   driver.py  stressor.py  harness.py
+    smoke.py                         # S1–S5
+    soak.py                          # K1, K2, K4
+    README.md
 ```
 
-- **Gated out of the default suite.** `pytest -q` (fast unit tests) never loads
-  the model. Load tests run explicitly: `pytest -m loadtest` (smoke),
-  `pytest -m soak` (soak). Markers registered in `pyproject`/`pytest.ini`.
-- **Unit tests stay fast & default:** the memory-watcher state machine, hysteresis,
-  hold-duration, `model_cost` learning, and `/metrics` shape are covered by
-  deterministic unit tests using the injected sampler/clock (no model, no timers).
-- **CLI:** `python -m loadtest --minutes 45 --cpu-sweep --live` for manual soak
-  with tunable knobs and a live-printed sampler.
+- **Gated by being explicit — nothing auto-runs.** Fast unit tests
+  (`test_memwatch.py`, `test_metrics.py`, `test_corpus.py`, `test_analysis.py`,
+  and the existing `test_*.py`) never load the model and run in milliseconds via
+  `~/.keld/sidecar-venv/bin/python`. The tiers run only when invoked:
+  `python -m loadtest smoke` and `python -m loadtest soak`.
+- **Unit-covered (no model, no real timers, injected sampler/clock):** the
+  eviction state machine (transitions, hysteresis, hold-duration — spec K3), the
+  `/metrics` builder shape, corpus determinism, and the analysis math.
+- **CLI:** `python -m loadtest soak --minutes 45 --live` for manual soak with
+  tunable knobs and a live-printed RSS/CPU/interval line.
 
 ## 8. Risks & safety
 
