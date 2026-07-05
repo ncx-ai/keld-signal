@@ -1,11 +1,90 @@
-# keld
+# keld — the Keld client
 
-The Keld CLI configures your local AI coding tools (Claude Code, Codex, Gemini
-CLI) to send telemetry to Keld Atlas.
+**The on-device half of Keld.** This repo is everything that runs on an
+engineer's own machine, and it does two things:
+
+1. **Telemetry** — configures your local AI coding tools (Claude Code, Codex,
+   Gemini CLI) to emit usage telemetry to Keld Atlas.
+2. **On-device enrichment (the core)** — a local daemon that classifies each
+   prompt **on your machine**, masks anything sensitive, and sends Atlas only the
+   *derived, masked* signal. **Raw prompt text never leaves the machine.**
+
+That second capability is the heart of the project. It's what lets Keld report
+*what kind of work* AI is being used for — by task, domain, business function,
+sensitivity — **without exfiltrating a single prompt**. The `keld` CLI is the
+setup/telemetry component; the `keld-agent` daemon and its GLiNER2 sidecar are the
+privacy-preserving intelligence the CLI installs.
+
+## What's in the client
+
+| Component | Binary / process | Role |
+|---|---|---|
+| **CLI** | `keld` | Sign-in, detect tools, configure telemetry, install the hook, manage the agent. |
+| **Hook** | `keld` (invoked by the tools) | Posts usage telemetry to Atlas and fire-and-forgets an *enrich pointer* (transcript path + prompt id — **never text**) to the local agent. |
+| **Enrichment daemon** | `keld-agent` | Loopback intake → resolve prompt text locally → enrich → **mask** → publish masked enrichments to Atlas. |
+| **ML sidecar** | `keld-agent-sidecar` | On-device GLiNER2 model doing the classification/extraction, spawned by the daemon on `127.0.0.1`. A pure-Go **deterministic backend** is the zero-dependency default and permanent fallback. |
+
+```mermaid
+flowchart LR
+  Tools["AI coding tools<br/>Claude Code · Codex · Gemini"]
+  subgraph Client["Keld client — this repo, on your machine"]
+    CLI["keld CLI<br/>setup · auth · hook"]
+    Hook["keld hook"]
+    Agent["keld-agent daemon<br/>resolve · enrich · mask · publish"]
+    Sidecar["GLiNER2 sidecar<br/>on-device ML (+ Go deterministic fallback)"]
+  end
+  Atlas["Keld Atlas"]
+
+  CLI -->|configures| Tools
+  Tools -->|usage telemetry| Hook
+  Hook -->|OTLP telemetry| Atlas
+  Hook -->|"/enrich — pointer, never text"| Agent
+  Agent <-->|"127.0.0.1 classify / extract"| Sidecar
+  Agent -->|"masked, derived enrichments"| Atlas
+```
+
+**Two lanes, one privacy guarantee.** Telemetry (counts, models, latencies) goes
+straight to Atlas from the hook. Enrichment (the semantic *meaning* of a prompt)
+is computed **locally** by `keld-agent`; only masked labels + masked entity spans
+are published. The raw prompt text is read on your machine and never transmitted.
+
+## On-device enrichment (the core)
+
+For each eligible prompt the agent runs a fixed sequence of classification /
+extraction **sweeps** (single-flight, so it never runs concurrent inferences),
+then masks and publishes. In two waves, up to 7 model calls per prompt:
+
+- **Wave 1** (independent): `task_type` · `sensitivity` (+ masked entity spans) ·
+  `domain` (+ entities) · `activity_type` · `personal` (work/personal) ·
+  `function_guess` (one of 12 business functions).
+- **Wave 2** (conditioned on the function): `subcategory`.
+
+Each prompt yields a `Profile` — task, domain + entities, sensitivity + **masked**
+spans, activity, function, subcategory — that's synced to Atlas. Sensitive spans
+(emails, keys, SSNs…) are masked before anything leaves; a hard span match
+(e.g. an API key) overrides the classifier to `secrets`.
+
+- **Model backends.** GLiNER2 (DeBERTa-v2) via the sidecar when provisioned;
+  otherwise a pure-Go **deterministic** backend — always present, zero-dependency.
+- **Governed per organization.** An Atlas admin sets enrichment policy once
+  (e.g. `include_entity_text`) and every agent picks it up within a poll interval.
+- **Invisible good citizen.** The sidecar throttles CPU two ways (a rate governor
+  *and* dynamic per-inference thread scaling), evicts the model under memory
+  pressure or after inactivity (returning its ~2.6 GB to the OS), and is
+  load-tested to prove it neither leaks nor runs away with CPU.
+
+📄 **Deep dive:** [sidecar/loadtest/README.md](sidecar/loadtest/README.md) — the
+sweep pipeline (with worked examples), the resource-safety mechanisms, tuning
+knobs, and the measured validation results. See also
+[docs/enrichment-settings.md](docs/enrichment-settings.md) (control plane) and
+[docs/keld-agent-p2-onnx-decision.md](docs/keld-agent-p2-onnx-decision.md)
+(why a bundled sidecar over in-process ONNX).
 
 ## Install
 
-`keld` is a single static binary — no Python, no runtime, no dependencies.
+`keld` is a single static binary — no Python, no runtime, no dependencies. (The
+enrichment agent + ML sidecar are provisioned separately; see *Enabling
+enrichment* below.)
 
 **macOS / Linux (one-liner):**
 
@@ -80,6 +159,21 @@ is preserved, and the diff is always shown for a replace), or **[a]bort**. Every
 file Keld modifies is first copied to `~/.keld/backups/<tool>/`. Use `--dry-run`
 to preview without writing and `--yes` to skip prompts (conflicts are
 auto-skipped in that mode).
+
+### Enabling enrichment (agent + sidecar)
+
+The on-device enrichment agent is a separate binary (`keld-agent`) with an
+optional Python ML sidecar. For local development on Linux:
+
+```bash
+make install-linux     # build keld + keld-agent + the sidecar venv, install the systemd --user service
+make send-test-prompt  # push one test prompt to the running daemon
+```
+
+On first ML enrichment the agent provisions the model (~1.9 GB) into
+`~/.keld/models` and the sidecar takes over; until then the pure-Go deterministic
+backend runs. The daemon is safe to run without the sidecar — enrichment simply
+uses the deterministic backend.
 
 ### Local development
 
@@ -158,15 +252,12 @@ client behavior, and security.
   settings (Go duration, default `5m`; for tests/local dev). See
   [docs/enrichment-settings.md](docs/enrichment-settings.md).
 
-### On-device resource safety (GLiNER2 sidecar)
+The GLiNER2 sidecar has load-protection + resource-safety knobs
+(`KELD_SIDECAR_*`, `KELD_GOV_*`) documented, with the mechanisms and validation,
+in [sidecar/loadtest/README.md](sidecar/loadtest/README.md#tunable-env). General
+sidecar setup lives in [sidecar/README.md](sidecar/README.md).
 
-The optional GLiNER2 ML sidecar is built to be an **invisible good citizen** on the
-user's own machine: it throttles CPU two ways (a rate governor *and* dynamic
-per-inference thread scaling), evicts the model under memory pressure or after
-inactivity (returning its ~2.6 GB to the OS), and is load-tested to prove it does
-not leak or run away with CPU.
+## Contributing
 
-📄 **See [sidecar/loadtest/README.md](sidecar/loadtest/README.md)** for the
-resource-safety mechanisms, the enrichment "sweep" pipeline (with examples), the
-tuning knobs (`KELD_SIDECAR_*`, `KELD_GOV_*`), and the measured validation results.
-General sidecar setup lives in [sidecar/README.md](sidecar/README.md).
+See [AGENTS.md](AGENTS.md) for the architecture, repo layout, build/run/test
+commands, and conventions.
