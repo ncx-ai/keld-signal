@@ -20,6 +20,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
 // sha256Hex returns the hex-encoded SHA256 of b.
@@ -390,6 +391,54 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 	}
 	if n := len(fs.all()); n != 0 {
 		t.Fatalf("enrichment must wait, not degrade: expected 0 publishes, got %d", n)
+	}
+	q.Close()
+}
+
+// blockModel simulates a sidecar that never answers (client waiting through a
+// reload/outage): every call blocks until release is closed.
+type blockModel struct{ release chan struct{} }
+
+func (b blockModel) Classify(string, map[string][]string) map[string][]enrich.Ranked {
+	<-b.release
+	return nil
+}
+func (b blockModel) Entities(string, map[string]string) []enrich.Entity { <-b.release; return nil }
+func (b blockModel) Extract(string, map[string]string, map[string][]string) enrich.ExtractResult {
+	<-b.release
+	return enrich.ExtractResult{}
+}
+
+// TestWorkerTimesOutAndRespools: a job whose model call hangs must not wedge the
+// worker — it times out, re-spools the pointer for retry, and the worker moves on.
+func TestWorkerTimesOutAndRespools(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("KELD_ENRICH_JOB_TIMEOUT", "150ms")
+
+	bm := blockModel{release: make(chan struct{})}
+	defer close(bm.release) // unblock the abandoned goroutine at teardown
+
+	q := queue.New(10)
+	fs := &fakeSender{}
+	go Worker(q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true })
+
+	q.Offer(queue.Job{Source: "claude_code", Scheme: "trace", ID: "SLOW-1", Inline: "write code"})
+
+	// Within a few timeouts the job must be re-spooled (not wedged, not published).
+	deadline := time.After(3 * time.Second)
+	for {
+		n, _ := spool.Drain(func(p spool.Pointer) error { return nil })
+		if n >= 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed-out job was not re-spooled — worker likely wedged")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if len(fs.all()) != 0 {
+		t.Fatalf("a hung job must not publish; got %d", len(fs.all()))
 	}
 	q.Close()
 }

@@ -59,8 +59,61 @@ func Worker(q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEnt
 			case <-time.After(20 * time.Millisecond):
 			}
 		}
-		process(j, m, pub, actor, includeEntityText)
+		to := jobTimeout()
+		if !runWithTimeout(to, func() { process(j, m, pub, actor, includeEntityText) }) {
+			// The job exceeded its deadline — the sidecar is unavailable/reloading and
+			// the client is still waiting. Re-spool the pointer so it retries on
+			// GLiNER2 later (NEVER degrade to deterministic, never lose it), and move
+			// on so one stuck job can't wedge the single worker. The abandoned attempt
+			// finishes in the background if the sidecar recovers; Atlas dedups on
+			// dedup_key, so a double-publish is harmless.
+			if err := spool.Write(pointerFromJob(j)); err != nil {
+				log.Printf("keld-agent: job %s exceeded %s and re-spool failed: %v", j.Key(), to, err)
+			} else {
+				log.Printf("keld-agent: job %s exceeded %s, re-spooled for retry", j.Key(), to)
+			}
+		}
 	}
+}
+
+// jobTimeout bounds how long the worker spends on one enrichment before it
+// re-spools and moves on. Default 30s (covers a model reload ~15s + the ~7-pass
+// enrichment); override with KELD_ENRICH_JOB_TIMEOUT (Go duration).
+func jobTimeout() time.Duration {
+	if v := os.Getenv("KELD_ENRICH_JOB_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 30 * time.Second
+}
+
+// runWithTimeout runs fn in a goroutine and reports whether it finished within d.
+// On timeout the goroutine is left to finish on its own (its sidecar client stops
+// on daemon shutdown); the caller decides what to do with the un-finished job.
+func runWithTimeout(d time.Duration, fn func()) bool {
+	done := make(chan struct{})
+	go func() { defer close(done); fn() }()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// pointerFromJob rebuilds a spool.Pointer from a queue.Job (inverse of
+// ingress.JobFrom) so a timed-out job can be re-spooled for retry.
+func pointerFromJob(j queue.Job) spool.Pointer {
+	p := spool.Pointer{
+		Source:      spool.Source{ID: j.Source, Origin: j.Origin, Version: j.Version},
+		Correlation: spool.Correlation{Scheme: j.Scheme, ID: j.ID, SessionID: j.SessionID},
+		Pointer:     &spool.Ptr{TranscriptPath: j.TranscriptPath, PromptID: j.PromptID, Cwd: j.Cwd},
+	}
+	if j.Inline != "" {
+		p.Inline = &spool.Inline{Text: j.Inline}
+	}
+	return p
 }
 
 func process(j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool) {
