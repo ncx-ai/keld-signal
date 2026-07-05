@@ -82,54 +82,78 @@ knobs, and the measured validation results. See also
 
 ## Install
 
-`keld` is a single static binary — no Python, no runtime, no dependencies. (The
-enrichment agent + ML sidecar are provisioned separately; see *Enabling
-enrichment* below.)
+The **platform installers are the recommended path** — each bundles the whole
+client (the `keld` CLI, the `keld-agent` enrichment daemon, and the frozen GLiNER2
+sidecar) and registers the agent as a background service. Grab the latest from
+[**GitHub Releases**](https://github.com/ncx-ai/keld-signal/releases/latest).
 
-**macOS / Linux (one-liner):**
+| Platform | Download | What it does |
+|---|---|---|
+| **macOS** (Apple Silicon) | `keld-<version>-arm64.pkg` | Full client + per-user agent |
+| **macOS** (Intel) | `keld-<version>-amd64.pkg` | Full client + per-user agent |
+| **Windows** (x64) | `keld-setup.exe` | Full client + logon-task agent |
+| **Linux** (x64/arm64) | one-liner below (+ sidecar tarball) | CLI + agent (+ optional ML sidecar) |
+
+### macOS — `.pkg` installer
+
+Download the `.pkg` for your chip and open it. It installs to `/usr/local/keld`
+and registers the per-user agent. It's a **`.pkg`, not a DMG** — a DMG is
+drag-to-Applications for `.app` bundles, whereas Keld installs a CLI plus a
+background daemon, which the `.pkg`'s install scripts wire up.
+
+> **Gatekeeper:** release builds are signed + notarized when the maintainer's
+> Apple credentials are configured; otherwise macOS warns on first run — open
+> **System Settings → Privacy & Security** and click **Allow**.
+
+### Windows — `keld-setup.exe`
+
+Download **`keld-setup.exe`** and run it. Per-user (no admin): installs to
+`%LOCALAPPDATA%\Programs\keld`, adds Keld to your `PATH`, and registers the agent
+as a logon task.
+
+> **SmartScreen:** unsigned builds trigger a warning — click **More info → Run
+> anyway**. Code signing is a planned follow-up.
+
+### Linux
+
+No native package yet — install the CLI + agent with the one-liner:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.sh | sh
 ```
 
-This detects your OS and architecture, fetches the latest release from GitHub,
-and installs `keld` to `~/.local/bin`. Set `KELD_INSTALL_DIR` to override the
-destination. A vanity URL (`https://keld.co/install.sh`) is planned but not yet
-live; use the `raw.githubusercontent.com` form until then.
+It detects your OS/arch, fetches the latest release, and installs `keld` (and
+`keld-agent`) to `~/.local/bin` (`KELD_INSTALL_DIR` to override). For on-device ML
+enrichment, add the frozen sidecar (`keld-agent-sidecar_linux_amd64.tar.gz` from
+Releases) beside `keld-agent`, or use `make install-linux` in a dev checkout for a
+systemd `--user` service. Without the sidecar, enrichment runs on the pure-Go
+deterministic backend.
 
-> **macOS Gatekeeper:** because the binary is not yet notarized, macOS may show
-> a warning on first run. Go to **System Settings → Privacy & Security** and
-> click **Allow**. Code signing and notarization are a planned follow-up.
+### Advanced — CLI-only / raw binaries
 
-**Windows (PowerShell 5.1+):**
+The one-liners install just the `keld` CLI + `keld-agent` binaries (no bundled ML
+sidecar):
 
-```powershell
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.sh | sh
+# Windows (PowerShell 5.1+)
 irm https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.ps1 | iex
 ```
 
-Installs `keld.exe` to `%LOCALAPPDATA%\Programs\keld`. Set `KELD_INSTALL_DIR`
-to override. A vanity URL (`https://keld.co/install.ps1`) is planned.
+Or grab the raw archive from
+[Releases](https://github.com/ncx-ai/keld-signal/releases/latest) and put the
+binaries on your `$PATH` (a vanity `https://keld.co/install.sh` is planned):
 
-> **Windows SmartScreen:** unsigned binaries trigger a SmartScreen warning.
-> Click **More info → Run anyway**. Code signing is a planned follow-up.
-
-**Direct download** — grab the archive for your platform from
-[GitHub Releases](https://github.com/ncx-ai/keld-signal/releases/latest), extract
-the binary, and place it on your `$PATH`:
-
-| Platform | Architecture | Archive                          | Binary inside     |
-|----------|--------------|----------------------------------|-------------------|
-| macOS    | arm64        | `keld_darwin_arm64.tar.gz`       | `keld`            |
-| macOS    | amd64        | `keld_darwin_amd64.tar.gz`       | `keld`            |
-| Linux    | arm64        | `keld_linux_arm64.tar.gz`        | `keld`            |
-| Linux    | amd64        | `keld_linux_amd64.tar.gz`        | `keld`            |
-| Windows  | amd64        | `keld_windows_amd64.zip`         | `keld.exe`        |
+| Platform | Architecture | Archive                     |
+|----------|--------------|-----------------------------|
+| macOS    | arm64 / amd64 | `keld_darwin_{arch}.tar.gz` |
+| Linux    | arm64 / amd64 | `keld_linux_{arch}.tar.gz`  |
+| Windows  | amd64        | `keld_windows_amd64.zip`    |
 
 ```bash
 # Example (macOS arm64):
-tar -xzf keld_darwin_arm64.tar.gz
-chmod +x keld
-sudo mv keld /usr/local/bin/
+tar -xzf keld_darwin_arm64.tar.gz && chmod +x keld keld-agent && sudo mv keld keld-agent /usr/local/bin/
 ```
 
 ## Usage
