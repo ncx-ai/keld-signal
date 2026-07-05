@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
 func TestPollSettingsAppliesRemoteOverLocal(t *testing.T) {

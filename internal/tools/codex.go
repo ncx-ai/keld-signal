@@ -8,8 +8,8 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 
-	"github.com/ncx-ai/keld-cli/internal/config"
-	"github.com/ncx-ai/keld-cli/internal/telemetry"
+	"github.com/ncx-ai/keld-signal/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/telemetry"
 )
 
 // CodexAdapter implements the Adapter interface for OpenAI Codex CLI.

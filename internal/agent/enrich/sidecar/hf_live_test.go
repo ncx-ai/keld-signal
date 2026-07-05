@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/provision"
+	"github.com/ncx-ai/keld-signal/internal/agent/provision"
 )
 
 // TestHFFetcherLiveDownload performs a real download of the pinned GLiNER2

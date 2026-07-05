@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/agentcfg"
-	"github.com/ncx-ai/keld-cli/internal/debuglog"
+	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/debuglog"
 )
 
 // forwardToAgent best-effort POSTs an enrich pointer to the local daemon. It is

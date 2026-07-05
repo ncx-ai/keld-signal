@@ -6,10 +6,10 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/api"
-	"github.com/ncx-ai/keld-cli/internal/console"
-	"github.com/ncx-ai/keld-cli/internal/errs"
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/api"
+	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // Login performs the OAuth2 device-flow login against the Atlas API.

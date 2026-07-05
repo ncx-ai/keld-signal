@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/config"
-	"github.com/ncx-ai/keld-cli/internal/console"
-	"github.com/ncx-ai/keld-cli/internal/errs"
-	"github.com/ncx-ai/keld-cli/internal/paths"
-	"github.com/ncx-ai/keld-cli/internal/tools"
+	"github.com/ncx-ai/keld-signal/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/tools"
 )
 
 // TestCollectStatusReadsRealConfigForUnmanagedTool verifies FIX B: a tool whose

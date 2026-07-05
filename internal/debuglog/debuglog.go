@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // MaxBytes caps the active log file. When it is reached the file rotates to

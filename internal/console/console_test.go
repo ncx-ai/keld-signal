@@ -8,7 +8,7 @@ import (
 
 	"github.com/fatih/color"
 
-	"github.com/ncx-ai/keld-cli/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/errs"
 )
 
 func TestRuleContainsTitle(t *testing.T) {

@@ -10,9 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/daemon"
-	"github.com/ncx-ai/keld-cli/internal/agent/service"
-	"github.com/ncx-ai/keld-cli/internal/version"
+	"github.com/ncx-ai/keld-signal/internal/agent/daemon"
+	"github.com/ncx-ai/keld-signal/internal/agent/service"
+	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
 // NewRootCmd builds the keld-agent command tree.

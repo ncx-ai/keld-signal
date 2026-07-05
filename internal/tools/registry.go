@@ -3,7 +3,7 @@ package tools
 import (
 	"strings"
 
-	"github.com/ncx-ai/keld-cli/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/errs"
 )
 
 // All returns all available adapters in order: Claude, Codex, Gemini.

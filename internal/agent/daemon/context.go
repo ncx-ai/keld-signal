@@ -7,9 +7,9 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/enrich"
-	"github.com/ncx-ai/keld-cli/internal/agent/queue"
-	"github.com/ncx-ai/keld-cli/internal/agent/resolve"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/agent/resolve"
 )
 
 const (

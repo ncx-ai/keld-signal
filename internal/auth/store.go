@@ -7,7 +7,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // AuthData holds the credentials persisted to ~/.keld/auth.json.

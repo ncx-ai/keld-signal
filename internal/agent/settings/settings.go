@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // Settings are the admin-configurable daemon options.

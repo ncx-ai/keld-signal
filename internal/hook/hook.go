@@ -22,7 +22,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // Config holds the hook endpoint and ingest token, resolved from hook.json

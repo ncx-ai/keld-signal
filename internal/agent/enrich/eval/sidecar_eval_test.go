@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/enrich"
-	"github.com/ncx-ai/keld-cli/internal/agent/enrich/sidecar"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 )
 
 func TestSidecarVsDeterministic(t *testing.T) {

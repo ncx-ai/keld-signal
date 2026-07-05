@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 )
 
 func TestGitBranch(t *testing.T) {

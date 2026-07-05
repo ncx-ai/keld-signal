@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ncx-ai/keld-cli/internal/hook"
+	"github.com/ncx-ai/keld-signal/internal/hook"
 )
 
 func newHookCmd() *cobra.Command {

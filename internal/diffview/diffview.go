@@ -7,7 +7,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/pmezard/go-difflib/difflib"
 
-	"github.com/ncx-ai/keld-cli/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/console"
 )
 
 var (

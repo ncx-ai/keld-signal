@@ -8,8 +8,8 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 
-	"github.com/ncx-ai/keld-cli/internal/errs"
-	"github.com/ncx-ai/keld-cli/internal/version"
+	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
 func NewRootCmd() *cobra.Command {

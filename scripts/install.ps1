@@ -1,10 +1,10 @@
 # keld installer for Windows (PowerShell)
-# Usage: irm https://raw.githubusercontent.com/ncx-ai/keld-cli/main/scripts/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.ps1 | iex
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$REPO = 'ncx-ai/keld-cli'
+$REPO = 'ncx-ai/keld-signal'
 $InstallDir = if ($env:KELD_INSTALL_DIR) { $env:KELD_INSTALL_DIR } `
               else { Join-Path $env:LOCALAPPDATA 'Programs\keld' }
 

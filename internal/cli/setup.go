@@ -7,15 +7,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ncx-ai/keld-cli/internal/api"
-	"github.com/ncx-ai/keld-cli/internal/auth"
-	"github.com/ncx-ai/keld-cli/internal/config"
-	"github.com/ncx-ai/keld-cli/internal/console"
-	"github.com/ncx-ai/keld-cli/internal/diffview"
-	"github.com/ncx-ai/keld-cli/internal/errs"
-	"github.com/ncx-ai/keld-cli/internal/paths"
-	"github.com/ncx-ai/keld-cli/internal/tools"
-	"github.com/ncx-ai/keld-cli/internal/version"
+	"github.com/ncx-ai/keld-signal/internal/api"
+	"github.com/ncx-ai/keld-signal/internal/auth"
+	"github.com/ncx-ai/keld-signal/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/diffview"
+	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/tools"
+	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
 // SetupOpts holds behavioural knobs for runSetup that are separate from the

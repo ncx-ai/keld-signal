@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/version"
+	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
 func TestRootVersionMatchesVersionPackage(t *testing.T) {

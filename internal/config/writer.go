@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // WriteAtomic writes text to path atomically: mkdir parent dirs, optionally

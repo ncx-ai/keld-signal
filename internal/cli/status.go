@@ -6,12 +6,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ncx-ai/keld-cli/internal/auth"
-	"github.com/ncx-ai/keld-cli/internal/config"
-	"github.com/ncx-ai/keld-cli/internal/console"
-	"github.com/ncx-ai/keld-cli/internal/errs"
-	"github.com/ncx-ai/keld-cli/internal/paths"
-	"github.com/ncx-ai/keld-cli/internal/tools"
+	"github.com/ncx-ai/keld-signal/internal/auth"
+	"github.com/ncx-ai/keld-signal/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/tools"
 )
 
 // statusRow pairs a tool's display name with its computed status.

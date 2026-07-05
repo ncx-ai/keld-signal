@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/enrich"
-	"github.com/ncx-ai/keld-cli/internal/agent/publish"
-	"github.com/ncx-ai/keld-cli/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/publish"
+	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 )
 
 // The end-to-end payload must never contain raw prompt text or raw secrets.

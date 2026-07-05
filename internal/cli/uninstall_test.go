@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/config"
-	"github.com/ncx-ai/keld-cli/internal/tools"
+	"github.com/ncx-ai/keld-signal/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/tools"
 )
 
 // buildManifestWithFakeTool writes a manifest and config file for a fake tool

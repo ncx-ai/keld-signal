@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 )
 
 type source struct {

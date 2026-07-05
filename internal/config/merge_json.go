@@ -8,7 +8,7 @@ import (
 
 	"github.com/iancoleman/orderedmap"
 
-	"github.com/ncx-ai/keld-cli/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/errs"
 )
 
 // LoadJSON parses JSON text into an order-preserving map.

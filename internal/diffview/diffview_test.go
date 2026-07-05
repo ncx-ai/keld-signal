@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/fatih/color"
-	"github.com/ncx-ai/keld-cli/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/console"
 )
 
 func TestRenderShowsAddedLine(t *testing.T) {

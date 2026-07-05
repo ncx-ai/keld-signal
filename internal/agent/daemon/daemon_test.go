@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/enrich"
-	"github.com/ncx-ai/keld-cli/internal/agent/enrich/sidecar"
-	"github.com/ncx-ai/keld-cli/internal/agent/publish"
-	"github.com/ncx-ai/keld-cli/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
+	"github.com/ncx-ai/keld-signal/internal/agent/publish"
+	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 )
 
 // sha256Hex returns the hex-encoded SHA256 of b.

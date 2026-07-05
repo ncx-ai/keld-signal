@@ -1,9 +1,9 @@
 #!/bin/sh
 # keld installer — POSIX sh, no jq required
-# Usage: curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-cli/main/scripts/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.sh | sh
 set -e
 
-REPO="ncx-ai/keld-cli"
+REPO="ncx-ai/keld-signal"
 DEST="${KELD_INSTALL_DIR:-${HOME}/.local/bin}"
 
 # ── OS detection ──────────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ case "$os" in
     echo "keld installer: unsupported operating system: $os" >&2
     echo "  Supported: Linux, macOS (Darwin)." >&2
     echo "  For Windows, use the PowerShell installer:" >&2
-    echo "  irm https://raw.githubusercontent.com/ncx-ai/keld-cli/main/scripts/install.ps1 | iex" >&2
+    echo "  irm https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.ps1 | iex" >&2
     exit 1
     ;;
 esac

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/enrich"
-	"github.com/ncx-ai/keld-cli/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 )
 
 func TestBuildShapeAndNoRawText(t *testing.T) {

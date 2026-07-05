@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/agentcfg"
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 func TestForwardPostsPointerWithSecret(t *testing.T) {

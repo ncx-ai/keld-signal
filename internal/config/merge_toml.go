@@ -6,7 +6,7 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 
-	"github.com/ncx-ai/keld-cli/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/errs"
 )
 
 // Marker comments that delimit the keld-managed block in Codex config.toml.

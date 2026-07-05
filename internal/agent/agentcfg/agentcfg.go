@@ -10,7 +10,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // Info is the on-disk shape of ~/.keld/agent.json.

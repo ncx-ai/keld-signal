@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/errs"
 )
 
 // DeviceStart holds the response from the device-start endpoint.

@@ -7,10 +7,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ncx-ai/keld-cli/internal/config"
-	"github.com/ncx-ai/keld-cli/internal/console"
-	"github.com/ncx-ai/keld-cli/internal/paths"
-	"github.com/ncx-ai/keld-cli/internal/tools"
+	"github.com/ncx-ai/keld-signal/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/tools"
 )
 
 // runUninstall removes keld telemetry configuration from the listed tools (or

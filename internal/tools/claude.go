@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 
 	"github.com/iancoleman/orderedmap"
-	"github.com/ncx-ai/keld-cli/internal/config"
-	"github.com/ncx-ai/keld-cli/internal/telemetry"
+	"github.com/ncx-ai/keld-signal/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/telemetry"
 )
 
 // ClaudeAdapter implements the Adapter interface for Claude Code.

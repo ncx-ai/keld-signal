@@ -1,4 +1,4 @@
-module github.com/ncx-ai/keld-cli
+module github.com/ncx-ai/keld-signal
 
 go 1.26
 

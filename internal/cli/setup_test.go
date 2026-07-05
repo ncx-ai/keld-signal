@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/api"
-	"github.com/ncx-ai/keld-cli/internal/errs"
-	"github.com/ncx-ai/keld-cli/internal/tools"
+	"github.com/ncx-ai/keld-signal/internal/api"
+	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/tools"
 )
 
 // fakeAdapter is a test double for tools.Adapter.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 func TestAppendWritesTimestampedLine(t *testing.T) {

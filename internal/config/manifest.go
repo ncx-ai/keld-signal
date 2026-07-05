@@ -7,7 +7,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 // HookRecord records the installed Keld hook. All three fields are preserved

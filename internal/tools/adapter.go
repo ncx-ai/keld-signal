@@ -3,7 +3,7 @@
 package tools
 
 import (
-	"github.com/ncx-ai/keld-cli/internal/telemetry"
+	"github.com/ncx-ai/keld-signal/internal/telemetry"
 )
 
 // SetupParams is a type alias to telemetry.SetupParams to avoid import cycles

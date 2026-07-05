@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 func TestSaveHookConfigRoundTrip(t *testing.T) {

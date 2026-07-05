@@ -13,7 +13,7 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w -X github.com/ncx-ai/keld-cli/internal/version.CLI={{.Version}}
+      - -s -w -X github.com/ncx-ai/keld-signal/internal/version.CLI={{.Version}}
     goos:
       - linux
       - darwin
@@ -31,7 +31,7 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w -X github.com/ncx-ai/keld-cli/internal/version.CLI={{.Version}}
+      - -s -w -X github.com/ncx-ai/keld-signal/internal/version.CLI={{.Version}}
     goos:
       - linux
       - darwin
@@ -60,4 +60,4 @@ checksum:
 release:
   github:
     owner: ncx-ai
-    name: keld-cli
+    name: keld-signal

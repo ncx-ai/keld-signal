@@ -89,7 +89,7 @@ enrichment* below.)
 **macOS / Linux (one-liner):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-cli/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.sh | sh
 ```
 
 This detects your OS and architecture, fetches the latest release from GitHub,
@@ -104,7 +104,7 @@ live; use the `raw.githubusercontent.com` form until then.
 **Windows (PowerShell 5.1+):**
 
 ```powershell
-irm https://raw.githubusercontent.com/ncx-ai/keld-cli/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.ps1 | iex
 ```
 
 Installs `keld.exe` to `%LOCALAPPDATA%\Programs\keld`. Set `KELD_INSTALL_DIR`
@@ -114,7 +114,7 @@ to override. A vanity URL (`https://keld.co/install.ps1`) is planned.
 > Click **More info → Run anyway**. Code signing is a planned follow-up.
 
 **Direct download** — grab the archive for your platform from
-[GitHub Releases](https://github.com/ncx-ai/keld-cli/releases/latest), extract
+[GitHub Releases](https://github.com/ncx-ai/keld-signal/releases/latest), extract
 the binary, and place it on your `$PATH`:
 
 | Platform | Architecture | Archive                          | Binary inside     |

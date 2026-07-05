@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 const (

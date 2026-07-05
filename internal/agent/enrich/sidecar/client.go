@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ncx-ai/keld-cli/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 type Client struct {

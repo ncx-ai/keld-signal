@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ncx-ai/keld-cli/internal/config"
+	"github.com/ncx-ai/keld-signal/internal/config"
 )
 
 func TestCodexApplyFreshAddsBlock(t *testing.T) {
