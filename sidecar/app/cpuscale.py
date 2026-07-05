@@ -11,7 +11,13 @@ import os
 
 
 def _default_max_threads():
-    return int(os.environ.get("KELD_SIDECAR_MAX_THREADS", str(os.cpu_count() or 1)))
+    """Idle-host ceiling on intra-op threads. Defaults to half the cores (rounded
+    down, min 1) so even an unloaded machine keeps headroom for the user's own
+    work; dynamic scaling then ramps this down toward the floor under load."""
+    env = os.environ.get("KELD_SIDECAR_MAX_THREADS")
+    if env is not None:
+        return int(env)
+    return max(1, (os.cpu_count() or 1) // 2)
 
 
 class CpuScaler:

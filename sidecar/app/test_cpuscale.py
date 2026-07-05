@@ -47,6 +47,14 @@ def test_never_below_one():
     assert s.threads_for(84.9) >= 1
 
 
+def test_default_max_is_half_of_cores():
+    import os
+    os.environ.pop("KELD_SIDECAR_MAX_THREADS", None)
+    expected = max(1, (os.cpu_count() or 1) // 2)
+    s = CpuScaler(low=60.0, high=85.0, min_threads=1, disabled=False)
+    assert s.max_threads == expected
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

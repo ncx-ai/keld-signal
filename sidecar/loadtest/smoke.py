@@ -95,13 +95,16 @@ def run(quick=True):
         fails += _report("S3 cpu-throttle", drop > 0.15 and ewma_max >= 60,
                          f"base={base_rate:.1f}/s stressed={st_rate:.1f}/s drop={drop:.0%} ewma_max={ewma_max:.0f}")
 
-        # --- S6: CPU thread scaling --- threads should drop below full cores under stress
-        thr = [s.metrics.get("governor", {}).get("cpu_threads") for s in rows_st]
-        thr = [t for t in thr if t is not None]
-        max_threads = os.cpu_count() or 1
-        thr_min = min(thr) if thr else max_threads
-        fails += _report("S6 cpu-thread-scaling", thr_min < max_threads,
-                         f"min_threads={thr_min} (< max {max_threads})")
+        # --- S6: CPU thread scaling --- threads under stress should drop below the
+        # unstressed baseline (the idle ceiling), whatever that ceiling is.
+        def _threads(rows):
+            return [s.metrics.get("governor", {}).get("cpu_threads") for s in rows
+                    if s.metrics.get("governor", {}).get("cpu_threads") is not None]
+        base_thr = max(_threads(rows_hi), default=(os.cpu_count() or 1))
+        stressed = _threads(rows_st)
+        thr_min = min(stressed) if stressed else base_thr
+        fails += _report("S6 cpu-thread-scaling", thr_min < base_thr,
+                         f"stressed_min={thr_min} < baseline {base_thr}")
 
         # --- S4: backpressure --- (n < 2*queue_max so the backlog drains quickly for S5)
         res_flood = flood(sc.base_url, n=100, target_len=8000)

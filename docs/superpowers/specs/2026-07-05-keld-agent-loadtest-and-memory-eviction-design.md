@@ -165,8 +165,9 @@ The CPU good-citizen story has **two** levers over the same host-load EWMA:
   *how many cores* each inference may use. torch otherwise defaults to **all**
   cores (`intra-op = n_cores`), so even a fully-paced inference briefly pegs the
   whole machine. `CpuScaler.threads_for(load)` maps the governor's EWMA to a
-  thread count — `≤ KELD_GOV_LOW` ⇒ full cores (`KELD_SIDECAR_MAX_THREADS`,
-  default `os.cpu_count()`); `≥ KELD_GOV_HIGH` ⇒ a floor
+  thread count — `≤ KELD_GOV_LOW` ⇒ the idle ceiling (`KELD_SIDECAR_MAX_THREADS`,
+  default **`max(1, cpu_count // 2)`** — half the cores, so even an unloaded host
+  keeps headroom for the user); `≥ KELD_GOV_HIGH` ⇒ a floor
   (`KELD_SIDECAR_MIN_THREADS`, default 1); linear ramp between. Applied via
   `torch.set_num_threads(n)` in a `pre_run` hook the `InferenceRunner` calls on
   the loop thread just before each single-flight inference (after governor
