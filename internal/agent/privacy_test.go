@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
@@ -16,7 +17,7 @@ func TestNoRawTextOrSecretInPublishedPayload(t *testing.T) {
 	raw := "translate this and here is my password: hunter2SuperSecretValue and email a@b.com"
 	p := enrich.Run(raw, "claude_code", enrich.Meta{}, enrich.NewDeterministic())
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X"}
-	e := publish.Build(j, p, "dg@keld.co", false, time.Unix(0, 0).UTC())
+	e := publish.Build(j, p, "dg@keld.co", false, utf8.RuneCountInString(raw), time.Unix(0, 0).UTC())
 
 	b, err := json.Marshal(e)
 	if err != nil {
