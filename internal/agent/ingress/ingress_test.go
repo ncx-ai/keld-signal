@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
 func post(t *testing.T, h http.Handler, secret, body string) *httptest.ResponseRecorder {
@@ -62,5 +63,19 @@ func TestNonPostReturns405(t *testing.T) {
 	Handler(queue.New(10), "s").ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("code = %d, want 405", rr.Code)
+	}
+}
+
+func TestJobFromMapsAllFields(t *testing.T) {
+	p := spool.Pointer{
+		Source:      spool.Source{ID: "claude_code", Origin: "hook", Version: "1"},
+		Correlation: spool.Correlation{Scheme: "prompt_id", ID: "P1", SessionID: "S1"},
+		Pointer:     &spool.Ptr{TranscriptPath: "/t.jsonl", PromptID: "P1", Cwd: "/c"},
+	}
+	j := JobFrom(p)
+	if j.Source != "claude_code" || j.Origin != "hook" || j.Version != "1" ||
+		j.Scheme != "prompt_id" || j.ID != "P1" || j.SessionID != "S1" ||
+		j.TranscriptPath != "/t.jsonl" || j.PromptID != "P1" || j.Cwd != "/c" {
+		t.Fatalf("JobFrom mismapped: %+v", j)
 	}
 }
