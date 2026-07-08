@@ -48,6 +48,57 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+func TestRunSetupEmitsEventsWhenEmitSet(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	dir := t.TempDir()
+
+	// One adapter that will be configured, one that reports no change.
+	changed := &fakeAdapter{
+		name: "configured_tool",
+		plan: tools.Plan{
+			Name: "configured_tool", ConfigPath: filepath.Join(dir, "a.json"),
+			AfterText: `{"k":1}`, Managed: map[string]any{}, Summary: []string{"add"}, Changed: true,
+		},
+	}
+	nochange := &fakeAdapter{
+		name: "nochange_tool",
+		plan: tools.Plan{
+			Name: "nochange_tool", ConfigPath: filepath.Join(dir, "b.json"),
+			AfterText: "", Managed: map[string]any{}, Changed: false,
+		},
+	}
+
+	var events []SetupEvent
+	ob := &api.Onboarding{Endpoint: "https://ep", IngestToken: "tok", Actor: "actor"}
+	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken, Actor: ob.Actor}
+	opts := SetupOpts{Yes: true, Emit: func(e SetupEvent) { events = append(events, e) }}
+
+	if _, err := runSetup([]tools.Adapter{changed, nochange}, p, &api.Client{}, ob, opts); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+
+	var tool0, tool1, done *SetupEvent
+	for i := range events {
+		switch {
+		case events[i].Kind == "tool" && events[i].Name == "configured_tool":
+			tool0 = &events[i]
+		case events[i].Kind == "tool" && events[i].Name == "nochange_tool":
+			tool1 = &events[i]
+		case events[i].Kind == "done":
+			done = &events[i]
+		}
+	}
+	if tool0 == nil || tool0.Action != "configured" {
+		t.Fatalf("configured_tool event = %+v", tool0)
+	}
+	if tool1 == nil || tool1.Action != "already_configured" {
+		t.Fatalf("nochange_tool event = %+v", tool1)
+	}
+	if done == nil || done.Configured != 1 {
+		t.Fatalf("done event = %+v", done)
+	}
+}
+
 func TestRunSetupDryRunWritesNothing(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	dir := t.TempDir()
