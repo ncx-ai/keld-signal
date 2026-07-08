@@ -5,7 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -14,6 +17,43 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
 	"github.com/ncx-ai/keld-signal/internal/version"
 )
+
+// keldName is the platform basename of the keld CLI binary.
+func keldName() string {
+	if runtime.GOOS == "windows" {
+		return "keld.exe"
+	}
+	return "keld"
+}
+
+// isRegularFile reports whether p exists and is a regular file.
+func isRegularFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// keldInDir returns the path to a regular-file keld binary in dir, if present.
+func keldInDir(dir string) (string, bool) {
+	p := filepath.Join(dir, keldName())
+	if isRegularFile(p) {
+		return p, true
+	}
+	return "", false
+}
+
+// resolveKeld locates the keld CLI binary: first beside the running keld-agent
+// executable (how the installers lay it out), then on PATH.
+func resolveKeld() (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		if p, ok := keldInDir(filepath.Dir(exe)); ok {
+			return p, nil
+		}
+	}
+	if p, err := exec.LookPath(keldName()); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("keld binary not found beside keld-agent or on PATH; install keld first")
+}
 
 // NewRootCmd builds the keld-agent command tree.
 func NewRootCmd() *cobra.Command {
