@@ -55,6 +55,36 @@ func resolveKeld() (string, error) {
 	return "", fmt.Errorf("keld binary not found beside keld-agent or on PATH; install keld first")
 }
 
+// stepRunner runs a keld subcommand. The production implementation execs it
+// with the parent's stdio so interactive flows (device auth, config diffs) work.
+type stepRunner func(name string, args ...string) error
+
+// runStep is the production stepRunner: run the command with inherited stdio.
+func runStep(name string, args ...string) error {
+	c := exec.Command(name, args...)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	return c.Run()
+}
+
+// runInstall sets the user up, then registers the service. Order matters: the
+// daemon refuses to run until signal setup has written ~/.keld/hook.json, and
+// installService starts it immediately — so service install runs last.
+func runInstall(resolveKeld func() (string, error), run stepRunner, installService func() error) error {
+	keld, err := resolveKeld()
+	if err != nil {
+		return err
+	}
+	if err := run(keld, "login"); err != nil {
+		return fmt.Errorf("keld login: %w", err)
+	}
+	if err := run(keld, "signal", "setup"); err != nil {
+		return fmt.Errorf("keld signal setup: %w", err)
+	}
+	return installService()
+}
+
 // NewRootCmd builds the keld-agent command tree.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
@@ -75,8 +105,10 @@ func NewRootCmd() *cobra.Command {
 	})
 	root.AddCommand(&cobra.Command{
 		Use:   "install",
-		Short: "Install keld-agent as a per-user autostart service.",
-		RunE:  func(cmd *cobra.Command, args []string) error { return service.Install() },
+		Short: "Log in, set up telemetry, and install keld-agent as a per-user autostart service.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runInstall(resolveKeld, runStep, service.Install)
+		},
 	})
 	root.AddCommand(&cobra.Command{
 		Use:   "uninstall",
