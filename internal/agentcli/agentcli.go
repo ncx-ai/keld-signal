@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/daemon"
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
@@ -71,18 +72,32 @@ func runStep(name string, args ...string) error {
 // runInstall sets the user up, then registers the service. Order matters: the
 // daemon refuses to run until signal setup has written ~/.keld/hook.json, and
 // installService starts it immediately — so service install runs last.
-func runInstall(resolveKeld func() (string, error), run stepRunner, installService func() error) error {
-	keld, err := resolveKeld()
-	if err != nil {
-		return err
-	}
-	if err := run(keld, "login"); err != nil {
-		return fmt.Errorf("keld login: %w", err)
-	}
-	if err := run(keld, "signal", "setup"); err != nil {
-		return fmt.Errorf("keld signal setup: %w", err)
+func runInstall(isTTY func() bool, resolveKeld func() (string, error), run stepRunner, installService func() error) error {
+	if isTTY() {
+		keld, err := resolveKeld()
+		if err != nil {
+			return err
+		}
+		if err := run(keld, "login"); err != nil {
+			return fmt.Errorf("keld login: %w", err)
+		}
+		if err := run(keld, "signal", "setup"); err != nil {
+			return fmt.Errorf("keld signal setup: %w", err)
+		}
+	} else {
+		fmt.Println("Service installed. Finish setup by running: keld login && keld signal setup")
 	}
 	return installService()
+}
+
+// stdinIsTTY reports whether stdin is an interactive terminal. A GUI installer
+// invokes `keld-agent install` with no console (Windows runhidden / macOS launchd
+// session, which wires stdin to /dev/null) — a real isatty check is required
+// because /dev/null is a character device and would fool a ModeCharDevice test.
+// When stdin is not a terminal the interactive login/setup steps are skipped and
+// the installer's own pages drive `keld --json` instead.
+func stdinIsTTY() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 // NewRootCmd builds the keld-agent command tree.
@@ -107,7 +122,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "install",
 		Short: "Log in, set up telemetry, and install keld-agent as a per-user autostart service.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInstall(resolveKeld, runStep, service.Install)
+			return runInstall(stdinIsTTY, resolveKeld, runStep, service.Install)
 		},
 	})
 	root.AddCommand(&cobra.Command{

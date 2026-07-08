@@ -43,7 +43,7 @@ func TestRunInstallSequence(t *testing.T) {
 	installed := false
 	install := func() error { installed = true; return nil }
 
-	if err := runInstall(resolve, run, install); err != nil {
+	if err := runInstall(func() bool { return true }, resolve, run, install); err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestRunInstallAbortsOnLoginFailure(t *testing.T) {
 	installed := false
 	install := func() error { installed = true; return nil }
 
-	if err := runInstall(resolve, run, install); err == nil {
+	if err := runInstall(func() bool { return true }, resolve, run, install); err == nil {
 		t.Fatal("expected error when login fails")
 	}
 	if len(calls) != 1 {
@@ -87,10 +87,31 @@ func TestRunInstallAbortsWhenKeldMissing(t *testing.T) {
 	installed := false
 	install := func() error { installed = true; return nil }
 
-	if err := runInstall(resolve, run, install); err == nil {
+	if err := runInstall(func() bool { return true }, resolve, run, install); err == nil {
 		t.Fatal("expected error when keld is missing")
 	}
 	if ran || installed {
 		t.Fatal("no steps should run when keld cannot be resolved")
+	}
+}
+
+func TestRunInstallNoTTYSkipsLoginAndSetup(t *testing.T) {
+	var calls []string
+	resolve := func() (string, error) { return "/fake/keld", nil }
+	run := func(name string, args ...string) error {
+		calls = append(calls, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}
+	installed := false
+	install := func() error { installed = true; return nil }
+
+	if err := runInstall(func() bool { return false }, resolve, run, install); err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("no-TTY must not run login/setup, got %v", calls)
+	}
+	if !installed {
+		t.Fatal("service install must still run in no-TTY mode")
 	}
 }
