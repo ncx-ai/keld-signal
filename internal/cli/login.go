@@ -5,9 +5,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ncx-ai/keld-signal/internal/api"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/errs"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
@@ -21,6 +23,28 @@ func newLoginCmd() *cobra.Command {
 
 			if apiURL != "" {
 				paths.SetAPIBaseOverride(apiURL)
+			}
+
+			jsonOut, _ := cmd.Flags().GetBool("json")
+			noBrowser, _ := cmd.Flags().GetBool("no-browser")
+
+			if jsonOut {
+				onStart := func(ds *api.DeviceStart) {
+					emitEvent(deviceCodeEvent{
+						Event:           "device_code",
+						VerificationURL: ds.VerificationURL,
+						UserCode:        ds.UserCode,
+						ExpiresIn:       ds.ExpiresIn,
+						Interval:        ds.Interval,
+					})
+				}
+				a, err := auth.RequireAuthReport(noLogin, !noBrowser, true, onStart)
+				if err != nil {
+					emitEvent(errorEvent{Event: "error", Message: err.Error()})
+					return errs.ErrSilentExit
+				}
+				emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org})
+				return nil
 			}
 
 			// force=true: an explicit `keld login` always re-authenticates rather than
@@ -38,6 +62,8 @@ func newLoginCmd() *cobra.Command {
 	}
 	cmd.Flags().String("api-url", "", "Target a different Keld API base URL (e.g. http://localhost:8000) for local dev.")
 	cmd.Flags().Bool("no-login", false, "Fail instead of opening a browser.")
+	cmd.Flags().Bool("json", false, "Emit machine-readable NDJSON events on stdout (for installer/automation).")
+	cmd.Flags().Bool("no-browser", false, "Do not auto-open the browser (the caller opens the verification URL itself).")
 	return cmd
 }
 

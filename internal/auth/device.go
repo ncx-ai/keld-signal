@@ -16,16 +16,15 @@ import (
 // sleep and opener are injectable for testing; in production use time.Sleep
 // and openURL respectively. The opener is launched concurrently so it can never
 // block the device-poll loop.
-func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener func(string) error) (*AuthData, error) {
+func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener func(string) error, onStart func(*api.DeviceStart)) (*AuthData, error) {
 	ds, err := c.DeviceStart()
 	if err != nil {
 		return nil, err
 	}
 
-	console.Print(fmt.Sprintf(
-		"To authorize this device, open:\n  %s\nThe code %s is already filled in — confirm it matches, then approve.",
-		ds.VerificationURL, ds.UserCode,
-	))
+	if onStart != nil {
+		onStart(ds)
+	}
 
 	if openBrowser {
 		console.Print("(Opening your browser…)")
@@ -83,7 +82,22 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 // invalidated server-side. force is ignored when noLogin is set (a fresh login
 // needs a browser): it falls back to the lazy path so `keld login --no-login`
 // still reports stored presence without opening a browser.
+// defaultDeviceReport prints the human device-code instructions (the pre-seam
+// behavior moved out of Login so a --json caller can substitute a JSON emitter).
+func defaultDeviceReport(ds *api.DeviceStart) {
+	console.Print(fmt.Sprintf(
+		"To authorize this device, open:\n  %s\nThe code %s is already filled in — confirm it matches, then approve.",
+		ds.VerificationURL, ds.UserCode,
+	))
+}
+
 func RequireAuth(noLogin bool, openBrowser bool, force bool) (*AuthData, error) {
+	return RequireAuthReport(noLogin, openBrowser, force, defaultDeviceReport)
+}
+
+// RequireAuthReport is RequireAuth with an injectable device-code reporter, used
+// by the machine-readable (--json) login path.
+func RequireAuthReport(noLogin bool, openBrowser bool, force bool, onStart func(*api.DeviceStart)) (*AuthData, error) {
 	existing, err := Load()
 	if err != nil {
 		return nil, err
@@ -109,6 +123,7 @@ func RequireAuth(noLogin bool, openBrowser bool, force bool) (*AuthData, error) 
 		openBrowser,
 		time.Sleep,
 		openURL,
+		onStart,
 	)
 }
 

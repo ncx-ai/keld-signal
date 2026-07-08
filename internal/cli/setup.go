@@ -26,11 +26,24 @@ type SetupOpts struct {
 	ShowDiff        bool
 	Confirm         func(string) bool
 	ResolveConflict func(a tools.Adapter, plan tools.Plan) string // returns "skip"/"replace"/"abort"
+	Emit            func(SetupEvent)                              // non-nil ⇒ machine mode: emit events, suppress human output
 }
 
 // runSetup applies keld telemetry configuration to each adapter, writes the
 // manifest, and returns the resulting Manifest.
 func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client, ob *api.Onboarding, opts SetupOpts) (*config.Manifest, error) {
+	quiet := opts.Emit != nil
+	emit := func(e SetupEvent) {
+		if opts.Emit != nil {
+			opts.Emit(e)
+		}
+	}
+	say := func(s string) {
+		if !quiet {
+			console.Print(s)
+		}
+	}
+
 	type approved struct {
 		adapter tools.Adapter
 		plan    tools.Plan
@@ -48,69 +61,81 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 			}
 		}
 
-		console.Rule(fmt.Sprintf("%s · %s", adapter.DisplayName(), path))
+		if !quiet {
+			console.Rule(fmt.Sprintf("%s · %s", adapter.DisplayName(), path))
+		}
 
 		plan := adapter.Apply(before, p, false)
 
 		if plan.Conflict != "" {
-			console.Print(fmt.Sprintf("  conflict: %s", plan.Conflict))
+			say(fmt.Sprintf("  conflict: %s", plan.Conflict))
 			if opts.DryRun {
-				console.Print("  (dry-run: would be skipped)")
+				say("  (dry-run: would be skipped)")
+				emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "skipped_conflict", Path: path})
 				continue
 			}
 			if opts.Yes {
-				console.Print("  skipped (--yes)")
+				say("  skipped (--yes)")
+				emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "skipped_conflict", Path: path})
 				continue
 			}
 			choice := opts.ResolveConflict(adapter, plan)
 			if choice == "abort" {
-				console.Print("Aborted.")
+				say("Aborted.")
 				return nil, errs.ErrSilentExit
 			}
 			if choice == "replace" {
 				plan = adapter.Apply(before, p, true)
 				if plan.Conflict != "" {
-					console.Print(fmt.Sprintf("  can't replace: %s", plan.Conflict))
-					console.Print("  skipped")
+					say(fmt.Sprintf("  can't replace: %s", plan.Conflict))
+					say("  skipped")
+					emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "skipped_conflict", Path: path})
 					continue
 				}
-				diffview.Render(before, plan.AfterText, plan.ConfigPath)
-				for _, line := range plan.Summary {
-					console.Print(fmt.Sprintf("  %s", line))
+				if !quiet {
+					diffview.Render(before, plan.AfterText, plan.ConfigPath)
+					for _, line := range plan.Summary {
+						console.Print(fmt.Sprintf("  %s", line))
+					}
 				}
 				approveds = append(approveds, approved{adapter, plan})
 				continue
 			}
-			console.Print("  skipped")
+			say("  skipped")
+			emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "skipped_conflict", Path: path})
 			continue
 		}
 
 		if !plan.Changed {
-			console.Print("  already configured — no changes")
+			say("  already configured — no changes")
+			emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "already_configured", Path: path})
 			continue
 		}
 
-		if opts.ShowDiff {
-			diffview.Render(before, plan.AfterText, plan.ConfigPath)
-		}
-		for _, line := range plan.Summary {
-			console.Print(fmt.Sprintf("  %s", line))
+		if !quiet {
+			if opts.ShowDiff {
+				diffview.Render(before, plan.AfterText, plan.ConfigPath)
+			}
+			for _, line := range plan.Summary {
+				console.Print(fmt.Sprintf("  %s", line))
+			}
 		}
 		approveds = append(approveds, approved{adapter, plan})
 	}
 
-	console.Print("\nHook · keld __hook (writes ~/.keld/hook.json)")
+	say("\nHook · keld __hook (writes ~/.keld/hook.json)")
 
 	if opts.DryRun {
-		console.Print("\n--dry-run: no changes written.")
+		say("\n--dry-run: no changes written.")
 		return config.LoadManifest()
 	}
 	if len(approveds) == 0 {
-		console.Print("\nNothing to apply.")
+		say("\nNothing to apply.")
+		emit(SetupEvent{Kind: "done", Configured: 0, Endpoint: ob.Endpoint})
 		return config.LoadManifest()
 	}
 	if !opts.Yes && !opts.Confirm(fmt.Sprintf("Apply %d change(s)?", len(approveds))) {
-		console.Print("Aborted.")
+		say("Aborted.")
 		return config.LoadManifest()
 	}
 
@@ -132,7 +157,7 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 			return nil, err
 		}
 		if backup != "" {
-			console.Print(fmt.Sprintf("  backed up %s → %s", a.plan.ConfigPath, backup))
+			say(fmt.Sprintf("  backed up %s → %s", a.plan.ConfigPath, backup))
 		}
 		if err := config.WriteAtomic(a.plan.ConfigPath, a.plan.AfterText, false); err != nil {
 			return nil, err
@@ -147,13 +172,15 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 			Managed:    a.plan.Managed,
 			BackupPath: backupPtr,
 		}
-		console.Print(fmt.Sprintf("  ✓ %s", a.adapter.DisplayName()))
+		say(fmt.Sprintf("  ✓ %s", a.adapter.DisplayName()))
+		emit(SetupEvent{Kind: "tool", Name: a.adapter.Name(), Display: a.adapter.DisplayName(), Action: "configured", Path: a.plan.ConfigPath, Backup: backup})
 	}
 
 	if err := manifest.Save(); err != nil {
 		return nil, err
 	}
-	console.Print("\nSetup complete. Restart any running sessions to pick up the new config.")
+	say("\nSetup complete. Restart any running sessions to pick up the new config.")
+	emit(SetupEvent{Kind: "done", Configured: len(manifest.Tools), Endpoint: ob.Endpoint})
 	return manifest, nil
 }
 
@@ -193,6 +220,7 @@ func newSetupCmd() *cobra.Command {
 	var yes bool
 	var noLogin bool
 	var apiURL string
+	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "setup",
@@ -220,7 +248,11 @@ func newSetupCmd() *cobra.Command {
 				return err
 			}
 			if len(adapters) == 0 {
-				console.Print("No supported tools detected. Use --tool to target one explicitly.")
+				if jsonOut {
+					emitEvent(doneEvent{Event: "done", Configured: 0})
+				} else {
+					console.Print("No supported tools detected. Use --tool to target one explicitly.")
+				}
 				return nil
 			}
 
@@ -237,6 +269,17 @@ func newSetupCmd() *cobra.Command {
 				Confirm:         stdinConfirm,
 				ResolveConflict: stdinResolveConflict,
 			}
+			if jsonOut {
+				opts.Yes = true
+				opts.Emit = func(e SetupEvent) {
+					switch e.Kind {
+					case "tool":
+						emitEvent(toolEvent{Event: "tool", Name: e.Name, Display: e.Display, Action: e.Action, Path: e.Path, Backup: e.Backup})
+					case "done":
+						emitEvent(doneEvent{Event: "done", Configured: e.Configured, Endpoint: e.Endpoint})
+					}
+				}
+			}
 
 			_, err = runSetup(adapters, p, client, ob, opts)
 			return err
@@ -249,6 +292,7 @@ func newSetupCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompts.")
 	cmd.Flags().BoolVar(&noLogin, "no-login", false, "Fail instead of opening a browser.")
 	cmd.Flags().StringVar(&apiURL, "api-url", "", "Target a different Keld API base URL for local dev.")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit machine-readable NDJSON events on stdout (implies --yes).")
 
 	return cmd
 }
