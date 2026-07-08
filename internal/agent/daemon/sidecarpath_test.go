@@ -14,7 +14,10 @@ func TestSidecarBinPathEnvOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("KELD_SIDECAR_BIN", p)
-	got, ok := sidecarBinPath()
+	// Target the env branch directly: sidecarBinPath would additionally fall
+	// through to beside-exe / well-known dirs, which may hold a real installed
+	// sidecar and make the env-only assertion non-hermetic.
+	got, ok := sidecarBinFromEnv()
 	if !ok || got != p {
 		t.Fatalf("env override: got %q,%v want %q,true", got, ok, p)
 	}
@@ -22,8 +25,7 @@ func TestSidecarBinPathEnvOverride(t *testing.T) {
 
 func TestSidecarBinPathEnvMissingFileIgnored(t *testing.T) {
 	t.Setenv("KELD_SIDECAR_BIN", filepath.Join(t.TempDir(), "nope"))
-	// No sibling binary in the test's exec dir, so expect not-found.
-	if _, ok := sidecarBinPath(); ok {
+	if _, ok := sidecarBinFromEnv(); ok {
 		t.Fatal("nonexistent env path should not resolve")
 	}
 }
@@ -34,7 +36,7 @@ func TestSidecarBinPathEnvMissingFileIgnored(t *testing.T) {
 func TestSidecarBinPathEnvDirectoryRejected(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("KELD_SIDECAR_BIN", dir)
-	if _, ok := sidecarBinPath(); ok {
+	if _, ok := sidecarBinFromEnv(); ok {
 		t.Fatal("KELD_SIDECAR_BIN pointing at a directory must not resolve")
 	}
 }

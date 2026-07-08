@@ -256,10 +256,8 @@ func resolveSidecar(dir string) (string, bool) {
 //	    and one-dir subdir layouts (macOS / Linux).
 //	(3) resolveSidecar on each per-OS well-known base directory.
 func sidecarBinPath() (string, bool) {
-	if p := os.Getenv("KELD_SIDECAR_BIN"); p != "" {
-		if isRegularFile(p) {
-			return p, true
-		}
+	if p, ok := sidecarBinFromEnv(); ok {
+		return p, true
 	}
 	// (2) beside the running keld-agent executable (how the installers lay it out).
 	if exe, err := os.Executable(); err == nil {
@@ -270,6 +268,20 @@ func sidecarBinPath() (string, bool) {
 	// (3) per-OS well-known fallback.
 	for _, base := range wellKnownSidecarDirs() {
 		if p, ok := resolveSidecar(base); ok {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// sidecarBinFromEnv resolves the KELD_SIDECAR_BIN override (resolution step 1).
+// It returns the path and true only when the env var is set AND points at a
+// regular file. An unset var, a nonexistent path, or a directory (e.g. the
+// one-dir PyInstaller bundle root) all yield ("", false) so the caller falls
+// through to the beside-executable and well-known-dir probes.
+func sidecarBinFromEnv() (string, bool) {
+	if p := os.Getenv("KELD_SIDECAR_BIN"); p != "" {
+		if isRegularFile(p) {
 			return p, true
 		}
 	}
