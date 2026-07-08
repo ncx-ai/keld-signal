@@ -109,6 +109,22 @@ top-level `login`/`logout`/`whoami`; the `keld signal` group
 (`setup`/`status`/`doctor`/`uninstall`) for telemetry onboarding. Config paths via
 `internal/paths` (`KELD_HOME`).
 
+**Machine interface (installer-/automation-driven onboarding).** `keld login` and
+`keld signal setup` each take `--json`, emitting **NDJSON** on stdout (one event
+object per line) instead of human text — the seam the native platform installers
+drive to render the device code + setup progress in their own UI. `keld login
+--json` emits `device_code` (immediately) then `authorized`/`error` (non-zero exit
+on error); `--no-browser` suppresses the auto-open so the caller owns the link.
+`keld signal setup --json` is non-interactive (implies `--yes`): a `tool` event per
+tool (`configured`/`already_configured`/`skipped_conflict`) then `done`. Keep all
+auth/setup logic Go-side behind the `onStart` (auth) and `SetupOpts.Emit` (setup)
+seams — don't reimplement it in installer code; the human paths stay unchanged when
+those seams are unset. `keld-agent install` is **TTY-aware** (`term.IsTerminal` —
+`os.ModeCharDevice` is wrong because macOS launchd wires stdin to `/dev/null`):
+in a terminal it runs login → setup → service install; headless it registers the
+service only and prints the finish-setup commands, so a GUI installer's pages drive
+`keld --json` instead of a hung, invisible interactive flow.
+
 ## Repo layout
 
 ```
