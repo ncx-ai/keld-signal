@@ -182,7 +182,9 @@ Keld product groups. Telemetry onboarding lives under the `keld signal` group.
 
 `keld signal setup` flags: `--tool claude_code,codex` (target specific tools),
 `--dry-run` (show changes only), `--yes` (skip confirmation),
-`--no-login` (fail instead of opening a browser, for CI).
+`--no-login` (fail instead of opening a browser, for CI),
+`--json` (stream machine-readable NDJSON instead of prompting; implies `--yes` —
+see [Machine-readable interface](#machine-readable-interface-installers--automation)).
 
 `setup` is interactive. By default it prints a concise summary of the changes to
 each config file; pass `--diff` to see the full unified diff. If a tool's config
@@ -222,6 +224,37 @@ keld signal setup                            # remembered — uses the same serv
 The chosen URL is stored with your credentials, so subsequent commands target it
 automatically. `--api-url` overrides the `KELD_API_URL` environment variable,
 which does the same thing if you prefer setting it in your shell.
+
+### Machine-readable interface (installers & automation)
+
+`keld login` and `keld signal setup` each accept `--json`, which streams
+**newline-delimited JSON** on stdout instead of human text — one object per line,
+each with an `event` field. This is what the native platform installers drive to
+surface the device-authorization code and setup progress inside their own UI, and
+it's useful for any scripted onboarding.
+
+```bash
+keld login --json --no-browser   # emit device_code immediately, then authorized (or error)
+keld signal setup --json         # non-interactive (implies --yes); a tool event per tool, then done
+```
+
+`keld login --json` emits, in order:
+
+- `{"event":"device_code","verification_url":…,"user_code":…,"expires_in":…,"interval":…}`
+  — emitted immediately, so a caller can render the code without waiting for approval;
+- `{"event":"authorized","principal":…,"org":…}` on success, or
+  `{"event":"error","message":…}` with a non-zero exit.
+
+`--no-browser` suppresses the automatic browser open so the caller owns the link
+(it has the URL from the first event). `keld signal setup --json` emits a
+`{"event":"tool",…,"action":"configured|already_configured|skipped_conflict"}` line
+per detected tool, then `{"event":"done","configured":N}`.
+
+**`keld-agent install` is TTY-aware.** Run from a terminal, it walks you through
+`keld login` then `keld signal setup`, and finally registers the background service.
+Run headless (e.g. by a GUI installer with no console attached), it **skips** the
+interactive steps, registers the service only, and prints the commands to finish
+setup — the installer's own pages drive the `--json` interface instead.
 
 ## Authentication
 
