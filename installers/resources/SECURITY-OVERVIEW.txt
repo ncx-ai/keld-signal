@@ -39,8 +39,8 @@ DATA THAT IS DERIVED ON YOUR COMPUTER (ENRICHMENT)
 The keld-agent service reads AI-session transcripts locally and derives
 per-prompt labels: task type, domain, activity type, work/personal,
 inferred business function and subcategory, a sensitivity category, and
-prompt length in characters. Only these derived labels — with all
-sensitive content masked — are transmitted.
+prompt length in characters. The prompt itself is never transmitted —
+these derived labels are the only output that leaves your computer.
 
 DATA THAT IS NEVER COLLECTED
 
@@ -49,11 +49,14 @@ DATA THAT IS NEVER COLLECTED
   - The AI's responses
   - Unmasked sensitive content of any kind
 
-Sensitive content detected in prompts (emails, credentials, API keys,
-government identifiers, and similar) is masked on-device before anything
-is transmitted. Masking is always on and is not configurable — not by
-you, your organization, or Keld. A detected credential always forces the
-prompt's sensitivity classification to "secrets".
+If the on-device analysis detects sensitive content in a prompt (emails,
+credentials, API keys, government identifiers, and similar), only the
+category of what was detected is reported, with a short, non-identifying
+redacted hint (e.g. "***@example.com") — never the detected value or any
+surrounding prompt text. This redaction is always on and is not
+configurable — not by you, your organization, or Keld. A detected
+credential always forces the prompt's sensitivity classification to
+"secrets".
 
 One organization-level setting ("include_entity_text", OFF by default)
 allows short, non-sensitive subject-matter terms (e.g. a technology or

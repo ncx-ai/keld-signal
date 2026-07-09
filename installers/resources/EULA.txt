@@ -51,15 +51,19 @@ following usage metadata to Keld Atlas:
 4. ON-DEVICE ANALYSIS (ENRICHMENT)
 
 The keld-agent background service reads the local transcripts of your AI
-coding sessions ON YOUR COMPUTER and derives, per prompt, classification
-labels such as: task type, subject-matter domain, activity type, a
+coding sessions ON YOUR COMPUTER and analyzes each prompt locally. THE
+PROMPT ITSELF IS NEVER TRANSMITTED. The only output that leaves your
+computer is a set of classification labels derived from that local
+analysis: task type, subject-matter domain, activity type, a
 work/personal indication, an inferred business function and subcategory,
-a sensitivity category, and the prompt's length in characters. Sensitive
-content detected in a prompt (such as email addresses, credentials, API
-keys, or government identifiers) is MASKED on your computer before
-anything is transmitted; masking of sensitive content is always on and
-cannot be disabled by you, your organization, or Keld. Only the derived
-labels and masked span placeholders are transmitted to Keld Atlas.
+a sensitivity category, and the prompt's length in characters. If the
+local analysis detects sensitive content in a prompt (such as an email
+address, credential, API key, or government identifier), the transmitted
+labels report only the category of what was detected, accompanied by a
+short, non-identifying redacted hint (for example, "***@example.com" for
+an email address) — never the detected value or any surrounding prompt
+text. This redaction is always on and cannot be disabled by you, your
+organization, or Keld.
 
 Your organization's administrator may enable an optional setting
 ("include_entity_text", off by default) under which short, non-sensitive
@@ -168,7 +172,7 @@ regarding the Software. Failure to enforce a provision is not a waiver.
 
 16. CONTACT
 
-KELD — https://keld.co — founders@keld.co
+KELD — https://keld.co — legal@keld.co
 
 By proceeding with installation you acknowledge that you have read and
 agree to this Agreement, including the data collection described in
