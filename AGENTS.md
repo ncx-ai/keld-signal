@@ -214,6 +214,11 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **Distribution packaging** freezes the sidecar with PyInstaller
   (`keld-agent-sidecar.spec`) into `keld-agent-sidecar`; the daemon resolves it
   beside `keld-agent` (flat or nested layout).
+- **macOS onboarding UI:** `installers/macos/KeldSetup/` (SwiftUI app) is compiled
+  by `installers/macos/build-app.sh`, wrapped into `KeldSetup.app`, staged + signed
+  by `build-pkg.sh`, and launched by the pkg `postinstall`. It drives the
+  `keld --json` interface. Swift builds only on the macOS CI runners — there's no
+  Swift toolchain in the Go/Linux dev environment, so its UX is human-verified.
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.

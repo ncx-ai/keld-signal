@@ -111,6 +111,11 @@ and registers the per-user agent. It's a **`.pkg`, not a DMG** — a DMG is
 drag-to-Applications for `.app` bundles, whereas Keld installs a CLI plus a
 background daemon, which the `.pkg`'s install scripts wire up.
 
+After install, a small **Keld Setup** app opens automatically to walk you through
+sign-in and tool configuration (it drives `keld login` / `keld signal setup` for
+you). You can close it and run those two commands yourself later — the background
+agent is registered either way.
+
 > **Gatekeeper:** release builds are signed + notarized when the maintainer's
 > Apple credentials are configured; otherwise macOS warns on first run — open
 > **System Settings → Privacy & Security** and click **Allow**.
