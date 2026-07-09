@@ -126,6 +126,11 @@ Download **`keld-setup.exe`** and run it. Per-user (no admin): installs to
 `%LOCALAPPDATA%\Programs\keld`, adds Keld to your `PATH`, and registers the agent
 as a logon task.
 
+During install a **Set up Keld** step walks you through sign-in and tool
+configuration (it drives `keld login` / `keld signal setup`). You can click Next to
+skip it and run those two commands yourself later — the background agent is
+registered either way.
+
 > **SmartScreen:** unsigned builds trigger a warning — click **More info → Run
 > anyway**. Code signing is a planned follow-up.
 

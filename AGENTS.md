@@ -219,6 +219,12 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   by `build-pkg.sh`, and launched by the pkg `postinstall`. It drives the
   `keld --json` interface. Swift builds only on the macOS CI runners — there's no
   Swift toolchain in the Go/Linux dev environment, so its UX is human-verified.
+- **Windows onboarding UI:** `installers/windows/keld-agent.iss` `[Code]` adds a
+  post-install Inno wizard page ("Set up Keld") that drives the `keld --json`
+  interface (WinAPI timer + async NDJSON temp-file polling). Compiled by `iscc` on
+  the Windows CI runner; UX is human-verified on Windows. Both installer UIs are
+  best-effort — the agent service is registered by the headless `keld-agent install`
+  regardless (the TTY guard).
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.
