@@ -1,0 +1,175 @@
+KELD SIGNAL END USER LICENSE AGREEMENT
+
+Version 1.0 — Last updated: July 9, 2026
+
+IMPORTANT — PLEASE READ CAREFULLY. This End User License Agreement (the
+"Agreement") is a legal agreement between you ("you") and KELD ("Keld",
+"we", "us") governing your installation and use of the Keld Signal desktop
+software: the "keld" command-line tool, the "keld-agent" background
+service, and the bundled on-device machine-learning component (together,
+the "Software").
+
+By clicking "Agree", or by installing or using the Software, you accept
+this Agreement. If you are installing the Software in the course of your
+work, you represent that you are authorized to do so under your
+organization's policies, and "you" includes your organization where
+applicable. If you do not agree, do not install the Software.
+
+1. WHAT THE SOFTWARE DOES
+
+The Software configures supported AI coding tools on your computer (such
+as Claude Code, OpenAI Codex, and Gemini CLI) to report usage telemetry to
+your organization's Keld Atlas service, and runs a local background
+service that analyzes your AI-tool usage ON YOUR COMPUTER to produce
+derived, privacy-preserving signal for your organization. The Software is
+designed around one invariant: YOUR PROMPTS, YOUR CODE, AND THE AI'S
+RESPONSES ARE NEVER TRANSMITTED OFF YOUR COMPUTER.
+
+2. LICENSE GRANT
+
+Keld grants you a limited, non-exclusive, non-transferable, revocable
+license to install and use the Software on devices you use, solely in
+connection with a valid Keld subscription held by you or your
+organization. This Agreement does not transfer ownership of the Software.
+
+3. USAGE TELEMETRY THE SOFTWARE COLLECTS
+
+Once configured, your AI coding tools and the Software report the
+following usage metadata to Keld Atlas:
+
+  (a) the AI model used and per-request token counts (input, output,
+      cache read, and cache creation);
+  (b) notional cost — a list-price equivalent of the tokens consumed,
+      provided for reporting only; it is not a charge, an invoice, or a
+      statement of amounts owed (in particular, not on flat-rate plans);
+  (c) session identifier, request identifier, and request duration;
+  (d) your work email address, terminal type, and the version of the AI
+      tool in use (e.g., Claude Code, Codex, or Gemini CLI version);
+  (e) the event type of each recorded event (for example "api_request"
+      or a tool-call event).
+
+4. ON-DEVICE ANALYSIS (ENRICHMENT)
+
+The keld-agent background service reads the local transcripts of your AI
+coding sessions ON YOUR COMPUTER and derives, per prompt, classification
+labels such as: task type, subject-matter domain, activity type, a
+work/personal indication, an inferred business function and subcategory,
+a sensitivity category, and the prompt's length in characters. Sensitive
+content detected in a prompt (such as email addresses, credentials, API
+keys, or government identifiers) is MASKED on your computer before
+anything is transmitted; masking of sensitive content is always on and
+cannot be disabled by you, your organization, or Keld. Only the derived
+labels and masked span placeholders are transmitted to Keld Atlas.
+
+Your organization's administrator may enable an optional setting
+("include_entity_text", off by default) under which short, non-sensitive
+subject-matter terms appearing in prompts (for example, the name of a
+technology or product being worked on) are included with the derived
+labels. Sensitive content remains masked regardless of this setting.
+
+5. WHAT IS NEVER COLLECTED
+
+The Software does not transmit: your prompt text; your source code or
+file contents; the AI's responses; or the unmasked text of any content
+classified as sensitive. Transcripts are read locally, analyzed locally,
+and never uploaded.
+
+6. LOCAL FILE ACCESS AND CONFIGURATION CHANGES
+
+To perform the functions above, the Software: (a) modifies the
+configuration files of your AI coding tools to enable telemetry, keeping
+a backup copy of every file it modifies; (b) installs a hook invoked by
+those tools; (c) runs keld-agent as a per-user background service that
+listens only on your computer's loopback interface, protected by a
+per-user secret; and (d) stores credentials and working files under your
+user profile (by default "~/.keld") with user-only permissions. The
+"keld signal uninstall" command removes the configuration the Software
+added.
+
+7. YOUR ORGANIZATION
+
+Data collected by the Software is provided to the organization that holds
+the Keld subscription under which you sign in. Your organization controls
+its use of that data and configures the Software's organization-level
+settings. Your use of the Software may also be subject to your
+organization's internal policies and its agreement with Keld; where that
+agreement conflicts with this Agreement, that agreement governs the
+organization's use of the data.
+
+8. PERSONAL DATA
+
+The telemetry described in Section 3 includes your work email address,
+which identifies you to your organization's reporting. Keld processes
+this data on behalf of your organization as described in the Keld privacy
+policy (https://keld.co/privacy) and the organization's agreement with
+Keld. Questions about your organization's use of this data should be
+directed to your organization.
+
+9. UPDATES
+
+Keld may make updated versions of the Software available. Updates may be
+required for continued operation with Keld Atlas. This Agreement applies
+to updates unless an updated agreement accompanies them.
+
+10. OWNERSHIP AND OPEN SOURCE
+
+The Software and all associated intellectual property rights are and
+remain the property of Keld and its licensors. The Software's source code
+is published at https://github.com/ncx-ai/keld-signal; source code made
+available under an open-source license is governed by that license, and
+nothing in this Agreement restricts rights granted to you under it. The
+Software includes third-party open-source components, each governed by
+its own license.
+
+11. RESTRICTIONS
+
+Except as permitted by an applicable open-source license or by law, you
+may not: sell, sublicense, or redistribute the Software; use it to
+collect data about individuals who have not installed it or whose
+organization has not deployed it; or use it other than in connection with
+a Keld subscription.
+
+12. TERM, TERMINATION, AND UNINSTALL
+
+This Agreement is effective until terminated. It terminates automatically
+if you breach it, and you may terminate it at any time by uninstalling
+the Software ("keld signal uninstall" removes Keld's configuration from
+your AI tools; the platform uninstaller removes the binaries and the
+background service). Sections 7, 8, 10, 13, 14, and 15 survive
+termination. Access tokens issued to the Software can be revoked by you
+or your organization from Keld Atlas at any time.
+
+13. DISCLAIMER OF WARRANTIES
+
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+KELD DOES NOT WARRANT THAT THE SOFTWARE WILL BE UNINTERRUPTED OR
+ERROR-FREE. SOME JURISDICTIONS DO NOT ALLOW THE EXCLUSION OF IMPLIED
+WARRANTIES, SO THE ABOVE EXCLUSION MAY NOT APPLY TO YOU.
+
+14. LIMITATION OF LIABILITY
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, KELD SHALL NOT BE LIABLE FOR ANY
+INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY
+LOSS OF PROFITS, DATA, OR GOODWILL, ARISING OUT OF OR RELATED TO THIS
+AGREEMENT OR THE SOFTWARE, AND KELD'S TOTAL AGGREGATE LIABILITY SHALL NOT
+EXCEED ONE HUNDRED U.S. DOLLARS (USD 100) OR THE AMOUNT YOU PAID FOR THE
+SOFTWARE, WHICHEVER IS GREATER. NOTHING IN THIS AGREEMENT LIMITS
+LIABILITY THAT CANNOT BE LIMITED UNDER APPLICABLE LAW.
+
+15. GENERAL
+
+This Agreement is governed by the laws of [GOVERNING LAW JURISDICTION],
+without regard to conflict-of-laws rules. If any provision is held
+unenforceable, the remainder remains in effect. This Agreement, together
+with your organization's agreement with Keld, is the entire agreement
+regarding the Software. Failure to enforce a provision is not a waiver.
+
+16. CONTACT
+
+KELD — https://keld.co — founders@keld.co
+
+By proceeding with installation you acknowledge that you have read and
+agree to this Agreement, including the data collection described in
+Sections 3 and 4.

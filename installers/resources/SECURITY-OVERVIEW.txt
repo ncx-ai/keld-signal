@@ -1,0 +1,110 @@
+KELD SIGNAL — SECURITY & PRIVACY OVERVIEW
+
+Last updated: July 9, 2026
+
+Keld Signal gives your organization visibility into how AI coding tools
+are used — without your prompts, code, or AI responses ever leaving your
+computer. This page summarizes exactly what is collected, what is not,
+and how the software protects your data.
+
+
+WHAT GETS INSTALLED
+
+  keld                 A command-line tool for sign-in, setup, and status.
+  keld-agent           A per-user background service that analyzes your AI
+                       usage locally.
+  keld-agent-sidecar   An on-device machine-learning model used by
+                       keld-agent. All inference runs on your computer.
+
+The install is per-user; no administrator privileges are required on
+Windows, and the background service runs under your own account.
+
+
+DATA THAT IS COLLECTED (USAGE TELEMETRY)
+
+For each AI-tool event, the following metadata is reported to your
+organization's Keld Atlas service:
+
+  - Model used and per-request token counts (input, output, cache read,
+    and cache creation)
+  - Notional cost — a list-price equivalent for reporting purposes only;
+    it is not a charge (in particular, not on flat-rate plans)
+  - Session id, request id, and request duration
+  - Your work email, terminal type, and AI tool version
+    (Claude Code / Codex / Gemini CLI)
+  - The event type of each event (e.g. api_request, tool call)
+
+DATA THAT IS DERIVED ON YOUR COMPUTER (ENRICHMENT)
+
+The keld-agent service reads AI-session transcripts locally and derives
+per-prompt labels: task type, domain, activity type, work/personal,
+inferred business function and subcategory, a sensitivity category, and
+prompt length in characters. Only these derived labels — with all
+sensitive content masked — are transmitted.
+
+DATA THAT IS NEVER COLLECTED
+
+  - Your prompt text
+  - Your source code or file contents
+  - The AI's responses
+  - Unmasked sensitive content of any kind
+
+Sensitive content detected in prompts (emails, credentials, API keys,
+government identifiers, and similar) is masked on-device before anything
+is transmitted. Masking is always on and is not configurable — not by
+you, your organization, or Keld. A detected credential always forces the
+prompt's sensitivity classification to "secrets".
+
+One organization-level setting ("include_entity_text", OFF by default)
+allows short, non-sensitive subject-matter terms (e.g. a technology or
+product name) to accompany the derived labels. It is controlled by your
+organization's administrator and never affects sensitive-content masking.
+
+
+HOW THE SOFTWARE PROTECTS YOUR DATA
+
+  On-device processing   All prompt analysis and ML inference run locally.
+                         Raw transcripts are read on your machine and
+                         never uploaded.
+  Masking before send    Masking is enforced in the agent immediately
+                         before publish — after classification, before
+                         any network transmission.
+  Encrypted transport    All communication with Keld Atlas uses HTTPS/TLS.
+  Local-only service     keld-agent listens only on 127.0.0.1 (loopback)
+                         and requires a per-user secret; it is not
+                         reachable from the network.
+  Credential hygiene     Sign-in uses a browser-based device-authorization
+                         flow — your password is never entered in the
+                         terminal. Tokens are stored under your user
+                         profile (~/.keld) with user-only permissions and
+                         can be revoked from Keld Atlas at any time.
+  Safe configuration     Every AI-tool config file the installer modifies
+                         is backed up first (~/.keld/backups). "keld
+                         signal uninstall" cleanly removes Keld's changes.
+  Signed releases        macOS packages are Developer ID-signed and
+                         notarized when released; binaries are built and
+                         published from CI.
+  Open source            The complete client source code is available for
+                         inspection at https://github.com/ncx-ai/keld-signal.
+
+
+GOVERNANCE & COMPLIANCE POSTURE
+
+  - Data minimization by design: only metadata and derived, masked labels
+    are collected — never content. This supports your organization's
+    obligations under privacy regulations such as the GDPR and CCPA.
+  - Purpose limitation: collected data is provided solely to the
+    organization holding the Keld subscription, for AI-usage visibility
+    and governance.
+  - Organization control: enrichment behavior is governed centrally by
+    your organization's administrator and applied to all agents within
+    minutes.
+  - Identifiability: telemetry includes your work email so your
+    organization can attribute usage; questions about how your
+    organization uses this data should go to your administrator.
+  - Removal: uninstalling via "keld signal uninstall" plus the platform
+    uninstaller removes the software, its configuration changes, and its
+    background service. Issued tokens are revocable server-side.
+
+Security contact: security@keld.co
+Full agreement: see the accompanying End User License Agreement.
