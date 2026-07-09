@@ -18,7 +18,12 @@ help:
 	@echo "  make enrichments-sink   run a local sink that prints enrichments as they are generated"
 	@echo "  make send-test-prompt   send one test prompt to the running daemon"
 	@echo ""
+	@echo "Release:"
+	@echo "  make release            cut a release: minor bump (or VERSION=X.Y.Z), tag + push, kicks off CI/CD"
+	@echo "  make release-dry        build UNSIGNED installers as CI artifacts (no tag/release; needs gh)"
+	@echo ""
 	@echo "Vars: DEST=$(DEST)  SIDECAR_VENV=$(SIDECAR_VENV)  PYTHON=$(PYTHON)  SINK_PORT=$(SINK_PORT)"
+	@echo "      VERSION=<X.Y.Z> (release, optional)  YES=1 (release, skip confirm)"
 
 .PHONY: build-binaries
 build-binaries:
@@ -68,3 +73,18 @@ enrichments-sink:
 .PHONY: send-test-prompt
 send-test-prompt:
 	python3 scripts/send-test-prompt.py
+
+# Cut a release: minor bump by default, or `make release VERSION=1.2.3`. Pushes a
+# vX.Y.Z tag, which kicks off GoReleaser + the installers build. YES=1 skips the
+# confirmation prompt.
+.PHONY: release
+release:
+	@bash scripts/cut-release.sh $(if $(YES),-y,) $(VERSION)
+
+# Dry run: trigger the installers workflow (unsigned installers on all 3 OSes as
+# downloadable CI artifacts) without cutting a real release. Requires the gh CLI.
+.PHONY: release-dry
+release-dry:
+	@command -v gh >/dev/null || { echo "release-dry needs the gh CLI (https://cli.github.com)"; exit 1; }
+	gh workflow run installers.yml
+	@echo "Triggered installers.yml — watch: gh run watch   (or the Actions tab)"
