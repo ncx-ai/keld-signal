@@ -2,6 +2,8 @@
 <installer-gui-script minSpecVersion="2">
   <title>Keld</title>
   <options customize="never" require-scripts="true"/>
+  <readme file="SECURITY-OVERVIEW.txt"/>
+  <license file="EULA.txt"/>
   <choices-outline>
     <line choice="default"/>
   </choices-outline>

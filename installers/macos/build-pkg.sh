@@ -24,7 +24,7 @@ trap 'rm -rf "$TMP"' EXIT
 pkgbuild --root "$STAGE" --install-location /usr/local/keld \
   --scripts "$ROOT/scripts" --identifier co.keld.agent --version "$VERSION" "$TMP/component.pkg"
 
-PB=(productbuild --distribution "$ROOT/distribution.xml" --package-path "$TMP" "$OUT")
+PB=(productbuild --distribution "$ROOT/distribution.xml" --resources "$ROOT/../resources" --package-path "$TMP" "$OUT")
 if [ -n "${APPLE_DEVELOPER_ID_INSTALLER:-}" ]; then
   PB+=(--sign "$APPLE_DEVELOPER_ID_INSTALLER")
 fi

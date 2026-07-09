@@ -12,6 +12,8 @@ PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 OutputBaseFilename=keld-setup
 ChangesEnvironment=yes
+LicenseFile=..\resources\EULA.txt
+InfoBeforeFile=..\resources\SECURITY-OVERVIEW.txt
 
 [Files]
 Source: "keld.exe";             DestDir: "{app}"; Flags: ignoreversion
