@@ -22,8 +22,14 @@ help:
 	@echo "  make release            cut a release: minor bump (or VERSION=X.Y.Z), tag + push, kicks off CI/CD"
 	@echo "  make release-dry        build UNSIGNED installers as CI artifacts (no tag/release; needs gh)"
 	@echo ""
+	@echo "Test Mac (Scaleway Apple silicon — for testing the installer; needs \`scw init\`):"
+	@echo "  make scaleway-up        provision/reuse a cloud macOS host, print how to connect (24h MIN billing!)"
+	@echo "  make scaleway-down      delete it (YES=1 skips confirm; still bills the 24h minimum)"
+	@echo "  make scaleway-status    show the current Mac + connection details"
+	@echo ""
 	@echo "Vars: DEST=$(DEST)  SIDECAR_VENV=$(SIDECAR_VENV)  PYTHON=$(PYTHON)  SINK_PORT=$(SINK_PORT)"
-	@echo "      VERSION=<X.Y.Z> (release, optional)  YES=1 (release, skip confirm)"
+	@echo "      VERSION=<X.Y.Z> (release, optional)  YES=1 (release/scaleway-down, skip confirm)"
+	@echo "      SCALEWAY_ZONE=$(SCALEWAY_ZONE)  SCALEWAY_UP_TIMEOUT=$(SCALEWAY_UP_TIMEOUT) (seconds)"
 
 .PHONY: build-binaries
 build-binaries:
@@ -88,3 +94,42 @@ release-dry:
 	@command -v gh >/dev/null || { echo "release-dry needs the gh CLI (https://cli.github.com)"; exit 1; }
 	gh workflow run installers.yml
 	@echo "Triggered installers.yml — watch: gh run watch   (or the Actions tab)"
+
+# ── Scaleway Apple silicon test Mac ─────────────────────────────────────────
+# Spin up a real (Apple-hardware) cloud macOS host to test the signed .pkg/.dmg
+# installer. There is no local macOS on Linux, and VirtualBox can only run *Intel*
+# macOS while we ship *arm64* — so a cloud Mac is the only faithful test. Wraps `scw`
+# via scripts/scaleway-mac.py (stdlib-only).
+#
+# ONE-TIME PREREQUISITES:
+#   * scw CLI installed + authenticated:  scw init   (https://github.com/scaleway/scaleway-cli)
+#   * Register your SSH *public* key in the Scaleway project BEFORE `scaleway-up`, or
+#     SSH won't work on the Mac (VNC still does).
+#   * Apple silicon quota > 0 for some type. New orgs start at 0 (anti-fraud gate); M1-M
+#     is usually the only pre-cleared type. For M2/M4 types, request an increase in the
+#     console → Quotas. `scaleway-up` auto-skips any type that reports quota 0/0.
+#
+# BILLING: 24-HOUR MINIMUM per Apple's licensing — `scaleway-down` before 24h have elapsed
+#          STILL bills the full 24h. Rates ~€0.11/hr (M1-M) … ~€0.29/hr (M4-M).
+# CONNECT: `scaleway-up`/`scaleway-status` print the IP + VNC URL. The VNC username/password
+#          and the exact SSH command are on the server's Overview page in the console
+#          (the API doesn't return the VNC password). Use any VNC client (e.g. Remmina).
+#          DO NOT enable FileVault on the Mac — it locks out all remote (VNC/SSH) access.
+SCALEWAY_ZONE ?= fr-par-1
+SCALEWAY_UP_TIMEOUT ?= 1800   # seconds to keep polling for stock before giving up
+
+# Reuse an existing Mac if there is one; else poll every type cheapest-first and create
+# the first that is in stock AND your quota allows, then print how to connect.
+.PHONY: scaleway-up
+scaleway-up:
+	SCALEWAY_ZONE=$(SCALEWAY_ZONE) SCALEWAY_UP_TIMEOUT=$(SCALEWAY_UP_TIMEOUT) python3 scripts/scaleway-mac.py up
+
+# Delete the Mac(s) in the project. Interactive confirm unless YES=1. Remember the 24h min.
+.PHONY: scaleway-down
+scaleway-down:
+	SCALEWAY_ZONE=$(SCALEWAY_ZONE) YES=$(YES) python3 scripts/scaleway-mac.py down
+
+# Show the current Mac(s) + connection details.
+.PHONY: scaleway-status
+scaleway-status:
+	SCALEWAY_ZONE=$(SCALEWAY_ZONE) python3 scripts/scaleway-mac.py status
