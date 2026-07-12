@@ -25,16 +25,18 @@ const (
 )
 
 // pathRe matches an embedded absolute-path token: a path that begins at the
-// start of the string or right after whitespace (so a relative token like
-// "a/b", where "/" is preceded by a non-space, is NOT matched). It covers
-// POSIX absolute paths ("/etc", "/home/u/x.json"), Windows drive paths
-// ("C:\..."), and Windows UNC paths ("\\server\share\..."). The leading
-// start/whitespace is captured as group 1 so RedactError can preserve it when
-// substituting "<path>". A token stops at the first whitespace, so a path
-// containing a space is only partially matched — redactFields relies on that
-// (any embedded-path match ⇒ redact the WHOLE value) to avoid leaking an
-// interior directory word.
-var pathRe = regexp.MustCompile(`(^|\s)(?:/\S+|[A-Za-z]:\\\S*|\\\\\S+)`)
+// start of the string or right after a NON-word char (so a relative token
+// like "a/b", where "/" is preceded by a word char, is NOT matched, but a
+// path behind a quote/equals/paren/colon — `="/…`, `stat "/…`, `cfg(/…`,
+// `file://…` — IS caught). It covers POSIX absolute paths ("/etc",
+// "/home/u/x.json"), Windows drive paths ("C:\..."), and Windows UNC paths
+// ("\\server\share\..."). The leading start/non-word char is CONSUMED and
+// captured as group 1, so RedactError must re-emit it (${1}<path>) to avoid
+// eating the preceding "/=/( char. A token stops at the first whitespace, so
+// a path containing a space is only partially matched — redactFields relies
+// on that (any embedded-path match ⇒ redact the WHOLE value) to avoid leaking
+// an interior directory word.
+var pathRe = regexp.MustCompile(`(^|[^\w])(?:/\S+|[A-Za-z]:\\\S*|\\\\\S+)`)
 
 // wholePathRe matches when the ENTIRE string is a single absolute-path token
 // (no other content, no interior whitespace).
@@ -87,7 +89,10 @@ func redactFields(in map[string]any) map[string]any {
 //  4. otherwise apply the free-text caps.
 func redactString(s string) string {
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		// Control (Cc: \n \t ...) or format (Cf: U+200B ZWSP, U+200D ZWJ, ...)
+		// chars — the latter can invisibly stitch a multi-token prompt into one
+		// "word", so reject both.
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
 			return "<redacted>"
 		}
 	}
@@ -132,9 +137,11 @@ func RedactError(err error) string {
 	}
 
 	msg := wsCollapseRE.ReplaceAllString(err.Error(), " ")
-	// Preserve the captured start/whitespace prefix (group 1) so we don't glue
-	// the "<path>" token onto the preceding word.
-	msg = pathRe.ReplaceAllString(msg, "$1<path>")
+	// pathRe consumes the leading start/non-word char into group 1; re-emit it
+	// with ${1} (braces required so it isn't parsed as $1<) so only the path
+	// itself becomes "<path>" and the preceding "/=/( char is preserved
+	// (e.g. `stat "<path>`, `path=<path>`).
+	msg = pathRe.ReplaceAllString(msg, "${1}<path>")
 
 	runes := []rune(msg)
 	if len(runes) > maxErrLen {

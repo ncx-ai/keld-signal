@@ -286,6 +286,74 @@ func TestRedactErrorTruncationIsRuneSafe(t *testing.T) {
 	}
 }
 
+func TestRedactErrorPathsAtNonWordBoundaries(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		leak string
+	}{
+		{"quoted", `read "/abs/path": denied`, "/abs/path"},
+		{"key_value", "path=/home/u/secret.txt", "/home/u/secret.txt"},
+		{"paren", "cfg(/home/u/secret.txt) invalid", "/home/u/secret.txt"},
+		{"file_url", "file:///home/u/secret.txt", "/home/u/secret.txt"},
+		{"windows_quoted", `stat "C:\Users\x.txt": nope`, `C:\Users\x.txt`},
+	}
+	for _, c := range cases {
+		got := RedactError(fmt.Errorf("%s", c.msg))
+		if strings.Contains(got, c.leak) {
+			t.Fatalf("%s: leaked verbatim path %q in %q", c.name, c.leak, got)
+		}
+		if !strings.Contains(got, "<path>") {
+			t.Fatalf("%s: expected <path> token, got %q", c.name, got)
+		}
+	}
+}
+
+func TestRedactErrorQuotedPathKeepsQuote(t *testing.T) {
+	got := RedactError(fmt.Errorf("%s", `read "/abs/path": denied`))
+	if strings.Contains(got, "/abs/path") {
+		t.Fatalf("leaked path: %q", got)
+	}
+	if !strings.Contains(got, `"`) {
+		t.Fatalf("expected the quote char retained, got %q", got)
+	}
+}
+
+func TestRedactFieldsPathsAtNonWordBoundariesRedacted(t *testing.T) {
+	cases := map[string]string{
+		"key_value":      "path=/home/u/secret.txt",
+		"quoted":         `open "/home/u/secret.txt"`,
+		"file_url":       "file:///home/u/secret.txt",
+		"windows_quoted": `"C:\Users\x.txt"`,
+	}
+	for name, v := range cases {
+		out := redactFields(map[string]any{"v": v})
+		got, _ := out["v"].(string)
+		if strings.Contains(got, "secret.txt") || strings.Contains(got, `x.txt`) {
+			t.Fatalf("%s: leaked path fragment in %q", name, got)
+		}
+		if strings.Contains(got, "/home/u") || strings.Contains(got, `C:\Users`) {
+			t.Fatalf("%s: leaked verbatim path in %q", name, got)
+		}
+	}
+}
+
+func TestRedactFieldsRelativePathNotTreatedAsAbsolute(t *testing.T) {
+	out := redactFields(map[string]any{"v": "a/b/c.go"})
+	if out["v"] != "a/b/c.go" {
+		t.Fatalf("relative path should pass unchanged, got %q", out["v"])
+	}
+}
+
+func TestRedactFieldsZeroWidthCharRedacted(t *testing.T) {
+	// U+200B ZERO WIDTH SPACE (category Cf) between tokens would otherwise let
+	// a multi-token prompt read as a single "word".
+	out := redactFields(map[string]any{"v": "fix​the​bug​now"})
+	if out["v"] != "<redacted>" {
+		t.Fatalf("expected <redacted> for zero-width-delimited value, got %q", out["v"])
+	}
+}
+
 func TestRedactErrorCollapsesMultilineAndTruncates(t *testing.T) {
 	msg := "line one\nline two\ttabbed\n" + strings.Repeat("x", 400)
 	err := errors.New(msg)
