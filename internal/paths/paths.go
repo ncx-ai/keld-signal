@@ -40,6 +40,7 @@ func DebugLogPath() string          { return filepath.Join(KeldHome(), "agent.lo
 func StateDir() string              { return filepath.Join(KeldHome(), "state") }
 func BackupsDir() string            { return filepath.Join(KeldHome(), "backups") }
 func ModelsDir(model string) string { return filepath.Join(KeldHome(), "models", model) }
+func InstallIDPath() string         { return filepath.Join(KeldHome(), "install-id") }
 
 // SpoolDir is the on-disk queue of undelivered enrich pointers (hook writes,
 // daemon drains). Sibling of models/ under KELD_HOME.
