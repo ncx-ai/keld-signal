@@ -2,13 +2,14 @@ package clientevents
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestSeverityRank(t *testing.T) {
 	tests := []struct {
-		sev Severity
+		sev      Severity
 		wantRank int
 	}{
 		{SevInfo, 0},
@@ -26,8 +27,8 @@ func TestSeverityRank(t *testing.T) {
 
 func TestSeverityAtLeast(t *testing.T) {
 	tests := []struct {
-		sev Severity
-		min Severity
+		sev  Severity
+		min  Severity
 		want bool
 	}{
 		{SevError, SevWarn, true},
@@ -76,16 +77,14 @@ func TestEventJSONOmitsEmptyFields(t *testing.T) {
 	}
 
 	// Check that "fields" key is NOT in the JSON when Fields is nil
-	if string(data) != "" && string(data) != "{}" {
-		if contains(string(data), `"fields"`) {
-			t.Errorf("marshaled JSON contains 'fields' key when Fields is nil: %s", string(data))
-		}
+	if strings.Contains(string(data), `"fields"`) {
+		t.Errorf("marshaled JSON contains 'fields' key when Fields is nil: %s", string(data))
 	}
 
 	// Check that required keys are present
 	requiredKeys := []string{`"code"`, `"severity"`, `"corr"`, `"ts"`}
 	for _, key := range requiredKeys {
-		if !contains(string(data), key) {
+		if !strings.Contains(string(data), key) {
 			t.Errorf("marshaled JSON missing key %s: %s", key, string(data))
 		}
 	}
@@ -114,7 +113,7 @@ func TestEventJSONOmitsEmptyFieldsWhenExplicitlyEmpty(t *testing.T) {
 	}
 
 	// Check that "fields" key is NOT in the JSON when Fields is empty map
-	if contains(string(data), `"fields"`) {
+	if strings.Contains(string(data), `"fields"`) {
 		t.Errorf("marshaled JSON contains 'fields' key when Fields is empty map: %s", string(data))
 	}
 }
@@ -145,7 +144,7 @@ func TestEventJSONIncludesFieldsWhenPresent(t *testing.T) {
 	}
 
 	// Check that "fields" key IS in the JSON when Fields has content
-	if !contains(string(data), `"fields"`) {
+	if !strings.Contains(string(data), `"fields"`) {
 		t.Errorf("marshaled JSON missing 'fields' key when Fields has content: %s", string(data))
 	}
 }
@@ -207,14 +206,4 @@ func TestEventRoundTrip(t *testing.T) {
 			t.Errorf("Fields[%q] mismatch: got %v, want %v", k, roundTripped.Fields[k], v)
 		}
 	}
-}
-
-// contains is a helper to check if a string contains a substring.
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
