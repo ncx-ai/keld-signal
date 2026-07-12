@@ -68,9 +68,13 @@ spans, activity, function, subcategory — that's synced to Atlas. Sensitive spa
   otherwise a pure-Go **deterministic** backend — always present, zero-dependency.
 - **Governed per organization.** An Atlas admin sets enrichment policy once
   (e.g. `include_entity_text`) and every agent picks it up within a poll interval.
-- **Invisible good citizen.** The sidecar throttles CPU two ways (a rate governor
-  *and* dynamic per-inference thread scaling), evicts the model under memory
-  pressure or after inactivity (returning its ~2.6 GB to the OS), and is
+- **Invisible good citizen.** The long-lived sidecar service holds no model
+  (RSS stays flat); inference runs in a separate worker child process that's
+  **recycled** — killed and respawned, reclaiming its ~2.6 GB heap via process
+  exit — on an RSS ceiling, memory pressure, inactivity, or a hung job, so a
+  single misbehaving inference can't wedge or balloon the service. CPU is still
+  throttled two ways (a rate governor *and* dynamic per-inference thread
+  scaling), single-flight is preserved (one inference at a time), and it's all
   load-tested to prove it neither leaks nor runs away with CPU.
 - **Reliable, GLiNER2-only delivery.** Enrichment never silently degrades to the
   deterministic backend. The hook writes each prompt *pointer* (never the prompt

@@ -76,8 +76,8 @@ a time. Two waves, up to 7 model calls per prompt:
   Why a bundled sidecar over in-process ONNX: `docs/keld-agent-p2-onnx-decision.md`.
 
 **Delivery reliability (never degrade, never wedge).** When ML is enabled,
-enrichment always runs on GLiNER2 — an idle-evicted or restarting sidecar is
-waited out (client wake + retry), never swapped for deterministic. Each job runs
+enrichment always runs on GLiNER2 — a sidecar whose inference worker is mid-recycle
+or respawning is waited out (client wake + retry), never swapped for deterministic. Each job runs
 under a deadline (`KELD_ENRICH_JOB_TIMEOUT`, default 30s) as a **child of the
 daemon context**; on timeout the worker **cancels it**, which aborts the job's
 in-flight sidecar calls (`Client.WithContext`) so an abandoned attempt is
@@ -95,23 +95,30 @@ See `docs/enrichment-settings.md`.
 **Resource safety (the sidecar is a good citizen).** Single-flight + bounded
 queue (503 backpressure); a **rate governor** (CPU-EWMA min-interval pacing) and a
 **CPU thread scaler** (`torch.set_num_threads` capped to host load, default 50%
-of cores); **memory eviction** (unload at ≤5% RAM, `malloc_trim` to return RSS,
-reload on absolute headroom) and **idle eviction** (unload after inactivity,
-reload on demand); plus an **idle maintenance trim** (`malloc_trim` after brief
-inactivity, `KELD_SIDECAR_TRIM_IDLE_S`, model stays loaded) that reclaims the
-heap `MALLOC_ARENA_MAX` bounds by arena *count* but not per-arena *growth* — a
-long-lived model otherwise accretes freed-but-retained 64 MB sub-heaps.
-`GET /metrics` exposes state/EWMA/threads/queue/counts (incl. `rss_mb`, `trims`). Full
-mechanisms + load-test validation: **`sidecar/loadtest/README.md`**.
+of cores). Inference itself runs in a separate **inference worker** child
+process, not the long-lived FastAPI service — the service holds no model and
+its own RSS stays flat regardless of uptime. The worker is **recycled** (killed
+and respawned, reclaiming its heap via process exit — the only cross-platform
+memory reset) on an **RSS ceiling** (`model_cost_mb + KELD_SIDECAR_RSS_MARGIN_MB`),
+**memory pressure** (available RAM ≤ `KELD_SIDECAR_EVICT_AVAIL_PCT` — held down
+until headroom returns), **idle** (`KELD_SIDECAR_IDLE_UNLOAD_S`, `<=0` disables),
+a **hung-job timeout** (`KELD_SIDECAR_JOB_DEADLINE_S`), or a crash; it respawns
+lazily on the next request. `GET /metrics` exposes a `worker` block
+(`state`/`worker_rss_mb`/`parent_rss_mb`/`model_cost_mb`/`recycles`/`kills`)
+alongside governor EWMA/threads/queue/counts. Full mechanisms + load-test
+validation: **`sidecar/loadtest/README.md`**.
 
-**Footprint caps are set at spawn, parent-side** (`daemon.go` → `sidecarEnv`).
-The daemon injects `MALLOC_ARENA_MAX=2` plus `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=2`
-and `KELD_SIDECAR_MAX_THREADS=2` (all set-if-absent, so an operator can override).
-Without the arena cap, glibc spawns a malloc arena per allocating thread and each
-retains freed heap — RSS then balloons to ~2× the model working set (measured
-6.4 GB vs a ~2.6 GB working set on a 20-core host). `MALLOC_ARENA_MAX` **must** be
-parent-set: glibc reads it when the child's allocator initializes, before Python
-can set it for itself. The thread caps also bound CPU to ≤2 cores.
+**Footprint caps are set at spawn, parent-side** (`daemon.go` → `sidecarEnv`),
+inherited by the spawned worker child. The daemon injects `MALLOC_ARENA_MAX=2`
+plus `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=2` and `KELD_SIDECAR_MAX_THREADS=2`
+(all set-if-absent, so an operator can override) — a cheap Linux-only baseline
+footprint reducer, not the memory-safety mechanism itself (that's the worker
+recycle above). Without the arena cap, glibc spawns a malloc arena per
+allocating thread and each retains freed heap — RSS then balloons to ~2× the
+model working set (measured 6.4 GB vs a ~2.6 GB working set on a 20-core host).
+`MALLOC_ARENA_MAX` **must** be parent-set: glibc reads it when the child's
+allocator initializes, before Python can set it for itself. The thread caps
+also bound CPU to ≤2 cores.
 
 ## The CLI (`keld`)
 
@@ -164,10 +171,11 @@ sidecar/
   serve.py           entrypoint the daemon spawns (uvicorn on 127.0.0.1)
   app/
     main.py          FastAPI app: /classify /extract /entities /health /metrics;
-                     lifespan wires governor + scaler + runner + memory watch
-    governor.py      CPU-EWMA rate pacing         runner.py    single-flight runner
-    cpuscale.py      host-load → torch threads    memwatch.py  eviction state machine
-    metrics.py       /metrics payload             adapter.py   normalize model output
+                     lifespan wires governor + scaler + runner + worker poll loop
+    governor.py      CPU-EWMA rate pacing         runner.py       single-flight runner
+    cpuscale.py      host-load → torch threads    worker.py       inference child (holds model)
+    metrics.py       /metrics payload             worker_manager.py  spawn/recycle/dispatch
+    adapter.py       normalize model output
   loadtest/          smoke + soak load-test harness (see its README)
   keld-agent-sidecar.spec / build-freeze.sh   PyInstaller packaging
 docs/                enrichment-settings.md, ONNX decision, superpowers/{specs,plans}
@@ -212,8 +220,9 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **CLI = single static Go binary**, no runtime deps. The sidecar is optional and
   isolated; the **deterministic backend is the permanent zero-dep fallback**.
 - **Sidecar single-flight** (one inference at a time) is load protection, not an
-  accident — don't fan out inference. RAM is handled by eviction, CPU by the
-  governor + thread scaler (see `sidecar/loadtest/README.md`).
+  accident — don't fan out inference. RAM is bounded by recycling the inference
+  worker child process, CPU by the governor + thread scaler (see
+  `sidecar/loadtest/README.md`).
 - **Schema versioning:** changing any enrichment vocabulary is contract-affecting
   — bump `enrich.SchemaVersion` and re-run the eval (`enrich/eval/`).
 
