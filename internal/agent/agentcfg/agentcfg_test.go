@@ -22,6 +22,31 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSetSidecarPortUpdatesExisting(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	if err := Write(Info{Port: 8765, Secret: "deadbeef"}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := SetSidecarPort(40313); err != nil {
+		t.Fatalf("SetSidecarPort: %v", err)
+	}
+	got, err := Read()
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	// The sidecar port is added without disturbing the daemon port/secret.
+	if got.SidecarPort != 40313 || got.Port != 8765 || got.Secret != "deadbeef" {
+		t.Fatalf("after SetSidecarPort: %+v", got)
+	}
+}
+
+func TestSetSidecarPortErrorsWhenNoInfo(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	if err := SetSidecarPort(1234); err == nil {
+		t.Fatal("want error when agent.json is absent, got nil")
+	}
+}
+
 func TestReadAbsentReturnsNil(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	got, err := Read()

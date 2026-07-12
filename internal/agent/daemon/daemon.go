@@ -444,6 +444,12 @@ func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func()
 	scPort := scLn.Addr().(*net.TCPAddr).Port
 	scLn.Close() // Release; sidecar will bind it.
 
+	// Record the sidecar port in agent.json so `keld-agent metrics` can reach it.
+	// Best-effort: a failure here only affects that diagnostic command.
+	if err := agentcfg.SetSidecarPort(scPort); err != nil {
+		log.Printf("keld-agent: could not record sidecar port: %v", err)
+	}
+
 	scBaseURL := fmt.Sprintf("http://127.0.0.1:%d", scPort)
 	scClient := sidecar.NewCtx(ctx, scBaseURL, 5*time.Second)
 	healthFn := func() bool { return scClient.Healthy(ctx) }
@@ -453,7 +459,7 @@ func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func()
 	sup := NewSupervisor(
 		func(p int) (*exec.Cmd, error) {
 			cmd := exec.CommandContext(ctx, binPath, fmt.Sprintf("--port=%d", p))
-			cmd.Env = append(os.Environ(), "KELD_GLINER2_DIR="+modelDir)
+			cmd.Env = sidecarEnv(os.Environ(), modelDir)
 			return cmd, nil
 		},
 		scPort,

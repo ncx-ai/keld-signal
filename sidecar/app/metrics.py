@@ -17,7 +17,7 @@ class Counts:
 
 def build_metrics(*, model_state, state_since, governor, runner, watch, counts,
                   model_cost_mb, reload_margin_mb, uptime_s, evict_reason=None,
-                  cpu_threads=None, clock=time.monotonic):
+                  cpu_threads=None, rss_mb=None, clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     headroom = (round(model_cost_mb + reload_margin_mb, 1)
                 if model_cost_mb else None)
@@ -36,6 +36,8 @@ def build_metrics(*, model_state, state_since, governor, runner, watch, counts,
             "avail_mb": round(watch.last_avail_mb, 1) if watch and watch.last_avail_mb is not None else None,
             "model_cost_mb": round(model_cost_mb, 1) if model_cost_mb else None,
             "reload_headroom_mb": headroom,
+            # Live process RSS; drift above model_cost_mb is heap buildup.
+            "rss_mb": round(rss_mb, 1) if rss_mb is not None else None,
         },
         "runner": {
             "queue_depth": runner.queue_depth if runner else 0,

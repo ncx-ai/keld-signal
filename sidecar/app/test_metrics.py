@@ -44,6 +44,29 @@ def test_build_metrics_shape_and_values():
     assert m["uptime_s"] == 100.0
 
 
+def test_build_metrics_reports_live_rss():
+    # Live process RSS lets an operator watch for gradual heap buildup past the
+    # one-time model_cost_mb baseline (fragmentation drift).
+    g = Governor(disabled=True)
+    m = build_metrics(
+        model_state="loaded", state_since=0.0, governor=g, runner=_FakeRunner(),
+        watch=_FakeWatch(), counts=Counts(), model_cost_mb=2680.0,
+        reload_margin_mb=1024.0, uptime_s=1.0, rss_mb=3100.4, clock=lambda: 1.0,
+    )
+    assert m["memory"]["rss_mb"] == 3100.4
+
+
+def test_build_metrics_rss_optional():
+    # psutil sampling is best-effort; a missing sample surfaces as null, not a crash.
+    g = Governor(disabled=True)
+    m = build_metrics(
+        model_state="loaded", state_since=0.0, governor=g, runner=_FakeRunner(),
+        watch=_FakeWatch(), counts=Counts(), model_cost_mb=2680.0,
+        reload_margin_mb=1024.0, uptime_s=1.0, clock=lambda: 1.0,
+    )
+    assert m["memory"]["rss_mb"] is None
+
+
 def test_build_metrics_handles_unknown_model_cost():
     g = Governor(disabled=True)
     m = build_metrics(

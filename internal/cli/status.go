@@ -6,10 +6,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/service"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/localagent"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/tools"
 )
@@ -80,6 +83,12 @@ func newStatusCmd() *cobra.Command {
 				console.Print(fmt.Sprintf("  hook            v%s", manifest.Hook.Version))
 			}
 
+			info, _ := agentcfg.Read()
+			health := localagent.Health(info, service.Status, localagent.FetchText)
+			for _, line := range renderLocalService(health) {
+				console.Print(line)
+			}
+
 			return nil
 		},
 	}
@@ -132,4 +141,27 @@ func newDoctorCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// renderLocalService formats the local signal service section of `keld signal
+// status` from a Health snapshot. Best-effort: lines are omitted when their
+// data is unavailable.
+func renderLocalService(h localagent.HealthInfo) []string {
+	lines := []string{"Local signal service:",
+		fmt.Sprintf("  %-11s %s", "service", h.Service)}
+	if !h.DaemonUp {
+		return append(lines, fmt.Sprintf("  %-11s %s", "daemon", "not running"))
+	}
+	lines = append(lines, fmt.Sprintf("  %-11s %s", "daemon", "reachable"))
+	if h.Backend != "" {
+		backend := h.Backend
+		if h.ModelState != "" {
+			backend += " · " + h.ModelState
+		}
+		lines = append(lines, fmt.Sprintf("  %-11s %s", "backend", backend))
+	}
+	if h.MetricsOK {
+		lines = append(lines, fmt.Sprintf("  %-11s rss %.0f MB (model %.0f)", "memory", h.RSSMB, h.ModelCostMB))
+	}
+	return lines
 }

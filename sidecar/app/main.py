@@ -113,6 +113,14 @@ def _rss_mb() -> float:
     return psutil.Process().memory_info().rss / (1024.0 * 1024.0)
 
 
+def _rss_mb_safe():
+    """Best-effort RSS for /metrics; never let a sampling error fail the endpoint."""
+    try:
+        return _rss_mb()
+    except Exception:
+        return None
+
+
 def _set_state(state: str) -> None:
     _state["model_state"] = state
     _state["state_since"] = time.monotonic()
@@ -283,6 +291,7 @@ def metrics():
         uptime_s=time.monotonic() - started,
         evict_reason=_state.get("evict_reason"),
         cpu_threads=_state.get("cpu_threads"),
+        rss_mb=_rss_mb_safe(),
     )
 
 
