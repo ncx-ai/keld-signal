@@ -18,8 +18,14 @@ import (
 func InstallID() (string, error) {
 	path := paths.InstallIDPath()
 
+	// A non-empty existing file is authoritative. An empty/whitespace-only file
+	// (e.g. a crash between create and flush from an older non-atomic writer) is
+	// treated as absent and regenerated, so a torn write can never pin the id to
+	// "" forever.
 	if existing, err := os.ReadFile(path); err == nil {
-		return strings.TrimSpace(string(existing)), nil
+		if id := strings.TrimSpace(string(existing)); id != "" {
+			return id, nil
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
@@ -30,28 +36,48 @@ func InstallID() (string, error) {
 	}
 	id := hex.EncodeToString(buf)
 
-	if err := os.MkdirAll(paths.KeldHome(), 0o755); err != nil {
+	dir := paths.KeldHome()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 
-	// Create exclusively so a concurrent first-writer race is benign: whoever
-	// loses re-reads the winner's id instead of erroring or overwriting it.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// Write to a temp file in the destination directory, flush + close it, then
+	// atomically rename into place. The id only ever becomes visible at its final
+	// path fully written — a crash or write/close failure leaves the temp file (or
+	// nothing), never an empty install-id.
+	tmp, err := os.CreateTemp(dir, "install-id-*")
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			existing, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return "", readErr
-			}
-			return strings.TrimSpace(string(existing)), nil
+		return "", err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+
+	if _, err := tmp.WriteString(id); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		cleanup()
+		return "", err
+	}
+
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return "", err
+	}
+
+	// A concurrent first-writer may have renamed its own (equally valid) id into
+	// place; rename is last-writer-wins, so re-read to return whatever is now
+	// authoritative and converge on a single stable id.
+	if existing, err := os.ReadFile(path); err == nil {
+		if winner := strings.TrimSpace(string(existing)); winner != "" {
+			return winner, nil
 		}
-		return "", err
 	}
-	defer f.Close()
-
-	if _, err := f.WriteString(id); err != nil {
-		return "", err
-	}
-
 	return id, nil
 }
