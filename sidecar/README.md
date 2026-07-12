@@ -5,8 +5,10 @@ The optional ML backend for keld-agent. A FastAPI app running
 `127.0.0.1`. The endpoints are **async** and execute inference through an
 internal governed, single-flight runner (see *Execution model* below):
 
-- `GET /health` → `{"ok": bool, "model": str}` (ok only once the model is warm
-  **and** the runner is started)
+- `GET /health` → `{"ok": bool, "model": str, "state": str}` (`state` is the
+  worker state — `down`/`spawning`/`ready`/`held`; `ok` is true whenever the
+  service can serve on demand, i.e. `state != "held"` — it does **not** require
+  a worker to already be loaded)
 - `POST /classify` `{text, tasks}` → `{"results": {task: [{label, confidence}]}}`
 - `POST /entities` `{text, labels}` → `{"entities": [{text, label, start, end, confidence}]}`
 - `POST /extract` `{text, labels, tasks}` → `{"entities": [...], "results": {...}}`
@@ -18,14 +20,38 @@ masks sensitive spans — the sidecar never does, and it never publishes to Atla
 
 ## Execution model & load protection
 
-Inference does **not** run inline in the request handlers. Each endpoint clips
-the input, submits the model call to an in-process `InferenceRunner`
-(`app/runner.py`), and awaits the result. This is a lightweight background-jobs
-mechanism — an `asyncio.Queue` + a single consumer task + a
-`ThreadPoolExecutor(max_workers=1)` — in lieu of a full task-queue subsystem. It
-guarantees **single-flight**: exactly one model inference runs at any instant, so
-resident memory is bounded to one call's footprint. (This design replaced an
-earlier global mutex after the sidecar was OOM-killed by concurrent inferences.)
+**Parent/worker split.** The FastAPI process is a thin control plane: it holds
+**no model** and never imports torch, so its own RSS stays flat (~50 MB) no
+matter how long it runs. Inference happens in a separate **inference worker**
+child process (`app/worker.py`, spawned via `multiprocessing` `spawn` and owned
+by `app/worker_manager.py`'s `WorkerManager`) that loads the GLiNER2 model and
+runs exactly one `classify`/`extract`/`entities` call at a time over a pair of
+request/response queues. Isolating inference in a child process means it can be
+**recycled** — killed and respawned — to reclaim its heap via process exit, the
+only cross-platform way to actually give memory back to the OS; the parent never
+restarts.
+
+Each endpoint clips the input, submits the worker call to an in-process
+`InferenceRunner` (`app/runner.py`), and awaits the result. This is a lightweight
+background-jobs mechanism — an `asyncio.Queue` + a single consumer task + a
+`ThreadPoolExecutor(max_workers=1)` that runs the (blocking) IPC round-trip to
+the worker off the event loop — in lieu of a full task-queue subsystem. It
+guarantees **single-flight**: exactly one inference runs at any instant, so the
+worker's resident memory is bounded to model weights + one call's footprint.
+(This design replaced an earlier global mutex after the sidecar was OOM-killed by
+concurrent inferences, and later moved the model itself into a recyclable child
+so the service's own memory couldn't grow at all.)
+
+**The worker is recycled** (killed + respawned on the next request) on any of:
+an **RSS ceiling** (`model_cost_mb + KELD_SIDECAR_RSS_MARGIN_MB`), sustained
+**memory pressure** (available RAM ≤ `KELD_SIDECAR_EVICT_AVAIL_PCT` — the worker
+is held down until headroom returns, serving 503s meanwhile), **inactivity**
+(`KELD_SIDECAR_IDLE_UNLOAD_S`, 0 disables), a **hung-job timeout**
+(`KELD_SIDECAR_JOB_DEADLINE_S`), or a crash. A parent-side poll loop
+(`WorkerManager.poll`, `KELD_SIDECAR_MEM_POLL_S`) drives ceiling/idle/pressure
+checks; the worker respawns lazily on the next request. See
+`sidecar/loadtest/README.md` for the full trigger list, env knobs, and
+validation.
 
 A `Governor` (`app/governor.py`) paces the **individual model-invocation rate**
 by host CPU load: it keeps an EWMA of CPU% and imposes a growing minimum interval
@@ -38,6 +64,11 @@ as abstained → the enrichment publishes as `partial`).
 Two further guards: inputs are truncated to `KELD_SIDECAR_MAX_CHARS` (transformer
 memory grows ~quadratically with sequence length), and the queue is bounded by
 `KELD_SIDECAR_QUEUE_MAX`.
+
+`GET /metrics` reports a `worker` block alongside `governor`/`runner`/`counts`:
+`worker.state` (`down`/`spawning`/`ready`/`held`), `worker.worker_rss_mb`,
+`worker.parent_rss_mb`, `worker.model_cost_mb`, `worker.recycles`, and
+`worker.kills` (`{timeout, pressure, idle, crash}`).
 
 ### Tuning (env)
 | Var | Default | Effect |

@@ -11,14 +11,24 @@ class _FakeRunner:
     inflight = 1
 
 
-class _FakeWatch:
-    last_avail_pct = 63.1
-    last_avail_mb = 20140.0
-
-
 def test_counts_defaults_zero():
     c = Counts()
-    assert (c.submitted, c.completed, c.shed_503, c.failed, c.evicted, c.reloaded, c.trims) == (0, 0, 0, 0, 0, 0, 0)
+    assert (c.submitted, c.completed, c.shed_503, c.failed) == (0, 0, 0, 0)
+
+
+def test_build_metrics_reports_worker_state():
+    g = Governor(disabled=True)
+    m = build_metrics(
+        worker_state="ready", worker_rss_mb=2743.1, parent_rss_mb=95.0,
+        model_cost_mb=2650.1, governor=g, runner=_FakeRunner(), counts=Counts(),
+        recycles=2, kills={"timeout": 1, "pressure": 0, "idle": 3, "crash": 0},
+        uptime_s=10.0, cpu_threads=2, clock=lambda: 1.0,
+    )
+    assert m["worker"]["state"] == "ready"
+    assert m["worker"]["worker_rss_mb"] == 2743.1
+    assert m["worker"]["parent_rss_mb"] == 95.0
+    assert m["worker"]["model_cost_mb"] == 2650.1
+    assert m["worker"]["recycles"] == 2 and m["worker"]["kills"]["idle"] == 3
 
 
 def test_build_metrics_shape_and_values():
@@ -26,56 +36,18 @@ def test_build_metrics_shape_and_values():
     g.observe(60.0)  # ewma 60 -> interval 0
     counts = Counts(submitted=10, completed=9, shed_503=1)
     m = build_metrics(
-        model_state="loaded", state_since=0.0, governor=g, runner=_FakeRunner(),
-        watch=_FakeWatch(), counts=counts, model_cost_mb=2680.0,
-        reload_margin_mb=1024.0, uptime_s=100.0, cpu_threads=12, clock=lambda: 5.0,
+        worker_state="ready", worker_rss_mb=None, parent_rss_mb=None,
+        model_cost_mb=None, governor=g, runner=_FakeRunner(), counts=counts,
+        recycles=0, kills={"timeout": 0, "pressure": 0, "idle": 0, "crash": 0},
+        uptime_s=100.0, cpu_threads=12, clock=lambda: 5.0,
     )
-    assert m["model_state"] == "loaded"
-    assert m["seconds_in_state"] == 5.0
     assert m["governor"]["cpu_ewma"] == 60.0
     assert m["governor"]["current_interval_ms"] == 0.0
     assert m["governor"]["cpu_threads"] == 12
     assert m["governor"]["disabled"] is False
-    assert m["memory"]["avail_pct"] == 63.1
-    assert m["memory"]["model_cost_mb"] == 2680.0
-    assert m["memory"]["reload_headroom_mb"] == 3704.0
     assert m["runner"] == {"queue_depth": 2, "queue_max": 64, "inflight": 1}
     assert m["counts"]["submitted"] == 10 and m["counts"]["shed_503"] == 1
     assert m["uptime_s"] == 100.0
-
-
-def test_build_metrics_reports_live_rss():
-    # Live process RSS lets an operator watch for gradual heap buildup past the
-    # one-time model_cost_mb baseline (fragmentation drift).
-    g = Governor(disabled=True)
-    m = build_metrics(
-        model_state="loaded", state_since=0.0, governor=g, runner=_FakeRunner(),
-        watch=_FakeWatch(), counts=Counts(), model_cost_mb=2680.0,
-        reload_margin_mb=1024.0, uptime_s=1.0, rss_mb=3100.4, clock=lambda: 1.0,
-    )
-    assert m["memory"]["rss_mb"] == 3100.4
-
-
-def test_build_metrics_rss_optional():
-    # psutil sampling is best-effort; a missing sample surfaces as null, not a crash.
-    g = Governor(disabled=True)
-    m = build_metrics(
-        model_state="loaded", state_since=0.0, governor=g, runner=_FakeRunner(),
-        watch=_FakeWatch(), counts=Counts(), model_cost_mb=2680.0,
-        reload_margin_mb=1024.0, uptime_s=1.0, clock=lambda: 1.0,
-    )
-    assert m["memory"]["rss_mb"] is None
-
-
-def test_build_metrics_handles_unknown_model_cost():
-    g = Governor(disabled=True)
-    m = build_metrics(
-        model_state="dormant", state_since=0.0, governor=g, runner=_FakeRunner(),
-        watch=_FakeWatch(), counts=Counts(), model_cost_mb=None,
-        reload_margin_mb=1024.0, uptime_s=1.0, clock=lambda: 1.0,
-    )
-    assert m["memory"]["model_cost_mb"] is None
-    assert m["memory"]["reload_headroom_mb"] is None
 
 
 if __name__ == "__main__":
