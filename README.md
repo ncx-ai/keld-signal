@@ -47,6 +47,9 @@ flowchart LR
 straight to Atlas from the hook. Enrichment (the semantic *meaning* of a prompt)
 is computed **locally** by `keld-agent`; only masked labels + masked entity spans
 are published. The raw prompt text is read on your machine and never transmitted.
+(The agent also reports its own operational health — see
+[Client-events monitoring](#client-events-monitoring-agent-health) below —
+which is a third, much smaller stream: no prompt content, ever.)
 
 ## On-device enrichment (the core)
 
@@ -93,6 +96,27 @@ knobs, and the measured validation results. See also
 [docs/enrichment-settings.md](docs/enrichment-settings.md) (control plane) and
 [docs/keld-agent-p2-onnx-decision.md](docs/keld-agent-p2-onnx-decision.md)
 (why a bundled sidecar over in-process ONNX).
+
+## Client-events monitoring (agent health)
+
+Alongside enrichment, `keld-agent` reports its own **operational health** to
+Atlas — a third, much smaller stream, distinct from both telemetry and
+enrichment: job retries/quarantines, sidecar crashes or fallback-to-deterministic,
+publish failures, sustained high RSS/CPU, and lifecycle (`daemon.start`/`stop`).
+It's how Atlas can tell an agent is struggling (or silent) without ever seeing a
+prompt — events carry only ids, codes, and small structured fields (counts,
+durations, thresholds), passed through a Go-side redaction gate that strips
+paths and reduces errors to a class+summary before anything is buffered.
+
+Batched and POSTed to `POST /v1/signal/client-events` — the first route under
+the **`/v1/signal/*`** convention for new client↔Atlas protocol surfaces — with
+the same durability posture as enrichment publish (retried, spooled to
+`~/.keld/spool/clientevents/` if Atlas is unreachable). Governed per-org (on by
+default) via the existing enrichment-settings poll.
+
+📄 **Wire contract:** [docs/signal-client-events.md](docs/signal-client-events.md)
+— the full envelope, event/code catalog, settings block, and redaction
+guarantee (what Atlas's ingest route and dashboard build against).
 
 ## Install
 
