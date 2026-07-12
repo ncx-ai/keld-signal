@@ -278,6 +278,44 @@ func TestEmitGaugeBypassesFloorButHonorsEnabled(t *testing.T) {
 	}
 }
 
+func TestEmitExemptBypassesFloorButHonorsEnabledAndSample(t *testing.T) {
+	e := NewEmitter(testBaseCorr(), 16)
+	warnFloor := Gate{Enabled: true, MinSeverity: SevWarn, SampleRate: 1.0}
+
+	// EmitExempt keeps an info-severity lifecycle event even under a warn floor,
+	// while a plain Emit at the same severity is dropped by that floor.
+	e.SetGate(warnFloor)
+	e.EmitExempt("daemon.start", SevInfo, map[string]any{"port": 4321})
+	batch := e.Drain()
+	if len(batch) != 1 {
+		t.Fatalf("expected EmitExempt info event to bypass the warn floor, got %d events", len(batch))
+	}
+	if batch[0].Code != "daemon.start" || batch[0].Severity != SevInfo {
+		t.Fatalf("expected daemon.start/SevInfo preserved, got %+v", batch[0])
+	}
+
+	e.SetGate(warnFloor)
+	e.Emit("daemon.start", SevInfo, nil)
+	if batch := e.Drain(); len(batch) != 0 {
+		t.Fatalf("expected plain Emit(SevInfo) dropped under warn floor, got %d events", len(batch))
+	}
+
+	// Still honors Enabled=false.
+	e.SetGate(Gate{Enabled: false, MinSeverity: SevInfo, SampleRate: 1.0})
+	e.EmitExempt("daemon.stop", SevInfo, nil)
+	if batch := e.Drain(); len(batch) != 0 {
+		t.Fatalf("expected EmitExempt dropped when Enabled=false, got %d events", len(batch))
+	}
+
+	// Still honors SampleRate=0.
+	e.SetGate(Gate{Enabled: true, MinSeverity: SevInfo, SampleRate: 0.0})
+	e.randFloat = func() float64 { return 0.0 }
+	e.EmitExempt("daemon.stop", SevInfo, nil)
+	if batch := e.Drain(); len(batch) != 0 {
+		t.Fatalf("expected EmitExempt dropped when sampled out, got %d events", len(batch))
+	}
+}
+
 func TestEmitGaugeHonorsSampleRate(t *testing.T) {
 	e := NewEmitter(testBaseCorr(), 16)
 	e.SetGate(Gate{Enabled: true, MinSeverity: SevWarn, SampleRate: 0.0})

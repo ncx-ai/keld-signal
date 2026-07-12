@@ -65,22 +65,23 @@ func (e *Emitter) SetGate(g Gate) {
 // Gate: dropped if disabled, below the severity floor, or sampled out.
 // Never blocks.
 func (e *Emitter) Emit(code string, sev Severity, fields map[string]any) {
-	gate := e.gate.Load().(Gate)
-	if !gate.Enabled || !sev.AtLeast(gate.MinSeverity) || !e.sampledIn(gate) {
-		return
-	}
-	e.enqueue(code, sev, fields)
+	e.record(code, sev, fields, e.base, true)
+}
+
+// EmitExempt records an event exempt from the MinSeverity floor (like
+// EmitGauge) but preserving the caller's severity — for low-volume lifecycle
+// events (e.g. daemon.start/daemon.stop) that must always surface for
+// narrative reconstruction even under a warn-and-above gate. Still subject to
+// Enabled and SampleRate. Never blocks.
+func (e *Emitter) EmitExempt(code string, sev Severity, fields map[string]any) {
+	e.record(code, sev, fields, e.base, false)
 }
 
 // EmitGauge records an info-severity gauge snapshot, exempt from the
 // MinSeverity floor (so a warn-and-above gate still lets gauges through) but
 // still subject to Enabled and SampleRate. Never blocks.
 func (e *Emitter) EmitGauge(code string, fields map[string]any) {
-	gate := e.gate.Load().(Gate)
-	if !gate.Enabled || !e.sampledIn(gate) {
-		return
-	}
-	e.enqueue(code, SevInfo, fields)
+	e.record(code, SevInfo, fields, e.base, false)
 }
 
 // sampledIn reports whether this event survives sampling for the given gate:
@@ -90,14 +91,28 @@ func (e *Emitter) sampledIn(gate Gate) bool {
 	return e.randFloat() < gate.SampleRate
 }
 
-// enqueue redacts fields, builds the Event against the base Corr, and inserts
-// it into the ring.
-func (e *Emitter) enqueue(code string, sev Severity, fields map[string]any) {
+// record is the shared gate+enqueue path for Emit/EmitExempt/EmitGauge and
+// JobEmitter.Emit. It always honors Enabled and SampleRate; it applies the
+// MinSeverity floor only when applyFloor is true (Emit / JobEmitter.Emit) and
+// skips it otherwise (EmitExempt / EmitGauge). On acceptance it redacts fields
+// and inserts an Event stamped with corr (the base Corr, or a job-augmented
+// copy) and the current clock. Never blocks.
+func (e *Emitter) record(code string, sev Severity, fields map[string]any, corr Corr, applyFloor bool) {
+	gate := e.gate.Load().(Gate)
+	if !gate.Enabled {
+		return
+	}
+	if applyFloor && !sev.AtLeast(gate.MinSeverity) {
+		return
+	}
+	if !e.sampledIn(gate) {
+		return
+	}
 	e.insert(Event{
 		Code:     code,
 		Severity: sev,
 		Fields:   redactFields(fields),
-		Corr:     e.base,
+		Corr:     corr,
 		TS:       e.clock(),
 	})
 }
@@ -161,27 +176,12 @@ type JobEmitter struct {
 }
 
 // Emit records an event via the parent Emitter, with SessionID/PromptID
-// stamped onto the Corr. Subject to the same gate as Emitter.Emit.
+// stamped onto the Corr. Subject to the same gate as Emitter.Emit (including
+// the MinSeverity floor).
 func (j *JobEmitter) Emit(code string, sev Severity, fields map[string]any) {
 	e := j.parent
-	gate := e.gate.Load().(Gate)
-	if !gate.Enabled || !sev.AtLeast(gate.MinSeverity) || !e.sampledIn(gate) {
-		return
-	}
-	e.enqueueJob(code, sev, fields, j.session, j.prompt)
-}
-
-// enqueueJob is like enqueue but stamps SessionID/PromptID on the Corr.
-func (e *Emitter) enqueueJob(code string, sev Severity, fields map[string]any, session, prompt string) {
 	corr := e.base
-	corr.SessionID = session
-	corr.PromptID = prompt
-
-	e.insert(Event{
-		Code:     code,
-		Severity: sev,
-		Fields:   redactFields(fields),
-		Corr:     corr,
-		TS:       e.clock(),
-	})
+	corr.SessionID = j.session
+	corr.PromptID = j.prompt
+	e.record(code, sev, fields, corr, true)
 }

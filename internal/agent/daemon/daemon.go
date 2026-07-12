@@ -396,6 +396,19 @@ func Run(ctx context.Context) error {
 	}
 	emitter := clientevents.NewEmitter(base, 1024)
 
+	// Client-events gate/thresholds default ON immediately — BEFORE any emit
+	// (daemon.start below, the pre-poll sidecar.fallback inside mlBackend, ...)
+	// so early startup events aren't dropped by the emitter's zero-value
+	// (disabled) gate. This also means telemetry works even if the settings
+	// fetch never completes (Atlas unreachable, or an Atlas predating the
+	// /v1/enrichment-settings client_telemetry block). The settings poll below
+	// narrows/widens this on each successful fetch; a fetch error leaves it
+	// exactly as-is (never closes the gate).
+	eff := (*settings.ClientTelemetry)(nil).WithDefaults()
+	emitter.SetGate(gateFrom(eff))
+	var gaugesEnabled atomic.Bool
+	gaugesEnabled.Store(eff.GaugesEnabled)
+
 	q := queue.New(256)
 	pub := publish.New(enrichEndpoint(cfg.Endpoint), cfg.IngestToken, actor)
 
@@ -408,7 +421,10 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	log.Printf("keld-agent: listening on 127.0.0.1:%d", port)
-	emitter.Emit("daemon.start", clientevents.SevInfo, map[string]any{"port": port})
+	// EmitExempt: daemon.start is SevInfo but must surface even under the
+	// default warn floor (lifecycle narrative), and it fires once here before
+	// any poll could lower the floor — a plain Emit would always drop it.
+	emitter.EmitExempt("daemon.start", clientevents.SevInfo, map[string]any{"port": port})
 
 	// Select the enrichment model and readiness gate. When ML is enabled and a
 	// sidecar binary is present we route through the sidecar (falling back to
@@ -424,16 +440,6 @@ func Run(ctx context.Context) error {
 			pollInterval = d
 		}
 	}
-
-	// Client-events gate/thresholds default ON immediately (before the first
-	// settings fetch even completes) so telemetry works even if Atlas is
-	// unreachable or predates the /v1/enrichment-settings client_telemetry
-	// block. The settings poll below narrows/widens this on each successful
-	// fetch; a fetch error leaves it exactly as-is (never closes the gate).
-	eff := (*settings.ClientTelemetry)(nil).WithDefaults()
-	emitter.SetGate(gateFrom(eff))
-	var gaugesEnabled atomic.Bool
-	gaugesEnabled.Store(eff.GaugesEnabled)
 
 	flushInterval := 30 * time.Second
 	if v := os.Getenv("KELD_CLIENTEVENTS_FLUSH"); v != "" {
@@ -459,10 +465,10 @@ func Run(ctx context.Context) error {
 	go watcher.Run(ctx, sampleInterval)
 
 	onRemote := func(r *settings.Remote) {
-		eff := r.ClientTelemetry.WithDefaults()
-		emitter.SetGate(gateFrom(eff))
-		watcher.SetThresholds(thresholdsFrom(eff))
-		gaugesEnabled.Store(eff.GaugesEnabled)
+		re := r.ClientTelemetry.WithDefaults()
+		emitter.SetGate(gateFrom(re))
+		watcher.SetThresholds(thresholdsFrom(re))
+		gaugesEnabled.Store(re.GaugesEnabled)
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), cfg.IngestToken, 10*time.Second), live, pollInterval, emitter, onRemote)
 	go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, emitter)
@@ -539,7 +545,7 @@ func serve(ctx context.Context, ln net.Listener, handler http.Handler, q *queue.
 	srv := &http.Server{Handler: handler}
 	go func() {
 		<-ctx.Done()
-		emitter.Emit("daemon.stop", clientevents.SevInfo, nil)
+		emitter.EmitExempt("daemon.stop", clientevents.SevInfo, nil)
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutCtx)
