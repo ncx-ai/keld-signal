@@ -26,11 +26,18 @@ def _rss_mb(pid):
 
 
 def _worker_pid(parent_pid):
-    """The inference worker is the sidecar (parent) process's only child; None
-    if it hasn't been spawned yet (or between recycles)."""
+    """The inference worker child, identified as the max-RSS child of the
+    sidecar (parent) process. Under multiprocessing spawn, the first child is
+    often the persistent, ~model-free `resource_tracker` (created before the
+    worker) rather than the worker itself, so picking children()[0] silently
+    samples the wrong static process; the worker is the one actually holding
+    the model (~GB-scale RSS vs the tracker's ~MB-scale). Returns None if no
+    children exist yet (or between recycles)."""
     try:
         children = psutil.Process(parent_pid).children()
-        return children[0].pid if children else None
+        if not children:
+            return None
+        return max(children, key=lambda c: c.memory_info().rss).pid
     except psutil.NoSuchProcess:
         return None
 

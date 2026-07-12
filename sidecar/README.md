@@ -5,8 +5,10 @@ The optional ML backend for keld-agent. A FastAPI app running
 `127.0.0.1`. The endpoints are **async** and execute inference through an
 internal governed, single-flight runner (see *Execution model* below):
 
-- `GET /health` → `{"ok": bool, "model": str}` (ok only once the model is warm
-  **and** the runner is started)
+- `GET /health` → `{"ok": bool, "model": str, "state": str}` (`state` is the
+  worker state — `down`/`spawning`/`ready`/`held`; `ok` is true whenever the
+  service can serve on demand, i.e. `state != "held"` — it does **not** require
+  a worker to already be loaded)
 - `POST /classify` `{text, tasks}` → `{"results": {task: [{label, confidence}]}}`
 - `POST /entities` `{text, labels}` → `{"entities": [{text, label, start, end, confidence}]}`
 - `POST /extract` `{text, labels, tasks}` → `{"entities": [...], "results": {...}}`

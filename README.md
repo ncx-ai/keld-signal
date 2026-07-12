@@ -84,8 +84,8 @@ spans, activity, function, subcategory — that's synced to Atlas. Sensitive spa
   timeout — so a slow/reloading model can't leak self-amplifying retries — then
   re-spools for a later GLiNER2 retry. Retries are **bounded**: after
   `KELD_ENRICH_MAX_ATTEMPTS` a job is quarantined to `~/.keld/spool/bad/` rather
-  than retried forever. An idle-evicted or briefly-restarting model is waited out
-  (wake + retry), not substituted.
+  than retried forever. A sidecar whose inference worker is mid-recycle or
+  respawning is waited out (wake + retry), never substituted with deterministic.
 
 📄 **Deep dive:** [sidecar/loadtest/README.md](sidecar/loadtest/README.md) — the
 sweep pipeline (with worked examples), the resource-safety mechanisms, tuning
