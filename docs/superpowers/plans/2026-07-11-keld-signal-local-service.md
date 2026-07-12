@@ -651,7 +651,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Modify: `internal/cli/root.go`
 
 **Interfaces:**
-- Consumes: `localagent.ReadPrompt`, `localagent.RunEnrich`, `agentcfg.Read`.
+- Consumes: `localagent.ReadPrompt`, `localagent.ResolveModel`, `localagent.EnrichJSON`, `agentcfg.Read`.
 - Produces: `func newSignalEnrichCmd() *cobra.Command`
 
 - [ ] **Step 1: Write the failing test**
@@ -707,11 +707,12 @@ func newSignalEnrichCmd() *cobra.Command {
 				return err
 			}
 			info, _ := agentcfg.Read()
-			out, note, err := localagent.RunEnrich(text, source, info, forceDeterministic)
+			model, note := localagent.ResolveModel(info, forceDeterministic)
+			fmt.Fprintln(cmd.ErrOrStderr(), "keld signal enrich: "+note)
+			out, err := localagent.EnrichJSON(text, source, model)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.ErrOrStderr(), "keld signal enrich: "+note)
 			fmt.Fprintln(cmd.OutOrStdout(), out)
 			return nil
 		},
@@ -758,7 +759,7 @@ Adds a pure `renderLocalService(Health) []string` and appends its output to the 
 
 **Interfaces:**
 - Consumes: `localagent.Health`, `service.Status`, `agentcfg.Read`, `localagent.FetchText`.
-- Produces: `func renderLocalService(h localagent.Health) []string`
+- Produces: `func renderLocalService(h localagent.HealthInfo) []string`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -777,7 +778,7 @@ import (
 func joined(lines []string) string { return strings.Join(lines, "\n") }
 
 func TestRenderLocalServiceDaemonDown(t *testing.T) {
-	out := joined(renderLocalService(localagent.Health{Service: "not running", DaemonUp: false}))
+	out := joined(renderLocalService(localagent.HealthInfo{Service: "not running", DaemonUp: false}))
 	if !strings.Contains(out, "Local signal service:") || !strings.Contains(out, "service") ||
 		!strings.Contains(out, "not running") || !strings.Contains(out, "daemon") {
 		t.Fatalf("got:\n%s", out)
@@ -788,7 +789,7 @@ func TestRenderLocalServiceDaemonDown(t *testing.T) {
 }
 
 func TestRenderLocalServiceDeterministic(t *testing.T) {
-	out := joined(renderLocalService(localagent.Health{
+	out := joined(renderLocalService(localagent.HealthInfo{
 		Service: "active", DaemonUp: true, Backend: "deterministic (ML disabled)",
 	}))
 	if !strings.Contains(out, "deterministic (ML disabled)") {
@@ -800,7 +801,7 @@ func TestRenderLocalServiceDeterministic(t *testing.T) {
 }
 
 func TestRenderLocalServiceLoaded(t *testing.T) {
-	out := joined(renderLocalService(localagent.Health{
+	out := joined(renderLocalService(localagent.HealthInfo{
 		Service: "active", DaemonUp: true, Backend: "GLiNER2 sidecar",
 		ModelState: "loaded", RSSMB: 2743.1, ModelCostMB: 2650.1, MetricsOK: true,
 	}))
@@ -833,7 +834,7 @@ Add the pure renderer at the end of the file:
 // renderLocalService formats the local signal service section of `keld signal
 // status` from a Health snapshot. Best-effort: lines are omitted when their
 // data is unavailable.
-func renderLocalService(h localagent.Health) []string {
+func renderLocalService(h localagent.HealthInfo) []string {
 	lines := []string{"Local signal service:",
 		fmt.Sprintf("  %-11s %s", "service", h.Service)}
 	if !h.DaemonUp {
