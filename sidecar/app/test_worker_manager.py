@@ -9,10 +9,12 @@ from app.worker_manager import (
 
 
 class FakeQueue:
-    def __init__(self): self.items = []
+    def __init__(self, advance=None): self.items = []; self._advance = advance
     def put(self, x): self.items.append(x)
     def get(self, timeout=None):
         if not self.items:
+            if self._advance and timeout:  # simulate blocking for `timeout`
+                self._advance(timeout)
             import queue
             raise queue.Empty()
         return self.items.pop(0)
@@ -31,18 +33,20 @@ def make(**over):
     state = {"proc": None, "req": None, "resp": None, "ready": True,
              "responses": over.pop("responses", None)}
 
+    now = {"t": 100.0}
+
     def spawn_fn():
-        proc, req, resp = FakeProc(), FakeQueue(), FakeQueue()
+        adv = lambda dt: now.__setitem__("t", now["t"] + dt)
+        proc, req, resp = FakeProc(), FakeQueue(), FakeQueue(advance=adv)
         if state["ready"]:
             resp.put({"ready": True})
         state.update(proc=proc, req=req, resp=resp)
         return proc, req, resp
 
     def default_rss(pid): return over.pop("rss", 2700.0)
-    now = {"t": 100.0}
     kw = dict(spawn_fn=spawn_fn, rss_fn=default_rss,
               ram_fn=lambda: (50.0, 9000.0), clock=lambda: now["t"],
-              job_deadline_s=5.0, spawn_timeout_s=5.0, idle_timeout_s=600.0,
+              job_deadline_s=5.0, live_poll_s=1.0, spawn_timeout_s=5.0, idle_timeout_s=600.0,
               evict_pct=5.0, margin_mb=1024.0)
     kw.update(over)
     m = WorkerManager(**kw)
@@ -72,6 +76,22 @@ def test_call_timeout_kills_and_raises():
     except WorkerTimeout:
         pass
     assert m.state == DOWN and m.counts["kills_timeout"] == 1
+
+
+def test_worker_death_detected_before_deadline():
+    # A worker that dies mid-job must be noticed within ~one liveness poll, not
+    # after blocking the whole (long) job deadline, since it holds the
+    # single-flight slot until then.
+    m = make(job_deadline_s=20.0, live_poll_s=1.0)
+    start = m._now["t"]
+    m._call_hook = lambda req: setattr(m._test["proc"], "_alive", False)  # dies, no reply
+    try:
+        m.call({"op": "classify", "text": "x", "tasks": {}})
+        assert False, "expected WorkerTimeout"
+    except WorkerTimeout:
+        pass
+    assert m.counts["crashes"] == 1
+    assert (m._now["t"] - start) <= 2.0, f"detection took {m._now['t'] - start}s, want ~1 poll"
 
 
 def test_worker_error_is_raised():

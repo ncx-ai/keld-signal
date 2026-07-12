@@ -52,7 +52,7 @@ def _default_ram():
 class WorkerManager:
     def __init__(self, *, spawn_fn=_default_spawn, rss_fn=_default_rss,
                  ram_fn=_default_ram, clock=None,
-                 job_deadline_s=None, spawn_timeout_s=None, idle_timeout_s=None,
+                 job_deadline_s=None, live_poll_s=None, spawn_timeout_s=None, idle_timeout_s=None,
                  evict_pct=None, margin_mb=None):
         import time
         self._spawn_fn = spawn_fn
@@ -60,6 +60,10 @@ class WorkerManager:
         self._ram_fn = ram_fn
         self._clock = clock or time.monotonic
         self._deadline = float(os.environ.get("KELD_SIDECAR_JOB_DEADLINE_S", "60")) if job_deadline_s is None else job_deadline_s
+        # Poll for the response in short slices so a worker that dies mid-job is
+        # noticed within ~one interval instead of blocking the whole deadline.
+        self._live_poll_s = max(0.05, float(os.environ.get("KELD_SIDECAR_LIVENESS_POLL_S", "1"))
+                                if live_poll_s is None else live_poll_s)
         self._spawn_timeout = float(os.environ.get("KELD_SIDECAR_SPAWN_TIMEOUT_S", "120")) if spawn_timeout_s is None else spawn_timeout_s
         self._idle_timeout = float(os.environ.get("KELD_SIDECAR_IDLE_UNLOAD_S", "600")) if idle_timeout_s is None else idle_timeout_s
         self._evict_pct = float(os.environ.get("KELD_SIDECAR_EVICT_AVAIL_PCT", "5")) if evict_pct is None else evict_pct
@@ -163,12 +167,23 @@ class WorkerManager:
             self._req.put(req)
             if self._call_hook is not None:   # test seam: emulate the child
                 self._call_hook(req)
-            try:
-                msg = self._resp.get(timeout=self._deadline)
-            except queue.Empty:
-                crashed = self._proc is not None and not self._proc.is_alive()
-                self._kill("crashes" if crashed else "kills_timeout")
-                raise WorkerTimeout("inference exceeded deadline or worker died")
+            # Poll in short slices: a worker that dies mid-job is caught within
+            # ~one interval (it holds the single-flight slot), rather than only
+            # after the full deadline elapses.
+            deadline_at = self._clock() + self._deadline
+            msg = None
+            while True:
+                remaining = deadline_at - self._clock()
+                if remaining <= 0:
+                    self._kill("kills_timeout")
+                    raise WorkerTimeout("inference exceeded deadline")
+                try:
+                    msg = self._resp.get(timeout=min(self._live_poll_s, remaining))
+                    break
+                except queue.Empty:
+                    if self._proc is None or not self._proc.is_alive():
+                        self._kill("crashes")
+                        raise WorkerTimeout("worker died mid-job")
             self._last_activity = self._clock()
             if not isinstance(msg, dict) or not msg.get("ok"):
                 err = msg.get("error") if isinstance(msg, dict) else "bad response"
