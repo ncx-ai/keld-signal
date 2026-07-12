@@ -6,7 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
+
+func utf8ValidString(s string) bool { return utf8.ValidString(s) }
 
 func TestRedactFieldsAbsolutePathBecomesBasenameOrPathToken(t *testing.T) {
 	in := map[string]any{"path": "/home/dg/keld/x.json"}
@@ -185,6 +188,101 @@ func TestRedactErrorStripsPathAndHasTypeName(t *testing.T) {
 func TestRedactErrorNilReturnsEmpty(t *testing.T) {
 	if got := RedactError(nil); got != "" {
 		t.Fatalf("expected empty string for nil error, got %q", got)
+	}
+}
+
+func TestRedactFieldsControlCharsRedacted(t *testing.T) {
+	cases := map[string]string{
+		"newlines": "fix\nthe\nbug\nin\nprod\nauth\ntokens",
+		"tabs":     "col1\tcol2\tcol3\tcol4",
+		"lone_nl":  "short\n",
+	}
+	for name, val := range cases {
+		out := redactFields(map[string]any{"v": val})
+		if out["v"] != "<redacted>" {
+			t.Fatalf("%s: expected <redacted>, got %q", name, out["v"])
+		}
+	}
+}
+
+func TestRedactFieldsSingleSegmentPathsNotVerbatim(t *testing.T) {
+	for _, p := range []string{"/etc", "/tmp", "/secret"} {
+		out := redactFields(map[string]any{"v": p})
+		v, _ := out["v"].(string)
+		if v == p {
+			t.Fatalf("single-segment path leaked verbatim: %q", v)
+		}
+		if strings.ContainsAny(v, "/") {
+			t.Fatalf("expected basename or <redacted>, got %q", v)
+		}
+	}
+}
+
+func TestRedactFieldsUNCPathNotVerbatim(t *testing.T) {
+	unc := `\\server\share\file.txt`
+	out := redactFields(map[string]any{"v": unc})
+	v, _ := out["v"].(string)
+	if strings.Contains(v, `\\server\share`) {
+		t.Fatalf("UNC path leaked verbatim: %q", v)
+	}
+}
+
+func TestRedactFieldsPathWithEmbeddedSpaceRedactedWhole(t *testing.T) {
+	out := redactFields(map[string]any{"v": "/home/dg/My Documents/secret.txt"})
+	v, _ := out["v"].(string)
+	if strings.Contains(v, "Documents") || strings.Contains(v, "secret.txt") {
+		t.Fatalf("path fragment leaked: %q", v)
+	}
+	if v != "<redacted>" {
+		t.Fatalf("expected whole-value <redacted>, got %q", v)
+	}
+}
+
+func TestRedactFieldsWindowsPathWithSpaceRedactedWhole(t *testing.T) {
+	out := redactFields(map[string]any{"v": `C:\Users\My Docs\x.txt`})
+	v, _ := out["v"].(string)
+	if strings.Contains(v, "Docs") || strings.Contains(v, "x.txt") {
+		t.Fatalf("windows path fragment leaked: %q", v)
+	}
+	if v != "<redacted>" {
+		t.Fatalf("expected whole-value <redacted>, got %q", v)
+	}
+}
+
+func TestRedactFieldsLoneCleanPathBecomesBasename(t *testing.T) {
+	out := redactFields(map[string]any{"v": "/home/dg/keld/x.json"})
+	if out["v"] != "x.json" {
+		t.Fatalf("expected basename x.json, got %q", out["v"])
+	}
+}
+
+func TestRedactErrorSingleSegmentPathStripped(t *testing.T) {
+	got := RedactError(fmt.Errorf("open /etc: denied"))
+	if strings.Contains(got, "/etc") {
+		t.Fatalf("single-segment path leaked in error: %q", got)
+	}
+	if !strings.Contains(got, "<path>") {
+		t.Fatalf("expected <path> token, got %q", got)
+	}
+}
+
+func TestRedactErrorUNCPathStripped(t *testing.T) {
+	got := RedactError(fmt.Errorf(`read \\server\share\f.txt: timeout`))
+	if strings.Contains(got, `\\server\share`) {
+		t.Fatalf("UNC path leaked in error: %q", got)
+	}
+}
+
+func TestRedactErrorTruncationIsRuneSafe(t *testing.T) {
+	// A multibyte-rune string past the cap must not be sliced mid-rune (which
+	// would corrupt into a replacement char / invalid UTF-8).
+	err := errors.New(strings.Repeat("é", 400))
+	got := RedactError(err)
+	if !strings.Contains(got, "…") {
+		t.Fatalf("expected truncation marker, got %q", got)
+	}
+	if !utf8ValidString(got) {
+		t.Fatalf("truncation corrupted UTF-8: %q", got)
 	}
 }
 
