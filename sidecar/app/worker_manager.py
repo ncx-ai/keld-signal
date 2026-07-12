@@ -145,8 +145,9 @@ class WorkerManager:
             if avail_pct <= self._evict_pct:
                 self._kill("kills_pressure"); self.state = HELD
                 return
-            if (self._clock() - self._last_activity) >= self._idle_timeout:
-                self._kill("kills_idle")
+            if (self._idle_timeout > 0
+                    and (self._clock() - self._last_activity) >= self._idle_timeout):
+                self._kill("kills_idle")  # <=0 disables idle eviction
                 return
             ceiling = self.ceiling_mb()
             if ceiling is not None and self._rss_fn(self._proc.pid) > ceiling:

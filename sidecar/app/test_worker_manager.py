@@ -111,6 +111,16 @@ def test_poll_idle_kills_worker():
     assert m.state == DOWN and m.counts["kills_idle"] == 1
 
 
+def test_poll_idle_disabled_when_zero():
+    # idle_timeout_s <= 0 disables idle eviction; a long-idle worker stays READY
+    # (regression: without the >0 guard, `now - last_activity >= 0` is always
+    # true, so the worker gets idle-killed immediately after every request).
+    m = _ready_manager(idle_timeout_s=0.0)
+    m._now["t"] += 10000.0
+    m.poll()
+    assert m.state == READY and m.counts["kills_idle"] == 0
+
+
 def test_poll_pressure_kills_and_holds():
     m = _ready_manager()
     m._ram_fn = lambda: (3.0, 300.0)          # <= evict_pct
