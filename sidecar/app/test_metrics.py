@@ -18,7 +18,7 @@ class _FakeWatch:
 
 def test_counts_defaults_zero():
     c = Counts()
-    assert (c.submitted, c.completed, c.shed_503, c.failed, c.evicted, c.reloaded) == (0, 0, 0, 0, 0, 0)
+    assert (c.submitted, c.completed, c.shed_503, c.failed, c.evicted, c.reloaded, c.trims) == (0, 0, 0, 0, 0, 0, 0)
 
 
 def test_build_metrics_shape_and_values():

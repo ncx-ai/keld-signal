@@ -2,14 +2,16 @@
   cd sidecar && PYTHONPATH=. ~/.keld/sidecar-venv/bin/python app/test_memwatch.py
 """
 from app.memwatch import (
-    MemoryWatch, LOADED, EVICTED, RELOADING, DORMANT, NONE, EVICT, EVICT_IDLE, RELOAD,
+    MemoryWatch, LOADED, EVICTED, RELOADING, DORMANT, NONE, EVICT, EVICT_IDLE,
+    RELOAD, TRIM,
 )
 
 
-def _watch(samples, *, evict_pct=5.0, margin=1024.0, hold=60.0, idle=0.0):
+def _watch(samples, *, evict_pct=5.0, margin=1024.0, hold=60.0, idle=0.0, trim=0.0):
     """A MemoryWatch driven by a scripted (avail_pct, avail_mb) sequence and a
-    fake clock that advances 1s per poll. `idle=0.0` disables idle eviction so the
-    memory-only tests are deterministic regardless of the environment."""
+    fake clock that advances 1s per poll. `idle=0.0` disables idle eviction and
+    `trim=0.0` disables the maintenance trim, so unrelated tests stay
+    deterministic regardless of the environment."""
     t = {"now": 0.0}
     seq = list(samples)
 
@@ -22,8 +24,8 @@ def _watch(samples, *, evict_pct=5.0, margin=1024.0, hold=60.0, idle=0.0):
         return v
 
     return MemoryWatch(evict_pct=evict_pct, reload_margin_mb=margin,
-                       restore_hold_s=hold, idle_timeout_s=idle, disabled=False,
-                       clock=clock, sampler=sampler)
+                       restore_hold_s=hold, idle_timeout_s=idle, trim_idle_s=trim,
+                       disabled=False, clock=clock, sampler=sampler)
 
 
 def test_evict_when_avail_pct_at_or_below_mark():
@@ -119,6 +121,41 @@ def test_idle_evicted_no_reload_without_headroom():
     w = _watch([(50.0, 2000.0)], idle=0.5)  # 2000 < 2000+1024 -> no headroom
     assert w.poll(EVICTED, 2000.0, last_activity=5.0, evicted_at=0.0,
                   evict_reason="idle") == NONE
+
+
+def test_trim_after_idle_settle():
+    # RAM fine, idle-evict off; a settled loaded model should get one maintenance
+    # trim once the work burst has been quiet for trim_idle_s.
+    w = _watch([(50.0, 9000.0)], trim=0.5, idle=0.0)
+    assert w.poll(LOADED, 2000.0, last_activity=0.0, last_trim=None) == TRIM  # now=1.0, quiet 1.0>=0.5
+
+
+def test_no_second_trim_until_new_activity():
+    # Already trimmed after the last activity -> don't trim again this idle period.
+    w = _watch([(50.0, 9000.0)], trim=0.5, idle=0.0)
+    assert w.poll(LOADED, 2000.0, last_activity=0.0, last_trim=0.6) == NONE
+
+
+def test_trim_eligible_again_after_new_activity():
+    # A new activity (0.5) arrived after the prior trim (0.2) -> eligible again.
+    w = _watch([(50.0, 9000.0)], trim=0.5, idle=0.0)
+    assert w.poll(LOADED, 2000.0, last_activity=0.5, last_trim=0.2) == TRIM  # now=1.0, quiet 0.5>=0.5
+
+
+def test_trim_disabled_when_zero():
+    w = _watch([(50.0, 9000.0)], trim=0.0, idle=0.0)
+    assert w.poll(LOADED, 2000.0, last_activity=-100.0, last_trim=None) == NONE
+
+
+def test_idle_evict_beats_trim():
+    # When both would fire, unloading (idle evict) wins over trimming.
+    w = _watch([(50.0, 9000.0)], idle=0.5, trim=0.5)
+    assert w.poll(LOADED, 2000.0, last_activity=0.0, last_trim=None) == EVICT_IDLE
+
+
+def test_memory_evict_beats_trim():
+    w = _watch([(3.0, 500.0)], evict_pct=5.0, trim=0.5, idle=0.0)
+    assert w.poll(LOADED, 2000.0, last_activity=0.0, last_trim=None) == EVICT
 
 
 if __name__ == "__main__":
