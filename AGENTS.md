@@ -225,6 +225,12 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   `sidecar/loadtest/README.md`).
 - **Schema versioning:** changing any enrichment vocabulary is contract-affecting
   — bump `enrich.SchemaVersion` and re-run the eval (`enrich/eval/`).
+- **Dependency-pull retries:** outbound "fetch a required dependency" calls use
+  `internal/retry` (`retry.Do` + the canonical `IsTransient` classifier; policy
+  env-tunable via `KELD_RETRY_*`). Transient = net faults + HTTP 408/429/5xx;
+  **unknown errors are permanent by design** (never hammer). The HF model download
+  (`sidecar/hf.go`) uses it; settings-poll / publish / api adopt it when next
+  touched — don't hand-roll new backoff loops.
 
 ## Gotchas
 
