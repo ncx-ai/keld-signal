@@ -89,6 +89,15 @@ func TestBackoffSequenceAndCap(t *testing.T) {
 	}
 }
 
+func TestBackoffClampsOverflowToMaxDelay(t *testing.T) {
+	// A large attempt count overflows the float64 exponentiation; the result must
+	// still clamp to MaxDelay, never a negative/zero delay (which would busy-retry).
+	p := Policy{BaseDelay: time.Second, MaxDelay: 30 * time.Second, Multiplier: 2, Jitter: false}
+	if got := backoff(p, 60, 0); got != 30*time.Second {
+		t.Fatalf("backoff(attempt=60) = %s, want MaxDelay 30s (overflow must clamp)", got)
+	}
+}
+
 func TestBackoffHonorsRetryAfter(t *testing.T) {
 	p := Policy{BaseDelay: time.Second, MaxDelay: 30 * time.Second, Multiplier: 2, Jitter: false}
 	if got := backoff(p, 1, 10*time.Second); got != 10*time.Second {

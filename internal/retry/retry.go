@@ -124,6 +124,9 @@ func backoff(p Policy, attempt int, retryAfter time.Duration) time.Duration {
 		d *= p.Multiplier
 	}
 	dd := time.Duration(d)
+	if dd < 0 { // float64 overflow wraps to a negative Duration — clamp to the cap
+		dd = p.MaxDelay
+	}
 	if p.MaxDelay > 0 && dd > p.MaxDelay {
 		dd = p.MaxDelay
 	}
