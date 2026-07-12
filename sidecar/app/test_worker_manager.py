@@ -97,6 +97,48 @@ def test_crash_detected_and_raises():
     assert m.state == DOWN and m.counts["crashes"] == 1
 
 
+def _ready_manager(**over):
+    m = make(**over)
+    m._call_hook = lambda req: m._test["resp"].put({"ok": True, "result": {}})
+    m.call({"op": "classify", "text": "x", "tasks": {}})  # -> READY, model_cost set
+    return m
+
+
+def test_poll_idle_kills_worker():
+    m = _ready_manager(idle_timeout_s=10.0)
+    m._now["t"] += 11.0                       # 11s since last activity
+    m.poll()
+    assert m.state == DOWN and m.counts["kills_idle"] == 1
+
+
+def test_poll_pressure_kills_and_holds():
+    m = _ready_manager()
+    m._ram_fn = lambda: (3.0, 300.0)          # <= evict_pct
+    m.poll()
+    assert m.state == HELD and m.counts["kills_pressure"] == 1
+
+
+def test_poll_held_releases_on_headroom():
+    m = _ready_manager()
+    m._ram_fn = lambda: (3.0, 300.0); m.poll()
+    assert m.state == HELD
+    m._ram_fn = lambda: (50.0, 9000.0); m.poll()
+    assert m.state == DOWN                    # respawns on next call
+
+def test_poll_rss_ceiling_recycles_when_idle():
+    m = _ready_manager(margin_mb=1000.0)      # ceiling = model_cost(2700)+1000 = 3700
+    m._rss_fn = lambda pid: 4000.0            # over ceiling
+    m.poll()
+    assert m.state == DOWN and m.counts["recycles"] == 1
+
+
+def test_poll_no_recycle_below_ceiling():
+    m = _ready_manager(margin_mb=1000.0)
+    m._rss_fn = lambda pid: 3000.0            # under 3700
+    m.poll()
+    assert m.state == READY and m.counts["recycles"] == 0
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

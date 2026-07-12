@@ -124,6 +124,35 @@ class WorkerManager:
         if self.state != READY:
             self._spawn()
 
+    def ceiling_mb(self):
+        if self.model_cost_mb is None:
+            return None
+        return self.model_cost_mb + self._margin
+
+    def poll(self):
+        """Periodic lifecycle check (called off the event loop). Pressure wins,
+        then idle, then RSS ceiling. Kills set DOWN (lazy respawn on next call);
+        pressure sets HELD until headroom returns."""
+        avail_pct, avail_mb = self._ram_fn()
+        with self._lock:
+            if self.state == HELD:
+                need = (self.model_cost_mb or 0.0) + self._margin
+                if avail_mb >= need:
+                    self.state = DOWN     # headroom back; respawn on demand
+                return
+            if self.state != READY:
+                return
+            if avail_pct <= self._evict_pct:
+                self._kill("kills_pressure"); self.state = HELD
+                return
+            if (self._clock() - self._last_activity) >= self._idle_timeout:
+                self._kill("kills_idle")
+                return
+            ceiling = self.ceiling_mb()
+            if ceiling is not None and self._rss_fn(self._proc.pid) > ceiling:
+                self._kill("recycles")    # DOWN; next call respawns a fresh heap
+                return
+
     def call(self, req: dict) -> dict:
         with self._lock:
             self._ensure_up()
