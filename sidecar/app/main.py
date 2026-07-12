@@ -164,8 +164,10 @@ def health():
 
 @app.get("/metrics")
 def metrics():
-    wm = _state["wm"]
     started = _state.get("started_at", time.monotonic())
+    wm = _state.get("wm")
+    if wm is None:  # pre-lifespan / post-shutdown; degrade rather than 500
+        return {"worker": {"state": "down"}, "uptime_s": round(time.monotonic() - started, 1)}
     return build_metrics(
         worker_state=wm.state, worker_rss_mb=wm.worker_rss_mb(),
         parent_rss_mb=_parent_rss_mb(), model_cost_mb=wm.model_cost_mb,
@@ -183,7 +185,8 @@ async def _dispatch(req: dict):
     lifecycle exceptions into HTTP status + lifetime counters. Endpoints return
     the worker's already-normalized result verbatim."""
     wm = _state["wm"]
-    if wm.state == "held":
+    if wm.state == HELD:
+        _count("shed_503")  # count pressure sheds so they're visible in /metrics
         raise HTTPException(status_code=503, detail="unavailable — memory pressure")
     _count("submitted")
     try:

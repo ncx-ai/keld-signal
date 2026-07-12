@@ -81,7 +81,7 @@ spans, activity, function, subcategory — that's synced to Atlas. Sensitive spa
   text) to a durable on-disk **spool**, so work survives daemon downtime and is
   drained on startup and a periodic sweep. Each job runs under a deadline
   (`KELD_ENRICH_JOB_TIMEOUT`) that **cancels its in-flight sidecar calls** on
-  timeout — so a slow/reloading model can't leak self-amplifying retries — then
+  timeout — so a slow or recycling sidecar worker can't leak self-amplifying retries — then
   re-spools for a later GLiNER2 retry. Retries are **bounded**: after
   `KELD_ENRICH_MAX_ATTEMPTS` a job is quarantined to `~/.keld/spool/bad/` rather
   than retried forever. A sidecar whose inference worker is mid-recycle or
