@@ -105,9 +105,9 @@ gauges are enabled — see governance). Escalation: a resource anomaly starts at
 
 - A sampler (goroutine, interval default 15s) measures the **keld-signal process
   tree** RSS + CPU%: the `keld-agent` daemon, the sidecar (FastAPI parent), and
-  its worker child. (Reuse `gopsutil`? No — avoid a new dep; read `/proc` on
-  Linux, `ps`/platform calls elsewhere, or a minimal per-OS probe. Footprint is
-  RSS sum + CPU% over the tree.)
+  its worker child. Use **`github.com/shirou/gopsutil/v4`** (pure-Go,
+  cross-platform — keeps the single static binary) via `process.Process` to sum
+  RSS + CPU% across the tree (walk children from the daemon pid).
 - **Sustained detection** (EWMA/threshold-over-window, mirroring the sidecar
   governor + memwatch): when tree RSS > `rss_threshold_mb` OR tree CPU% >
   `cpu_threshold_pct` continuously for ≥ `sustained_window_s`, emit
@@ -126,10 +126,16 @@ gauges are enabled — see governance). Escalation: a resource anomaly starts at
 ## Transport
 
 - A reporter drains the buffer, batches (envelope below), and POSTs to the new
-  Atlas route — **A defines the contract**, proposed `POST /v1/client-events`
+  Atlas route — **A defines the contract**: `POST /v1/signal/client-events`
   (derived from `cfg.Endpoint` the same way `enrichEndpoint`/`settingsEndpoint`
   are), with the ingest token, wrapped in `retry.Do` (transient → backoff,
   permanent → drop-or-spool per status).
+- **Route-namespace convention (new):** every route in the client-signal ↔ Atlas
+  protocol lives under **`/v1/signal/*`**. This new route adopts it. The existing
+  `/v1/enrichments` and `/v1/enrichment-settings` predate the convention; migrating
+  them under `/v1/signal/*` is a coordinated cross-repo (client + Atlas) change —
+  a follow-up, out of A's scope. Note the `client_telemetry` settings still ride
+  the existing `/v1/enrichment-settings` poll for now.
 - Flush on a timer (default 30s) or when the batch hits N events; flush on
   graceful shutdown.
 - **Offline durability**: on unreachable Atlas / persistent failure, spool the
@@ -186,9 +192,9 @@ and unit-tested to prove no raw text escapes.
 
 ## Risks / notes
 
-- Cross-platform process-tree RSS/CPU without a new dep: `/proc` on Linux is easy;
-  macOS/Windows need a minimal probe (or accept `gopsutil` — decide in the plan).
-  The sidecar already uses `psutil` Python-side, but this watcher is Go-side.
+- Cross-platform process-tree RSS/CPU: use `gopsutil/v4` (pure-Go, static-binary
+  safe) — decided. First real third-party runtime dep for the CLI binary; justified
+  by cross-platform correctness vs hand-rolled per-OS probes.
 - Volume: gauges every 5 min ≈ 288/install/day + sparse anomalies — bounded and
   governable via `sample_rate`/`gauges_enabled`.
 - `client_telemetry` settings + `/v1/client-events` are the **contract with B**;
