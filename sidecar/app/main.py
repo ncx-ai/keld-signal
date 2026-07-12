@@ -178,8 +178,25 @@ def _apply_threads():
     _state["cpu_threads"] = n
 
 
+def _maintenance_trim():
+    """Return retained heap to the OS WITHOUT unloading the model. MALLOC_ARENA_MAX
+    caps arena count but not per-arena growth, so a long-lived loaded model accretes
+    freed-but-retained sub-heaps; a periodic idle trim reclaims them. Guarded to run
+    only when no inference is in flight, so it never contends with active work or the
+    single-flight lock; if a job slipped in, skip and let a later poll retry
+    (last_trim stays unset, so the model is still due for a trim)."""
+    runner = _state.get("runner")
+    if runner and runner.inflight > 0:
+        return
+    import gc
+    gc.collect()
+    _malloc_trim()
+    _state["last_trim"] = time.monotonic()
+    _count("trims")
+
+
 async def _mem_watch_loop(watch, interval: float):
-    from app.memwatch import EVICT, EVICT_IDLE, RELOAD
+    from app.memwatch import EVICT, EVICT_IDLE, RELOAD, TRIM
     while True:
         try:
             state = _state.get("model_state")
@@ -188,11 +205,14 @@ async def _mem_watch_loop(watch, interval: float):
                 last_activity=_state.get("last_activity"),
                 evicted_at=_state.get("state_since"),
                 evict_reason=_state.get("evict_reason"),
+                last_trim=_state.get("last_trim"),
             )
             if action == EVICT and state == LOADED:
                 await _unload_model(reason="memory")
             elif action == EVICT_IDLE and state == LOADED:
                 await _unload_model(reason="idle")
+            elif action == TRIM and state == LOADED:
+                _maintenance_trim()
             elif action == RELOAD and state in (EVICTED, DORMANT):
                 await _reload_model()
         except Exception:
@@ -215,6 +235,7 @@ async def lifespan(app: FastAPI):
     _state["model_cost_mb"] = None
     _state["last_activity"] = time.monotonic()
     _state["evict_reason"] = None
+    _state["last_trim"] = None
     _state["cpu_threads"] = scaler.max_threads  # full cores until load says otherwise
     runner.start()
     _set_state(DORMANT)

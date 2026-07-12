@@ -13,6 +13,7 @@ class Counts:
     failed: int = 0
     evicted: int = 0
     reloaded: int = 0
+    trims: int = 0
 
 
 def build_metrics(*, model_state, state_since, governor, runner, watch, counts,

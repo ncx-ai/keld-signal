@@ -17,7 +17,12 @@ Levers:
     request) it is unloaded to free its footprint. Unlike memory eviction, an
     idle-evicted model reloads ON DEMAND: as soon as a request arrives again (and
     there is headroom) it comes back — no dwell, so resumed work isn't stalled.
-The telemetry path is separate and unaffected by either eviction.
+  • Maintenance trim — when the model has been LOADED but quiet for trim_idle_s
+    (well below idle_timeout_s), return retained heap to the OS via malloc_trim
+    WITHOUT unloading. MALLOC_ARENA_MAX caps arena count but not per-arena growth,
+    so a long-lived model accretes freed-but-retained sub-heaps that only a trim
+    releases. Fires once per idle period; the model keeps serving throughout.
+The telemetry path is separate and unaffected by eviction or trimming.
 """
 import os
 import time
@@ -31,6 +36,7 @@ NONE = "none"
 EVICT = "evict"          # memory-pressure eviction
 EVICT_IDLE = "evict_idle"  # inactivity eviction
 RELOAD = "reload"
+TRIM = "trim"            # maintenance heap trim (model stays loaded)
 
 
 def _avail_sampler():
@@ -42,8 +48,8 @@ def _avail_sampler():
 
 class MemoryWatch:
     def __init__(self, evict_pct=None, reload_margin_mb=None, restore_hold_s=None,
-                 idle_timeout_s=None, disabled=None, *, clock=time.monotonic,
-                 sampler=_avail_sampler):
+                 idle_timeout_s=None, trim_idle_s=None, disabled=None, *,
+                 clock=time.monotonic, sampler=_avail_sampler):
         self._evict_pct = (float(os.environ.get("KELD_SIDECAR_EVICT_AVAIL_PCT", "5"))
                            if evict_pct is None else evict_pct)
         self._margin_mb = (float(os.environ.get("KELD_SIDECAR_RELOAD_MARGIN_MB", "1024"))
@@ -56,6 +62,15 @@ class MemoryWatch:
         # delays the first post-idle enrichment — it never drops fidelity.
         self._idle_timeout_s = (float(os.environ.get("KELD_SIDECAR_IDLE_UNLOAD_S", "600"))
                                 if idle_timeout_s is None else idle_timeout_s)
+        # Maintenance-trim idle gate (seconds). Once the model has been LOADED but
+        # quiet for this long, return freed heap to the OS via malloc_trim WITHOUT
+        # unloading — glibc caps arena COUNT (MALLOC_ARENA_MAX) but not per-arena
+        # growth, so a long-lived model accretes retained 64MB sub-heaps that only
+        # a trim releases. Fires once per idle period; <= 0 disables. Kept well
+        # below idle_timeout so it reclaims during medium-idle gaps before idle
+        # eviction would unload entirely.
+        self._trim_idle_s = (float(os.environ.get("KELD_SIDECAR_TRIM_IDLE_S", "30"))
+                             if trim_idle_s is None else trim_idle_s)
         self._disabled = (os.environ.get("KELD_SIDECAR_EVICT_DISABLED", "0") == "1"
                           if disabled is None else disabled)
         self._clock = clock
@@ -72,13 +87,14 @@ class MemoryWatch:
         return avail_mb >= need
 
     def poll(self, state, model_cost_mb, last_activity=None, evicted_at=None,
-             evict_reason=None):
+             evict_reason=None, last_trim=None):
         """Sample RAM once and return an action for `state`.
 
-        Actions: NONE, EVICT (memory pressure), EVICT_IDLE (inactivity), RELOAD.
-        `last_activity`/`evicted_at`/`evict_reason` (from the caller's state) drive
-        idle eviction and idle on-demand reload; they may be omitted when only
-        memory eviction is relevant.
+        Actions: NONE, EVICT (memory pressure), EVICT_IDLE (inactivity), TRIM
+        (maintenance heap trim, model stays loaded), RELOAD.
+        `last_activity`/`evicted_at`/`evict_reason`/`last_trim` (from the caller's
+        state) drive idle eviction, idle on-demand reload, and the maintenance
+        trim; they may be omitted when only memory eviction is relevant.
         """
         if self._disabled:
             return NONE
@@ -97,7 +113,14 @@ class MemoryWatch:
                 return EVICT  # memory pressure wins
             if (self._idle_timeout_s > 0 and last_activity is not None
                     and (now - last_activity) >= self._idle_timeout_s):
-                return EVICT_IDLE
+                return EVICT_IDLE  # unloading wins over a mere trim
+            # Maintenance trim: quiet long enough since the last activity, and we
+            # have not already trimmed during THIS idle period (last_trim predates
+            # the last activity). Reclaims retained heap without unloading.
+            if (self._trim_idle_s > 0 and last_activity is not None
+                    and (now - last_activity) >= self._trim_idle_s
+                    and (last_trim is None or last_trim < last_activity)):
+                return TRIM
             return NONE
         if state in (EVICTED, DORMANT):
             if evict_reason == "idle":

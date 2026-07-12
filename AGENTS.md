@@ -97,7 +97,11 @@ queue (503 backpressure); a **rate governor** (CPU-EWMA min-interval pacing) and
 **CPU thread scaler** (`torch.set_num_threads` capped to host load, default 50%
 of cores); **memory eviction** (unload at ≤5% RAM, `malloc_trim` to return RSS,
 reload on absolute headroom) and **idle eviction** (unload after inactivity,
-reload on demand). `GET /metrics` exposes state/EWMA/threads/queue/counts. Full
+reload on demand); plus an **idle maintenance trim** (`malloc_trim` after brief
+inactivity, `KELD_SIDECAR_TRIM_IDLE_S`, model stays loaded) that reclaims the
+heap `MALLOC_ARENA_MAX` bounds by arena *count* but not per-arena *growth* — a
+long-lived model otherwise accretes freed-but-retained 64 MB sub-heaps.
+`GET /metrics` exposes state/EWMA/threads/queue/counts (incl. `rss_mb`, `trims`). Full
 mechanisms + load-test validation: **`sidecar/loadtest/README.md`**.
 
 **Footprint caps are set at spawn, parent-side** (`daemon.go` → `sidecarEnv`).
