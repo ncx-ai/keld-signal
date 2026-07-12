@@ -236,6 +236,27 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **Distribution packaging** freezes the sidecar with PyInstaller
   (`keld-agent-sidecar.spec`) into `keld-agent-sidecar`; the daemon resolves it
   beside `keld-agent` (flat or nested layout).
+- **Obfuscation (`KELD_OBFUSCATE=1`, CI-set, default off).** The installer/release
+  freeze obfuscates the shipped sidecar — python-minifier **locals-only** rename
+  (globals/Pydantic-fields/spawn-targets preserved; annotations kept so Pydantic
+  v2 + FastAPI still work) → free-tier PyArmor bytecode encryption → PyInstaller.
+  `build-freeze.sh` freezes from a **copy** (never clobbers the tree), hard-fails
+  if the tools are missing, and the `.spec` names the obfuscated `app.*` +
+  `pyarmor_runtime` as `hiddenimports` (their imports are encrypted, invisible to
+  PyInstaller analysis). Go binaries are `-s -w`-stripped by GoReleaser. Dev/local
+  builds stay plain/debuggable. It's **license-ready** (a paid PyArmor license
+  unlocks RFT/BCC via the same flow) and protects **code logic only** — it does
+  **not** hide the base model (GLiNER2 is discoverable via bundled deps + the
+  on-disk weights; explicit non-goal).
+- **Frozen worker spawn needs `freeze_support()`.** The inference worker uses
+  `multiprocessing` spawn, which re-execs the frozen binary to bootstrap the
+  child; `serve.py` calls `multiprocessing.freeze_support()` so the child doesn't
+  fall through to argparse. This only manifests in the **frozen** binary — unit
+  tests never freeze, so it can't be caught there. `make freeze-check` (plain) and
+  `make obfuscate-check` (obfuscated) run the freeze + a real `/classify`
+  worker-spawn gate locally (Linux); CI's installer smoke does the same for every
+  shipped OS. Any change touching the worker/spawn/freeze path must keep those
+  green.
 - **macOS onboarding UI:** `installers/macos/KeldSetup/` (SwiftUI app) is compiled
   by `installers/macos/build-app.sh`, wrapped into `KeldSetup.app`, staged + signed
   by `build-pkg.sh`, and launched by the pkg `postinstall`. It drives the
