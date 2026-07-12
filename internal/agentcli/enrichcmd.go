@@ -62,7 +62,10 @@ func newEnrichCmd() *cobra.Command {
 			"profile as JSON, for quick sanity checking and debugging.\n\n" +
 			"The prompt is taken from the arguments, or from stdin if none are given. " +
 			"Uses the running GLiNER2 sidecar when available, otherwise the deterministic " +
-			"backend. The prompt is processed locally and never published to Atlas.",
+			"backend. The prompt is processed locally and never published to Atlas.\n\n" +
+			"Tip: single-quote the prompt (or pipe it via stdin) so your shell does not " +
+			"interpret backticks or $(...) as command substitution and splice command " +
+			"output into the text being enriched.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			text, err := readPrompt(args, cmd.InOrStdin())
