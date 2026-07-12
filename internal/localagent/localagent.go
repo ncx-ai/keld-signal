@@ -41,6 +41,8 @@ func ReadPrompt(args []string, stdin io.Reader) (string, error) {
 func ResolveModel(info *agentcfg.Info, forceDeterministic bool) (enrich.Model, string) {
 	if !forceDeterministic && info != nil && info.SidecarPort != 0 {
 		url := fmt.Sprintf("http://127.0.0.1:%d", info.SidecarPort)
+		// Generous per-call timeout: the pipeline issues up to 7 sidecar calls
+		// and CPU inference can be slow on a busy host.
 		return sidecar.New(url, 30*time.Second), "using live GLiNER2 sidecar at " + url
 	}
 	if forceDeterministic {
@@ -87,16 +89,15 @@ func Metrics(info *agentcfg.Info) (string, error) {
 	return FetchText(url)
 }
 
-// RunEnrich runs the enrichment pipeline on text and returns the profile as
-// indented JSON plus a note naming the backend. Local only; never publishes.
-func RunEnrich(text, source string, info *agentcfg.Info, forceDeterministic bool) (string, string, error) {
-	model, note := ResolveModel(info, forceDeterministic)
+// EnrichJSON runs the enrichment pipeline on text with the given model and
+// returns the profile as indented JSON. Local only; never publishes.
+func EnrichJSON(text, source string, model enrich.Model) (string, error) {
 	cwd, _ := os.Getwd()
 	meta := enrich.Meta{Repo: cwd, Tool: source}
 	profile := enrich.Run(text, source, meta, model)
 	b, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
-		return "", note, err
+		return "", err
 	}
-	return string(b), note, nil
+	return string(b), nil
 }

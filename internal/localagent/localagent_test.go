@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 func TestReadPromptFromArgs(t *testing.T) {
@@ -71,6 +72,16 @@ func TestFetchText(t *testing.T) {
 	defer bad.Close()
 	if _, err := FetchText(bad.URL); err == nil {
 		t.Fatal("want error on 503")
+	}
+}
+
+func TestEnrichJSON(t *testing.T) {
+	out, err := EnrichJSON("refactor the auth module", "claude_code", enrich.NewDeterministic())
+	if err != nil {
+		t.Fatalf("EnrichJSON: %v", err)
+	}
+	if !strings.Contains(out, `"task_type"`) {
+		t.Fatalf("expected profile JSON with task_type, got: %s", out)
 	}
 }
 
