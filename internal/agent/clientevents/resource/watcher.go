@@ -6,6 +6,7 @@ package resource
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
@@ -58,7 +59,7 @@ type Watcher struct {
 	daemonPID int
 	emit      func(code string, sev clientevents.Severity, fields map[string]any)
 	emitGauge func(fields map[string]any)
-	th        Thresholds
+	th        atomic.Value // Thresholds
 	sampler   Sampler
 	clock     func() time.Time
 
@@ -78,14 +79,29 @@ func NewWatcher(
 	sampler Sampler,
 	clock func() time.Time,
 ) *Watcher {
-	return &Watcher{
+	w := &Watcher{
 		daemonPID: daemonPID,
 		emit:      emit,
 		emitGauge: emitGauge,
-		th:        th,
 		sampler:   sampler,
 		clock:     clock,
 	}
+	w.th.Store(th)
+	return w
+}
+
+// SetThresholds atomically replaces the thresholds used by subsequent Poll
+// calls. Safe for concurrent use with Poll/Run — called by the daemon's
+// settings-poll goroutine while Run's own goroutine is independently polling,
+// so both sides must never race on a plain (unsynchronized) struct field.
+func (w *Watcher) SetThresholds(th Thresholds) {
+	w.th.Store(th)
+}
+
+// thresholds returns the current thresholds snapshot. Poll reads through this
+// (rather than a raw field) so it never races with a concurrent SetThresholds.
+func (w *Watcher) thresholds() Thresholds {
+	return w.th.Load().(Thresholds)
 }
 
 // Run polls once immediately, then on every tick of interval until ctx is
@@ -112,8 +128,9 @@ func (w *Watcher) Run(ctx context.Context, interval time.Duration) {
 func (w *Watcher) Poll() {
 	s := w.sampler()
 	now := w.clock()
+	th := w.thresholds()
 
-	if w.lastGaugeAt.IsZero() || now.Sub(w.lastGaugeAt) >= w.th.GaugeInterval {
+	if w.lastGaugeAt.IsZero() || now.Sub(w.lastGaugeAt) >= th.GaugeInterval {
 		w.emitGauge(map[string]any{
 			"rss_mb":    s.RSSMB,
 			"cpu_pct":   s.CPUPct,
@@ -122,7 +139,7 @@ func (w *Watcher) Poll() {
 		w.lastGaugeAt = now
 	}
 
-	w.pollTrack(&w.rss, s.RSSMB, w.th.RSSMB, now, "resource.sustained_high_rss", func(value, threshold, elapsedS float64) map[string]any {
+	w.pollTrack(&w.rss, s.RSSMB, th.RSSMB, now, th.SustainedWindow, "resource.sustained_high_rss", func(value, threshold, elapsedS float64) map[string]any {
 		return map[string]any{
 			"rss_mb":     value,
 			"threshold":  threshold,
@@ -131,7 +148,7 @@ func (w *Watcher) Poll() {
 		}
 	})
 
-	w.pollTrack(&w.cpu, s.CPUPct, w.th.CPUPct, now, "resource.sustained_high_cpu", func(value, threshold, elapsedS float64) map[string]any {
+	w.pollTrack(&w.cpu, s.CPUPct, th.CPUPct, now, th.SustainedWindow, "resource.sustained_high_cpu", func(value, threshold, elapsedS float64) map[string]any {
 		return map[string]any{
 			"cpu_pct":    value,
 			"threshold":  threshold,
@@ -146,15 +163,17 @@ func (w *Watcher) Poll() {
 // a single recovered event on the drop below threshold, and a full reset so
 // the next elevation starts fresh at warn. fields builds the code-specific
 // field map (value/threshold/elevated_s/proc_tree) for both the anomaly and
-// recovered events.
-func (w *Watcher) pollTrack(tr *trackState, value, threshold float64, now time.Time, code string, fields func(value, threshold, elapsedS float64) map[string]any) {
+// recovered events. sustainedWindow is passed in (rather than read off w.th)
+// so the whole Poll() call uses one consistent thresholds snapshot even if
+// SetThresholds races in concurrently.
+func (w *Watcher) pollTrack(tr *trackState, value, threshold float64, now time.Time, sustainedWindow time.Duration, code string, fields func(value, threshold, elapsedS float64) map[string]any) {
 	if value > threshold {
 		if tr.elevatedSince.IsZero() {
 			tr.elevatedSince = now
 		}
 		elapsed := now.Sub(tr.elevatedSince)
-		if elapsed >= w.th.SustainedWindow {
-			sev := severityFor(elapsed, w.th.SustainedWindow)
+		if elapsed >= sustainedWindow {
+			sev := severityFor(elapsed, sustainedWindow)
 			if sev != tr.lastSeverity {
 				w.emit(code, sev, fields(value, threshold, elapsed.Seconds()))
 				tr.lastSeverity = sev

@@ -46,6 +46,10 @@ func InstallIDPath() string         { return filepath.Join(KeldHome(), "install-
 // daemon drains). Sibling of models/ under KELD_HOME.
 func SpoolDir() string { return filepath.Join(KeldHome(), "spool") }
 
+// ClientEventsSpoolDir is where the clientevents Reporter spools batches that
+// failed to POST to Atlas (e.g. Atlas unreachable), for a later drain sweep.
+func ClientEventsSpoolDir() string { return filepath.Join(SpoolDir(), "clientevents") }
+
 func APIBase() string {
 	if apiOverrideSet {
 		return apiOverride

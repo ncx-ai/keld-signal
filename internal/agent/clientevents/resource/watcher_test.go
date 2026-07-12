@@ -329,6 +329,42 @@ func TestPollGaugeCadence(t *testing.T) {
 	}
 }
 
+// TestSetThresholdsAffectsSubsequentPoll proves SetThresholds changes the
+// thresholds used by later Poll calls (the settings-poll goroutine updating a
+// live daemon's watcher without restarting it).
+func TestSetThresholdsAffectsSubsequentPoll(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)}
+	initial := testThresholds() // RSSMB: 1000
+	samples := []Sample{
+		{RSSMB: 800, CPUPct: 10}, // below the initial 1000 threshold -> no anomaly
+		{RSSMB: 800, CPUPct: 10}, // after SetThresholds(500): now elevated, elevatedSince set
+		{RSSMB: 800, CPUPct: 10}, // 11s later: sustained -> warn
+	}
+	w, events, _ := newTestWatcher(queueSampler(t, samples), clock.now, initial)
+
+	w.Poll() // t=0, RSSMB=800 vs threshold=1000 -> not elevated
+	if got := anomalyEvents(*events, "resource.sustained_high_rss"); len(got) != 0 {
+		t.Fatalf("expected no anomaly before SetThresholds, got %+v", got)
+	}
+
+	w.SetThresholds(Thresholds{RSSMB: 500, CPUPct: 80, SustainedWindow: 10 * time.Second, GaugeInterval: 30 * time.Second})
+
+	w.Poll() // t=0 (same instant), RSSMB=800 vs new threshold=500 -> elevatedSince set
+	clock.advance(11 * time.Second)
+	w.Poll() // t=11 -> elapsed 11s >= 10s window -> warn
+
+	got := anomalyEvents(*events, "resource.sustained_high_rss")
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 RSS anomaly after threshold lowered, got %d: %+v", len(got), got)
+	}
+	if got[0].sev != clientevents.SevWarn {
+		t.Fatalf("expected warn severity, got %v", got[0].sev)
+	}
+	if got[0].fields["threshold"].(float64) != 500 {
+		t.Fatalf("expected updated threshold=500 reflected in fields, got %v", got[0].fields["threshold"])
+	}
+}
+
 func TestPollProcTreeSurvivesAsMapAny(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)}
 	th := testThresholds()

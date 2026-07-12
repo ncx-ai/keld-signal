@@ -55,7 +55,8 @@ type Reporter struct {
 }
 
 // NewReporter builds a Reporter that POSTs drained batches to endpoint using
-// token as a bearer credential, tagging the envelope with installID. Spooled
+// token as the x-keld-ingest-token credential (matching the publish/settings
+// client<->Atlas convention), tagging the envelope with installID. Spooled
 // batches (written when Atlas is unreachable) live under spoolDir.
 func NewReporter(endpoint, token, installID string, drain func() []Event, spoolDir string) *Reporter {
 	r := &Reporter{
@@ -80,7 +81,7 @@ func (r *Reporter) doPost(ctx context.Context, body []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("Authorization", "Bearer "+r.token)
+	req.Header.Set("x-keld-ingest-token", r.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := r.httpClient.Do(req)

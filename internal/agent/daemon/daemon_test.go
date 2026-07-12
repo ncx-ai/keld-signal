@@ -49,7 +49,7 @@ func (f *fakeSender) all() []publish.Enrichment {
 func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true })
+	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
@@ -91,7 +91,7 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 func TestWorkerDeterministicMLOff(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, func() bool { return true })
+	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ML-OFF-1",
@@ -129,7 +129,7 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, neverReady)
+		Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, neverReady, nil)
 		close(done)
 	}()
 
@@ -222,7 +222,7 @@ func TestWorkerWithSidecarStubPublishesViaRouter(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, router, fs, "sidecar-test@keld.co", func() bool { return false }, gate)
+	go Worker(context.Background(), q, router, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "SC-1",
@@ -320,7 +320,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, router, fs, "provision-test@keld.co", func() bool { return false }, gate)
+	go Worker(context.Background(), q, router, fs, "provision-test@keld.co", func() bool { return false }, gate, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "PROV-1",
@@ -377,7 +377,7 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, model, fs, "fail-test@keld.co", func() bool { return false }, gate)
+	go Worker(context.Background(), q, model, fs, "fail-test@keld.co", func() bool { return false }, gate, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "FAIL-1",
@@ -447,7 +447,7 @@ func TestWorkerTimesOutAndRespools(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true })
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil)
 
 	q.Offer(queue.Job{Source: "claude_code", Scheme: "trace", ID: "SLOW-1", Inline: "write code"})
 
@@ -483,7 +483,7 @@ func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true })
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil)
 
 	// Deliver once, then mirror the daemon's sweep: drain each re-spooled pointer
 	// and re-deliver it. With max=2, attempt 1 re-spools and attempt 2 exhausts

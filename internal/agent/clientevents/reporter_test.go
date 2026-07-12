@@ -39,7 +39,7 @@ func TestFlushPostsEnvelopeWithAuthHeader(t *testing.T) {
 	var gotAuth string
 	var gotEnv envelope
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
+		gotAuth = r.Header.Get("x-keld-ingest-token")
 		if err := json.NewDecoder(r.Body).Decode(&gotEnv); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
@@ -65,8 +65,8 @@ func TestFlushPostsEnvelopeWithAuthHeader(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	if gotAuth != "Bearer tok-123" {
-		t.Fatalf("expected bearer auth header, got %q", gotAuth)
+	if gotAuth != "tok-123" {
+		t.Fatalf("expected x-keld-ingest-token header, got %q", gotAuth)
 	}
 	if gotEnv.SchemaVersion != SchemaVersion {
 		t.Fatalf("expected schema_version %d, got %d", SchemaVersion, gotEnv.SchemaVersion)
