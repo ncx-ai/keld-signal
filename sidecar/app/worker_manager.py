@@ -116,7 +116,10 @@ class WorkerManager:
         return self.state == READY
 
     def worker_rss_mb(self):
-        return self._rss_fn(self._proc.pid) if self._proc else 0.0
+        # Snapshot _proc: poll() (executor thread) may null it between the check
+        # and the .pid access, which would 500 the /metrics call on the loop.
+        p = self._proc
+        return self._rss_fn(p.pid) if p else 0.0
 
     def _ensure_up(self):
         if self.state == HELD:
