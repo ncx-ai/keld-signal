@@ -133,3 +133,11 @@ scaleway-down:
 .PHONY: scaleway-status
 scaleway-status:
 	SCALEWAY_ZONE=$(SCALEWAY_ZONE) python3 scripts/scaleway-mac.py status
+
+.PHONY: freeze-check
+freeze-check: ## run the PLAIN freeze + worker-spawn acceptance gate locally (Linux)
+	KELD_OBFUSCATE=0 bash scripts/freeze-check-local.sh
+
+.PHONY: obfuscate-check
+obfuscate-check: ## run the OBFUSCATED freeze + worker-spawn acceptance gate locally (Linux)
+	KELD_OBFUSCATE=1 bash scripts/freeze-check-local.sh
