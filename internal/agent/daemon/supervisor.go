@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
@@ -36,7 +37,19 @@ type Supervisor struct {
 
 	mu  sync.Mutex
 	cmd *exec.Cmd
+
+	// emitter is optional (set via SetEmitter before Start runs); every emit
+	// site below guards it nil so the many existing tests that never call
+	// SetEmitter are unaffected.
+	emitter *clientevents.Emitter
 }
+
+// SetEmitter wires an Emitter so Start's anomaly sites (spawn/start failure,
+// restart-cap-exceeded fallback, child crash/retry) also emit client events
+// alongside their existing log.Printf. Call before Start; not safe to change
+// concurrently with a running Start (matches the one-shot construction
+// pattern used elsewhere in the daemon).
+func (s *Supervisor) SetEmitter(e *clientevents.Emitter) { s.emitter = e }
 
 // NewSupervisor builds a Supervisor. Start must be called once to begin
 // supervision; it blocks until ctx is cancelled.
@@ -84,11 +97,13 @@ func (s *Supervisor) Start(ctx context.Context) {
 		cmd, err := s.spawn(s.port)
 		if err != nil {
 			log.Printf("supervisor: spawn error: %v", err)
+			s.emit("sidecar.fallback", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
 			s.fellBack.Store(true)
 			return
 		}
 		if err := cmd.Start(); err != nil {
 			log.Printf("supervisor: cmd.Start error: %v", err)
+			s.emit("sidecar.fallback", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
 			s.fellBack.Store(true)
 			return
 		}
@@ -163,11 +178,17 @@ func (s *Supervisor) Start(ctx context.Context) {
 		restarts++
 		if restarts > maxRestarts {
 			log.Printf("supervisor: restart cap (%d) exceeded, falling back", maxRestarts)
+			s.emit("sidecar.fallback", clientevents.SevError, map[string]any{"restarts": maxRestarts})
 			s.fellBack.Store(true)
 			return
 		}
 
 		log.Printf("supervisor: child exited (restart %d/%d), retrying in %s", restarts, maxRestarts, backoff)
+		s.emit("worker.crash", clientevents.SevWarn, map[string]any{
+			"restart":      restarts,
+			"max_restarts": maxRestarts,
+			"backoff_s":    backoff.Seconds(),
+		})
 
 		select {
 		case <-ctx.Done():
@@ -175,6 +196,13 @@ func (s *Supervisor) Start(ctx context.Context) {
 		case <-time.After(backoff):
 		}
 		backoff *= 2
+	}
+}
+
+// emit is a nil-safe convenience over s.emitter (optional — see SetEmitter).
+func (s *Supervisor) emit(code string, sev clientevents.Severity, fields map[string]any) {
+	if s.emitter != nil {
+		s.emitter.Emit(code, sev, fields)
 	}
 }
 

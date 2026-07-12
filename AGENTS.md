@@ -92,6 +92,26 @@ late double-publish from a recovering attempt is harmless.
 (`KELD_SETTINGS_POLL`). Remote overrides local; non-fatal if Atlas is unreachable.
 See `docs/enrichment-settings.md`.
 
+**Client-events telemetry (`internal/agent/clientevents/`).** Separately from
+enrichment, the daemon emits structured **operational** events about itself —
+job retries/quarantines, sidecar crashes/fallback, publish failures, resource
+pressure, lifecycle — batched and POSTed to `POST /v1/signal/client-events`
+(`x-keld-ingest-token`, same header convention as publish/settings). This is
+the first route under the **`/v1/signal/*`** convention: the namespace for new
+client↔Atlas protocol routes going forward (`/v1/enrichments` and
+`/v1/enrichment-settings` predate it and are not renamed as part of this — a
+later coordinated migration). Governed per-org via a `client_telemetry` block
+riding the existing `/v1/enrichment-settings` poll (default ON, independent of
+the enrichment toggle). Events carry only ids + structured primitive metadata;
+a Go-side **privacy redaction gate** (`clientevents/redact.go`) strips
+absolute paths, drops non-primitive field types, and reduces errors to a
+class+summary before anything is buffered — never raw prompt text, matching
+the same invariant enrichment upholds for masked spans. Durable like
+enrichment: batched + periodically flushed, retried via `internal/retry`, and
+spooled to `~/.keld/spool/clientevents/` (bounded, drop-oldest) when Atlas is
+unreachable. Full wire contract (envelope, event/code catalog, settings
+defaults, redaction guarantee): **`docs/signal-client-events.md`**.
+
 **Resource safety (the sidecar is a good citizen).** Single-flight + bounded
 queue (503 backpressure); a **rate governor** (CPU-EWMA min-interval pacing) and a
 **CPU thread scaler** (`torch.set_num_threads` capped to host load, default 50%
