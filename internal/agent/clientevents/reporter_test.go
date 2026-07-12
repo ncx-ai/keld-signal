@@ -170,6 +170,44 @@ func TestFlushPermanentFailureDropsNoSpool(t *testing.T) {
 	}
 }
 
+func TestFlushSpoolsOnContextCancellation(t *testing.T) {
+	// Server always fails; we cancel the ctx as soon as the first request
+	// lands, simulating daemon shutdown while Atlas is slow/down mid-retry.
+	// retry.Do then returns context.Canceled, which IsTransient classifies as
+	// PERMANENT — but the already-drained batch must be spooled, not dropped.
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return testEvents() }, dir)
+	r.policy = fastPolicy()
+
+	err := r.flush(ctx)
+	if err == nil {
+		t.Fatalf("expected flush to return an error after ctx cancellation")
+	}
+
+	files := spoolFiles(t, dir)
+	if len(files) != 1 {
+		t.Fatalf("expected drained batch to be spooled (not dropped) on ctx cancellation, got %v", files)
+	}
+	data, readErr := os.ReadFile(files[0])
+	if readErr != nil {
+		t.Fatalf("read spool file: %v", readErr)
+	}
+	var env envelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatalf("unmarshal spooled envelope: %v", err)
+	}
+	if env.InstallID != "install-1" || len(env.Events) != 1 {
+		t.Fatalf("unexpected spooled envelope: %+v", env)
+	}
+}
+
 func TestFlushEmptyDrainNoPost(t *testing.T) {
 	var reqCount int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

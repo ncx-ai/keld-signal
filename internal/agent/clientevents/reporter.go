@@ -145,13 +145,19 @@ func (r *Reporter) flush(ctx context.Context) error {
 
 	postErr := r.postWithRetry(ctx, body)
 	if postErr != nil {
-		if retry.IsTransient(postErr) {
+		// Spool when the failure is transient/exhausted OR when the context was
+		// cancelled mid-flight (daemon shutting down while Atlas is slow/down):
+		// retry.Do returns context.Canceled, which IsTransient classifies as
+		// PERMANENT by design — but this batch is already drained, so dropping
+		// it would silently lose events that shutdown prevented us delivering.
+		// Preserve it for the next process start instead.
+		if retry.IsTransient(postErr) || ctx.Err() != nil {
 			if spoolErr := r.spool(body); spoolErr != nil {
 				log.Printf("clientevents: spool write failed: %v", spoolErr)
 			}
 		}
-		// Permanent failures (e.g. 400/401) are poison: re-posting can never
-		// succeed, so the batch is dropped rather than spooled.
+		// Otherwise a permanent failure (e.g. 400/401) is poison: re-posting can
+		// never succeed, so the batch is dropped rather than spooled.
 		return postErr
 	}
 	return nil
