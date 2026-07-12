@@ -20,7 +20,7 @@ from app.governor import Governor
 from app.metrics import Counts, build_metrics
 from app.runner import InferenceRunner, QueueFull
 from app.worker_manager import (
-    WorkerManager, WorkerTimeout, WorkerUnavailable, WorkerError,
+    WorkerManager, WorkerTimeout, WorkerUnavailable, WorkerError, HELD,
 )
 
 # Cap input length as a guard: GLiNER2 is a transformer, so memory grows
@@ -152,8 +152,13 @@ class ExtractIn(BaseModel):
 
 @app.get("/health")
 def health():
+    # ok = "the service can serve on demand", NOT "a worker is already loaded".
+    # DOWN/SPAWNING/READY all serve (a request spawns the worker lazily); only
+    # HELD (memory pressure) cannot. Reporting ok=False while lazily DOWN would
+    # deadlock the daemon's supervisor + readiness gate (it waits for ok before
+    # sending the request that would spawn the worker).
     wm = _state.get("wm")
-    return {"ok": bool(wm and wm.ready()), "model": MODEL_NAME,
+    return {"ok": bool(wm) and wm.state != HELD, "model": MODEL_NAME,
             "state": wm.state if wm else "down"}
 
 

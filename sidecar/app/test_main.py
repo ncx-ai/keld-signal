@@ -162,6 +162,23 @@ def test_health_state_down_when_no_worker():
     assert h["ok"] is False and h["state"] == "down"
 
 
+def test_health_ok_when_worker_down_but_service_up():
+    # DOWN is a serve-on-demand state: /health must report ok=True so the
+    # daemon's supervisor + readiness gate open and the first request triggers a
+    # lazy worker spawn. (Regression: a lazy DOWN reporting ok=False deadlocks the
+    # supervisor — it never sees ready, exhausts restarts, and no sidecar runs.)
+    m = _reload_main(None)
+    _wire(m, wm=_FakeWM(state="down"))
+    h = m.health()
+    assert h["ok"] is True and h["state"] == "down"
+
+
+def test_health_not_ok_when_held():
+    m = _reload_main(None)
+    _wire(m, wm=_FakeWM(state="held"))
+    assert m.health()["ok"] is False
+
+
 def test_dispatch_503_when_worker_held():
     # Memory pressure holds the worker; endpoints shed with 503 rather than block.
     m = _reload_main(None)
