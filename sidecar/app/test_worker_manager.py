@@ -28,10 +28,9 @@ class FakeProc:
 
 
 def make(**over):
-    """A manager whose worker becomes ready immediately and echoes results.
-    `scripted` lets a test control what the worker 'returns' per call."""
-    state = {"proc": None, "req": None, "resp": None, "ready": True,
-             "responses": over.pop("responses", None)}
+    """A manager whose worker becomes ready immediately; tests drive per-call
+    worker responses via m._call_hook."""
+    state = {"proc": None, "req": None, "resp": None, "ready": True}
 
     now = {"t": 100.0}
 
@@ -53,11 +52,6 @@ def make(**over):
     m._test = state
     m._now = now
     return m
-
-
-def _feed_result(m, result):
-    """Simulate the worker having produced a response for the next call."""
-    m._test["resp"].put({"ok": True, "result": result})
 
 
 def test_call_spawns_and_returns_result():
@@ -154,6 +148,7 @@ def test_poll_held_releases_on_headroom():
     assert m.state == HELD
     m._ram_fn = lambda: (50.0, 9000.0); m.poll()
     assert m.state == DOWN                    # respawns on next call
+
 
 def test_poll_rss_ceiling_recycles_when_idle():
     m = _ready_manager(margin_mb=1000.0)      # ceiling = model_cost(2700)+1000 = 3700
