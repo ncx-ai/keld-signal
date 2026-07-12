@@ -34,6 +34,16 @@ func TestHealthSidecarUnreachable(t *testing.T) {
 	}
 }
 
+func TestHealthSidecarUnparseableMetrics(t *testing.T) {
+	// A reachable sidecar that returns non-JSON must not crash; it lands on the
+	// same "sidecar unreachable" surface as a fetch failure.
+	h := Health(&agentcfg.Info{Port: 8765, SidecarPort: 40313}, okStatus,
+		func(string) (string, error) { return "<html>not json</html>", nil })
+	if h.Backend != "sidecar unreachable" || h.MetricsOK {
+		t.Fatalf("got %+v", h)
+	}
+}
+
 func TestHealthSidecarLoaded(t *testing.T) {
 	body := `{"model_state":"loaded","memory":{"rss_mb":2743.1,"model_cost_mb":2650.1}}`
 	h := Health(&agentcfg.Info{Port: 8765, SidecarPort: 40313}, okStatus,

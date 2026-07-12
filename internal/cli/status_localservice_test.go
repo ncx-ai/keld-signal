@@ -15,8 +15,8 @@ func TestRenderLocalServiceDaemonDown(t *testing.T) {
 		!strings.Contains(out, "not running") || !strings.Contains(out, "daemon") {
 		t.Fatalf("got:\n%s", out)
 	}
-	if strings.Contains(out, "backend") {
-		t.Fatalf("should omit backend when daemon down:\n%s", out)
+	if strings.Contains(out, "backend") || strings.Contains(out, "memory") {
+		t.Fatalf("should omit backend and memory when daemon down:\n%s", out)
 	}
 }
 

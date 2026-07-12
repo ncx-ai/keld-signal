@@ -44,7 +44,27 @@ func Write(info Info) error {
 	if err := enc.Encode(info); err != nil {
 		return err
 	}
-	return os.WriteFile(paths.AgentInfoPath(), buf.Bytes(), 0o600)
+	// Write to a temp file then rename, so a concurrent reader (e.g. the hook
+	// reading the ingress port/secret) never observes a torn file — matters
+	// because SetSidecarPort rewrites agent.json at daemon startup.
+	tmp, err := os.CreateTemp(paths.KeldHome(), ".agent-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, paths.AgentInfoPath())
 }
 
 // SetSidecarPort updates the SidecarPort field of the existing agent.json,
