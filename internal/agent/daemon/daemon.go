@@ -461,7 +461,7 @@ func Run(ctx context.Context) error {
 			emitter.EmitGauge("resource.gauge", f)
 		}
 	}
-	watcher := resource.NewWatcher(os.Getpid(), emitter.Emit, gaugeEmit, thresholdsFrom(eff), resource.NewProcessTreeSampler(os.Getpid()), time.Now)
+	watcher := resource.NewWatcher(emitter.Emit, gaugeEmit, thresholdsFrom(eff), resource.NewProcessTreeSampler(os.Getpid()), time.Now)
 	go watcher.Run(ctx, sampleInterval)
 
 	onRemote := func(r *settings.Remote) {

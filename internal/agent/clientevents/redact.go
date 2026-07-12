@@ -19,8 +19,10 @@ const (
 	maxFieldLen   = 120
 	maxFieldWords = 3
 
-	// maxErrLen caps a RedactError message (in runes, excluding the "<Type>: "
-	// prefix) so a verbose wrapped error can never smuggle a large blob of text.
+	// maxErrLen is a defensive final cap (in runes) on RedactError's WHOLE
+	// "<Type>: <message>" result, in case a pathological type name is long
+	// enough to matter — the message itself is already bounded to
+	// maxFieldLen/maxFieldWords by safeErrMessage before this applies.
 	maxErrLen = 200
 )
 
@@ -46,10 +48,22 @@ var wholePathRe = regexp.MustCompile(`^(?:/\S+|[A-Za-z]:\\\S*|\\\\\S+)$`)
 // multi-line error message collapses to a single line.
 var wsCollapseRE = regexp.MustCompile(`[\t\n\r\v\f]+`)
 
+// redactedText marks a string as already vetted by RedactError: leading/
+// embedded absolute paths surgically replaced with "<path>", the message
+// portion word/length-capped exactly like a plain field value, and control
+// chars scrubbed. redactFields passes it through AS-IS rather than routing it
+// through redactString/capField again — re-applying the free-text word-cap to
+// an already-short "<Type>: message" summary is what previously clobbered
+// nearly every real error (anything with more than 3 words, or any path) into
+// a bare "<redacted>", gutting error telemetry. Only RedactError should ever
+// produce a value of this type.
+type redactedText string
+
 // redactFields returns a NEW map derived from in where every value has been
 // allow-listed for publication: numbers, bools, and time.Duration pass
 // unchanged; strings go through conservative whole-value redaction
-// (redactString); nested maps recurse; anything else (slices, structs,
+// (redactString); a redactedText (from RedactError) passes through as-is,
+// already vetted; nested maps recurse; anything else (slices, structs,
 // pointers, ...) is dropped. The input map is never mutated. This is the
 // privacy gate for client events — conservative by design: when in doubt,
 // redact.
@@ -66,6 +80,18 @@ func redactFields(in map[string]any) map[string]any {
 			float32, float64,
 			time.Duration:
 			out[k] = val
+		case redactedText:
+			// Already vetted by RedactError. A defensive control-char scan
+			// only — no word/length cap here, since that's the exact
+			// double-redaction this type exists to avoid.
+			s := string(val)
+			for _, r := range s {
+				if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+					s = "<redacted>"
+					break
+				}
+			}
+			out[k] = s
 		case string:
 			out[k] = redactString(val)
 		case map[string]any:
@@ -127,14 +153,22 @@ func baseName(s string) string {
 
 // RedactError reduces an error to a short, path-stripped, rune-safe,
 // length-capped class+summary string suitable for publication:
-// "<Type>: <redacted message>". Unlike a field value it strips embedded paths
+// "<Type>: <message>". Unlike a plain field value it strips embedded paths
 // surgically (→ "<path>") so the useful error class survives, e.g.
-// "open <path>: denied". It never returns raw multi-line text or a verbatim
-// absolute path.
-func RedactError(err error) string {
+// "open <path>: denied", rather than nuking the whole value. The message
+// portion is then given the SAME free-text protection a plain field value
+// gets (word/length cap) — a message that still reads as prose (or still
+// contains a control/format char) after path-stripping is replaced wholesale
+// with "<redacted>", but the "<Type>: " prefix always survives so the error
+// class remains useful for classification even when the message can't be
+// trusted. The returned redactedText is pre-vetted: redactFields passes it
+// through unchanged rather than re-running the field free-text cap on it
+// (that double-pass was the bug — see the redactedText doc comment).
+func RedactError(err error) redactedText {
 	if err == nil {
-		return ""
+		return redactedText("")
 	}
+	typeName := fmt.Sprintf("%T", err)
 
 	msg := wsCollapseRE.ReplaceAllString(err.Error(), " ")
 	// pathRe consumes the leading start/non-word char into group 1; re-emit it
@@ -142,11 +176,30 @@ func RedactError(err error) string {
 	// itself becomes "<path>" and the preceding "/=/( char is preserved
 	// (e.g. `stat "<path>`, `path=<path>`).
 	msg = pathRe.ReplaceAllString(msg, "${1}<path>")
-
-	runes := []rune(msg)
-	if len(runes) > maxErrLen {
-		msg = string(runes[:maxErrLen]) + "…"
+	if !safeErrMessage(msg) {
+		msg = "<redacted>"
 	}
 
-	return fmt.Sprintf("%T: %s", err, msg)
+	result := typeName + ": " + msg
+	runes := []rune(result)
+	if len(runes) > maxErrLen {
+		result = string(runes[:maxErrLen]) + "…"
+	}
+
+	return redactedText(result)
+}
+
+// safeErrMessage reports whether an already path-stripped RedactError message
+// is safe to publish verbatim: no control/format character, at most
+// maxFieldLen bytes, and at most maxFieldWords whitespace-separated words —
+// the identical free-text protection capField applies to a plain field value,
+// applied here to the message half of a "<Type>: <message>" summary so a
+// prose or prompt-embedded error message can't leak through the error field.
+func safeErrMessage(msg string) bool {
+	for _, r := range msg {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			return false
+		}
+	}
+	return len(msg) <= maxFieldLen && len(strings.Fields(msg)) <= maxFieldWords
 }

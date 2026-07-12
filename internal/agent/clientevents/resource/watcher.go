@@ -56,7 +56,6 @@ type trackState struct {
 // (no real I/O of its own — the sampler and clock are injected) so it's fully
 // deterministic under test.
 type Watcher struct {
-	daemonPID int
 	emit      func(code string, sev clientevents.Severity, fields map[string]any)
 	emitGauge func(fields map[string]any)
 	th        atomic.Value // Thresholds
@@ -72,7 +71,6 @@ type Watcher struct {
 // (sustained-high crossing an escalation bucket, or recovery); emitGauge is
 // called on the configured cadence with a baseline resource snapshot.
 func NewWatcher(
-	daemonPID int,
 	emit func(code string, sev clientevents.Severity, fields map[string]any),
 	emitGauge func(fields map[string]any),
 	th Thresholds,
@@ -80,7 +78,6 @@ func NewWatcher(
 	clock func() time.Time,
 ) *Watcher {
 	w := &Watcher{
-		daemonPID: daemonPID,
 		emit:      emit,
 		emitGauge: emitGauge,
 		sampler:   sampler,
@@ -183,9 +180,17 @@ func (w *Watcher) pollTrack(tr *trackState, value, threshold float64, now time.T
 	}
 
 	if !tr.elevatedSince.IsZero() && tr.lastSeverity != "" {
+		// Emit the recovery at the track's peak (last-reached) severity for
+		// this episode, not a fixed SevInfo: under the default warn floor, an
+		// info-severity recovery would be dropped by the very floor the
+		// matching anomaly passed to be delivered, leaving the anomaly
+		// looking permanently unresolved. Using the same severity means the
+		// recovery is delivered iff its anomaly was (no orphan recoveries,
+		// no floor bypass). Capture it before resetting the track below.
+		peakSeverity := tr.lastSeverity
 		f := fields(value, threshold, now.Sub(tr.elevatedSince).Seconds())
 		f["recovered"] = true
-		w.emit(code, clientevents.SevInfo, f)
+		w.emit(code, peakSeverity, f)
 	}
 	tr.elevatedSince = time.Time{}
 	tr.lastSeverity = ""

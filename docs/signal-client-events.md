@@ -142,14 +142,20 @@ package/file for a receiver author who wants to trace the source.
 | `publish.failed` | error | `daemon/daemon.go` (`process()`) | POSTing a completed enrichment to Atlas (`/v1/enrichments`) failed. `fields.error`. |
 | `model.load_failed` | error | `daemon/daemon.go` (`mlBackendWithOpts`) | Model provisioning (`provision.EnsureModel` — fetching/verifying the ~1.9 GB GLiNER2 weights) failed. `fields.error`. **Note:** the original design spec called this `provision.failed`; there is only one provisioning call site in the code, so it was folded into `model.load_failed` rather than kept as a separate code — this doc reflects the actual (single) code. |
 | `settings.poll_failed` | warn | `daemon/daemon.go` (`pollSettings`) | A `GET /v1/enrichment-settings` fetch failed (network error, non-2xx, decode error). Non-fatal — the daemon keeps its last-known effective settings. `fields.error`. |
-| `resource.sustained_high_rss` | warn / error / critical (escalating), or info (recovery) | `clientevents/resource/watcher.go` | RSS across the daemon+sidecar+worker process tree has stayed above `rss_threshold_mb` for at least `sustained_window_s`. See Resource events below. |
-| `resource.sustained_high_cpu` | warn / error / critical (escalating), or info (recovery) | `clientevents/resource/watcher.go` | Same as above, for summed CPU% across the process tree vs. `cpu_threshold_pct`. |
+| `resource.sustained_high_rss` | warn / error / critical (escalating), or the same severity on recovery | `clientevents/resource/watcher.go` | RSS across the daemon+sidecar+worker process tree has stayed above `rss_threshold_mb` for at least `sustained_window_s`. See Resource events below. |
+| `resource.sustained_high_cpu` | warn / error / critical (escalating), or the same severity on recovery | `clientevents/resource/watcher.go` | Same as above, for summed CPU% across the process tree vs. `cpu_threshold_pct`. |
 | `resource.gauge` | info (floor-exempt) | `clientevents/resource/watcher.go` | Periodic baseline resource snapshot, independent of anomaly state. See Resource events below. |
 
 All `fields.error` / `fields.…error` values are the output of
 `clientevents.RedactError` (see Privacy redaction) — a short `"<Type>:
 <message>"` string, never a raw Go error, and never containing an absolute
-path or raw multi-line text.
+path or raw multi-line text. The `<Type>` half always survives (Go type names
+carry no user data, so they're always safe to publish, and remain useful for
+classification even when the message doesn't survive); the `<message>` half is
+conservatively redacted to `<redacted>` when — even after path-stripping — it
+still reads as free text (more than a few words) or still contains a
+control/format character. A short, simple message (e.g. `connection refused`)
+survives verbatim; a prose or prompt-shaped message does not.
 
 ## Resource events — semantics
 
@@ -170,9 +176,16 @@ machines — one for RSS, one for CPU — plus a gauge cadence.
   parked in the same bucket).
 
 **Recovery:** the instant a previously-elevated track drops back to/below
-threshold, exactly one **info** event fires with `fields.recovered: true`
-(same field shape as the anomaly, plus that flag), and the track's state
-resets — a fresh elevation starts again at warn.
+threshold, exactly one event fires with `fields.recovered: true` (same field
+shape as the anomaly, plus that flag), **at the same severity as the anomaly
+it clears** (the track's peak bucket for that episode — e.g. an episode that
+escalated to error recovers at error, not info), and the track's state
+resets — a fresh elevation starts again at warn. Emitting the recovery at a
+fixed `info` severity would mean it gets dropped by the default `warn`
+severity floor even though the anomaly that preceded it passed the floor —
+leaving the track looking permanently elevated on the dashboard. Using the
+same severity as the anomaly means the recovery is delivered if and only if
+its anomaly was (no orphan recoveries, no floor bypass).
 
 **Fields** (both `resource.sustained_high_rss` and
 `resource.sustained_high_cpu`, anomaly and recovery alike):
@@ -183,7 +196,7 @@ resets — a fresh elevation starts again at warn.
 | `threshold` | number | The threshold that was crossed, at time of emission. |
 | `elevated_s` | number | Seconds continuously elevated so far. |
 | `proc_tree` | object | Per-role breakdown, see below. |
-| `recovered` | bool | Present (`true`) only on the recovery event. |
+| `recovered` | bool | Present (`true`) only on the recovery event, which carries the same `severity` as the anomaly it clears (see Recovery above). |
 
 **`proc_tree`:** currently a flat object with two keys — `"daemon"` (the root
 process only) and `"others"` (every descendant process — sidecar service +
@@ -263,8 +276,20 @@ enum-like strings — never prompt content. This is enforced Go-side
 - **Errors are never raw.** Any error placed into `fields` goes through
   `RedactError`, which collapses it to a single-line, length-capped
   (~200-rune) `"<Type>: <message>"` summary with any embedded absolute path
-  surgically replaced by `<path>` — never a verbatim `%v` of the original
-  error, never multi-line text.
+  surgically replaced by `<path>` first — never a verbatim `%v` of the
+  original error, never multi-line text. The message half then gets the SAME
+  free-text protection as a plain field value (item 4 above, applied to the
+  message only): if it's still more than a few words, still too long, or
+  still contains a control/format character after path-stripping, the message
+  becomes `"<redacted>"` while the `<Type>` prefix survives. This is what lets
+  `RedactError`'s output skip the generic string redaction above when it's
+  later placed in `fields` — it's pre-vetted (path-stripped, free-text
+  capped) by `RedactError` itself, so it is not run back through the
+  whole-value free-text cap (which would otherwise double-redact it: a
+  second, unconditional 3-word cap over an already-short `"<Type>: <message>"`
+  summary would clobber nearly every non-trivial error into a bare
+  `"<redacted>"`, discarding the type information the first pass deliberately
+  preserved).
 
 This is the same no-raw-prompt-text invariant the enrichment pipeline upholds
 for masked spans — client events simply never touch prompt content in the

@@ -171,7 +171,7 @@ func TestRedactFieldsNilAndEmptyInput(t *testing.T) {
 
 func TestRedactErrorStripsPathAndHasTypeName(t *testing.T) {
 	err := fmt.Errorf("open /home/u/secret.txt: denied")
-	got := RedactError(err)
+	got := string(RedactError(err))
 
 	if strings.Contains(got, "/home/u/secret.txt") {
 		t.Fatalf("RedactError leaked verbatim path: %q", got)
@@ -257,7 +257,7 @@ func TestRedactFieldsLoneCleanPathBecomesBasename(t *testing.T) {
 }
 
 func TestRedactErrorSingleSegmentPathStripped(t *testing.T) {
-	got := RedactError(fmt.Errorf("open /etc: denied"))
+	got := string(RedactError(fmt.Errorf("open /etc: denied")))
 	if strings.Contains(got, "/etc") {
 		t.Fatalf("single-segment path leaked in error: %q", got)
 	}
@@ -267,22 +267,33 @@ func TestRedactErrorSingleSegmentPathStripped(t *testing.T) {
 }
 
 func TestRedactErrorUNCPathStripped(t *testing.T) {
-	got := RedactError(fmt.Errorf(`read \\server\share\f.txt: timeout`))
+	got := string(RedactError(fmt.Errorf(`read \\server\share\f.txt: timeout`)))
 	if strings.Contains(got, `\\server\share`) {
 		t.Fatalf("UNC path leaked in error: %q", got)
 	}
 }
 
-func TestRedactErrorTruncationIsRuneSafe(t *testing.T) {
-	// A multibyte-rune string past the cap must not be sliced mid-rune (which
-	// would corrupt into a replacement char / invalid UTF-8).
+// TestRedactErrorLongMessageRedactedNotTruncated proves a message so long it
+// would otherwise need truncation is instead fully redacted by the same
+// free-text cap a plain field value gets (word/length cap on the MESSAGE),
+// rather than leaking a large verbatim (if truncated) blob of the original
+// error text. The type prefix still survives and the result stays valid
+// UTF-8 (no mid-rune slicing) either way.
+func TestRedactErrorLongMessageRedactedNotTruncated(t *testing.T) {
 	err := errors.New(strings.Repeat("é", 400))
-	got := RedactError(err)
-	if !strings.Contains(got, "…") {
-		t.Fatalf("expected truncation marker, got %q", got)
+	got := string(RedactError(err))
+	if strings.Contains(got, "é") {
+		t.Fatalf("long message leaked verbatim content: %q", got)
+	}
+	if !strings.Contains(got, "<redacted>") {
+		t.Fatalf("expected message to be <redacted>, got %q", got)
+	}
+	wantType := fmt.Sprintf("%T", err)
+	if !strings.HasPrefix(got, wantType+": ") {
+		t.Fatalf("expected type prefix %q to survive, got %q", wantType+": ", got)
 	}
 	if !utf8ValidString(got) {
-		t.Fatalf("truncation corrupted UTF-8: %q", got)
+		t.Fatalf("result is not valid UTF-8: %q", got)
 	}
 }
 
@@ -299,7 +310,7 @@ func TestRedactErrorPathsAtNonWordBoundaries(t *testing.T) {
 		{"windows_quoted", `stat "C:\Users\x.txt": nope`, `C:\Users\x.txt`},
 	}
 	for _, c := range cases {
-		got := RedactError(fmt.Errorf("%s", c.msg))
+		got := string(RedactError(fmt.Errorf("%s", c.msg)))
 		if strings.Contains(got, c.leak) {
 			t.Fatalf("%s: leaked verbatim path %q in %q", c.name, c.leak, got)
 		}
@@ -310,7 +321,7 @@ func TestRedactErrorPathsAtNonWordBoundaries(t *testing.T) {
 }
 
 func TestRedactErrorQuotedPathKeepsQuote(t *testing.T) {
-	got := RedactError(fmt.Errorf("%s", `read "/abs/path": denied`))
+	got := string(RedactError(fmt.Errorf("%s", `read "/abs/path": denied`)))
 	if strings.Contains(got, "/abs/path") {
 		t.Fatalf("leaked path: %q", got)
 	}
@@ -357,12 +368,95 @@ func TestRedactFieldsZeroWidthCharRedacted(t *testing.T) {
 func TestRedactErrorCollapsesMultilineAndTruncates(t *testing.T) {
 	msg := "line one\nline two\ttabbed\n" + strings.Repeat("x", 400)
 	err := errors.New(msg)
-	got := RedactError(err)
+	got := string(RedactError(err))
 
 	if strings.Contains(got, "\n") || strings.Contains(got, "\t") {
 		t.Fatalf("expected no raw newlines/tabs, got %q", got)
 	}
 	if len(got) > maxErrLen+len(fmt.Sprintf("%T", err))+10 {
 		t.Fatalf("expected result to be capped, got length %d: %q", len(got), got)
+	}
+	// The message is well past maxFieldWords once newlines/tabs collapse to
+	// spaces, so it gets the SAME free-text redaction a plain field value
+	// would — proving the multi-line collapse doesn't accidentally let a long
+	// prose-shaped message slip through unredacted.
+	if !strings.Contains(got, "<redacted>") {
+		t.Fatalf("expected message to be <redacted>, got %q", got)
+	}
+}
+
+// --- Regression coverage for the double-redaction bug: RedactError's output,
+// once stored in an event's fields map, previously went through redactFields
+// -> redactString -> capField A SECOND time, and capField's free-text cap
+// (max 3 words) replaced nearly every real "<Type>: <message>" summary with a
+// bare "<redacted>", silently gutting error telemetry. These tests exercise
+// the FULL pipeline (RedactError followed by redactFields) rather than
+// RedactError alone, since that's the only way to reproduce the bug.
+
+// TestRedactErrorSurvivesFullPipelineWhenShort proves a short, simple error
+// summary is no longer clobbered by the second (field-level) redaction pass:
+// it must come out exactly as RedactError produced it, not "<redacted>".
+func TestRedactErrorSurvivesFullPipelineWhenShort(t *testing.T) {
+	err := errors.New("connection refused")
+	out := redactFields(map[string]any{"error": RedactError(err)})
+
+	got, ok := out["error"].(string)
+	if !ok {
+		t.Fatalf("expected string error field, got %T: %v", out["error"], out["error"])
+	}
+	if got == "<redacted>" {
+		t.Fatalf("short multi-word error summary was clobbered by double-redaction: %q", got)
+	}
+	if !strings.Contains(got, "connection refused") {
+		t.Fatalf("expected message to survive, got %q", got)
+	}
+	wantType := fmt.Sprintf("%T", err)
+	if !strings.HasPrefix(got, wantType+": ") {
+		t.Fatalf("expected type prefix %q, got %q", wantType+": ", got)
+	}
+}
+
+// TestRedactErrorProseMessageRedactedThroughFullPipeline proves a prompt-
+// shaped error message can't leak prompt content through the error field: the
+// message half is redacted (by RedactError itself, and NOT un-redacted by the
+// second pass), while the type prefix — useful for classification — survives.
+func TestRedactErrorProseMessageRedactedThroughFullPipeline(t *testing.T) {
+	err := fmt.Errorf("could not classify the following user prompt about quarterly financial planning and layoffs")
+	out := redactFields(map[string]any{"error": RedactError(err)})
+
+	got, ok := out["error"].(string)
+	if !ok {
+		t.Fatalf("expected string error field, got %T: %v", out["error"], out["error"])
+	}
+	for _, word := range []string{"financial", "layoffs", "quarterly", "planning"} {
+		if strings.Contains(got, word) {
+			t.Fatalf("prose word %q leaked through the error field: %q", word, got)
+		}
+	}
+	if !strings.Contains(got, "<redacted>") {
+		t.Fatalf("expected the message to be <redacted>, got %q", got)
+	}
+	wantType := fmt.Sprintf("%T", err)
+	if !strings.HasPrefix(got, wantType+": ") {
+		t.Fatalf("expected type prefix %q to survive, got %q", wantType+": ", got)
+	}
+}
+
+// TestRedactErrorPathNeverLeaksThroughFullPipeline proves a path embedded in
+// an error message never appears verbatim anywhere in the fully-redacted
+// pipeline output (RedactError followed by redactFields).
+func TestRedactErrorPathNeverLeaksThroughFullPipeline(t *testing.T) {
+	err := fmt.Errorf("open /home/u/secret.txt: denied")
+	out := redactFields(map[string]any{"error": RedactError(err)})
+
+	got, ok := out["error"].(string)
+	if !ok {
+		t.Fatalf("expected string error field, got %T: %v", out["error"], out["error"])
+	}
+	if strings.Contains(got, "/home/u/secret.txt") {
+		t.Fatalf("path-containing error leaked verbatim path through full pipeline: %q", got)
+	}
+	if strings.Contains(got, "secret.txt") {
+		t.Fatalf("path-containing error leaked a path fragment through full pipeline: %q", got)
 	}
 }

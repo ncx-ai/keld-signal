@@ -57,7 +57,7 @@ func newTestWatcher(sampler Sampler, clock func() time.Time, th Thresholds) (*Wa
 	emitGauge := func(fields map[string]any) {
 		gauges = append(gauges, fields)
 	}
-	w := NewWatcher(1234, emit, emitGauge, th, sampler, clock)
+	w := NewWatcher(emit, emitGauge, th, sampler, clock)
 	return w, &events, &gauges
 }
 
@@ -208,12 +208,58 @@ func TestPollRecoversOnceThenResets(t *testing.T) {
 	if got[0].sev != clientevents.SevWarn {
 		t.Fatalf("expected first event warn, got %v", got[0].sev)
 	}
-	if got[1].sev != clientevents.SevInfo {
-		t.Fatalf("expected recovered event to be info severity, got %v", got[1].sev)
+	// The recovery must carry the SAME severity as the anomaly it clears
+	// (SevWarn here), not a fixed SevInfo -- otherwise, under the default
+	// warn floor, the recovery would be dropped while the warn anomaly that
+	// preceded it was delivered, leaving the track looking permanently
+	// elevated on the dashboard.
+	if got[1].sev != clientevents.SevWarn {
+		t.Fatalf("expected recovered event to carry the anomaly's severity (warn), got %v", got[1].sev)
 	}
 	recovered, ok := got[1].fields["recovered"].(bool)
 	if !ok || !recovered {
 		t.Fatalf("expected recovered=true field, got %+v", got[1].fields)
+	}
+}
+
+// TestPollRecoveryCarriesPeakEscalatedSeverity proves the recovery event
+// after an escalation ladder (warn -> error) carries the PEAK severity
+// reached (error), not SevInfo and not the initial warn bucket -- a track
+// that escalated all the way to error/critical must recover at that same
+// severity so it passes the same floor its anomaly passed, and so a receiver
+// can tell how bad the episode got even from the recovery event alone.
+func TestPollRecoveryCarriesPeakEscalatedSeverity(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)}
+	th := testThresholds() // window = 10s -> error at 20s
+	samples := []Sample{
+		{RSSMB: 1500, CPUPct: 10}, // t=0
+		{RSSMB: 1500, CPUPct: 10}, // t=11 -> warn
+		{RSSMB: 1500, CPUPct: 10}, // t=21 -> error
+		{RSSMB: 500, CPUPct: 10},  // t=22 -> drop below threshold -> recovered at error severity
+	}
+	w, events, _ := newTestWatcher(queueSampler(t, samples), clock.now, th)
+
+	w.Poll() // t=0
+	clock.advance(11 * time.Second)
+	w.Poll() // t=11 -> warn
+	clock.advance(10 * time.Second)
+	w.Poll() // t=21 -> error
+	clock.advance(1 * time.Second)
+	w.Poll() // t=22 -> recovered
+
+	got := anomalyEvents(*events, "resource.sustained_high_rss")
+	if len(got) != 3 {
+		t.Fatalf("expected exactly 3 RSS events (warn, error, recovered), got %d: %+v", len(got), got)
+	}
+	if got[0].sev != clientevents.SevWarn || got[1].sev != clientevents.SevError {
+		t.Fatalf("expected warn then error before recovery, got %v then %v", got[0].sev, got[1].sev)
+	}
+	if got[2].sev != clientevents.SevError {
+		t.Fatalf("expected recovery to carry the peak severity (error), got %v", got[2].sev)
+	}
+	recovered, ok := got[2].fields["recovered"].(bool)
+	if !ok || !recovered {
+		t.Fatalf("expected recovered=true field, got %+v", got[2].fields)
 	}
 }
 

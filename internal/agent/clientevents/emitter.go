@@ -128,9 +128,9 @@ func (e *Emitter) insert(evt Event) {
 	if n := len(e.ring); n > 0 {
 		last := &e.ring[n-1]
 		if last.Code == evt.Code && last.Severity == evt.Severity {
-			if last.Fields == nil {
-				last.Fields = make(map[string]any, 1)
-			}
+			// last.Fields is never nil here: record() always sets Fields via
+			// redactFields(fields), which returns a non-nil map (make(...))
+			// even for a nil/empty input.
 			count, _ := last.Fields["count"].(int)
 			if count == 0 {
 				count = 1
