@@ -45,10 +45,10 @@ It stays a single static binary (it merely starts depending on `enrich`,
 `enrich/sidecar`, `agentcfg`, and `service` — all pure Go, no runtime deps).
 
 Extract the client-side logic (currently in `internal/agentcli/{metrics,enrichcmd}.go`)
-into a new neutral package **`internal/agentclient`**. Both cobra layers become
+into a new neutral package **`internal/localagent`**. Both cobra layers become
 thin wrappers over it, so there is exactly one implementation of each behavior.
 
-### `internal/agentclient` API
+### `internal/localagent` API
 
 ```go
 // Prompt input (args joined, else stdin), shared by both `enrich` commands.
@@ -98,7 +98,7 @@ Local signal service:
   memory      rss 2743 MB (model 2650)
 ```
 
-Rendering is driven by `agentclient.Health`. All best-effort — a missing daemon,
+Rendering is driven by `localagent.Health`. All best-effort — a missing daemon,
 unreachable sidecar, or metrics-parse failure degrades to a shorter section and
 **never** fails the whole `status` command. Fallbacks:
 
@@ -121,8 +121,8 @@ Registered on the `signal` group in `internal/cli/root.go`.
 ### `internal/agentcli` refactor
 
 `metrics.go` / `enrichcmd.go` keep their cobra command constructors but delegate
-their bodies to `internal/agentclient`. The helper functions (`readPrompt`,
-`resolveEnrichModel`, `sidecarMetricsURL`, `fetchText`) move to `agentclient`;
+their bodies to `internal/localagent`. The helper functions (`readPrompt`,
+`resolveEnrichModel`, `sidecarMetricsURL`, `fetchText`) move to `localagent`;
 the agentcli tests move or adapt to the new package. No user-visible change to
 `keld-agent enrich`/`metrics`.
 
@@ -130,16 +130,16 @@ the agentcli tests move or adapt to the new package. No user-visible change to
 
 ```
 keld signal status
-  └─ agentclient.Health(service.Status, fetch /metrics)
+  └─ localagent.Health(service.Status, fetch /metrics)
        ├─ agentcfg.Read()            → daemon/sidecar ports
        └─ GET 127.0.0.1:<scPort>/metrics → model_state, rss, model_cost
 
 keld signal enrich "<prompt>"
-  └─ agentclient.ReadPrompt → ResolveModel(agentcfg.Read()) → enrich.Run → JSON stdout
+  └─ localagent.ReadPrompt → ResolveModel(agentcfg.Read()) → enrich.Run → JSON stdout
        (ResolveModel builds a sidecar.Client at the agent.json sidecar_port, else deterministic)
 
 keld signal metrics
-  └─ agentclient.MetricsURL(agentcfg.Read()) → FetchText → stdout
+  └─ localagent.MetricsURL(agentcfg.Read()) → FetchText → stdout
 ```
 
 ## Error handling
@@ -152,7 +152,7 @@ keld signal metrics
 
 ## Testing (TDD)
 
-- `internal/agentclient`: unit tests for `MetricsURL`, `FetchText` (httptest),
+- `internal/localagent`: unit tests for `MetricsURL`, `FetchText` (httptest),
   `ResolveModel`, `ReadPrompt` (ported from agentcli), and `Health` driven by a
   fake `statusFn` and an httptest sidecar — covering reachable, unreachable,
   deterministic (`sidecar_port==0`), and daemon-absent cases.
