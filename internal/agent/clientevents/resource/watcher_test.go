@@ -217,6 +217,58 @@ func TestPollRecoversOnceThenResets(t *testing.T) {
 	}
 }
 
+func TestPollElevatedButNeverSustainedThenClears(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)}
+	th := testThresholds() // window = 10s
+	samples := []Sample{
+		{RSSMB: 1500, CPUPct: 10}, // t=0, elevatedSince=0
+		{RSSMB: 1500, CPUPct: 10}, // t=5, elapsed=5 < window -> no anomaly
+		{RSSMB: 500, CPUPct: 10},  // t=8, dropped before window -> must NOT emit recovered
+	}
+	w, events, _ := newTestWatcher(queueSampler(t, samples), clock.now, th)
+
+	w.Poll() // t=0
+	clock.advance(5 * time.Second)
+	w.Poll() // t=5
+	clock.advance(3 * time.Second)
+	w.Poll() // t=8 -> below threshold, but never crossed sustained window
+
+	if got := anomalyEvents(*events, "resource.sustained_high_rss"); len(got) != 0 {
+		t.Fatalf("expected zero events when elevated but never sustained then cleared, got %+v", got)
+	}
+}
+
+func TestPollFullEscalationLadderToCritical(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)}
+	th := testThresholds() // window = 10s -> error at 20s, critical at 40s
+	samples := []Sample{
+		{RSSMB: 1500, CPUPct: 10}, // t=0
+		{RSSMB: 1500, CPUPct: 10}, // t=11 -> warn
+		{RSSMB: 1500, CPUPct: 10}, // t=21 -> error
+		{RSSMB: 1500, CPUPct: 10}, // t=41 -> critical
+	}
+	w, events, _ := newTestWatcher(queueSampler(t, samples), clock.now, th)
+
+	w.Poll() // t=0
+	clock.advance(11 * time.Second)
+	w.Poll() // t=11 -> warn
+	clock.advance(10 * time.Second)
+	w.Poll() // t=21 -> error
+	clock.advance(20 * time.Second)
+	w.Poll() // t=41 -> critical
+
+	got := anomalyEvents(*events, "resource.sustained_high_rss")
+	if len(got) != 3 {
+		t.Fatalf("expected 3 RSS anomaly events (warn, error, critical), got %d: %+v", len(got), got)
+	}
+	want := []clientevents.Severity{clientevents.SevWarn, clientevents.SevError, clientevents.SevCritical}
+	for i, sev := range want {
+		if got[i].sev != sev {
+			t.Fatalf("escalation step %d: expected %v, got %v (all: %+v)", i, sev, got[i].sev, got)
+		}
+	}
+}
+
 func TestPollCPUTrackSustainedEmitsWarn(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)}
 	th := testThresholds()

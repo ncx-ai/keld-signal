@@ -201,20 +201,62 @@ func treeAsAny(tree map[string]float64) map[string]any {
 
 // NewProcessTreeSampler returns a Sampler that walks the real process tree
 // rooted at daemonPID (the daemon itself plus all descendants — sidecar,
-// inference worker, ...), summing RSS (MB) and CPU% across the tree. It is
-// deliberately defensive: any error walking a process (e.g. it exited mid-walk)
-// just skips that process rather than failing the whole sample, and a
-// top-level failure (daemon pid not found) returns a zero Sample rather than
-// panicking. This function is not exercised by the deterministic unit tests —
-// Poll's state machine is tested via an injected Sampler.
+// inference worker, ...), summing RSS (MB) and CPU% across the tree.
+//
+// The returned closure is STATEFUL: it keeps a persistent cache of
+// *process.Process handles keyed by pid across calls. This is required for
+// correct CPU measurement — Percent(0) reports CPU usage as an interval delta
+// since the *previous call on the same handle*, so a fresh handle created each
+// poll (as gopsutil's lifetime-average CPUPercent effectively does) would
+// always read ~0 and the sustained-CPU anomaly would never fire. Reusing the
+// handle means the first poll on a new pid returns 0 (it caches the baseline)
+// and every poll thereafter yields a true since-last-poll delta; the sustained
+// window spans multiple polls, so the discarded first sample is harmless.
+//
+// Note: summed tree cpu_pct can exceed 100 on multi-core hosts (each process
+// can independently saturate a core) — the operator sets Thresholds.CPUPct
+// with that in mind.
+//
+// It is deliberately defensive: a handle whose process has exited (errors on
+// MemoryInfo/Percent/Children) is skipped and evicted from the cache, a bad
+// root pid returns a zero Sample, and it never panics. This function is not
+// exercised by the deterministic unit tests — Poll's state machine is tested
+// via an injected Sampler.
 func NewProcessTreeSampler(daemonPID int) Sampler {
+	// cache holds one *process.Process per live pid, persisted across calls so
+	// Percent(0) has the per-handle baseline it needs for an interval delta.
+	cache := map[int32]*process.Process{}
+
 	return func() Sample {
-		root, err := process.NewProcess(int32(daemonPID))
-		if err != nil {
-			return Sample{}
+		root, ok := cache[int32(daemonPID)]
+		if !ok {
+			p, err := process.NewProcess(int32(daemonPID))
+			if err != nil {
+				return Sample{}
+			}
+			root = p
+			cache[int32(daemonPID)] = p
 		}
 
+		// Recompute the current tree pid set, reusing cached handles for pids
+		// still present and creating handles for newly-seen pids.
 		procs := collectTree(root)
+		present := make(map[int32]bool, len(procs))
+		for i, p := range procs {
+			pid := p.Pid
+			present[pid] = true
+			if cached, ok := cache[pid]; ok {
+				procs[i] = cached // reuse the handle (keeps Percent baseline)
+			} else {
+				cache[pid] = p
+			}
+		}
+		// Evict handles for pids that vanished since the last poll.
+		for pid := range cache {
+			if !present[pid] {
+				delete(cache, pid)
+			}
+		}
 
 		var totalRSSMB, totalCPUPct float64
 		tree := make(map[string]float64, len(procs))
@@ -224,13 +266,23 @@ func NewProcessTreeSampler(daemonPID int) Sampler {
 				role = "daemon"
 			}
 
-			if mem, err := p.MemoryInfo(); err == nil && mem != nil {
+			mem, memErr := p.MemoryInfo()
+			if memErr == nil && mem != nil {
 				rssMB := float64(mem.RSS) / 1024 / 1024
 				totalRSSMB += rssMB
 				tree[role] += rssMB
 			}
-			if cpuPct, err := p.CPUPercent(); err == nil {
+			// Percent(0): CPU% used since the previous call on this handle
+			// (non-blocking). First call on a fresh handle returns 0.
+			cpuPct, cpuErr := p.Percent(0)
+			if cpuErr == nil {
 				totalCPUPct += cpuPct
+			}
+
+			// A handle that errors on both reads has almost certainly exited;
+			// drop it from the cache so a stale handle isn't reused next poll.
+			if memErr != nil && cpuErr != nil {
+				delete(cache, p.Pid)
 			}
 		}
 
