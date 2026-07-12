@@ -100,6 +100,15 @@ reload on absolute headroom) and **idle eviction** (unload after inactivity,
 reload on demand). `GET /metrics` exposes state/EWMA/threads/queue/counts. Full
 mechanisms + load-test validation: **`sidecar/loadtest/README.md`**.
 
+**Footprint caps are set at spawn, parent-side** (`daemon.go` → `sidecarEnv`).
+The daemon injects `MALLOC_ARENA_MAX=2` plus `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=2`
+and `KELD_SIDECAR_MAX_THREADS=2` (all set-if-absent, so an operator can override).
+Without the arena cap, glibc spawns a malloc arena per allocating thread and each
+retains freed heap — RSS then balloons to ~2× the model working set (measured
+6.4 GB vs a ~2.6 GB working set on a 20-core host). `MALLOC_ARENA_MAX` **must** be
+parent-set: glibc reads it when the child's allocator initializes, before Python
+can set it for itself. The thread caps also bound CPU to ≤2 cores.
+
 ## The CLI (`keld`)
 
 `cmd/keld` → `internal/cli`. Browser-based device-authorization login

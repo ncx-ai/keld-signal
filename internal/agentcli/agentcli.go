@@ -130,6 +130,7 @@ func NewRootCmd() *cobra.Command {
 		Short: "Remove the keld-agent service.",
 		RunE:  func(cmd *cobra.Command, args []string) error { return service.Uninstall() },
 	})
+	root.AddCommand(newMetricsCmd())
 	root.AddCommand(&cobra.Command{
 		Use:   "status",
 		Short: "Show keld-agent service status.",

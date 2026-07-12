@@ -17,6 +17,10 @@ import (
 type Info struct {
 	Port   int    `json:"port"`
 	Secret string `json:"secret"`
+	// SidecarPort is the loopback port of the GLiNER2 sidecar, allocated by the
+	// daemon at startup. Zero/absent when ML is disabled or the deterministic
+	// backend is in use. Lets `keld-agent metrics` reach the sidecar's /metrics.
+	SidecarPort int `json:"sidecar_port,omitempty"`
 }
 
 // NewSecret returns a 32-byte random secret as a 64-char hex string.
@@ -41,6 +45,21 @@ func Write(info Info) error {
 		return err
 	}
 	return os.WriteFile(paths.AgentInfoPath(), buf.Bytes(), 0o600)
+}
+
+// SetSidecarPort updates the SidecarPort field of the existing agent.json,
+// preserving the daemon port/secret. Errors if agent.json is absent — the
+// daemon writes it (with port + secret) before the sidecar port is known.
+func SetSidecarPort(port int) error {
+	info, err := Read()
+	if err != nil {
+		return err
+	}
+	if info == nil {
+		return errors.New("agentcfg: agent.json not found")
+	}
+	info.SidecarPort = port
+	return Write(*info)
 }
 
 // Read returns the info, or (nil, nil) if the file is absent.
