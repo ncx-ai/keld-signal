@@ -96,6 +96,26 @@ func TestRunInstallCodeAbortsBeforeService(t *testing.T) {
 	}
 }
 
+func TestRunInstallTTYLoginFailureAbortsBeforeService(t *testing.T) {
+	var calls []string
+	run := func(name string, args ...string) error {
+		calls = append(calls, strings.Join(append([]string{name}, args...), " "))
+		if strings.Contains(calls[len(calls)-1], "login") {
+			return errors.New("login boom")
+		}
+		return nil
+	}
+	installed := false
+	err := runInstall(installConfig{}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, func() error { installed = true; return nil })
+	if err == nil {
+		t.Fatal("expected error when login fails in the TTY branch")
+	}
+	if len(calls) != 1 || installed {
+		t.Fatalf("must stop after login; calls=%v installed=%v", calls, installed)
+	}
+}
+
 func TestRunInstallApiURLAndJSONPassthrough(t *testing.T) {
 	calls, run := recorder()
 	err := runInstall(installConfig{code: "X1-Y2", apiURL: "http://localhost:8000", jsonOut: true},

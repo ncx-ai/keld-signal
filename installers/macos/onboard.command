@@ -10,9 +10,9 @@ read -r CODE
 if [ -n "$CODE" ]; then
   # keld-agent install redeems the code (keld login --code), configures tools, then
   # starts the agent. Fall back to interactive install (browser login) if the code fails.
-  "$AGENT" install --code "$CODE" || { echo "Setup code didn't work; falling back to browser login…"; "$AGENT" install || exit 1; }
+  "$AGENT" install --code "$CODE" || { echo "Setup code didn't work; falling back to browser login…"; "$AGENT" install --yes || exit 1; }
 else
-  "$AGENT" install || exit 1
+  "$AGENT" install --yes || exit 1
 fi
 echo; echo "Keld is set up and running. You can close this window."; echo
 echo "(Re-run anytime: /usr/local/keld/onboard.command)"

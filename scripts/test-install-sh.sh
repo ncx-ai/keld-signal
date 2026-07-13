@@ -30,7 +30,6 @@ KELD_NO_SIDECAR=1 \
   sh "$here/scripts/install.sh" --code TESTCODE >/dev/null 2>&1 || true
 
 # On x86_64 linux the archive matches; on other hosts uname differs — skip cleanly.
-if ! grep -q "keld_linux_amd64" "$tmp/dl/testtag/keld_linux_amd64.tar.gz" 2>/dev/null; then :; fi
 if [ "$(uname -s)" != "Linux" ] || { [ "$(uname -m)" != "x86_64" ] && [ "$(uname -m)" != "amd64" ]; }; then
   echo "SKIP: install.sh test requires linux/amd64 host"; exit 0
 fi

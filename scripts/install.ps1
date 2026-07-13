@@ -70,6 +70,9 @@ if (Test-Path $agent) {
     } else {
         & $agent install
     }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "keld-agent install did not complete (exit $LASTEXITCODE). Re-run: keld-agent install --code <CODE>"
+    }
 }
 
 Write-Host ""
