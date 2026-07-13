@@ -1,7 +1,8 @@
 """Soak tier (opt-in, long): slow-leak slope (K1), CPU stress sweep (K2), and a
-real model unload/reload (K4) with the evict threshold configured just below the
-measured baseline available% so the true host is never driven to 5%. Deterministic
-eviction transitions (K3, incl. idle) are covered by app/test_memwatch.py."""
+real worker recycle under memory pressure (K4) with the evict threshold
+configured just below the measured baseline available% so the true host is
+never driven to 5%. Deterministic recycle transitions (K3, incl. idle) are
+covered by app/test_worker_manager.py."""
 import os
 import random
 import time
@@ -24,15 +25,42 @@ def _rss_mb(pid):
     return psutil.Process(pid).memory_info().rss / (1024.0 * 1024.0)
 
 
+def _worker_pid(parent_pid):
+    """The inference worker child, identified as the max-RSS child of the
+    sidecar (parent) process. Under multiprocessing spawn, the first child is
+    often the persistent, ~model-free `resource_tracker` (created before the
+    worker) rather than the worker itself, so picking children()[0] silently
+    samples the wrong static process; the worker is the one actually holding
+    the model (~GB-scale RSS vs the tracker's ~MB-scale). Returns None if no
+    children exist yet (or between recycles)."""
+    try:
+        children = psutil.Process(parent_pid).children()
+        if not children:
+            return None
+        return max(children, key=lambda c: c.memory_info().rss).pid
+    except psutil.NoSuchProcess:
+        return None
+
+
 def _k1_k2(minutes, live):
     fails = 0
     # Idle eviction off so a quiet moment doesn't unload mid-measurement.
     sc = SidecarProcess(env={"KELD_SIDECAR_IDLE_UNLOAD_S": "0"})
     sc.start()
     try:
+        # Unlike the old in-process model, the inference worker is spawned
+        # lazily on first request (/health going "ok" only means the parent
+        # can serve on demand). Warm it up first so the whole measurement
+        # window sees a steady, already-loaded worker.
+        httpx.post(sc.base_url + "/classify",
+                   json={"text": "warm up", "tasks": {"task_type": ["codegen", "other"]}},
+                   timeout=60.0)
+        worker_pid = _worker_pid(sc.pid)
         rng = random.Random(11)
-        # K1: sustained moderate load; RSS slope over the whole run.
-        sm = Sampler(sc.pid, sc.base_url + "/metrics", interval=1.0)
+        # K1: sustained moderate load; RSS slope over the whole run. Sample the
+        # worker process — it holds the model; the parent's own RSS stays flat
+        # by design and would make this assertion vacuous.
+        sm = Sampler(worker_pid or sc.pid, sc.base_url + "/metrics", interval=1.0)
         sm.start()
         dur = minutes * 60.0
         if live:
@@ -74,61 +102,83 @@ def _k1_k2(minutes, live):
     return fails
 
 
-def _k4_real_eviction():
-    """Configure evict-mark just below current available% and reload gate small,
-    apply a bounded memory stressor to cross it, and assert the model actually
-    unloads (RSS drops ~model_cost) and reloads on recovery."""
+def _k4_real_recycle():
+    """Configure the RSS margin / evict-pct just below current available% and
+    apply a bounded memory stressor to cross it, then assert the worker is
+    held (killed) under pressure, requests 503 while held, the parent
+    service's own RSS stays flat throughout (it never holds the model), and
+    the worker recovers to serving on demand once headroom returns."""
     fails = 0
     vm = psutil.virtual_memory()
     avail_pct = vm.available / vm.total * 100.0
     evict_at = max(1.0, avail_pct - 3.0)  # trip with a small stressor; never 5% of a full box
     env = {
         "KELD_SIDECAR_EVICT_AVAIL_PCT": f"{evict_at:.1f}",
-        "KELD_SIDECAR_RESTORE_HOLD_S": "5",     # shortened for the test
-        "KELD_SIDECAR_RELOAD_MARGIN_MB": "256",
+        "KELD_SIDECAR_RSS_MARGIN_MB": "256",   # small so a modest stressor trips it
         "KELD_SIDECAR_MEM_POLL_S": "1",
         "KELD_SIDECAR_IDLE_UNLOAD_S": "0",
     }
     sc = SidecarProcess(env=env)
     sc.start()
     try:
+        # Spawn + warm the worker before applying pressure so model_cost_mb is
+        # known and the worker is READY (poll()'s pressure check is a no-op
+        # unless the worker is already up).
+        r0 = httpx.post(sc.base_url + "/classify",
+                        json={"text": "hi", "tasks": {"task_type": ["codegen", "other"]}},
+                        timeout=60.0)
+        fails += _report("K4 warm-up", r0.status_code == 200, f"status={r0.status_code}")
+
         m0 = httpx.get(sc.base_url + "/metrics", timeout=2.0).json()
-        cost = m0["memory"]["model_cost_mb"] or 0.0
-        rss0 = _rss_mb(sc.pid)
+        cost = m0["worker"]["model_cost_mb"] or 0.0
+        worker_rss0 = m0["worker"]["worker_rss_mb"] or 0.0
+        parent_rss0 = _rss_mb(sc.pid)
 
         from loadtest.stressor import MemStressor
         need_mb = int((avail_pct - evict_at + 1.0) / 100.0 * vm.total / (1024.0 * 1024.0))
         ms = MemStressor(target_mb=need_mb, floor_mb=1024)
         ms.start()
 
-        state, rss1 = "loaded", rss0
+        state, worker_rss1 = m0["worker"]["state"], worker_rss0
         for _ in range(30):
             time.sleep(1)
             m = httpx.get(sc.base_url + "/metrics", timeout=2.0).json()
-            state = m["model_state"]
-            rss1 = _rss_mb(sc.pid)
-            if state in ("evicted", "reloading"):
+            state = m["worker"]["state"]
+            worker_rss1 = m["worker"]["worker_rss_mb"] or 0.0
+            if state == "held":
                 break
-        fails += _report("K4 evicts", state in ("evicted", "reloading"), f"state={state}")
+        fails += _report("K4 recycles-under-pressure", state == "held", f"state={state}")
 
         r = httpx.post(sc.base_url + "/classify",
                        json={"text": "hi", "tasks": {"task_type": ["codegen", "other"]}},
                        timeout=5.0)
-        fails += _report("K4 503-while-evicted", r.status_code == 503, f"status={r.status_code}")
-        dropped = rss0 - rss1
-        fails += _report("K4 rss-released", cost == 0.0 or dropped > cost * 0.4,
-                         f"rss0={rss0:.0f} rss1={rss1:.0f} dropped={dropped:.0f} cost={cost:.0f}")
+        fails += _report("K4 503-while-held", r.status_code == 503, f"status={r.status_code}")
+
+        dropped = worker_rss0 - worker_rss1
+        fails += _report("K4 worker-rss-released", cost == 0.0 or dropped > cost * 0.4,
+                         f"worker_rss0={worker_rss0:.0f} worker_rss1={worker_rss1:.0f} "
+                         f"dropped={dropped:.0f} cost={cost:.0f}")
+
+        parent_rss1 = _rss_mb(sc.pid)
+        fails += _report("K4 parent-rss-flat", abs(parent_rss1 - parent_rss0) < 100,
+                         f"parent_rss0={parent_rss0:.0f} parent_rss1={parent_rss1:.0f}")
 
         ms.stop()
-        reloaded = False
-        m = {"model_state": state}
+        recovered = False
+        m = {"worker": {"state": state}}
         for _ in range(40):
             time.sleep(1)
             m = httpx.get(sc.base_url + "/metrics", timeout=2.0).json()
-            if m["model_state"] == "loaded":
-                reloaded = True
+            if m["worker"]["state"] != "held":
+                recovered = True
                 break
-        fails += _report("K4 reloads", reloaded, f"final_state={m['model_state']}")
+        fails += _report("K4 recovers", recovered, f"final_state={m['worker']['state']}")
+
+        # Serve-on-demand: a fresh request respawns the worker and succeeds.
+        r2 = httpx.post(sc.base_url + "/classify",
+                        json={"text": "hi", "tasks": {"task_type": ["codegen", "other"]}},
+                        timeout=60.0)
+        fails += _report("K4 serves-after-recovery", r2.status_code == 200, f"status={r2.status_code}")
     finally:
         sc.stop()
     return fails
@@ -141,8 +191,10 @@ def _live_load(sc, dur, rng):
         try:
             m = httpx.get(sc.base_url + "/metrics", timeout=2.0).json()
             rss = _rss_mb(sc.pid)
-            print(f"  t={time.monotonic()-t0:6.0f}s rss={rss:7.0f}MB "
-                  f"state={m['model_state']} ewma={m['governor']['cpu_ewma']} "
+            print(f"  t={time.monotonic()-t0:6.0f}s parent_rss={rss:7.0f}MB "
+                  f"worker_state={m['worker']['state']} "
+                  f"worker_rss={m['worker']['worker_rss_mb']}MB "
+                  f"ewma={m['governor']['cpu_ewma']} "
                   f"interval={m['governor']['current_interval_ms']}ms "
                   f"completed={m['counts']['completed']}")
         except Exception:
@@ -152,6 +204,6 @@ def _live_load(sc, dur, rng):
 def run(minutes=30.0, live=False):
     fails = 0
     fails += _k1_k2(minutes, live)
-    fails += _k4_real_eviction()
+    fails += _k4_real_recycle()
     print(f"\nsoak: {'ALL PASS' if fails == 0 else str(fails) + ' FAILED'}")
     return fails

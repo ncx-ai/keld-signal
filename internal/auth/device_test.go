@@ -27,6 +27,33 @@ func deviceServer(t *testing.T, token, principal, org string, hits *int) *httpte
 	return srv
 }
 
+// Login must hand the freshly started device code to the onStart callback (the
+// seam the --json login mode uses to emit a device_code event) before polling.
+func TestLoginInvokesOnStartWithDeviceCode(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	hits := 0
+	srv := deviceServer(t, "AT", "p", "o", &hits)
+	defer srv.Close()
+
+	var seen *api.DeviceStart
+	got, err := Login(
+		api.NewClient(srv.URL, ""),
+		false,
+		func(time.Duration) {},
+		func(string) error { return nil },
+		func(ds *api.DeviceStart) { seen = ds },
+	)
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if seen == nil || seen.UserCode != "UC" || seen.VerificationURL != "https://v" {
+		t.Fatalf("onStart got %+v, want UserCode=UC url=https://v", seen)
+	}
+	if got == nil || got.Principal != "p" || got.Org != "o" {
+		t.Fatalf("auth result %+v, want principal=p org=o", got)
+	}
+}
+
 // force=true makes `keld login` re-authenticate even when (possibly stale) creds
 // are already stored — it must NOT short-circuit on them, and it must persist the
 // fresh token. Regression test for stored creds surviving a server-side token
@@ -98,7 +125,7 @@ func TestLoginPollsThenSucceeds(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	got, err := Login(api.NewClient(srv.URL, ""), false, func(time.Duration) {}, func(string) error { return nil })
+	got, err := Login(api.NewClient(srv.URL, ""), false, func(time.Duration) {}, func(string) error { return nil }, nil)
 	if err != nil || got.AccessToken != "AT" {
 		t.Fatalf("login %v %v", got, err)
 	}
@@ -119,7 +146,7 @@ func TestLoginContinuesWhenBrowserOpenFails(t *testing.T) {
 	// Login must still proceed to poll and succeed.
 	got, err := Login(api.NewClient(srv.URL, ""), true, func(time.Duration) {}, func(string) error {
 		return errors.New("no browser available")
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("login should not abort on browser-open failure: %v", err)
 	}
@@ -140,7 +167,7 @@ func TestLoginTimesOut(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	_, err := Login(api.NewClient(srv.URL, ""), false, func(time.Duration) {}, func(string) error { return nil })
+	_, err := Login(api.NewClient(srv.URL, ""), false, func(time.Duration) {}, func(string) error { return nil }, nil)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
@@ -171,7 +198,7 @@ func TestLoginPollsDespiteBlockingOpener(t *testing.T) {
 
 	done := make(chan *AuthData, 1)
 	go func() {
-		got, err := Login(api.NewClient(srv.URL, ""), true, func(time.Duration) {}, blockingOpener)
+		got, err := Login(api.NewClient(srv.URL, ""), true, func(time.Duration) {}, blockingOpener, nil)
 		if err == nil {
 			done <- got
 		}

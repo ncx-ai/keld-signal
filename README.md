@@ -47,6 +47,9 @@ flowchart LR
 straight to Atlas from the hook. Enrichment (the semantic *meaning* of a prompt)
 is computed **locally** by `keld-agent`; only masked labels + masked entity spans
 are published. The raw prompt text is read on your machine and never transmitted.
+(The agent also reports its own operational health — see
+[Client-events monitoring](#client-events-monitoring-agent-health) below —
+which is a third, much smaller stream: no prompt content, ever.)
 
 ## On-device enrichment (the core)
 
@@ -68,20 +71,24 @@ spans, activity, function, subcategory — that's synced to Atlas. Sensitive spa
   otherwise a pure-Go **deterministic** backend — always present, zero-dependency.
 - **Governed per organization.** An Atlas admin sets enrichment policy once
   (e.g. `include_entity_text`) and every agent picks it up within a poll interval.
-- **Invisible good citizen.** The sidecar throttles CPU two ways (a rate governor
-  *and* dynamic per-inference thread scaling), evicts the model under memory
-  pressure or after inactivity (returning its ~2.6 GB to the OS), and is
+- **Invisible good citizen.** The long-lived sidecar service holds no model
+  (RSS stays flat); inference runs in a separate worker child process that's
+  **recycled** — killed and respawned, reclaiming its ~2.6 GB heap via process
+  exit — on an RSS ceiling, memory pressure, inactivity, or a hung job, so a
+  single misbehaving inference can't wedge or balloon the service. CPU is still
+  throttled two ways (a rate governor *and* dynamic per-inference thread
+  scaling), single-flight is preserved (one inference at a time), and it's all
   load-tested to prove it neither leaks nor runs away with CPU.
 - **Reliable, GLiNER2-only delivery.** Enrichment never silently degrades to the
   deterministic backend. The hook writes each prompt *pointer* (never the prompt
   text) to a durable on-disk **spool**, so work survives daemon downtime and is
   drained on startup and a periodic sweep. Each job runs under a deadline
   (`KELD_ENRICH_JOB_TIMEOUT`) that **cancels its in-flight sidecar calls** on
-  timeout — so a slow/reloading model can't leak self-amplifying retries — then
+  timeout — so a slow or recycling sidecar worker can't leak self-amplifying retries — then
   re-spools for a later GLiNER2 retry. Retries are **bounded**: after
   `KELD_ENRICH_MAX_ATTEMPTS` a job is quarantined to `~/.keld/spool/bad/` rather
-  than retried forever. An idle-evicted or briefly-restarting model is waited out
-  (wake + retry), not substituted.
+  than retried forever. A sidecar whose inference worker is mid-recycle or
+  respawning is waited out (wake + retry), never substituted with deterministic.
 
 📄 **Deep dive:** [sidecar/loadtest/README.md](sidecar/loadtest/README.md) — the
 sweep pipeline (with worked examples), the resource-safety mechanisms, tuning
@@ -89,6 +96,27 @@ knobs, and the measured validation results. See also
 [docs/enrichment-settings.md](docs/enrichment-settings.md) (control plane) and
 [docs/keld-agent-p2-onnx-decision.md](docs/keld-agent-p2-onnx-decision.md)
 (why a bundled sidecar over in-process ONNX).
+
+## Client-events monitoring (agent health)
+
+Alongside enrichment, `keld-agent` reports its own **operational health** to
+Atlas — a third, much smaller stream, distinct from both telemetry and
+enrichment: job retries/quarantines, sidecar crashes or fallback-to-deterministic,
+publish failures, sustained high RSS/CPU, and lifecycle (`daemon.start`/`stop`).
+It's how Atlas can tell an agent is struggling (or silent) without ever seeing a
+prompt — events carry only ids, codes, and small structured fields (counts,
+durations, thresholds), passed through a Go-side redaction gate that strips
+paths and reduces errors to a class+summary before anything is buffered.
+
+Batched and POSTed to `POST /v1/signal/client-events` — the first route under
+the **`/v1/signal/*`** convention for new client↔Atlas protocol surfaces — with
+the same durability posture as enrichment publish (retried, spooled to
+`~/.keld/spool/clientevents/` if Atlas is unreachable). Governed per-org (on by
+default) via the existing enrichment-settings poll.
+
+📄 **Wire contract:** [docs/signal-client-events.md](docs/signal-client-events.md)
+— the full envelope, event/code catalog, settings block, and redaction
+guarantee (what Atlas's ingest route and dashboard build against).
 
 ## Install
 
@@ -111,6 +139,11 @@ and registers the per-user agent. It's a **`.pkg`, not a DMG** — a DMG is
 drag-to-Applications for `.app` bundles, whereas Keld installs a CLI plus a
 background daemon, which the `.pkg`'s install scripts wire up.
 
+After install, a small **Keld Setup** app opens automatically to walk you through
+sign-in and tool configuration (it drives `keld login` / `keld signal setup` for
+you). You can close it and run those two commands yourself later — the background
+agent is registered either way.
+
 > **Gatekeeper:** release builds are signed + notarized when the maintainer's
 > Apple credentials are configured; otherwise macOS warns on first run — open
 > **System Settings → Privacy & Security** and click **Allow**.
@@ -120,6 +153,11 @@ background daemon, which the `.pkg`'s install scripts wire up.
 Download **`keld-setup.exe`** and run it. Per-user (no admin): installs to
 `%LOCALAPPDATA%\Programs\keld`, adds Keld to your `PATH`, and registers the agent
 as a logon task.
+
+During install a **Set up Keld** step walks you through sign-in and tool
+configuration (it drives `keld login` / `keld signal setup`). You can click Next to
+skip it and run those two commands yourself later — the background agent is
+registered either way.
 
 > **SmartScreen:** unsigned builds trigger a warning — click **More info → Run
 > anyway**. Code signing is a planned follow-up.
@@ -182,7 +220,9 @@ Keld product groups. Telemetry onboarding lives under the `keld signal` group.
 
 `keld signal setup` flags: `--tool claude_code,codex` (target specific tools),
 `--dry-run` (show changes only), `--yes` (skip confirmation),
-`--no-login` (fail instead of opening a browser, for CI).
+`--no-login` (fail instead of opening a browser, for CI),
+`--json` (stream machine-readable NDJSON instead of prompting; implies `--yes` —
+see [Machine-readable interface](#machine-readable-interface-installers--automation)).
 
 `setup` is interactive. By default it prints a concise summary of the changes to
 each config file; pass `--diff` to see the full unified diff. If a tool's config
@@ -222,6 +262,37 @@ keld signal setup                            # remembered — uses the same serv
 The chosen URL is stored with your credentials, so subsequent commands target it
 automatically. `--api-url` overrides the `KELD_API_URL` environment variable,
 which does the same thing if you prefer setting it in your shell.
+
+### Machine-readable interface (installers & automation)
+
+`keld login` and `keld signal setup` each accept `--json`, which streams
+**newline-delimited JSON** on stdout instead of human text — one object per line,
+each with an `event` field. This is what the native platform installers drive to
+surface the device-authorization code and setup progress inside their own UI, and
+it's useful for any scripted onboarding.
+
+```bash
+keld login --json --no-browser   # emit device_code immediately, then authorized (or error)
+keld signal setup --json         # non-interactive (implies --yes); a tool event per tool, then done
+```
+
+`keld login --json` emits, in order:
+
+- `{"event":"device_code","verification_url":…,"user_code":…,"expires_in":…,"interval":…}`
+  — emitted immediately, so a caller can render the code without waiting for approval;
+- `{"event":"authorized","principal":…,"org":…}` on success, or
+  `{"event":"error","message":…}` with a non-zero exit.
+
+`--no-browser` suppresses the automatic browser open so the caller owns the link
+(it has the URL from the first event). `keld signal setup --json` emits a
+`{"event":"tool",…,"action":"configured|already_configured|skipped_conflict"}` line
+per detected tool, then `{"event":"done","configured":N}`.
+
+**`keld-agent install` is TTY-aware.** Run from a terminal, it walks you through
+`keld login` then `keld signal setup`, and finally registers the background service.
+Run headless (e.g. by a GUI installer with no console attached), it **skips** the
+interactive steps, registers the service only, and prints the commands to finish
+setup — the installer's own pages drive the `--json` interface instead.
 
 ## Authentication
 

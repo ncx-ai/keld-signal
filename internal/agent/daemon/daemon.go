@@ -3,6 +3,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -19,6 +21,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
+	"github.com/ncx-ai/keld-signal/internal/agent/clientevents/resource"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
@@ -27,10 +31,12 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 	"github.com/ncx-ai/keld-signal/internal/agent/resolve"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/hook"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/spool"
+	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
 // errQueueFull signals a spool drain to keep the file for the next sweep.
@@ -49,7 +55,7 @@ type Sender interface {
 // ctx is the daemon-lifetime context; each job runs under a child context that
 // is cancelled on timeout so a hung/slow enrichment's in-flight sidecar calls
 // are reclaimed (not left retrying forever — the death-spiral root cause).
-func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool) {
+func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, emitter *clientevents.Emitter) {
 	ledger := newRetryLedger()
 	for {
 		j, ok := q.Next()
@@ -72,7 +78,7 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 		// single-flight sidecar instead of leaking a retry loop.
 		jobCtx, cancel := context.WithCancel(ctx)
 		jobModel := withJobCtx(m, jobCtx)
-		finished := runWithTimeout(to, func() { process(jobCtx, j, jobModel, pub, actor, includeEntityText) })
+		finished := runWithTimeout(to, func() { process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter) })
 		cancel() // always: on timeout this reclaims the abandoned attempt; on success it just releases resources.
 
 		if finished {
@@ -86,20 +92,55 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 		// un-enrichable job can't loop forever (the amplification that saturated
 		// the sidecar). Atlas dedups on dedup_key, so a late double-publish from
 		// a recovering attempt is harmless.
+		je := newJobEmit(emitter, j)
 		if ledger.exhausted(j.Key(), maxAttempts()) {
+			je.Emit("job.retry_exhausted", clientevents.SevWarn, map[string]any{
+				"attempts":  maxAttempts(),
+				"timeout_s": to.Seconds(),
+			})
 			if err := spool.Quarantine(pointerFromJob(j)); err != nil {
 				log.Printf("keld-agent: job %s exhausted retries and quarantine failed: %v", j.Key(), err)
+				je.Emit("job.quarantined", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
 			} else {
 				log.Printf("keld-agent: job %s exceeded %s on %d attempts — quarantined", j.Key(), to, maxAttempts())
+				je.Emit("job.quarantined", clientevents.SevWarn, map[string]any{"attempts": maxAttempts()})
 			}
 			continue
 		}
 		if err := spool.Write(pointerFromJob(j)); err != nil {
 			log.Printf("keld-agent: job %s exceeded %s and re-spool failed: %v", j.Key(), to, err)
+			je.Emit("job.respool_failed", clientevents.SevError, map[string]any{
+				"error":     clientevents.RedactError(err),
+				"timeout_s": to.Seconds(),
+			})
 		} else {
 			log.Printf("keld-agent: job %s exceeded %s, re-spooled for retry", j.Key(), to)
 		}
 	}
+}
+
+// jobEmit wraps a clientevents.JobEmitter so job-scoped emit sites can call
+// Emit unconditionally even when the daemon's Emitter is nil — several
+// existing tests exercise Worker/process without wiring client events, and a
+// nil *clientevents.JobEmitter (from calling WithJob on a nil Emitter) would
+// panic if Emit were invoked on it directly.
+type jobEmit struct{ je *clientevents.JobEmitter }
+
+// newJobEmit builds a jobEmit for job j, tolerating a nil emitter.
+func newJobEmit(emitter *clientevents.Emitter, j queue.Job) jobEmit {
+	if emitter == nil {
+		return jobEmit{}
+	}
+	return jobEmit{je: emitter.WithJob(j.SessionID, j.PromptID)}
+}
+
+// Emit is a no-op when the wrapped emitter is nil; otherwise it stamps j's
+// session/prompt ids and forwards to the parent Emitter's gate.
+func (j jobEmit) Emit(code string, sev clientevents.Severity, fields map[string]any) {
+	if j.je == nil {
+		return
+	}
+	j.je.Emit(code, sev, fields)
 }
 
 // retryLedger counts per-job re-spool attempts so the worker can cap them. It is
@@ -186,10 +227,16 @@ func pointerFromJob(j queue.Job) spool.Pointer {
 	return p
 }
 
-func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool) {
+func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter) {
+	je := newJobEmit(emitter, j)
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("keld-agent: worker recovered: %v", r)
+			panicErr, ok := r.(error)
+			if !ok {
+				panicErr = fmt.Errorf("%v", r)
+			}
+			je.Emit("worker.panic", clientevents.SevError, map[string]any{"error": clientevents.RedactError(panicErr)})
 		}
 	}()
 	text, ok := resolve.Resolve(j.Source, j.TranscriptPath, j.PromptID, j.Inline)
@@ -212,6 +259,7 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	e := publish.Build(j, profile, actor, includeEntityText(), promptChars, time.Now())
 	if err := pub.Send(e); err != nil {
 		log.Printf("keld-agent: publish failed for %s: %v", j.Key(), err)
+		je.Emit("publish.failed", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
 	}
 }
 
@@ -256,10 +304,8 @@ func resolveSidecar(dir string) (string, bool) {
 //	    and one-dir subdir layouts (macOS / Linux).
 //	(3) resolveSidecar on each per-OS well-known base directory.
 func sidecarBinPath() (string, bool) {
-	if p := os.Getenv("KELD_SIDECAR_BIN"); p != "" {
-		if isRegularFile(p) {
-			return p, true
-		}
+	if p, ok := sidecarBinFromEnv(); ok {
+		return p, true
 	}
 	// (2) beside the running keld-agent executable (how the installers lay it out).
 	if exe, err := os.Executable(); err == nil {
@@ -270,6 +316,20 @@ func sidecarBinPath() (string, bool) {
 	// (3) per-OS well-known fallback.
 	for _, base := range wellKnownSidecarDirs() {
 		if p, ok := resolveSidecar(base); ok {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// sidecarBinFromEnv resolves the KELD_SIDECAR_BIN override (resolution step 1).
+// It returns the path and true only when the env var is set AND points at a
+// regular file. An unset var, a nonexistent path, or a directory (e.g. the
+// one-dir PyInstaller bundle root) all yield ("", false) so the caller falls
+// through to the beside-executable and well-known-dir probes.
+func sidecarBinFromEnv() (string, bool) {
+	if p := os.Getenv("KELD_SIDECAR_BIN"); p != "" {
+		if isRegularFile(p) {
 			return p, true
 		}
 	}
@@ -313,6 +373,42 @@ func Run(ctx context.Context) error {
 	if m, err := config.LoadManifest(); err == nil && m != nil && m.Actor != nil {
 		actor = *m.Actor
 	}
+	// Org comes from the login-time auth store; a manifest-less actor falls
+	// back to the auth principal. Non-fatal: an unreadable/absent auth.json
+	// just leaves Org "" (and Actor unresolved) — client events still flow,
+	// with reduced correlation.
+	var org string
+	if a, aerr := auth.Load(); aerr == nil && a != nil {
+		org = a.Org
+		if actor == "" {
+			actor = a.Principal
+		}
+	}
+	installID, _ := clientevents.InstallID() // non-fatal: "" just weakens cross-run correlation
+	base := clientevents.Corr{
+		Org:       org,
+		Actor:     actor,
+		InstallID: installID,
+		RunID:     newRunID(),
+		Version:   version.CLI,
+		OS:        runtime.GOOS,
+		Arch:      runtime.GOARCH,
+	}
+	emitter := clientevents.NewEmitter(base, 1024)
+
+	// Client-events gate/thresholds default ON immediately — BEFORE any emit
+	// (daemon.start below, the pre-poll sidecar.fallback inside mlBackend, ...)
+	// so early startup events aren't dropped by the emitter's zero-value
+	// (disabled) gate. This also means telemetry works even if the settings
+	// fetch never completes (Atlas unreachable, or an Atlas predating the
+	// /v1/enrichment-settings client_telemetry block). The settings poll below
+	// narrows/widens this on each successful fetch; a fetch error leaves it
+	// exactly as-is (never closes the gate).
+	eff := (*settings.ClientTelemetry)(nil).WithDefaults()
+	emitter.SetGate(gateFrom(eff))
+	var gaugesEnabled atomic.Bool
+	gaugesEnabled.Store(eff.GaugesEnabled)
+
 	q := queue.New(256)
 	pub := publish.New(enrichEndpoint(cfg.Endpoint), cfg.IngestToken, actor)
 
@@ -325,13 +421,17 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	log.Printf("keld-agent: listening on 127.0.0.1:%d", port)
+	// EmitExempt: daemon.start is SevInfo but must surface even under the
+	// default warn floor (lifecycle narrative), and it fires once here before
+	// any poll could lower the floor — a plain Emit would always drop it.
+	emitter.EmitExempt("daemon.start", clientevents.SevInfo, map[string]any{"port": port})
 
 	// Select the enrichment model and readiness gate. When ML is enabled and a
 	// sidecar binary is present we route through the sidecar (falling back to
 	// deterministic when it is unhealthy); otherwise we use the deterministic
 	// model with an always-ready gate. mlBackend returns the deterministic pair
 	// when it cannot bring the sidecar up, so the caller has a single code path.
-	model, gate := mlBackend(ctx, set)
+	model, gate := mlBackend(ctx, set, emitter)
 
 	live := settings.NewLive(set)
 	pollInterval := 5 * time.Minute
@@ -340,8 +440,38 @@ func Run(ctx context.Context) error {
 			pollInterval = d
 		}
 	}
-	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), cfg.IngestToken, 10*time.Second), live, pollInterval)
-	go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate)
+
+	flushInterval := 30 * time.Second
+	if v := os.Getenv("KELD_CLIENTEVENTS_FLUSH"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			flushInterval = d
+		}
+	}
+	reporter := clientevents.NewReporter(signalClientEventsEndpoint(cfg.Endpoint), cfg.IngestToken, installID, emitter.Drain, paths.ClientEventsSpoolDir())
+	go reporter.Run(ctx, flushInterval)
+
+	sampleInterval := 15 * time.Second
+	if v := os.Getenv("KELD_CLIENTEVENTS_SAMPLE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			sampleInterval = d
+		}
+	}
+	gaugeEmit := func(f map[string]any) {
+		if gaugesEnabled.Load() {
+			emitter.EmitGauge("resource.gauge", f)
+		}
+	}
+	watcher := resource.NewWatcher(emitter.Emit, gaugeEmit, thresholdsFrom(eff), resource.NewProcessTreeSampler(os.Getpid()), time.Now)
+	go watcher.Run(ctx, sampleInterval)
+
+	onRemote := func(r *settings.Remote) {
+		re := r.ClientTelemetry.WithDefaults()
+		emitter.SetGate(gateFrom(re))
+		watcher.SetThresholds(thresholdsFrom(re))
+		gaugesEnabled.Store(re.GaugesEnabled)
+	}
+	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), cfg.IngestToken, 10*time.Second), live, pollInterval, emitter, onRemote)
+	go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, emitter)
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
 	// sweeping for ones spooled during brief unavailability. Idempotent:
@@ -374,15 +504,48 @@ func Run(ctx context.Context) error {
 		}
 	}()
 
-	return serve(ctx, ln, ingress.Handler(q, secret), q)
+	return serve(ctx, ln, ingress.Handler(q, secret), q, emitter)
+}
+
+// newRunID generates a per-run correlation id (16 random bytes, hex-encoded),
+// mirroring clientevents.InstallID's random-id style. A read failure from the
+// system CSPRNG is vanishingly rare and non-fatal here — an empty run_id just
+// weakens correlation within a single process lifetime, it never blocks startup.
+func newRunID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(buf)
+}
+
+// gateFrom maps resolved client_telemetry settings to the clientevents Gate.
+func gateFrom(eff settings.EffectiveClientTelemetry) clientevents.Gate {
+	return clientevents.Gate{
+		Enabled:     eff.Enabled,
+		MinSeverity: clientevents.Severity(eff.MinSeverity),
+		SampleRate:  eff.SampleRate,
+	}
+}
+
+// thresholdsFrom maps resolved client_telemetry settings to the resource
+// watcher's Thresholds.
+func thresholdsFrom(eff settings.EffectiveClientTelemetry) resource.Thresholds {
+	return resource.Thresholds{
+		RSSMB:           eff.RSSThresholdMB,
+		CPUPct:          eff.CPUThresholdPct,
+		SustainedWindow: time.Duration(eff.SustainedWindowS) * time.Second,
+		GaugeInterval:   time.Duration(eff.GaugeIntervalS) * time.Second,
+	}
 }
 
 // serve runs the ingress HTTP server until ctx is cancelled, then gracefully
 // shuts it down and closes the queue. It blocks until the server stops.
-func serve(ctx context.Context, ln net.Listener, handler http.Handler, q *queue.Queue) error {
+func serve(ctx context.Context, ln net.Listener, handler http.Handler, q *queue.Queue, emitter *clientevents.Emitter) error {
 	srv := &http.Server{Handler: handler}
 	go func() {
 		<-ctx.Done()
+		emitter.EmitExempt("daemon.stop", clientevents.SevInfo, nil)
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutCtx)
@@ -403,6 +566,7 @@ type mlBackendOpts struct {
 	modelSHA string
 	fetcher  provision.Fetcher
 	healthFn func() bool
+	emitter  *clientevents.Emitter
 }
 
 // mlBackend returns the enrichment model and the worker readiness gate.
@@ -413,7 +577,7 @@ type mlBackendOpts struct {
 // sidecar is ready, has fallen back, OR provisioning has failed. In every
 // other case (ML off, no binary, or a setup failure) it returns the
 // deterministic model with an always-ready gate.
-func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func() bool) {
+func mlBackend(ctx context.Context, set settings.Settings, emitter *clientevents.Emitter) (enrich.Model, func() bool) {
 	deterministic := func() (enrich.Model, func() bool) {
 		return enrich.NewDeterministic(), func() bool { return true }
 	}
@@ -427,10 +591,17 @@ func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func()
 	scLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Printf("keld-agent: sidecar port alloc failed, using deterministic: %v", err)
+		emitter.Emit("sidecar.fallback", clientevents.SevWarn, map[string]any{"error": clientevents.RedactError(err)})
 		return deterministic()
 	}
 	scPort := scLn.Addr().(*net.TCPAddr).Port
 	scLn.Close() // Release; sidecar will bind it.
+
+	// Record the sidecar port in agent.json so `keld-agent metrics` can reach it.
+	// Best-effort: a failure here only affects that diagnostic command.
+	if err := agentcfg.SetSidecarPort(scPort); err != nil {
+		log.Printf("keld-agent: could not record sidecar port: %v", err)
+	}
 
 	scBaseURL := fmt.Sprintf("http://127.0.0.1:%d", scPort)
 	scClient := sidecar.NewCtx(ctx, scBaseURL, 5*time.Second)
@@ -441,13 +612,14 @@ func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func()
 	sup := NewSupervisor(
 		func(p int) (*exec.Cmd, error) {
 			cmd := exec.CommandContext(ctx, binPath, fmt.Sprintf("--port=%d", p))
-			cmd.Env = append(os.Environ(), "KELD_GLINER2_DIR="+modelDir)
+			cmd.Env = sidecarEnv(os.Environ(), modelDir)
 			return cmd, nil
 		},
 		scPort,
 		healthFn,
 		30*time.Second,
 	)
+	sup.SetEmitter(emitter)
 
 	return mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
@@ -456,6 +628,7 @@ func mlBackend(ctx context.Context, set settings.Settings) (enrich.Model, func()
 		modelSHA: provision.ModelSHA256,
 		fetcher:  sidecar.NewHFFetcher(provision.ModelRepo, provision.ModelRevision),
 		healthFn: healthFn,
+		emitter:  emitter,
 	})
 }
 
@@ -471,6 +644,9 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 	go func() {
 		if err := provision.EnsureModel(ctx, opts.modelDir, opts.modelSHA, opts.fetcher); err != nil {
 			log.Printf("keld-agent: model provisioning failed: %v", err)
+			if opts.emitter != nil {
+				opts.emitter.Emit("model.load_failed", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
+			}
 			provisionFailed.Store(true)
 			return
 		}
@@ -508,15 +684,36 @@ func settingsEndpoint(ingest string) string {
 	return strings.TrimRight(ingest, "/") + "/v1/enrichment-settings"
 }
 
+// signalClientEventsEndpoint derives the client-events ingest URL from the
+// configured ingest endpoint by swapping the trailing path segment for
+// /v1/signal/client-events.
+func signalClientEventsEndpoint(ingest string) string {
+	if i := strings.Index(ingest, "/v1/"); i >= 0 {
+		return ingest[:i] + "/v1/signal/client-events"
+	}
+	return strings.TrimRight(ingest, "/") + "/v1/signal/client-events"
+}
+
 // pollSettings fetches org settings on startup then on each tick of interval.
-// On any Fetch error it logs and keeps the last-known effective settings (non-fatal).
+// On a successful fetch it applies the remote doc to live and — if onRemote is
+// non-nil — invokes onRemote(r) so the caller can additionally react to
+// fields Live doesn't itself model (e.g. client_telemetry gate/thresholds).
+// On any Fetch error it logs + emits settings.poll_failed and keeps the
+// last-known effective settings (non-fatal) — onRemote is NOT called, so a
+// caller-held gate/thresholds simply persist unchanged rather than closing.
 // It returns when ctx is cancelled.
-func pollSettings(ctx context.Context, c *settings.Client, live *settings.Live, interval time.Duration) {
+func pollSettings(ctx context.Context, c *settings.Client, live *settings.Live, interval time.Duration, emitter *clientevents.Emitter, onRemote func(*settings.Remote)) {
 	apply := func() {
 		if r, err := c.Fetch(ctx); err == nil {
 			live.Apply(r)
+			if onRemote != nil {
+				onRemote(r)
+			}
 		} else {
 			log.Printf("keld-agent: settings poll failed (keeping current): %v", err)
+			if emitter != nil {
+				emitter.Emit("settings.poll_failed", clientevents.SevWarn, map[string]any{"error": clientevents.RedactError(err)})
+			}
 		}
 	}
 	apply() // startup fetch

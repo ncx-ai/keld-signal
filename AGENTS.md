@@ -76,8 +76,8 @@ a time. Two waves, up to 7 model calls per prompt:
   Why a bundled sidecar over in-process ONNX: `docs/keld-agent-p2-onnx-decision.md`.
 
 **Delivery reliability (never degrade, never wedge).** When ML is enabled,
-enrichment always runs on GLiNER2 — an idle-evicted or restarting sidecar is
-waited out (client wake + retry), never swapped for deterministic. Each job runs
+enrichment always runs on GLiNER2 — a sidecar whose inference worker is mid-recycle
+or respawning is waited out (client wake + retry), never swapped for deterministic. Each job runs
 under a deadline (`KELD_ENRICH_JOB_TIMEOUT`, default 30s) as a **child of the
 daemon context**; on timeout the worker **cancels it**, which aborts the job's
 in-flight sidecar calls (`Client.WithContext`) so an abandoned attempt is
@@ -92,13 +92,53 @@ late double-publish from a recovering attempt is harmless.
 (`KELD_SETTINGS_POLL`). Remote overrides local; non-fatal if Atlas is unreachable.
 See `docs/enrichment-settings.md`.
 
+**Client-events telemetry (`internal/agent/clientevents/`).** Separately from
+enrichment, the daemon emits structured **operational** events about itself —
+job retries/quarantines, sidecar crashes/fallback, publish failures, resource
+pressure, lifecycle — batched and POSTed to `POST /v1/signal/client-events`
+(`x-keld-ingest-token`, same header convention as publish/settings). This is
+the first route under the **`/v1/signal/*`** convention: the namespace for new
+client↔Atlas protocol routes going forward (`/v1/enrichments` and
+`/v1/enrichment-settings` predate it and are not renamed as part of this — a
+later coordinated migration). Governed per-org via a `client_telemetry` block
+riding the existing `/v1/enrichment-settings` poll (default ON, independent of
+the enrichment toggle). Events carry only ids + structured primitive metadata;
+a Go-side **privacy redaction gate** (`clientevents/redact.go`) strips
+absolute paths, drops non-primitive field types, and reduces errors to a
+class+summary before anything is buffered — never raw prompt text, matching
+the same invariant enrichment upholds for masked spans. Durable like
+enrichment: batched + periodically flushed, retried via `internal/retry`, and
+spooled to `~/.keld/spool/clientevents/` (bounded, drop-oldest) when Atlas is
+unreachable. Full wire contract (envelope, event/code catalog, settings
+defaults, redaction guarantee): **`docs/signal-client-events.md`**.
+
 **Resource safety (the sidecar is a good citizen).** Single-flight + bounded
 queue (503 backpressure); a **rate governor** (CPU-EWMA min-interval pacing) and a
 **CPU thread scaler** (`torch.set_num_threads` capped to host load, default 50%
-of cores); **memory eviction** (unload at ≤5% RAM, `malloc_trim` to return RSS,
-reload on absolute headroom) and **idle eviction** (unload after inactivity,
-reload on demand). `GET /metrics` exposes state/EWMA/threads/queue/counts. Full
-mechanisms + load-test validation: **`sidecar/loadtest/README.md`**.
+of cores). Inference itself runs in a separate **inference worker** child
+process, not the long-lived FastAPI service — the service holds no model and
+its own RSS stays flat regardless of uptime. The worker is **recycled** (killed
+and respawned, reclaiming its heap via process exit — the only cross-platform
+memory reset) on an **RSS ceiling** (`model_cost_mb + KELD_SIDECAR_RSS_MARGIN_MB`),
+**memory pressure** (available RAM ≤ `KELD_SIDECAR_EVICT_AVAIL_PCT` — held down
+until headroom returns), **idle** (`KELD_SIDECAR_IDLE_UNLOAD_S`, `<=0` disables),
+a **hung-job timeout** (`KELD_SIDECAR_JOB_DEADLINE_S`), or a crash; it respawns
+lazily on the next request. `GET /metrics` exposes a `worker` block
+(`state`/`worker_rss_mb`/`parent_rss_mb`/`model_cost_mb`/`recycles`/`kills`)
+alongside governor EWMA/threads/queue/counts. Full mechanisms + load-test
+validation: **`sidecar/loadtest/README.md`**.
+
+**Footprint caps are set at spawn, parent-side** (`daemon.go` → `sidecarEnv`),
+inherited by the spawned worker child. The daemon injects `MALLOC_ARENA_MAX=2`
+plus `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=2` and `KELD_SIDECAR_MAX_THREADS=2`
+(all set-if-absent, so an operator can override) — a cheap Linux-only baseline
+footprint reducer, not the memory-safety mechanism itself (that's the worker
+recycle above). Without the arena cap, glibc spawns a malloc arena per
+allocating thread and each retains freed heap — RSS then balloons to ~2× the
+model working set (measured 6.4 GB vs a ~2.6 GB working set on a 20-core host).
+`MALLOC_ARENA_MAX` **must** be parent-set: glibc reads it when the child's
+allocator initializes, before Python can set it for itself. The thread caps
+also bound CPU to ≤2 cores.
 
 ## The CLI (`keld`)
 
@@ -108,6 +148,22 @@ mechanisms + load-test validation: **`sidecar/loadtest/README.md`**.
 top-level `login`/`logout`/`whoami`; the `keld signal` group
 (`setup`/`status`/`doctor`/`uninstall`) for telemetry onboarding. Config paths via
 `internal/paths` (`KELD_HOME`).
+
+**Machine interface (installer-/automation-driven onboarding).** `keld login` and
+`keld signal setup` each take `--json`, emitting **NDJSON** on stdout (one event
+object per line) instead of human text — the seam the native platform installers
+drive to render the device code + setup progress in their own UI. `keld login
+--json` emits `device_code` (immediately) then `authorized`/`error` (non-zero exit
+on error); `--no-browser` suppresses the auto-open so the caller owns the link.
+`keld signal setup --json` is non-interactive (implies `--yes`): a `tool` event per
+tool (`configured`/`already_configured`/`skipped_conflict`) then `done`. Keep all
+auth/setup logic Go-side behind the `onStart` (auth) and `SetupOpts.Emit` (setup)
+seams — don't reimplement it in installer code; the human paths stay unchanged when
+those seams are unset. `keld-agent install` is **TTY-aware** (`term.IsTerminal` —
+`os.ModeCharDevice` is wrong because macOS launchd wires stdin to `/dev/null`):
+in a terminal it runs login → setup → service install; headless it registers the
+service only and prints the finish-setup commands, so a GUI installer's pages drive
+`keld --json` instead of a hung, invisible interactive flow.
 
 ## Repo layout
 
@@ -135,10 +191,11 @@ sidecar/
   serve.py           entrypoint the daemon spawns (uvicorn on 127.0.0.1)
   app/
     main.py          FastAPI app: /classify /extract /entities /health /metrics;
-                     lifespan wires governor + scaler + runner + memory watch
-    governor.py      CPU-EWMA rate pacing         runner.py    single-flight runner
-    cpuscale.py      host-load → torch threads    memwatch.py  eviction state machine
-    metrics.py       /metrics payload             adapter.py   normalize model output
+                     lifespan wires governor + scaler + runner + worker poll loop
+    governor.py      CPU-EWMA rate pacing         runner.py       single-flight runner
+    cpuscale.py      host-load → torch threads    worker.py       inference child (holds model)
+    metrics.py       /metrics payload             worker_manager.py  spawn/recycle/dispatch
+    adapter.py       normalize model output
   loadtest/          smoke + soak load-test harness (see its README)
   keld-agent-sidecar.spec / build-freeze.sh   PyInstaller packaging
 docs/                enrichment-settings.md, ONNX decision, superpowers/{specs,plans}
@@ -183,10 +240,17 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **CLI = single static Go binary**, no runtime deps. The sidecar is optional and
   isolated; the **deterministic backend is the permanent zero-dep fallback**.
 - **Sidecar single-flight** (one inference at a time) is load protection, not an
-  accident — don't fan out inference. RAM is handled by eviction, CPU by the
-  governor + thread scaler (see `sidecar/loadtest/README.md`).
+  accident — don't fan out inference. RAM is bounded by recycling the inference
+  worker child process, CPU by the governor + thread scaler (see
+  `sidecar/loadtest/README.md`).
 - **Schema versioning:** changing any enrichment vocabulary is contract-affecting
   — bump `enrich.SchemaVersion` and re-run the eval (`enrich/eval/`).
+- **Dependency-pull retries:** outbound "fetch a required dependency" calls use
+  `internal/retry` (`retry.Do` + the canonical `IsTransient` classifier; policy
+  env-tunable via `KELD_RETRY_*`). Transient = net faults + HTTP 408/429/5xx;
+  **unknown errors are permanent by design** (never hammer). The HF model download
+  (`sidecar/hf.go`) uses it; settings-poll / publish / api adopt it when next
+  touched — don't hand-roll new backoff loops.
 
 ## Gotchas
 
@@ -198,6 +262,38 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **Distribution packaging** freezes the sidecar with PyInstaller
   (`keld-agent-sidecar.spec`) into `keld-agent-sidecar`; the daemon resolves it
   beside `keld-agent` (flat or nested layout).
+- **Obfuscation (`KELD_OBFUSCATE=1`, CI-set, default off).** The installer/release
+  freeze obfuscates the shipped sidecar — python-minifier **locals-only** rename
+  (globals/Pydantic-fields/spawn-targets preserved; annotations kept so Pydantic
+  v2 + FastAPI still work) → free-tier PyArmor bytecode encryption → PyInstaller.
+  `build-freeze.sh` freezes from a **copy** (never clobbers the tree), hard-fails
+  if the tools are missing, and the `.spec` names the obfuscated `app.*` +
+  `pyarmor_runtime` as `hiddenimports` (their imports are encrypted, invisible to
+  PyInstaller analysis). Go binaries are `-s -w`-stripped by GoReleaser. Dev/local
+  builds stay plain/debuggable. It's **license-ready** (a paid PyArmor license
+  unlocks RFT/BCC via the same flow) and protects **code logic only** — it does
+  **not** hide the base model (GLiNER2 is discoverable via bundled deps + the
+  on-disk weights; explicit non-goal).
+- **Frozen worker spawn needs `freeze_support()`.** The inference worker uses
+  `multiprocessing` spawn, which re-execs the frozen binary to bootstrap the
+  child; `serve.py` calls `multiprocessing.freeze_support()` so the child doesn't
+  fall through to argparse. This only manifests in the **frozen** binary — unit
+  tests never freeze, so it can't be caught there. `make freeze-check` (plain) and
+  `make obfuscate-check` (obfuscated) run the freeze + a real `/classify`
+  worker-spawn gate locally (Linux); CI's installer smoke does the same for every
+  shipped OS. Any change touching the worker/spawn/freeze path must keep those
+  green.
+- **macOS onboarding UI:** `installers/macos/KeldSetup/` (SwiftUI app) is compiled
+  by `installers/macos/build-app.sh`, wrapped into `KeldSetup.app`, staged + signed
+  by `build-pkg.sh`, and launched by the pkg `postinstall`. It drives the
+  `keld --json` interface. Swift builds only on the macOS CI runners — there's no
+  Swift toolchain in the Go/Linux dev environment, so its UX is human-verified.
+- **Windows onboarding UI:** `installers/windows/keld-agent.iss` `[Code]` adds a
+  post-install Inno wizard page ("Set up Keld") that drives the `keld --json`
+  interface (WinAPI timer + async NDJSON temp-file polling). Compiled by `iscc` on
+  the Windows CI runner; UX is human-verified on Windows. Both installer UIs are
+  best-effort — the agent service is registered by the headless `keld-agent install`
+  regardless (the TTY guard).
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.

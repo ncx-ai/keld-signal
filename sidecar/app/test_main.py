@@ -1,8 +1,8 @@
 """Tests for the sidecar's load-protection guards (input clipping) and the
-async endpoints that route inference through the governed InferenceRunner.
-These import app.main (light — fastapi/pydantic only; the GLiNER2 model is
-loaded lazily in lifespan, never at import) so they run without torch.
-Runnable under pytest OR standalone: `python app/test_main.py`.
+async endpoints that route inference through the governed InferenceRunner into
+the worker (WorkerManager.call). These import app.main (light — fastapi/pydantic
+only; the GLiNER2 model lives in a worker child, never at import) so they run
+without torch. Runnable under pytest OR standalone: `python app/test_main.py`.
 """
 import importlib
 import os
@@ -42,8 +42,10 @@ def test_default_cap_is_generous():
 
 import asyncio as _asyncio
 
+from app.cpuscale import CpuScaler
 from app.governor import Governor
 from app.runner import InferenceRunner, QueueFull
+from app.worker import handle
 from fastapi import HTTPException
 
 
@@ -71,18 +73,40 @@ class _FakeModel:
         return {"entities": {}}
 
 
-def _wire(main, queue_max=8):
+class _FakeWM:
+    """Stands in for WorkerManager: call() runs worker.handle against a fake
+    model in-thread (the runner still executes it single-flight), so endpoints
+    see the same already-normalized payload the real worker returns."""
+    def __init__(self, model=None, state="ready"):
+        self._model = model or _FakeModel()
+        self.state = state
+        self.model_cost_mb = None
+        self.counts = {"recycles": 0, "kills_timeout": 0, "kills_pressure": 0,
+                       "kills_idle": 0, "crashes": 0}
+
+    def call(self, req):
+        return handle(req, self._model)
+
+    def ready(self):
+        return self.state == "ready"
+
+    def worker_rss_mb(self):
+        return 0.0
+
+
+def _wire(main, queue_max=8, wm=None, runner=None):
     gov = Governor(disabled=True)
-    runner = InferenceRunner(gov, queue_max=queue_max)
+    scaler = CpuScaler()
+    runner = runner or InferenceRunner(gov, queue_max=queue_max)
     main._state.clear()
-    main._state["model"] = _FakeModel()
-    main._state["model_state"] = "loaded"
     main._state["governor"] = gov
+    main._state["scaler"] = scaler
     main._state["runner"] = runner
+    main._state["wm"] = wm or _FakeWM()
     return runner
 
 
-def test_classify_endpoint_routes_through_runner():
+def test_classify_endpoint_routes_through_worker():
     m = _reload_main(None)
     runner = _wire(m)
 
@@ -131,41 +155,53 @@ def test_extract_endpoint_queue_full_returns_503():
     _asyncio.run(run())
 
 
-def test_require_loaded_raises_503_when_not_loaded():
-    from fastapi import HTTPException
+def test_health_state_down_when_no_worker():
     m = _reload_main(None)
     m._state.clear()
-    m._state["model_state"] = "evicted"
+    h = m.health()
+    assert h["ok"] is False and h["state"] == "down"
+
+
+def test_health_ok_when_worker_down_but_service_up():
+    # DOWN is a serve-on-demand state: /health must report ok=True so the
+    # daemon's supervisor + readiness gate open and the first request triggers a
+    # lazy worker spawn. (Regression: a lazy DOWN reporting ok=False deadlocks the
+    # supervisor — it never sees ready, exhausts restarts, and no sidecar runs.)
+    m = _reload_main(None)
+    _wire(m, wm=_FakeWM(state="down"))
+    h = m.health()
+    assert h["ok"] is True and h["state"] == "down"
+
+
+def test_health_not_ok_when_held():
+    m = _reload_main(None)
+    _wire(m, wm=_FakeWM(state="held"))
+    assert m.health()["ok"] is False
+
+
+def test_dispatch_503_when_worker_held():
+    # Memory pressure holds the worker; endpoints shed with 503 rather than block.
+    m = _reload_main(None)
+    _wire(m, wm=_FakeWM(state="held"))
+    body = m.ClassifyIn(text="hi", tasks={"task_type": ["codegen", "other"]})
     try:
-        m._require_loaded()
-        assert False, "expected HTTPException"
+        _asyncio.run(m.classify(body))
+        assert False, "expected 503"
     except HTTPException as e:
         assert e.status_code == 503
 
 
-def test_require_loaded_returns_model_when_loaded():
-    m = _reload_main(None)
-    m._state.clear()
-    m._state["model_state"] = "loaded"
-    m._state["model"] = _FakeModel()
-    assert m._require_loaded() is m._state["model"]
-
-
 def test_classify_sheds_503_and_counts_when_queue_full():
     from app.metrics import Counts
-    m = _reload_main(None)
-    m._state.clear()
-    m._state["model_state"] = "loaded"
-    m._state["model"] = _FakeModel()
-    m._state["counts"] = Counts()
 
     class _FullRunner:
         async def submit(self, *a, **k):
-            from app.runner import QueueFull
             raise QueueFull()
-    m._state["runner"] = _FullRunner()
 
-    from fastapi import HTTPException
+    m = _reload_main(None)
+    _wire(m, runner=_FullRunner())
+    m._state["counts"] = Counts()
+
     body = m.ClassifyIn(text="hi", tasks={"task_type": ["codegen", "other"]})
     try:
         _asyncio.run(m.classify(body))

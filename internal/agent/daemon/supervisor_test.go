@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 )
 
 func sleepCmd() (*exec.Cmd, error) { return exec.Command("sleep", "30"), nil }
@@ -99,5 +101,48 @@ func TestSupervisorKillsChildOnShutdown(t *testing.T) {
 		// Still a zombie being reaped — Start() already returned, which means
 		// Wait() was called and the process is effectively dead. Log only.
 		t.Logf("note: signal(0) succeeded (process may be zombie during reap) — Start() returned, which is sufficient")
+	}
+}
+
+// TestSupervisorEmitsWorkerCrashAndFallbackViaEmitter wires an Emitter via
+// SetEmitter and proves the two Start() anomaly sites additive to their
+// log.Printf calls actually fire: a child that exits immediately (never
+// healthy, health always false) cycles through worker.crash on each restart,
+// then sidecar.fallback once the restart cap is exceeded and the supervisor
+// gives up.
+func TestSupervisorEmitsWorkerCrashAndFallbackViaEmitter(t *testing.T) {
+	emitter := enabledEmitter()
+	spawn := func(int) (*exec.Cmd, error) { return exec.Command("true"), nil }
+	s := NewSupervisor(spawn, 0, func() bool { return false }, 50*time.Millisecond)
+	s.SetEmitter(emitter)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		s.Start(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("supervisor did not fall back within the test timeout")
+	}
+	if !s.FellBack() {
+		t.Fatal("expected FellBack after the restart cap is exceeded")
+	}
+
+	events := emitter.Drain()
+	if findEvent(events, "worker.crash") == nil {
+		t.Fatalf("expected at least one worker.crash event, got %+v", events)
+	}
+	ev := findEvent(events, "sidecar.fallback")
+	if ev == nil {
+		t.Fatalf("expected a sidecar.fallback event, got %+v", events)
+	}
+	if ev.Severity != clientevents.SevError {
+		t.Fatalf("expected error severity, got %v", ev.Severity)
 	}
 }

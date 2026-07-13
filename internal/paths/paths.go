@@ -40,10 +40,15 @@ func DebugLogPath() string          { return filepath.Join(KeldHome(), "agent.lo
 func StateDir() string              { return filepath.Join(KeldHome(), "state") }
 func BackupsDir() string            { return filepath.Join(KeldHome(), "backups") }
 func ModelsDir(model string) string { return filepath.Join(KeldHome(), "models", model) }
+func InstallIDPath() string         { return filepath.Join(KeldHome(), "install-id") }
 
 // SpoolDir is the on-disk queue of undelivered enrich pointers (hook writes,
 // daemon drains). Sibling of models/ under KELD_HOME.
 func SpoolDir() string { return filepath.Join(KeldHome(), "spool") }
+
+// ClientEventsSpoolDir is where the clientevents Reporter spools batches that
+// failed to POST to Atlas (e.g. Atlas unreachable), for a later drain sweep.
+func ClientEventsSpoolDir() string { return filepath.Join(SpoolDir(), "clientevents") }
 
 func APIBase() string {
 	if apiOverrideSet {

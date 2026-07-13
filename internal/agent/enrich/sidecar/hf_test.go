@@ -8,7 +8,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
 // hfStub returns an httptest.Server that stubs the HF API for a two-file repo.
@@ -123,6 +128,7 @@ func TestHFFetcherResolveErrorPropagates(t *testing.T) {
 
 	f := NewHFFetcher(repo, rev)
 	f.baseURL = srv.URL
+	f.Policy = fastPolicy() // 500 is transient; keep the test fast
 
 	dest := t.TempDir()
 	err := f.Fetch(context.Background(), dest)
@@ -175,5 +181,58 @@ func TestHFFetcherRejectsPathTraversal(t *testing.T) {
 	evilPath := filepath.Join(parent, "evil.txt")
 	if _, err := os.Stat(evilPath); err == nil {
 		t.Fatalf("evil.txt was written outside destDir at %s", evilPath)
+	}
+}
+
+func fastPolicy() retry.Policy {
+	return retry.Policy{MaxAttempts: 4, BaseDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 2}
+}
+
+// TestHFFetcherRetriesTransient verifies that Fetch retries a transient 503 from
+// the revision endpoint and eventually succeeds once the upstream recovers.
+func TestHFFetcherRetriesTransient(t *testing.T) {
+	var hits int32
+	// Fail the revision endpoint twice with 503, then serve normally.
+	real := hfStub(t, "owner/repo", "rev1", map[string][]byte{"config.json": []byte("{}")})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/revision/") && atomic.AddInt32(&hits, 1) <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		http.Redirect(w, r, real.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	f := NewHFFetcher("owner/repo", "rev1")
+	f.baseURL = srv.URL
+	f.Policy = fastPolicy()
+	if err := f.Fetch(context.Background(), t.TempDir()); err != nil {
+		t.Fatalf("Fetch after transient 503s: %v", err)
+	}
+	if hits < 3 {
+		t.Fatalf("expected retries, hits=%d", hits)
+	}
+}
+
+// TestHFFetcherPermanentFailsFast verifies that a 404 from the revision endpoint
+// is not retried at all.
+func TestHFFetcherPermanentFailsFast(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	f := NewHFFetcher("owner/repo", "rev1")
+	f.baseURL = srv.URL
+	f.Policy = fastPolicy()
+	if err := f.Fetch(context.Background(), t.TempDir()); err == nil {
+		t.Fatal("want error on 404")
+	}
+	if hits != 1 {
+		t.Fatalf("404 must not retry, hits=%d", hits)
 	}
 }

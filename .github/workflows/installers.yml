@@ -40,9 +40,13 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Freeze sidecar
+      - name: Freeze sidecar (obfuscated)
         shell: bash
-        run: bash sidecar/build-freeze.sh
+        env:
+          KELD_OBFUSCATE: "1"   # shipped artifacts are obfuscated; dev builds stay plain
+        run: |
+          python -m pip install --quiet python-minifier pyarmor
+          bash sidecar/build-freeze.sh
 
       - name: Cache HuggingFace model
         uses: actions/cache@v4
@@ -59,10 +63,22 @@ jobs:
           [ "${{ runner.os }}" = "Windows" ] && BIN="dist/keld-agent-sidecar/keld-agent-sidecar.exe"
           "$BIN" --port 8399 --host 127.0.0.1 &
           for i in $(seq 1 180); do
-            if curl -sf http://127.0.0.1:8399/health | grep -q '"ok":true'; then ok=1; break; fi
+            if curl -sf http://127.0.0.1:8399/health | grep -q '"ok"'; then ok=1; break; fi
             sleep 2
           done
           [ -n "${ok:-}" ] || { echo "sidecar did not become healthy"; exit 1; }
+          # Spawn acceptance gate: a real /classify spawns the inference worker
+          # child, which must import the (obfuscated) modules from the frozen
+          # bundle. /health alone never spawns a worker, so this is the ONLY CI
+          # coverage for frozen-distribution worker spawn (freeze_support, pyarmor
+          # runtime bundling, multiprocessing under PyInstaller).
+          resp=$(curl -sf -m 120 -X POST http://127.0.0.1:8399/classify \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"debug the login bug","tasks":{"task_type":["debug","other"]}}') \
+            || { echo "frozen worker /classify failed — spawn/import/bundle broke"; exit 1; }
+          echo "$resp" | grep -q '"task_type"' \
+            || { echo "frozen worker returned no result: $resp"; exit 1; }
+          echo "frozen worker spawn + inference OK"
 
       - name: Stage keld/keld-agent binaries
         shell: bash
@@ -86,8 +102,10 @@ jobs:
           else
             # Dry run (workflow_dispatch): no release to pull from, so build the
             # binaries natively on this runner (runner arch == matrix arch, no cross-compile).
-            GOOS=$goos GOARCH=$arch go build -o "stage/keld${ext}" ./cmd/keld
-            GOOS=$goos GOARCH=$arch go build -o "stage/keld-agent${ext}" ./cmd/keld-agent
+            # Strip symbols to match the release (GoReleaser) binaries, which
+            # already build with -s -w.
+            GOOS=$goos GOARCH=$arch go build -ldflags "-s -w" -o "stage/keld${ext}" ./cmd/keld
+            GOOS=$goos GOARCH=$arch go build -ldflags "-s -w" -o "stage/keld-agent${ext}" ./cmd/keld-agent
           fi
           cp -R dist/keld-agent-sidecar stage/ 2>/dev/null || cp -R dist/keld-agent-sidecar/* stage/
 

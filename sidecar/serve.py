@@ -31,4 +31,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # In a PyInstaller-frozen binary, multiprocessing-spawn (the inference worker)
+    # re-execs THIS binary to bootstrap the child. freeze_support() intercepts that
+    # re-exec and runs the child, so it never falls through to main()'s argparse
+    # (which would die on the missing --port the child launch doesn't pass).
+    # No-op in a normal (non-frozen / non-child) run.
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

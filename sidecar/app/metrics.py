@@ -1,6 +1,5 @@
-"""The /metrics payload: a read-only snapshot of governor pacing, runner queue
-state, memory-watch state, and lifetime counters. Pure builder so it is unit-
-testable with fakes (no model, no lifespan)."""
+"""The /metrics payload: governor pacing, runner queue, worker lifecycle, and
+lifetime counters. Pure builder, testable with fakes."""
 import time
 from dataclasses import dataclass
 
@@ -11,31 +10,26 @@ class Counts:
     completed: int = 0
     shed_503: int = 0
     failed: int = 0
-    evicted: int = 0
-    reloaded: int = 0
 
 
-def build_metrics(*, model_state, state_since, governor, runner, watch, counts,
-                  model_cost_mb, reload_margin_mb, uptime_s, evict_reason=None,
+def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
+                  governor, runner, counts, recycles, kills, uptime_s,
                   cpu_threads=None, clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
-    headroom = (round(model_cost_mb + reload_margin_mb, 1)
-                if model_cost_mb else None)
     return {
-        "model_state": model_state,
-        "evict_reason": evict_reason,
-        "seconds_in_state": round(clock() - state_since, 1),
+        "worker": {
+            "state": worker_state,
+            "worker_rss_mb": round(worker_rss_mb, 1) if worker_rss_mb is not None else None,
+            "parent_rss_mb": round(parent_rss_mb, 1) if parent_rss_mb is not None else None,
+            "model_cost_mb": round(model_cost_mb, 1) if model_cost_mb else None,
+            "recycles": recycles,
+            "kills": dict(kills),
+        },
         "governor": {
             "cpu_ewma": round(governor.ewma, 2) if governor else None,
             "current_interval_ms": interval_ms,
             "cpu_threads": cpu_threads,
             "disabled": getattr(governor, "_disabled", None) if governor else None,
-        },
-        "memory": {
-            "avail_pct": round(watch.last_avail_pct, 2) if watch and watch.last_avail_pct is not None else None,
-            "avail_mb": round(watch.last_avail_mb, 1) if watch and watch.last_avail_mb is not None else None,
-            "model_cost_mb": round(model_cost_mb, 1) if model_cost_mb else None,
-            "reload_headroom_mb": headroom,
         },
         "runner": {
             "queue_depth": runner.queue_depth if runner else 0,
