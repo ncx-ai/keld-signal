@@ -33,50 +33,96 @@ func TestKeldInDir(t *testing.T) {
 	}
 }
 
-func TestRunInstallSequence(t *testing.T) {
+// helper: records "name arg arg" per call
+func recorder() (*[]string, stepRunner) {
 	var calls []string
-	resolve := func() (string, error) { return "/fake/keld", nil }
-	run := func(name string, args ...string) error {
+	return &calls, func(name string, args ...string) error {
 		calls = append(calls, strings.Join(append([]string{name}, args...), " "))
 		return nil
 	}
-	installed := false
-	install := func() error { installed = true; return nil }
+}
 
-	if err := runInstall(func() bool { return true }, resolve, run, install); err != nil {
+func TestRunInstallSequence(t *testing.T) { // no code, TTY → login, signal setup (no --yes)
+	calls, run := recorder()
+	installed := false
+	err := runInstall(installConfig{}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, func() error { installed = true; return nil })
+	if err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
-
 	want := []string{"/fake/keld login", "/fake/keld signal setup"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
-		t.Fatalf("steps = %v, want %v", calls, want)
+	if strings.Join(*calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("steps = %v, want %v", *calls, want)
 	}
 	if !installed {
 		t.Fatal("service install was not called")
 	}
 }
 
-func TestRunInstallAbortsOnLoginFailure(t *testing.T) {
+func TestRunInstallWithCodeIsHeadlessCapable(t *testing.T) { // code set, no TTY → still onboards
+	calls, run := recorder()
+	installed := false
+	err := runInstall(installConfig{code: "AB12-CD34"}, func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, func() error { installed = true; return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	want := []string{"/fake/keld login --code AB12-CD34", "/fake/keld signal setup --yes"}
+	if strings.Join(*calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("steps = %v, want %v", *calls, want)
+	}
+	if !installed {
+		t.Fatal("service install must run after code onboarding")
+	}
+}
+
+func TestRunInstallCodeAbortsBeforeService(t *testing.T) {
 	var calls []string
-	resolve := func() (string, error) { return "/fake/keld", nil }
 	run := func(name string, args ...string) error {
 		calls = append(calls, strings.Join(append([]string{name}, args...), " "))
-		if strings.HasSuffix(calls[len(calls)-1], "login") {
-			return errors.New("boom")
+		if strings.Contains(calls[len(calls)-1], "login") {
+			return errors.New("bad code")
 		}
 		return nil
 	}
 	installed := false
-	install := func() error { installed = true; return nil }
+	err := runInstall(installConfig{code: "NOPE"}, func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, func() error { installed = true; return nil })
+	if err == nil {
+		t.Fatal("expected error when login --code fails")
+	}
+	if len(calls) != 1 || installed {
+		t.Fatalf("must stop after login; calls=%v installed=%v", calls, installed)
+	}
+}
 
-	if err := runInstall(func() bool { return true }, resolve, run, install); err == nil {
-		t.Fatal("expected error when login fails")
+func TestRunInstallApiURLAndJSONPassthrough(t *testing.T) {
+	calls, run := recorder()
+	err := runInstall(installConfig{code: "X1-Y2", apiURL: "http://localhost:8000", jsonOut: true},
+		func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
 	}
-	if len(calls) != 1 {
-		t.Fatalf("expected to stop after login, got calls %v", calls)
+	want := []string{
+		"/fake/keld login --api-url http://localhost:8000 --json --code X1-Y2",
+		"/fake/keld signal setup --api-url http://localhost:8000 --json --yes",
 	}
-	if installed {
-		t.Fatal("service install must not run when login fails")
+	if strings.Join(*calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("steps = %v, want %v", *calls, want)
+	}
+}
+
+func TestRunInstallYesInTTY(t *testing.T) { // no code, TTY, yes=true → setup --yes
+	calls, run := recorder()
+	err := runInstall(installConfig{yes: true}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	want := []string{"/fake/keld login", "/fake/keld signal setup --yes"}
+	if strings.Join(*calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("steps = %v, want %v", *calls, want)
 	}
 }
 
@@ -87,7 +133,7 @@ func TestRunInstallAbortsWhenKeldMissing(t *testing.T) {
 	installed := false
 	install := func() error { installed = true; return nil }
 
-	if err := runInstall(func() bool { return true }, resolve, run, install); err == nil {
+	if err := runInstall(installConfig{}, func() bool { return true }, resolve, run, install); err == nil {
 		t.Fatal("expected error when keld is missing")
 	}
 	if ran || installed {
@@ -105,7 +151,7 @@ func TestRunInstallNoTTYSkipsLoginAndSetup(t *testing.T) {
 	installed := false
 	install := func() error { installed = true; return nil }
 
-	if err := runInstall(func() bool { return false }, resolve, run, install); err != nil {
+	if err := runInstall(installConfig{}, func() bool { return false }, resolve, run, install); err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
 	if len(calls) != 0 {

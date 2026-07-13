@@ -69,35 +69,72 @@ func runStep(name string, args ...string) error {
 	return c.Run()
 }
 
-// runInstall sets the user up, then registers the service. Order matters: the
-// daemon refuses to run until signal setup has written ~/.keld/hook.json, and
-// installService starts it immediately — so service install runs last.
-func runInstall(isTTY func() bool, resolveKeld func() (string, error), run stepRunner, installService func() error) error {
-	if isTTY() {
+// installConfig carries the install command's onboarding knobs.
+type installConfig struct {
+	code    string // one-time setup code; when set, onboarding runs headless
+	apiURL  string // --api-url passthrough for local dev
+	yes     bool   // pass --yes to signal setup (implied when code is set)
+	jsonOut bool   // --json passthrough for installer UIs
+}
+
+// runInstall sets the user up, then registers the service. Order matters: the daemon
+// refuses to run until signal setup has written ~/.keld/hook.json, and installService
+// starts it immediately — so service install runs last. With a setup code the login+setup
+// run non-interactively regardless of TTY; without a code they run only in a real terminal.
+func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string, error), run stepRunner, installService func() error) error {
+	login := []string{"login"}
+	setup := []string{"signal", "setup"}
+	if cfg.apiURL != "" {
+		login = append(login, "--api-url", cfg.apiURL)
+		setup = append(setup, "--api-url", cfg.apiURL)
+	}
+	if cfg.jsonOut {
+		login = append(login, "--json")
+		setup = append(setup, "--json")
+	}
+
+	switch {
+	case cfg.code != "":
 		keld, err := resolveKeld()
 		if err != nil {
 			return err
 		}
-		if err := run(keld, "login"); err != nil {
+		login = append(login, "--code", cfg.code)
+		setup = append(setup, "--yes")
+		if err := run(keld, login...); err != nil {
 			return fmt.Errorf("keld login: %w", err)
 		}
-		if err := run(keld, "signal", "setup"); err != nil {
+		if err := run(keld, setup...); err != nil {
 			return fmt.Errorf("keld signal setup: %w", err)
 		}
-	} else {
+	case isTTY():
+		keld, err := resolveKeld()
+		if err != nil {
+			return err
+		}
+		if cfg.yes {
+			setup = append(setup, "--yes")
+		}
+		if err := run(keld, login...); err != nil {
+			return fmt.Errorf("keld login: %w", err)
+		}
+		if err := run(keld, setup...); err != nil {
+			return fmt.Errorf("keld signal setup: %w", err)
+		}
+	default:
 		fmt.Println("Service installed. Finish setup by running: keld login && keld signal setup")
 	}
 	return installService()
 }
 
-// stdinIsTTY reports whether stdin is an interactive terminal. A GUI installer
-// invokes `keld-agent install` with no console (Windows runhidden / macOS launchd
-// session, which wires stdin to /dev/null) — a real isatty check is required
-// because /dev/null is a character device and would fool a ModeCharDevice test.
-// When stdin is not a terminal the interactive login/setup steps are skipped and
-// the installer's own pages drive `keld --json` instead.
-func stdinIsTTY() bool {
-	return term.IsTerminal(int(os.Stdin.Fd()))
+// stdoutIsTTY reports whether stdout is an interactive terminal. Detection keys on
+// stdout, NOT stdin: under `curl | sh` the installer — and the keld-agent it spawns —
+// inherit the pipe as stdin, so a stdin check misreads a human in a real terminal as
+// headless. Interactive device-flow login needs no stdin (it prints a URL and polls),
+// so a piped stdin never blocks it. A GUI installer (launchd/runhidden) has no terminal
+// on stdout either, so the headless branch is still selected there.
+func stdoutIsTTY() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
 }
 
 // NewRootCmd builds the keld-agent command tree.
@@ -118,13 +155,26 @@ func NewRootCmd() *cobra.Command {
 			return daemon.Run(ctx)
 		},
 	})
-	root.AddCommand(&cobra.Command{
+	installCmd := &cobra.Command{
 		Use:   "install",
 		Short: "Log in, set up telemetry, and install keld-agent as a per-user autostart service.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInstall(stdinIsTTY, resolveKeld, runStep, service.Install)
+			code, _ := cmd.Flags().GetString("code")
+			if code == "" {
+				code = os.Getenv("KELD_SETUP_CODE") // flag wins; fall back to the env var
+			}
+			yes, _ := cmd.Flags().GetBool("yes")
+			apiURL, _ := cmd.Flags().GetString("api-url")
+			jsonOut, _ := cmd.Flags().GetBool("json")
+			cfg := installConfig{code: code, apiURL: apiURL, yes: yes, jsonOut: jsonOut}
+			return runInstall(cfg, stdoutIsTTY, resolveKeld, runStep, service.Install)
 		},
-	})
+	}
+	installCmd.Flags().String("code", "", "Redeem a one-time setup code for a non-interactive login (defaults to $KELD_SETUP_CODE).")
+	installCmd.Flags().Bool("yes", false, "Skip confirmation prompts during setup.")
+	installCmd.Flags().String("api-url", "", "Target a different Keld API base URL (e.g. http://localhost:8000) for local dev.")
+	installCmd.Flags().Bool("json", false, "Emit machine-readable NDJSON from login/setup (for installer UIs).")
+	root.AddCommand(installCmd)
 	root.AddCommand(&cobra.Command{
 		Use:   "uninstall",
 		Short: "Remove the keld-agent service.",
