@@ -28,6 +28,24 @@ func newLoginCmd() *cobra.Command {
 			jsonOut, _ := cmd.Flags().GetBool("json")
 			noBrowser, _ := cmd.Flags().GetBool("no-browser")
 
+			code, _ := cmd.Flags().GetString("code")
+			if code != "" {
+				a, err := auth.LoginWithCode(api.NewClient(paths.APIBase(), ""), code)
+				if err != nil {
+					if jsonOut {
+						emitEvent(errorEvent{Event: "error", Message: err.Error()})
+						return errs.ErrSilentExit
+					}
+					return err
+				}
+				if jsonOut {
+					emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org})
+				} else {
+					console.Print(fmt.Sprintf("Logged in as %s (org: %s)", a.Principal, a.Org))
+				}
+				return nil
+			}
+
 			if jsonOut {
 				onStart := func(ds *api.DeviceStart) {
 					emitEvent(deviceCodeEvent{
@@ -61,6 +79,7 @@ func newLoginCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("api-url", "", "Target a different Keld API base URL (e.g. http://localhost:8000) for local dev.")
+	cmd.Flags().String("code", "", "Redeem a one-time setup code (non-interactive; skips the browser login).")
 	cmd.Flags().Bool("no-login", false, "Fail instead of opening a browser.")
 	cmd.Flags().Bool("json", false, "Emit machine-readable NDJSON events on stdout (for installer/automation).")
 	cmd.Flags().Bool("no-browser", false, "Do not auto-open the browser (the caller opens the verification URL itself).")

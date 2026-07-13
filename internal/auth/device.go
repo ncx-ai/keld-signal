@@ -43,25 +43,9 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 			return nil, err
 		}
 		if result != nil {
-			str := func(k string) (string, bool) { s, ok := result[k].(string); return s, ok }
-			at, ok1 := str("access_token")
-			pr, ok2 := str("principal")
-			org, ok3 := str("org")
-			if !ok1 || !ok2 || !ok3 {
-				return nil, errs.New("Atlas returned an unexpected device-poll response")
-			}
-			auth := AuthData{
-				AccessToken: at,
-				Principal:   pr,
-				Org:         org,
-				APIURL:      c.BaseURL,
-			}
-			if err := Save(auth); err != nil {
-				return nil, err
-			}
 			// The "Logged in as …" confirmation is printed by the command layer
 			// (login.go) so it appears exactly once regardless of entry path.
-			return &auth, nil
+			return persistToken(result, c.BaseURL)
 		}
 		sleep(time.Duration(ds.Interval) * time.Second)
 		interval := ds.Interval
@@ -72,6 +56,32 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 	}
 
 	return nil, errs.New("login timed out; please run `keld login` again")
+}
+
+// persistToken validates a device/enroll result map and saves it as AuthData.
+func persistToken(result map[string]any, apiURL string) (*AuthData, error) {
+	str := func(k string) (string, bool) { s, ok := result[k].(string); return s, ok }
+	at, ok1 := str("access_token")
+	pr, ok2 := str("principal")
+	org, ok3 := str("org")
+	if !ok1 || !ok2 || !ok3 {
+		return nil, errs.New("Atlas returned an unexpected response")
+	}
+	a := AuthData{AccessToken: at, Principal: pr, Org: org, APIURL: apiURL}
+	if err := Save(a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// LoginWithCode redeems a one-time setup code (non-interactive; no browser) and
+// persists the resulting credentials.
+func LoginWithCode(c *api.Client, code string) (*AuthData, error) {
+	result, err := c.Enroll(code)
+	if err != nil {
+		return nil, err
+	}
+	return persistToken(result, c.BaseURL)
 }
 
 // RequireAuth returns usable auth. When force is false it is lazy: stored creds
