@@ -34,86 +34,105 @@ present, interactive device flow otherwise), `signal setup`, then start the agen
   `login --code` (headless); without a code → interactive `keld login` (device flow)
   → `keld signal setup --yes` → start the agent. Code vs no-code differ **only** in
   the login step.
-- **Orchestration lives in a new Go command `keld onboard`** — a single, TTY-aware,
-  unit-testable source of truth. `install.sh`, `install.ps1`, and `onboard.command`
-  all collapse to calling it. (Chosen over inlining the flow in each script, which
-  would create three shell copies of the fallback + TTY logic and drift against the
-  codebase mandate to keep auth/setup logic Go-side.)
+- **Orchestration extends the existing `keld-agent install` command** — that command's
+  `runInstall` (`internal/agentcli/agentcli.go`) *already* is the single, TTY-aware Go
+  orchestrator: it resolves the sibling `keld`, runs `keld login` → `keld signal setup`
+  → `service.Install` (agent last). We add code-awareness to it rather than build a
+  redundant parallel command. `install.sh`, `install.ps1`, and `onboard.command` all
+  collapse to calling `keld-agent install [--code X]`. (Chosen over inlining the flow
+  in each script — three shell copies — and over a new `keld onboard` command that
+  would duplicate `runInstall`'s own login→setup.)
 - **Scope = all three now**: `install.sh`, `install.ps1`, and the keld-atlas web
   install one-liner.
 
-## Component 1 — `keld onboard` (new CLI command)
+## Component 1 — extend `keld-agent install`
 
-New `internal/cli/onboard.go`, registered on the root command
-(`root.AddCommand(newOnboardCmd())` in `root.go`). It is a thin orchestrator —
-it **composes** existing logic and reimplements none of it.
+The orchestration already exists in `internal/agentcli/agentcli.go`:
 
+```go
+func runInstall(isTTY func() bool, resolveKeld func() (string, error),
+                run stepRunner, installService func() error) error {
+    if isTTY() {
+        keld, _ := resolveKeld()
+        run(keld, "login")
+        run(keld, "signal", "setup")
+    } else {
+        fmt.Println("Service installed. Finish setup by running: keld login && keld signal setup")
+    }
+    return installService()   // agent last — the daemon needs hook.json first
+}
 ```
-keld onboard [--code <CODE>] [--api-url <URL>] [--yes] [--no-browser] [--json]
+
+`resolveKeld()` (agentcli.go:47) already finds the sibling `keld` (beside the running
+`keld-agent`, then `$PATH`). We extend `runInstall` and the `install` cobra command —
+**not** a new command — with three changes:
+
+**(a) Code-aware signature.** `runInstall` gains a resolved `code string` and a
+`yes bool` (plumbed from a new `--code` flag defaulting to `KELD_SETUP_CODE`, the flag
+winning, and a `--yes` flag). New branch structure:
+
+```go
+switch {
+case code != "":                       // headless-capable pre-auth path
+    run(keld, "login", "--code", code)  // + --api-url when set
+    run(keld, "signal", "setup", "--yes")
+case isTTY():                           // human in a real terminal
+    run(keld, "login")
+    run(keld, "signal", "setup")        // + --yes when yes==true
+default:                                // headless, no code → can't interactively log in
+    fmt.Println("Service installed. Finish setup by running: keld login && keld signal setup")
+}
+return installService()
 ```
 
-Flags: `--code` (default from `KELD_SETUP_CODE` if the flag is empty; the flag wins);
-`--api-url`, `--no-browser`, `--json` (same meanings as `keld login`); `--yes`
-(passed to setup; `--json` implies it). 
+A login/setup error in the code or TTY branch aborts **before** `installService()`
+(don't start a daemon that has no `hook.json`); the default branch is unchanged.
 
-Sequence:
+**(b) Stdout-based TTY detection (bug fix).** `stdinIsTTY` (agentcli.go:99) checks
+**stdin**. Under `curl | sh` the script — and the `keld-agent` it spawns — inherit the
+**pipe** as stdin, so a human in a real terminal is misread as headless. Switch the
+detector to **stdout** (`term.IsTerminal(int(os.Stdout.Fd()))`, rename to
+`stdoutIsTTY`); interactive device-flow login needs no stdin (it prints a URL and
+polls), so a piped stdin never blocks it. The GUI-installer case (launchd/runhidden)
+still reads correctly: those wire stdout away from a terminal too.
 
-1. **Login.** If a code is resolved (flag or env) → `auth.LoginWithCode(client, code)`
-   (piece 1). Else → the existing interactive device-flow `Login` via its `onStart`
-   seam. Honors `--api-url`/`--no-browser`; under `--json` emits the login events
-   already defined for `keld login --json`.
-2. **Setup.** Invoke the existing setup path (the `runSetup` seam in `setup.go`) with
-   `--yes` semantics (non-interactive) and, under `--json`, `SetupOpts.Emit` wired to
-   the machine event stream — i.e. exactly what `keld signal setup --yes [--json]`
-   does today, called in-process.
-3. **Agent (last).** Resolve the sibling `keld-agent` binary — first next to
-   `os.Executable()`'s directory, then `$PATH` (the same "resolve a sibling binary"
-   shape the daemon uses to find the sidecar). Run `keld-agent install`. If the
-   binary is not found or the install fails, print the exact command to finish
-   manually and continue (non-fatal) — the login+setup already succeeded.
+**(c) Flag/env plumbing + passthrough.** The `install` command gains
+`--code` (default `os.Getenv("KELD_SETUP_CODE")`, flag wins), `--yes`, `--api-url`
+(passed through to both `keld login` and `keld signal setup` when non-empty), and
+`--json` (passed through to both, for installer UIs consuming NDJSON). The
+`stepRunner` already inherits stdio, so child NDJSON/human output flows through.
 
-**TTY-awareness** (reuse the existing `term.IsTerminal` guard, per AGENTS.md — not
-`os.ModeCharDevice`). Detection keys on **stdout (fd 1)**, *not* stdin: under
-`curl | sh` the script — and the `keld` it spawns — inherit the **pipe** as stdin, so
-`term.IsTerminal(stdin)` is false even for a human at a real terminal; stdout is still
-the terminal. (Interactive device-flow login needs no stdin — it prints a URL and
-polls — so a piped stdin does not block it.)
+New `install` signature call: `runInstall(code, yes, apiURL, jsonOut, stdoutIsTTY, resolveKeld, runStep, service.Install)`
+(argument list widened; the `isTTY`/`resolveKeld`/`run`/`installService` seams stay
+injectable for the existing table tests).
 
-- **Code present** → every step is non-interactive; run the full flow headless.
-- **No code + stdout is a TTY** → interactive login (device flow) → setup → agent.
-  This is the human `curl | sh` in a real terminal.
-- **No code + stdout not a TTY** (e.g. CI piping `curl | sh` to a log) → **skip**
-  onboarding (interactive login cannot proceed), print the next-steps block, and exit
-  0. Never hang waiting on a browser that no one will open. `onboard` owns this
-  decision and the next-steps output, so the installer scripts do not re-check the TTY.
-
-`--json` emits NDJSON on stdout using the existing onboarding event scaffolding
-(`onboard_events.go`) so an installer UI can render progress; human mode prints the
-current human text.
-
-## Component 2 — installer scripts call `keld onboard`
+## Component 2 — installer scripts call `keld-agent install [--code X]`
 
 **`scripts/install.sh`** (POSIX sh):
-- Parse a code from `--code <X>` (via `sh -s -- --code X`; simple positional scan, no
-  getopts dependency) **or** `KELD_SETUP_CODE`; the argument wins.
-- Keep download/extract/chmod and the Linux sidecar fetch (sidecar before onboard, so
-  ML is provisioned by the time the agent starts).
-- **Remove** the current early `keld-agent install` block.
-- Then **always** run `"${DEST}/keld" onboard [--code "$CODE"]` (agent-start happens
-  last, inside `onboard`). The script does **not** re-check the TTY — `onboard` owns
-  the no-code/non-TTY skip and prints next-steps itself (back-compat for automated/CI
-  installs). The script's own trailing message is limited to PATH guidance.
+- Parse a code from `--code <X>` (via `sh -s -- --code X`; a simple positional scan, no
+  getopts dependency) **or** `KELD_SETUP_CODE`; the argument wins. Export the resolved
+  code as `KELD_SETUP_CODE` for the child (belt-and-suspenders; the `--code` flag is
+  also passed explicitly).
+- Keep download/extract/chmod and the Linux sidecar fetch (sidecar before the agent
+  starts, so ML is provisioned).
+- **Replace** the current `keld-agent install` invocation (which was Linux/systemctl-
+  gated and ran with no code) with a single `"${DEST}/keld-agent" install [--code "$CODE"]`
+  whenever `keld-agent` is present. `keld-agent install` now owns login→setup→service
+  and the TTY/headless decision, so the script does **not** re-check the TTY. Drop the
+  now-redundant "Next steps: run keld login / keld signal setup" echo (the command
+  prints the finish-setup line itself in the headless-no-code case); keep the PATH
+  guidance.
 
 **`scripts/install.ps1`** (PowerShell): the same shape — a `-Code` param defaulting to
-`$env:KELD_SETUP_CODE`; after download, always call `keld onboard [-Code]` (which owns
-the no-code/non-interactive skip, same as install.sh). (Windows service pre-registration behavior noted in
-AGENTS.md is unaffected by this script; the `.pkg`/Inno GUI paths are separate.)
+`$env:KELD_SETUP_CODE`; after download, call `keld-agent install [-Code $Code]`.
+(The Windows `.pkg`/Inno GUI wizard is separate and unaffected.)
 
 **`installers/macos/onboard.command`**: collapse the 4-step shell chain
-(`login --code` || `login` → `signal setup --yes` → `keld-agent install`) to prompt
-for the code, then a single `keld onboard [--code "$CODE"]` — removing the shell-side
-fallback/ordering duplication (now owned by the Go command). Still best-effort and
-re-runnable.
+(`keld login --code` || `keld login` → `keld signal setup --yes` → `keld-agent install`)
+to prompt for the code, then a single `keld-agent install --code "$CODE"` (empty code →
+`keld-agent install`, which is interactive in the Terminal's TTY). Removes the
+shell-side fallback/ordering duplication (now owned by `keld-agent install`). Still
+best-effort and re-runnable.
 
 ## Component 3 — Atlas web install one-liner (keld-atlas `services/web`)
 
@@ -137,34 +156,41 @@ download page (authed)                  installer                         Atlas
                                    ▼
                         install.sh / install.ps1
                           download keld + keld-agent (+ sidecar)
-                          keld onboard --code <CODE>
-                            ├─ auth.LoginWithCode ──▶ POST /v1/cli/enroll ──▶ {token,principal,org}  ──▶ auth.json
-                            ├─ signal setup --yes ──▶ configure tools + hook ──▶ hook.json/manifest
-                            └─ keld-agent install ──▶ register + start the daemon
+                          keld-agent install --code <CODE>
+                            ├─ keld login --code <CODE> ─▶ POST /v1/cli/enroll ─▶ {token,principal,org} ─▶ auth.json
+                            ├─ keld signal setup --yes ──▶ configure tools + hook ──▶ hook.json/manifest
+                            └─ service.Install ──────────▶ register + start the daemon (last)
 ```
 
 ## Error handling
 
-- **Bad/expired code** → `LoginWithCode` returns the typed "invalid or expired setup
-  code" error; `onboard` surfaces it and, in a TTY, falls back to interactive login;
-  headless, it exits non-zero with that message (installer prints how to re-run).
-- **Setup partial/conflict** → the existing setup emits per-tool
-  `configured`/`already_configured`/`skipped_conflict`; `onboard` does not abort the
-  agent step on a skipped tool.
-- **`keld-agent` missing** → non-fatal; print the manual `keld-agent install` command.
-- **No code + non-TTY** → skip onboarding, print next steps, exit 0 (nothing failed).
+- **Bad/expired code** → `keld login --code` exits non-zero with the typed "invalid or
+  expired setup code" message (piece 1); `runInstall`'s code branch returns that error
+  **before** `service.Install`, so no daemon is started without `hook.json`. The
+  installer surfaces it and prints how to re-run.
+- **Setup partial/conflict** → the existing `keld signal setup --yes` skips conflicting
+  tools (emitting `skipped_conflict`) and still succeeds; `runInstall` proceeds to
+  `service.Install`.
+- **`keld` binary missing** → `resolveKeld()` already returns
+  "keld binary not found beside keld-agent or on PATH; install keld first"; surfaced as
+  the command's error.
+- **No code + non-TTY** → headless branch: print the finish-setup line, install the
+  service, exit 0 (nothing failed).
 
 ## Testing
 
-- **Go (`onboard_test.go`):** code→`LoginWithCode` vs interactive dispatch (assert the
-  right auth path per `--code`/env, arg-wins); the agent-binary resolver (found beside
-  the exe / found on PATH / missing → prints instructions, non-fatal); the TTY-guard
-  branch (no code + non-TTY → skip signal); `--json` event stream shape. Auth calls hit
-  an `httptest` stub (mirror `login_test.go`); the `keld-agent` exec is stubbed via an
-  injected runner seam so no real binary/service is touched.
+- **Go (`internal/agentcli/agentcli_test.go`, extend the existing table tests):** the
+  new `runInstall` branch matrix — (i) code set → `run` receives
+  `login --code <code>` then `signal setup --yes` then `installService`, regardless of
+  TTY; (ii) no code + TTY → `login` then `signal setup` then `installService`; (iii) no
+  code + no TTY → no login/setup, prints finish-setup, `installService` still called;
+  (iv) a login error in the code/TTY branch aborts before `installService`. All via the
+  injected `isTTY`/`resolveKeld`/`run`/`installService` seams (no real binary/service).
+  Plus `--api-url`/`--yes`/`--json` passthrough assertions. Keep the existing four
+  `TestRunInstall*` cases green (signatures widened).
 - **install.sh:** `shellcheck`; assert the code parse (arg + env, arg-wins) and that
-  `keld onboard` is invoked with the resolved code (the no-code/non-TTY skip is
-  `onboard`'s responsibility, covered by the Go tests — the script always calls it).
+  `keld-agent install` is invoked with the resolved `--code` (the TTY/headless decision
+  is `keld-agent install`'s responsibility, covered by the Go tests).
 - **install.ps1:** `Invoke-ScriptAnalyzer` if available; param/env parse assertion.
 - **Web:** vitest — the one-liner renders with the embedded code per OS and Copy works
   (extend `install-panel.test.tsx` / a new `install-command.test.tsx`).
@@ -174,8 +200,8 @@ download page (authed)                  installer                         Atlas
 ## Non-goals / notes
 
 - No change to `keld login`, `keld signal setup`, or the enroll wire contract —
-  `onboard` composes them. Interactive `keld login`, `--json`, `--api-url`,
-  `--no-browser` all unchanged.
+  `keld-agent install` composes them via subprocess. Interactive `keld login`,
+  `--json`, `--api-url`, `--no-browser` all unchanged. No new CLI command is added.
 - The Windows `.pkg`/Inno GUI wizard and macOS `.pkg` postinstall structure are not
   reworked here; only `onboard.command`'s internals simplify. (The Inno wizard driving
   `keld --json` remains its own documented follow-on.)
@@ -184,9 +210,13 @@ download page (authed)                  installer                         Atlas
 
 ## Decomposition (→ plans)
 
-1. **keld-cli — `keld onboard` command** (`internal/cli/onboard.go` + agent resolver +
-   tests). The foundation the scripts call.
+1. **keld-cli — extend `keld-agent install`** (`internal/agentcli/agentcli.go`:
+   code-aware `runInstall` + `--code`/`--yes`/`--api-url`/`--json` flags + stdout TTY
+   fix; extend `agentcli_test.go`). The foundation the scripts call.
 2. **keld-cli — installer scripts** (`install.sh`, `install.ps1`, `onboard.command`)
-   rewired to `keld onboard` (+ shellcheck/parse tests). Depends on 1.
+   rewired to `keld-agent install [--code X]` (+ shellcheck/parse tests). Depends on 1.
 3. **keld-atlas — web install one-liner** (`install-command.tsx` reusing
    `useEnrollCode` + tests). Independent of 1/2 (only needs the install URLs + code).
+
+Pieces 1 + 2 are one keld-cli plan (sequential, same repo); piece 3 is a separate
+keld-atlas plan.
