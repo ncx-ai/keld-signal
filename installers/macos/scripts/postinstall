@@ -1,23 +1,19 @@
 #!/bin/bash
 set -e
 # Payload staged to /usr/local/keld; symlink the CLIs onto PATH, keep the sidecar
-# and KeldSetup.app beside keld-agent so sidecarBinPath()/the app resolve them.
+# and onboard.command beside keld-agent so sidecarBinPath()/the script resolve them.
 PREFIX="/usr/local/keld"
 ln -sf "$PREFIX/keld" /usr/local/bin/keld
 ln -sf "$PREFIX/keld-agent" /usr/local/bin/keld-agent
 
-# Register the LaunchAgent in the logged-in user's GUI session (postinstall runs as
-# root). keld-agent install has no TTY here, so the shipped TTY guard registers the
-# service only and skips the interactive login/setup.
 uid=$(stat -f %u /dev/console)
 user=$(id -un "$uid")
-launchctl asuser "$uid" sudo -u "$user" "$PREFIX/keld-agent" install || true
 
-# Launch the onboarding app in the user's GUI session (best-effort — the service is
-# already registered regardless). It drives `keld login --json` / `keld signal
-# setup --json` to walk the user through auth + tool setup.
-if [ -d "$PREFIX/KeldSetup.app" ]; then
-  launchctl asuser "$uid" sudo -u "$user" open "$PREFIX/KeldSetup.app" || true
+# Onboarding runs in the user's GUI session and registers/starts the agent itself
+# (after login + setup), so the agent isn't started before the user is set up.
+if [ -f "$PREFIX/onboard.command" ]; then
+  chmod +x "$PREFIX/onboard.command" || true
+  launchctl asuser "$uid" sudo -u "$user" open "$PREFIX/onboard.command" || true
 fi
 
 exit 0

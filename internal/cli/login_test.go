@@ -50,3 +50,43 @@ func TestLoginJSONEmitsDeviceCodeThenAuthorized(t *testing.T) {
 		t.Fatalf("line1 not authorized: %s", lines[1])
 	}
 }
+
+func TestLoginCodePersistsAuthAndExitsZero(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cli/enroll" {
+			t.Fatalf("path %s", r.URL.Path)
+		}
+		w.Write([]byte(`{"access_token":"AT","principal":"dg@keld.co","org":"Acme"}`))
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	cmd := newLoginCmd()
+	cmd.SetArgs([]string{"--code", "AB12-CD34", "--api-url", srv.URL})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(buf.String(), "dg@keld.co") || !strings.Contains(buf.String(), "Acme") {
+		t.Fatalf("expected confirmation output, got %q", buf.String())
+	}
+}
+
+func TestLoginCodeExpiredExitsNonZero(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(410)
+	}))
+	defer srv.Close()
+
+	cmd := newLoginCmd()
+	cmd.SetArgs([]string{"--code", "expired", "--api-url", srv.URL})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected non-zero exit / error for expired code")
+	}
+}

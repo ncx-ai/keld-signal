@@ -83,6 +83,28 @@ func (c *Client) DevicePoll(deviceCode string) (map[string]any, error) {
 	return result, nil
 }
 
+// Enroll calls POST /v1/cli/enroll to redeem a one-time setup code, returning
+// the same {access_token, principal, org} payload as a successful device poll.
+func (c *Client) Enroll(code string) (map[string]any, error) {
+	body, _ := json.Marshal(map[string]string{"code": code})
+	resp, err := c.post("/v1/cli/enroll", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusGone {
+		return nil, errs.New("invalid or expired setup code")
+	}
+	if err := checkStatus(resp); err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, errs.New("Atlas returned invalid JSON: %v", err)
+	}
+	return result, nil
+}
+
 // Onboarding calls GET /v1/cli/onboarding with a Bearer token.
 // Returns an error if no token was provided at construction time.
 func (c *Client) Onboarding() (*Onboarding, error) {

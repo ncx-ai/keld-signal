@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +33,55 @@ func TestOnboardingRequiresToken(t *testing.T) {
 	c := NewClient("https://x", "")
 	if _, err := c.Onboarding(); err == nil {
 		t.Fatal("expected auth error")
+	}
+}
+
+func TestEnrollSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cli/enroll" {
+			t.Fatalf("path %s", r.URL.Path)
+		}
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["code"] != "AB12-CD34" {
+			t.Fatalf("code %q", body["code"])
+		}
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"access_token":"tok","principal":"dg@keld.co","org":"Acme"}`))
+	}))
+	defer srv.Close()
+	res, err := NewClient(srv.URL, "").Enroll("AB12-CD34")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["access_token"] != "tok" || res["org"] != "Acme" {
+		t.Fatalf("res %v", res)
+	}
+}
+
+func TestEnrollExpired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(410)
+	}))
+	defer srv.Close()
+	_, err := NewClient(srv.URL, "").Enroll("x")
+	if err == nil {
+		t.Fatal("want error on 410")
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "invalid") && !strings.Contains(msg, "expired") {
+		t.Fatalf("error should mention invalid/expired code, got %q", err.Error())
+	}
+}
+
+func TestEnrollUnauthorized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+	}))
+	defer srv.Close()
+	_, err := NewClient(srv.URL, "").Enroll("x")
+	if err == nil {
+		t.Fatal("want error on 401")
 	}
 }
 

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -234,6 +235,56 @@ func TestRequireAuthTargetsStoredAPIURL(t *testing.T) {
 	}
 	if paths.APIBase() != "http://localhost:8000" {
 		t.Fatalf("APIBase should follow the stored token's server, got %q", paths.APIBase())
+	}
+}
+
+// LoginWithCode redeems a one-time setup code against a stub /v1/cli/enroll and
+// persists the resulting credentials, mirroring the device-flow's auth.json shape.
+func TestLoginWithCodeSuccess(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cli/enroll" {
+			t.Fatalf("path %s", r.URL.Path)
+		}
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"access_token":"AT","principal":"dg@keld.co","org":"Acme"}`))
+	}))
+	defer srv.Close()
+
+	got, err := LoginWithCode(api.NewClient(srv.URL, ""), "AB12-CD34")
+	if err != nil {
+		t.Fatalf("LoginWithCode: %v", err)
+	}
+	if gotBody["code"] != "AB12-CD34" {
+		t.Fatalf("code sent to server = %q", gotBody["code"])
+	}
+	if got.AccessToken != "AT" || got.Principal != "dg@keld.co" || got.Org != "Acme" || got.APIURL != srv.URL {
+		t.Fatalf("unexpected AuthData: %+v", got)
+	}
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded == nil || reloaded.AccessToken != "AT" || reloaded.APIURL != srv.URL {
+		t.Fatalf("auth.json not persisted correctly: %+v", reloaded)
+	}
+}
+
+// A 410 (expired code) from the enroll endpoint must surface as an error and
+// must NOT write auth.json.
+func TestLoginWithCodeExpired(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(410)
+	}))
+	defer srv.Close()
+
+	if _, err := LoginWithCode(api.NewClient(srv.URL, ""), "expired"); err == nil {
+		t.Fatal("expected error for expired code")
+	}
+	if reloaded, _ := Load(); reloaded != nil {
+		t.Fatalf("auth.json should not be written on failure, got %+v", reloaded)
 	}
 }
 
