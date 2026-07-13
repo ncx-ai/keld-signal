@@ -6,6 +6,18 @@ set -e
 REPO="ncx-ai/keld-signal"
 DEST="${KELD_INSTALL_DIR:-${HOME}/.local/bin}"
 
+# ── One-time setup code (pre-authenticated onboarding) ────────────────────────
+# Precedence: a `--code <X>` argument (curl … | sh -s -- --code X) wins over the
+# KELD_SETUP_CODE env var. The resolved code is handed to `keld-agent install`.
+CODE="${KELD_SETUP_CODE:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --code) shift; CODE="${1:-}"; [ $# -gt 0 ] && shift ;;
+    --code=*) CODE="${1#--code=}"; shift ;;
+    *) shift ;;
+  esac
+done
+
 # ── OS detection ──────────────────────────────────────────────────────────────
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$os" in
@@ -78,9 +90,6 @@ chmod +x "${DEST}/keld"
 
 if [ -f "${DEST}/keld-agent" ]; then
   chmod +x "${DEST}/keld-agent"
-  if command -v systemctl >/dev/null 2>&1; then
-    "${DEST}/keld-agent" install || echo "keld: could not enable keld-agent service (enable later with: keld-agent install)" >&2
-  fi
 fi
 
 # Fetch the frozen GLiNER2 sidecar (large, ~hundreds of MB) BY DEFAULT — this is
@@ -99,6 +108,18 @@ if [ "$os" = "linux" ] && [ -f "${DEST}/keld-agent" ] && [ "${KELD_NO_SIDECAR:-0
   fi
 fi
 
+if [ -f "${DEST}/keld-agent" ]; then
+  # keld-agent install owns login → signal setup → service (agent last), and the
+  # TTY/headless decision. With a setup code it onboards non-interactively.
+  if [ -n "$CODE" ]; then
+    "${DEST}/keld-agent" install --code "$CODE" \
+      || echo "keld: onboarding/agent install did not fully complete — re-run: keld-agent install --code <CODE>" >&2
+  else
+    "${DEST}/keld-agent" install \
+      || echo "keld: agent install did not complete — finish with: keld login && keld signal setup && keld-agent install" >&2
+  fi
+fi
+
 echo ""
 echo "keld ${tag} installed to ${DEST}/keld"
 if [ -f "${DEST}/keld-agent" ]; then
@@ -106,11 +127,11 @@ if [ -f "${DEST}/keld-agent" ]; then
 fi
 echo ""
 echo "Next steps:"
-echo "  1. Ensure ${DEST} is on your PATH."
-echo "     If it is not, add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
+echo "  Ensure ${DEST} is on your PATH:"
 echo "       export PATH=\"${DEST}:\${PATH}\""
-echo "  2. Run:  keld login"
-echo "  3. Run:  keld signal setup"
+if [ ! -f "${DEST}/keld-agent" ]; then
+  echo "  Then run:  keld login && keld signal setup"
+fi
 echo ""
 echo "Note: macOS users may see a Gatekeeper warning on first run."
 echo "  To allow the binary: System Settings > Privacy & Security > Allow."
