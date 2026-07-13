@@ -41,7 +41,7 @@ install identity that produced them.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "install_id": "a3f9c2e1b8d04f7a9c1e2b3d4f5a6b7c",
   "events": [
     {
@@ -65,10 +65,13 @@ install identity that produced them.
 }
 ```
 
-- **`schema_version`** (int) — currently `1` (`clientevents.SchemaVersion` in
+- **`schema_version`** (int) — currently `2` (`clientevents.SchemaVersion` in
   `internal/agent/clientevents/event.go`). Bump on any breaking change to the
   `Event`/`Corr` shape or code catalog; Atlas should reject or version-branch
-  on an unrecognized value rather than guess.
+  on an unrecognized value rather than guess. `2` is the version that changed
+  `resource.gauge` from a flat instantaneous `{rss_mb, cpu_pct}` snapshot to a
+  per-interval distribution (`{rss: {...}, cpu: {...}, n, window_s}`) — see
+  Resource events below and its backward-compatibility note.
 - **`install_id`** (string) — duplicated at the envelope level and inside each
   event's `corr.install_id` (same value) so a receiver can key/shard on the
   envelope without decoding every event.
@@ -161,9 +164,13 @@ survives verbatim; a prose or prompt-shaped message does not.
 
 The resource watcher (`internal/agent/clientevents/resource/watcher.go`)
 samples the daemon's full process tree (daemon + sidecar + inference worker,
-walked via `gopsutil`) on a fixed interval (daemon-side default 15s, not
-org-configurable) and drives two independent hysteresis/escalation state
-machines — one for RSS, one for CPU — plus a gauge cadence.
+walked via `gopsutil`) on a fixed interval (daemon-side default **10s**,
+`KELD_CLIENTEVENTS_SAMPLE` to override; not org-configurable) and drives two
+independent hysteresis/escalation state machines — one for RSS, one for CPU —
+plus a gauge cadence. Every sub-sample is folded into a running accumulator
+per track (RSS, CPU); the accumulator resets each time a `resource.gauge` is
+emitted (see below) — the anomaly state machines are otherwise unaffected by
+this accumulation.
 
 **Escalation (edge-triggered, one event per bucket crossing):**
 - A track becomes "elevated" the instant its value exceeds its threshold
@@ -207,8 +214,56 @@ comments, but not yet implemented; document the actual two-key shape.
 **`resource.gauge`:** an unconditional info snapshot emitted every
 `gauge_interval_s` (default 300s) regardless of anomaly state, so Atlas has a
 steady-state baseline even when nothing is elevated. Only emitted when
-`gauges_enabled` is true. Fields: `rss_mb`, `cpu_pct`, `proc_tree` (same shape
-as above; no `threshold`/`elevated_s`, since it's not an anomaly).
+`gauges_enabled` is true.
+
+**Interval semantics (schema v2):** the watcher sub-samples the process tree
+every ~10s (the sample interval above) and folds each sub-sample into a
+constant-memory running accumulator per track (RSS, CPU) — it does not retain
+individual samples. On each gauge tick (every `gauge_interval_s`, default
+300s ⇒ ~30 sub-samples per gauge) it emits the accumulated
+min/max/mean/population-std/last distribution for that window, then resets
+the accumulator for the next window. `std` is the **population** standard
+deviation (divides by `n`, not `n-1`); with fewer than 2 sub-samples folded in
+(`n < 2` — e.g. right after a threshold/settings change shortens the window),
+`std` is `0` rather than NaN.
+
+Fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `rss` | object | Distribution of summed RSS (MB) across the process tree over the gauge window: `{min, max, mean, std, last}`, all numbers. `last` is the most recent sub-sample before the gauge fired. |
+| `cpu` | object | Same shape as `rss`, for summed CPU% across the process tree. |
+| `n` | int | Number of sub-samples folded into this gauge's distribution. |
+| `window_s` | number | Seconds actually elapsed since the previous gauge (the real elapsed time, not the configured `gauge_interval_s` target). `0` for the very first gauge emitted after daemon startup (there is no prior gauge to measure from). |
+| `proc_tree` | object | Same per-role breakdown as the anomaly events (see above) — a point-in-time snapshot at gauge-emission time, not itself a distribution. |
+
+Example:
+
+```json
+{
+  "code": "resource.gauge",
+  "severity": "info",
+  "fields": {
+    "rss": { "min": 812.3, "max": 941.7, "mean": 875.4, "std": 28.9, "last": 902.1 },
+    "cpu": { "min": 2.1, "max": 46.8, "mean": 14.2, "std": 9.7, "last": 11.0 },
+    "n": 30,
+    "window_s": 300.4,
+    "proc_tree": { "daemon": 210.5, "others": 691.6 }
+  }
+}
+```
+
+**Backward compatibility.** Pre-v2 clients (`schema_version: 1`) emit the
+legacy flat gauge shape: a single instantaneous sample per field —
+`fields.rss_mb` / `fields.cpu_pct` (same names/shape as the anomaly events'
+current-value fields) plus `proc_tree`, with no `rss`/`cpu` distribution
+objects and no `n`/`window_s`. Atlas consumers (e.g. `resource_series`) must
+tolerate both shapes on the same route: detect the legacy shape by the
+presence of `fields.rss_mb`/`fields.cpu_pct` (equivalently, the absence of
+`fields.rss`/`fields.cpu` objects) and normalize it to the v2 shape by mapping
+the single value to both `mean` and `last` (`min`/`max` collapse to that same
+value), leaving `std` **absent** — not `0` — since a single instantaneous
+sample has no distribution to compute a standard deviation from.
 
 ## `client_telemetry` settings block
 
