@@ -283,17 +283,20 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   worker-spawn gate locally (Linux); CI's installer smoke does the same for every
   shipped OS. Any change touching the worker/spawn/freeze path must keep those
   green.
-- **macOS onboarding UI:** `installers/macos/KeldSetup/` (SwiftUI app) is compiled
-  by `installers/macos/build-app.sh`, wrapped into `KeldSetup.app`, staged + signed
-  by `build-pkg.sh`, and launched by the pkg `postinstall`. It drives the
-  `keld --json` interface. Swift builds only on the macOS CI runners — there's no
-  Swift toolchain in the Go/Linux dev environment, so its UX is human-verified.
+- **macOS onboarding UI:** `installers/macos/onboard.command` is a plain Terminal
+  script (no SwiftUI app) staged executable into the payload by `build-pkg.sh` and
+  opened by the pkg `postinstall` in the logged-in user's GUI session (`launchctl
+  asuser … open onboard.command`). It prompts for the one-time setup code and runs
+  `keld login --code "$CODE"` (falling back to interactive `keld login` on an empty
+  or failed code), then `keld signal setup --yes`, then `keld-agent install` —
+  **last**, since onboarding precedes the agent: `postinstall` no longer
+  pre-registers the service headlessly. Best-effort (`|| true`) and safe to re-run.
 - **Windows onboarding UI:** `installers/windows/keld-agent.iss` `[Code]` adds a
   post-install Inno wizard page ("Set up Keld") that drives the `keld --json`
   interface (WinAPI timer + async NDJSON temp-file polling). Compiled by `iscc` on
-  the Windows CI runner; UX is human-verified on Windows. Both installer UIs are
-  best-effort — the agent service is registered by the headless `keld-agent install`
-  regardless (the TTY guard).
+  the Windows CI runner; UX is human-verified on Windows. Unlike macOS, the Windows
+  installer's headless `keld-agent install` still pre-registers the service (the
+  TTY guard); the wizard page then drives interactive login/setup.
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.

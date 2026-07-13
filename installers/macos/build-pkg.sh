@@ -9,17 +9,15 @@ ARCH="${3:?arch}"
 OUT="keld-${VERSION}-${ARCH}.pkg"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-# Build the onboarding app into the payload (no-op if swift is unavailable).
-bash "$ROOT/build-app.sh" "$STAGE"
+# Stage the Terminal onboarding script into the payload (executable).
+cp "$ROOT/onboard.command" "$STAGE/onboard.command"
+chmod +x "$STAGE/onboard.command"
 
 # Optional codesign of the Mach-O binaries (hardened runtime) when a signing identity is present.
 if [ -n "${APPLE_DEVELOPER_ID_APP:-}" ]; then
   for b in keld keld-agent keld-agent-sidecar/keld-agent-sidecar; do
     codesign --force --options runtime --timestamp --sign "$APPLE_DEVELOPER_ID_APP" "$STAGE/$b" || true
   done
-  if [ -d "$STAGE/KeldSetup.app" ]; then
-    codesign --force --options runtime --timestamp --deep --sign "$APPLE_DEVELOPER_ID_APP" "$STAGE/KeldSetup.app" || true
-  fi
 fi
 
 # Build component pkg into a temp dir so the final pkg glob never catches it and

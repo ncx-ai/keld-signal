@@ -1,6 +1,11 @@
 /keld
 *.test
-/installers*
+# Local installer dry-run build output dirs (installers-<os>-<arch>/, e.g. from
+# `act`/local CI runs) and the Inno Setup output dir — not the tracked installers/
+# source tree itself. An earlier bare `/installers*` pattern here accidentally
+# matched that tracked dir too (no untracked files under it could be `git add`ed).
+/installers-*/
+/installers/windows/Output/
 
 # GoReleaser build output
 /dist/
