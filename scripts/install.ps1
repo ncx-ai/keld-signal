@@ -1,6 +1,9 @@
 # keld installer for Windows (PowerShell)
 # Usage: irm https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/install.ps1 | iex
 #Requires -Version 5.1
+param(
+    [string]$Code = $env:KELD_SETUP_CODE
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -59,6 +62,16 @@ try {
     Remove-Item $tmpZip -ErrorAction SilentlyContinue
 }
 
+$agent = Join-Path $InstallDir 'keld-agent.exe'
+if (Test-Path $agent) {
+    # keld-agent install owns login -> signal setup -> service (agent last).
+    if ($Code) {
+        & $agent install --code $Code
+    } else {
+        & $agent install
+    }
+}
+
 Write-Host ""
 Write-Host "keld $tag installed to $InstallDir\keld.exe"
 Write-Host ""
@@ -66,8 +79,10 @@ Write-Host "Next steps:"
 Write-Host "  1. Add $InstallDir to your PATH (if not already)."
 Write-Host "     Run this once in an elevated PowerShell to add it permanently:"
 Write-Host "       [Environment]::SetEnvironmentVariable('PATH', `$env:PATH + ';$InstallDir', 'User')"
-Write-Host "  2. Open a new terminal, then run:  keld login"
-Write-Host "  3. Run:  keld signal setup"
+if (-not (Test-Path $agent)) {
+    Write-Host "  2. Open a new terminal, then run:  keld login"
+    Write-Host "  3. Run:  keld signal setup"
+}
 Write-Host ""
 Write-Host "Note: Windows SmartScreen may warn on first run — unsigned binaries"
 Write-Host "  trigger this. Click 'More info' > 'Run anyway' to proceed."
