@@ -6,6 +6,7 @@ package resource
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -50,6 +51,52 @@ type trackState struct {
 	lastSeverity  clientevents.Severity
 }
 
+// acc is a running (constant-memory) accumulator over the sub-samples taken
+// within one gauge interval, producing a min/max/mean/population-std/last
+// distribution without retaining the individual samples.
+type acc struct {
+	n                          int
+	sum, sumsq, min, max, last float64
+}
+
+// add folds one more sample into the accumulator.
+func (a *acc) add(v float64) {
+	if a.n == 0 || v < a.min {
+		a.min = v
+	}
+	if a.n == 0 || v > a.max {
+		a.max = v
+	}
+	a.n++
+	a.sum += v
+	a.sumsq += v * v
+	a.last = v
+}
+
+// stats returns the distribution accumulated so far as a map[string]any (not
+// map[string]float64) so it survives clientevents' redaction gate -- see
+// treeAsAny below for the same rationale.
+func (a *acc) stats() map[string]any {
+	mean := 0.0
+	if a.n > 0 {
+		mean = a.sum / float64(a.n)
+	}
+	varp := 0.0
+	if a.n > 1 {
+		varp = a.sumsq/float64(a.n) - mean*mean
+		if varp < 0 {
+			varp = 0
+		}
+	}
+	return map[string]any{
+		"min": a.min, "max": a.max, "mean": mean,
+		"std": math.Sqrt(varp), "last": a.last,
+	}
+}
+
+// reset zeroes the accumulator for the next gauge interval.
+func (a *acc) reset() { *a = acc{} }
+
 // Watcher polls a Sampler on a timer and drives two independent
 // hysteresis/escalation state machines (RSS, CPU) plus a low-frequency gauge
 // snapshot, invoking the injected emit/emitGauge callbacks. Poll is pure-ish
@@ -62,9 +109,12 @@ type Watcher struct {
 	sampler   Sampler
 	clock     func() time.Time
 
-	lastGaugeAt time.Time
-	rss         trackState
-	cpu         trackState
+	lastGaugeAt  time.Time
+	gaugeStartAt time.Time
+	rssAcc       acc
+	cpuAcc       acc
+	rss          trackState
+	cpu          trackState
 }
 
 // NewWatcher builds a Watcher. emit is called for each anomaly transition
@@ -127,13 +177,22 @@ func (w *Watcher) Poll() {
 	now := w.clock()
 	th := w.thresholds()
 
+	w.rssAcc.add(s.RSSMB)
+	w.cpuAcc.add(s.CPUPct)
+
 	if w.lastGaugeAt.IsZero() || now.Sub(w.lastGaugeAt) >= th.GaugeInterval {
+		windowS := 0.0
+		if !w.gaugeStartAt.IsZero() {
+			windowS = now.Sub(w.gaugeStartAt).Seconds()
+		}
 		w.emitGauge(map[string]any{
-			"rss_mb":    s.RSSMB,
-			"cpu_pct":   s.CPUPct,
-			"proc_tree": treeAsAny(s.Tree),
+			"rss": w.rssAcc.stats(), "cpu": w.cpuAcc.stats(),
+			"n": w.rssAcc.n, "window_s": windowS, "proc_tree": treeAsAny(s.Tree),
 		})
+		w.rssAcc.reset()
+		w.cpuAcc.reset()
 		w.lastGaugeAt = now
+		w.gaugeStartAt = now
 	}
 
 	w.pollTrack(&w.rss, s.RSSMB, th.RSSMB, now, th.SustainedWindow, "resource.sustained_high_rss", func(value, threshold, elapsedS float64) map[string]any {

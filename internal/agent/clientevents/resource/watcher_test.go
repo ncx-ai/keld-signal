@@ -367,11 +367,169 @@ func TestPollGaugeCadence(t *testing.T) {
 		t.Fatalf("expected 3 gauge emits over %d polls, got %d: %+v", n, len(*gauges), *gauges)
 	}
 	for _, g := range *gauges {
-		for _, key := range []string{"rss_mb", "cpu_pct", "proc_tree"} {
+		for _, key := range []string{"rss", "cpu", "n", "window_s", "proc_tree"} {
 			if _, ok := g[key]; !ok {
 				t.Fatalf("expected gauge field %q in %+v", key, g)
 			}
 		}
+		if _, ok := g["rss"].(map[string]any); !ok {
+			t.Fatalf("expected rss to be map[string]any, got %T", g["rss"])
+		}
+		if _, ok := g["cpu"].(map[string]any); !ok {
+			t.Fatalf("expected cpu to be map[string]any, got %T", g["cpu"])
+		}
+	}
+}
+
+// TestPollGaugeFirstPollBaseline proves the very first Poll() emits a
+// baseline gauge distribution over a single sample: n=1, std=0, and
+// min==max==mean==last==the sample -- there is no prior interval to average
+// over, so the "distribution" degenerates to the one point.
+func TestPollGaugeFirstPollBaseline(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)}
+	th := testThresholds()
+	th.GaugeInterval = 300 * time.Second
+	samples := []Sample{{RSSMB: 512, CPUPct: 42}}
+	w, _, gauges := newTestWatcher(queueSampler(t, samples), clock.now, th)
+
+	w.Poll()
+
+	if len(*gauges) != 1 {
+		t.Fatalf("expected exactly 1 gauge emit on first poll, got %d: %+v", len(*gauges), *gauges)
+	}
+	g := (*gauges)[0]
+	if n, ok := g["n"].(int); !ok || n != 1 {
+		t.Fatalf("expected n=1, got %v (%T)", g["n"], g["n"])
+	}
+	if ws, ok := g["window_s"].(float64); !ok || ws != 0 {
+		t.Fatalf("expected window_s=0 on first poll, got %v", g["window_s"])
+	}
+	rss, ok := g["rss"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected rss to be map[string]any, got %T", g["rss"])
+	}
+	for _, key := range []string{"min", "max", "mean", "last"} {
+		if rss[key].(float64) != 512 {
+			t.Fatalf("expected rss[%q]=512, got %v", key, rss[key])
+		}
+	}
+	if rss["std"].(float64) != 0 {
+		t.Fatalf("expected rss[std]=0 for a single sample, got %v", rss["std"])
+	}
+	cpu, ok := g["cpu"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected cpu to be map[string]any, got %T", g["cpu"])
+	}
+	for _, key := range []string{"min", "max", "mean", "last"} {
+		if cpu[key].(float64) != 42 {
+			t.Fatalf("expected cpu[%q]=42, got %v", key, cpu[key])
+		}
+	}
+	if cpu["std"].(float64) != 0 {
+		t.Fatalf("expected cpu[std]=0 for a single sample, got %v", cpu["std"])
+	}
+}
+
+// TestPollGaugeIntervalDistribution feeds three sub-samples within one gauge
+// interval (100, 300, 200 -- folded in that order, the last one closing the
+// interval) and asserts the emitted distribution against hand-computed
+// min/max/mean/std/last. Population std of {100,200,300}: mean=200,
+// sumsq=10000+90000+40000=140000, var=140000/3-40000=6666.67,
+// std=sqrt(6666.67)=81.65.
+func TestPollGaugeIntervalDistribution(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)}
+	th := testThresholds()
+	th.GaugeInterval = 300 * time.Second
+	samples := []Sample{
+		{RSSMB: 999, CPUPct: 99}, // t=0: first-poll baseline, not part of the distribution under test
+		{RSSMB: 100, CPUPct: 10}, // t=100: within interval
+		{RSSMB: 300, CPUPct: 30}, // t=200: within interval
+		{RSSMB: 200, CPUPct: 20}, // t=300: crosses the 300s boundary -> closes the interval
+	}
+	w, _, gauges := newTestWatcher(queueSampler(t, samples), clock.now, th)
+
+	for i := 0; i < len(samples); i++ {
+		w.Poll()
+		clock.advance(100 * time.Second)
+	}
+
+	if len(*gauges) != 2 {
+		t.Fatalf("expected exactly 2 gauge emits (baseline + interval close), got %d: %+v", len(*gauges), *gauges)
+	}
+	g := (*gauges)[1]
+	if n, ok := g["n"].(int); !ok || n != 3 {
+		t.Fatalf("expected n=3, got %v (%T)", g["n"], g["n"])
+	}
+	if ws, ok := g["window_s"].(float64); !ok || ws != 300 {
+		t.Fatalf("expected window_s=300, got %v", g["window_s"])
+	}
+	rss, ok := g["rss"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected rss to be map[string]any, got %T", g["rss"])
+	}
+	assertClose := func(name string, got, want float64) {
+		if diff := got - want; diff > 0.01 || diff < -0.01 {
+			t.Fatalf("rss[%s]: got %v, want %v", name, got, want)
+		}
+	}
+	assertClose("min", rss["min"].(float64), 100)
+	assertClose("max", rss["max"].(float64), 300)
+	assertClose("mean", rss["mean"].(float64), 200)
+	assertClose("last", rss["last"].(float64), 200)
+	assertClose("std", rss["std"].(float64), 81.65)
+
+	cpu, ok := g["cpu"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected cpu to be map[string]any, got %T", g["cpu"])
+	}
+	assertClose("cpu.min", cpu["min"].(float64), 10)
+	assertClose("cpu.max", cpu["max"].(float64), 30)
+	assertClose("cpu.mean", cpu["mean"].(float64), 20)
+	assertClose("cpu.last", cpu["last"].(float64), 20)
+	assertClose("cpu.std", cpu["std"].(float64), 8.165)
+}
+
+// TestPollGaugeResetsBetweenIntervals proves that once an interval closes and
+// emits, the NEXT interval's stats reflect only its own samples -- the
+// accumulator must be reset, not carried forward.
+func TestPollGaugeResetsBetweenIntervals(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)}
+	th := testThresholds()
+	th.GaugeInterval = 300 * time.Second
+	samples := []Sample{
+		{RSSMB: 999, CPUPct: 99}, // t=0: baseline
+		{RSSMB: 100, CPUPct: 10}, // t=100: interval 1
+		{RSSMB: 300, CPUPct: 30}, // t=200: interval 1
+		{RSSMB: 200, CPUPct: 20}, // t=300: closes interval 1
+		{RSSMB: 50, CPUPct: 5},   // t=400: interval 2
+		{RSSMB: 150, CPUPct: 15}, // t=500: interval 2
+		{RSSMB: 100, CPUPct: 10}, // t=600: closes interval 2
+	}
+	w, _, gauges := newTestWatcher(queueSampler(t, samples), clock.now, th)
+
+	for i := 0; i < len(samples); i++ {
+		w.Poll()
+		clock.advance(100 * time.Second)
+	}
+
+	if len(*gauges) != 3 {
+		t.Fatalf("expected exactly 3 gauge emits, got %d: %+v", len(*gauges), *gauges)
+	}
+	g := (*gauges)[2]
+	if n, ok := g["n"].(int); !ok || n != 3 {
+		t.Fatalf("expected n=3 for interval 2, got %v (%T)", g["n"], g["n"])
+	}
+	rss := g["rss"].(map[string]any)
+	// Interval 2's samples are {50,150,100}; interval 1's max (300) and min
+	// (100 is shared but not the min here) must NOT leak in.
+	if got := rss["max"].(float64); got != 150 {
+		t.Fatalf("expected interval 2 max=150 (not carrying interval 1's 300), got %v", got)
+	}
+	if got := rss["min"].(float64); got != 50 {
+		t.Fatalf("expected interval 2 min=50, got %v", got)
+	}
+	if got := rss["mean"].(float64); got != 100 {
+		t.Fatalf("expected interval 2 mean=100, got %v", got)
 	}
 }
 

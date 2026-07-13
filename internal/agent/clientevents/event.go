@@ -2,7 +2,7 @@ package clientevents
 
 import "time"
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type Severity string
 

@@ -49,8 +49,8 @@ func TestSeverityAtLeast(t *testing.T) {
 }
 
 func TestSchemaVersion(t *testing.T) {
-	if SchemaVersion != 1 {
-		t.Errorf("SchemaVersion = %d, want 1", SchemaVersion)
+	if SchemaVersion != 2 {
+		t.Errorf("SchemaVersion = %d, want 2", SchemaVersion)
 	}
 }
 

@@ -450,7 +450,7 @@ func Run(ctx context.Context) error {
 	reporter := clientevents.NewReporter(signalClientEventsEndpoint(cfg.Endpoint), cfg.IngestToken, installID, emitter.Drain, paths.ClientEventsSpoolDir())
 	go reporter.Run(ctx, flushInterval)
 
-	sampleInterval := 15 * time.Second
+	sampleInterval := 10 * time.Second
 	if v := os.Getenv("KELD_CLIENTEVENTS_SAMPLE"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			sampleInterval = d
