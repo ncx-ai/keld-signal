@@ -106,7 +106,7 @@ knobs, and the measured validation results. See also
 Alongside enrichment, `keld-agent` reports its own **operational health** to
 Atlas — a third, much smaller stream, distinct from both telemetry and
 enrichment: job retries/quarantines, sidecar crashes or startup failures
-(`sidecar.fallback` — the sidecar couldn't be brought up, so jobs queue/spool
+(`sidecar.unavailable` — the sidecar couldn't be brought up, so jobs queue/spool
 until it can), publish failures, sustained high RSS/CPU, and lifecycle
 (`daemon.start`/`stop`).
 It's how Atlas can tell an agent is struggling (or silent) without ever seeing a

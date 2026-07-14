@@ -108,7 +108,7 @@ func TestSupervisorKillsChildOnShutdown(t *testing.T) {
 // SetEmitter and proves the two Start() anomaly sites additive to their
 // log.Printf calls actually fire: a child that exits immediately (never
 // healthy, health always false) cycles through worker.crash on each restart,
-// then sidecar.fallback once the restart cap is exceeded and the supervisor
+// then sidecar.unavailable once the restart cap is exceeded and the supervisor
 // gives up.
 func TestSupervisorEmitsWorkerCrashAndFallbackViaEmitter(t *testing.T) {
 	emitter := enabledEmitter()
@@ -138,9 +138,9 @@ func TestSupervisorEmitsWorkerCrashAndFallbackViaEmitter(t *testing.T) {
 	if findEvent(events, "worker.crash") == nil {
 		t.Fatalf("expected at least one worker.crash event, got %+v", events)
 	}
-	ev := findEvent(events, "sidecar.fallback")
+	ev := findEvent(events, "sidecar.unavailable")
 	if ev == nil {
-		t.Fatalf("expected a sidecar.fallback event, got %+v", events)
+		t.Fatalf("expected a sidecar.unavailable event, got %+v", events)
 	}
 	if ev.Severity != clientevents.SevError {
 		t.Fatalf("expected error severity, got %v", ev.Severity)

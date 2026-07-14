@@ -399,7 +399,7 @@ func Run(ctx context.Context) error {
 	emitter := clientevents.NewEmitter(base, 1024)
 
 	// Client-events gate/thresholds default ON immediately — BEFORE any emit
-	// (daemon.start below, the pre-poll sidecar.fallback inside mlBackend, ...)
+	// (daemon.start below, the pre-poll sidecar.unavailable inside mlBackend, ...)
 	// so early startup events aren't dropped by the emitter's zero-value
 	// (disabled) gate. This also means telemetry works even if the settings
 	// fetch never completes (Atlas unreachable, or an Atlas predating the
@@ -663,13 +663,13 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 // sidecarUnavailable is mlBackend's shared "no sidecar this run" path: the
 // sidecar binary is missing, or its ephemeral port could not be allocated.
 // Enrichment never degrades to a lower-fidelity backend in this case either —
-// it emits sidecar.fallback (SevWarn) with the given diagnostic fields and
+// it emits sidecar.unavailable (SevWarn) with the given diagnostic fields and
 // returns a permanently-closed gate, so jobs simply queue/spool until the
 // daemon is restarted (matching the supervisor-give-up path in
 // mlBackendWithOpts). The returned Model is nil: the gate never opens, so
 // Worker never invokes it.
 func sidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) (enrich.Model, func() bool) {
-	emitter.Emit("sidecar.fallback", clientevents.SevWarn, fields)
+	emitter.Emit("sidecar.unavailable", clientevents.SevWarn, fields)
 	return nil, func() bool { return false }
 }
 

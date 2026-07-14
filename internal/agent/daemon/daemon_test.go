@@ -608,8 +608,8 @@ func TestSidecarUnavailableClosedGateNeverPublishes(t *testing.T) {
 	}
 
 	events := emitter.Drain()
-	if len(events) != 1 || events[0].Code != "sidecar.fallback" || events[0].Severity != clientevents.SevWarn {
-		t.Fatalf("expected one sidecar.fallback/warn event, got %+v", events)
+	if len(events) != 1 || events[0].Code != "sidecar.unavailable" || events[0].Severity != clientevents.SevWarn {
+		t.Fatalf("expected one sidecar.unavailable/warn event, got %+v", events)
 	}
 
 	// Drive it through the real Worker like the provisioning-failure test

@@ -99,13 +99,13 @@ func (s *Supervisor) Start(ctx context.Context) {
 		cmd, err := s.spawn(s.port)
 		if err != nil {
 			log.Printf("supervisor: spawn error: %v", err)
-			s.emit("sidecar.fallback", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
+			s.emit("sidecar.unavailable", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
 			s.fellBack.Store(true)
 			return
 		}
 		if err := cmd.Start(); err != nil {
 			log.Printf("supervisor: cmd.Start error: %v", err)
-			s.emit("sidecar.fallback", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
+			s.emit("sidecar.unavailable", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
 			s.fellBack.Store(true)
 			return
 		}
@@ -180,7 +180,7 @@ func (s *Supervisor) Start(ctx context.Context) {
 		restarts++
 		if restarts > maxRestarts {
 			log.Printf("supervisor: restart cap (%d) exceeded, falling back", maxRestarts)
-			s.emit("sidecar.fallback", clientevents.SevError, map[string]any{"restarts": maxRestarts})
+			s.emit("sidecar.unavailable", clientevents.SevError, map[string]any{"restarts": maxRestarts})
 			s.fellBack.Store(true)
 			return
 		}
