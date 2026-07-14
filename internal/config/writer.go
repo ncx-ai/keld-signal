@@ -98,6 +98,17 @@ func BackupConfig(path, toolName string) (string, error) {
 	return dest, nil
 }
 
+// RestoreBackup atomically copies the pristine backup at backupPath back
+// over configPath, undoing whatever keld wrote there. Returns an error if
+// the backup file is missing.
+func RestoreBackup(backupPath, configPath string) error {
+	data, err := os.ReadFile(backupPath)
+	if err != nil {
+		return err
+	}
+	return WriteAtomic(configPath, string(data), false)
+}
+
 // copyFile copies src to dst byte-for-byte, preserving the source's
 // permission bits and modification time (matching Python's shutil.copy2).
 func copyFile(src, dst string) error {

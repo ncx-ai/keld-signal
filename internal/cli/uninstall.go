@@ -43,38 +43,9 @@ func runUninstall(m *config.Manifest, names []string, yes bool, confirm func(str
 			continue
 		}
 
-		var current *string
-		if data, err := os.ReadFile(tm.ConfigPath); err == nil {
-			s := string(data)
-			current = &s
+		if err := stripToolConfig(m, name, tm, adapter); err != nil {
+			return err
 		}
-
-		plan := adapter.Remove(current, tm.Managed)
-
-		created, _ := anyBool(tm.Managed, "created")
-		if created {
-			deleted, err := config.DeleteIfEmpty(tm.ConfigPath, plan.AfterText)
-			if err != nil {
-				return err
-			}
-			if !deleted {
-				if err := config.WriteAtomic(tm.ConfigPath, plan.AfterText, false); err != nil {
-					return err
-				}
-			}
-		} else {
-			if err := config.WriteAtomic(tm.ConfigPath, plan.AfterText, false); err != nil {
-				return err
-			}
-		}
-
-		// Remove the .keld.bak sibling if it exists.
-		bak := tm.ConfigPath + ".keld.bak"
-		if _, err := os.Stat(bak); err == nil {
-			_ = os.Remove(bak)
-		}
-
-		delete(m.Tools, name)
 		console.Print(fmt.Sprintf("  ✓ %s", adapter.DisplayName()))
 	}
 
@@ -94,6 +65,47 @@ func runUninstall(m *config.Manifest, names []string, yes bool, confirm func(str
 		return err
 	}
 	console.Print("Done.")
+	return nil
+}
+
+// stripToolConfig surgically removes keld's managed config (env vars + hooks)
+// from a tool's config file via its adapter, deleting the file if keld
+// created it fresh and it's now empty, cleans up the .keld.bak sibling if
+// present, and drops the tool from the manifest. It does not save the
+// manifest — callers are responsible for that.
+func stripToolConfig(m *config.Manifest, name string, tm config.ToolManifest, adapter tools.Adapter) error {
+	var current *string
+	if data, err := os.ReadFile(tm.ConfigPath); err == nil {
+		s := string(data)
+		current = &s
+	}
+
+	plan := adapter.Remove(current, tm.Managed)
+
+	created, _ := anyBool(tm.Managed, "created")
+	if created {
+		deleted, err := config.DeleteIfEmpty(tm.ConfigPath, plan.AfterText)
+		if err != nil {
+			return err
+		}
+		if !deleted {
+			if err := config.WriteAtomic(tm.ConfigPath, plan.AfterText, false); err != nil {
+				return err
+			}
+		}
+	} else {
+		if err := config.WriteAtomic(tm.ConfigPath, plan.AfterText, false); err != nil {
+			return err
+		}
+	}
+
+	// Remove the .keld.bak sibling if it exists.
+	bak := tm.ConfigPath + ".keld.bak"
+	if _, err := os.Stat(bak); err == nil {
+		_ = os.Remove(bak)
+	}
+
+	delete(m.Tools, name)
 	return nil
 }
 
