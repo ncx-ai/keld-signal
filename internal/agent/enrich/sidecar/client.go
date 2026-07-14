@@ -2,12 +2,13 @@
 // implements enrich.Model. It returns RAW entities — masking is enforced by the
 // enrichment pipeline (SensitivityExtractor), not here.
 //
-// Availability policy: enrichment must NEVER silently degrade to the
-// deterministic backend. When the sidecar is temporarily unavailable — idle-
-// evicted (503, reloads on demand) or briefly down/restarting (transport error)
-// — the client waits (with backoff) and retries until the sidecar answers, so
-// every enrichment runs on GLiNER2. Retries stop only on context cancellation
-// (daemon shutdown) or a genuine non-retryable error (a real inference failure).
+// Availability policy: enrichment must never silently degrade to a
+// lower-fidelity backend — there is none; the sidecar is the sole Model. When
+// the sidecar is temporarily unavailable — idle-evicted (503, reloads on
+// demand) or briefly down/restarting (transport error) — the client waits
+// (with backoff) and retries until the sidecar answers, so every enrichment
+// runs on GLiNER2. Retries stop only on context cancellation (daemon
+// shutdown) or a genuine non-retryable error (a real inference failure).
 package sidecar
 
 import (

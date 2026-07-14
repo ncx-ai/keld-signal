@@ -18,8 +18,9 @@ type Info struct {
 	Port   int    `json:"port"`
 	Secret string `json:"secret"`
 	// SidecarPort is the loopback port of the GLiNER2 sidecar, allocated by the
-	// daemon at startup. Zero/absent when ML is disabled or the deterministic
-	// backend is in use. Lets `keld-agent metrics` reach the sidecar's /metrics.
+	// daemon at startup. Zero/absent when ML is disabled (`ml_backend=off`) or
+	// the sidecar isn't up yet. Lets `keld-agent metrics` reach the sidecar's
+	// /metrics.
 	SidecarPort int `json:"sidecar_port,omitempty"`
 }
 
