@@ -2,10 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
 func TestDeviceStartAndPoll(t *testing.T) {
@@ -82,6 +85,33 @@ func TestEnrollUnauthorized(t *testing.T) {
 	_, err := NewClient(srv.URL, "").Enroll("x")
 	if err == nil {
 		t.Fatal("want error on 401")
+	}
+}
+
+// TestOnboardingStatusErrorDetectable proves a >=400 response from
+// Onboarding wraps a *retry.StatusError with the right code, so callers
+// (e.g. the daemon self-heal reauther) can detect 401/403 via errors.As
+// without losing the human-readable message.
+func TestOnboardingStatusErrorDetectable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL, "cli-token").Onboarding()
+	if err == nil {
+		t.Fatal("want error on 401")
+	}
+	var se *retry.StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("errors.As(*retry.StatusError) failed on err = %v", err)
+	}
+	if se.Code != 401 {
+		t.Errorf("se.Code = %d, want 401", se.Code)
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("err.Error() = %q, want it to mention 401", err.Error())
 	}
 }
 

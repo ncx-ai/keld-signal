@@ -42,6 +42,13 @@ func BackupsDir() string            { return filepath.Join(KeldHome(), "backups"
 func ModelsDir(model string) string { return filepath.Join(KeldHome(), "models", model) }
 func InstallIDPath() string         { return filepath.Join(KeldHome(), "install-id") }
 
+// ReauthMarkerPath is the local "re-authentication required" marker written
+// by the daemon self-heal reauther when the CLI token itself is gone/revoked
+// (Onboarding 401/403, or no auth.json). Its presence is the only local
+// visibility channel once Atlas can no longer be reached with the stored
+// credentials; `keld-agent status` / `keld signal status`/`doctor` read it.
+func ReauthMarkerPath() string { return filepath.Join(KeldHome(), "reauth-required") }
+
 // SpoolDir is the on-disk queue of undelivered enrich pointers (hook writes,
 // daemon drains). Sibling of models/ under KELD_HOME.
 func SpoolDir() string { return filepath.Join(KeldHome(), "spool") }

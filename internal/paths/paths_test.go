@@ -13,6 +13,9 @@ func TestKeldHomeRespectsEnv(t *testing.T) {
 	if AuthPath() != filepath.Join("/tmp/kh", "auth.json") {
 		t.Fatalf("auth path %q", AuthPath())
 	}
+	if ReauthMarkerPath() != filepath.Join("/tmp/kh", "reauth-required") {
+		t.Fatalf("reauth marker path %q", ReauthMarkerPath())
+	}
 }
 
 func TestAPIBasePrecedence(t *testing.T) {

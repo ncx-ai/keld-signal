@@ -4,12 +4,14 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
 // DeviceStart holds the response from the device-start endpoint.
@@ -151,7 +153,11 @@ func (c *Client) post(path string, body []byte) (*http.Response, error) {
 	return resp, nil
 }
 
-// checkStatus returns an error for HTTP status >= 400.
+// checkStatus returns an error for HTTP status >= 400. The error joins a
+// human-readable *errs.Error (what the CLI prints) with a *retry.StatusError
+// carrying the numeric code, so callers can detect specific statuses (e.g.
+// 401/403 for the daemon self-heal reauther) via errors.As without losing
+// the descriptive message.
 func checkStatus(resp *http.Response) error {
 	if resp.StatusCode < 400 {
 		return nil
@@ -161,5 +167,8 @@ func checkStatus(resp *http.Response) error {
 	if len(text) > 200 {
 		text = text[:200]
 	}
-	return errs.New("Atlas returned %d: %s", resp.StatusCode, text)
+	return errors.Join(
+		errs.New("Atlas returned %d: %s", resp.StatusCode, text),
+		&retry.StatusError{Code: resp.StatusCode},
+	)
 }
