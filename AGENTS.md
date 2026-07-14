@@ -96,6 +96,25 @@ attempt is harmless.
 (`KELD_SETTINGS_POLL`). Remote overrides local; non-fatal if Atlas is unreachable.
 See `docs/enrichment-settings.md`.
 
+**Auth & self-heal.** Both client tokens are long-lived and revoke-only (no
+TTL) — the CLI token (`~/.keld/auth.json`) and the org ingest token
+(`~/.keld/hook.json`) — so normal background operation needs no re-auth. The
+daemon reads the ingest token at startup but self-heals on a persistent
+publish/settings `401`/`403`: it re-fetches the current ingest token via
+`Onboarding` using the CLI token (`auth.Load`), live-swaps it into the shared
+`creds.Token` (publish/settings/client-events all pick it up from there),
+rewrites `hook.json`, and emits an `auth.refreshed` client-event.
+Single-flight + cooldown (`KELD_REAUTH_COOLDOWN`, default 60s) turns a burst
+of 401s into one re-onboard. Token-only: an endpoint change instead logs a
+"restart to adopt" warning. If the CLI token itself is gone/revoked, the
+daemon writes `~/.keld/reauth-required` and logs loudly; `keld signal
+status`/`doctor` and `keld-agent status` surface it — recovery is `keld
+login` then `keld-agent restart`. **Known limitation (v1):** a job that hits
+the 401 mid-rotation isn't itself re-spooled (only the per-job timeout path
+re-spools, bounded by `KELD_ENRICH_MAX_ATTEMPTS`); the daemon still recovers
+forward for subsequent jobs — lossless re-spool of the 401'd job is a
+documented follow-up.
+
 **Client-events telemetry (`internal/agent/clientevents/`).** Separately from
 enrichment, the daemon emits structured **operational** events about itself —
 job retries/quarantines, sidecar crashes/fallback, publish failures, resource
