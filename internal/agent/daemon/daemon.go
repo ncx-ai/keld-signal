@@ -23,6 +23,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents/resource"
+	"github.com/ncx-ai/keld-signal/internal/agent/creds"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
@@ -411,8 +412,14 @@ func Run(ctx context.Context) error {
 	var gaugesEnabled atomic.Bool
 	gaugesEnabled.Store(eff.GaugesEnabled)
 
+	// tok is the shared, live-swappable ingest token: publish/settings/reporter
+	// all read it through tok.Get rather than capturing a static string, so a
+	// later self-heal re-auth (a future task) can rotate it in one place via
+	// tok.Set and have every consumer observe the new value immediately.
+	tok := creds.NewToken(cfg.IngestToken)
+
 	q := queue.New(256)
-	pub := publish.New(enrichEndpoint(cfg.Endpoint), cfg.IngestToken, actor)
+	pub := publish.New(enrichEndpoint(cfg.Endpoint), tok.Get, actor)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -451,7 +458,7 @@ func Run(ctx context.Context) error {
 			flushInterval = d
 		}
 	}
-	reporter := clientevents.NewReporter(signalClientEventsEndpoint(cfg.Endpoint), cfg.IngestToken, installID, emitter.Drain, paths.ClientEventsSpoolDir())
+	reporter := clientevents.NewReporter(signalClientEventsEndpoint(cfg.Endpoint), tok.Get, installID, emitter.Drain, paths.ClientEventsSpoolDir())
 	go reporter.Run(ctx, flushInterval)
 
 	sampleInterval := 10 * time.Second
@@ -474,7 +481,7 @@ func Run(ctx context.Context) error {
 		watcher.SetThresholds(thresholdsFrom(re))
 		gaugesEnabled.Store(re.GaugesEnabled)
 	}
-	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), cfg.IngestToken, 10*time.Second), live, pollInterval, emitter, onRemote)
+	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote)
 	if enrichmentEnabled {
 		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, emitter)
 	}

@@ -18,7 +18,7 @@ func TestPollSettingsAppliesRemoteOverLocal(t *testing.T) {
 	}))
 	defer srv.Close()
 	live := settings.NewLive(settings.Settings{IncludeEntityText: true}) // local base true
-	client := settings.NewClient(srv.URL, "tok", 2*time.Second)
+	client := settings.NewClient(srv.URL, func() string { return "tok" }, 2*time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// one startup fetch is enough for the assertion; a long interval keeps the ticker quiet
@@ -58,7 +58,7 @@ func TestPollSettingsInvokesOnRemoteOnSuccess(t *testing.T) {
 	defer srv.Close()
 
 	live := settings.NewLive(settings.Settings{})
-	client := settings.NewClient(srv.URL, "tok", 2*time.Second)
+	client := settings.NewClient(srv.URL, func() string { return "tok" }, 2*time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -104,7 +104,7 @@ func TestPollSettingsEmitsAndSkipsOnRemoteOnFetchError(t *testing.T) {
 	defer srv.Close()
 
 	live := settings.NewLive(settings.Settings{})
-	client := settings.NewClient(srv.URL, "tok", 2*time.Second)
+	client := settings.NewClient(srv.URL, func() string { return "tok" }, 2*time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

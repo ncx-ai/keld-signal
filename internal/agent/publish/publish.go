@@ -6,13 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
 type Source struct {
@@ -90,13 +90,15 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 // Publisher POSTs enrichments to Atlas.
 type Publisher struct {
 	Endpoint string
-	Token    string
+	Token    func() string
 	Actor    string
 	HTTP     *http.Client
 }
 
-// New returns a Publisher targeting the enrichments endpoint.
-func New(endpoint, token, actor string) *Publisher {
+// New returns a Publisher targeting the enrichments endpoint. token is called
+// on every Send so a later credential rotation (e.g. creds.Token.Set) is
+// observed without reconstructing the Publisher.
+func New(endpoint string, token func() string, actor string) *Publisher {
 	return &Publisher{Endpoint: endpoint, Token: token, Actor: actor, HTTP: &http.Client{Timeout: 10 * time.Second}}
 }
 
@@ -113,7 +115,7 @@ func (p *Publisher) Send(e Enrichment) error {
 		return err
 	}
 	req.Header.Set("content-type", "application/json")
-	req.Header.Set("x-keld-ingest-token", p.Token)
+	req.Header.Set("x-keld-ingest-token", p.Token())
 	req.Header.Set("x-keld-actor", p.Actor)
 
 	client := p.HTTP
@@ -127,7 +129,7 @@ func (p *Publisher) Send(e Enrichment) error {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("atlas returned %d", resp.StatusCode)
+		return &retry.StatusError{Code: resp.StatusCode}
 	}
 	return nil
 }

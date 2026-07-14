@@ -3,6 +3,7 @@ package publish
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
 func TestBuildIncludesPromptChars(t *testing.T) {
@@ -64,7 +66,7 @@ func TestSendPostsHeadersAndBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	pub := New(srv.URL, "tok123", "dg@keld.co")
+	pub := New(srv.URL, func() string { return "tok123" }, "dg@keld.co")
 	err := pub.Send(Enrichment{Source: Source{ID: "claude_code"}, Correlation: Correlation{ID: "X"}})
 	if err != nil {
 		t.Fatal(err)
@@ -82,8 +84,23 @@ func TestSendErrorsOn500(t *testing.T) {
 		w.WriteHeader(500)
 	}))
 	defer srv.Close()
-	if err := New(srv.URL, "t", "a").Send(Enrichment{}); err == nil {
+	if err := New(srv.URL, func() string { return "t" }, "a").Send(Enrichment{}); err == nil {
 		t.Fatal("expected error on 500")
+	}
+}
+
+func TestSendErrorsAreTypedStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+	}))
+	defer srv.Close()
+	err := New(srv.URL, func() string { return "t" }, "a").Send(Enrichment{})
+	var se *retry.StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *retry.StatusError, got %T (%v)", err, err)
+	}
+	if se.Code != 401 {
+		t.Fatalf("StatusError.Code = %d, want 401", se.Code)
 	}
 }
 

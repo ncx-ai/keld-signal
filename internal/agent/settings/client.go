@@ -3,17 +3,22 @@ package settings
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
 type Client struct {
-	url, token string
-	hc         *http.Client
+	url   string
+	token func() string
+	hc    *http.Client
 }
 
-func NewClient(url, token string, timeout time.Duration) *Client {
+// NewClient builds a Client targeting url. token is called on every Fetch so
+// a later credential rotation (e.g. creds.Token.Set) is observed without
+// reconstructing the Client.
+func NewClient(url string, token func() string, timeout time.Duration) *Client {
 	return &Client{url: url, token: token, hc: &http.Client{Timeout: timeout}}
 }
 
@@ -24,14 +29,14 @@ func (c *Client) Fetch(ctx context.Context) (*Remote, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("x-keld-ingest-token", c.token)
+	req.Header.Set("x-keld-ingest-token", c.token())
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("enrichment-settings: status %d", resp.StatusCode)
+		return nil, &retry.StatusError{Code: resp.StatusCode}
 	}
 	var r Remote
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
