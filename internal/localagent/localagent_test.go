@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 )
 
 func TestReadPromptFromArgs(t *testing.T) {
@@ -76,7 +76,7 @@ func TestFetchText(t *testing.T) {
 }
 
 func TestEnrichJSON(t *testing.T) {
-	out, err := EnrichJSON("refactor the auth module", "claude_code", enrich.NewDeterministic())
+	out, err := EnrichJSON("refactor the auth module", "claude_code", enrichtest.NewFake())
 	if err != nil {
 		t.Fatalf("EnrichJSON: %v", err)
 	}

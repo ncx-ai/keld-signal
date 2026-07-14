@@ -3,7 +3,7 @@ package eval
 import (
 	"testing"
 
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 )
 
 func TestRunModelOnDeterministicBaseline(t *testing.T) {
@@ -11,7 +11,7 @@ func TestRunModelOnDeterministicBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pred := RunModel(enrich.NewDeterministic(), gold)
+	pred := RunModel(enrichtest.NewFake(), gold)
 	if len(pred) != len(gold) {
 		t.Fatalf("pred len = %d, want %d", len(pred), len(gold))
 	}

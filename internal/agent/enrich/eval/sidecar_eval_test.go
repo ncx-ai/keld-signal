@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 )
 
@@ -31,7 +31,7 @@ func TestSidecarVsDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := []string{"task_type", "domain", "sensitivity"}
-	det := Score(gold, RunModel(enrich.NewDeterministic(), gold), fields)
+	det := Score(gold, RunModel(enrichtest.NewFake(), gold), fields)
 	side := Score(gold, RunModel(sc, gold), fields)
 
 	t.Logf("gold rows: %d", len(gold))

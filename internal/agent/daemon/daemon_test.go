@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
@@ -49,7 +50,7 @@ func (f *fakeSender) all() []publish.Enrichment {
 func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
@@ -91,7 +92,7 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 func TestWorkerDeterministicMLOff(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ML-OFF-1",
@@ -129,7 +130,7 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, neverReady, nil)
+		Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, neverReady, nil)
 		close(done)
 	}()
 
@@ -217,7 +218,7 @@ func TestWorkerWithSidecarStubPublishesViaRouter(t *testing.T) {
 
 	go sup.Start(ctx)
 
-	router := enrich.NewRouter(client, enrich.NewDeterministic(), healthFn)
+	router := enrich.NewRouter(client, enrichtest.NewFake(), healthFn)
 	gate := func() bool { return sup.Ready() || sup.FellBack() }
 
 	q := queue.New(10)

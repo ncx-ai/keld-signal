@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 )
 
@@ -39,7 +40,7 @@ func TestBuildOmitsZeroPromptChars(t *testing.T) {
 }
 
 func TestBuildShapeAndNoRawText(t *testing.T) {
-	p := enrich.Run("key sk-live-ABCDEF0123456789 and write a function", "claude_code", enrich.Meta{}, enrich.NewDeterministic())
+	p := enrich.Run("key sk-live-ABCDEF0123456789 and write a function", "claude_code", enrich.Meta{}, enrichtest.NewFake())
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X", SessionID: "S", Origin: "hook", Version: "2.1"}
 	e := Build(j, p, "dg@keld.co", false, 0, time.Unix(0, 0).UTC())
 
