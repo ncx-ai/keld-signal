@@ -53,7 +53,7 @@ func TestProcessEmitsWorkerPanicWithRedactedError(t *testing.T) {
 	panicGate := func() bool { panic("boom: the panic payload itself") }
 
 	// process recovers internally, so this must not itself panic the test.
-	process(context.Background(), j, enrichtest.NewFake(), &fakeSender{}, "actor@keld.co", panicGate, emitter)
+	process(context.Background(), j, enrichtest.NewFake(), &fakeSender{}, "actor@keld.co", panicGate, emitter, nil)
 
 	events := emitter.Drain()
 	ev := findEvent(events, "worker.panic")
@@ -86,7 +86,7 @@ func TestProcessEmitsPublishFailedWithRedactedError(t *testing.T) {
 		Inline: "write a function",
 	}
 
-	process(context.Background(), j, enrichtest.NewFake(), failingSender{}, "actor@keld.co", func() bool { return false }, emitter)
+	process(context.Background(), j, enrichtest.NewFake(), failingSender{}, "actor@keld.co", func() bool { return false }, emitter, nil)
 
 	events := emitter.Drain()
 	ev := findEvent(events, "publish.failed")
@@ -119,7 +119,7 @@ func TestWorkerEmitsJobQuarantinedOnExhaustion(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, emitter)
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, emitter, nil)
 
 	job := queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "QUAR-1",

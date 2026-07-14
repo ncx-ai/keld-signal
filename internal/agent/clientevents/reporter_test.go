@@ -58,7 +58,7 @@ func TestFlushPostsEnvelopeWithAuthHeader(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	r := NewReporter(srv.URL, "tok-123", "install-1", drain, dir)
+	r := NewReporter(srv.URL, func() string { return "tok-123" }, "install-1", drain, dir)
 	r.policy = fastPolicy()
 
 	if err := r.flush(t.Context()); err != nil {
@@ -96,7 +96,7 @@ func TestFlushRetriesTransientThenSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return testEvents() }, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return testEvents() }, dir)
 	r.policy = fastPolicy()
 
 	if err := r.flush(t.Context()); err != nil {
@@ -117,7 +117,7 @@ func TestFlushExhaustedTransientSpools(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return testEvents() }, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return testEvents() }, dir)
 	r.policy = fastPolicy()
 
 	err := r.flush(t.Context())
@@ -158,7 +158,7 @@ func TestFlushPermanentFailureDropsNoSpool(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return testEvents() }, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return testEvents() }, dir)
 	r.policy = fastPolicy()
 
 	err := r.flush(t.Context())
@@ -183,7 +183,7 @@ func TestFlushSpoolsOnContextCancellation(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return testEvents() }, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return testEvents() }, dir)
 	r.policy = fastPolicy()
 
 	err := r.flush(ctx)
@@ -217,7 +217,7 @@ func TestFlushEmptyDrainNoPost(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return nil }, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return nil }, dir)
 	r.policy = fastPolicy()
 
 	if err := r.flush(t.Context()); err != nil {
@@ -249,7 +249,7 @@ func TestDrainSpoolRepostsAndDeletes(t *testing.T) {
 		t.Fatalf("write spool file: %v", err)
 	}
 
-	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return nil }, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return nil }, dir)
 	r.policy = fastPolicy()
 
 	if err := r.drainSpool(t.Context()); err != nil {
@@ -278,7 +278,7 @@ func TestDrainSpoolStopsOnTransientFailure(t *testing.T) {
 		t.Fatalf("write spool file: %v", err)
 	}
 
-	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return nil }, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return nil }, dir)
 	r.policy = fastPolicy()
 
 	_ = r.drainSpool(t.Context())
@@ -302,7 +302,7 @@ func TestDrainSpoolDropsPoisonFile(t *testing.T) {
 		t.Fatalf("write spool file: %v", err)
 	}
 
-	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return nil }, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return nil }, dir)
 	r.policy = fastPolicy()
 
 	_ = r.drainSpool(t.Context())
@@ -314,7 +314,7 @@ func TestDrainSpoolDropsPoisonFile(t *testing.T) {
 
 func TestDrainSpoolMissingDirIsNoop(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "does-not-exist")
-	r := NewReporter("http://example.invalid", "tok", "install-1", func() []Event { return nil }, dir)
+	r := NewReporter("http://example.invalid", func() string { return "tok" }, "install-1", func() []Event { return nil }, dir)
 	r.policy = fastPolicy()
 
 	if err := r.drainSpool(t.Context()); err != nil {
@@ -329,7 +329,7 @@ func TestSpoolBoundedDropsOldest(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	r := NewReporter(srv.URL, "tok", "install-1", func() []Event { return testEvents() }, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return testEvents() }, dir)
 	r.policy = fastPolicy()
 	r.maxSpool = 2
 
@@ -371,7 +371,7 @@ func TestRunFlushesOnShutdown(t *testing.T) {
 		return nil
 	}
 
-	r := NewReporter(srv.URL, "tok", "install-1", drain, dir)
+	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", drain, dir)
 	r.policy = fastPolicy()
 
 	ctx, cancel := context.WithCancel(context.Background())

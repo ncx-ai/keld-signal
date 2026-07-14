@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -37,7 +38,7 @@ func newLoginCmd() *cobra.Command {
 				a, err := auth.LoginWithCode(api.NewClient(paths.APIBase(), ""), code)
 				if err != nil {
 					if jsonOut {
-						emitEvent(errorEvent{Event: "error", Message: err.Error()})
+						emitEvent(errorEvent{Event: "error", Message: cleanErrorMessage(err)})
 						return errs.ErrSilentExit
 					}
 					return err
@@ -62,7 +63,7 @@ func newLoginCmd() *cobra.Command {
 				}
 				a, err := auth.RequireAuthReport(noLogin, !noBrowser, true, onStart)
 				if err != nil {
-					emitEvent(errorEvent{Event: "error", Message: err.Error()})
+					emitEvent(errorEvent{Event: "error", Message: cleanErrorMessage(err)})
 					return errs.ErrSilentExit
 				}
 				emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org})
@@ -91,6 +92,21 @@ func newLoginCmd() *cobra.Command {
 	cmd.Flags().Bool("json", false, "Emit machine-readable NDJSON events on stdout (for installer/automation).")
 	cmd.Flags().Bool("no-browser", false, "Do not auto-open the browser (the caller opens the verification URL itself).")
 	return cmd
+}
+
+// cleanErrorMessage returns the clean *errs.Error message when err wraps one
+// (mirroring root.go's Execute), falling back to err.Error() otherwise. This
+// keeps machine-readable --json error events a single clean line rather than
+// leaking an embedded implementation detail — e.g. checkStatus can return
+// errors.Join(*errs.Error, *retry.StatusError), whose Error() joins both with
+// a newline.
+func cleanErrorMessage(err error) string {
+	msg := err.Error()
+	var ke *errs.Error
+	if errors.As(err, &ke) {
+		msg = ke.Msg
+	}
+	return msg
 }
 
 func newLogoutCmd() *cobra.Command {

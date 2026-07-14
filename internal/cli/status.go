@@ -89,10 +89,21 @@ func newStatusCmd() *cobra.Command {
 				console.Print(line)
 			}
 
+			if required, _ := paths.ReauthRequired(); required {
+				console.Print(reauthRequiredLine)
+			}
+
 			return nil
 		},
 	}
 }
+
+// reauthRequiredLine is the human line surfaced by `keld signal status`,
+// `keld signal doctor`, and `keld-agent status` when the daemon's local
+// re-authentication marker (paths.ReauthMarkerPath) is present — the CLI
+// token itself is gone/revoked and the daemon self-heal can't recover it.
+// Kept as one constant so the wording stays identical across all three.
+const reauthRequiredLine = "⚠ re-authentication required — run 'keld login', then 'keld-agent restart'"
 
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
@@ -131,10 +142,22 @@ func newDoctorCmd() *cobra.Command {
 				}
 			}
 
+			reauthRequired, _ := paths.ReauthRequired()
+
 			if len(problems) > 0 {
 				for _, p := range problems {
 					console.Print(fmt.Sprintf("  ✗ %s", p))
 				}
+			}
+			if reauthRequired {
+				console.Print("  " + reauthRequiredLine)
+			} else {
+				// Absent marker means only that the daemon hasn't detected a revoked
+				// CLI token — not that login state was verified here. Don't overclaim.
+				console.Print("  ✓ no re-authentication required")
+			}
+
+			if len(problems) > 0 || reauthRequired {
 				return errs.ErrSilentExit
 			}
 			console.Print("No problems found.")

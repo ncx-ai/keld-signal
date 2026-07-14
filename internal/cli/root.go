@@ -53,7 +53,7 @@ func Execute() int {
 			return 1
 		}
 		var ke *errs.Error
-		if as(err, &ke) {
+		if errors.As(err, &ke) {
 			color.New(color.FgRed, color.Bold).Fprint(os.Stderr, "Error: ")
 			fmt.Fprintln(os.Stderr, ke.Msg)
 		} else {
@@ -62,20 +62,4 @@ func Execute() int {
 		return 1
 	}
 	return 0
-}
-
-func as(err error, target **errs.Error) bool {
-	for err != nil {
-		if e, ok := err.(*errs.Error); ok {
-			*target = e
-			return true
-		}
-		type unwrap interface{ Unwrap() error }
-		u, ok := err.(unwrap)
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
 }

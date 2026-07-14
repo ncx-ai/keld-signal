@@ -41,7 +41,7 @@ type envelope struct {
 // 400/401) is dropped — re-posting it will never succeed.
 type Reporter struct {
 	endpoint  string
-	token     string
+	token     func() string
 	installID string
 	drain     func() []Event
 	spoolDir  string
@@ -54,11 +54,13 @@ type Reporter struct {
 	httpClient *http.Client
 }
 
-// NewReporter builds a Reporter that POSTs drained batches to endpoint using
-// token as the x-keld-ingest-token credential (matching the publish/settings
-// client<->Atlas convention), tagging the envelope with installID. Spooled
+// NewReporter builds a Reporter that POSTs drained batches to endpoint,
+// calling token on every POST for the x-keld-ingest-token credential
+// (matching the publish/settings client<->Atlas convention — a getter so a
+// later credential rotation, e.g. creds.Token.Set, is observed without
+// reconstructing the Reporter), tagging the envelope with installID. Spooled
 // batches (written when Atlas is unreachable) live under spoolDir.
-func NewReporter(endpoint, token, installID string, drain func() []Event, spoolDir string) *Reporter {
+func NewReporter(endpoint string, token func() string, installID string, drain func() []Event, spoolDir string) *Reporter {
 	r := &Reporter{
 		endpoint:   endpoint,
 		token:      token,
@@ -81,7 +83,7 @@ func (r *Reporter) doPost(ctx context.Context, body []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("x-keld-ingest-token", r.token)
+	req.Header.Set("x-keld-ingest-token", r.token())
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := r.httpClient.Do(req)

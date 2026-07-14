@@ -127,6 +127,124 @@ func TestDoctorNoHookProblemWhenHookJsonExists(t *testing.T) {
 	}
 }
 
+// TestStatusReportsReauthRequired verifies that `keld signal status` surfaces
+// the daemon's local "re-authentication required" marker when present.
+func TestStatusReportsReauthRequired(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	if err := os.WriteFile(paths.ReauthMarkerPath(), []byte("re-authentication required (401) — run 'keld login' then 'keld-agent restart'\n"), 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	manifest := &config.Manifest{Tools: map[string]config.ToolManifest{}}
+	if err := manifest.Save(); err != nil {
+		t.Fatalf("saving manifest: %v", err)
+	}
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newStatusCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("status should not error; got %v", err)
+	}
+
+	out := buf.String()
+	if !bytes.Contains([]byte(out), []byte("re-authentication required")) {
+		t.Errorf("expected output to mention re-authentication required; got: %s", out)
+	}
+}
+
+// TestStatusNoReauthLineWithoutMarker verifies the re-auth line is absent
+// when the marker file doesn't exist.
+func TestStatusNoReauthLineWithoutMarker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	manifest := &config.Manifest{Tools: map[string]config.ToolManifest{}}
+	if err := manifest.Save(); err != nil {
+		t.Fatalf("saving manifest: %v", err)
+	}
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newStatusCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("status should not error; got %v", err)
+	}
+
+	out := buf.String()
+	if bytes.Contains([]byte(out), []byte("re-authentication required")) {
+		t.Errorf("expected no re-auth message; got: %s", out)
+	}
+}
+
+// TestDoctorReportsReauthRequired verifies that `keld signal doctor` flags the
+// re-authentication-required marker as a problem.
+func TestDoctorReportsReauthRequired(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	if err := os.WriteFile(paths.ReauthMarkerPath(), []byte("re-authentication required (401) — run 'keld login' then 'keld-agent restart'\n"), 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	manifest := &config.Manifest{Tools: map[string]config.ToolManifest{}}
+	if err := manifest.Save(); err != nil {
+		t.Fatalf("saving manifest: %v", err)
+	}
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newDoctorCmd()
+	err := cmd.RunE(cmd, nil)
+	if !errors.Is(err, errs.ErrSilentExit) {
+		t.Fatalf("doctor should return ErrSilentExit; got %v", err)
+	}
+
+	out := buf.String()
+	if !bytes.Contains([]byte(out), []byte("re-authentication required")) {
+		t.Errorf("expected output to mention re-authentication required; got: %s", out)
+	}
+}
+
+// TestDoctorOkWithoutReauthMarker verifies doctor reports a healthy
+// authenticated line (and no error) when the re-auth marker is absent and
+// there are no other problems.
+func TestDoctorOkWithoutReauthMarker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	manifest := &config.Manifest{Tools: map[string]config.ToolManifest{}}
+	if err := manifest.Save(); err != nil {
+		t.Fatalf("saving manifest: %v", err)
+	}
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newDoctorCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("doctor should return nil (no problems); got %v", err)
+	}
+
+	out := buf.String()
+	if bytes.Contains([]byte(out), []byte("re-authentication required")) {
+		t.Errorf("expected no re-auth message; got: %s", out)
+	}
+}
+
 func TestDoctorReportsDrift(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 

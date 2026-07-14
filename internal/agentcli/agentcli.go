@@ -17,8 +17,32 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/daemon"
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
 	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/version"
 )
+
+// reauthRequiredLine is the human line surfaced by `keld-agent status` (and,
+// with identical wording, `keld signal status`/`doctor` — internal/cli) when
+// the daemon's local re-authentication marker (paths.ReauthMarkerPath) is
+// present: the CLI token itself is gone/revoked and the daemon self-heal
+// can't recover it without a human `keld login` + restart.
+const reauthRequiredLine = "⚠ re-authentication required — run 'keld login', then 'keld-agent restart'"
+
+// printStatus implements `keld-agent status`: print the service status, then
+// (best-effort, read-only) surface the daemon's local re-authentication
+// marker if present. statusFn/reauthFn are seams for testing — production
+// wires service.Status and paths.ReauthRequired.
+func printStatus(statusFn func() (string, error), reauthFn func() (bool, string)) error {
+	s, err := statusFn()
+	if err != nil {
+		return err
+	}
+	fmt.Println(s)
+	if required, _ := reauthFn(); required {
+		fmt.Println(reauthRequiredLine)
+	}
+	return nil
+}
 
 // keldName is the platform basename of the keld CLI binary.
 func keldName() string {
@@ -198,12 +222,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show keld-agent service status.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := service.Status()
-			if err != nil {
-				return err
-			}
-			fmt.Println(s)
-			return nil
+			return printStatus(service.Status, paths.ReauthRequired)
 		},
 	})
 	for _, c := range serviceControlCmds() {
