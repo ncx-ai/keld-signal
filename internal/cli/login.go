@@ -31,6 +31,7 @@ func newLoginCmd() *cobra.Command {
 			code, _ := cmd.Flags().GetString("code")
 			if code != "" {
 				if !jsonOut {
+					console.Print("")
 					console.Print("Signing in…")
 				}
 				a, err := auth.LoginWithCode(api.NewClient(paths.APIBase(), ""), code)
@@ -71,6 +72,7 @@ func newLoginCmd() *cobra.Command {
 			// force=true: an explicit `keld login` always re-authenticates rather than
 			// trusting stored creds (which may be revoked/rotated). Falls back to the
 			// lazy path only under --no-login (no browser available).
+			console.Print("")
 			console.Print("Signing in…")
 			a, err := auth.RequireAuth(noLogin, true, true)
 			if err != nil {

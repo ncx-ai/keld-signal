@@ -50,6 +50,7 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		say(fmt.Sprintf("  ⚠ %-26s skipped (conflict)", adapter.DisplayName()))
 	}
 
+	say("")
 	say("Configuring your AI tools…")
 
 	type approved struct {
@@ -72,6 +73,7 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		plan := adapter.Apply(before, p, false)
 
 		if plan.Conflict != "" {
+			say(fmt.Sprintf("  ⚠ %-26s conflict: %s", adapter.DisplayName(), plan.Conflict))
 			if opts.DryRun {
 				skipConflict(adapter)
 				emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "skipped_conflict", Path: path})

@@ -127,6 +127,7 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 	}
 
 	if !cfg.jsonOut {
+		console.Print("")
 		console.Print("Starting the agent…")
 	}
 	if err := installService(); err != nil {

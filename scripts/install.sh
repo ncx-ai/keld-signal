@@ -112,15 +112,16 @@ if [ "$os" = "linux" ] && [ -f "${DEST}/keld-agent" ]; then
   fi
 fi
 
+agent_ok=1
 if [ -f "${DEST}/keld-agent" ]; then
   # keld-agent install owns login → signal setup → service (agent last), and the
   # TTY/headless decision. With a setup code it onboards non-interactively.
   if [ -n "$CODE" ]; then
     "${DEST}/keld-agent" install --code "$CODE" \
-      || echo "keld: onboarding/agent install did not fully complete — re-run: keld-agent install --code <CODE>" >&2
+      || { agent_ok=0; echo "keld: onboarding/agent install did not fully complete — re-run: keld-agent install --code <CODE>" >&2; }
   else
     "${DEST}/keld-agent" install \
-      || echo "keld: agent install did not complete — finish with: keld login && keld signal setup && keld-agent install" >&2
+      || { agent_ok=0; echo "keld: agent install did not complete — finish with: keld login && keld signal setup && keld-agent install" >&2; }
   fi
 fi
 
@@ -143,4 +144,11 @@ if [ "$os" = "darwin" ]; then
 fi
 
 echo ""
-echo "Done — Keld is set up and running."
+if [ -f "${DEST}/keld-agent" ] && [ "$agent_ok" = "1" ]; then
+  echo "Done — Keld is set up and running."
+elif [ ! -f "${DEST}/keld-agent" ]; then
+  echo "Done — keld installed. Run: keld login && keld signal setup"
+else
+  echo "Keld installed, but onboarding did not complete — see the errors above." >&2
+  exit 1
+fi

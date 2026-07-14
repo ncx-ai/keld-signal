@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -314,10 +315,10 @@ func TestRunSetupHumanOutputFormat(t *testing.T) {
 	if strings.Contains(got, "─") {
 		t.Fatalf("box-drawing rule leaked into human output: %q", got)
 	}
-	if !strings.Contains(got, "✓") || !strings.Contains(got, "codex") || !strings.Contains(got, "already configured") {
+	if !regexp.MustCompile(`(?m)^\s*✓ codex\s+already configured\s*$`).MatchString(got) {
 		t.Fatalf("missing already-configured tool line: %q", got)
 	}
-	if !strings.Contains(got, "✓") || !strings.Contains(got, "Hook") || !strings.Contains(got, "~/.keld/hook.json") {
+	if !regexp.MustCompile(`(?m)^\s*✓ Hook\s+~/\.keld/hook\.json\s*$`).MatchString(got) {
 		t.Fatalf("missing Hook line: %q", got)
 	}
 	if strings.Contains(got, "Nothing to apply.") {
@@ -364,7 +365,7 @@ func TestRunSetupConflictHumanOutputFormat(t *testing.T) {
 	}
 
 	got := buf.String()
-	if !strings.Contains(got, "⚠") || !strings.Contains(got, "faketool") || !strings.Contains(got, "skipped (conflict)") {
+	if !regexp.MustCompile(`(?m)^\s*⚠ faketool\s+skipped \(conflict\)\s*$`).MatchString(got) {
 		t.Fatalf("missing unified skipped-conflict line: %q", got)
 	}
 }
