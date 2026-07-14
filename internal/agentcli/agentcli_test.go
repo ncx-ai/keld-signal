@@ -1,12 +1,15 @@
 package agentcli
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/ncx-ai/keld-signal/internal/console"
 )
 
 func TestKeldInDir(t *testing.T) {
@@ -143,6 +146,51 @@ func TestRunInstallYesInTTY(t *testing.T) { // no code, TTY, yes=true → setup 
 	want := []string{"/fake/keld login", "/fake/keld signal setup --yes"}
 	if strings.Join(*calls, "|") != strings.Join(want, "|") {
 		t.Fatalf("steps = %v, want %v", *calls, want)
+	}
+}
+
+// runInstall prints a "Starting the agent…" header before installService()
+// and a "✓ keld-agent running" confirmation on success, in human mode.
+func TestRunInstallPrintsStartingAgentHeaderHuman(t *testing.T) {
+	_, run := recorder()
+
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	err := runInstall(installConfig{}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "Starting the agent…") {
+		t.Fatalf("missing 'Starting the agent…' header: %q", got)
+	}
+	if !strings.Contains(got, "✓ keld-agent running") {
+		t.Fatalf("missing '✓ keld-agent running' confirmation: %q", got)
+	}
+}
+
+// The --json passthrough mode must stay a clean NDJSON stream from login/setup
+// subprocesses — runInstall itself must not inject any human console lines.
+func TestRunInstallSuppressesHumanLinesInJSONMode(t *testing.T) {
+	_, run := recorder()
+
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	err := runInstall(installConfig{jsonOut: true, code: "X1"}, func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	if buf.String() != "" {
+		t.Fatalf("jsonOut must suppress human lines from runInstall itself, got %q", buf.String())
 	}
 }
 

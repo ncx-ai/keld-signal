@@ -72,11 +72,12 @@ dl_base="${KELD_DOWNLOAD_BASE:-https://github.com/${REPO}/releases/download}"
 archive="keld_${os}_${arch}.tar.gz"
 url="${dl_base}/${tag}/${archive}"
 
-echo "Installing keld ${tag} (${os}/${arch})..."
-echo "  Source:      ${url}"
-echo "  Destination: ${DEST}/keld"
+echo "Keld · installing  (${os}/${arch}, ${tag})"
+echo ""
 
 mkdir -p "$DEST"
+
+echo "Downloading…"
 
 if ! curl -fsSL "$url" | tar -xz -C "$DEST"; then
   echo "" >&2
@@ -92,16 +93,18 @@ if [ -f "${DEST}/keld-agent" ]; then
   chmod +x "${DEST}/keld-agent"
 fi
 
+echo "  ✓ $(printf '%-26s' 'keld + keld-agent') → ${DEST}"
+
 # Fetch the frozen GLiNER2 ML sidecar — REQUIRED. Keld Signal runs on-device ML;
 # there is no deterministic alternative, so a failed sidecar install aborts the whole
 # install rather than degrading. Linux only here: macOS ships the sidecar in its .pkg.
 if [ "$os" = "linux" ] && [ -f "${DEST}/keld-agent" ]; then
   sc_archive="keld-agent-sidecar_${os}_${arch}.tar.gz"
   sc_url="${dl_base}/${tag}/${sc_archive}"
-  echo "Fetching the ML sidecar (GLiNER2)..."
   rm -rf "${DEST}/keld-agent-sidecar"   # clear any prior sidecar (incl. a dev venv-wrapper file) so the dir extracts cleanly
   if curl -fsSL "$sc_url" | tar -xz -C "$DEST"; then
     chmod +x "${DEST}/keld-agent-sidecar/keld-agent-sidecar" 2>/dev/null || true
+    echo "  ✓ $(printf '%-26s' 'ML sidecar (GLiNER2)') → ${DEST}/keld-agent-sidecar"
   else
     echo "keld: ML sidecar download failed — Keld Signal requires on-device ML and has no" >&2
     echo "  deterministic fallback. Aborting. URL: ${sc_url}" >&2
@@ -121,19 +124,23 @@ if [ -f "${DEST}/keld-agent" ]; then
   fi
 fi
 
-echo ""
-echo "keld ${tag} installed to ${DEST}/keld"
-if [ -f "${DEST}/keld-agent" ]; then
-  echo "keld-agent installed to ${DEST}/keld-agent"
+case ":$PATH:" in
+  *":${DEST}:"*) ;;
+  *)
+    echo ""
+    echo "Note: ${DEST} is not on your PATH. Add it with:"
+    echo "  export PATH=\"${DEST}:\${PATH}\""
+    if [ ! -f "${DEST}/keld-agent" ]; then
+      echo "  Then run:  keld login && keld signal setup"
+    fi
+    ;;
+esac
+
+if [ "$os" = "darwin" ]; then
+  echo ""
+  echo "Note: macOS users may see a Gatekeeper warning on first run."
+  echo "  To allow the binary: System Settings > Privacy & Security > Allow."
 fi
+
 echo ""
-echo "Next steps:"
-echo "  Ensure ${DEST} is on your PATH:"
-echo "       export PATH=\"${DEST}:\${PATH}\""
-if [ ! -f "${DEST}/keld-agent" ]; then
-  echo "  Then run:  keld login && keld signal setup"
-fi
-echo ""
-echo "Note: macOS users may see a Gatekeeper warning on first run."
-echo "  To allow the binary: System Settings > Privacy & Security > Allow."
-echo "  Code signing is a planned follow-up."
+echo "Done — Keld is set up and running."

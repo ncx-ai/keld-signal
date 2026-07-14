@@ -16,6 +16,7 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/daemon"
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
+	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
@@ -124,7 +125,17 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 	default:
 		fmt.Println("Service installed. Finish setup by running: keld login && keld signal setup")
 	}
-	return installService()
+
+	if !cfg.jsonOut {
+		console.Print("Starting the agent…")
+	}
+	if err := installService(); err != nil {
+		return err
+	}
+	if !cfg.jsonOut {
+		console.Print("  ✓ keld-agent running — enrichment stays on-device; only masked signal is sent")
+	}
+	return nil
 }
 
 // stdoutIsTTY reports whether stdout is an interactive terminal. Detection keys on
