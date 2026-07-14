@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
+	"github.com/ncx-ai/keld-signal/internal/agent/creds"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
@@ -22,7 +23,7 @@ func TestPollSettingsAppliesRemoteOverLocal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// one startup fetch is enough for the assertion; a long interval keeps the ticker quiet
-	go pollSettings(ctx, client, live, time.Hour, nil, nil)
+	go pollSettings(ctx, client, live, time.Hour, nil, nil, nil)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && live.IncludeEntityText() {
 		time.Sleep(10 * time.Millisecond)
@@ -70,7 +71,7 @@ func TestPollSettingsInvokesOnRemoteOnSuccess(t *testing.T) {
 		got = r
 	}
 
-	go pollSettings(ctx, client, live, time.Hour, nil, onRemote)
+	go pollSettings(ctx, client, live, time.Hour, nil, onRemote, nil)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -115,7 +116,7 @@ func TestPollSettingsEmitsAndSkipsOnRemoteOnFetchError(t *testing.T) {
 	onRemote := func(*settings.Remote) { onRemoteCalled = true }
 
 	// A single startup fetch (long interval) is enough for the assertion.
-	go pollSettings(ctx, client, live, time.Hour, emitter, onRemote)
+	go pollSettings(ctx, client, live, time.Hour, emitter, onRemote, nil)
 
 	deadline := time.Now().Add(2 * time.Second)
 	var events []clientevents.Event
@@ -136,6 +137,46 @@ func TestPollSettingsEmitsAndSkipsOnRemoteOnFetchError(t *testing.T) {
 	}
 	if _, ok := ev.Fields["error"].(string); !ok {
 		t.Fatalf("expected a redacted string error field, got %+v", ev.Fields)
+	}
+	if onRemoteCalled {
+		t.Fatal("onRemote must not be invoked on a fetch error")
+	}
+}
+
+// TestPollSettingsAuthErrorTriggersReauthRefresh proves a 401 from Fetch
+// triggers the reauther's refresh (mirroring the publish-side wiring in
+// daemon_test.go's TestProcessPublish401TriggersReauthRefreshExactlyOnce) and
+// that the shared token observes the refreshed value, while last-known
+// settings are left untouched (onRemote not called — unchanged behavior).
+func TestPollSettingsAuthErrorTriggersReauthRefresh(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	live := settings.NewLive(settings.Settings{})
+	client := settings.NewClient(srv.URL, func() string { return "tok" }, 2*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tok := creds.NewToken("old-ingest-token")
+	ra, onboardCalls := newTestReauther(t, tok, "new-ingest-token")
+
+	onRemoteCalled := false
+	onRemote := func(*settings.Remote) { onRemoteCalled = true }
+
+	go pollSettings(ctx, client, live, time.Hour, nil, onRemote, ra)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && onboardCalls() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := onboardCalls(); got != 1 {
+		t.Fatalf("onboard called %d times, want 1", got)
+	}
+	if got := tok.Get(); got != "new-ingest-token" {
+		t.Fatalf("tok.Get() = %q, want new-ingest-token after refresh", got)
 	}
 	if onRemoteCalled {
 		t.Fatal("onRemote must not be invoked on a fetch error")

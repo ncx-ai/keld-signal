@@ -17,12 +17,16 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
+	"github.com/ncx-ai/keld-signal/internal/agent/creds"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/api"
+	"github.com/ncx-ai/keld-signal/internal/auth"
+	"github.com/ncx-ai/keld-signal/internal/retry"
 	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
@@ -52,7 +56,7 @@ func (f *fakeSender) all() []publish.Enrichment {
 func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
@@ -95,7 +99,7 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 func TestWorkerAlwaysReadyGatePublishesImmediately(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ML-OFF-1",
@@ -133,7 +137,7 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, neverReady, nil)
+		Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, neverReady, nil, nil)
 		close(done)
 	}()
 
@@ -227,7 +231,7 @@ func TestWorkerWithSidecarStubPublishes(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, client, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil)
+	go Worker(context.Background(), q, client, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "SC-1",
@@ -325,7 +329,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, router, fs, "provision-test@keld.co", func() bool { return false }, gate, nil)
+	go Worker(context.Background(), q, router, fs, "provision-test@keld.co", func() bool { return false }, gate, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "PROV-1",
@@ -382,7 +386,7 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, model, fs, "fail-test@keld.co", func() bool { return false }, gate, nil)
+	go Worker(context.Background(), q, model, fs, "fail-test@keld.co", func() bool { return false }, gate, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "FAIL-1",
@@ -452,7 +456,7 @@ func TestWorkerTimesOutAndRespools(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil)
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil)
 
 	q.Offer(queue.Job{Source: "claude_code", Scheme: "trace", ID: "SLOW-1", Inline: "write code"})
 
@@ -488,7 +492,7 @@ func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil)
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil)
 
 	// Deliver once, then mirror the daemon's sweep: drain each re-spooled pointer
 	// and re-deliver it. With max=2, attempt 1 re-spools and attempt 2 exhausts
@@ -617,7 +621,7 @@ func TestSidecarUnavailableClosedGateNeverPublishes(t *testing.T) {
 	// opens.
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, model, fs, "unavailable-test@keld.co", func() bool { return false }, gate, nil)
+	go Worker(context.Background(), q, model, fs, "unavailable-test@keld.co", func() bool { return false }, gate, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "UNAVAIL-1",
@@ -629,4 +633,105 @@ func TestSidecarUnavailableClosedGateNeverPublishes(t *testing.T) {
 		t.Fatalf("closed gate must never publish: got %d", n)
 	}
 	q.Close()
+}
+
+// authFailSender is a Sender whose Send always returns a 401 *retry.StatusError,
+// exercising process()'s publish-401 → reauther.refresh trigger.
+type authFailSender struct {
+	mu    sync.Mutex
+	sends int
+}
+
+func (a *authFailSender) Send(publish.Enrichment) error {
+	a.mu.Lock()
+	a.sends++
+	a.mu.Unlock()
+	return &retry.StatusError{Code: http.StatusUnauthorized}
+}
+
+// newTestReauther builds a reauther wired with injected seams (no real
+// network/filesystem auth calls) that counts Onboarding calls and reports
+// what token it handed back — the shape the wiring tests below need to
+// observe refresh's single-flight/cooldown behavior and the token swap.
+func newTestReauther(t *testing.T, tok *creds.Token, newIngestToken string) (ra *reauther, onboardCalls func() int) {
+	t.Helper()
+	t.Setenv("KELD_HOME", t.TempDir())
+	ra = newReauther(tok, nil)
+	fixedNow := time.Unix(9000, 0)
+	ra.now = func() time.Time { return fixedNow }
+	ra.cooldown = time.Minute
+	var calls int
+	var mu sync.Mutex
+	ra.loadAuth = func() (*auth.AuthData, error) {
+		return &auth.AuthData{AccessToken: "cli-token", APIURL: "https://atlas.example"}, nil
+	}
+	ra.onboard = func(apiURL, cliToken string) (*api.Onboarding, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return &api.Onboarding{Endpoint: "https://atlas.example/v1/ingest", IngestToken: newIngestToken}, nil
+	}
+	ra.save = func(endpoint, token string) error { return nil }
+	onboardCalls = func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+	return ra, onboardCalls
+}
+
+// TestProcessPublish401TriggersReauthRefreshExactlyOnce is the RED→GREEN test
+// for Task 3's wiring: a publish 401 must trigger the reauther's refresh, and
+// a successful refresh must live-swap the shared token so the next Send would
+// use it. Cooldown/single-flight means two 401s in a row within the window
+// still cost exactly one Onboarding call — that guard lives in reauther.refresh
+// itself (see reauth_test.go); this test proves process() actually calls it.
+func TestProcessPublish401TriggersReauthRefreshExactlyOnce(t *testing.T) {
+	tok := creds.NewToken("old-ingest-token")
+	ra, onboardCalls := newTestReauther(t, tok, "new-ingest-token")
+
+	sender := &authFailSender{}
+	j := queue.Job{Source: "claude_code", Scheme: "trace", ID: "AUTH-1", Inline: "write code"}
+
+	process(context.Background(), j, enrichtest.NewFake(), sender, "actor@keld.co", func() bool { return false }, nil, ra)
+	process(context.Background(), j, enrichtest.NewFake(), sender, "actor@keld.co", func() bool { return false }, nil, ra)
+
+	if got := onboardCalls(); got != 1 {
+		t.Fatalf("onboard called %d times, want exactly 1 (cooldown-guarded single-flight)", got)
+	}
+	if sender.sends != 2 {
+		t.Fatalf("sender.sends = %d, want 2 (both publish attempts still went out)", sender.sends)
+	}
+	if got := tok.Get(); got != "new-ingest-token" {
+		t.Fatalf("tok.Get() = %q, want new-ingest-token after refresh — a subsequent Send would still use the stale token otherwise", got)
+	}
+}
+
+// TestProcessPublish401WithNilReautherIsSafe proves process() never panics on
+// a publish 401 when no reauther is wired (ra == nil) — the nil-safety choice
+// that keeps every pre-existing Worker/process test (which pass nil for ra)
+// unaffected by this change.
+func TestProcessPublish401WithNilReautherIsSafe(t *testing.T) {
+	j := queue.Job{Source: "claude_code", Scheme: "trace", ID: "AUTH-NIL-1", Inline: "write code"}
+	process(context.Background(), j, enrichtest.NewFake(), &authFailSender{}, "actor@keld.co", func() bool { return false }, nil, nil)
+}
+
+// TestProcessNonAuthPublishErrorDoesNotTriggerRefresh proves a non-401/403
+// publish failure (e.g. a 500 or a network error) must NOT call refresh — only
+// an auth error is the self-heal trigger; other failures already have their
+// own handling (log + publish.failed event) and calling Onboarding for them
+// would just churn the CLI token endpoint for no reason.
+func TestProcessNonAuthPublishErrorDoesNotTriggerRefresh(t *testing.T) {
+	tok := creds.NewToken("old-ingest-token")
+	ra, onboardCalls := newTestReauther(t, tok, "new-ingest-token")
+
+	j := queue.Job{Source: "claude_code", Scheme: "trace", ID: "AUTH-500", Inline: "write code"}
+	process(context.Background(), j, enrichtest.NewFake(), failingSender{}, "actor@keld.co", func() bool { return false }, nil, ra)
+
+	if got := onboardCalls(); got != 0 {
+		t.Fatalf("onboard called %d times, want 0 for a non-auth publish error", got)
+	}
+	if got := tok.Get(); got != "old-ingest-token" {
+		t.Fatalf("tok.Get() = %q, want unchanged old-ingest-token", got)
+	}
 }

@@ -47,6 +47,15 @@ type reauther struct {
 	tok     *creds.Token
 	emitter *clientevents.Emitter
 
+	// startupEndpoint is the ingest endpoint the daemon's consumers (publish,
+	// settings, client-events) were built against at startup (cfg.Endpoint).
+	// refresh only swaps the token (see the endpoint-rotation comment below);
+	// this is compared against a successful Onboarding response purely to
+	// warn when the endpoint itself has also changed underneath the running
+	// daemon. Zero value ("") is fine — it just means the warning never fires
+	// (e.g. in tests that don't set it).
+	startupEndpoint string
+
 	mu             sync.Mutex
 	lastAttempt    time.Time
 	inFlight       bool
@@ -144,11 +153,16 @@ func (r *reauther) refresh(ctx context.Context) error {
 		r.emitter.Emit("auth.refreshed", clientevents.SevInfo, map[string]any{})
 	}
 	log.Printf("keld-agent: ingest token refreshed")
-	// Endpoint rotation is out of scope (v1: token-only refresh — see spec
-	// §3): the three consumers' base URLs are fixed at daemon startup, so a
-	// changed endpoint here can't be adopted without a restart. We don't have
-	// the startup endpoint threaded into reauther to compare against, so this
-	// is a deliberate no-op rather than a half-correct comparison.
+	// Endpoint rotation is out of scope for the swap itself (v1: token-only
+	// refresh — see spec §3): the three consumers' base URLs are fixed at
+	// daemon startup, so a changed endpoint here can't be adopted without a
+	// restart. We do have the startup endpoint (see startupEndpoint), so warn
+	// loudly when Onboarding reports a different one — the operator needs to
+	// restart keld-agent to pick it up; the token swap above still applies
+	// immediately regardless.
+	if ob.Endpoint != "" && ob.Endpoint != r.startupEndpoint {
+		log.Printf("keld-agent: ingest endpoint changed (%s → %s); restart keld-agent to adopt it", r.startupEndpoint, ob.Endpoint)
+	}
 	return nil
 }
 

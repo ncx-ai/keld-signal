@@ -36,6 +36,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/hook"
 	"github.com/ncx-ai/keld-signal/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/retry"
 	"github.com/ncx-ai/keld-signal/internal/spool"
 	"github.com/ncx-ai/keld-signal/internal/version"
 )
@@ -56,7 +57,7 @@ type Sender interface {
 // ctx is the daemon-lifetime context; each job runs under a child context that
 // is cancelled on timeout so a hung/slow enrichment's in-flight sidecar calls
 // are reclaimed (not left retrying forever — the death-spiral root cause).
-func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, emitter *clientevents.Emitter) {
+func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, emitter *clientevents.Emitter, ra *reauther) {
 	ledger := newRetryLedger()
 	for {
 		j, ok := q.Next()
@@ -79,7 +80,7 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 		// single-flight sidecar instead of leaking a retry loop.
 		jobCtx, cancel := context.WithCancel(ctx)
 		jobModel := withJobCtx(m, jobCtx)
-		finished := runWithTimeout(to, func() { process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter) })
+		finished := runWithTimeout(to, func() { process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter, ra) })
 		cancel() // always: on timeout this reclaims the abandoned attempt; on success it just releases resources.
 
 		if finished {
@@ -230,7 +231,16 @@ func pointerFromJob(j queue.Job) spool.Pointer {
 	return p
 }
 
-func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter) {
+// isAuthError reports whether err is a *retry.StatusError carrying 401 or
+// 403 — the daemon's self-heal trigger: the ingest token was rejected (rotated
+// or revoked), so the caller should kick a reauther.refresh (cooldown/
+// single-flight-guarded, so this is cheap to call on every such error).
+func isAuthError(err error) bool {
+	var se *retry.StatusError
+	return errors.As(err, &se) && (se.Code == http.StatusUnauthorized || se.Code == http.StatusForbidden)
+}
+
+func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther) {
 	je := newJobEmit(emitter, j)
 	defer func() {
 		if r := recover(); r != nil {
@@ -263,6 +273,14 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	if err := pub.Send(e); err != nil {
 		log.Printf("keld-agent: publish failed for %s: %v", j.Key(), err)
 		je.Emit("publish.failed", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
+		// A 401/403 means the ingest token was rotated/revoked out from under
+		// us — kick the reauther so the retried job (existing re-spool path
+		// above, in Worker) has a shot at a fresh token. refresh is cooldown +
+		// single-flight guarded, so calling it on every auth failure is cheap;
+		// ra is nil in tests that don't care about self-heal, so guard it.
+		if ra != nil && isAuthError(err) {
+			ra.refresh(ctx)
+		}
 	}
 }
 
@@ -418,6 +436,15 @@ func Run(ctx context.Context) error {
 	// tok.Set and have every consumer observe the new value immediately.
 	tok := creds.NewToken(cfg.IngestToken)
 
+	// ra is the self-heal reauther: publish (process) and settings poll
+	// trigger ra.refresh on a 401/403 so a rotated/revoked ingest token is
+	// re-fetched (via the still-valid CLI token) with no daemon restart. Its
+	// startupEndpoint is cfg.Endpoint so a successful refresh can warn if
+	// Onboarding now reports a *different* endpoint — refresh only swaps the
+	// token, not the endpoint, so that case still needs a restart to adopt.
+	ra := newReauther(tok, emitter)
+	ra.startupEndpoint = cfg.Endpoint
+
 	q := queue.New(256)
 	pub := publish.New(enrichEndpoint(cfg.Endpoint), tok.Get, actor)
 
@@ -481,9 +508,9 @@ func Run(ctx context.Context) error {
 		watcher.SetThresholds(thresholdsFrom(re))
 		gaugesEnabled.Store(re.GaugesEnabled)
 	}
-	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote)
+	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
-		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, emitter)
+		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, emitter, ra)
 	}
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
@@ -750,7 +777,7 @@ func signalClientEventsEndpoint(ingest string) string {
 // last-known effective settings (non-fatal) — onRemote is NOT called, so a
 // caller-held gate/thresholds simply persist unchanged rather than closing.
 // It returns when ctx is cancelled.
-func pollSettings(ctx context.Context, c *settings.Client, live *settings.Live, interval time.Duration, emitter *clientevents.Emitter, onRemote func(*settings.Remote)) {
+func pollSettings(ctx context.Context, c *settings.Client, live *settings.Live, interval time.Duration, emitter *clientevents.Emitter, onRemote func(*settings.Remote), ra *reauther) {
 	apply := func() {
 		if r, err := c.Fetch(ctx); err == nil {
 			live.Apply(r)
@@ -761,6 +788,12 @@ func pollSettings(ctx context.Context, c *settings.Client, live *settings.Live, 
 			log.Printf("keld-agent: settings poll failed (keeping current): %v", err)
 			if emitter != nil {
 				emitter.Emit("settings.poll_failed", clientevents.SevWarn, map[string]any{"error": clientevents.RedactError(err)})
+			}
+			// A 401/403 means the ingest token was rotated/revoked — kick the
+			// reauther (cooldown/single-flight guarded); last-known settings
+			// are kept as-is either way (unchanged behavior).
+			if ra != nil && isAuthError(err) {
+				ra.refresh(ctx)
 			}
 		}
 	}
