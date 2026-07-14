@@ -229,3 +229,16 @@ func TestRunInstallNoTTYSkipsLoginAndSetup(t *testing.T) {
 		t.Fatal("service install must still run in no-TTY mode")
 	}
 }
+
+func TestServiceControlCommandsRegistered(t *testing.T) {
+	root := NewRootCmd()
+	have := map[string]bool{}
+	for _, c := range root.Commands() {
+		have[c.Name()] = true
+	}
+	for _, v := range []string{"start", "stop", "restart"} {
+		if !have[v] {
+			t.Errorf("keld-agent missing %q command", v)
+		}
+	}
+}

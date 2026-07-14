@@ -206,7 +206,41 @@ func NewRootCmd() *cobra.Command {
 			return nil
 		},
 	})
+	for _, c := range serviceControlCmds() {
+		root.AddCommand(c)
+	}
 	return root
+}
+
+// serviceControlCmds builds the start/stop/restart lifecycle commands for the
+// installed keld-agent service. Shared verb→action table so keld-agent and
+// `keld signal` expose the same three controls.
+func serviceControlCmds() []*cobra.Command {
+	type ctl struct {
+		use, short, done string
+		run              func() error
+	}
+	ctls := []ctl{
+		{"start", "Start the keld-agent background service.", "started", service.Start},
+		{"stop", "Stop the keld-agent background service.", "stopped", service.Stop},
+		{"restart", "Restart the keld-agent background service (picks up a new binary).", "restarted", service.Restart},
+	}
+	cmds := make([]*cobra.Command, 0, len(ctls))
+	for _, c := range ctls {
+		c := c
+		cmds = append(cmds, &cobra.Command{
+			Use:   c.use,
+			Short: c.short,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				if err := c.run(); err != nil {
+					return err
+				}
+				fmt.Printf("keld-agent %s.\n", c.done)
+				return nil
+			},
+		})
+	}
+	return cmds
 }
 
 // Execute runs the keld-agent CLI and returns an exit code.

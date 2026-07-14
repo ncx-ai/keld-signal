@@ -35,6 +35,17 @@ func Uninstall() error {
 	return os.Remove(unitPath())
 }
 
+// Start starts the (installed) service; no-op-ish if already running.
+func Start() error { return exec.Command("systemctl", "--user", "start", "keld-agent.service").Run() }
+
+// Stop stops the running service (leaves it installed/enabled).
+func Stop() error { return exec.Command("systemctl", "--user", "stop", "keld-agent.service").Run() }
+
+// Restart restarts the service, picking up a newly-installed binary.
+func Restart() error {
+	return exec.Command("systemctl", "--user", "restart", "keld-agent.service").Run()
+}
+
 func Status() (string, error) {
 	out, err := exec.Command("systemctl", "--user", "is-active", "keld-agent.service").CombinedOutput()
 	s := strings.TrimSpace(string(out))

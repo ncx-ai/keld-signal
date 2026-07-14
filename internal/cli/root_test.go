@@ -42,3 +42,19 @@ func TestRootHelpListsSignalGroup(t *testing.T) {
 		t.Errorf("help missing %q\n%s", "signal", s)
 	}
 }
+
+func TestSignalGroupHasServiceControls(t *testing.T) {
+	cmd := NewRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"signal", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("signal help failed: %v", err)
+	}
+	s := out.String()
+	for _, verb := range []string{"start", "stop", "restart"} {
+		if !strings.Contains(s, verb) {
+			t.Errorf("`keld signal --help` missing service control %q\n%s", verb, s)
+		}
+	}
+}

@@ -27,6 +27,18 @@ func Uninstall() error {
 	return exec.Command("schtasks", "/Delete", "/F", "/TN", taskName).Run()
 }
 
+// Start runs the scheduled task now.
+func Start() error { return exec.Command("schtasks", "/Run", "/TN", taskName).Run() }
+
+// Stop ends the running task instance.
+func Stop() error { return exec.Command("schtasks", "/End", "/TN", taskName).Run() }
+
+// Restart ends then re-runs the task (picks up a newly-installed binary).
+func Restart() error {
+	_ = exec.Command("schtasks", "/End", "/TN", taskName).Run()
+	return exec.Command("schtasks", "/Run", "/TN", taskName).Run()
+}
+
 func Status() (string, error) {
 	out, err := exec.Command("schtasks", "/Query", "/TN", taskName).CombinedOutput()
 	if err != nil {
