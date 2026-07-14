@@ -481,34 +481,38 @@ func Run(ctx context.Context) error {
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
 	// sweeping for ones spooled during brief unavailability. Idempotent:
-	// delete-after-enqueue + Atlas dedups on dedup_key.
-	drainSpool := func() {
-		spool.Drain(func(p spool.Pointer) error {
-			if q.Offer(ingress.JobFrom(p)) {
-				return nil
+	// delete-after-enqueue + Atlas dedups on dedup_key. Only when enrichment is
+	// enabled: with it disabled there's no Worker to consume the queue, so
+	// draining/sweeping would just re-enqueue pointers nobody processes.
+	if enrichmentEnabled {
+		drainSpool := func() {
+			spool.Drain(func(p spool.Pointer) error {
+				if q.Offer(ingress.JobFrom(p)) {
+					return nil
+				}
+				return errQueueFull // queue full: keep the file, retry next sweep
+			})
+		}
+		drainSpool()
+		go func() {
+			iv := 30 * time.Second
+			if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
+				if d, err := time.ParseDuration(v); err == nil {
+					iv = d
+				}
 			}
-			return errQueueFull // queue full: keep the file, retry next sweep
-		})
+			t := time.NewTicker(iv)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					drainSpool()
+				}
+			}
+		}()
 	}
-	drainSpool()
-	go func() {
-		iv := 30 * time.Second
-		if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
-				iv = d
-			}
-		}
-		t := time.NewTicker(iv)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				drainSpool()
-			}
-		}
-	}()
 
 	return serve(ctx, ln, handler, q, emitter)
 }
