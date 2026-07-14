@@ -153,8 +153,10 @@ func newDoctorCmd() *cobra.Command {
 				console.Print("  " + reauthRequiredLine)
 			} else {
 				// Absent marker means only that the daemon hasn't detected a revoked
-				// CLI token — not that login state was verified here. Don't overclaim.
-				console.Print("  ✓ no re-authentication required")
+				// CLI token — not that login state was verified here. Don't overclaim
+				// "authenticated"; wording also avoids the "re-authentication required"
+				// substring the marker line uses.
+				console.Print("  ✓ no re-auth needed")
 			}
 
 			if len(problems) > 0 || reauthRequired {
