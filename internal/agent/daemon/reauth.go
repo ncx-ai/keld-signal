@@ -167,13 +167,18 @@ func (r *reauther) markTerminal(reason string) {
 	log.Printf("keld-agent: %s", msg)
 }
 
-// clearTerminal clears the terminal flag and removes the marker file
-// (a no-op if it doesn't already exist).
+// clearTerminal removes the marker file and, only once it's confirmed gone,
+// clears the in-process terminal flag. Fail safe toward still-required
+// (mirroring markTerminal's caution): if os.Remove fails for a reason other
+// than the marker already being absent, the flag is left set so
+// TerminalRequired() doesn't report false while a stale marker remains on
+// disk.
 func (r *reauther) clearTerminal() {
-	r.reauthRequired.Store(false)
 	if err := os.Remove(paths.ReauthMarkerPath()); err != nil && !os.IsNotExist(err) {
 		log.Printf("keld-agent: failed to remove re-auth marker: %v", err)
+		return
 	}
+	r.reauthRequired.Store(false)
 }
 
 // TerminalRequired reports whether the daemon is currently in the terminal

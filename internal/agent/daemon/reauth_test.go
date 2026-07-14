@@ -163,6 +163,46 @@ func TestReauthNoAuthJSONIsTerminal(t *testing.T) {
 	}
 }
 
+func TestReauthEmptyAccessTokenIsTerminal(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+
+	tok := creds.NewToken("old-ingest-token")
+	emitter := testEmitter()
+	r := newReauther(tok, emitter)
+	r.now = func() time.Time { return time.Unix(3500, 0) }
+	r.loadAuth = func() (*auth.AuthData, error) {
+		// Present AuthData but an empty AccessToken (e.g. a corrupted/partial
+		// auth.json) — distinct from the nil-auth case above but must be
+		// treated the same way: terminal, no onboard call.
+		return &auth.AuthData{AccessToken: ""}, nil
+	}
+	onboardCalled := false
+	r.onboard = func(apiURL, cliToken string) (*api.Onboarding, error) {
+		onboardCalled = true
+		return nil, nil
+	}
+
+	if err := r.refresh(context.Background()); err == nil {
+		t.Fatal("refresh() should return an error when AccessToken is empty")
+	}
+	if onboardCalled {
+		t.Fatal("onboard should not be called when AccessToken is empty")
+	}
+	if !r.TerminalRequired() {
+		t.Fatal("TerminalRequired() should be true when AccessToken is empty")
+	}
+	if _, err := os.Stat(paths.ReauthMarkerPath()); err != nil {
+		t.Fatalf("marker file should exist: %v", err)
+	}
+	if got := tok.Get(); got != "old-ingest-token" {
+		t.Fatalf("tok.Get() = %q, want unchanged old-ingest-token", got)
+	}
+	codes := drainCodes(emitter)
+	if containsCode(codes, "auth.refreshed") {
+		t.Fatalf("codes = %v, should not contain auth.refreshed", codes)
+	}
+}
+
 func TestReauthCooldownAndSingleFlight(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 

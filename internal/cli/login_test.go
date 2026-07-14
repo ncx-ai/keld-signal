@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -81,6 +82,92 @@ func TestLoginCodePersistsAuthAndExitsZero(t *testing.T) {
 	if strings.Contains(got, "Logged in as") {
 		t.Fatalf("stale 'Logged in as' wording still present: %q", got)
 	}
+}
+
+// assertCleanJSONErrorMessage fails the test if msg leaks the embedded
+// implementation detail that errors.Join(*errs.Error, *retry.StatusError)
+// (see internal/api/client.go's checkStatus) produces when joined with
+// err.Error() unadorned: an embedded newline and the "http status" suffix
+// contributed by *retry.StatusError.Error().
+func assertCleanJSONErrorMessage(t *testing.T, msg string) {
+	t.Helper()
+	if strings.Contains(msg, "\n") {
+		t.Fatalf("error Message contains a newline (leaked joined error): %q", msg)
+	}
+	if strings.Contains(msg, "http status") {
+		t.Fatalf("error Message leaks internal detail %q: %q", "http status", msg)
+	}
+}
+
+func TestLoginJSONErrorMessageIsClean(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A 5xx from device/start makes api.checkStatus return
+		// errors.Join(*errs.Error, *retry.StatusError) — the joined error whose
+		// raw Error() this test guards against leaking into the --json event.
+		w.WriteHeader(500)
+		w.Write([]byte("internal error"))
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	cmd := newLoginCmd()
+	cmd.SetArgs([]string{"--json", "--no-browser", "--api-url", srv.URL})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected non-zero exit for a 500 from device/start")
+	}
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], `"event":"error"`) {
+		t.Fatalf("want a single error event, got %q", buf.String())
+	}
+	var ev struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &ev); err != nil {
+		t.Fatalf("unmarshal error event: %v", err)
+	}
+	assertCleanJSONErrorMessage(t, ev.Message)
+}
+
+func TestLoginCodeJSONErrorMessageIsClean(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 500 (not 401/410) so Enroll falls through to checkStatus's joined
+		// error rather than its own plain "invalid or expired setup code".
+		w.WriteHeader(500)
+		w.Write([]byte("internal error"))
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	cmd := newLoginCmd()
+	cmd.SetArgs([]string{"--code", "AB12-CD34", "--json", "--api-url", srv.URL})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected non-zero exit for a 500 from enroll")
+	}
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], `"event":"error"`) {
+		t.Fatalf("want a single error event, got %q", buf.String())
+	}
+	var ev struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &ev); err != nil {
+		t.Fatalf("unmarshal error event: %v", err)
+	}
+	assertCleanJSONErrorMessage(t, ev.Message)
 }
 
 func TestLoginCodeExpiredExitsNonZero(t *testing.T) {
