@@ -81,7 +81,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		PipelineStatus:    p.PipelineStatus,
 		ExtractorVersions: p.ExtractorVersions,
 		SchemaVersion:     p.SchemaVersion,
-		ModelVersion:      "deterministic-v1",
+		ModelVersion:      "gliner2-large-v1",
 		PromptChars:       promptChars,
 		TS:                now.UTC().Format(time.RFC3339),
 	}

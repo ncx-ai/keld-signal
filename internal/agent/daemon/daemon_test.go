@@ -16,10 +16,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
@@ -44,12 +47,12 @@ func (f *fakeSender) all() []publish.Enrichment {
 	return append([]publish.Enrichment(nil), f.sent...)
 }
 
-// TestWorkerEnrichesInlineAndNeverLeaksRaw verifies the deterministic (ML-off)
-// path with an always-ready gate (unchanged behaviour from before Task 7).
+// TestWorkerEnrichesInlineAndNeverLeaksRaw verifies Worker against a fake
+// Model with an always-ready gate (unchanged behaviour from before Task 7).
 func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
@@ -86,12 +89,13 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	}
 }
 
-// TestWorkerDeterministicMLOff confirms the ML-off / no-sidecar path publishes
-// immediately (always-ready gate) and does not regress existing behaviour.
-func TestWorkerDeterministicMLOff(t *testing.T) {
+// TestWorkerAlwaysReadyGatePublishesImmediately confirms Worker publishes
+// immediately against an always-ready gate (unchanged Worker behaviour;
+// ml_backend=off wiring itself is covered by TestWireEnrichmentDisabledWhenMLOff).
+func TestWorkerAlwaysReadyGatePublishesImmediately(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ML-OFF-1",
@@ -129,7 +133,7 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(context.Background(), q, enrich.NewDeterministic(), fs, "test@keld.co", func() bool { return false }, neverReady, nil)
+		Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, neverReady, nil)
 		close(done)
 	}()
 
@@ -193,11 +197,13 @@ func sidecarStub(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// TestWorkerWithSidecarStubPublishesViaRouter sets up a real httptest sidecar
-// stub + a Supervisor whose spawn is a harmless "sleep" command and whose
-// health function reports the stub as healthy. It asserts that a job Offered
-// to the queue is published once the worker gate becomes ready.
-func TestWorkerWithSidecarStubPublishesViaRouter(t *testing.T) {
+// TestWorkerWithSidecarStubPublishes sets up a real httptest sidecar stub + a
+// Supervisor whose spawn is a harmless "sleep" command and whose health
+// function reports the stub as healthy. It asserts that a job Offered to the
+// queue is published once the worker gate becomes ready. The sidecar client
+// is used directly as the Model — there is no router/deterministic backend to
+// fall through to; the gate alone holds the worker until the sidecar is up.
+func TestWorkerWithSidecarStubPublishes(t *testing.T) {
 	stub := sidecarStub(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -217,12 +223,11 @@ func TestWorkerWithSidecarStubPublishesViaRouter(t *testing.T) {
 
 	go sup.Start(ctx)
 
-	router := enrich.NewRouter(client, enrich.NewDeterministic(), healthFn)
-	gate := func() bool { return sup.Ready() || sup.FellBack() }
+	gate := func() bool { return sup.Ready() }
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, router, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil)
+	go Worker(context.Background(), q, client, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "SC-1",
@@ -508,6 +513,120 @@ func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 	}
 	if len(fs.all()) != 0 {
 		t.Fatalf("a hung job must not publish; got %d", len(fs.all()))
+	}
+	q.Close()
+}
+
+// TestWireEnrichmentDisabledWhenMLOff pins the ml_backend="off" contract: no
+// enrichment worker is started (enabled=false, model/gate nil) and the
+// /enrich handler accepts-and-discards — POSTing a valid pointer returns 202
+// but the request never reaches a queue at all (DiscardHandler takes no
+// *queue.Queue), so nothing can ever be enqueued or published.
+func TestWireEnrichmentDisabledWhenMLOff(t *testing.T) {
+	q := queue.New(10)
+	set := settings.Settings{MLBackend: "off"}
+	handler, model, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil)
+
+	if enabled {
+		t.Fatal("enrichment must be disabled when ml_backend=off")
+	}
+	if model != nil {
+		t.Fatalf("disabled wiring must not produce a model, got %v", model)
+	}
+	if gate != nil {
+		t.Fatal("disabled wiring must not produce a gate")
+	}
+
+	body := `{"source":{"id":"claude_code","origin":"hook"},"correlation":{"scheme":"prompt_id","id":"X"},"pointer":{"transcript_path":"/t","prompt_id":"X"}}`
+	req := httptest.NewRequest(http.MethodPost, "/enrich", strings.NewReader(body))
+	req.Header.Set("x-keld-agent-secret", "s3cret")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202", rr.Code)
+	}
+
+	// The queue passed in must stay untouched: draining it after Close should
+	// report no jobs (ok=false immediately).
+	q.Close()
+	if _, ok := q.Next(); ok {
+		t.Fatal("ml_backend=off must never enqueue a job")
+	}
+}
+
+// TestWireEnrichmentEnabledStartsRealHandler confirms the ml_backend="auto"
+// (default) path still wires the normal ingress.Handler bound to the real
+// queue, unchanged from before this purge.
+func TestWireEnrichmentEnabledStartsRealHandler(t *testing.T) {
+	q := queue.New(10)
+	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
+	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
+	set := settings.Settings{MLBackend: "auto"}
+	handler, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter)
+
+	if !enabled {
+		t.Fatal("enrichment must be enabled by default (ml_backend=auto)")
+	}
+	if gate == nil {
+		t.Fatal("enabled wiring must produce a gate")
+	}
+
+	body := `{"source":{"id":"claude_code","origin":"hook"},"correlation":{"scheme":"prompt_id","id":"X"},"pointer":{"transcript_path":"/t","prompt_id":"X"}}`
+	req := httptest.NewRequest(http.MethodPost, "/enrich", strings.NewReader(body))
+	req.Header.Set("x-keld-agent-secret", "s3cret")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202", rr.Code)
+	}
+	q.Close()
+	if _, ok := q.Next(); !ok {
+		t.Fatal("ml_backend=auto must enqueue the job via the real handler")
+	}
+}
+
+// TestSidecarUnavailableClosedGateNeverPublishes covers mlBackend's shared
+// "no sidecar this run" path (missing binary, or port-alloc failure): it must
+// return a permanently-closed gate and a model that is never invoked — never
+// a deterministic (or any other) fallback publish. Mirrors
+// TestMLBackendProvisionFailureDoesNotDegradeToDeterministic, but exercises
+// the sidecarUnavailable helper directly (bypassing sidecarBinPath/net.Listen,
+// which depend on the host's real filesystem/network state).
+func TestSidecarUnavailableClosedGateNeverPublishes(t *testing.T) {
+	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
+	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
+
+	model, gate := sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
+
+	if model != nil {
+		t.Fatalf("sidecarUnavailable must return a nil model (never invoked), got %v", model)
+	}
+	for i := 0; i < 3; i++ {
+		if gate() {
+			t.Fatal("gate must stay permanently closed")
+		}
+	}
+
+	events := emitter.Drain()
+	if len(events) != 1 || events[0].Code != "sidecar.fallback" || events[0].Severity != clientevents.SevWarn {
+		t.Fatalf("expected one sidecar.fallback/warn event, got %+v", events)
+	}
+
+	// Drive it through the real Worker like the provisioning-failure test
+	// does: nothing may ever be enqueued-and-processed since the gate never
+	// opens.
+	q := queue.New(10)
+	fs := &fakeSender{}
+	go Worker(context.Background(), q, model, fs, "unavailable-test@keld.co", func() bool { return false }, gate, nil)
+
+	q.Offer(queue.Job{
+		Source: "claude_code", Scheme: "trace", ID: "UNAVAIL-1",
+		Inline: "write a function",
+	})
+
+	time.Sleep(200 * time.Millisecond)
+	if n := len(fs.all()); n != 0 {
+		t.Fatalf("closed gate must never publish: got %d", n)
 	}
 	q.Close()
 }

@@ -66,6 +66,32 @@ func TestNonPostReturns405(t *testing.T) {
 	}
 }
 
+// TestDiscardHandlerAccepts202 confirms the ml_backend=off wiring: a validly
+// authenticated pointer POST still gets 202 (so the hook does not spool it
+// for later delivery), even though — unlike Handler — DiscardHandler is not
+// constructed with a *queue.Queue at all, so there is nothing it could enqueue
+// to; this is enforced by its signature, not a runtime check.
+func TestDiscardHandlerAccepts202(t *testing.T) {
+	rr := post(t, DiscardHandler("s3cret"), "s3cret", pointerBody)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202", rr.Code)
+	}
+}
+
+func TestDiscardHandlerRejectsBadSecret401(t *testing.T) {
+	rr := post(t, DiscardHandler("s3cret"), "wrong", pointerBody)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", rr.Code)
+	}
+}
+
+func TestDiscardHandlerBadBody400(t *testing.T) {
+	rr := post(t, DiscardHandler("s"), "s", "{not json")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400", rr.Code)
+	}
+}
+
 func TestJobFromMapsAllFields(t *testing.T) {
 	p := spool.Pointer{
 		Source:      spool.Source{ID: "claude_code", Origin: "hook", Version: "1"},

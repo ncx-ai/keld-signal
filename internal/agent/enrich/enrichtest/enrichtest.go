@@ -1,8 +1,15 @@
-package enrich
+// Package enrichtest provides a test-only fake enrich.Model carrying the
+// regex/keyword detection logic that used to live in enrich.NewDeterministic
+// (production deterministic backend; see the purge-deterministic design doc).
+// It exists purely so tests can exercise the enrichment pipeline against a
+// stable, dependency-free Model without needing the sidecar.
+package enrichtest
 
 import (
 	"regexp"
 	"strings"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 // luhnValid strips non-digit characters from s and returns true if the
@@ -32,16 +39,18 @@ func luhnValid(s string) bool {
 	return sum%10 == 0
 }
 
-type deterministic struct {
+type fake struct {
 	patterns map[string]*regexp.Regexp
 	keywords map[string]map[string][]string // task -> label -> keywords
 }
 
-// NewDeterministic returns a regex/keyword Model backend (P1 default + permanent
-// fallback). Secret/PII detection has strong regex priors, so this is useful
-// even once the ML backend lands.
-func NewDeterministic() Model {
-	return &deterministic{
+// NewFake returns a regex/keyword enrich.Model test double reproducing the
+// detection semantics of the (former) deterministic production backend:
+// email/api_key/SSN/credit-card(Luhn-valid)/phone spans, codegen/software
+// keyword classification, and abstention (empty label, zero confidence) on
+// tasks with no keyword priors (activity/personal/function_guess/subcategory).
+func NewFake() enrich.Model {
+	return &fake{
 		patterns: map[string]*regexp.Regexp{
 			"email":       regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`),
 			"ssn":         regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`),
@@ -75,10 +84,10 @@ func NewDeterministic() Model {
 	}
 }
 
-func (d *deterministic) Entities(text string, labels map[string]string) []Entity {
-	var out []Entity
+func (f *fake) Entities(text string, labels map[string]string) []enrich.Entity {
+	var out []enrich.Entity
 	for label := range labels {
-		re, ok := d.patterns[label]
+		re, ok := f.patterns[label]
 		if !ok {
 			continue
 		}
@@ -87,7 +96,7 @@ func (d *deterministic) Entities(text string, labels map[string]string) []Entity
 			if label == "credit_card" && !luhnValid(matched) {
 				continue
 			}
-			out = append(out, Entity{
+			out = append(out, enrich.Entity{
 				Text:       matched,
 				Label:      label,
 				Start:      loc[0],
@@ -99,17 +108,17 @@ func (d *deterministic) Entities(text string, labels map[string]string) []Entity
 	return out
 }
 
-func (d *deterministic) Classify(text string, tasks map[string][]string) map[string][]Ranked {
+func (f *fake) Classify(text string, tasks map[string][]string) map[string][]enrich.Ranked {
 	lower := strings.ToLower(text)
-	out := map[string][]Ranked{}
+	out := map[string][]enrich.Ranked{}
 	for task, allowed := range tasks {
-		kw := d.keywords[task]
+		kw := f.keywords[task]
 		if kw == nil {
 			// No keyword priors for this task (e.g. the newer job-category
 			// facets): abstain rather than guessing via fallbackLabel, so
 			// callers can gate on an empty label instead of treating a
 			// meaningless last-resort pick as a real classification.
-			out[task] = []Ranked{{Label: "", Confidence: 0}}
+			out[task] = []enrich.Ranked{{Label: "", Confidence: 0}}
 			continue
 		}
 		var best string
@@ -130,13 +139,13 @@ func (d *deterministic) Classify(text string, tasks map[string][]string) map[str
 		if bestN > 0 {
 			conf = 0.6 + 0.1*float64(min(bestN, 4))
 		}
-		out[task] = []Ranked{{Label: best, Confidence: conf}}
+		out[task] = []enrich.Ranked{{Label: best, Confidence: conf}}
 	}
 	return out
 }
 
-func (d *deterministic) Extract(text string, labels map[string]string, tasks map[string][]string) ExtractResult {
-	return ExtractResult{Entities: d.Entities(text, labels), Results: d.Classify(text, tasks)}
+func (f *fake) Extract(text string, labels map[string]string, tasks map[string][]string) enrich.ExtractResult {
+	return enrich.ExtractResult{Entities: f.Entities(text, labels), Results: f.Classify(text, tasks)}
 }
 
 // fallbackLabel prefers "other"/"general" if present, else the last item.

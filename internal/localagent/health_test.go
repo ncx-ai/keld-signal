@@ -16,12 +16,12 @@ func TestHealthDaemonDown(t *testing.T) {
 	}
 }
 
-func TestHealthDeterministicWhenNoSidecarPort(t *testing.T) {
+func TestHealthDisabledWhenNoSidecarPort(t *testing.T) {
 	h := Health(&agentcfg.Info{Port: 8765}, okStatus, func(string) (string, error) {
 		t.Fatal("fetch should not be called without a sidecar port")
 		return "", nil
 	})
-	if !h.DaemonUp || h.Backend != "deterministic (ML disabled)" || h.MetricsOK {
+	if !h.DaemonUp || h.Backend != "disabled (ML off)" || h.MetricsOK {
 		t.Fatalf("got %+v", h)
 	}
 }

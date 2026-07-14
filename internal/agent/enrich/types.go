@@ -32,13 +32,18 @@ type ExtractResult struct {
 	Results  map[string][]Ranked
 }
 
-// Model is the swappable inference backend. P1 ships a deterministic
-// implementation; P2 adds a GLiNER2 (ONNX or sidecar) implementation.
+// Model is the swappable inference backend. The GLiNER2 sidecar is the only
+// production implementation — enrichment is ML-only, with no deterministic
+// fallback (see the daemon's mlBackend/Worker readiness gate).
 type Model interface {
 	Classify(text string, tasks map[string][]string) map[string][]Ranked
 	Entities(text string, labels map[string]string) []Entity
 	Extract(text string, labels map[string]string, tasks map[string][]string) ExtractResult
 }
+
+// HealthFunc reports whether the sidecar backend is currently usable. Used by
+// the daemon's Supervisor to poll sidecar health.
+type HealthFunc func() bool
 
 // Profile is the full enrichment result for one prompt.
 type Profile struct {

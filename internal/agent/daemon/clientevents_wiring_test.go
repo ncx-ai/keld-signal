@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 )
@@ -53,7 +53,7 @@ func TestProcessEmitsWorkerPanicWithRedactedError(t *testing.T) {
 	panicGate := func() bool { panic("boom: the panic payload itself") }
 
 	// process recovers internally, so this must not itself panic the test.
-	process(context.Background(), j, enrich.NewDeterministic(), &fakeSender{}, "actor@keld.co", panicGate, emitter)
+	process(context.Background(), j, enrichtest.NewFake(), &fakeSender{}, "actor@keld.co", panicGate, emitter)
 
 	events := emitter.Drain()
 	ev := findEvent(events, "worker.panic")
@@ -86,7 +86,7 @@ func TestProcessEmitsPublishFailedWithRedactedError(t *testing.T) {
 		Inline: "write a function",
 	}
 
-	process(context.Background(), j, enrich.NewDeterministic(), failingSender{}, "actor@keld.co", func() bool { return false }, emitter)
+	process(context.Background(), j, enrichtest.NewFake(), failingSender{}, "actor@keld.co", func() bool { return false }, emitter)
 
 	events := emitter.Drain()
 	ev := findEvent(events, "publish.failed")

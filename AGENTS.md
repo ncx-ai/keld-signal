@@ -22,7 +22,7 @@ flowchart LR
     CLI["keld CLI"]
     Hook["keld hook"]
     Agent["keld-agent daemon"]
-    Sidecar["GLiNER2 sidecar<br/>(+ Go deterministic fallback)"]
+    Sidecar["GLiNER2 sidecar<br/>(ML-mandatory, no fallback)"]
   end
   Atlas["Keld Atlas"]
   CLI -->|configures| Tools
@@ -65,27 +65,31 @@ a time. Two waves, up to 7 model calls per prompt:
   re-run the eval when changing any vocab). Each classify is prefixed with a
   `Meta.Preamble()` (repo/branch/tool/recent prompts) so context informs the guess.
 
-**Model backends.**
-- `deterministic.go` — pure-Go, zero-dependency. Used **only when ML is disabled
-  or no sidecar binary is present** (the daemon is fully functional without the
-  sidecar). When ML is *enabled*, enrichment never silently degrades to it — see
-  Delivery reliability.
+**Model backends.** Enrichment is **ML-only — there is no deterministic
+backend.**
 - `sidecar/` — HTTP client to the GLiNER2 sidecar (`/classify`, `/extract`,
-  `/entities`); used when the sidecar binary is provisioned and healthy. Model
-  provisioning (`provision/`) fetches weights (`hf.go`) into `~/.keld/models`.
-  Why a bundled sidecar over in-process ONNX: `docs/keld-agent-p2-onnx-decision.md`.
+  `/entities`); the sole `Model` implementation. Model provisioning
+  (`provision/`) fetches weights (`hf.go`) into `~/.keld/models`. Why a bundled
+  sidecar over in-process ONNX: `docs/keld-agent-p2-onnx-decision.md`
+  (historical — see the superseded note at its top).
+- If the local `ml_backend` setting is `"off"`, enrichment is **disabled
+  entirely**: no enrichment worker is started and `/enrich` accepts-and-discards
+  (returns 202, never enqueues). Telemetry and client-events are unaffected.
 
-**Delivery reliability (never degrade, never wedge).** When ML is enabled,
-enrichment always runs on GLiNER2 — a sidecar whose inference worker is mid-recycle
-or respawning is waited out (client wake + retry), never swapped for deterministic. Each job runs
-under a deadline (`KELD_ENRICH_JOB_TIMEOUT`, default 30s) as a **child of the
-daemon context**; on timeout the worker **cancels it**, which aborts the job's
-in-flight sidecar calls (`Client.WithContext`) so an abandoned attempt is
-reclaimed instead of leaking a retry loop that saturates the single-flight
-sidecar. A timed-out job re-spools for a later retry, **bounded** by
-`KELD_ENRICH_MAX_ATTEMPTS` (default 4) — an exhausted job is `spool.Quarantine`'d
-to `spool/bad/` rather than retried forever. Atlas dedups on `dedup_key`, so a
-late double-publish from a recovering attempt is harmless.
+**Delivery reliability (never degrade, never wedge).** When enrichment is
+enabled, it always runs on GLiNER2 — there is no fallback to swap to. A sidecar
+that isn't ready yet (not yet provisioned, restarting, mid-recycle, or the
+supervisor couldn't bring it up at all) keeps the readiness gate **closed**:
+jobs simply queue/spool until the sidecar is ready, they are never processed by
+anything else. Each job runs under a deadline (`KELD_ENRICH_JOB_TIMEOUT`,
+default 30s) as a **child of the daemon context**; on timeout the worker
+**cancels it**, which aborts the job's in-flight sidecar calls
+(`Client.WithContext`) so an abandoned attempt is reclaimed instead of leaking a
+retry loop that saturates the single-flight sidecar. A timed-out job re-spools
+for a later retry, **bounded** by `KELD_ENRICH_MAX_ATTEMPTS` (default 4) — an
+exhausted job is `spool.Quarantine`'d to `spool/bad/` rather than retried
+forever. Atlas dedups on `dedup_key`, so a late double-publish from a recovering
+attempt is harmless.
 
 **Control plane.** Enrichment is governed per-org from Atlas
 (`settings/`, `agentcfg/`); the daemon polls `GET /v1/enrichment-settings`
@@ -176,9 +180,8 @@ internal/
     ingress/         loopback /enrich intake (auth + bounded queue)
     queue/           bounded, key-deduping job queue (backpressure)
     resolve/         read prompt text + recent-prompt tail from transcripts
-    enrich/          the pipeline: extractors, passes, labels, mask, meta, router
-      deterministic.go   pure-Go Model (default/fallback)
-      sidecar/           HTTP client to the GLiNER2 sidecar
+    enrich/          the pipeline: extractors, passes, labels, mask, meta
+      sidecar/           HTTP client to the GLiNER2 sidecar (the only Model)
       eval/              enrichment quality eval harness
     provision/       model provisioning (weights → ~/.keld/models)
     publish/         build + POST masked enrichments to Atlas
@@ -237,8 +240,9 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **Config via env (`KELD_*`)**, resolved through `internal/config` /
   `internal/paths`; credentials/tokens/hook/manifest under `~/.keld` with
   user-only permissions.
-- **CLI = single static Go binary**, no runtime deps. The sidecar is optional and
-  isolated; the **deterministic backend is the permanent zero-dep fallback**.
+- **CLI = single static Go binary**, no runtime deps. Enrichment is **ML-only**:
+  the GLiNER2 sidecar is mandatory and there is no deterministic backend — when
+  it isn't ready, jobs queue/spool until it is (see Delivery reliability above).
 - **Sidecar single-flight** (one inference at a time) is load protection, not an
   accident — don't fan out inference. RAM is bounded by recycling the inference
   worker child process, CPU by the governor + thread scaler (see
@@ -300,8 +304,9 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.
-- **Model provisioning** downloads ~1.9 GB on first ML enrichment; until then the
-  deterministic backend runs.
+- **Model provisioning** downloads ~1.9 GB on first ML enrichment; until then
+  the sidecar isn't ready, so enrichment jobs queue/spool rather than run on a
+  fallback backend (there is none).
 
 ## Design docs
 

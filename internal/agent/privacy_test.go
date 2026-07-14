@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 )
@@ -15,7 +16,7 @@ import (
 // The end-to-end payload must never contain raw prompt text or raw secrets.
 func TestNoRawTextOrSecretInPublishedPayload(t *testing.T) {
 	raw := "translate this and here is my password: hunter2SuperSecretValue and email a@b.com"
-	p := enrich.Run(raw, "claude_code", enrich.Meta{}, enrich.NewDeterministic())
+	p := enrich.Run(raw, "claude_code", enrich.Meta{}, enrichtest.NewFake())
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "X"}
 	e := publish.Build(j, p, "dg@keld.co", false, utf8.RuneCountInString(raw), time.Unix(0, 0).UTC())
 

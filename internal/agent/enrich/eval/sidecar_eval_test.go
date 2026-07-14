@@ -1,7 +1,7 @@
 //go:build sidecar
 
-// Live eval gate: compares the GLiNER2 sidecar backend against the deterministic
-// backend over the gold set. Build-tagged so normal CI (no sidecar) skips it.
+// Live eval gate: scores the GLiNER2 sidecar backend against fixed absolute
+// thresholds on the gold set. Build-tagged so normal CI (no sidecar) skips it.
 //
 //	SIDECAR_URL=http://127.0.0.1:8399 go test -tags sidecar ./internal/agent/enrich/eval/ -run Sidecar -v
 package eval
@@ -12,11 +12,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 )
 
-func TestSidecarVsDeterministic(t *testing.T) {
+// Absolute gold-set thresholds for the sidecar backend. These are conservative
+// FLOORS, not targets — the deterministic backend has been purged, so there is
+// no baseline to compare against, and these were picked without a live sidecar
+// run against the current (expanded) gold set. Tighten them once a real run
+// establishes the sidecar's actual scores; don't loosen them without one.
+const (
+	minSensitiveRecall = 0.60
+	minSensitivityAcc  = 0.60
+	minTaskTypeAcc     = 0.60
+	minDomainAcc       = 0.60
+)
+
+func TestSidecarMeetsGoldThresholds(t *testing.T) {
 	url := os.Getenv("SIDECAR_URL")
 	if url == "" {
 		url = "http://127.0.0.1:8399"
@@ -31,38 +42,25 @@ func TestSidecarVsDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := []string{"task_type", "domain", "sensitivity"}
-	det := Score(gold, RunModel(enrich.NewDeterministic(), gold), fields)
 	side := Score(gold, RunModel(sc, gold), fields)
 
 	t.Logf("gold rows: %d", len(gold))
-	t.Logf("deterministic: %+v", det)
-	t.Logf("sidecar:       %+v", side)
+	t.Logf("sidecar: %+v", side)
 
-	// The sidecar's value (measured) is the compliance/security dimension:
-	// sensitivity accuracy jumps from ~0.23 (regex) to ~0.81, and it catches
-	// sensitive spans the regex baseline cannot (proprietary, address-only PII,
-	// MRN-based PHI). It is at parity with the keyword baseline on task_type
-	// (keyword priors are strong for "write/summarize/translate"), so the gate
-	// hard-asserts the sensitivity wins and only guards classification against a
-	// real regression (small tolerance absorbs run-to-run noise).
-
-	// Safety-critical hard gate: sensitivity recall must not regress.
-	dSR, sSR := det["sensitivity"]["sensitive_recall"], side["sensitivity"]["sensitive_recall"]
-	if sSR < dSR {
-		t.Fatalf("sidecar sensitive_recall %.3f regressed vs deterministic %.3f", sSR, dSR)
+	// Safety-critical hard gate: sensitivity recall must clear the floor — this
+	// is the compliance/security dimension the ML backend exists to deliver.
+	if sSR := side["sensitivity"]["sensitive_recall"]; sSR < minSensitiveRecall {
+		t.Fatalf("sidecar sensitive_recall %.3f below floor %.3f", sSR, minSensitiveRecall)
 	}
-	// Value hard gate: sensitivity CLASSIFICATION must be clearly better — this is
-	// the reason the ML backend exists.
-	dSA, sSA := det["sensitivity"]["accuracy"], side["sensitivity"]["accuracy"]
-	if sSA <= dSA {
-		t.Fatalf("sidecar sensitivity accuracy %.3f did not beat deterministic %.3f", sSA, dSA)
+	// Value hard gate: sensitivity CLASSIFICATION accuracy must clear the floor.
+	if sSA := side["sensitivity"]["accuracy"]; sSA < minSensitivityAcc {
+		t.Fatalf("sidecar sensitivity accuracy %.3f below floor %.3f", sSA, minSensitivityAcc)
 	}
-	// Classification: allow small noise, fail only on a real regression.
-	const tol = 0.05
+	// Classification floors for the remaining fields.
+	floors := map[string]float64{"task_type": minTaskTypeAcc, "domain": minDomainAcc}
 	for _, f := range []string{"task_type", "domain"} {
-		if side[f]["accuracy"] < det[f]["accuracy"]-tol {
-			t.Fatalf("sidecar %s accuracy %.3f regressed materially vs deterministic %.3f",
-				f, side[f]["accuracy"], det[f]["accuracy"])
+		if got := side[f]["accuracy"]; got < floors[f] {
+			t.Fatalf("sidecar %s accuracy %.3f below floor %.3f", f, got, floors[f])
 		}
 	}
 

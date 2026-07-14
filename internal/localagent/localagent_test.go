@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 )
 
 func TestReadPromptFromArgs(t *testing.T) {
@@ -76,7 +76,7 @@ func TestFetchText(t *testing.T) {
 }
 
 func TestEnrichJSON(t *testing.T) {
-	out, err := EnrichJSON("refactor the auth module", "claude_code", enrich.NewDeterministic())
+	out, err := EnrichJSON("refactor the auth module", "claude_code", enrichtest.NewFake())
 	if err != nil {
 		t.Fatalf("EnrichJSON: %v", err)
 	}
@@ -86,16 +86,14 @@ func TestEnrichJSON(t *testing.T) {
 }
 
 func TestResolveModel(t *testing.T) {
-	m, note := ResolveModel(&agentcfg.Info{Port: 8765, SidecarPort: 40313}, false)
-	if m == nil || !strings.Contains(note, "sidecar") || !strings.Contains(note, "40313") {
-		t.Fatalf("sidecar path: model=%v note=%q", m, note)
+	m, note, err := ResolveModel(&agentcfg.Info{Port: 8765, SidecarPort: 40313})
+	if err != nil || m == nil || !strings.Contains(note, "sidecar") || !strings.Contains(note, "40313") {
+		t.Fatalf("sidecar path: model=%v note=%q err=%v", m, note, err)
 	}
-	m, note = ResolveModel(&agentcfg.Info{Port: 8765}, false)
-	if m == nil || !strings.Contains(note, "deterministic") {
-		t.Fatalf("fallback path: note=%q", note)
-	}
-	m, note = ResolveModel(&agentcfg.Info{Port: 8765, SidecarPort: 40313}, true)
-	if m == nil || strings.Contains(note, "sidecar") {
-		t.Fatalf("forced path should not use sidecar: note=%q", note)
+	// ML is mandatory: sidecar not running must error, not return a degraded
+	// Model.
+	m, _, err = ResolveModel(&agentcfg.Info{Port: 8765})
+	if err == nil || m != nil {
+		t.Fatalf("expected an error and nil model when sidecar is not running, got model=%v err=%v", m, err)
 	}
 }

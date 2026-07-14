@@ -59,3 +59,29 @@ func Handler(q *queue.Queue, secret string) http.Handler {
 	})
 	return mux
 }
+
+// DiscardHandler returns the daemon's /enrich handler for when enrichment is
+// disabled (ml_backend=off): it authenticates and validates the request body
+// exactly like Handler, but never enqueues — it accepts-and-discards (202) so
+// the hook does not spool pointers that would otherwise never be processed.
+func DiscardHandler(secret string) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/enrich", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("x-keld-agent-secret")), []byte(secret)) != 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB cap
+		var p spool.Pointer
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	})
+	return mux
+}

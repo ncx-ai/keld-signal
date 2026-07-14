@@ -22,7 +22,7 @@ privacy-preserving intelligence the CLI installs.
 | **CLI** | `keld` | Sign-in, detect tools, configure telemetry, install the hook, manage the agent. |
 | **Hook** | `keld` (invoked by the tools) | Posts usage telemetry to Atlas and fire-and-forgets an *enrich pointer* (transcript path + prompt id — **never text**) to the local agent. |
 | **Enrichment daemon** | `keld-agent` | Loopback intake → resolve prompt text locally → enrich → **mask** → publish masked enrichments to Atlas. |
-| **ML sidecar** | `keld-agent-sidecar` | On-device GLiNER2 model doing the classification/extraction, spawned by the daemon on `127.0.0.1`. A pure-Go **deterministic backend** is the zero-dependency default and permanent fallback. |
+| **ML sidecar** | `keld-agent-sidecar` | On-device GLiNER2 model doing the classification/extraction, spawned by the daemon on `127.0.0.1`. **Mandatory** — enrichment is ML-only; there is no fallback backend. |
 
 ```mermaid
 flowchart LR
@@ -31,7 +31,7 @@ flowchart LR
     CLI["keld CLI<br/>setup · auth · hook"]
     Hook["keld hook"]
     Agent["keld-agent daemon<br/>resolve · enrich · mask · publish"]
-    Sidecar["GLiNER2 sidecar<br/>on-device ML (+ Go deterministic fallback)"]
+    Sidecar["GLiNER2 sidecar<br/>on-device ML, mandatory (no fallback)"]
   end
   Atlas["Keld Atlas"]
 
@@ -67,8 +67,10 @@ spans, activity, function, subcategory — that's synced to Atlas. Sensitive spa
 (emails, keys, SSNs…) are masked before anything leaves; a hard span match
 (e.g. an API key) overrides the classifier to `secrets`.
 
-- **Model backends.** GLiNER2 (DeBERTa-v2) via the sidecar when provisioned;
-  otherwise a pure-Go **deterministic** backend — always present, zero-dependency.
+- **Model backends.** GLiNER2 (DeBERTa-v2) via the sidecar — the only backend.
+  Enrichment is ML-only; there is no deterministic fallback. If the sidecar
+  isn't ready yet (not yet provisioned, restarting, or the daemon couldn't
+  bring it up), enrichment simply waits — jobs queue/spool until it is.
 - **Governed per organization.** An Atlas admin sets enrichment policy once
   (e.g. `include_entity_text`) and every agent picks it up within a poll interval.
 - **Invisible good citizen.** The long-lived sidecar service holds no model
@@ -79,16 +81,18 @@ spans, activity, function, subcategory — that's synced to Atlas. Sensitive spa
   throttled two ways (a rate governor *and* dynamic per-inference thread
   scaling), single-flight is preserved (one inference at a time), and it's all
   load-tested to prove it neither leaks nor runs away with CPU.
-- **Reliable, GLiNER2-only delivery.** Enrichment never silently degrades to the
-  deterministic backend. The hook writes each prompt *pointer* (never the prompt
-  text) to a durable on-disk **spool**, so work survives daemon downtime and is
-  drained on startup and a periodic sweep. Each job runs under a deadline
+- **Reliable, GLiNER2-only delivery.** Enrichment never degrades to a fallback
+  backend — there isn't one. The hook writes each prompt *pointer* (never the
+  prompt text) to a durable on-disk **spool**, so work survives daemon downtime
+  and is drained on startup and a periodic sweep. Each job runs under a deadline
   (`KELD_ENRICH_JOB_TIMEOUT`) that **cancels its in-flight sidecar calls** on
   timeout — so a slow or recycling sidecar worker can't leak self-amplifying retries — then
   re-spools for a later GLiNER2 retry. Retries are **bounded**: after
   `KELD_ENRICH_MAX_ATTEMPTS` a job is quarantined to `~/.keld/spool/bad/` rather
-  than retried forever. A sidecar whose inference worker is mid-recycle or
-  respawning is waited out (wake + retry), never substituted with deterministic.
+  than retried forever. A sidecar that isn't ready — mid-recycle, respawning, or
+  still provisioning — is waited out (wake + retry, or jobs queue/spool until it
+  comes up); enrichment is disabled only when the local `ml_backend` setting is
+  explicitly `"off"`.
 
 📄 **Deep dive:** [sidecar/loadtest/README.md](sidecar/loadtest/README.md) — the
 sweep pipeline (with worked examples), the resource-safety mechanisms, tuning
@@ -101,8 +105,10 @@ knobs, and the measured validation results. See also
 
 Alongside enrichment, `keld-agent` reports its own **operational health** to
 Atlas — a third, much smaller stream, distinct from both telemetry and
-enrichment: job retries/quarantines, sidecar crashes or fallback-to-deterministic,
-publish failures, sustained high RSS/CPU, and lifecycle (`daemon.start`/`stop`).
+enrichment: job retries/quarantines, sidecar crashes or startup failures
+(`sidecar.fallback` — the sidecar couldn't be brought up, so jobs queue/spool
+until it can), publish failures, sustained high RSS/CPU, and lifecycle
+(`daemon.start`/`stop`).
 It's how Atlas can tell an agent is struggling (or silent) without ever seeing a
 prompt — events carry only ids, codes, and small structured fields (counts,
 durations, thresholds), passed through a Go-side redaction gate that strips
@@ -171,11 +177,12 @@ curl -fsSL https://raw.githubusercontent.com/ncx-ai/keld-signal/main/scripts/ins
 ```
 
 It detects your OS/arch, fetches the latest release, and installs `keld` (and
-`keld-agent`) to `~/.local/bin` (`KELD_INSTALL_DIR` to override). For on-device ML
-enrichment, add the frozen sidecar (`keld-agent-sidecar_linux_amd64.tar.gz` from
-Releases) beside `keld-agent`, or use `make install-linux` in a dev checkout for a
-systemd `--user` service. Without the sidecar, enrichment runs on the pure-Go
-deterministic backend.
+`keld-agent`) to `~/.local/bin` (`KELD_INSTALL_DIR` to override). Enrichment is
+ML-only, so on-device enrichment needs the sidecar: add the frozen sidecar
+(`keld-agent-sidecar_linux_amd64.tar.gz` from Releases) beside `keld-agent`, or
+use `make install-linux` in a dev checkout for a systemd `--user` service.
+Without the sidecar, enrichment jobs simply queue/spool rather than run on a
+fallback backend.
 
 ### Advanced — CLI-only / raw binaries
 
@@ -245,9 +252,11 @@ make send-test-prompt  # push one test prompt to the running daemon
 ```
 
 On first ML enrichment the agent provisions the model (~1.9 GB) into
-`~/.keld/models` and the sidecar takes over; until then the pure-Go deterministic
-backend runs. The daemon is safe to run without the sidecar — enrichment simply
-uses the deterministic backend.
+`~/.keld/models`; until provisioning finishes and the sidecar is ready,
+enrichment jobs queue/spool rather than run on a fallback backend — there is
+none. The daemon is safe to run without the sidecar: it stays up and telemetry
+still flows, but enrichment stalls until the sidecar comes up (or you set the
+local `ml_backend` to `"off"` to disable enrichment entirely).
 
 ### Local development
 

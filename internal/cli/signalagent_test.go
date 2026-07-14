@@ -15,17 +15,17 @@ func TestSignalMetricsCmdErrorsWhenDaemonDown(t *testing.T) {
 	}
 }
 
-func TestSignalEnrichCmdDeterministicPrintsJSON(t *testing.T) {
+// TestSignalEnrichCmdErrorsWhenSidecarDown pins the no-fallback contract on
+// the CLI diagnostic path: ML is mandatory, so with no keld-agent/sidecar
+// running the command must error instead of silently degrading to a
+// lower-fidelity backend.
+func TestSignalEnrichCmdErrorsWhenSidecarDown(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	cmd := newSignalEnrichCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.Flags().Set("deterministic", "true") // no sidecar needed
-	if err := cmd.RunE(cmd, []string{"refactor the auth module"}); err != nil {
-		t.Fatalf("RunE: %v", err)
-	}
-	if !bytes.Contains(out.Bytes(), []byte(`"task_type"`)) {
-		t.Fatalf("expected a profile JSON, got: %s", out.String())
+	if err := cmd.RunE(cmd, []string{"refactor the auth module"}); err == nil {
+		t.Fatal("want error when the sidecar is not running (no fallback backend)")
 	}
 }

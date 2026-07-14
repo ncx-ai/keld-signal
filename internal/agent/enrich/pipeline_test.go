@@ -1,9 +1,14 @@
-package enrich
+package enrich_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
+)
 
 func TestRunProducesEnrichedProfile(t *testing.T) {
-	p := Run("write a go function; email jane@acme.com", "claude_code", Meta{}, NewDeterministic())
+	p := enrich.Run("write a go function; email jane@acme.com", "claude_code", enrich.Meta{}, enrichtest.NewFake())
 	if p.PipelineStatus != "enriched" {
 		t.Fatalf("status = %q, want enriched", p.PipelineStatus)
 	}
@@ -13,7 +18,7 @@ func TestRunProducesEnrichedProfile(t *testing.T) {
 	if p.Sensitivity.Value != "pii" {
 		t.Fatalf("sensitivity = %+v, want pii (email)", p.Sensitivity)
 	}
-	if p.SchemaVersion != SchemaVersion {
+	if p.SchemaVersion != enrich.SchemaVersion {
 		t.Fatalf("schema version not set")
 	}
 	if len(p.ExtractorVersions) != 7 {
@@ -25,12 +30,12 @@ func TestRunProducesEnrichedProfile(t *testing.T) {
 }
 
 func TestProfileHasActivityAndFunctionGuess(t *testing.T) {
-	// The deterministic backend has no keyword priors for these job-category
-	// facets, so it must abstain (empty value, zero confidence) rather than
-	// emit a meaningless fallback label. Atlas gates on this emptiness; see
+	// The fake backend has no keyword priors for these job-category facets, so
+	// it must abstain (empty value, zero confidence) rather than emit a
+	// meaningless fallback label. Atlas gates on this emptiness; see
 	// TestCondPassExtractorSwitchesLabelSetByFunction and
 	// TestClassifyPassMapsReadableToID for real-label wiring via stub models.
-	p := Run("write a python function to sort a list", "eval", Meta{}, NewDeterministic())
+	p := enrich.Run("write a python function to sort a list", "eval", enrich.Meta{}, enrichtest.NewFake())
 	if p.Activity.Value != "" || p.Activity.Confidence != 0 {
 		t.Errorf("expected activity_type to abstain, got %+v", p.Activity)
 	}
@@ -43,12 +48,12 @@ func TestProfileHasActivityAndFunctionGuess(t *testing.T) {
 }
 
 func TestSubcategoryConditionsOnFunctionGuess(t *testing.T) {
-	// The deterministic backend abstains on function_guess (no keyword priors),
-	// so subcategory's conditioning on it must cascade the abstention rather
-	// than pick an arbitrary label set. Real conditioning behavior (subcategory
-	// id belonging to the guessed function) is covered by
+	// The fake backend abstains on function_guess (no keyword priors), so
+	// subcategory's conditioning on it must cascade the abstention rather than
+	// pick an arbitrary label set. Real conditioning behavior (subcategory id
+	// belonging to the guessed function) is covered by
 	// TestCondPassExtractorSwitchesLabelSetByFunction via a stub model.
-	p := Run("debug why this handler throws a 500 error", "eval", Meta{}, NewDeterministic())
+	p := enrich.Run("debug why this handler throws a 500 error", "eval", enrich.Meta{}, enrichtest.NewFake())
 	if p.FunctionGuess.Value != "" {
 		t.Fatalf("expected function_guess to abstain, got %+v", p.FunctionGuess)
 	}
@@ -57,17 +62,17 @@ func TestSubcategoryConditionsOnFunctionGuess(t *testing.T) {
 	}
 }
 
-type panicModel struct{ Model }
+type panicModel struct{ enrich.Model }
 
-func (panicModel) Extract(string, map[string]string, map[string][]string) ExtractResult {
+func (panicModel) Extract(string, map[string]string, map[string][]string) enrich.ExtractResult {
 	panic("boom")
 }
 
 func TestRunIsolatesPanicAsPartial(t *testing.T) {
 	// task_type uses Classify (works via embedded Model); sensitivity+domain use
 	// Extract (panics). Pipeline must survive and mark partial.
-	m := panicModel{Model: NewDeterministic()}
-	p := Run("write a function", "claude_code", Meta{}, m)
+	m := panicModel{Model: enrichtest.NewFake()}
+	p := enrich.Run("write a function", "claude_code", enrich.Meta{}, m)
 	if p.PipelineStatus != "partial" {
 		t.Fatalf("status = %q, want partial", p.PipelineStatus)
 	}

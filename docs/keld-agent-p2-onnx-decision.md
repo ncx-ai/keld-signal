@@ -1,5 +1,9 @@
 # keld-agent P2 — in-process Go+ONNX vs sidecar: decision
 
+> **Superseded (2026-07-14):** the deterministic backend has been removed —
+> Keld Signal is ML-only (GLiNER2 sidecar mandatory; no fallback). The
+> "permanent fallback" posture below is historical.
+
 **Date:** 2026-07-01
 **Phase:** P2 2a (spike)
 **Decision:** **NO-GO for in-process Go+ONNX → adopt the bundled GLiNER2 sidecar.**

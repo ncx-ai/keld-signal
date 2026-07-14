@@ -86,8 +86,9 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 			continue
 		}
 		// The job exceeded its deadline (sidecar reloading/overloaded). Re-spool
-		// so it retries on GLiNER2 later (NEVER degrade to deterministic, never
-		// lose it) and move on so one stuck job can't wedge the single worker —
+		// so it retries on GLiNER2 later (there is no other backend to fall
+		// through to; never lose it) and move on so one stuck job can't wedge
+		// the single worker —
 		// but bound the retries: after maxAttempts, quarantine it so a genuinely
 		// un-enrichable job can't loop forever (the amplification that saturated
 		// the sidecar). Atlas dedups on dedup_key, so a late double-publish from
@@ -164,9 +165,10 @@ func (r *retryLedger) exhausted(key string, max int) bool {
 // reset clears a job's attempt count (called when it finally succeeds).
 func (r *retryLedger) reset(key string) { delete(r.n, key) }
 
-// withJobCtx binds m to a per-job context when it is the sidecar client, so the
-// job's timeout can cancel its in-flight calls. The deterministic backend has no
-// network calls to cancel, so it passes through unchanged.
+// withJobCtx binds m to a per-job context when it is the sidecar client, so
+// the job's timeout can cancel its in-flight calls. Any other Model (nil when
+// the readiness gate never opens, or a test fake) has no network calls to
+// cancel, so it passes through unchanged.
 func withJobCtx(m enrich.Model, ctx context.Context) enrich.Model {
 	if c, ok := m.(*sidecar.Client); ok {
 		return c.WithContext(ctx)
@@ -426,12 +428,14 @@ func Run(ctx context.Context) error {
 	// any poll could lower the floor — a plain Emit would always drop it.
 	emitter.EmitExempt("daemon.start", clientevents.SevInfo, map[string]any{"port": port})
 
-	// Select the enrichment model and readiness gate. When ML is enabled and a
-	// sidecar binary is present we route through the sidecar (falling back to
-	// deterministic when it is unhealthy); otherwise we use the deterministic
-	// model with an always-ready gate. mlBackend returns the deterministic pair
-	// when it cannot bring the sidecar up, so the caller has a single code path.
-	model, gate := mlBackend(ctx, set, emitter)
+	// Decide once, at startup, whether enrichment runs at all (ml_backend is a
+	// local, startup-only setting — never re-read at runtime, see
+	// settings.Settings.MLEnabled). When disabled, handler is the
+	// accept-and-discard /enrich endpoint and there is no model/gate/Worker to
+	// start at all. When enabled, mlBackend provisions+supervises the sidecar
+	// (never a deterministic fallback — see mlBackend's doc comment) and
+	// handler is the normal ingress.Handler bound to q.
+	handler, model, gate, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter)
 
 	live := settings.NewLive(set)
 	pollInterval := 5 * time.Minute
@@ -471,40 +475,66 @@ func Run(ctx context.Context) error {
 		gaugesEnabled.Store(re.GaugesEnabled)
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), cfg.IngestToken, 10*time.Second), live, pollInterval, emitter, onRemote)
-	go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, emitter)
+	if enrichmentEnabled {
+		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, emitter)
+	}
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
 	// sweeping for ones spooled during brief unavailability. Idempotent:
-	// delete-after-enqueue + Atlas dedups on dedup_key.
-	drainSpool := func() {
-		spool.Drain(func(p spool.Pointer) error {
-			if q.Offer(ingress.JobFrom(p)) {
-				return nil
+	// delete-after-enqueue + Atlas dedups on dedup_key. Only when enrichment is
+	// enabled: with it disabled there's no Worker to consume the queue, so
+	// draining/sweeping would just re-enqueue pointers nobody processes.
+	if enrichmentEnabled {
+		drainSpool := func() {
+			spool.Drain(func(p spool.Pointer) error {
+				if q.Offer(ingress.JobFrom(p)) {
+					return nil
+				}
+				return errQueueFull // queue full: keep the file, retry next sweep
+			})
+		}
+		drainSpool()
+		go func() {
+			iv := 30 * time.Second
+			if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
+				if d, err := time.ParseDuration(v); err == nil {
+					iv = d
+				}
 			}
-			return errQueueFull // queue full: keep the file, retry next sweep
-		})
+			t := time.NewTicker(iv)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					drainSpool()
+				}
+			}
+		}()
 	}
-	drainSpool()
-	go func() {
-		iv := 30 * time.Second
-		if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
-				iv = d
-			}
-		}
-		t := time.NewTicker(iv)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				drainSpool()
-			}
-		}
-	}()
 
-	return serve(ctx, ln, ingress.Handler(q, secret), q, emitter)
+	return serve(ctx, ln, handler, q, emitter)
+}
+
+// wireEnrichment decides, once at startup, whether enrichment runs at all
+// (ml_backend is a local, startup-only setting — see settings.Settings) and
+// returns everything Run needs to wire it up:
+//
+//   - handler: the /enrich HTTP handler to serve — the real ingress.Handler
+//     bound to q when enabled, or ingress.DiscardHandler (202, never
+//     enqueues) when disabled, so the hook stops spooling pointers that would
+//     never be processed.
+//   - model, gate: the enrichment Model + Worker readiness gate when enabled
+//     (nil, nil otherwise — Run must not start Worker in that case).
+//   - enabled: whether Run should start the enrich Worker.
+func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter) (handler http.Handler, model enrich.Model, gate func() bool, enabled bool) {
+	if !set.MLEnabled() {
+		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
+		return ingress.DiscardHandler(secret), nil, nil, false
+	}
+	model, gate = mlBackend(ctx, emitter)
+	return ingress.Handler(q, secret), model, gate, true
 }
 
 // newRunID generates a per-run correlation id (16 random bytes, hex-encoded),
@@ -569,30 +599,28 @@ type mlBackendOpts struct {
 	emitter  *clientevents.Emitter
 }
 
-// mlBackend returns the enrichment model and the worker readiness gate.
+// mlBackend returns the enrichment model and the worker readiness gate. It is
+// only called when ML enrichment is enabled (see wireEnrichment) — ml_backend
+// off is handled entirely by the caller and never reaches here.
 //
-// When ML is enabled and a sidecar binary is present it provisions the model,
-// spawns and supervises the sidecar, and returns a router (sidecar when
-// healthy, else deterministic) with a gate that holds the worker until the
-// sidecar is ready, has fallen back, OR provisioning has failed. In every
-// other case (ML off, no binary, or a setup failure) it returns the
-// deterministic model with an always-ready gate.
-func mlBackend(ctx context.Context, set settings.Settings, emitter *clientevents.Emitter) (enrich.Model, func() bool) {
-	deterministic := func() (enrich.Model, func() bool) {
-		return enrich.NewDeterministic(), func() bool { return true }
-	}
-
+// It provisions the model, spawns and supervises the sidecar, and returns the
+// sidecar client with a gate that opens once the sidecar has reported healthy
+// at least once. There is no lower-fidelity fallback: when the sidecar binary
+// is missing, or its port cannot be allocated, this returns
+// sidecarUnavailable's permanently-closed gate (jobs queue/spool until the
+// daemon is restarted) rather than a synthetic/degraded model.
+func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model, func() bool) {
 	binPath, hasBin := sidecarBinPath()
-	if !set.MLEnabled() || !hasBin {
-		return deterministic()
+	if !hasBin {
+		log.Printf("keld-agent: no sidecar binary found; enrichment jobs will queue/spool until one is installed")
+		return sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
 	}
 
 	// Pick an ephemeral port for the sidecar.
 	scLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		log.Printf("keld-agent: sidecar port alloc failed, using deterministic: %v", err)
-		emitter.Emit("sidecar.fallback", clientevents.SevWarn, map[string]any{"error": clientevents.RedactError(err)})
-		return deterministic()
+		log.Printf("keld-agent: sidecar port alloc failed: %v", err)
+		return sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
 	}
 	scPort := scLn.Addr().(*net.TCPAddr).Port
 	scLn.Close() // Release; sidecar will bind it.
@@ -632,6 +660,19 @@ func mlBackend(ctx context.Context, set settings.Settings, emitter *clientevents
 	})
 }
 
+// sidecarUnavailable is mlBackend's shared "no sidecar this run" path: the
+// sidecar binary is missing, or its ephemeral port could not be allocated.
+// Enrichment never degrades to a lower-fidelity backend in this case either —
+// it emits sidecar.fallback (SevWarn) with the given diagnostic fields and
+// returns a permanently-closed gate, so jobs simply queue/spool until the
+// daemon is restarted (matching the supervisor-give-up path in
+// mlBackendWithOpts). The returned Model is nil: the gate never opens, so
+// Worker never invokes it.
+func sidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) (enrich.Model, func() bool) {
+	emitter.Emit("sidecar.fallback", clientevents.SevWarn, fields)
+	return nil, func() bool { return false }
+}
+
 // mlBackendWithOpts is the testable core of mlBackend. It accepts all
 // dependencies explicitly so tests can inject stubs without touching the
 // real filesystem or spawning real processes.
@@ -639,8 +680,8 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 	var provisionFailed atomic.Bool
 
 	// Provision the model BEFORE spawning the sidecar; on success start the
-	// supervisor; on failure open the gate so the worker can fall through to
-	// the deterministic path.
+	// supervisor; on failure leave the gate closed (see below) rather than
+	// starting a sidecar against an unprovisioned model dir.
 	go func() {
 		if err := provision.EnsureModel(ctx, opts.modelDir, opts.modelSHA, opts.fetcher); err != nil {
 			log.Printf("keld-agent: model provisioning failed: %v", err)
@@ -653,14 +694,14 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 		go opts.sup.Start(ctx)
 	}()
 
-	// Enrichment never degrades to deterministic: the worker waits until the
-	// sidecar has loaded at least once, then the client itself waits+retries
-	// through idle-eviction (503) and transient restarts. If the model can't be
-	// provisioned/started, the gate stays closed and jobs stay queued/spooled
-	// (durable) until the sidecar recovers — rather than producing degraded
-	// deterministic enrichment. (Deterministic is used only when ML is disabled
-	// outright — see mlBackend's early return.) provisionFailed is still set by
-	// the provisioning goroutine for logging; it no longer opens a fallback gate.
+	// Enrichment never degrades to a lower-fidelity backend: the worker waits
+	// until the sidecar has loaded at least once, then the client itself
+	// waits+retries through idle-eviction (503) and transient restarts. If the
+	// model can't be provisioned/started, the gate stays closed and jobs stay
+	// queued/spooled (durable) until the sidecar recovers on a later daemon
+	// run — there is no fallback to fall through to. provisionFailed is still
+	// set by the provisioning goroutine for logging; it does not affect the
+	// gate (which is keyed off the supervisor's own Ready state).
 	gate := func() bool { return opts.sup.Ready() }
 	return opts.client, gate
 }
