@@ -86,16 +86,20 @@ func TestEnrichJSON(t *testing.T) {
 }
 
 func TestResolveModel(t *testing.T) {
-	m, note := ResolveModel(&agentcfg.Info{Port: 8765, SidecarPort: 40313}, false)
-	if m == nil || !strings.Contains(note, "sidecar") || !strings.Contains(note, "40313") {
-		t.Fatalf("sidecar path: model=%v note=%q", m, note)
+	m, note, err := ResolveModel(&agentcfg.Info{Port: 8765, SidecarPort: 40313}, false)
+	if err != nil || m == nil || !strings.Contains(note, "sidecar") || !strings.Contains(note, "40313") {
+		t.Fatalf("sidecar path: model=%v note=%q err=%v", m, note, err)
 	}
-	m, note = ResolveModel(&agentcfg.Info{Port: 8765}, false)
-	if m == nil || !strings.Contains(note, "deterministic") {
-		t.Fatalf("fallback path: note=%q", note)
+	// No deterministic fallback: sidecar not running must error, not return a
+	// degraded Model.
+	m, _, err = ResolveModel(&agentcfg.Info{Port: 8765}, false)
+	if err == nil || m != nil {
+		t.Fatalf("expected an error and nil model when sidecar is not running, got model=%v err=%v", m, err)
 	}
-	m, note = ResolveModel(&agentcfg.Info{Port: 8765, SidecarPort: 40313}, true)
-	if m == nil || strings.Contains(note, "sidecar") {
-		t.Fatalf("forced path should not use sidecar: note=%q", note)
+	// forceDeterministic is no longer supported — it must also error, never
+	// silently pick a backend.
+	m, _, err = ResolveModel(&agentcfg.Info{Port: 8765, SidecarPort: 40313}, true)
+	if err == nil || m != nil {
+		t.Fatalf("expected --deterministic to error, got model=%v err=%v", m, err)
 	}
 }

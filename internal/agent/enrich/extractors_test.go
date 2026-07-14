@@ -1,26 +1,31 @@
-package enrich
+package enrich_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
+)
 
 func TestSensitivityHardEvidenceOverrides(t *testing.T) {
-	ctx := NewJobContext("my ssn is 123-45-6789", "claude_code", Meta{}, NewDeterministic())
-	out, err := SensitivityExtractor{}.Run(ctx)
+	ctx := enrich.NewJobContext("my ssn is 123-45-6789", "claude_code", enrich.Meta{}, enrichtest.NewFake())
+	out, err := enrich.SensitivityExtractor{}.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lab := out["sensitivity"].(Labeled)
+	lab := out["sensitivity"].(enrich.Labeled)
 	if lab.Value != "phi" || lab.Confidence != 1.0 {
 		t.Fatalf("ssn must force phi@1.0, got %+v", lab)
 	}
 }
 
 func TestSensitivitySpansAreMaskedNotRaw(t *testing.T) {
-	ctx := NewJobContext("key sk-live-ABCDEF0123456789 here", "claude_code", Meta{}, NewDeterministic())
-	out, err := SensitivityExtractor{}.Run(ctx)
+	ctx := enrich.NewJobContext("key sk-live-ABCDEF0123456789 here", "claude_code", enrich.Meta{}, enrichtest.NewFake())
+	out, err := enrich.SensitivityExtractor{}.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	spans := out["sensitivity_spans"].([]Entity)
+	spans := out["sensitivity_spans"].([]enrich.Entity)
 	if len(spans) == 0 {
 		t.Fatal("expected at least one span")
 	}
@@ -35,17 +40,17 @@ func TestSensitivitySpansAreMaskedNotRaw(t *testing.T) {
 }
 
 func TestTaskTypeExtractorTopLabel(t *testing.T) {
-	ctx := NewJobContext("write a function in go", "claude_code", Meta{}, NewDeterministic())
-	out, _ := TaskTypeExtractor{}.Run(ctx)
-	if out["task_type"].(Labeled).Value != "codegen" {
+	ctx := enrich.NewJobContext("write a function in go", "claude_code", enrich.Meta{}, enrichtest.NewFake())
+	out, _ := enrich.TaskTypeExtractor{}.Run(ctx)
+	if out["task_type"].(enrich.Labeled).Value != "codegen" {
 		t.Fatalf("want codegen, got %+v", out["task_type"])
 	}
 }
 
 func TestDomainEntitiesExtractor(t *testing.T) {
-	ctx := NewJobContext("debug this python api bug", "claude_code", Meta{}, NewDeterministic())
-	out, _ := DomainEntitiesExtractor{}.Run(ctx)
-	if out["domain"].(Labeled).Value != "software" {
+	ctx := enrich.NewJobContext("debug this python api bug", "claude_code", enrich.Meta{}, enrichtest.NewFake())
+	out, _ := enrich.DomainEntitiesExtractor{}.Run(ctx)
+	if out["domain"].(enrich.Labeled).Value != "software" {
 		t.Fatalf("want software, got %+v", out["domain"])
 	}
 }

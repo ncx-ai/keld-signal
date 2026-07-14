@@ -82,8 +82,10 @@ func (s *Supervisor) Pid() int {
 }
 
 // FellBack reports whether the supervisor gave up waiting for health or
-// exhausted its restart budget. When true, callers should fall back to the
-// deterministic model.
+// exhausted its restart budget. There is no fallback backend to switch to:
+// callers key the Worker readiness gate off Ready alone, so when FellBack is
+// true the gate simply stays permanently closed — jobs queue/spool until the
+// daemon is restarted and the sidecar comes up cleanly.
 func (s *Supervisor) FellBack() bool { return s.fellBack.Load() }
 
 // Start spawns the sidecar and supervises it. It blocks until ctx is Done.

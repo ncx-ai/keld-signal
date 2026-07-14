@@ -35,20 +35,25 @@ func ReadPrompt(args []string, stdin io.Reader) (string, error) {
 	return text, nil
 }
 
-// ResolveModel picks the enrichment backend and a human note naming it. It uses
-// the running sidecar (via agent.json) when available, else the deterministic
-// backend. forceDeterministic always picks deterministic.
-func ResolveModel(info *agentcfg.Info, forceDeterministic bool) (enrich.Model, string) {
-	if !forceDeterministic && info != nil && info.SidecarPort != 0 {
+// ResolveModel picks the enrichment backend and a human note naming it. It
+// uses the running sidecar (via agent.json) when available; there is no
+// deterministic fallback (the deterministic backend has been removed — ML is
+// mandatory), so when the sidecar is not running (or forceDeterministic is
+// requested, no longer supported) it returns a clear error instead of a
+// degraded Model. Removing forceDeterministic entirely + the --deterministic
+// flag on its callers is tracked separately; this keeps the seam compiling
+// with its previous behavior gone.
+func ResolveModel(info *agentcfg.Info, forceDeterministic bool) (enrich.Model, string, error) {
+	if forceDeterministic {
+		return nil, "", errors.New("--deterministic is no longer supported: the deterministic backend has been removed (ML is mandatory)")
+	}
+	if info != nil && info.SidecarPort != 0 {
 		url := fmt.Sprintf("http://127.0.0.1:%d", info.SidecarPort)
 		// Generous per-call timeout: the pipeline issues up to 7 sidecar calls
 		// and CPU inference can be slow on a busy host.
-		return sidecar.New(url, 30*time.Second), "using live GLiNER2 sidecar at " + url
+		return sidecar.New(url, 30*time.Second), "using live GLiNER2 sidecar at " + url, nil
 	}
-	if forceDeterministic {
-		return enrich.NewDeterministic(), "using deterministic backend (--deterministic)"
-	}
-	return enrich.NewDeterministic(), "sidecar not running; using deterministic backend"
+	return nil, "", errors.New("sidecar not running — start keld-agent / wait for provisioning")
 }
 
 // MetricsURL resolves the running sidecar's /metrics URL from agent.json.
@@ -57,7 +62,7 @@ func MetricsURL(info *agentcfg.Info) (string, error) {
 		return "", errors.New("keld-agent is not running")
 	}
 	if info.SidecarPort == 0 {
-		return "", errors.New("sidecar is not running (ML disabled or deterministic backend in use)")
+		return "", errors.New("sidecar is not running (ML disabled, or not yet provisioned/ready)")
 	}
 	return fmt.Sprintf("http://127.0.0.1:%d/metrics", info.SidecarPort), nil
 }

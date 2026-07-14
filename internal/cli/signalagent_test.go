@@ -15,17 +15,19 @@ func TestSignalMetricsCmdErrorsWhenDaemonDown(t *testing.T) {
 	}
 }
 
-func TestSignalEnrichCmdDeterministicPrintsJSON(t *testing.T) {
+// TestSignalEnrichCmdDeterministicErrors pins the no-fallback contract on the
+// CLI diagnostic path: the deterministic backend has been removed, so
+// --deterministic can no longer silently produce lower-fidelity output — it
+// must error instead. (Removing the flag itself, so this stops being a valid
+// invocation at all, is tracked separately.)
+func TestSignalEnrichCmdDeterministicErrors(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	cmd := newSignalEnrichCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.Flags().Set("deterministic", "true") // no sidecar needed
-	if err := cmd.RunE(cmd, []string{"refactor the auth module"}); err != nil {
-		t.Fatalf("RunE: %v", err)
-	}
-	if !bytes.Contains(out.Bytes(), []byte(`"task_type"`)) {
-		t.Fatalf("expected a profile JSON, got: %s", out.String())
+	cmd.Flags().Set("deterministic", "true")
+	if err := cmd.RunE(cmd, []string{"refactor the auth module"}); err == nil {
+		t.Fatal("want error: --deterministic is no longer supported (no deterministic backend)")
 	}
 }

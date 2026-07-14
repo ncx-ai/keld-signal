@@ -31,7 +31,10 @@ func newEnrichCmd() *cobra.Command {
 				return err
 			}
 			info, _ := agentcfg.Read()
-			model, note := localagent.ResolveModel(info, forceDeterministic)
+			model, note, err := localagent.ResolveModel(info, forceDeterministic)
+			if err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "keld-agent enrich: "+note)
 			out, err := localagent.EnrichJSON(text, source, model)
 			if err != nil {

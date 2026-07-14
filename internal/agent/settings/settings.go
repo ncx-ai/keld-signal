@@ -17,8 +17,11 @@ type Settings struct {
 	// Default false (privacy-first). Sensitivity spans are always masked
 	// regardless of this setting.
 	IncludeEntityText bool `json:"include_entity_text"`
-	// MLBackend selects the ML backend: "auto" (use the GLiNER2 sidecar when
-	// healthy, else deterministic) or "off" (deterministic only). Default auto.
+	// MLBackend selects whether ML enrichment runs: "auto" (enrichment runs on
+	// the GLiNER2 sidecar; jobs queue/spool until it is ready — never a
+	// deterministic fallback) or "off" (enrichment is disabled entirely; the
+	// /enrich ingress accepts-and-discards). Default auto. Local, startup-only
+	// — not part of the remote settings doc and never re-read at runtime.
 	MLBackend string `json:"ml_backend"`
 }
 
