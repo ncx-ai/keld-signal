@@ -3,6 +3,7 @@ package agentcli
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -227,6 +228,81 @@ func TestRunInstallNoTTYSkipsLoginAndSetup(t *testing.T) {
 	}
 	if !installed {
 		t.Fatal("service install must still run in no-TTY mode")
+	}
+}
+
+// printStatus is the testable core of `keld-agent status`: statusFn/reauthFn
+// are seams standing in for service.Status (OS-specific, not easily driven in
+// a unit test) and paths.ReauthRequired.
+func TestPrintStatusWithReauthMarker(t *testing.T) {
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	statusFn := func() (string, error) { return "active", nil }
+	reauthFn := func() (bool, string) { return true, "re-authentication required (401)\n2026-07-14T00:00:00Z\n" }
+
+	// printStatus uses fmt.Println (stdlib stdout), not console.Print, so
+	// capture os.Stdout instead of console.Out.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	origStdout := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = origStdout }()
+
+	if err := printStatus(statusFn, reauthFn); err != nil {
+		t.Fatalf("printStatus: %v", err)
+	}
+	w.Close()
+	out, _ := io.ReadAll(r)
+	os.Stdout = origStdout
+
+	if !strings.Contains(string(out), "active") {
+		t.Errorf("expected status output; got: %s", out)
+	}
+	if !strings.Contains(string(out), "re-authentication required") {
+		t.Errorf("expected re-auth line; got: %s", out)
+	}
+}
+
+func TestPrintStatusWithoutReauthMarker(t *testing.T) {
+	statusFn := func() (string, error) { return "active", nil }
+	reauthFn := func() (bool, string) { return false, "" }
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	origStdout := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = origStdout }()
+
+	if err := printStatus(statusFn, reauthFn); err != nil {
+		t.Fatalf("printStatus: %v", err)
+	}
+	w.Close()
+	out, _ := io.ReadAll(r)
+	os.Stdout = origStdout
+
+	if strings.Contains(string(out), "re-authentication required") {
+		t.Errorf("expected no re-auth line; got: %s", out)
+	}
+}
+
+func TestPrintStatusPropagatesStatusFnError(t *testing.T) {
+	wantErr := errors.New("service not installed")
+	statusFn := func() (string, error) { return "", wantErr }
+	called := false
+	reauthFn := func() (bool, string) { called = true; return false, "" }
+
+	if err := printStatus(statusFn, reauthFn); !errors.Is(err, wantErr) {
+		t.Fatalf("expected statusFn error to propagate; got %v", err)
+	}
+	if called {
+		t.Error("reauthFn should not be called when statusFn errors")
 	}
 }
 

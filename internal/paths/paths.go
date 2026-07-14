@@ -49,6 +49,19 @@ func InstallIDPath() string         { return filepath.Join(KeldHome(), "install-
 // credentials; `keld-agent status` / `keld signal status`/`doctor` read it.
 func ReauthMarkerPath() string { return filepath.Join(KeldHome(), "reauth-required") }
 
+// ReauthRequired reports whether the daemon has written the local
+// "re-authentication required" marker (see ReauthMarkerPath) and, if so,
+// returns its contents (a human message + timestamp). Any error reading the
+// file (missing, unreadable, etc.) is treated as "not required" — this is a
+// best-effort, read-only surface; the daemon alone manages the marker.
+func ReauthRequired() (bool, string) {
+	data, err := os.ReadFile(ReauthMarkerPath())
+	if err != nil {
+		return false, ""
+	}
+	return true, string(data)
+}
+
 // SpoolDir is the on-disk queue of undelivered enrich pointers (hook writes,
 // daemon drains). Sibling of models/ under KELD_HOME.
 func SpoolDir() string { return filepath.Join(KeldHome(), "spool") }
