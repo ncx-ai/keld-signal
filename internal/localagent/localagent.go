@@ -35,18 +35,12 @@ func ReadPrompt(args []string, stdin io.Reader) (string, error) {
 	return text, nil
 }
 
-// ResolveModel picks the enrichment backend and a human note naming it. It
-// uses the running sidecar (via agent.json) when available; there is no
-// deterministic fallback (the deterministic backend has been removed — ML is
-// mandatory), so when the sidecar is not running (or forceDeterministic is
-// requested, no longer supported) it returns a clear error instead of a
-// degraded Model. Removing forceDeterministic entirely + the --deterministic
-// flag on its callers is tracked separately; this keeps the seam compiling
-// with its previous behavior gone.
-func ResolveModel(info *agentcfg.Info, forceDeterministic bool) (enrich.Model, string, error) {
-	if forceDeterministic {
-		return nil, "", errors.New("--deterministic is no longer supported: the deterministic backend has been removed (ML is mandatory)")
-	}
+// ResolveModel returns the sidecar-backed enrichment Model and a human note
+// naming it, resolved from the running keld-agent (via agent.json). ML is
+// mandatory: there is no lower-fidelity fallback, so when the sidecar isn't
+// running (not started, or not yet provisioned/ready) it returns a clear
+// error instead of a degraded Model.
+func ResolveModel(info *agentcfg.Info) (enrich.Model, string, error) {
 	if info != nil && info.SidecarPort != 0 {
 		url := fmt.Sprintf("http://127.0.0.1:%d", info.SidecarPort)
 		// Generous per-call timeout: the pipeline issues up to 7 sidecar calls

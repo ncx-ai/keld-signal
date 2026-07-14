@@ -15,19 +15,17 @@ func TestSignalMetricsCmdErrorsWhenDaemonDown(t *testing.T) {
 	}
 }
 
-// TestSignalEnrichCmdDeterministicErrors pins the no-fallback contract on the
-// CLI diagnostic path: the deterministic backend has been removed, so
-// --deterministic can no longer silently produce lower-fidelity output — it
-// must error instead. (Removing the flag itself, so this stops being a valid
-// invocation at all, is tracked separately.)
-func TestSignalEnrichCmdDeterministicErrors(t *testing.T) {
+// TestSignalEnrichCmdErrorsWhenSidecarDown pins the no-fallback contract on
+// the CLI diagnostic path: ML is mandatory, so with no keld-agent/sidecar
+// running the command must error instead of silently degrading to a
+// lower-fidelity backend.
+func TestSignalEnrichCmdErrorsWhenSidecarDown(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	cmd := newSignalEnrichCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.Flags().Set("deterministic", "true")
 	if err := cmd.RunE(cmd, []string{"refactor the auth module"}); err == nil {
-		t.Fatal("want error: --deterministic is no longer supported (no deterministic backend)")
+		t.Fatal("want error when the sidecar is not running (no fallback backend)")
 	}
 }

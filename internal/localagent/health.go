@@ -8,10 +8,10 @@ import (
 
 // HealthInfo is a snapshot of the local signal service for the status view.
 type HealthInfo struct {
-	Service     string  // OS service state ("active", "not running", …)
-	DaemonUp    bool    // agent.json present with a port
-	Backend     string  // "GLiNER2 sidecar" | "deterministic (ML disabled)" | "sidecar unreachable"
-	ModelState  string  // "loaded" / "evicted" / … when the sidecar answered
+	Service     string // OS service state ("active", "not running", …)
+	DaemonUp    bool   // agent.json present with a port
+	Backend     string // "GLiNER2 sidecar" | "disabled (ML off)" | "sidecar unreachable"
+	ModelState  string // "loaded" / "evicted" / … when the sidecar answered
 	RSSMB       float64
 	ModelCostMB float64
 	MetricsOK   bool
@@ -38,7 +38,7 @@ func Health(info *agentcfg.Info, statusFn func() (string, error), fetchFn func(s
 	}
 	h.DaemonUp = true
 	if info.SidecarPort == 0 {
-		h.Backend = "deterministic (ML disabled)"
+		h.Backend = "disabled (ML off)"
 		return h
 	}
 	body, err := fetchFn(MetricsURLNoErr(info))
