@@ -67,6 +67,28 @@ install-linux: build-binaries sidecar install-service
 	@echo "If not yet configured, run:  keld login && keld signal setup"
 	@echo "Visualize enrichments:      make enrichments-sink   (see README / the notes printed by this session)"
 
+.PHONY: signal-dev-artifacts
+# Build the current keld/keld-agent + install.sh into .dev-dl/ for the local install
+# mirror: the sibling keld-atlas web dev container mounts .dev-dl at /public/dl and its
+# /signal route serves this install.sh, so `curl http://localhost:3000/signal | sh`
+# installs THESE binaries against your local Atlas. Re-run after code changes.
+signal-dev-artifacts:
+	@mkdir -p .dev-dl/local .dev-dl/_pkg
+	go build -o .dev-dl/_pkg/keld ./cmd/keld
+	go build -o .dev-dl/_pkg/keld-agent ./cmd/keld-agent
+	tar -C .dev-dl/_pkg -czf .dev-dl/local/keld_linux_amd64.tar.gz keld keld-agent
+	cp scripts/install.sh .dev-dl/install.sh
+	@rm -rf .dev-dl/_pkg
+	@# Frozen ML sidecar (always ML — never deterministic). Reuses dist/keld-agent-sidecar
+	@# if already frozen; otherwise builds it once (heavy: PyInstaller + torch/GLiNER2).
+	@if [ ! -x dist/keld-agent-sidecar/keld-agent-sidecar ]; then \
+	  echo "freezing sidecar (one-time; heavy)…"; \
+	  KELD_OBFUSCATE=0 PYTHON="$(HOME)/.keld/sidecar-venv/bin/python" bash sidecar/build-freeze.sh; \
+	fi
+	tar -C dist -czf .dev-dl/local/keld-agent-sidecar_linux_amd64.tar.gz keld-agent-sidecar
+	@echo "built .dev-dl (keld + keld-agent + ML sidecar + install.sh)"
+	@echo "test the install workflow with:  curl -fsSL http://localhost:3000/signal/install.sh | sh"
+
 .PHONY: uninstall-linux
 uninstall-linux:
 	-"$(DEST)/keld-agent" uninstall

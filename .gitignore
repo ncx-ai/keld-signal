@@ -13,3 +13,6 @@
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Local dev install-mirror artifacts (served to the web app for curl|sh testing)
+/.dev-dl/
