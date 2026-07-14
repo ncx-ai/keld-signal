@@ -92,19 +92,20 @@ if [ -f "${DEST}/keld-agent" ]; then
   chmod +x "${DEST}/keld-agent"
 fi
 
-# Fetch the frozen GLiNER2 sidecar (large, ~hundreds of MB) BY DEFAULT — this is
-# the full ML experience, matching the GUI installers. Set KELD_NO_SIDECAR=1 for
-# a lean, deterministic-only install (the deterministic backend needs no sidecar).
-# Linux only: macOS uses the .pkg installer; no darwin sidecar tarball is published.
-if [ "$os" = "linux" ] && [ -f "${DEST}/keld-agent" ] && [ "${KELD_NO_SIDECAR:-0}" != "1" ]; then
+# Fetch the frozen GLiNER2 ML sidecar — REQUIRED. Keld Signal runs on-device ML;
+# there is no deterministic alternative, so a failed sidecar install aborts the whole
+# install rather than degrading. Linux only here: macOS ships the sidecar in its .pkg.
+if [ "$os" = "linux" ] && [ -f "${DEST}/keld-agent" ]; then
   sc_archive="keld-agent-sidecar_${os}_${arch}.tar.gz"
   sc_url="${dl_base}/${tag}/${sc_archive}"
-  echo "Fetching keld-agent-sidecar (large; set KELD_NO_SIDECAR=1 to skip)..."
+  echo "Fetching the ML sidecar (GLiNER2)..."
+  rm -rf "${DEST}/keld-agent-sidecar"   # clear any prior sidecar (incl. a dev venv-wrapper file) so the dir extracts cleanly
   if curl -fsSL "$sc_url" | tar -xz -C "$DEST"; then
     chmod +x "${DEST}/keld-agent-sidecar/keld-agent-sidecar" 2>/dev/null || true
-    echo "keld-agent-sidecar installed to ${DEST}/keld-agent-sidecar/keld-agent-sidecar"
   else
-    echo "keld: sidecar download failed; continuing with the deterministic backend." >&2
+    echo "keld: ML sidecar download failed — Keld Signal requires on-device ML and has no" >&2
+    echo "  deterministic fallback. Aborting. URL: ${sc_url}" >&2
+    exit 1
   fi
 fi
 
