@@ -27,6 +27,8 @@ func Install() error {
 		return err
 	}
 	uid := fmt.Sprintf("gui/%d", os.Getuid())
+	// bootout then bootstrap = a restart, so a REINSTALL over a running agent picks up
+	// the newly-installed binary (launchd starts whatever is at the plist's program path).
 	_ = exec.Command("launchctl", "bootout", uid, p).Run() // ignore if not loaded
 	return exec.Command("launchctl", "bootstrap", uid, p).Run()
 }

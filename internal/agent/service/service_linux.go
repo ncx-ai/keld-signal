@@ -27,7 +27,12 @@ func Install() error {
 		return err
 	}
 	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
-	return exec.Command("systemctl", "--user", "enable", "--now", "keld-agent.service").Run()
+	if err := exec.Command("systemctl", "--user", "enable", "keld-agent.service").Run(); err != nil {
+		return err
+	}
+	// restart (not `enable --now`) so a REINSTALL over a running daemon picks up the
+	// newly-installed binary; on a fresh install `restart` just starts the stopped unit.
+	return exec.Command("systemctl", "--user", "restart", "keld-agent.service").Run()
 }
 
 func Uninstall() error {

@@ -16,11 +16,17 @@ func Install() error {
 		return err
 	}
 	// Per-user logon task running `keld-agent run`.
-	return exec.Command("schtasks", "/Create", "/F",
+	if err := exec.Command("schtasks", "/Create", "/F",
 		"/SC", "ONLOGON",
 		"/TN", taskName,
 		"/TR", `"`+exe+`" run`,
-	).Run()
+	).Run(); err != nil {
+		return err
+	}
+	// Run it now (don't wait for next logon), restarting any running instance so a
+	// REINSTALL picks up the newly-installed binary.
+	_ = exec.Command("schtasks", "/End", "/TN", taskName).Run() // no-op if not running
+	return exec.Command("schtasks", "/Run", "/TN", taskName).Run()
 }
 
 func Uninstall() error {
