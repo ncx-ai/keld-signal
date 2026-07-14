@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/api"
+	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/errs"
 	"github.com/ncx-ai/keld-signal/internal/tools"
 )
@@ -267,6 +271,102 @@ func TestRunSetupAbortReturnsSilentExit(t *testing.T) {
 	}
 	if fileExists(filepath.Join(os.Getenv("KELD_HOME"), "manifest.json")) {
 		t.Error("abort must not write the manifest")
+	}
+}
+
+// TestRunSetupHumanOutputFormat locks the unified phased human console output:
+// a single "Configuring your AI tools…" header, one aligned ✓/⚠ line per tool
+// (no per-tool box rule), a single ✓ Hook line, and no stale
+// "Nothing to apply." / "Setup complete…" summary text.
+func TestRunSetupHumanOutputFormat(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	dir := t.TempDir()
+
+	nochange := &fakeAdapter{
+		name: "codex",
+		plan: tools.Plan{
+			Name: "codex", ConfigPath: filepath.Join(dir, "codex.json"),
+			Changed: false,
+		},
+	}
+
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	ob := &api.Onboarding{Endpoint: "https://ep", IngestToken: "tok", Actor: "actor"}
+	client := &api.Client{}
+	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken, Actor: ob.Actor}
+	opts := SetupOpts{
+		Yes:             true,
+		Confirm:         func(string) bool { return true },
+		ResolveConflict: func(tools.Adapter, tools.Plan) string { return "skip" },
+	}
+
+	if _, err := runSetup([]tools.Adapter{nochange}, p, client, ob, opts); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "Configuring your AI tools…") {
+		t.Fatalf("missing header: %q", got)
+	}
+	if strings.Contains(got, "─") {
+		t.Fatalf("box-drawing rule leaked into human output: %q", got)
+	}
+	if !regexp.MustCompile(`(?m)^\s*✓ codex\s+already configured\s*$`).MatchString(got) {
+		t.Fatalf("missing already-configured tool line: %q", got)
+	}
+	if !regexp.MustCompile(`(?m)^\s*✓ Hook\s+~/\.keld/hook\.json\s*$`).MatchString(got) {
+		t.Fatalf("missing Hook line: %q", got)
+	}
+	if strings.Contains(got, "Nothing to apply.") {
+		t.Fatalf("stale 'Nothing to apply.' text present: %q", got)
+	}
+	if strings.Contains(got, "Setup complete") {
+		t.Fatalf("stale 'Setup complete' text present: %q", got)
+	}
+}
+
+// TestRunSetupConflictHumanOutputFormat locks the unified ⚠ skipped-conflict line.
+func TestRunSetupConflictHumanOutputFormat(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "tool.json")
+
+	adapter := &fakeAdapter{
+		name: "faketool",
+		plan: tools.Plan{
+			Name:       "faketool",
+			ConfigPath: cfgPath,
+			Managed:    map[string]any{},
+			Changed:    true,
+			Conflict:   "block already present",
+		},
+	}
+
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
+	client := &api.Client{}
+	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken, Actor: ob.Actor}
+	opts := SetupOpts{
+		Yes:             true, // --yes auto-skips conflicts
+		Confirm:         func(string) bool { return true },
+		ResolveConflict: func(tools.Adapter, tools.Plan) string { return "replace" },
+	}
+
+	if _, err := runSetup([]tools.Adapter{adapter}, p, client, ob, opts); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+
+	got := buf.String()
+	if !regexp.MustCompile(`(?m)^\s*⚠ faketool\s+skipped \(conflict\)\s*$`).MatchString(got) {
+		t.Fatalf("missing unified skipped-conflict line: %q", got)
 	}
 }
 

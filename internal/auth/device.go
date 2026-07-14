@@ -27,7 +27,7 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 	}
 
 	if openBrowser {
-		console.Print("(Opening your browser…)")
+		console.Print("  Opening your browser…")
 		// Launch the browser concurrently. The opener can block until the browser
 		// process exits (some Linux xdg-open setups do not return until the
 		// browser window is closed), and the poll loop below MUST start regardless.
@@ -96,8 +96,8 @@ func LoginWithCode(c *api.Client, code string) (*AuthData, error) {
 // behavior moved out of Login so a --json caller can substitute a JSON emitter).
 func defaultDeviceReport(ds *api.DeviceStart) {
 	console.Print(fmt.Sprintf(
-		"To authorize this device, open:\n  %s\nThe code %s is already filled in — confirm it matches, then approve.",
-		ds.VerificationURL, ds.UserCode,
+		"  Approve this device in your browser (code pre-filled):\n    %s",
+		ds.VerificationURL,
 	))
 }
 

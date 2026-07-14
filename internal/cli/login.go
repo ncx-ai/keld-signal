@@ -30,6 +30,10 @@ func newLoginCmd() *cobra.Command {
 
 			code, _ := cmd.Flags().GetString("code")
 			if code != "" {
+				if !jsonOut {
+					console.Print("")
+					console.Print("Signing in…")
+				}
 				a, err := auth.LoginWithCode(api.NewClient(paths.APIBase(), ""), code)
 				if err != nil {
 					if jsonOut {
@@ -41,7 +45,7 @@ func newLoginCmd() *cobra.Command {
 				if jsonOut {
 					emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org})
 				} else {
-					console.Print(fmt.Sprintf("Logged in as %s (org: %s)", a.Principal, a.Org))
+					console.Print(fmt.Sprintf("  ✓ %s · org %s", a.Principal, a.Org))
 				}
 				return nil
 			}
@@ -68,13 +72,16 @@ func newLoginCmd() *cobra.Command {
 			// force=true: an explicit `keld login` always re-authenticates rather than
 			// trusting stored creds (which may be revoked/rotated). Falls back to the
 			// lazy path only under --no-login (no browser available).
+			console.Print("")
+			console.Print("Signing in…")
 			a, err := auth.RequireAuth(noLogin, true, true)
 			if err != nil {
 				return err
 			}
-			// Sole "Logged in as …" confirmation (Login() no longer prints it), so the
-			// line appears exactly once whether we re-authed or returned stored creds.
-			console.Print(fmt.Sprintf("Logged in as %s (org: %s)", a.Principal, a.Org))
+			// Sole "✓ <principal> · org <org>" confirmation (Login() no longer prints
+			// it), so the line appears exactly once whether we re-authed or returned
+			// stored creds.
+			console.Print(fmt.Sprintf("  ✓ %s · org %s", a.Principal, a.Org))
 			return nil
 		},
 	}

@@ -1,14 +1,17 @@
 package auth
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/api"
+	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
@@ -285,6 +288,51 @@ func TestLoginWithCodeExpired(t *testing.T) {
 	}
 	if reloaded, _ := Load(); reloaded != nil {
 		t.Fatalf("auth.json should not be written on failure, got %+v", reloaded)
+	}
+}
+
+// defaultDeviceReport prints the unified human device-code line: a single
+// "approve in your browser" instruction with the URL, no separate sentence
+// about the code being pre-filled (that's implied by "code pre-filled").
+func TestDefaultDeviceReportHumanFormat(t *testing.T) {
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	defaultDeviceReport(&api.DeviceStart{VerificationURL: "https://v", UserCode: "UC"})
+
+	got := buf.String()
+	if !strings.Contains(got, "Approve this device in your browser (code pre-filled):") {
+		t.Fatalf("missing approve line: %q", got)
+	}
+	if !strings.Contains(got, "https://v") {
+		t.Fatalf("missing verification URL: %q", got)
+	}
+	if strings.Contains(got, "already filled in") || strings.Contains(got, "To authorize this device") {
+		t.Fatalf("stale device-report wording still present: %q", got)
+	}
+}
+
+// Login's human "opening the browser" notice uses the unified 2-space-indented
+// wording.
+func TestLoginPrintsOpeningBrowserHumanLine(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	hits := 0
+	srv := deviceServer(t, "AT", "p", "o", &hits)
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	old := console.Out
+	console.Out = &buf
+	defer func() { console.Out = old }()
+
+	_, err := Login(api.NewClient(srv.URL, ""), true, func(time.Duration) {}, func(string) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if !strings.Contains(buf.String(), "  Opening your browser…") {
+		t.Fatalf("expected unified opening-browser line, got %q", buf.String())
 	}
 }
 

@@ -43,6 +43,15 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 			console.Print(s)
 		}
 	}
+	// skipConflict prints the unified single-line outcome for a tool that is
+	// skipped because of a config conflict, regardless of which of the three
+	// paths (dry-run / --yes / interactive) led there.
+	skipConflict := func(adapter tools.Adapter) {
+		say(fmt.Sprintf("  ⚠ %-26s skipped (conflict)", adapter.DisplayName()))
+	}
+
+	say("")
+	say("Configuring your AI tools…")
 
 	type approved struct {
 		adapter tools.Adapter
@@ -61,21 +70,17 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 			}
 		}
 
-		if !quiet {
-			console.Rule(fmt.Sprintf("%s · %s", adapter.DisplayName(), path))
-		}
-
 		plan := adapter.Apply(before, p, false)
 
 		if plan.Conflict != "" {
-			say(fmt.Sprintf("  conflict: %s", plan.Conflict))
+			say(fmt.Sprintf("  ⚠ %-26s conflict: %s", adapter.DisplayName(), plan.Conflict))
 			if opts.DryRun {
-				say("  (dry-run: would be skipped)")
+				skipConflict(adapter)
 				emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "skipped_conflict", Path: path})
 				continue
 			}
 			if opts.Yes {
-				say("  skipped (--yes)")
+				skipConflict(adapter)
 				emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "skipped_conflict", Path: path})
 				continue
 			}
@@ -87,50 +92,41 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 			if choice == "replace" {
 				plan = adapter.Apply(before, p, true)
 				if plan.Conflict != "" {
-					say(fmt.Sprintf("  can't replace: %s", plan.Conflict))
-					say("  skipped")
+					skipConflict(adapter)
 					emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "skipped_conflict", Path: path})
 					continue
 				}
-				if !quiet {
+				if !quiet && opts.ShowDiff {
 					diffview.Render(before, plan.AfterText, plan.ConfigPath)
-					for _, line := range plan.Summary {
-						console.Print(fmt.Sprintf("  %s", line))
-					}
 				}
 				approveds = append(approveds, approved{adapter, plan})
 				continue
 			}
-			say("  skipped")
+			skipConflict(adapter)
 			emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "skipped_conflict", Path: path})
 			continue
 		}
 
 		if !plan.Changed {
-			say("  already configured — no changes")
+			say(fmt.Sprintf("  ✓ %-26s already configured", adapter.DisplayName()))
 			emit(SetupEvent{Kind: "tool", Name: adapter.Name(), Display: adapter.DisplayName(), Action: "already_configured", Path: path})
 			continue
 		}
 
-		if !quiet {
-			if opts.ShowDiff {
-				diffview.Render(before, plan.AfterText, plan.ConfigPath)
-			}
-			for _, line := range plan.Summary {
-				console.Print(fmt.Sprintf("  %s", line))
-			}
+		if !quiet && opts.ShowDiff {
+			diffview.Render(before, plan.AfterText, plan.ConfigPath)
 		}
 		approveds = append(approveds, approved{adapter, plan})
 	}
 
-	say("\nHook · keld __hook (writes ~/.keld/hook.json)")
+	say(fmt.Sprintf("  ✓ %-26s %s", "Hook", "~/.keld/hook.json"))
 
 	if opts.DryRun {
-		say("\n--dry-run: no changes written.")
 		return config.LoadManifest()
 	}
 	if len(approveds) == 0 {
-		say("\nNothing to apply.")
+		// The per-tool "already configured" / "skipped (conflict)" lines above
+		// already convey the outcome; no separate "Nothing to apply." summary.
 		emit(SetupEvent{Kind: "done", Configured: 0, Endpoint: ob.Endpoint})
 		return config.LoadManifest()
 	}
@@ -156,9 +152,6 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		if err != nil {
 			return nil, err
 		}
-		if backup != "" {
-			say(fmt.Sprintf("  backed up %s → %s", a.plan.ConfigPath, backup))
-		}
 		if err := config.WriteAtomic(a.plan.ConfigPath, a.plan.AfterText, false); err != nil {
 			return nil, err
 		}
@@ -172,14 +165,17 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 			Managed:    a.plan.Managed,
 			BackupPath: backupPtr,
 		}
-		say(fmt.Sprintf("  ✓ %s", a.adapter.DisplayName()))
+		line := fmt.Sprintf("  ✓ %-26s configured", a.adapter.DisplayName())
+		if backup != "" {
+			line += fmt.Sprintf(" (backed up %s)", backup)
+		}
+		say(line)
 		emit(SetupEvent{Kind: "tool", Name: a.adapter.Name(), Display: a.adapter.DisplayName(), Action: "configured", Path: a.plan.ConfigPath, Backup: backup})
 	}
 
 	if err := manifest.Save(); err != nil {
 		return nil, err
 	}
-	say("\nSetup complete. Restart any running sessions to pick up the new config.")
 	emit(SetupEvent{Kind: "done", Configured: len(manifest.Tools), Endpoint: ob.Endpoint})
 	return manifest, nil
 }

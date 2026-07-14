@@ -71,8 +71,15 @@ func TestLoginCodePersistsAuthAndExitsZero(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if !strings.Contains(buf.String(), "dg@keld.co") || !strings.Contains(buf.String(), "Acme") {
-		t.Fatalf("expected confirmation output, got %q", buf.String())
+	got := buf.String()
+	if !strings.Contains(got, "Signing in…") {
+		t.Fatalf("expected 'Signing in…' header, got %q", got)
+	}
+	if !strings.Contains(got, "✓ dg@keld.co · org Acme") {
+		t.Fatalf("expected unified '✓ <principal> · org <org>' confirmation, got %q", got)
+	}
+	if strings.Contains(got, "Logged in as") {
+		t.Fatalf("stale 'Logged in as' wording still present: %q", got)
 	}
 }
 
