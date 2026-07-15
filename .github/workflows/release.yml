@@ -24,3 +24,19 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # After GoReleaser publishes the release (keld/keld-agent Go binaries), build + attach the
+  # frozen GLiNER2 sidecar and native installers to the SAME release. Chained via workflow_call
+  # rather than `on: release: published` because GoReleaser creates the release with the default
+  # GITHUB_TOKEN, and GITHUB_TOKEN-created releases do NOT fire the `release` event — so a plain
+  # `on: release` installers workflow never runs for an automated release (that's the bug that
+  # left every release without the Linux keld-agent-sidecar_*.tar.gz the installer requires).
+  installers:
+    needs: goreleaser
+    uses: ./.github/workflows/installers.yml
+    with:
+      publish_release: true
+      release_tag: ${{ github.ref_name }}
+    secrets: inherit
+    permissions:
+      contents: write

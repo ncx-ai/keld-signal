@@ -5,6 +5,27 @@ name: installers
 # artifacts to the published GitHub release. GoReleaser builds keld/keld-agent
 # separately; this workflow adds the frozen sidecar + installers.
 on:
+  # Called by release.yml after GoReleaser publishes the release. GoReleaser creates the
+  # release with the default GITHUB_TOKEN, whose events do NOT trigger `release: published`,
+  # so chaining via workflow_call is the reliable way to run on every real release.
+  workflow_call:
+    inputs:
+      publish_release:
+        description: "Attach the built installers to the release tagged `release_tag`."
+        type: boolean
+        default: false
+      release_tag:
+        description: "The release tag to stage GoReleaser archives from and upload assets to."
+        type: string
+        default: ""
+    secrets:
+      APPLE_DEVELOPER_ID_APP: { required: false }
+      APPLE_DEVELOPER_ID_INSTALLER: { required: false }
+      APPLE_NOTARY_KEY: { required: false }
+      APPLE_NOTARY_KEY_ID: { required: false }
+      APPLE_NOTARY_ISSUER: { required: false }
+  # A manually published release (e.g. via the GitHub UI, not GoReleaser's GITHUB_TOKEN) still
+  # fires this and attaches the installers.
   release:
     types: [published]
   # On-demand, credential-free dry run: builds UNSIGNED installers on all three
@@ -16,6 +37,13 @@ permissions:
 
 jobs:
   build:
+    # `IS_RELEASE`: attach to a GitHub release when triggered by a `release` event OR chained
+    # from release.yml (`inputs.publish_release`). `TAG`: the release tag in either mode.
+    # (github.event_name inside a workflow_call reflects the CALLER's event — `push` — not
+    # `workflow_call`, so we branch on inputs, never on github.event_name, for the chained path.)
+    env:
+      IS_RELEASE: ${{ github.event_name == 'release' || inputs.publish_release }}
+      TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -84,7 +112,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
         run: |
           case "${{ runner.os }}" in
             macOS)   goos=darwin;  ext="" ;;
@@ -93,7 +120,7 @@ jobs:
           esac
           mkdir -p stage
           arch="${{ matrix.goarch }}"
-          if [ "${{ github.event_name }}" = "release" ]; then
+          if [ "$IS_RELEASE" = "true" ]; then
             # Release: keld/keld-agent come from the GoReleaser archive on the same release.
             asset="keld_${goos}_${arch}.tar.gz"
             [ "$goos" = "windows" ] && asset="keld_${goos}_${arch}.zip"
@@ -120,7 +147,7 @@ jobs:
           APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
         run: |
           # Flatten sidecar one-dir beside keld-agent in the payload.
-          VER="${{ github.event.release.tag_name }}"
+          VER="$TAG"
           [ -z "$VER" ] && VER="0.0.0-dryrun"
           bash installers/macos/build-pkg.sh "$VER" stage "${{ matrix.goarch }}"
 
@@ -128,7 +155,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         env:
-          KELD_VERSION: ${{ github.event.release.tag_name }}
+          KELD_VERSION: ${{ env.TAG }}
         run: |
           if (-not $env:KELD_VERSION) { $env:KELD_VERSION = "0.0.0-dryrun" }
           Copy-Item -Recurse -Force dist\keld-agent-sidecar installers\windows\keld-agent-sidecar
@@ -146,7 +173,7 @@ jobs:
 
       # Release runs attach the installers to the GitHub release.
       - name: Upload installers to release
-        if: github.event_name == 'release'
+        if: env.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: |
