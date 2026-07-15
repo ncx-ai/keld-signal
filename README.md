@@ -379,6 +379,58 @@ The GLiNER2 sidecar has load-protection + resource-safety knobs
 in [sidecar/loadtest/README.md](sidecar/loadtest/README.md#tunable-env). General
 sidecar setup lives in [sidecar/README.md](sidecar/README.md).
 
+## Release process
+
+A release is cut by pushing a `vX.Y.Z` tag (`make release` bumps the version, tags,
+and pushes — which kicks off CI). Two workflows run, in order, and both attach their
+outputs to the **same** GitHub Release:
+
+1. **`release.yml` → GoReleaser.** Builds the Go binaries `keld` and `keld-agent`
+   for macOS/Linux/Windows (amd64 + arm64), **creates the GitHub Release**, and
+   uploads the archives `keld_<os>_<arch>.tar.gz` (`.zip` on Windows) plus
+   `checksums.txt`.
+2. **`installers.yml` (chained via `needs: goreleaser`).** For each OS it freezes
+   the GLiNER2 sidecar (`sidecar/build-freeze.sh` → PyInstaller, obfuscated), smoke-
+   tests the frozen binary, then packages and uploads to the release:
+   - **macOS** — `keld-<ver>-<arch>.pkg`, signed + notarized when the Apple secrets
+     are present (unsigned otherwise).
+   - **Windows** — `keld-setup.exe` (Inno Setup).
+   - **Linux** — `keld-agent-sidecar_linux_<arch>.tar.gz` (the frozen sidecar; the
+     Linux `install.sh` downloads exactly this, since macOS/Windows bundle the
+     sidecar inside their native installers instead).
+
+   It's chained from `release.yml` rather than triggered by `on: release: published`
+   because GoReleaser creates the release with the default `GITHUB_TOKEN`, and
+   releases created by `GITHUB_TOKEN` do **not** fire the `release` event — so an
+   `on: release` workflow would silently never run for an automated release.
+
+**The GLiNER2 model is not in any artifact.** The frozen sidecar ships the *runner*
+(code + torch/gliner2 libraries + a bundled Python); the ~1.9 GB model is pulled at
+runtime into the HF cache on the sidecar's first start (pin a local copy with
+`KELD_GLINER2_DIR`). See [sidecar/README.md](sidecar/README.md).
+
+**Where to find the artifacts.** On the repo's **Releases** page — every asset
+above is attached to the tagged release. `install.sh` / `install.ps1` resolve the
+**latest** release and download from there.
+
+**Dry runs (no release, no secrets).** Run `installers.yml` on demand to build and
+inspect the installers without cutting a release:
+
+```bash
+gh workflow run installers.yml           # optionally: --ref <branch>
+```
+
+This builds **unsigned** installers on all OSes and uploads them as **workflow
+artifacts** (Actions → the run → *Artifacts*: `installers-<os>-<arch>`), including
+the Linux `keld-agent-sidecar_*.tar.gz`. Use it to validate a freeze/packaging
+change before tagging a real release.
+
+> **Linux portability note.** The Linux sidecar is currently frozen on
+> `ubuntu-latest`, so it dynamically links that runner's (recent) glibc and runs on
+> current rolling/LTS distros. Broad old-glibc coverage (RHEL, older Debian/Ubuntu)
+> requires freezing in a `manylinux_2_28` container (glibc 2.28) — tracked as a
+> follow-up.
+
 ## Contributing
 
 See [AGENTS.md](AGENTS.md) for the architecture, repo layout, build/run/test
