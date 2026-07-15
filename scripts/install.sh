@@ -113,14 +113,23 @@ if [ "$os" = "linux" ] && [ -f "${DEST}/keld-agent" ]; then
 fi
 
 agent_ok=1
+# Pair against the origin this installer was fetched from. KELD_API_URL is set by the
+# server that serves this script (see the Keld-served header) — pass it as --api-url so
+# login/setup target THIS host explicitly. Without the flag, keld reuses the API URL of any
+# previously stored token (device.go), so re-installing from a new origin over an existing
+# install would silently keep signing in against the old host.
+api_flag=""
+[ -n "${KELD_API_URL:-}" ] && api_flag="--api-url ${KELD_API_URL}"
 if [ -f "${DEST}/keld-agent" ]; then
   # keld-agent install owns login → signal setup → service (agent last), and the
   # TTY/headless decision. With a setup code it onboards non-interactively.
   if [ -n "$CODE" ]; then
-    "${DEST}/keld-agent" install --code "$CODE" \
+    # shellcheck disable=SC2086  # api_flag must word-split into two args (a URL has no spaces)
+    "${DEST}/keld-agent" install $api_flag --code "$CODE" \
       || { agent_ok=0; echo "keld: onboarding/agent install did not fully complete — re-run: keld-agent install --code <CODE>" >&2; }
   else
-    "${DEST}/keld-agent" install \
+    # shellcheck disable=SC2086
+    "${DEST}/keld-agent" install $api_flag \
       || { agent_ok=0; echo "keld: agent install did not complete — finish with: keld login && keld signal setup && keld-agent install" >&2; }
   fi
 fi
