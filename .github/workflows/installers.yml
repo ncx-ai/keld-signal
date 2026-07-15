@@ -48,13 +48,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Apple Silicon only. No Intel macOS leg: PyTorch dropped Intel-mac wheels after
+          # torch 2.2.2 (Apple Silicon only since 2.3), and macOS 27 (Fall 2026) is
+          # Apple-Silicon-only — so a torch-based sidecar can't meaningfully target Intel macOS.
           - os: macos-14        # arm64
             goarch: arm64
-          - os: macos-13        # x64
-            goarch: amd64
           - os: windows-latest
-            goarch: amd64
-          - os: ubuntu-latest
             goarch: amd64
     runs-on: ${{ matrix.os }}
     steps:
@@ -165,12 +164,6 @@ jobs:
           & $iscc installers\windows\keld-agent.iss
           if ($env:WINDOWS_CERT_PFX) { Write-Host "signtool sign step (gated) would run here" }
 
-      - name: Package Linux sidecar tarball
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          tar -C dist -czf "keld-agent-sidecar_linux_${{ matrix.goarch }}.tar.gz" keld-agent-sidecar
-
       # Release runs attach the installers to the GitHub release.
       - name: Upload installers to release
         if: env.IS_RELEASE == 'true'
@@ -179,7 +172,6 @@ jobs:
           files: |
             keld-*-*.pkg
             installers/windows/Output/keld-setup.exe
-            keld-agent-sidecar_*.tar.gz
 
       # Dry runs (workflow_dispatch) publish the unsigned installers as downloadable
       # workflow artifacts instead — no release, no credentials required.
@@ -192,4 +184,98 @@ jobs:
           path: |
             keld-*-*.pkg
             installers/windows/Output/keld-setup.exe
-            keld-agent-sidecar_*.tar.gz
+
+  # The Linux sidecar is frozen in a manylinux_2_28 container (glibc 2.28), NOT on the
+  # ubuntu-latest runner. PyInstaller does not bundle glibc, so the frozen binary demands the
+  # target's glibc be >= the BUILD glibc; ubuntu-latest (glibc 2.39) would only run on the very
+  # newest distros. Freezing against the manylinux 2.28 baseline makes the sidecar run on any
+  # distro with glibc >= 2.28 — RHEL/Alma/Rocky 8+, Debian 10+, Ubuntu 18.04+, Arch, Fedora,
+  # Amazon Linux 2023. (manylinux_2_28 is also the oldest baseline whose glibc still satisfies
+  # GitHub Actions' bundled node20, so the JS actions below run inside the container.)
+  # macOS/Windows bundle the sidecar inside their native installers, so only Linux ships it as a
+  # standalone tarball — which install.sh downloads.
+  linux-sidecar:
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    env:
+      IS_RELEASE: ${{ github.event_name == 'release' || inputs.publish_release }}
+      TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # manylinux's /opt/python CPython is built statically (no libpython.so), which PyInstaller
+      # cannot freeze against. manylinux_2_28 is AlmaLinux 8, whose python3.12 RPM IS built
+      # --enable-shared and links glibc 2.28 — exactly the shared interpreter + old baseline we
+      # need. Install and freeze against that instead.
+      # Reference /usr/bin/python3.12 by absolute path throughout: the manylinux image keeps its
+      # static /opt/python/cp312-cp312/bin first on PATH, so bare `python3.12` would resolve to
+      # the static interpreter we can't freeze against.
+      - name: Install shared CPython 3.12 (glibc 2.28)
+        run: |
+          dnf install -y python3.12 python3.12-devel
+          /usr/bin/python3.12 -m ensurepip --upgrade
+          /usr/bin/python3.12 -m pip install --upgrade pip
+
+      - name: Freeze sidecar (obfuscated, glibc 2.28 baseline)
+        shell: bash
+        env:
+          KELD_OBFUSCATE: "1"   # shipped artifacts are obfuscated; dev builds stay plain
+          PYTHON: /usr/bin/python3.12
+          # torch's default Linux wheel hard-depends on the CUDA 13 stack (cuda-toolkit,
+          # nvidia-*), so the frozen bundle needs libcudart.so.13 at runtime and won't load on
+          # CPU-only machines — which is every device the sidecar runs on (GLiNER2 runs on CPU;
+          # macOS/Windows already ship CPU torch). Pin the CPU build: pre-install it from the
+          # CPU index, and expose that index to build-freeze.sh's own requirements install (the
+          # `+cpu` local version outranks the plain PyPI wheel, so gliner2's torch dep stays CPU).
+          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+        run: |
+          /usr/bin/python3.12 -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          /usr/bin/python3.12 -m pip install --quiet python-minifier pyarmor
+          bash sidecar/build-freeze.sh
+
+      - name: Cache HuggingFace model
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/hf-cache
+          key: hf-gliner2-large-v1-b122b11eeaee4dabd32bed80412f3234c0d0e943
+
+      - name: Smoke the frozen sidecar
+        shell: bash
+        env:
+          HF_HOME: ${{ github.workspace }}/hf-cache
+        run: |
+          BIN="dist/keld-agent-sidecar/keld-agent-sidecar"
+          "$BIN" --port 8399 --host 127.0.0.1 &
+          for i in $(seq 1 180); do
+            if curl -sf http://127.0.0.1:8399/health | grep -q '"ok"'; then ok=1; break; fi
+            sleep 2
+          done
+          [ -n "${ok:-}" ] || { echo "sidecar did not become healthy"; exit 1; }
+          # Real /classify spawns the inference worker child, which must import the (obfuscated)
+          # modules from the frozen bundle — the only CI coverage for frozen worker spawn. It
+          # also proves the glibc-2.28-linked binary actually runs (here, inside the 2.28 image).
+          resp=$(curl -sf -m 120 -X POST http://127.0.0.1:8399/classify \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"debug the login bug","tasks":{"task_type":["debug","other"]}}') \
+            || { echo "frozen worker /classify failed — spawn/import/bundle broke"; exit 1; }
+          echo "$resp" | grep -q '"task_type"' \
+            || { echo "frozen worker returned no result: $resp"; exit 1; }
+          echo "frozen worker spawn + inference OK (glibc 2.28 baseline)"
+
+      - name: Package Linux sidecar tarball
+        shell: bash
+        run: tar -C dist -czf "keld-agent-sidecar_linux_amd64.tar.gz" keld-agent-sidecar
+
+      - name: Upload sidecar to release
+        if: env.IS_RELEASE == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: keld-agent-sidecar_linux_amd64.tar.gz
+
+      - name: Upload sidecar as artifact (dry run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-linux-amd64
+          if-no-files-found: ignore
+          path: keld-agent-sidecar_linux_amd64.tar.gz
