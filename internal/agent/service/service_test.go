@@ -6,7 +6,11 @@ import (
 )
 
 func TestLaunchAgentPlistContainsExecAndLabel(t *testing.T) {
-	p := LaunchAgentPlist("/usr/local/bin/keld-agent")
+	p := LaunchAgentPlist(
+		"/usr/local/bin/keld-agent",
+		"/home/u/.keld/logs/agent.out.log",
+		"/home/u/.keld/logs/agent.err.log",
+	)
 	if !strings.Contains(p, "<string>/usr/local/bin/keld-agent</string>") {
 		t.Fatalf("plist missing exec path:\n%s", p)
 	}
@@ -15,6 +19,12 @@ func TestLaunchAgentPlistContainsExecAndLabel(t *testing.T) {
 	}
 	if !strings.Contains(p, "<key>RunAtLoad</key>") {
 		t.Fatalf("plist missing RunAtLoad:\n%s", p)
+	}
+	if !strings.Contains(p, "<key>StandardOutPath</key><string>/home/u/.keld/logs/agent.out.log</string>") {
+		t.Fatalf("plist missing StandardOutPath:\n%s", p)
+	}
+	if !strings.Contains(p, "<key>StandardErrorPath</key><string>/home/u/.keld/logs/agent.err.log</string>") {
+		t.Fatalf("plist missing StandardErrorPath:\n%s", p)
 	}
 }
 
