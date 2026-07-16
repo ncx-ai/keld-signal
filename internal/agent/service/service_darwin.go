@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 func plistPath() string {
@@ -23,7 +25,11 @@ func Install() error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(p, []byte(LaunchAgentPlist(exe)), 0o644); err != nil {
+	if err := os.MkdirAll(paths.AgentLogDir(), 0o755); err != nil {
+		return err
+	}
+	plist := LaunchAgentPlist(exe, paths.AgentStdoutLog(), paths.AgentStderrLog())
+	if err := os.WriteFile(p, []byte(plist), 0o644); err != nil {
 		return err
 	}
 	uid := fmt.Sprintf("gui/%d", os.Getuid())
