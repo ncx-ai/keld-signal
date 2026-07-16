@@ -41,6 +41,19 @@ func TestReauthRequiredWithMarker(t *testing.T) {
 	}
 }
 
+func TestAgentLogPaths(t *testing.T) {
+	t.Setenv("KELD_HOME", "/tmp/kh")
+	if AgentLogDir() != filepath.Join("/tmp/kh", "logs") {
+		t.Fatalf("log dir %q", AgentLogDir())
+	}
+	if AgentStdoutLog() != filepath.Join("/tmp/kh", "logs", "agent.out.log") {
+		t.Fatalf("stdout %q", AgentStdoutLog())
+	}
+	if AgentStderrLog() != filepath.Join("/tmp/kh", "logs", "agent.err.log") {
+		t.Fatalf("stderr %q", AgentStderrLog())
+	}
+}
+
 func TestAPIBasePrecedence(t *testing.T) {
 	t.Setenv("KELD_API_URL", "https://env.example/")
 	SetAPIBaseOverride("")
