@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,6 +51,21 @@ func (f *fakeSender) all() []publish.Enrichment {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]publish.Enrichment(nil), f.sent...)
+}
+
+// count returns the number of publishes so far (mutexed, safe for polling
+// from a test goroutine while Worker runs concurrently).
+func (f *fakeSender) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.sent)
+}
+
+// sampleInlineJob builds a minimal inline queue.Job keyed by id, for tests
+// that only care about the worker's wait/defer/publish behavior, not the
+// enrichment content itself.
+func sampleInlineJob(id string) queue.Job {
+	return queue.Job{Source: "claude_code", Scheme: "trace", ID: id, Inline: "write a function"}
 }
 
 // TestWorkerEnrichesInlineAndNeverLeaksRaw verifies Worker against a fake
@@ -177,6 +194,10 @@ func sidecarStub(t *testing.T) *httptest.Server {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"worker":{"state":"ready"}}`))
+	})
 	mux.HandleFunc("/extract", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -227,7 +248,12 @@ func TestWorkerWithSidecarStubPublishes(t *testing.T) {
 
 	go sup.Start(ctx)
 
-	gate := func() bool { return sup.Ready() }
+	// The per-job gate is model-resident warmth (sidecar /metrics
+	// worker.state=="ready"), mirroring mlBackendWithOpts's real wiring —
+	// not the supervisor's latched liveness.
+	wg := newWarmGate()
+	go wg.run(ctx, client.WorkerReady, warmPollInterval)
+	gate := wg.Warm
 
 	q := queue.New(10)
 	fs := &fakeSender{}
@@ -393,8 +419,8 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 		Inline: "write a function",
 	})
 
-	// Let provisioning fail; the gate must stay closed and nothing may publish.
-	time.Sleep(1500 * time.Millisecond)
+	// gate must never open when provisioning fails (no sidecar → not warm).
+	time.Sleep(100 * time.Millisecond)
 	if gate() {
 		t.Fatal("gate must stay closed on provision failure — no deterministic fallback")
 	}
@@ -733,5 +759,105 @@ func TestProcessNonAuthPublishErrorDoesNotTriggerRefresh(t *testing.T) {
 	}
 	if got := tok.Get(); got != "old-ingest-token" {
 		t.Fatalf("tok.Get() = %q, want unchanged old-ingest-token", got)
+	}
+}
+
+// waitFor polls cond every 2ms until it is true, failing the test if it does
+// not become true within d.
+func waitFor(t *testing.T, d time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.After(d)
+	for !cond() {
+		select {
+		case <-deadline:
+			t.Fatal("condition not met in time")
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+}
+
+// spoolCount counts .json pointer files anywhere under home/spool (live spool
+// plus any quarantined ones under spool/bad), proving a job was preserved on
+// disk rather than lost.
+func spoolCount(t *testing.T, home string) int {
+	t.Helper()
+	n := 0
+	filepath.WalkDir(filepath.Join(home, "spool"), func(_ string, d fs.DirEntry, _ error) error {
+		if d != nil && !d.IsDir() && strings.HasSuffix(d.Name(), ".json") {
+			n++
+		}
+		return nil
+	})
+	return n
+}
+
+// quarantineCount counts .json files under home/spool/bad — the exact
+// subtree spool.Quarantine writes to (see internal/spool.Quarantine). Used to
+// prove a model-not-ready defer never drives quarantine, no matter how many
+// times it re-spools.
+func quarantineCount(t *testing.T, home string) int {
+	t.Helper()
+	n := 0
+	filepath.WalkDir(filepath.Join(home, "spool", "bad"), func(_ string, d fs.DirEntry, _ error) error {
+		if d != nil && !d.IsDir() && strings.HasSuffix(d.Name(), ".json") {
+			n++
+		}
+		return nil
+	})
+	return n
+}
+
+// A job must WAIT (not burn an attempt) until warm, then publish. With a tiny
+// warm-wait and a gate that flips to true, the job should publish exactly once.
+func TestWorkerWaitsForWarmThenPublishes(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("KELD_ENRICH_WARM_WAIT", "5s")
+
+	var warm atomic.Bool // false until we flip it
+	q := queue.New(4)
+	fs := &fakeSender{}
+	q.Offer(sampleInlineJob("warm-wait-1")) // helper used by existing tests
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "t@keld.co",
+		func() bool { return false }, warm.Load, nil, nil)
+
+	time.Sleep(50 * time.Millisecond) // job pulled, waiting for warm
+	if fs.count() != 0 {
+		t.Fatal("published before warm")
+	}
+	warm.Store(true)
+	waitFor(t, time.Second, func() bool { return fs.count() == 1 })
+	q.Close()
+}
+
+// If warmth never arrives within KELD_ENRICH_WARM_WAIT, the job is re-spooled
+// (deferred) WITHOUT consuming the retry budget — so it is NEVER quarantined,
+// no matter how many times it defers.
+func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+	t.Setenv("KELD_ENRICH_WARM_WAIT", "20ms")
+	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "2") // low cap: prove defers don't count
+
+	q := queue.New(4)
+	fs := &fakeSender{}
+	q.Offer(sampleInlineJob("never-warm-1"))
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "t@keld.co",
+		func() bool { return false }, func() bool { return false }, nil, nil)
+
+	// Give it time to defer: the job is deferred exactly once (re-spooled to
+	// disk), then the loop pulls from the now-empty queue and blocks until
+	// Close — there's no spool sweeper here to re-offer it and defer again.
+	time.Sleep(200 * time.Millisecond)
+	q.Close()
+
+	if fs.count() != 0 {
+		t.Fatalf("nothing should publish while never warm; got %d", fs.count())
+	}
+	if n := quarantineCount(t, home); n != 0 {
+		t.Fatalf("model-not-ready must never quarantine; found %d quarantined", n)
+	}
+	// A spooled (deferred) pointer should exist — the job was preserved.
+	if n := spoolCount(t, home); n == 0 {
+		t.Fatal("expected the deferred job to be re-spooled, not lost")
 	}
 }

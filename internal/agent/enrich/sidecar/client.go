@@ -162,3 +162,31 @@ func (c *Client) Healthy(ctx context.Context) bool {
 	}
 	return resp.StatusCode == http.StatusOK && json.NewDecoder(resp.Body).Decode(&h) == nil && h.Ok
 }
+
+// WorkerReady reports whether the sidecar's inference worker has the model
+// resident RIGHT NOW (GET /metrics, worker.state == "ready"). Unlike Healthy
+// (which only proves the HTTP server is up), this reflects post-idle-kill
+// reloads: worker.state is "spawning" while the model reloads. Any state
+// other than exactly "ready" — e.g. "spawning", "held", "down" — is treated
+// as not warm, as is any transport or decode error, so a caller never starts
+// a job's deadline against a cold model.
+func (c *Client) WorkerReady(ctx context.Context) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/metrics", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var m struct {
+		Worker struct {
+			State string `json:"state"`
+		} `json:"worker"`
+	}
+	return json.NewDecoder(resp.Body).Decode(&m) == nil && m.Worker.State == "ready"
+}

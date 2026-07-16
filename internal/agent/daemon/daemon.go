@@ -64,15 +64,23 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 		if !ok {
 			return
 		}
-		// Wait until the backend is ready. Poll with a short sleep; break out
-		// immediately if the queue is closed so shutdown is never blocked.
-		for !ready() {
-			select {
-			case <-q.Done():
-				// Queue closed; discard the in-hand job and exit.
-				return
-			case <-time.After(20 * time.Millisecond):
+		// Wait until the model is resident (warm) before starting the job's
+		// deadline, so model-load time is never counted against it. Bound the
+		// wait: if warmth doesn't arrive in time, DEFER the job (re-spool)
+		// WITHOUT consuming its retry budget — "not ready yet" is not
+		// "un-enrichable", so a cold start must never drive quarantine.
+		ww := warmWait()
+		warm, closed := waitWarm(ready, ww, q.Done())
+		if closed {
+			return // queue closed during the wait; discard in-hand job and exit.
+		}
+		if !warm {
+			if err := spool.Write(pointerFromJob(j)); err != nil {
+				log.Printf("keld-agent: job %s deferred (model not ready) and re-spool failed: %v", j.Key(), err)
+			} else {
+				log.Printf("keld-agent: job %s deferred — model not ready after %s, re-spooled", j.Key(), ww)
 			}
+			continue
 		}
 		to := jobTimeout()
 		// Per-job context: cancelling it aborts the job's in-flight sidecar calls
@@ -188,6 +196,44 @@ func jobTimeout() time.Duration {
 		}
 	}
 	return 30 * time.Second
+}
+
+// warmWait bounds how long the worker waits for the sidecar model to become
+// resident before deferring a job (re-spool, no retry attempt consumed).
+// Default 90s (a cold model load plus headroom); override with
+// KELD_ENRICH_WARM_WAIT (Go duration).
+func warmWait() time.Duration {
+	if v := os.Getenv("KELD_ENRICH_WARM_WAIT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 90 * time.Second
+}
+
+// waitWarm blocks until ready() is true (warm=true), bound elapses
+// (warm=false, closed=false), or done is closed (warm=false, closed=true). It
+// polls ready on a short interval; ready is expected to be a cheap gate read.
+func waitWarm(ready func() bool, bound time.Duration, done <-chan struct{}) (warm, closed bool) {
+	if ready() {
+		return true, false
+	}
+	deadline := time.NewTimer(bound)
+	defer deadline.Stop()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-done:
+			return false, true
+		case <-deadline.C:
+			return false, false
+		case <-tick.C:
+			if ready() {
+				return true, false
+			}
+		}
+	}
 }
 
 // maxAttempts bounds how many times a timed-out job is re-spooled before it is
@@ -735,9 +781,17 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 	// queued/spooled (durable) until the sidecar recovers on a later daemon
 	// run — there is no fallback to fall through to. provisionFailed is still
 	// set by the provisioning goroutine for logging; it does not affect the
-	// gate (which is keyed off the supervisor's own Ready state).
-	gate := func() bool { return opts.sup.Ready() }
-	return opts.client, gate
+	// gate (which is now keyed off model warmth, not the supervisor).
+	//
+	// The per-job gate is model-resident WARMTH (sidecar /metrics
+	// worker.state=="ready"), not latched liveness: after an idle-kill the
+	// /health server stays up while the worker reloads, and counting that
+	// reload against a job's deadline is the death-spiral this fixes. A dead or
+	// never-started sidecar simply never reports warm (metrics unreachable), so
+	// the gate stays closed — same durable queue/spool behaviour as before.
+	wg := newWarmGate()
+	go wg.run(ctx, opts.client.WorkerReady, warmPollInterval)
+	return opts.client, wg.Warm
 }
 
 // enrichEndpoint derives the enrichments URL from the configured ingest endpoint

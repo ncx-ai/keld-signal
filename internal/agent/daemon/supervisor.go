@@ -67,7 +67,12 @@ func NewSupervisor(
 	}
 }
 
-// Ready reports whether the sidecar has reported healthy at least once.
+// Ready reports whether the sidecar has reported healthy at least once. This
+// is latched liveness for the supervisor's own restart/backoff machinery — it
+// is NOT the Worker's per-job readiness gate. That gate is model warmth (see
+// mlBackendWithOpts's warmGate, driven by client.WorkerReady polling the
+// sidecar's /metrics endpoint), which is non-latching and tracks whether the
+// model is resident right now.
 func (s *Supervisor) Ready() bool { return s.ready.Load() }
 
 // Pid returns the PID of the current child process, or 0 if no child is
@@ -82,10 +87,13 @@ func (s *Supervisor) Pid() int {
 }
 
 // FellBack reports whether the supervisor gave up waiting for health or
-// exhausted its restart budget. There is no fallback backend to switch to:
-// callers key the Worker readiness gate off Ready alone, so when FellBack is
-// true the gate simply stays permanently closed — jobs queue/spool until the
-// daemon is restarted and the sidecar comes up cleanly.
+// exhausted its restart budget. There is no fallback backend to switch to.
+// Like Ready, this is retained for the supervisor's own liveness/restart
+// bookkeeping, not as the Worker's per-job gate — that gate is model warmth
+// (see Ready's doc comment). A fallen-back or dead sidecar closes the warmth
+// gate indirectly: with no process serving /metrics, client.WorkerReady can't
+// reach it and reports not-warm, so jobs queue/spool until the daemon is
+// restarted and the sidecar comes up cleanly.
 func (s *Supervisor) FellBack() bool { return s.fellBack.Load() }
 
 // Start spawns the sidecar and supervises it. It blocks until ctx is Done.

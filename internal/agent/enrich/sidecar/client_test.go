@@ -144,3 +144,41 @@ func TestClassifyDoesNotSpinOnGenuineError(t *testing.T) {
 		t.Fatalf("500 is non-retryable; expected exactly 1 call, got %d", calls)
 	}
 }
+
+func TestWorkerReady(t *testing.T) {
+	cases := []struct {
+		name string
+		code int
+		body string
+		want bool
+	}{
+		{"ready", 200, `{"worker":{"state":"ready"}}`, true},
+		{"spawning", 200, `{"worker":{"state":"spawning"}}`, false},
+		{"missing", 200, `{"worker":{}}`, false},
+		{"malformed", 200, `not json`, false},
+		{"http error", 503, `{}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/metrics" {
+					t.Fatalf("unexpected path %q", r.URL.Path)
+				}
+				w.WriteHeader(tc.code)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			c := New(srv.URL, time.Second)
+			if got := c.WorkerReady(context.Background()); got != tc.want {
+				t.Fatalf("WorkerReady = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorkerReadyTransportError(t *testing.T) {
+	c := New("http://127.0.0.1:1", time.Second) // nothing listening
+	if c.WorkerReady(context.Background()) {
+		t.Fatal("WorkerReady should be false when the sidecar is unreachable")
+	}
+}
