@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/ncx-ai/keld-signal/internal/console"
 )
 
@@ -316,5 +318,34 @@ func TestServiceControlCommandsRegistered(t *testing.T) {
 		if !have[v] {
 			t.Errorf("keld-agent missing %q command", v)
 		}
+	}
+}
+
+func TestExecuteCmdPrintsErrorToStderr(t *testing.T) {
+	root := &cobra.Command{
+		Use:           "x",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE:          func(*cobra.Command, []string) error { return errors.New("boom") },
+	}
+	var buf bytes.Buffer
+	code := executeCmd(root, &buf)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(buf.String(), "boom") {
+		t.Fatalf("stderr = %q, want to contain \"boom\"", buf.String())
+	}
+}
+
+func TestExecuteCmdSuccessIsSilent(t *testing.T) {
+	root := &cobra.Command{Use: "x", RunE: func(*cobra.Command, []string) error { return nil }}
+	var buf bytes.Buffer
+	code := executeCmd(root, &buf)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	if buf.String() != "" {
+		t.Fatalf("stderr = %q, want empty", buf.String())
 	}
 }

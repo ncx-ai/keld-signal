@@ -4,6 +4,7 @@ package agentcli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -262,10 +263,18 @@ func serviceControlCmds() []*cobra.Command {
 	return cmds
 }
 
-// Execute runs the keld-agent CLI and returns an exit code.
-func Execute() int {
-	if err := NewRootCmd().Execute(); err != nil {
+// executeCmd runs root and, on error, prints it to stderr (once) before
+// returning exit code 1. The root command keeps SilenceErrors/SilenceUsage so
+// cobra prints neither the error nor usage; printing here is the single place a
+// returned error becomes visible. Without this, a daemon.Run failure (e.g. an
+// unconfigured agent) exits 1 with completely empty output.
+func executeCmd(root *cobra.Command, stderr io.Writer) int {
+	if err := root.Execute(); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
 }
+
+// Execute runs the keld-agent CLI and returns an exit code.
+func Execute() int { return executeCmd(NewRootCmd(), os.Stderr) }
