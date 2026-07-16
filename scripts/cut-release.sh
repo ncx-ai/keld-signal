@@ -40,7 +40,7 @@ command -v git >/dev/null 2>&1 || die "git not found"
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
 cd "$ROOT"
 
-echo "cut-release: fetching tags from $REMOTE…"
+echo "cut-release: fetching tags from ${REMOTE}…"
 git fetch --tags --quiet "$REMOTE" || die "git fetch failed"
 
 # --- Guardrails ------------------------------------------------------------
