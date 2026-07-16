@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
   <title>Keld</title>
-  <options customize="never" require-scripts="true"/>
+  <!-- hostArchitectures MUST be set: a distribution pkg that omits it defaults to x86_64, so
+       Installer.app demands Rosetta on Apple Silicon even though every payload binary is arm64.
+       We ship mac arm64-only (macos-14 build); use arm64,x86_64 if a universal pkg is ever made. -->
+  <options customize="never" require-scripts="true" hostArchitectures="arm64"/>
   <readme file="SECURITY-OVERVIEW.txt"/>
   <license file="EULA.txt"/>
   <choices-outline>
