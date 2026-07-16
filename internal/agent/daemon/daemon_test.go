@@ -73,7 +73,7 @@ func sampleInlineJob(id string) queue.Job {
 func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
@@ -116,7 +116,7 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 func TestWorkerAlwaysReadyGatePublishesImmediately(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ML-OFF-1",
@@ -154,7 +154,7 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, neverReady, nil, nil)
+		Worker(context.Background(), q, enrichtest.NewFake(), fs, "test@keld.co", func() bool { return false }, neverReady, nil, nil, nil)
 		close(done)
 	}()
 
@@ -257,7 +257,7 @@ func TestWorkerWithSidecarStubPublishes(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, client, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil, nil)
+	go Worker(context.Background(), q, client, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "SC-1",
@@ -355,7 +355,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, router, fs, "provision-test@keld.co", func() bool { return false }, gate, nil, nil)
+	go Worker(context.Background(), q, router, fs, "provision-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "PROV-1",
@@ -412,7 +412,7 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, model, fs, "fail-test@keld.co", func() bool { return false }, gate, nil, nil)
+	go Worker(context.Background(), q, model, fs, "fail-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "FAIL-1",
@@ -482,7 +482,7 @@ func TestWorkerTimesOutAndRespools(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil)
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil, nil)
 
 	q.Offer(queue.Job{Source: "claude_code", Scheme: "trace", ID: "SLOW-1", Inline: "write code"})
 
@@ -518,7 +518,7 @@ func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil)
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil, nil)
 
 	// Deliver once, then mirror the daemon's sweep: drain each re-spooled pointer
 	// and re-deliver it. With max=2, attempt 1 re-spools and attempt 2 exhausts
@@ -647,7 +647,7 @@ func TestSidecarUnavailableClosedGateNeverPublishes(t *testing.T) {
 	// opens.
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, model, fs, "unavailable-test@keld.co", func() bool { return false }, gate, nil, nil)
+	go Worker(context.Background(), q, model, fs, "unavailable-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "UNAVAIL-1",
@@ -818,7 +818,7 @@ func TestWorkerWaitsForWarmThenPublishes(t *testing.T) {
 	fs := &fakeSender{}
 	q.Offer(sampleInlineJob("warm-wait-1")) // helper used by existing tests
 	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "t@keld.co",
-		func() bool { return false }, warm.Load, nil, nil)
+		func() bool { return false }, warm.Load, nil, nil, nil)
 
 	time.Sleep(50 * time.Millisecond) // job pulled, waiting for warm
 	if fs.count() != 0 {
@@ -842,7 +842,7 @@ func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
 	fs := &fakeSender{}
 	q.Offer(sampleInlineJob("never-warm-1"))
 	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "t@keld.co",
-		func() bool { return false }, func() bool { return false }, nil, nil)
+		func() bool { return false }, func() bool { return false }, nil, nil, nil)
 
 	// Give it time to defer: the job is deferred exactly once (re-spooled to
 	// disk), then the loop pulls from the now-empty queue and blocks until
@@ -860,4 +860,73 @@ func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
 	if n := spoolCount(t, home); n == 0 {
 		t.Fatal("expected the deferred job to be re-spooled, not lost")
 	}
+}
+
+// Cold model: Worker must call warmup (which loads the model → ready flips
+// true), then process and publish, with the retry ledger untouched.
+func TestWorkerWarmupLoadsThenPublishes(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("KELD_ENRICH_WARM_WAIT", "5s")
+	var warm atomic.Bool // starts false (cold)
+	var warmupCalls atomic.Int32
+	warmup := func(context.Context) error { warmupCalls.Add(1); warm.Store(true); return nil }
+
+	q := queue.New(4)
+	fs := &fakeSender{}
+	q.Offer(sampleInlineJob("warmup-1"))
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "t@keld.co",
+		func() bool { return false }, warm.Load, warmup, nil, nil)
+
+	waitFor(t, time.Second, func() bool { return fs.count() == 1 })
+	if warmupCalls.Load() != 1 {
+		t.Fatalf("warmup calls = %d, want 1", warmupCalls.Load())
+	}
+	q.Close()
+}
+
+// Warmup never makes it ready (returns error): job defers (re-spool) WITHOUT
+// consuming the retry budget — never quarantined, even at a low max-attempts.
+func TestWorkerWarmupTimesOutDefersNeverQuarantines(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+	t.Setenv("KELD_ENRICH_WARM_WAIT", "20ms")
+	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "2")
+	warmup := func(context.Context) error { return context.DeadlineExceeded }
+
+	q := queue.New(4)
+	fs := &fakeSender{}
+	q.Offer(sampleInlineJob("warmup-fail-1"))
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "t@keld.co",
+		func() bool { return false }, func() bool { return false }, warmup, nil, nil)
+
+	time.Sleep(150 * time.Millisecond)
+	q.Close()
+	if fs.count() != 0 {
+		t.Fatalf("nothing should publish; got %d", fs.count())
+	}
+	if n := quarantineCount(t, home); n != 0 {
+		t.Fatalf("model-not-ready must never quarantine; found %d", n)
+	}
+	if n := spoolCount(t, home); n == 0 {
+		t.Fatal("expected the deferred job to be re-spooled")
+	}
+}
+
+// Already warm: warmup must NOT be called.
+func TestWorkerSkipsWarmupWhenReady(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	var warmupCalls atomic.Int32
+	warmup := func(context.Context) error { warmupCalls.Add(1); return nil }
+
+	q := queue.New(4)
+	fs := &fakeSender{}
+	q.Offer(sampleInlineJob("already-warm-1"))
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "t@keld.co",
+		func() bool { return false }, func() bool { return true }, warmup, nil, nil)
+
+	waitFor(t, time.Second, func() bool { return fs.count() == 1 })
+	if warmupCalls.Load() != 0 {
+		t.Fatalf("warmup must not be called when already ready; calls=%d", warmupCalls.Load())
+	}
+	q.Close()
 }

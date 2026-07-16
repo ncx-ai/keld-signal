@@ -2,8 +2,10 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -180,5 +182,46 @@ func TestWorkerReadyTransportError(t *testing.T) {
 	c := New("http://127.0.0.1:1", time.Second) // nothing listening
 	if c.WorkerReady(context.Background()) {
 		t.Fatal("WorkerReady should be false when the sidecar is unreachable")
+	}
+}
+
+func TestWarmupWaitsThrough503ThenSucceeds(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/classify" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		// First two calls: still loading (503). Then 200.
+		if calls.Add(1) <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":{"task_type":[{"label":"other","confidence":1.0}]}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, time.Second)
+	if err := c.Warmup(context.Background()); err != nil {
+		t.Fatalf("Warmup returned error: %v", err)
+	}
+	if calls.Load() < 3 {
+		t.Fatalf("expected retries through 503; calls=%d", calls.Load())
+	}
+}
+
+func TestWarmupReturnsCtxErrOnTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable) // never becomes ready
+	}))
+	defer srv.Close()
+	c := New(srv.URL, time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := c.Warmup(ctx)
+	if err == nil {
+		t.Fatal("expected an error when the model never becomes ready before ctx timeout")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected ctx.Err() (context.DeadlineExceeded), got %v", err)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -145,6 +146,26 @@ func (c *Client) Classify(text string, tasks map[string][]string) map[string][]e
 		return nil
 	}
 	return r.Results
+}
+
+// Warmup triggers and awaits the sidecar's on-demand model load by issuing a
+// trivial /classify bound to ctx. The sidecar loads the model only when it
+// receives an inference request, so this is the request that starts the load;
+// post() waits+retries through the 503/reload window until the sidecar answers.
+// Returns nil once the model is resident, ctx.Err() if ctx ends first, or a
+// generic error on a non-retryable failure. The result is discarded.
+func (c *Client) Warmup(ctx context.Context) error {
+	var r extractResp
+	if c.WithContext(ctx).post("/classify", struct {
+		Text  string              `json:"text"`
+		Tasks map[string][]string `json:"tasks"`
+	}{"warmup", map[string][]string{"task_type": {"other"}}}, &r) {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errors.New("sidecar warmup failed")
 }
 
 func (c *Client) Healthy(ctx context.Context) bool {

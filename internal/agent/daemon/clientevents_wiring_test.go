@@ -119,7 +119,7 @@ func TestWorkerEmitsJobQuarantinedOnExhaustion(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, emitter, nil)
+	go Worker(context.Background(), q, bm, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, emitter, nil)
 
 	job := queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "QUAR-1",
@@ -128,20 +128,37 @@ func TestWorkerEmitsJobQuarantinedOnExhaustion(t *testing.T) {
 	}
 	q.Offer(job)
 
-	badFile := filepath.Join(os.Getenv("KELD_HOME"), "spool", "bad", "QUAR-1.json")
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(badFile); err == nil {
+	// Wait for the job.quarantined client event itself rather than for the
+	// quarantine file's existence: the Worker writes the badFile via
+	// spool.Quarantine and only emits job.quarantined on the following
+	// statement (see daemon.go's quarantine block), so keying the done
+	// signal off the file let this test observe the file before the event
+	// landed and drain too early, catching only job.retry_exhausted.
+	//
+	// Drain() empties the ring on every call, so accumulate each batch as we
+	// poll -- otherwise an earlier job.retry_exhausted (or job.quarantined
+	// itself) drained on one poll iteration would be lost by the next.
+	var events []clientevents.Event
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		events = append(events, emitter.Drain()...)
+		if findEvent(events, "job.quarantined") != nil {
 			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job.quarantined event not emitted within deadline, got %+v", events)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if _, err := os.Stat(badFile); err != nil {
-		t.Fatalf("job was not quarantined within the deadline: %v", err)
-	}
 	q.Close()
 
-	events := emitter.Drain()
+	// The event is only emitted after spool.Quarantine's write succeeds, so
+	// the badFile must exist by now too.
+	badFile := filepath.Join(os.Getenv("KELD_HOME"), "spool", "bad", "QUAR-1.json")
+	if _, err := os.Stat(badFile); err != nil {
+		t.Fatalf("expected the job to have been quarantined to disk, got: %v", err)
+	}
+
 	if findEvent(events, "job.retry_exhausted") == nil {
 		t.Fatalf("expected a job.retry_exhausted event, got %+v", events)
 	}

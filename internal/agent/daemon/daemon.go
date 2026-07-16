@@ -52,35 +52,52 @@ type Sender interface {
 // Worker consumes jobs, resolves text, enriches, and publishes. It is
 // panic-isolated per job so one bad prompt never kills the daemon.
 // ready is a readiness gate: Worker blocks before processing each job until
-// ready() returns true. The block exits promptly when the queue is closed.
+// ready() returns true. When ready() is false, warmup (if non-nil) is invoked
+// to actively trigger the model load (e.g. the sidecar's on-demand load on
+// first inference) instead of passively waiting for something else to warm
+// it — the model never warms itself if nothing ever calls it. warmup is bound
+// by warmWait and runs OUTSIDE the job's inference deadline; a nil warmup
+// falls back to the legacy bounded passive wait (waitWarm), which the block
+// exits promptly if the queue is closed while waiting.
 //
 // ctx is the daemon-lifetime context; each job runs under a child context that
 // is cancelled on timeout so a hung/slow enrichment's in-flight sidecar calls
 // are reclaimed (not left retrying forever — the death-spiral root cause).
-func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, emitter *clientevents.Emitter, ra *reauther) {
+func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, warmup func(context.Context) error, emitter *clientevents.Emitter, ra *reauther) {
 	ledger := newRetryLedger()
 	for {
 		j, ok := q.Next()
 		if !ok {
 			return
 		}
-		// Wait until the model is resident (warm) before starting the job's
-		// deadline, so model-load time is never counted against it. Bound the
-		// wait: if warmth doesn't arrive in time, DEFER the job (re-spool)
-		// WITHOUT consuming its retry budget — "not ready yet" is not
-		// "un-enrichable", so a cold start must never drive quarantine.
-		ww := warmWait()
-		warm, closed := waitWarm(ready, ww, q.Done())
-		if closed {
-			return // queue closed during the wait; discard in-hand job and exit.
-		}
-		if !warm {
-			if err := spool.Write(pointerFromJob(j)); err != nil {
-				log.Printf("keld-agent: job %s deferred (model not ready) and re-spool failed: %v", j.Key(), err)
+		if !ready() {
+			ww := warmWait()
+			warmedInTime := false
+			if warmup != nil {
+				// Trigger the sidecar's on-demand model load and wait for it,
+				// bounded by ww and OUTSIDE the job's inference deadline.
+				wctx, wcancel := context.WithTimeout(ctx, ww)
+				err := warmup(wctx)
+				wcancel()
+				warmedInTime = err == nil
 			} else {
-				log.Printf("keld-agent: job %s deferred — model not ready after %s, re-spooled", j.Key(), ww)
+				// No warmer wired (e.g. tests): bounded passive wait.
+				warm, closed := waitWarm(ready, ww, q.Done())
+				if closed {
+					return // queue closed during the wait; discard in-hand job and exit.
+				}
+				warmedInTime = warm
 			}
-			continue
+			if !warmedInTime {
+				// Model not resident in time — DEFER (re-spool) WITHOUT consuming
+				// the retry budget; "not ready yet" is never "un-enrichable".
+				if err := spool.Write(pointerFromJob(j)); err != nil {
+					log.Printf("keld-agent: job %s deferred (model not ready) and re-spool failed: %v", j.Key(), err)
+				} else {
+					log.Printf("keld-agent: job %s deferred — model not ready after %s, re-spooled", j.Key(), ww)
+				}
+				continue
+			}
 		}
 		to := jobTimeout()
 		// Per-job context: cancelling it aborts the job's in-flight sidecar calls
@@ -186,6 +203,17 @@ func withJobCtx(m enrich.Model, ctx context.Context) enrich.Model {
 	return m
 }
 
+// warmupFunc returns a warmup trigger bound to the sidecar client, or nil when
+// m is not the sidecar client (nothing to warm — e.g. a test fake or the eval
+// model). The daemon passes this to Worker as its warmup seam.
+func warmupFunc(m enrich.Model) func(context.Context) error {
+	c, ok := m.(*sidecar.Client)
+	if !ok {
+		return nil
+	}
+	return c.Warmup
+}
+
 // jobTimeout bounds how long the worker spends on one enrichment before it
 // re-spools and moves on. Default 30s (covers a model reload ~15s + the ~7-pass
 // enrichment); override with KELD_ENRICH_JOB_TIMEOUT (Go duration).
@@ -200,7 +228,7 @@ func jobTimeout() time.Duration {
 
 // warmWait bounds how long the worker waits for the sidecar model to become
 // resident before deferring a job (re-spool, no retry attempt consumed).
-// Default 90s (a cold model load plus headroom); override with
+// Default 120s (a cold model load plus headroom); override with
 // KELD_ENRICH_WARM_WAIT (Go duration).
 func warmWait() time.Duration {
 	if v := os.Getenv("KELD_ENRICH_WARM_WAIT"); v != "" {
@@ -208,7 +236,7 @@ func warmWait() time.Duration {
 			return d
 		}
 	}
-	return 90 * time.Second
+	return 120 * time.Second
 }
 
 // waitWarm blocks until ready() is true (warm=true), bound elapses
@@ -556,7 +584,7 @@ func Run(ctx context.Context) error {
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
-		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, emitter, ra)
+		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, warmupFunc(model), emitter, ra)
 	}
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
@@ -695,6 +723,10 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 		log.Printf("keld-agent: no sidecar binary found; enrichment jobs will queue/spool until one is installed")
 		return sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
 	}
+
+	// Reap any orphaned sidecar from a prior daemon before spawning ours, so a
+	// SIGKILL'd/crashed/reinstalled predecessor's child can't accumulate.
+	reapStaleSidecars(binPath)
 
 	// Pick an ephemeral port for the sidecar.
 	scLn, err := net.Listen("tcp", "127.0.0.1:0")
