@@ -3,6 +3,11 @@ set -e
 # Payload staged to /usr/local/keld; symlink the CLIs onto PATH, keep the sidecar
 # and onboard.command beside keld-agent so sidecarBinPath()/the script resolve them.
 PREFIX="/usr/local/keld"
+# /usr/local/bin isn't guaranteed to exist — on an Apple-Silicon Mac with no
+# Homebrew in /usr/local (Homebrew lives in /opt/homebrew), it's often absent.
+# Under `set -e` a failing `ln` into a missing dir aborts the whole postinstall
+# and fails the install, so ensure the target dir exists first.
+mkdir -p /usr/local/bin
 ln -sf "$PREFIX/keld" /usr/local/bin/keld
 ln -sf "$PREFIX/keld-agent" /usr/local/bin/keld-agent
 
