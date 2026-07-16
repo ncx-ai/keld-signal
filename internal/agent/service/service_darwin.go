@@ -47,18 +47,23 @@ func Uninstall() error {
 }
 
 // syncPlist ensures the plist at path equals want. If it already matches,
-// nothing happens (returns false). Otherwise — differing, missing, or
-// unreadable — it creates the plist and log directories, writes want, and
-// reloads the job via reload (returns true). write/reload are seams; production
-// wires os.WriteFile and reloadJob (a launchctl bootout+bootstrap).
+// nothing happens beyond ensuring logDir exists (returns false). Otherwise —
+// differing, missing, or unreadable — it also creates the plist directory,
+// writes want, and reloads the job via reload (returns true). logDir is
+// ensured unconditionally, even on the already-current no-op path: launchd
+// does not create the parent directory of StandardErrorPath/StandardOutPath,
+// so if it were missing the job would fail to spawn silently. write/reload
+// are seams; production wires writeFile (an os.WriteFile adapter) and
+// reloadJob (a launchctl bootout+bootstrap).
 func syncPlist(path, logDir, want string, write func(string, []byte) error, reload func() error) (bool, error) {
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return false, err
+	}
 	if cur, err := os.ReadFile(path); err == nil && string(cur) == want {
 		return false, nil
 	}
-	for _, d := range []string{filepath.Dir(path), logDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return false, err
-		}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, err
 	}
 	if err := write(path, []byte(want)); err != nil {
 		return false, err
