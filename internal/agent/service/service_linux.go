@@ -15,7 +15,7 @@ func unitPath() string {
 }
 
 func Install() error {
-	exe, err := os.Executable()
+	exe, err := agentExecPath()
 	if err != nil {
 		return err
 	}
