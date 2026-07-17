@@ -3,7 +3,6 @@
 package service
 
 import (
-	"os"
 	"os/exec"
 )
 
@@ -11,7 +10,7 @@ import (
 const taskName = "KeldAgent"
 
 func Install() error {
-	exe, err := os.Executable()
+	exe, err := agentExecPath()
 	if err != nil {
 		return err
 	}
