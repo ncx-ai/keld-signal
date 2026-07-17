@@ -119,14 +119,44 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		approveds = append(approveds, approved{adapter, plan})
 	}
 
-	say(fmt.Sprintf("  ✓ %-26s %s", "Hook", "~/.keld/hook.json"))
-
 	if opts.DryRun {
+		say(fmt.Sprintf("  ✓ %-26s %s", "Hook", "~/.keld/hook.json"))
 		return config.LoadManifest()
 	}
+
+	// newManifest writes ~/.keld/hook.json and returns a manifest seeded with
+	// endpoint/actor/hook (tools are filled in by the caller). The hook config
+	// is what the daemon reads, so it must be persisted whether or not any tool
+	// needed changing — otherwise a fully "already configured" tool set returns
+	// with a missing hook.json that setup can never repair, and the daemon stays
+	// stuck "not configured". The ✓ Hook line prints only after a successful
+	// write, so it can no longer claim success while writing nothing.
+	newManifest := func() (*config.Manifest, error) {
+		if err := config.SaveHookConfig(ob.Endpoint, ob.IngestToken); err != nil {
+			return nil, err
+		}
+		say(fmt.Sprintf("  ✓ %-26s %s", "Hook", "~/.keld/hook.json"))
+		endpoint := ob.Endpoint
+		actor := ob.Actor
+		return &config.Manifest{
+			Endpoint: &endpoint,
+			Actor:    &actor,
+			Tools:    map[string]config.ToolManifest{},
+			Hook:     &config.HookRecord{Version: version.CLI},
+		}, nil
+	}
+
 	if len(approveds) == 0 {
-		// The per-tool "already configured" / "skipped (conflict)" lines above
-		// already convey the outcome; no separate "Nothing to apply." summary.
+		// No tool changes, but still persist hook.json + manifest so the daemon
+		// can start. The per-tool "already configured" / "skipped (conflict)"
+		// lines above already convey the outcome; no "Nothing to apply." summary.
+		manifest, err := newManifest()
+		if err != nil {
+			return nil, err
+		}
+		if err := manifest.Save(); err != nil {
+			return nil, err
+		}
 		emit(SetupEvent{Kind: "done", Configured: 0, Endpoint: ob.Endpoint})
 		return config.LoadManifest()
 	}
@@ -135,15 +165,8 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		return config.LoadManifest()
 	}
 
-	endpoint := ob.Endpoint
-	actor := ob.Actor
-	manifest := &config.Manifest{
-		Endpoint: &endpoint,
-		Actor:    &actor,
-		Tools:    map[string]config.ToolManifest{},
-	}
-	manifest.Hook = &config.HookRecord{Version: version.CLI}
-	if err := config.SaveHookConfig(ob.Endpoint, ob.IngestToken); err != nil {
+	manifest, err := newManifest()
+	if err != nil {
 		return nil, err
 	}
 

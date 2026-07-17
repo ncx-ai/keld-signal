@@ -188,6 +188,43 @@ func TestRunSetupNormalApply(t *testing.T) {
 	}
 }
 
+// Regression: when every detected tool is already configured (no changes to
+// apply), setup used to return before writing ~/.keld/hook.json, leaving the
+// daemon permanently "not configured". hook.json + manifest must be written
+// regardless of whether any tool config changed.
+func TestRunSetupWritesHookWhenAllToolsAlreadyConfigured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+	dir := t.TempDir()
+
+	nochange := &fakeAdapter{
+		name: "faketool",
+		plan: tools.Plan{
+			Name: "faketool", ConfigPath: filepath.Join(dir, "a.json"),
+			AfterText: "", Managed: map[string]any{}, Changed: false,
+		},
+	}
+
+	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
+	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken, Actor: ob.Actor}
+	opts := SetupOpts{Yes: true, Confirm: func(string) bool { return true }}
+
+	m, err := runSetup([]tools.Adapter{nochange}, p, &api.Client{}, ob, opts)
+	if err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+
+	if !fileExists(filepath.Join(home, "hook.json")) {
+		t.Fatalf("hook.json not written when all tools already configured")
+	}
+	if !fileExists(filepath.Join(home, "manifest.json")) {
+		t.Fatalf("manifest.json not written when all tools already configured")
+	}
+	if m == nil || m.Endpoint == nil || *m.Endpoint != ob.Endpoint {
+		t.Fatalf("manifest endpoint = %+v, want %s", m, ob.Endpoint)
+	}
+}
+
 func TestRunSetupConflictSkip(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	dir := t.TempDir()
