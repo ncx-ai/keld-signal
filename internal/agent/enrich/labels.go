@@ -8,8 +8,10 @@ package enrich
 // same vocab) rather than a vocab change — see v3, which promoted the A0/A4
 // enrichment fixes to default, and v4, which promoted A6 (task_type classified
 // against short readable label descriptions instead of the bare id strings) —
-// both without altering any label text or id.
-const SchemaVersion = 4
+// both without altering any label text or id — and v5, which ADDS the emitted
+// speech_act facet (a genuine contract change: a new Profile field, not just a
+// derivation change).
+const SchemaVersion = 5
 
 // TaskTypes is the canonical job-classification vocabulary (ported from
 // inference-enrichment).
@@ -22,6 +24,17 @@ var TaskTypes = []string{
 var Domains = []string{
 	"software", "legal", "medical", "finance", "science",
 	"business", "education", "creative", "general",
+}
+
+// SpeechActDefs — the speech_act facet (what KIND of utterance the current
+// prompt is), classified against ctx.Text only. Ids are stable (Atlas contract);
+// the readable Text is bakeoff-tuned (short, positive, discriminative — no
+// negation). See docs/superpowers/specs/2026-07-17-speech-act-facet-design.md.
+var SpeechActDefs = []LabelDef{
+	{"command", "a command or instruction to do something"},
+	{"question", "a question asking for information or an answer"},
+	{"statement", "a statement or observation describing something"},
+	{"fragment", "a short follow-up, acknowledgement, or code snippet"},
 }
 
 // Sensitivity is the canonical sensitivity-level vocabulary.

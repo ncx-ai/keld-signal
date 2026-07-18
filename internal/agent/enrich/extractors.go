@@ -23,7 +23,7 @@ func Wave1() []Extractor {
 		TaskTypeExtractor{}, SensitivityExtractor{}, DomainEntitiesExtractor{},
 		passExtractor{Pass{Name: "activity_type", Labels: Activities}},
 		passExtractor{Pass{Name: "personal", Labels: Personal}},
-		funcGuessExtractor{},
+		funcGuessExtractor{}, SpeechActExtractor{},
 	}
 }
 

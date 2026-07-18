@@ -86,6 +86,8 @@ func Run(text, source string, meta Meta, m Model) Profile {
 		Activity:          labeledFrom(ctx.Get("activity_type"), "activity_type", "activity_type"),
 		Personal:          labeledFrom(ctx.Get("personal"), "personal", "personal"),
 		FunctionGuess:     labeledFrom(ctx.Get("function_guess"), "function_guess", "function_guess"),
+		SpeechAct:         labeledFrom(ctx.Get("speech_act"), "speech_act", "speech_act"),
+		SpeechActAlt:      altsNamed(ctx.Get("speech_act"), "speech_act_alt"),
 		Subcategory:       labeledFrom(ctx.Get("subcategory"), "subcategory", "subcategory"),
 		SubcategoryAlt:    altsNamed(ctx.Get("subcategory"), "subcategory_alt"),
 		PipelineStatus:    status,

@@ -17,10 +17,10 @@ type Pass struct {
 	LabelsByCond map[string][]LabelDef
 }
 
-// classifyPass runs one classification over readable label text and maps the
-// winning readable label back to its dotted id. Returns the top Labeled (id) and
-// ranked alternates (ids). Uses the Meta preamble so repo/tool inform the guess.
-func classifyPass(ctx *JobContext, name string, labels []LabelDef) (Labeled, []Labeled) {
+// classifyLabeled runs one classification over readable label text on the GIVEN
+// text and maps the winning readable label back to its dotted id. Returns the
+// top Labeled (id) and ranked alternates (ids).
+func classifyLabeled(ctx *JobContext, name string, labels []LabelDef, text string) (Labeled, []Labeled) {
 	if len(labels) == 0 {
 		return Labeled{}, nil
 	}
@@ -30,7 +30,7 @@ func classifyPass(ctx *JobContext, name string, labels []LabelDef) (Labeled, []L
 		texts[i] = l.Text
 		idByText[l.Text] = l.ID
 	}
-	res := ctx.Model.Classify(ctx.Meta.Preamble()+ctx.Text, map[string][]string{name: texts})
+	res := ctx.Model.Classify(text, map[string][]string{name: texts})
 	ranked := res[name]
 	if len(ranked) == 0 {
 		return Labeled{Value: labels[0].ID, Confidence: 0}, nil
@@ -40,6 +40,12 @@ func classifyPass(ctx *JobContext, name string, labels []LabelDef) (Labeled, []L
 		out = append(out, Labeled{Value: idByText[r.Label], Confidence: r.Confidence, Producer: versioned(name)})
 	}
 	return out[0], out[1:]
+}
+
+// classifyPass classifies over Meta.Preamble()+ctx.Text (so repo/tool inform the
+// guess). Facets needing raw text only (e.g. speech_act) call classifyLabeled.
+func classifyPass(ctx *JobContext, name string, labels []LabelDef) (Labeled, []Labeled) {
+	return classifyLabeled(ctx, name, labels, ctx.Meta.Preamble()+ctx.Text)
 }
 
 // passExtractor adapts a plain (non-conditioned) Pass to the Extractor interface.

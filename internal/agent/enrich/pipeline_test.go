@@ -21,8 +21,8 @@ func TestRunProducesEnrichedProfile(t *testing.T) {
 	if p.SchemaVersion != enrich.SchemaVersion {
 		t.Fatalf("schema version not set")
 	}
-	if len(p.ExtractorVersions) != 7 {
-		t.Fatalf("want 7 extractor versions, got %d", len(p.ExtractorVersions))
+	if len(p.ExtractorVersions) != 8 {
+		t.Fatalf("want 8 extractor versions, got %d", len(p.ExtractorVersions))
 	}
 	if p.EnrichedAt.IsZero() {
 		t.Fatal("EnrichedAt must be set")

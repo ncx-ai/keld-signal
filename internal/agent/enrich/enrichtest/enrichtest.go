@@ -70,6 +70,19 @@ func NewFake() enrich.Model {
 			taskKW[d.Text] = kws
 		}
 	}
+	// speech_act keyword priors keyed by canonical id, aliased to the A6-style
+	// description texts so this double works for both id and description label sets.
+	speechKW := map[string][]string{
+		"command":   {"add", "write", "fix", "implement", "create", "refactor", "build", "make", "set up", "update"},
+		"question":  {"?", "how", "why", "what", "should", "which", "can you", "do i"},
+		"statement": {"is broken", "keeps", "fails", "failing", "doubled", "the build", "there is", "we have"},
+		"fragment":  {"ok", "ship it", "also", "same", "too", "and the", "ditto", "yes"},
+	}
+	for _, d := range enrich.SpeechActDefs {
+		if kws, ok := speechKW[d.ID]; ok && d.Text != d.ID {
+			speechKW[d.Text] = kws
+		}
+	}
 	return &fake{
 		patterns: map[string]*regexp.Regexp{
 			"email":       regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`),
@@ -80,7 +93,8 @@ func NewFake() enrich.Model {
 			"secret":      regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token)\s*[:=]\s*\S+`),
 		},
 		keywords: map[string]map[string][]string{
-			"task_type": taskKW,
+			"task_type":  taskKW,
+			"speech_act": speechKW,
 			"domain": {
 				"software":  {"go", "python", "code", "api", "function", "bug"},
 				"legal":     {"contract", "clause", "liability", "court"},
