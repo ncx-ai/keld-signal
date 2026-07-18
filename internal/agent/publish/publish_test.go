@@ -155,3 +155,39 @@ func TestBuildCarriesJobCategoryFields(t *testing.T) {
 		t.Errorf("SubcategoryAlt = %+v, want %+v", e.SubcategoryAlt, p.SubcategoryAlt)
 	}
 }
+
+func TestBuildCarriesSpeechActFields(t *testing.T) {
+	// Verify that SpeechAct and SpeechActAlt are properly mapped through to
+	// the wire payload and serialized with the correct JSON keys.
+	p := enrich.Profile{
+		SpeechAct:    enrich.Labeled{Value: "question", Confidence: 0.9},
+		SpeechActAlt: []enrich.Labeled{
+			{Value: "command", Confidence: 0.5},
+			{Value: "statement", Confidence: 0.3},
+		},
+	}
+	e := Build(queue.Job{Source: "claude_code"}, p, "a@b.test", false, 0, time.Now())
+
+	if e.SpeechAct != p.SpeechAct {
+		t.Errorf("SpeechAct = %+v, want %+v", e.SpeechAct, p.SpeechAct)
+	}
+	if len(e.SpeechActAlt) != 2 || e.SpeechActAlt[0] != p.SpeechActAlt[0] {
+		t.Errorf("SpeechActAlt = %+v, want %+v", e.SpeechActAlt, p.SpeechActAlt)
+	}
+
+	// Verify JSON serialization includes speech_act field with correct value.
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonStr := string(b)
+	if !strings.Contains(jsonStr, `"speech_act"`) {
+		t.Fatalf("JSON missing speech_act key: %s", b)
+	}
+	if !strings.Contains(jsonStr, `"question"`) {
+		t.Fatalf("JSON missing speech_act value 'question': %s", b)
+	}
+	if !strings.Contains(jsonStr, `"speech_act_alt"`) {
+		t.Fatalf("JSON missing speech_act_alt key: %s", b)
+	}
+}
