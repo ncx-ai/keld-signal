@@ -85,6 +85,23 @@ func NewFake() enrich.Model {
 			speechKW[d.Text] = kws
 		}
 	}
+	// domain keyword priors keyed by canonical id, aliased to the readable domain
+	// DESCRIPTIONS (the extractor now classifies domain against DomainDefs texts).
+	domainKW := map[string][]string{
+		"software":  {"go", "python", "code", "api", "function", "bug"},
+		"legal":     {"contract", "clause", "liability", "court"},
+		"medical":   {"patient", "diagnosis", "symptom", "clinical"},
+		"finance":   {"invoice", "revenue", "tax", "payment"},
+		"science":   {"experiment", "hypothesis", "molecule"},
+		"business":  {"customer", "market", "strategy"},
+		"education": {"student", "lesson", "homework"},
+		"creative":  {"poem", "story", "novel", "lyrics"},
+	}
+	for _, d := range enrich.DomainDefs {
+		if kws, ok := domainKW[d.ID]; ok && d.Text != d.ID {
+			domainKW[d.Text] = kws
+		}
+	}
 	return &fake{
 		patterns: map[string]*regexp.Regexp{
 			"email":       regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`),
@@ -97,16 +114,7 @@ func NewFake() enrich.Model {
 		keywords: map[string]map[string][]string{
 			"task_type":  taskKW,
 			"speech_act": speechKW,
-			"domain": {
-				"software":  {"go", "python", "code", "api", "function", "bug"},
-				"legal":     {"contract", "clause", "liability", "court"},
-				"medical":   {"patient", "diagnosis", "symptom", "clinical"},
-				"finance":   {"invoice", "revenue", "tax", "payment"},
-				"science":   {"experiment", "hypothesis", "molecule"},
-				"business":  {"customer", "market", "strategy"},
-				"education": {"student", "lesson", "homework"},
-				"creative":  {"poem", "story", "novel", "lyrics"},
-			},
+			"domain":     domainKW,
 		},
 	}
 }

@@ -30,6 +30,26 @@ var Domains = []string{
 	"business", "education", "creative", "general",
 }
 
+// DomainDefs pairs each canonical domain id with the readable phrase the model
+// scores against (the A6 treatment for domain — bare label strings left domain
+// at ~0.46 accuracy with business/software collapsing into a "general" magnet).
+// Bakeoff-selected (bare 0.462 → 0.654). `general` is NARROWED so it stops being
+// a magnet; `business` is the diffuse hard case (tuned to a mid point — broader
+// makes it a magnet, narrower makes it under-fire against software/finance). Ids
+// are stable (Atlas contract); do not re-tune the Text without re-running the
+// domain bakeoff.
+var DomainDefs = []LabelDef{
+	{"software", "software development, programming, code, DevOps, or IT systems"},
+	{"legal", "law, contracts, compliance, or regulation"},
+	{"medical", "health, clinical care, patients, or medicine"},
+	{"finance", "money, accounting, invoices, payments, or financial analysis"},
+	{"science", "scientific research, physics, chemistry, biology, or mathematics"},
+	{"business", "workplace, marketing, sales, customer, or general business tasks"},
+	{"education", "teaching, lessons, tutoring, or learning materials"},
+	{"creative", "fiction, stories, poetry, or creative writing"},
+	{"general", "a trivial everyday request (weather, time, jokes, personal chat)"},
+}
+
 // SpeechActDefs — the speech_act facet (what KIND of utterance the current
 // prompt is), classified against ctx.Text only. Ids are stable (Atlas contract);
 // the readable Text is bakeoff-selected (short, positive, discriminative — no

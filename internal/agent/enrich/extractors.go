@@ -146,10 +146,24 @@ func (DomainEntitiesExtractor) Name() string    { return "domain_entities" }
 func (DomainEntitiesExtractor) Version() string { return versioned("domain_entities") }
 
 func (e DomainEntitiesExtractor) Run(ctx *JobContext) (map[string]any, error) {
-	res := ctx.Model.Extract(ctx.Text, DomainEntityLabels, map[string][]string{"domain": Domains})
+	// Classify domain against readable label DESCRIPTIONS (A6-style), mapping the
+	// winning text back to its canonical id. Bare label strings left business and
+	// software collapsing into a "general" magnet.
+	texts := make([]string, len(DomainDefs))
+	idByText := make(map[string]string, len(DomainDefs))
+	for i, d := range DomainDefs {
+		texts[i] = d.Text
+		idByText[d.Text] = d.ID
+	}
+	res := ctx.Model.Extract(ctx.Text, DomainEntityLabels, map[string][]string{"domain": texts})
 	value, conf := "general", 0.0
 	if ranked := res.Results["domain"]; len(ranked) > 0 {
-		value, conf = ranked[0].Label, ranked[0].Confidence
+		if id, ok := idByText[ranked[0].Label]; ok {
+			value = id
+		} else {
+			value = ranked[0].Label // defensive: unmapped (e.g. a fake backend using bare ids)
+		}
+		conf = ranked[0].Confidence
 	}
 	return map[string]any{
 		"domain":   Labeled{Value: value, Confidence: conf, Producer: e.Version()},
