@@ -7,6 +7,29 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-07-18
+
+New enrichment facet **`speech_act`** — a subject-independent, structural signal:
+whether the current prompt is a `command`, `question`, `statement`, or `fragment`.
+
+### Added
+- **`speech_act` facet (schema v5).** A new Wave1 extractor classifies the current
+  prompt (its text only, not the session context) into `command` / `question` /
+  `statement` / `fragment`, emitted in the `Profile` and carried on the Atlas
+  enrichment payload. Label wording was bakeoff-selected (`command` = "a task to
+  carry out" recovers imperatives the model reads as *describing* a task). Measured
+  `speech_act` accuracy **0.731** (gold+confound); zero regression on every existing
+  facet. Groundwork for a future lever that uses speech-act to disambiguate
+  task_type/activity (e.g. a question → answer, not code).
+- **Adversarial `s1` eval class + speech-act metrics.** `keld-agent eval` gains
+  `speech_act` accuracy (per-mood) and `s1_downstream_baseline` (headroom for the
+  conditioning lever), backed by 20 "mood-is-the-trap" rows and `speech_act` labels
+  on the full gold set.
+
+### Changed
+- **SchemaVersion 4 → 5** — signals the new emitted `speech_act` field to Atlas
+  (existing label vocabularies unchanged).
+
 ## [0.5.0] — 2026-07-17
 
 Enrichment **classification quality** — the on-device model now labels a session
