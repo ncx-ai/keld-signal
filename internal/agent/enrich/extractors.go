@@ -2,6 +2,8 @@ package enrich
 
 import (
 	"fmt"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/creddetect"
 )
 
 // Extractor is one pipeline stage.
@@ -84,6 +86,20 @@ func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 			End:        ent.End,
 			Confidence: ent.Confidence,
 			Masked:     Mask(ent.Label, ent.Text), // Text intentionally dropped
+		})
+	}
+
+	// Deterministic credential layer (creddetect): union its spans and register an
+	// api_key entity, so sensitivityFromEntities elevates to "secrets" via the
+	// existing rule table WITHOUT overriding a higher-severity class (e.g. phi).
+	for _, c := range creddetect.Detect(ctx.Text) {
+		found["api_key"] = true
+		spans = append(spans, Entity{
+			Label:      "api_key",
+			Start:      c.Start,
+			End:        c.End,
+			Confidence: 1.0,
+			Masked:     Mask("api_key", ctx.Text[c.Start:c.End]),
 		})
 	}
 
