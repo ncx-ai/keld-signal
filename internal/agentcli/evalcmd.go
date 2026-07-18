@@ -14,7 +14,7 @@ import (
 // GLiNER2 sidecar and print a per-facet metric table. Local only; never
 // publishes. This is the measurement substrate for classification experiments.
 func newEvalCmd() *cobra.Command {
-	var withContext, withConfound, withCreds bool
+	var withContext, withConfound, withCreds, withCalibration bool
 	cmd := &cobra.Command{
 		Use:   "eval",
 		Short: "Score the enrichment pipeline against the gold/confound sets (local; uses the live sidecar).",
@@ -69,11 +69,28 @@ func newEvalCmd() *cobra.Command {
 				fmt.Fprintf(out, "  %-15s secret_recall=%.3f  secret_fpr=%.3f\n", "creds",
 					eval.SecretRecall(credRows, credPred), eval.SecretFPR(credRows, credPred))
 			}
+			if withCalibration {
+				classifier := []string{"task_type", "domain", "activity_type", "speech_act", "subcategory"}
+				ruleInfluenced := []string{"sensitivity", "function_guess"}
+				printCal := func(title string, facets []string) {
+					fmt.Fprintf(out, "\n== calibration: %s ==\n", title)
+					for _, f := range facets {
+						r := eval.Calibration(rows, pred, f, 10)
+						fmt.Fprintf(out, "  %-15s N=%-3d ECE=%.3f\n", r.Facet, r.N, r.ECE)
+						for _, b := range r.Bins {
+							fmt.Fprintf(out, "      [%.1f,%.1f) n=%-3d conf=%.3f acc=%.3f\n", b.Lo, b.Hi, b.Count, b.MeanConf, b.Accuracy)
+						}
+					}
+				}
+				printCal("classifier facets", classifier)
+				printCal("rule-influenced (confidence forced to 1.0 on some rows — reflects rules, not model)", ruleInfluenced)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&withContext, "context", false, "Feed session context (recent prompts, repo/branch) to the classifier.")
 	cmd.Flags().BoolVar(&withConfound, "confound", false, "Include the confound set and report leakage/false-eng metrics.")
 	cmd.Flags().BoolVar(&withCreds, "creds", false, "Score the credential-detection corpus and report secret_recall/secret_fpr.")
+	cmd.Flags().BoolVar(&withCalibration, "calibration", false, "Print per-facet accuracy stratified by GLiNER2 confidence (reliability bins + ECE).")
 	return cmd
 }
