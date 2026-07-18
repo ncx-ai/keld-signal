@@ -816,6 +816,54 @@ pkill -f keld-agent-exp 2>/dev/null; /usr/local/bin/keld-agent start 2>/dev/null
 
 ---
 
+### Task 6: Wire `speech_act` through the Atlas publish payload
+
+**Why:** `speech_act` is an *emitted* facet — Atlas must receive it. The wire
+payload is a separate `Enrichment` struct in `publish.go` that mirrors `Profile`
+facet-by-facet; without adding the field there, the classified value never leaves
+the daemon. (Discovered during Task 1 — the plan's original file list missed it.)
+
+**Files:**
+- Modify: `internal/agent/publish/publish.go` (`Enrichment` struct + the mapping in the payload constructor)
+
+**Interfaces:**
+- Consumes: `Profile.SpeechAct Labeled` + `Profile.SpeechActAlt []Labeled` (Task 1).
+- Produces: `Enrichment.SpeechAct` / `Enrichment.SpeechActAlt` on the wire as `speech_act` / `speech_act_alt`.
+
+- [ ] **Step 1: Add the wire fields** (`publish.go`, `Enrichment` struct, after the `FunctionGuess` field)
+
+```go
+	FunctionGuess     enrich.Labeled    `json:"function_guess"`
+	SpeechAct         enrich.Labeled    `json:"speech_act"`
+	SpeechActAlt      []enrich.Labeled  `json:"speech_act_alt,omitempty"`
+```
+
+- [ ] **Step 2: Map them in the payload constructor** (`publish.go`, after the `FunctionGuess: p.FunctionGuess,` line)
+
+```go
+		FunctionGuess:     p.FunctionGuess,
+		SpeechAct:         p.SpeechAct,
+		SpeechActAlt:      p.SpeechActAlt,
+```
+
+- [ ] **Step 3: Build + full test suite**
+
+Run: `export PATH="/opt/homebrew/bin:$PATH"; go build ./... && go test ./internal/agent/publish/...`
+Expected: PASS (no golden-payload test asserts the facet set today; if one does, update its expectation to include `speech_act`).
+
+- [ ] **Step 4: Verify the field actually serializes** (guards against a silently-dropped facet)
+
+Add a focused test to `internal/agent/publish/publish_test.go` (or create it) that builds a payload from a `Profile` with `SpeechAct: enrich.Labeled{Value:"question", Confidence: 0.9}`, marshals the `Enrichment` to JSON, and asserts the JSON contains `"speech_act"` with value `question`. Follow the file's existing construction helper if present.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/agent/publish/
+git commit -m "feat(publish): carry speech_act on the Atlas enrichment payload
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+```
+
 ## Notes for the implementer
 
 - The whole feature is behind no runtime flag by design — `speech_act` is a new *additive* emitted facet (blank/low-confidence is harmless to consumers), and there is no old behavior to preserve, so an escape hatch would be dead weight. (Contrast A4/A6, which *changed* an existing facet's derivation and thus shipped a disable switch.)
