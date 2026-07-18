@@ -35,6 +35,7 @@ type GoldRow struct {
 	Sensitivity   string   `json:"sensitivity"`
 	Activity      string   `json:"activity_type"`
 	FunctionGuess string   `json:"function_guess"`
+	SpeechAct     string   `json:"speech_act"`
 	Subcategory   string   `json:"subcategory"`
 }
 
@@ -66,6 +67,7 @@ type Pred struct {
 	Sensitivity   string
 	Activity      string
 	FunctionGuess string
+	SpeechAct     string
 	Subcategory   string
 }
 
@@ -108,6 +110,8 @@ func fieldOf(x any, f string) string {
 			return v.Activity
 		case "function_guess":
 			return v.FunctionGuess
+		case "speech_act":
+			return v.SpeechAct
 		case "subcategory":
 			return v.Subcategory
 		}
@@ -123,6 +127,8 @@ func fieldOf(x any, f string) string {
 			return v.Activity
 		case "function_guess":
 			return v.FunctionGuess
+		case "speech_act":
+			return v.SpeechAct
 		case "subcategory":
 			return v.Subcategory
 		}
@@ -195,6 +201,7 @@ func RunModel(m enrich.Model, gold []GoldRow) []Pred {
 			Sensitivity:   p.Sensitivity.Value,
 			Activity:      p.Activity.Value,
 			FunctionGuess: p.FunctionGuess.Value,
+			SpeechAct:     p.SpeechAct.Value,
 			Subcategory:   p.Subcategory.Value,
 		})
 	}
@@ -211,7 +218,7 @@ func RunModelWithContext(m enrich.Model, gold []GoldRow) []Pred {
 		p := enrich.Run(g.Text, src, g.Meta(src), m)
 		pred = append(pred, Pred{
 			TaskType: p.TaskType.Value, Domain: p.Domain.Value, Sensitivity: p.Sensitivity.Value,
-			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, Subcategory: p.Subcategory.Value,
+			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, SpeechAct: p.SpeechAct.Value, Subcategory: p.Subcategory.Value,
 		})
 	}
 	return pred
@@ -267,4 +274,61 @@ func FalseEngRate(gold []GoldRow, pred []Pred) float64 {
 		return 0
 	}
 	return float64(wrong) / float64(c2)
+}
+
+// S1DownstreamBaseline measures the CURRENT (unconditioned) downstream error on
+// the speech-act adversarial class s1: over s1 rows, the fraction of trapped
+// (row, facet) pairs where prediction != gold. The trapped facets are whichever
+// of task_type / activity_type the row sets a gold value for. This is the
+// headroom number the future speech-act conditioning lever must beat. 0 when no
+// s1 rows.
+func S1DownstreamBaseline(gold []GoldRow, pred []Pred) float64 {
+	n := len(gold)
+	if len(pred) < n {
+		n = len(pred)
+	}
+	var pairs, wrong int
+	for i := 0; i < n; i++ {
+		if gold[i].Class != "s1" {
+			continue
+		}
+		for _, f := range []string{"task_type", "activity_type"} {
+			g := fieldOf(gold[i], f)
+			if g == "" {
+				continue
+			}
+			pairs++
+			if g != fieldOf(pred[i], f) {
+				wrong++
+			}
+		}
+	}
+	if pairs == 0 {
+		return 0
+	}
+	return float64(wrong) / float64(pairs)
+}
+
+// SpeechActPerMood returns, per gold speech_act id, [correct, total] over rows
+// carrying a gold speech_act. Surfaces which moods (typically fragment/statement)
+// the facet handles worst.
+func SpeechActPerMood(gold []GoldRow, pred []Pred) map[string][2]int {
+	n := len(gold)
+	if len(pred) < n {
+		n = len(pred)
+	}
+	out := map[string][2]int{}
+	for i := 0; i < n; i++ {
+		g := gold[i].SpeechAct
+		if g == "" {
+			continue
+		}
+		c := out[g]
+		c[1]++
+		if pred[i].SpeechAct == g {
+			c[0]++
+		}
+		out[g] = c
+	}
+	return out
 }
