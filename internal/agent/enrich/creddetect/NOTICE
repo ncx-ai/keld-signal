@@ -1,0 +1,10 @@
+gitleaks.toml is vendored from the gitleaks project.
+
+Source:  https://raw.githubusercontent.com/gitleaks/gitleaks/v8.30.1/config/gitleaks.toml
+Project: https://github.com/gitleaks/gitleaks
+Tag:     v8.30.1
+License: MIT © gitleaks authors
+
+The file is included verbatim (unmodified) and is used only to compile a
+read-only set of Go RE2 credential-detection regexes at build/runtime. See
+rules.go for the parsing/compilation logic.
