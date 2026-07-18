@@ -28,13 +28,16 @@ var Domains = []string{
 
 // SpeechActDefs — the speech_act facet (what KIND of utterance the current
 // prompt is), classified against ctx.Text only. Ids are stable (Atlas contract);
-// the readable Text is bakeoff-tuned (short, positive, discriminative — no
-// negation). See docs/superpowers/specs/2026-07-17-speech-act-facet-design.md.
+// the readable Text is bakeoff-selected (short, positive, discriminative — no
+// negation). Notably command="a task to carry out" (NOT "a command/instruction"):
+// many imperative prompts ("Summarize this", "Translate…") read to the bi-encoder
+// as *describing a task*, so the task framing recovers command recall (35→44/65,
+// overall 0.624→0.731). See docs/superpowers/specs/2026-07-17-speech-act-facet-design.md.
 var SpeechActDefs = []LabelDef{
-	{"command", "a command or instruction to do something"},
-	{"question", "a question asking for information or an answer"},
-	{"statement", "a statement or observation describing something"},
-	{"fragment", "a short follow-up, acknowledgement, or code snippet"},
+	{"command", "a task to carry out"},
+	{"question", "a question asking for information"},
+	{"statement", "a statement describing a situation"},
+	{"fragment", "a short follow-up or acknowledgement"},
 }
 
 // Sensitivity is the canonical sensitivity-level vocabulary.
