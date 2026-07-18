@@ -1,30 +1,30 @@
-{"class":"c1","text":"Add a Postgres migration for the campaigns table and wire the SEO metadata fields into the CampaignSerializer.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Debug why the marketing-attribution worker drops events under load; the Kafka consumer lag keeps climbing.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Write unit tests for the invoice-reconciliation service that posts journal entries to the ledger API.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Refactor the patient-intake FHIR parser to stream records instead of loading the whole bundle into memory.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Set up CI to run the contract-clause classifier's eval suite on every PR and fail under 0.9 F1.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"The recruiting pipeline's candidate-dedupe query is O(n^2); rewrite it with a hashed join and add an index.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Implement retry-with-backoff in the payments webhook handler and make the PCI redaction happen before logging.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Trace the null-pointer in the sales-forecast dashboard's React chart component when a quota is unset.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Add a rate limiter to the ad-bidding service's gRPC endpoints and expose a Prometheus metric for rejected bids.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Fix the timezone bug in the payroll accrual calculator — hours near DST boundaries are off by one.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Write an integration test that mocks the Stripe webhook and asserts the subscription state machine transitions correctly.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"The legal-document embedding index OOMs on contracts over 200 pages; stream the chunks and cap batch memory.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Add cursor pagination to the clinical-trials results endpoint and cache the count query in Redis.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Refactor the email-campaign scheduler from a cron into a durable queue with idempotent, at-least-once sends.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Debug the CSV importer that mangles UTF-8 in exported customer-support ticket archives.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c1","text":"Add a feature flag and kill switch around the sales lead-scoring model rollout.","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c2","source":"generic","text":"Write three subject-line variants for our Q3 product-launch email campaign targeting mid-market SaaS buyers.","task_type":"other","domain":"business","function_guess":"mkt"}
+{"class":"c1","text":"Add a Postgres migration for the campaigns table and wire the SEO metadata fields into the CampaignSerializer.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Debug why the marketing-attribution worker drops events under load; the Kafka consumer lag keeps climbing.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Write unit tests for the invoice-reconciliation service that posts journal entries to the ledger API.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Refactor the patient-intake FHIR parser to stream records instead of loading the whole bundle into memory.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Set up CI to run the contract-clause classifier's eval suite on every PR and fail under 0.9 F1.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"The recruiting pipeline's candidate-dedupe query is O(n^2); rewrite it with a hashed join and add an index.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Implement retry-with-backoff in the payments webhook handler and make the PCI redaction happen before logging.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Trace the null-pointer in the sales-forecast dashboard's React chart component when a quota is unset.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Add a rate limiter to the ad-bidding service's gRPC endpoints and expose a Prometheus metric for rejected bids.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Fix the timezone bug in the payroll accrual calculator — hours near DST boundaries are off by one.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Write an integration test that mocks the Stripe webhook and asserts the subscription state machine transitions correctly.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"The legal-document embedding index OOMs on contracts over 200 pages; stream the chunks and cap batch memory.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Add cursor pagination to the clinical-trials results endpoint and cache the count query in Redis.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Refactor the email-campaign scheduler from a cron into a durable queue with idempotent, at-least-once sends.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Debug the CSV importer that mangles UTF-8 in exported customer-support ticket archives.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c1","text":"Add a feature flag and kill switch around the sales lead-scoring model rollout.","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c2","source":"generic","text":"Write three subject-line variants for our Q3 product-launch email campaign targeting mid-market SaaS buyers.","task_type":"text_generation","domain":"business","function_guess":"mkt"}
 {"class":"c2","source":"generic","text":"Draft the FY26 operating budget narrative explaining the variance in marketing spend vs plan.","task_type":"summarization","domain":"finance","function_guess":"fin"}
 {"class":"c2","source":"generic","text":"Review this SaaS master services agreement and flag any auto-renewal or liability-cap clauses we should push back on.","task_type":"reasoning","domain":"legal","function_guess":"legal"}
 {"class":"c2","source":"generic","text":"Summarize the candidate's interview feedback and recommend hire / no-hire with reasons.","task_type":"summarization","domain":"business","function_guess":"hr"}
-{"class":"c2","source":"generic","text":"Draft a cold outreach email sequence for enterprise prospects in the logistics vertical.","task_type":"other","domain":"business","function_guess":"sales"}
+{"class":"c2","source":"generic","text":"Draft a cold outreach email sequence for enterprise prospects in the logistics vertical.","task_type":"text_generation","domain":"business","function_guess":"sales"}
 {"class":"c2","source":"generic","text":"Reconcile the March credit-card statement against the expense ledger and flag any mismatches.","task_type":"reasoning","domain":"finance","function_guess":"fin"}
-{"class":"c3","text":"now do the same for the other endpoint","recent_prompts":["add request validation to the /users POST handler","write a table test for the validator"],"repo":"acme/api","branch":"feat/validation","project":"Acme API","task_type":"codegen","domain":"software","function_guess":"eng"}
-{"class":"c3","text":"ok ship it","recent_prompts":["fix the flaky migration test","rebase onto main and resolve the conflict in schema.sql"],"repo":"acme/api","branch":"feat/db","project":"Acme API","task_type":"codegen","domain":"software","function_guess":"eng"}
+{"class":"c3","text":"now do the same for the other endpoint","recent_prompts":["add request validation to the /users POST handler","write a table test for the validator"],"repo":"acme/api","branch":"feat/validation","project":"Acme API","task_type":"code_generation","domain":"software","function_guess":"eng"}
+{"class":"c3","text":"ok ship it","recent_prompts":["fix the flaky migration test","rebase onto main and resolve the conflict in schema.sql"],"repo":"acme/api","branch":"feat/db","project":"Acme API","task_type":"code_generation","domain":"software","function_guess":"eng"}
 {"class":"s1","source":"claude_code","text":"How would you add cursor pagination to this results endpoint?","speech_act":"question","task_type":"reasoning","activity_type":"retrieve","domain":"software"}
 {"class":"s1","source":"claude_code","text":"Should we cache this query in Redis or Memcached?","speech_act":"question","task_type":"reasoning","activity_type":"analyze","domain":"software"}
-{"class":"s1","source":"claude_code","text":"What's the difference between a mutex and a semaphore here?","speech_act":"question","task_type":"rag_qa","activity_type":"retrieve","domain":"software"}
+{"class":"s1","source":"claude_code","text":"What's the difference between a mutex and a semaphore here?","speech_act":"question","task_type":"question_answering","activity_type":"retrieve","domain":"software"}
 {"class":"s1","source":"claude_code","text":"Why does the worker drop events under load?","speech_act":"question","task_type":"reasoning","activity_type":"analyze","domain":"software"}
 {"class":"s1","source":"generic","text":"Which vendor should we pick for the payroll integration?","speech_act":"question","task_type":"reasoning","activity_type":"analyze","domain":"business"}
 {"class":"s1","source":"claude_code","text":"The migration keeps deadlocking under load.","speech_act":"statement","task_type":"reasoning","activity_type":"analyze","domain":"software"}
@@ -32,13 +32,13 @@
 {"class":"s1","source":"claude_code","text":"The build is green but the staging pods keep crash-looping.","speech_act":"statement","task_type":"reasoning","activity_type":"analyze","domain":"software"}
 {"class":"s1","source":"generic","text":"Our Q3 conversion rate is down eight percent versus plan.","speech_act":"statement","task_type":"reasoning","activity_type":"analyze","domain":"business"}
 {"class":"s1","source":"claude_code","text":"There is a race between the cache warmer and the invalidation sweep.","speech_act":"statement","task_type":"reasoning","activity_type":"analyze","domain":"software"}
-{"class":"s1","source":"claude_code","text":"and the other endpoint too","speech_act":"fragment","task_type":"codegen","activity_type":"generate","domain":"software"}
-{"class":"s1","source":"claude_code","text":"ok ship it","speech_act":"fragment","task_type":"agentic_tool_use","domain":"software"}
-{"class":"s1","source":"claude_code","text":"same for the staging config","speech_act":"fragment","task_type":"codegen","domain":"software"}
-{"class":"s1","source":"claude_code","text":"yep, that one","speech_act":"fragment","task_type":"other","domain":"software"}
-{"class":"s1","source":"generic","text":"the second bullet, shorter","speech_act":"fragment","task_type":"summarization","domain":"business"}
-{"class":"s1","source":"claude_code","text":"Add a rate limiter to the gRPC endpoints.","speech_act":"command","task_type":"codegen","activity_type":"generate","domain":"software"}
-{"class":"s1","source":"claude_code","text":"Refactor the scheduler into a durable queue.","speech_act":"command","task_type":"codegen","activity_type":"generate","domain":"software"}
-{"class":"s1","source":"generic","text":"Draft a cold outreach email for logistics prospects.","speech_act":"command","task_type":"other","activity_type":"generate","domain":"business"}
+{"class":"s1","source":"claude_code","text":"and the other endpoint too","speech_act":"fragment","task_type":"code_generation","activity_type":"generate","domain":"software"}
+{"class":"s1","source":"claude_code","text":"ok ship it","speech_act":"fragment","task_type":"code_generation","domain":"software"}
+{"class":"s1","source":"claude_code","text":"same for the staging config","speech_act":"fragment","task_type":"code_generation","domain":"software"}
+{"class":"s1","source":"claude_code","text":"yep, that one","speech_act":"fragment","task_type":"general","domain":"software"}
+{"class":"s1","source":"generic","text":"the second bullet, shorter","speech_act":"fragment","task_type":"rewriting","domain":"business"}
+{"class":"s1","source":"claude_code","text":"Add a rate limiter to the gRPC endpoints.","speech_act":"command","task_type":"code_generation","activity_type":"generate","domain":"software"}
+{"class":"s1","source":"claude_code","text":"Refactor the scheduler into a durable queue.","speech_act":"command","task_type":"code_generation","activity_type":"generate","domain":"software"}
+{"class":"s1","source":"generic","text":"Draft a cold outreach email for logistics prospects.","speech_act":"command","task_type":"text_generation","activity_type":"generate","domain":"business"}
 {"class":"s1","source":"claude_code","text":"Explain how the retry backoff interacts with the circuit breaker.","speech_act":"command","task_type":"reasoning","activity_type":"analyze","domain":"software"}
 {"class":"s1","source":"generic","text":"Is this clause enforceable under New York law?","speech_act":"question","task_type":"reasoning","activity_type":"analyze","domain":"legal"}
