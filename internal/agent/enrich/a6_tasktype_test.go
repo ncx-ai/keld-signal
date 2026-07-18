@@ -42,16 +42,16 @@ func TestTaskTypeDescriptions(t *testing.T) {
 	// Default (no env): A6 on — task_type classifies over the readable
 	// descriptions and maps the winning text back to its canonical id.
 	got := taskType(t, pickLabelModel{want: "software engineering"})
-	if got.Value != "codegen" {
-		t.Fatalf("A6 default-on: winning label %q should map to id codegen; got %s", "software engineering", got.Value)
+	if got.Value != "code_generation" {
+		t.Fatalf("A6 default-on: winning label %q should map to id code_generation; got %s", "software engineering", got.Value)
 	}
 
 	// The description path must be what's used: a model that only knows the bare
-	// id string "codegen" finds no such label (defs use descriptions), so it
-	// falls through to the first candidate's id — still a valid canonical id,
+	// id string "code_generation" finds no such label (defs use descriptions), so
+	// it falls through to the first candidate's id — still a valid canonical id,
 	// never a raw description leaking out as the value.
 	for _, d := range TaskTypeDefs {
-		if d.Text == d.ID && d.ID != "other" {
+		if d.Text == d.ID && d.ID != "general" {
 			t.Fatalf("A6 def %q uses a bare id as its text; expected a readable description", d.ID)
 		}
 	}

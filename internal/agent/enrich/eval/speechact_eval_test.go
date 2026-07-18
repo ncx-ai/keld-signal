@@ -13,14 +13,14 @@ func TestSpeechActScoredField(t *testing.T) {
 
 func TestS1DownstreamBaseline(t *testing.T) {
 	gold := []GoldRow{
-		{Class: "s1", TaskType: "reasoning"},                    // trapped facet: task_type
-		{Class: "s1", TaskType: "rag_qa", Activity: "retrieve"}, // two trapped facets
-		{Class: "c1", TaskType: "codegen"},                      // not s1 → ignored
+		{Class: "s1", TaskType: "reasoning"},                                // trapped facet: task_type
+		{Class: "s1", TaskType: "question_answering", Activity: "retrieve"}, // two trapped facets
+		{Class: "c1", TaskType: "code_generation"},                          // not s1 → ignored
 	}
 	pred := []Pred{
-		{TaskType: "codegen"},                      // wrong (1/1)
-		{TaskType: "rag_qa", Activity: "generate"}, // task_type right, activity wrong (1/2)
-		{TaskType: "codegen"},
+		{TaskType: "code_generation"},                          // wrong (1/1)
+		{TaskType: "question_answering", Activity: "generate"}, // task_type right, activity wrong (1/2)
+		{TaskType: "code_generation"},
 	}
 	// pairs: row0 task_type(wrong), row1 task_type(right)+activity(wrong) = 3 pairs, 2 wrong.
 	if got := S1DownstreamBaseline(gold, pred); got != 2.0/3.0 {

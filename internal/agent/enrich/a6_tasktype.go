@@ -36,28 +36,32 @@ func taskTypeDescriptionsEnabled() bool {
 	}
 }
 
-// TaskTypeDefs pairs each canonical task_type id (the value that must still be
-// emitted, unchanged, for gold/Atlas) with the SHORT phrase the model actually
-// scores against. Order-independent; the model ranks them.
+// TaskTypeDefs pairs each canonical task_type id (now the routing-aligned Keld
+// Inference Exchange vocabulary — see labels.go) with the SHORT phrase the
+// model actually scores against. Order-independent; the model ranks them.
+// These descriptions are PROVISIONAL — a later bakeoff finalizes the wording
+// against the new vocab; do not treat them as validated.
 //
-// The load-bearing choice is codegen = "software engineering" (NOT "codegen" /
-// "code generation"). The bare id "codegen" is narrow — it captures greenfield
-// "write code" but not the debug/fix/refactor/CI/infra/ops work that is most of
-// real engineering, which then fell into other/extraction/classification. A
-// label bakeoff over the confound + gold sets found "software engineering" flips
-// c1 task_type leak 0.625 → 0.062 AND lifts gold codegen recall to 10/10 with
-// non-codegen preservation up too — a strict, dominating win. Enumerated
-// descriptions (A6 v1) were INERT on c1 (they diluted the codegen token: the A2
-// "verbose descriptions collapse separation" failure mode), which is why these
-// are short. Do not lengthen them without re-running the bakeoff.
+// The load-bearing choice, carried over from the prior vocab, is
+// code_generation = "software engineering" (NOT "codegen" / "code
+// generation"). The narrow phrase captures greenfield "write code" but not the
+// debug/fix/refactor/CI/infra/ops work that is most of real engineering, which
+// then fell into other/extraction/classification. A label bakeoff over the
+// confound + gold sets found "software engineering" flips c1 task_type leak
+// 0.625 → 0.062 AND lifts gold codegen recall to 10/10 with non-codegen
+// preservation up too — a strict, dominating win. Enumerated descriptions (A6
+// v1) were INERT on c1 (they diluted the codegen token: the A2 "verbose
+// descriptions collapse separation" failure mode), which is why these are
+// short. Do not lengthen them without re-running the bakeoff.
 var TaskTypeDefs = []LabelDef{
-	{"codegen", "software engineering"},
-	{"summarization", "summarizing text"},
-	{"extraction", "extracting structured data from text"},
-	{"translation", "translating between languages"},
-	{"rag_qa", "answering questions from documents"},
-	{"classification", "categorizing an input"},
-	{"reasoning", "reasoning and analysis"},
-	{"agentic_tool_use", "using tools or APIs"},
-	{"other", "other"},
+	{"summarization", "summarizing text into a shorter form"},
+	{"translation", "translating text between languages"},
+	{"code_generation", "software engineering"},
+	{"information_extraction", "extracting structured data or entities from text"},
+	{"classification", "categorizing or labeling an input"},
+	{"reasoning", "reasoning, analysis, math, or planning"},
+	{"question_answering", "answering a question from documents or knowledge"},
+	{"text_generation", "writing new content from scratch"},
+	{"rewriting", "editing or rewriting existing text"},
+	{"general", "a general or unclear request"},
 }

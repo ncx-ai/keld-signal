@@ -159,7 +159,7 @@ func (c *Client) Warmup(ctx context.Context) error {
 	if c.WithContext(ctx).post("/classify", struct {
 		Text  string              `json:"text"`
 		Tasks map[string][]string `json:"tasks"`
-	}{"warmup", map[string][]string{"task_type": {"other"}}}, &r) {
+	}{"warmup", map[string][]string{"task_type": {"general"}}}, &r) {
 		return nil
 	}
 	if err := ctx.Err(); err != nil {

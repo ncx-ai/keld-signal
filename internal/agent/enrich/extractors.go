@@ -54,7 +54,7 @@ func (e TaskTypeExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	res := ctx.Model.Classify(text, map[string][]string{"task_type": TaskTypes})
 	ranked := res["task_type"]
 	if len(ranked) == 0 {
-		ranked = []Ranked{{Label: "other", Confidence: 0}}
+		ranked = []Ranked{{Label: "general", Confidence: 0}}
 	}
 	alts := make([]Labeled, 0, max(0, len(ranked)-1))
 	for _, r := range ranked[1:] {

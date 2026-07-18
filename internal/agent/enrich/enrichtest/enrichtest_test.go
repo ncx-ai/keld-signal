@@ -32,16 +32,16 @@ func TestFakeClassifyCodegen(t *testing.T) {
 	m := NewFake()
 	res := m.Classify("Write a Go function to parse JSON", map[string][]string{"task_type": enrich.TaskTypes})
 	ranked := res["task_type"]
-	if len(ranked) == 0 || ranked[0].Label != "codegen" {
-		t.Fatalf("top task_type = %+v, want codegen", ranked)
+	if len(ranked) == 0 || ranked[0].Label != "code_generation" {
+		t.Fatalf("top task_type = %+v, want code_generation", ranked)
 	}
 }
 
-func TestFakeClassifyFallsBackToOther(t *testing.T) {
+func TestFakeClassifyFallsBackToGeneral(t *testing.T) {
 	m := NewFake()
 	res := m.Classify("zzzzz", map[string][]string{"task_type": enrich.TaskTypes})
-	if res["task_type"][0].Label != "other" {
-		t.Fatalf("unmatched should be 'other', got %+v", res["task_type"])
+	if res["task_type"][0].Label != "general" {
+		t.Fatalf("unmatched should be 'general', got %+v", res["task_type"])
 	}
 }
 

@@ -8,8 +8,8 @@ import (
 )
 
 func TestScoreAccuracy(t *testing.T) {
-	gold := []GoldRow{{TaskType: "codegen"}, {TaskType: "summarization"}}
-	pred := []Pred{{TaskType: "codegen"}, {TaskType: "codegen"}}
+	gold := []GoldRow{{TaskType: "code_generation"}, {TaskType: "summarization"}}
+	pred := []Pred{{TaskType: "code_generation"}, {TaskType: "code_generation"}}
 	m := Score(gold, pred, []string{"task_type"})
 	if m["task_type"]["accuracy"] != 0.5 {
 		t.Fatalf("accuracy = %v, want 0.5", m["task_type"]["accuracy"])
@@ -147,14 +147,14 @@ func TestLoadConfoundParsesClasses(t *testing.T) {
 
 func TestLeakageAndFalseEng(t *testing.T) {
 	gold := []GoldRow{
-		{Class: "c1", FunctionGuess: "eng", TaskType: "codegen"}, // leaked below
-		{Class: "c1", FunctionGuess: "eng", TaskType: "codegen"}, // correct below
-		{Class: "c2", FunctionGuess: "mkt"},                      // false-eng below
+		{Class: "c1", FunctionGuess: "eng", TaskType: "code_generation"}, // leaked below
+		{Class: "c1", FunctionGuess: "eng", TaskType: "code_generation"}, // correct below
+		{Class: "c2", FunctionGuess: "mkt"},                              // false-eng below
 	}
 	pred := []Pred{
-		{FunctionGuess: "mkt", TaskType: "summarization"}, // c1 leaked (function+task)
-		{FunctionGuess: "eng", TaskType: "codegen"},       // c1 correct
-		{FunctionGuess: "eng"},                            // c2 → wrongly eng
+		{FunctionGuess: "mkt", TaskType: "summarization"},   // c1 leaked (function+task)
+		{FunctionGuess: "eng", TaskType: "code_generation"}, // c1 correct
+		{FunctionGuess: "eng"},                              // c2 → wrongly eng
 	}
 	lk := LeakageRate(gold, pred)
 	if lk["function_guess"] != 0.5 {

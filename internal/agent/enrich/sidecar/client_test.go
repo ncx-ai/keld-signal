@@ -18,7 +18,7 @@ func stub(t *testing.T) *httptest.Server {
 		w.Write([]byte(`{"ok":true}`))
 	})
 	mux.HandleFunc("/extract", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"entities":[{"text":"a@b.com","label":"email","start":5,"end":12,"confidence":1.0}],"results":{"task_type":[{"label":"codegen","confidence":0.9}]}}`))
+		w.Write([]byte(`{"entities":[{"text":"a@b.com","label":"email","start":5,"end":12,"confidence":1.0}],"results":{"task_type":[{"label":"code_generation","confidence":0.9}]}}`))
 	})
 	return httptest.NewServer(mux)
 }
@@ -27,7 +27,7 @@ func TestExtractReturnsRawEntities(t *testing.T) {
 	s := stub(t)
 	defer s.Close()
 	c := New(s.URL, 5*time.Second)
-	res := c.Extract("email a@b.com", map[string]string{"email": "Email addresses"}, map[string][]string{"task_type": {"codegen"}})
+	res := c.Extract("email a@b.com", map[string]string{"email": "Email addresses"}, map[string][]string{"task_type": {"code_generation"}})
 	if len(res.Entities) != 1 {
 		t.Fatalf("entities = %d, want 1", len(res.Entities))
 	}
@@ -38,7 +38,7 @@ func TestExtractReturnsRawEntities(t *testing.T) {
 	if e.Start != 5 || e.End != 12 || e.Label != "email" {
 		t.Fatalf("bad span: %+v", e)
 	}
-	if r := res.Results["task_type"]; len(r) != 1 || r[0].Label != "codegen" {
+	if r := res.Results["task_type"]; len(r) != 1 || r[0].Label != "code_generation" {
 		t.Fatalf("bad results: %+v", res.Results)
 	}
 }
@@ -64,13 +64,13 @@ func TestClassifyRetriesThrough503ThenSucceeds(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		w.Write([]byte(`{"results":{"task_type":[{"label":"codegen","confidence":0.9}]}}`))
+		w.Write([]byte(`{"results":{"task_type":[{"label":"code_generation","confidence":0.9}]}}`))
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, 2*time.Second)
-	got := c.Classify("x", map[string][]string{"task_type": {"codegen"}})
-	if got["task_type"][0].Label != "codegen" {
+	got := c.Classify("x", map[string][]string{"task_type": {"code_generation"}})
+	if got["task_type"][0].Label != "code_generation" {
 		t.Fatalf("expected retry through 503 to succeed on GLiNER2, got %+v (calls=%d)", got, calls)
 	}
 	if calls < 3 {
@@ -103,7 +103,7 @@ func TestWithContextCancelAbortsInFlight(t *testing.T) {
 	c := base.WithContext(jobCtx)
 
 	done := make(chan map[string][]enrich.Ranked, 1)
-	go func() { done <- c.Classify("x", map[string][]string{"task_type": {"codegen"}}) }()
+	go func() { done <- c.Classify("x", map[string][]string{"task_type": {"code_generation"}}) }()
 
 	// Wait until the request is genuinely in flight at the server.
 	select {
@@ -138,7 +138,7 @@ func TestClassifyDoesNotSpinOnGenuineError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, 2*time.Second)
-	got := c.Classify("x", map[string][]string{"task_type": {"codegen"}})
+	got := c.Classify("x", map[string][]string{"task_type": {"code_generation"}})
 	if got != nil {
 		t.Fatalf("500 should return nil (no degrade, no spin), got %+v", got)
 	}
@@ -197,7 +197,7 @@ func TestWarmupWaitsThrough503ThenSucceeds(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"results":{"task_type":[{"label":"other","confidence":1.0}]}}`))
+		_, _ = w.Write([]byte(`{"results":{"task_type":[{"label":"general","confidence":1.0}]}}`))
 	}))
 	defer srv.Close()
 	c := New(srv.URL, time.Second)

@@ -52,14 +52,16 @@ type fake struct {
 func NewFake() enrich.Model {
 	// task_type keyword priors keyed by canonical id.
 	taskKW := map[string][]string{
-		"codegen":          {"write", "function", "code", "implement", "class", "refactor"},
-		"summarization":    {"summarize", "summary", "tldr"},
-		"translation":      {"translate", "translation"},
-		"extraction":       {"extract", "parse", "pull out"},
-		"rag_qa":           {"according to", "based on the", "what does the doc"},
-		"classification":   {"classify", "categorize", "label"},
-		"reasoning":        {"why", "explain", "reason", "prove"},
-		"agentic_tool_use": {"run the", "use the tool", "call the api"},
+		"code_generation":        {"function", "code", "implement", "class", "refactor", "deploy", "migration"},
+		"summarization":          {"summarize", "summary", "tldr"},
+		"translation":            {"translate", "translation"},
+		"information_extraction": {"extract", "parse", "pull out"},
+		"classification":         {"classify", "categorize", "label"},
+		"reasoning":              {"why", "reason", "prove", "analyze"},
+		"question_answering":     {"according to", "based on the", "what does the doc"},
+		"text_generation":        {"draft", "compose", "write a post", "write an email"},
+		"rewriting":              {"rewrite", "edit", "revise", "paraphrase"},
+		"general":                {},
 	}
 	// A6 (schema v4) classifies task_type against readable label DESCRIPTIONS,
 	// not the bare ids. Alias each description text to its id's keyword list so

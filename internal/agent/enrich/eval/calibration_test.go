@@ -13,13 +13,13 @@ func TestCalibrationBinsAndECE(t *testing.T) {
 	//   conf 0.55 correct              -> bin [0.5,0.6): n=1, meanConf=0.55, acc=1.0
 	//   conf 0.15 wrong                -> bin [0.1,0.2): n=1, meanConf=0.15, acc=0.0
 	gold := []GoldRow{
-		{TaskType: "codegen"}, {TaskType: "codegen"}, {TaskType: "codegen"}, {TaskType: "codegen"},
+		{TaskType: "code_generation"}, {TaskType: "code_generation"}, {TaskType: "code_generation"}, {TaskType: "code_generation"},
 	}
 	pred := []Pred{
-		{TaskType: "codegen", Conf: map[string]float64{"task_type": 0.95}},
-		{TaskType: "other", Conf: map[string]float64{"task_type": 0.92}},
-		{TaskType: "codegen", Conf: map[string]float64{"task_type": 0.55}},
-		{TaskType: "other", Conf: map[string]float64{"task_type": 0.15}},
+		{TaskType: "code_generation", Conf: map[string]float64{"task_type": 0.95}},
+		{TaskType: "general", Conf: map[string]float64{"task_type": 0.92}},
+		{TaskType: "code_generation", Conf: map[string]float64{"task_type": 0.55}},
+		{TaskType: "general", Conf: map[string]float64{"task_type": 0.15}},
 	}
 	r := Calibration(gold, pred, "task_type", 10)
 	if r.N != 4 {
@@ -43,10 +43,10 @@ func TestCalibrationBinsAndECE(t *testing.T) {
 }
 
 func TestCalibrationSkipsBlankGold(t *testing.T) {
-	gold := []GoldRow{{TaskType: ""}, {TaskType: "codegen"}}
+	gold := []GoldRow{{TaskType: ""}, {TaskType: "code_generation"}}
 	pred := []Pred{
-		{TaskType: "codegen", Conf: map[string]float64{"task_type": 0.9}},
-		{TaskType: "codegen", Conf: map[string]float64{"task_type": 0.9}},
+		{TaskType: "code_generation", Conf: map[string]float64{"task_type": 0.9}},
+		{TaskType: "code_generation", Conf: map[string]float64{"task_type": 0.9}},
 	}
 	if r := Calibration(gold, pred, "task_type", 10); r.N != 1 {
 		t.Fatalf("blank gold must be excluded: N = %d, want 1", r.N)

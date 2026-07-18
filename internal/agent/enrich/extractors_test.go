@@ -42,8 +42,8 @@ func TestSensitivitySpansAreMaskedNotRaw(t *testing.T) {
 func TestTaskTypeExtractorTopLabel(t *testing.T) {
 	ctx := enrich.NewJobContext("write a function in go", "claude_code", enrich.Meta{}, enrichtest.NewFake())
 	out, _ := enrich.TaskTypeExtractor{}.Run(ctx)
-	if out["task_type"].(enrich.Labeled).Value != "codegen" {
-		t.Fatalf("want codegen, got %+v", out["task_type"])
+	if out["task_type"].(enrich.Labeled).Value != "code_generation" {
+		t.Fatalf("want code_generation, got %+v", out["task_type"])
 	}
 }
 

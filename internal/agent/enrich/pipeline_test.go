@@ -12,7 +12,7 @@ func TestRunProducesEnrichedProfile(t *testing.T) {
 	if p.PipelineStatus != "enriched" {
 		t.Fatalf("status = %q, want enriched", p.PipelineStatus)
 	}
-	if p.TaskType.Value != "codegen" {
+	if p.TaskType.Value != "code_generation" {
 		t.Fatalf("task_type = %+v", p.TaskType)
 	}
 	if p.Sensitivity.Value != "pii" {
@@ -76,7 +76,7 @@ func TestRunIsolatesPanicAsPartial(t *testing.T) {
 	if p.PipelineStatus != "partial" {
 		t.Fatalf("status = %q, want partial", p.PipelineStatus)
 	}
-	if p.TaskType.Value != "codegen" {
+	if p.TaskType.Value != "code_generation" {
 		t.Fatalf("surviving stage should still populate: %+v", p.TaskType)
 	}
 }

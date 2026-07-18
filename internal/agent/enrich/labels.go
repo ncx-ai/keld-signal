@@ -10,14 +10,18 @@ package enrich
 // against short readable label descriptions instead of the bare id strings) —
 // both without altering any label text or id — and v5, which ADDS the emitted
 // speech_act facet (a genuine contract change: a new Profile field, not just a
-// derivation change).
-const SchemaVersion = 5
+// derivation change) — and v6, which redesigned the task_type vocabulary into
+// routing-aligned job categories (dropped agentic_tool_use, added
+// text_generation + rewriting, renamed to HF conventions, other→general).
+const SchemaVersion = 6
 
-// TaskTypes is the canonical job-classification vocabulary (ported from
-// inference-enrichment).
+// TaskTypes is the canonical task_type vocabulary — routing keys for Keld
+// Inference Exchange order books (real-world async inference job categories).
+// Text jobs only; modality is a separate future axis. See the taxonomy spec.
 var TaskTypes = []string{
-	"codegen", "summarization", "extraction", "translation",
-	"rag_qa", "classification", "reasoning", "agentic_tool_use", "other",
+	"summarization", "translation", "code_generation", "information_extraction",
+	"classification", "reasoning", "question_answering", "text_generation",
+	"rewriting", "general",
 }
 
 // Domains is the canonical domain-classification vocabulary.
