@@ -39,6 +39,20 @@ Deterministic credential-detection layer for the `secrets` sensitivity class —
   - **3 FPs — ALL placeholders** (`YOUR_API_KEY`, `<API_KEY>`, `<YOUR_SECRET_HERE>`), all flagged by **GLiNER** with the deterministic layer correctly **NOT** firing. This is the L3 precision-gate target, exactly as the research predicted.
 - **→ REPRIORITIZED next plan (L2/L3):** **placeholder precision-gating is the highest-value next step** (fixes 3/3 FPs; clean pattern: a GLiNER-only secrets hit whose span is a placeholder shape `YOUR_*`/`<...>`/`****` → suppress). Then L2 connection-string/contextual recall. The gitleaks weekly-sync workflow is still pending.
 
+## Calibration instrument (BUILT on `feat/calibration-eval`; pending merge) + KEY FINDING
+`keld-agent eval --calibration` now reports per-facet accuracy stratified by GLiNER2's returned confidence — reliability bins + ECE (`eval.Calibration`, `Pred.Conf`). No pipeline change. Spec/plan: `docs/superpowers/{specs,plans}/2026-07-18-confidence-calibration-eval*.md`.
+- **DECISIVE FINDING (gold set): GLiNER2 is systematically OVERCONFIDENT, and errors live in the HIGH-confidence bins, not a low-confidence tail:**
+  - `task_type` ECE 0.238 — 55/69 preds in `[0.9,1.0]` at conf **0.98 but acc 0.76**.
+  - `domain` ECE **0.434** (worst) — conf 0.85→acc 0.125; nearly meaningless confidence.
+  - `speech_act` ECE 0.211 — 55/73 top-bin, conf 0.99→acc 0.78.
+  - `activity_type` ECE **0.146** (best) — top bin conf 0.97→acc **1.00**; the "confident⇒correct" pattern.
+  - Rule-influenced (`sensitivity` 67/69 forced conf 1.0; `function_guess` A4-forced) behaved as expected — separation validated.
+- **IMPLICATIONS for the task_type focus (measure-first redirect):**
+  1. **Abstain (Lever F) is NOT the play for `task_type`/`domain`/`speech_act`** — errors are high-confidence and ~80% of preds are top-bin, so a confidence threshold can't recover accuracy. These need a BETTER CLASSIFIER (labels/approach), not calibration/abstain.
+  2. **`activity_type` IS a clean abstain candidate** (conf≥0.9 ⇒ ~100% acc). Cheapest Lever-F win if we want one.
+  3. **`domain` is the worst-calibrated & lowest-accuracy (0.449) facet** — likely needs the most fundamental rework.
+  - A future abstain-lever spec (Lever F) should target `activity_type` only; task_type work should focus on the classifier itself. Note: raw top-confidence is a weak discriminator here, but the top-vs-2nd **margin** is untested (deferred option (b)) — worth checking before fully closing Lever F for task_type.
+
 ## What was REJECTED (measured, not shipped)
 - **A1 — tool prior (soft posterior over functions):** INERT. Floor sweep 0.15/0.05/0.02 all left `leakage(function_guess)=0.375`. The model scores `eng` ~0 on subject-heavy prompts, so reweighting surfaced candidates can't promote it. (Deleted from tree.)
 - **A2 / A2.1 — rewriting the function label descriptions:** REGRESSED. Verbose+negated labels catastrophic (function acc 0.824→0.059); short/eng-boosted still worse (→0.500). **The v1 labels are the best labels.** Bi-encoders don't understand negation ("not building marketing software" matches "marketing software") and long similar descriptions collapse score separation. (Deleted from tree.)
