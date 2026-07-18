@@ -6,6 +6,7 @@ import (
 	"bufio"
 	_ "embed"
 	"encoding/json"
+	"math"
 	"strings"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -72,6 +73,21 @@ type Pred struct {
 	FunctionGuess string
 	SpeechAct     string
 	Subcategory   string
+	Conf          map[string]float64 // facet name -> top-label confidence (for calibration)
+}
+
+// predConf captures each facet's top-label confidence from a Profile, keyed by
+// the same facet names fieldOf uses.
+func predConf(p enrich.Profile) map[string]float64 {
+	return map[string]float64{
+		"task_type":      p.TaskType.Confidence,
+		"domain":         p.Domain.Confidence,
+		"sensitivity":    p.Sensitivity.Confidence,
+		"activity_type":  p.Activity.Confidence,
+		"function_guess": p.FunctionGuess.Confidence,
+		"speech_act":     p.SpeechAct.Confidence,
+		"subcategory":    p.Subcategory.Confidence,
+	}
 }
 
 // parseRows is a shared helper that parses JSONL rows into GoldRow objects.
@@ -210,6 +226,7 @@ func RunModel(m enrich.Model, gold []GoldRow) []Pred {
 			FunctionGuess: p.FunctionGuess.Value,
 			SpeechAct:     p.SpeechAct.Value,
 			Subcategory:   p.Subcategory.Value,
+			Conf:          predConf(p),
 		})
 	}
 	return pred
@@ -226,6 +243,7 @@ func RunModelWithContext(m enrich.Model, gold []GoldRow) []Pred {
 		pred = append(pred, Pred{
 			TaskType: p.TaskType.Value, Domain: p.Domain.Value, Sensitivity: p.Sensitivity.Value,
 			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, SpeechAct: p.SpeechAct.Value, Subcategory: p.Subcategory.Value,
+			Conf: predConf(p),
 		})
 	}
 	return pred
@@ -384,4 +402,83 @@ func SpeechActPerMood(gold []GoldRow, pred []Pred) map[string][2]int {
 		out[g] = c
 	}
 	return out
+}
+
+// Bin is one confidence band's reliability stats.
+type Bin struct {
+	Lo, Hi   float64
+	Count    int
+	MeanConf float64
+	Accuracy float64
+}
+
+// Reliability is a facet's confidence-stratified accuracy + calibration error.
+type Reliability struct {
+	Facet string
+	Bins  []Bin // non-empty bins, ascending
+	N     int
+	ECE   float64
+}
+
+// Calibration stratifies a facet's predictions into nbins fixed-width confidence
+// bins ([0,1/nbins)…[1-1/nbins,1.0], top bin closed) and computes per-bin accuracy
+// + the facet's Expected Calibration Error (Σ (n_bin/N)·|acc_bin − meanConf_bin|).
+// Rows with a blank gold label for the facet are excluded.
+func Calibration(gold []GoldRow, pred []Pred, facet string, nbins int) Reliability {
+	if nbins <= 0 {
+		nbins = 10
+	}
+	n := len(gold)
+	if len(pred) < n {
+		n = len(pred)
+	}
+	type acc struct {
+		count   int
+		sumConf float64
+		correct int
+	}
+	bins := make([]acc, nbins)
+	total := 0
+	for i := 0; i < n; i++ {
+		g := fieldOf(gold[i], facet)
+		if g == "" {
+			continue
+		}
+		c := 0.0
+		if pred[i].Conf != nil {
+			c = pred[i].Conf[facet]
+		}
+		b := int(c * float64(nbins))
+		if b >= nbins { // c == 1.0 lands in the top bin
+			b = nbins - 1
+		}
+		if b < 0 {
+			b = 0
+		}
+		bins[b].count++
+		bins[b].sumConf += c
+		if g == fieldOf(pred[i], facet) {
+			bins[b].correct++
+		}
+		total++
+	}
+	r := Reliability{Facet: facet, N: total}
+	if total == 0 {
+		return r
+	}
+	width := 1.0 / float64(nbins)
+	for i, a := range bins {
+		if a.count == 0 {
+			continue
+		}
+		binAcc := float64(a.correct) / float64(a.count)
+		binConf := a.sumConf / float64(a.count)
+		hi := float64(i+1) * width
+		if i == nbins-1 {
+			hi = 1.0
+		}
+		r.Bins = append(r.Bins, Bin{Lo: float64(i) * width, Hi: hi, Count: a.count, MeanConf: binConf, Accuracy: binAcc})
+		r.ECE += float64(a.count) / float64(total) * math.Abs(binAcc-binConf)
+	}
+	return r
 }
