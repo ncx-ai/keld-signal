@@ -18,7 +18,7 @@ func TestS1DownstreamBaseline(t *testing.T) {
 		{Class: "c1", TaskType: "codegen"},                      // not s1 → ignored
 	}
 	pred := []Pred{
-		{TaskType: "codegen"},                    // wrong (1/1)
+		{TaskType: "codegen"},                      // wrong (1/1)
 		{TaskType: "rag_qa", Activity: "generate"}, // task_type right, activity wrong (1/2)
 		{TaskType: "codegen"},
 	}

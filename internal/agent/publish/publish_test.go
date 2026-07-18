@@ -160,7 +160,7 @@ func TestBuildCarriesSpeechActFields(t *testing.T) {
 	// Verify that SpeechAct and SpeechActAlt are properly mapped through to
 	// the wire payload and serialized with the correct JSON keys.
 	p := enrich.Profile{
-		SpeechAct:    enrich.Labeled{Value: "question", Confidence: 0.9},
+		SpeechAct: enrich.Labeled{Value: "question", Confidence: 0.9},
 		SpeechActAlt: []enrich.Labeled{
 			{Value: "command", Confidence: 0.5},
 			{Value: "statement", Confidence: 0.3},
