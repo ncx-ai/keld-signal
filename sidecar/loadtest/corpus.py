@@ -3,8 +3,9 @@ sends (internal/agent/enrich/labels.go): classification tasks + entity labels.
 Deterministic under a seeded Random; no PII in the corpus."""
 
 TASKS = {
-    "task_type": ["codegen", "summarization", "extraction", "translation",
-                  "rag_qa", "classification", "reasoning", "agentic_tool_use", "other"],
+    "task_type": ["summarization", "translation", "code_generation", "information_extraction",
+                  "classification", "reasoning", "question_answering", "text_generation",
+                  "rewriting", "general"],
     "domain": ["software", "legal", "medical", "finance", "science",
                "business", "education", "creative", "general"],
     "sensitivity": ["none", "pii", "secrets", "phi", "pci", "proprietary"],
