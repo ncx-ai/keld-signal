@@ -1,0 +1,47 @@
+# A0 experiment 2026-07-17T20:47:15Z — 8-thread sidecar
+
+>>> BASELINE eval --confound --context
+keld-agent eval: using live GLiNER2 sidecar at http://127.0.0.1:54193
+context=true confound=true rows=87
+  task_type       accuracy=0.530
+  domain          accuracy=0.422
+  sensitivity     accuracy=0.812
+  activity_type   accuracy=0.750
+  function_guess  accuracy=0.824
+  subcategory     accuracy=0.650
+  sensitivity     sensitive_recall=0.351
+  leakage(function_guess)=0.250  leakage(task_type)=0.625  false_eng=0.000
+
+>>> A0 (task_type context) eval --confound --context
+keld-agent eval: using live GLiNER2 sidecar at http://127.0.0.1:54193
+context=true confound=true rows=87
+  task_type       accuracy=0.566
+  domain          accuracy=0.422
+  sensitivity     accuracy=0.812
+  activity_type   accuracy=0.750
+  function_guess  accuracy=0.824
+  subcategory     accuracy=0.650
+  sensitivity     sensitive_recall=0.351
+  leakage(function_guess)=0.250  leakage(task_type)=0.500  false_eng=0.000
+
+>>> BASELINE gold-only eval --context
+keld-agent eval: using live GLiNER2 sidecar at http://127.0.0.1:54193
+context=true confound=false rows=73
+  task_type       accuracy=0.580
+  domain          accuracy=0.449
+  sensitivity     accuracy=0.812
+  activity_type   accuracy=0.750
+  function_guess  accuracy=0.800
+  subcategory     accuracy=0.650
+  sensitivity     sensitive_recall=0.565
+
+>>> A0 gold-only eval --context
+keld-agent eval: using live GLiNER2 sidecar at http://127.0.0.1:54193
+context=true confound=false rows=73
+  task_type       accuracy=0.580
+  domain          accuracy=0.449
+  sensitivity     accuracy=0.812
+  activity_type   accuracy=0.750
+  function_guess  accuracy=0.800
+  subcategory     accuracy=0.650
+  sensitivity     sensitive_recall=0.565

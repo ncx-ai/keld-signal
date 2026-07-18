@@ -3,8 +3,11 @@
 package enrich
 
 // SchemaVersion gates the label vocabulary below. Changing any vocab list is a
-// contract-affecting event: bump this and re-run the eval set.
-const SchemaVersion = 2
+// contract-affecting event: bump this and re-run the eval set. A bump can also
+// signal a derivation change (how function/task_type are computed from the
+// same vocab) rather than a vocab change — see v3, which promoted the A0/A4
+// enrichment fixes to default without altering any label text or id.
+const SchemaVersion = 3
 
 // TaskTypes is the canonical job-classification vocabulary (ported from
 // inference-enrichment).

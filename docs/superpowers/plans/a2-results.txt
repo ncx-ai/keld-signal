@@ -1,0 +1,14 @@
+# A2 experiment 2026-07-17T21:35:57Z — 8-thread sidecar
+## confound+context
+
+>>> A0 checkpoint
+context=true confound=true rows=87
+  function_guess  accuracy=0.824
+  leakage(function_guess)=0.250  leakage(task_type)=0.500  false_eng=0.000
+
+>>> A0+A2 (labels v2)
+context=true confound=true rows=87
+  function_guess  accuracy=0.059
+  leakage(function_guess)=1.000  leakage(task_type)=0.500  false_eng=0.000
+
+>>> A0+A1+A2 (labels v2 + tool prior)

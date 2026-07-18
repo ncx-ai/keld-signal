@@ -1,0 +1,11 @@
+# A4 experiment 2026-07-17T23:34:57Z — compositional function (coding tool ⇒ eng), expanded confound, 8-thread
+
+>>> A0 (new confound baseline) --confound --context
+context=true confound=true rows=97
+  function_guess  accuracy=0.773
+  leakage(function_guess)=0.375  leakage(task_type)=0.625  false_eng=0.000
+
+>>> A0+A4 (compositional) --confound --context
+context=true confound=true rows=97
+  function_guess  accuracy=0.682
+  leakage(function_guess)=0.000  leakage(task_type)=0.625  false_eng=0.000

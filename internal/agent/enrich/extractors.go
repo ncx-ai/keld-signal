@@ -1,6 +1,8 @@
 package enrich
 
-import "fmt"
+import (
+	"fmt"
+)
 
 // Extractor is one pipeline stage.
 type Extractor interface {
@@ -21,7 +23,7 @@ func Wave1() []Extractor {
 		TaskTypeExtractor{}, SensitivityExtractor{}, DomainEntitiesExtractor{},
 		passExtractor{Pass{Name: "activity_type", Labels: Activities}},
 		passExtractor{Pass{Name: "personal", Labels: Personal}},
-		passExtractor{Pass{Name: "function_guess", Labels: Functions}},
+		funcGuessExtractor{},
 	}
 }
 
@@ -40,7 +42,8 @@ func (TaskTypeExtractor) Name() string    { return "task_type" }
 func (TaskTypeExtractor) Version() string { return versioned("task_type") }
 
 func (e TaskTypeExtractor) Run(ctx *JobContext) (map[string]any, error) {
-	res := ctx.Model.Classify(ctx.Text, map[string][]string{"task_type": TaskTypes})
+	text := ctx.Meta.Preamble() + ctx.Text
+	res := ctx.Model.Classify(text, map[string][]string{"task_type": TaskTypes})
 	ranked := res["task_type"]
 	if len(ranked) == 0 {
 		ranked = []Ranked{{Label: "other", Confidence: 0}}

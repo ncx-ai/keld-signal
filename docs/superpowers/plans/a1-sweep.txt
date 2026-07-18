@@ -1,0 +1,13 @@
+# A1 floor sweep 2026-07-17T21:21:25Z — A0+A1, --confound --context, 8-thread
+
+>>> floor=0.15 (default)
+  function_guess  accuracy=0.824
+  leakage(function_guess)=0.250  leakage(task_type)=0.500  false_eng=0.000
+
+>>> floor=0.05
+  function_guess  accuracy=0.824
+  leakage(function_guess)=0.250  leakage(task_type)=0.500  false_eng=0.000
+
+>>> floor=0.02
+  function_guess  accuracy=0.824
+  leakage(function_guess)=0.250  leakage(task_type)=0.500  false_eng=0.000

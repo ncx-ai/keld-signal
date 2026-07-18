@@ -1,0 +1,18 @@
+# A2.1 experiment 2026-07-17T21:49:52Z — short/eng-boosted/negation-free labels, 8-thread
+
+>>> A0 checkpoint (confound+ctx)
+context=true confound=true rows=87
+  function_guess  accuracy=0.824
+  leakage(function_guess)=0.250  leakage(task_type)=0.500  false_eng=0.000
+
+>>> A0+A2.1 (confound+ctx)
+context=true confound=true rows=87
+  function_guess  accuracy=0.500
+  leakage(function_guess)=0.625  leakage(task_type)=0.500  false_eng=0.000
+
+>>> A0+A1+A2.1 (confound+ctx)
+context=true confound=true rows=87
+  function_guess  accuracy=0.500
+  leakage(function_guess)=0.625  leakage(task_type)=0.500  false_eng=0.000
+
+>>> A0+A2.1 gold-only

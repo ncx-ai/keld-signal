@@ -119,3 +119,51 @@ func TestRunModelWithContextFeedsRecentPrompts(t *testing.T) {
 		t.Fatalf("baseline run must NOT include context; got %q", base.lastClassify)
 	}
 }
+
+func TestLoadConfoundParsesClasses(t *testing.T) {
+	rows, err := LoadConfound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) < 10 {
+		t.Fatalf("confound rows = %d, want >= 10", len(rows))
+	}
+	seen := map[string]int{}
+	for _, r := range rows {
+		seen[r.Class]++
+	}
+	for _, c := range []string{"c1", "c2", "c3"} {
+		if seen[c] == 0 {
+			t.Fatalf("confound set missing class %q", c)
+		}
+	}
+	// c1 rows must be gold-labeled eng (the whole point).
+	for _, r := range rows {
+		if r.Class == "c1" && r.FunctionGuess != "eng" {
+			t.Fatalf("c1 row not gold-eng: %q", r.Text)
+		}
+	}
+}
+
+func TestLeakageAndFalseEng(t *testing.T) {
+	gold := []GoldRow{
+		{Class: "c1", FunctionGuess: "eng", TaskType: "codegen"}, // leaked below
+		{Class: "c1", FunctionGuess: "eng", TaskType: "codegen"}, // correct below
+		{Class: "c2", FunctionGuess: "mkt"},                      // false-eng below
+	}
+	pred := []Pred{
+		{FunctionGuess: "mkt", TaskType: "summarization"}, // c1 leaked (function+task)
+		{FunctionGuess: "eng", TaskType: "codegen"},       // c1 correct
+		{FunctionGuess: "eng"},                            // c2 → wrongly eng
+	}
+	lk := LeakageRate(gold, pred)
+	if lk["function_guess"] != 0.5 {
+		t.Fatalf("function leakage = %v, want 0.5", lk["function_guess"])
+	}
+	if lk["task_type"] != 0.5 {
+		t.Fatalf("task leakage = %v, want 0.5", lk["task_type"])
+	}
+	if fe := FalseEngRate(gold, pred); fe != 1.0 {
+		t.Fatalf("false_eng = %v, want 1.0", fe)
+	}
+}

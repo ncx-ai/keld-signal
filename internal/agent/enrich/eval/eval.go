@@ -14,6 +14,9 @@ import (
 //go:embed gold.jsonl
 var goldJSONL string
 
+//go:embed confound.jsonl
+var confoundJSONL string
+
 // GoldRow is one labeled evaluation example.
 //
 // Activity, FunctionGuess, and Subcategory are optional (schema-v2 job-category
@@ -21,6 +24,8 @@ var goldJSONL string
 // gold value for a field as "not scored" rather than counting it as a miss.
 type GoldRow struct {
 	Text          string   `json:"text"`
+	Class         string   `json:"class"`
+	Source        string   `json:"source"`         // tool source for context runs; blank ⇒ claude_code
 	RecentPrompts []string `json:"recent_prompts"` // optional preceding user prompts (newest-first)
 	Repo          string   `json:"repo"`
 	Branch        string   `json:"branch"`
@@ -31,6 +36,16 @@ type GoldRow struct {
 	Activity      string   `json:"activity_type"`
 	FunctionGuess string   `json:"function_guess"`
 	Subcategory   string   `json:"subcategory"`
+}
+
+// srcOr returns the row's tool source, defaulting to claude_code. Confound c2
+// (genuine non-eng) rows set source to a generic tool so a tool-conditioned
+// rule (A4) does not force them to eng — keeping false_eng honest.
+func (r GoldRow) srcOr() string {
+	if r.Source != "" {
+		return r.Source
+	}
+	return "claude_code"
 }
 
 // Meta builds the enrich.Meta an augmented run would see for this gold row.
@@ -54,10 +69,10 @@ type Pred struct {
 	Subcategory   string
 }
 
-// LoadGold parses the embedded gold set.
-func LoadGold() ([]GoldRow, error) {
+// parseRows is a shared helper that parses JSONL rows into GoldRow objects.
+func parseRows(s string) ([]GoldRow, error) {
 	var out []GoldRow
-	sc := bufio.NewScanner(strings.NewReader(goldJSONL))
+	sc := bufio.NewScanner(strings.NewReader(s))
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -72,6 +87,12 @@ func LoadGold() ([]GoldRow, error) {
 	}
 	return out, sc.Err()
 }
+
+// LoadGold parses the embedded gold set.
+func LoadGold() ([]GoldRow, error) { return parseRows(goldJSONL) }
+
+// LoadConfound parses the embedded confound eval set (classes c1/c2/c3).
+func LoadConfound() ([]GoldRow, error) { return parseRows(confoundJSONL) }
 
 func fieldOf(x any, f string) string {
 	switch v := x.(type) {
@@ -186,11 +207,64 @@ func RunModel(m enrich.Model, gold []GoldRow) []Pred {
 func RunModelWithContext(m enrich.Model, gold []GoldRow) []Pred {
 	pred := make([]Pred, 0, len(gold))
 	for _, g := range gold {
-		p := enrich.Run(g.Text, "eval", g.Meta("claude_code"), m)
+		src := g.srcOr()
+		p := enrich.Run(g.Text, src, g.Meta(src), m)
 		pred = append(pred, Pred{
 			TaskType: p.TaskType.Value, Domain: p.Domain.Value, Sensitivity: p.Sensitivity.Value,
 			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, Subcategory: p.Subcategory.Value,
 		})
 	}
 	return pred
+}
+
+// LeakageRate measures subject-matter leakage over c1 rows (engineering activity,
+// non-eng subject): the fraction whose predicted facet != the gold eng-correct
+// value. Reported for function_guess and task_type. 0 when there are no c1 rows.
+func LeakageRate(gold []GoldRow, pred []Pred) map[string]float64 {
+	n := len(gold)
+	if len(pred) < n {
+		n = len(pred)
+	}
+	var c1, fLeak, tLeak int
+	for i := 0; i < n; i++ {
+		if gold[i].Class != "c1" {
+			continue
+		}
+		c1++
+		if pred[i].FunctionGuess != gold[i].FunctionGuess {
+			fLeak++
+		}
+		if gold[i].TaskType != "" && pred[i].TaskType != gold[i].TaskType {
+			tLeak++
+		}
+	}
+	out := map[string]float64{"function_guess": 0, "task_type": 0}
+	if c1 > 0 {
+		out["function_guess"] = float64(fLeak) / float64(c1)
+		out["task_type"] = float64(tLeak) / float64(c1)
+	}
+	return out
+}
+
+// FalseEngRate measures over-correction over c2 rows (genuine non-eng work):
+// the fraction wrongly predicted function_guess == "eng". 0 when no c2 rows.
+func FalseEngRate(gold []GoldRow, pred []Pred) float64 {
+	n := len(gold)
+	if len(pred) < n {
+		n = len(pred)
+	}
+	var c2, wrong int
+	for i := 0; i < n; i++ {
+		if gold[i].Class != "c2" {
+			continue
+		}
+		c2++
+		if pred[i].FunctionGuess == "eng" {
+			wrong++
+		}
+	}
+	if c2 == 0 {
+		return 0
+	}
+	return float64(wrong) / float64(c2)
 }

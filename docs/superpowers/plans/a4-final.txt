@@ -1,0 +1,22 @@
+# A4 FINAL 2026-07-17T23:45:35Z — source-attributed gold + confound, 8-thread
+## gold-only (no-regression gate)
+
+>>> A0 gold-only
+context=true confound=false rows=73
+  function_guess  accuracy=0.800
+
+>>> A0+A4 gold-only
+context=true confound=false rows=73
+  function_guess  accuracy=0.800
+
+## confound (the target)
+
+>>> A0 confound
+context=true confound=true rows=97
+  function_guess  accuracy=0.773
+  leakage(function_guess)=0.375  leakage(task_type)=0.625  false_eng=0.000
+
+>>> A0+A4 confound
+context=true confound=true rows=97
+  function_guess  accuracy=0.909
+  leakage(function_guess)=0.000  leakage(task_type)=0.625  false_eng=0.000
