@@ -39,8 +39,11 @@ func taskTypeDescriptionsEnabled() bool {
 // TaskTypeDefs pairs each canonical task_type id (now the routing-aligned Keld
 // Inference Exchange vocabulary — see labels.go) with the SHORT phrase the
 // model actually scores against. Order-independent; the model ranks them.
-// These descriptions are PROVISIONAL — a later bakeoff finalizes the wording
-// against the new vocab; do not treat them as validated.
+// These descriptions were bakeoff-selected against the relabeled gold set
+// (v2 winner, 0.744 vs 0.692 provisional). Empirical finding: `reasoning` is a
+// genuine bi-encoder ceiling — it conflates with question_answering regardless of
+// wording (every reasoning phrasing tried topped out at ~4/9). Do not re-tune
+// without re-running the bakeoff.
 //
 // The load-bearing choice, carried over from the prior vocab, is
 // code_generation = "software engineering" (NOT "codegen" / "code
@@ -59,9 +62,9 @@ var TaskTypeDefs = []LabelDef{
 	{"code_generation", "software engineering"},
 	{"information_extraction", "extracting structured data or entities from text"},
 	{"classification", "categorizing or labeling an input"},
-	{"reasoning", "reasoning, analysis, math, or planning"},
+	{"reasoning", "step-by-step reasoning, analysis, or problem solving"},
 	{"question_answering", "answering a question from documents or knowledge"},
-	{"text_generation", "writing new content from scratch"},
-	{"rewriting", "editing or rewriting existing text"},
-	{"general", "a general or unclear request"},
+	{"text_generation", "writing new original content such as an email, post, or story"},
+	{"rewriting", "improving, rewriting, or paraphrasing existing text"},
+	{"general", "a general assistant request"},
 }

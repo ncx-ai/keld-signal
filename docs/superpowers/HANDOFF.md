@@ -53,6 +53,17 @@ Deterministic credential-detection layer for the `secrets` sensitivity class —
   3. **`domain` is the worst-calibrated & lowest-accuracy (0.449) facet** — likely needs the most fundamental rework.
   - A future abstain-lever spec (Lever F) should target `activity_type` only; task_type work should focus on the classifier itself. Note: raw top-confidence is a weak discriminator here, but the top-vs-2nd **margin** is untested (deferred option (b)) — worth checking before fully closing Lever F for task_type.
 
+## What's BUILT on `feat/tasktype-taxonomy` (schema v6; pending merge)
+task_type redesigned into a **routing-aligned taxonomy** (routing key for Keld Inference Exchange order books; see memory `tasktype-routing-purpose`). Spec/plan/research: `docs/superpowers/{specs,plans}/2026-07-18-tasktype-*`.
+- **New 10-entry vocab:** summarization, translation, code_generation, information_extraction, classification, reasoning, question_answering, **text_generation** (new), **rewriting** (new), **general** (replaces "other"). **DROPPED `agentic_tool_use`** (a workflow shape, not an inference job — was ~half of all task_type errors; agentic-ness lives on the speech_act axis). Renamed codegen/extraction/rag_qa to HF conventions. SchemaVersion 5→6.
+- **Gold set relabeled** (review-gated): agentic_tool_use rows routed to underlying job; "other" split into text_generation/rewriting/general; + coverage rows. 2 human corrections + 1 review fix applied.
+- **Bakeoff-tuned descriptions** (v2 winner). **MEASURED (live sidecar):**
+  - task_type gold accuracy **0.696 → 0.744** (+4.8pts); the agentic_tool_use high-confidence error class is GONE.
+  - Per-category: code_generation 13/14, question_answering 6/6, translation 4/4, summarization 9/10, rewriting 4/5; text_generation 6/10, general 6/10.
+  - **Zero regression:** leakage(task_type) 0.062 flat, leakage(function)/false_eng 0, function_guess 0.909 / sensitivity 0.818 / speech_act ~0.72 / subcategory 0.650 all flat.
+- **FINDING — `reasoning` is a genuine bi-encoder ceiling (4/9).** All 6 reasoning wordings tried topped out at ~4/9; it conflates with question_answering ("reason about X" ≈ "answer about X"), empirically confirming the research prediction. NOT fixable by label wording — needs a different mechanism (NLI-style classifier / Lever E) or is accepted as-is. text_generation→general and general→question_answering are the other residual confusions.
+- **Modality axis (image/video/audio) explicitly deferred** to a future separate axis; `data_analysis` deferred to v2. Both are spec non-goals.
+
 ## What was REJECTED (measured, not shipped)
 - **A1 — tool prior (soft posterior over functions):** INERT. Floor sweep 0.15/0.05/0.02 all left `leakage(function_guess)=0.375`. The model scores `eng` ~0 on subject-heavy prompts, so reweighting surfaced candidates can't promote it. (Deleted from tree.)
 - **A2 / A2.1 — rewriting the function label descriptions:** REGRESSED. Verbose+negated labels catastrophic (function acc 0.824→0.059); short/eng-boosted still worse (→0.500). **The v1 labels are the best labels.** Bi-encoders don't understand negation ("not building marketing software" matches "marketing software") and long similar descriptions collapse score separation. (Deleted from tree.)
