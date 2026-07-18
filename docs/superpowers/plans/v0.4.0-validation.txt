@@ -1,0 +1,12 @@
+# v0.4.0 validation 2026-07-18T00:08:46Z — DEFAULT build (A0+A4 on), 8-thread
+
+>>> DEFAULT confound+ctx (expect leakage fn=0, false_eng=0)
+  function_guess  accuracy=0.909
+  leakage(function_guess)=0.000  leakage(task_type)=0.625  false_eng=0.000
+
+>>> DEFAULT gold-only (expect fn acc ~0.800)
+  function_guess  accuracy=0.800
+
+>>> DISABLE A4 (KELD_ENRICH_COMPOSITIONAL_FUNCTION=off) confound+ctx (expect leakage fn back ~0.375)
+  function_guess  accuracy=0.773
+  leakage(function_guess)=0.375  leakage(task_type)=0.625  false_eng=0.000
