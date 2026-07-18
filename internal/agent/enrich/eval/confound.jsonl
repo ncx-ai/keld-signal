@@ -22,3 +22,23 @@
 {"class":"c2","source":"generic","text":"Reconcile the March credit-card statement against the expense ledger and flag any mismatches.","task_type":"reasoning","domain":"finance","function_guess":"fin"}
 {"class":"c3","text":"now do the same for the other endpoint","recent_prompts":["add request validation to the /users POST handler","write a table test for the validator"],"repo":"acme/api","branch":"feat/validation","project":"Acme API","task_type":"codegen","domain":"software","function_guess":"eng"}
 {"class":"c3","text":"ok ship it","recent_prompts":["fix the flaky migration test","rebase onto main and resolve the conflict in schema.sql"],"repo":"acme/api","branch":"feat/db","project":"Acme API","task_type":"codegen","domain":"software","function_guess":"eng"}
+{"class":"s1","source":"claude_code","text":"How would you add cursor pagination to this results endpoint?","speech_act":"question","task_type":"reasoning","activity_type":"retrieve","domain":"software"}
+{"class":"s1","source":"claude_code","text":"Should we cache this query in Redis or Memcached?","speech_act":"question","task_type":"reasoning","activity_type":"analyze","domain":"software"}
+{"class":"s1","source":"claude_code","text":"What's the difference between a mutex and a semaphore here?","speech_act":"question","task_type":"rag_qa","activity_type":"retrieve","domain":"software"}
+{"class":"s1","source":"claude_code","text":"Why does the worker drop events under load?","speech_act":"question","task_type":"reasoning","activity_type":"analyze","domain":"software"}
+{"class":"s1","source":"generic","text":"Which vendor should we pick for the payroll integration?","speech_act":"question","task_type":"reasoning","activity_type":"analyze","domain":"business"}
+{"class":"s1","source":"claude_code","text":"The migration keeps deadlocking under load.","speech_act":"statement","task_type":"reasoning","activity_type":"analyze","domain":"software"}
+{"class":"s1","source":"claude_code","text":"Latency doubled after the last deploy.","speech_act":"statement","task_type":"reasoning","activity_type":"analyze","domain":"software"}
+{"class":"s1","source":"claude_code","text":"The build is green but the staging pods keep crash-looping.","speech_act":"statement","task_type":"reasoning","activity_type":"analyze","domain":"software"}
+{"class":"s1","source":"generic","text":"Our Q3 conversion rate is down eight percent versus plan.","speech_act":"statement","task_type":"reasoning","activity_type":"analyze","domain":"business"}
+{"class":"s1","source":"claude_code","text":"There is a race between the cache warmer and the invalidation sweep.","speech_act":"statement","task_type":"reasoning","activity_type":"analyze","domain":"software"}
+{"class":"s1","source":"claude_code","text":"and the other endpoint too","speech_act":"fragment","task_type":"codegen","activity_type":"generate","domain":"software"}
+{"class":"s1","source":"claude_code","text":"ok ship it","speech_act":"fragment","task_type":"agentic_tool_use","domain":"software"}
+{"class":"s1","source":"claude_code","text":"same for the staging config","speech_act":"fragment","task_type":"codegen","domain":"software"}
+{"class":"s1","source":"claude_code","text":"yep, that one","speech_act":"fragment","task_type":"other","domain":"software"}
+{"class":"s1","source":"generic","text":"the second bullet, shorter","speech_act":"fragment","task_type":"summarization","domain":"business"}
+{"class":"s1","source":"claude_code","text":"Add a rate limiter to the gRPC endpoints.","speech_act":"command","task_type":"codegen","activity_type":"generate","domain":"software"}
+{"class":"s1","source":"claude_code","text":"Refactor the scheduler into a durable queue.","speech_act":"command","task_type":"codegen","activity_type":"generate","domain":"software"}
+{"class":"s1","source":"generic","text":"Draft a cold outreach email for logistics prospects.","speech_act":"command","task_type":"other","activity_type":"generate","domain":"business"}
+{"class":"s1","source":"claude_code","text":"Explain how the retry backoff interacts with the circuit breaker.","speech_act":"command","task_type":"reasoning","activity_type":"analyze","domain":"software"}
+{"class":"s1","source":"generic","text":"Is this clause enforceable under New York law?","speech_act":"question","task_type":"reasoning","activity_type":"analyze","domain":"legal"}

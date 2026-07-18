@@ -1,73 +1,73 @@
-{"text": "Write a Python function that reverses a linked list.", "task_type": "codegen", "domain": "software", "sensitivity": "none"}
-{"text": "Summarize the attached quarterly earnings report in three bullets.", "task_type": "summarization", "domain": "finance", "sensitivity": "none"}
-{"text": "Translate this paragraph from English to German.", "task_type": "translation", "domain": "general", "sensitivity": "none"}
-{"text": "My SSN is 123-45-6789, can you fill out the medical intake form?", "task_type": "extraction", "domain": "medical", "sensitivity": "phi"}
-{"text": "Here is my API key sk-live-9f8a7b6c, configure the deployment.", "task_type": "agentic_tool_use", "domain": "software", "sensitivity": "secrets"}
-{"text": "Classify these support tickets as bug, feature, or question.", "task_type": "classification", "domain": "software", "sensitivity": "none"}
-{"text": "Given these docs, answer: what is the refund policy?", "task_type": "rag_qa", "domain": "business", "sensitivity": "none"}
-{"text": "Prove that the square root of 2 is irrational.", "task_type": "reasoning", "domain": "science", "sensitivity": "none"}
-{"text": "Refactor this Go HTTP handler to use context cancellation and add tests.", "task_type": "codegen", "domain": "software", "sensitivity": "none"}
-{"text": "Write a SQL query to find the top 10 customers by revenue this quarter.", "task_type": "codegen", "domain": "software", "sensitivity": "none"}
-{"text": "Implement a debounce function in TypeScript with a trailing option.", "task_type": "codegen", "domain": "software", "sensitivity": "none"}
-{"text": "Fix the null pointer exception thrown by this Java service method.", "task_type": "codegen", "domain": "software", "sensitivity": "none"}
-{"text": "Summarize this legal contract's termination and renewal clauses.", "task_type": "summarization", "domain": "legal", "sensitivity": "none"}
-{"text": "Give me a two-sentence summary of this research paper's abstract.", "task_type": "summarization", "domain": "science", "sensitivity": "none"}
-{"text": "TL;DR this twenty-page product requirements document.", "task_type": "summarization", "domain": "business", "sensitivity": "none"}
-{"text": "Extract all invoice numbers and amounts from this accounts-payable export.", "task_type": "extraction", "domain": "finance", "sensitivity": "none"}
-{"text": "Pull the patient's diagnosis and current medications from this chart note.", "task_type": "extraction", "domain": "medical", "sensitivity": "phi"}
-{"text": "Extract the customer's home address and phone number from this order.", "task_type": "extraction", "domain": "business", "sensitivity": "pii"}
-{"text": "Translate this user manual section into Japanese.", "task_type": "translation", "domain": "software", "sensitivity": "none"}
-{"text": "Translate this poem into French, preserving the meter.", "task_type": "translation", "domain": "creative", "sensitivity": "none"}
-{"text": "Translate this Spanish medical discharge summary into English.", "task_type": "translation", "domain": "medical", "sensitivity": "phi"}
-{"text": "Based on the attached HR policy, what is the parental leave allowance?", "task_type": "rag_qa", "domain": "business", "sensitivity": "none"}
-{"text": "According to the provided RFC, how is the TLS handshake initiated?", "task_type": "rag_qa", "domain": "software", "sensitivity": "none"}
-{"text": "Using the attached study, what does an elevated ALT level generally indicate?", "task_type": "rag_qa", "domain": "medical", "sensitivity": "none"}
-{"text": "Categorize each of these inbound emails as spam or not spam.", "task_type": "classification", "domain": "software", "sensitivity": "none"}
-{"text": "Label each product review as positive, negative, or neutral.", "task_type": "classification", "domain": "business", "sensitivity": "none"}
-{"text": "Is this transaction fraudulent? Card 4111 1111 1111 1111, $4,200 at 3am.", "task_type": "classification", "domain": "finance", "sensitivity": "pci"}
-{"text": "If one train leaves at 60 mph and another at 40 mph, when do they meet?", "task_type": "reasoning", "domain": "education", "sensitivity": "none"}
-{"text": "Explain why this distributed locking scheme avoids deadlock.", "task_type": "reasoning", "domain": "software", "sensitivity": "none"}
-{"text": "Work through the tax implications of this stock sale step by step.", "task_type": "reasoning", "domain": "finance", "sensitivity": "none"}
-{"text": "Deploy the staging branch and run the smoke tests, then report status.", "task_type": "agentic_tool_use", "domain": "software", "sensitivity": "none"}
-{"text": "Book a meeting with the team for Thursday and email everyone the agenda.", "task_type": "agentic_tool_use", "domain": "business", "sensitivity": "none"}
-{"text": "Open a pull request with these changes and request review from Alice.", "task_type": "agentic_tool_use", "domain": "software", "sensitivity": "none"}
-{"text": "What's the weather forecast for this weekend?", "task_type": "other", "domain": "general", "sensitivity": "none"}
-{"text": "Tell me a joke about databases.", "task_type": "other", "domain": "creative", "sensitivity": "none"}
-{"text": "What time is it right now in Tokyo?", "task_type": "other", "domain": "general", "sensitivity": "none"}
-{"text": "My email is jane.doe@gmail.com and phone 415-555-0198 — update my profile.", "task_type": "agentic_tool_use", "domain": "general", "sensitivity": "pii"}
-{"text": "Here's my home address: 742 Evergreen Terrace, Springfield. Ship it there.", "task_type": "agentic_tool_use", "domain": "general", "sensitivity": "pii"}
-{"text": "Contact me at bob_smith@company.co or +1 (206) 555-0142 about the invoice.", "task_type": "other", "domain": "business", "sensitivity": "pii"}
-{"text": "Use token ghp_ABC123DEF456GHI789JKL0mnop to push to the repository.", "task_type": "agentic_tool_use", "domain": "software", "sensitivity": "secrets"}
-{"text": "The database password is Hunter2!Prod — connect and run the migration.", "task_type": "agentic_tool_use", "domain": "software", "sensitivity": "secrets"}
-{"text": "My OpenAI key is sk-proj-9d8f7a6b5c4e3, wire up the client for me.", "task_type": "codegen", "domain": "software", "sensitivity": "secrets"}
-{"text": "Patient John Smith, DOB 03/12/1980, diagnosed with Type 2 diabetes — draft a care plan.", "task_type": "other", "domain": "medical", "sensitivity": "phi"}
-{"text": "Summarize this radiology report for patient MRN 4482910, note any follow-ups.", "task_type": "summarization", "domain": "medical", "sensitivity": "phi"}
-{"text": "Charge my Visa 4111 1111 1111 1111, exp 08/27, CVV 123 for the subscription.", "task_type": "agentic_tool_use", "domain": "finance", "sensitivity": "pci"}
-{"text": "Store this card 5500 0000 0000 0004 on file for future billing.", "task_type": "agentic_tool_use", "domain": "finance", "sensitivity": "pci"}
-{"text": "Here is our unreleased Q3 roadmap and internal revenue targets — summarize the risks.", "task_type": "summarization", "domain": "business", "sensitivity": "proprietary"}
-{"text": "Review and refactor our confidential ranking-algorithm source for edge cases.", "task_type": "codegen", "domain": "software", "sensitivity": "proprietary"}
-{"text": "Summarize the merger terms in this internal, NDA-covered memo.", "task_type": "summarization", "domain": "legal", "sensitivity": "proprietary"}
-{"text": "Draft a standard mutual non-disclosure agreement template.", "task_type": "other", "domain": "legal", "sensitivity": "none"}
-{"text": "Create a lesson plan for teaching fractions to fourth graders.", "task_type": "other", "domain": "education", "sensitivity": "none"}
-{"text": "Write a short science-fiction story about a lighthouse keeper on Mars.", "task_type": "other", "domain": "creative", "sensitivity": "none"}
-{"text": "Explain the difference between civil and criminal liability.", "task_type": "reasoning", "domain": "legal", "sensitivity": "none"}
-{"text": "write pytest unit tests for this date parser", "task_type": "codegen", "domain": "software", "sensitivity": "none", "activity_type": "generate", "function_guess": "eng", "subcategory": "eng.test", "source": "claude_code"}
-{"text": "summarize this 40-minute meeting transcript into decisions and action items", "task_type": "summarization", "domain": "business", "sensitivity": "none", "activity_type": "transform", "function_guess": "gen", "subcategory": "gen.notes", "source": "generic"}
-{"text": "Write a new REST endpoint for user profile updates in our Go service.", "task_type": "codegen", "domain": "software", "sensitivity": "none", "activity_type": "generate", "function_guess": "eng", "subcategory": "eng.dev", "source": "claude_code"}
-{"text": "Debug why this Go goroutine leak causes steady memory growth in production.", "task_type": "codegen", "domain": "software", "sensitivity": "none", "activity_type": "analyze", "function_guess": "eng", "subcategory": "eng.debug", "source": "claude_code"}
-{"text": "Run a cohort retention analysis on this signup dataset and summarize the trend.", "task_type": "reasoning", "domain": "business", "sensitivity": "none", "activity_type": "analyze", "function_guess": "data", "subcategory": "data.analysis", "source": "claude_code"}
-{"text": "Clean and normalize this messy CSV export before loading it into the warehouse.", "task_type": "extraction", "domain": "business", "sensitivity": "none", "activity_type": "transform", "function_guess": "data", "subcategory": "data.prep", "source": "claude_code"}
-{"text": "Review this vendor MSA and flag any one-sided indemnification clauses.", "task_type": "summarization", "domain": "legal", "sensitivity": "none", "activity_type": "review", "function_guess": "legal", "subcategory": "legal.contract", "source": "generic"}
-{"text": "Research whether this data-sharing clause complies with GDPR Article 28.", "task_type": "rag_qa", "domain": "legal", "sensitivity": "none", "activity_type": "retrieve", "function_guess": "legal", "subcategory": "legal.research", "source": "generic"}
-{"text": "Draft a cold outreach email to a VP of Engineering prospect at a target account.", "task_type": "other", "domain": "business", "sensitivity": "none", "activity_type": "generate", "function_guess": "sales", "subcategory": "sales.outreach", "source": "generic"}
-{"text": "Analyze this list of leads and rank them by likelihood to convert this quarter.", "task_type": "classification", "domain": "business", "sensitivity": "none", "activity_type": "analyze", "function_guess": "sales", "subcategory": "sales.prospect", "source": "generic"}
-{"text": "Help this customer troubleshoot why their app keeps crashing on login.", "task_type": "other", "domain": "business", "sensitivity": "none", "activity_type": "converse", "function_guess": "support", "subcategory": "support.chat", "source": "generic"}
-{"text": "Turn these five resolved support tickets into a knowledge-base article.", "task_type": "summarization", "domain": "business", "sensitivity": "none", "activity_type": "transform", "function_guess": "support", "subcategory": "support.kb", "source": "generic"}
-{"text": "Analyze this company's cash flow statement and flag any red flags.", "task_type": "reasoning", "domain": "finance", "sensitivity": "none", "activity_type": "analyze", "function_guess": "fin", "subcategory": "fin.analysis", "source": "generic"}
-{"text": "Prepare the month-end close reconciliation summary from this ledger export.", "task_type": "summarization", "domain": "finance", "sensitivity": "none", "activity_type": "transform", "function_guess": "fin", "subcategory": "fin.close", "source": "generic"}
-{"text": "Write a blog post announcing our new product launch next month.", "task_type": "other", "domain": "business", "sensitivity": "none", "activity_type": "generate", "function_guess": "mkt", "subcategory": "mkt.content", "source": "generic"}
-{"text": "Research what competitors are doing for their Q3 marketing campaigns.", "task_type": "rag_qa", "domain": "business", "sensitivity": "none", "activity_type": "retrieve", "function_guess": "mkt", "subcategory": "mkt.research", "source": "generic"}
-{"text": "ok that's fine, do it", "recent_prompts": ["add the compliance flag to single-event activity rows", "right-align the enrichment pills"], "repo": "keld-atlas", "branch": "feat/pills", "project": "Keld Atlas", "function_guess": "eng", "subcategory": "eng.dev", "activity_type": "generate", "source": "claude_code"}
-{"text": "yes", "recent_prompts": ["write the failing test for the sidecar confidence fix", "run it to confirm it fails"], "repo": "keld-cli", "branch": "fix/sidecar", "project": "Keld CLI", "function_guess": "eng", "subcategory": "eng.test", "activity_type": "generate", "source": "claude_code"}
-{"text": "revert that", "recent_prompts": ["change the pill fill to a subdued tint", "assign a color to the team badge"], "repo": "keld-atlas", "branch": "feat/pills", "project": "Keld Atlas", "function_guess": "eng", "subcategory": "eng.dev", "activity_type": "transform", "source": "claude_code"}
-{"text": "looks good, ship it", "recent_prompts": ["draft the Q3 revenue summary email", "tighten the wording on the forecast paragraph"], "repo": "", "branch": "", "project": "", "function_guess": "fin", "subcategory": "fin.fpa", "activity_type": "generate", "source": "generic"}
+{"text": "Write a Python function that reverses a linked list.", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Summarize the attached quarterly earnings report in three bullets.", "task_type": "summarization", "speech_act": "command", "domain": "finance", "sensitivity": "none"}
+{"text": "Translate this paragraph from English to German.", "task_type": "translation", "speech_act": "command", "domain": "general", "sensitivity": "none"}
+{"text": "My SSN is 123-45-6789, can you fill out the medical intake form?", "task_type": "extraction", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
+{"text": "Here is my API key sk-live-9f8a7b6c, configure the deployment.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "Classify these support tickets as bug, feature, or question.", "task_type": "classification", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Given these docs, answer: what is the refund policy?", "task_type": "rag_qa", "speech_act": "question", "domain": "business", "sensitivity": "none"}
+{"text": "Prove that the square root of 2 is irrational.", "task_type": "reasoning", "speech_act": "command", "domain": "science", "sensitivity": "none"}
+{"text": "Refactor this Go HTTP handler to use context cancellation and add tests.", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Write a SQL query to find the top 10 customers by revenue this quarter.", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Implement a debounce function in TypeScript with a trailing option.", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Fix the null pointer exception thrown by this Java service method.", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Summarize this legal contract's termination and renewal clauses.", "task_type": "summarization", "speech_act": "command", "domain": "legal", "sensitivity": "none"}
+{"text": "Give me a two-sentence summary of this research paper's abstract.", "task_type": "summarization", "speech_act": "command", "domain": "science", "sensitivity": "none"}
+{"text": "TL;DR this twenty-page product requirements document.", "task_type": "summarization", "speech_act": "command", "domain": "business", "sensitivity": "none"}
+{"text": "Extract all invoice numbers and amounts from this accounts-payable export.", "task_type": "extraction", "speech_act": "command", "domain": "finance", "sensitivity": "none"}
+{"text": "Pull the patient's diagnosis and current medications from this chart note.", "task_type": "extraction", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
+{"text": "Extract the customer's home address and phone number from this order.", "task_type": "extraction", "speech_act": "command", "domain": "business", "sensitivity": "pii"}
+{"text": "Translate this user manual section into Japanese.", "task_type": "translation", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Translate this poem into French, preserving the meter.", "task_type": "translation", "speech_act": "command", "domain": "creative", "sensitivity": "none"}
+{"text": "Translate this Spanish medical discharge summary into English.", "task_type": "translation", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
+{"text": "Based on the attached HR policy, what is the parental leave allowance?", "task_type": "rag_qa", "speech_act": "question", "domain": "business", "sensitivity": "none"}
+{"text": "According to the provided RFC, how is the TLS handshake initiated?", "task_type": "rag_qa", "speech_act": "question", "domain": "software", "sensitivity": "none"}
+{"text": "Using the attached study, what does an elevated ALT level generally indicate?", "task_type": "rag_qa", "speech_act": "question", "domain": "medical", "sensitivity": "none"}
+{"text": "Categorize each of these inbound emails as spam or not spam.", "task_type": "classification", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Label each product review as positive, negative, or neutral.", "task_type": "classification", "speech_act": "command", "domain": "business", "sensitivity": "none"}
+{"text": "Is this transaction fraudulent? Card 4111 1111 1111 1111, $4,200 at 3am.", "task_type": "classification", "speech_act": "question", "domain": "finance", "sensitivity": "pci"}
+{"text": "If one train leaves at 60 mph and another at 40 mph, when do they meet?", "task_type": "reasoning", "speech_act": "question", "domain": "education", "sensitivity": "none"}
+{"text": "Explain why this distributed locking scheme avoids deadlock.", "task_type": "reasoning", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Work through the tax implications of this stock sale step by step.", "task_type": "reasoning", "speech_act": "command", "domain": "finance", "sensitivity": "none"}
+{"text": "Deploy the staging branch and run the smoke tests, then report status.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Book a meeting with the team for Thursday and email everyone the agenda.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "business", "sensitivity": "none"}
+{"text": "Open a pull request with these changes and request review from Alice.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "What's the weather forecast for this weekend?", "task_type": "other", "speech_act": "question", "domain": "general", "sensitivity": "none"}
+{"text": "Tell me a joke about databases.", "task_type": "other", "speech_act": "command", "domain": "creative", "sensitivity": "none"}
+{"text": "What time is it right now in Tokyo?", "task_type": "other", "speech_act": "question", "domain": "general", "sensitivity": "none"}
+{"text": "My email is jane.doe@gmail.com and phone 415-555-0198 — update my profile.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "general", "sensitivity": "pii"}
+{"text": "Here's my home address: 742 Evergreen Terrace, Springfield. Ship it there.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "general", "sensitivity": "pii"}
+{"text": "Contact me at bob_smith@company.co or +1 (206) 555-0142 about the invoice.", "task_type": "other", "speech_act": "command", "domain": "business", "sensitivity": "pii"}
+{"text": "Use token ghp_ABC123DEF456GHI789JKL0mnop to push to the repository.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "The database password is Hunter2!Prod — connect and run the migration.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "My OpenAI key is sk-proj-9d8f7a6b5c4e3, wire up the client for me.", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "Patient John Smith, DOB 03/12/1980, diagnosed with Type 2 diabetes — draft a care plan.", "task_type": "other", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
+{"text": "Summarize this radiology report for patient MRN 4482910, note any follow-ups.", "task_type": "summarization", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
+{"text": "Charge my Visa 4111 1111 1111 1111, exp 08/27, CVV 123 for the subscription.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "finance", "sensitivity": "pci"}
+{"text": "Store this card 5500 0000 0000 0004 on file for future billing.", "task_type": "agentic_tool_use", "speech_act": "command", "domain": "finance", "sensitivity": "pci"}
+{"text": "Here is our unreleased Q3 roadmap and internal revenue targets — summarize the risks.", "task_type": "summarization", "speech_act": "command", "domain": "business", "sensitivity": "proprietary"}
+{"text": "Review and refactor our confidential ranking-algorithm source for edge cases.", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "proprietary"}
+{"text": "Summarize the merger terms in this internal, NDA-covered memo.", "task_type": "summarization", "speech_act": "command", "domain": "legal", "sensitivity": "proprietary"}
+{"text": "Draft a standard mutual non-disclosure agreement template.", "task_type": "other", "speech_act": "command", "domain": "legal", "sensitivity": "none"}
+{"text": "Create a lesson plan for teaching fractions to fourth graders.", "task_type": "other", "speech_act": "command", "domain": "education", "sensitivity": "none"}
+{"text": "Write a short science-fiction story about a lighthouse keeper on Mars.", "task_type": "other", "speech_act": "command", "domain": "creative", "sensitivity": "none"}
+{"text": "Explain the difference between civil and criminal liability.", "task_type": "reasoning", "speech_act": "command", "domain": "legal", "sensitivity": "none"}
+{"text": "write pytest unit tests for this date parser", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "none", "activity_type": "generate", "function_guess": "eng", "subcategory": "eng.test", "source": "claude_code"}
+{"text": "summarize this 40-minute meeting transcript into decisions and action items", "task_type": "summarization", "speech_act": "command", "domain": "business", "sensitivity": "none", "activity_type": "transform", "function_guess": "gen", "subcategory": "gen.notes", "source": "generic"}
+{"text": "Write a new REST endpoint for user profile updates in our Go service.", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "none", "activity_type": "generate", "function_guess": "eng", "subcategory": "eng.dev", "source": "claude_code"}
+{"text": "Debug why this Go goroutine leak causes steady memory growth in production.", "task_type": "codegen", "speech_act": "command", "domain": "software", "sensitivity": "none", "activity_type": "analyze", "function_guess": "eng", "subcategory": "eng.debug", "source": "claude_code"}
+{"text": "Run a cohort retention analysis on this signup dataset and summarize the trend.", "task_type": "reasoning", "speech_act": "command", "domain": "business", "sensitivity": "none", "activity_type": "analyze", "function_guess": "data", "subcategory": "data.analysis", "source": "claude_code"}
+{"text": "Clean and normalize this messy CSV export before loading it into the warehouse.", "task_type": "extraction", "speech_act": "command", "domain": "business", "sensitivity": "none", "activity_type": "transform", "function_guess": "data", "subcategory": "data.prep", "source": "claude_code"}
+{"text": "Review this vendor MSA and flag any one-sided indemnification clauses.", "task_type": "summarization", "speech_act": "command", "domain": "legal", "sensitivity": "none", "activity_type": "review", "function_guess": "legal", "subcategory": "legal.contract", "source": "generic"}
+{"text": "Research whether this data-sharing clause complies with GDPR Article 28.", "task_type": "rag_qa", "speech_act": "command", "domain": "legal", "sensitivity": "none", "activity_type": "retrieve", "function_guess": "legal", "subcategory": "legal.research", "source": "generic"}
+{"text": "Draft a cold outreach email to a VP of Engineering prospect at a target account.", "task_type": "other", "speech_act": "command", "domain": "business", "sensitivity": "none", "activity_type": "generate", "function_guess": "sales", "subcategory": "sales.outreach", "source": "generic"}
+{"text": "Analyze this list of leads and rank them by likelihood to convert this quarter.", "task_type": "classification", "speech_act": "command", "domain": "business", "sensitivity": "none", "activity_type": "analyze", "function_guess": "sales", "subcategory": "sales.prospect", "source": "generic"}
+{"text": "Help this customer troubleshoot why their app keeps crashing on login.", "task_type": "other", "speech_act": "command", "domain": "business", "sensitivity": "none", "activity_type": "converse", "function_guess": "support", "subcategory": "support.chat", "source": "generic"}
+{"text": "Turn these five resolved support tickets into a knowledge-base article.", "task_type": "summarization", "speech_act": "command", "domain": "business", "sensitivity": "none", "activity_type": "transform", "function_guess": "support", "subcategory": "support.kb", "source": "generic"}
+{"text": "Analyze this company's cash flow statement and flag any red flags.", "task_type": "reasoning", "speech_act": "command", "domain": "finance", "sensitivity": "none", "activity_type": "analyze", "function_guess": "fin", "subcategory": "fin.analysis", "source": "generic"}
+{"text": "Prepare the month-end close reconciliation summary from this ledger export.", "task_type": "summarization", "speech_act": "command", "domain": "finance", "sensitivity": "none", "activity_type": "transform", "function_guess": "fin", "subcategory": "fin.close", "source": "generic"}
+{"text": "Write a blog post announcing our new product launch next month.", "task_type": "other", "speech_act": "command", "domain": "business", "sensitivity": "none", "activity_type": "generate", "function_guess": "mkt", "subcategory": "mkt.content", "source": "generic"}
+{"text": "Research what competitors are doing for their Q3 marketing campaigns.", "task_type": "rag_qa", "speech_act": "command", "domain": "business", "sensitivity": "none", "activity_type": "retrieve", "function_guess": "mkt", "subcategory": "mkt.research", "source": "generic"}
+{"text": "ok that's fine, do it", "recent_prompts": ["add the compliance flag to single-event activity rows", "right-align the enrichment pills"], "repo": "keld-atlas", "branch": "feat/pills", "project": "Keld Atlas", "function_guess": "eng", "subcategory": "eng.dev", "activity_type": "generate", "source": "claude_code", "speech_act": "fragment"}
+{"text": "yes", "recent_prompts": ["write the failing test for the sidecar confidence fix", "run it to confirm it fails"], "repo": "keld-cli", "branch": "fix/sidecar", "project": "Keld CLI", "function_guess": "eng", "subcategory": "eng.test", "activity_type": "generate", "source": "claude_code", "speech_act": "fragment"}
+{"text": "revert that", "recent_prompts": ["change the pill fill to a subdued tint", "assign a color to the team badge"], "repo": "keld-atlas", "branch": "feat/pills", "project": "Keld Atlas", "function_guess": "eng", "subcategory": "eng.dev", "activity_type": "transform", "source": "claude_code", "speech_act": "fragment"}
+{"text": "looks good, ship it", "recent_prompts": ["draft the Q3 revenue summary email", "tighten the wording on the forecast paragraph"], "repo": "", "branch": "", "project": "", "function_guess": "fin", "subcategory": "fin.fpa", "activity_type": "generate", "source": "generic", "speech_act": "fragment"}
