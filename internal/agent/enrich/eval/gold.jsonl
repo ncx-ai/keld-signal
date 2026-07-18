@@ -14,11 +14,11 @@
 {"text": "Give me a two-sentence summary of this research paper's abstract.", "task_type": "summarization", "speech_act": "command", "domain": "science", "sensitivity": "none"}
 {"text": "TL;DR this twenty-page product requirements document.", "task_type": "summarization", "speech_act": "command", "domain": "business", "sensitivity": "none"}
 {"text": "Extract all invoice numbers and amounts from this accounts-payable export.", "task_type": "information_extraction", "speech_act": "command", "domain": "finance", "sensitivity": "none"}
-{"text": "Pull the patient's diagnosis and current medications from this chart note.", "task_type": "information_extraction", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
+{"text": "Pull the patient's diagnosis and current medications from this chart note.", "task_type": "information_extraction", "speech_act": "command", "domain": "medical", "sensitivity": "none"}
 {"text": "Extract the customer's home address and phone number from this order.", "task_type": "information_extraction", "speech_act": "command", "domain": "business", "sensitivity": "pii"}
 {"text": "Translate this user manual section into Japanese.", "task_type": "translation", "speech_act": "command", "domain": "software", "sensitivity": "none"}
 {"text": "Translate this poem into French, preserving the meter.", "task_type": "translation", "speech_act": "command", "domain": "creative", "sensitivity": "none"}
-{"text": "Translate this Spanish medical discharge summary into English.", "task_type": "translation", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
+{"text": "Translate this Spanish medical discharge summary into English.", "task_type": "translation", "speech_act": "command", "domain": "medical", "sensitivity": "none"}
 {"text": "Based on the attached HR policy, what is the parental leave allowance?", "task_type": "question_answering", "speech_act": "question", "domain": "business", "sensitivity": "none"}
 {"text": "According to the provided RFC, how is the TLS handshake initiated?", "task_type": "question_answering", "speech_act": "question", "domain": "software", "sensitivity": "none"}
 {"text": "Using the attached study, what does an elevated ALT level generally indicate?", "task_type": "question_answering", "speech_act": "question", "domain": "medical", "sensitivity": "none"}
@@ -40,13 +40,13 @@
 {"text": "Use token ghp_ABC123DEF456GHI789JKL0mnop to push to the repository.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
 {"text": "The database password is Hunter2!Prod — connect and run the migration.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
 {"text": "My OpenAI key is sk-proj-9d8f7a6b5c4e3, wire up the client for me.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
-{"text": "Patient John Smith, DOB 03/12/1980, diagnosed with Type 2 diabetes — draft a care plan.", "task_type": "text_generation", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
-{"text": "Summarize this radiology report for patient MRN 4482910, note any follow-ups.", "task_type": "summarization", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
+{"text": "Patient John Smith, DOB 03/12/1980, diagnosed with Type 2 diabetes — draft a care plan.", "task_type": "text_generation", "speech_act": "command", "domain": "medical", "sensitivity": "pii"}
+{"text": "Summarize this radiology report for patient MRN 4482910, note any follow-ups.", "task_type": "summarization", "speech_act": "command", "domain": "medical", "sensitivity": "pii"}
 {"text": "Charge my Visa 4111 1111 1111 1111, exp 08/27, CVV 123 for the subscription.", "task_type": "general", "speech_act": "command", "domain": "finance", "sensitivity": "pci"}
 {"text": "Store this card 5500 0000 0000 0004 on file for future billing.", "task_type": "general", "speech_act": "command", "domain": "finance", "sensitivity": "pci"}
-{"text": "Here is our unreleased Q3 roadmap and internal revenue targets — summarize the risks.", "task_type": "summarization", "speech_act": "command", "domain": "business", "sensitivity": "proprietary"}
-{"text": "Review and refactor our confidential ranking-algorithm source for edge cases.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "proprietary"}
-{"text": "Summarize the merger terms in this internal, NDA-covered memo.", "task_type": "summarization", "speech_act": "command", "domain": "legal", "sensitivity": "proprietary"}
+{"text": "Here is our unreleased Q3 roadmap and internal revenue targets — summarize the risks.", "task_type": "summarization", "speech_act": "command", "domain": "business", "sensitivity": "none"}
+{"text": "Review and refactor our confidential ranking-algorithm source for edge cases.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "none"}
+{"text": "Summarize the merger terms in this internal, NDA-covered memo.", "task_type": "summarization", "speech_act": "command", "domain": "legal", "sensitivity": "none"}
 {"text": "Draft a standard mutual non-disclosure agreement template.", "task_type": "text_generation", "speech_act": "command", "domain": "legal", "sensitivity": "none"}
 {"text": "Create a lesson plan for teaching fractions to fourth graders.", "task_type": "text_generation", "speech_act": "command", "domain": "education", "sensitivity": "none"}
 {"text": "Write a short science-fiction story about a lighthouse keeper on Mars.", "task_type": "text_generation", "speech_act": "command", "domain": "creative", "sensitivity": "none"}

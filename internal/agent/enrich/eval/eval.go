@@ -194,9 +194,11 @@ func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]f
 		if f == "sensitivity" {
 			sens, hit := 0, 0
 			for i := 0; i < n; i++ {
-				if fieldOf(gold[i], f) != "none" {
+				// Recall is over rows with a LABELED sensitive class; blank gold is
+				// "not scored" (as for accuracy), never a sensitive miss.
+				if g := fieldOf(gold[i], f); g != "none" && g != "" {
 					sens++
-					if fieldOf(gold[i], f) == fieldOf(pred[i], f) {
+					if g == fieldOf(pred[i], f) {
 						hit++
 					}
 				}

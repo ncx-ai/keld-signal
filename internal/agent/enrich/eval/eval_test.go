@@ -77,12 +77,14 @@ func TestLoadGoldReadsExpandedSet(t *testing.T) {
 	if g[3].Sensitivity != "phi" || g[4].Sensitivity != "secrets" {
 		t.Fatalf("unexpected gold sensitivity: %q %q", g[3].Sensitivity, g[4].Sensitivity)
 	}
-	// Every sensitivity class must be represented so sensitive_recall is meaningful.
+	// Every ACTIVE sensitivity class must be represented so sensitive_recall is
+	// meaningful. "proprietary" is deprecated (content-domain, no concrete-token
+	// detector — see the sensitivity-concrete-data reframe) and no longer required.
 	seen := map[string]bool{}
 	for _, r := range g {
 		seen[r.Sensitivity] = true
 	}
-	for _, want := range []string{"none", "pii", "secrets", "phi", "pci", "proprietary"} {
+	for _, want := range []string{"none", "pii", "secrets", "phi", "pci"} {
 		if !seen[want] {
 			t.Fatalf("gold set missing sensitivity class %q", want)
 		}

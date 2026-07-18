@@ -74,7 +74,13 @@ type SensRule struct {
 	Triggers    []string
 }
 
-// SensitivityFromEntity: first matching rule wins; order matters.
+// SensitivityFromEntity maps a DETECTED CONCRETE ENTITY to a sensitivity class:
+// the class is just a rollup of which sensitive token is present (SSN → phi, card
+// → pci, credential → secrets, other personal identifier → pii). It classifies
+// leaked DATA, not the prompt's subject matter — e.g. medical topic words are not
+// sensitive; a person name or SSN is. `proprietary` (in the Sensitivity vocab) is
+// deprecated: content-domain, no concrete token, no detector. First match wins;
+// order encodes severity (phi > pci > secrets > pii).
 var SensitivityFromEntity = []SensRule{
 	{"phi", []string{"ssn"}},
 	{"pci", []string{"credit_card"}},
