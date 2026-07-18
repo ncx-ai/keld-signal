@@ -19,14 +19,8 @@ func Detect(text string) []Span {
 	lower := strings.ToLower(text)
 	var out []Span
 	for _, r := range Rules() {
-		if r.Regex.String() == "" {
-			// Path-only gitleaks rules (e.g. pkcs12-file) carry no "regex" key,
-			// only a "path" key for filename matching; Task 2's loader compiles
-			// the missing field as an empty pattern, which matches the empty
-			// string at every offset. Such rules have no content-matching
-			// semantics, so skip them here rather than flag every position.
-			continue
-		}
+		// Path-only gitleaks rules (e.g. pkcs12-file) are filtered out by the
+		// loader in rules.go, so every rule here has real regex semantics.
 		if !keywordPresent(lower, r.Keywords) {
 			continue
 		}

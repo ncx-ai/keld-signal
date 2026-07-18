@@ -51,6 +51,15 @@ func load() {
 		return // leaves rules empty; TestRulesLoad guards this
 	}
 	for _, r := range cfg.Rules {
+		if r.Regex == "" {
+			// Path-only gitleaks rules (e.g. pkcs12-file) carry no "regex" key,
+			// only a "path" key for filename matching. Compiling the missing
+			// field would produce an empty pattern that matches every offset,
+			// so treat it like a compile failure and never surface it via
+			// Rules().
+			skipped++
+			continue
+		}
 		re, err := regexp.Compile(r.Regex)
 		if err != nil {
 			skipped++ // RE2 incompatibility: skip, never fatal
