@@ -42,6 +42,12 @@ func (TaskTypeExtractor) Name() string    { return "task_type" }
 func (TaskTypeExtractor) Version() string { return versioned("task_type") }
 
 func (e TaskTypeExtractor) Run(ctx *JobContext) (map[string]any, error) {
+	// A6: route through the labeled classify path (readable descriptions) when
+	// enabled; classifyPass already prepends the Meta preamble (A0).
+	if taskTypeDescriptionsEnabled() {
+		top, alts := classifyPass(ctx, "task_type", TaskTypeDefs)
+		return map[string]any{"task_type": top, "task_type_alt": alts}, nil
+	}
 	text := ctx.Meta.Preamble() + ctx.Text
 	res := ctx.Model.Classify(text, map[string][]string{"task_type": TaskTypes})
 	ranked := res["task_type"]

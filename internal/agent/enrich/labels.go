@@ -6,8 +6,10 @@ package enrich
 // contract-affecting event: bump this and re-run the eval set. A bump can also
 // signal a derivation change (how function/task_type are computed from the
 // same vocab) rather than a vocab change — see v3, which promoted the A0/A4
-// enrichment fixes to default without altering any label text or id.
-const SchemaVersion = 3
+// enrichment fixes to default, and v4, which promoted A6 (task_type classified
+// against short readable label descriptions instead of the bare id strings) —
+// both without altering any label text or id.
+const SchemaVersion = 4
 
 // TaskTypes is the canonical job-classification vocabulary (ported from
 // inference-enrichment).

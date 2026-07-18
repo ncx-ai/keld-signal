@@ -7,10 +7,38 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-17
+
+Enrichment **classification quality** — the on-device model now labels a session
+by the *work being done*, not the *subject the software is about*.
+
+### Changed
+- **task_type classifies against readable label descriptions, not bare id
+  strings (A6, schema v4).** task_type was the last facet still handed the bare
+  vocabulary words (`codegen`, `other`, …), so `other` became an undefined
+  catch-all that swallowed genuine engineering work phrased as
+  debug/fix/refactor/CI/infra/ops. It now classifies over short discriminative
+  descriptions, with codegen framed as **"software engineering"** (not "code
+  generation"). Measured on the eval harness: task_type subject-leakage
+  **0.625 → 0.062** and gold task_type accuracy **0.580 → 0.696**, with
+  function-leakage and false-eng unchanged at **0**. Escape hatch:
+  `KELD_ENRICH_TASKTYPE_DESCRIPTIONS=off` restores bare-string classification.
+- **SchemaVersion 3 → 4** — signals the task_type derivation change to Atlas
+  (label vocabulary unchanged, same as the v3 A0/A4 bump).
+
+## [0.4.0] — 2026-07-17
+
 Enrichment **delivery reliability** — the arc that makes enrichment actually land
-on every prompt, always on GLiNER2, without wedging.
+on every prompt, always on GLiNER2, without wedging — plus the first
+**activity-vs-subject** classification fix.
 
 ### Added
+- **Activity-vs-subject enrichment fix (A0 + A4, schema v3).** Coding sessions
+  that build marketing/finance/etc. software no longer inherit the *subject's*
+  business function. `task_type` now reads the session context preamble (A0), and
+  `function_guess` for interactive coding tools is derived compositionally as
+  `eng` rather than topically (A4, disable with
+  `KELD_ENRICH_COMPOSITIONAL_FUNCTION=off`). Function subject-leakage 0.375 → 0.
 - **Durable spool.** The hook writes each prompt *pointer* (never text) to an
   on-disk spool when the daemon is unreachable; the daemon drains it on startup
   and a periodic sweep. No more silently-lost enrichments during daemon downtime.

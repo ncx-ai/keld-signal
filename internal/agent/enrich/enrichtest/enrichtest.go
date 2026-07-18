@@ -50,6 +50,26 @@ type fake struct {
 // keyword classification, and abstention (empty label, zero confidence) on
 // tasks with no keyword priors (activity/personal/function_guess/subcategory).
 func NewFake() enrich.Model {
+	// task_type keyword priors keyed by canonical id.
+	taskKW := map[string][]string{
+		"codegen":          {"write", "function", "code", "implement", "class", "refactor"},
+		"summarization":    {"summarize", "summary", "tldr"},
+		"translation":      {"translate", "translation"},
+		"extraction":       {"extract", "parse", "pull out"},
+		"rag_qa":           {"according to", "based on the", "what does the doc"},
+		"classification":   {"classify", "categorize", "label"},
+		"reasoning":        {"why", "explain", "reason", "prove"},
+		"agentic_tool_use": {"run the", "use the tool", "call the api"},
+	}
+	// A6 (schema v4) classifies task_type against readable label DESCRIPTIONS,
+	// not the bare ids. Alias each description text to its id's keyword list so
+	// this double recognises both the bare-id path (escape hatch / other facets)
+	// and the default description path. Kept drift-proof by walking TaskTypeDefs.
+	for _, d := range enrich.TaskTypeDefs {
+		if kws, ok := taskKW[d.ID]; ok && d.Text != d.ID {
+			taskKW[d.Text] = kws
+		}
+	}
 	return &fake{
 		patterns: map[string]*regexp.Regexp{
 			"email":       regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`),
@@ -60,16 +80,7 @@ func NewFake() enrich.Model {
 			"secret":      regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token)\s*[:=]\s*\S+`),
 		},
 		keywords: map[string]map[string][]string{
-			"task_type": {
-				"codegen":          {"write", "function", "code", "implement", "class", "refactor"},
-				"summarization":    {"summarize", "summary", "tldr"},
-				"translation":      {"translate", "translation"},
-				"extraction":       {"extract", "parse", "pull out"},
-				"rag_qa":           {"according to", "based on the", "what does the doc"},
-				"classification":   {"classify", "categorize", "label"},
-				"reasoning":        {"why", "explain", "reason", "prove"},
-				"agentic_tool_use": {"run the", "use the tool", "call the api"},
-			},
+			"task_type": taskKW,
 			"domain": {
 				"software":  {"go", "python", "code", "api", "function", "bug"},
 				"legal":     {"contract", "clause", "liability", "court"},
