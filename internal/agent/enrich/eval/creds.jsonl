@@ -1,0 +1,42 @@
+{"text":"deploy with aws key AKIAIOSFODNN7EXAMPLE and go","sensitivity":"secrets","class":"cred"}
+{"text":"aws secret access key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY set in .env","sensitivity":"secrets","class":"cred"}
+{"text":"here's the token ghp_16C7e42F292c6912E7710c838347Ae178B4a","sensitivity":"secrets","class":"cred"}
+{"text":"oauth app token gho_16C7e42F292c6912E7710c838347Ae178B4a for the integration","sensitivity":"secrets","class":"cred"}
+{"text":"github app server token ghs_16C7e42F292c6912E7710c838347Ae178B4a in the workflow config","sensitivity":"secrets","class":"cred"}
+{"text":"gitlab personal access token glpat-1234567890abcdefWXYZ was added to the CI variables","sensitivity":"secrets","class":"cred"}
+{"text":"use stripe sk_live_4eC39HqLyjWDarjtT1zdp7dc for billing","sensitivity":"secrets","class":"cred"}
+{"text":"restricted stripe key rk_live_51Hh1hs2eZvKYlo2C0kJz9r0hkZfWQ was wired into the webhook service","sensitivity":"secrets","class":"cred"}
+{"text":"slack hook xoxb-2345678901-2345678901234-AbCdEfGhIjKlMnOpQrStUvWx","sensitivity":"secrets","class":"cred"}
+{"text":"slack user token xoxp-2345678901-2345678901234-2345678901234-AbCdEfGhIjKlMnOpQrStUvWx0123 leaked in the log","sensitivity":"secrets","class":"cred"}
+{"text":"sendgrid api key SG.abcdEFGH1234ijklMNOP.qrstUVWX5678yzABCDEF9012ghijKLMN3456opqr for transactional email","sensitivity":"secrets","class":"cred"}
+{"text":"twilio auth token 9b1deb4d3b7d4bad9bdd2b0d7b3dcb6f with account sid ACaa11bb22cc33dd44ee55ff66aa77bb88 in the config","sensitivity":"secrets","class":"cred"}
+{"text":"openai key sk-ABCDEFGHIJKLMNOPQRSTT3BlbkFJabcdefghijklmnop hardcoded in the script","sensitivity":"secrets","class":"cred"}
+{"text":"openai key sk-proj-abc123DEF456ghi789JKL012mno345 wired up","sensitivity":"secrets","class":"cred"}
+{"text":"google api key AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI here","sensitivity":"secrets","class":"cred"}
+{"text":"bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U","sensitivity":"secrets","class":"cred"}
+{"text":"-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA3Tz2mr7\n-----END RSA PRIVATE KEY-----","sensitivity":"secrets","class":"cred"}
+{"text":"rotate the deploy key -----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU\n-----END OPENSSH PRIVATE KEY-----","sensitivity":"secrets","class":"cred"}
+{"text":"connect to postgres://admin:s3cr3tP@ss@db.example.com:5432/prod","sensitivity":"secrets","class":"cred"}
+{"text":"mongo uri is mongodb+srv://dbuser:M0ngoP@ssw0rd@cluster0.example.mongodb.net/prod","sensitivity":"secrets","class":"cred"}
+{"text":"the password is Tr0ub4dor&3, don't share it with anyone else","sensitivity":"secrets","class":"cred"}
+{"text":"db password is CorrectHorseBattery9! for the staging box, rotate it after the demo","sensitivity":"secrets","class":"cred"}
+{"text":"npm publish token npm_1234567890abcdefghijklmnopqrstuvwxyzAB is sitting in .npmrc","sensitivity":"secrets","class":"cred"}
+{"text":"datadog api key 0123456789abcdef0123456789abcdef added to the agent config","sensitivity":"secrets","class":"cred"}
+{"text":"the deploy commit is a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0","sensitivity":"none","class":"decoy"}
+{"text":"fixed in commit a1b2c3d, see the changelog","sensitivity":"none","class":"decoy"}
+{"text":"order id 550e8400-e29b-41d4-a716-446655440000 shipped","sensitivity":"none","class":"decoy"}
+{"text":"request 3fa85f64-5717-4562-b3fc-2c963f66afa6 failed with a 500","sensitivity":"none","class":"decoy"}
+{"text":"set the api key to YOUR_API_KEY before running","sensitivity":"none","class":"decoy"}
+{"text":"set Authorization: Bearer <API_KEY> in the request headers","sensitivity":"none","class":"decoy"}
+{"text":"the value was redacted to sk_live_**** in the logs","sensitivity":"none","class":"decoy"}
+{"text":"base64 the payload aGVsbG8gd29ybGQgdGhpcyBpcyBmaW5l please","sensitivity":"none","class":"decoy"}
+{"text":"trace id 4bf92f3577b34da6a3ce929d0e0e4736 attached to the span","sensitivity":"none","class":"decoy"}
+{"text":"verify the checksum sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 matches","sensitivity":"none","class":"decoy"}
+{"text":"pull the image at myapp@sha256:2cf3d2e131b53e6a4a4e4a1e9f6a3b9c1d0e7f8a9b0c1d2e3f4a5b6c7d8e9f0a","sensitivity":"none","class":"decoy"}
+{"text":"set REPLACE_WITH_YOUR_TOKEN in the .env.example file before committing","sensitivity":"none","class":"decoy"}
+{"text":"config.yaml still has the placeholder <YOUR_SECRET_HERE> for now","sensitivity":"none","class":"decoy"}
+{"text":"read the value from $DATABASE_URL at runtime, don't hardcode it","sensitivity":"none","class":"decoy"}
+{"text":"the key was AKIA**************** in the old screenshot, already rotated","sensitivity":"none","class":"decoy"}
+{"text":"feature flag id 7f3e9a2c1b8d4f6e is enabled for the cohort","sensitivity":"none","class":"decoy"}
+{"text":"device id 5f2b1c9e8a3d4f7b6c0e1a2d3f4b5c6a stored locally for telemetry","sensitivity":"none","class":"decoy"}
+{"text":"customer 9c858901-8a57-4791-81fe-4c455b099bc9 requested a refund","sensitivity":"none","class":"decoy"}

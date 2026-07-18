@@ -14,7 +14,7 @@ import (
 // GLiNER2 sidecar and print a per-facet metric table. Local only; never
 // publishes. This is the measurement substrate for classification experiments.
 func newEvalCmd() *cobra.Command {
-	var withContext, withConfound bool
+	var withContext, withConfound, withCreds bool
 	cmd := &cobra.Command{
 		Use:   "eval",
 		Short: "Score the enrichment pipeline against the gold/confound sets (local; uses the live sidecar).",
@@ -60,10 +60,20 @@ func newEvalCmd() *cobra.Command {
 				fmt.Fprintf(out, "  s1_downstream_baseline=%.3f\n", eval.S1DownstreamBaseline(rows, pred))
 				fmt.Fprintf(out, "  speech_act per-mood=%v\n", eval.SpeechActPerMood(rows, pred))
 			}
+			if withCreds {
+				credRows, err := eval.LoadCreds()
+				if err != nil {
+					return err
+				}
+				credPred := eval.RunModelWithContext(model, credRows)
+				fmt.Fprintf(out, "  %-15s secret_recall=%.3f  secret_fpr=%.3f\n", "creds",
+					eval.SecretRecall(credRows, credPred), eval.SecretFPR(credRows, credPred))
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&withContext, "context", false, "Feed session context (recent prompts, repo/branch) to the classifier.")
 	cmd.Flags().BoolVar(&withConfound, "confound", false, "Include the confound set and report leakage/false-eng metrics.")
+	cmd.Flags().BoolVar(&withCreds, "creds", false, "Score the credential-detection corpus and report secret_recall/secret_fpr.")
 	return cmd
 }

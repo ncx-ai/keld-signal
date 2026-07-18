@@ -17,6 +17,9 @@ var goldJSONL string
 //go:embed confound.jsonl
 var confoundJSONL string
 
+//go:embed creds.jsonl
+var credsJSONL string
+
 // GoldRow is one labeled evaluation example.
 //
 // Activity, FunctionGuess, and Subcategory are optional (schema-v2 job-category
@@ -95,6 +98,10 @@ func LoadGold() ([]GoldRow, error) { return parseRows(goldJSONL) }
 
 // LoadConfound parses the embedded confound eval set (classes c1/c2/c3).
 func LoadConfound() ([]GoldRow, error) { return parseRows(confoundJSONL) }
+
+// LoadCreds parses the embedded credential-detection corpus (class "cred" =
+// contains a real credential; class "decoy" = high-entropy/placeholder non-secret).
+func LoadCreds() ([]GoldRow, error) { return parseRows(credsJSONL) }
 
 func fieldOf(x any, f string) string {
 	switch v := x.(type) {
@@ -307,6 +314,52 @@ func S1DownstreamBaseline(gold []GoldRow, pred []Pred) float64 {
 		return 0
 	}
 	return float64(wrong) / float64(pairs)
+}
+
+// SecretRecall: over rows whose gold sensitivity is "secrets", the fraction
+// predicted "secrets". 0 when there are none.
+func SecretRecall(gold []GoldRow, pred []Pred) float64 {
+	n := len(gold)
+	if len(pred) < n {
+		n = len(pred)
+	}
+	var tot, hit int
+	for i := 0; i < n; i++ {
+		if gold[i].Sensitivity != "secrets" {
+			continue
+		}
+		tot++
+		if pred[i].Sensitivity == "secrets" {
+			hit++
+		}
+	}
+	if tot == 0 {
+		return 0
+	}
+	return float64(hit) / float64(tot)
+}
+
+// SecretFPR: over decoy rows (class "decoy", gold sensitivity "none"), the
+// fraction wrongly predicted "secrets". 0 when there are none.
+func SecretFPR(gold []GoldRow, pred []Pred) float64 {
+	n := len(gold)
+	if len(pred) < n {
+		n = len(pred)
+	}
+	var tot, wrong int
+	for i := 0; i < n; i++ {
+		if gold[i].Class != "decoy" {
+			continue
+		}
+		tot++
+		if pred[i].Sensitivity == "secrets" {
+			wrong++
+		}
+	}
+	if tot == 0 {
+		return 0
+	}
+	return float64(wrong) / float64(tot)
 }
 
 // SpeechActPerMood returns, per gold speech_act id, [correct, total] over rows
