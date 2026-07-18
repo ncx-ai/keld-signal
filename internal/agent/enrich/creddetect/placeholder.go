@@ -35,7 +35,7 @@ var (
 func IsPlaceholder(s string) bool {
 	t := strings.TrimSpace(s)
 	if t == "" {
-		return true
+		return false // no value to judge — do NOT gate (fail open for recall)
 	}
 	if reTemplate.MatchString(t) {
 		return true

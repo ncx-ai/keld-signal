@@ -79,6 +79,9 @@ func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	found := map[string]bool{}
 	spans := make([]Entity, 0, len(res.Entities))
 	for _, ent := range res.Entities {
+		if creddetect.IsPlaceholder(ent.Text) {
+			continue // precision-gate: placeholder/redacted value, not a real secret
+		}
 		found[ent.Label] = true
 		spans = append(spans, Entity{
 			Label:      ent.Label,
@@ -93,6 +96,9 @@ func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	// api_key entity, so sensitivityFromEntities elevates to "secrets" via the
 	// existing rule table WITHOUT overriding a higher-severity class (e.g. phi).
 	for _, c := range creddetect.Detect(ctx.Text) {
+		if creddetect.IsPlaceholder(ctx.Text[c.Start:c.End]) {
+			continue // defense-in-depth: a placeholder that matched a regex is still a placeholder
+		}
 		found["api_key"] = true
 		spans = append(spans, Entity{
 			Label:      "api_key",

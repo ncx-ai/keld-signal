@@ -14,6 +14,16 @@ func TestIsPlaceholderPositives(t *testing.T) {
 	}
 }
 
+func TestIsPlaceholderEmptyIsNotPlaceholder(t *testing.T) {
+	// Empty/whitespace text = no value to judge. Must NOT gate (fail open for
+	// recall) — a detected entity with no surfaced text should still count.
+	for _, s := range []string{"", "   "} {
+		if IsPlaceholder(s) {
+			t.Errorf("IsPlaceholder(%q) = true, want false (empty must fail open for recall)", s)
+		}
+	}
+}
+
 func TestIsPlaceholderNegatives_RealSecrets(t *testing.T) {
 	// Every one of these is a real (fake-but-realistic) secret from the corpus —
 	// a false positive here is RECALL LOSS. They MUST NOT be placeholders.
