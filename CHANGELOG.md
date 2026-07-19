@@ -7,6 +7,38 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-07-18
+
+Enrichment **classification quality** — routing-aligned task_type, better domain
+and sensitivity, and credential false-positive control. Schema **5 → 6**.
+
+### Changed
+- **task_type redesigned into a routing-aligned taxonomy (schema v6).** Dropped
+  `agentic_tool_use` (a workflow shape, not an inference job — it caused ~half of
+  task_type errors); added `text_generation` and `rewriting`; renamed to HF
+  conventions (`code_generation`, `information_extraction`, `question_answering`);
+  `other` → `general`. task_type is the routing key for the Keld Inference
+  Exchange order books. Bakeoff-tuned descriptions; measured 0.696 → 0.744.
+- **Domain classification given readable label descriptions** (the A6 treatment).
+  Domain classified against bare label strings with a `general` magnet; adding
+  bakeoff-tuned descriptions lifted domain **0.462 → 0.68** with no new model
+  (CPU-only, single resident model).
+- **Sensitivity reframed to concrete leaked DATA, not content domain.** The class
+  is a rollup of which concrete sensitive entity is present (SSN → phi, card →
+  pci, credential → secrets, other personal identifier → pii); medical/topic
+  words no longer flagged. `proprietary` deprecated. sensitive_recall 0.68 → 0.90+.
+
+### Added
+- **Deterministic credential detection layer** (vendored gitleaks ruleset + a
+  keyword-prefiltered, entropy-gated detector) unioned into the `secrets` class,
+  raising credential recall with zero false positives on the eval corpus.
+- **Placeholder precision-gate** — placeholder/redacted values (`YOUR_API_KEY`,
+  `<API_KEY>`, `sk_live_****`) no longer trigger `secrets` (fpr 0.167 → 0.056),
+  with zero recall loss.
+- **Confidence-calibration + credential eval metrics** in `keld-agent eval`
+  (`--calibration`, `--creds`), and the gold set expanded 82 → 165 rows with
+  multi-judge consensus labels.
+
 ## [0.6.0] — 2026-07-18
 
 New enrichment facet **`speech_act`** — a subject-independent, structural signal:
