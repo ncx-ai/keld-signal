@@ -73,6 +73,21 @@ and its raw counterpart where paired. Consensus → gold; splits → blank (unsc
 - **tool / model augmentation** — excluded by decision.
 - Changing the taxonomy — agentic sub-tasks use the same task_type/domain vocab.
 
+## Planned follow-on — multi-stage actor/intent resolution (for the `raw` shape)
+
+Once the baseline is measured (the raw-scaffolding penalty), experiment with a
+**two-pass, single-model** approach for raw calls: **Stage 1** runs a GLiNER
+extraction over the SYSTEM-PROMPT portion of a raw call to resolve actor/intent —
+agent role, domain, purpose, available tools — i.e. derive the agentic Meta *from
+the call itself* (when it isn't provided separately). **Stage 2** classifies the
+task portion augmented with that derived context. This turns the hard "raw, no
+metadata" case into the easy "clean + metadata" case, and fits the single-resident-
+model / CPU-only constraint (two passes of the SAME model, not a second model). The
+corpus enables both measurements: (a) does stage-1-derived context recover raw
+accuracy toward clean+augmented, and (b) does stage-1 correctly recover the true
+`agent_role`/`framework`/`workflow` (carried as gold on the raw rows). Only build it
+if the measured raw penalty justifies it.
+
 ## Success criteria
 
 - `agentic.jsonl` (~60–80 rows, clean+raw), multi-judge-labeled.
