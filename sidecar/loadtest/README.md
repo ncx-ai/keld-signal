@@ -69,62 +69,83 @@ covered by `app/test_worker_manager.py`.
 The load test drives the same endpoints (`/classify`, `/extract`, `/entities`)
 and label schemas the real pipeline uses. In production, every eligible prompt is
 enriched by a fixed sequence of classification/extraction **sweeps** (the code
-calls them *extractors*, `internal/agent/enrich/`). They run against the GLiNER2
-sidecar when it's provisioned, otherwise the pure-Go deterministic fallback.
+calls them *extractors*, `internal/agent/enrich/`). Enrichment is **ML-only** —
+it runs against the GLiNER2 sidecar; there is **no fallback backend** (if the
+sidecar isn't ready, jobs queue/spool until it is).
 
-**Sequencing — two waves, single-flight.** Each prompt makes **up to 7 model
-calls**, one at a time (never concurrent — that's the load-protection guarantee
-the tests verify):
+**Sequencing — two waves, single-flight.** Each prompt yields **up to 8 facets**,
+one model call at a time (never concurrent — that's the load-protection guarantee
+the tests verify; `sensitivity` also runs a deterministic no-model credential
+layer, and `domain` uses a second call only for agentic requests):
 
-- **Wave 1 — six independent sweeps**, run serially and committed as a batch (they
-  never read each other):
-  1. `task_type` — *classify* the kind of task (`codegen`, `summarization`,
-     `extraction`, `translation`, `rag_qa`, `classification`, `reasoning`,
-     `agentic_tool_use`, `other`).
-  2. `sensitivity` — *extract* sensitive entities (`email`, `phone`, `ssn`,
-     `credit_card`, `api_key`, `secret`, `person`, `address`) **and** classify a
-     level (`none`/`pii`/`secrets`/`phi`/`pci`/`proprietary`); a hard span
-     override wins (an `api_key` ⇒ `secrets`, an `ssn` ⇒ `phi`). Spans are
-     **masked** here — the raw text is dropped.
+- **Wave 1 — seven independent sweeps**, run serially and committed as a batch
+  (they never read each other):
+  1. `task_type` — *classify* the inference-job category, the **routing key** for
+     the Keld Inference Exchange: `summarization`, `translation`,
+     `code_generation`, `information_extraction`, `classification`, `reasoning`,
+     `question_answering`, `text_generation`, `rewriting`, `general`.
+  2. `sensitivity` — detect **concrete leaked data** (not topic). Unions the
+     GLiNER2 NER (`email`, `phone`, `ssn`, `credit_card`, `api_key`, `secret`,
+     `person`, `address`) with a **deterministic credential-detection layer**
+     (vendored gitleaks regex + entropy, keyword-prefiltered) and a **placeholder
+     precision-gate** (suppresses `YOUR_API_KEY`/`<API_KEY>`/redacted values).
+     The ordered rule table maps the detected entities to the highest-severity
+     class: `ssn`→`phi`, `credit_card`→`pci`, `api_key`/`secret`→`secrets`, other
+     personal id→`pii` (so a credential never downgrades a co-present SSN).
+     `none` otherwise. (`proprietary` is a deprecated vocab member, never emitted.)
+     Spans are **masked** here — the raw text is dropped.
   3. `domain_entities` — *extract* domain entities (`language`, `framework`,
      `library`, `org`, `product`) **and** classify a `domain` (`software`,
-     `legal`, `medical`, `finance`, …).
+     `legal`, `medical`, `finance`, `science`, `business`, `education`,
+     `creative`, `general`).
   4. `activity_type` — *classify* the cognitive operation (`generate`,
      `transform`, `analyze`, `retrieve`, `converse`, `review`).
   5. `personal` — `work` vs `personal`.
   6. `function_guess` — which of the **12 business functions** (`eng`, `prod`,
      `data`, `mkt`, `sales`, `support`, `delivery`, `fin`, `legal`, `hr`, `it`,
-     `gen`).
+     `gen`). For interactive coding tools this is derived compositionally as `eng`
+     (the A4 rule), not classified topically.
+  7. `speech_act` — *classify* the utterance kind: `command` / `question` /
+     `statement` / `fragment`. Classifies the prompt **text only** (no context
+     preamble — mood is a property of the ask).
 - **Wave 2 — one conditioned sweep**, run after Wave 1 commits:
-  7. `subcategory` — *conditioned on* `function_guess`: it classifies only within
+  8. `subcategory` — *conditioned on* `function_guess`: it classifies only within
      that function's subcategories (e.g. `function=eng` ⇒ `eng.dev` / `eng.debug`
      / `eng.test` / `eng.review` / `eng.devops` / `eng.docs`).
 
-Every classify call is prefixed with a **context preamble** (`Meta.Preamble()`:
-repo, branch, project, tool, and recent prompts) so the surrounding work informs
-the guess — e.g. the same prompt in a `finance` repo leans toward `fin`.
+Classify calls are prefixed with a **context preamble** so the surrounding work
+informs the guess. Two variants (see `Meta`): `PreambleCoding()` (repo, branch,
+project, tool, recent prompts) is used by `task_type`/`activity_type`/etc.;
+`domain` uses the fuller `Preamble()`. For agentic-framework requests the two
+diverge — agentic context (framework/agent/workflow) **helps `domain` but hurts
+`task_type`**, so `task_type` drops it and `domain` keeps it.
+
+**Classifier facets score against readable label DESCRIPTIONS, not bare ids** — a
+bi-encoder keys on token/semantic overlap, so the label wording is load-bearing
+(e.g. `code_generation` scores against "software engineering"; `domain`'s
+`general` is narrowed so it stops acting as a catch-all magnet).
 
 **What a production enrichment consists of** (the `Profile`, minus raw text):
 `task_type` (+ ranked alternates), `domain` + `entities`, `sensitivity` +
-**masked** `sensitivity_spans`, `activity`, `personal` (work/personal),
-`function_guess`, `subcategory` (+ alternates), plus each producer's version,
-pipeline status (`enriched`/`partial`), schema version, and timestamp. Only this
-derived, masked profile is synced to Atlas — **the prompt text never leaves the
-machine.**
+**masked** `sensitivity_spans`, `activity_type`, `personal`, `function_guess`,
+`subcategory` (+ alternates), `speech_act`, plus each producer's version,
+pipeline status (`enriched`/`partial`), **schema version (v6)**, and timestamp.
+Only this derived, masked profile is synced to Atlas — **the prompt text never
+leaves the machine.**
 
 **Intuitive examples** (illustrative — real outputs vary with the model):
 
 - *"Refactor this Django view to use the ORM efficiently and add pagination."*
-  → `task_type=codegen`, `domain=software` (entity `framework=Django`),
+  → `task_type=code_generation`, `domain=software` (entity `framework=Django`),
   `activity=transform`, `personal=work`, `function=eng`, `subcategory=eng.review`,
-  `sensitivity=none`.
+  `speech_act=command`, `sensitivity=none`.
 - *"Draft an email to jane@acme.com sharing our API key sk-live-abc123."*
-  → entities `email`, `api_key`; `sensitivity=secrets` (hard override from the
-  `api_key`, conf 1.0) with both spans **masked**; `task_type=generate`,
-  `activity=generate`, `function=gen`, `subcategory=gen.comms`.
+  → entities `email`, `api_key`; `sensitivity=secrets` (the `api_key` outranks the
+  `email`'s `pii`, conf 1.0) with both spans **masked**; `task_type=text_generation`,
+  `activity=generate`, `function=gen`, `subcategory=gen.comms`, `speech_act=command`.
 - *"Build a Q3 revenue forecast model in the finance workbook."*
   → `task_type=reasoning`, `domain=finance`, `activity=analyze`, `function=fin`,
-  `subcategory=fin.fpa`, `sensitivity=none`.
+  `subcategory=fin.fpa`, `speech_act=command`, `sensitivity=none`.
 
 The load-test corpus (`corpus.py`) sends these same task/label schemas at varied
 text lengths, so the tests exercise the real inference shapes and sizes.

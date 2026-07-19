@@ -55,15 +55,28 @@ unreachable, and the daemon drains it on startup + a periodic sweep.
 **Enrichment pipeline (`internal/agent/enrich/`).** A staged registry of
 extractors ("sweeps") run over a swappable `Model` backend, producing a `Profile`.
 Single-flight (never fans out) so the shared model issues at most one inference at
-a time. Two waves, up to 7 model calls per prompt:
-- **Wave 1** (independent, committed as a batch): `task_type`, `sensitivity`
-  (+ masked entity spans; hard span match overrides the classifier, e.g. an
-  `api_key` ⇒ `secrets`), `domain` (+ entities), `activity_type`, `personal`,
-  `function_guess` (12 business functions).
+a time. Two waves, up to 8 facets per prompt:
+- **Wave 1** (independent, committed as a batch): `task_type` (the routing key for
+  the Keld Inference Exchange — a 10-entry routing taxonomy: `summarization`,
+  `translation`, `code_generation`, `information_extraction`, `classification`,
+  `reasoning`, `question_answering`, `text_generation`, `rewriting`, `general`),
+  `sensitivity` (+ masked entity spans; detects **concrete leaked data**, not
+  topic — unions the GLiNER2 NER with a deterministic gitleaks credential layer
+  and a placeholder gate, then rolls up to the highest-severity class: `ssn`⇒`phi`,
+  `credit_card`⇒`pci`, `api_key`/`secret`⇒`secrets`, other personal id⇒`pii`),
+  `domain` (+ entities), `activity_type`, `personal`, `function_guess`
+  (12 business functions), `speech_act` (`command`/`question`/`statement`/
+  `fragment`, classifies the prompt text only).
 - **Wave 2** (conditioned on Wave-1 `function_guess`): `subcategory`.
-- Label vocabularies live in `labels.go` (gated by `SchemaVersion` — bump it and
-  re-run the eval when changing any vocab). Each classify is prefixed with a
-  `Meta.Preamble()` (repo/branch/tool/recent prompts) so context informs the guess.
+- **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
+  (the bi-encoder keys on token/semantic overlap — the label wording is
+  load-bearing; e.g. `code_generation` scores against "software engineering").
+- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **6**
+  — bump it and re-run the eval when changing any vocab). Classify calls are
+  prefixed with a context preamble (`Meta.PreambleCoding()`; `domain` uses the
+  fuller `Meta.Preamble()`). **Facet-selective agentic augmentation:** agentic
+  framework metadata helps `domain` but hurts `task_type`, so only `domain`
+  augments with it — `task_type` and the others drop it.
 
 **Model backends.** Enrichment is **ML-only — there is no deterministic
 backend.**

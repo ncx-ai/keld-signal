@@ -55,17 +55,34 @@ which is a third, much smaller stream: no prompt content, ever.)
 
 For each eligible prompt the agent runs a fixed sequence of classification /
 extraction **sweeps** (single-flight, so it never runs concurrent inferences),
-then masks and publishes. In two waves, up to 7 model calls per prompt:
+then masks and publishes. In two waves, up to 8 facets per prompt:
 
 - **Wave 1** (independent): `task_type` · `sensitivity` (+ masked entity spans) ·
   `domain` (+ entities) · `activity_type` · `personal` (work/personal) ·
-  `function_guess` (one of 12 business functions).
+  `function_guess` (one of 12 business functions) · `speech_act`
+  (command/question/statement/fragment).
 - **Wave 2** (conditioned on the function): `subcategory`.
 
-Each prompt yields a `Profile` — task, domain + entities, sensitivity + **masked**
-spans, activity, function, subcategory — that's synced to Atlas. Sensitive spans
-(emails, keys, SSNs…) are masked before anything leaves; a hard span match
-(e.g. an API key) overrides the classifier to `secrets`.
+Each prompt yields a `Profile` — `task_type`, `domain` + entities, `sensitivity` +
+**masked** spans, `activity_type`, `personal`, `function_guess`, `subcategory`,
+`speech_act` — synced to Atlas (**schema v6**). `task_type` is a **routing-aligned
+taxonomy** (a real inference-job category — `summarization` · `translation` ·
+`code_generation` · `information_extraction` · `classification` · `reasoning` ·
+`question_answering` · `text_generation` · `rewriting` · `general`) — the routing
+key for the Keld Inference Exchange. Classifier facets score against readable label
+**descriptions**, not bare ids (a bi-encoder keys on token overlap, so the label
+wording is load-bearing).
+
+**Sensitivity is concrete leaked data, not topic.** The class is a rollup of which
+concrete sensitive entity is present — SSN→`phi`, card→`pci`, credential→`secrets`,
+other personal identifier (email/phone/person/address)→`pii`; medical or other
+*topic* words alone are never flagged. Detection **unions two layers**: the GLiNER2
+NER **and** a deterministic credential-detection layer (a vendored gitleaks ruleset
+— keyword-prefiltered regex + entropy floors — with a **placeholder precision-gate**
+that suppresses `YOUR_API_KEY`/`<API_KEY>`/redacted values). Any hit registers its
+entity; the ordered rule table then picks the **highest-severity** class, so a
+detected credential never downgrades a co-present SSN. Sensitive spans (emails,
+keys, SSNs…) are **masked** before anything leaves the machine.
 
 - **Model backends.** GLiNER2 (DeBERTa-v2) via the sidecar — the only backend.
   Enrichment is ML-only; there is no deterministic fallback. If the sidecar
