@@ -7,6 +7,28 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-07-19
+
+Agentic-framework classification — measure and improve enrichment on traffic from
+agentic workflows (Mastra, LangChain/LangGraph, CrewAI).
+
+### Added
+- **Agentic-framework eval corpus** (88 rows: 60 clean sub-tasks + 28 full raw LLM
+  calls, multi-judge-consensus-labeled) and `keld-agent eval --agentic` reporting
+  task_type/domain accuracy by prompt shape and augmented-vs-bare.
+- **Agentic context on `Meta`** — framework, agent role, workflow, step, and recent
+  steps, rendered into the classification preamble.
+
+### Changed
+- **Facet-selective agentic augmentation.** Measured that naive full-metadata
+  augmentation *hurts* task_type (subject-noise) while *helping* domain. task_type
+  and the other non-domain classifiers now use a coding-only preamble
+  (`Meta.PreambleCoding()`, dropping agentic fields); domain augments with the
+  agentic context. On the agentic corpus: task_type 0.64→0.80, domain 0.73→0.78,
+  with **zero change to coding/human classification** (coding preamble byte-identical).
+- Eval gold `activity_type` + `speech_act` coverage extended to the full 165-row set
+  via multi-judge consensus, making those facets measurable on the larger set.
+
 ## [0.7.0] — 2026-07-18
 
 Enrichment **classification quality** — routing-aligned task_type, better domain
