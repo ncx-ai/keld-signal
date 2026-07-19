@@ -14,7 +14,7 @@ import (
 // GLiNER2 sidecar and print a per-facet metric table. Local only; never
 // publishes. This is the measurement substrate for classification experiments.
 func newEvalCmd() *cobra.Command {
-	var withContext, withConfound, withCreds, withCalibration bool
+	var withContext, withConfound, withCreds, withCalibration, withAgentic bool
 	cmd := &cobra.Command{
 		Use:   "eval",
 		Short: "Score the enrichment pipeline against the gold/confound sets (local; uses the live sidecar).",
@@ -85,6 +85,21 @@ func newEvalCmd() *cobra.Command {
 				printCal("classifier facets", classifier)
 				printCal("rule-influenced (confidence forced to 1.0 on some rows — reflects rules, not model)", ruleInfluenced)
 			}
+			if withAgentic {
+				ag, err := eval.LoadAgentic()
+				if err != nil {
+					return err
+				}
+				aug := eval.RunModelWithContext(model, ag) // agentic Meta in the preamble
+				bare := eval.RunModel(model, ag)           // no context
+				fmt.Fprintf(out, "\n== agentic corpus (rows=%d) ==\n", len(ag))
+				for _, f := range []string{"task_type", "domain"} {
+					am := eval.Score(ag, aug, []string{f})[f]["accuracy"]
+					bm := eval.Score(ag, bare, []string{f})[f]["accuracy"]
+					fmt.Fprintf(out, "  %-10s augmented=%.3f  bare=%.3f  (Δ=%+.3f)\n", f, am, bm, am-bm)
+					fmt.Fprintf(out, "      by shape (augmented): %v\n", eval.AccuracyByShape(ag, aug, f))
+				}
+			}
 			return nil
 		},
 	}
@@ -92,5 +107,6 @@ func newEvalCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&withConfound, "confound", false, "Include the confound set and report leakage/false-eng metrics.")
 	cmd.Flags().BoolVar(&withCreds, "creds", false, "Score the credential-detection corpus and report secret_recall/secret_fpr.")
 	cmd.Flags().BoolVar(&withCalibration, "calibration", false, "Print per-facet accuracy stratified by GLiNER2 confidence (reliability bins + ECE).")
+	cmd.Flags().BoolVar(&withAgentic, "agentic", false, "Score the agentic-framework corpus: task_type/domain accuracy by shape and augmented-vs-bare.")
 	return cmd
 }

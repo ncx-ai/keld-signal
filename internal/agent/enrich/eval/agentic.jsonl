@@ -1,0 +1,1 @@
+{"text":"Summarize the web_search results into three bullets","shape":"clean","framework":"langgraph","agent_role":"research_agent","workflow":"research_pipeline","step":"3","recent_steps":["web_search","fetch_docs"],"task_type":"summarization","domain":"general"}

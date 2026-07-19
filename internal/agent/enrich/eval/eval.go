@@ -21,6 +21,9 @@ var confoundJSONL string
 //go:embed creds.jsonl
 var credsJSONL string
 
+//go:embed agentic.jsonl
+var agenticJSONL string
+
 // GoldRow is one labeled evaluation example.
 //
 // Activity, FunctionGuess, and Subcategory are optional (schema-v2 job-category
@@ -41,6 +44,15 @@ type GoldRow struct {
 	FunctionGuess string   `json:"function_guess"`
 	SpeechAct     string   `json:"speech_act"`
 	Subcategory   string   `json:"subcategory"`
+
+	// Agentic-corpus fields (agentic.jsonl): shape ∈ {clean, raw}; the rest are
+	// the agentic Meta augmentation.
+	Shape       string   `json:"shape"`
+	Framework   string   `json:"framework"`
+	AgentRole   string   `json:"agent_role"`
+	Workflow    string   `json:"workflow"`
+	Step        string   `json:"step"`
+	RecentSteps []string `json:"recent_steps"`
 }
 
 // srcOr returns the row's tool source, defaulting to claude_code. Confound c2
@@ -53,7 +65,8 @@ func (r GoldRow) srcOr() string {
 	return "claude_code"
 }
 
-// Meta builds the enrich.Meta an augmented run would see for this gold row.
+// Meta builds the enrich.Meta an augmented run would see for this gold row,
+// including agentic-framework context when present.
 func (r GoldRow) Meta(source string) enrich.Meta {
 	return enrich.Meta{
 		Repo:          r.Repo,
@@ -61,6 +74,11 @@ func (r GoldRow) Meta(source string) enrich.Meta {
 		GitBranch:     r.Branch,
 		Project:       r.Project,
 		RecentPrompts: r.RecentPrompts,
+		Framework:     r.Framework,
+		AgentRole:     r.AgentRole,
+		Workflow:      r.Workflow,
+		Step:          r.Step,
+		RecentSteps:   r.RecentSteps,
 	}
 }
 
@@ -118,6 +136,38 @@ func LoadConfound() ([]GoldRow, error) { return parseRows(confoundJSONL) }
 // LoadCreds parses the embedded credential-detection corpus (class "cred" =
 // contains a real credential; class "decoy" = high-entropy/placeholder non-secret).
 func LoadCreds() ([]GoldRow, error) { return parseRows(credsJSONL) }
+
+// LoadAgentic parses the embedded agentic-framework corpus (rows carry a Shape
+// ∈ {clean, raw} and agentic Meta fields).
+func LoadAgentic() ([]GoldRow, error) { return parseRows(agenticJSONL) }
+
+// AccuracyByShape returns per-Shape [correct,total] for a facet over rows with a
+// non-blank gold value for that facet. Used to compare clean-subtask vs raw-call
+// classification on the agentic corpus.
+func AccuracyByShape(gold []GoldRow, pred []Pred, facet string) map[string][2]int {
+	n := len(gold)
+	if len(pred) < n {
+		n = len(pred)
+	}
+	out := map[string][2]int{}
+	for i := 0; i < n; i++ {
+		g := fieldOf(gold[i], facet)
+		if g == "" {
+			continue
+		}
+		shape := gold[i].Shape
+		if shape == "" {
+			shape = "(none)"
+		}
+		c := out[shape]
+		c[1]++
+		if g == fieldOf(pred[i], facet) {
+			c[0]++
+		}
+		out[shape] = c
+	}
+	return out
+}
 
 func fieldOf(x any, f string) string {
 	switch v := x.(type) {

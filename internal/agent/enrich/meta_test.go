@@ -26,3 +26,18 @@ func TestPreamble(t *testing.T) {
 		t.Fatalf("full preamble\n got: %q\nwant: %q", full, want)
 	}
 }
+
+func TestPreambleAgentic(t *testing.T) {
+	// agentic context: framework/agent/workflow/step appended after coding fields
+	// (repository:none base preserved), recent_steps as a newest-first block.
+	got := Meta{
+		Framework: "langgraph", AgentRole: "billing_assistant",
+		Workflow: "research_pipeline", Step: "4",
+		RecentSteps: []string{"search_web", "fetch_docs"},
+	}.Preamble()
+	want := "[Context — repository: none; framework: langgraph; agent: billing_assistant; workflow: research_pipeline; step: 4]\n" +
+		"Recent steps (newest first):\n 1. search_web\n 2. fetch_docs\nTask: "
+	if got != want {
+		t.Fatalf("agentic preamble\n got: %q\nwant: %q", got, want)
+	}
+}
