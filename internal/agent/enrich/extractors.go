@@ -50,7 +50,7 @@ func (e TaskTypeExtractor) Run(ctx *JobContext) (map[string]any, error) {
 		top, alts := classifyPass(ctx, "task_type", TaskTypeDefs)
 		return map[string]any{"task_type": top, "task_type_alt": alts}, nil
 	}
-	text := ctx.Meta.Preamble() + ctx.Text
+	text := ctx.Meta.PreambleCoding() + ctx.Text
 	res := ctx.Model.Classify(text, map[string][]string{"task_type": TaskTypes})
 	ranked := res["task_type"]
 	if len(ranked) == 0 {
@@ -155,9 +155,23 @@ func (e DomainEntitiesExtractor) Run(ctx *JobContext) (map[string]any, error) {
 		texts[i] = d.Text
 		idByText[d.Text] = d.ID
 	}
-	res := ctx.Model.Extract(ctx.Text, DomainEntityLabels, map[string][]string{"domain": texts})
+
+	var entities []Entity
+	var ranked []Ranked
+	if ctx.Meta.HasAgentic() {
+		// Agentic augmentation HELPS domain (measured +0.10): classify domain over
+		// the agentic-context preamble, but extract ENTITIES from raw text (the
+		// preamble would corrupt entity offsets), so split into two calls.
+		entities = ctx.Model.Extract(ctx.Text, DomainEntityLabels, nil).Entities
+		ranked = ctx.Model.Classify(ctx.Meta.Preamble()+ctx.Text, map[string][]string{"domain": texts})["domain"]
+	} else {
+		// Coding/human requests: single bundled call over raw text (unchanged).
+		res := ctx.Model.Extract(ctx.Text, DomainEntityLabels, map[string][]string{"domain": texts})
+		entities, ranked = res.Entities, res.Results["domain"]
+	}
+
 	value, conf := "general", 0.0
-	if ranked := res.Results["domain"]; len(ranked) > 0 {
+	if len(ranked) > 0 {
 		if id, ok := idByText[ranked[0].Label]; ok {
 			value = id
 		} else {
@@ -167,6 +181,6 @@ func (e DomainEntitiesExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	}
 	return map[string]any{
 		"domain":   Labeled{Value: value, Confidence: conf, Producer: e.Version()},
-		"entities": res.Entities,
+		"entities": entities,
 	}, nil
 }

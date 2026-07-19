@@ -41,3 +41,28 @@ func TestPreambleAgentic(t *testing.T) {
 		t.Fatalf("agentic preamble\n got: %q\nwant: %q", got, want)
 	}
 }
+
+func TestPreambleCodingDropsAgentic(t *testing.T) {
+	m := Meta{
+		Repo: "acme/api", Tool: "Claude Code",
+		Framework: "langgraph", AgentRole: "billing_assistant", Workflow: "wf", Step: "4",
+		RecentSteps: []string{"search_web"},
+	}
+	// PreambleCoding keeps coding fields, drops ALL agentic fields + recent steps.
+	got := m.PreambleCoding()
+	want := "[Context — repository: acme/api; tool: Claude Code]\nTask: "
+	if got != want {
+		t.Fatalf("PreambleCoding must drop agentic\n got: %q\nwant: %q", got, want)
+	}
+	if !m.HasAgentic() {
+		t.Fatal("HasAgentic should be true")
+	}
+	// For a pure coding Meta, PreambleCoding == Preamble (byte-identical).
+	c := Meta{Repo: "acme/api", Tool: "Claude Code", GitBranch: "b", RecentPrompts: []string{"p"}}
+	if c.PreambleCoding() != c.Preamble() {
+		t.Fatalf("coding: PreambleCoding %q != Preamble %q", c.PreambleCoding(), c.Preamble())
+	}
+	if c.HasAgentic() {
+		t.Fatal("HasAgentic should be false for coding Meta")
+	}
+}

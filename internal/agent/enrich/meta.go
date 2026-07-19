@@ -26,11 +26,27 @@ type Meta struct {
 	RecentSteps []string // prior agent steps, newest-first
 }
 
-// Preamble renders a compact context block prepended to the text handed to
+// HasAgentic reports whether any agentic-framework field is set.
+func (m Meta) HasAgentic() bool {
+	return m.Framework != "" || m.AgentRole != "" || m.Workflow != "" || m.Step != "" || len(m.RecentSteps) > 0
+}
+
+// Preamble renders the FULL context block (coding + agentic fields). Used by the
+// domain classifier, where the agentic agent/workflow context is a measured help.
+func (m Meta) Preamble() string { return m.build(true) }
+
+// PreambleCoding renders ONLY the coding-tool context (repo/branch/project/tool +
+// recent prompts), never the agentic fields. Used by task_type and the other
+// non-domain classifiers, where agentic metadata is subject-noise that HURTS
+// (measured: agentic task_type 0.83→0.62 with full metadata). For coding-tool
+// requests (no agentic fields) this is byte-identical to Preamble().
+func (m Meta) PreambleCoding() string { return m.build(false) }
+
+// build renders a compact context block prepended to the text handed to
 // CLASSIFICATION passes (never to entity/sensitivity passes, which need raw
 // offsets). Only non-empty fields render; empty repo renders "none" for a stable
-// shape. The current prompt follows "Task: " last.
-func (m Meta) Preamble() string {
+// shape. Agentic fields (and the recent-steps block) render only when agentic=true.
+func (m Meta) build(agentic bool) string {
 	parts := []string{"repository: none"}
 	if m.Repo != "" {
 		parts[0] = "repository: " + m.Repo
@@ -44,19 +60,19 @@ func (m Meta) Preamble() string {
 	if m.Tool != "" {
 		parts = append(parts, "tool: "+m.Tool)
 	}
-	// Agentic fields append AFTER the coding fields, so coding-tool preambles are
-	// byte-identical (all prior facet numbers unchanged).
-	if m.Framework != "" {
-		parts = append(parts, "framework: "+m.Framework)
-	}
-	if m.AgentRole != "" {
-		parts = append(parts, "agent: "+m.AgentRole)
-	}
-	if m.Workflow != "" {
-		parts = append(parts, "workflow: "+m.Workflow)
-	}
-	if m.Step != "" {
-		parts = append(parts, "step: "+m.Step)
+	if agentic {
+		if m.Framework != "" {
+			parts = append(parts, "framework: "+m.Framework)
+		}
+		if m.AgentRole != "" {
+			parts = append(parts, "agent: "+m.AgentRole)
+		}
+		if m.Workflow != "" {
+			parts = append(parts, "workflow: "+m.Workflow)
+		}
+		if m.Step != "" {
+			parts = append(parts, "step: "+m.Step)
+		}
 	}
 	var b strings.Builder
 	b.WriteString("[Context — " + strings.Join(parts, "; ") + "]\n")
@@ -66,7 +82,7 @@ func (m Meta) Preamble() string {
 			fmt.Fprintf(&b, " %d. %s\n", i+1, p)
 		}
 	}
-	if len(m.RecentSteps) > 0 {
+	if agentic && len(m.RecentSteps) > 0 {
 		b.WriteString("Recent steps (newest first):\n")
 		for i, s := range m.RecentSteps {
 			fmt.Fprintf(&b, " %d. %s\n", i+1, s)
