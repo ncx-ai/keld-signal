@@ -89,11 +89,21 @@ func (q *Queue) Next() (Job, bool) {
 		return Job{}, false
 	}
 	q.mu.Lock()
-	k := j.Key()
-	delete(q.inflight, k)
-	q.markRecentLocked(k)
+	delete(q.inflight, j.Key())
 	q.mu.Unlock()
 	return j, true
+}
+
+// Complete records a job as SUCCESSFULLY processed so later duplicates (e.g. the
+// same prompt seen by both the hook and the transcript watcher) are deduped by
+// Offer. Call it only when the job will NOT be retried and produced a real
+// result: a re-spooled/timed-out job must stay re-offerable, and a job that
+// couldn't resolve its text must stay re-offerable so the watcher can retry it
+// later — so neither is Completed.
+func (q *Queue) Complete(j Job) {
+	q.mu.Lock()
+	q.markRecentLocked(j.Key())
+	q.mu.Unlock()
 }
 
 // Close stops the queue; pending Next calls return ok=false.

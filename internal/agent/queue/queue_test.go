@@ -67,7 +67,7 @@ func TestNextBlockedThenClose(t *testing.T) {
 	}
 }
 
-func TestRecentCompletedDedup(t *testing.T) {
+func TestCompletedKeyIsDeduped(t *testing.T) {
 	q := New(4)
 	j := Job{Source: "claude_code", Scheme: "prompt_id", ID: "X"}
 	if !q.Offer(j) {
@@ -76,30 +76,37 @@ func TestRecentCompletedDedup(t *testing.T) {
 	if q.Offer(j) {
 		t.Fatal("duplicate while in-flight should be dropped")
 	}
-	got, ok := q.Next()
-	if !ok || got.ID != "X" {
-		t.Fatalf("dequeue: got %+v ok=%v", got, ok)
+	if _, ok := q.Next(); !ok {
+		t.Fatal("dequeue")
 	}
-	// inflight is now cleared; the recently-completed buffer must still drop it
-	// (this is the hook↔watcher overlap window an inflight-only dedup misses).
+	// Dequeued but NOT completed: a re-offer (e.g. re-spool retry, or a hook that
+	// failed to resolve text) MUST be allowed — completion, not dequeue, is what
+	// suppresses duplicates.
+	if !q.Offer(j) {
+		t.Fatal("re-offer after dequeue but before completion must be allowed (retry path)")
+	}
+	if _, ok := q.Next(); !ok {
+		t.Fatal("dequeue 2")
+	}
+	// Mark completed: now duplicates (the hook↔watcher overlap) are dropped.
+	q.Complete(j)
 	if q.Offer(j) {
-		t.Fatal("duplicate after completion should be dropped by recent buffer")
+		t.Fatal("offer after completion should be dropped by recent buffer")
 	}
 }
 
 func TestRecentEvictionReallowsOffer(t *testing.T) {
-	q := New(2)
+	q := New(4)
 	q.recentCap = 2
 	for _, id := range []string{"A", "B", "C"} {
-		if !q.Offer(Job{Source: "s", Scheme: "p", ID: id}) {
-			t.Fatalf("offer %s should enqueue", id)
-		}
-		if _, ok := q.Next(); !ok {
-			t.Fatalf("dequeue %s", id)
-		}
+		q.Complete(Job{Source: "s", Scheme: "p", ID: id})
 	}
 	// cap=2 now holds {B,C}; A was evicted, so re-offering A is allowed again.
 	if !q.Offer(Job{Source: "s", Scheme: "p", ID: "A"}) {
 		t.Fatal("A should be re-allowed after eviction from the recent buffer")
+	}
+	// C is still in the recent buffer, so it stays deduped.
+	if q.Offer(Job{Source: "s", Scheme: "p", ID: "C"}) {
+		t.Fatal("C should still be deduped (not yet evicted)")
 	}
 }
