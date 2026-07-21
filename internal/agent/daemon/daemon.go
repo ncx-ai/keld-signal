@@ -32,6 +32,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 	"github.com/ncx-ai/keld-signal/internal/agent/resolve"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/hook"
@@ -105,11 +106,20 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 		// single-flight sidecar instead of leaking a retry loop.
 		jobCtx, cancel := context.WithCancel(ctx)
 		jobModel := withJobCtx(m, jobCtx)
-		finished := runWithTimeout(to, func() { process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter, ra) })
+		var published bool
+		finished := runWithTimeout(to, func() {
+			published = process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter, ra)
+		})
 		cancel() // always: on timeout this reclaims the abandoned attempt; on success it just releases resources.
 
 		if finished {
 			ledger.reset(j.Key())
+			// Mark the key done so a later duplicate (same prompt via the hook AND
+			// the transcript watcher) is deduped — but only on a real publish, so a
+			// job that couldn't resolve its text stays re-offerable for the watcher.
+			if published {
+				q.Complete(j)
+			}
 			continue
 		}
 		// The job exceeded its deadline (sidecar reloading/overloaded). Re-spool
@@ -314,7 +324,12 @@ func isAuthError(err error) bool {
 	return errors.As(err, &se) && (se.Code == http.StatusUnauthorized || se.Code == http.StatusForbidden)
 }
 
-func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther) {
+// process resolves, enriches, and publishes one job. It returns true only when
+// the enrichment was actually published — the caller uses that to decide whether
+// to mark the job's key deduped. A skip (unresolved text), a deadline-cancelled
+// attempt, a publish failure, or a panic all return false so the job stays
+// re-offerable (retry / watcher fallback).
+func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther) bool {
 	je := newJobEmit(emitter, j)
 	defer func() {
 		if r := recover(); r != nil {
@@ -328,7 +343,7 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	}()
 	text, ok := resolve.Resolve(j.Source, j.TranscriptPath, j.PromptID, j.Inline)
 	if !ok {
-		return // could not resolve prompt text; skip silently
+		return false // could not resolve prompt text; skip silently
 	}
 	meta := enrich.Meta{Repo: j.Cwd, Tool: j.Source}
 	if enrich.ContextEligible(j.Source) {
@@ -339,7 +354,7 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	// leaving a partial/empty profile — don't publish that. The worker re-spools
 	// (bounded) so it retries on a healthy sidecar.
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 	// Derived integer only — the resolved prompt's length in code points, never its text.
 	promptChars := utf8.RuneCountInString(text)
@@ -355,7 +370,9 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 		if ra != nil && isAuthError(err) {
 			ra.refresh(ctx)
 		}
+		return false
 	}
+	return true
 }
 
 // isRegularFile returns true if p exists and is a regular file (not a directory
@@ -620,6 +637,17 @@ func Run(ctx context.Context) error {
 				}
 			}
 		}()
+	}
+
+	// Transcript watcher: the hook-free capture trigger. Tails Claude Code and
+	// Cowork transcripts and offers pointers into the SAME queue the hook feeds,
+	// so surfaces that don't fire the command hook (Cowork; Claude Code in the
+	// Desktop app) still enrich. Only when enrichment is enabled (no Worker to
+	// consume the queue otherwise) and not explicitly disabled.
+	if enrichmentEnabled && watch.EnabledFromEnv() {
+		offer := func(p spool.Pointer) { q.Offer(ingress.JobFrom(p)) }
+		txw := watch.New(offer, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv())
+		go txw.Run(ctx)
 	}
 
 	return serve(ctx, ln, handler, q, emitter)

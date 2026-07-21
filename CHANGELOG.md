@@ -7,6 +7,32 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-07-21
+
+Hook-free prompt capture — Claude Code on every launch surface (incl. the Desktop
+app) and Cowork now enrich, not just the terminal CLI.
+
+### Added
+- **On-device transcript watcher** (`internal/agent/watch/`). A daemon poll loop
+  tails the JSONL transcripts Claude Code (all surfaces) and Cowork already write
+  to disk and synthesizes the same enrich pointer the command hook produces —
+  never prompt text — into the existing resolve → enrich → publish pipeline. This
+  is the hook-free capture path for surfaces (Cowork's Linux sandbox; Claude Code
+  in the Desktop app) that don't fire `~/.claude/settings.json` hooks. Sources:
+  `~/.claude/projects` → `claude_code`; the Cowork
+  `local-agent-mode-sessions/**/.claude/projects` trees → `cowork` (macOS). New
+  env: `KELD_WATCH` (default on), `KELD_WATCH_POLL` (5s), `KELD_WATCH_BACKFILL`
+  (off = forward-only, so first run doesn't flood on existing history). Cowork
+  prompts are classified as general knowledge work, not coding.
+
+### Changed
+- **Queue dedup now also covers recently-completed keys**, not just in-flight, so
+  a prompt caught by both the hook and the watcher is enriched once (the hook
+  typically completes before the watcher's next poll — an in-flight-only dedup
+  would miss it). A key is marked completed only on a real publish
+  (`queue.Complete`), so re-spooled retries and a hook that couldn't resolve its
+  text yet stay re-offerable. Bounded in-memory ring buffer (4096 keys).
+
 ## [0.8.0] — 2026-07-19
 
 Agentic-framework classification — measure and improve enrichment on traffic from

@@ -14,6 +14,7 @@ import (
 // (transcripts grow unbounded — re-reading from byte 0 each time would be
 // O(file^2)). It tolerates malformed lines and polls briefly for write-timing.
 type ClaudeReader struct {
+	src      string
 	Attempts int
 	Delay    time.Duration
 
@@ -21,12 +22,19 @@ type ClaudeReader struct {
 	cursors map[string]int64 // transcript path -> offset of last consumed complete line
 }
 
-// NewClaudeReader returns a reader with sane poll defaults.
-func NewClaudeReader() *ClaudeReader {
-	return &ClaudeReader{Attempts: 10, Delay: 50 * time.Millisecond, cursors: map[string]int64{}}
+// NewClaudeReader returns a reader for Claude Code transcripts (source "claude_code").
+func NewClaudeReader() *ClaudeReader { return newClaudeReader("claude_code") }
+
+// NewClaudeReaderForSource returns a reader that reports the given source but
+// parses the identical Claude-Code JSONL format (used for Cowork, whose
+// transcripts share the schema).
+func NewClaudeReaderForSource(src string) *ClaudeReader { return newClaudeReader(src) }
+
+func newClaudeReader(src string) *ClaudeReader {
+	return &ClaudeReader{src: src, Attempts: 10, Delay: 50 * time.Millisecond, cursors: map[string]int64{}}
 }
 
-func (*ClaudeReader) Source() string { return "claude_code" }
+func (r *ClaudeReader) Source() string { return r.src }
 
 // claudeLine is a tolerant view of a transcript line. The format is internal to
 // Claude Code and may drift; unknown shapes are skipped, never fatal.
