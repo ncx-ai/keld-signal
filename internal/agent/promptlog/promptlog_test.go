@@ -78,6 +78,11 @@ func TestObserveUserPromptEmitsIdentityNoText(t *testing.T) {
 			t.Fatalf("logs body missing %q: %s", want, body)
 		}
 	}
+	// Must be attributable to Cowork, not indistinguishable from CLI traffic:
+	// a tool=<source> resource attribute (mirrors Cowork's native otelConfig).
+	if !strings.Contains(body, `"tool"`) || !strings.Contains(body, `"cowork"`) {
+		t.Fatalf("logs body missing tool=cowork marker: %s", body)
+	}
 }
 
 func TestObserveAssistantEmitsApiRequestAndMetricsNoText(t *testing.T) {
