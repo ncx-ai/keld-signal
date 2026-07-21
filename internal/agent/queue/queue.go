@@ -4,6 +4,11 @@ package queue
 
 import "sync"
 
+// defaultRecentCap bounds the recently-completed dedup set. It only needs to
+// cover the live window between a hook job completing and the watcher first
+// sighting the same prompt (seconds), so a few thousand keys is ample.
+const defaultRecentCap = 4096
+
 // Job is one unit of enrichment work.
 type Job struct {
 	Source         string
@@ -23,12 +28,15 @@ func (j Job) Key() string { return j.Source + "|" + j.Scheme + "|" + j.ID }
 
 // Queue is a bounded FIFO with key-dedup and a drop counter.
 type Queue struct {
-	mu       sync.Mutex
-	ch       chan Job
-	done     chan struct{}
-	inflight map[string]bool
-	dropped  int
-	closed   bool
+	mu        sync.Mutex
+	ch        chan Job
+	done      chan struct{}
+	inflight  map[string]bool
+	dropped   int
+	closed    bool
+	recent    map[string]struct{} // recently-completed keys (bounded)
+	recentQ   []string            // FIFO order for eviction
+	recentCap int
 }
 
 // New returns a queue with the given capacity.
@@ -36,7 +44,13 @@ func New(capacity int) *Queue {
 	if capacity < 1 {
 		capacity = 1
 	}
-	return &Queue{ch: make(chan Job, capacity), done: make(chan struct{}), inflight: map[string]bool{}}
+	return &Queue{
+		ch:        make(chan Job, capacity),
+		done:      make(chan struct{}),
+		inflight:  map[string]bool{},
+		recent:    map[string]struct{}{},
+		recentCap: defaultRecentCap,
+	}
 }
 
 // Done returns a channel that is closed when the queue is closed. Callers can
@@ -51,12 +65,16 @@ func (q *Queue) Done() <-chan struct{} { return q.done }
 func (q *Queue) Offer(j Job) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.closed || q.inflight[j.Key()] {
+	k := j.Key()
+	if q.closed || q.inflight[k] {
+		return false
+	}
+	if _, seen := q.recent[k]; seen {
 		return false
 	}
 	select {
 	case q.ch <- j:
-		q.inflight[j.Key()] = true
+		q.inflight[k] = true
 		return true
 	default:
 		q.dropped++
@@ -71,7 +89,9 @@ func (q *Queue) Next() (Job, bool) {
 		return Job{}, false
 	}
 	q.mu.Lock()
-	delete(q.inflight, j.Key())
+	k := j.Key()
+	delete(q.inflight, k)
+	q.markRecentLocked(k)
 	q.mu.Unlock()
 	return j, true
 }
@@ -92,4 +112,23 @@ func (q *Queue) Dropped() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.dropped
+}
+
+// markRecentLocked records a completed key, evicting the oldest past recentCap.
+// Caller holds q.mu. Slicing the front is bounded: append reallocates and copies
+// only live elements once the head advances, so memory stays ~O(recentCap).
+func (q *Queue) markRecentLocked(k string) {
+	if q.recentCap <= 0 {
+		return
+	}
+	if _, ok := q.recent[k]; ok {
+		return
+	}
+	q.recent[k] = struct{}{}
+	q.recentQ = append(q.recentQ, k)
+	if len(q.recentQ) > q.recentCap {
+		old := q.recentQ[0]
+		q.recentQ = q.recentQ[1:]
+		delete(q.recent, old)
+	}
 }
