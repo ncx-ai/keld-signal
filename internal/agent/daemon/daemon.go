@@ -32,6 +32,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 	"github.com/ncx-ai/keld-signal/internal/agent/resolve"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/hook"
@@ -620,6 +621,17 @@ func Run(ctx context.Context) error {
 				}
 			}
 		}()
+	}
+
+	// Transcript watcher: the hook-free capture trigger. Tails Claude Code and
+	// Cowork transcripts and offers pointers into the SAME queue the hook feeds,
+	// so surfaces that don't fire the command hook (Cowork; Claude Code in the
+	// Desktop app) still enrich. Only when enrichment is enabled (no Worker to
+	// consume the queue otherwise) and not explicitly disabled.
+	if enrichmentEnabled && watch.EnabledFromEnv() {
+		offer := func(p spool.Pointer) { q.Offer(ingress.JobFrom(p)) }
+		txw := watch.New(offer, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv())
+		go txw.Run(ctx)
 	}
 
 	return serve(ctx, ln, handler, q, emitter)
