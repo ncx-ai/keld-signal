@@ -114,41 +114,6 @@ func SourcesFromEnv() map[string]bool {
 	return map[string]bool{"cowork": true}
 }
 
-// --- minimal OTLP/HTTP logs JSON types (ExportLogsServiceRequest subset) ---
-
-type otlpLogs struct {
-	ResourceLogs []resourceLogs `json:"resourceLogs"`
-}
-type resourceLogs struct {
-	Resource  otlpResource `json:"resource"`
-	ScopeLogs []scopeLogs  `json:"scopeLogs"`
-}
-type otlpResource struct {
-	Attributes []kv `json:"attributes"`
-}
-type scopeLogs struct {
-	Scope      otlpScope   `json:"scope"`
-	LogRecords []logRecord `json:"logRecords"`
-}
-type otlpScope struct {
-	Name string `json:"name"`
-}
-type logRecord struct {
-	TimeUnixNano         string `json:"timeUnixNano"`
-	ObservedTimeUnixNano string `json:"observedTimeUnixNano"`
-	SeverityNumber       int    `json:"severityNumber"`
-	SeverityText         string `json:"severityText"`
-	Body                 anyVal `json:"body"`
-	Attributes           []kv   `json:"attributes"`
-}
-type kv struct {
-	Key   string `json:"key"`
-	Value anyVal `json:"value"`
-}
-type anyVal struct {
-	StringValue string `json:"stringValue"`
-}
-
 // buildLogsPayload constructs the OTLP/HTTP logs JSON for one prompt event. It
 // deliberately carries no prompt text — only source, ids, and timestamp.
 func buildLogsPayload(source, sessionID, promptID string, ts time.Time) ([]byte, error) {
