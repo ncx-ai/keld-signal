@@ -27,6 +27,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
+	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
 	"github.com/ncx-ai/keld-signal/internal/agent/provision"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
@@ -645,7 +646,16 @@ func Run(ctx context.Context) error {
 	// Desktop app) still enrich. Only when enrichment is enabled (no Worker to
 	// consume the queue otherwise) and not explicitly disabled.
 	if enrichmentEnabled && watch.EnabledFromEnv() {
-		offer := func(p spool.Pointer) { q.Offer(ingress.JobFrom(p)) }
+		// Host-side telemetry emitter: for captured sources whose own OTEL can't
+		// reach Keld (Cowork's sandbox blocks egress to atlas.keld.co), the daemon
+		// emits the prompt telemetry itself — from the host, unrestricted egress —
+		// so watched sources reach Atlas with the same footprint the CLI's native
+		// OTEL provides. Claude Code is excluded by default (it emits its own OTEL).
+		plog := promptlog.New(logsEndpoint(cfg.Endpoint), tok.Get, actor, promptlog.SourcesFromEnv())
+		offer := func(p spool.Pointer) {
+			q.Offer(ingress.JobFrom(p))
+			plog.Emit(p.Source.ID, p.Correlation.SessionID, p.Correlation.ID, time.Now())
+		}
 		txw := watch.New(offer, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv())
 		go txw.Run(ctx)
 	}
@@ -881,6 +891,16 @@ func signalClientEventsEndpoint(ingest string) string {
 		return ingest[:i] + "/v1/signal/client-events"
 	}
 	return strings.TrimRight(ingest, "/") + "/v1/signal/client-events"
+}
+
+// logsEndpoint derives the OTLP logs ingest URL from the configured ingest
+// endpoint by swapping the trailing path segment for /v1/logs — the same OTLP
+// logs receiver the tools' native OTEL exports to.
+func logsEndpoint(ingest string) string {
+	if i := strings.Index(ingest, "/v1/"); i >= 0 {
+		return ingest[:i] + "/v1/logs"
+	}
+	return strings.TrimRight(ingest, "/") + "/v1/logs"
 }
 
 // pollSettings fetches org settings on startup then on each tick of interval.
