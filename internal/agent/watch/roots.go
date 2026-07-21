@@ -31,6 +31,14 @@ func discoverRoots(home, goos string) []Root {
 	if cc := filepath.Join(home, ".claude", "projects"); isDir(cc) {
 		roots = append(roots, Root{SourceID: "claude_code", Dir: cc})
 	}
+	// Codex — sessions directory, respects CODEX_HOME override.
+	codexHome := os.Getenv("CODEX_HOME")
+	if codexHome == "" {
+		codexHome = filepath.Join(home, ".codex")
+	}
+	if cx := filepath.Join(codexHome, "sessions"); isDir(cx) {
+		roots = append(roots, Root{SourceID: "codex", Dir: cx})
+	}
 	// Cowork (Claude Code in a sandbox) — macOS only. Each session nests a
 	// standard .claude/projects transcript tree two levels down.
 	if goos == "darwin" {

@@ -35,6 +35,17 @@ func TestDiscoverRootsClaudeAndCowork(t *testing.T) {
 	}
 }
 
+func TestDiscoverRootsCodex(t *testing.T) {
+	home := t.TempDir()
+	cx := filepath.Join(home, ".codex", "sessions")
+	mkdir(t, cx)
+	for _, goos := range []string{"darwin", "linux"} {
+		if !hasRoot(discoverRoots(home, goos), "codex", cx) {
+			t.Errorf("%s: missing codex root; got %+v", goos, discoverRoots(home, goos))
+		}
+	}
+}
+
 func mkdir(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o700); err != nil {
