@@ -1,11 +1,12 @@
-// Package promptlog emits an OTLP/HTTP log record to the Keld ingest endpoint
-// for each prompt captured by the transcript watcher whose source cannot deliver
-// its own OTEL telemetry — notably Cowork, whose agent runs in a sandbox whose
-// egress allowlist excludes atlas.keld.co, so its natively-configured OTEL export
-// never reaches Keld. This emitter runs host-side in the daemon (unrestricted
-// egress), mirroring the OTEL usage telemetry the Claude Code CLI emits natively,
-// so watched sources reach Atlas with functional parity. It never carries prompt
-// text — only ids, source, and timestamp.
+// Package promptlog emits OTEL telemetry to the Keld ingest endpoint for prompts
+// captured by the transcript watcher whose source cannot deliver its own OTEL —
+// notably Cowork, whose agent sandbox egress allowlist excludes atlas.keld.co, so
+// its natively-configured OTEL export is dropped at the firewall. Running
+// host-side in the daemon (unrestricted egress), it mirrors the Claude Code CLI's
+// native OTEL: for each new transcript line it emits the matching log event
+// (user_prompt / api_request / assistant_response) and usage/cost metrics, with
+// identity recovered from the Cowork session path. It NEVER carries prompt or
+// response text — only lengths, ids, model, and token counts.
 package promptlog
 
 import (
@@ -15,88 +16,57 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/debuglog"
 )
 
-// PromptEventName is the OTLP log event name for a captured user prompt. It
-// matches the Claude Code user-prompt telemetry event so Atlas attributes watched
-// prompts alongside native CLI prompt activity.
-const PromptEventName = "claude_code.user_prompt"
+// Event names (log body = "claude_code."+name), matching the captured CLI schema.
+const (
+	eventUserPrompt        = "user_prompt"
+	eventAPIRequest        = "api_request"
+	eventAssistantResponse = "assistant_response"
+	metricTokenUsage       = "claude_code.token.usage"
+	metricCostUsage        = "claude_code.cost.usage"
+)
 
-// Emitter POSTs OTLP logs to the configured /v1/logs endpoint for a fixed set of
-// sources.
-type Emitter struct {
-	endpoint string
-	token    func() string
-	actor    string
-	sources  map[string]bool
-	client   *http.Client
+// Telemetry emits OTLP logs + metrics for eligible captured sources.
+type Telemetry struct {
+	logsURL    string
+	metricsURL string
+	token      func() string
+	sources    map[string]bool
+	ids        *identityCache
+	client     *http.Client
+
+	mu  sync.Mutex
+	seq map[string]int64 // per-session event.sequence counter
 }
 
-// New returns an Emitter. endpoint is the full /v1/logs URL; token is read live
-// (so a re-auth token swap is picked up); actor sets x-keld-actor; sources is the
-// set of capture sources this emitter emits for (others are ignored).
-func New(endpoint string, token func() string, actor string, sources map[string]bool) *Emitter {
-	return &Emitter{
-		endpoint: endpoint,
-		token:    token,
-		actor:    actor,
-		sources:  sources,
-		client:   &http.Client{Timeout: 5 * time.Second},
+// New builds a Telemetry. logsURL/metricsURL are the full OTLP endpoints; token is
+// read live (re-auth swaps picked up); sources is the set of capture sources to
+// emit for (others ignored — Claude Code is excluded by default as it emits its
+// own OTEL host-side).
+func New(logsURL, metricsURL string, token func() string, sources map[string]bool) *Telemetry {
+	return &Telemetry{
+		logsURL:    logsURL,
+		metricsURL: metricsURL,
+		token:      token,
+		sources:    sources,
+		ids:        newIdentityCache(),
+		client:     &http.Client{Timeout: 5 * time.Second},
+		seq:        map[string]int64{},
 	}
-}
-
-// Emit sends one user-prompt log event for a captured prompt from an eligible
-// source. Best-effort: anything unexpected is logged and swallowed (telemetry
-// must never block or crash capture). Never includes prompt text.
-func (e *Emitter) Emit(source, sessionID, promptID string, ts time.Time) {
-	if e == nil || e.endpoint == "" || !e.sources[source] {
-		return
-	}
-	tok := ""
-	if e.token != nil {
-		tok = e.token()
-	}
-	if tok == "" {
-		return
-	}
-	body, err := buildLogsPayload(source, sessionID, promptID, ts)
-	if err != nil {
-		debuglog.Append("promptlog: build failed: %v", err)
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.endpoint, bytes.NewReader(body))
-	if err != nil {
-		debuglog.Append("promptlog: request build failed: %v", err)
-		return
-	}
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("x-keld-ingest-token", tok)
-	req.Header.Set("x-keld-actor", e.actor)
-	resp, err := e.client.Do(req)
-	if err != nil {
-		debuglog.Append("promptlog: POST %s failed: %v", e.endpoint, err)
-		return
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body) // drain so the connection can be reused
-	// Log every emit with its status so on-device inspection can confirm delivery
-	// (2xx = Atlas accepted the telemetry). Watched sources are low-volume, so this
-	// is not noisy.
-	debuglog.Append("promptlog: emitted %s prompt telemetry (session=%s prompt=%s) -> HTTP %d",
-		source, sessionID, promptID, resp.StatusCode)
 }
 
 // SourcesFromEnv returns the set of capture sources to emit telemetry for.
-// Default: {"cowork"} (Claude Code emits its own OTEL natively, so it is excluded
-// to avoid double-counting). KELD_WATCH_TELEMETRY=off disables entirely (empty
-// set). KELD_WATCH_TELEMETRY_SOURCES=a,b overrides the source list.
+// Default {"cowork"}. KELD_WATCH_TELEMETRY=off disables (empty set);
+// KELD_WATCH_TELEMETRY_SOURCES=a,b overrides the list.
 func SourcesFromEnv() map[string]bool {
 	switch strings.ToLower(os.Getenv("KELD_WATCH_TELEMETRY")) {
 	case "off", "0", "false":
@@ -114,33 +84,243 @@ func SourcesFromEnv() map[string]bool {
 	return map[string]bool{"cowork": true}
 }
 
-// buildLogsPayload constructs the OTLP/HTTP logs JSON for one prompt event. It
-// deliberately carries no prompt text — only source, ids, and timestamp.
-func buildLogsPayload(source, sessionID, promptID string, ts time.Time) ([]byte, error) {
-	ns := strconv.FormatInt(ts.UnixNano(), 10)
-	rec := logRecord{
+// --- transcript record parsing (tolerant) ---
+
+type tRecord struct {
+	Type          string          `json:"type"`
+	PromptID      string          `json:"promptId"`
+	UUID          string          `json:"uuid"`
+	SessionID     string          `json:"sessionId"`
+	Version       string          `json:"version"`
+	Timestamp     string          `json:"timestamp"`
+	IsSidechain   bool            `json:"isSidechain"`
+	IsMeta        bool            `json:"isMeta"`
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Message       json.RawMessage `json:"message"`
+}
+type tMessage struct {
+	Role    string          `json:"role"`
+	Model   string          `json:"model"`
+	ID      string          `json:"id"`
+	Content json.RawMessage `json:"content"`
+	Usage   *tUsage         `json:"usage"`
+}
+type tUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+}
+
+// Observe parses one transcript line and emits the matching telemetry for an
+// eligible source. Best-effort: any parse/POST failure is logged and swallowed.
+func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
+	if t == nil || !t.sources[source] {
+		return
+	}
+	if t.token == nil || t.token() == "" {
+		return
+	}
+	var r tRecord
+	if json.Unmarshal(line, &r) != nil {
+		return
+	}
+	var msg tMessage
+	if len(r.Message) > 0 {
+		_ = json.Unmarshal(r.Message, &msg)
+	}
+	id := t.ids.forCowork(transcriptPath)
+	res := resourceAttrs(r.Version)
+
+	switch r.Type {
+	case "user":
+		// Genuine human prompt only (mirror the watch filter): promptId set, real
+		// text, not a tool-result / sidechain / meta record.
+		if r.PromptID == "" || r.IsSidechain || r.IsMeta || len(r.ToolUseResult) > 0 {
+			return
+		}
+		text := contentText(msg.Content)
+		if text == "" {
+			return
+		}
+		rec := t.record(eventUserPrompt, r, id, []kv{
+			attr("session.id", r.SessionID),
+			attr("prompt.id", r.PromptID),
+			attr("message.uuid", r.UUID),
+			attrInt("prompt_length", utf8.RuneCountInString(text)),
+		})
+		t.postLogs(res, []logRecord{rec}, id.Email)
+	case "assistant":
+		if msg.Usage == nil {
+			return
+		}
+		respLen := utf8.RuneCountInString(contentText(msg.Content))
+		common := []kv{
+			attr("session.id", r.SessionID),
+			attr("model", msg.Model),
+			attr("request_id", msg.ID),
+		}
+		api := t.record(eventAPIRequest, r, id, append(append([]kv{}, common...),
+			attrInt("input_tokens", msg.Usage.InputTokens),
+			attrInt("output_tokens", msg.Usage.OutputTokens),
+			attrInt("cache_creation_tokens", msg.Usage.CacheCreationInputTokens),
+			attrInt("cache_read_tokens", msg.Usage.CacheReadInputTokens),
+		))
+		if cost, ok := costUSD(msg.Model, msg.Usage.InputTokens, msg.Usage.OutputTokens, msg.Usage.CacheCreationInputTokens, msg.Usage.CacheReadInputTokens); ok {
+			api.Attributes = append(api.Attributes, attrInt("cost_usd_micros", int(cost*1e6)))
+		}
+		resp := t.record(eventAssistantResponse, r, id, append(append([]kv{}, common...),
+			attr("message.uuid", r.UUID),
+			attrInt("response_length", respLen),
+		))
+		t.postLogs(res, []logRecord{api, resp}, id.Email)
+		t.postMetrics(res, r, msg, id)
+	}
+}
+
+// record builds a log record for an event with common event metadata + the given
+// event-specific attributes + identity.
+func (t *Telemetry) record(event string, r tRecord, id Identity, specific []kv) logRecord {
+	attrs := []kv{
+		attr("event.name", event),
+		attr("event.timestamp", r.Timestamp),
+		attrInt("event.sequence", int(t.nextSeq(r.SessionID))),
+	}
+	attrs = append(attrs, specific...)
+	attrs = append(attrs, identityAttrs(id)...)
+	ns := timeNano(r.Timestamp)
+	return logRecord{
 		TimeUnixNano:         ns,
 		ObservedTimeUnixNano: ns,
-		SeverityNumber:       9, // INFO
+		SeverityNumber:       9,
 		SeverityText:         "INFO",
-		Body:                 anyVal{StringValue: PromptEventName},
-		Attributes: []kv{
-			{Key: "event.name", Value: anyVal{StringValue: PromptEventName}},
-			{Key: "session.id", Value: anyVal{StringValue: sessionID}},
-			{Key: "prompt.id", Value: anyVal{StringValue: promptID}},
-			{Key: "source", Value: anyVal{StringValue: source}},
-			{Key: "keld.capture", Value: anyVal{StringValue: "watch"}},
-		},
+		Body:                 anyVal{StringValue: "claude_code." + event},
+		Attributes:           attrs,
 	}
-	payload := otlpLogs{ResourceLogs: []resourceLogs{{
-		Resource: otlpResource{Attributes: []kv{
-			{Key: "service.name", Value: anyVal{StringValue: source}},
-			{Key: "tool", Value: anyVal{StringValue: source}},
-		}},
-		ScopeLogs: []scopeLogs{{
-			Scope:      otlpScope{Name: "keld-agent/watch"},
-			LogRecords: []logRecord{rec},
-		}},
-	}}}
-	return json.Marshal(payload)
+}
+
+func (t *Telemetry) postMetrics(res []kv, r tRecord, msg tMessage, id Identity) {
+	ns := timeNano(r.Timestamp)
+	base := append([]kv{attr("session.id", r.SessionID), attr("model", msg.Model)}, identityAttrs(id)...)
+	tok := func(typ string, n int) metric {
+		return metric{Name: metricTokenUsage, Value: float64(n), IsInt: true, TimeUnixNano: ns,
+			Attrs: append(append([]kv{}, base...), attr("type", typ))}
+	}
+	metrics := []metric{
+		tok("input", msg.Usage.InputTokens),
+		tok("output", msg.Usage.OutputTokens),
+	}
+	if msg.Usage.CacheReadInputTokens > 0 {
+		metrics = append(metrics, tok("cacheRead", msg.Usage.CacheReadInputTokens))
+	}
+	if msg.Usage.CacheCreationInputTokens > 0 {
+		metrics = append(metrics, tok("cacheCreation", msg.Usage.CacheCreationInputTokens))
+	}
+	if cost, ok := costUSD(msg.Model, msg.Usage.InputTokens, msg.Usage.OutputTokens, msg.Usage.CacheCreationInputTokens, msg.Usage.CacheReadInputTokens); ok {
+		metrics = append(metrics, metric{Name: metricCostUsage, Value: cost, IsInt: false, TimeUnixNano: ns, Attrs: base})
+	}
+	body, err := metricsPayload(res, metrics)
+	if err != nil {
+		return
+	}
+	t.doPost(t.metricsURL, body, id.Email)
+}
+
+func (t *Telemetry) postLogs(res []kv, recs []logRecord, actorEmail string) {
+	body, err := logsPayload(res, recs)
+	if err != nil {
+		return
+	}
+	t.doPost(t.logsURL, body, actorEmail)
+}
+
+func (t *Telemetry) doPost(url string, body []byte, actorEmail string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		debuglog.Append("promptlog: request build failed: %v", err)
+		return
+	}
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("x-keld-ingest-token", t.token())
+	if actorEmail != "" {
+		req.Header.Set("x-keld-actor", actorEmail)
+	}
+	resp, err := t.client.Do(req)
+	if err != nil {
+		debuglog.Append("promptlog: POST %s failed: %v", url, err)
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	debuglog.Append("promptlog: POST %s -> HTTP %d", url, resp.StatusCode)
+}
+
+func (t *Telemetry) nextSeq(session string) int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.seq[session]++
+	return t.seq[session]
+}
+
+func resourceAttrs(version string) []kv {
+	a := []kv{attr("service.name", "claude-code")}
+	if version != "" {
+		a = append(a, attr("service.version", version))
+	}
+	return append(a, attr("os.type", runtime.GOOS), attr("host.arch", runtime.GOARCH))
+}
+
+func identityAttrs(id Identity) []kv {
+	var a []kv
+	if id.Email != "" {
+		a = append(a, attr("user.email", id.Email))
+	}
+	if id.AccountUUID != "" {
+		a = append(a, attr("user.account_uuid", id.AccountUUID))
+	}
+	if id.OrgID != "" {
+		a = append(a, attr("organization.id", id.OrgID))
+	}
+	return a
+}
+
+// contentText concatenates message text (bare string or text blocks) for LENGTH
+// measurement only — the returned text is never emitted in telemetry.
+func contentText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &blocks) == nil {
+		var b strings.Builder
+		for _, bl := range blocks {
+			if bl.Type == "text" {
+				b.WriteString(bl.Text)
+			}
+		}
+		return b.String()
+	}
+	return ""
+}
+
+// timeNano converts an RFC3339 timestamp to a UnixNano decimal string, or "" if
+// unparseable.
+func timeNano(ts string) string {
+	if ts == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return ""
+	}
+	return strconv.FormatInt(t.UnixNano(), 10)
 }
