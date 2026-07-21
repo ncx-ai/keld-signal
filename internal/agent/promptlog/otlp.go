@@ -38,10 +38,12 @@ type kv struct {
 }
 
 // anyVal is an OTLP AnyValue. OTLP/JSON encodes integers as decimal strings under
-// "intValue"; only one field is set per value.
+// "intValue"; only one field is set per value. DoubleValue is a pointer so a
+// legitimate 0.0 still serializes (and non-double values omit the field).
 type anyVal struct {
-	StringValue string `json:"stringValue,omitempty"`
-	IntValue    string `json:"intValue,omitempty"`
+	StringValue string   `json:"stringValue,omitempty"`
+	IntValue    string   `json:"intValue,omitempty"`
+	DoubleValue *float64 `json:"doubleValue,omitempty"`
 }
 
 type otlpMetrics struct {
@@ -87,6 +89,9 @@ func attr(k, v string) kv { return kv{Key: k, Value: anyVal{StringValue: v}} }
 // attrInt builds an integer-valued OTLP attribute (encoded as a decimal string).
 func attrInt(k string, n int) kv { return kv{Key: k, Value: anyVal{IntValue: strconv.Itoa(n)}} }
 
+// attrFloat builds a double-valued OTLP attribute.
+func attrFloat(k string, f float64) kv { return kv{Key: k, Value: anyVal{DoubleValue: &f}} }
+
 // logsPayload marshals an OTLP/HTTP logs export request for one resource.
 func logsPayload(res []kv, records []logRecord) ([]byte, error) {
 	return json.Marshal(otlpLogs{ResourceLogs: []resourceLogs{{
@@ -96,9 +101,12 @@ func logsPayload(res []kv, records []logRecord) ([]byte, error) {
 }
 
 // metricsPayload marshals an OTLP/HTTP metrics export request for one resource.
-// Each metric becomes a single-datapoint, non-monotonic Sum (delta temporality).
+// Datapoints are grouped under one Sum per metric NAME (matching the captured CLI
+// shape: e.g. claude_code.token.usage carries one datapoint per token type), with
+// delta temporality and monotonic=true — the same encoding the CLI emits.
 func metricsPayload(res []kv, metrics []metric) ([]byte, error) {
-	ms := make([]otlpMetric, 0, len(metrics))
+	order := []string{}
+	dps := map[string][]numberDP{}
 	for _, m := range metrics {
 		dp := numberDP{TimeUnixNano: m.TimeUnixNano, Attributes: m.Attrs}
 		if m.IsInt {
@@ -106,9 +114,16 @@ func metricsPayload(res []kv, metrics []metric) ([]byte, error) {
 		} else {
 			dp.AsDouble = m.Value
 		}
+		if _, seen := dps[m.Name]; !seen {
+			order = append(order, m.Name)
+		}
+		dps[m.Name] = append(dps[m.Name], dp)
+	}
+	ms := make([]otlpMetric, 0, len(order))
+	for _, name := range order {
 		ms = append(ms, otlpMetric{
-			Name: m.Name,
-			Sum:  otlpSum{DataPoints: []numberDP{dp}, AggregationTemporality: 1 /*delta*/, IsMonotonic: false},
+			Name: name,
+			Sum:  otlpSum{DataPoints: dps[name], AggregationTemporality: 1 /*delta*/, IsMonotonic: true},
 		})
 	}
 	return json.Marshal(otlpMetrics{ResourceMetrics: []resourceMetrics{{

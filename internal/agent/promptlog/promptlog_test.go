@@ -119,6 +119,85 @@ func TestObserveAssistantEmitsApiRequestAndMetricsNoText(t *testing.T) {
 	}
 }
 
+// TestFidelityMirrorsCLISchema enforces that each emitted log event carries
+// exactly the CLI's captured attribute key set MINUS the documented omissions
+// (prompt/response text = privacy; the rest = not reconstructable host-side). Any
+// structural drift from the CLI schema fails here.
+func TestFidelityMirrorsCLISchema(t *testing.T) {
+	// Oracle: captured from a real `claude` OTLP export (2026-07-21).
+	oracle := map[string][]string{
+		"user_prompt":        {"event.name", "event.sequence", "event.timestamp", "message.uuid", "organization.id", "prompt", "prompt.id", "prompt_length", "session.id", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
+		"api_request":        {"cache_creation_tokens", "cache_read_tokens", "client_request_id", "cost_usd", "cost_usd_micros", "duration_ms", "effort", "event.name", "event.sequence", "event.timestamp", "input_tokens", "model", "organization.id", "output_tokens", "prompt.id", "query_source", "request_id", "session.id", "speed", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
+		"assistant_response": {"event.name", "event.sequence", "event.timestamp", "message.uuid", "model", "organization.id", "prompt.id", "query_source", "request_id", "response", "response_length", "session.id", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
+	}
+	// Documented omissions: privacy (text) + not reconstructable host-side.
+	omit := map[string]bool{
+		"prompt": true, "response": true, // privacy — never emit text
+		"terminal.type": true, "user.id": true, "user.account_id": true, // no host-side source
+		"duration_ms": true, "query_source": true, "speed": true, // runtime-only
+	}
+
+	c, srv := newCapSink()
+	defer srv.Close()
+	tel := telFor(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", map[string]bool{"cowork": true})
+	tp := coworkPath(t)
+	// user first (establishes prompt.id linkage), then assistant.
+	tel.Observe("cowork", tp, []byte(`{"type":"user","promptId":"P1","uuid":"U1","sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:00Z","message":{"role":"user","content":"hi"}}`))
+	tel.Observe("cowork", tp, []byte(`{"type":"assistant","uuid":"AU1","parentUuid":"U1","requestId":"req_1","effort":"high","sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:02Z","message":{"role":"assistant","model":"claude-opus-4-8","id":"msg_1","content":[{"type":"text","text":"yo"}],"usage":{"input_tokens":2,"output_tokens":5,"cache_creation_input_tokens":7,"cache_read_input_tokens":9}}}`))
+
+	got := emittedKeysByEvent(t, c.bodies("/v1/logs"))
+	for event, keys := range oracle {
+		want := map[string]bool{}
+		for _, k := range keys {
+			if !omit[k] {
+				want[k] = true
+			}
+		}
+		have := got[event]
+		if have == nil {
+			t.Fatalf("event %q was never emitted", event)
+		}
+		for k := range want {
+			if !have[k] {
+				t.Errorf("%s: MISSING key %q (CLI has it, not omitted)", event, k)
+			}
+		}
+		for k := range have {
+			if !want[k] {
+				t.Errorf("%s: EXTRA key %q not in CLI schema", event, k)
+			}
+		}
+	}
+}
+
+// emittedKeysByEvent parses captured logs bodies → event.name → set of attr keys.
+func emittedKeysByEvent(t *testing.T, bodies []string) map[string]map[string]bool {
+	t.Helper()
+	out := map[string]map[string]bool{}
+	for _, b := range bodies {
+		var p otlpLogs
+		if err := json.Unmarshal([]byte(b), &p); err != nil {
+			t.Fatal(err)
+		}
+		for _, rl := range p.ResourceLogs {
+			for _, sl := range rl.ScopeLogs {
+				for _, lr := range sl.LogRecords {
+					keys := map[string]bool{}
+					var event string
+					for _, a := range lr.Attributes {
+						keys[a.Key] = true
+						if a.Key == "event.name" {
+							event = a.Value.StringValue
+						}
+					}
+					out[event] = keys
+				}
+			}
+		}
+	}
+	return out
+}
+
 func TestObserveSkipsIneligibleAndEmptyToken(t *testing.T) {
 	c, srv := newCapSink()
 	defer srv.Close()
