@@ -7,6 +7,23 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-07-21
+
+Telemetry parity for watched sources — Cowork prompts now produce usage telemetry
+in Atlas, not just enrichments.
+
+### Added
+- **Host-side prompt telemetry emitter** (`internal/agent/promptlog`). For captured
+  sources whose own OTEL can't reach Keld — notably **Cowork**, whose agent sandbox
+  egress allowlist excludes `atlas.keld.co`, so its natively-configured OTEL export
+  is dropped at the firewall — the daemon now emits an equivalent OTLP/HTTP
+  user-prompt log to `/v1/logs` **host-side** (unrestricted egress), giving watched
+  sources the same telemetry footprint the CLI's native OTEL provides. Carries only
+  ids/source/timestamp — **never prompt text**. Claude Code is excluded by default
+  (it emits its own OTEL host-side); configurable via `KELD_WATCH_TELEMETRY` (on/off)
+  and `KELD_WATCH_TELEMETRY_SOURCES` (comma list). Verified end-to-end: a real Cowork
+  prompt → daemon emit → Atlas `/v1/logs` **HTTP 200**.
+
 ## [0.9.0] — 2026-07-21
 
 Hook-free prompt capture — Claude Code on every launch surface (incl. the Desktop
