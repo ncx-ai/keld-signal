@@ -7,6 +7,28 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-07-21
+
+Telemetry now mirrors the Claude Code CLI's OTLP schema exactly (so token/cost
+data actually surfaces in Atlas).
+
+### Fixed
+- **Metrics rendered correctly.** `token.usage`/`cost.usage` are now emitted as
+  one Sum per name with a datapoint per type, delta temporality, **monotonic=true**
+  — matching the captured CLI shape. Previously duplicate-named, single-datapoint,
+  non-monotonic sums that Atlas would not surface (so token/cost data appeared
+  missing).
+- **`api_request`/`assistant_response` now carry the CLI's full attribute set** we
+  can reconstruct: `prompt.id` (linked to the turn's user prompt), `effort`,
+  `cost_usd` (double) + `cost_usd_micros`, `client_request_id`, `request_id`.
+
+### Added
+- **Schema fidelity test** — asserts each emitted log event's attribute keys equal
+  the captured CLI oracle minus documented omissions (`prompt`/`response` text =
+  privacy; `terminal.type`/`user.id`/`user.account_id`/`duration_ms`/`query_source`/
+  `speed` = not reconstructable host-side). Guards against future drift.
+- `doubleValue` support in the OTLP attribute encoder (for `cost_usd`).
+
 ## [0.9.3] — 2026-07-21
 
 ### Fixed
