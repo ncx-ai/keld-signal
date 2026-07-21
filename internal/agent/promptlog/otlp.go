@@ -96,9 +96,12 @@ func logsPayload(res []kv, records []logRecord) ([]byte, error) {
 }
 
 // metricsPayload marshals an OTLP/HTTP metrics export request for one resource.
-// Each metric becomes a single-datapoint, non-monotonic Sum (delta temporality).
+// Datapoints are grouped under one Sum per metric NAME (matching the captured CLI
+// shape: e.g. claude_code.token.usage carries one datapoint per token type), with
+// delta temporality and monotonic=true — the same encoding the CLI emits.
 func metricsPayload(res []kv, metrics []metric) ([]byte, error) {
-	ms := make([]otlpMetric, 0, len(metrics))
+	order := []string{}
+	dps := map[string][]numberDP{}
 	for _, m := range metrics {
 		dp := numberDP{TimeUnixNano: m.TimeUnixNano, Attributes: m.Attrs}
 		if m.IsInt {
@@ -106,9 +109,16 @@ func metricsPayload(res []kv, metrics []metric) ([]byte, error) {
 		} else {
 			dp.AsDouble = m.Value
 		}
+		if _, seen := dps[m.Name]; !seen {
+			order = append(order, m.Name)
+		}
+		dps[m.Name] = append(dps[m.Name], dp)
+	}
+	ms := make([]otlpMetric, 0, len(order))
+	for _, name := range order {
 		ms = append(ms, otlpMetric{
-			Name: m.Name,
-			Sum:  otlpSum{DataPoints: []numberDP{dp}, AggregationTemporality: 1 /*delta*/, IsMonotonic: false},
+			Name: name,
+			Sum:  otlpSum{DataPoints: dps[name], AggregationTemporality: 1 /*delta*/, IsMonotonic: true},
 		})
 	}
 	return json.Marshal(otlpMetrics{ResourceMetrics: []resourceMetrics{{

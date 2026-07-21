@@ -50,3 +50,35 @@ func TestMetricsPayloadShape(t *testing.T) {
 		t.Fatalf("int metric should serialize asInt: %s", string(b))
 	}
 }
+
+func TestMetricsPayloadGroupsByNameMonotonic(t *testing.T) {
+	// Two datapoints for the SAME metric name (input/output) must produce ONE
+	// metric with two datapoints (matching the captured CLI shape), not two
+	// metrics with a duplicate name.
+	b, err := metricsPayload(nil, []metric{
+		{Name: "claude_code.token.usage", Value: 2, IsInt: true, Attrs: []kv{attr("type", "input")}},
+		{Name: "claude_code.token.usage", Value: 4, IsInt: true, Attrs: []kv{attr("type", "output")}},
+		{Name: "claude_code.cost.usage", Value: 0.08, IsInt: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m otlpMetrics
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	ms := m.ResourceMetrics[0].ScopeMetrics[0].Metrics
+	if len(ms) != 2 {
+		t.Fatalf("expected 2 distinct metrics (token.usage, cost.usage), got %d", len(ms))
+	}
+	byName := map[string]otlpMetric{}
+	for _, x := range ms {
+		byName[x.Name] = x
+	}
+	if len(byName["claude_code.token.usage"].Sum.DataPoints) != 2 {
+		t.Fatalf("token.usage must carry both datapoints, got %d", len(byName["claude_code.token.usage"].Sum.DataPoints))
+	}
+	if !byName["claude_code.token.usage"].Sum.IsMonotonic {
+		t.Fatal("token.usage sum must be monotonic (matches CLI)")
+	}
+}
