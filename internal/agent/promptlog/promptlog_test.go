@@ -5,92 +5,144 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestBuildLogsPayloadStructureNoText(t *testing.T) {
-	ts := time.Unix(1700000000, 0)
-	body, err := buildLogsPayload("cowork", "S1", "P1", ts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Must not contain anything resembling prompt text — only ids/source/event.
-	s := string(body)
-	for _, banned := range []string{"content", "message", "text"} {
-		if strings.Contains(s, banned) {
-			t.Errorf("payload unexpectedly contains %q: %s", banned, s)
-		}
-	}
-	var p otlpLogs
-	if err := json.Unmarshal(body, &p); err != nil {
-		t.Fatal(err)
-	}
-	if len(p.ResourceLogs) != 1 || len(p.ResourceLogs[0].ScopeLogs) != 1 || len(p.ResourceLogs[0].ScopeLogs[0].LogRecords) != 1 {
-		t.Fatalf("unexpected OTLP shape: %+v", p)
-	}
-	attrs := map[string]string{}
-	for _, a := range p.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes {
-		attrs[a.Key] = a.Value.StringValue
-	}
-	if attrs["event.name"] != PromptEventName || attrs["session.id"] != "S1" || attrs["prompt.id"] != "P1" || attrs["source"] != "cowork" {
-		t.Fatalf("log record attributes wrong: %+v", attrs)
-	}
-	res := map[string]string{}
-	for _, a := range p.ResourceLogs[0].Resource.Attributes {
-		res[a.Key] = a.Value.StringValue
-	}
-	if res["tool"] != "cowork" {
-		t.Fatalf("resource tool attr wrong: %+v", res)
-	}
-	if p.ResourceLogs[0].ScopeLogs[0].LogRecords[0].TimeUnixNano != "1700000000000000000" {
-		t.Fatalf("timeUnixNano wrong: %s", p.ResourceLogs[0].ScopeLogs[0].LogRecords[0].TimeUnixNano)
-	}
+// capSink records POST bodies by path.
+type capSink struct {
+	mu sync.Mutex
+	by map[string][]string
 }
 
-func TestEmitPostsToEndpoint(t *testing.T) {
-	type got struct {
-		path, tokenHdr, actorHdr, body string
-	}
-	ch := make(chan got, 1)
+func newCapSink() (*capSink, *httptest.Server) {
+	c := &capSink{by: map[string][]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		ch <- got{r.URL.Path, r.Header.Get("x-keld-ingest-token"), r.Header.Get("x-keld-actor"), string(b)}
+		c.mu.Lock()
+		c.by[r.URL.Path] = append(c.by[r.URL.Path], string(b))
+		c.mu.Unlock()
 		w.WriteHeader(200)
 	}))
+	return c, srv
+}
+func (c *capSink) bodies(path string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.by[path]...)
+}
+
+// coworkPath builds a real-shaped cowork transcript path under home with identity
+// metadata, and returns the transcript path.
+func coworkPath(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	base := filepath.Join(home, "Library", "Application Support", "Claude", "local-agent-mode-sessions")
+	acct, org, sess := "acct-9", "org-4", "local_s1"
+	proj := filepath.Join(base, acct, org, sess, ".claude", "projects", "enc")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, acct, org, sess+".json"), []byte(`{"emailAddress":"dg@keld.co"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(proj, "sess.jsonl")
+}
+
+func telFor(logsURL, metricsURL string, sources map[string]bool) *Telemetry {
+	return New(logsURL, metricsURL, func() string { return "tok" }, sources)
+}
+
+func TestObserveUserPromptEmitsIdentityNoText(t *testing.T) {
+	c, srv := newCapSink()
 	defer srv.Close()
+	tel := telFor(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", map[string]bool{"cowork": true})
+	tp := coworkPath(t)
+	line := `{"type":"user","promptId":"P1","uuid":"U1","sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:00Z","message":{"role":"user","content":"secret prompt body"}}`
+	tel.Observe("cowork", tp, []byte(line))
 
-	e := New(srv.URL, func() string { return "tok-123" }, "admin@acme.test", map[string]bool{"cowork": true})
-	e.Emit("cowork", "S1", "P1", time.Unix(1700000000, 0))
-
-	select {
-	case g := <-ch:
-		if g.tokenHdr != "tok-123" || g.actorHdr != "admin@acme.test" {
-			t.Fatalf("headers wrong: token=%q actor=%q", g.tokenHdr, g.actorHdr)
+	logs := c.bodies("/v1/logs")
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 logs POST, got %d", len(logs))
+	}
+	body := logs[0]
+	if strings.Contains(body, "secret prompt body") {
+		t.Fatalf("prompt text leaked into telemetry: %s", body)
+	}
+	for _, want := range []string{"user_prompt", `"P1"`, `"S1"`, "dg@keld.co", "org-4", "acct-9", "prompt_length", "service.name", "claude-code"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("logs body missing %q: %s", want, body)
 		}
-		if !strings.Contains(g.body, "\"P1\"") || !strings.Contains(g.body, "\"cowork\"") {
-			t.Fatalf("body missing ids: %s", g.body)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("emitter did not POST")
 	}
 }
 
-func TestEmitSkipsIneligibleSourceAndNoToken(t *testing.T) {
-	hits := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; w.WriteHeader(200) }))
+func TestObserveAssistantEmitsApiRequestAndMetricsNoText(t *testing.T) {
+	c, srv := newCapSink()
 	defer srv.Close()
+	tel := telFor(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", map[string]bool{"cowork": true})
+	tp := coworkPath(t)
+	line := `{"type":"assistant","sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:02Z","message":{"role":"assistant","model":"claude-opus-4-8","id":"req_123","content":[{"type":"text","text":"secret response body"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":5,"cache_read_input_tokens":3}}}`
+	tel.Observe("cowork", tp, []byte(line))
 
-	// claude_code not in the source set → no emit.
-	e := New(srv.URL, func() string { return "tok" }, "a", map[string]bool{"cowork": true})
-	e.Emit("claude_code", "S", "P", time.Now())
-	// empty token → no emit.
-	e2 := New(srv.URL, func() string { return "" }, "a", map[string]bool{"cowork": true})
-	e2.Emit("cowork", "S", "P", time.Now())
-	time.Sleep(200 * time.Millisecond)
-	if hits != 0 {
-		t.Fatalf("expected no POSTs, got %d", hits)
+	logs := c.bodies("/v1/logs")
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 logs POST, got %d", len(logs))
+	}
+	lb := logs[0]
+	if strings.Contains(lb, "secret response body") {
+		t.Fatalf("response text leaked: %s", lb)
+	}
+	for _, want := range []string{"api_request", "assistant_response", "claude-opus-4-8", "req_123", "input_tokens", "output_tokens", "response_length"} {
+		if !strings.Contains(lb, want) {
+			t.Fatalf("logs body missing %q: %s", want, lb)
+		}
+	}
+	metrics := c.bodies("/v1/metrics")
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metrics POST, got %d", len(metrics))
+	}
+	if !strings.Contains(metrics[0], "claude_code.token.usage") {
+		t.Fatalf("metrics missing token.usage: %s", metrics[0])
+	}
+	// cost.usage is derived for a known model.
+	if !strings.Contains(metrics[0], "claude_code.cost.usage") {
+		t.Fatalf("metrics missing cost.usage: %s", metrics[0])
+	}
+}
+
+func TestObserveSkipsIneligibleAndEmptyToken(t *testing.T) {
+	c, srv := newCapSink()
+	defer srv.Close()
+	tp := coworkPath(t)
+	line := `{"type":"user","promptId":"P1","message":{"role":"user","content":"x"}}`
+	// claude_code excluded by default source set.
+	telFor(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", map[string]bool{"cowork": true}).Observe("claude_code", tp, []byte(line))
+	// empty token.
+	New(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", func() string { return "" }, map[string]bool{"cowork": true}).Observe("cowork", tp, []byte(line))
+	time.Sleep(150 * time.Millisecond)
+	if n := len(c.bodies("/v1/logs")); n != 0 {
+		t.Fatalf("expected no POSTs, got %d", n)
+	}
+}
+
+func TestObserveIgnoresToolResultAndSidechain(t *testing.T) {
+	c, srv := newCapSink()
+	defer srv.Close()
+	tel := telFor(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", map[string]bool{"cowork": true})
+	tp := coworkPath(t)
+	for _, line := range []string{
+		`{"type":"user","promptId":"P","isSidechain":true,"message":{"role":"user","content":"sub"}}`,
+		`{"type":"user","promptId":"P","toolUseResult":{"ok":true},"message":{"role":"user","content":"tr"}}`,
+		`{"type":"user","promptId":"P","isMeta":true,"message":{"role":"user","content":"meta"}}`,
+	} {
+		tel.Observe("cowork", tp, []byte(line))
+	}
+	if n := len(c.bodies("/v1/logs")); n != 0 {
+		t.Fatalf("synthetic user records must not emit; got %d", n)
 	}
 }
 
@@ -108,5 +160,13 @@ func TestSourcesFromEnv(t *testing.T) {
 	t.Setenv("KELD_WATCH_TELEMETRY_SOURCES", "cowork,claude_code")
 	if s := SourcesFromEnv(); !s["cowork"] || !s["claude_code"] {
 		t.Errorf("override should include both: %+v", s)
+	}
+}
+
+// sanity: buildLogsPayload helper removed; ensure JSON round-trips for a hand rec.
+func TestLogRecordJSON(t *testing.T) {
+	b, _ := json.Marshal(logRecord{Body: anyVal{StringValue: "x"}, Attributes: []kv{attr("a", "b")}})
+	if !strings.Contains(string(b), `"stringValue":"x"`) {
+		t.Fatalf("bad: %s", b)
 	}
 }

@@ -20,6 +20,7 @@ import (
 // forwards prompt TEXT — only pointers.
 type Watcher struct {
 	offer    func(spool.Pointer)
+	observe  func(source, transcriptPath string, line []byte)
 	cursors  *CursorStore
 	discover func() []Root
 	version  string
@@ -27,15 +28,17 @@ type Watcher struct {
 	backfill bool
 }
 
-// New builds a Watcher. offer receives each synthesized pointer; version stamps
-// Source.Version; poll is the scan cadence; backfill=false starts new files at
-// EOF (forward-only), true enriches history.
-func New(offer func(spool.Pointer), version string, poll time.Duration, backfill bool) *Watcher {
+// New builds a Watcher. offer receives each synthesized pointer (enrichment);
+// observe (may be nil) receives every new complete transcript line (telemetry);
+// version stamps Source.Version; poll is the scan cadence; backfill=false starts
+// new files at EOF (forward-only), true enriches history.
+func New(offer func(spool.Pointer), observe func(source, transcriptPath string, line []byte), version string, poll time.Duration, backfill bool) *Watcher {
 	if poll <= 0 {
 		poll = 5 * time.Second
 	}
 	return &Watcher{
 		offer:    offer,
+		observe:  observe,
 		cursors:  NewCursorStore(),
 		discover: DiscoverRoots,
 		version:  version,
@@ -114,7 +117,11 @@ func (w *Watcher) scanFile(source, path string) bool {
 			off = 0 // shrank: re-scan from the start
 		}
 	}
-	recs, consumed := scanFrom(path, off)
+	var observe func(line []byte)
+	if w.observe != nil {
+		observe = func(line []byte) { w.observe(source, path, line) }
+	}
+	recs, consumed := scanFrom(path, off, observe)
 	for _, rec := range recs {
 		w.offer(spool.Pointer{
 			Source:      spool.Source{ID: source, Origin: "watch", Version: w.version},
@@ -144,11 +151,12 @@ func transcriptFiles(dir string) []string {
 	return out
 }
 
-// scanFrom reads complete (newline-terminated) lines from byte offset off and
-// returns the genuine prompts found plus the number of bytes of complete lines
-// consumed. A trailing partial line (write in progress) is not consumed, so it
-// is re-read on the next poll.
-func scanFrom(path string, off int64) (recs []promptRec, consumed int64) {
+// scanFrom reads complete (newline-terminated) lines from byte offset off. It
+// invokes observe (if non-nil) with every complete line — for telemetry that
+// mirrors all transcript events — and returns the genuine prompts found (for
+// enrichment) plus the number of bytes of complete lines consumed. A trailing
+// partial line (write in progress) is not consumed, so it is re-read next poll.
+func scanFrom(path string, off int64, observe func(line []byte)) (recs []promptRec, consumed int64) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, 0
@@ -164,6 +172,9 @@ func scanFrom(path string, off int64) (recs []promptRec, consumed int64) {
 			break // EOF: `line` is a partial trailing line; do not consume it
 		}
 		consumed += int64(len(line))
+		if observe != nil {
+			observe([]byte(line))
+		}
 		if rec, ok := parsePrompt([]byte(line)); ok {
 			recs = append(recs, rec)
 		}

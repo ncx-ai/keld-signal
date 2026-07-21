@@ -64,6 +64,17 @@ and watcher fallbacks stay re-offerable). Sources: `~/.claude/projects` →
 `cowork` (macOS). Env: `KELD_WATCH` (default on), `KELD_WATCH_POLL` (default 5s),
 `KELD_WATCH_BACKFILL` (default off = forward-only). macOS + Linux; Windows deferred.
 
+**Watched-source telemetry (`internal/agent/promptlog`).** Cowork's own OTEL is
+configured to Keld but its sandbox egress blocks `atlas.keld.co`, so the daemon
+mirrors the transcript's events into OTLP logs+metrics host-side: the watcher's
+per-line `observe` hook → `promptlog.Telemetry.Observe`, which emits `user_prompt`
+/ `api_request` / `assistant_response` logs + `token.usage`/`cost.usage` metrics to
+`/v1/logs` + `/v1/metrics`, matching the CLI's native OTEL schema. Identity
+(`user.email`/`account_uuid`/`organization.id`) is recovered from the Cowork
+session path/metadata. **Never emits prompt/response text.** Default source
+`{cowork}` (Claude Code emits its own OTEL); `KELD_WATCH_TELEMETRY` (off/on),
+`KELD_WATCH_TELEMETRY_SOURCES`.
+
 **Enrichment pipeline (`internal/agent/enrich/`).** A staged registry of
 extractors ("sweeps") run over a swappable `Model` backend, producing a `Profile`.
 Single-flight (never fans out) so the shared model issues at most one inference at
