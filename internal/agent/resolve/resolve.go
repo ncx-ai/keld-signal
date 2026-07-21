@@ -17,6 +17,7 @@ func register(r TranscriptReader) { readers[r.Source()] = r }
 func init() {
 	register(NewClaudeReader())
 	register(NewClaudeReaderForSource("cowork"))
+	register(NewCodexReader())
 }
 
 // Resolve returns the prompt text. Inline text (when present) wins; otherwise it
