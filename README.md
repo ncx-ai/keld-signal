@@ -63,6 +63,18 @@ then masks and publishes. In two waves, up to 8 facets per prompt:
   (command/question/statement/fragment).
 - **Wave 2** (conditioned on the function): `subcategory`.
 
+**Two capture triggers, one pipeline.** Prompts reach the daemon two ways, both
+producing the same masked, derived `Profile`: (1) the **command hook**
+(`keld __hook`, installed by `keld setup`) on `UserPromptSubmit`; and (2) an
+on-device **transcript watcher** that tails the JSONL transcripts Claude Code
+(every launch surface, including the Desktop app) and **Cowork** already write to
+disk. The watcher is the hook-free path for surfaces that don't run command
+hooks. It reads only a pointer (path + prompt id) into the existing
+resolve → enrich → publish flow — **never prompt text** — and dedups against the
+hook via the prompt id. Cowork prompts are labeled `source=cowork` and classified
+as general knowledge work (not coding). Plain Claude *chat* (server-synced, no
+local transcript) is not captured on-device.
+
 Each prompt yields a `Profile` — `task_type`, `domain` + entities, `sensitivity` +
 **masked** spans, `activity_type`, `personal`, `function_guess`, `subcategory`,
 `speech_act` — synced to Atlas (**schema v6**). `task_type` is a **routing-aligned

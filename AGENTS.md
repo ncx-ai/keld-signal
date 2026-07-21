@@ -52,6 +52,18 @@ gate holds work until the backend is up. Delivery is durable: the hook writes a
 prompt *pointer* (never text) to the on-disk `spool` when the daemon is
 unreachable, and the daemon drains it on startup + a periodic sweep.
 
+**Capture triggers.** Two triggers feed the same queue: the **command hook**
+(`keld __hook --source <tool>`, wired by `keld setup`), and an on-device
+**transcript watcher** (`internal/agent/watch/`) that tails the JSONL transcripts
+Claude Code (all surfaces incl. the Desktop app) and **Cowork** write to disk —
+the hook-free path. The watcher synthesizes the same `spool.Pointer` the hook does
+(never text) keyed on `promptId`; the queue dedups hook↔watcher overlap via a
+recently-completed set (`queue.Complete`, marked only on a real publish so retries
+and watcher fallbacks stay re-offerable). Sources: `~/.claude/projects` →
+`claude_code`, the Cowork `local-agent-mode-sessions/**/.claude/projects` trees →
+`cowork` (macOS). Env: `KELD_WATCH` (default on), `KELD_WATCH_POLL` (default 5s),
+`KELD_WATCH_BACKFILL` (default off = forward-only). macOS + Linux; Windows deferred.
+
 **Enrichment pipeline (`internal/agent/enrich/`).** A staged registry of
 extractors ("sweeps") run over a swappable `Model` backend, producing a `Profile`.
 Single-flight (never fans out) so the shared model issues at most one inference at

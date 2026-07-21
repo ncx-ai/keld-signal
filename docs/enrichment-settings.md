@@ -19,6 +19,13 @@ includes the surrounding **domain-entity surface text** (`include_entity_text`),
 which is richer but higher-signal. An org admin should be able to turn that off
 for everyone at once, and have it stick. That is what this subsystem provides.
 
+> **Capture surfaces.** Enrichment covers prompts captured two ways: the command
+> hook (Claude Code CLI and other hook-capable tools) and the on-device
+> transcript watcher (Claude Code on any surface, incl. the Desktop app, plus
+> Cowork). Both go through the same masking and settings governance described
+> here — `include_entity_text` and always-on span masking apply identically
+> regardless of which trigger captured the prompt.
+
 ## Governance model
 
 **Remote overrides local, per key present.** For any key the org has set, the
