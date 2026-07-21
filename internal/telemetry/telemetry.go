@@ -80,7 +80,8 @@ func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 // Python reference byte-for-byte (modulo the intentional hook-command change:
 // Go uses HookCommand(source) instead of "python3 {path}; true").
 func CodexBlockBody(p SetupParams, source string) string {
-	endpoint := fmt.Sprintf("%s/v1/logs?token=%s", p.Endpoint, p.IngestToken)
+	logsEndpoint := fmt.Sprintf("%s/v1/logs", p.Endpoint)
+	metricsEndpoint := fmt.Sprintf("%s/v1/metrics", p.Endpoint)
 	cmd := HookCommand(source)
 
 	var hookBlocks []string
@@ -94,10 +95,15 @@ func CodexBlockBody(p SetupParams, source string) string {
 		"[otel]\n"+
 			"environment = \"prod\"\n"+
 			"log_user_prompt = false\n"+
-			"exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-actor\" = \"%s\" } } }\n"+
+			"exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-ingest-token\" = \"%s\", \"x-keld-actor\" = \"%s\" } } }\n"+
+			"metrics_exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-ingest-token\" = \"%s\", \"x-keld-actor\" = \"%s\" } } }\n"+
 			"\n"+
 			"%s",
-		endpoint,
+		logsEndpoint,
+		p.IngestToken,
+		p.Actor,
+		metricsEndpoint,
+		p.IngestToken,
 		p.Actor,
 		strings.Join(hookBlocks, "\n"),
 	)
