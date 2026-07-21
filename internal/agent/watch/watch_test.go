@@ -30,6 +30,32 @@ func testWatcher(t *testing.T, root Root, offer func(spool.Pointer), backfill bo
 	}
 }
 
+func TestWatcherObserveSeesEveryLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	content := genuine("A") +
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var offered []spool.Pointer
+	var observed int
+	w := &Watcher{
+		offer:    func(p spool.Pointer) { offered = append(offered, p) },
+		observe:  func(source, p string, line []byte) { observed++ },
+		cursors:  newCursorStoreAt(filepath.Join(t.TempDir(), "c.json")),
+		discover: func() []Root { return []Root{{SourceID: "cowork", Dir: dir}} },
+		version:  "t", poll: time.Second, backfill: true,
+	}
+	w.pollOnce()
+	if observed != 2 {
+		t.Fatalf("observe should see BOTH lines (user + assistant), got %d", observed)
+	}
+	if len(offered) != 1 {
+		t.Fatalf("offer only the genuine prompt, got %d", len(offered))
+	}
+}
+
 func TestWatcherForwardOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
