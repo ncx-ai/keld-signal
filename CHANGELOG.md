@@ -7,6 +7,29 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-21
+
+Codex parity — native OTEL completed. Enrichment via `~/.codex/sessions`
+watcher root + rollout TranscriptReader (resolves user_message by session_id#ordinal,
+pointer model — no prompt text on disk); telemetry stays native (no host-side emit /
+no double-count).
+
+### Added
+- **Codex transcript watcher** (`internal/agent/watch/codex.go`) tails
+  `~/.codex/sessions` to capture prompts with source=codex, feeding the same
+  resolve → enrich → publish pipeline as Claude Code / Cowork. Pointer-only,
+  never text.
+- **Codex TranscriptReader** (`internal/resolve/codex.go`) implements the `Reader`
+  interface for Codex rollout transcripts: resolves user message by session_id +
+  ordinal index into the message array (pointer model — ids only, no disk-resident
+  prompt text). Registered alongside Claude Code and Cowork readers.
+
+### Changed
+- **Codex telemetry now native.** Codex's own OTEL (configured in Task 1) handles
+  all codex telemetry; the host-side promptlog emitter explicitly excludes `codex`
+  to prevent double-counting. Guard test asserts `SourcesFromEnv()` default does
+  not include codex.
+
 ## [0.9.5] — 2026-07-21
 
 Cost is now computed authoritatively in Atlas from exact tokens, not estimated

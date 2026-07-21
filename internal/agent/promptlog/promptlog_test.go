@@ -261,6 +261,14 @@ func TestSourcesFromEnv(t *testing.T) {
 	}
 }
 
+func TestCodexNotHostEmitted(t *testing.T) {
+	t.Setenv("KELD_WATCH_TELEMETRY", "")
+	t.Setenv("KELD_WATCH_TELEMETRY_SOURCES", "")
+	if SourcesFromEnv()["codex"] {
+		t.Error("codex must not be host-side emitted; its native OTEL is used")
+	}
+}
+
 // sanity: buildLogsPayload helper removed; ensure JSON round-trips for a hand rec.
 func TestLogRecordJSON(t *testing.T) {
 	b, _ := json.Marshal(logRecord{Body: anyVal{StringValue: "x"}, Attributes: []kv{attr("a", "b")}})
