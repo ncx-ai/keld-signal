@@ -7,6 +7,15 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-07-21
+
+### Fixed
+- **Watched telemetry now carries a `tool=<source>` resource attribute** (e.g.
+  `tool=cowork`), mirroring Cowork's own native `otelConfig` resourceAttributes.
+  Without it, emitted telemetry was indistinguishable from Claude Code CLI traffic
+  in Atlas — activity appeared but was not attributable to Cowork. `service.name`
+  stays `claude-code` (family recognition); `tool` marks the surface.
+
 ## [0.9.2] — 2026-07-21
 
 Full-fidelity Cowork telemetry — watched telemetry now mirrors the Claude Code

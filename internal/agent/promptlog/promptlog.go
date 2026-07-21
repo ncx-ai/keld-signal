@@ -130,7 +130,7 @@ func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
 		_ = json.Unmarshal(r.Message, &msg)
 	}
 	id := t.ids.forCowork(transcriptPath)
-	res := resourceAttrs(r.Version)
+	res := resourceAttrs(source, r.Version)
 
 	switch r.Type {
 	case "user":
@@ -264,8 +264,12 @@ func (t *Telemetry) nextSeq(session string) int64 {
 	return t.seq[session]
 }
 
-func resourceAttrs(version string) []kv {
-	a := []kv{attr("service.name", "claude-code")}
+func resourceAttrs(source, version string) []kv {
+	// service.name=claude-code so Atlas recognizes it as Claude-Code-family
+	// telemetry; tool=<source> marks the surface (e.g. cowork) so it is
+	// attributable and not conflated with CLI traffic — mirroring Cowork's own
+	// native otelConfig resourceAttributes ("tool=cowork").
+	a := []kv{attr("service.name", "claude-code"), attr("tool", source)}
 	if version != "" {
 		a = append(a, attr("service.version", version))
 	}
