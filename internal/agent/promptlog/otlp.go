@@ -38,12 +38,10 @@ type kv struct {
 }
 
 // anyVal is an OTLP AnyValue. OTLP/JSON encodes integers as decimal strings under
-// "intValue"; only one field is set per value. DoubleValue is a pointer so a
-// legitimate 0.0 still serializes (and non-double values omit the field).
+// "intValue"; only one field is set per value.
 type anyVal struct {
-	StringValue string   `json:"stringValue,omitempty"`
-	IntValue    string   `json:"intValue,omitempty"`
-	DoubleValue *float64 `json:"doubleValue,omitempty"`
+	StringValue string `json:"stringValue,omitempty"`
+	IntValue    string `json:"intValue,omitempty"`
 }
 
 type otlpMetrics struct {
@@ -88,9 +86,6 @@ func attr(k, v string) kv { return kv{Key: k, Value: anyVal{StringValue: v}} }
 
 // attrInt builds an integer-valued OTLP attribute (encoded as a decimal string).
 func attrInt(k string, n int) kv { return kv{Key: k, Value: anyVal{IntValue: strconv.Itoa(n)}} }
-
-// attrFloat builds a double-valued OTLP attribute.
-func attrFloat(k string, f float64) kv { return kv{Key: k, Value: anyVal{DoubleValue: &f}} }
 
 // logsPayload marshals an OTLP/HTTP logs export request for one resource.
 func logsPayload(res []kv, records []logRecord) ([]byte, error) {
