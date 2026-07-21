@@ -44,19 +44,32 @@ func New(offer func(spool.Pointer), version string, poll time.Duration, backfill
 	}
 }
 
-// Run polls until ctx is cancelled.
+// Run polls until ctx is cancelled. Each poll is panic-isolated so a malformed
+// transcript or unexpected filesystem state can never crash the daemon (and with
+// it the hook capture path and enrichment worker).
 func (w *Watcher) Run(ctx context.Context) {
 	t := time.NewTicker(w.poll)
 	defer t.Stop()
-	w.pollOnce() // initial pass so forward-only cursors are set promptly
+	w.safePollOnce() // initial pass so forward-only cursors are set promptly
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			w.pollOnce()
+			w.safePollOnce()
 		}
 	}
+}
+
+// safePollOnce runs one poll under a recover, so a panic in any single poll is
+// logged and swallowed rather than taking down the daemon.
+func (w *Watcher) safePollOnce() {
+	defer func() {
+		if r := recover(); r != nil {
+			debuglog.Append("watch: poll recovered from panic: %v", r)
+		}
+	}()
+	w.pollOnce()
 }
 
 func (w *Watcher) pollOnce() {
@@ -91,9 +104,15 @@ func (w *Watcher) scanFile(source, path string) bool {
 		}
 		off = 0
 	}
-	// Truncation/rotation guard: restart from 0 if the file shrank.
-	if st, err := os.Stat(path); err == nil && st.Size() < off {
-		off = 0
+	// Stat once: skip untouched files without opening them (most files, most
+	// polls), and reset the cursor if the file shrank (truncation/rotation).
+	if st, err := os.Stat(path); err == nil {
+		switch {
+		case st.Size() == off:
+			return false // nothing appended since last poll
+		case st.Size() < off:
+			off = 0 // shrank: re-scan from the start
+		}
 	}
 	recs, consumed := scanFrom(path, off)
 	for _, rec := range recs {

@@ -11,24 +11,34 @@ type promptRec struct {
 }
 
 type rawLine struct {
-	Type      string          `json:"type"`
-	PromptID  string          `json:"promptId"`
-	Cwd       string          `json:"cwd"`
-	SessionID string          `json:"sessionId"`
-	Message   json.RawMessage `json:"message"`
+	Type          string          `json:"type"`
+	PromptID      string          `json:"promptId"`
+	Cwd           string          `json:"cwd"`
+	SessionID     string          `json:"sessionId"`
+	IsSidechain   bool            `json:"isSidechain"`
+	IsMeta        bool            `json:"isMeta"`
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Message       json.RawMessage `json:"message"`
 }
 
 // parsePrompt returns the record projection when line is a GENUINE human prompt:
 // a type=="user" record with a promptId whose message content is real text
 // (a non-empty string, or an array with a text block and no tool_result block).
-// Tool-result user records, assistant/system records, and malformed lines are
-// rejected. This mirrors what the UserPromptSubmit hook captures.
+// It rejects the synthetic "user" records that the UserPromptSubmit hook never
+// fires for — subagent/sidechain turns (isSidechain), injected/caveat content
+// (isMeta), and tool-result records (a tool_result content block or a top-level
+// toolUseResult) — plus assistant/system records and malformed lines. Keeping
+// the watcher aligned with what the hook captures avoids polluting the signal
+// with non-human turns.
 func parsePrompt(line []byte) (promptRec, bool) {
 	var ln rawLine
 	if err := json.Unmarshal(line, &ln); err != nil {
 		return promptRec{}, false
 	}
 	if ln.Type != "user" || ln.PromptID == "" {
+		return promptRec{}, false
+	}
+	if ln.IsSidechain || ln.IsMeta || len(ln.ToolUseResult) > 0 {
 		return promptRec{}, false
 	}
 	if !hasHumanText(ln.Message) {

@@ -31,7 +31,7 @@ app) and Cowork now enrich, not just the terminal CLI.
   typically completes before the watcher's next poll — an in-flight-only dedup
   would miss it). A key is marked completed only on a real publish
   (`queue.Complete`), so re-spooled retries and a hook that couldn't resolve its
-  text yet stay re-offerable. Bounded in-memory ring buffer (~5000 keys).
+  text yet stay re-offerable. Bounded in-memory ring buffer (4096 keys).
 
 ## [0.8.0] — 2026-07-19
 
