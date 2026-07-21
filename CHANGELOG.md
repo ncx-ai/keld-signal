@@ -7,6 +7,20 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-07-21
+
+Cost is now computed authoritatively in Atlas from exact tokens, not estimated
+on-device.
+
+### Changed
+- **Dropped client-derived cost** (`cost_usd`/`cost_usd_micros` log attrs +
+  `cost.usage` metric). The transcript carries no first-hand cost — only tokens —
+  and a client price table is approximate (ignores `service_tier` and the 1h-vs-5m
+  cache-write rate split). Instead the `api_request` event now carries the **exact
+  token detail** Atlas needs to compute cost correctly: `cache_creation_1h_tokens`,
+  `cache_creation_5m_tokens`, and `service_tier`, alongside the existing
+  input/output/cache totals. Removed the per-model price table.
+
 ## [0.9.4] — 2026-07-21
 
 Telemetry now mirrors the Claude Code CLI's OTLP schema exactly (so token/cost
