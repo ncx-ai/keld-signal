@@ -86,7 +86,7 @@ surface and Cowork, on any plan, with no admin/enterprise setup.
 | Cowork source label | **Distinct `cowork`** (Origin `watch`). Atlas distinguishes Code vs Cowork; Cowork skips the coding-only function rule. No dedup collision (Cowork has no hook). |
 | Default state | **On by default** when the daemon runs (`ml_backend != off`); env/setting to disable. |
 | Watch mechanism | **Periodic poll** (stat mtime/size, read from cursor) — not fsnotify. Simpler, rotation-robust; enrichment is async so sub-second latency is unnecessary. |
-| Hook overlap | Watcher covers all roots; dedup via queue in-flight set + persisted seen-`promptId` set + idempotent correlation-keyed Atlas publish. |
+| Hook overlap | Watcher covers all roots (incl. canonical, for in-Desktop Code where the hook may not fire). Overlap closed by extending the queue dedup with a bounded recently-*completed* ring buffer — both paths share the daemon queue, so no cross-process ledger is needed. |
 
 ## Architecture
 
@@ -131,6 +131,10 @@ transcript .jsonl ──▶ │  watcher (poll loop)                            
   `pointerFromJob` semantics) and offers it to the queue; start `watcher.Run` as a
   panic-isolated goroutine alongside the spool drain; gate on `ml_backend != off`;
   stop on shutdown.
+- **Modify `internal/agent/queue/queue.go`** — extend dedup to also drop keys in
+  a bounded recently-*completed* ring buffer (default ~5000 `Source|Scheme|ID`
+  keys), recorded when any job finishes. Closes the hook↔watcher overlap (see
+  Dedup semantics).
 - **Modify `internal/paths/paths.go`** (or equivalent) — add `WatchDir()`.
 - **No change** to `internal/agent/enrich/context.go` `interactiveCodingTools`
   (Cowork intentionally excluded).
@@ -155,17 +159,33 @@ under, resolving the ambiguity the current hook-only model has.
 
 ### Dedup semantics
 
-- The canonical `~/.claude/projects` root is watched even when the CLI hook is
-  active. A prompt caught by both paths shares `source=claude_code`,
-  `scheme=prompt_id`, `id=promptId`.
-- **In-flight:** the queue's existing dedup key `Source|Scheme|ID`
-  (`queue.go:22`) drops the duplicate while the first is pending/in-flight.
-- **After completion:** the watcher maintains a persisted seen-`promptId` set
-  (bounded LRU) and skips already-seen ids; the hook path is unaffected. A rare
-  race (hook completes and leaves the queue before the watcher records it)
-  results in an **idempotent** re-publish (Atlas upserts on correlation), never a
-  duplicate row. Double GLiNER2 compute in that rare window is an accepted minor
-  cost; a shared hook/watcher ledger is a possible fast-follow.
+The canonical `~/.claude/projects` root is watched even when the CLI hook is
+active (so in-Desktop Code, where the hook may silently not fire, is still
+covered). A prompt caught by both paths shares `source=claude_code`,
+`scheme=prompt_id`, `id=promptId`.
+
+**The overlap is the common case, not a rare race, and must be closed — not
+tolerated.** Timing: the hook fires on submit and its enrichment typically
+completes in ~0.5–2s, while the watcher polls every ~5s. So by the time the
+watcher first *sees* the transcript line, the hook's job has usually already
+completed and left the in-flight set. An in-flight-only dedup would therefore
+miss most overlaps and re-compute nearly every hooked prompt (Atlas upsert would
+hide the duplicate *row*, but the wasted GLiNER2 compute — doubled on the most
+common surface — is unacceptable).
+
+**Fix — dedup against recent completions, not just in-flight.** Both the hook
+and the watcher funnel through the *same daemon queue*, so no cross-process
+ledger is needed. Extend the queue's dedup (`queue.go:22`) to also consult a
+**bounded in-memory ring buffer of recently *completed* keys** (`Source|Scheme|ID`,
+default last ~5000 — a few hundred KB of 36-char ids). A job is dropped if its
+key is either in-flight *or* recently completed. The hook's completions populate
+the same buffer because they pass through the daemon. This closes the window
+regardless of hook-vs-watcher timing.
+
+Persistence is unnecessary: the per-file cursor already prevents re-sighting old
+transcript lines across a daemon restart, so the completed-set only has to cover
+the live, seconds-scale race within a single daemon lifetime. (Cowork prompts
+never collide — Cowork has no hook and a distinct `source`.)
 
 ### Error handling
 
@@ -201,8 +221,11 @@ Best-effort and non-fatal, mirroring the hook/spool ethos:
   reprocess; drop a Cowork-shaped nested path → offered with `source=cowork`.
 - **resolve:** `cowork` source resolves text via `ClaudeReader` against a
   sanitized real Cowork transcript fixture.
-- **dedup:** hook-offered + watcher-offered same `promptId` → single enrichment
-  (in-flight) / idempotent publish (post-completion).
+- **dedup:** (a) hook-offered then watcher-offered *while in-flight* → dropped by
+  in-flight set; (b) hook job **completed** (left the in-flight set) *then*
+  watcher offers same key → dropped by the recently-completed ring buffer — the
+  common timing, and the case an in-flight-only dedup would miss; (c) key evicted
+  from the ring buffer → re-enrich is idempotent at Atlas (no duplicate row).
 - **eval:** no enrichment-vocabulary change → no `SchemaVersion` bump and no eval
   gold changes required. Capture-only feature.
 
