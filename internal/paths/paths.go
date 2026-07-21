@@ -69,6 +69,10 @@ func ReauthRequired() (bool, string) {
 // daemon drains). Sibling of models/ under KELD_HOME.
 func SpoolDir() string { return filepath.Join(KeldHome(), "spool") }
 
+// WatchDir holds the transcript watcher's persisted per-file byte cursors.
+// Sibling of spool/ and models/ under KELD_HOME.
+func WatchDir() string { return filepath.Join(KeldHome(), "watch") }
+
 // ClientEventsSpoolDir is where the clientevents Reporter spools batches that
 // failed to POST to Atlas (e.g. Atlas unreachable), for a later drain sweep.
 func ClientEventsSpoolDir() string { return filepath.Join(SpoolDir(), "clientevents") }
