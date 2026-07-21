@@ -90,7 +90,7 @@ func TestObserveAssistantEmitsApiRequestAndMetricsNoText(t *testing.T) {
 	defer srv.Close()
 	tel := telFor(srv.URL+"/v1/logs", srv.URL+"/v1/metrics", map[string]bool{"cowork": true})
 	tp := coworkPath(t)
-	line := `{"type":"assistant","sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:02Z","message":{"role":"assistant","model":"claude-opus-4-8","id":"req_123","content":[{"type":"text","text":"secret response body"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":5,"cache_read_input_tokens":3}}}`
+	line := `{"type":"assistant","sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:02Z","message":{"role":"assistant","model":"claude-opus-4-8","id":"req_123","content":[{"type":"text","text":"secret response body"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":5,"cache_read_input_tokens":3,"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":5,"ephemeral_5m_input_tokens":0}}}}`
 	tel.Observe("cowork", tp, []byte(line))
 
 	logs := c.bodies("/v1/logs")
@@ -101,10 +101,14 @@ func TestObserveAssistantEmitsApiRequestAndMetricsNoText(t *testing.T) {
 	if strings.Contains(lb, "secret response body") {
 		t.Fatalf("response text leaked: %s", lb)
 	}
-	for _, want := range []string{"api_request", "assistant_response", "claude-opus-4-8", "req_123", "input_tokens", "output_tokens", "response_length"} {
+	for _, want := range []string{"api_request", "assistant_response", "claude-opus-4-8", "req_123", "input_tokens", "output_tokens", "response_length", "service_tier", "cache_creation_1h_tokens"} {
 		if !strings.Contains(lb, want) {
 			t.Fatalf("logs body missing %q: %s", want, lb)
 		}
+	}
+	// Cost is NOT emitted client-side (no first-hand cost; Atlas computes it).
+	if strings.Contains(lb, "cost_usd") {
+		t.Fatalf("api_request must not carry derived cost: %s", lb)
 	}
 	metrics := c.bodies("/v1/metrics")
 	if len(metrics) != 1 {
@@ -113,9 +117,8 @@ func TestObserveAssistantEmitsApiRequestAndMetricsNoText(t *testing.T) {
 	if !strings.Contains(metrics[0], "claude_code.token.usage") {
 		t.Fatalf("metrics missing token.usage: %s", metrics[0])
 	}
-	// cost.usage is derived for a known model.
-	if !strings.Contains(metrics[0], "claude_code.cost.usage") {
-		t.Fatalf("metrics missing cost.usage: %s", metrics[0])
+	if strings.Contains(metrics[0], "claude_code.cost.usage") {
+		t.Fatalf("cost.usage metric must not be emitted (Atlas computes cost): %s", metrics[0])
 	}
 }
 
@@ -130,11 +133,19 @@ func TestFidelityMirrorsCLISchema(t *testing.T) {
 		"api_request":        {"cache_creation_tokens", "cache_read_tokens", "client_request_id", "cost_usd", "cost_usd_micros", "duration_ms", "effort", "event.name", "event.sequence", "event.timestamp", "input_tokens", "model", "organization.id", "output_tokens", "prompt.id", "query_source", "request_id", "session.id", "speed", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
 		"assistant_response": {"event.name", "event.sequence", "event.timestamp", "message.uuid", "model", "organization.id", "prompt.id", "query_source", "request_id", "response", "response_length", "session.id", "terminal.type", "user.account_id", "user.account_uuid", "user.email", "user.id"},
 	}
-	// Documented omissions: privacy (text) + not reconstructable host-side.
+	// Documented omissions: privacy (text) + not reconstructable host-side +
+	// cost (dropped deliberately — no first-hand cost in the transcript; Atlas
+	// computes it authoritatively from the exact tokens we emit).
 	omit := map[string]bool{
 		"prompt": true, "response": true, // privacy — never emit text
 		"terminal.type": true, "user.id": true, "user.account_id": true, // no host-side source
 		"duration_ms": true, "query_source": true, "speed": true, // runtime-only
+		"cost_usd": true, "cost_usd_micros": true, // derived cost dropped; Atlas computes from tokens
+	}
+	// Intentional extensions beyond the CLI schema: exact token detail Atlas needs
+	// to compute cost accurately (service tier + 1h/5m cache-write split).
+	extra := map[string]map[string]bool{
+		"api_request": {"service_tier": true, "cache_creation_1h_tokens": true, "cache_creation_5m_tokens": true},
 	}
 
 	c, srv := newCapSink()
@@ -143,7 +154,7 @@ func TestFidelityMirrorsCLISchema(t *testing.T) {
 	tp := coworkPath(t)
 	// user first (establishes prompt.id linkage), then assistant.
 	tel.Observe("cowork", tp, []byte(`{"type":"user","promptId":"P1","uuid":"U1","sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:00Z","message":{"role":"user","content":"hi"}}`))
-	tel.Observe("cowork", tp, []byte(`{"type":"assistant","uuid":"AU1","parentUuid":"U1","requestId":"req_1","effort":"high","sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:02Z","message":{"role":"assistant","model":"claude-opus-4-8","id":"msg_1","content":[{"type":"text","text":"yo"}],"usage":{"input_tokens":2,"output_tokens":5,"cache_creation_input_tokens":7,"cache_read_input_tokens":9}}}`))
+	tel.Observe("cowork", tp, []byte(`{"type":"assistant","uuid":"AU1","parentUuid":"U1","requestId":"req_1","effort":"high","sessionId":"S1","version":"2.1.216","timestamp":"2026-07-21T19:00:02Z","message":{"role":"assistant","model":"claude-opus-4-8","id":"msg_1","content":[{"type":"text","text":"yo"}],"usage":{"input_tokens":2,"output_tokens":5,"cache_creation_input_tokens":7,"cache_read_input_tokens":9,"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":7,"ephemeral_5m_input_tokens":0}}}}`))
 
 	got := emittedKeysByEvent(t, c.bodies("/v1/logs"))
 	for event, keys := range oracle {
@@ -152,6 +163,9 @@ func TestFidelityMirrorsCLISchema(t *testing.T) {
 			if !omit[k] {
 				want[k] = true
 			}
+		}
+		for k := range extra[event] {
+			want[k] = true
 		}
 		have := got[event]
 		if have == nil {

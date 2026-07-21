@@ -32,7 +32,6 @@ const (
 	eventAPIRequest        = "api_request"
 	eventAssistantResponse = "assistant_response"
 	metricTokenUsage       = "claude_code.token.usage"
-	metricCostUsage        = "claude_code.cost.usage"
 )
 
 // Telemetry emits OTLP logs + metrics for eligible captured sources.
@@ -111,10 +110,15 @@ type tMessage struct {
 	Usage   *tUsage         `json:"usage"`
 }
 type tUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	InputTokens              int    `json:"input_tokens"`
+	OutputTokens             int    `json:"output_tokens"`
+	CacheCreationInputTokens int    `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int    `json:"cache_read_input_tokens"`
+	ServiceTier              string `json:"service_tier"`
+	CacheCreation            struct {
+		Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
+		Ephemeral5m int `json:"ephemeral_5m_input_tokens"`
+	} `json:"cache_creation"`
 }
 
 // Observe parses one transcript line and emits the matching telemetry for an
@@ -172,6 +176,9 @@ func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
 			attr("model", msg.Model),
 			attr("request_id", requestID),
 		}
+		// Exact token detail — including the 1h/5m cache-write split and service
+		// tier — so Atlas can compute cost authoritatively. We do NOT emit a
+		// derived cost: the transcript carries no first-hand cost figure.
 		apiAttrs := append(append([]kv{}, common...),
 			attr("client_request_id", r.UUID),
 			attr("effort", r.Effort),
@@ -179,10 +186,10 @@ func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
 			attrInt("output_tokens", msg.Usage.OutputTokens),
 			attrInt("cache_creation_tokens", msg.Usage.CacheCreationInputTokens),
 			attrInt("cache_read_tokens", msg.Usage.CacheReadInputTokens),
+			attrInt("cache_creation_1h_tokens", msg.Usage.CacheCreation.Ephemeral1h),
+			attrInt("cache_creation_5m_tokens", msg.Usage.CacheCreation.Ephemeral5m),
+			attr("service_tier", msg.Usage.ServiceTier),
 		)
-		if cost, ok := costUSD(msg.Model, msg.Usage.InputTokens, msg.Usage.OutputTokens, msg.Usage.CacheCreationInputTokens, msg.Usage.CacheReadInputTokens); ok {
-			apiAttrs = append(apiAttrs, attrFloat("cost_usd", cost), attrInt("cost_usd_micros", int(cost*1e6)))
-		}
 		api := t.record(eventAPIRequest, r, id, apiAttrs)
 		resp := t.record(eventAssistantResponse, r, id, append(append([]kv{}, common...),
 			attr("message.uuid", r.UUID),
@@ -231,9 +238,8 @@ func (t *Telemetry) postMetrics(res []kv, r tRecord, msg tMessage, id Identity) 
 	if msg.Usage.CacheCreationInputTokens > 0 {
 		metrics = append(metrics, tok("cacheCreation", msg.Usage.CacheCreationInputTokens))
 	}
-	if cost, ok := costUSD(msg.Model, msg.Usage.InputTokens, msg.Usage.OutputTokens, msg.Usage.CacheCreationInputTokens, msg.Usage.CacheReadInputTokens); ok {
-		metrics = append(metrics, metric{Name: metricCostUsage, Value: cost, IsInt: false, TimeUnixNano: ns, Attrs: base})
-	}
+	// No cost.usage metric: cost is derived authoritatively in Atlas from these
+	// exact token counts, not estimated client-side.
 	body, err := metricsPayload(res, metrics)
 	if err != nil {
 		return
