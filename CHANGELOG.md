@@ -7,6 +7,31 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-07-21
+
+Full-fidelity Cowork telemetry — watched telemetry now mirrors the Claude Code
+CLI's native OTEL, not a single thin event.
+
+### Changed
+- **`promptlog` now emits the CLI's full OTEL footprint** for watched sources.
+  Grounded in a captured real `claude` OTEL export, the daemon mirrors the
+  transcript's events into OTLP **logs** (`user_prompt`, `api_request`,
+  `assistant_response`) and **metrics** (`token.usage`, `cost.usage`) at
+  `/v1/logs` + `/v1/metrics`, with resource attrs (`service.name=claude-code`,
+  version, os/arch) and the **Anthropic account identity** (`user.email`,
+  `user.account_uuid`, `organization.id`) recovered host-side from the Cowork
+  session path/metadata — so it attributes to the same account as the CLI, not
+  keld's login. Model + token counts come from the transcript's assistant
+  records. Supersedes v0.9.1's single-event emit. Still **never emits prompt or
+  response text** — only lengths, ids, model, tokens.
+- The watcher gained a per-line **observe** hook feeding telemetry; enrichment
+  (offer) is unchanged.
+
+### Known gaps (not reconstructable host-side, omitted or approximate)
+- `duration_ms`, `terminal.type`, `user.id`/`user.account_id`, metric
+  `active_time.total` — omitted; `event.sequence` synthesized; `cost_usd`
+  **derived** from a per-model price table (may drift with pricing).
+
 ## [0.9.1] — 2026-07-21
 
 Telemetry parity for watched sources — Cowork prompts now produce usage telemetry
