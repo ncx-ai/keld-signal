@@ -44,8 +44,9 @@ type Telemetry struct {
 	ids        *identityCache
 	client     *http.Client
 
-	mu  sync.Mutex
-	seq map[string]int64 // per-session event.sequence counter
+	mu         sync.Mutex
+	seq        map[string]int64  // per-session event.sequence counter
+	lastPrompt map[string]string // per-session last user prompt id, for prompt.id linkage
 }
 
 // New builds a Telemetry. logsURL/metricsURL are the full OTLP endpoints; token is
@@ -61,6 +62,7 @@ func New(logsURL, metricsURL string, token func() string, sources map[string]boo
 		ids:        newIdentityCache(),
 		client:     &http.Client{Timeout: 5 * time.Second},
 		seq:        map[string]int64{},
+		lastPrompt: map[string]string{},
 	}
 }
 
@@ -90,6 +92,9 @@ type tRecord struct {
 	Type          string          `json:"type"`
 	PromptID      string          `json:"promptId"`
 	UUID          string          `json:"uuid"`
+	ParentUUID    string          `json:"parentUuid"`
+	RequestID     string          `json:"requestId"`
+	Effort        string          `json:"effort"`
 	SessionID     string          `json:"sessionId"`
 	Version       string          `json:"version"`
 	Timestamp     string          `json:"timestamp"`
@@ -143,6 +148,7 @@ func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
 		if text == "" {
 			return
 		}
+		t.setLastPrompt(r.SessionID, r.PromptID) // for prompt.id linkage on later assistant events
 		rec := t.record(eventUserPrompt, r, id, []kv{
 			attr("session.id", r.SessionID),
 			attr("prompt.id", r.PromptID),
@@ -155,20 +161,29 @@ func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
 			return
 		}
 		respLen := utf8.RuneCountInString(contentText(msg.Content))
+		promptID := t.lastPromptID(r.SessionID)
+		requestID := r.RequestID
+		if requestID == "" {
+			requestID = msg.ID
+		}
 		common := []kv{
 			attr("session.id", r.SessionID),
+			attr("prompt.id", promptID),
 			attr("model", msg.Model),
-			attr("request_id", msg.ID),
+			attr("request_id", requestID),
 		}
-		api := t.record(eventAPIRequest, r, id, append(append([]kv{}, common...),
+		apiAttrs := append(append([]kv{}, common...),
+			attr("client_request_id", r.UUID),
+			attr("effort", r.Effort),
 			attrInt("input_tokens", msg.Usage.InputTokens),
 			attrInt("output_tokens", msg.Usage.OutputTokens),
 			attrInt("cache_creation_tokens", msg.Usage.CacheCreationInputTokens),
 			attrInt("cache_read_tokens", msg.Usage.CacheReadInputTokens),
-		))
+		)
 		if cost, ok := costUSD(msg.Model, msg.Usage.InputTokens, msg.Usage.OutputTokens, msg.Usage.CacheCreationInputTokens, msg.Usage.CacheReadInputTokens); ok {
-			api.Attributes = append(api.Attributes, attrInt("cost_usd_micros", int(cost*1e6)))
+			apiAttrs = append(apiAttrs, attrFloat("cost_usd", cost), attrInt("cost_usd_micros", int(cost*1e6)))
 		}
+		api := t.record(eventAPIRequest, r, id, apiAttrs)
 		resp := t.record(eventAssistantResponse, r, id, append(append([]kv{}, common...),
 			attr("message.uuid", r.UUID),
 			attrInt("response_length", respLen),
@@ -262,6 +277,18 @@ func (t *Telemetry) nextSeq(session string) int64 {
 	defer t.mu.Unlock()
 	t.seq[session]++
 	return t.seq[session]
+}
+
+func (t *Telemetry) setLastPrompt(session, promptID string) {
+	t.mu.Lock()
+	t.lastPrompt[session] = promptID
+	t.mu.Unlock()
+}
+
+func (t *Telemetry) lastPromptID(session string) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastPrompt[session]
 }
 
 func resourceAttrs(source, version string) []kv {
