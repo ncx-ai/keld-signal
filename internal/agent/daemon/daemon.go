@@ -646,17 +646,17 @@ func Run(ctx context.Context) error {
 	// Desktop app) still enrich. Only when enrichment is enabled (no Worker to
 	// consume the queue otherwise) and not explicitly disabled.
 	if enrichmentEnabled && watch.EnabledFromEnv() {
-		// Host-side telemetry emitter: for captured sources whose own OTEL can't
-		// reach Keld (Cowork's sandbox blocks egress to atlas.keld.co), the daemon
-		// emits the prompt telemetry itself — from the host, unrestricted egress —
-		// so watched sources reach Atlas with the same footprint the CLI's native
-		// OTEL provides. Claude Code is excluded by default (it emits its own OTEL).
-		plog := promptlog.New(logsEndpoint(cfg.Endpoint), tok.Get, actor, promptlog.SourcesFromEnv())
-		offer := func(p spool.Pointer) {
-			q.Offer(ingress.JobFrom(p))
-			plog.Emit(p.Source.ID, p.Correlation.SessionID, p.Correlation.ID, time.Now())
-		}
-		txw := watch.New(offer, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv())
+		// Host-side telemetry: for captured sources whose own OTEL can't reach Keld
+		// (Cowork's sandbox blocks egress to atlas.keld.co), the daemon mirrors the
+		// transcript's events into OTLP logs+metrics itself — from the host,
+		// unrestricted egress — so watched sources reach Atlas with the same
+		// footprint the CLI's native OTEL provides. Claude Code is excluded by
+		// default (it emits its own OTEL host-side). The watcher's observe hook
+		// feeds every new transcript line to the telemetry; offer handles enrichment.
+		tel := promptlog.New(logsEndpoint(cfg.Endpoint), metricsEndpoint(cfg.Endpoint), tok.Get, promptlog.SourcesFromEnv())
+		offer := func(p spool.Pointer) { q.Offer(ingress.JobFrom(p)) }
+		observe := func(source, path string, line []byte) { tel.Observe(source, path, line) }
+		txw := watch.New(offer, observe, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv())
 		go txw.Run(ctx)
 	}
 
@@ -901,6 +901,15 @@ func logsEndpoint(ingest string) string {
 		return ingest[:i] + "/v1/logs"
 	}
 	return strings.TrimRight(ingest, "/") + "/v1/logs"
+}
+
+// metricsEndpoint derives the OTLP metrics ingest URL from the configured ingest
+// endpoint by swapping the trailing path segment for /v1/metrics.
+func metricsEndpoint(ingest string) string {
+	if i := strings.Index(ingest, "/v1/"); i >= 0 {
+		return ingest[:i] + "/v1/metrics"
+	}
+	return strings.TrimRight(ingest, "/") + "/v1/metrics"
 }
 
 // pollSettings fetches org settings on startup then on each tick of interval.
