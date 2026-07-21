@@ -14,7 +14,10 @@ var readers = map[string]TranscriptReader{}
 
 func register(r TranscriptReader) { readers[r.Source()] = r }
 
-func init() { register(NewClaudeReader()) }
+func init() {
+	register(NewClaudeReader())
+	register(NewClaudeReaderForSource("cowork"))
+}
 
 // Resolve returns the prompt text. Inline text (when present) wins; otherwise it
 // dispatches to the registered reader for source. Returns ok=false to skip.
