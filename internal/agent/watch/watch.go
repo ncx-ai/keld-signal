@@ -19,13 +19,40 @@ import (
 // and Claude Code launch surfaces where hooks may not run). It never reads or
 // forwards prompt TEXT — only pointers.
 type Watcher struct {
-	offer    func(spool.Pointer)
-	observe  func(source, transcriptPath string, line []byte)
-	cursors  *CursorStore
-	discover func() []Root
-	version  string
-	poll     time.Duration
-	backfill bool
+	offer      func(spool.Pointer)
+	observe    func(source, transcriptPath string, line []byte)
+	cursors    *CursorStore
+	discover   func() []Root
+	version    string
+	poll       time.Duration
+	backfill   bool
+	extractors map[string]promptExtractor
+}
+
+// promptExtractor detects a genuine user prompt within a single transcript
+// line and, if found, projects it to the minimal id/cwd record needed to
+// synthesize an enrich pointer. Implementations never see (or need) prompt
+// text beyond what's required to decide genuineness.
+type promptExtractor interface {
+	extract(path string, line []byte) (promptRec, bool)
+}
+
+// claudeExtractor is the stateless Claude-Code-format extractor: it wraps the
+// existing parsePrompt with no per-file state, so the Claude/cowork path's
+// behavior is unchanged (byte-identical) by this indirection.
+type claudeExtractor struct{}
+
+func (claudeExtractor) extract(_ string, line []byte) (promptRec, bool) {
+	return parsePrompt(line)
+}
+
+// extractorFor returns the promptExtractor for a capture source, defaulting
+// to claudeExtractor for unknown/unset sources.
+func (w *Watcher) extractorFor(source string) promptExtractor {
+	if ex, ok := w.extractors[source]; ok {
+		return ex
+	}
+	return claudeExtractor{}
 }
 
 // New builds a Watcher. offer receives each synthesized pointer (enrichment);
@@ -44,6 +71,11 @@ func New(offer func(spool.Pointer), observe func(source, transcriptPath string, 
 		version:  version,
 		poll:     poll,
 		backfill: backfill,
+		extractors: map[string]promptExtractor{
+			"claude_code": claudeExtractor{},
+			"cowork":      claudeExtractor{},
+			"codex":       newCodexExtractor(),
+		},
 	}
 }
 
@@ -121,7 +153,7 @@ func (w *Watcher) scanFile(source, path string) bool {
 	if w.observe != nil {
 		observe = func(line []byte) { w.observe(source, path, line) }
 	}
-	recs, consumed := scanFrom(path, off, observe)
+	recs, consumed := scanFrom(path, off, w.extractorFor(source), observe)
 	for _, rec := range recs {
 		w.offer(spool.Pointer{
 			Source:      spool.Source{ID: source, Origin: "watch", Version: w.version},
@@ -153,10 +185,11 @@ func transcriptFiles(dir string) []string {
 
 // scanFrom reads complete (newline-terminated) lines from byte offset off. It
 // invokes observe (if non-nil) with every complete line — for telemetry that
-// mirrors all transcript events — and returns the genuine prompts found (for
-// enrichment) plus the number of bytes of complete lines consumed. A trailing
-// partial line (write in progress) is not consumed, so it is re-read next poll.
-func scanFrom(path string, off int64, observe func(line []byte)) (recs []promptRec, consumed int64) {
+// mirrors all transcript events — and returns the genuine prompts found (via
+// ex.extract, for enrichment) plus the number of bytes of complete lines
+// consumed. A trailing partial line (write in progress) is not consumed, so
+// it is re-read next poll.
+func scanFrom(path string, off int64, ex promptExtractor, observe func(line []byte)) (recs []promptRec, consumed int64) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, 0
@@ -175,7 +208,7 @@ func scanFrom(path string, off int64, observe func(line []byte)) (recs []promptR
 		if observe != nil {
 			observe([]byte(line))
 		}
-		if rec, ok := parsePrompt([]byte(line)); ok {
+		if rec, ok := ex.extract(path, []byte(line)); ok {
 			recs = append(recs, rec)
 		}
 	}
