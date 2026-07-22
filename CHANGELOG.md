@@ -7,6 +7,36 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-07-22
+
+Gemini CLI parity — native OTEL completed. Enrichment via `~/.gemini/tmp/*/chats`
+watcher root + Gemini transcript reader (resolves user messages by `id`,
+pointer model — no prompt text on disk); telemetry stays native (no host-side emit /
+no double-count).
+
+### Added
+- **Gemini transcript watcher** (`internal/agent/watch/gemini.go`) tails
+  `~/.gemini/tmp/*/chats` to capture prompts with source=gemini, feeding the same
+  resolve → enrich → publish pipeline as Claude Code / Cowork / Codex. Pointer-only,
+  never text.
+- **Gemini TranscriptReader** (`internal/agent/resolve/gemini.go`) implements the
+  `TranscriptReader` + `RecentReader` interfaces for Gemini chat transcripts:
+  resolves a user message by matching the JSONL line's `id` field
+  (promptID = message `id`; pointer model — ids only, no disk-resident
+  prompt text). Registered alongside Claude Code, Cowork, and Codex readers.
+- **Gemini classified as an interactive coding tool** in the enrichment pipeline.
+
+### Changed
+- **Gemini telemetry now native.** Gemini's own OTEL (configured in Task 1) handles
+  all gemini telemetry; the host-side promptlog emitter explicitly excludes `gemini`
+  to prevent double-counting. Guard test asserts `SourcesFromEnv()` default does
+  not include gemini. The keld-managed `~/.gemini/.env` block preserves `GEMINI_API_KEY`
+  while adding OTEL auth headers (`x-keld-ingest-token` / `x-keld-actor`) and
+  `OTEL_TRACES_EXPORTER=none`, using the base OTLP endpoint (was a broken `/v1/logs?token=` URL).
+  Distinguished in Atlas by `service.name:"gemini-cli"`; identity via `user.email`.
+- **Gemini hook** — `settings.json hooks.BeforeAgent` → `keld __hook --source gemini`
+  (context event only; silent stdout; watcher owns enrichment capture).
+
 ## [0.10.0] — 2026-07-21
 
 Codex parity — native OTEL completed. Enrichment via `~/.codex/sessions`

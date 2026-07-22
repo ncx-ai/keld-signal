@@ -55,13 +55,13 @@ unreachable, and the daemon drains it on startup + a periodic sweep.
 **Capture triggers.** Two triggers feed the same queue: the **command hook**
 (`keld __hook --source <tool>`, wired by `keld setup`), and an on-device
 **transcript watcher** (`internal/agent/watch/`) that tails the JSONL transcripts
-Claude Code (all surfaces incl. the Desktop app) and **Cowork** write to disk —
+Claude Code (all surfaces incl. the Desktop app), **Cowork**, and **Gemini** write to disk —
 the hook-free path. The watcher synthesizes the same `spool.Pointer` the hook does
 (never text) keyed on `promptId`; the queue dedups hook↔watcher overlap via a
 recently-completed set (`queue.Complete`, marked only on a real publish so retries
 and watcher fallbacks stay re-offerable). Sources: `~/.claude/projects` →
 `claude_code`, the Cowork `local-agent-mode-sessions/**/.claude/projects` trees →
-`cowork` (macOS). Env: `KELD_WATCH` (default on), `KELD_WATCH_POLL` (default 5s),
+`cowork` (macOS), `~/.gemini/tmp/*/chats` → `gemini` (all platforms). Env: `KELD_WATCH` (default on), `KELD_WATCH_POLL` (default 5s),
 `KELD_WATCH_BACKFILL` (default off = forward-only). macOS + Linux; Windows deferred.
 
 **Watched-source telemetry (`internal/agent/promptlog`).** Cowork's own OTEL is
@@ -73,10 +73,10 @@ per-line `observe` hook → `promptlog.Telemetry.Observe`, which emits `user_pro
 (`user.email`/`account_uuid`/`organization.id`) is recovered from the Cowork
 session path/metadata. **Never emits prompt/response text.** Default source
 `{cowork}` (Claude Code emits its own OTEL); `KELD_WATCH_TELEMETRY` (off/on),
-`KELD_WATCH_TELEMETRY_SOURCES`. **Codex** is covered via its own watcher root
-`~/.codex/sessions` (source codex) + rollout reader for enrichment (TranscriptReader
-resolves user_message by session_id#ordinal); telemetry via Codex's native OTEL
-(config completed in the codex adapter), not host-side promptlog.
+`KELD_WATCH_TELEMETRY_SOURCES`. **Codex** and **Gemini** are covered via their own watcher roots
+(`~/.codex/sessions` and `~/.gemini/tmp/*/chats`, sources codex and gemini) + specialized readers for enrichment
+(TranscriptReader resolves user_message by session_id#ordinal for Codex, by message `id` for Gemini);
+telemetry via their native OTEL (config completed in the tool adapters), not host-side promptlog.
 
 **Enrichment pipeline (`internal/agent/enrich/`).** A staged registry of
 extractors ("sweeps") run over a swappable `Model` backend, producing a `Profile`.

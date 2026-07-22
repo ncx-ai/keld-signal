@@ -4,7 +4,7 @@
 engineer's own machine, and it does two things:
 
 1. **Telemetry** — configures your local AI coding tools (Claude Code, Codex with
-   enriched capture + native telemetry, Gemini CLI) to emit usage telemetry to Keld Atlas.
+   enriched capture + native telemetry, Gemini CLI with enriched capture + native telemetry) to emit usage telemetry to Keld Atlas.
 2. **On-device enrichment (the core)** — a local daemon that classifies each
    prompt **on your machine**, masks anything sensitive, and sends Atlas only the
    *derived, masked* signal. **Raw prompt text never leaves the machine.**
