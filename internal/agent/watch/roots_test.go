@@ -46,6 +46,26 @@ func TestDiscoverRootsCodex(t *testing.T) {
 	}
 }
 
+func TestDiscoverRootsGemini(t *testing.T) {
+	home := t.TempDir()
+	// Create two Gemini project chat directories.
+	projA := filepath.Join(home, ".gemini", "tmp", "projA", "chats")
+	projB := filepath.Join(home, ".gemini", "tmp", "projB", "chats")
+	mkdir(t, projA)
+	mkdir(t, projB)
+
+	// Test on both macOS and Linux.
+	for _, goos := range []string{"darwin", "linux"} {
+		roots := discoverRoots(home, goos)
+		if !hasRoot(roots, "gemini", projA) {
+			t.Errorf("%s: missing gemini root for projA; got %+v", goos, roots)
+		}
+		if !hasRoot(roots, "gemini", projB) {
+			t.Errorf("%s: missing gemini root for projB; got %+v", goos, roots)
+		}
+	}
+}
+
 func mkdir(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o700); err != nil {

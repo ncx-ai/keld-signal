@@ -51,6 +51,15 @@ func discoverRoots(home, goos string) []Root {
 			}
 		}
 	}
+	// Gemini — chats live at ~/.gemini/tmp/<project>/chats/*.jsonl on both
+	// macOS and Linux.
+	glob := filepath.Join(home, ".gemini", "tmp", "*", "chats")
+	matches, _ := filepath.Glob(glob)
+	for _, m := range matches {
+		if isDir(m) {
+			roots = append(roots, Root{SourceID: "gemini", Dir: m})
+		}
+	}
 	return roots
 }
 
