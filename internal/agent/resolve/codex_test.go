@@ -55,3 +55,99 @@ func TestResolveCodexSource(t *testing.T) {
 		t.Fatalf("resolve codex: %q ok=%v", text, ok)
 	}
 }
+
+// codexFixtureWithGarbage is the base fixture with a malformed, non-JSON line
+// spliced in. Read must not panic on it and must still resolve valid lines.
+const codexFixtureWithGarbage = `{"timestamp":"2026-07-21T19:00:00Z","type":"session_meta","payload":{"id":"thread_1","session_id":"s1","cwd":"/work/proj","cli_version":"1.0.0"}}
+not even json {{{
+{"timestamp":"2026-07-21T19:00:01Z","ordinal":5,"type":"event_msg","payload":{"type":"user_message","message":"refactor the auth module"}}
+`
+
+func writeCodexFixtureWithGarbage(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "rollout-garbage.jsonl")
+	if err := os.WriteFile(p, []byte(codexFixtureWithGarbage), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestCodexReaderMalformedLineIgnored verifies a garbage (non-JSON) line in the
+// rollout file doesn't panic Read and doesn't block resolution of a valid line
+// elsewhere in the file.
+func TestCodexReaderMalformedLineIgnored(t *testing.T) {
+	r := NewCodexReader()
+	path := writeCodexFixtureWithGarbage(t)
+	text, ok := r.Read(path, "thread_1#5")
+	if !ok || text != "refactor the auth module" {
+		t.Fatalf("read with garbage line present: %q ok=%v", text, ok)
+	}
+}
+
+// TestCodexReaderReadNoHash verifies a promptID with no '#' separator is
+// rejected (ok=false) without panicking.
+func TestCodexReaderReadNoHash(t *testing.T) {
+	r := NewCodexReader()
+	path := writeCodexFixture(t)
+	if text, ok := r.Read(path, "thread_1_no_separator"); ok {
+		t.Fatalf("expected ok=false for promptID with no '#', got %q", text)
+	}
+}
+
+// TestCodexReaderReadNonNumericOrdinal verifies a promptID whose ordinal
+// suffix isn't a valid integer is rejected (ok=false) without panicking.
+func TestCodexReaderReadNonNumericOrdinal(t *testing.T) {
+	r := NewCodexReader()
+	path := writeCodexFixture(t)
+	if text, ok := r.Read(path, "thread_1#not-a-number"); ok {
+		t.Fatalf("expected ok=false for non-numeric ordinal, got %q", text)
+	}
+}
+
+const codexFixtureEmptyMessage = `{"timestamp":"2026-07-21T19:00:01Z","ordinal":0,"type":"event_msg","payload":{"type":"user_message","message":""}}
+{"timestamp":"2026-07-21T19:00:02Z","ordinal":1,"type":"event_msg","payload":{"type":"user_message","message":"hello"}}
+`
+
+// TestCodexReaderEmptyMessageNotFound verifies an empty user_message text is
+// treated as not-found in both the Read and RecentUserPrompts paths, matching
+// the Claude reader's extractText (s != "") semantics.
+func TestCodexReaderEmptyMessageNotFound(t *testing.T) {
+	r := NewCodexReader()
+	p := filepath.Join(t.TempDir(), "rollout-empty.jsonl")
+	if err := os.WriteFile(p, []byte(codexFixtureEmptyMessage), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if text, ok := r.Read(p, "thread_1#0"); ok {
+		t.Fatalf("expected ok=false for empty message, got %q", text)
+	}
+
+	// currentPromptID "thread_1#99" doesn't match either ordinal, so the
+	// empty-message line (ordinal 0) must still be excluded from the results
+	// because its text is empty, not because it collides with currentOrdinal.
+	got := r.RecentUserPrompts(p, "thread_1#99", 5)
+	if len(got) != 1 || got[0] != "hello" {
+		t.Fatalf("recent (empty message skipped) = %v", got)
+	}
+}
+
+// TestCodexReaderRecentUserPromptsOrdinalZeroNotExcludedByBadCurrent verifies
+// that an unparsable currentPromptID doesn't wrongly exclude a genuine
+// ordinal-0 user message (currentOrdinal's zero value must not be mistaken
+// for a successfully parsed 0).
+func TestCodexReaderRecentUserPromptsOrdinalZeroNotExcludedByBadCurrent(t *testing.T) {
+	r := NewCodexReader()
+	fixture := `{"timestamp":"2026-07-21T19:00:00Z","ordinal":0,"type":"event_msg","payload":{"type":"user_message","message":"first message"}}
+{"timestamp":"2026-07-21T19:00:01Z","ordinal":1,"type":"event_msg","payload":{"type":"user_message","message":"second message"}}
+`
+	p := filepath.Join(t.TempDir(), "rollout-ordinal-zero.jsonl")
+	if err := os.WriteFile(p, []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// currentPromptID has no parseable ordinal at all.
+	got := r.RecentUserPrompts(p, "unparsable-current-id", 5)
+	if len(got) != 2 {
+		t.Fatalf("expected both messages (ordinal-0 not wrongly excluded), got %v", got)
+	}
+}

@@ -40,12 +40,13 @@ type codexPayload struct {
 // and type=="event_msg" with payload.type=="user_message", returning the message text.
 // PromptID format: "<sessionID>#<ordinal>".
 func (r *CodexReader) Read(path, promptID string) (string, bool) {
-	// Parse promptID: "<sessionID>#<ordinal>"
-	parts := strings.Split(promptID, "#")
-	if len(parts) != 2 {
+	// Parse promptID: "<sessionID>#<ordinal>". The ordinal is everything after
+	// the last '#' so a sessionID that itself contains '#' is tolerated.
+	idx := strings.LastIndex(promptID, "#")
+	if idx < 0 {
 		return "", false
 	}
-	ordinalWant, err := strconv.ParseUint(parts[1], 10, 64)
+	ordinalWant, err := strconv.ParseUint(promptID[idx+1:], 10, 64)
 	if err != nil {
 		return "", false
 	}
@@ -98,8 +99,9 @@ func (r *CodexReader) matchLine(line string, ordinalWant uint64) (string, bool) 
 		return "", false // tolerate malformed payloads
 	}
 
-	// Must be a user_message
-	if payload.Type != "user_message" {
+	// Must be a user_message with non-empty text (empty message is "not found",
+	// matching the Claude reader's extractText semantics).
+	if payload.Type != "user_message" || payload.Message == "" {
 		return "", false
 	}
 
@@ -155,19 +157,22 @@ func (r *CodexReader) RecentUserPrompts(path, currentPromptID string, n int) []s
 		}
 	}
 
-	// Parse currentPromptID to exclude the current ordinal
+	// Parse currentPromptID to exclude the current ordinal. currentOK tracks
+	// whether parsing actually succeeded, so an unparsable currentPromptID
+	// doesn't wrongly exclude a genuine ordinal-0 message (the zero value).
 	var currentOrdinal uint64
-	parts := strings.Split(currentPromptID, "#")
-	if len(parts) == 2 {
-		if ordinal, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
+	var currentOK bool
+	if idx := strings.LastIndex(currentPromptID, "#"); idx >= 0 {
+		if ordinal, err := strconv.ParseUint(currentPromptID[idx+1:], 10, 64); err == nil {
 			currentOrdinal = ordinal
+			currentOK = true
 		}
 	}
 
 	// Build output: newest-first (reverse order), excluding current, capped at n
 	out := make([]string, 0, n)
 	for i := len(messages) - 1; i >= 0 && len(out) < n; i-- {
-		if messages[i].ordinal == currentOrdinal {
+		if currentOK && messages[i].ordinal == currentOrdinal {
 			continue
 		}
 		out = append(out, messages[i].text)
@@ -198,8 +203,9 @@ func (r *CodexReader) userMessage(line string) (text string, ordinal uint64, ok 
 		return "", 0, false // tolerate malformed payloads
 	}
 
-	// Must be a user_message
-	if payload.Type != "user_message" {
+	// Must be a user_message with non-empty text (empty message is "not found",
+	// matching the Claude reader's extractText semantics).
+	if payload.Type != "user_message" || payload.Message == "" {
 		return "", 0, false
 	}
 

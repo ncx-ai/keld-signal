@@ -76,9 +76,11 @@ func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 }
 
 // CodexBlockBody returns the TOML text for the [otel] table and [[hooks.*]]
-// blocks that keld injects into Codex's config file. The output matches the
-// Python reference byte-for-byte (modulo the intentional hook-command change:
-// Go uses HookCommand(source) instead of "python3 {path}; true").
+// blocks that keld injects into Codex's config file. This intentionally
+// diverges from the Python reference in three ways: Go uses HookCommand(source)
+// instead of "python3 {path}; true"; it also emits a metrics_exporter entry
+// alongside the logs exporter; and it authenticates via the
+// x-keld-ingest-token header rather than a token embedded in the endpoint URL.
 func CodexBlockBody(p SetupParams, source string) string {
 	logsEndpoint := fmt.Sprintf("%s/v1/logs", p.Endpoint)
 	metricsEndpoint := fmt.Sprintf("%s/v1/metrics", p.Endpoint)
