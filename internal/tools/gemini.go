@@ -17,7 +17,7 @@ import (
 //   - ~/.gemini/settings.json — telemetry block + hooks.BeforeAgent, carried
 //     as Plan.AfterText like every other adapter: Apply/Remove compute it,
 //     the caller commits it on confirm.
-//   - ~/.gemini/.env — OTEL header auth + trace-off (via config.UpsertEnvBlock/
+//   - ~/.gemini/.env — OTEL header auth (via config.UpsertEnvBlock/
 //     RemoveEnvBlock), carried as Plan.ExtraFile. Apply/Remove only *read* the
 //     current .env (to preserve GEMINI_API_KEY and any other lines
 //     byte-for-byte) and compute the new text; they never write it. The
@@ -44,7 +44,7 @@ func (a *GeminiAdapter) ConfigPath() string {
 }
 
 // envPath returns the path to Gemini CLI's env file (~/.gemini/.env), which
-// holds the keld-managed OTEL header/trace-off block alongside the user's own
+// holds the keld-managed OTEL header block alongside the user's own
 // GEMINI_API_KEY. Derived from ConfigPath's directory (not a separate
 // os.UserHomeDir() call) so the two artifacts always move together; since
 // os.UserHomeDir honors $HOME on darwin/linux, tests can redirect both files

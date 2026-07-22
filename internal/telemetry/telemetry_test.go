@@ -98,6 +98,15 @@ func TestGeminiTelemetryBaseEndpoint(t *testing.T) {
 		t.Errorf("logPrompts should be false, got %v", logPrompts)
 	}
 
+	// traces=false is the native knob that (with logPrompts) gates
+	// shouldIncludePayloads, keeping prompt/response bodies out of spans.
+	// Trace *export* itself cannot be disabled in gemini-cli, but stays
+	// content-free.
+	traces, ok := tm.Get("traces")
+	if !ok || traces != false {
+		t.Errorf("traces should be present and false, got %v (present=%v)", traces, ok)
+	}
+
 	// Ensure no token is embedded in string values
 	for _, key := range tm.Keys() {
 		val, _ := tm.Get(key)
@@ -114,24 +123,26 @@ func TestGeminiEnvBlockHeaders(t *testing.T) {
 	env := GeminiEnvBlock(p)
 
 	lines := strings.Split(strings.TrimSpace(env), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("GeminiEnvBlock should return exactly 2 lines, got %d: %q", len(lines), env)
+	// Only the auth-headers line: gemini-cli has no per-signal trace-export
+	// off-switch (OTEL_TRACES_EXPORTER is ignored — it builds its own OTLP
+	// exporters), so we no longer emit a dead OTEL_TRACES_EXPORTER=none line.
+	// Prompt content is kept out of spans via telemetry.logPrompts/traces=false.
+	if len(lines) != 1 {
+		t.Fatalf("GeminiEnvBlock should return exactly 1 line, got %d: %q", len(lines), env)
 	}
 
-	// Check first line: OTEL_EXPORTER_OTLP_HEADERS
+	// The only line: OTEL_EXPORTER_OTLP_HEADERS
 	if !strings.HasPrefix(lines[0], "OTEL_EXPORTER_OTLP_HEADERS=") {
-		t.Fatalf("first line should start with OTEL_EXPORTER_OTLP_HEADERS=, got %q", lines[0])
+		t.Fatalf("line should start with OTEL_EXPORTER_OTLP_HEADERS=, got %q", lines[0])
 	}
 	if !strings.Contains(lines[0], "x-keld-ingest-token=tok123") {
-		t.Errorf("first line should contain x-keld-ingest-token=tok123, got %q", lines[0])
+		t.Errorf("line should contain x-keld-ingest-token=tok123, got %q", lines[0])
 	}
 	if !strings.Contains(lines[0], "x-keld-actor=test") {
-		t.Errorf("first line should contain x-keld-actor=test, got %q", lines[0])
+		t.Errorf("line should contain x-keld-actor=test, got %q", lines[0])
 	}
-
-	// Check second line: OTEL_TRACES_EXPORTER
-	if lines[1] != "OTEL_TRACES_EXPORTER=none" {
-		t.Fatalf("second line should be OTEL_TRACES_EXPORTER=none, got %q", lines[1])
+	if strings.Contains(env, "OTEL_TRACES_EXPORTER") {
+		t.Errorf("must not emit the ineffective OTEL_TRACES_EXPORTER line: %q", env)
 	}
 
 	// Ensure no token or endpoint URL appears in env output

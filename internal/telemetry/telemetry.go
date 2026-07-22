@@ -74,17 +74,27 @@ func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 	m.Set("otlpProtocol", "http")
 	m.Set("otlpEndpoint", p.Endpoint)
 	m.Set("logPrompts", false)
+	// gemini-cli builds its OTLP trace exporter unconditionally when telemetry
+	// is enabled — there is no per-signal switch to stop trace *export* (spans
+	// still flow to /v1/traces; Atlas ignores them). What we can control is
+	// span *content*: shouldIncludePayloads = traces && logPrompts. Both are
+	// false here, so spans carry no prompt/response bodies. Setting traces
+	// explicitly (in addition to logPrompts) makes that guarantee robust even
+	// if a future gemini-cli flips the logPrompts default.
+	m.Set("traces", false)
 	return m
 }
 
-// GeminiEnvBlock returns a multi-line string containing two environment variable
-// assignments for Gemini CLI: OTEL_EXPORTER_OTLP_HEADERS (with x-keld-ingest-token
-// and x-keld-actor comma-separated in headers style) and OTEL_TRACES_EXPORTER=none.
-// Each line is on its own line. No token or endpoint appears in a URL.
+// GeminiEnvBlock returns the environment-variable line(s) keld manages in
+// Gemini CLI's .env: OTEL_EXPORTER_OTLP_HEADERS carrying x-keld-ingest-token
+// and x-keld-actor (headers style, comma-separated). Authentication rides in
+// headers, never in a URL. We deliberately do NOT emit OTEL_TRACES_EXPORTER:
+// gemini-cli constructs its own OTLP exporters and ignores that generic OTEL
+// SDK variable, so it would be a dead, misleading line. Trace content is kept
+// empty via the telemetry.traces/logPrompts settings instead (see
+// GeminiTelemetry).
 func GeminiEnvBlock(p SetupParams) string {
-	line1 := fmt.Sprintf("OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=%s,x-keld-actor=%s", p.IngestToken, p.Actor)
-	line2 := "OTEL_TRACES_EXPORTER=none"
-	return fmt.Sprintf("%s\n%s", line1, line2)
+	return fmt.Sprintf("OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=%s,x-keld-actor=%s", p.IngestToken, p.Actor)
 }
 
 // CodexBlockBody returns the TOML text for the [otel] table and [[hooks.*]]

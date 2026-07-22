@@ -31,9 +31,14 @@ no double-count).
   all gemini telemetry; the host-side promptlog emitter explicitly excludes `gemini`
   to prevent double-counting. Guard test asserts `SourcesFromEnv()` default does
   not include gemini. The keld-managed `~/.gemini/.env` block preserves `GEMINI_API_KEY`
-  while adding OTEL auth headers (`x-keld-ingest-token` / `x-keld-actor`) and
-  `OTEL_TRACES_EXPORTER=none`, using the base OTLP endpoint (was a broken `/v1/logs?token=` URL).
+  while adding OTEL auth headers (`x-keld-ingest-token` / `x-keld-actor`),
+  using the base OTLP endpoint (was a broken `/v1/logs?token=` URL).
   Distinguished in Atlas by `service.name:"gemini-cli"`; identity via `user.email`.
+  Prompts never enter telemetry: the settings block sets `logPrompts:false` and
+  `traces:false`, which together gate `shouldIncludePayloads`, so spans carry no
+  prompt/response bodies. gemini-cli has no switch to stop trace *export* (it
+  builds its own OTLP exporters and ignores the generic `OTEL_TRACES_EXPORTER`),
+  so content-free spans still POST to `/v1/traces`; Atlas ignores that path.
 - **Gemini hook** — `settings.json hooks.BeforeAgent` → `keld __hook --source gemini`
   (context event only; silent stdout; watcher owns enrichment capture).
 

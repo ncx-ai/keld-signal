@@ -120,7 +120,7 @@ func TestRunSetupDryRunWritesNothing(t *testing.T) {
 			Managed:    map[string]any{},
 			Summary:    []string{"added key"},
 			Changed:    true,
-			ExtraFile:  &tools.ExtraFile{Path: extraPath, AfterText: "OTEL_TRACES_EXPORTER=none\n", Mode: 0o600},
+			ExtraFile:  &tools.ExtraFile{Path: extraPath, AfterText: "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me\n", Mode: 0o600},
 		},
 	}
 
@@ -170,7 +170,7 @@ func TestRunSetupConfirmedApplyWritesExtraFile(t *testing.T) {
 			Managed:    map[string]any{"created": true},
 			Summary:    []string{"added key"},
 			Changed:    true,
-			ExtraFile:  &tools.ExtraFile{Path: extraPath, AfterText: "OTEL_TRACES_EXPORTER=none\n", Mode: 0o600},
+			ExtraFile:  &tools.ExtraFile{Path: extraPath, AfterText: "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me\n", Mode: 0o600},
 		},
 	}
 
@@ -195,8 +195,8 @@ func TestRunSetupConfirmedApplyWritesExtraFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("confirmed apply: ExtraFile should have been written: %v", err)
 	}
-	if string(data) != "OTEL_TRACES_EXPORTER=none\n" {
-		t.Fatalf("ExtraFile contents = %q, want %q", data, "OTEL_TRACES_EXPORTER=none\n")
+	if string(data) != "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me\n" {
+		t.Fatalf("ExtraFile contents = %q, want %q", data, "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me\n")
 	}
 	info, err := os.Stat(extraPath)
 	if err != nil {

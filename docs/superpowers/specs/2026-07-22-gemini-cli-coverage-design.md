@@ -59,8 +59,18 @@ API-key auth. Oracles captured: real chat transcript, real OTLP wire payloads
   `OTel-OTLP-Exporter-JavaScript/0.218.0` → standard OTel SDK.)
 - **Headers:** no settings field exists; the SDK **honors
   `OTEL_EXPORTER_OTLP_HEADERS`** (verified: `x-keld-ingest-token` + `x-keld-actor`
-  arrived on every POST). `OTEL_TRACES_EXPORTER`/`_METRICS_EXPORTER`/`_LOGS_EXPORTER`
-  env vars are recognized → `OTEL_TRACES_EXPORTER=none` drops trace export.
+  arrived on every POST).
+- **Trace export cannot be disabled (correction, re-validated 2026-07-22):** an
+  earlier capture claimed `OTEL_TRACES_EXPORTER=none` drops trace export. That is
+  **false** for gemini-cli. Reading `@google/gemini-cli` 0.51.0's bundled
+  `initializeTelemetry`: when telemetry is enabled it *unconditionally* builds
+  `new BatchSpanProcessor(new OTLPTraceExporter(...))` plus an `HttpInstrumentation`
+  and hands them to the NodeSDK. It constructs its own exporters, so the generic
+  OTel SDK env var `OTEL_TRACES_EXPORTER` is ignored. A sink capture confirmed 5
+  `/v1/traces` POSTs still arrive with that var set. There is no per-signal
+  off-switch; only `telemetryOutfile` (all signals → file, no network) or
+  disabling telemetry entirely would stop it — both unacceptable (we need
+  logs+metrics on the network). We therefore let content-free traces flow (see §privacy).
 - **Distinguisher:** resource attr `service.name:"gemini-cli"` (+ `service.version`).
   No custom `tool=` attribute is available; Atlas keys on `service.name`.
 - **Identity present even with API-key auth:** every log record + metric data
@@ -70,12 +80,17 @@ API-key auth. Oracles captured: real chat transcript, real OTLP wire payloads
   (`input_token_count`, `output_token_count`, `cached_content_token_count`,
   `thoughts_token_count`, `tool_token_count`, `total_token_count`). Plus GenAI
   semconv `gen_ai.client.token.usage`.
-- **Privacy verified:** with `logPrompts:false`, no prompt text appears in any log
-  record field or body (`user_prompt` carries only `prompt_length`+`prompt_id`).
-  The *only* place prompt text surfaced was the `process.command_args` resource
-  attribute — an artifact of headless `-p "<prompt>"`; interactive sessions type
-  the prompt, so argv is just `["gemini"]`. Setting `OTEL_TRACES_EXPORTER=none`
-  also removes the trace payloads that echoed argv.
+- **Privacy verified (re-validated 2026-07-22):** with `logPrompts:false`, no
+  prompt text appears in any log record field or body (`user_prompt` carries only
+  `prompt_length`+`prompt_id`). Spans are also content-free: gemini-cli gates
+  span payloads behind `shouldIncludePayloads = getTelemetryTracesEnabled() &&
+  getTelemetryLogPromptsEnabled()`, so `logPrompts:false` alone keeps prompt and
+  response bodies out of spans, and we additionally set `traces:false` in the
+  settings block to make that robust to any future default change. Two sink
+  captures (old config, and the exact new config) found **no** prompt text and
+  **no** `process.command_args` in any `/v1/logs`, `/v1/metrics`, or `/v1/traces`
+  body. So although trace export can't be turned off, the traces that flow carry
+  no prompt content.
 
 ---
 
@@ -87,31 +102,34 @@ architecture (capture→queue→resolve→enrich→mask→publish; and native OT
 | Capability | Decision |
 |---|---|
 | Install adapter + detect | keep (`~/.gemini`) |
-| `keld setup` config | **settings.json** (telemetry + hooks) **and** a keld-managed block in **`~/.gemini/.env`** (OTEL headers + trace-off) |
+| `keld setup` config | **settings.json** (telemetry + hooks) **and** a keld-managed block in **`~/.gemini/.env`** (OTEL auth headers) |
 | Command hook | `BeforeAgent` → `keld __hook --source gemini`, **context event only** |
 | Transcript watcher root | `~/.gemini/tmp/*/chats/*.jsonl` |
 | Transcript reader/extractor | new Gemini reader + extractor (skip `$set`, `type:"user"`) |
 | Enrichment classification | add `gemini` to coding-tool flags |
-| Telemetry | **native OTEL** (host-side), logs+metrics; traces disabled |
+| Telemetry | **native OTEL** (host-side), logs+metrics+traces; traces content-free (can't be disabled) |
 
 ## 3. Stream 1 — Telemetry (native OTEL)
 
 **`telemetry.GeminiTelemetry(p)`** → settings.json `telemetry` block:
 ```json
 { "enabled": true, "target": "local", "otlpProtocol": "http",
-  "otlpEndpoint": "<p.Endpoint>", "logPrompts": false }
+  "otlpEndpoint": "<p.Endpoint>", "logPrompts": false, "traces": false }
 ```
 Change from today: `otlpEndpoint` becomes the **base** endpoint (was
 `"<endpoint>/v1/logs?token=<tok>"`, which is broken). No token in the URL.
+`logPrompts:false` + `traces:false` together gate `shouldIncludePayloads`, so
+spans never carry prompt/response bodies (see §1.3).
 
-**Auth + trace-off via `~/.gemini/.env`** (new managed artifact). keld writes a
-delimited block, preserving all other lines (notably the user's `GEMINI_API_KEY`):
+**Auth via `~/.gemini/.env`** (new managed artifact). keld writes a delimited
+block, preserving all other lines (notably the user's `GEMINI_API_KEY`):
 ```
 # >>> keld-managed (do not edit) >>>
 OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=<tok>,x-keld-actor=<actor>
-OTEL_TRACES_EXPORTER=none
 # <<< keld-managed <<<
 ```
+No `OTEL_TRACES_EXPORTER` line: gemini-cli ignores it (§1.3), so it would be dead,
+misleading config.
 `Remove` strips only this block. Header auth mirrors the Codex fix
 (`x-keld-ingest-token`/`x-keld-actor` header, not a URL token).
 
@@ -178,8 +196,9 @@ exit 0 — to be verified in the plan (add a test asserting empty stdout).
 
 ## 7. Privacy & identity (invariants)
 - Pointer model; never persist prompt/response text to disk or telemetry.
-- `logPrompts:false` (settings) + `OTEL_TRACES_EXPORTER=none` (env) — keeps prompt
-  text out of the OTEL payloads (incl. the argv-echoing trace/resource paths).
+- `logPrompts:false` + `traces:false` (settings) — gates `shouldIncludePayloads`,
+  keeping prompt/response text out of all OTEL payloads (logs and spans). Trace
+  *export* itself can't be disabled (§1.3), but the exported spans are content-free.
 - Emit lengths, ids, model, tokens only. Atlas computes cost.
 - Identity: `user.email`/`installation.id` supplied by Gemini's native OTEL.
 

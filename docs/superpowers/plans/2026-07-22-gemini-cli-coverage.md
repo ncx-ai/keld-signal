@@ -14,7 +14,7 @@
 - Telemetry = native OTEL (Gemini is host-side); `promptlog` stays OFF for `gemini`.
 - Pinned Gemini v0.51.0 schema (oracles on this machine):
   - Chat line types: meta (`sessionId`/`projectHash`/`kind`, line 0), `{"$set":{…}}` mutations (SKIP), user `{id,timestamp,type:"user",content:[{text}]}` (id = PromptID), gemini `{id,type:"gemini",tokens,model,…}`.
-  - OTLP: SDK appends signal path → `<BASE>/v1/logs|/v1/metrics|/v1/traces`; honors `OTEL_EXPORTER_OTLP_HEADERS` + `OTEL_TRACES_EXPORTER=none`; resource `service.name:"gemini-cli"`; identity `user.email`/`installation.id` present even with API-key auth; tokens in metric `gemini_cli.token.usage` + log `gemini_cli.api_response`.
+  - OTLP: SDK appends signal path → `<BASE>/v1/logs|/v1/metrics|/v1/traces`; honors `OTEL_EXPORTER_OTLP_HEADERS`; `OTEL_TRACES_EXPORTER` is ignored (gemini builds its own exporters — see spec §1.3 correction), so trace export can't be disabled; resource `service.name:"gemini-cli"`; identity `user.email`/`installation.id` present even with API-key auth; tokens in metric `gemini_cli.token.usage` + log `gemini_cli.api_response`.
   - BeforeAgent hook stdin: `{session_id, transcript_path, cwd, hook_event_name, timestamp, prompt}` — **no prompt_id**; fires before the user line is written (race) → watcher owns enrichment capture, hook posts context event only. Gemini requires **silent stdout** from hooks.
 
 ---
@@ -42,9 +42,9 @@
 
 **Files:** `internal/telemetry/telemetry.go`; `internal/telemetry/telemetry_test.go`.
 
-**Interfaces:** `GeminiTelemetry(p)` → settings `telemetry` block with `otlpEndpoint = p.Endpoint` (BASE, no `/v1/logs?token=`). New `GeminiEnvBlock(p) string` → the two env lines (`OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=<tok>,x-keld-actor=<actor>` and `OTEL_TRACES_EXPORTER=none`).
+**Interfaces:** `GeminiTelemetry(p)` → settings `telemetry` block with `otlpEndpoint = p.Endpoint` (BASE, no `/v1/logs?token=`), `logPrompts:false`, `traces:false`. `GeminiEnvBlock(p) string` → the single auth line `OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=<tok>,x-keld-actor=<actor>`. (Post-release correction 2026-07-22: dropped the earlier `OTEL_TRACES_EXPORTER=none` line — gemini-cli ignores it; traces can't be disabled, so instead `traces:false` in settings keeps spans content-free. See spec §1.3.)
 
-- [ ] **Step 1 — failing test**: `GeminiTelemetry` `otlpEndpoint` == `p.Endpoint` exactly (no `/v1/logs`, no `?token=`); `logPrompts:false`, `target:"local"`. `GeminiEnvBlock` contains `x-keld-ingest-token=<tok>` + `x-keld-actor=<actor>` in `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_TRACES_EXPORTER=none`; no token in any URL.
+- [ ] **Step 1 — failing test**: `GeminiTelemetry` `otlpEndpoint` == `p.Endpoint` exactly (no `/v1/logs`, no `?token=`); `logPrompts:false`, `traces:false`, `target:"local"`. `GeminiEnvBlock` contains `x-keld-ingest-token=<tok>` + `x-keld-actor=<actor>` in `OTEL_EXPORTER_OTLP_HEADERS`; no `OTEL_TRACES_EXPORTER` line; no token in any URL.
 - [ ] **Step 2** — run; FAIL.
 - [ ] **Step 3 — implement** both.
 - [ ] **Step 4** — PASS.
@@ -153,7 +153,7 @@
 ## Self-Review
 - Spec coverage: `.env` helper (T1), telemetry builders (T2), adapter wiring (T3), reader (T4), watcher root (T5), extractor (T6), classification (T7), hook silent-stdout (T8), guard+docs (T9), live validation (T10). All spec §3–§6 mapped.
 - Highest risk (`.env` secret safety) isolated in T1 with dedicated tests; adapter (T3) reuses it.
-- No prompt text on disk/telemetry (T4/T6 pointer model; T2 `logPrompts:false`+`traces=none`).
+- No prompt text on disk/telemetry (T4/T6 pointer model; T2 `logPrompts:false`+`traces:false` gate span payloads).
 - Types: `promptExtractor` (existing) gains `geminiExtractor`; `TranscriptReader`/`RecentReader` (existing) gain `GeminiReader`; adapter interface unchanged.
 - Live validation (T10) closes the Codex no-validation gap — Gemini is installed here.
 

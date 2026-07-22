@@ -252,8 +252,8 @@ func TestGeminiApplyWritesEnvBlockPreservingAPIKey(t *testing.T) {
 	if !strings.Contains(envText, "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me") {
 		t.Fatalf("ExtraFile.AfterText missing OTEL headers line:\n%s", envText)
 	}
-	if !strings.Contains(envText, "OTEL_TRACES_EXPORTER=none") {
-		t.Fatalf("ExtraFile.AfterText missing trace-off line:\n%s", envText)
+	if strings.Contains(envText, "OTEL_TRACES_EXPORTER") {
+		t.Fatalf("ExtraFile.AfterText should not carry the dead OTEL_TRACES_EXPORTER line (gemini ignores it):\n%s", envText)
 	}
 
 	// managed["env_created"] should be false: the file already existed.
@@ -495,7 +495,7 @@ func TestGeminiApplyIdempotent(t *testing.T) {
 	if n := strings.Count(envText, "# >>> keld-managed (do not edit) >>>"); n != 1 {
 		t.Fatalf(".env block duplicated: found %d start markers in:\n%s", n, envText)
 	}
-	if n := strings.Count(envText, "OTEL_TRACES_EXPORTER=none"); n != 1 {
+	if n := strings.Count(envText, "OTEL_EXPORTER_OTLP_HEADERS="); n != 1 {
 		t.Fatalf(".env OTEL line duplicated: found %d occurrences in:\n%s", n, envText)
 	}
 }
