@@ -9,13 +9,43 @@ import (
 )
 
 // sandboxGeminiHome points $HOME at a fresh temp dir for the duration of the
-// test so GeminiAdapter's real side effect (reading/writing ~/.gemini/.env)
-// never touches the developer's actual home directory. Returns the temp home.
+// test so any manual writes tests perform to simulate the caller committing
+// a Plan.ExtraFile never touch the developer's actual home directory. Returns
+// the temp home.
 func sandboxGeminiHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	return home
+}
+
+// commitExtraFile writes (or deletes) an ExtraFile to disk exactly the way
+// the real caller (internal/cli/setup.go, internal/cli/uninstall.go) does
+// once it has passed its own confirm/--dry-run gate. Tests use this to
+// simulate "the user confirmed" between an Apply/Remove call and a
+// subsequent one that needs to observe the committed on-disk state (e.g.
+// Remove reading back what Apply staged). A nil ef is a no-op.
+func commitExtraFile(t *testing.T, ef *ExtraFile) {
+	t.Helper()
+	if ef == nil {
+		return
+	}
+	if ef.Delete {
+		if err := os.Remove(ef.Path); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("commitExtraFile: delete %s: %v", ef.Path, err)
+		}
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(ef.Path), 0o700); err != nil {
+		t.Fatalf("commitExtraFile: MkdirAll: %v", err)
+	}
+	mode := ef.Mode
+	if mode == 0 {
+		mode = 0o600
+	}
+	if err := os.WriteFile(ef.Path, []byte(ef.AfterText), mode); err != nil {
+		t.Fatalf("commitExtraFile: WriteFile %s: %v", ef.Path, err)
+	}
 }
 
 func TestGeminiApplySetsTelemetry(t *testing.T) {
@@ -27,6 +57,9 @@ func TestGeminiApplySetsTelemetry(t *testing.T) {
 	if !plan.Changed || !strings.Contains(plan.AfterText, "otlpEndpoint") || !strings.Contains(plan.AfterText, "\"theme\"") {
 		t.Fatalf("telemetry not merged into existing config:\n%s", plan.AfterText)
 	}
+	// Status reads .env off disk; commit the staged ExtraFile first, exactly
+	// as the real caller would after confirm, so Status sees it.
+	commitExtraFile(t, plan.ExtraFile)
 	st := a.Status(&plan.AfterText, nil)
 	if !st.Configured {
 		t.Fatalf("expected configured, detail=%s", st.Detail)
@@ -55,6 +88,7 @@ func TestGeminiApplyRemoveRoundTrip(t *testing.T) {
 	if !strings.Contains(applyPlan.AfterText, "\"theme\"") {
 		t.Fatalf("Apply: AfterText missing original 'theme' key:\n%s", applyPlan.AfterText)
 	}
+	commitExtraFile(t, applyPlan.ExtraFile)
 
 	// Status after apply: Configured must be true.
 	stAfterApply := a.Status(&applyPlan.AfterText, applyPlan.Managed)
@@ -70,6 +104,7 @@ func TestGeminiApplyRemoveRoundTrip(t *testing.T) {
 	if removePlan.Conflict != "" {
 		t.Fatalf("Remove: unexpected conflict: %s", removePlan.Conflict)
 	}
+	commitExtraFile(t, removePlan.ExtraFile)
 
 	// Status after remove: Configured must be false.
 	stAfterRemove := a.Status(&removePlan.AfterText, nil)
@@ -159,8 +194,10 @@ func TestGeminiApplyWiresBeforeAgentHook(t *testing.T) {
 }
 
 // TestGeminiApplyWritesEnvBlockPreservingAPIKey covers the second artifact:
-// Apply must upsert the keld OTEL block into ~/.gemini/.env while never
-// touching a pre-existing GEMINI_API_KEY line.
+// Apply must compute a Plan.ExtraFile that upserts the keld OTEL block into
+// ~/.gemini/.env while never touching a pre-existing GEMINI_API_KEY line —
+// and must NOT write that file itself; only the returned Plan carries the
+// change, for the caller to commit under its own confirm/--dry-run gate.
 func TestGeminiApplyWritesEnvBlockPreservingAPIKey(t *testing.T) {
 	home := sandboxGeminiHome(t)
 	geminiDir := filepath.Join(home, ".gemini")
@@ -168,7 +205,8 @@ func TestGeminiApplyWritesEnvBlockPreservingAPIKey(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	envPath := filepath.Join(geminiDir, ".env")
-	if err := os.WriteFile(envPath, []byte("GEMINI_API_KEY=real-secret-value\n"), 0o600); err != nil {
+	const seeded = "GEMINI_API_KEY=real-secret-value\n"
+	if err := os.WriteFile(envPath, []byte(seeded), 0o600); err != nil {
 		t.Fatalf("seed .env: %v", err)
 	}
 
@@ -181,32 +219,41 @@ func TestGeminiApplyWritesEnvBlockPreservingAPIKey(t *testing.T) {
 		t.Fatalf("unexpected conflict: %s", plan.Conflict)
 	}
 
-	got, err := os.ReadFile(envPath)
+	// Apply must be side-effect-free: the file on disk is untouched.
+	onDisk, err := os.ReadFile(envPath)
 	if err != nil {
 		t.Fatalf("reading .env after Apply: %v", err)
 	}
-	envText := string(got)
+	if string(onDisk) != seeded {
+		t.Fatalf("Apply wrote to ~/.gemini/.env directly; on-disk contents changed:\nwant: %q\ngot:  %q", seeded, string(onDisk))
+	}
 
+	// The change must instead be fully staged in plan.ExtraFile.
+	ef := plan.ExtraFile
+	if ef == nil {
+		t.Fatal("expected plan.ExtraFile to be non-nil")
+	}
+	if ef.Path != envPath {
+		t.Fatalf("ExtraFile.Path = %q, want %q", ef.Path, envPath)
+	}
+	if ef.Mode != 0o600 {
+		t.Fatalf("ExtraFile.Mode = %o, want 0600", ef.Mode)
+	}
+	if ef.Delete {
+		t.Fatal("ExtraFile.Delete should be false when upserting into an existing .env")
+	}
+	envText := ef.AfterText
 	if !strings.Contains(envText, "GEMINI_API_KEY=real-secret-value") {
-		t.Fatalf("Apply clobbered GEMINI_API_KEY:\n%s", envText)
+		t.Fatalf("ExtraFile.AfterText clobbered GEMINI_API_KEY:\n%s", envText)
 	}
 	if !strings.Contains(envText, "# >>> keld-managed (do not edit) >>>") {
-		t.Fatalf(".env missing keld block start marker:\n%s", envText)
+		t.Fatalf("ExtraFile.AfterText missing keld block start marker:\n%s", envText)
 	}
 	if !strings.Contains(envText, "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me") {
-		t.Fatalf(".env missing OTEL headers line:\n%s", envText)
+		t.Fatalf("ExtraFile.AfterText missing OTEL headers line:\n%s", envText)
 	}
 	if !strings.Contains(envText, "OTEL_TRACES_EXPORTER=none") {
-		t.Fatalf(".env missing trace-off line:\n%s", envText)
-	}
-
-	// Mode must be 0600 (the file holds a secret).
-	info, err := os.Stat(envPath)
-	if err != nil {
-		t.Fatalf("Stat .env: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf(".env mode = %o, want 0600", perm)
+		t.Fatalf("ExtraFile.AfterText missing trace-off line:\n%s", envText)
 	}
 
 	// managed["env_created"] should be false: the file already existed.
@@ -215,11 +262,15 @@ func TestGeminiApplyWritesEnvBlockPreservingAPIKey(t *testing.T) {
 	}
 }
 
-// TestGeminiApplyCreatesEnvFileWhenAbsent covers the "no .env yet" path: Apply
-// must create the file fresh at 0600.
-func TestGeminiApplyCreatesEnvFileWhenAbsent(t *testing.T) {
+// TestGeminiApplyDoesNotWriteEnvFile proves Apply performs NO write of its
+// own to ~/.gemini/.env even when the file is entirely absent: the returned
+// Plan carries the would-be contents in ExtraFile, but the file itself must
+// still not exist on disk afterward. Only a caller that later commits
+// ExtraFile (as the real setup/uninstall flows do, gated by confirm/
+// --dry-run) may bring it into existence.
+func TestGeminiApplyDoesNotWriteEnvFile(t *testing.T) {
 	home := sandboxGeminiHome(t)
-	// Note: no ~/.gemini dir at all yet — Apply must create it.
+	// Note: no ~/.gemini dir at all yet.
 	envPath := filepath.Join(home, ".gemini", ".env")
 
 	a := &GeminiAdapter{}
@@ -230,22 +281,36 @@ func TestGeminiApplyCreatesEnvFileWhenAbsent(t *testing.T) {
 		t.Fatalf("unexpected conflict: %s", plan.Conflict)
 	}
 
-	info, err := os.Stat(envPath)
-	if err != nil {
-		t.Fatalf(".env was not created: %v", err)
+	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
+		t.Fatalf("Apply must not create ~/.gemini/.env itself; stat err=%v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf(".env mode = %o, want 0600", perm)
+	if _, err := os.Stat(filepath.Dir(envPath)); !os.IsNotExist(err) {
+		t.Fatalf("Apply must not even create the ~/.gemini directory itself; stat err=%v", err)
+	}
+
+	ef := plan.ExtraFile
+	if ef == nil {
+		t.Fatal("expected plan.ExtraFile to be non-nil")
+	}
+	if ef.Path != envPath {
+		t.Fatalf("ExtraFile.Path = %q, want %q", ef.Path, envPath)
+	}
+	if ef.Mode != 0o600 {
+		t.Fatalf("ExtraFile.Mode = %o, want 0600", ef.Mode)
+	}
+	if !strings.Contains(ef.AfterText, "# >>> keld-managed (do not edit) >>>") {
+		t.Fatalf("ExtraFile.AfterText missing keld block:\n%s", ef.AfterText)
 	}
 	if created, _ := plan.Managed["env_created"].(bool); !created {
-		t.Fatal("expected managed[\"env_created\"]=true for a freshly-created .env")
+		t.Fatal("expected managed[\"env_created\"]=true when .env is absent")
 	}
 }
 
 // TestGeminiRemoveStripsBothArtifacts covers the brief's Remove scenario: a
 // settings.json with security.auth plus keld's blocks, and a .env with
-// GEMINI_API_KEY plus keld's block — Remove must strip only keld's parts of
-// each, leaving security.auth and GEMINI_API_KEY intact.
+// GEMINI_API_KEY plus keld's block — Remove must compute a Plan.ExtraFile
+// that strips only keld's parts of each, leaving security.auth and
+// GEMINI_API_KEY intact, again without writing anything itself.
 func TestGeminiRemoveStripsBothArtifacts(t *testing.T) {
 	home := sandboxGeminiHome(t)
 	geminiDir := filepath.Join(home, ".gemini")
@@ -265,6 +330,9 @@ func TestGeminiRemoveStripsBothArtifacts(t *testing.T) {
 	if applyPlan.Conflict != "" {
 		t.Fatalf("Apply: unexpected conflict: %s", applyPlan.Conflict)
 	}
+	// Simulate the caller committing Apply's staged ExtraFile (confirmed,
+	// non-dry-run) so Remove has something on disk to read back and strip.
+	commitExtraFile(t, applyPlan.ExtraFile)
 
 	removePlan := a.Remove(&applyPlan.AfterText, applyPlan.Managed)
 	if removePlan.Conflict != "" {
@@ -285,23 +353,54 @@ func TestGeminiRemoveStripsBothArtifacts(t *testing.T) {
 		t.Fatalf("Remove: BeforeAgent hook not stripped:\n%s", removePlan.AfterText)
 	}
 
-	// .env: GEMINI_API_KEY survives; keld block is gone.
-	envAfter, err := os.ReadFile(envPath)
+	// Remove must not have written to disk itself: the on-disk .env should
+	// still be exactly what Apply's commit left (i.e. unchanged by Remove).
+	onDiskAfterRemove, err := os.ReadFile(envPath)
 	if err != nil {
 		t.Fatalf("reading .env after Remove: %v", err)
 	}
-	envText := string(envAfter)
-	if !strings.Contains(envText, "GEMINI_API_KEY=real-secret-value") {
-		t.Fatalf("Remove: GEMINI_API_KEY lost from .env:\n%s", envText)
-	}
-	if strings.Contains(envText, "keld-managed") {
-		t.Fatalf("Remove: keld block not stripped from .env:\n%s", envText)
-	}
-	if strings.Contains(envText, "OTEL_EXPORTER_OTLP_HEADERS") || strings.Contains(envText, "OTEL_TRACES_EXPORTER") {
-		t.Fatalf("Remove: OTEL env lines not stripped:\n%s", envText)
+	if !strings.Contains(string(onDiskAfterRemove), "keld-managed") {
+		t.Fatalf("Remove must not touch disk itself, but the committed keld block is missing:\n%s", onDiskAfterRemove)
 	}
 
-	// Status after remove must report not configured.
+	// The staged ExtraFile is where the strip actually lives.
+	ef := removePlan.ExtraFile
+	if ef == nil {
+		t.Fatal("expected removePlan.ExtraFile to be non-nil")
+	}
+	if ef.Path != envPath {
+		t.Fatalf("ExtraFile.Path = %q, want %q", ef.Path, envPath)
+	}
+	if ef.Delete {
+		t.Fatal("ExtraFile.Delete should be false: the .env pre-existed (GEMINI_API_KEY), so it must survive stripped rather than be deleted")
+	}
+	if ef.Mode != 0o600 {
+		t.Fatalf("ExtraFile.Mode = %o, want 0600", ef.Mode)
+	}
+	envText := ef.AfterText
+	if !strings.Contains(envText, "GEMINI_API_KEY=real-secret-value") {
+		t.Fatalf("Remove: GEMINI_API_KEY lost from ExtraFile.AfterText:\n%s", envText)
+	}
+	if strings.Contains(envText, "keld-managed") {
+		t.Fatalf("Remove: keld block not stripped from ExtraFile.AfterText:\n%s", envText)
+	}
+	if strings.Contains(envText, "OTEL_EXPORTER_OTLP_HEADERS") || strings.Contains(envText, "OTEL_TRACES_EXPORTER") {
+		t.Fatalf("Remove: OTEL env lines not stripped from ExtraFile.AfterText:\n%s", envText)
+	}
+
+	// Now commit the remove plan too, and confirm final on-disk state and Status.
+	commitExtraFile(t, ef)
+	finalEnv, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("reading .env after committing Remove: %v", err)
+	}
+	if !strings.Contains(string(finalEnv), "GEMINI_API_KEY=real-secret-value") {
+		t.Fatalf("Remove: GEMINI_API_KEY lost from .env:\n%s", finalEnv)
+	}
+	if strings.Contains(string(finalEnv), "keld-managed") {
+		t.Fatalf("Remove: keld block not stripped from .env:\n%s", finalEnv)
+	}
+
 	st := a.Status(&removePlan.AfterText, nil)
 	if st.Configured {
 		t.Fatalf("Status after Remove: expected Configured=false, detail=%s", st.Detail)
@@ -309,8 +408,9 @@ func TestGeminiRemoveStripsBothArtifacts(t *testing.T) {
 }
 
 // TestGeminiRemoveDeletesFreshlyCreatedEnvFile covers the "we created the
-// .env file, and after removal it's now empty" case: the file itself should
-// be deleted rather than left behind as an empty husk.
+// .env file, and after removal it's now empty" case: Remove's Plan.ExtraFile
+// should carry Delete=true rather than an empty AfterText, so the caller
+// removes the file rather than leaving an empty husk behind.
 func TestGeminiRemoveDeletesFreshlyCreatedEnvFile(t *testing.T) {
 	home := sandboxGeminiHome(t)
 	envPath := filepath.Join(home, ".gemini", ".env")
@@ -322,8 +422,10 @@ func TestGeminiRemoveDeletesFreshlyCreatedEnvFile(t *testing.T) {
 	if applyPlan.Conflict != "" {
 		t.Fatalf("Apply: unexpected conflict: %s", applyPlan.Conflict)
 	}
+	// Simulate the caller committing Apply's ExtraFile.
+	commitExtraFile(t, applyPlan.ExtraFile)
 	if _, err := os.Stat(envPath); err != nil {
-		t.Fatalf(".env should exist after Apply: %v", err)
+		t.Fatalf(".env should exist after committing Apply's ExtraFile: %v", err)
 	}
 
 	removePlan := a.Remove(&applyPlan.AfterText, applyPlan.Managed)
@@ -331,8 +433,26 @@ func TestGeminiRemoveDeletesFreshlyCreatedEnvFile(t *testing.T) {
 		t.Fatalf("Remove: unexpected conflict: %s", removePlan.Conflict)
 	}
 
+	ef := removePlan.ExtraFile
+	if ef == nil {
+		t.Fatal("expected removePlan.ExtraFile to be non-nil")
+	}
+	if !ef.Delete {
+		t.Fatalf("expected ExtraFile.Delete=true for a freshly-created, now-empty .env, got AfterText=%q", ef.AfterText)
+	}
+	if ef.Path != envPath {
+		t.Fatalf("ExtraFile.Path = %q, want %q", ef.Path, envPath)
+	}
+
+	// Remove itself must not have deleted the file (no side effects).
+	if _, err := os.Stat(envPath); err != nil {
+		t.Fatalf("Remove must not delete .env itself before commit: %v", err)
+	}
+
+	// Commit the remove plan (as the real caller would) and confirm deletion.
+	commitExtraFile(t, ef)
 	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
-		t.Fatalf(".env should have been deleted (keld created it fresh and it's now empty), stat err=%v", err)
+		t.Fatalf(".env should have been deleted after committing Remove's ExtraFile, stat err=%v", err)
 	}
 }
 
@@ -340,8 +460,7 @@ func TestGeminiRemoveDeletesFreshlyCreatedEnvFile(t *testing.T) {
 // applying twice in a row must produce byte-identical settings.json output
 // and must not duplicate the .env block.
 func TestGeminiApplyIdempotent(t *testing.T) {
-	home := sandboxGeminiHome(t)
-	envPath := filepath.Join(home, ".gemini", ".env")
+	sandboxGeminiHome(t)
 
 	a := &GeminiAdapter{}
 	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
@@ -351,6 +470,10 @@ func TestGeminiApplyIdempotent(t *testing.T) {
 	if first.Conflict != "" {
 		t.Fatalf("first Apply: unexpected conflict: %s", first.Conflict)
 	}
+	// Simulate the caller committing the first Apply's ExtraFile before the
+	// second Apply runs, exactly as a real re-run of `keld setup` would.
+	commitExtraFile(t, first.ExtraFile)
+
 	second := a.Apply(&first.AfterText, p, false)
 	if second.Conflict != "" {
 		t.Fatalf("second Apply: unexpected conflict: %s", second.Conflict)
@@ -362,12 +485,13 @@ func TestGeminiApplyIdempotent(t *testing.T) {
 	if second.Changed {
 		t.Fatal("second Apply: expected Changed=false (already configured)")
 	}
-
-	envData, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatalf("reading .env: %v", err)
+	// The .env block is already present and unchanged, so the second Apply
+	// must report no ExtraFile change to write.
+	if second.ExtraFile != nil {
+		t.Fatalf("second Apply: expected ExtraFile=nil (no change), got %+v", second.ExtraFile)
 	}
-	envText := string(envData)
+
+	envText := first.ExtraFile.AfterText
 	if n := strings.Count(envText, "# >>> keld-managed (do not edit) >>>"); n != 1 {
 		t.Fatalf(".env block duplicated: found %d start markers in:\n%s", n, envText)
 	}

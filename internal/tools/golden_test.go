@@ -58,9 +58,9 @@ func TestGoldenParity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("could not read golden: %v", err)
 		}
-		// Sandbox $HOME: GeminiAdapter.Apply performs a real read/write of
-		// ~/.gemini/.env as a side effect. Without this, the test would touch
-		// the developer's real .env (which may hold a live GEMINI_API_KEY).
+		// Sandbox $HOME: GeminiAdapter.Apply reads ~/.gemini/.env (read-only)
+		// to compute Plan.ExtraFile. Without this, the test would read the
+		// developer's real .env (which may hold a live GEMINI_API_KEY).
 		t.Setenv("HOME", t.TempDir())
 		cur := "{\n  \"theme\": \"dark\"\n}\n"
 		got := (&GeminiAdapter{}).Apply(&cur, p, false).AfterText

@@ -99,6 +99,14 @@ func stripToolConfig(m *config.Manifest, name string, tm config.ToolManifest, ad
 		}
 	}
 
+	// Write/delete the adapter's secondary artifact (e.g. Gemini's
+	// ~/.gemini/.env), gated by the same confirm prompt that already guards
+	// the ConfigPath write above (runUninstall confirms before ever calling
+	// stripToolConfig).
+	if err := writeExtraFile(plan.ExtraFile); err != nil {
+		return err
+	}
+
 	// Remove the .keld.bak sibling if it exists.
 	bak := tm.ConfigPath + ".keld.bak"
 	if _, err := os.Stat(bak); err == nil {

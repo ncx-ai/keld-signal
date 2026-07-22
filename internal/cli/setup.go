@@ -155,6 +155,9 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 		if err := config.WriteAtomic(a.plan.ConfigPath, a.plan.AfterText, false); err != nil {
 			return nil, err
 		}
+		if err := writeExtraFile(a.plan.ExtraFile); err != nil {
+			return nil, err
+		}
 		var backupPtr *string
 		if backup != "" {
 			backupPtr = &backup
@@ -178,6 +181,33 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 	}
 	emit(SetupEvent{Kind: "done", Configured: len(manifest.Tools), Endpoint: ob.Endpoint})
 	return manifest, nil
+}
+
+// writeExtraFile writes (or deletes) an adapter's secondary artifact
+// (tools.Plan.ExtraFile, e.g. Gemini's ~/.gemini/.env) to disk. Callers must
+// only reach this from a branch that has already passed the --dry-run/confirm
+// gate that also guards the primary ConfigPath write, so the extra file is
+// never touched during a preview or a declined confirmation. A nil ef is a
+// no-op.
+func writeExtraFile(ef *tools.ExtraFile) error {
+	if ef == nil {
+		return nil
+	}
+	if ef.Delete {
+		if err := os.Remove(ef.Path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := config.WriteAtomic(ef.Path, ef.AfterText, false); err != nil {
+		return err
+	}
+	if ef.Mode != 0 {
+		if err := os.Chmod(ef.Path, ef.Mode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // stdinConfirm prompts the user with a [Y/n] prompt and reads their answer. Defaults to yes:

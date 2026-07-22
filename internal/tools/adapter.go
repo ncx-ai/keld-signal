@@ -3,12 +3,27 @@
 package tools
 
 import (
+	"os"
+
 	"github.com/ncx-ai/keld-signal/internal/telemetry"
 )
 
 // SetupParams is a type alias to telemetry.SetupParams to avoid import cycles
 // while keeping the tools package ergonomic.
 type SetupParams = telemetry.SetupParams
+
+// ExtraFile describes a second on-disk artifact (beyond ConfigPath/AfterText)
+// that an adapter's Apply/Remove needs written or deleted. Adapters must stay
+// pure: they compute AfterText (or set Delete) by reading the current file
+// contents, but never write to disk themselves. The caller (internal/cli's
+// setup/uninstall flows) performs the actual write, gated behind the same
+// confirm/--dry-run logic that already guards Plan.AfterText.
+type ExtraFile struct {
+	Path      string
+	AfterText string
+	Mode      os.FileMode
+	Delete    bool
+}
 
 // Plan describes the result of an Apply or Remove operation on a tool's
 // configuration.
@@ -20,6 +35,12 @@ type Plan struct {
 	Summary    []string
 	Changed    bool
 	Conflict   string // Empty string means no conflict (Python's None)
+
+	// ExtraFile carries a second file (e.g. Gemini's ~/.gemini/.env) whose
+	// write must be gated by the same caller-side confirm/--dry-run logic as
+	// AfterText. Nil when the adapter manages only one file, or when this
+	// Apply/Remove call produced no change to the extra file.
+	ExtraFile *ExtraFile
 }
 
 // ToolStatus describes the installation and configuration state of a tool.
