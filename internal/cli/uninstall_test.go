@@ -149,7 +149,7 @@ func TestRunUninstallWritesGeminiExtraFile(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 
 	a := &tools.GeminiAdapter{}
-	p := tools.SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := tools.SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 	cur := "{\n  \"security\": {\n    \"auth\": {\n      \"selectedType\": \"oauth-personal\"\n    }\n  }\n}\n"
 
 	geminiDir := filepath.Join(home, ".gemini")
@@ -157,7 +157,14 @@ func TestRunUninstallWritesGeminiExtraFile(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	envPath := filepath.Join(geminiDir, ".env")
-	if err := os.WriteFile(envPath, []byte("GEMINI_API_KEY=real-secret-value\n"), 0o600); err != nil {
+	// Simulate an upgraded install: a lingering legacy keld block (as keld <=
+	// v0.11.0 wrote it) sits alongside the user's own GEMINI_API_KEY. Uninstall
+	// must strip the block and keep the key.
+	const legacy = "GEMINI_API_KEY=real-secret-value\n" +
+		"# >>> keld-managed (do not edit) >>>\n" +
+		"OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=old-token\n" +
+		"# <<< keld-managed <<<\n"
+	if err := os.WriteFile(envPath, []byte(legacy), 0o600); err != nil {
 		t.Fatalf("seed .env: %v", err)
 	}
 
@@ -165,16 +172,11 @@ func TestRunUninstallWritesGeminiExtraFile(t *testing.T) {
 	if applyPlan.Conflict != "" {
 		t.Fatalf("Apply: unexpected conflict: %s", applyPlan.Conflict)
 	}
-	// Commit Apply's staged artifacts to disk, simulating a prior confirmed
-	// `keld setup` run.
+	// Seed settings.json as a prior confirmed `keld setup` would have left it.
+	// Leave the .env untouched here (with its legacy block) so uninstall is the
+	// thing that strips it.
 	if err := os.WriteFile(a.ConfigPath(), []byte(applyPlan.AfterText), 0o644); err != nil {
 		t.Fatalf("seed settings.json: %v", err)
-	}
-	if applyPlan.ExtraFile == nil {
-		t.Fatal("expected Apply's ExtraFile to be non-nil")
-	}
-	if err := os.WriteFile(applyPlan.ExtraFile.Path, []byte(applyPlan.ExtraFile.AfterText), 0o600); err != nil {
-		t.Fatalf("seed .env with keld block: %v", err)
 	}
 
 	endpoint := "https://ep.example.com"
@@ -213,16 +215,16 @@ func TestRunUninstallWritesGeminiExtraFile(t *testing.T) {
 }
 
 // TestRunUninstallDeletesFreshlyCreatedGeminiEnvFile covers the delete branch
-// of Plan.ExtraFile: when keld created ~/.gemini/.env fresh (no prior
-// GEMINI_API_KEY) and stripping leaves it empty, uninstall's confirm-gated
-// write path must delete the file rather than leave an empty husk behind.
+// of Plan.ExtraFile: when ~/.gemini/.env contains ONLY a legacy keld block (no
+// other lines) and stripping leaves it empty, uninstall's confirm-gated write
+// path must delete the file rather than leave an empty husk behind.
 func TestRunUninstallDeletesFreshlyCreatedGeminiEnvFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("KELD_HOME", t.TempDir())
 
 	a := &tools.GeminiAdapter{}
-	p := tools.SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := tools.SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 
 	applyPlan := a.Apply(nil, p, false)
 	if applyPlan.Conflict != "" {
@@ -234,12 +236,13 @@ func TestRunUninstallDeletesFreshlyCreatedGeminiEnvFile(t *testing.T) {
 	if err := os.WriteFile(a.ConfigPath(), []byte(applyPlan.AfterText), 0o644); err != nil {
 		t.Fatalf("seed settings.json: %v", err)
 	}
-	if applyPlan.ExtraFile == nil {
-		t.Fatal("expected Apply's ExtraFile to be non-nil")
-	}
-	envPath := applyPlan.ExtraFile.Path
-	if err := os.WriteFile(envPath, []byte(applyPlan.ExtraFile.AfterText), 0o600); err != nil {
-		t.Fatalf("seed fresh .env: %v", err)
+	// A .env that is nothing but a legacy keld block.
+	envPath := filepath.Join(home, ".gemini", ".env")
+	const blockOnly = "# >>> keld-managed (do not edit) >>>\n" +
+		"OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=old-token\n" +
+		"# <<< keld-managed <<<\n"
+	if err := os.WriteFile(envPath, []byte(blockOnly), 0o600); err != nil {
+		t.Fatalf("seed block-only .env: %v", err)
 	}
 
 	endpoint := "https://ep.example.com"

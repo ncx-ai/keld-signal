@@ -159,7 +159,7 @@ func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
 			attr("message.uuid", r.UUID),
 			attrInt("prompt_length", utf8.RuneCountInString(text)),
 		})
-		t.postLogs(res, []logRecord{rec}, id.Email)
+		t.postLogs(res, []logRecord{rec})
 	case "assistant":
 		if msg.Usage == nil {
 			return
@@ -195,7 +195,7 @@ func (t *Telemetry) Observe(source, transcriptPath string, line []byte) {
 			attr("message.uuid", r.UUID),
 			attrInt("response_length", respLen),
 		))
-		t.postLogs(res, []logRecord{api, resp}, id.Email)
+		t.postLogs(res, []logRecord{api, resp})
 		t.postMetrics(res, r, msg, id)
 	}
 }
@@ -244,18 +244,18 @@ func (t *Telemetry) postMetrics(res []kv, r tRecord, msg tMessage, id Identity) 
 	if err != nil {
 		return
 	}
-	t.doPost(t.metricsURL, body, id.Email)
+	t.doPost(t.metricsURL, body)
 }
 
-func (t *Telemetry) postLogs(res []kv, recs []logRecord, actorEmail string) {
+func (t *Telemetry) postLogs(res []kv, recs []logRecord) {
 	body, err := logsPayload(res, recs)
 	if err != nil {
 		return
 	}
-	t.doPost(t.logsURL, body, actorEmail)
+	t.doPost(t.logsURL, body)
 }
 
-func (t *Telemetry) doPost(url string, body []byte, actorEmail string) {
+func (t *Telemetry) doPost(url string, body []byte) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -264,10 +264,8 @@ func (t *Telemetry) doPost(url string, body []byte, actorEmail string) {
 		return
 	}
 	req.Header.Set("content-type", "application/json")
+	// Auth is the ingest token only; x-keld-actor is deprecated (never sent).
 	req.Header.Set("x-keld-ingest-token", t.token())
-	if actorEmail != "" {
-		req.Header.Set("x-keld-actor", actorEmail)
-	}
 	resp, err := t.client.Do(req)
 	if err != nil {
 		debuglog.Append("promptlog: POST %s failed: %v", url, err)

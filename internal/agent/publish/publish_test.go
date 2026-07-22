@@ -71,8 +71,12 @@ func TestSendPostsHeadersAndBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotToken != "tok123" || gotActor != "dg@keld.co" {
-		t.Fatalf("headers wrong: token=%q actor=%q", gotToken, gotActor)
+	if gotToken != "tok123" {
+		t.Fatalf("token header wrong: %q", gotToken)
+	}
+	// x-keld-actor is deprecated: the publisher must never send it.
+	if gotActor != "" {
+		t.Fatalf("x-keld-actor must not be sent, got %q", gotActor)
 	}
 	if !strings.Contains(gotBody, `"claude_code"`) {
 		t.Fatalf("body missing source: %s", gotBody)

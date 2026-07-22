@@ -25,7 +25,6 @@ func TestGoldenParity(t *testing.T) {
 	p := SetupParams{
 		Endpoint:    "https://atlas.keld.co",
 		IngestToken: "tok",
-		Actor:       "me",
 	}
 
 	t.Run("claude", func(t *testing.T) {

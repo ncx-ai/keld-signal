@@ -2,8 +2,8 @@
 [otel]
 environment = "prod"
 log_user_prompt = false
-exporter = { otlp-http = { endpoint = "https://atlas.keld.co/v1/logs", protocol = "json", headers = { "x-keld-ingest-token" = "tok", "x-keld-actor" = "me" } } }
-metrics_exporter = { otlp-http = { endpoint = "https://atlas.keld.co/v1/metrics", protocol = "json", headers = { "x-keld-ingest-token" = "tok", "x-keld-actor" = "me" } } }
+exporter = { otlp-http = { endpoint = "https://atlas.keld.co/v1/logs", protocol = "json", headers = { "x-keld-ingest-token" = "tok" } } }
+metrics_exporter = { otlp-http = { endpoint = "https://atlas.keld.co/v1/metrics", protocol = "json", headers = { "x-keld-ingest-token" = "tok" } } }
 
 [[hooks.SessionStart]]
 hooks = [ { type = "command", command = 'keld __hook --source codex' } ]

@@ -3,6 +3,7 @@ package telemetry
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/iancoleman/orderedmap"
@@ -17,7 +18,6 @@ const HookCommandSubstr = "keld __hook"
 type SetupParams struct {
 	Endpoint    string
 	IngestToken string
-	Actor       string
 }
 
 // ClaudeHookEvent represents one (event, optional matcher) pair for Claude Code
@@ -59,20 +59,21 @@ func ClaudeEnv(p SetupParams) *orderedmap.OrderedMap {
 	m.Set("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json")
 	m.Set("OTEL_EXPORTER_OTLP_ENDPOINT", p.Endpoint)
 	m.Set("OTEL_EXPORTER_OTLP_HEADERS",
-		fmt.Sprintf("x-keld-ingest-token=%s,x-keld-actor=%s", p.IngestToken, p.Actor))
+		fmt.Sprintf("x-keld-ingest-token=%s", p.IngestToken))
 	return m
 }
 
 // GeminiTelemetry returns an ordered map representing the telemetry block for
-// Gemini CLI's settings file. Sets otlpEndpoint to the base endpoint URL (no
-// /v1/logs path, no ?token= query param); the Gemini OTLP SDK appends paths
-// itself and uses header-based authentication via GeminiEnvBlock.
+// Gemini CLI's settings file. otlpEndpoint is the base endpoint with the ingest
+// token added as a ?token= query param (see endpointWithToken for why the token
+// rides in the URL rather than a header). The Gemini OTLP SDK appends the signal
+// path (/v1/logs etc.) while preserving the query string.
 func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 	m := orderedmap.New()
 	m.Set("enabled", true)
 	m.Set("target", "local")
 	m.Set("otlpProtocol", "http")
-	m.Set("otlpEndpoint", p.Endpoint)
+	m.Set("otlpEndpoint", endpointWithToken(p.Endpoint, p.IngestToken))
 	m.Set("logPrompts", false)
 	// gemini-cli builds its OTLP trace exporter unconditionally when telemetry
 	// is enabled — there is no per-signal switch to stop trace *export* (spans
@@ -85,16 +86,24 @@ func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 	return m
 }
 
-// GeminiEnvBlock returns the environment-variable line(s) keld manages in
-// Gemini CLI's .env: OTEL_EXPORTER_OTLP_HEADERS carrying x-keld-ingest-token
-// and x-keld-actor (headers style, comma-separated). Authentication rides in
-// headers, never in a URL. We deliberately do NOT emit OTEL_TRACES_EXPORTER:
-// gemini-cli constructs its own OTLP exporters and ignores that generic OTEL
-// SDK variable, so it would be a dead, misleading line. Trace content is kept
-// empty via the telemetry.traces/logPrompts settings instead (see
-// GeminiTelemetry).
-func GeminiEnvBlock(p SetupParams) string {
-	return fmt.Sprintf("OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=%s,x-keld-actor=%s", p.IngestToken, p.Actor)
+// endpointWithToken returns base with the ingest token as a ?token= query param.
+// Gemini CLI cannot reliably carry an auth *header*: its OTEL_EXPORTER_OTLP_HEADERS
+// env var is only honored when the workspace is "trusted" (and even then a closer
+// project .env shadows ~/.gemini/.env), so in a normal untrusted directory the
+// header never reaches the exporter — the request hits Atlas with no token and is
+// rejected 401 "missing ingest token". The otlpEndpoint in user settings.json, by
+// contrast, is always loaded regardless of trust/cwd, and gemini's exporter
+// preserves the URL's query string when it appends the signal path. Atlas accepts
+// the token via ?token= for ingest auth. No x-keld-actor: that header is deprecated.
+func endpointWithToken(base, token string) string {
+	u, err := url.Parse(base)
+	if err != nil {
+		return base
+	}
+	q := u.Query()
+	q.Set("token", token)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // CodexBlockBody returns the TOML text for the [otel] table and [[hooks.*]]
@@ -119,16 +128,14 @@ func CodexBlockBody(p SetupParams, source string) string {
 		"[otel]\n"+
 			"environment = \"prod\"\n"+
 			"log_user_prompt = false\n"+
-			"exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-ingest-token\" = \"%s\", \"x-keld-actor\" = \"%s\" } } }\n"+
-			"metrics_exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-ingest-token\" = \"%s\", \"x-keld-actor\" = \"%s\" } } }\n"+
+			"exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-ingest-token\" = \"%s\" } } }\n"+
+			"metrics_exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-ingest-token\" = \"%s\" } } }\n"+
 			"\n"+
 			"%s",
 		logsEndpoint,
 		p.IngestToken,
-		p.Actor,
 		metricsEndpoint,
 		p.IngestToken,
-		p.Actor,
 		strings.Join(hookBlocks, "\n"),
 	)
 }

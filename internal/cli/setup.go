@@ -285,7 +285,6 @@ func newSetupCmd() *cobra.Command {
 			p := tools.SetupParams{
 				Endpoint:    ob.Endpoint,
 				IngestToken: ob.IngestToken,
-				Actor:       ob.Actor,
 			}
 
 			opts := SetupOpts{

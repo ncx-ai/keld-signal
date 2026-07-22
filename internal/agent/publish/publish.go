@@ -119,8 +119,8 @@ func (p *Publisher) Send(e Enrichment) error {
 		return err
 	}
 	req.Header.Set("content-type", "application/json")
+	// Auth is the ingest token only; x-keld-actor is deprecated (never sent).
 	req.Header.Set("x-keld-ingest-token", p.Token())
-	req.Header.Set("x-keld-actor", p.Actor)
 
 	client := p.HTTP
 	if client == nil {

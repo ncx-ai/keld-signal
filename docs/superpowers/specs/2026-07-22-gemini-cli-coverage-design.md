@@ -57,9 +57,22 @@ API-key auth. Oracles captured: real chat transcript, real OTLP wire payloads
   **`<BASE>/v1/logs`**, **`<BASE>/v1/metrics`**, **`<BASE>/v1/traces`** — the
   exporter appends the signal path itself. (User-Agent
   `OTel-OTLP-Exporter-JavaScript/0.218.0` → standard OTel SDK.)
-- **Headers:** no settings field exists; the SDK **honors
-  `OTEL_EXPORTER_OTLP_HEADERS`** (verified: `x-keld-ingest-token` + `x-keld-actor`
-  arrived on every POST).
+- **Auth channel (corrected, v0.11.1 — 2026-07-22):** there is no settings
+  field for OTLP headers. v0.11.0 put the token in `OTEL_EXPORTER_OTLP_HEADERS`
+  in `~/.gemini/.env` — but that only works in a *trusted* workspace: gemini's
+  `findEnvFile`/`loadEnvironment` (bundle chunk) reads `~/.gemini/.env` only when
+  `isTrusted`, and for an *untrusted* workspace loads only vars in
+  `AUTH_ENV_VAR_WHITELIST` = `[GEMINI_API_KEY, GOOGLE_API_KEY,
+  GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION]` (and runs `sanitizeEnvVar`, which
+  strips `,`/`=`). So in a normal directory `OTEL_EXPORTER_OTLP_HEADERS` never
+  reaches the exporter → Atlas 401 "missing ingest token". **Fix: carry the
+  token in `settings.json` `otlpEndpoint` as `?token=<tok>`** — user settings are
+  always loaded regardless of trust, and gemini's exporter preserves the query
+  string when appending the signal path (`buildUrl`: sets `pathname`, keeps
+  `search`). Verified against a local sink from an untrusted workspace:
+  `/v1/logs?token=…` on every signal, no header. Atlas accepts `?token=`.
+  keld no longer writes `~/.gemini/.env`; it strips any legacy block on upgrade.
+  **No `x-keld-actor`** — that header is deprecated; auth is the token alone.
 - **Trace export cannot be disabled (correction, re-validated 2026-07-22):** an
   earlier capture claimed `OTEL_TRACES_EXPORTER=none` drops trace export. That is
   **false** for gemini-cli. Reading `@google/gemini-cli` 0.51.0's bundled
@@ -102,7 +115,7 @@ architecture (capture→queue→resolve→enrich→mask→publish; and native OT
 | Capability | Decision |
 |---|---|
 | Install adapter + detect | keep (`~/.gemini`) |
-| `keld setup` config | **settings.json** (telemetry + hooks) **and** a keld-managed block in **`~/.gemini/.env`** (OTEL auth headers) |
+| `keld setup` config | **settings.json** only (telemetry with token in `otlpEndpoint` query + hooks); cleans up any legacy `~/.gemini/.env` keld block |
 | Command hook | `BeforeAgent` → `keld __hook --source gemini`, **context event only** |
 | Transcript watcher root | `~/.gemini/tmp/*/chats/*.jsonl` |
 | Transcript reader/extractor | new Gemini reader + extractor (skip `$set`, `type:"user"`) |
@@ -111,27 +124,24 @@ architecture (capture→queue→resolve→enrich→mask→publish; and native OT
 
 ## 3. Stream 1 — Telemetry (native OTEL)
 
-**`telemetry.GeminiTelemetry(p)`** → settings.json `telemetry` block:
+**`telemetry.GeminiTelemetry(p)`** → settings.json `telemetry` block (v0.11.1):
 ```json
 { "enabled": true, "target": "local", "otlpProtocol": "http",
-  "otlpEndpoint": "<p.Endpoint>", "logPrompts": false, "traces": false }
+  "otlpEndpoint": "<p.Endpoint>?token=<tok>", "logPrompts": false, "traces": false }
 ```
-Change from today: `otlpEndpoint` becomes the **base** endpoint (was
-`"<endpoint>/v1/logs?token=<tok>"`, which is broken). No token in the URL.
-`logPrompts:false` + `traces:false` together gate `shouldIncludePayloads`, so
-spans never carry prompt/response bodies (see §1.3).
+`otlpEndpoint` is the **base** endpoint (no baked-in `/v1/logs` path) with the
+ingest token as a `?token=` query param. This is the only trust-independent auth
+channel: settings.json is always loaded, whereas `~/.gemini/.env` is not (§1.3).
+The exporter preserves the query when appending the signal path, so every POST
+hits `<base>/v1/logs?token=<tok>` etc. `logPrompts:false` + `traces:false`
+together gate `shouldIncludePayloads`, so spans never carry prompt/response
+bodies (see §1.3).
 
-**Auth via `~/.gemini/.env`** (new managed artifact). keld writes a delimited
-block, preserving all other lines (notably the user's `GEMINI_API_KEY`):
-```
-# >>> keld-managed (do not edit) >>>
-OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=<tok>,x-keld-actor=<actor>
-# <<< keld-managed <<<
-```
-No `OTEL_TRACES_EXPORTER` line: gemini-cli ignores it (§1.3), so it would be dead,
-misleading config.
-`Remove` strips only this block. Header auth mirrors the Codex fix
-(`x-keld-ingest-token`/`x-keld-actor` header, not a URL token).
+**keld does NOT write `~/.gemini/.env`.** (v0.11.0 did — an OTEL header block —
+but gemini ignores it in untrusted workspaces; see §1.3.) On upgrade, Apply and
+Remove emit a `Plan.ExtraFile` that *strips* any legacy keld block from the file,
+preserving `GEMINI_API_KEY` (or deletes the file if the block was its only
+content). **No `x-keld-actor`** anywhere — deprecated; auth is the token alone.
 
 **No reconstruction** — Gemini is host-side; native OTEL reaches Keld. The
 `promptlog` host-side emitter stays **off** for gemini. Atlas distinguishes the

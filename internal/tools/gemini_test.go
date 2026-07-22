@@ -51,7 +51,7 @@ func commitExtraFile(t *testing.T, ef *ExtraFile) {
 func TestGeminiApplySetsTelemetry(t *testing.T) {
 	sandboxGeminiHome(t)
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://e", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
 	cur := "{\n  \"theme\": \"dark\"\n}\n"
 	plan := a.Apply(&cur, p, false)
 	if !plan.Changed || !strings.Contains(plan.AfterText, "otlpEndpoint") || !strings.Contains(plan.AfterText, "\"theme\"") {
@@ -69,7 +69,7 @@ func TestGeminiApplySetsTelemetry(t *testing.T) {
 func TestGeminiApplyRemoveRoundTrip(t *testing.T) {
 	sandboxGeminiHome(t)
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://otel.example.com", IngestToken: "secret", Actor: "alice"}
+	p := SetupParams{Endpoint: "https://otel.example.com", IngestToken: "secret"}
 
 	// Start with a config that has an extra key.
 	original := "{\n  \"theme\": \"dark\"\n}\n"
@@ -121,7 +121,7 @@ func TestGeminiApplyRemoveRoundTrip(t *testing.T) {
 func TestGeminiApplyNilCurrentText(t *testing.T) {
 	sandboxGeminiHome(t)
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://otel.example.com", IngestToken: "tok2", Actor: "bob"}
+	p := SetupParams{Endpoint: "https://otel.example.com", IngestToken: "tok2"}
 
 	plan := a.Apply(nil, p, false)
 	if !plan.Changed {
@@ -160,7 +160,7 @@ func TestGeminiMeta(t *testing.T) {
 func TestGeminiApplyWiresBeforeAgentHook(t *testing.T) {
 	sandboxGeminiHome(t)
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 
 	cur := "{\n  \"security\": {\n    \"auth\": {\n      \"selectedType\": \"oauth-personal\"\n    }\n  }\n}\n"
 	plan := a.Apply(&cur, p, false)
@@ -171,12 +171,13 @@ func TestGeminiApplyWiresBeforeAgentHook(t *testing.T) {
 	if !strings.Contains(plan.AfterText, "\"selectedType\": \"oauth-personal\"") {
 		t.Fatalf("security.auth not preserved:\n%s", plan.AfterText)
 	}
-	// Fixed base endpoint: no /v1/logs path, no ?token= query param.
-	if !strings.Contains(plan.AfterText, "\"otlpEndpoint\": \"https://atlas.keld.co\"") {
-		t.Fatalf("expected fixed base otlpEndpoint:\n%s", plan.AfterText)
+	// Token rides in the endpoint query (gemini can't carry an auth header in an
+	// untrusted workspace); still no baked-in /v1/logs path (the SDK appends it).
+	if !strings.Contains(plan.AfterText, "\"otlpEndpoint\": \"https://atlas.keld.co?token=tok\"") {
+		t.Fatalf("expected token-in-query otlpEndpoint:\n%s", plan.AfterText)
 	}
-	if strings.Contains(plan.AfterText, "/v1/logs") || strings.Contains(plan.AfterText, "?token=") {
-		t.Fatalf("otlpEndpoint must not carry a path or token query param:\n%s", plan.AfterText)
+	if strings.Contains(plan.AfterText, "/v1/logs") {
+		t.Fatalf("otlpEndpoint must not carry a signal path:\n%s", plan.AfterText)
 	}
 	if !strings.Contains(plan.AfterText, "\"BeforeAgent\"") {
 		t.Fatalf("expected hooks.BeforeAgent entry:\n%s", plan.AfterText)
@@ -193,12 +194,18 @@ func TestGeminiApplyWiresBeforeAgentHook(t *testing.T) {
 	}
 }
 
-// TestGeminiApplyWritesEnvBlockPreservingAPIKey covers the second artifact:
-// Apply must compute a Plan.ExtraFile that upserts the keld OTEL block into
-// ~/.gemini/.env while never touching a pre-existing GEMINI_API_KEY line —
-// and must NOT write that file itself; only the returned Plan carries the
-// change, for the caller to commit under its own confirm/--dry-run gate.
-func TestGeminiApplyWritesEnvBlockPreservingAPIKey(t *testing.T) {
+// legacyEnvBlock is a ~/.gemini/.env as keld <= v0.11.0 wrote it: the user's
+// own GEMINI_API_KEY plus a keld-managed OTEL header block (the block that, on
+// this version, we clean up rather than write).
+const legacyEnvBlock = "GEMINI_API_KEY=real-secret-value\n" +
+	"# >>> keld-managed (do not edit) >>>\n" +
+	"OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=old-token\n" +
+	"# <<< keld-managed <<<\n"
+
+// TestGeminiApplyLeavesCleanEnvUntouched: keld no longer writes a .env block.
+// When ~/.gemini/.env has no legacy keld block, Apply must produce NO ExtraFile
+// and never touch the file (especially the user's GEMINI_API_KEY).
+func TestGeminiApplyLeavesCleanEnvUntouched(t *testing.T) {
 	home := sandboxGeminiHome(t)
 	geminiDir := filepath.Join(home, ".gemini")
 	if err := os.MkdirAll(geminiDir, 0o755); err != nil {
@@ -211,7 +218,7 @@ func TestGeminiApplyWritesEnvBlockPreservingAPIKey(t *testing.T) {
 	}
 
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 	cur := "{\n  \"security\": {\n    \"auth\": {\n      \"selectedType\": \"oauth-personal\"\n    }\n  }\n}\n"
 
 	plan := a.Apply(&cur, p, false)
@@ -219,121 +226,132 @@ func TestGeminiApplyWritesEnvBlockPreservingAPIKey(t *testing.T) {
 		t.Fatalf("unexpected conflict: %s", plan.Conflict)
 	}
 
-	// Apply must be side-effect-free: the file on disk is untouched.
+	// No legacy keld block present, so there is nothing to clean up.
+	if plan.ExtraFile != nil {
+		t.Fatalf("expected no ExtraFile for a .env with no keld block, got %+v", plan.ExtraFile)
+	}
+	// And the file on disk is untouched.
 	onDisk, err := os.ReadFile(envPath)
 	if err != nil {
 		t.Fatalf("reading .env after Apply: %v", err)
 	}
 	if string(onDisk) != seeded {
-		t.Fatalf("Apply wrote to ~/.gemini/.env directly; on-disk contents changed:\nwant: %q\ngot:  %q", seeded, string(onDisk))
+		t.Fatalf("Apply touched ~/.gemini/.env:\nwant: %q\ngot:  %q", seeded, string(onDisk))
 	}
-
-	// The change must instead be fully staged in plan.ExtraFile.
-	ef := plan.ExtraFile
-	if ef == nil {
-		t.Fatal("expected plan.ExtraFile to be non-nil")
-	}
-	if ef.Path != envPath {
-		t.Fatalf("ExtraFile.Path = %q, want %q", ef.Path, envPath)
-	}
-	if ef.Mode != 0o600 {
-		t.Fatalf("ExtraFile.Mode = %o, want 0600", ef.Mode)
-	}
-	if ef.Delete {
-		t.Fatal("ExtraFile.Delete should be false when upserting into an existing .env")
-	}
-	envText := ef.AfterText
-	if !strings.Contains(envText, "GEMINI_API_KEY=real-secret-value") {
-		t.Fatalf("ExtraFile.AfterText clobbered GEMINI_API_KEY:\n%s", envText)
-	}
-	if !strings.Contains(envText, "# >>> keld-managed (do not edit) >>>") {
-		t.Fatalf("ExtraFile.AfterText missing keld block start marker:\n%s", envText)
-	}
-	if !strings.Contains(envText, "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me") {
-		t.Fatalf("ExtraFile.AfterText missing OTEL headers line:\n%s", envText)
-	}
-	if strings.Contains(envText, "OTEL_TRACES_EXPORTER") {
-		t.Fatalf("ExtraFile.AfterText should not carry the dead OTEL_TRACES_EXPORTER line (gemini ignores it):\n%s", envText)
-	}
-
-	// managed["env_created"] should be false: the file already existed.
-	if created, _ := plan.Managed["env_created"].(bool); created {
-		t.Fatal("expected managed[\"env_created\"]=false for a pre-existing .env")
+	// Token rides in settings.json's otlpEndpoint, not the .env.
+	if !strings.Contains(plan.AfterText, "?token=tok") {
+		t.Fatalf("expected token in otlpEndpoint query:\n%s", plan.AfterText)
 	}
 }
 
-// TestGeminiApplyDoesNotWriteEnvFile proves Apply performs NO write of its
-// own to ~/.gemini/.env even when the file is entirely absent: the returned
-// Plan carries the would-be contents in ExtraFile, but the file itself must
-// still not exist on disk afterward. Only a caller that later commits
-// ExtraFile (as the real setup/uninstall flows do, gated by confirm/
-// --dry-run) may bring it into existence.
-func TestGeminiApplyDoesNotWriteEnvFile(t *testing.T) {
-	home := sandboxGeminiHome(t)
-	// Note: no ~/.gemini dir at all yet.
-	envPath := filepath.Join(home, ".gemini", ".env")
-
-	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
-
-	plan := a.Apply(nil, p, false)
-	if plan.Conflict != "" {
-		t.Fatalf("unexpected conflict: %s", plan.Conflict)
-	}
-
-	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
-		t.Fatalf("Apply must not create ~/.gemini/.env itself; stat err=%v", err)
-	}
-	if _, err := os.Stat(filepath.Dir(envPath)); !os.IsNotExist(err) {
-		t.Fatalf("Apply must not even create the ~/.gemini directory itself; stat err=%v", err)
-	}
-
-	ef := plan.ExtraFile
-	if ef == nil {
-		t.Fatal("expected plan.ExtraFile to be non-nil")
-	}
-	if ef.Path != envPath {
-		t.Fatalf("ExtraFile.Path = %q, want %q", ef.Path, envPath)
-	}
-	if ef.Mode != 0o600 {
-		t.Fatalf("ExtraFile.Mode = %o, want 0600", ef.Mode)
-	}
-	if !strings.Contains(ef.AfterText, "# >>> keld-managed (do not edit) >>>") {
-		t.Fatalf("ExtraFile.AfterText missing keld block:\n%s", ef.AfterText)
-	}
-	if created, _ := plan.Managed["env_created"].(bool); !created {
-		t.Fatal("expected managed[\"env_created\"]=true when .env is absent")
-	}
-}
-
-// TestGeminiRemoveStripsBothArtifacts covers the brief's Remove scenario: a
-// settings.json with security.auth plus keld's blocks, and a .env with
-// GEMINI_API_KEY plus keld's block — Remove must compute a Plan.ExtraFile
-// that strips only keld's parts of each, leaving security.auth and
-// GEMINI_API_KEY intact, again without writing anything itself.
-func TestGeminiRemoveStripsBothArtifacts(t *testing.T) {
+// TestGeminiApplyCleansLegacyEnvBlock: an upgrading install has a v0.11.0 keld
+// block in ~/.gemini/.env. Apply must stage an ExtraFile that strips it while
+// preserving GEMINI_API_KEY — and must not write the file itself.
+func TestGeminiApplyCleansLegacyEnvBlock(t *testing.T) {
 	home := sandboxGeminiHome(t)
 	geminiDir := filepath.Join(home, ".gemini")
 	if err := os.MkdirAll(geminiDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	envPath := filepath.Join(geminiDir, ".env")
-	if err := os.WriteFile(envPath, []byte("GEMINI_API_KEY=real-secret-value\n"), 0o600); err != nil {
+	if err := os.WriteFile(envPath, []byte(legacyEnvBlock), 0o600); err != nil {
 		t.Fatalf("seed .env: %v", err)
 	}
 
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
+	cur := "{}\n"
+
+	plan := a.Apply(&cur, p, false)
+	if plan.Conflict != "" {
+		t.Fatalf("unexpected conflict: %s", plan.Conflict)
+	}
+
+	// Apply is side-effect free: on-disk .env still has the legacy block.
+	onDisk, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("reading .env after Apply: %v", err)
+	}
+	if string(onDisk) != legacyEnvBlock {
+		t.Fatalf("Apply wrote to .env directly:\n%s", string(onDisk))
+	}
+
+	ef := plan.ExtraFile
+	if ef == nil {
+		t.Fatal("expected plan.ExtraFile staging the legacy-block cleanup")
+	}
+	if ef.Path != envPath {
+		t.Fatalf("ExtraFile.Path = %q, want %q", ef.Path, envPath)
+	}
+	if ef.Delete {
+		t.Fatal("ExtraFile.Delete should be false: GEMINI_API_KEY must survive")
+	}
+	if ef.Mode != 0o600 {
+		t.Fatalf("ExtraFile.Mode = %o, want 0600", ef.Mode)
+	}
+	if !strings.Contains(ef.AfterText, "GEMINI_API_KEY=real-secret-value") {
+		t.Fatalf("cleanup dropped GEMINI_API_KEY:\n%s", ef.AfterText)
+	}
+	if strings.Contains(ef.AfterText, "keld-managed") || strings.Contains(ef.AfterText, "OTEL_EXPORTER_OTLP_HEADERS") {
+		t.Fatalf("legacy keld block not stripped:\n%s", ef.AfterText)
+	}
+
+	// Committing it leaves just the API key on disk.
+	commitExtraFile(t, ef)
+	final, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("reading .env after commit: %v", err)
+	}
+	if strings.Contains(string(final), "keld-managed") {
+		t.Fatalf("keld block still present after cleanup:\n%s", string(final))
+	}
+}
+
+// TestGeminiApplyDoesNotCreateEnvFile: when ~/.gemini/.env is absent, keld
+// writes nothing there (the token lives in settings.json now), so Apply must
+// produce no ExtraFile and not create the file or directory.
+func TestGeminiApplyDoesNotCreateEnvFile(t *testing.T) {
+	home := sandboxGeminiHome(t)
+	envPath := filepath.Join(home, ".gemini", ".env")
+
+	a := &GeminiAdapter{}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
+
+	plan := a.Apply(nil, p, false)
+	if plan.Conflict != "" {
+		t.Fatalf("unexpected conflict: %s", plan.Conflict)
+	}
+	if plan.ExtraFile != nil {
+		t.Fatalf("expected no ExtraFile when .env absent, got %+v", plan.ExtraFile)
+	}
+	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
+		t.Fatalf("Apply must not create ~/.gemini/.env; stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(envPath)); !os.IsNotExist(err) {
+		t.Fatalf("Apply must not create the ~/.gemini directory; stat err=%v", err)
+	}
+}
+
+// TestGeminiRemoveStripsSettingsAndLegacyEnv: Remove strips keld's telemetry +
+// hook from settings.json, and stages a cleanup of any lingering legacy keld
+// .env block — preserving security.auth and GEMINI_API_KEY.
+func TestGeminiRemoveStripsSettingsAndLegacyEnv(t *testing.T) {
+	home := sandboxGeminiHome(t)
+	geminiDir := filepath.Join(home, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	envPath := filepath.Join(geminiDir, ".env")
+	if err := os.WriteFile(envPath, []byte(legacyEnvBlock), 0o600); err != nil {
+		t.Fatalf("seed .env: %v", err)
+	}
+
+	a := &GeminiAdapter{}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 	cur := "{\n  \"security\": {\n    \"auth\": {\n      \"selectedType\": \"oauth-personal\"\n    }\n  }\n}\n"
 
+	// Configure settings via Apply, then Remove.
 	applyPlan := a.Apply(&cur, p, false)
-	if applyPlan.Conflict != "" {
-		t.Fatalf("Apply: unexpected conflict: %s", applyPlan.Conflict)
-	}
-	// Simulate the caller committing Apply's staged ExtraFile (confirmed,
-	// non-dry-run) so Remove has something on disk to read back and strip.
-	commitExtraFile(t, applyPlan.ExtraFile)
-
 	removePlan := a.Remove(&applyPlan.AfterText, applyPlan.Managed)
 	if removePlan.Conflict != "" {
 		t.Fatalf("Remove: unexpected conflict: %s", removePlan.Conflict)
@@ -353,52 +371,19 @@ func TestGeminiRemoveStripsBothArtifacts(t *testing.T) {
 		t.Fatalf("Remove: BeforeAgent hook not stripped:\n%s", removePlan.AfterText)
 	}
 
-	// Remove must not have written to disk itself: the on-disk .env should
-	// still be exactly what Apply's commit left (i.e. unchanged by Remove).
-	onDiskAfterRemove, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatalf("reading .env after Remove: %v", err)
-	}
-	if !strings.Contains(string(onDiskAfterRemove), "keld-managed") {
-		t.Fatalf("Remove must not touch disk itself, but the committed keld block is missing:\n%s", onDiskAfterRemove)
-	}
-
-	// The staged ExtraFile is where the strip actually lives.
+	// .env cleanup staged: legacy block stripped, GEMINI_API_KEY preserved.
 	ef := removePlan.ExtraFile
 	if ef == nil {
-		t.Fatal("expected removePlan.ExtraFile to be non-nil")
-	}
-	if ef.Path != envPath {
-		t.Fatalf("ExtraFile.Path = %q, want %q", ef.Path, envPath)
+		t.Fatal("expected removePlan.ExtraFile staging the legacy .env cleanup")
 	}
 	if ef.Delete {
-		t.Fatal("ExtraFile.Delete should be false: the .env pre-existed (GEMINI_API_KEY), so it must survive stripped rather than be deleted")
+		t.Fatal("ExtraFile.Delete should be false: GEMINI_API_KEY must survive")
 	}
-	if ef.Mode != 0o600 {
-		t.Fatalf("ExtraFile.Mode = %o, want 0600", ef.Mode)
+	if !strings.Contains(ef.AfterText, "GEMINI_API_KEY=real-secret-value") {
+		t.Fatalf("Remove: GEMINI_API_KEY lost:\n%s", ef.AfterText)
 	}
-	envText := ef.AfterText
-	if !strings.Contains(envText, "GEMINI_API_KEY=real-secret-value") {
-		t.Fatalf("Remove: GEMINI_API_KEY lost from ExtraFile.AfterText:\n%s", envText)
-	}
-	if strings.Contains(envText, "keld-managed") {
-		t.Fatalf("Remove: keld block not stripped from ExtraFile.AfterText:\n%s", envText)
-	}
-	if strings.Contains(envText, "OTEL_EXPORTER_OTLP_HEADERS") || strings.Contains(envText, "OTEL_TRACES_EXPORTER") {
-		t.Fatalf("Remove: OTEL env lines not stripped from ExtraFile.AfterText:\n%s", envText)
-	}
-
-	// Now commit the remove plan too, and confirm final on-disk state and Status.
-	commitExtraFile(t, ef)
-	finalEnv, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatalf("reading .env after committing Remove: %v", err)
-	}
-	if !strings.Contains(string(finalEnv), "GEMINI_API_KEY=real-secret-value") {
-		t.Fatalf("Remove: GEMINI_API_KEY lost from .env:\n%s", finalEnv)
-	}
-	if strings.Contains(string(finalEnv), "keld-managed") {
-		t.Fatalf("Remove: keld block not stripped from .env:\n%s", finalEnv)
+	if strings.Contains(ef.AfterText, "keld-managed") || strings.Contains(ef.AfterText, "OTEL_EXPORTER_OTLP_HEADERS") {
+		t.Fatalf("Remove: legacy keld block not stripped:\n%s", ef.AfterText)
 	}
 
 	st := a.Status(&removePlan.AfterText, nil)
@@ -407,95 +392,74 @@ func TestGeminiRemoveStripsBothArtifacts(t *testing.T) {
 	}
 }
 
-// TestGeminiRemoveDeletesFreshlyCreatedEnvFile covers the "we created the
-// .env file, and after removal it's now empty" case: Remove's Plan.ExtraFile
-// should carry Delete=true rather than an empty AfterText, so the caller
-// removes the file rather than leaving an empty husk behind.
-func TestGeminiRemoveDeletesFreshlyCreatedEnvFile(t *testing.T) {
+// TestGeminiRemoveDeletesLegacyOnlyEnvFile: a .env that contains ONLY a legacy
+// keld block (no other lines) should be deleted, not left as an empty husk.
+func TestGeminiRemoveDeletesLegacyOnlyEnvFile(t *testing.T) {
 	home := sandboxGeminiHome(t)
-	envPath := filepath.Join(home, ".gemini", ".env")
+	geminiDir := filepath.Join(home, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	envPath := filepath.Join(geminiDir, ".env")
+	const blockOnly = "# >>> keld-managed (do not edit) >>>\n" +
+		"OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=old-token\n" +
+		"# <<< keld-managed <<<\n"
+	if err := os.WriteFile(envPath, []byte(blockOnly), 0o600); err != nil {
+		t.Fatalf("seed .env: %v", err)
+	}
 
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
-
-	applyPlan := a.Apply(nil, p, false)
-	if applyPlan.Conflict != "" {
-		t.Fatalf("Apply: unexpected conflict: %s", applyPlan.Conflict)
-	}
-	// Simulate the caller committing Apply's ExtraFile.
-	commitExtraFile(t, applyPlan.ExtraFile)
-	if _, err := os.Stat(envPath); err != nil {
-		t.Fatalf(".env should exist after committing Apply's ExtraFile: %v", err)
-	}
-
-	removePlan := a.Remove(&applyPlan.AfterText, applyPlan.Managed)
-	if removePlan.Conflict != "" {
-		t.Fatalf("Remove: unexpected conflict: %s", removePlan.Conflict)
-	}
-
+	removePlan := a.Remove(strPtrLocal("{}"), map[string]any{})
 	ef := removePlan.ExtraFile
 	if ef == nil {
-		t.Fatal("expected removePlan.ExtraFile to be non-nil")
+		t.Fatal("expected removePlan.ExtraFile")
 	}
 	if !ef.Delete {
-		t.Fatalf("expected ExtraFile.Delete=true for a freshly-created, now-empty .env, got AfterText=%q", ef.AfterText)
+		t.Fatalf("expected ExtraFile.Delete=true for a keld-block-only .env, got AfterText=%q", ef.AfterText)
 	}
 	if ef.Path != envPath {
 		t.Fatalf("ExtraFile.Path = %q, want %q", ef.Path, envPath)
 	}
 
-	// Remove itself must not have deleted the file (no side effects).
-	if _, err := os.Stat(envPath); err != nil {
-		t.Fatalf("Remove must not delete .env itself before commit: %v", err)
-	}
-
-	// Commit the remove plan (as the real caller would) and confirm deletion.
+	// Commit and confirm deletion.
 	commitExtraFile(t, ef)
 	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
-		t.Fatalf(".env should have been deleted after committing Remove's ExtraFile, stat err=%v", err)
+		t.Fatalf(".env should be deleted after commit, stat err=%v", err)
 	}
 }
 
-// TestGeminiApplyIdempotent covers the brief's idempotency requirement:
-// applying twice in a row must produce byte-identical settings.json output
-// and must not duplicate the .env block.
+// TestGeminiApplyIdempotent: applying twice must produce byte-identical
+// settings.json output, and (with a clean .env) stage no ExtraFile either time.
 func TestGeminiApplyIdempotent(t *testing.T) {
 	sandboxGeminiHome(t)
 
 	a := &GeminiAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 	cur := "{\n  \"security\": {\n    \"auth\": {\n      \"selectedType\": \"oauth-personal\"\n    }\n  }\n}\n"
 
 	first := a.Apply(&cur, p, false)
 	if first.Conflict != "" {
 		t.Fatalf("first Apply: unexpected conflict: %s", first.Conflict)
 	}
-	// Simulate the caller committing the first Apply's ExtraFile before the
-	// second Apply runs, exactly as a real re-run of `keld setup` would.
-	commitExtraFile(t, first.ExtraFile)
+	// No .env on disk → no cleanup ExtraFile.
+	if first.ExtraFile != nil {
+		t.Fatalf("first Apply: expected ExtraFile=nil (no legacy .env), got %+v", first.ExtraFile)
+	}
 
 	second := a.Apply(&first.AfterText, p, false)
 	if second.Conflict != "" {
 		t.Fatalf("second Apply: unexpected conflict: %s", second.Conflict)
 	}
-
 	if second.AfterText != first.AfterText {
 		t.Fatalf("Apply is not idempotent on settings.json:\n--first--\n%s\n--second--\n%s", first.AfterText, second.AfterText)
 	}
 	if second.Changed {
 		t.Fatal("second Apply: expected Changed=false (already configured)")
 	}
-	// The .env block is already present and unchanged, so the second Apply
-	// must report no ExtraFile change to write.
 	if second.ExtraFile != nil {
-		t.Fatalf("second Apply: expected ExtraFile=nil (no change), got %+v", second.ExtraFile)
-	}
-
-	envText := first.ExtraFile.AfterText
-	if n := strings.Count(envText, "# >>> keld-managed (do not edit) >>>"); n != 1 {
-		t.Fatalf(".env block duplicated: found %d start markers in:\n%s", n, envText)
-	}
-	if n := strings.Count(envText, "OTEL_EXPORTER_OTLP_HEADERS="); n != 1 {
-		t.Fatalf(".env OTEL line duplicated: found %d occurrences in:\n%s", n, envText)
+		t.Fatalf("second Apply: expected ExtraFile=nil, got %+v", second.ExtraFile)
 	}
 }
+
+// strPtrLocal returns a pointer to s (test helper).
+func strPtrLocal(s string) *string { return &s }

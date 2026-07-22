@@ -14,7 +14,7 @@ claim in real on-disk data or upstream source — never guess a schema. Use the
 superpowers flow: brainstorming → spec → writing-plans (TDD) → subagent-driven
 execution → final review → finishing-a-development-branch → release.
 
-Date written: 2026-07-22 (updated after Gemini CLI shipped). Repo: `/Users/keldtester1/keld-signal`. Latest tag: **v0.11.0**.
+Date written: 2026-07-22 (updated after Gemini CLI shipped + v0.11.1 auth fix). Repo: `/Users/keldtester1/keld-signal`. Latest tag: **v0.11.1**.
 Run go with `export PATH="/opt/homebrew/bin:$PATH"`. `gh` is at `/opt/homebrew/bin/gh` (authed).
 
 ---
@@ -56,28 +56,33 @@ when the tool's own OTEL can't reach Keld (Cowork's sandbox blocks egress).
 
 ---
 
-## 2. Coverage matrix (as of v0.11.0)
+## 2. Coverage matrix (as of v0.11.1)
 
 | Capability | Claude Code | Cowork | Codex | **Gemini CLI** |
 |---|---|---|---|---|
 | Install adapter + detect | ✅ | (via Claude app) | ✅ | ✅ (`~/.gemini`) |
-| `keld setup` writes config | ✅ hooks+OTEL env | n/a | ✅ `[otel]`+hooks | ✅ telemetry block + hook + `.env` auth block |
+| `keld setup` writes config | ✅ hooks+OTEL env | n/a | ✅ `[otel]`+hooks | ✅ telemetry block (token in `otlpEndpoint`) + hook |
 | Command hook | ✅ UserPromptSubmit | ❌ (sandbox) | ⚠️ SessionStart/PreToolUse (no prompt-submit) | ✅ BeforeAgent (context event only) |
 | Transcript watcher root | ✅ `~/.claude/projects` | ✅ cowork dirs | ✅ `~/.codex/sessions` | ✅ `~/.gemini/tmp/*/chats` |
 | Transcript reader (enrichment) | ✅ | ✅ (reuses Claude) | ✅ rollout | ✅ Gemini reader (`type:"user"` by id) |
 | Enrichment classification flags | ✅ eng | topical (excluded) | ✅ eng | ✅ eng |
-| Telemetry | native OTEL (host) | **host-side reconstruction** (promptlog) | native OTEL (host) | native OTEL (host), base endpoint + `.env` header auth |
+| Telemetry | native OTEL (host) | **host-side reconstruction** (promptlog) | native OTEL (host) | native OTEL (host), token in `otlpEndpoint` `?token=` query (v0.11.1) |
 
-**Gemini CLI = full parity (v0.11.0).** `keld setup` writes `~/.gemini/settings.json`
-`telemetry: {enabled:true, target:"local", otlpProtocol:"http", otlpEndpoint:"<BASE>",
-logPrompts:false, traces:false}` (`telemetry.GeminiTelemetry`; base endpoint — the old
-`/v1/logs?token=` URL was broken), a `hooks.BeforeAgent` context hook, and a keld-managed
-block in `~/.gemini/.env` carrying only `OTEL_EXPORTER_OTLP_HEADERS` (auth; preserves the
-user's `GEMINI_API_KEY`). Enrichment: watcher root + `resolve.NewGeminiReader` (pointer
-model). Telemetry gotcha (see spec §1.3): gemini-cli builds its own OTLP exporters and
-**ignores `OTEL_TRACES_EXPORTER`** — trace export can't be disabled; content stays out of
-spans via `logPrompts:false`+`traces:false` (gate `shouldIncludePayloads`); Atlas ignores
-`/v1/traces`. Validated on 5/5 real transcripts and a local OTLP sink.
+**Gemini CLI = full parity (v0.11.0; auth fixed in v0.11.1).** `keld setup` writes
+`~/.gemini/settings.json` `telemetry: {enabled:true, target:"local", otlpProtocol:"http",
+otlpEndpoint:"<BASE>?token=<tok>", logPrompts:false, traces:false}`
+(`telemetry.GeminiTelemetry`) plus a `hooks.BeforeAgent` context hook. Enrichment: watcher
+root + `resolve.NewGeminiReader` (pointer model). **Two hard-won gemini gotchas (spec §1.3):**
+(1) **Auth can't ride in a header.** gemini reads `~/.gemini/.env`/`OTEL_EXPORTER_OTLP_HEADERS`
+only in a *trusted* workspace (untrusted → only `AUTH_ENV_VAR_WHITELIST` vars load), so
+v0.11.0's `.env` header 401'd in normal dirs. The token now rides in `otlpEndpoint` as
+`?token=` (settings.json is always loaded; the exporter preserves the query when appending
+`/v1/logs`). keld no longer writes `.env`; it strips any legacy block on upgrade. Auth is the
+token only — **`x-keld-actor` is deprecated, never sent** (dropped across all tools + the
+enrichment publisher in v0.11.1). (2) **Traces can't be disabled** — gemini builds its own OTLP
+exporters and ignores `OTEL_TRACES_EXPORTER`; content stays out of spans via
+`logPrompts:false`+`traces:false`; Atlas ignores `/v1/traces`. Validated on 5/5 real
+transcripts and a local OTLP sink (untrusted workspace: `/v1/logs?token=…`, no header).
 
 ---
 
@@ -177,8 +182,8 @@ gemini.google.com) remain likely-out-of-scope server-side — flag, don't build 
   v0.9.1–0.9.5 (full-fidelity Cowork telemetry — host-side OTLP mirroring the CLI
   schema; `tool=cowork`; grouped/monotonic metrics; exact tokens, cost-in-Atlas),
   v0.10.0 (Codex parity), v0.11.0 (Gemini CLI parity — enrichment watcher/reader +
-  native OTEL base endpoint + `.env` header auth; validated on real transcripts +
-  a local OTLP sink; traces can't be disabled in gemini-cli but stay content-free).
+  native OTEL), v0.11.1 (Gemini auth fix: token in `otlpEndpoint` `?token=` query,
+  not a trust-gated `.env` header; dropped deprecated `x-keld-actor` everywhere).
   All merged to `main`, released, CI green.
 - **Machine:** macOS arm64. Daemon installed via `.pkg`, runs under launchd
   `co.keld.agent` (per-user). Logs: `~/.keld/logs/agent.{out,err}.log`,
@@ -221,7 +226,7 @@ gemini.google.com) remain likely-out-of-scope server-side — flag, don't build 
 1. Re-read this doc + the freshest worked example: the `2026-07-22-gemini-cli-coverage`
    spec + plan (and the earlier 2026-07-21 specs for Cowork/Codex rationale).
 2. Confirm current state: `git -C ~/keld-signal log --oneline -5`, `git tag | head`
-   (latest should be `v0.11.0`).
+   (latest should be `v0.11.1`).
 3. Brainstorm Antigravity scope with the user: do they use it / is it in scope; do
    they have an install to investigate + validate against?
 4. Investigate Antigravity empirically FIRST (§4): find its on-disk footprint, whether

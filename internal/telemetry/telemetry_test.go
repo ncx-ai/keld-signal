@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -12,20 +13,23 @@ func TestHookCommand(t *testing.T) {
 }
 
 func TestClaudeEnvOrderAndHeaders(t *testing.T) {
-	p := SetupParams{Endpoint: "https://e", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
 	env := ClaudeEnv(p)
 	keys := env.Keys()
 	if keys[0] != "CLAUDE_CODE_ENABLE_TELEMETRY" || keys[len(keys)-1] != "OTEL_EXPORTER_OTLP_HEADERS" {
 		t.Fatalf("env order wrong: %v", keys)
 	}
 	v, _ := env.Get("OTEL_EXPORTER_OTLP_HEADERS")
-	if v.(string) != "x-keld-ingest-token=tok,x-keld-actor=me" {
+	if v.(string) != "x-keld-ingest-token=tok" {
 		t.Fatalf("headers %q", v)
+	}
+	if strings.Contains(v.(string), "x-keld-actor") {
+		t.Errorf("x-keld-actor is deprecated and must not be sent: %q", v)
 	}
 }
 
 func TestCodexBlockBodyHasHooksAndOtel(t *testing.T) {
-	p := SetupParams{Endpoint: "https://e", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
 	body := CodexBlockBody(p, "codex")
 	for _, want := range []string{"[otel]", "[[hooks.SessionStart]]", "[[hooks.PreToolUse]]", "keld __hook --source codex"} {
 		if !strings.Contains(body, want) {
@@ -47,7 +51,7 @@ func TestClaudeHookEventsIncludeUserPromptSubmit(t *testing.T) {
 }
 
 func TestCodexBlockBodyMetricsAndHeaderAuth(t *testing.T) {
-	got := CodexBlockBody(SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}, "codex")
+	got := CodexBlockBody(SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}, "codex")
 	// logs exporter present, metrics exporter present
 	if !strings.Contains(got, "metrics_exporter") {
 		t.Error("missing metrics_exporter (token metrics never flow otherwise)")
@@ -62,19 +66,28 @@ func TestCodexBlockBodyMetricsAndHeaderAuth(t *testing.T) {
 	if strings.Contains(got, "?token=") {
 		t.Errorf("token must not ride in the URL:\n%s", got)
 	}
+	if strings.Contains(got, "x-keld-actor") {
+		t.Errorf("x-keld-actor is deprecated and must not be sent:\n%s", got)
+	}
 	if !strings.Contains(got, `command = 'keld __hook --source codex'`) {
 		t.Error("hook command changed unexpectedly")
 	}
 }
 
-func TestGeminiTelemetryBaseEndpoint(t *testing.T) {
-	p := SetupParams{Endpoint: "https://api.gemini.example.com", IngestToken: "tok123", Actor: "test"}
+func TestGeminiTelemetryEndpointCarriesToken(t *testing.T) {
+	p := SetupParams{Endpoint: "https://api.gemini.example.com", IngestToken: "tok123"}
 	tm := GeminiTelemetry(p)
 
-	// Check otlpEndpoint is exactly p.Endpoint, no /v1/logs, no ?token=
+	// The ingest token rides in the otlpEndpoint query (gemini can't carry an
+	// auth header in an untrusted workspace); the base host/path is preserved
+	// and no /v1/logs path is baked in (the SDK appends it).
 	otlpVal, _ := tm.Get("otlpEndpoint")
-	if otlpVal != "https://api.gemini.example.com" {
-		t.Fatalf("otlpEndpoint should be base URL, got %q", otlpVal)
+	s, _ := otlpVal.(string)
+	if s != "https://api.gemini.example.com?token=tok123" {
+		t.Fatalf("otlpEndpoint should be base + ?token=, got %q", otlpVal)
+	}
+	if strings.Contains(s, "/v1/logs") {
+		t.Errorf("otlpEndpoint must not bake in a signal path: %q", s)
 	}
 
 	// Check other required fields
@@ -107,49 +120,29 @@ func TestGeminiTelemetryBaseEndpoint(t *testing.T) {
 		t.Errorf("traces should be present and false, got %v (present=%v)", traces, ok)
 	}
 
-	// Ensure no token is embedded in string values
+	// The token is intentionally in otlpEndpoint and NOWHERE else.
 	for _, key := range tm.Keys() {
+		if key == "otlpEndpoint" {
+			continue
+		}
 		val, _ := tm.Get(key)
-		if strVal, ok := val.(string); ok {
-			if strings.Contains(strVal, "tok123") {
-				t.Fatalf("token must not be embedded in any value; found in %s=%q", key, strVal)
-			}
+		if strVal, ok := val.(string); ok && strings.Contains(strVal, "tok123") {
+			t.Fatalf("token must only appear in otlpEndpoint; found in %s=%q", key, strVal)
 		}
 	}
 }
 
-func TestGeminiEnvBlockHeaders(t *testing.T) {
-	p := SetupParams{Endpoint: "https://api.gemini.example.com", IngestToken: "tok123", Actor: "test"}
-	env := GeminiEnvBlock(p)
-
-	lines := strings.Split(strings.TrimSpace(env), "\n")
-	// Only the auth-headers line: gemini-cli has no per-signal trace-export
-	// off-switch (OTEL_TRACES_EXPORTER is ignored — it builds its own OTLP
-	// exporters), so we no longer emit a dead OTEL_TRACES_EXPORTER=none line.
-	// Prompt content is kept out of spans via telemetry.logPrompts/traces=false.
-	if len(lines) != 1 {
-		t.Fatalf("GeminiEnvBlock should return exactly 1 line, got %d: %q", len(lines), env)
+func TestGeminiTelemetryTokenEndpointIsURLEncodable(t *testing.T) {
+	// A token with a URL-special char must be safely query-escaped so the
+	// resulting otlpEndpoint is still a valid parseable URL.
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "a b/c&d"}
+	tm := GeminiTelemetry(p)
+	otlpVal, _ := tm.Get("otlpEndpoint")
+	u, err := url.Parse(otlpVal.(string))
+	if err != nil {
+		t.Fatalf("otlpEndpoint not a valid URL: %v", err)
 	}
-
-	// The only line: OTEL_EXPORTER_OTLP_HEADERS
-	if !strings.HasPrefix(lines[0], "OTEL_EXPORTER_OTLP_HEADERS=") {
-		t.Fatalf("line should start with OTEL_EXPORTER_OTLP_HEADERS=, got %q", lines[0])
-	}
-	if !strings.Contains(lines[0], "x-keld-ingest-token=tok123") {
-		t.Errorf("line should contain x-keld-ingest-token=tok123, got %q", lines[0])
-	}
-	if !strings.Contains(lines[0], "x-keld-actor=test") {
-		t.Errorf("line should contain x-keld-actor=test, got %q", lines[0])
-	}
-	if strings.Contains(env, "OTEL_TRACES_EXPORTER") {
-		t.Errorf("must not emit the ineffective OTEL_TRACES_EXPORTER line: %q", env)
-	}
-
-	// Ensure no token or endpoint URL appears in env output
-	if strings.Contains(env, "https://") {
-		t.Errorf("GeminiEnvBlock should not contain URL: %q", env)
-	}
-	if strings.Contains(env, "?token=") {
-		t.Errorf("token must not ride in any URL: %q", env)
+	if got := u.Query().Get("token"); got != "a b/c&d" {
+		t.Fatalf("token round-trip failed: got %q", got)
 	}
 }

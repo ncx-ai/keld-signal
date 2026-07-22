@@ -7,6 +7,37 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-07-22
+
+Gemini telemetry auth fix + drop deprecated `x-keld-actor`.
+
+### Fixed
+- **Gemini telemetry was unauthorized (401 "missing ingest token") in normal
+  use.** v0.11.0 put the ingest token in an `OTEL_EXPORTER_OTLP_HEADERS` line in
+  `~/.gemini/.env`, but gemini-cli only reads that file in a *trusted* workspace
+  (and drops non-whitelisted vars like `OTEL_EXPORTER_OTLP_HEADERS` otherwise),
+  so in an ordinary directory the header never reached Atlas. The token now
+  rides in `settings.json`'s `otlpEndpoint` as a `?token=` query param —
+  settings.json is always loaded regardless of workspace trust, and gemini's
+  OTLP exporter preserves the query when it appends `/v1/logs` etc. keld no
+  longer writes `~/.gemini/.env`; on upgrade, `keld setup`/uninstall strip any
+  legacy keld block from it (preserving `GEMINI_API_KEY`). Verified against a
+  local sink in an untrusted workspace: `/v1/logs?token=…` on every signal, no
+  header needed.
+
+- **Hook no longer POSTs a "context" event (was 405).** The `keld __hook` command
+  used to POST a repo/attributes context payload straight to the bare ingest
+  endpoint, which has no route there — Atlas answered `HTTP 405` (visible on every
+  Gemini prompt via its `BeforeAgent` hook). Removed: the enrichment path already
+  carries repo/branch context, and the daemon's `/v1/signal/client-events` covers
+  operational telemetry. The hook's sole job is now the enrich-pointer hand-off to
+  the local daemon (unchanged).
+
+### Changed
+- **Dropped the deprecated `x-keld-actor` header everywhere.** Ingest auth is
+  the token alone. Removed from `ClaudeEnv`, `CodexBlockBody`, the Gemini config,
+  the daemon's promptlog OTLP POST, and the enrichment publisher.
+
 ## [0.11.0] — 2026-07-22
 
 Gemini CLI parity — native OTEL completed. Enrichment via `~/.gemini/tmp/*/chats`

@@ -4,7 +4,7 @@
     "enabled": true,
     "target": "local",
     "otlpProtocol": "http",
-    "otlpEndpoint": "https://atlas.keld.co",
+    "otlpEndpoint": "https://atlas.keld.co?token=tok",
     "logPrompts": false,
     "traces": false
   },

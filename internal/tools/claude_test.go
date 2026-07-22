@@ -10,7 +10,7 @@ import (
 
 func TestClaudeApplyStructural(t *testing.T) {
 	a := &ClaudeAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 	existing := "{\n  \"model\": \"x\"\n}\n"
 
 	plan := a.Apply(&existing, p, false)
@@ -129,7 +129,7 @@ func TestClaudeApplyStructural(t *testing.T) {
 
 func TestClaudeApplyNilCreated(t *testing.T) {
 	a := &ClaudeAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 
 	plan := a.Apply(nil, p, false)
 
@@ -143,7 +143,7 @@ func TestClaudeApplyNilCreated(t *testing.T) {
 
 func TestClaudeStatusConfigured(t *testing.T) {
 	a := &ClaudeAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 	existing := "{\n  \"model\": \"x\"\n}\n"
 
 	plan := a.Apply(&existing, p, false)
@@ -161,7 +161,7 @@ func TestClaudeStatusConfigured(t *testing.T) {
 
 func TestClaudeRemoveRoundTrip(t *testing.T) {
 	a := &ClaudeAdapter{}
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}
 	existing := "{\n  \"model\": \"x\"\n}\n"
 
 	applyPlan := a.Apply(&existing, p, false)

@@ -6,7 +6,7 @@
     "OTEL_METRICS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "https://atlas.keld.co",
-    "OTEL_EXPORTER_OTLP_HEADERS": "x-keld-ingest-token=tok,x-keld-actor=me"
+    "OTEL_EXPORTER_OTLP_HEADERS": "x-keld-ingest-token=tok"
   },
   "hooks": {
     "SessionStart": [
