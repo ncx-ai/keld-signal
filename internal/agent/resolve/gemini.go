@@ -26,13 +26,41 @@ type geminiLine struct {
 	ID        string          `json:"id"`
 	Timestamp string          `json:"timestamp"`
 	Type      string          `json:"type"`
-	Content   []geminiContent `json:"content"`
+	Content   json.RawMessage `json:"content"`
 	Set       json.RawMessage `json:"$set"` // If present, skip this line
 }
 
 // geminiContent represents a single content block in the content array.
 type geminiContent struct {
 	Text string `json:"text"`
+}
+
+// extractGeminiText extracts text from a content field that may be either:
+// - An array of objects with a "text" field: [{"text":"..."}]
+// - A bare string: "..."
+// Returns the concatenated text; empty string if parsing fails or content is empty.
+func extractGeminiText(content json.RawMessage) string {
+	if len(content) == 0 {
+		return ""
+	}
+
+	// Try to unmarshal as an array of content blocks
+	var blocks []geminiContent
+	if err := json.Unmarshal(content, &blocks); err == nil {
+		text := ""
+		for _, c := range blocks {
+			text += c.Text
+		}
+		return text
+	}
+
+	// Try to unmarshal as a single string
+	var s string
+	if err := json.Unmarshal(content, &s); err == nil {
+		return s
+	}
+
+	return ""
 }
 
 // Read scans the transcript for a line whose id matches the promptID
@@ -82,11 +110,8 @@ func (r *GeminiReader) matchLine(line string, promptID string) (string, bool) {
 		return "", false
 	}
 
-	// Concatenate text from content[].text
-	text := ""
-	for _, c := range ln.Content {
-		text += c.Text
-	}
+	// Extract text from content (handles both array and string forms)
+	text := extractGeminiText(ln.Content)
 
 	// Empty text is "not found" (matching Claude reader's extractText semantics)
 	if text == "" {
@@ -173,11 +198,8 @@ func (r *GeminiReader) userMessage(line string) (text string, id string, ok bool
 		return "", "", false
 	}
 
-	// Concatenate text from content[].text
-	text = ""
-	for _, c := range ln.Content {
-		text += c.Text
-	}
+	// Extract text from content (handles both array and string forms)
+	text = extractGeminiText(ln.Content)
 
 	// Empty text is "not found" (matching Claude reader's extractText semantics)
 	if text == "" {

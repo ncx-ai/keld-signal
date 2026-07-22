@@ -160,3 +160,25 @@ func TestGeminiReaderSkipsSetLineInRecentUserPrompts(t *testing.T) {
 		t.Fatalf("recent (skip $set): %v, want [first]", got)
 	}
 }
+
+func TestGeminiReaderStringFormContent(t *testing.T) {
+	fixture := `{"sessionId":"sess_123","projectHash":"abc123","startTime":"2026-07-21T10:00:00Z","lastUpdated":"2026-07-21T10:00:00Z","kind":"chat"}
+{"id":"msg-uuid-string","timestamp":"2026-07-21T10:00:05Z","type":"user","content":"hello world"}
+{"id":"msg-uuid-array","timestamp":"2026-07-21T10:00:10Z","type":"user","content":[{"text":"array form"}]}
+`
+	p := filepath.Join(t.TempDir(), "gemini-string-form.jsonl")
+	if err := os.WriteFile(p, []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := NewGeminiReader()
+	// Test string-form content
+	text, ok := r.Read(p, "msg-uuid-string")
+	if !ok || text != "hello world" {
+		t.Fatalf("read string-form content: %q ok=%v, want (hello world,true)", text, ok)
+	}
+	// Test that array form still works
+	text, ok = r.Read(p, "msg-uuid-array")
+	if !ok || text != "array form" {
+		t.Fatalf("read array-form content: %q ok=%v, want (array form,true)", text, ok)
+	}
+}
