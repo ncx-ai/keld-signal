@@ -19,9 +19,10 @@ no double-count).
   `~/.codex/sessions` to capture prompts with source=codex, feeding the same
   resolve → enrich → publish pipeline as Claude Code / Cowork. Pointer-only,
   never text.
-- **Codex TranscriptReader** (`internal/resolve/codex.go`) implements the `Reader`
-  interface for Codex rollout transcripts: resolves user message by session_id +
-  ordinal index into the message array (pointer model — ids only, no disk-resident
+- **Codex TranscriptReader** (`internal/agent/resolve/codex.go`) implements the
+  `TranscriptReader` + `RecentReader` interfaces for Codex rollout transcripts:
+  resolves a `user_message` by matching the rollout line's `ordinal` field
+  (promptID = `session_id#ordinal`; pointer model — ids only, no disk-resident
   prompt text). Registered alongside Claude Code and Cowork readers.
 
 ### Changed
