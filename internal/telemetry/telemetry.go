@@ -64,15 +64,27 @@ func ClaudeEnv(p SetupParams) *orderedmap.OrderedMap {
 }
 
 // GeminiTelemetry returns an ordered map representing the telemetry block for
-// Gemini CLI's settings file, matching the Python reference's key order and values.
+// Gemini CLI's settings file. Sets otlpEndpoint to the base endpoint URL (no
+// /v1/logs path, no ?token= query param); the Gemini OTLP SDK appends paths
+// itself and uses header-based authentication via GeminiEnvBlock.
 func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 	m := orderedmap.New()
 	m.Set("enabled", true)
 	m.Set("target", "local")
 	m.Set("otlpProtocol", "http")
-	m.Set("otlpEndpoint", fmt.Sprintf("%s/v1/logs?token=%s", p.Endpoint, p.IngestToken))
+	m.Set("otlpEndpoint", p.Endpoint)
 	m.Set("logPrompts", false)
 	return m
+}
+
+// GeminiEnvBlock returns a multi-line string containing two environment variable
+// assignments for Gemini CLI: OTEL_EXPORTER_OTLP_HEADERS (with x-keld-ingest-token
+// and x-keld-actor comma-separated in headers style) and OTEL_TRACES_EXPORTER=none.
+// Each line is on its own line. No token or endpoint appears in a URL.
+func GeminiEnvBlock(p SetupParams) string {
+	line1 := fmt.Sprintf("OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=%s,x-keld-actor=%s", p.IngestToken, p.Actor)
+	line2 := "OTEL_TRACES_EXPORTER=none"
+	return fmt.Sprintf("%s\n%s", line1, line2)
 }
 
 // CodexBlockBody returns the TOML text for the [otel] table and [[hooks.*]]
