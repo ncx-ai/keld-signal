@@ -1,16 +1,20 @@
-# HANDOFF — AI-tool coverage in keld-signal (next: Gemini)
+# HANDOFF — AI-tool coverage in keld-signal (next candidate: Antigravity)
 
 **Purpose.** You (a fresh-context instance) are extending keld-signal's per-tool
-coverage. This session added Claude Code (all surfaces), Cowork, and Codex. **Next
-move: add Gemini products** (Gemini CLI, Vertex, Code Assist, …) *to the extent
-they empirically expose coverage* — don't assume, investigate first.
+coverage. Covered to functional parity: Claude Code (all surfaces), Cowork, Codex,
+and **Gemini CLI** (shipped v0.11.0). **Next candidate: Antigravity** — Google's
+Gemini-based VS Code–fork IDE. It is NOT covered by the Gemini CLI work: it's a
+separate app that doesn't use the gemini-cli, `~/.gemini/tmp/chats`, or gemini-cli
+settings. Investigate empirically first (does it persist transcripts on disk, and
+where; does it emit OTEL) — don't assume. Other Gemini surfaces (Vertex, Code
+Assist, gemini.google.com) remain likely-out-of-scope (server-side); see §4.
 
 **How to use this doc.** Read it, then follow the playbook (below). Ground every
 claim in real on-disk data or upstream source — never guess a schema. Use the
 superpowers flow: brainstorming → spec → writing-plans (TDD) → subagent-driven
 execution → final review → finishing-a-development-branch → release.
 
-Date written: 2026-07-22. Repo: `/Users/keldtester1/keld-signal`. Latest tag: **v0.10.0**.
+Date written: 2026-07-22 (updated after Gemini CLI shipped). Repo: `/Users/keldtester1/keld-signal`. Latest tag: **v0.11.0**.
 Run go with `export PATH="/opt/homebrew/bin:$PATH"`. `gh` is at `/opt/homebrew/bin/gh` (authed).
 
 ---
@@ -52,22 +56,28 @@ when the tool's own OTEL can't reach Keld (Cowork's sandbox blocks egress).
 
 ---
 
-## 2. Coverage matrix (as of v0.10.0)
+## 2. Coverage matrix (as of v0.11.0)
 
-| Capability | Claude Code | Cowork | Codex | **Gemini (today)** |
+| Capability | Claude Code | Cowork | Codex | **Gemini CLI** |
 |---|---|---|---|---|
 | Install adapter + detect | ✅ | (via Claude app) | ✅ | ✅ (`~/.gemini`) |
-| `keld setup` writes config | ✅ hooks+OTEL env | n/a | ✅ `[otel]`+hooks | ⚠️ **telemetry block only** |
-| Command hook | ✅ UserPromptSubmit | ❌ (sandbox) | ⚠️ SessionStart/PreToolUse (no prompt-submit) | ❌ **no hook** |
-| Transcript watcher root | ✅ `~/.claude/projects` | ✅ cowork dirs | ✅ `~/.codex/sessions` | ❌ |
-| Transcript reader (enrichment) | ✅ | ✅ (reuses Claude) | ✅ rollout | ❌ |
-| Enrichment classification flags | ✅ eng | topical (excluded) | ✅ eng | ❌ (not context-eligible) |
-| Telemetry | native OTEL (host) | **host-side reconstruction** (promptlog) | native OTEL (host) | ⚠️ **OTEL configured, unverified** |
+| `keld setup` writes config | ✅ hooks+OTEL env | n/a | ✅ `[otel]`+hooks | ✅ telemetry block + hook + `.env` auth block |
+| Command hook | ✅ UserPromptSubmit | ❌ (sandbox) | ⚠️ SessionStart/PreToolUse (no prompt-submit) | ✅ BeforeAgent (context event only) |
+| Transcript watcher root | ✅ `~/.claude/projects` | ✅ cowork dirs | ✅ `~/.codex/sessions` | ✅ `~/.gemini/tmp/*/chats` |
+| Transcript reader (enrichment) | ✅ | ✅ (reuses Claude) | ✅ rollout | ✅ Gemini reader (`type:"user"` by id) |
+| Enrichment classification flags | ✅ eng | topical (excluded) | ✅ eng | ✅ eng |
+| Telemetry | native OTEL (host) | **host-side reconstruction** (promptlog) | native OTEL (host) | native OTEL (host), base endpoint + `.env` header auth |
 
-**Gemini today = telemetry-config-only, no capture/enrichment.** `keld setup` writes
-`~/.gemini/settings.json` `telemetry: {enabled:true, target:"local", otlpProtocol:"http",
-otlpEndpoint:"<endpoint>/v1/logs?token=<tok>", logPrompts:false}` (`telemetry.GeminiTelemetry`).
-No hook, no watcher root, no reader, zero refs in resolve/watch/promptlog/enrich flags.
+**Gemini CLI = full parity (v0.11.0).** `keld setup` writes `~/.gemini/settings.json`
+`telemetry: {enabled:true, target:"local", otlpProtocol:"http", otlpEndpoint:"<BASE>",
+logPrompts:false, traces:false}` (`telemetry.GeminiTelemetry`; base endpoint — the old
+`/v1/logs?token=` URL was broken), a `hooks.BeforeAgent` context hook, and a keld-managed
+block in `~/.gemini/.env` carrying only `OTEL_EXPORTER_OTLP_HEADERS` (auth; preserves the
+user's `GEMINI_API_KEY`). Enrichment: watcher root + `resolve.NewGeminiReader` (pointer
+model). Telemetry gotcha (see spec §1.3): gemini-cli builds its own OTLP exporters and
+**ignores `OTEL_TRACES_EXPORTER`** — trace export can't be disabled; content stays out of
+spans via `logPrompts:false`+`traces:false` (gate `shouldIncludePayloads`); Atlas ignores
+`/v1/traces`. Validated on 5/5 real transcripts and a local OTLP sink.
 
 ---
 
@@ -116,46 +126,48 @@ This is exactly how Claude Code / Cowork / Codex were done. Follow it.
 
 ---
 
-## 4. Gemini — where to start
+## 4. Next candidate: Antigravity — where to start
 
-**Surfaces to scope with the user** (pick what's empirically coverable):
-- **Gemini CLI** (`google-gemini/gemini-cli`, open source, `~/.gemini/`) — most
-  likely to have local session logs + OTEL. Primary target.
-- **Gemini Code Assist** (VS Code / JetBrains / Cloud) — IDE plugin; unclear local
-  footprint.
-- **Vertex AI / Gemini API** — server-side; likely NOT on-device (probably out of
-  scope, like plain Claude chat was — flag it).
-- **Gemini app / gemini.google.com** — web; server-side, likely out of scope.
+**Gemini CLI is DONE (v0.11.0).** Its spec/plan are the freshest worked example of
+this playbook: `docs/superpowers/{specs,plans}/2026-07-22-gemini-cli-coverage*`.
+Read those first — they show exactly how a new tool gets wired (adapter, watcher
+root, reader/extractor, classification, hook, telemetry builders, fidelity/oracle).
 
-**First investigations (empirical):**
-1. Gemini CLI local sessions: does it persist transcripts? Where under `~/.gemini`
-   (e.g. `~/.gemini/tmp/<hash>/logs.json`, chat/checkpoint files)? Schema? Which
-   record is a user prompt? (Gemini isn't installed on this machine — inspect the
-   `google-gemini/gemini-cli` source via `gh`, and/or ask the user to run it and
-   share `~/.gemini` layout + a session file.)
-2. Gemini CLI telemetry: it already gets `telemetry.target=local` + `otlpEndpoint`.
-   **Verify it actually reaches `atlas.keld.co`** (target `local` vs `gcp`; does the
-   CLI export OTLP to the configured endpoint?). Confirm the OTEL schema (event
-   names, token/usage fields) so telemetry can be normalized in Atlas. Consider
-   header auth vs the current `?token=` in the URL (Codex was moved to a header).
-3. Does Gemini CLI have a **hook** mechanism (like Claude's `settings.json` hooks /
-   Codex's `[[hooks.*]]`)? If yes → prompt-submit hook capture; if no → watcher
-   only (like Cowork/Codex).
-4. Host-side vs sandbox: Gemini CLI runs host-side → native OTEL should reach Keld
-   (no reconstruction needed) IF telemetry actually exports to the remote endpoint.
+**Antigravity** is Google's agentic IDE — a VS Code fork that uses Gemini models.
+It is a **separate application** from gemini-cli: it will NOT write to
+`~/.gemini/tmp/chats`, will NOT read gemini-cli's `settings.json`/`.env`, and the
+v0.11.0 Gemini coverage does nothing for it. No Antigravity footprint existed on
+the dev machine (2026-07-22), so everything below is genuinely open — investigate,
+don't assume.
 
-**Likely design shape** (confirm empirically): telemetry = complete/verify native
-OTEL config (metrics exporter + header auth, mirror the Codex fix); enrichment = a
-`~/.gemini` watcher root + a Gemini transcript reader (register in `resolve.go`;
-add a source-aware extractor in the watcher like `codexExtractor` if the schema
-differs from Claude's); add `gemini` to `interactiveCodingTools`/`codingTools` if
-it's a coding tool; keep `promptlog` off for gemini (native OTEL). Same pointer
-model, fidelity test, no-double-emit guard.
+**First investigations (empirical — answer these before designing anything):**
+1. Is Antigravity even installed / installable here? Find its on-disk footprint —
+   likely under `~/Library/Application Support/<name>/`, `~/.config/`, or a
+   `~/.antigravity`-style dir (it's an Electron/VSCode fork, so look for a
+   `User/workspaceStorage`, `globalStorage`, or SQLite `state.vscdb` like other
+   forks). Ask the user to run it and share the layout if it's not present.
+2. Does it persist conversation transcripts locally, and in what format (JSON lines?
+   SQLite? leveldb)? Which record is a genuine user prompt (vs tool/agent turns)?
+   This decides whether the watcher/reader/extractor pattern even applies.
+3. Does it emit OTEL or any telemetry we can point at Keld? Is there a settings
+   surface (like gemini-cli's `telemetry` block) or is it fully closed? If closed,
+   is there a host-side reconstruction path (like Cowork's promptlog) from the
+   transcript store?
+4. Is it host-side or sandboxed (egress)? Determines native-OTEL vs reconstruction.
+5. Hook mechanism? VSCode forks sometimes expose extension/hook points; if none,
+   watcher-only capture (like Cowork/Codex).
 
-**Open questions for the user (brainstorm):** which surfaces are in scope; is
-Gemini CLI the only realistically-coverable one; do they have a Gemini install to
-validate against (Codex shipped WITHOUT live validation — a known gap; ideally
-don't repeat that for Gemini if avoidable).
+**Likely design shape (DO NOT assume — confirm each):** if it stores transcripts
+on disk → new watcher root + a source-aware reader/extractor (register in
+`resolve.go`, add to `watch.New` extractors), add its source id to
+`interactiveCodingTools`/`codingTools`. Telemetry → native OTEL if it has a
+configurable exporter; else host-side reconstruction from the transcript store.
+Same pointer model (no text on disk), fidelity/oracle test, no-double-emit guard.
+
+**Open questions for the user (brainstorm):** is Antigravity in scope / do they use
+it; do they have an install to investigate + validate against (Gemini CLI got real
+on-device validation — keep that bar). Other Gemini surfaces (Code Assist, Vertex,
+gemini.google.com) remain likely-out-of-scope server-side — flag, don't build blind.
 
 ---
 
@@ -164,7 +176,10 @@ don't repeat that for Gemini if avoidable).
 - **Shipped:** v0.9.0 (hook-free capture: Claude Code all surfaces + Cowork),
   v0.9.1–0.9.5 (full-fidelity Cowork telemetry — host-side OTLP mirroring the CLI
   schema; `tool=cowork`; grouped/monotonic metrics; exact tokens, cost-in-Atlas),
-  v0.10.0 (Codex parity). All merged to `main`, released, CI green.
+  v0.10.0 (Codex parity), v0.11.0 (Gemini CLI parity — enrichment watcher/reader +
+  native OTEL base endpoint + `.env` header auth; validated on real transcripts +
+  a local OTLP sink; traces can't be disabled in gemini-cli but stay content-free).
+  All merged to `main`, released, CI green.
 - **Machine:** macOS arm64. Daemon installed via `.pkg`, runs under launchd
   `co.keld.agent` (per-user). Logs: `~/.keld/logs/agent.{out,err}.log`,
   `~/.keld/agent.log` (debuglog; watcher/promptlog write here). Config:
@@ -195,16 +210,21 @@ don't repeat that for Gemini if avoidable).
   cowork-telemetry, codex-parity). Read them for detail + rationale.
 - **Captured OTEL oracle** technique (for fidelity): point a tool's OTEL at a local
   python HTTP sink via a settings override, run it, capture the exact OTLP JSON.
-  (For Cowork I captured `claude`; for Gemini, capture `gemini` similarly.)
+  (Done for Cowork `claude` and Gemini `gemini` — the latter also proved
+  `OTEL_TRACES_EXPORTER` is ignored and confirmed spans are content-free. Do the
+  same for Antigravity if it exposes an OTEL endpoint.)
 
 ---
 
 ## 6. First actions on resume
 
-1. Re-read this doc + the three 2026-07-21 specs.
-2. Confirm current state: `git -C ~/keld-signal log --oneline -5`, `git tag | head`.
-3. Brainstorm Gemini scope with the user (surfaces; do they have a Gemini install to
-   validate against?).
-4. Investigate Gemini CLI empirically (source via `gh`, real `~/.gemini` if the user
-   provides it, OTEL capture) — mirror the Codex investigation.
+1. Re-read this doc + the freshest worked example: the `2026-07-22-gemini-cli-coverage`
+   spec + plan (and the earlier 2026-07-21 specs for Cowork/Codex rationale).
+2. Confirm current state: `git -C ~/keld-signal log --oneline -5`, `git tag | head`
+   (latest should be `v0.11.0`).
+3. Brainstorm Antigravity scope with the user: do they use it / is it in scope; do
+   they have an install to investigate + validate against?
+4. Investigate Antigravity empirically FIRST (§4): find its on-disk footprint, whether
+   it persists transcripts + in what format, and whether it exposes any telemetry.
+   Nothing was known as of 2026-07-22 — no assuming.
 5. Spec → TDD plan → execute → review → release, per the playbook.
