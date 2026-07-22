@@ -66,3 +66,90 @@ func TestCodexBlockBodyMetricsAndHeaderAuth(t *testing.T) {
 		t.Error("hook command changed unexpectedly")
 	}
 }
+
+func TestGeminiTelemetryBaseEndpoint(t *testing.T) {
+	p := SetupParams{Endpoint: "https://api.gemini.example.com", IngestToken: "tok123", Actor: "test"}
+	tm := GeminiTelemetry(p)
+
+	// Check otlpEndpoint is exactly p.Endpoint, no /v1/logs, no ?token=
+	otlpVal, _ := tm.Get("otlpEndpoint")
+	if otlpVal != "https://api.gemini.example.com" {
+		t.Fatalf("otlpEndpoint should be base URL, got %q", otlpVal)
+	}
+
+	// Check other required fields
+	enabled, _ := tm.Get("enabled")
+	if enabled != true {
+		t.Errorf("enabled should be true, got %v", enabled)
+	}
+
+	target, _ := tm.Get("target")
+	if target != "local" {
+		t.Errorf("target should be 'local', got %q", target)
+	}
+
+	protocol, _ := tm.Get("otlpProtocol")
+	if protocol != "http" {
+		t.Errorf("otlpProtocol should be 'http', got %q", protocol)
+	}
+
+	logPrompts, _ := tm.Get("logPrompts")
+	if logPrompts != false {
+		t.Errorf("logPrompts should be false, got %v", logPrompts)
+	}
+
+	// traces=false is the native knob that (with logPrompts) gates
+	// shouldIncludePayloads, keeping prompt/response bodies out of spans.
+	// Trace *export* itself cannot be disabled in gemini-cli, but stays
+	// content-free.
+	traces, ok := tm.Get("traces")
+	if !ok || traces != false {
+		t.Errorf("traces should be present and false, got %v (present=%v)", traces, ok)
+	}
+
+	// Ensure no token is embedded in string values
+	for _, key := range tm.Keys() {
+		val, _ := tm.Get(key)
+		if strVal, ok := val.(string); ok {
+			if strings.Contains(strVal, "tok123") {
+				t.Fatalf("token must not be embedded in any value; found in %s=%q", key, strVal)
+			}
+		}
+	}
+}
+
+func TestGeminiEnvBlockHeaders(t *testing.T) {
+	p := SetupParams{Endpoint: "https://api.gemini.example.com", IngestToken: "tok123", Actor: "test"}
+	env := GeminiEnvBlock(p)
+
+	lines := strings.Split(strings.TrimSpace(env), "\n")
+	// Only the auth-headers line: gemini-cli has no per-signal trace-export
+	// off-switch (OTEL_TRACES_EXPORTER is ignored — it builds its own OTLP
+	// exporters), so we no longer emit a dead OTEL_TRACES_EXPORTER=none line.
+	// Prompt content is kept out of spans via telemetry.logPrompts/traces=false.
+	if len(lines) != 1 {
+		t.Fatalf("GeminiEnvBlock should return exactly 1 line, got %d: %q", len(lines), env)
+	}
+
+	// The only line: OTEL_EXPORTER_OTLP_HEADERS
+	if !strings.HasPrefix(lines[0], "OTEL_EXPORTER_OTLP_HEADERS=") {
+		t.Fatalf("line should start with OTEL_EXPORTER_OTLP_HEADERS=, got %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "x-keld-ingest-token=tok123") {
+		t.Errorf("line should contain x-keld-ingest-token=tok123, got %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "x-keld-actor=test") {
+		t.Errorf("line should contain x-keld-actor=test, got %q", lines[0])
+	}
+	if strings.Contains(env, "OTEL_TRACES_EXPORTER") {
+		t.Errorf("must not emit the ineffective OTEL_TRACES_EXPORTER line: %q", env)
+	}
+
+	// Ensure no token or endpoint URL appears in env output
+	if strings.Contains(env, "https://") {
+		t.Errorf("GeminiEnvBlock should not contain URL: %q", env)
+	}
+	if strings.Contains(env, "?token=") {
+		t.Errorf("token must not ride in any URL: %q", env)
+	}
+}

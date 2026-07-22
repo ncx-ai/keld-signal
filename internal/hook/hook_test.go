@@ -268,3 +268,78 @@ func TestRunRecoverFromPanic(t *testing.T) {
 		t.Fatalf("Run returned %d after panic; want 0 (never block host tool)", code)
 	}
 }
+
+// TestGeminiBeforeAgentHook verifies that hook.Run with Gemini BeforeAgent input
+// (no prompt_id) exits 0, writes nothing to stdout (Gemini's strict-JSON requirement),
+// and does not forward an enrichment pointer (forwardToAgent early-returns on empty promptID).
+// The context event is attempted (session_id present).
+func TestGeminiBeforeAgentHook(t *testing.T) {
+	// Set up a temporary home directory so agent.json doesn't exist
+	// (this ensures no daemon forward is attempted)
+	t.Setenv("KELD_HOME", t.TempDir())
+
+	// Configure hook endpoint+token so Run proceeds past the config gate
+	// Use a test server to verify no enrichment POST is made
+	var enrichmentHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/enrich") {
+			enrichmentHits++
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	t.Setenv("KELD_CTX_ENDPOINT", srv.URL)
+	t.Setenv("KELD_CTX_TOKEN", "test-token")
+
+	// Gemini BeforeAgent input: no prompt_id field
+	geminiInput := `{
+		"session_id":"gemini-session-123",
+		"transcript_path":"/path/to/transcript.jsonl",
+		"cwd":"/tmp",
+		"hook_event_name":"BeforeAgent",
+		"timestamp":"2025-07-22T00:00:00Z",
+		"prompt":"test prompt"
+	}`
+
+	var stderrBuf strings.Builder
+
+	// Capture stdout by redirecting os.Stdout
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe for stdout capture: %v", err)
+	}
+	os.Stdout = w
+
+	// Call Run with gemini source
+	code := Run("gemini", strings.NewReader(geminiInput), &stderrBuf, time.Now())
+
+	// Restore os.Stdout and read captured output
+	os.Stdout = oldStdout
+	w.Close()
+
+	var capturedStdout strings.Builder
+	_, _ = io.Copy(&capturedStdout, r)
+
+	// Assert exit code is 0
+	if code != 0 {
+		t.Fatalf("Run returned %d, want 0", code)
+	}
+
+	// Assert stdout is empty (Gemini's strict-JSON requirement)
+	if capturedStdout.Len() > 0 {
+		t.Errorf("stdout should be empty for Gemini, got: %q", capturedStdout.String())
+	}
+
+	// Assert no enrichment pointer was forwarded
+	// With no prompt_id, forwardToAgent early-returns and doesn't POST to /enrich
+	if enrichmentHits > 0 {
+		t.Errorf("enrichment POST should not be made with empty prompt_id, got %d hits", enrichmentHits)
+	}
+
+	// Verify that a context event was attempted
+	// (the test server should have received a POST to the endpoint)
+	// If ChangedSinceLast returns true and the POST succeeds, we should see hits
+	// For this test, we just verify no panic and exit 0.
+}

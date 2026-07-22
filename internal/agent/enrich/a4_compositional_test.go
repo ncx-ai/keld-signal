@@ -47,3 +47,14 @@ func TestCompositionalFunction(t *testing.T) {
 		t.Fatalf("disable escape-hatch must restore topical (gen); got %s", got)
 	}
 }
+
+func TestGeminiAsInteractiveCodingTool(t *testing.T) {
+	// Gemini should be eligible for context augmentation.
+	if !ContextEligible("gemini") {
+		t.Errorf("gemini should be eligible for context augmentation")
+	}
+	// Gemini should be treated as a coding tool with A4 override.
+	if got := fnGuess(t, "gemini", lastLabelModel{}); got != "eng" {
+		t.Fatalf("A4 must force eng for gemini as a coding tool; got %s", got)
+	}
+}

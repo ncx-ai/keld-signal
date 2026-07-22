@@ -4,7 +4,20 @@
     "enabled": true,
     "target": "local",
     "otlpProtocol": "http",
-    "otlpEndpoint": "https://atlas.keld.co/v1/logs?token=tok",
-    "logPrompts": false
+    "otlpEndpoint": "https://atlas.keld.co",
+    "logPrompts": false,
+    "traces": false
+  },
+  "hooks": {
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "keld __hook --source gemini"
+          }
+        ]
+      }
+    ]
   }
 }

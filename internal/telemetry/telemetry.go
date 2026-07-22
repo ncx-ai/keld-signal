@@ -64,15 +64,37 @@ func ClaudeEnv(p SetupParams) *orderedmap.OrderedMap {
 }
 
 // GeminiTelemetry returns an ordered map representing the telemetry block for
-// Gemini CLI's settings file, matching the Python reference's key order and values.
+// Gemini CLI's settings file. Sets otlpEndpoint to the base endpoint URL (no
+// /v1/logs path, no ?token= query param); the Gemini OTLP SDK appends paths
+// itself and uses header-based authentication via GeminiEnvBlock.
 func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 	m := orderedmap.New()
 	m.Set("enabled", true)
 	m.Set("target", "local")
 	m.Set("otlpProtocol", "http")
-	m.Set("otlpEndpoint", fmt.Sprintf("%s/v1/logs?token=%s", p.Endpoint, p.IngestToken))
+	m.Set("otlpEndpoint", p.Endpoint)
 	m.Set("logPrompts", false)
+	// gemini-cli builds its OTLP trace exporter unconditionally when telemetry
+	// is enabled — there is no per-signal switch to stop trace *export* (spans
+	// still flow to /v1/traces; Atlas ignores them). What we can control is
+	// span *content*: shouldIncludePayloads = traces && logPrompts. Both are
+	// false here, so spans carry no prompt/response bodies. Setting traces
+	// explicitly (in addition to logPrompts) makes that guarantee robust even
+	// if a future gemini-cli flips the logPrompts default.
+	m.Set("traces", false)
 	return m
+}
+
+// GeminiEnvBlock returns the environment-variable line(s) keld manages in
+// Gemini CLI's .env: OTEL_EXPORTER_OTLP_HEADERS carrying x-keld-ingest-token
+// and x-keld-actor (headers style, comma-separated). Authentication rides in
+// headers, never in a URL. We deliberately do NOT emit OTEL_TRACES_EXPORTER:
+// gemini-cli constructs its own OTLP exporters and ignores that generic OTEL
+// SDK variable, so it would be a dead, misleading line. Trace content is kept
+// empty via the telemetry.traces/logPrompts settings instead (see
+// GeminiTelemetry).
+func GeminiEnvBlock(p SetupParams) string {
+	return fmt.Sprintf("OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=%s,x-keld-actor=%s", p.IngestToken, p.Actor)
 }
 
 // CodexBlockBody returns the TOML text for the [otel] table and [[hooks.*]]

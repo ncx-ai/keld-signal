@@ -107,6 +107,9 @@ func TestRunSetupDryRunWritesNothing(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "tool.json")
+	// Simulates GeminiAdapter's second artifact (~/.gemini/.env): a plan can
+	// stage an ExtraFile, but --dry-run must never let it reach disk.
+	extraPath := filepath.Join(dir, ".env")
 
 	adapter := &fakeAdapter{
 		name: "faketool",
@@ -117,6 +120,7 @@ func TestRunSetupDryRunWritesNothing(t *testing.T) {
 			Managed:    map[string]any{},
 			Summary:    []string{"added key"},
 			Changed:    true,
+			ExtraFile:  &tools.ExtraFile{Path: extraPath, AfterText: "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me\n", Mode: 0o600},
 		},
 	}
 
@@ -139,8 +143,67 @@ func TestRunSetupDryRunWritesNothing(t *testing.T) {
 	if fileExists(cfgPath) {
 		t.Error("dry-run: config file should not have been created")
 	}
+	if fileExists(extraPath) {
+		t.Error("dry-run: gemini-style ExtraFile (.env) should not have been created")
+	}
 	if m == nil {
 		t.Error("expected non-nil manifest")
+	}
+}
+
+// TestRunSetupConfirmedApplyWritesExtraFile covers the write-on-confirm path:
+// once the user confirms (or --yes is set) and dry-run is off, a plan's
+// ExtraFile must be written to disk at the given mode alongside the primary
+// config file.
+func TestRunSetupConfirmedApplyWritesExtraFile(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "tool.json")
+	extraPath := filepath.Join(dir, ".env")
+
+	adapter := &fakeAdapter{
+		name: "faketool",
+		plan: tools.Plan{
+			Name:       "faketool",
+			ConfigPath: cfgPath,
+			AfterText:  `{"key":"val"}`,
+			Managed:    map[string]any{"created": true},
+			Summary:    []string{"added key"},
+			Changed:    true,
+			ExtraFile:  &tools.ExtraFile{Path: extraPath, AfterText: "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me\n", Mode: 0o600},
+		},
+	}
+
+	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
+	client := &api.Client{}
+	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken, Actor: ob.Actor}
+
+	opts := SetupOpts{
+		DryRun:  false,
+		Yes:     true,
+		Confirm: func(string) bool { return true },
+	}
+
+	if _, err := runSetup([]tools.Adapter{adapter}, p, client, ob, opts); err != nil {
+		t.Fatalf("runSetup returned error: %v", err)
+	}
+
+	if !fileExists(cfgPath) {
+		t.Fatal("confirmed apply: config file should have been created")
+	}
+	data, err := os.ReadFile(extraPath)
+	if err != nil {
+		t.Fatalf("confirmed apply: ExtraFile should have been written: %v", err)
+	}
+	if string(data) != "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me\n" {
+		t.Fatalf("ExtraFile contents = %q, want %q", data, "OTEL_EXPORTER_OTLP_HEADERS=x-keld-ingest-token=tok,x-keld-actor=me\n")
+	}
+	info, err := os.Stat(extraPath)
+	if err != nil {
+		t.Fatalf("stat ExtraFile: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("ExtraFile mode = %o, want 0600", perm)
 	}
 }
 
