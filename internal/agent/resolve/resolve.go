@@ -18,6 +18,7 @@ func init() {
 	register(NewClaudeReader())
 	register(NewClaudeReaderForSource("cowork"))
 	register(NewCodexReader())
+	register(NewGeminiReader())
 }
 
 // Resolve returns the prompt text. Inline text (when present) wins; otherwise it
