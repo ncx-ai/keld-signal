@@ -45,3 +45,24 @@ func TestClaudeHookEventsIncludeUserPromptSubmit(t *testing.T) {
 		t.Fatal("ClaudeHookEvents must include UserPromptSubmit (no matcher)")
 	}
 }
+
+func TestCodexBlockBodyMetricsAndHeaderAuth(t *testing.T) {
+	got := CodexBlockBody(SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", Actor: "me"}, "codex")
+	// logs exporter present, metrics exporter present
+	if !strings.Contains(got, "metrics_exporter") {
+		t.Error("missing metrics_exporter (token metrics never flow otherwise)")
+	}
+	if !strings.Contains(got, "/v1/logs") || !strings.Contains(got, "/v1/metrics") {
+		t.Errorf("expected both /v1/logs and /v1/metrics endpoints:\n%s", got)
+	}
+	// header auth, not token-in-URL
+	if !strings.Contains(got, `"x-keld-ingest-token" = "tok"`) {
+		t.Errorf("expected x-keld-ingest-token header:\n%s", got)
+	}
+	if strings.Contains(got, "?token=") {
+		t.Errorf("token must not ride in the URL:\n%s", got)
+	}
+	if !strings.Contains(got, `command = 'keld __hook --source codex'`) {
+		t.Error("hook command changed unexpectedly")
+	}
+}

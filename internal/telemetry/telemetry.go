@@ -76,11 +76,14 @@ func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 }
 
 // CodexBlockBody returns the TOML text for the [otel] table and [[hooks.*]]
-// blocks that keld injects into Codex's config file. The output matches the
-// Python reference byte-for-byte (modulo the intentional hook-command change:
-// Go uses HookCommand(source) instead of "python3 {path}; true").
+// blocks that keld injects into Codex's config file. This intentionally
+// diverges from the Python reference in three ways: Go uses HookCommand(source)
+// instead of "python3 {path}; true"; it also emits a metrics_exporter entry
+// alongside the logs exporter; and it authenticates via the
+// x-keld-ingest-token header rather than a token embedded in the endpoint URL.
 func CodexBlockBody(p SetupParams, source string) string {
-	endpoint := fmt.Sprintf("%s/v1/logs?token=%s", p.Endpoint, p.IngestToken)
+	logsEndpoint := fmt.Sprintf("%s/v1/logs", p.Endpoint)
+	metricsEndpoint := fmt.Sprintf("%s/v1/metrics", p.Endpoint)
 	cmd := HookCommand(source)
 
 	var hookBlocks []string
@@ -94,10 +97,15 @@ func CodexBlockBody(p SetupParams, source string) string {
 		"[otel]\n"+
 			"environment = \"prod\"\n"+
 			"log_user_prompt = false\n"+
-			"exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-actor\" = \"%s\" } } }\n"+
+			"exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-ingest-token\" = \"%s\", \"x-keld-actor\" = \"%s\" } } }\n"+
+			"metrics_exporter = { otlp-http = { endpoint = \"%s\", protocol = \"json\", headers = { \"x-keld-ingest-token\" = \"%s\", \"x-keld-actor\" = \"%s\" } } }\n"+
 			"\n"+
 			"%s",
-		endpoint,
+		logsEndpoint,
+		p.IngestToken,
+		p.Actor,
+		metricsEndpoint,
+		p.IngestToken,
 		p.Actor,
 		strings.Join(hookBlocks, "\n"),
 	)

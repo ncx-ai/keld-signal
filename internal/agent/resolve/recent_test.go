@@ -59,7 +59,7 @@ func TestRecentPromptsRespectsN(t *testing.T) {
 
 func TestRecentPromptsUnsupportedSourceNil(t *testing.T) {
 	p := writeRecentTranscript(t, []string{`{"type":"user","promptId":"x","message":{"role":"user","content":"hi"}}`})
-	if got := RecentPrompts("codex", p, "y", 3); got != nil {
+	if got := RecentPrompts("nonexistent", p, "y", 3); got != nil {
 		t.Fatalf("unsupported source should be nil, got %v", got)
 	}
 	if got := RecentPrompts("claude_code", "", "y", 3); got != nil {

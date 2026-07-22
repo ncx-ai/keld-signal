@@ -73,7 +73,10 @@ per-line `observe` hook → `promptlog.Telemetry.Observe`, which emits `user_pro
 (`user.email`/`account_uuid`/`organization.id`) is recovered from the Cowork
 session path/metadata. **Never emits prompt/response text.** Default source
 `{cowork}` (Claude Code emits its own OTEL); `KELD_WATCH_TELEMETRY` (off/on),
-`KELD_WATCH_TELEMETRY_SOURCES`.
+`KELD_WATCH_TELEMETRY_SOURCES`. **Codex** is covered via its own watcher root
+`~/.codex/sessions` (source codex) + rollout reader for enrichment (TranscriptReader
+resolves user_message by session_id#ordinal); telemetry via Codex's native OTEL
+(config completed in the codex adapter), not host-side promptlog.
 
 **Enrichment pipeline (`internal/agent/enrich/`).** A staged registry of
 extractors ("sweeps") run over a swappable `Model` backend, producing a `Profile`.
