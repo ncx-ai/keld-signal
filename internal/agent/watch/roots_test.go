@@ -57,10 +57,10 @@ func TestDiscoverRootsGemini(t *testing.T) {
 	// Test on both macOS and Linux.
 	for _, goos := range []string{"darwin", "linux"} {
 		roots := discoverRoots(home, goos)
-		if !hasRoot(roots, "gemini", projA) {
+		if !hasRoot(roots, "gemini_cli", projA) {
 			t.Errorf("%s: missing gemini root for projA; got %+v", goos, roots)
 		}
-		if !hasRoot(roots, "gemini", projB) {
+		if !hasRoot(roots, "gemini_cli", projB) {
 			t.Errorf("%s: missing gemini root for projB; got %+v", goos, roots)
 		}
 	}

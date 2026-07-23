@@ -75,7 +75,7 @@ func New(offer func(spool.Pointer), observe func(source, transcriptPath string, 
 			"claude_code": claudeExtractor{},
 			"cowork":      claudeExtractor{},
 			"codex":       newCodexExtractor(),
-			"gemini":      geminiExtractor{},
+			"gemini_cli":  geminiExtractor{},
 		},
 	}
 }

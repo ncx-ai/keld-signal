@@ -3,7 +3,7 @@ package enrich
 import "testing"
 
 func TestContextEligible(t *testing.T) {
-	for _, s := range []string{"claude_code", "codex", "gemini"} {
+	for _, s := range []string{"claude_code", "codex", "gemini_cli"} {
 		if !ContextEligible(s) {
 			t.Errorf("%s should be eligible", s)
 		}

@@ -14,12 +14,12 @@ import (
 // - Model turn: {"id","timestamp","type":"gemini","content",...}
 type GeminiReader struct{}
 
-// NewGeminiReader returns a reader for Gemini chat transcripts (source "gemini").
+// NewGeminiReader returns a reader for Gemini chat transcripts (source "gemini_cli").
 func NewGeminiReader() *GeminiReader {
 	return &GeminiReader{}
 }
 
-func (r *GeminiReader) Source() string { return "gemini" }
+func (r *GeminiReader) Source() string { return "gemini_cli" }
 
 // geminiLine is a tolerant view of a Gemini chat JSONL line.
 type geminiLine struct {

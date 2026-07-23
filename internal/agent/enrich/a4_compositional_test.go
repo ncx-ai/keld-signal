@@ -50,11 +50,11 @@ func TestCompositionalFunction(t *testing.T) {
 
 func TestGeminiAsInteractiveCodingTool(t *testing.T) {
 	// Gemini should be eligible for context augmentation.
-	if !ContextEligible("gemini") {
+	if !ContextEligible("gemini_cli") {
 		t.Errorf("gemini should be eligible for context augmentation")
 	}
 	// Gemini should be treated as a coding tool with A4 override.
-	if got := fnGuess(t, "gemini", lastLabelModel{}); got != "eng" {
+	if got := fnGuess(t, "gemini_cli", lastLabelModel{}); got != "eng" {
 		t.Fatalf("A4 must force eng for gemini as a coding tool; got %s", got)
 	}
 }

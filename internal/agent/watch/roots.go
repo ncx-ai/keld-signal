@@ -57,7 +57,7 @@ func discoverRoots(home, goos string) []Root {
 	matches, _ := filepath.Glob(glob)
 	for _, m := range matches {
 		if isDir(m) {
-			roots = append(roots, Root{SourceID: "gemini", Dir: m})
+			roots = append(roots, Root{SourceID: "gemini_cli", Dir: m})
 		}
 	}
 	return roots

@@ -27,7 +27,7 @@ func compositionalFunctionEnabled() bool {
 }
 
 // codingTools are the interactive coding tools A4 treats as ~always eng.
-var codingTools = map[string]bool{"claude_code": true, "codex": true, "gemini": true}
+var codingTools = map[string]bool{"claude_code": true, "codex": true, "gemini_cli": true}
 
 // funcGuessExtractor replaces the plain passExtractor for function_guess. For a
 // coding tool under A4 it emits eng directly; otherwise it runs the normal

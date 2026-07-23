@@ -24,8 +24,8 @@ func writeGeminiFixture(t *testing.T) string {
 
 func TestGeminiReaderSource(t *testing.T) {
 	r := NewGeminiReader()
-	if r.Source() != "gemini" {
-		t.Fatalf("source=%q, want gemini", r.Source())
+	if r.Source() != "gemini_cli" {
+		t.Fatalf("source=%q, want gemini_cli", r.Source())
 	}
 }
 
@@ -137,7 +137,7 @@ not json at all
 }
 
 func TestResolveGeminiSource(t *testing.T) {
-	text, ok := Resolve("gemini", writeGeminiFixture(t), "msg-uuid-001", "")
+	text, ok := Resolve("gemini_cli", writeGeminiFixture(t), "msg-uuid-001", "")
 	if !ok || text != "hello world" {
 		t.Fatalf("resolve gemini: %q ok=%v, want (hello world,true)", text, ok)
 	}
