@@ -304,3 +304,53 @@ func TestReautherDefaultOnboardSeamDetects401(t *testing.T) {
 		t.Fatalf("errors.As(*retry.StatusError) failed on err = %v", err)
 	}
 }
+
+// TestNoteAuthOKClearsStaleMarker: a marker file left by a PREVIOUS daemon run
+// (in-process flag false on a fresh reauther) is cleared by a successful
+// authenticated response — the fix for a stale marker surviving restart.
+func TestNoteAuthOKClearsStaleMarker(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	if err := os.WriteFile(paths.ReauthMarkerPath(), []byte("stale (401)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := newReauther(creds.NewToken("tok"), testEmitter())
+	if r.TerminalRequired() {
+		t.Fatal("fresh reauther should not have the in-process flag set")
+	}
+	r.noteAuthOK()
+	if _, err := os.Stat(paths.ReauthMarkerPath()); !os.IsNotExist(err) {
+		t.Fatalf("noteAuthOK should have removed the stale marker; stat err=%v", err)
+	}
+	if r.TerminalRequired() {
+		t.Fatal("flag should be false after clear")
+	}
+}
+
+// TestNoteAuthOKClearsInProcessTerminalState: a live terminal state (flag +
+// marker set via markTerminal) is cleared by a successful response.
+func TestNoteAuthOKClearsInProcessTerminalState(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	r := newReauther(creds.NewToken("tok"), testEmitter())
+	r.markTerminal("CLI token rejected")
+	if !r.TerminalRequired() {
+		t.Fatal("markTerminal should set the flag")
+	}
+	r.noteAuthOK()
+	if r.TerminalRequired() {
+		t.Fatal("noteAuthOK should clear the in-process terminal flag")
+	}
+	if _, err := os.Stat(paths.ReauthMarkerPath()); !os.IsNotExist(err) {
+		t.Fatal("noteAuthOK should remove the marker file")
+	}
+}
+
+// TestNoteAuthOKNoopWhenClean: with no terminal state, noteAuthOK must not
+// create a marker (or panic).
+func TestNoteAuthOKNoopWhenClean(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	r := newReauther(creds.NewToken("tok"), testEmitter())
+	r.noteAuthOK()
+	if _, err := os.Stat(paths.ReauthMarkerPath()); !os.IsNotExist(err) {
+		t.Fatal("noteAuthOK must not create a marker when clean")
+	}
+}

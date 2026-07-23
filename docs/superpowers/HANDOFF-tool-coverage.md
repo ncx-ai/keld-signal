@@ -189,11 +189,11 @@ gemini.google.com) remain likely-out-of-scope server-side — flag, don't build 
   `co.keld.agent` (per-user). Logs: `~/.keld/logs/agent.{out,err}.log`,
   `~/.keld/agent.log` (debuglog; watcher/promptlog write here). Config:
   `~/.keld/{auth,hook,agent,manifest}.json`, `~/.keld/watch/cursors.json`.
-- **Known real bugs found (not yet fixed — worth filing):**
-  1. **Stale `reauth-required` marker** — daemon writes `~/.keld/reauth-required`
-     on a 401 but never deletes it when auth recovers; `keld signal doctor`/`status`
-     then falsely report "re-authentication required." Fix: clear the marker on the
-     next successful poll/publish; make `doctor` do a live check, not read the file.
+- **Known real bugs found:**
+  1. ~~**Stale `reauth-required` marker**~~ — FIXED in v0.11.3. The daemon now
+     clears `~/.keld/reauth-required` on any successful authenticated response
+     (startup settings poll / publish) via `reauther.noteAuthOK()`, so a marker
+     left by a previous run no longer outlives the problem.
   2. **Cowork sandbox egress allowlist omits `atlas.keld.co`** — why Cowork's own
      native OTEL never arrives (the reason the host-side emitter exists). Org/Anthropic
      -side; the host-side emitter is our workaround.

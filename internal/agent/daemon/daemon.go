@@ -373,6 +373,10 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 		}
 		return false
 	}
+	// Successful publish is positive proof auth works — clear any stale marker.
+	if ra != nil {
+		ra.noteAuthOK()
+	}
 	return true
 }
 
@@ -923,6 +927,11 @@ func metricsEndpoint(ingest string) string {
 func pollSettings(ctx context.Context, c *settings.Client, live *settings.Live, interval time.Duration, emitter *clientevents.Emitter, onRemote func(*settings.Remote), ra *reauther) {
 	apply := func() {
 		if r, err := c.Fetch(ctx); err == nil {
+			// A successful poll is positive proof auth works — clear any stale
+			// re-auth marker (incl. one left by a previous daemon run).
+			if ra != nil {
+				ra.noteAuthOK()
+			}
 			live.Apply(r)
 			if onRemote != nil {
 				onRemote(r)

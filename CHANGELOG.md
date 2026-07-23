@@ -7,6 +7,19 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.11.3] — 2026-07-23
+
+### Fixed
+- **Stale "re-authentication required" marker survived restart.** The daemon
+  wrote `~/.keld/reauth-required` on a persistent 401 but only cleared it inside
+  the 401→refresh→success self-heal path — so a marker left by a previous run
+  outlived the problem, and `keld doctor`/`status` (which read the file) falsely
+  reported re-auth needed even after the user re-authenticated and restarted.
+  The daemon now clears the marker on **any** successful authenticated Atlas
+  response (the startup settings poll, or a publish) — positive proof auth
+  works — so a stale marker is cleared within one poll of startup, and
+  `keld-agent restart` after `keld login` reliably clears it.
+
 ## [0.11.2] — 2026-07-23
 
 Bulletproof install: no stale `keld` can shadow the release or hijack the hooks.

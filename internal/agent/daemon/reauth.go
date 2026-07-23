@@ -195,6 +195,23 @@ func (r *reauther) clearTerminal() {
 	r.reauthRequired.Store(false)
 }
 
+// noteAuthOK records positive proof that authentication currently works — it is
+// called after any successful authenticated Atlas response (settings poll,
+// publish). It clears any terminal re-authentication state: the in-process flag
+// AND a marker file left by a PREVIOUS daemon run (the flag resets to false on
+// start, so a stale marker would otherwise outlive the condition that set it —
+// e.g. after the user re-authenticates and restarts, or auth recovers on its
+// own). Cheap: it only touches disk when there is something to clear.
+func (r *reauther) noteAuthOK() {
+	if r.reauthRequired.Load() {
+		r.clearTerminal()
+		return
+	}
+	if _, err := os.Stat(paths.ReauthMarkerPath()); err == nil {
+		r.clearTerminal()
+	}
+}
+
 // TerminalRequired reports whether the daemon is currently in the terminal
 // re-authentication-required state. This is an in-process convenience for
 // tests/callers that already hold the reauther; the status CLI (a later
