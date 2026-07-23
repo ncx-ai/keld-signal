@@ -3,8 +3,9 @@ package resolve
 import (
 	"bufio"
 	"encoding/json"
-	"io"
 	"os"
+	"strconv"
+	"strings"
 )
 
 // GeminiReader reads Gemini chat JSONL transcripts. Each line is a JSON object:
@@ -12,6 +13,11 @@ import (
 // - Mutation lines: {"$set": {...}} — skip these
 // - User prompt: {"id":"<uuid>","timestamp":"...","type":"user","content":[{"text":"..."}]}
 // - Model turn: {"id","timestamp","type":"gemini","content",...}
+//
+// The correlation id (promptID) is Gemini's OTEL telemetry id
+// "<sessionId>########<0-based user-prompt ordinal>", NOT the record UUID (see
+// internal/agent/watch/gemini.go). So Read resolves by ordinal; a promptID with
+// no "########" is treated as a legacy record UUID.
 type GeminiReader struct{}
 
 // NewGeminiReader returns a reader for Gemini chat transcripts (source "gemini_cli").
@@ -20,6 +26,8 @@ func NewGeminiReader() *GeminiReader {
 }
 
 func (r *GeminiReader) Source() string { return "gemini_cli" }
+
+const geminiPromptSep = "########"
 
 // geminiLine is a tolerant view of a Gemini chat JSONL line.
 type geminiLine struct {
@@ -35,16 +43,12 @@ type geminiContent struct {
 	Text string `json:"text"`
 }
 
-// extractGeminiText extracts text from a content field that may be either:
-// - An array of objects with a "text" field: [{"text":"..."}]
-// - A bare string: "..."
-// Returns the concatenated text; empty string if parsing fails or content is empty.
+// extractGeminiText extracts text from a content field that may be either an
+// array of {"text":...} objects or a bare string. Returns concatenated text.
 func extractGeminiText(content json.RawMessage) string {
 	if len(content) == 0 {
 		return ""
 	}
-
-	// Try to unmarshal as an array of content blocks
 	var blocks []geminiContent
 	if err := json.Unmarshal(content, &blocks); err == nil {
 		text := ""
@@ -53,20 +57,59 @@ func extractGeminiText(content json.RawMessage) string {
 		}
 		return text
 	}
-
-	// Try to unmarshal as a single string
 	var s string
 	if err := json.Unmarshal(content, &s); err == nil {
 		return s
 	}
-
 	return ""
 }
 
-// Read scans the transcript for a line whose id matches the promptID
-// and type=="user", returning the concatenated text from content[].text.
-// Lines with top-level "$set" key are skipped.
+// Read resolves promptID to a prompt's text. promptID is
+// "<sessionId>########<ordinal>" (Gemini's telemetry id); resolution is by the
+// 0-based ordinal among genuine user prompts. A promptID with no "########"
+// falls back to a legacy record-UUID match (older spooled pointers).
 func (r *GeminiReader) Read(path, promptID string) (string, bool) {
+	if i := strings.LastIndex(promptID, geminiPromptSep); i >= 0 {
+		ordinal, err := strconv.Atoi(promptID[i+len(geminiPromptSep):])
+		if err != nil {
+			return "", false
+		}
+		return r.readByOrdinal(path, ordinal)
+	}
+	return r.readByRecordID(path, promptID)
+}
+
+// readByOrdinal returns the text of the ordinal-th (0-based) genuine user prompt.
+// The predicate MUST match watch/gemini.go's geminiPromptIndex counting exactly
+// (type=="user", id != "", non-$set, non-empty text) so ordinals agree.
+func (r *GeminiReader) readByOrdinal(path string, ordinal int) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+
+	br := bufio.NewReaderSize(f, 64*1024)
+	idx := 0
+	for {
+		line, err := br.ReadString('\n')
+		if len(line) > 0 {
+			if text, id, ok := r.userMessage(line); ok && id != "" {
+				if idx == ordinal {
+					return text, true
+				}
+				idx++
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return "", false
+}
+
+// readByRecordID resolves a legacy promptID equal to a record's UUID `id`.
+func (r *GeminiReader) readByRecordID(path, promptID string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false
@@ -76,53 +119,23 @@ func (r *GeminiReader) Read(path, promptID string) (string, bool) {
 	br := bufio.NewReaderSize(f, 64*1024)
 	for {
 		line, err := br.ReadString('\n')
-		if err != nil {
-			// io.EOF: reached end of file
-			break
+		if len(line) > 0 {
+			if text, id, ok := r.userMessage(line); ok && id == promptID {
+				return text, true
+			}
 		}
-		text, found := r.matchLine(line, promptID)
-		if found {
-			return text, true
+		if err != nil {
+			break
 		}
 	}
 	return "", false
 }
 
-// matchLine parses one JSONL line and returns the user message text if it matches.
-func (r *GeminiReader) matchLine(line string, promptID string) (string, bool) {
-	var ln geminiLine
-	if err := json.Unmarshal([]byte(line), &ln); err != nil {
-		return "", false // tolerate malformed lines
-	}
-
-	// Skip lines with top-level "$set" key
-	if ln.Set != nil && len(ln.Set) > 0 {
-		return "", false
-	}
-
-	// Only user prompts have type=="user"
-	if ln.Type != "user" {
-		return "", false
-	}
-
-	// Check if id matches
-	if ln.ID != promptID {
-		return "", false
-	}
-
-	// Extract text from content (handles both array and string forms)
-	text := extractGeminiText(ln.Content)
-
-	// Empty text is "not found" (matching Claude reader's extractText semantics)
-	if text == "" {
-		return "", false
-	}
-
-	return text, true
-}
-
-// RecentUserPrompts tail-scans the transcript (bounded window) for user prompts,
-// excludes currentPromptID, and returns up to n newest-first. Returns nil on error.
+// RecentUserPrompts returns up to n prior user-prompt texts (newest-first),
+// excluding the current prompt. The current prompt is identified by the ordinal
+// encoded in currentPromptID ("<sessionId>########<ordinal>"); a legacy UUID
+// currentPromptID excludes by matching record id. Scans from the start so
+// ordinals are absolute.
 func (r *GeminiReader) RecentUserPrompts(path, currentPromptID string, n int) []string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -130,81 +143,60 @@ func (r *GeminiReader) RecentUserPrompts(path, currentPromptID string, n int) []
 	}
 	defer f.Close()
 
-	st, err := f.Stat()
-	if err != nil {
-		return nil
-	}
-
-	var off int64
-	if st.Size() > recentTailBytes {
-		off = st.Size() - recentTailBytes
-	}
-
-	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return nil
-	}
-
-	br := bufio.NewReaderSize(f, 64*1024)
-	if off > 0 {
-		// Drop the first (possibly partial) line so we only parse complete records.
-		if _, err := br.ReadString('\n'); err != nil {
-			return nil
+	curOrdinal := -1
+	curID := ""
+	if i := strings.LastIndex(currentPromptID, geminiPromptSep); i >= 0 {
+		if o, err := strconv.Atoi(currentPromptID[i+len(geminiPromptSep):]); err == nil {
+			curOrdinal = o
 		}
+	} else {
+		curID = currentPromptID
 	}
 
-	// Collect user messages with their ids
 	type msg struct {
-		id   string
 		text string
 	}
 	var messages []msg
-
+	idx := 0
+	br := bufio.NewReaderSize(f, 64*1024)
 	for {
 		line, err := br.ReadString('\n')
-		if err != nil {
-			break // EOF: trailing partial line not consumed
+		if len(line) > 0 {
+			if text, id, ok := r.userMessage(line); ok && id != "" {
+				if idx != curOrdinal && id != curID {
+					messages = append(messages, msg{text: text})
+				}
+				idx++
+			}
 		}
-
-		if text, id, ok := r.userMessage(line); ok {
-			messages = append(messages, msg{id: id, text: text})
+		if err != nil {
+			break
 		}
 	}
 
-	// Build output: newest-first (reverse order), excluding current, capped at n
 	out := make([]string, 0, n)
 	for i := len(messages) - 1; i >= 0 && len(out) < n; i-- {
-		if messages[i].id == currentPromptID {
-			continue
-		}
 		out = append(out, messages[i].text)
 	}
 	return out
 }
 
-// userMessage parses one JSONL line and returns (text, id, true) for a user message.
+// userMessage parses one JSONL line and returns (text, id, true) for a genuine
+// user message (non-$set, type=="user", non-empty text).
 func (r *GeminiReader) userMessage(line string) (text string, id string, ok bool) {
 	var ln geminiLine
 	if err := json.Unmarshal([]byte(line), &ln); err != nil {
-		return "", "", false // tolerate malformed lines
+		return "", "", false
 	}
-
-	// Skip lines with top-level "$set" key
 	if ln.Set != nil && len(ln.Set) > 0 {
 		return "", "", false
 	}
-
-	// Only user prompts have type=="user"
 	if ln.Type != "user" {
 		return "", "", false
 	}
-
-	// Extract text from content (handles both array and string forms)
 	text = extractGeminiText(ln.Content)
-
-	// Empty text is "not found" (matching Claude reader's extractText semantics)
 	if text == "" {
 		return "", "", false
 	}
-
 	return text, ln.ID, true
 }

@@ -1,64 +1,85 @@
 package watch
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-func TestGeminiExtractorPromptDetection(t *testing.T) {
+// writeGeminiTranscript writes a Gemini chat JSONL file with the given lines and
+// returns its path.
+func writeGeminiTranscript(t *testing.T, lines ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "session.jsonl")
+	body := ""
+	for _, l := range lines {
+		body += l + "\n"
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestGeminiExtractorEmitsTelemetryCorrID: the extractor emits
+// "<sessionId>########<0-based user ordinal>" — matching Gemini's OTEL prompt_id
+// — not the record UUID. $set, gemini turns, and blank prompts don't advance the
+// ordinal.
+func TestGeminiExtractorEmitsTelemetryCorrID(t *testing.T) {
 	ex := geminiExtractor{}
-	path := "/x/gemini.jsonl"
+	metaLine := `{"sessionId":"sess_1","projectHash":"abc","kind":"main"}`
+	u0 := `{"id":"uuid-0","type":"user","content":[{"text":"first"}]}`
+	g0 := `{"id":"g-0","type":"gemini","content":[{"text":"reply"}]}`
+	setLine := `{"$set":{"lastUpdated":"t"}}`
+	u1 := `{"id":"uuid-1","type":"user","content":[{"text":"second"}]}`
+	u2 := `{"id":"uuid-2","type":"user","content":[{"text":"third"}]}`
+	path := writeGeminiTranscript(t, metaLine, u0, g0, setLine, u1, u2)
 
-	// Meta line (no type key) → not a prompt
-	if _, ok := ex.extract(path, []byte(`{"sessionId":"sess_1","projectHash":"abc123","kind":"chat"}`)); ok {
-		t.Fatal("meta line is not a prompt")
+	cases := []struct {
+		line string
+		want string
+	}{
+		{u0, "sess_1########0"},
+		{u1, "sess_1########1"},
+		{u2, "sess_1########2"},
+	}
+	for _, c := range cases {
+		rec, ok := ex.extract(path, []byte(c.line))
+		if !ok || rec.PromptID != c.want {
+			t.Fatalf("extract(%s): rec=%+v ok=%v, want PromptID=%q", c.line, rec, ok, c.want)
+		}
+		if rec.SessionID != "sess_1" {
+			t.Errorf("SessionID=%q, want sess_1", rec.SessionID)
+		}
 	}
 
-	// $set mutation line → skip
-	if _, ok := ex.extract(path, []byte(`{"$set":{"field":"value"}}`)); ok {
-		t.Fatal("$set line should be skipped")
+	// Non-prompts are rejected.
+	for _, bad := range []string{metaLine, g0, setLine, `{invalid`,
+		`{"type":"user","content":[{"text":"no id"}]}`,
+		`{"id":"e","type":"user","content":[]}`,
+		`{"id":"w","type":"user","content":[{"text":"   "}]}`} {
+		if _, ok := ex.extract(path, []byte(bad)); ok {
+			t.Errorf("expected non-prompt rejected: %s", bad)
+		}
 	}
+}
 
-	// type:user with id and non-empty text → promptRec with PromptID
-	userLine := `{"id":"msg_12345","type":"user","content":[{"text":"hello world"}]}`
-	rec, ok := ex.extract(path, []byte(userLine))
-	if !ok || rec.PromptID != "msg_12345" || rec.SessionID != "" || rec.Cwd != "" {
-		t.Fatalf("rec=%+v ok=%v (expected PromptID=msg_12345, empty SessionID/Cwd)", rec, ok)
-	}
-
-	// type:gemini → skip
-	if _, ok := ex.extract(path, []byte(`{"id":"msg_67890","type":"gemini","content":[{"text":"response"}]}`)); ok {
-		t.Fatal("type:gemini line should be skipped")
-	}
-
-	// type:user with empty content → skip
-	if _, ok := ex.extract(path, []byte(`{"id":"msg_empty","type":"user","content":[]}`)); ok {
-		t.Fatal("empty content user should be skipped")
-	}
-
-	// type:user with empty text → skip
-	if _, ok := ex.extract(path, []byte(`{"id":"msg_blank","type":"user","content":[{"text":""}]}`)); ok {
-		t.Fatal("empty text user should be skipped")
-	}
-
-	// Malformed JSON → skip, no panic
-	if _, ok := ex.extract(path, []byte(`{invalid json}`)); ok {
-		t.Fatal("malformed JSON should be skipped")
-	}
-
-	// Missing id in type:user → skip
-	if _, ok := ex.extract(path, []byte(`{"type":"user","content":[{"text":"no id"}]}`)); ok {
-		t.Fatal("type:user without id should be skipped")
-	}
-
-	// Multiple content blocks with text → concatenate and accept
-	multiLine := `{"id":"msg_multi","type":"user","content":[{"text":"hello"},{"text":" world"}]}`
-	rec, ok = ex.extract(path, []byte(multiLine))
-	if !ok || rec.PromptID != "msg_multi" {
-		t.Fatalf("rec=%+v ok=%v (expected PromptID=msg_multi for multi-block)", rec, ok)
-	}
-
-	// Content with only whitespace → skip
-	if _, ok := ex.extract(path, []byte(`{"id":"msg_ws","type":"user","content":[{"text":"   "}]}`)); ok {
-		t.Fatal("whitespace-only text should be skipped")
+// TestGeminiExtractorForwardOnlyOrdinal: even when the extractor is handed a
+// later user line first (as the forward-only watcher does when it starts
+// mid-session), the ordinal is absolute because geminiPromptIndex scans from the
+// file start.
+func TestGeminiExtractorForwardOnlyOrdinal(t *testing.T) {
+	ex := geminiExtractor{}
+	path := writeGeminiTranscript(t,
+		`{"sessionId":"S","kind":"main"}`,
+		`{"id":"a","type":"user","content":[{"text":"one"}]}`,
+		`{"id":"b","type":"user","content":[{"text":"two"}]}`,
+		`{"id":"c","type":"user","content":[{"text":"three"}]}`,
+	)
+	// Hand it the 3rd user line directly — ordinal must still be 2.
+	rec, ok := ex.extract(path, []byte(`{"id":"c","type":"user","content":[{"text":"three"}]}`))
+	if !ok || rec.PromptID != "S########2" {
+		t.Fatalf("rec=%+v ok=%v, want S########2", rec, ok)
 	}
 }

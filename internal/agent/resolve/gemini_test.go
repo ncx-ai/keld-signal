@@ -182,3 +182,26 @@ func TestGeminiReaderStringFormContent(t *testing.T) {
 		t.Fatalf("read array-form content: %q ok=%v, want (array form,true)", text, ok)
 	}
 }
+
+// TestGeminiReaderReadByOrdinal: the primary path — resolve the telemetry corr
+// id "<sessionId>########<ordinal>" by 0-based user-prompt ordinal. The fixture
+// has two user prompts (ordinals 0 and 1) with a gemini turn + $set between.
+func TestGeminiReaderReadByOrdinal(t *testing.T) {
+	r := NewGeminiReader()
+	p := writeGeminiFixture(t)
+
+	if txt, ok := r.Read(p, "sess_123########0"); !ok || txt != "hello world" {
+		t.Fatalf("ordinal 0: %q ok=%v, want (hello world,true)", txt, ok)
+	}
+	if txt, ok := r.Read(p, "sess_123########1"); !ok || txt != "second prompt" {
+		t.Fatalf("ordinal 1: %q ok=%v, want (second prompt,true)", txt, ok)
+	}
+	// Out-of-range ordinal → not found.
+	if _, ok := r.Read(p, "sess_123########9"); ok {
+		t.Fatal("ordinal 9 should not resolve")
+	}
+	// Legacy UUID promptID still resolves via the fallback.
+	if txt, ok := r.Read(p, "msg-uuid-003"); !ok || txt != "second prompt" {
+		t.Fatalf("legacy UUID: %q ok=%v, want (second prompt,true)", txt, ok)
+	}
+}

@@ -7,6 +7,24 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.11.5] — 2026-07-23
+
+### Fixed
+- **Gemini enrichments never correlated to Gemini activity in Atlas** (you saw
+  activity but no enrichments). Gemini uses two different ids for one prompt: the
+  chat transcript record `id` is a random UUID, but its OTEL telemetry `prompt_id`
+  is `"<sessionId>########<0-based user-prompt count>"`. The daemon keyed the
+  enrichment on the transcript UUID, while Atlas joins
+  `enrichments.corr_id == tool_events.prompt_id` — so a UUID never matched the
+  telemetry id and every Gemini enrichment stayed orphaned. The watcher/reader now
+  emit and resolve the correlation id as `"<sessionId>########<ordinal>"` (session
+  id from the transcript meta line, ordinal = 0-based index among genuine user
+  prompts), matching Gemini's telemetry exactly. Verified against a real session:
+  the extractor reproduces the exact `prompt_id` Atlas recorded for that prompt.
+  (Combines with the `gemini_cli` source normalization so source **and** id both
+  match the telemetry side.) Enrichments published before this fix stay orphaned;
+  only prompts captured afterward correlate.
+
 ## [0.11.4] — 2026-07-23
 
 ### Fixed
