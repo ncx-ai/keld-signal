@@ -7,7 +7,7 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
-## [0.11.5] — 2026-07-23
+## [0.13.1] — 2026-07-23
 
 ### Fixed
 - **Gemini enrichments never correlated to Gemini activity in Atlas** (you saw
@@ -24,6 +24,16 @@ semantic-ish versioning during `0.x`.
   (Combines with the `gemini_cli` source normalization so source **and** id both
   match the telemetry side.) Enrichments published before this fix stay orphaned;
   only prompts captured afterward correlate.
+
+## [0.13.0] — 2026-07-23
+
+### Changed
+- Gemini enrichment capture emits the canonical source `gemini_cli` (matching
+  Atlas's normalized telemetry source and the `claude_code`/`codex` convention).
+
+## [0.12.0] — 2026-07-23
+
+- Repo housekeeping (gitignore). No functional change. (Version bump only.)
 
 ## [0.11.4] — 2026-07-23
 
