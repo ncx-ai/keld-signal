@@ -78,7 +78,7 @@ func (a *GeminiAdapter) Apply(currentText *string, p SetupParams, replace bool) 
 
 	obj.Set("telemetry", telemetry.GeminiTelemetry(p))
 
-	cmd := telemetry.HookCommand("gemini")
+	cmd := telemetry.HookCommand(p.BinPath, "gemini")
 	config.AddClaudeHook(obj, "BeforeAgent", nil, cmd)
 
 	after := config.DumpJSON(obj)

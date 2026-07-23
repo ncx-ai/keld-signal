@@ -18,6 +18,10 @@ const HookCommandSubstr = "keld __hook"
 type SetupParams struct {
 	Endpoint    string
 	IngestToken string
+	// BinPath is the absolute path of the keld binary to pin into tool hook
+	// commands (resolved from os.Executable at setup time). Empty → hooks use
+	// bare "keld" (PATH-resolved). See HookCommand.
+	BinPath string
 }
 
 // ClaudeHookEvent represents one (event, optional matcher) pair for Claude Code
@@ -43,9 +47,18 @@ var ClaudeHookEvents = []ClaudeHookEvent{
 var CodexHookEvents = []string{"SessionStart", "PreToolUse"}
 
 // HookCommand returns the command string keld uses for a hook invocation from
-// the given source tool. The binary acts as its own hook runner.
-func HookCommand(source string) string {
-	return "keld __hook --source " + source
+// the given source tool. The binary acts as its own hook runner. binPath is the
+// absolute path of the keld binary to invoke (from os.Executable at setup time),
+// so the hook can't be hijacked by a different keld earlier on PATH; when
+// binPath is empty it falls back to bare "keld" (PATH-resolved). The recognizer
+// HookCommandSubstr ("keld __hook") matches both forms, since a pinned command
+// ends in ".../keld __hook".
+func HookCommand(binPath, source string) string {
+	bin := "keld"
+	if binPath != "" {
+		bin = binPath
+	}
+	return bin + " __hook --source " + source
 }
 
 // ClaudeEnv returns an ordered map of environment variables to inject into
@@ -115,7 +128,7 @@ func endpointWithToken(base, token string) string {
 func CodexBlockBody(p SetupParams, source string) string {
 	logsEndpoint := fmt.Sprintf("%s/v1/logs", p.Endpoint)
 	metricsEndpoint := fmt.Sprintf("%s/v1/metrics", p.Endpoint)
-	cmd := HookCommand(source)
+	cmd := HookCommand(p.BinPath, source)
 
 	var hookBlocks []string
 	for _, event := range CodexHookEvents {

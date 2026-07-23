@@ -92,6 +92,9 @@ func TestDoctorReportsMissingHookConfig(t *testing.T) {
 func TestDoctorNoHookProblemWhenHookJsonExists(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
+	// Isolate PATH so the shadowing check sees no keld (the dev machine's real
+	// PATH may have several) — this test is about the hook-config problem only.
+	t.Setenv("PATH", t.TempDir())
 
 	// Write hook.json so it exists.
 	hookPath := paths.HookConfigPath()
@@ -223,6 +226,8 @@ func TestDoctorReportsReauthRequired(t *testing.T) {
 func TestDoctorOkWithoutReauthMarker(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
+	// Isolate PATH so the shadowing check doesn't fire on the dev machine's PATH.
+	t.Setenv("PATH", t.TempDir())
 
 	manifest := &config.Manifest{Tools: map[string]config.ToolManifest{}}
 	if err := manifest.Save(); err != nil {
@@ -296,5 +301,89 @@ func TestDoctorReportsDrift(t *testing.T) {
 	// The output should contain a drift message for Claude Code.
 	if !bytes.Contains([]byte(out), []byte("claude")) && !bytes.Contains([]byte(out), []byte("Claude")) {
 		t.Errorf("expected drift message mentioning Claude Code; got: %s", out)
+	}
+}
+
+func TestKeldPATHBinariesDetectsShadowing(t *testing.T) {
+	writeExec := func(dir string) {
+		if err := os.WriteFile(filepath.Join(dir, "keld"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sep := string(os.PathListSeparator)
+
+	d1 := t.TempDir()
+	d2 := t.TempDir()
+	writeExec(d1)
+	writeExec(d2)
+
+	// Two distinct keld binaries on PATH → shadowing (2 detected, PATH order).
+	t.Setenv("PATH", d1+sep+d2)
+	got := keldPATHBinaries()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 shadowing keld, got %d: %v", len(got), got)
+	}
+	if got[0] != filepath.Join(d1, "keld") {
+		t.Fatalf("PATH order not preserved: winner=%q", got[0])
+	}
+
+	// Single dir → exactly one, no shadowing.
+	t.Setenv("PATH", d1)
+	if got := keldPATHBinaries(); len(got) != 1 {
+		t.Fatalf("expected 1 keld, got %d: %v", len(got), got)
+	}
+
+	// A second PATH entry that is a symlink to the first's keld → deduped to 1
+	// (same underlying binary, not a real shadow).
+	d3 := t.TempDir()
+	if err := os.Symlink(filepath.Join(d1, "keld"), filepath.Join(d3, "keld")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", d1+sep+d3)
+	if got := keldPATHBinaries(); len(got) != 1 {
+		t.Fatalf("expected 1 keld (symlink deduped), got %d: %v", len(got), got)
+	}
+}
+
+func TestDoctorReportsPATHShadowing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	// Clean config so the ONLY problem doctor can find is PATH shadowing:
+	// hook.json present (no hook problem), no tools (no drift), no reauth marker.
+	hookPath := paths.HookConfigPath()
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hookPath, []byte(`{"endpoint":"http://e","ingest_token":"t"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := &config.Manifest{Tools: map[string]config.ToolManifest{}, Hook: &config.HookRecord{Version: "x"}}
+	if err := manifest.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two distinct keld binaries on PATH → shadowing.
+	d1 := t.TempDir()
+	d2 := t.TempDir()
+	for _, d := range []string{d1, d2} {
+		if err := os.WriteFile(filepath.Join(d, "keld"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", d1+string(os.PathListSeparator)+d2)
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newDoctorCmd()
+	err := cmd.RunE(cmd, nil)
+	if !errors.Is(err, errs.ErrSilentExit) {
+		t.Fatalf("doctor should fail on PATH shadowing; got err=%v", err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("multiple keld binaries on PATH")) {
+		t.Fatalf("doctor should report shadowing; output:\n%s", buf.String())
 	}
 }

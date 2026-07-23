@@ -7,6 +7,32 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-07-23
+
+Bulletproof install: no stale `keld` can shadow the release or hijack the hooks.
+
+### Fixed
+- **A stale `keld` earlier on PATH could hijack the tool hooks.** `keld` ships via
+  two channels that write to different dirs (`install.sh` → `~/.local/bin`, macOS
+  `.pkg` → `/usr/local/bin`); running both leaves two binaries on PATH, and an
+  older one winning meant its (removed) hook code ran — e.g. a v0.8.0 in
+  `~/.local/bin` firing the old context POST → `HTTP 405` on every Gemini prompt.
+
+### Changed
+- **Hooks are pinned to an absolute keld path.** `keld setup` now writes each
+  tool's hook command as `<abs>/keld __hook --source <tool>` (resolved via
+  `os.Executable`), so PATH order can't hijack it. Bare `keld` remains the
+  fallback when the path can't be resolved.
+- **Installs are idempotent (last-install-wins).** The macOS `.pkg` postinstall
+  repoints any stray `keld`/`keld-agent` in `~/.local/bin` and `/opt/homebrew/bin`
+  to the canonical install (symlink — nothing is deleted) and restarts the agent
+  (`launchctl kickstart -k`) so the live daemon is the just-installed build.
+  `install.sh` warns (with the exact fix) when another `keld` earlier on PATH
+  would shadow it, rather than silently rewriting dirs it may not own.
+- **`keld doctor` detects PATH drift.** It flags when more than one distinct
+  `keld` is reachable on PATH, names the winner and the shadowed copies, and
+  prints the repoint/remove fix.
+
 ## [0.11.1] — 2026-07-22
 
 Gemini telemetry auth fix + drop deprecated `x-keld-actor`.

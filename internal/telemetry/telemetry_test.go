@@ -7,8 +7,18 @@ import (
 )
 
 func TestHookCommand(t *testing.T) {
-	if HookCommand("claude_code") != "keld __hook --source claude_code" {
-		t.Fatalf("got %q", HookCommand("claude_code"))
+	// Bare (no pinned path) → PATH-resolved "keld".
+	if got := HookCommand("", "claude_code"); got != "keld __hook --source claude_code" {
+		t.Fatalf("bare: got %q", got)
+	}
+	// Pinned → absolute binary path, immune to PATH shadowing.
+	if got := HookCommand("/usr/local/keld/keld", "gemini"); got != "/usr/local/keld/keld __hook --source gemini" {
+		t.Fatalf("pinned: got %q", got)
+	}
+	// The recognizer substring must still match the pinned command, so hook
+	// detection/removal keeps working.
+	if !strings.Contains(HookCommand("/usr/local/keld/keld", "gemini"), HookCommandSubstr) {
+		t.Fatalf("HookCommandSubstr %q must match pinned command", HookCommandSubstr)
 	}
 }
 

@@ -146,6 +146,28 @@ case ":$PATH:" in
     ;;
 esac
 
+# Idempotent-install guard: if a DIFFERENT keld earlier on PATH would shadow this
+# install (e.g. a macOS .pkg copy in /usr/local/bin), say so with the exact fix.
+# We don't silently rewrite dirs this installer may not own (esp. /usr/local,
+# the .pkg's domain — repointing it at a curl install would break the sidecar).
+shadow=""
+OLD_IFS="$IFS"; IFS=:
+for d in $PATH; do
+  [ -n "$d" ] || continue
+  if [ -x "$d/keld" ]; then
+    [ "$d/keld" -ef "${DEST}/keld" ] || shadow="$d/keld"
+    break
+  fi
+done
+IFS="$OLD_IFS"
+if [ -n "$shadow" ]; then
+  echo "" >&2
+  echo "Warning: another keld earlier on PATH will shadow this install:" >&2
+  echo "    ${shadow}" >&2
+  echo "  Repoint it:  ln -sf \"${DEST}/keld\" \"${shadow}\"   (and likewise keld-agent)" >&2
+  echo "  or remove it, or put \"${DEST}\" first on PATH. Then run: keld doctor" >&2
+fi
+
 if [ "$os" = "darwin" ]; then
   echo ""
   echo "Note: macOS users may see a Gatekeeper warning on first run."

@@ -58,7 +58,7 @@ func (a *ClaudeAdapter) Apply(currentText *string, p SetupParams, replace bool) 
 
 	envKeys := config.MergeEnv(obj, telemetry.ClaudeEnv(p))
 
-	command := telemetry.HookCommand("claude_code")
+	command := telemetry.HookCommand(p.BinPath, "claude_code")
 	for _, he := range telemetry.ClaudeHookEvents {
 		config.AddClaudeHook(obj, he.Event, he.Matcher, command)
 	}

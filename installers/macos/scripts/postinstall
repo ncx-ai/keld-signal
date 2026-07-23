@@ -14,6 +14,27 @@ ln -sf "$PREFIX/keld-agent" /usr/local/bin/keld-agent
 uid=$(stat -f %u /dev/console)
 user=$(id -un "$uid")
 
+# Idempotent install: repoint any stray keld/keld-agent in OTHER known PATH
+# locations to this canonical install, so an older copy (e.g. a prior curl|sh
+# install in ~/.local/bin) can't shadow it for the CLI or the tool hooks. We only
+# touch files that already exist (never create new ones), and only when they
+# aren't already the canonical symlink. Best-effort under `set -e`.
+userhome=$(dscl . -read /Users/"$user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+for d in ${userhome:+"$userhome/.local/bin"} /opt/homebrew/bin; do
+  for b in keld keld-agent; do
+    t="$d/$b"
+    canon="$PREFIX/$b"
+    if { [ -e "$t" ] || [ -L "$t" ]; } && [ "$(readlink "$t" 2>/dev/null)" != "$canon" ]; then
+      sudo -u "$user" ln -sf "$canon" "$t" 2>/dev/null || true
+    fi
+  done
+done
+
+# Replace the running process: restart the per-user agent so the live daemon is
+# THIS build, not a lingering older one from a previous install. Best-effort —
+# a no-op if it isn't loaded yet (a first install loads it via onboard.command).
+launchctl kickstart -k "gui/$uid/co.keld.agent" 2>/dev/null || true
+
 # Onboarding runs in the user's GUI session and registers/starts the agent itself
 # (after login + setup), so the agent isn't started before the user is set up.
 if [ -f "$PREFIX/onboard.command" ]; then

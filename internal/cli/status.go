@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -105,6 +106,35 @@ func newStatusCmd() *cobra.Command {
 // Kept as one constant so the wording stays identical across all three.
 const reauthRequiredLine = "⚠ re-authentication required — run 'keld login', then 'keld-agent restart'"
 
+// keldPATHBinaries returns the distinct `keld` executables reachable on PATH, in
+// PATH order, deduped by symlink-resolved target. Length > 1 means a stale keld
+// can shadow the intended one (the first entry wins for anything invoked by
+// name). Used by doctor to surface install drift.
+func keldPATHBinaries() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		p := filepath.Join(dir, "keld")
+		info, err := os.Stat(p)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue // absent, a directory, or not executable
+		}
+		real := p
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			real = r
+		}
+		if seen[real] {
+			continue // same underlying binary reached via another PATH entry
+		}
+		seen[real] = true
+		out = append(out, p)
+	}
+	return out
+}
+
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
@@ -140,6 +170,18 @@ func newDoctorCmd() *cobra.Command {
 				if _, err := os.Stat(paths.HookConfigPath()); os.IsNotExist(err) {
 					problems = append(problems, "hook config (~/.keld/hook.json) is missing. Re-run `keld signal setup`.")
 				}
+			}
+
+			// Multiple keld binaries on PATH → a stale one can shadow the
+			// release for anything invoked by name (the CLI, and any hook not
+			// pinned to an absolute path). This caused a real bug (an old keld
+			// in ~/.local/bin firing a removed hook path). Surface it with the
+			// fix.
+			if bins := keldPATHBinaries(); len(bins) > 1 {
+				problems = append(problems, fmt.Sprintf(
+					"multiple keld binaries on PATH — %s will run, shadowing %v. "+
+						"Repoint or remove the extras (e.g. `ln -sf %s <stray>`), then re-run `keld setup`.",
+					bins[0], bins[1:], bins[0]))
 			}
 
 			reauthRequired, _ := paths.ReauthRequired()

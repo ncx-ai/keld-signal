@@ -461,5 +461,18 @@ func TestGeminiApplyIdempotent(t *testing.T) {
 	}
 }
 
+// TestGeminiApplyPinsHookBinary: when SetupParams.BinPath is set, the hook
+// command embeds that absolute path so a different keld earlier on PATH can't
+// hijack it.
+func TestGeminiApplyPinsHookBinary(t *testing.T) {
+	sandboxGeminiHome(t)
+	a := &GeminiAdapter{}
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", BinPath: "/usr/local/keld/keld"}
+	plan := a.Apply(nil, p, false)
+	if !strings.Contains(plan.AfterText, "/usr/local/keld/keld __hook --source gemini") {
+		t.Fatalf("hook command not pinned to abs path:\n%s", plan.AfterText)
+	}
+}
+
 // strPtrLocal returns a pointer to s (test helper).
 func strPtrLocal(s string) *string { return &s }

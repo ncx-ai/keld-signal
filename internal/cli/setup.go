@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -17,6 +18,21 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/tools"
 	"github.com/ncx-ai/keld-signal/internal/version"
 )
+
+// keldBinaryPath returns the absolute, symlink-resolved path of the running keld
+// binary, for pinning into tool hook commands so a different keld earlier on
+// PATH can't hijack them. Falls back to os.Executable's raw value, or "" (bare
+// "keld") if even that can't be resolved.
+func keldBinaryPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		return resolved
+	}
+	return exe
+}
 
 // SetupOpts holds behavioural knobs for runSetup that are separate from the
 // telemetry parameters.
@@ -285,6 +301,7 @@ func newSetupCmd() *cobra.Command {
 			p := tools.SetupParams{
 				Endpoint:    ob.Endpoint,
 				IngestToken: ob.IngestToken,
+				BinPath:     keldBinaryPath(),
 			}
 
 			opts := SetupOpts{
