@@ -78,6 +78,12 @@ func (a *GeminiAdapter) Apply(currentText *string, p SetupParams, replace bool) 
 
 	obj.Set("telemetry", telemetry.GeminiTelemetry(p))
 
+	// Strip any existing keld hook before adding the current one, so re-running
+	// setup is idempotent even when the command STRING changes (e.g. bare
+	// "keld" → an absolute pinned path): AddClaudeHook dedups by exact entry, so
+	// without this a changed command would leave the old entry AND append the
+	// new one (the "running hooks 2/2, both keld" duplication).
+	config.RemoveHooksByCommand(obj, telemetry.HookCommandSubstr)
 	cmd := telemetry.HookCommand(p.BinPath, "gemini")
 	config.AddClaudeHook(obj, "BeforeAgent", nil, cmd)
 

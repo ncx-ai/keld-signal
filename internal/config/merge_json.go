@@ -226,7 +226,12 @@ func RemoveHooksByCommand(obj *orderedmap.OrderedMap, substr string) {
 		return
 	}
 
-	for _, event := range hm.Keys() {
+	// Snapshot the keys: orderedmap.Keys() returns the LIVE internal slice and
+	// Delete() reslices it, so ranging over Keys() while deleting would skip the
+	// element after each deletion (e.g. leaving one keld hook behind when several
+	// events are all-keld). Copy first, then mutate.
+	events := append([]string(nil), hm.Keys()...)
+	for _, event := range events {
 		av, _ := hm.Get(event)
 		arr, ok := av.([]interface{})
 		if !ok {

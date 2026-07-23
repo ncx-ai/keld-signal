@@ -58,7 +58,12 @@ func (a *ClaudeAdapter) Apply(currentText *string, p SetupParams, replace bool) 
 
 	envKeys := config.MergeEnv(obj, telemetry.ClaudeEnv(p))
 
+	// Strip existing keld hooks before re-adding, so re-running setup is
+	// idempotent even when the command STRING changes (bare "keld" → pinned
+	// absolute path) — otherwise the changed command leaves the old entries and
+	// appends new ones (duplicate keld hooks). See RemoveHooksByCommand.
 	command := telemetry.HookCommand(p.BinPath, "claude_code")
+	config.RemoveHooksByCommand(obj, telemetry.HookCommandSubstr)
 	for _, he := range telemetry.ClaudeHookEvents {
 		config.AddClaudeHook(obj, he.Event, he.Matcher, command)
 	}

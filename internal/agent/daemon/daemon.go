@@ -377,6 +377,10 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	if ra != nil {
 		ra.noteAuthOK()
 	}
+	// Log successes too (not just failures) so "are enrichments reaching Atlas"
+	// is answerable from the daemon log — silent success made this hard to tell
+	// apart from a broken pipeline.
+	log.Printf("keld-agent: published enrichment for %s", j.Key())
 	return true
 }
 

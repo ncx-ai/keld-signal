@@ -7,6 +7,27 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [0.11.4] — 2026-07-23
+
+### Fixed
+- **Duplicate keld hooks ("running hooks 2/2, both keld").** `keld setup` deduped
+  hooks by exact entry, so when the hook command string changed (v0.11.2 pinned
+  it to an absolute path), re-running setup left the old bare `keld __hook` entry
+  AND appended the new pinned one. Setup now strips existing keld hooks (by the
+  `keld __hook` recognizer) before re-adding, so it's idempotent across command
+  changes. Re-run `keld setup` once to collapse an existing duplicate to one.
+- **`RemoveHooksByCommand` skipped events (also affected uninstall).** It called
+  `Delete` while ranging over the orderedmap's live `Keys()` slice, so removing
+  several all-keld events in one pass skipped the event after each deletion —
+  leaving a keld hook behind (e.g. Claude's `CwdChanged`). Now snapshots the keys
+  first. Regression-tested.
+
+### Changed
+- **The daemon logs successful enrichment publishes**, not just failures — so
+  "are enrichments reaching Atlas?" is answerable from `~/.keld/logs/agent.err.log`
+  (`published enrichment for <source>|prompt_id|<id>`). Silent success previously
+  made a healthy pipeline indistinguishable from a broken one.
+
 ## [0.11.3] — 2026-07-23
 
 ### Fixed

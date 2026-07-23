@@ -115,3 +115,28 @@ func TestClaudeHookAddIdempotentAndRemove(t *testing.T) {
 		t.Fatalf("hooks key should be pruned, keys=%v", o.Keys())
 	}
 }
+
+// TestRemoveHooksByCommandMultipleAllKeldEvents guards the delete-during-range
+// bug: orderedmap.Keys() is the live slice and Delete() reslices it, so removing
+// several all-keld events in one pass must not skip any (it previously left the
+// event after each deleted one behind).
+func TestRemoveHooksByCommandMultipleAllKeldEvents(t *testing.T) {
+	const in = `{"hooks":{` +
+		`"A":[{"hooks":[{"type":"command","command":"keld __hook --source x"}]}],` +
+		`"B":[{"hooks":[{"type":"command","command":"keld __hook --source x"}]}],` +
+		`"C":[{"hooks":[{"type":"command","command":"keld __hook --source x"}]}],` +
+		`"D":[{"hooks":[{"type":"command","command":"keld __hook --source x"}]}]}}`
+	obj, err := LoadJSON(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	RemoveHooksByCommand(obj, "keld __hook")
+	out := DumpJSON(obj)
+	if strings.Contains(out, "keld __hook") {
+		t.Fatalf("all keld hooks should be removed across every event; leftover:\n%s", out)
+	}
+	// With every event emptied, the hooks object itself should be gone.
+	if strings.Contains(out, "\"hooks\"") {
+		t.Fatalf("empty hooks map should be dropped:\n%s", out)
+	}
+}

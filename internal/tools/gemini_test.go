@@ -474,5 +474,28 @@ func TestGeminiApplyPinsHookBinary(t *testing.T) {
 	}
 }
 
+// TestGeminiApplyDedupsHookOnCommandChange: a pre-existing bare keld hook (from
+// an older setup) must be REPLACED, not duplicated, when the pinned-path command
+// differs — the "running hooks 2/2, both keld" bug.
+func TestGeminiApplyDedupsHookOnCommandChange(t *testing.T) {
+	sandboxGeminiHome(t)
+	a := &GeminiAdapter{}
+	// settings.json already carries a bare keld BeforeAgent hook (older version).
+	cur := `{"hooks":{"BeforeAgent":[{"hooks":[{"type":"command","command":"keld __hook --source gemini"}]}]}}`
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", BinPath: "/usr/local/keld/keld"}
+
+	plan := a.Apply(&cur, p, false)
+
+	if n := strings.Count(plan.AfterText, "__hook --source gemini"); n != 1 {
+		t.Fatalf("expected exactly 1 gemini keld hook after re-apply, got %d:\n%s", n, plan.AfterText)
+	}
+	if !strings.Contains(plan.AfterText, "/usr/local/keld/keld __hook --source gemini") {
+		t.Fatalf("expected the pinned hook to win:\n%s", plan.AfterText)
+	}
+	if strings.Contains(plan.AfterText, `"keld __hook --source gemini"`) {
+		t.Fatalf("stale bare hook should have been removed:\n%s", plan.AfterText)
+	}
+}
+
 // strPtrLocal returns a pointer to s (test helper).
 func strPtrLocal(s string) *string { return &s }

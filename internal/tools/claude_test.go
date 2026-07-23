@@ -203,3 +203,25 @@ func TestClaudeConfigPath(t *testing.T) {
 		t.Fatalf("expected ConfigPath to end with /.claude/settings.json, got %q", cp)
 	}
 }
+
+// TestClaudeApplyDedupsHooksOnCommandChange: re-running setup after the hook
+// command string changed (bare "keld" → pinned absolute path) must REPLACE the
+// old keld hooks, not append duplicates. Result must equal a fresh pinned apply.
+func TestClaudeApplyDedupsHooksOnCommandChange(t *testing.T) {
+	a := &ClaudeAdapter{}
+	pinned := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok", BinPath: "/usr/local/keld/keld"}
+
+	// Older setup wrote BARE-command hooks.
+	bare := a.Apply(strPtrLocal("{}"), SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "tok"}, false)
+	// New setup re-applies with the pinned command over that config.
+	got := a.Apply(&bare.AfterText, pinned, false)
+	// A fresh pinned apply on empty config is the reference shape.
+	want := a.Apply(strPtrLocal("{}"), pinned, false)
+
+	if got.AfterText != want.AfterText {
+		t.Fatalf("re-apply over stale bare hooks not idempotent (duplicate/leftover hooks):\n--got--\n%s\n--want--\n%s", got.AfterText, want.AfterText)
+	}
+	if strings.Contains(got.AfterText, `"keld __hook --source claude_code"`) {
+		t.Fatalf("stale bare hooks should have been removed:\n%s", got.AfterText)
+	}
+}
