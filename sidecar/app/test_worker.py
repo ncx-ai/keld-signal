@@ -58,6 +58,32 @@ def test_serve_ready_then_handles_then_stops():
     assert sent[1]["ok"] is True and "results" in sent[1]["result"]
 
 
+def test_release_memory_is_safe():
+    # Best-effort + cross-platform: must never raise, on any OS.
+    from app.worker import _release_memory
+    _release_memory()
+
+
+def test_serve_releases_memory_after_each_request():
+    import app.worker as w
+    calls = {"n": 0}
+    orig = w._release_memory
+    w._release_memory = lambda: calls.__setitem__("n", calls["n"] + 1)
+    try:
+        reqs = [{"op": "classify", "text": "hi", "tasks": {"t": ["a"]}}, None]
+
+        class Q:
+            def __init__(self, items=None): self.items = list(items or [])
+            def get(self): return self.items.pop(0)
+            def put(self, x): pass
+
+        w.serve(Q(reqs), Q(), lambda: _StubModel())
+        # released after the real request; NOT after the None sentinel (serve returns first)
+        assert calls["n"] == 1
+    finally:
+        w._release_memory = orig
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

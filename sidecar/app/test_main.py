@@ -35,9 +35,11 @@ def test_clip_disabled_when_nonpositive():
     assert m._clip("x" * 5000) == "x" * 5000
 
 
-def test_default_cap_is_generous():
+def test_default_cap_is_conservative():
     m = _reload_main(None)
-    assert m._MAX_CHARS == 20000  # clips only pathological inputs
+    # Bounds worst-case per-inference activation memory (grows ~quadratically with
+    # sequence length); still generous for prompt/turn classification. Env-tunable.
+    assert m._MAX_CHARS == 8000
 
 
 import asyncio as _asyncio

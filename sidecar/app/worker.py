@@ -5,7 +5,30 @@ reclaims its heap via process exit — the only cross-platform memory reset.
 
 No heavy module-level imports: torch/gliner2 are imported lazily so the spawn
 re-import stays cheap and the parent never pulls in torch."""
+import gc
+
 from app.adapter import normalize_classify, normalize_entities, normalize_extract
+
+
+def _release_memory() -> None:
+    """Return transient inference memory to the OS after each request so the
+    worker's RSS does not stay inflated between jobs. A transformer forward pass
+    allocates large activation buffers that are freed on return but not
+    necessarily handed back to the OS by the allocator — so RSS ratchets up under
+    a burst and only the RSS-ceiling recycle (which cannot fire while a job holds
+    the manager lock) would reclaim it. gc.collect() drops any cycles first;
+    malloc_trim(0) then releases freed glibc arenas back to the OS. Both are
+    best-effort and must never raise: malloc_trim is Linux/glibc-only (absent on
+    macOS), and a trim failure must not kill the worker."""
+    try:
+        gc.collect()
+    except Exception:
+        pass
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
 
 
 def handle(req: dict, model) -> dict:
@@ -54,3 +77,6 @@ def serve(req_q, resp_q, model_factory) -> None:
             resp_q.put({"ok": True, "result": handle(req, model)})
         except Exception as e:  # never let one bad request kill the worker
             resp_q.put({"ok": False, "error": repr(e)})
+        # Hand the request's transient activation memory back to the OS so RSS
+        # stays flat between jobs (runs on success and failure alike).
+        _release_memory()

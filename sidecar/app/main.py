@@ -26,9 +26,10 @@ from app.worker_manager import (
 # Cap input length as a guard: GLiNER2 is a transformer, so memory grows
 # roughly with the square of the sequence length. A pathologically long prompt
 # or transcript can allocate a huge tensor in a single call, which single-flight
-# execution (see runner.py) alone would not prevent. The cap is generous (only
-# clips outliers) and overridable via env. <= 0 disables clipping.
-_MAX_CHARS = int(os.environ.get("KELD_SIDECAR_MAX_CHARS", "20000"))
+# execution (see runner.py) alone would not prevent. The default bounds the
+# worst-case per-inference activation spike while staying generous for prompt/
+# turn classification; overridable via env. <= 0 disables clipping.
+_MAX_CHARS = int(os.environ.get("KELD_SIDECAR_MAX_CHARS", "8000"))
 
 
 def _clip(text: str) -> str:
