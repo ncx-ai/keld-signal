@@ -25,6 +25,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents/resource"
 	"github.com/ncx-ai/keld-signal/internal/agent/creds"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/lenstat"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
@@ -67,6 +68,10 @@ type Sender interface {
 // are reclaimed (not left retrying forever — the death-spiral root cause).
 func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, warmup func(context.Context) error, emitter *clientevents.Emitter, ra *reauther) {
 	ledger := newRetryLedger()
+	// One tracker for the daemon's lifetime: it accumulates the prompt-length
+	// distribution across jobs (and restarts, via its persisted state) so
+	// truncation converges on this machine's actual prompt sizes.
+	lens := lenstat.FromEnv(paths.PromptLengthsPath())
 	for {
 		j, ok := q.Next()
 		if !ok {
@@ -109,7 +114,7 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 		jobModel := withJobCtx(m, jobCtx)
 		var published bool
 		finished := runWithTimeout(to, func() {
-			published = process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter, ra)
+			published = process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter, ra, lens)
 		})
 		cancel() // always: on timeout this reclaims the abandoned attempt; on success it just releases resources.
 
@@ -214,6 +219,22 @@ func withJobCtx(m enrich.Model, ctx context.Context) enrich.Model {
 	return m
 }
 
+// bindMaxLen binds an input token cap to the sidecar client for this job's
+// inferences, bounding each one's transient activation memory (the cap is
+// derived adaptively — see enrich/lenstat). n <= 0 means "no cap" and leaves the
+// model untouched; a non-sidecar Model (test fake, eval harness) has nothing to
+// cap and passes through. Returns a copy, so the job context bound by
+// withJobCtx is preserved.
+func bindMaxLen(m enrich.Model, n int) enrich.Model {
+	if n <= 0 {
+		return m
+	}
+	if c, ok := m.(*sidecar.Client); ok {
+		return c.WithMaxLen(n)
+	}
+	return m
+}
+
 // warmupFunc returns a warmup trigger bound to the sidecar client, or nil when
 // m is not the sidecar client (nothing to warm — e.g. a test fake or the eval
 // model). The daemon passes this to Worker as its warmup seam.
@@ -225,16 +246,24 @@ func warmupFunc(m enrich.Model) func(context.Context) error {
 	return c.Warmup
 }
 
-// jobTimeout bounds how long the worker spends on one enrichment before it
-// re-spools and moves on. Default 30s (covers a model reload ~15s + the ~7-pass
-// enrichment); override with KELD_ENRICH_JOB_TIMEOUT (Go duration).
+// jobTimeout is a WEDGE BACKSTOP, not the operating bound: enrichment is
+// bounded per pass (enrich.DefaultPassTimeout), which is the correct unit
+// because a job issues 8-9 inferences. It exists only to catch a job wedged
+// somewhere outside a pass (resolve, publish) and must stay above the worst
+// case of every pass burning its full deadline — otherwise it pre-empts the
+// per-pass deadlines and resurrects the old failure mode, where a job-wide
+// expiry discarded every pass that had already succeeded and re-spooled the
+// job, redoing and re-discarding the same work until the attempt budget ran
+// out. That amplification kept the sidecar in permanent burst and drove the RAM
+// oscillation. Default 5m (> 8 passes x 30s); override with
+// KELD_ENRICH_JOB_TIMEOUT (Go duration).
 func jobTimeout() time.Duration {
 	if v := os.Getenv("KELD_ENRICH_JOB_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			return d
 		}
 	}
-	return 30 * time.Second
+	return 5 * time.Minute
 }
 
 // warmWait bounds how long the worker waits for the sidecar model to become
@@ -330,7 +359,7 @@ func isAuthError(err error) bool {
 // to mark the job's key deduped. A skip (unresolved text), a deadline-cancelled
 // attempt, a publish failure, or a panic all return false so the job stays
 // re-offerable (retry / watcher fallback).
-func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther) bool {
+func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther, lens *lenstat.Tracker) bool {
 	je := newJobEmit(emitter, j)
 	defer func() {
 		if r := recover(); r != nil {
@@ -346,13 +375,30 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	if !ok {
 		return false // could not resolve prompt text; skip silently
 	}
+	// Size this job's input truncation from the machine's own prompt-length
+	// distribution: record this prompt's length (a count, never its text) and
+	// bind the resulting cap for the job's inferences. Without a cap, gliner2
+	// applies none, and a long prompt's activation memory is what drove the
+	// sidecar's RSS oscillation.
+	if lens != nil {
+		lens.Observe(lenstat.Words(text))
+		if err := lens.Save(); err != nil {
+			log.Printf("keld-agent: prompt-length stats not persisted: %v", err)
+		}
+		m = bindMaxLen(m, lens.Cap())
+	}
 	meta := enrich.Meta{Repo: j.Cwd, Tool: j.Source}
 	if enrich.ContextEligible(j.Source) {
 		meta = contextMeta(j)
 	}
-	profile := enrich.Run(text, j.Source, meta, m)
-	// If the job's deadline fired mid-enrichment its sidecar calls were cancelled,
-	// leaving a partial/empty profile — don't publish that. The worker re-spools
+	// Bound each pass individually and derive those deadlines from the job
+	// context, so cancelling the job still aborts whatever pass is in flight.
+	// A pass that exceeds its deadline costs only its own facet: the profile
+	// comes back "partial" and is still published, so a slow pass never
+	// discards the work the other passes already completed.
+	profile := enrich.Run(text, j.Source, meta, m, enrich.WithJobContext(ctx))
+	// The job-level backstop only fires for a wedge outside the passes; if it
+	// did, the profile is untrustworthy — don't publish it. The worker re-spools
 	// (bounded) so it retries on a healthy sidecar.
 	if ctx.Err() != nil {
 		return false

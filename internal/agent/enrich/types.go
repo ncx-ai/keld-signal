@@ -1,6 +1,10 @@
 package enrich
 
-import "time"
+import (
+	"context"
+	"sync"
+	"time"
+)
 
 // Labeled is a single classification result with provenance.
 type Labeled struct {
@@ -41,6 +45,17 @@ type Model interface {
 	Extract(text string, labels map[string]string, tasks map[string][]string) ExtractResult
 }
 
+// ContextModel is an optional Model capability: return a copy of the backend
+// bound to ctx, so a per-pass deadline can abort that pass's in-flight
+// inference instead of letting it run on unattended. The sidecar client
+// implements it (its HTTP request carries the context); test fakes and other
+// backends have no call to cancel and may omit it, in which case a timed-out
+// pass is abandoned rather than actively aborted.
+type ContextModel interface {
+	Model
+	WithModelContext(ctx context.Context) Model
+}
+
 // HealthFunc reports whether the sidecar backend is currently usable. Used by
 // the daemon's Supervisor to poll sidecar health.
 type HealthFunc func() bool
@@ -73,16 +88,42 @@ type JobContext struct {
 	Meta   Meta
 	Model  Model
 
-	results map[string]map[string]any
+	// res is shared by pointer with any per-stage context derived via
+	// withModel, so a stage sees the same committed outputs.
+	res *jobResults
+}
+
+// jobResults holds the stage outputs behind a lock. A pass that exceeds its
+// deadline is abandoned, not killed — its goroutine may still call Get
+// (conditioned passes do) while the pipeline commits a later stage's output, so
+// the map needs guarding even though the pipeline itself never fans out.
+type jobResults struct {
+	mu sync.RWMutex
+	m  map[string]map[string]any
 }
 
 // NewJobContext builds a context for one prompt.
 func NewJobContext(text, source string, meta Meta, m Model) *JobContext {
-	return &JobContext{Text: text, Source: source, Meta: meta, Model: m, results: map[string]map[string]any{}}
+	return &JobContext{Text: text, Source: source, Meta: meta, Model: m,
+		res: &jobResults{m: map[string]map[string]any{}}}
 }
 
-// Set is called by the pipeline after the parallel stage; do not call it from an extractor goroutine.
-func (c *JobContext) Set(stage string, out map[string]any) { c.results[stage] = out }
+// withModel returns a shallow copy bound to a different backend, sharing this
+// context's committed results. Used to give one pass a deadline-bound model.
+func (c *JobContext) withModel(m Model) *JobContext {
+	return &JobContext{Text: c.Text, Source: c.Source, Meta: c.Meta, Model: m, res: c.res}
+}
+
+// Set commits a stage's output. Called by the pipeline between stages.
+func (c *JobContext) Set(stage string, out map[string]any) {
+	c.res.mu.Lock()
+	defer c.res.mu.Unlock()
+	c.res.m[stage] = out
+}
 
 // Get returns a stage's output or nil.
-func (c *JobContext) Get(stage string) map[string]any { return c.results[stage] }
+func (c *JobContext) Get(stage string) map[string]any {
+	c.res.mu.RLock()
+	defer c.res.mu.RUnlock()
+	return c.res.m[stage]
+}

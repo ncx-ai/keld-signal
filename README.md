@@ -113,10 +113,14 @@ keys, SSNs…) are **masked** before anything leaves the machine.
 - **Reliable, GLiNER2-only delivery.** Enrichment never degrades to a fallback
   backend — there isn't one. The hook writes each prompt *pointer* (never the
   prompt text) to a durable on-disk **spool**, so work survives daemon downtime
-  and is drained on startup and a periodic sweep. Each job runs under a deadline
-  (`KELD_ENRICH_JOB_TIMEOUT`) that **cancels its in-flight sidecar calls** on
-  timeout — so a slow or recycling sidecar worker can't leak self-amplifying retries — then
-  re-spools for a later GLiNER2 retry. Retries are **bounded**: after
+  and is drained on startup and a periodic sweep. Each **pass** runs under its own
+  deadline (`KELD_ENRICH_PASS_TIMEOUT`) that **cancels its in-flight sidecar call**
+  on timeout. Per-pass is the load-bearing detail: a job makes 8-9 inferences, so a
+  job-wide deadline meant one slow pass discarded every pass that had already
+  succeeded and re-spooled the lot — self-amplifying retries that pinned the
+  sidecar in permanent burst. Bounded per pass, a slow pass costs one facet and the
+  profile still publishes as `partial`. `KELD_ENRICH_JOB_TIMEOUT` remains only as a
+  wedge backstop; a job that trips it re-spools, **bounded**: after
   `KELD_ENRICH_MAX_ATTEMPTS` a job is quarantined to `~/.keld/spool/bad/` rather
   than retried forever. A sidecar that isn't ready — mid-recycle, respawning, or
   still provisioning — is waited out (wake + retry, or jobs queue/spool until it
@@ -394,9 +398,20 @@ client behavior, and security.
 - `KELD_SETTINGS_POLL` — how often `keld-agent` polls Atlas for org enrichment
   settings (Go duration, default `5m`; for tests/local dev). See
   [docs/enrichment-settings.md](docs/enrichment-settings.md).
-- `KELD_ENRICH_JOB_TIMEOUT` — per-job enrichment deadline (Go duration, default
-  `30s`). On timeout the job's in-flight sidecar calls are cancelled and the
-  pointer re-spools for a later GLiNER2 retry.
+- `KELD_ENRICH_PASS_TIMEOUT` — **per-pass** enrichment deadline (Go duration,
+  default `30s`). On expiry that pass's in-flight sidecar call is cancelled and
+  only that facet is dropped; the remaining passes still publish (`partial`).
+- `KELD_ENRICH_JOB_TIMEOUT` — wedge backstop for a job stuck outside a pass (Go
+  duration, default `5m`). Must exceed `passes x KELD_ENRICH_PASS_TIMEOUT`, or it
+  pre-empts the per-pass deadlines and discards completed work.
+- `KELD_ENRICH_TOKEN_FLOOR` / `KELD_ENRICH_TOKEN_CEILING` — clamps on the adaptive
+  input truncation (word tokens, default `512` / `768`). The daemon truncates at
+  mu+2*sigma of this machine's observed prompt lengths; the ceiling is the sidecar
+  memory budget expressed in tokens, the floor keeps the window from ever becoming
+  over-restrictive.
+- `KELD_SIDECAR_MEM_BUDGET_MB` — total sidecar memory budget (default `4096`). The
+  inference worker's hard limit is derived from it; exceeding that kills and
+  respawns the worker rather than letting the host swap.
 - `KELD_ENRICH_MAX_ATTEMPTS` — how many times a timed-out job re-spools before it
   is quarantined to `~/.keld/spool/bad/` (default `4`) — bounds retries so one
   un-enrichable prompt can't loop forever.

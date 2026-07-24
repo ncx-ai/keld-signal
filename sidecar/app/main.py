@@ -23,18 +23,21 @@ from app.worker_manager import (
     WorkerManager, WorkerTimeout, WorkerUnavailable, WorkerError, HELD,
 )
 
-# Cap input length as a guard: GLiNER2 is a transformer, so memory grows
-# roughly with the square of the sequence length. A pathologically long prompt
-# or transcript can allocate a huge tensor in a single call, which single-flight
-# execution (see runner.py) alone would not prevent. The default bounds the
-# worst-case per-inference activation spike while staying generous for prompt/
-# turn classification; overridable via env. <= 0 disables clipping.
-_MAX_CHARS = int(os.environ.get("KELD_SIDECAR_MAX_CHARS", "8000"))
+# Character pre-clip. This bounds TOKENIZER cost on a pathological paste; it is
+# NOT the memory bound — that is max_len, in tokens, which is what activation
+# memory actually scales with (gliner2 truncates to max_len only AFTER
+# tokenizing, so a huge string is still tokenized in full).
+#
+# Keep this generous enough never to pre-empt the token cap. It used to default
+# to 8000, which is ~1100 word tokens — below the token ceiling, so the char clip
+# silently became the real constraint and the adaptive token cap had no effect
+# above ~1100. Sized here well above the largest token cap the daemon will send.
+_MAX_CHARS = int(os.environ.get("KELD_SIDECAR_MAX_CHARS", "24000"))
 
 
 def _clip(text: str) -> str:
-    """Truncate text to _MAX_CHARS to bound single-inference memory. Pure so it
-    is unit-testable without loading the model."""
+    """Truncate text to _MAX_CHARS to bound tokenizer work on pathological
+    input. Pure so it is unit-testable without loading the model."""
     if _MAX_CHARS > 0 and len(text) > _MAX_CHARS:
         return text[:_MAX_CHARS]
     return text
@@ -118,7 +121,12 @@ async def lifespan(app: FastAPI):
                 pass
             await asyncio.sleep(interval)
 
-    poll_task = asyncio.create_task(_poll_loop(float(os.environ.get("KELD_SIDECAR_MEM_POLL_S", "2"))))
+    # 1s: poll() both samples RSS (for the peak high-water) and enforces the
+    # hard limit, so the interval bounds how long an over-budget worker can run
+    # before it is killed. Both reads (psutil RSS + virtual_memory) are cheap
+    # enough to do every second; measured spikes last only 1-3s, so a slower
+    # interval would miss them outright.
+    poll_task = asyncio.create_task(_poll_loop(float(os.environ.get("KELD_SIDECAR_MEM_POLL_S", "1"))))
     sample_task = asyncio.create_task(_sample_loop(governor))
     yield
     for t in (poll_task, sample_task):
@@ -135,20 +143,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+# max_len is the daemon's adaptive per-inference token cap (see
+# internal/agent/enrich/lenstat). It is the real bound on transient activation
+# memory: the _clip char guard below only bounds characters, while attention cost
+# scales with TOKENS. None means no cap, matching gliner2's default.
 class EntitiesIn(BaseModel):
     text: str
     labels: dict[str, str]
+    max_len: int | None = None
 
 
 class ClassifyIn(BaseModel):
     text: str
     tasks: dict[str, list[str]]
+    max_len: int | None = None
 
 
 class ExtractIn(BaseModel):
     text: str
     labels: dict[str, str]
     tasks: dict[str, list[str]]
+    max_len: int | None = None
 
 
 @app.get("/health")
@@ -176,8 +191,11 @@ def metrics():
         counts=_state.get("counts", Counts()),
         recycles=wm.counts["recycles"],
         kills={"timeout": wm.counts["kills_timeout"], "pressure": wm.counts["kills_pressure"],
-               "idle": wm.counts["kills_idle"], "crash": wm.counts["crashes"]},
+               "idle": wm.counts["kills_idle"], "hard": wm.counts["kills_hard"],
+               "crash": wm.counts["crashes"]},
         uptime_s=time.monotonic() - started, cpu_threads=_state.get("cpu_threads"),
+        peak_rss_mb=wm.peak_rss_mb, ceiling_mb=wm.ceiling_mb(),
+        hard_limit_mb=wm.hard_limit_mb(),
     )
 
 
@@ -207,19 +225,19 @@ async def _dispatch(req: dict):
 @app.post("/entities")
 async def entities(body: EntitiesIn):
     req = {"op": "entities", "text": _clip(body.text), "labels": body.labels,
-           "threads": _threads_for_load()}
+           "threads": _threads_for_load(), "max_len": body.max_len}
     return await _dispatch(req)
 
 
 @app.post("/classify")
 async def classify(body: ClassifyIn):
     req = {"op": "classify", "text": _clip(body.text), "tasks": body.tasks,
-           "threads": _threads_for_load()}
+           "threads": _threads_for_load(), "max_len": body.max_len}
     return await _dispatch(req)
 
 
 @app.post("/extract")
 async def extract(body: ExtractIn):
     req = {"op": "extract", "text": _clip(body.text), "labels": body.labels,
-           "tasks": body.tasks, "threads": _threads_for_load()}
+           "tasks": body.tasks, "threads": _threads_for_load(), "max_len": body.max_len}
     return await _dispatch(req)

@@ -152,6 +152,7 @@ def test_poll_held_releases_on_headroom():
 
 def test_poll_rss_ceiling_recycles_when_idle():
     m = _ready_manager(margin_mb=1000.0)      # ceiling = model_cost(2700)+1000 = 3700
+    m._hard_limit_mb = 9000.0                 # isolate: test the drift guard, not the hard limit
     m._rss_fn = lambda pid: 4000.0            # over ceiling
     m.poll()
     assert m.state == DOWN and m.counts["recycles"] == 1

@@ -719,8 +719,8 @@ func TestProcessPublish401TriggersReauthRefreshExactlyOnce(t *testing.T) {
 	sender := &authFailSender{}
 	j := queue.Job{Source: "claude_code", Scheme: "trace", ID: "AUTH-1", Inline: "write code"}
 
-	process(context.Background(), j, enrichtest.NewFake(), sender, "actor@keld.co", func() bool { return false }, nil, ra)
-	process(context.Background(), j, enrichtest.NewFake(), sender, "actor@keld.co", func() bool { return false }, nil, ra)
+	process(context.Background(), j, enrichtest.NewFake(), sender, "actor@keld.co", func() bool { return false }, nil, ra, nil)
+	process(context.Background(), j, enrichtest.NewFake(), sender, "actor@keld.co", func() bool { return false }, nil, ra, nil)
 
 	if got := onboardCalls(); got != 1 {
 		t.Fatalf("onboard called %d times, want exactly 1 (cooldown-guarded single-flight)", got)
@@ -739,7 +739,7 @@ func TestProcessPublish401TriggersReauthRefreshExactlyOnce(t *testing.T) {
 // unaffected by this change.
 func TestProcessPublish401WithNilReautherIsSafe(t *testing.T) {
 	j := queue.Job{Source: "claude_code", Scheme: "trace", ID: "AUTH-NIL-1", Inline: "write code"}
-	process(context.Background(), j, enrichtest.NewFake(), &authFailSender{}, "actor@keld.co", func() bool { return false }, nil, nil)
+	process(context.Background(), j, enrichtest.NewFake(), &authFailSender{}, "actor@keld.co", func() bool { return false }, nil, nil, nil)
 }
 
 // TestProcessNonAuthPublishErrorDoesNotTriggerRefresh proves a non-401/403
@@ -752,7 +752,7 @@ func TestProcessNonAuthPublishErrorDoesNotTriggerRefresh(t *testing.T) {
 	ra, onboardCalls := newTestReauther(t, tok, "new-ingest-token")
 
 	j := queue.Job{Source: "claude_code", Scheme: "trace", ID: "AUTH-500", Inline: "write code"}
-	process(context.Background(), j, enrichtest.NewFake(), failingSender{}, "actor@keld.co", func() bool { return false }, nil, ra)
+	process(context.Background(), j, enrichtest.NewFake(), failingSender{}, "actor@keld.co", func() bool { return false }, nil, ra, nil)
 
 	if got := onboardCalls(); got != 0 {
 		t.Fatalf("onboard called %d times, want 0 for a non-auth publish error", got)

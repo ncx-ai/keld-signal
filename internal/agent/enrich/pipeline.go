@@ -1,8 +1,50 @@
 package enrich
 
 import (
+	"context"
+	"os"
 	"time"
 )
+
+// DefaultPassTimeout bounds ONE pass (one extractor stage), not the whole job.
+// Per-pass is the correct unit: a job issues 8-9 inferences, so a single
+// job-wide budget means one slow pass discards every completed pass and
+// re-spools the job, which is pure amplification — the same work is redone and
+// thrown away until the attempt budget is exhausted. Bounded per pass, a slow
+// pass costs exactly one facet: the rest commit and the profile publishes as
+// "partial", so progress is monotonic. Override with KELD_ENRICH_PASS_TIMEOUT.
+const DefaultPassTimeout = 30 * time.Second
+
+// Option configures Run. Options keep Run's signature stable for existing
+// callers (eval harness, tests) while the daemon opts into deadlines.
+type Option func(*runCfg)
+
+type runCfg struct {
+	passTimeout time.Duration
+	parent      context.Context
+}
+
+// WithPassTimeout sets the per-pass deadline. <= 0 disables it (no deadline).
+func WithPassTimeout(d time.Duration) Option {
+	return func(c *runCfg) { c.passTimeout = d }
+}
+
+// WithJobContext sets the parent context each pass deadline derives from, so
+// cancelling the job still aborts the pass in flight. Without it, passes are
+// bounded only by their own deadline.
+func WithJobContext(ctx context.Context) Option {
+	return func(c *runCfg) { c.parent = ctx }
+}
+
+// passTimeoutFromEnv resolves the default per-pass deadline.
+func passTimeoutFromEnv() time.Duration {
+	if v := os.Getenv("KELD_ENRICH_PASS_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return DefaultPassTimeout
+}
 
 // runStage executes one extractor with panic isolation; ok=false on panic/error.
 func runStage(ex Extractor, ctx *JobContext) (out map[string]any, ok bool) {
@@ -18,6 +60,43 @@ func runStage(ex Extractor, ctx *JobContext) (out map[string]any, ok bool) {
 	return o, true
 }
 
+// runStageBounded runs one extractor under its own deadline. On expiry the pass
+// is reported failed and abandoned: the stage's context is cancelled so a
+// ContextModel aborts its in-flight inference (reclaiming the sidecar's
+// single-flight slot) rather than leaving an orphan attempt running.
+func runStageBounded(ex Extractor, jc *JobContext, cfg runCfg) (map[string]any, bool) {
+	if cfg.passTimeout <= 0 {
+		return runStage(ex, jc)
+	}
+	parent := cfg.parent
+	if parent == nil {
+		parent = context.Background()
+	}
+	sctx, cancel := context.WithTimeout(parent, cfg.passTimeout)
+	defer cancel()
+
+	stage := jc
+	if cm, ok := jc.Model.(ContextModel); ok {
+		stage = jc.withModel(cm.WithModelContext(sctx))
+	}
+
+	type outcome struct {
+		out map[string]any
+		ok  bool
+	}
+	done := make(chan outcome, 1) // buffered: an abandoned pass must not block on send
+	go func() {
+		o, ok := runStage(ex, stage)
+		done <- outcome{o, ok}
+	}()
+	select {
+	case r := <-done:
+		return r.out, r.ok
+	case <-sctx.Done():
+		return nil, false
+	}
+}
+
 // Run executes the wave-1 extractors sequentially and assembles a Profile.
 //
 // The extractors are run one at a time (never fanned out into goroutines) so a
@@ -29,7 +108,11 @@ func runStage(ex Extractor, ctx *JobContext) (out map[string]any, ok bool) {
 // extractors are independent (they never read each other's output), so results
 // are committed to ctx only after the whole wave completes — preserving the
 // original semantics regardless of order.
-func Run(text, source string, meta Meta, m Model) Profile {
+func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
+	cfg := runCfg{passTimeout: passTimeoutFromEnv()}
+	for _, o := range opts {
+		o(&cfg)
+	}
 	ctx := NewJobContext(text, source, meta, m)
 	exs := Wave1()
 
@@ -40,7 +123,7 @@ func Run(text, source string, meta Meta, m Model) Profile {
 	}
 	results := make([]res, len(exs))
 	for i, ex := range exs {
-		out, ok := runStage(ex, ctx)
+		out, ok := runStageBounded(ex, ctx, cfg)
 		results[i] = res{name: ex.Name(), out: out, ok: ok}
 	}
 
@@ -56,7 +139,7 @@ func Run(text, source string, meta Meta, m Model) Profile {
 	// Wave2: extractors that depend on Wave1 output (run after commit).
 	wave2 := Wave2()
 	for _, ex := range wave2 {
-		if out, ok := runStage(ex, ctx); ok {
+		if out, ok := runStageBounded(ex, ctx, cfg); ok {
 			ctx.Set(ex.Name(), out)
 		} else {
 			anyFailed = true

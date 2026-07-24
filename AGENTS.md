@@ -120,15 +120,59 @@ enabled, it always runs on GLiNER2 — there is no fallback to swap to. A sideca
 that isn't ready yet (not yet provisioned, restarting, mid-recycle, or the
 supervisor couldn't bring it up at all) keeps the readiness gate **closed**:
 jobs simply queue/spool until the sidecar is ready, they are never processed by
-anything else. Each job runs under a deadline (`KELD_ENRICH_JOB_TIMEOUT`,
-default 30s) as a **child of the daemon context**; on timeout the worker
-**cancels it**, which aborts the job's in-flight sidecar calls
-(`Client.WithContext`) so an abandoned attempt is reclaimed instead of leaking a
-retry loop that saturates the single-flight sidecar. A timed-out job re-spools
-for a later retry, **bounded** by `KELD_ENRICH_MAX_ATTEMPTS` (default 4) — an
-exhausted job is `spool.Quarantine`'d to `spool/bad/` rather than retried
-forever. Atlas dedups on `dedup_key`, so a late double-publish from a recovering
-attempt is harmless.
+anything else.
+
+**Deadlines are PER PASS, not per job** (`KELD_ENRICH_PASS_TIMEOUT`, default
+30s). Per-pass is the only correct unit: a job issues 8-9 inferences, so a
+job-wide budget meant one slow pass discarded *every pass that had already
+succeeded* and re-spooled the whole job — the same work redone and re-discarded
+until the attempt budget ran out. That amplification kept the sidecar in
+permanent burst and was the driver behind the RAM-oscillation incident. Bounded
+per pass, a slow pass costs exactly one facet: `runStage` reports it failed, the
+other passes commit, and the profile publishes as `pipeline_status:"partial"`.
+Progress is monotonic. Each pass deadline is a child of the job context (via
+`enrich.WithJobContext`) and is bound to the backend through
+`enrich.ContextModel` (`Client.WithModelContext`), so expiry aborts that pass's
+in-flight sidecar call instead of leaving an orphan attempt consuming the
+single-flight sidecar.
+
+`KELD_ENRICH_JOB_TIMEOUT` (default **5m**) is now only a **wedge backstop** for a
+job stuck outside a pass (resolve, publish). It must stay above
+`passes x KELD_ENRICH_PASS_TIMEOUT` or it pre-empts the per-pass deadlines and
+resurrects the discard-everything failure mode; a unit test pins that invariant.
+A job that trips the backstop re-spools, **bounded** by
+`KELD_ENRICH_MAX_ATTEMPTS` (default 4) — an exhausted job is
+`spool.Quarantine`'d to `spool/bad/` rather than retried forever. Atlas dedups on
+`dedup_key`, so a late double-publish from a recovering attempt is harmless.
+
+**Adaptive input truncation (`enrich/lenstat`).** GLiNER2's transient activation
+memory scales with sequence length, and gliner2's own `max_len` defaults to
+`None` — *no truncation* — so one long prompt could allocate a multi-GB spike.
+The daemon therefore tracks the streaming mean/variance of observed prompt
+lengths (Welford; **lengths only, never text**, persisted to
+`~/.keld/state/prompt-lengths.json`) and truncates at **mu + 2*sigma**, the window
+that covers ~97.7% of that machine's prompts in full. It is clamped to
+`[KELD_ENRICH_TOKEN_FLOOR (512), KELD_ENRICH_TOKEN_CEILING (768)]` and stays at
+the liberal ceiling until `KELD_ENRICH_LEN_MIN_SAMPLE` (200) observations make the
+estimate representative. The floor means the adaptive cap can only ever *widen*
+the window; the ceiling is the memory budget expressed in tokens and is a hard
+invariant, since mu+2*sigma knows nothing about RAM. The cap rides each request
+as `max_len` (`Client.WithMaxLen` → sidecar → gliner2). Ceiling values are
+**measured**, not estimated — see the table in `lenstat.go`; cost is superlinear
+in both memory *and* latency, so raising it is not a free win. Credential
+detection is unaffected (`creddetect.Detect` runs Go-side on the full text);
+NER-derived PII sees only the window.
+
+⚠️ **This is sized for chat-scale prompts and does NOT extend to agentic-workflow
+payloads** (system prompt + work prompt + metadata, thousands of tokens). Three
+things break: mu+2*sigma is meaningless on the resulting bimodal population; no
+token cap both admits such a payload and fits the memory budget (measured
+marginal cost exceeds 1 MB/token, so ~4000 tokens implies ~7 GB); and
+head-truncation discards the work prompt when the system prompt leads. The fix is
+segment-aware **windowed** inference — bounded peak regardless of payload length,
+linear rather than superlinear cost — spec'd in
+`docs/superpowers/specs/2026-07-24-agentic-scale-input-bounding.md`. Read it
+before extending enrichment to agentic sources.
 
 **Control plane.** Enrichment is governed per-org from Atlas
 (`settings/`, `agentcfg/`); the daemon polls `GET /v1/enrichment-settings`
@@ -185,10 +229,45 @@ memory reset) on an **RSS ceiling** (`model_cost_mb + KELD_SIDECAR_RSS_MARGIN_MB
 **memory pressure** (available RAM ≤ `KELD_SIDECAR_EVICT_AVAIL_PCT` — held down
 until headroom returns), **idle** (`KELD_SIDECAR_IDLE_UNLOAD_S`, `<=0` disables),
 a **hung-job timeout** (`KELD_SIDECAR_JOB_DEADLINE_S`), or a crash; it respawns
-lazily on the next request. `GET /metrics` exposes a `worker` block
-(`state`/`worker_rss_mb`/`parent_rss_mb`/`model_cost_mb`/`recycles`/`kills`)
-alongside governor EWMA/threads/queue/counts. Full mechanisms + load-test
-validation: **`sidecar/loadtest/README.md`**.
+lazily on the next request.
+
+**The guard must not sample under the inference lock.** `poll()` used to read the
+worker's RSS while holding the same lock `call()` holds for an entire inference,
+so it could only ever sample *between* jobs — right after the worker returned its
+heap to the OS. Every in-flight spike was invisible: measured live, RSS
+oscillated 2715MB → 5692MB against a 3409MB ceiling with `recycles == 0`. So the
+guard now has two tiers:
+
+- `observe_rss()` samples **without the lock** (reading RSS needs no lock; only
+  mutating the worker does) and records `peak_rss_mb` for the current worker
+  generation.
+- The **RSS ceiling is a baseline-drift guard**, decided only when the lock is
+  free (a mid-inference sample measures a transient spike, not drift, and
+  recycling for it would kill a job to reclaim memory about to be freed anyway).
+  The lock is taken **non-blocking** — waiting would stall the poll loop for a
+  whole inference and pin every sample to a job boundary, i.e. the trough.
+- A **hard limit** (`KELD_SIDECAR_MEM_BUDGET_MB` 4096 − `KELD_SIDECAR_PARENT_RESERVE_MB`
+  150, or absolute `KELD_SIDECAR_RSS_HARD_MB`) is enforced on the lock-free
+  sample and kills the worker **even mid-job** (`kills.hard`). Derived from the
+  TOTAL budget, because that is the actual requirement; it never sits below
+  `ceiling + KELD_SIDECAR_RSS_HARD_MARGIN_MB`, or an ordinary spike would become a
+  mid-job kill. Prevention (bounded `max_len`) keeps peaks far below it, so this
+  stays a backstop. Note it bounds *sustained* use: with a 1s poll a fast
+  allocation can overshoot briefly before the kill lands.
+
+`GET /metrics` exposes a `worker` block (`state`/`worker_rss_mb`/**`peak_rss_mb`**/
+`parent_rss_mb`/`model_cost_mb`/**`ceiling_mb`**/**`hard_limit_mb`**/`recycles`/
+`kills` incl. `hard`) alongside governor EWMA/threads/queue/counts — the peak and
+the limits it is judged against, because an instantaneous sample is exactly what
+made the oscillation look healthy. Full mechanisms + load-test validation:
+**`sidecar/loadtest/README.md`**.
+
+**`KELD_SIDECAR_MAX_CHARS` (default 24000) is a tokenizer-cost guard, not the
+memory bound.** Memory scales with *tokens*, and gliner2 truncates to `max_len`
+only *after* tokenizing, so a char pre-clip still helps on a pathological paste —
+but it must stay generous enough never to pre-empt the token cap. It previously
+defaulted to 8000 (~1100 word tokens), which silently made it the real
+constraint and rendered any larger token cap dead.
 
 **Footprint caps are set at spawn, parent-side** (`daemon.go` → `sidecarEnv`),
 inherited by the spawned worker child. The daemon injects `MALLOC_ARENA_MAX=2`
@@ -240,6 +319,7 @@ internal/
     resolve/         read prompt text + recent-prompt tail from transcripts
     enrich/          the pipeline: extractors, passes, labels, mask, meta
       sidecar/           HTTP client to the GLiNER2 sidecar (the only Model)
+      lenstat/           adaptive input truncation (mu+2sigma prompt-length stats)
       eval/              enrichment quality eval harness
     provision/       model provisioning (weights → ~/.keld/models)
     publish/         build + POST masked enrichments to Atlas

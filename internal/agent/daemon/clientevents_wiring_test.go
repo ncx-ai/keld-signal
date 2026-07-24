@@ -53,7 +53,7 @@ func TestProcessEmitsWorkerPanicWithRedactedError(t *testing.T) {
 	panicGate := func() bool { panic("boom: the panic payload itself") }
 
 	// process recovers internally, so this must not itself panic the test.
-	process(context.Background(), j, enrichtest.NewFake(), &fakeSender{}, "actor@keld.co", panicGate, emitter, nil)
+	process(context.Background(), j, enrichtest.NewFake(), &fakeSender{}, "actor@keld.co", panicGate, emitter, nil, nil)
 
 	events := emitter.Drain()
 	ev := findEvent(events, "worker.panic")
@@ -86,7 +86,7 @@ func TestProcessEmitsPublishFailedWithRedactedError(t *testing.T) {
 		Inline: "write a function",
 	}
 
-	process(context.Background(), j, enrichtest.NewFake(), failingSender{}, "actor@keld.co", func() bool { return false }, emitter, nil)
+	process(context.Background(), j, enrichtest.NewFake(), failingSender{}, "actor@keld.co", func() bool { return false }, emitter, nil, nil)
 
 	events := emitter.Drain()
 	ev := findEvent(events, "publish.failed")

@@ -35,11 +35,17 @@ def test_clip_disabled_when_nonpositive():
     assert m._clip("x" * 5000) == "x" * 5000
 
 
-def test_default_cap_is_conservative():
+def test_default_char_clip_does_not_preempt_the_token_cap():
+    # The char clip bounds TOKENIZER cost, not memory; max_len (in tokens) is the
+    # memory bound. So the default must not bind before the token cap does.
+    # Regression: at 8000 chars (~1100 word tokens) the clip silently became the
+    # real constraint and the daemon's adaptive token cap had no effect above it.
     m = _reload_main(None)
-    # Bounds worst-case per-inference activation memory (grows ~quadratically with
-    # sequence length); still generous for prompt/turn classification. Env-tunable.
-    assert m._MAX_CHARS == 8000
+    words = 2000  # comfortably more word tokens than any cap the daemon sends
+    prose = "refactor the authentication middleware so tokens are validated " * (words // 8)
+    assert m._clip(prose) == prose, (
+        f"char clip cut a {len(prose)}-char / ~{words}-word prompt at "
+        f"{m._MAX_CHARS} chars, pre-empting the token cap")
 
 
 import asyncio as _asyncio
@@ -52,14 +58,14 @@ from fastapi import HTTPException
 
 
 class _FakeModel:
-    def classify_text(self, text, tasks, include_confidence=False):
+    def classify_text(self, text, tasks, include_confidence=False, max_len=None):
         # Mirror gliner2: with include_confidence it returns {"label","confidence"} dicts
         # carrying the real score; without it, a bare label string (→ adapter fabricates 1.0).
         if include_confidence:
             return {t: {"label": opts[0], "confidence": 0.73} for t, opts in tasks.items()}
         return {t: opts[0] for t, opts in tasks.items()}  # top label = first option
 
-    def extract_entities(self, text, labels):
+    def extract_entities(self, text, labels, max_len=None):
         return {"entities": {}}
 
     def create_schema(self):
@@ -71,7 +77,7 @@ class _FakeModel:
     def classification(self, task, options):
         return self
 
-    def extract(self, text, schema, include_confidence=False):
+    def extract(self, text, schema, include_confidence=False, max_len=None):
         return {"entities": {}}
 
 

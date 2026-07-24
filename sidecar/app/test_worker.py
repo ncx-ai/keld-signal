@@ -5,13 +5,13 @@ from app.worker import handle, serve
 
 
 class _StubModel:
-    def classify_text(self, text, tasks, include_confidence=False):
+    def classify_text(self, text, tasks, include_confidence=False, max_len=None):
         return {"task_type": "debug"}
-    def extract_entities(self, text, labels):
+    def extract_entities(self, text, labels, max_len=None):
         return {"entities": {"email": ["a@b.com"]}}
     def create_schema(self):
         return _StubSchema()
-    def extract(self, text, schema, include_confidence=False):
+    def extract(self, text, schema, include_confidence=False, max_len=None):
         return {"entities": {"email": ["a@b.com"]}, "sensitivity": "pii"}
 
 

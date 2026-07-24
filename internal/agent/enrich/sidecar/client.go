@@ -26,6 +26,11 @@ type Client struct {
 	base string
 	hc   *http.Client
 	ctx  context.Context
+	// maxLen truncates each inference's input to this many word tokens,
+	// bounding its transient activation memory. 0 means "no cap", which is
+	// gliner2's own default — see lenstat for why a cap is required and how
+	// this value is derived from the machine's prompt-length distribution.
+	maxLen int
 }
 
 func New(baseURL string, timeout time.Duration) *Client {
@@ -47,6 +52,27 @@ func (c *Client) WithContext(ctx context.Context) *Client {
 	cp := *c
 	cp.ctx = ctx
 	return &cp
+}
+
+// WithMaxLen returns a shallow copy that truncates each inference's input to n
+// word tokens (<= 0 clears the cap). The daemon binds this per job from the
+// adaptive cap; it composes with WithContext/WithModelContext, so binding a
+// per-pass deadline afterwards preserves the cap.
+func (c *Client) WithMaxLen(n int) *Client {
+	cp := *c
+	if n < 0 {
+		n = 0
+	}
+	cp.maxLen = n
+	return &cp
+}
+
+// WithModelContext satisfies enrich.ContextModel so the pipeline can bind a
+// per-pass deadline to the backend. Returns the same shallow copy WithContext
+// does, typed as enrich.Model (Go interfaces are invariant in the return type,
+// so WithContext cannot satisfy the interface directly).
+func (c *Client) WithModelContext(ctx context.Context) enrich.Model {
+	return c.WithContext(ctx)
 }
 
 // postOnce performs one POST. ok=true means a 200 was decoded into out.
@@ -108,10 +134,24 @@ func (c *Client) post(path string, body any, out any) bool {
 	}
 }
 
+// Request bodies carry MaxLen as omitempty so an unset cap is absent from the
+// JSON rather than sent as 0 — the sidecar reads a present-but-zero value as
+// "truncate to nothing", not "no cap".
 type extractReq struct {
 	Text   string              `json:"text"`
 	Labels map[string]string   `json:"labels"`
 	Tasks  map[string][]string `json:"tasks"`
+	MaxLen int                 `json:"max_len,omitempty"`
+}
+type entitiesReq struct {
+	Text   string            `json:"text"`
+	Labels map[string]string `json:"labels"`
+	MaxLen int               `json:"max_len,omitempty"`
+}
+type classifyReq struct {
+	Text   string              `json:"text"`
+	Tasks  map[string][]string `json:"tasks"`
+	MaxLen int                 `json:"max_len,omitempty"`
 }
 type extractResp struct {
 	Entities []enrich.Entity            `json:"entities"`
@@ -120,7 +160,7 @@ type extractResp struct {
 
 func (c *Client) Extract(text string, labels map[string]string, tasks map[string][]string) enrich.ExtractResult {
 	var r extractResp
-	if !c.post("/extract", extractReq{text, labels, tasks}, &r) {
+	if !c.post("/extract", extractReq{text, labels, tasks, c.maxLen}, &r) {
 		return enrich.ExtractResult{}
 	}
 	return enrich.ExtractResult{Entities: r.Entities, Results: r.Results}
@@ -128,10 +168,7 @@ func (c *Client) Extract(text string, labels map[string]string, tasks map[string
 
 func (c *Client) Entities(text string, labels map[string]string) []enrich.Entity {
 	var r extractResp
-	if !c.post("/entities", struct {
-		Text   string            `json:"text"`
-		Labels map[string]string `json:"labels"`
-	}{text, labels}, &r) {
+	if !c.post("/entities", entitiesReq{text, labels, c.maxLen}, &r) {
 		return nil
 	}
 	return r.Entities
@@ -139,10 +176,7 @@ func (c *Client) Entities(text string, labels map[string]string) []enrich.Entity
 
 func (c *Client) Classify(text string, tasks map[string][]string) map[string][]enrich.Ranked {
 	var r extractResp
-	if !c.post("/classify", struct {
-		Text  string              `json:"text"`
-		Tasks map[string][]string `json:"tasks"`
-	}{text, tasks}, &r) {
+	if !c.post("/classify", classifyReq{text, tasks, c.maxLen}, &r) {
 		return nil
 	}
 	return r.Results

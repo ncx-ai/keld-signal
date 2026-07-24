@@ -7,6 +7,56 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+### Fixed
+- **Sidecar RAM oscillated from a ~2.7 GB baseline to ~5.7 GB peaks, swapping and
+  destabilizing the host, and `keld-agent` thrashed without completing any
+  enrichment.** Three compounding causes, each fixed:
+
+  1. **The per-inference memory spike was unbounded.** gliner2's `max_len`
+     defaults to `None` (no truncation) and the sidecar never passed it;
+     `KELD_SIDECAR_MAX_CHARS` bounded *characters* while activation memory scales
+     with *tokens*. The daemon now derives an adaptive token cap from the
+     machine's own prompt-length distribution — streaming mean/variance (Welford;
+     lengths only, never text, in `~/.keld/state/prompt-lengths.json`), truncating
+     at mu+2*sigma clamped to `[KELD_ENRICH_TOKEN_FLOOR 512,
+     KELD_ENRICH_TOKEN_CEILING 768]` — and sends it as `max_len`. Ceiling values
+     are measured against the real model in the running daemon, not estimated. `KELD_SIDECAR_MAX_CHARS`
+     is now 24000 and documented as a tokenizer-cost guard, not the memory bound
+     (at 8000 it silently pre-empted any larger token cap).
+  2. **The enrichment deadline was per JOB, not per pass.** A job issues 8-9
+     inferences, so one slow pass discarded every pass that had already succeeded
+     and re-spooled the whole job — the same work redone and re-discarded until
+     quarantine. Observed: no job ever completed. Deadlines are now per pass
+     (`KELD_ENRICH_PASS_TIMEOUT`, default 30s), bound to the backend via
+     `enrich.ContextModel` so expiry aborts that pass's in-flight call; a slow pass
+     costs one facet and the profile still publishes as `partial`, making progress
+     monotonic. `KELD_ENRICH_JOB_TIMEOUT` is demoted to a wedge backstop (30s →
+     **5m**), with a test pinning that it exceeds `passes x pass-timeout`.
+  3. **The RSS-ceiling guard could not see what it guarded.** `poll()` sampled the
+     worker's RSS while holding the same lock `call()` holds for an entire
+     inference, so it only ever sampled *between* jobs, right after the worker
+     trimmed its heap — measured `recycles == 0` while real RSS ran at ~1.7x the
+     ceiling. RSS is now sampled without the lock, `peak_rss_mb` is tracked and
+     reported, the drift ceiling is decided only when uncontended (non-blocking
+     acquire), and a budget-derived **hard limit**
+     (`KELD_SIDECAR_MEM_BUDGET_MB` 4096 − `KELD_SIDECAR_PARENT_RESERVE_MB` 150)
+     kills the worker even mid-job. `/metrics` now exposes `peak_rss_mb`,
+     `ceiling_mb`, `hard_limit_mb`, and `kills.hard`.
+
+  Verified end-to-end. In the live daemon, the same 60 s RSS trace that showed
+  min 2715 / p50 4052 / p95 5601 / **max 5692 MB** before now shows min 2788 /
+  p50 3251 / p95 3755 / **max 3872 MB**, and the worst case at the final 768
+  ceiling on the heaviest real op (`/extract`) peaks at 3238 MB (~3343 MB total,
+  753 MB of margin). An unbounded control reproduced the original bug at 6307 MB
+  and was hard-killed. Jobs that previously re-spooled forever now publish; the
+  spool drains to 0. Truncation cannot shift enrichment quality on the eval corpus
+  (every gold prompt is ≤380 word tokens, below the 512 floor).
+
+### Notes
+- Chat-scale only: agentic-workflow payloads (system + work prompt + metadata)
+  need a distinct control-flow branch with segment-aware windowed inference — see
+  `docs/superpowers/specs/2026-07-24-agentic-scale-input-bounding.md`.
+
 ## [0.13.1] — 2026-07-23
 
 ### Fixed

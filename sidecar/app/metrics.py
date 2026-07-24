@@ -14,14 +14,23 @@ class Counts:
 
 def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
                   governor, runner, counts, recycles, kills, uptime_s,
-                  cpu_threads=None, clock=time.monotonic):
+                  cpu_threads=None, peak_rss_mb=None, ceiling_mb=None,
+                  hard_limit_mb=None, clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     return {
         "worker": {
             "state": worker_state,
             "worker_rss_mb": round(worker_rss_mb, 1) if worker_rss_mb is not None else None,
+            # peak_rss_mb is the high-water for the current worker generation.
+            # worker_rss_mb alone is an instantaneous sample, which is why a
+            # 2.7GB->5.7GB oscillation could look healthy in /metrics: the budget
+            # is blown by the PEAK, so report it alongside the limits it is
+            # judged against.
+            "peak_rss_mb": round(peak_rss_mb, 1) if peak_rss_mb is not None else None,
             "parent_rss_mb": round(parent_rss_mb, 1) if parent_rss_mb is not None else None,
             "model_cost_mb": round(model_cost_mb, 1) if model_cost_mb else None,
+            "ceiling_mb": round(ceiling_mb, 1) if ceiling_mb is not None else None,
+            "hard_limit_mb": round(hard_limit_mb, 1) if hard_limit_mb is not None else None,
             "recycles": recycles,
             "kills": dict(kills),
         },

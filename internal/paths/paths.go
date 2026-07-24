@@ -41,6 +41,11 @@ func AgentLogDir() string           { return filepath.Join(KeldHome(), "logs") }
 func AgentStdoutLog() string        { return filepath.Join(AgentLogDir(), "agent.out.log") }
 func AgentStderrLog() string        { return filepath.Join(AgentLogDir(), "agent.err.log") }
 func StateDir() string              { return filepath.Join(KeldHome(), "state") }
+
+// PromptLengthsPath holds the streaming prompt-length distribution the daemon
+// uses to size enrichment's input truncation (see agent/enrich/lenstat).
+// Lengths only — never prompt text.
+func PromptLengthsPath() string { return filepath.Join(StateDir(), "prompt-lengths.json") }
 func BackupsDir() string            { return filepath.Join(KeldHome(), "backups") }
 func ModelsDir(model string) string { return filepath.Join(KeldHome(), "models", model) }
 func InstallIDPath() string         { return filepath.Join(KeldHome(), "install-id") }

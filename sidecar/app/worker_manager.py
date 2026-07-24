@@ -68,13 +68,36 @@ class WorkerManager:
         self._idle_timeout = float(os.environ.get("KELD_SIDECAR_IDLE_UNLOAD_S", "600")) if idle_timeout_s is None else idle_timeout_s
         self._evict_pct = float(os.environ.get("KELD_SIDECAR_EVICT_AVAIL_PCT", "5")) if evict_pct is None else evict_pct
         self._margin = float(os.environ.get("KELD_SIDECAR_RSS_MARGIN_MB", "1024")) if margin_mb is None else margin_mb
+        # Hard limit: an absolute RSS above which the worker is killed even
+        # mid-job. The ceiling above is a BASELINE-DRIFT guard consulted only
+        # between jobs; this is the "the host is at risk right now" backstop.
+        #
+        # It is derived from the TOTAL sidecar memory budget rather than from the
+        # ceiling, because the budget is the actual requirement ("the sidecar must
+        # never exceed 4 GB"): worker limit = budget - what the FastAPI parent and
+        # the multiprocessing resource tracker cost. Set KELD_SIDECAR_RSS_HARD_MB
+        # for an absolute worker limit instead.
+        self._budget_mb = float(os.environ.get("KELD_SIDECAR_MEM_BUDGET_MB", "4096"))
+        self._parent_reserve_mb = float(os.environ.get("KELD_SIDECAR_PARENT_RESERVE_MB", "150"))
+        # Floor the hard limit at ceiling + this, so on a host where the model
+        # alone is large (ceiling above the budget) the limit stays above the
+        # ceiling instead of turning every transient spike into a mid-job kill.
+        self._hard_margin = float(os.environ.get("KELD_SIDECAR_RSS_HARD_MARGIN_MB", "512"))
+        _hard = os.environ.get("KELD_SIDECAR_RSS_HARD_MB")
+        self._hard_limit_mb = float(_hard) if _hard else None
         self._lock = threading.RLock()
         self._proc = self._req = self._resp = None
         self.state = DOWN
         self.model_cost_mb = None
         self._last_activity = self._clock()
+        # High-water RSS for the CURRENT worker generation. Sampled without the
+        # lock (see observe_rss) so an in-flight spike is visible at all; the
+        # previous design only ever sampled between jobs, right after the worker
+        # trimmed its heap, so every spike was invisible and recycles stayed 0
+        # while real RSS ran at ~1.7x the ceiling.
+        self._peak_rss = 0.0
         self.counts = {"recycles": 0, "kills_timeout": 0, "kills_pressure": 0,
-                       "kills_idle": 0, "crashes": 0}
+                       "kills_idle": 0, "kills_hard": 0, "crashes": 0}
         self._call_hook = None  # test seam
 
     # ---- lifecycle -------------------------------------------------------
@@ -96,13 +119,20 @@ class WorkerManager:
             self.model_cost_mb = self._rss_fn(self._proc.pid)
 
     def _kill(self, count_key):
-        if self._proc is not None:
+        # Snapshot the process: the hard-limit guard kills without the lock, so
+        # call() may null these fields concurrently. Reading through a local means
+        # a lost race is a no-op instead of an AttributeError.
+        proc = self._proc
+        if proc is not None:
             try:
-                self._proc.kill(); self._proc.join(timeout=5)
+                proc.kill(); proc.join(timeout=5)
             except Exception:
                 pass
         self._proc = self._req = self._resp = None
         self.state = DOWN
+        # Peak is per worker generation: carrying a dead worker's high-water into
+        # a fresh one would misreport it and could trip the hard limit at once.
+        self._peak_rss = 0.0
         if count_key:
             self.counts[count_key] = self.counts.get(count_key, 0) + 1
 
@@ -136,12 +166,77 @@ class WorkerManager:
             return None
         return self.model_cost_mb + self._margin
 
+    def hard_limit_mb(self):
+        """Absolute worker RSS above which the worker is killed even mid-job.
+
+        The total budget less the parent's share, but never below
+        ceiling + hard_margin: on a host whose model alone is large enough that
+        the ceiling exceeds the budget, a limit under the ceiling would make
+        every ordinary transient spike a mid-job kill."""
+        if self._hard_limit_mb is not None:
+            return self._hard_limit_mb
+        from_budget = self._budget_mb - self._parent_reserve_mb
+        ceiling = self.ceiling_mb()
+        if ceiling is None or from_budget > ceiling:
+            return from_budget      # normal case: the budget is the binding limit
+        # Pathological host: the model alone is large enough that the drift
+        # ceiling already exceeds the budget. Sit above the ceiling anyway — a
+        # limit BELOW it would make every ordinary spike a mid-job kill — and
+        # accept that the budget cannot be met with this model on this host.
+        return ceiling + self._hard_margin
+
+    @property
+    def peak_rss_mb(self):
+        """High-water RSS for the current worker generation."""
+        return self._peak_rss
+
+    def observe_rss(self):
+        """Sample the worker's RSS and update the peak, WITHOUT taking the
+        manager lock.
+
+        Reading RSS needs no lock — only mutating the worker does — and taking
+        one here is what blinded the guard: call() holds the lock for the entire
+        inference, so a sampler that waits for it can only ever read between
+        jobs, immediately after the worker returns its heap to the OS. The spike
+        the guard exists to catch was therefore never sampled once."""
+        p = self._proc
+        if p is None:
+            return 0.0
+        rss = self._rss_fn(p.pid)
+        if rss > self._peak_rss:
+            self._peak_rss = rss
+        return rss
+
     def poll(self):
-        """Periodic lifecycle check (called off the event loop). Pressure wins,
-        then idle, then RSS ceiling. Kills set DOWN (lazy respawn on next call);
-        pressure sets HELD until headroom returns."""
+        """Periodic lifecycle check (called off the event loop).
+
+        Two tiers, because "RSS is high right now" and "the worker's baseline has
+        grown" call for different responses:
+
+        - Hard limit: enforced on a LOCK-FREE sample, so it applies even while a
+          job holds the lock. At this point the host is at risk now and waiting
+          for a job boundary that may never come is not an option.
+        - Baseline drift (pressure / idle / ceiling): decided only when the lock
+          is free, i.e. between jobs. A ceiling sample taken mid-inference would
+          measure a transient spike rather than drift, and recycling for that
+          would kill a job to reclaim memory the worker is about to free anyway.
+
+        The lock is acquired non-blocking: waiting for it would stall the poll
+        loop for a whole inference and pin every sample to a job boundary."""
+        rss = self.observe_rss()
+        hard = self.hard_limit_mb()
+        if (hard is not None and self.state == READY and rss > hard):
+            # Deliberately not lock-guarded: the lock may be held by the very
+            # inference that has to be stopped. call() reads its queue through a
+            # local snapshot, so tearing the worker down under it surfaces as a
+            # normal "worker died mid-job".
+            self._kill("kills_hard")
+            return
+
         avail_pct, avail_mb = self._ram_fn()
-        with self._lock:
+        if not self._lock.acquire(blocking=False):
+            return  # a job is in flight; baseline decisions wait for a boundary
+        try:
             if self.state == HELD:
                 need = (self.model_cost_mb or 0.0) + self._margin
                 if avail_mb >= need:
@@ -160,6 +255,8 @@ class WorkerManager:
             if ceiling is not None and self._rss_fn(self._proc.pid) > ceiling:
                 self._kill("recycles")    # DOWN; next call respawns a fresh heap
                 return
+        finally:
+            self._lock.release()
 
     def call(self, req: dict) -> dict:
         with self._lock:
@@ -167,6 +264,12 @@ class WorkerManager:
             self._req.put(req)
             if self._call_hook is not None:   # test seam: emulate the child
                 self._call_hook(req)
+            # Snapshot the response queue and process: the hard-limit guard in
+            # poll() may tear the worker down mid-job (it must not wait for this
+            # lock), which nulls the instance fields. Reading through locals turns
+            # that into the normal "worker died mid-job" path instead of an
+            # AttributeError escaping as a 500.
+            resp, proc = self._resp, self._proc
             # Poll in short slices: a worker that dies mid-job is caught within
             # ~one interval (it holds the single-flight slot), rather than only
             # after the full deadline elapses.
@@ -178,10 +281,10 @@ class WorkerManager:
                     self._kill("kills_timeout")
                     raise WorkerTimeout("inference exceeded deadline")
                 try:
-                    msg = self._resp.get(timeout=min(self._live_poll_s, remaining))
+                    msg = resp.get(timeout=min(self._live_poll_s, remaining))
                     break
                 except queue.Empty:
-                    if self._proc is None or not self._proc.is_alive():
+                    if proc is None or not proc.is_alive():
                         self._kill("crashes")
                         raise WorkerTimeout("worker died mid-job")
             self._last_activity = self._clock()

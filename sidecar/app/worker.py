@@ -31,23 +31,42 @@ def _release_memory() -> None:
         pass
 
 
+def _max_len(req: dict):
+    """The request's token cap, or None for no truncation.
+
+    This is THE bound on a single inference's transient memory: gliner2's own
+    max_len default is None (no truncation), so activation memory grows with
+    sequence length until the host swaps. The daemon derives the value adaptively
+    (internal/agent/enrich/lenstat) and sends it per request.
+
+    0 is treated as unset, not as an empty window: it is Go's zero value, so a
+    cap that was never configured must mean "no cap" rather than "truncate
+    everything away"."""
+    n = req.get("max_len")
+    if not n or int(n) <= 0:
+        return None
+    return int(n)
+
+
 def handle(req: dict, model) -> dict:
     """Run one request against the model and return the final endpoint-shaped,
     normalized dict. Pure w.r.t. the model object, so it is unit-testable with a
     stub."""
     op = req["op"]
     text = req["text"]
+    max_len = _max_len(req)
     if op == "classify":
-        raw = model.classify_text(text, req["tasks"], include_confidence=True)
+        raw = model.classify_text(text, req["tasks"], include_confidence=True,
+                                  max_len=max_len)
         return {"results": normalize_classify(raw)}
     if op == "entities":
-        raw = model.extract_entities(text, req["labels"])
+        raw = model.extract_entities(text, req["labels"], max_len=max_len)
         return {"entities": normalize_entities(raw, text)}
     if op == "extract":
         schema = model.create_schema().entities(req["labels"])
         for task, options in req["tasks"].items():
             schema = schema.classification(task, options)
-        raw = model.extract(text, schema, include_confidence=True)
+        raw = model.extract(text, schema, include_confidence=True, max_len=max_len)
         return normalize_extract(raw, text, list(req["tasks"].keys()))
     raise ValueError(f"unknown op: {op}")
 
