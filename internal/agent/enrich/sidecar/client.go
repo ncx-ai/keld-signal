@@ -174,6 +174,35 @@ func (c *Client) Entities(text string, labels map[string]string) []enrich.Entity
 	return r.Entities
 }
 
+// multiTaskWire is the per-task object form of the /classify contract: unlike
+// the plain []string (single-label softmax), it asks the sidecar to score each
+// label independently (sigmoid) at a threshold. Mirrors the Classifier Lab
+// preview's multi_label request.
+type multiTaskWire struct {
+	Labels       []string `json:"labels"`
+	MultiLabel   bool     `json:"multi_label"`
+	ClsThreshold float64  `json:"cls_threshold"`
+}
+type classifyMultiReq struct {
+	Text   string                   `json:"text"`
+	Tasks  map[string]multiTaskWire `json:"tasks"`
+	MaxLen int                      `json:"max_len,omitempty"`
+}
+
+// ClassifyMulti implements enrich.MultiLabelModel via the /classify route's
+// object task form (labels + multi_label + cls_threshold).
+func (c *Client) ClassifyMulti(text string, tasks map[string]enrich.MultiTask) map[string][]enrich.Ranked {
+	wire := make(map[string]multiTaskWire, len(tasks))
+	for name, t := range tasks {
+		wire[name] = multiTaskWire{Labels: t.Labels, MultiLabel: true, ClsThreshold: t.Threshold}
+	}
+	var r extractResp
+	if !c.post("/classify", classifyMultiReq{text, wire, c.maxLen}, &r) {
+		return nil
+	}
+	return r.Results
+}
+
 func (c *Client) Classify(text string, tasks map[string][]string) map[string][]enrich.Ranked {
 	var r extractResp
 	if !c.post("/classify", classifyReq{text, tasks, c.maxLen}, &r) {

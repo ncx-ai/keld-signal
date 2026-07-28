@@ -49,6 +49,10 @@ type Enrichment struct {
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
 	ModelVersion      string            `json:"model_version"`
+	// Custom carries org-defined (custom) pass results, keyed by pass key. Atlas
+	// stores it verbatim (enrichment.custom / raw); built-ins stay in the typed
+	// fields above.
+	Custom map[string]enrich.CustomResult `json:"custom,omitempty"`
 	// PromptChars is the resolved (typed) prompt length in Unicode code points —
 	// a derived integer, never the prompt text. Omitted when 0 (unknown).
 	PromptChars int    `json:"prompt_chars,omitempty"`
@@ -85,6 +89,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		PipelineStatus:    p.PipelineStatus,
 		ExtractorVersions: p.ExtractorVersions,
 		SchemaVersion:     p.SchemaVersion,
+		Custom:            p.Custom,
 		ModelVersion:      "gliner2-large-v1",
 		PromptChars:       promptChars,
 		TS:                now.UTC().Format(time.RFC3339),

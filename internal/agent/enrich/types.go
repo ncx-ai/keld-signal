@@ -56,6 +56,22 @@ type ContextModel interface {
 	WithModelContext(ctx context.Context) Model
 }
 
+// MultiTask is a multi-label classification request: score each label
+// independently (sigmoid) and keep those at/above Threshold.
+type MultiTask struct {
+	Labels    []string
+	Threshold float64
+}
+
+// MultiLabelModel is an OPTIONAL Model capability (like ContextModel): true
+// multi-label classification. The GLiNER2 sidecar implements it; fakes/other
+// backends may too. Custom multi_label passes require it and degrade (skip with
+// an empty result) when the backend lacks it.
+type MultiLabelModel interface {
+	Model
+	ClassifyMulti(text string, tasks map[string]MultiTask) map[string][]Ranked
+}
+
 // HealthFunc reports whether the sidecar backend is currently usable. Used by
 // the daemon's Supervisor to poll sidecar health.
 type HealthFunc func() bool
@@ -78,7 +94,21 @@ type Profile struct {
 	PipelineStatus    string            `json:"pipeline_status"`
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
+	Custom            map[string]CustomResult `json:"custom,omitempty"`
 	EnrichedAt        time.Time         `json:"-"`
+}
+
+// CustomResult is one org-defined (custom) pass's output, shaped by kind. It
+// rides alongside the built-in Profile fields and is emitted on the enrichment
+// wire so Atlas can persist/surface arbitrary org-defined passes.
+type CustomResult struct {
+	Kind       string    `json:"kind"`                 // single_label | multi_label | entity
+	Value      string    `json:"value,omitempty"`      // single_label
+	Confidence float64   `json:"confidence,omitempty"` // single_label
+	Alt        []Labeled `json:"alt,omitempty"`        // single_label alternates
+	Values     []Labeled `json:"values,omitempty"`     // multi_label tags
+	Entities   []Entity  `json:"entities,omitempty"`   // entity (masked)
+	Producer   string    `json:"producer,omitempty"`
 }
 
 // JobContext threads input + per-stage outputs through the pipeline.
