@@ -56,6 +56,22 @@ type ContextModel interface {
 	WithModelContext(ctx context.Context) Model
 }
 
+// MultiTask is a multi-label classification request: score each label
+// independently (sigmoid) and keep those at/above Threshold.
+type MultiTask struct {
+	Labels    []string
+	Threshold float64
+}
+
+// MultiLabelModel is an OPTIONAL Model capability (like ContextModel): true
+// multi-label classification. The GLiNER2 sidecar implements it; fakes/other
+// backends may too. Custom multi_label passes require it and degrade (skip with
+// an empty result) when the backend lacks it.
+type MultiLabelModel interface {
+	Model
+	ClassifyMulti(text string, tasks map[string]MultiTask) map[string][]Ranked
+}
+
 // HealthFunc reports whether the sidecar backend is currently usable. Used by
 // the daemon's Supervisor to poll sidecar health.
 type HealthFunc func() bool

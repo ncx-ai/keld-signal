@@ -183,6 +183,28 @@ func (f *fake) Extract(text string, labels map[string]string, tasks map[string][
 	return enrich.ExtractResult{Entities: f.Entities(text, labels), Results: f.Classify(text, tasks)}
 }
 
+// ClassifyMulti satisfies enrich.MultiLabelModel: score each label by whether
+// its own text appears in the prompt, keeping those at/above the threshold. A
+// dependency-free stand-in for the sidecar's sigmoid multi-label path.
+func (f *fake) ClassifyMulti(text string, tasks map[string]enrich.MultiTask) map[string][]enrich.Ranked {
+	lower := strings.ToLower(text)
+	out := map[string][]enrich.Ranked{}
+	for task, mt := range tasks {
+		var ranked []enrich.Ranked
+		for _, label := range mt.Labels {
+			conf := 0.0
+			if strings.Contains(lower, strings.ToLower(label)) {
+				conf = 0.8
+			}
+			if conf > 0 && conf >= mt.Threshold {
+				ranked = append(ranked, enrich.Ranked{Label: label, Confidence: conf})
+			}
+		}
+		out[task] = ranked
+	}
+	return out
+}
+
 // fallbackLabel prefers "other"/"general" if present, else the last item.
 func fallbackLabel(allowed []string) string {
 	for _, l := range allowed {
