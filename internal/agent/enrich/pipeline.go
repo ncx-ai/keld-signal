@@ -22,6 +22,8 @@ type Option func(*runCfg)
 type runCfg struct {
 	passTimeout time.Duration
 	parent      context.Context
+	customW1    []Extractor
+	customW2    []Extractor
 }
 
 // WithPassTimeout sets the per-pass deadline. <= 0 disables it (no deadline).
@@ -34,6 +36,14 @@ func WithPassTimeout(d time.Duration) Option {
 // bounded only by their own deadline.
 func WithJobContext(ctx context.Context) Option {
 	return func(c *runCfg) { c.parent = ctx }
+}
+
+// WithCustomExtractors appends org-defined custom passes to the built-in
+// pipeline: wave1 run alongside the independent built-ins, wave2 after commit
+// (so conditioned custom passes can read a prior pass's id). Their outputs are
+// collected into Profile.Custom, never into the built-in fields.
+func WithCustomExtractors(wave1, wave2 []Extractor) Option {
+	return func(c *runCfg) { c.customW1, c.customW2 = wave1, wave2 }
 }
 
 // passTimeoutFromEnv resolves the default per-pass deadline.
@@ -114,7 +124,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		o(&cfg)
 	}
 	ctx := NewJobContext(text, source, meta, m)
-	exs := Wave1()
+	exs := append(Wave1(), cfg.customW1...)
 
 	type res struct {
 		name string
@@ -137,7 +147,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	}
 
 	// Wave2: extractors that depend on Wave1 output (run after commit).
-	wave2 := Wave2()
+	wave2 := append(Wave2(), cfg.customW2...)
 	for _, ex := range wave2 {
 		if out, ok := runStageBounded(ex, ctx, cfg); ok {
 			ctx.Set(ex.Name(), out)
@@ -159,6 +169,8 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		versions[ex.Name()] = ex.Version()
 	}
 
+	custom := collectCustom(ctx, cfg.customW1, cfg.customW2)
+
 	return Profile{
 		TaskType:          labeledFrom(ctx.Get("task_type"), "task_type", "task_type"),
 		TaskTypeAlt:       altsFrom(ctx.Get("task_type")),
@@ -176,8 +188,50 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		PipelineStatus:    status,
 		ExtractorVersions: versions,
 		SchemaVersion:     SchemaVersion,
+		Custom:            custom,
 		EnrichedAt:        time.Now().UTC(),
 	}
+}
+
+// collectCustom reads the committed outputs of the custom extractors into a
+// CustomResult map keyed by pass key, shaped by the output type each custom
+// extractor emits (Labeled / []Labeled / []Entity). A failed/absent pass
+// contributes nothing. Returns nil when there are no custom passes.
+func collectCustom(ctx *JobContext, wave1, wave2 []Extractor) map[string]CustomResult {
+	names := make([]string, 0, len(wave1)+len(wave2))
+	for _, ex := range wave1 {
+		names = append(names, ex.Name())
+	}
+	for _, ex := range wave2 {
+		names = append(names, ex.Name())
+	}
+	var out map[string]CustomResult
+	for _, name := range names {
+		got := ctx.Get(name)
+		if got == nil {
+			continue
+		}
+		if out == nil {
+			out = map[string]CustomResult{}
+		}
+		switch v := got[name].(type) {
+		case Labeled:
+			out[name] = CustomResult{Kind: "single_label", Value: v.Value, Confidence: v.Confidence, Producer: v.Producer}
+		case []Labeled:
+			out[name] = CustomResult{Kind: "multi_label", Values: v, Producer: producerOf(v)}
+		case []Entity:
+			out[name] = CustomResult{Kind: "entity", Entities: v}
+		}
+	}
+	return out
+}
+
+// producerOf returns the first tag's Producer (they share one), or "".
+func producerOf(vals []Labeled) string {
+	if len(vals) > 0 {
+		return vals[0].Producer
+	}
+	return ""
 }
 
 func labeledFrom(out map[string]any, key, producer string) Labeled {

@@ -94,7 +94,21 @@ type Profile struct {
 	PipelineStatus    string            `json:"pipeline_status"`
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
+	Custom            map[string]CustomResult `json:"custom,omitempty"`
 	EnrichedAt        time.Time         `json:"-"`
+}
+
+// CustomResult is one org-defined (custom) pass's output, shaped by kind. It
+// rides alongside the built-in Profile fields and is emitted on the enrichment
+// wire so Atlas can persist/surface arbitrary org-defined passes.
+type CustomResult struct {
+	Kind       string    `json:"kind"`                 // single_label | multi_label | entity
+	Value      string    `json:"value,omitempty"`      // single_label
+	Confidence float64   `json:"confidence,omitempty"` // single_label
+	Alt        []Labeled `json:"alt,omitempty"`        // single_label alternates
+	Values     []Labeled `json:"values,omitempty"`     // multi_label tags
+	Entities   []Entity  `json:"entities,omitempty"`   // entity (masked)
+	Producer   string    `json:"producer,omitempty"`
 }
 
 // JobContext threads input + per-stage outputs through the pipeline.
