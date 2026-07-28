@@ -66,8 +66,15 @@ type Sender interface {
 // ctx is the daemon-lifetime context; each job runs under a child context that
 // is cancelled on timeout so a hung/slow enrichment's in-flight sidecar calls
 // are reclaimed (not left retrying forever — the death-spiral root cause).
-func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, warmup func(context.Context) error, emitter *clientevents.Emitter, ra *reauther) {
+// Worker drains the enrichment queue. The trailing variadic customHolder is an
+// optional, backward-compatible hook: the daemon passes the live custom-pass
+// holder (hot-swapped by the settings poll); existing callers/tests omit it.
+func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, warmup func(context.Context) error, emitter *clientevents.Emitter, ra *reauther, custom ...*customHolder) {
 	ledger := newRetryLedger()
+	var holder *customHolder
+	if len(custom) > 0 {
+		holder = custom[0]
+	}
 	// One tracker for the daemon's lifetime: it accumulates the prompt-length
 	// distribution across jobs (and restarts, via its persisted state) so
 	// truncation converges on this machine's actual prompt sizes.
@@ -113,8 +120,14 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 		jobCtx, cancel := context.WithCancel(ctx)
 		jobModel := withJobCtx(m, jobCtx)
 		var published bool
+		// Snapshot the live custom passes once per job (consistent even if the
+		// settings poll swaps mid-job).
+		var copts []enrich.Option
+		if w1, w2 := holder.load(); len(w1) > 0 || len(w2) > 0 {
+			copts = []enrich.Option{enrich.WithCustomExtractors(w1, w2)}
+		}
 		finished := runWithTimeout(to, func() {
-			published = process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter, ra, lens)
+			published = process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter, ra, lens, copts...)
 		})
 		cancel() // always: on timeout this reclaims the abandoned attempt; on success it just releases resources.
 
@@ -359,7 +372,7 @@ func isAuthError(err error) bool {
 // to mark the job's key deduped. A skip (unresolved text), a deadline-cancelled
 // attempt, a publish failure, or a panic all return false so the job stays
 // re-offerable (retry / watcher fallback).
-func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther, lens *lenstat.Tracker) bool {
+func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther, lens *lenstat.Tracker, customOpts ...enrich.Option) bool {
 	je := newJobEmit(emitter, j)
 	defer func() {
 		if r := recover(); r != nil {
@@ -396,7 +409,7 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	// A pass that exceeds its deadline costs only its own facet: the profile
 	// comes back "partial" and is still published, so a slow pass never
 	// discards the work the other passes already completed.
-	profile := enrich.Run(text, j.Source, meta, m, enrich.WithJobContext(ctx))
+	profile := enrich.Run(text, j.Source, meta, m, append([]enrich.Option{enrich.WithJobContext(ctx)}, customOpts...)...)
 	// The job-level backstop only fires for a wedge outside the passes; if it
 	// did, the profile is untrustworthy — don't publish it. The worker re-spools
 	// (bounded) so it retries on a healthy sidecar.
@@ -648,15 +661,28 @@ func Run(ctx context.Context) error {
 	watcher := resource.NewWatcher(emitter.Emit, gaugeEmit, thresholdsFrom(eff), resource.NewProcessTreeSampler(os.Getpid()), time.Now)
 	go watcher.Run(ctx, sampleInterval)
 
+	// custom holds the org's live custom enrichment passes, rebuilt on each
+	// successful settings poll and read per-job by the Worker.
+	custom := newCustomHolder()
 	onRemote := func(r *settings.Remote) {
 		re := r.ClientTelemetry.WithDefaults()
 		emitter.SetGate(gateFrom(re))
 		watcher.SetThresholds(thresholdsFrom(re))
 		gaugesEnabled.Store(re.GaugesEnabled)
+
+		// Rebuild + hot-swap the org's custom passes. Built-in/unsupported
+		// passes are rejected here (never as extractors); surface each as a
+		// client-telemetry warning without leaking prompt content.
+		w1, w2, rejected := enrich.BuildCustomExtractors(passesFromSchema(r.EnrichmentSchema))
+		custom.store(w1, w2)
+		for _, rj := range rejected {
+			emitter.Emit("enrich.custom.rejected", clientevents.SevWarn,
+				map[string]any{"key": rj.Key, "reason": rj.Reason})
+		}
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
-		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, warmupFunc(model), emitter, ra)
+		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, warmupFunc(model), emitter, ra, custom)
 	}
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
