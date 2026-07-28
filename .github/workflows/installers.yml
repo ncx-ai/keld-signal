@@ -150,6 +150,28 @@ jobs:
           [ -z "$VER" ] && VER="0.0.0-dryrun"
           bash installers/macos/build-pkg.sh "$VER" stage "${{ matrix.goarch }}"
 
+      # Publish the frozen macOS sidecar as a standalone tarball so the curl|sh installer
+      # (scripts/install.sh) can fetch it on macOS — the .pkg bundles it, but the curl path
+      # downloads it per-OS/arch like Linux does.
+      - name: Package macOS sidecar tarball
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: tar -C dist -czf "keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz" keld-agent-sidecar
+
+      - name: Upload macOS sidecar to release
+        if: startsWith(matrix.os, 'macos') && env.IS_RELEASE == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz
+
+      - name: Upload macOS sidecar as artifact (dry run)
+        if: startsWith(matrix.os, 'macos') && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-macos-${{ matrix.goarch }}-sidecar
+          if-no-files-found: ignore
+          path: keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz
+
       - name: Package Windows installer
         if: matrix.os == 'windows-latest'
         shell: pwsh
