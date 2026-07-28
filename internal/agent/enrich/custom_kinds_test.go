@@ -38,6 +38,23 @@ func TestCustomMultiLabelEmitsAllTagsAndDefaultsThreshold(t *testing.T) {
 	}
 }
 
+func TestCustomMultiLabelHonorsExplicitZeroThreshold(t *testing.T) {
+	zero := 0.0
+	m := &multiCanned{Model: &cannedModel{}, ranked: map[string][]Ranked{
+		"Artifact": {{Label: "source code", Confidence: 0.8}},
+	}}
+	p := CustomPass{Key: "art", Kind: "multi_label", Title: "Artifact", ClsThreshold: &zero,
+		Labels: []CustomLabel{{ID: "code", Text: "source code"}}}
+	w1, _, _ := BuildCustomExtractors([]CustomPass{p})
+	ctx := NewJobContext("code", "claude_code", Meta{}, m)
+	if _, err := w1[0].Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if m.lastTh["Artifact"] != 0.0 {
+		t.Fatalf("explicit 0.0 threshold not honored, got %v", m.lastTh["Artifact"])
+	}
+}
+
 func TestCustomMultiLabelSkippedWhenBackendLacksCapability(t *testing.T) {
 	// cannedModel does NOT implement MultiLabelModel -> extractor emits empty, no panic.
 	m := &cannedModel{}

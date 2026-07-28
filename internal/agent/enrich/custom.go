@@ -27,8 +27,8 @@ type CustomPass struct {
 	ConditionOn      string
 	LabelsByCond     map[string][]CustomLabel
 	MultiLabel       bool
-	ClsThreshold     float64 // 0 => DefaultClsThreshold at run time
-	Version          string  // Producer/version string; falls back to key
+	ClsThreshold     *float64 // nil => DefaultClsThreshold; explicit 0.0 honored
+	Version          string   // Producer/version string; falls back to key
 }
 
 // CustomReject records a pass we could not build, for telemetry/logging.
@@ -87,7 +87,9 @@ func BuildCustomExtractors(passes []CustomPass) (wave1, wave2 []Extractor, rejec
 // on RAW ctx.Text with the pass TITLE as the task name (Lab parity with
 // enrich_preview). For a lone label it injects a hidden "Not <value>" negative
 // so the pass behaves as a binary "tag if applicable", stripped from the output.
-func classifyCustom(ctx *JobContext, p CustomPass, labels []CustomLabel) Labeled {
+// Returns the winning Labeled plus ranked alternates (both mapped to ids, with
+// the synthetic negative removed) — mirroring the built-in single_label passes.
+func classifyCustom(ctx *JobContext, p CustomPass, labels []CustomLabel) (Labeled, []Labeled) {
 	task := p.Title
 	if task == "" {
 		task = p.Key
@@ -109,10 +111,20 @@ func classifyCustom(ctx *JobContext, p CustomPass, labels []CustomLabel) Labeled
 	}
 	res := ctx.Model.Classify(ctx.Text, map[string][]string{task: texts})
 	ranked := res[task]
-	if len(ranked) == 0 || ranked[0].Label == neg {
-		return Labeled{Value: "", Confidence: 0, Producer: p.producer()}
+	// neg != "" guards the lone-label case only; without it an empty model label
+	// ("") would spuriously match the empty neg and read as "not tagged".
+	if len(ranked) == 0 || (neg != "" && ranked[0].Label == neg) {
+		return Labeled{Value: "", Confidence: 0, Producer: p.producer()}, nil
 	}
-	return Labeled{Value: idByText[ranked[0].Label], Confidence: ranked[0].Confidence, Producer: p.producer()}
+	top := Labeled{Value: idByText[ranked[0].Label], Confidence: ranked[0].Confidence, Producer: p.producer()}
+	var alts []Labeled
+	for _, r := range ranked[1:] {
+		if r.Label == neg {
+			continue // never surface the synthetic negative as an alternate
+		}
+		alts = append(alts, Labeled{Value: idByText[r.Label], Confidence: r.Confidence, Producer: p.producer()})
+	}
+	return top, alts
 }
 
 // --- single_label ---
@@ -122,7 +134,8 @@ type customClassifyExtractor struct{ p CustomPass }
 func (e customClassifyExtractor) Name() string    { return e.p.Key }
 func (e customClassifyExtractor) Version() string { return e.p.producer() }
 func (e customClassifyExtractor) Run(ctx *JobContext) (map[string]any, error) {
-	return map[string]any{e.p.Key: classifyCustom(ctx, e.p, e.p.Labels)}, nil
+	top, alts := classifyCustom(ctx, e.p, e.p.Labels)
+	return map[string]any{e.p.Key: top, e.p.Key + "_alt": alts}, nil
 }
 
 // --- conditioned (Wave2) ---
@@ -142,7 +155,8 @@ func (e customCondExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	if len(labels) == 0 {
 		return map[string]any{e.p.Key: Labeled{Producer: e.p.producer()}}, nil
 	}
-	return map[string]any{e.p.Key: classifyCustom(ctx, e.p, labels)}, nil
+	top, alts := classifyCustom(ctx, e.p, labels)
+	return map[string]any{e.p.Key: top, e.p.Key + "_alt": alts}, nil
 }
 
 // --- multi_label ---
@@ -160,9 +174,9 @@ func (e customMultiExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	if task == "" {
 		task = e.p.Key
 	}
-	th := e.p.ClsThreshold
-	if th <= 0 {
-		th = DefaultClsThreshold
+	th := DefaultClsThreshold
+	if e.p.ClsThreshold != nil {
+		th = *e.p.ClsThreshold // honor an explicit threshold, including 0.0 (emit all)
 	}
 	texts := make([]string, 0, len(e.p.Labels))
 	idByText := map[string]string{}

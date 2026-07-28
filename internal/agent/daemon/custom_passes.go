@@ -44,11 +44,9 @@ func passesFromSchema(s *settings.EnrichmentSchema) []enrich.CustomPass {
 		cp := enrich.CustomPass{
 			Key: p.Key, Kind: p.Kind, Title: p.Title,
 			ConditionOn: p.ConditionOn, MultiLabel: p.MultiLabel, Version: p.Version,
+			ClsThreshold: p.ClsThreshold, // *float64 passthrough (nil vs explicit 0.0)
 			Labels:       toCustomLabels(p.Labels),
 			LabelsByCond: toCustomLabelsByCond(p.LabelsByCond),
-		}
-		if p.ClsThreshold != nil {
-			cp.ClsThreshold = *p.ClsThreshold
 		}
 		out = append(out, cp)
 	}

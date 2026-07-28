@@ -1,9 +1,12 @@
 package daemon
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
+	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
@@ -48,6 +51,37 @@ func TestCustomHolderSwapAndNilSafe(t *testing.T) {
 	h.store([]enrich.Extractor{customStub{}}, nil)
 	if w1, _ := h.load(); len(w1) != 1 {
 		t.Fatalf("swap failed")
+	}
+}
+
+// End-to-end daemon threading: a stored holder's custom passes reach the
+// published enrichment via process's customOpts... (the wiring the unit tests
+// above don't exercise).
+func TestProcessThreadsCustomPassesIntoPublishedEnrichment(t *testing.T) {
+	holder := newCustomHolder()
+	w1, w2, _ := enrich.BuildCustomExtractors([]enrich.CustomPass{
+		{Key: "nsfw", Kind: "single_label", Title: "NSFW", Version: "1",
+			Labels: []enrich.CustomLabel{{ID: "safe", Text: "safe"}, {ID: "nsfw", Text: "nsfw"}}},
+	})
+	holder.store(w1, w2)
+
+	// Mirror Worker's per-job snapshot.
+	cw1, cw2 := holder.load()
+	copts := []enrich.Option{enrich.WithCustomExtractors(cw1, cw2)}
+
+	sender := &fakeSender{}
+	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "CUS-1", Inline: "hello world"}
+	ok := process(context.Background(), j, enrichtest.NewFake(), sender, "actor@keld.co",
+		func() bool { return true }, nil, nil, nil, copts...)
+	if !ok {
+		t.Fatalf("process did not publish")
+	}
+	sent := sender.all()
+	if len(sent) != 1 {
+		t.Fatalf("want 1 publish, got %d", len(sent))
+	}
+	if _, present := sent[0].Custom["nsfw"]; !present {
+		t.Fatalf("custom pass not threaded into published enrichment: %+v", sent[0].Custom)
 	}
 }
 

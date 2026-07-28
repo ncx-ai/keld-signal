@@ -198,40 +198,40 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 // extractor emits (Labeled / []Labeled / []Entity). A failed/absent pass
 // contributes nothing. Returns nil when there are no custom passes.
 func collectCustom(ctx *JobContext, wave1, wave2 []Extractor) map[string]CustomResult {
-	names := make([]string, 0, len(wave1)+len(wave2))
-	for _, ex := range wave1 {
-		names = append(names, ex.Name())
-	}
-	for _, ex := range wave2 {
-		names = append(names, ex.Name())
-	}
 	var out map[string]CustomResult
-	for _, name := range names {
+	add := func(ex Extractor) {
+		name := ex.Name()
 		got := ctx.Get(name)
 		if got == nil {
-			continue
+			return // stage failed/uncommitted — contribute nothing
 		}
 		if out == nil {
 			out = map[string]CustomResult{}
 		}
+		// Producer comes from the extractor version so it's present even on the
+		// empty/degraded paths (not-tagged, no-span, no multi-label capability),
+		// keeping vocab-drift observable for every custom pass.
+		producer := ex.Version()
 		switch v := got[name].(type) {
 		case Labeled:
-			out[name] = CustomResult{Kind: "single_label", Value: v.Value, Confidence: v.Confidence, Producer: v.Producer}
+			var alts []Labeled
+			if a, ok := got[name+"_alt"].([]Labeled); ok {
+				alts = a
+			}
+			out[name] = CustomResult{Kind: "single_label", Value: v.Value, Confidence: v.Confidence, Alt: alts, Producer: producer}
 		case []Labeled:
-			out[name] = CustomResult{Kind: "multi_label", Values: v, Producer: producerOf(v)}
+			out[name] = CustomResult{Kind: "multi_label", Values: v, Producer: producer}
 		case []Entity:
-			out[name] = CustomResult{Kind: "entity", Entities: v}
+			out[name] = CustomResult{Kind: "entity", Entities: v, Producer: producer}
 		}
 	}
-	return out
-}
-
-// producerOf returns the first tag's Producer (they share one), or "".
-func producerOf(vals []Labeled) string {
-	if len(vals) > 0 {
-		return vals[0].Producer
+	for _, ex := range wave1 {
+		add(ex)
 	}
-	return ""
+	for _, ex := range wave2 {
+		add(ex)
+	}
+	return out
 }
 
 func labeledFrom(out map[string]any, key, producer string) Labeled {
