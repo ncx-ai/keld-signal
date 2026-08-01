@@ -57,10 +57,33 @@ type ContextModel interface {
 }
 
 // MultiTask is a multi-label classification request: score each label
-// independently (sigmoid) and keep those at/above Threshold.
+// independently (sigmoid) and keep those at/above Threshold. Descriptions
+// optionally maps a label to a GLiNER2 hint that steers the match by meaning; a
+// label absent from the map carries no hint. Empty ⇒ the wire stays the bare
+// label-list form, so passes without authored descriptions are unaffected.
 type MultiTask struct {
-	Labels    []string
-	Threshold float64
+	Labels       []string
+	Threshold    float64
+	Descriptions map[string]string
+}
+
+// DescribedTask is a single-label (softmax) classification carrying optional
+// per-label GLiNER2 hints — the single-label counterpart of MultiTask's
+// Descriptions. Labels is the full readable label set; Descriptions maps a
+// label to its hint (subset; omitted labels carry no hint).
+type DescribedTask struct {
+	Labels       []string
+	Descriptions map[string]string
+}
+
+// DescribedLabelModel is an OPTIONAL Model capability (like MultiLabelModel):
+// single-label classification with per-label descriptions. Custom single_label
+// passes use it when the backend implements it AND the pass has any authored
+// value descriptions; otherwise they fall back to Classify (no hints), so the
+// behavior of description-less passes and built-ins is unchanged.
+type DescribedLabelModel interface {
+	Model
+	ClassifyDescribed(text string, tasks map[string]DescribedTask) map[string][]Ranked
 }
 
 // MultiLabelModel is an OPTIONAL Model capability (like ContextModel): true

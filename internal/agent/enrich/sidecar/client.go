@@ -174,14 +174,32 @@ func (c *Client) Entities(text string, labels map[string]string) []enrich.Entity
 	return r.Entities
 }
 
+// labelsPayload builds the /classify task "labels" value. With no authored
+// descriptions it stays the bare []string (unchanged wire; a plain label set).
+// When any label carries a description it becomes GLiNER2's dict form
+// {label: hint} for EVERY label ("" where none was authored) — gliner2 reads a
+// dict-valued "labels" as label→description and injects each hint into the model
+// prompt (see gliner2 Schema.classification / processor DESC token).
+func labelsPayload(labels []string, desc map[string]string) any {
+	if len(desc) == 0 {
+		return labels
+	}
+	m := make(map[string]string, len(labels))
+	for _, l := range labels {
+		m[l] = desc[l]
+	}
+	return m
+}
+
 // multiTaskWire is the per-task object form of the /classify contract: unlike
 // the plain []string (single-label softmax), it asks the sidecar to score each
 // label independently (sigmoid) at a threshold. Mirrors the Classifier Lab
-// preview's multi_label request.
+// preview's multi_label request. Labels is []string or, with per-label
+// descriptions, the {label: hint} dict form.
 type multiTaskWire struct {
-	Labels       []string `json:"labels"`
-	MultiLabel   bool     `json:"multi_label"`
-	ClsThreshold float64  `json:"cls_threshold"`
+	Labels       any     `json:"labels"`
+	MultiLabel   bool    `json:"multi_label"`
+	ClsThreshold float64 `json:"cls_threshold"`
 }
 type classifyMultiReq struct {
 	Text   string                   `json:"text"`
@@ -194,10 +212,42 @@ type classifyMultiReq struct {
 func (c *Client) ClassifyMulti(text string, tasks map[string]enrich.MultiTask) map[string][]enrich.Ranked {
 	wire := make(map[string]multiTaskWire, len(tasks))
 	for name, t := range tasks {
-		wire[name] = multiTaskWire{Labels: t.Labels, MultiLabel: true, ClsThreshold: t.Threshold}
+		wire[name] = multiTaskWire{Labels: labelsPayload(t.Labels, t.Descriptions), MultiLabel: true, ClsThreshold: t.Threshold}
 	}
 	var r extractResp
 	if !c.post("/classify", classifyMultiReq{text, wire, c.maxLen}, &r) {
+		return nil
+	}
+	return r.Results
+}
+
+// describedTaskWire is the single-label (softmax) task object carrying per-label
+// descriptions: the {label: hint} dict form of "labels", with multi_label left
+// off so the sidecar scores it single-label. classify_text() accepts this task
+// config dict directly (gliner2 Schema.classification).
+type describedTaskWire struct {
+	Labels map[string]string `json:"labels"`
+}
+type classifyDescribedReq struct {
+	Text   string                       `json:"text"`
+	Tasks  map[string]describedTaskWire `json:"tasks"`
+	MaxLen int                          `json:"max_len,omitempty"`
+}
+
+// ClassifyDescribed implements enrich.DescribedLabelModel: single-label
+// classification with per-label GLiNER2 hints, via the /classify route's object
+// task form (dict labels, no multi_label).
+func (c *Client) ClassifyDescribed(text string, tasks map[string]enrich.DescribedTask) map[string][]enrich.Ranked {
+	wire := make(map[string]describedTaskWire, len(tasks))
+	for name, t := range tasks {
+		m := make(map[string]string, len(t.Labels))
+		for _, l := range t.Labels {
+			m[l] = t.Descriptions[l]
+		}
+		wire[name] = describedTaskWire{Labels: m}
+	}
+	var r extractResp
+	if !c.post("/classify", classifyDescribedReq{text, wire, c.maxLen}, &r) {
 		return nil
 	}
 	return r.Results

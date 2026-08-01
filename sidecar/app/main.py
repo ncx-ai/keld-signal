@@ -157,8 +157,12 @@ class ClassifyIn(BaseModel):
     text: str
     # A task value is either a bare label list (single-label softmax — pick one) OR a config dict
     # {"labels": [...], "multi_label": true, "cls_threshold": 0.5} for independent per-label
-    # (sigmoid) scoring — the basis for binary "tag or not" classification. classify_text() accepts
-    # both forms directly (gliner2 Schema.classification). Kept in parity with the Atlas
+    # (sigmoid) scoring — the basis for binary "tag or not" classification. In either form the
+    # config dict's "labels" may itself be a {label: description} MAP: gliner2 reads a dict-valued
+    # "labels" as per-label descriptions and injects each hint into the model prompt (the daemon
+    # sends this for custom passes with authored value descriptions — single-label via a dict-labels
+    # task with no multi_label, multi-label via the same with multi_label=true). classify_text()
+    # accepts all these forms directly (gliner2 Schema.classification). Kept in parity with the Atlas
     # enrich-sidecar copy.
     tasks: dict[str, list[str] | dict]
     max_len: int | None = None

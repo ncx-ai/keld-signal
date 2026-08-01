@@ -83,6 +83,19 @@ func BuildCustomExtractors(passes []CustomPass) (wave1, wave2 []Extractor, rejec
 	return wave1, wave2, rejected
 }
 
+// classifyOne runs one single-label (softmax) classification, routing through
+// the description-aware backend when the pass has authored per-value hints AND
+// the backend supports them; otherwise it uses the plain label-list Classify so
+// description-less passes and built-ins are byte-identical on the wire.
+func classifyOne(ctx *JobContext, task string, texts []string, desc map[string]string) map[string][]Ranked {
+	if len(desc) > 0 {
+		if dm, ok := ctx.Model.(DescribedLabelModel); ok {
+			return dm.ClassifyDescribed(ctx.Text, map[string]DescribedTask{task: {Labels: texts, Descriptions: desc}})
+		}
+	}
+	return ctx.Model.Classify(ctx.Text, map[string][]string{task: texts})
+}
+
 // classifyCustom runs one single-label classification over readable label text
 // on RAW ctx.Text with the pass TITLE as the task name (Lab parity with
 // enrich_preview). For a lone label it injects a hidden "Not <value>" negative
@@ -96,6 +109,7 @@ func classifyCustom(ctx *JobContext, p CustomPass, labels []CustomLabel) (Labele
 	}
 	texts := make([]string, 0, len(labels)+1)
 	idByText := map[string]string{}
+	descByText := map[string]string{}
 	for _, l := range labels {
 		t := l.Text
 		if t == "" {
@@ -103,13 +117,16 @@ func classifyCustom(ctx *JobContext, p CustomPass, labels []CustomLabel) (Labele
 		}
 		texts = append(texts, t)
 		idByText[t] = l.ID
+		if l.Description != "" {
+			descByText[t] = l.Description
+		}
 	}
 	var neg string
 	if len(labels) == 1 {
 		neg = "Not " + texts[0]
-		texts = append(texts, neg)
+		texts = append(texts, neg) // the synthetic negative carries no description
 	}
-	res := ctx.Model.Classify(ctx.Text, map[string][]string{task: texts})
+	res := classifyOne(ctx, task, texts, descByText)
 	ranked := res[task]
 	// neg != "" guards the lone-label case only; without it an empty model label
 	// ("") would spuriously match the empty neg and read as "not tagged".
@@ -180,6 +197,7 @@ func (e customMultiExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	}
 	texts := make([]string, 0, len(e.p.Labels))
 	idByText := map[string]string{}
+	descByText := map[string]string{}
 	for _, l := range e.p.Labels {
 		t := l.Text
 		if t == "" {
@@ -187,8 +205,11 @@ func (e customMultiExtractor) Run(ctx *JobContext) (map[string]any, error) {
 		}
 		texts = append(texts, t)
 		idByText[t] = l.ID
+		if l.Description != "" {
+			descByText[t] = l.Description
+		}
 	}
-	res := mm.ClassifyMulti(ctx.Text, map[string]MultiTask{task: {Labels: texts, Threshold: th}})
+	res := mm.ClassifyMulti(ctx.Text, map[string]MultiTask{task: {Labels: texts, Threshold: th, Descriptions: descByText}})
 	out := make([]Labeled, 0, len(res[task]))
 	for _, r := range res[task] {
 		out = append(out, Labeled{Value: idByText[r.Label], Confidence: r.Confidence, Producer: e.p.producer()})
