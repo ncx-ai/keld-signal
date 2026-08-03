@@ -7,17 +7,13 @@ import (
 	"time"
 )
 
-func TestMain(m *testing.M) {
-	os.Exit(m.Run())
-}
-
-// setHome points the spool at a fresh directory and drops the memoized handle.
+// setHome points the spool at a fresh temp directory. The SQLite backend is keyed
+// by dbPath(), so each test's distinct KELD_HOME gets its own *sql.DB handle for
+// free — no reset seam needed.
 func setHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("KELD_HOME", dir)
-	resetForTest()
-	t.Cleanup(resetForTest)
 	return dir
 }
 

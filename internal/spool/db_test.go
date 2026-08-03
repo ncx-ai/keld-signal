@@ -37,12 +37,25 @@ func TestDatabaseFileIsOwnerOnly(t *testing.T) {
 	if err := Write(inlinePtr("C1", "x")); err != nil {
 		t.Fatal(err)
 	}
-	fi, err := os.Stat(filepath.Join(dir, "spool", "spool.db"))
+	// Glob spool.db*, not just spool.db: WAL mode's -wal/-shm sidecars hold the
+	// freshly committed rows until checkpoint, so on a long-running daemon the -wal
+	// file is the one holding the newest prompt text. Stat-ing only spool.db would
+	// give false assurance on the exact invariant this test exists to protect.
+	matches, err := filepath.Glob(filepath.Join(dir, "spool", "spool.db*"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("db mode = %v, want 0600 (spool now holds prompt text)", fi.Mode().Perm())
+	if len(matches) == 0 {
+		t.Fatal("expected spool.db (and its WAL sidecars) to exist after a write")
+	}
+	for _, m := range matches {
+		fi, err := os.Stat(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %v, want 0600 (spool now holds prompt text)", m, fi.Mode().Perm())
+		}
 	}
 }
 

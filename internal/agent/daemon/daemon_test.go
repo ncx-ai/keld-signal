@@ -475,8 +475,6 @@ func (b blockModel) Extract(string, map[string]string, map[string][]string) enri
 // worker — it times out, re-spools the pointer for retry, and the worker moves on.
 func TestWorkerTimesOutAndRespools(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
-	spool.ResetForTest()
-	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_JOB_TIMEOUT", "150ms")
 
 	bm := blockModel{release: make(chan struct{})}
@@ -512,8 +510,6 @@ func TestWorkerTimesOutAndRespools(t *testing.T) {
 // maxAttempts it is quarantined to spool/bad/ and never retried again.
 func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
-	spool.ResetForTest()
-	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_JOB_TIMEOUT", "80ms")
 	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "2")
 
@@ -688,8 +684,6 @@ func (a *authFailSender) Send(publish.Enrichment) error {
 func newTestReauther(t *testing.T, tok *creds.Token, newIngestToken string) (ra *reauther, onboardCalls func() int) {
 	t.Helper()
 	t.Setenv("KELD_HOME", t.TempDir())
-	spool.ResetForTest()
-	t.Cleanup(spool.ResetForTest)
 	ra = newReauther(tok, nil)
 	fixedNow := time.Unix(9000, 0)
 	ra.now = func() time.Time { return fixedNow }
@@ -815,8 +809,6 @@ func quarantineCount(t *testing.T, home string) int {
 // warm-wait and a gate that flips to true, the job should publish exactly once.
 func TestWorkerWaitsForWarmThenPublishes(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
-	spool.ResetForTest()
-	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_WARM_WAIT", "5s")
 
 	var warm atomic.Bool // false until we flip it
@@ -841,8 +833,6 @@ func TestWorkerWaitsForWarmThenPublishes(t *testing.T) {
 func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
-	spool.ResetForTest()
-	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_WARM_WAIT", "20ms")
 	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "2") // low cap: prove defers don't count
 
@@ -874,8 +864,6 @@ func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
 // true), then process and publish, with the retry ledger untouched.
 func TestWorkerWarmupLoadsThenPublishes(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
-	spool.ResetForTest()
-	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_WARM_WAIT", "5s")
 	var warm atomic.Bool // starts false (cold)
 	var warmupCalls atomic.Int32
@@ -899,8 +887,6 @@ func TestWorkerWarmupLoadsThenPublishes(t *testing.T) {
 func TestWorkerWarmupTimesOutDefersNeverQuarantines(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
-	spool.ResetForTest()
-	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_WARM_WAIT", "20ms")
 	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "2")
 	warmup := func(context.Context) error { return context.DeadlineExceeded }
@@ -927,8 +913,6 @@ func TestWorkerWarmupTimesOutDefersNeverQuarantines(t *testing.T) {
 // Already warm: warmup must NOT be called.
 func TestWorkerSkipsWarmupWhenReady(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
-	spool.ResetForTest()
-	t.Cleanup(spool.ResetForTest)
 	var warmupCalls atomic.Int32
 	warmup := func(context.Context) error { warmupCalls.Add(1); return nil }
 

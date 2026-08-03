@@ -80,9 +80,21 @@ func Write(p Pointer) error {
 
 const drainPage = 100
 
+// spoolRow is one page row: the id (for deletion) plus its raw JSON body.
+type spoolRow struct {
+	id   int64
+	body []byte
+}
+
 // Drain applies fn to each spooled pointer oldest-first. On fn success the row is
 // deleted; on fn error it is left for the next sweep; on decode error it is
-// quarantined. Returns the number successfully drained.
+// quarantined. Deletes are batched one page (drainPage rows) per statement rather
+// than one per row: under synchronous=FULL every autocommit statement fsyncs the
+// WAL, so a naive per-row DELETE would cost one fsync per drained record — 10,000
+// fsyncs to clear a 10,000-deep backlog, on the exact path this task exists to make
+// fast. Batching costs at most one page (up to drainPage records) of redelivery on a
+// crash mid-drain, which is fine: the contract is already at-least-once and Atlas
+// dedups on dedup_key. Returns the number successfully drained.
 func Drain(fn func(Pointer) error) (int, error) {
 	db, err := open()
 	if err != nil {
@@ -96,13 +108,9 @@ func Drain(fn func(Pointer) error) (int, error) {
 		if err != nil {
 			return drained, err
 		}
-		type item struct {
-			id   int64
-			body []byte
-		}
-		var batch []item
+		var batch []spoolRow
 		for rows.Next() {
-			var it item
+			var it spoolRow
 			if err := rows.Scan(&it.id, &it.body); err != nil {
 				rows.Close()
 				return drained, err
@@ -113,21 +121,50 @@ func Drain(fn func(Pointer) error) (int, error) {
 		if len(batch) == 0 {
 			return drained, nil
 		}
+
+		var toDelete []int64
+		var poison []spoolRow
 		for _, it := range batch {
 			lastID = it.id
 			var p Pointer
 			if err := json.Unmarshal(it.body, &p); err != nil {
-				quarantineRaw(db, it.id, it.body)
+				poison = append(poison, it)
 				continue
 			}
 			if err := fn(p); err != nil {
 				continue // leave for retry
 			}
-			if _, err := db.Exec(`DELETE FROM spool WHERE id = ?`, it.id); err == nil {
-				drained++
+			toDelete = append(toDelete, it.id)
+		}
+
+		if len(poison) > 0 {
+			quarantineRaw(db, poison)
+		}
+		if len(toDelete) > 0 {
+			n, err := deleteIDs(db, toDelete)
+			if err != nil {
+				return drained, err
 			}
+			drained += n
 		}
 	}
+}
+
+// deleteIDs removes the given rows in a single statement (one fsync under
+// synchronous=FULL, regardless of how many ids are in the page) and returns how many
+// rows were actually removed.
+func deleteIDs(db *sql.DB, ids []int64) (int, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	res, err := db.Exec(`DELETE FROM spool WHERE id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 // Quarantine writes a pointer straight to spool/bad/ instead of the live spool, so it
@@ -159,14 +196,22 @@ func badName(src, scheme, id string) string {
 	return safe.Replace(src+"_"+scheme+"_"+id) + ".json"
 }
 
-// quarantineRaw moves an undecodable row out of the live spool so poison can never
-// block the drain.
-func quarantineRaw(db *sql.DB, id int64, body []byte) {
+// quarantineRaw moves undecodable rows out of the live spool so poison can never
+// block the drain: each gets its own file under spool/bad/ (necessarily one write
+// per row, since they're distinct files), but the removal from the live spool is one
+// batched statement, same as the successful-drain path.
+func quarantineRaw(db *sql.DB, rows []spoolRow) {
 	bad := filepath.Join(paths.SpoolDir(), "bad")
 	if os.MkdirAll(bad, 0o700) == nil {
-		name := fmt.Sprintf("poison-%d.json", id)
-		os.WriteFile(filepath.Join(bad, name), body, 0o600)
-		debuglog.Append("spool: quarantined poison row %d", id)
+		for _, it := range rows {
+			name := fmt.Sprintf("poison-%d.json", it.id)
+			os.WriteFile(filepath.Join(bad, name), it.body, 0o600)
+		}
+		debuglog.Append("spool: quarantined %d poison row(s)", len(rows))
 	}
-	db.Exec(`DELETE FROM spool WHERE id = ?`, id)
+	ids := make([]int64, len(rows))
+	for i, it := range rows {
+		ids[i] = it.id
+	}
+	deleteIDs(db, ids)
 }

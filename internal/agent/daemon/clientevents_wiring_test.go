@@ -11,7 +11,6 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
-	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
 // enabledEmitter builds a real clientevents.Emitter with an always-on,
@@ -111,8 +110,6 @@ func TestProcessEmitsPublishFailedWithRedactedError(t *testing.T) {
 // existing log.Printf, stamped with the job's session/prompt ids.
 func TestWorkerEmitsJobQuarantinedOnExhaustion(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
-	spool.ResetForTest()
-	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_JOB_TIMEOUT", "60ms")
 	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "1") // exhausted on the very first attempt
 
