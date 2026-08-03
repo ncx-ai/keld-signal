@@ -415,8 +415,19 @@ client behavior, and security.
 - `KELD_ENRICH_MAX_ATTEMPTS` — how many times a timed-out job re-spools before it
   is quarantined to `~/.keld/spool/bad/` (default `4`) — bounds retries so one
   un-enrichable prompt can't loop forever.
-- `KELD_SPOOL_MAX` — cap on spooled pointers before the oldest are dropped
-  (default `500`).
+- `KELD_SPOOL_MAX` — **superseded, no longer read.** The old file-based spool
+  capped pointer *count*; the SQLite-backed spool caps total *bytes* instead
+  (a pointer is ~200 bytes, an inline rendered prompt is 10-50 KB, so a count
+  cap's real disk cost swings ~250x with payload type). Set
+  `KELD_SPOOL_MAX_BYTES` instead — see below.
+- `KELD_SPOOL_MAX_BYTES` — byte budget for the spool database (default `256
+  MiB` = `268435456`). Oldest records are evicted first once a write would
+  exceed it; a single record larger than the whole budget is rejected rather
+  than evicting everything. Evictions are counted (surfaced via the spool
+  package's `Evicted()`) since a drop is meaningful under a completeness SLO.
+- `KELD_QUEUE_CAP` — in-memory job queue depth for the daemon (default
+  `1024`). Raise this if a burst of calls (e.g. many concurrent agent runs)
+  outpaces enrichment throughput.
 
 The GLiNER2 sidecar has load-protection + resource-safety knobs
 (`KELD_SIDECAR_*`, `KELD_GOV_*`) documented, with the mechanisms and validation,

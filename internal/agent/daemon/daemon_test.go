@@ -928,3 +928,17 @@ func TestWorkerSkipsWarmupWhenReady(t *testing.T) {
 	}
 	q.Close()
 }
+
+func TestQueueCapFromEnv(t *testing.T) {
+	if got := queueCap(); got != 1024 {
+		t.Fatalf("default queue cap = %d, want 1024", got)
+	}
+	t.Setenv("KELD_QUEUE_CAP", "4096")
+	if got := queueCap(); got != 4096 {
+		t.Fatalf("env queue cap = %d, want 4096", got)
+	}
+	t.Setenv("KELD_QUEUE_CAP", "garbage")
+	if got := queueCap(); got != 1024 {
+		t.Fatalf("garbage should fall back to the default, got %d", got)
+	}
+}

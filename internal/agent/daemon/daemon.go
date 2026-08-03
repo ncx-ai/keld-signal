@@ -317,6 +317,18 @@ func waitWarm(ready func() bool, bound time.Duration, done <-chan struct{}) (war
 	}
 }
 
+// queueCap is the in-memory job queue depth. The old hard-coded 256 overran on a
+// single agent burst (20 calls/run x 10 concurrent runs); service deployments raise
+// this via KELD_QUEUE_CAP.
+func queueCap() int {
+	if v := os.Getenv("KELD_QUEUE_CAP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1024
+}
+
 // maxAttempts bounds how many times a timed-out job is re-spooled before it is
 // quarantined. Default 4 (a couple of reload/transient windows); override with
 // KELD_ENRICH_MAX_ATTEMPTS.
@@ -604,7 +616,7 @@ func Run(ctx context.Context) error {
 	ra := newReauther(tok, emitter)
 	ra.startupEndpoint = cfg.Endpoint
 
-	q := queue.New(256)
+	q := queue.New(queueCap())
 	pub := publish.New(enrichEndpoint(cfg.Endpoint), tok.Get, actor)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -70,12 +70,32 @@ func Write(p Pointer) error {
 		return err
 	}
 	src, scheme, id := identity(p)
+
+	// The insert below is an upsert (same identity replaces rather than
+	// duplicates), so the byte total must move by the *net* delta — new minus
+	// old — not simply add the new size, or a same-identity rewrite would
+	// double-count the bytes already on disk. A point lookup on the unique key
+	// is O(log N) via the index, not the O(N) table scan this budget exists to
+	// avoid.
+	var oldBytes int64
+	err = db.QueryRow(
+		`SELECT bytes FROM spool WHERE source_id=? AND corr_scheme=? AND corr_id=?`,
+		src, scheme, id,
+	).Scan(&oldBytes)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
 	_, err = db.Exec(
 		`INSERT INTO spool(source_id,corr_scheme,corr_id,bytes,body,ts) VALUES(?,?,?,?,?,?)
 		 ON CONFLICT(source_id,corr_scheme,corr_id)
 		 DO UPDATE SET bytes=excluded.bytes, body=excluded.body, ts=excluded.ts`,
 		src, scheme, id, len(b), b, time.Now().UnixNano())
-	return err
+	if err != nil {
+		return err
+	}
+	addBytes(db, int64(len(b))-oldBytes)
+	return nil
 }
 
 const drainPage = 100
@@ -124,6 +144,7 @@ func Drain(fn func(Pointer) error) (int, error) {
 
 		var toDelete []int64
 		var poison []spoolRow
+		var deletedBytes int64
 		for _, it := range batch {
 			lastID = it.id
 			var p Pointer
@@ -135,10 +156,11 @@ func Drain(fn func(Pointer) error) (int, error) {
 				continue // leave for retry
 			}
 			toDelete = append(toDelete, it.id)
+			deletedBytes += int64(len(it.body))
 		}
 
 		if len(poison) > 0 {
-			quarantineRaw(db, poison)
+			quarantineRaw(db, poison) // adjusts the byte total for its own deletes
 		}
 		if len(toDelete) > 0 {
 			n, err := deleteIDs(db, toDelete)
@@ -146,6 +168,7 @@ func Drain(fn func(Pointer) error) (int, error) {
 				return drained, err
 			}
 			drained += n
+			addBytes(db, -deletedBytes)
 		}
 	}
 }
@@ -210,8 +233,11 @@ func quarantineRaw(db *sql.DB, rows []spoolRow) {
 		debuglog.Append("spool: quarantined %d poison row(s)", len(rows))
 	}
 	ids := make([]int64, len(rows))
+	var freed int64
 	for i, it := range rows {
 		ids[i] = it.id
+		freed += int64(len(it.body))
 	}
 	deleteIDs(db, ids)
+	addBytes(db, -freed)
 }
