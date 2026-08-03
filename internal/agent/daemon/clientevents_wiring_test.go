@@ -11,6 +11,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
 // enabledEmitter builds a real clientevents.Emitter with an always-on,
@@ -110,6 +111,8 @@ func TestProcessEmitsPublishFailedWithRedactedError(t *testing.T) {
 // existing log.Printf, stamped with the job's session/prompt ids.
 func TestWorkerEmitsJobQuarantinedOnExhaustion(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_JOB_TIMEOUT", "60ms")
 	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "1") // exhausted on the very first attempt
 
@@ -153,10 +156,11 @@ func TestWorkerEmitsJobQuarantinedOnExhaustion(t *testing.T) {
 	q.Close()
 
 	// The event is only emitted after spool.Quarantine's write succeeds, so
-	// the badFile must exist by now too.
-	badFile := filepath.Join(os.Getenv("KELD_HOME"), "spool", "bad", "QUAR-1.json")
-	if _, err := os.Stat(badFile); err != nil {
-		t.Fatalf("expected the job to have been quarantined to disk, got: %v", err)
+	// the badFile must exist by now too. Identity is now (source, scheme, id),
+	// not the bare id, so glob rather than pinning the exact prefix.
+	badGlob := filepath.Join(os.Getenv("KELD_HOME"), "spool", "bad", "*QUAR-1.json")
+	if matches, _ := filepath.Glob(badGlob); len(matches) == 0 {
+		t.Fatalf("expected the job to have been quarantined to disk, matched none for %s", badGlob)
 	}
 
 	if findEvent(events, "job.retry_exhausted") == nil {

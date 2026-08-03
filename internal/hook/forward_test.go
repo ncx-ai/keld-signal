@@ -18,6 +18,8 @@ import (
 
 func TestForwardPostsPointerWithSecret(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 
 	var gotSecret, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,12 +52,16 @@ func TestForwardPostsPointerWithSecret(t *testing.T) {
 
 func TestForwardNoopWhenAgentAbsent(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	// Must not panic or block when agent.json is missing.
 	forwardToAgent("claude_code", "S1", "P1", "/t", "/cwd")
 }
 
 func TestForwardLogsNon2xxWithoutPromptText(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
@@ -86,6 +92,8 @@ func TestForwardLogsNon2xxWithoutPromptText(t *testing.T) {
 
 func TestForwardSpoolsWhenDaemonUnreachable(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	// agent.json with a dead port -> POST fails -> must spool.
 	if err := agentcfg.Write(agentcfg.Info{Port: 1, Secret: "s"}); err != nil {
 		t.Fatal(err)
@@ -101,6 +109,8 @@ func TestForwardSpoolsWhenDaemonUnreachable(t *testing.T) {
 
 func TestForwardSpoolsWhenNoDaemonInfo(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir()) // no agent.json at all
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	forwardToAgent("claude_code", "S1", "Pnoinfo", "/t/x.jsonl", "/cwd")
 	n, _ := spool.Drain(func(p spool.Pointer) error { return nil })
 	if n != 1 {

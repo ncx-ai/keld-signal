@@ -1,13 +1,15 @@
 // Package spool is the on-disk fallback queue for enrich pointers. The hook
 // writes a pointer here when the daemon is unreachable; the daemon drains it on
-// startup and on a periodic sweep. Only the pointer is stored — never prompt text.
+// startup and on a periodic sweep. It holds inline prompt text as well as pointers,
+// not only pointers.
 package spool
 
 import (
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,109 +45,94 @@ type Pointer struct {
 	Inline      *Inline     `json:"inline,omitempty"`
 }
 
-func maxFiles() int {
-	if v := os.Getenv("KELD_SPOOL_MAX"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 500
-}
-
-var safe = strings.NewReplacer("/", "_", "\\", "_", "..", "_", string(os.PathSeparator), "_")
-
-func fileName(p Pointer) string {
-	id := safe.Replace(p.Correlation.ID)
+// identity returns the natural key. It matches queue.Job.Key() and Atlas's
+// uq_enrichment_corr — deliberately narrower than the old filename scheme, which
+// keyed on corr_id alone and so collided across sources.
+func identity(p Pointer) (string, string, string) {
+	id := p.Correlation.ID
 	if id == "" {
 		id = strconv.FormatInt(time.Now().UnixNano(), 10)
 	}
-	return id + ".json"
+	return p.Source.ID, p.Correlation.Scheme, id
 }
 
-// jsonFiles returns spool/*.json sorted oldest-first by mtime.
-func jsonFiles(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	type fe struct {
-		path string
-		mod  time.Time
-	}
-	var fs []fe
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		fs = append(fs, fe{filepath.Join(dir, e.Name()), info.ModTime()})
-	}
-	sort.Slice(fs, func(i, j int) bool { return fs[i].mod.Before(fs[j].mod) })
-	out := make([]string, len(fs))
-	for i, f := range fs {
-		out[i] = f.path
-	}
-	return out
-}
-
-// Write atomically persists a pointer, enforcing the cap first.
+// Write persists a pointer, enforcing the byte budget first.
 func Write(p Pointer) error {
-	dir := paths.SpoolDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	db, err := open()
+	if err != nil {
 		return err
-	}
-	// Enforce cap: drop oldest so we keep at most maxFiles()-1 before adding one.
-	if files := jsonFiles(dir); len(files) >= maxFiles() {
-		drop := len(files) - maxFiles() + 1
-		for i := 0; i < drop && i < len(files); i++ {
-			os.Remove(files[i])
-		}
-		debuglog.Append("spool: cap %d reached, dropped %d oldest", maxFiles(), drop)
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
-	final := filepath.Join(dir, fileName(p))
-	tmp := final + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := evictFor(db, int64(len(b))); err != nil {
 		return err
 	}
-	return os.Rename(tmp, final)
+	src, scheme, id := identity(p)
+	_, err = db.Exec(
+		`INSERT INTO spool(source_id,corr_scheme,corr_id,bytes,body,ts) VALUES(?,?,?,?,?,?)
+		 ON CONFLICT(source_id,corr_scheme,corr_id)
+		 DO UPDATE SET bytes=excluded.bytes, body=excluded.body, ts=excluded.ts`,
+		src, scheme, id, len(b), b, time.Now().UnixNano())
+	return err
 }
 
-// Drain applies fn to each spooled pointer oldest-first. On fn success the file
-// is deleted; on fn error it is left for the next sweep; on decode error it is
-// quarantined to spool/bad/. Returns the number successfully drained.
+const drainPage = 100
+
+// Drain applies fn to each spooled pointer oldest-first. On fn success the row is
+// deleted; on fn error it is left for the next sweep; on decode error it is
+// quarantined. Returns the number successfully drained.
 func Drain(fn func(Pointer) error) (int, error) {
-	dir := paths.SpoolDir()
-	n := 0
-	for _, path := range jsonFiles(dir) {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var p Pointer
-		if err := json.Unmarshal(b, &p); err != nil {
-			quarantine(dir, path)
-			continue
-		}
-		if err := fn(p); err != nil {
-			continue // leave for retry
-		}
-		os.Remove(path)
-		n++
+	db, err := open()
+	if err != nil {
+		return 0, err
 	}
-	return n, nil
+	drained := 0
+	lastID := int64(0)
+	for {
+		rows, err := db.Query(
+			`SELECT id, body FROM spool WHERE id > ? ORDER BY id LIMIT ?`, lastID, drainPage)
+		if err != nil {
+			return drained, err
+		}
+		type item struct {
+			id   int64
+			body []byte
+		}
+		var batch []item
+		for rows.Next() {
+			var it item
+			if err := rows.Scan(&it.id, &it.body); err != nil {
+				rows.Close()
+				return drained, err
+			}
+			batch = append(batch, it)
+		}
+		rows.Close()
+		if len(batch) == 0 {
+			return drained, nil
+		}
+		for _, it := range batch {
+			lastID = it.id
+			var p Pointer
+			if err := json.Unmarshal(it.body, &p); err != nil {
+				quarantineRaw(db, it.id, it.body)
+				continue
+			}
+			if err := fn(p); err != nil {
+				continue // leave for retry
+			}
+			if _, err := db.Exec(`DELETE FROM spool WHERE id = ?`, it.id); err == nil {
+				drained++
+			}
+		}
+	}
 }
 
-// Quarantine writes a pointer directly to spool/bad/ instead of the live spool,
-// so it is preserved for inspection but never drained/retried again. The daemon
-// uses this for a job that has repeatedly exceeded its deadline — bounding
-// re-spool so one un-enrichable job can't retry forever.
+// Quarantine writes a pointer straight to spool/bad/ instead of the live spool, so it
+// is preserved for inspection but never drained again. Unchanged in form: the bad/
+// directory stays a plain JSON drop, since it is low-volume and hand-inspected.
 func Quarantine(p Pointer) error {
 	bad := filepath.Join(paths.SpoolDir(), "bad")
 	if err := os.MkdirAll(bad, 0o700); err != nil {
@@ -155,21 +142,31 @@ func Quarantine(p Pointer) error {
 	if err != nil {
 		return err
 	}
-	final := filepath.Join(bad, fileName(p))
+	src, scheme, id := identity(p)
+	name := badName(src, scheme, id)
+	final := filepath.Join(bad, name)
 	tmp := final + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	debuglog.Append("spool: quarantined un-enrichable pointer %s", filepath.Base(final))
+	debuglog.Append("spool: quarantined un-enrichable pointer %s", name)
 	return os.Rename(tmp, final)
 }
 
-func quarantine(dir, path string) {
-	bad := filepath.Join(dir, "bad")
+var safe = strings.NewReplacer("/", "_", "\\", "_", "..", "_", string(os.PathSeparator), "_")
+
+func badName(src, scheme, id string) string {
+	return safe.Replace(src+"_"+scheme+"_"+id) + ".json"
+}
+
+// quarantineRaw moves an undecodable row out of the live spool so poison can never
+// block the drain.
+func quarantineRaw(db *sql.DB, id int64, body []byte) {
+	bad := filepath.Join(paths.SpoolDir(), "bad")
 	if os.MkdirAll(bad, 0o700) == nil {
-		if err := os.Rename(path, filepath.Join(bad, filepath.Base(path))); err != nil {
-			os.Remove(path) // last resort: never let poison block the drain
-		}
-		debuglog.Append("spool: quarantined poison file %s", filepath.Base(path))
+		name := fmt.Sprintf("poison-%d.json", id)
+		os.WriteFile(filepath.Join(bad, name), body, 0o600)
+		debuglog.Append("spool: quarantined poison row %d", id)
 	}
+	db.Exec(`DELETE FROM spool WHERE id = ?`, id)
 }

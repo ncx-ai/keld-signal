@@ -475,6 +475,8 @@ func (b blockModel) Extract(string, map[string]string, map[string][]string) enri
 // worker — it times out, re-spools the pointer for retry, and the worker moves on.
 func TestWorkerTimesOutAndRespools(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_JOB_TIMEOUT", "150ms")
 
 	bm := blockModel{release: make(chan struct{})}
@@ -510,6 +512,8 @@ func TestWorkerTimesOutAndRespools(t *testing.T) {
 // maxAttempts it is quarantined to spool/bad/ and never retried again.
 func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_JOB_TIMEOUT", "80ms")
 	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "2")
 
@@ -526,10 +530,12 @@ func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 	job := queue.Job{Source: "claude_code", Scheme: "trace", ID: "STUCK-1", Inline: "write code"}
 	q.Offer(job)
 
-	badFile := filepath.Join(os.Getenv("KELD_HOME"), "spool", "bad", "STUCK-1.json")
+	// Quarantine identity is now (source, scheme, id), not the bare id — glob rather
+	// than pinning the exact prefix.
+	badGlob := filepath.Join(os.Getenv("KELD_HOME"), "spool", "bad", "*STUCK-1.json")
 	deadline := time.After(6 * time.Second)
 	for {
-		if _, err := os.Stat(badFile); err == nil {
+		if matches, _ := filepath.Glob(badGlob); len(matches) > 0 {
 			break
 		}
 		// Sweep: a re-spooled pointer is drained (removing the live file) and
@@ -682,6 +688,8 @@ func (a *authFailSender) Send(publish.Enrichment) error {
 func newTestReauther(t *testing.T, tok *creds.Token, newIngestToken string) (ra *reauther, onboardCalls func() int) {
 	t.Helper()
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	ra = newReauther(tok, nil)
 	fixedNow := time.Unix(9000, 0)
 	ra.now = func() time.Time { return fixedNow }
@@ -776,18 +784,14 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool) {
 	}
 }
 
-// spoolCount counts .json pointer files anywhere under home/spool (live spool
-// plus any quarantined ones under spool/bad), proving a job was preserved on
-// disk rather than lost.
+// spoolCount reports how many pointers are live in home's spool.db, proving a
+// job was preserved (re-spooled) rather than lost. The live spool is a SQLite
+// database now, not one file per job, so this drains-and-counts via the public
+// API rather than walking spool/*.json — safe here since both call sites check
+// this last, with nothing after that depends on the rows still being present.
 func spoolCount(t *testing.T, home string) int {
 	t.Helper()
-	n := 0
-	filepath.WalkDir(filepath.Join(home, "spool"), func(_ string, d fs.DirEntry, _ error) error {
-		if d != nil && !d.IsDir() && strings.HasSuffix(d.Name(), ".json") {
-			n++
-		}
-		return nil
-	})
+	n, _ := spool.Drain(func(spool.Pointer) error { return nil })
 	return n
 }
 
@@ -811,6 +815,8 @@ func quarantineCount(t *testing.T, home string) int {
 // warm-wait and a gate that flips to true, the job should publish exactly once.
 func TestWorkerWaitsForWarmThenPublishes(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_WARM_WAIT", "5s")
 
 	var warm atomic.Bool // false until we flip it
@@ -835,6 +841,8 @@ func TestWorkerWaitsForWarmThenPublishes(t *testing.T) {
 func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_WARM_WAIT", "20ms")
 	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "2") // low cap: prove defers don't count
 
@@ -866,6 +874,8 @@ func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
 // true), then process and publish, with the retry ledger untouched.
 func TestWorkerWarmupLoadsThenPublishes(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_WARM_WAIT", "5s")
 	var warm atomic.Bool // starts false (cold)
 	var warmupCalls atomic.Int32
@@ -889,6 +899,8 @@ func TestWorkerWarmupLoadsThenPublishes(t *testing.T) {
 func TestWorkerWarmupTimesOutDefersNeverQuarantines(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	t.Setenv("KELD_ENRICH_WARM_WAIT", "20ms")
 	t.Setenv("KELD_ENRICH_MAX_ATTEMPTS", "2")
 	warmup := func(context.Context) error { return context.DeadlineExceeded }
@@ -915,6 +927,8 @@ func TestWorkerWarmupTimesOutDefersNeverQuarantines(t *testing.T) {
 // Already warm: warmup must NOT be called.
 func TestWorkerSkipsWarmupWhenReady(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
+	spool.ResetForTest()
+	t.Cleanup(spool.ResetForTest)
 	var warmupCalls atomic.Int32
 	warmup := func(context.Context) error { warmupCalls.Add(1); return nil }
 
