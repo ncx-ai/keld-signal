@@ -147,6 +147,35 @@ func totalFor(db *sql.DB) *atomic.Int64 {
 	return dbTotals[db]
 }
 
+// Resync re-seeds this process's in-memory byte total from the table, exactly
+// as open() does at startup. It exists because the hook (cmd/keld) is a
+// separate, short-lived process that writes to the same spool.db: every hook
+// invocation gets its own correct total for its own brief lifetime, but the
+// long-lived daemon's total is seeded once at its own startup and has no way
+// to observe rows the hook inserts afterward. Left unresynced, that drift is
+// one-directional and unbounded — the daemon's total permanently understates
+// the real table, so evictFor never trips and the spool grows past the
+// configured budget, which is the opposite failure from what a byte budget
+// exists to prevent. The daemon calls this once per periodic spool sweep
+// (KELD_SPOOL_MAX_BYTES aside, default every 30s), bounding the drift to one
+// sweep interval instead of the process lifetime. The aggregate itself is the
+// same one open() already runs once at startup (benchmarked ~9.5ms/50k rows),
+// so a 30s cadence is negligible — this does not reintroduce a per-write cost.
+func Resync() error {
+	db, err := open()
+	if err != nil {
+		return err
+	}
+	var used sql.NullInt64
+	if err := db.QueryRow(`SELECT COALESCE(SUM(bytes),0) FROM spool`).Scan(&used); err != nil {
+		return err
+	}
+	if total := totalFor(db); total != nil {
+		total.Store(used.Int64)
+	}
+	return nil
+}
+
 // addBytes adjusts db's in-memory running total by delta (positive on insert,
 // negative on delete/eviction). This is the single seam every mutation path
 // (Write's upsert, evictFor's eviction, Drain's batched delete, poison
@@ -182,20 +211,31 @@ func maxBytes() int64 {
 // batch rather than one per row under synchronous=FULL.
 const evictBatch = 16
 
-// evictFor drops oldest-first until an incoming record of n bytes fits the
-// budget. It compares against the in-memory running total (seeded once at
-// open, kept in sync by every write/delete) rather than re-aggregating the
-// table, so its cost does not grow with spool depth.
-func evictFor(db *sql.DB, n int64) error {
+// evictFor drops oldest-first until an incoming write fits the budget.
+//
+// gross is the absolute size of the new record body — used only for the "too
+// big to ever fit" reject, which must hold regardless of what the write
+// replaces. delta is the net change the write will make to the table's total
+// bytes (gross minus whatever the upsert is about to free from an existing
+// row of the same identity; equal to gross for a brand-new row). The eviction
+// decision uses delta, not gross: Write's caller already knows the old row's
+// bytes are about to be freed by its own upsert, and evicting against the
+// gross size would double-count that space and evict unrelated queued
+// records to make room that was about to be freed anyway.
+//
+// Either way, evictFor compares against the in-memory running total (seeded
+// once at open, kept in sync by every write/delete) rather than
+// re-aggregating the table, so its cost does not grow with spool depth.
+func evictFor(db *sql.DB, gross, delta int64) error {
 	limit := maxBytes()
-	if n > limit {
-		return fmt.Errorf("spool: record of %d bytes exceeds the %d-byte budget", n, limit)
+	if gross > limit {
+		return fmt.Errorf("spool: record of %d bytes exceeds the %d-byte budget", gross, limit)
 	}
 	total := totalFor(db)
 	if total == nil {
 		return fmt.Errorf("spool: no byte total tracked for this handle")
 	}
-	for total.Load()+n > limit {
+	for total.Load()+delta > limit {
 		rows, err := db.Query(`SELECT id, bytes FROM spool ORDER BY id LIMIT ?`, evictBatch)
 		if err != nil {
 			return err

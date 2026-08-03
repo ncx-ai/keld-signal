@@ -2,6 +2,7 @@ package spool
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,5 +84,113 @@ func TestWriteCostDoesNotGrowWithDepth(t *testing.T) {
 	t.Logf("early batch (depth ~1000): %v; late batch (depth ~5000): %v", early, late)
 	if late > early*3 {
 		t.Fatalf("per-write cost grew with depth: early=%v late=%v (>3x) — looks like a reintroduced O(N) scan per write", early, late)
+	}
+}
+
+// TestSameIdentityRewriteDoesNotEvictUnrelatedRecords pins fix round 1's
+// "Important" finding: evictFor must judge the eviction decision on the net
+// byte delta a write causes, not the gross size of the new body. A
+// same-identity rewrite (the ON CONFLICT DO UPDATE path in Write) is about to
+// free the old row's bytes as part of the same upsert, so a same-size rewrite
+// makes no net change to the table's total and must never evict an unrelated,
+// still-queued record to make room for space that wasn't actually needed.
+func TestSameIdentityRewriteDoesNotEvictUnrelatedRecords(t *testing.T) {
+	setHome(t)
+	body := strings.Repeat("x", 1000)
+
+	// Measure this record's actual on-disk size (envelope + id vary the exact
+	// byte count) so the budget below can be sized precisely around it, rather
+	// than guessing a constant that might silently stop being tight enough.
+	t.Setenv("KELD_SPOOL_MAX_BYTES", "1000000000")
+	if err := Write(inlinePtr("A", body)); err != nil {
+		t.Fatal(err)
+	}
+	db, err := open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var perRecord int64
+	if err := db.QueryRow(`SELECT bytes FROM spool WHERE corr_id='A'`).Scan(&perRecord); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Drain(func(Pointer) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	// A budget that holds exactly A and B (with a little slack) but not a
+	// third record's worth of headroom.
+	budget := perRecord*2 + 10
+	t.Setenv("KELD_SPOOL_MAX_BYTES", strconv.FormatInt(budget, 10))
+
+	if err := Write(inlinePtr("A", body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(inlinePtr("B", body)); err != nil {
+		t.Fatal(err)
+	}
+	before := Evicted()
+
+	// Rewrite B with a body of identical length: the marshaled JSON — and so
+	// the stored byte count — is identical, so the net delta is 0. This must
+	// not evict A: a gross-size-based decision would see "need room for
+	// perRecord more bytes" and evict the oldest (A) to get it, even though
+	// the upsert is simultaneously freeing B's old perRecord bytes.
+	if err := Write(inlinePtr("B", body)); err != nil {
+		t.Fatal(err)
+	}
+
+	if Evicted() != before {
+		t.Fatalf("same-size rewrite should not evict anything: evicted count went from %d to %d", before, Evicted())
+	}
+	var order []string
+	Drain(func(p Pointer) error { order = append(order, p.Correlation.ID); return nil })
+	if len(order) != 2 {
+		t.Fatalf("expected both A and B to survive a same-size rewrite of B, got %v", order)
+	}
+}
+
+// TestResyncPicksUpRowsFromAnotherWriter pins fix round 1's critical finding:
+// the hook (cmd/keld) is a separate, short-lived OS process writing to the
+// same spool.db, so from the long-lived daemon process's point of view a
+// hook-inserted row is indistinguishable from this direct same-shape insert —
+// bytes land in the table with no corresponding addBytes call on this
+// process's in-memory total. Resync must re-learn the table's true total
+// rather than leaving the daemon's counter permanently understating it (which
+// would mean evictFor never trips and the spool grows unbounded).
+func TestResyncPicksUpRowsFromAnotherWriter(t *testing.T) {
+	setHome(t)
+	if err := Write(inlinePtr("A", "hello")); err != nil {
+		t.Fatal(err)
+	}
+	db, err := open()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Exec(
+		`INSERT INTO spool(source_id,corr_scheme,corr_id,bytes,body,ts) VALUES(?,?,?,?,?,?)`,
+		"other-process", "prompt_id", "X", 500,
+		[]byte(`{"source":{"id":"other-process"},"correlation":{"scheme":"prompt_id","id":"X"}}`),
+		time.Now().UnixNano(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	staleTotal := totalFor(db).Load()
+
+	if err := Resync(); err != nil {
+		t.Fatal(err)
+	}
+
+	resynced := totalFor(db).Load()
+	if resynced == staleTotal {
+		t.Fatalf("Resync should have picked up the externally-inserted row: stale=%d resynced=%d", staleTotal, resynced)
+	}
+	var want int64
+	if err := db.QueryRow(`SELECT COALESCE(SUM(bytes),0) FROM spool`).Scan(&want); err != nil {
+		t.Fatal(err)
+	}
+	if resynced != want {
+		t.Fatalf("resynced total = %d, want %d (table truth)", resynced, want)
 	}
 }

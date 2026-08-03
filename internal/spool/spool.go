@@ -66,23 +66,29 @@ func Write(p Pointer) error {
 	if err != nil {
 		return err
 	}
-	if err := evictFor(db, int64(len(b))); err != nil {
-		return err
-	}
 	src, scheme, id := identity(p)
 
-	// The insert below is an upsert (same identity replaces rather than
-	// duplicates), so the byte total must move by the *net* delta — new minus
-	// old — not simply add the new size, or a same-identity rewrite would
-	// double-count the bytes already on disk. A point lookup on the unique key
-	// is O(log N) via the index, not the O(N) table scan this budget exists to
-	// avoid.
+	// Look up the old row's size (if any) BEFORE calling evictFor: the insert
+	// below is an upsert (same identity replaces rather than duplicates), so
+	// both the byte-total bookkeeping AND the eviction decision need the net
+	// delta — new minus old — not the gross new size. Reusing gross for
+	// eviction would make evictFor think the write needs room for the full new
+	// size on top of the old row still sitting there, when the upsert is about
+	// to free the old row's bytes anyway; that would evict unrelated queued
+	// records to make space that didn't actually need freeing. A point lookup
+	// on the unique key is O(log N) via the index, not the O(N) table scan
+	// this budget exists to avoid.
 	var oldBytes int64
 	err = db.QueryRow(
 		`SELECT bytes FROM spool WHERE source_id=? AND corr_scheme=? AND corr_id=?`,
 		src, scheme, id,
 	).Scan(&oldBytes)
 	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	gross := int64(len(b))
+	if err := evictFor(db, gross, gross-oldBytes); err != nil {
 		return err
 	}
 
@@ -94,7 +100,7 @@ func Write(p Pointer) error {
 	if err != nil {
 		return err
 	}
-	addBytes(db, int64(len(b))-oldBytes)
+	addBytes(db, gross-oldBytes)
 	return nil
 }
 

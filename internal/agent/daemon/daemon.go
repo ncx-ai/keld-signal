@@ -726,6 +726,21 @@ func Run(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case <-t.C:
+					// Resync the in-memory byte total from the table before
+					// draining: the hook (cmd/keld) is a separate, short-lived
+					// process that writes to this same spool.db, so this
+					// long-lived daemon's total can't otherwise observe rows
+					// the hook inserted since the daemon started (or since the
+					// last sweep) — left unresynced that drift is
+					// one-directional (the daemon's total understates the
+					// table), so evictFor never trips and the spool grows past
+					// its configured budget. This bounds the drift to one
+					// sweep interval; the aggregate it runs is the same one
+					// open() already runs once at startup (~9.5ms/50k rows),
+					// negligible at this cadence.
+					if err := spool.Resync(); err != nil {
+						log.Printf("keld-agent: spool byte-total resync failed: %v", err)
+					}
 					drainSpool()
 				}
 			}
