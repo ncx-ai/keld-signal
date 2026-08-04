@@ -328,19 +328,28 @@ func bindAddr() string {
 	return "127.0.0.1:0"
 }
 
-// isLoopbackBind reports whether addr's host resolves to loopback (or is empty
-// / "localhost", both of which bind every/loopback interfaces locally).
+// isLoopbackBind reports whether addr's host is "localhost" or an IP that
+// parses as loopback. An EMPTY host is deliberately NOT loopback: Go's
+// net.Listen treats "" as the wildcard address (all interfaces, IPv4 and
+// IPv6) — the same as "0.0.0.0" but wider, since it also covers IPv6 — so
+// KELD_AGENT_BIND=":7788" is the idiomatic and widest-possible off-loopback
+// bind, not a local one. Getting this backwards would let a
+// network-reachable listener start with no operator-supplied secret.
 func isLoopbackBind(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return false
 	}
-	if host == "" || host == "localhost" {
+	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
+
+// minServiceSecretLen is the floor for KELD_AGENT_SECRET off loopback, where
+// it is the sole access control on an endpoint that accepts prompt text.
+const minServiceSecretLen = 32
 
 // serviceSecret resolves the /enrich secret. On loopback the daemon keeps generating
 // one into agent.json for the logged-in user. Off loopback there is no logged-in
@@ -356,9 +365,9 @@ func serviceSecret() (string, error) {
 		return "", fmt.Errorf(
 			"keld-agent: KELD_AGENT_BIND=%s is not loopback; KELD_AGENT_SECRET must be set", addr)
 	}
-	if len(s) < 32 {
+	if len(s) < minServiceSecretLen {
 		return "", fmt.Errorf(
-			"keld-agent: KELD_AGENT_SECRET must be at least 32 characters when binding off-loopback")
+			"keld-agent: KELD_AGENT_SECRET must be at least %d characters when binding off-loopback", minServiceSecretLen)
 	}
 	return s, nil
 }

@@ -38,7 +38,7 @@ func TestOffLoopbackRejectsAWeakSecret(t *testing.T) {
 }
 
 func TestOffLoopbackAcceptsAStrongSecret(t *testing.T) {
-	strong := strings.Repeat("k", 32)
+	strong := strings.Repeat("k", minServiceSecretLen)
 	t.Setenv("KELD_AGENT_BIND", "0.0.0.0:7788")
 	t.Setenv("KELD_AGENT_SECRET", strong)
 	got, err := serviceSecret()
@@ -50,5 +50,26 @@ func TestOffLoopbackAcceptsAStrongSecret(t *testing.T) {
 func TestLoopbackNeedsNoEnvSecret(t *testing.T) {
 	if _, err := serviceSecret(); err != nil {
 		t.Fatalf("loopback keeps the generated agent.json secret: %v", err)
+	}
+}
+
+func TestIsLoopbackBind(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1:0", true},
+		{"localhost:7788", true},
+		{"[::1]:7788", true},
+		{"0.0.0.0:7788", false},
+		{":7788", false},                   // Go's wildcard shorthand — widest possible bind, not loopback.
+		{"[::]:7788", false},               // explicit IPv6 wildcard — not loopback.
+		{":::7788", false},                 // malformed (SplitHostPort rejects it) — still not loopback.
+		{"myhost.example.com:7788", false}, // unresolved hostname, not loopback either.
+	}
+	for _, c := range cases {
+		if got := isLoopbackBind(c.addr); got != c.want {
+			t.Errorf("isLoopbackBind(%q) = %v, want %v", c.addr, got, c.want)
+		}
 	}
 }
