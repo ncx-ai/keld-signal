@@ -228,10 +228,12 @@ func TestRunSweepCadencesAreIndependent(t *testing.T) {
 		}
 	}
 
-	// By construction (rounds*perRoundTimeout = 500ms < gaugeIv = 1500ms)
-	// this should always hold; the elapsed guard means a genuinely
-	// pathological scheduling stall skips the assertion instead of
-	// misreporting it as a re-coupling regression.
+	// By construction this always holds: nextWithTimeout's t.Fatalf halts
+	// the test on any round slower than perRoundTimeout, so elapsed here is
+	// bounded above by rounds*perRoundTimeout = 5*500ms = 2.5s, comfortably
+	// under gaugeIv = 6s. The elapsed guard is a second, independent check
+	// for the same invariant — belt and suspenders — in case that bound is
+	// ever loosened without updating this comment.
 	if elapsed := time.Since(start); elapsed < gaugeIv {
 		early := emitter.Drain()
 		if n := countCode(early, "spool.depth"); n != 0 {
