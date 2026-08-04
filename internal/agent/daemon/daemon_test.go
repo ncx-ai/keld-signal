@@ -526,10 +526,12 @@ func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 	job := queue.Job{Source: "claude_code", Scheme: "trace", ID: "STUCK-1", Inline: "write code"}
 	q.Offer(job)
 
-	badFile := filepath.Join(os.Getenv("KELD_HOME"), "spool", "bad", "STUCK-1.json")
+	// Quarantine identity is now (source, scheme, id), not the bare id — glob rather
+	// than pinning the exact prefix.
+	badGlob := filepath.Join(os.Getenv("KELD_HOME"), "spool", "bad", "*STUCK-1.json")
 	deadline := time.After(6 * time.Second)
 	for {
-		if _, err := os.Stat(badFile); err == nil {
+		if matches, _ := filepath.Glob(badGlob); len(matches) > 0 {
 			break
 		}
 		// Sweep: a re-spooled pointer is drained (removing the live file) and
@@ -776,18 +778,14 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool) {
 	}
 }
 
-// spoolCount counts .json pointer files anywhere under home/spool (live spool
-// plus any quarantined ones under spool/bad), proving a job was preserved on
-// disk rather than lost.
+// spoolCount reports how many pointers are live in home's spool.db, proving a
+// job was preserved (re-spooled) rather than lost. The live spool is a SQLite
+// database now, not one file per job, so this drains-and-counts via the public
+// API rather than walking spool/*.json — safe here since both call sites check
+// this last, with nothing after that depends on the rows still being present.
 func spoolCount(t *testing.T, home string) int {
 	t.Helper()
-	n := 0
-	filepath.WalkDir(filepath.Join(home, "spool"), func(_ string, d fs.DirEntry, _ error) error {
-		if d != nil && !d.IsDir() && strings.HasSuffix(d.Name(), ".json") {
-			n++
-		}
-		return nil
-	})
+	n, _ := spool.Drain(func(spool.Pointer) error { return nil })
 	return n
 }
 
@@ -929,4 +927,18 @@ func TestWorkerSkipsWarmupWhenReady(t *testing.T) {
 		t.Fatalf("warmup must not be called when already ready; calls=%d", warmupCalls.Load())
 	}
 	q.Close()
+}
+
+func TestQueueCapFromEnv(t *testing.T) {
+	if got := queueCap(); got != 1024 {
+		t.Fatalf("default queue cap = %d, want 1024", got)
+	}
+	t.Setenv("KELD_QUEUE_CAP", "4096")
+	if got := queueCap(); got != 4096 {
+		t.Fatalf("env queue cap = %d, want 4096", got)
+	}
+	t.Setenv("KELD_QUEUE_CAP", "garbage")
+	if got := queueCap(); got != 1024 {
+		t.Fatalf("garbage should fall back to the default, got %d", got)
+	}
 }

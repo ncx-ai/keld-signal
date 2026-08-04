@@ -134,6 +134,25 @@ knobs, and the measured validation results. See also
 [docs/keld-agent-p2-onnx-decision.md](docs/keld-agent-p2-onnx-decision.md)
 (why a bundled sidecar over in-process ONNX).
 
+### Service mode (headless deployments)
+
+By default `keld-agent` binds `127.0.0.1` on an ephemeral port and generates its own
+`/enrich` secret into `~/.keld/agent.json` — the right shape for a logged-in developer.
+A headless deployment (a sidecar next to a framework agent, say) sets:
+
+| Variable | Meaning |
+|---|---|
+| `KELD_AGENT_BIND` | Listen address, e.g. `0.0.0.0:7788`. Off-loopback values require the two below. |
+| `KELD_AGENT_SECRET` | The `x-keld-agent-secret` clients must send. Minimum 32 characters. |
+| `KELD_AGENT_TLS_TERMINATED` | Set to any value to acknowledge TLS is terminated in front; suppresses the startup warning. |
+| `KELD_QUEUE_CAP` | In-memory job queue depth (default 1024; 4096 is a reasonable service value). |
+| `KELD_SPOOL_MAX_BYTES` | Disk backlog budget (default 256 MB; 2 GB is a reasonable service value). |
+| `KELD_SPOOL_GAUGE_INTERVAL` | `spool.depth` gauge cadence (Go duration, default `300s`). Deliberately decoupled from `KELD_SPOOL_SWEEP` so the client-events emitter's same-code coalescing can't publish a stale gauge. |
+| `KELD_SIDECAR_MAX_THREADS` | Existing knob. Enrichment throughput scales vertically before anything else — on a host with cores to spare, raise this above the default of half the cores. |
+
+Binding off-loopback without a secret refuses to start: the secret is the only access
+control on that listener.
+
 ## Client-events monitoring (agent health)
 
 Alongside enrichment, `keld-agent` reports its own **operational health** to
@@ -415,8 +434,19 @@ client behavior, and security.
 - `KELD_ENRICH_MAX_ATTEMPTS` — how many times a timed-out job re-spools before it
   is quarantined to `~/.keld/spool/bad/` (default `4`) — bounds retries so one
   un-enrichable prompt can't loop forever.
-- `KELD_SPOOL_MAX` — cap on spooled pointers before the oldest are dropped
-  (default `500`).
+- `KELD_SPOOL_MAX` — **superseded, no longer read.** The old file-based spool
+  capped pointer *count*; the SQLite-backed spool caps total *bytes* instead
+  (a pointer is ~200 bytes, an inline rendered prompt is 10-50 KB, so a count
+  cap's real disk cost swings ~250x with payload type). Set
+  `KELD_SPOOL_MAX_BYTES` instead — see below.
+- `KELD_SPOOL_MAX_BYTES` — byte budget for the spool database (default `256
+  MiB` = `268435456`). Oldest records are evicted first once a write would
+  exceed it; a single record larger than the whole budget is rejected rather
+  than evicting everything. Evictions are counted (surfaced via the spool
+  package's `Evicted()`) since a drop is meaningful under a completeness SLO.
+- `KELD_QUEUE_CAP` — in-memory job queue depth for the daemon (default
+  `1024`). Raise this if a burst of calls (e.g. many concurrent agent runs)
+  outpaces enrichment throughput.
 
 The GLiNER2 sidecar has load-protection + resource-safety knobs
 (`KELD_SIDECAR_*`, `KELD_GOV_*`) documented, with the mechanisms and validation,

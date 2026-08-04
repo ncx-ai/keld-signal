@@ -317,6 +317,73 @@ func waitWarm(ready func() bool, bound time.Duration, done <-chan struct{}) (war
 	}
 }
 
+// bindAddr is the daemon's listen address. Default is loopback on an ephemeral port
+// (the historical behavior, with the port published via agent.json). Service
+// deployments set KELD_AGENT_BIND to a fixed address so the plugin can reach it from
+// another host.
+func bindAddr() string {
+	if v := os.Getenv("KELD_AGENT_BIND"); v != "" {
+		return v
+	}
+	return "127.0.0.1:0"
+}
+
+// isLoopbackBind reports whether addr's host is "localhost" or an IP that
+// parses as loopback. An EMPTY host is deliberately NOT loopback: Go's
+// net.Listen treats "" as the wildcard address (all interfaces, IPv4 and
+// IPv6) — the same as "0.0.0.0" but wider, since it also covers IPv6 — so
+// KELD_AGENT_BIND=":7788" is the idiomatic and widest-possible off-loopback
+// bind, not a local one. Getting this backwards would let a
+// network-reachable listener start with no operator-supplied secret.
+func isLoopbackBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// minServiceSecretLen is the floor for KELD_AGENT_SECRET off loopback, where
+// it is the sole access control on an endpoint that accepts prompt text.
+const minServiceSecretLen = 32
+
+// serviceSecret resolves the /enrich secret. On loopback the daemon keeps generating
+// one into agent.json for the logged-in user. Off loopback there is no logged-in
+// human and the secret becomes the sole access control, so it must be supplied
+// explicitly and be long enough to be worth having.
+func serviceSecret() (string, error) {
+	addr := bindAddr()
+	if isLoopbackBind(addr) {
+		return "", nil // caller falls back to the generated agent.json secret
+	}
+	s := os.Getenv("KELD_AGENT_SECRET")
+	if s == "" {
+		return "", fmt.Errorf(
+			"keld-agent: KELD_AGENT_BIND=%s is not loopback; KELD_AGENT_SECRET must be set", addr)
+	}
+	if len(s) < minServiceSecretLen {
+		return "", fmt.Errorf(
+			"keld-agent: KELD_AGENT_SECRET must be at least %d characters when binding off-loopback", minServiceSecretLen)
+	}
+	return s, nil
+}
+
+// queueCap is the in-memory job queue depth. The old hard-coded 256 overran on a
+// single agent burst (20 calls/run x 10 concurrent runs); service deployments raise
+// this via KELD_QUEUE_CAP.
+func queueCap() int {
+	if v := os.Getenv("KELD_QUEUE_CAP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1024
+}
+
 // maxAttempts bounds how many times a timed-out job is re-spooled before it is
 // quarantined. Default 4 (a couple of reload/transient windows); override with
 // KELD_ENRICH_MAX_ATTEMPTS.
@@ -604,10 +671,20 @@ func Run(ctx context.Context) error {
 	ra := newReauther(tok, emitter)
 	ra.startupEndpoint = cfg.Endpoint
 
-	q := queue.New(256)
+	q := queue.New(queueCap())
 	pub := publish.New(enrichEndpoint(cfg.Endpoint), tok.Get, actor)
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	addr := bindAddr()
+	if svcSecret, err := serviceSecret(); err != nil {
+		return err
+	} else if svcSecret != "" {
+		secret = svcSecret // overrides the generated agent.json secret in service mode
+		if os.Getenv("KELD_AGENT_TLS_TERMINATED") == "" {
+			log.Printf("keld-agent: WARNING binding %s off-loopback with no TLS termination declared; "+
+				"the /enrich secret is the only control on this listener", addr)
+		}
+	}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
@@ -615,7 +692,7 @@ func Run(ctx context.Context) error {
 	if err := agentcfg.Write(agentcfg.Info{Port: port, Secret: secret}); err != nil {
 		return err
 	}
-	log.Printf("keld-agent: listening on 127.0.0.1:%d", port)
+	log.Printf("keld-agent: listening on %s", ln.Addr().String())
 	// EmitExempt: daemon.start is SevInfo but must surface even under the
 	// default warn floor (lifecycle narrative), and it fires once here before
 	// any poll could lower the floor — a plain Emit would always drop it.
@@ -691,15 +768,33 @@ func Run(ctx context.Context) error {
 	// enabled: with it disabled there's no Worker to consume the queue, so
 	// draining/sweeping would just re-enqueue pointers nobody processes.
 	if enrichmentEnabled {
+		if n, err := spool.ImportLegacy(); err != nil {
+			log.Printf("keld-agent: legacy spool import failed: %v", err)
+		} else if n > 0 {
+			log.Printf("keld-agent: imported %d legacy spool records", n)
+		}
 		drainSpool := func() {
-			spool.Drain(func(p spool.Pointer) error {
+			if _, err := spool.Drain(func(p spool.Pointer) error {
 				if q.Offer(ingress.JobFrom(p)) {
 					return nil
 				}
 				return errQueueFull // queue full: keep the file, retry next sweep
-			})
+			}); err != nil {
+				// Pre-branch, spool.Drain always returned nil; it now surfaces real
+				// backend errors (open() failing, a wedged db.Query) and under the
+				// completeness SLO a silently-discarded one here means every future
+				// sweep becomes a no-op forever — no drains, and (since Stats()
+				// shares the same failing backend) no spool.depth gauge either, i.e.
+				// no signal at all that anything is wrong. Log it like Resync/
+				// ImportLegacy's errors nearby, and also surface it as a client
+				// event: a local log alone doesn't reach the platform dashboard.
+				log.Printf("keld-agent: spool drain failed: %v", err)
+				emitter.Emit("spool.drain_failed", clientevents.SevError,
+					map[string]any{"error": clientevents.RedactError(err)})
+			}
 		}
 		drainSpool()
+		lastEvicted := int64(0)
 		go func() {
 			iv := 30 * time.Second
 			if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
@@ -709,12 +804,85 @@ func Run(ctx context.Context) error {
 			}
 			t := time.NewTicker(iv)
 			defer t.Stop()
+
+			// spool.depth gets its own, deliberately slower ticker rather than
+			// riding the sweep ticker above. The Emitter's ring coalesces
+			// same-code+same-severity events (emitter.go's insert), keeping
+			// only the FIRST snapshot's fields and bumping a count — so any
+			// gauge tick landing between two reporter flushes (flushInterval,
+			// KELD_CLIENTEVENTS_FLUSH, default 30s) reports a stale
+			// rows/bytes/oldest_age_s for that interval. resource.gauge avoids
+			// this the same way: GaugeIntervalS defaults to 300s against a 30s
+			// flush default, a 10x margin. Mirror that ratio here rather than
+			// tying the gauge to KELD_SPOOL_SWEEP — which exists to control
+			// resync/drain/eviction-check freshness and, if ever tuned faster
+			// for finer backlog visibility, would shrink this margin to zero
+			// again. Do NOT re-couple these two cadences.
+			gaugeIv := 300 * time.Second
+			if v := os.Getenv("KELD_SPOOL_GAUGE_INTERVAL"); v != "" {
+				if d, err := time.ParseDuration(v); err == nil && d > 0 {
+					gaugeIv = d
+				}
+			}
+			gt := time.NewTicker(gaugeIv)
+			defer gt.Stop()
+
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-t.C:
+					// Resync the in-memory byte total from the table before
+					// draining: the hook (cmd/keld) is a separate, short-lived
+					// process that writes to this same spool.db, so this
+					// long-lived daemon's total can't otherwise observe rows
+					// the hook inserted since the daemon started (or since the
+					// last sweep) — left unresynced that drift is
+					// one-directional (the daemon's total understates the
+					// table), so evictFor never trips and the spool grows past
+					// its configured budget. This bounds the drift to one
+					// sweep interval; the aggregate it runs is the same one
+					// open() already runs once at startup (~9.5ms/50k rows),
+					// negligible at this cadence.
+					if err := spool.Resync(); err != nil {
+						log.Printf("keld-agent: spool byte-total resync failed: %v", err)
+					}
 					drainSpool()
+
+					// Evictions are the opposite of a gauge: dropped rows are
+					// enrichment data that is gone, not merely late, so this
+					// stays a real warn-level anomaly, checked every sweep
+					// tick (not the slower gauge tick) and reported as a delta
+					// since the last check.
+					if n := spool.Evicted(); n > lastEvicted {
+						emitter.Emit("spool.evicted", clientevents.SevWarn, map[string]any{"dropped": n - lastEvicted})
+						lastEvicted = n
+					}
+				case <-gt.C:
+					// Backlog visibility: depth/bytes/oldest-age is a gauge —
+					// a deep backlog is a designed steady state under agent
+					// load, not a problem, so it rides EmitGauge (info,
+					// floor-exempt) the same way resource.gauge does, rather
+					// than a plain Emit that a warn-and-above gate would
+					// silently drop.
+					if st, err := spool.Stats(); err == nil {
+						oldestAgeS := 0.0
+						if st.OldestUnixNano != 0 {
+							oldestAgeS = time.Since(time.Unix(0, st.OldestUnixNano)).Seconds()
+						}
+						emitter.EmitGauge("spool.depth", map[string]any{
+							"rows":         st.Rows,
+							"bytes":        st.Bytes,
+							"oldest_age_s": oldestAgeS,
+						})
+					} else {
+						// Same backend as Drain above: a wedged spool fails Stats the
+						// same way it fails Drain, and this gauge is otherwise the
+						// only remaining signal once a sweep goes silent. Log rather
+						// than swallow — spool.drain_failed above already covers the
+						// client-event side for the shared underlying failure.
+						log.Printf("keld-agent: spool stats failed: %v", err)
+					}
 				}
 			}
 		}()
@@ -798,7 +966,24 @@ func thresholdsFrom(eff settings.EffectiveClientTelemetry) resource.Thresholds {
 // serve runs the ingress HTTP server until ctx is cancelled, then gracefully
 // shuts it down and closes the queue. It blocks until the server stops.
 func serve(ctx context.Context, ln net.Listener, handler http.Handler, q *queue.Queue, emitter *clientevents.Emitter) error {
-	srv := &http.Server{Handler: handler}
+	srv := &http.Server{
+		Handler: handler,
+		// KELD_AGENT_BIND=0.0.0.0:… (service mode) makes this reachable from
+		// anywhere, and connection acceptance happens before ingress.go's
+		// constant-time secret check — so an unauthenticated caller can hold a
+		// connection open (slowloris, or just an idle connection) before ever
+		// presenting a secret. A zero-value http.Server has no timeouts at all,
+		// which was fine on the loopback-only listener this predates but isn't
+		// once the bind can be public. ReadHeaderTimeout/ReadTimeout bound how
+		// long an unauthenticated connection can occupy a goroutine; IdleTimeout
+		// bounds a keep-alive connection sitting idle between requests. All three
+		// are generous relative to ingress.go's 1 MiB body cap — a legitimate
+		// large inline-prompt POST over a slow link still completes well inside
+		// ReadTimeout.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	go func() {
 		<-ctx.Done()
 		emitter.EmitExempt("daemon.stop", clientevents.SevInfo, nil)

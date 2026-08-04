@@ -163,3 +163,11 @@ freeze-check: ## run the PLAIN freeze + worker-spawn acceptance gate locally (Li
 .PHONY: obfuscate-check
 obfuscate-check: ## run the OBFUSCATED freeze + worker-spawn acceptance gate locally (Linux)
 	KELD_OBFUSCATE=1 bash scripts/freeze-check-local.sh
+
+.PHONY: crosscheck
+crosscheck:  ## verify all release targets build pure-Go (CGO_ENABLED=0)
+	@for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
+	  os=$${t%/*}; arch=$${t#*/}; \
+	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build ./... \
+	    && echo "  OK   $$t" || { echo "  FAIL $$t"; exit 1; }; \
+	done
