@@ -722,6 +722,29 @@ func Run(ctx context.Context) error {
 			}
 			t := time.NewTicker(iv)
 			defer t.Stop()
+
+			// spool.depth gets its own, deliberately slower ticker rather than
+			// riding the sweep ticker above. The Emitter's ring coalesces
+			// same-code+same-severity events (emitter.go's insert), keeping
+			// only the FIRST snapshot's fields and bumping a count — so any
+			// gauge tick landing between two reporter flushes (flushInterval,
+			// KELD_CLIENTEVENTS_FLUSH, default 30s) reports a stale
+			// rows/bytes/oldest_age_s for that interval. resource.gauge avoids
+			// this the same way: GaugeIntervalS defaults to 300s against a 30s
+			// flush default, a 10x margin. Mirror that ratio here rather than
+			// tying the gauge to KELD_SPOOL_SWEEP — which exists to control
+			// resync/drain/eviction-check freshness and, if ever tuned faster
+			// for finer backlog visibility, would shrink this margin to zero
+			// again. Do NOT re-couple these two cadences.
+			gaugeIv := 300 * time.Second
+			if v := os.Getenv("KELD_SPOOL_GAUGE_INTERVAL"); v != "" {
+				if d, err := time.ParseDuration(v); err == nil && d > 0 {
+					gaugeIv = d
+				}
+			}
+			gt := time.NewTicker(gaugeIv)
+			defer gt.Stop()
+
 			for {
 				select {
 				case <-ctx.Done():
@@ -744,15 +767,22 @@ func Run(ctx context.Context) error {
 					}
 					drainSpool()
 
+					// Evictions are the opposite of a gauge: dropped rows are
+					// enrichment data that is gone, not merely late, so this
+					// stays a real warn-level anomaly, checked every sweep
+					// tick (not the slower gauge tick) and reported as a delta
+					// since the last check.
+					if n := spool.Evicted(); n > lastEvicted {
+						emitter.Emit("spool.evicted", clientevents.SevWarn, map[string]any{"dropped": n - lastEvicted})
+						lastEvicted = n
+					}
+				case <-gt.C:
 					// Backlog visibility: depth/bytes/oldest-age is a gauge —
 					// a deep backlog is a designed steady state under agent
 					// load, not a problem, so it rides EmitGauge (info,
 					// floor-exempt) the same way resource.gauge does, rather
 					// than a plain Emit that a warn-and-above gate would
-					// silently drop. Evictions are the opposite: dropped rows
-					// are enrichment data that is gone, not merely late, so
-					// that's a real warn-level anomaly reported as a delta
-					// since the last sweep.
+					// silently drop.
 					if st, err := spool.Stats(); err == nil {
 						oldestAgeS := 0.0
 						if st.OldestUnixNano != 0 {
@@ -763,10 +793,6 @@ func Run(ctx context.Context) error {
 							"bytes":        st.Bytes,
 							"oldest_age_s": oldestAgeS,
 						})
-					}
-					if n := spool.Evicted(); n > lastEvicted {
-						emitter.Emit("spool.evicted", clientevents.SevWarn, map[string]any{"dropped": n - lastEvicted})
-						lastEvicted = n
 					}
 				}
 			}

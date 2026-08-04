@@ -117,12 +117,14 @@ below). No other values are ever emitted.
 
 **Severity floor.** The org-governed `min_severity` setting (default `warn`)
 gates most events: anything below the floor is dropped before it's ever
-buffered. Two exceptions are **floor-exempt** (always pass through once
+buffered. Three exceptions are **floor-exempt** (always pass through once
 telemetry is enabled at all, regardless of `min_severity`):
 - the lifecycle events `daemon.start` / `daemon.stop` (so the narrative of
-  "was this agent even running" survives a strict floor), and
+  "was this agent even running" survives a strict floor),
 - all `resource.gauge` snapshots (gauges are periodic health data, not
-  alerts — a `warn` floor shouldn't blind Atlas to baseline resource use).
+  alerts — a `warn` floor shouldn't blind Atlas to baseline resource use), and
+- all `spool.depth` snapshots, for the same reason: backlog depth is a gauge,
+  not an alert, and a `warn` floor shouldn't blind Atlas to it.
 
 An org can also disable client telemetry entirely (`enabled: false`), or
 sample it (`sample_rate`) — see the settings block below.
@@ -138,7 +140,7 @@ package/file for a receiver author who wants to trace the source.
 | `daemon.stop` | info (floor-exempt) | `daemon/daemon.go` | Daemon's shutdown goroutine observed context cancellation (graceful shutdown beginning). |
 | `job.retry_exhausted` | warn | `daemon/daemon.go` (Worker loop) | An enrichment job hit its per-job timeout (`KELD_ENRICH_JOB_TIMEOUT`) enough times to exceed `KELD_ENRICH_MAX_ATTEMPTS`. `fields.attempts`, `fields.timeout_s`. Always followed by a `job.quarantined` event for the same job. |
 | `job.quarantined` | warn (normal path) or error (quarantine write failed) | `daemon/daemon.go` | A retry-exhausted job's pointer was moved to `spool.Quarantine` (`~/.keld/spool/bad/`). warn = quarantine write succeeded, `fields.attempts`; error = the quarantine write itself failed (job pointer may be lost), `fields.error`. |
-| `spool.depth` | info (floor-exempt) | `daemon/daemon.go` | Periodic backlog gauge emitted on the spool sweep (`KELD_SPOOL_SWEEP`, default 30s): `fields.rows`, `fields.bytes`, `fields.oldest_age_s`. Deep backlog is a designed steady state under agent load, not a problem — this is a gauge, not an alarm, which is also why it rides `EmitGauge` like `resource.gauge` rather than the severity floor. |
+| `spool.depth` | info (floor-exempt) | `daemon/daemon.go` | Periodic backlog gauge: `fields.rows`, `fields.bytes`, `fields.oldest_age_s`. Runs on its own ticker (`KELD_SPOOL_GAUGE_INTERVAL`, default 300s) independent of the drain/resync/eviction-check sweep (`KELD_SPOOL_SWEEP`, default 30s) — deliberately, with a 10x margin over the client-events flush interval (`KELD_CLIENTEVENTS_FLUSH`, default 30s), matching `resource.gauge`'s ratio. The Emitter's ring coalesces same-code/same-severity events by keeping only the first snapshot's fields, so a gauge ticked faster than the flush interval could publish a stale reading; the margin keeps that from happening. Deep backlog is a designed steady state under agent load, not a problem — this is a gauge, not an alarm, which is also why it rides `EmitGauge` like `resource.gauge` rather than the severity floor. |
 | `spool.evicted` | warn | `daemon/daemon.go` | Records were dropped to stay inside `KELD_SPOOL_MAX_BYTES` since the last sweep (`fields.dropped`, the delta in `spool.Evicted()`'s running count). Under a completeness SLO this is an anomaly: the evicted rows' enrichment data is gone, not merely late. Note: `spool.Evicted()` can over-count by one in a narrow case (a rewrite of the globally-oldest row evicting itself, then reinserting under the same write) — a deferred minor, not fixed here — so treat `fields.dropped` as an upper bound on rows actually lost, not an exact count. |
 | `job.respool_failed` | error | `daemon/daemon.go` | A timed-out job (not yet exhausted) failed to re-spool to disk for a later retry — the durability guarantee broke for this job. `fields.error`, `fields.timeout_s`. |
 | `worker.panic` | error | `daemon/daemon.go` (`process()`'s recovered panic) | The single enrichment worker goroutine panicked mid-job; recovered so the daemon keeps running. `fields.error`. |
