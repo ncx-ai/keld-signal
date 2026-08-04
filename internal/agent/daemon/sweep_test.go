@@ -7,12 +7,24 @@ package daemon
 // runSweep directly, with millisecond intervals and a real spool rooted at
 // a t.TempDir() KELD_HOME, and no login required.
 //
-// One cross-test gotcha worth flagging up front: internal/spool's
-// evictedCount is a single package-level atomic, not reset between tests in
-// this binary. Tests that assert eviction behavior treat it as a
-// monotonically increasing counter and work in deltas rather than absolute
-// values, and drain any stale "catch-up" event before inducing the real
-// eviction they want to assert on (see TestRunSweepEvictedFiresOnlyOnChange).
+// Every test that starts runSweep waits for it to actually return
+// (cancel(); <-done) before the test function ends, rather than just
+// deferring cancel() and moving on. t.Setenv's KELD_HOME restore is a
+// t.Cleanup, which runs AFTER the test function's own defers — so a
+// still-running runSweep goroutine could otherwise take one more tick after
+// KELD_HOME has already been restored to the developer's real value,
+// falling back to ~/.keld and draining (deleting) real spooled prompts into
+// a queue nobody reads. Under a completeness SLO that's exactly the kind of
+// silent data loss this whole feature exists to prevent — caused by a test,
+// which would be worse than having no test at all.
+//
+// A second, unrelated cross-test gotcha: internal/spool's evictedCount is a
+// single package-level atomic, never reset between tests in this binary.
+// TestRunSweepEvictedFiresOnlyOnChange induces its eviction and reads
+// spool.Evicted() BEFORE starting runSweep specifically so it can assert
+// against that absolute value (valid because runSweep's local lastEvicted
+// always starts at 0 — daemon.go's runSweep) rather than needing a delta or
+// any cross-test bookkeeping.
 
 import (
 	"context"
@@ -63,6 +75,32 @@ func countCode(evts []clientevents.Event, code string) int {
 	return n
 }
 
+// findCode returns the last event in evts with the given code (the
+// coalescing target if the emitter merged repeats into one ring slot).
+func findCode(evts []clientevents.Event, code string) (clientevents.Event, bool) {
+	var found clientevents.Event
+	ok := false
+	for _, e := range evts {
+		if e.Code == code {
+			found = e
+			ok = true
+		}
+	}
+	return found, ok
+}
+
+// assertNotCoalesced fails the test if ev carries a "count" field, which the
+// Emitter's ring only ever adds when it merged 2+ consecutive same-code
+// events into one slot (emitter.go's insert). A bare countCode(...)==1 over
+// a drained batch cannot by itself distinguish "fired once" from "fired
+// twice back-to-back and coalesced" — this closes that gap.
+func assertNotCoalesced(t *testing.T, ev clientevents.Event) {
+	t.Helper()
+	if c, has := ev.Fields["count"]; has {
+		t.Fatalf("%s coalesced with a prior same-code event (Fields[count]=%v present) — cannot conclude it fired exactly once from the drained batch alone", ev.Code, c)
+	}
+}
+
 // nextWithTimeout reads one job from q, or reports ok=false if none arrives
 // within timeout. Only used when a job is expected to already be in flight
 // (or arrive shortly), since a timed-out call leaves its q.Next() goroutine
@@ -87,7 +125,9 @@ func nextWithTimeout(q *queue.Queue, timeout time.Duration) (queue.Job, bool) {
 }
 
 // runSweepAsync launches runSweep and returns a channel closed once it
-// returns, so tests can assert prompt cancellation.
+// returns, so tests can assert prompt cancellation and — just as
+// importantly — wait for the goroutine to actually stop before returning,
+// rather than merely canceling its context and hoping.
 func runSweepAsync(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter, sweepIv, gaugeIv time.Duration) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -111,8 +151,8 @@ func TestRunSweepDrainsSpooledRows(t *testing.T) {
 	q := queue.New(16)
 	emitter := testEmitter()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runSweepAsync(ctx, q, emitter, 5*time.Millisecond, 10*time.Second)
+	done := runSweepAsync(ctx, q, emitter, 5*time.Millisecond, 10*time.Second)
+	defer func() { cancel(); <-done }()
 
 	got := map[string]bool{}
 	for i := 0; i < 3; i++ {
@@ -142,53 +182,78 @@ func TestRunSweepDrainsSpooledRows(t *testing.T) {
 // them (e.g. "for finer visibility") would reintroduce the stale-gauge bug
 // the emitter's same-code coalescing causes (see daemon.go's comment next to
 // gaugeIv's computation).
+//
+// gaugeIv is set to 1200x sweepIv (not the production 10x) specifically so
+// the "no gauge yet" check below is a PROVABLE bound rather than one that
+// merely happens to hold when the test runs fast: 5 rounds at a 500ms
+// per-round cap is 2.5s worst case, comfortably under one 6s gaugeIv even
+// under heavy scheduler contention. (An earlier version of this test used a
+// 100ms per-round cap against a 1.5s gaugeIv — reproducibly, under -race
+// plus 20+ CPU-bound busy loops on a 20-core machine, that still hit the
+// per-round timeout often enough to be a real flake, not just a
+// theoretical one; these wider margins were sized empirically against that
+// same contention, not guessed.) The elapsed-time guard around the
+// zero-gauge check below is a second, independent safety net for the same
+// reason — so a future edit to these constants can't quietly turn the
+// bound incidental again without the test noticing.
 func TestRunSweepCadencesAreIndependent(t *testing.T) {
 	sweepHome(t)
 
 	q := queue.New(16)
 	emitter := testEmitter()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	const sweepIv = 5 * time.Millisecond
-	const gaugeIv = 150 * time.Millisecond // 30x sweepIv
-	runSweepAsync(ctx, q, emitter, sweepIv, gaugeIv)
+	const gaugeIv = 6 * time.Second // 1200x sweepIv
+	done := runSweepAsync(ctx, q, emitter, sweepIv, gaugeIv)
+	defer func() { cancel(); <-done }()
 
 	// Write and drain several rows one at a time, each round-tripped well
 	// inside a single gaugeIv window. If drains only happened on the gauge
 	// cadence, these would never come back within their own timeout.
 	const rounds = 5
+	const perRoundTimeout = 500 * time.Millisecond // rounds*perRoundTimeout = 2.5s << gaugeIv (6s)
+	start := time.Now()
 	for i := 0; i < rounds; i++ {
 		id := "R" + string(rune('0'+i))
 		if err := spool.Write(ptr(id)); err != nil {
 			t.Fatal(err)
 		}
-		j, ok := nextWithTimeout(q, 60*time.Millisecond) // << gaugeIv
+		j, ok := nextWithTimeout(q, perRoundTimeout)
 		if !ok {
-			t.Fatalf("round %d: drain did not pick up the new row within %v (<< gaugeIv %v)", i, 60*time.Millisecond, gaugeIv)
+			t.Fatalf("round %d: drain did not pick up the new row within %v (<< gaugeIv %v)", i, perRoundTimeout, gaugeIv)
 		}
 		if j.ID != id {
 			t.Fatalf("round %d: got job %q, want %q", i, j.ID, id)
 		}
 	}
 
-	// rounds*60ms of elapsed time is still comfortably under one gaugeIv
-	// (150ms), so no gauge tick should have fired yet despite the several
-	// drains that just ran.
-	early := emitter.Drain()
-	if n := countCode(early, "spool.depth"); n != 0 {
-		t.Fatalf("gauge fired %d times before its own interval elapsed (cadences re-coupled?): %v", n, codesOf(early))
+	// By construction (rounds*perRoundTimeout = 500ms < gaugeIv = 1500ms)
+	// this should always hold; the elapsed guard means a genuinely
+	// pathological scheduling stall skips the assertion instead of
+	// misreporting it as a re-coupling regression.
+	if elapsed := time.Since(start); elapsed < gaugeIv {
+		early := emitter.Drain()
+		if n := countCode(early, "spool.depth"); n != 0 {
+			t.Fatalf("gauge fired %d times before its own interval elapsed (elapsed=%v, gaugeIv=%v; cadences re-coupled?): %v", n, elapsed, gaugeIv, codesOf(early))
+		}
+	} else {
+		t.Logf("skipping the pre-gauge zero-check: %v already >= gaugeIv %v by the time the 5 rounds finished (this run was too slow to prove the negative — not evidence of re-coupling)", elapsed, gaugeIv)
 	}
 
-	// Now wait past gaugeIv and confirm exactly one gauge fires.
+	// Now wait past gaugeIv and confirm exactly one gauge fires (and that
+	// it wasn't a coalesced count>=2, i.e. genuinely one real tick, not
+	// several folded into one ring slot).
 	var seen []clientevents.Event
-	waitFor(t, 2*time.Second, func() bool {
+	waitFor(t, gaugeIv+4*time.Second, func() bool {
 		seen = append(seen, emitter.Drain()...)
 		return countCode(seen, "spool.depth") > 0
 	})
 	if n := countCode(seen, "spool.depth"); n != 1 {
 		t.Fatalf("want exactly 1 spool.depth event, got %d: %v", n, codesOf(seen))
 	}
+	ev, _ := findCode(seen, "spool.depth")
+	assertNotCoalesced(t, ev)
 }
 
 // TestRunSweepGaugeReportsRealNumbers pins that the spool.depth event's
@@ -214,10 +279,10 @@ func TestRunSweepGaugeReportsRealNumbers(t *testing.T) {
 	q := queue.New(16)
 	emitter := testEmitter()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	// sweepIv never fires within this test's lifetime, so the drain can't
 	// touch the seeded rows before the gauge does.
-	runSweepAsync(ctx, q, emitter, 10*time.Second, 15*time.Millisecond)
+	done := runSweepAsync(ctx, q, emitter, 10*time.Second, 15*time.Millisecond)
+	defer func() { cancel(); <-done }()
 
 	var seen []clientevents.Event
 	waitFor(t, 2*time.Second, func() bool {
@@ -225,13 +290,7 @@ func TestRunSweepGaugeReportsRealNumbers(t *testing.T) {
 		return countCode(seen, "spool.depth") > 0
 	})
 
-	var ev clientevents.Event
-	for _, e := range seen {
-		if e.Code == "spool.depth" {
-			ev = e
-			break
-		}
-	}
+	ev, _ := findCode(seen, "spool.depth")
 	rows, ok := ev.Fields["rows"].(int64)
 	if !ok || rows != want.Rows {
 		t.Fatalf("rows = %v (ok=%v), want %d", ev.Fields["rows"], ok, want.Rows)
@@ -257,35 +316,26 @@ func TestRunSweepGaugeReportsRealNumbers(t *testing.T) {
 // event: it fires once when Evicted() increases, and does not repeat on
 // later quiet sweeps that observe no further change.
 //
-// internal/spool's evictedCount is a single process-global atomic (not
-// reset between tests in this binary), so runSweep's local lastEvicted
-// (which always starts at 0) can see a stale, already-nonzero Evicted()
-// baseline on its very first tick and fire a one-off "catch-up" event for
-// history that predates this test. That's a test-binary artifact, not a
-// production concern (a real process's Evicted() starts at 0), so this test
-// neutralizes it explicitly: let runSweep catch up and drain that event
-// before inducing the real eviction it wants to assert on.
+// The eviction is induced BEFORE runSweep is even started, and asserted
+// against spool.Evicted()'s absolute value at that point (valid because
+// runSweep's local lastEvicted always starts at 0). This is deliberate, not
+// incidental: starting runSweep first and only then writing the
+// budget-busting rows races runSweep's own drain against the writes — with
+// an unconsumed queue (cap 16, no reader yet) every Offer succeeds, so
+// spool.go's Drain deletes each row (and addBytes(-n)) about as fast as it
+// arrives, and the running total can plausibly never reach the configured
+// byte budget, so evictFor never trips at all. Inducing the eviction first,
+// synchronously, with no daemon-managed reader running yet, removes that
+// race entirely.
 func TestRunSweepEvictedFiresOnlyOnChange(t *testing.T) {
 	sweepHome(t)
 
-	q := queue.New(16)
-	emitter := testEmitter()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	const sweepIv = 5 * time.Millisecond
-	const gaugeIv = 10 * time.Second // never fires
-	runSweepAsync(ctx, q, emitter, sweepIv, gaugeIv)
-
-	// Let any stale catch-up event settle, then discard it.
-	time.Sleep(30 * time.Millisecond)
-	emitter.Drain()
-
-	before := spool.Evicted()
+	t.Setenv("KELD_SPOOL_MAX_BYTES", "3000")
 	// Mirrors internal/spool's own TestByteBudgetEvictsOldestFirst: a
 	// 3000-byte budget holds about 2 of these ~1000-byte records, so
-	// writing 4 evicts some.
-	t.Setenv("KELD_SPOOL_MAX_BYTES", "3000")
+	// writing 4 evicts some. spool.Write enforces the budget (and so
+	// Evicted()) synchronously, so by the time this loop returns the
+	// eviction has already happened — no sweep involved yet.
 	body := make([]byte, 1000)
 	for i := range body {
 		body[i] = 'x'
@@ -297,10 +347,16 @@ func TestRunSweepEvictedFiresOnlyOnChange(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	wantDropped := spool.Evicted() - before
-	if wantDropped <= 0 {
-		t.Fatalf("setup did not evict anything: before=%d after=%d", before, spool.Evicted())
+	want := spool.Evicted()
+	if want <= 0 {
+		t.Fatalf("setup did not evict anything: Evicted()=%d", want)
 	}
+
+	q := queue.New(16)
+	emitter := testEmitter()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runSweepAsync(ctx, q, emitter, 5*time.Millisecond, 10*time.Second) // gaugeIv never fires
+	defer func() { cancel(); <-done }()
 
 	var seen []clientevents.Event
 	waitFor(t, 2*time.Second, func() bool {
@@ -308,21 +364,17 @@ func TestRunSweepEvictedFiresOnlyOnChange(t *testing.T) {
 		return countCode(seen, "spool.evicted") > 0
 	})
 	if n := countCode(seen, "spool.evicted"); n != 1 {
-		t.Fatalf("want exactly 1 spool.evicted event for this delta, got %d: %v", n, codesOf(seen))
+		t.Fatalf("want exactly 1 spool.evicted event, got %d: %v", n, codesOf(seen))
 	}
-	var ev clientevents.Event
-	for _, e := range seen {
-		if e.Code == "spool.evicted" {
-			ev = e
-		}
-	}
+	ev, _ := findCode(seen, "spool.evicted")
+	assertNotCoalesced(t, ev)
 	dropped, ok := ev.Fields["dropped"].(int64)
-	if !ok || dropped != wantDropped {
-		t.Fatalf("dropped = %v (ok=%v), want %d", ev.Fields["dropped"], ok, wantDropped)
+	if !ok || dropped != want {
+		t.Fatalf("dropped = %v (ok=%v), want %d (spool.Evicted() at fire time)", ev.Fields["dropped"], ok, want)
 	}
 
-	// Quiet sweeps: no further writes, no further evictions. Confirm no
-	// repeat firing.
+	// Quiet sweeps: no further writes, no further evictions. This is the
+	// real pin for "fires only on change" — confirm no repeat firing.
 	time.Sleep(50 * time.Millisecond)
 	quiet := emitter.Drain()
 	if n := countCode(quiet, "spool.evicted"); n != 0 {
@@ -340,10 +392,10 @@ func TestRunSweepEvictedFiresOnlyOnChange(t *testing.T) {
 // entirely, exactly as an out-of-process writer would.
 //
 // If Resync did not run before the drain, the in-memory total would go
-// negative (drainSpool's delete-time addBytes(-freed) would subtract bytes
-// for a row the total never knew it had): Resync running correctly is what
-// leaves the total at exactly 0 once every row (the tracked seed row and
-// the untracked external one) has been drained.
+// negative (drainEnrichSpool's delete-time addBytes(-freed) would subtract
+// bytes for a row the total never knew it had): Resync running correctly is
+// what leaves the total at exactly 0 once every row (the tracked seed row
+// and the untracked external one) has been drained.
 func TestRunSweepResyncPicksUpExternalWrite(t *testing.T) {
 	sweepHome(t)
 
@@ -388,8 +440,8 @@ func TestRunSweepResyncPicksUpExternalWrite(t *testing.T) {
 	q := queue.New(16)
 	emitter := testEmitter()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runSweepAsync(ctx, q, emitter, 5*time.Millisecond, 10*time.Second)
+	done := runSweepAsync(ctx, q, emitter, 5*time.Millisecond, 10*time.Second)
+	defer func() { cancel(); <-done }()
 
 	// Drain both jobs off the queue so the sweep's drain can actually
 	// delete both rows (Offer must succeed for Drain to remove a row).

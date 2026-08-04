@@ -773,7 +773,7 @@ func Run(ctx context.Context) error {
 		} else if n > 0 {
 			log.Printf("keld-agent: imported %d legacy spool records", n)
 		}
-		drainSpool(q, emitter)
+		drainEnrichSpool(q, emitter)
 
 		sweepIv := 30 * time.Second
 		if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
@@ -828,11 +828,11 @@ func Run(ctx context.Context) error {
 	return serve(ctx, ln, handler, q, emitter)
 }
 
-// drainSpool drains queued spool pointers into q, offering each as an
+// drainEnrichSpool drains queued spool pointers into q, offering each as an
 // ingress job. Idempotent and safe to call repeatedly (at startup and on
 // every sweep tick): a row is deleted only once its offer to q succeeds, and
 // a full queue leaves the row in place for the next call to retry.
-func drainSpool(q *queue.Queue, emitter *clientevents.Emitter) {
+func drainEnrichSpool(q *queue.Queue, emitter *clientevents.Emitter) {
 	if _, err := spool.Drain(func(p spool.Pointer) error {
 		if q.Offer(ingress.JobFrom(p)) {
 			return nil
@@ -893,7 +893,7 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 			if err := spool.Resync(); err != nil {
 				log.Printf("keld-agent: spool byte-total resync failed: %v", err)
 			}
-			drainSpool(q, emitter)
+			drainEnrichSpool(q, emitter)
 
 			// Evictions are the opposite of a gauge: dropped rows are
 			// enrichment data that is gone, not merely late, so this
