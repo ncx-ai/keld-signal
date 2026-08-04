@@ -773,119 +773,36 @@ func Run(ctx context.Context) error {
 		} else if n > 0 {
 			log.Printf("keld-agent: imported %d legacy spool records", n)
 		}
-		drainSpool := func() {
-			if _, err := spool.Drain(func(p spool.Pointer) error {
-				if q.Offer(ingress.JobFrom(p)) {
-					return nil
-				}
-				return errQueueFull // queue full: keep the file, retry next sweep
-			}); err != nil {
-				// Pre-branch, spool.Drain always returned nil; it now surfaces real
-				// backend errors (open() failing, a wedged db.Query) and under the
-				// completeness SLO a silently-discarded one here means every future
-				// sweep becomes a no-op forever — no drains, and (since Stats()
-				// shares the same failing backend) no spool.depth gauge either, i.e.
-				// no signal at all that anything is wrong. Log it like Resync/
-				// ImportLegacy's errors nearby, and also surface it as a client
-				// event: a local log alone doesn't reach the platform dashboard.
-				log.Printf("keld-agent: spool drain failed: %v", err)
-				emitter.Emit("spool.drain_failed", clientevents.SevError,
-					map[string]any{"error": clientevents.RedactError(err)})
+		drainSpool(q, emitter)
+
+		sweepIv := 30 * time.Second
+		if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				sweepIv = d
 			}
 		}
-		drainSpool()
-		lastEvicted := int64(0)
-		go func() {
-			iv := 30 * time.Second
-			if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
-				if d, err := time.ParseDuration(v); err == nil {
-					iv = d
-				}
-			}
-			t := time.NewTicker(iv)
-			defer t.Stop()
 
-			// spool.depth gets its own, deliberately slower ticker rather than
-			// riding the sweep ticker above. The Emitter's ring coalesces
-			// same-code+same-severity events (emitter.go's insert), keeping
-			// only the FIRST snapshot's fields and bumping a count — so any
-			// gauge tick landing between two reporter flushes (flushInterval,
-			// KELD_CLIENTEVENTS_FLUSH, default 30s) reports a stale
-			// rows/bytes/oldest_age_s for that interval. resource.gauge avoids
-			// this the same way: GaugeIntervalS defaults to 300s against a 30s
-			// flush default, a 10x margin. Mirror that ratio here rather than
-			// tying the gauge to KELD_SPOOL_SWEEP — which exists to control
-			// resync/drain/eviction-check freshness and, if ever tuned faster
-			// for finer backlog visibility, would shrink this margin to zero
-			// again. Do NOT re-couple these two cadences.
-			gaugeIv := 300 * time.Second
-			if v := os.Getenv("KELD_SPOOL_GAUGE_INTERVAL"); v != "" {
-				if d, err := time.ParseDuration(v); err == nil && d > 0 {
-					gaugeIv = d
-				}
+		// spool.depth gets its own, deliberately slower ticker rather than
+		// riding the sweep ticker above. The Emitter's ring coalesces
+		// same-code+same-severity events (emitter.go's insert), keeping
+		// only the FIRST snapshot's fields and bumping a count — so any
+		// gauge tick landing between two reporter flushes (flushInterval,
+		// KELD_CLIENTEVENTS_FLUSH, default 30s) reports a stale
+		// rows/bytes/oldest_age_s for that interval. resource.gauge avoids
+		// this the same way: GaugeIntervalS defaults to 300s against a 30s
+		// flush default, a 10x margin. Mirror that ratio here rather than
+		// tying the gauge to KELD_SPOOL_SWEEP — which exists to control
+		// resync/drain/eviction-check freshness and, if ever tuned faster
+		// for finer backlog visibility, would shrink this margin to zero
+		// again. Do NOT re-couple these two cadences.
+		gaugeIv := 300 * time.Second
+		if v := os.Getenv("KELD_SPOOL_GAUGE_INTERVAL"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil && d > 0 {
+				gaugeIv = d
 			}
-			gt := time.NewTicker(gaugeIv)
-			defer gt.Stop()
+		}
 
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-					// Resync the in-memory byte total from the table before
-					// draining: the hook (cmd/keld) is a separate, short-lived
-					// process that writes to this same spool.db, so this
-					// long-lived daemon's total can't otherwise observe rows
-					// the hook inserted since the daemon started (or since the
-					// last sweep) — left unresynced that drift is
-					// one-directional (the daemon's total understates the
-					// table), so evictFor never trips and the spool grows past
-					// its configured budget. This bounds the drift to one
-					// sweep interval; the aggregate it runs is the same one
-					// open() already runs once at startup (~9.5ms/50k rows),
-					// negligible at this cadence.
-					if err := spool.Resync(); err != nil {
-						log.Printf("keld-agent: spool byte-total resync failed: %v", err)
-					}
-					drainSpool()
-
-					// Evictions are the opposite of a gauge: dropped rows are
-					// enrichment data that is gone, not merely late, so this
-					// stays a real warn-level anomaly, checked every sweep
-					// tick (not the slower gauge tick) and reported as a delta
-					// since the last check.
-					if n := spool.Evicted(); n > lastEvicted {
-						emitter.Emit("spool.evicted", clientevents.SevWarn, map[string]any{"dropped": n - lastEvicted})
-						lastEvicted = n
-					}
-				case <-gt.C:
-					// Backlog visibility: depth/bytes/oldest-age is a gauge —
-					// a deep backlog is a designed steady state under agent
-					// load, not a problem, so it rides EmitGauge (info,
-					// floor-exempt) the same way resource.gauge does, rather
-					// than a plain Emit that a warn-and-above gate would
-					// silently drop.
-					if st, err := spool.Stats(); err == nil {
-						oldestAgeS := 0.0
-						if st.OldestUnixNano != 0 {
-							oldestAgeS = time.Since(time.Unix(0, st.OldestUnixNano)).Seconds()
-						}
-						emitter.EmitGauge("spool.depth", map[string]any{
-							"rows":         st.Rows,
-							"bytes":        st.Bytes,
-							"oldest_age_s": oldestAgeS,
-						})
-					} else {
-						// Same backend as Drain above: a wedged spool fails Stats the
-						// same way it fails Drain, and this gauge is otherwise the
-						// only remaining signal once a sweep goes silent. Log rather
-						// than swallow — spool.drain_failed above already covers the
-						// client-event side for the shared underlying failure.
-						log.Printf("keld-agent: spool stats failed: %v", err)
-					}
-				}
-			}
-		}()
+		go runSweep(ctx, q, emitter, sweepIv, gaugeIv)
 	}
 
 	// Transcript watcher: the hook-free capture trigger. Tails Claude Code and
@@ -909,6 +826,111 @@ func Run(ctx context.Context) error {
 	}
 
 	return serve(ctx, ln, handler, q, emitter)
+}
+
+// drainSpool drains queued spool pointers into q, offering each as an
+// ingress job. Idempotent and safe to call repeatedly (at startup and on
+// every sweep tick): a row is deleted only once its offer to q succeeds, and
+// a full queue leaves the row in place for the next call to retry.
+func drainSpool(q *queue.Queue, emitter *clientevents.Emitter) {
+	if _, err := spool.Drain(func(p spool.Pointer) error {
+		if q.Offer(ingress.JobFrom(p)) {
+			return nil
+		}
+		return errQueueFull // queue full: keep the file, retry next sweep
+	}); err != nil {
+		// Pre-branch, spool.Drain always returned nil; it now surfaces real
+		// backend errors (open() failing, a wedged db.Query) and under the
+		// completeness SLO a silently-discarded one here means every future
+		// sweep becomes a no-op forever — no drains, and (since Stats()
+		// shares the same failing backend) no spool.depth gauge either, i.e.
+		// no signal at all that anything is wrong. Log it like Resync/
+		// ImportLegacy's errors nearby, and also surface it as a client
+		// event: a local log alone doesn't reach the platform dashboard.
+		log.Printf("keld-agent: spool drain failed: %v", err)
+		emitter.Emit("spool.drain_failed", clientevents.SevError,
+			map[string]any{"error": clientevents.RedactError(err)})
+	}
+}
+
+// runSweep is the daemon's periodic spool-maintenance loop, extracted
+// verbatim from Run's former inline sweep goroutine so it can be driven
+// directly by a test with no credentials and millisecond intervals. Every
+// dependency arrives as a parameter rather than via an enclosing closure.
+//
+// On sweepIv it resyncs the in-memory byte total from the table, drains the
+// spool into q, and checks Evicted() for a delta since the last check. On
+// the independent, slower gaugeIv it reports a spool.depth backlog
+// snapshot (rows/bytes/oldest_age_s). The two cadences are deliberately
+// decoupled — see gaugeIv's computation in Run — and this loop must not
+// re-couple them. Returns (stopping both tickers via their deferred Stop)
+// when ctx is done.
+func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter, sweepIv, gaugeIv time.Duration) {
+	lastEvicted := int64(0)
+
+	t := time.NewTicker(sweepIv)
+	defer t.Stop()
+	gt := time.NewTicker(gaugeIv)
+	defer gt.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			// Resync the in-memory byte total from the table before
+			// draining: the hook (cmd/keld) is a separate, short-lived
+			// process that writes to this same spool.db, so this
+			// long-lived daemon's total can't otherwise observe rows
+			// the hook inserted since the daemon started (or since the
+			// last sweep) — left unresynced that drift is
+			// one-directional (the daemon's total understates the
+			// table), so evictFor never trips and the spool grows past
+			// its configured budget. This bounds the drift to one
+			// sweep interval; the aggregate it runs is the same one
+			// open() already runs once at startup (~9.5ms/50k rows),
+			// negligible at this cadence.
+			if err := spool.Resync(); err != nil {
+				log.Printf("keld-agent: spool byte-total resync failed: %v", err)
+			}
+			drainSpool(q, emitter)
+
+			// Evictions are the opposite of a gauge: dropped rows are
+			// enrichment data that is gone, not merely late, so this
+			// stays a real warn-level anomaly, checked every sweep
+			// tick (not the slower gauge tick) and reported as a delta
+			// since the last check.
+			if n := spool.Evicted(); n > lastEvicted {
+				emitter.Emit("spool.evicted", clientevents.SevWarn, map[string]any{"dropped": n - lastEvicted})
+				lastEvicted = n
+			}
+		case <-gt.C:
+			// Backlog visibility: depth/bytes/oldest-age is a gauge —
+			// a deep backlog is a designed steady state under agent
+			// load, not a problem, so it rides EmitGauge (info,
+			// floor-exempt) the same way resource.gauge does, rather
+			// than a plain Emit that a warn-and-above gate would
+			// silently drop.
+			if st, err := spool.Stats(); err == nil {
+				oldestAgeS := 0.0
+				if st.OldestUnixNano != 0 {
+					oldestAgeS = time.Since(time.Unix(0, st.OldestUnixNano)).Seconds()
+				}
+				emitter.EmitGauge("spool.depth", map[string]any{
+					"rows":         st.Rows,
+					"bytes":        st.Bytes,
+					"oldest_age_s": oldestAgeS,
+				})
+			} else {
+				// Same backend as Drain above: a wedged spool fails Stats the
+				// same way it fails Drain, and this gauge is otherwise the
+				// only remaining signal once a sweep goes silent. Log rather
+				// than swallow — spool.drain_failed above already covers the
+				// client-event side for the shared underlying failure.
+				log.Printf("keld-agent: spool stats failed: %v", err)
+			}
+		}
+	}
 }
 
 // wireEnrichment decides, once at startup, whether enrichment runs at all
