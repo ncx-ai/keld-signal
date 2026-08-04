@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -123,5 +124,51 @@ func TestImportLegacyResumesAfterInterruption(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(dir, "spool", "*.json"))
 	if len(files) != 0 {
 		t.Fatalf("legacy files should all be removed after the resumed import, found %v", files)
+	}
+}
+
+// TestImportLegacySpansMultiplePages proves the batching added in fix round 1
+// (one transaction per importPage-sized page, instead of one autocommit statement
+// per file) is correct across a page boundary, not just within a single page: every
+// file imports exactly once, every row is durable, and no legacy file is left
+// behind, whether it landed in the first page or a later one.
+func TestImportLegacySpansMultiplePages(t *testing.T) {
+	dir := setHome(t)
+	os.MkdirAll(filepath.Join(dir, "spool"), 0o700)
+
+	total := importPage*2 + 7 // deliberately not a multiple of the page size
+	ids := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		id := "OLD" + strconv.Itoa(i)
+		ids = append(ids, id)
+		writeLegacyFile(t, dir, id, inlinePtr(id, "legacy body"))
+	}
+
+	n, err := ImportLegacy()
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if n != total {
+		t.Fatalf("expected all %d files imported across page boundaries, got %d", total, n)
+	}
+
+	var got []string
+	Drain(func(p Pointer) error { got = append(got, p.Correlation.ID); return nil })
+	if len(got) != total {
+		t.Fatalf("expected %d rows after multi-page import, got %d", total, len(got))
+	}
+	seen := map[string]int{}
+	for _, id := range got {
+		seen[id]++
+	}
+	for _, id := range ids {
+		if seen[id] != 1 {
+			t.Fatalf("expected exactly one row for %s, got %d", id, seen[id])
+		}
+	}
+
+	files, _ := filepath.Glob(filepath.Join(dir, "spool", "*.json"))
+	if len(files) != 0 {
+		t.Fatalf("all legacy files should be removed after a multi-page import, found %v", files)
 	}
 }

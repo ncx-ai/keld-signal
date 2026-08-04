@@ -56,6 +56,14 @@ func identity(p Pointer) (string, string, string) {
 	return p.Source.ID, p.Correlation.Scheme, id
 }
 
+// upsertSQL is the single INSERT-or-replace statement for the natural key
+// (source_id, corr_scheme, corr_id). Shared as a const rather than duplicated
+// inline so Write's single-record path and import.go's batched-transaction
+// path can never drift apart on the statement text.
+const upsertSQL = `INSERT INTO spool(source_id,corr_scheme,corr_id,bytes,body,ts) VALUES(?,?,?,?,?,?)
+	 ON CONFLICT(source_id,corr_scheme,corr_id)
+	 DO UPDATE SET bytes=excluded.bytes, body=excluded.body, ts=excluded.ts`
+
 // Write persists a pointer, enforcing the byte budget first.
 func Write(p Pointer) error {
 	db, err := open()
@@ -92,11 +100,7 @@ func Write(p Pointer) error {
 		return err
 	}
 
-	_, err = db.Exec(
-		`INSERT INTO spool(source_id,corr_scheme,corr_id,bytes,body,ts) VALUES(?,?,?,?,?,?)
-		 ON CONFLICT(source_id,corr_scheme,corr_id)
-		 DO UPDATE SET bytes=excluded.bytes, body=excluded.body, ts=excluded.ts`,
-		src, scheme, id, len(b), b, time.Now().UnixNano())
+	_, err = db.Exec(upsertSQL, src, scheme, id, len(b), b, time.Now().UnixNano())
 	if err != nil {
 		return err
 	}
