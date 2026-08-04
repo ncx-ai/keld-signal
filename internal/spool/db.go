@@ -1,7 +1,10 @@
 // SQLite backend for the spool. One WAL-mode database at $KELD_HOME/spool/spool.db
-// replaces one-JSON-file-per-job: enqueue is O(1) regardless of backlog depth, and a
-// real fsync happens per commit. The hook and the daemon are separate processes that
-// both write, so busy_timeout is load-bearing.
+// replaces one-JSON-file-per-job: enqueue is O(1) regardless of backlog depth for the
+// long-lived daemon, and a real fsync happens per commit. The hook (cmd/keld) is a
+// fresh process per event, so its first write on the fallback path still pays open()'s
+// one-time `SELECT SUM(bytes)` seed — far cheaper than the old ReadDir+per-file-stat
+// scan it replaces, but not literally O(1). The hook and the daemon are separate
+// processes that both write, so busy_timeout is load-bearing.
 package spool
 
 import (
@@ -67,6 +70,26 @@ var (
 	dbTotals = map[*sql.DB]*atomic.Int64{}
 )
 
+// totalMu serializes every mutation of a running byte total (addBytes) against
+// Resync's re-seed of that same total. Without it, a delta that lands between
+// Resync's SELECT SUM and its Store is lost: Resync's Store unconditionally
+// overwrites with a value that was already stale by the time it commits,
+// silently undoing whatever the concurrent addBytes call just applied. Every
+// other drift source in this package (the daemon's total understating the
+// table between sweeps while the hook writes concurrently) drifts the total
+// LOW, which only delays an eviction — late, not lost. This is the only path
+// that can drift the total HIGH, which makes evictFor evict rows that didn't
+// need to go, and that eviction is never undone. Guards mutation only, not
+// reads: every total.Load() in this package already tolerates the same
+// bounded one-sweep-interval staleness it always has, and a stale Load only
+// misjudges how close to budget a write is, never destroys data. Lock
+// ordering is always totalMu → dbMu (addBytes/Resync take dbMu transitively
+// via totalFor while holding totalMu; nothing ever takes dbMu first and then
+// waits on totalMu), so the two never deadlock against each other. Distinct
+// from dbMu, which guards the connection/total registries, not the total's
+// value.
+var totalMu sync.Mutex
+
 func open() (*sql.DB, error) {
 	path := dbPath()
 
@@ -108,7 +131,24 @@ func open() (*sql.DB, error) {
 	// mode materializes the file and locks auto_vacuum's setting in — which the
 	// driver's fixed apply order guarantees here: the _auto_vacuum shorthand key
 	// runs before the _pragma list (see modernc.org/sqlite's applyQueryParams).
-	dsn := "file:" + path +
+	//
+	// Deliberately the BARE path form, not "file:"+path: modernc.org/sqlite's
+	// newConn (conn.go:62-73) parses everything after the DSN's first '?' as a
+	// URI query string, and — only when the DSN is NOT prefixed with "file:" —
+	// strips that query string back off before opening, so the underlying
+	// driver still sees a plain filesystem path either way and the four pragmas
+	// above apply identically. Prefixing with "file:" instead turns path into a
+	// SQLite URI, where a '#' has fragment semantics: any '#' occurring
+	// anywhere in $KELD_HOME then truncates the path SQLite actually opens at
+	// that character, silently opening a DIFFERENT file than the one open()
+	// just created and chmod'd 0600 above — measured empirically to come back
+	// at SQLite's default 0644, containing prompt text. (A literal '%XX'
+	// escape in the path is worse: it hard-fails SQLITE_CANTOPEN.) The bare
+	// form has no URI parsing at all, so neither failure mode exists — and it
+	// sidesteps an otherwise-unverified Windows question (windows/amd64 is a
+	// shipped target with Linux-only CI; "file:C:\Users\…" is a URI form this
+	// codebase has never actually exercised).
+	dsn := path +
 		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_auto_vacuum=incremental"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -161,11 +201,21 @@ func totalFor(db *sql.DB) *atomic.Int64 {
 // sweep interval instead of the process lifetime. The aggregate itself is the
 // same one open() already runs once at startup (benchmarked ~9.5ms/50k rows),
 // so a 30s cadence is negligible — this does not reintroduce a per-write cost.
+//
+// The SELECT and the Store below run under totalMu (see its doc comment): a
+// concurrent addBytes delta — e.g. Drain deleting a row, or evictFor evicting
+// one — that isn't serialized against this pair could land in the gap
+// between them, and this function's own Store would then silently discard
+// it, leaving the in-memory total permanently too high. totalMu closes that
+// window by making the whole SELECT+Store pair atomic with respect to every
+// addBytes call.
 func Resync() error {
 	db, err := open()
 	if err != nil {
 		return err
 	}
+	totalMu.Lock()
+	defer totalMu.Unlock()
 	var used sql.NullInt64
 	if err := db.QueryRow(`SELECT COALESCE(SUM(bytes),0) FROM spool`).Scan(&used); err != nil {
 		return err
@@ -187,12 +237,14 @@ type SpoolStats struct {
 
 // Stats snapshots the spool for the daemon's periodic backlog gauge. Bytes
 // comes from the in-memory running total (the same counter Write/evictFor/
-// Drain already keep exactly in sync, and that Resync just re-seeded on this
-// same sweep) rather than a second `SUM(bytes)` — the daemon's sweep already
-// runs that aggregate once via Resync immediately before calling this, and
-// re-deriving it here would just be a third independent aggregate over the
-// same table on the same tick. Rows and OldestUnixNano aren't tracked
-// in-memory anywhere else, so those two ride a single COUNT+MIN query.
+// Drain already keep exactly in sync) rather than a second `SUM(bytes)`. The
+// gauge that calls this rides its own, slower KELD_SPOOL_GAUGE_INTERVAL
+// ticker, independent of the drain/resync/eviction-check sweep — so unlike
+// an earlier version of this comment claimed, Resync is not guaranteed to
+// have just run immediately before this call; Bytes can be up to one sweep
+// interval stale relative to the table. That's fine for a gauge. Rows and
+// OldestUnixNano aren't tracked in-memory anywhere else, so those two ride a
+// single COUNT+MIN query.
 func Stats() (SpoolStats, error) {
 	db, err := open()
 	if err != nil {
@@ -214,7 +266,16 @@ func Stats() (SpoolStats, error) {
 // negative on delete/eviction). This is the single seam every mutation path
 // (Write's upsert, evictFor's eviction, Drain's batched delete, poison
 // quarantine) goes through, so the counter can never drift from the table.
+//
+// Takes totalMu (see its doc comment) so this can never land in the gap
+// between Resync's SELECT and its Store. Every call site calls this only
+// after its own database operation (the INSERT/DELETE the delta describes)
+// has already returned — so this lock is never held while a database
+// connection is also checked out from the pool, and can't deadlock against
+// Resync/open() taking dbMu the other way around.
 func addBytes(db *sql.DB, delta int64) {
+	totalMu.Lock()
+	defer totalMu.Unlock()
 	if total := totalFor(db); total != nil {
 		total.Add(delta)
 	}
@@ -324,7 +385,12 @@ func evictFor(db *sql.DB, gross, delta, pending int64) error {
 		if _, err := db.Exec(`DELETE FROM spool WHERE id IN (`+placeholders+`)`, args...); err != nil {
 			return err
 		}
-		total.Add(-freed)
+		// Through addBytes (not a direct total.Add) so this eviction delete is
+		// serialized against Resync's SELECT+Store the same as every other
+		// mutation path — see totalMu's doc comment. The DELETE above has
+		// already returned, so no database connection is held while waiting
+		// on that lock.
+		addBytes(db, -freed)
 		evictedCount.Add(int64(len(ids)))
 		debuglog.Append("spool: byte budget %d reached, evicted %d oldest (%d bytes)", limit, len(ids), freed)
 	}

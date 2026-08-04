@@ -774,12 +774,24 @@ func Run(ctx context.Context) error {
 			log.Printf("keld-agent: imported %d legacy spool records", n)
 		}
 		drainSpool := func() {
-			spool.Drain(func(p spool.Pointer) error {
+			if _, err := spool.Drain(func(p spool.Pointer) error {
 				if q.Offer(ingress.JobFrom(p)) {
 					return nil
 				}
 				return errQueueFull // queue full: keep the file, retry next sweep
-			})
+			}); err != nil {
+				// Pre-branch, spool.Drain always returned nil; it now surfaces real
+				// backend errors (open() failing, a wedged db.Query) and under the
+				// completeness SLO a silently-discarded one here means every future
+				// sweep becomes a no-op forever — no drains, and (since Stats()
+				// shares the same failing backend) no spool.depth gauge either, i.e.
+				// no signal at all that anything is wrong. Log it like Resync/
+				// ImportLegacy's errors nearby, and also surface it as a client
+				// event: a local log alone doesn't reach the platform dashboard.
+				log.Printf("keld-agent: spool drain failed: %v", err)
+				emitter.Emit("spool.drain_failed", clientevents.SevWarn,
+					map[string]any{"error": clientevents.RedactError(err)})
+			}
 		}
 		drainSpool()
 		lastEvicted := int64(0)
@@ -863,6 +875,13 @@ func Run(ctx context.Context) error {
 							"bytes":        st.Bytes,
 							"oldest_age_s": oldestAgeS,
 						})
+					} else {
+						// Same backend as Drain above: a wedged spool fails Stats the
+						// same way it fails Drain, and this gauge is otherwise the
+						// only remaining signal once a sweep goes silent. Log rather
+						// than swallow — spool.drain_failed above already covers the
+						// client-event side for the shared underlying failure.
+						log.Printf("keld-agent: spool stats failed: %v", err)
 					}
 				}
 			}
@@ -947,7 +966,24 @@ func thresholdsFrom(eff settings.EffectiveClientTelemetry) resource.Thresholds {
 // serve runs the ingress HTTP server until ctx is cancelled, then gracefully
 // shuts it down and closes the queue. It blocks until the server stops.
 func serve(ctx context.Context, ln net.Listener, handler http.Handler, q *queue.Queue, emitter *clientevents.Emitter) error {
-	srv := &http.Server{Handler: handler}
+	srv := &http.Server{
+		Handler: handler,
+		// KELD_AGENT_BIND=0.0.0.0:… (service mode) makes this reachable from
+		// anywhere, and connection acceptance happens before ingress.go's
+		// constant-time secret check — so an unauthenticated caller can hold a
+		// connection open (slowloris, or just an idle connection) before ever
+		// presenting a secret. A zero-value http.Server has no timeouts at all,
+		// which was fine on the loopback-only listener this predates but isn't
+		// once the bind can be public. ReadHeaderTimeout/ReadTimeout bound how
+		// long an unauthenticated connection can occupy a goroutine; IdleTimeout
+		// bounds a keep-alive connection sitting idle between requests. All three
+		// are generous relative to ingress.go's 1 MiB body cap — a legitimate
+		// large inline-prompt POST over a slow link still completes well inside
+		// ReadTimeout.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	go func() {
 		<-ctx.Done()
 		emitter.EmitExempt("daemon.stop", clientevents.SevInfo, nil)

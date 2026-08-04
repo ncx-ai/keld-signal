@@ -48,6 +48,26 @@ func TestDatabaseFileIsOwnerOnly(t *testing.T) {
 	if len(matches) == 0 {
 		t.Fatal("expected spool.db (and its WAL sidecars) to exist after a write")
 	}
+	// A bare len(matches)==0 check alone passes even when the glob's intended
+	// path isn't the file SQLite actually opened (see the file:-URI '#'-fragment
+	// bug this package's DSN construction used to have): a stray file matching
+	// the glob pattern for any reason would satisfy "non-empty" without proving
+	// the real database — and specifically its -wal/-shm sidecars, which hold
+	// the newest prompt text under WAL mode — are among the matches at all. So
+	// assert the three expected sidecars are actually present by name, not just
+	// that the glob found something.
+	base := filepath.Join(dir, "spool", "spool.db")
+	want := map[string]bool{base: false, base + "-wal": false, base + "-shm": false}
+	for _, m := range matches {
+		if _, ok := want[m]; ok {
+			want[m] = true
+		}
+	}
+	for path, found := range want {
+		if !found {
+			t.Fatalf("expected %s to exist after a write, matches were %v", path, matches)
+		}
+	}
 	for _, m := range matches {
 		fi, err := os.Stat(m)
 		if err != nil {
@@ -56,6 +76,74 @@ func TestDatabaseFileIsOwnerOnly(t *testing.T) {
 		if fi.Mode().Perm() != 0o600 {
 			t.Fatalf("%s mode = %v, want 0600 (spool now holds prompt text)", m, fi.Mode().Perm())
 		}
+	}
+}
+
+// TestHomePathWithHashOpensIntendedFile proves the fix for a real privacy bug: the
+// DSN used to be built as "file:" + path. modernc.org/sqlite's newConn parses
+// everything after a DSN's first '?' as a URI, and a bare '#' inside a "file:" URI
+// has fragment semantics — SQLite stops reading the path at the '#' and drops
+// everything from there on (including the rest of the path AND the pragma query
+// string). That silently opens a completely different file than the one open()
+// just pre-created and chmod'd 0600 — one level up from the intended spool
+// directory in this repro — and SQLite creates ITS file at its own default mode,
+// not 0600. A KELD_HOME with a '#' (an org id, a temp-dir name, anything a caller
+// doesn't fully control) is enough to trigger it. The fix drops the "file:" prefix
+// so the DSN is a bare filesystem path with no URI parsing at all.
+func TestHomePathWithHashOpensIntendedFile(t *testing.T) {
+	parent := t.TempDir()
+	home := filepath.Join(parent, "org#123")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KELD_HOME", home)
+
+	if err := Write(inlinePtr("C1", "secret prompt text")); err != nil {
+		t.Fatal(err)
+	}
+
+	dbFile := filepath.Join(home, "spool", "spool.db")
+	fi, err := os.Stat(dbFile)
+	if err != nil {
+		t.Fatalf("expected the intended spool.db to exist: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("spool.db mode = %v, want 0600", fi.Mode().Perm())
+	}
+	if fi.Size() == 0 {
+		t.Fatal("spool.db is empty — SQLite opened a different file than the one this test stat'd (the file: URI '#'-fragment bug)")
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		sfi, err := os.Stat(dbFile + suffix)
+		if err != nil {
+			t.Fatalf("expected %s%s to exist: %v", dbFile, suffix, err)
+		}
+		if sfi.Mode().Perm() != 0o600 {
+			t.Fatalf("%s%s mode = %v, want 0600", dbFile, suffix, sfi.Mode().Perm())
+		}
+	}
+
+	// The historical bug opened its real database as a sibling of `home` (one
+	// level up in `parent`), at SQLite's default mode — world-readable, holding
+	// prompt text, outside $KELD_HOME entirely. Assert parent holds nothing but
+	// the `home` directory itself.
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(home) {
+		t.Fatalf("unexpected entries in %s (SQLite opened a path outside KELD_HOME): %v", parent, entries)
+	}
+
+	// Round-trip through Drain: the intended file is really the one the daemon
+	// reads back from, not a coincidentally-populated decoy.
+	var got []Pointer
+	n, err := Drain(func(p Pointer) error { got = append(got, p); return nil })
+	if err != nil || n != 1 {
+		t.Fatalf("drain: n=%d err=%v", n, err)
+	}
+	if got[0].Inline == nil || got[0].Inline.Text != "secret prompt text" {
+		t.Fatalf("round-tripped text mismatch: %+v", got[0].Inline)
 	}
 }
 

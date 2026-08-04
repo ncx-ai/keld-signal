@@ -30,3 +30,13 @@ jobs:
         with:
           version: "~> v2"
           args: check
+
+  crosscheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: cross-platform pure-Go build gate
+        run: make crosscheck
