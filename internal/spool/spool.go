@@ -96,7 +96,9 @@ func Write(p Pointer) error {
 	}
 
 	gross := int64(len(b))
-	if err := evictFor(db, gross, gross-oldBytes); err != nil {
+	// pending=0: a single Write call has no page-mates awaiting commit — see
+	// evictFor's doc comment for why that parameter exists at all.
+	if err := evictFor(db, gross, gross-oldBytes, 0); err != nil {
 		return err
 	}
 

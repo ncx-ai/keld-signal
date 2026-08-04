@@ -257,10 +257,23 @@ const evictBatch = 16
 // gross size would double-count that space and evict unrelated queued
 // records to make room that was about to be freed anyway.
 //
+// pending is the sum of net byte deltas from OTHER records a caller has
+// already decided to accept but not yet durably committed — every ordinary
+// Write call passes 0, since it inserts and calls addBytes before the next
+// write is ever considered, so the in-memory total is always current by the
+// time the next call checks it. A batched importer (see import.go) breaks
+// that assumption: it must decide whether a whole page of records fits
+// before any of them are actually inserted, so each record in the page would
+// otherwise be checked against the same stale pre-page total and never see
+// its own page-mates' bytes. Folding pending into the check here — rather
+// than letting the caller re-derive it — keeps the single source of truth
+// for "does this write fit" in one place, so a future caller can't
+// accidentally repeat the staleness bug by checking totalFor(db) directly.
+//
 // Either way, evictFor compares against the in-memory running total (seeded
 // once at open, kept in sync by every write/delete) rather than
 // re-aggregating the table, so its cost does not grow with spool depth.
-func evictFor(db *sql.DB, gross, delta int64) error {
+func evictFor(db *sql.DB, gross, delta, pending int64) error {
 	limit := maxBytes()
 	if gross > limit {
 		return fmt.Errorf("spool: record of %d bytes exceeds the %d-byte budget", gross, limit)
@@ -269,7 +282,7 @@ func evictFor(db *sql.DB, gross, delta int64) error {
 	if total == nil {
 		return fmt.Errorf("spool: no byte total tracked for this handle")
 	}
-	for total.Load()+delta > limit {
+	for total.Load()+pending+delta > limit {
 		rows, err := db.Query(`SELECT id, bytes FROM spool ORDER BY id LIMIT ?`, evictBatch)
 		if err != nil {
 			return err

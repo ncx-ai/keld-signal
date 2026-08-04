@@ -137,7 +137,33 @@ func importBatch(dir string, entries []os.DirEntry) int {
 	// statements against db; with SetMaxOpenConns(1) those would block forever
 	// against an already-open transaction on the same handle, so every evictFor
 	// call must run while no transaction is held.
+	//
+	// pending tracks the sum of deltas already accepted into `ready` earlier in
+	// this same loop. It exists because none of those records are actually
+	// inserted (and so never reach addBytes) until the whole page's transaction
+	// commits below — unlike a serial Write, where record N+1's evictFor call
+	// always sees record N's bytes already reflected in the real running total.
+	// Without folding pending into the check, every record in a page would be
+	// judged against the same pre-page baseline: a page of many small records
+	// that individually "fit" against that stale baseline could commit a total
+	// that blows through maxBytes() with zero evictions and zero log lines,
+	// silently violating the "the budget is the budget, and it's never silent"
+	// invariant Write and evictFor otherwise guarantee.
+	//
+	// NOTE (known residual gap, intentionally not fixed here): evictFor's
+	// eviction deletes are real, autocommit, and immediately durable — and they
+	// remove oldest-by-id rows from the WHOLE table, not just this page's
+	// candidates, so a live queued job can be the victim. If the process dies
+	// between such an eviction firing here in Phase A and this page's
+	// tx.Commit() below, those evicted rows are gone forever even though
+	// nothing from this page was actually inserted to justify freeing their
+	// space — the record that triggered the eviction self-heals (its source
+	// file is still on disk and retries next startup), but its victims do not.
+	// Closing this needs evictFor's deletes to share the same transaction as
+	// the page's inserts (i.e. the evictFor/transaction-sharing rework called
+	// out as out-of-scope in this task's report), not another accumulator.
 	var ready []legacyRecord
+	var pending int64
 	for i, p := range staged {
 		body, err := json.Marshal(p)
 		if err != nil {
@@ -154,12 +180,13 @@ func importBatch(dir string, entries []os.DirEntry) int {
 		}
 		gross := int64(len(body))
 		delta := gross - oldBytes
-		if err := evictFor(db, gross, delta); err != nil {
+		if err := evictFor(db, gross, delta, pending); err != nil {
 			continue // record can't fit even after eviction; leave the file
 		}
 		ready = append(ready, legacyRecord{
 			path: srcPaths[i], body: body, src: src, scheme: scheme, id: id, delta: delta,
 		})
+		pending += delta
 	}
 	if len(ready) == 0 {
 		return 0

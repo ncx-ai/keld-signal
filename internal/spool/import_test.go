@@ -172,3 +172,96 @@ func TestImportLegacySpansMultiplePages(t *testing.T) {
 		t.Fatalf("all legacy files should be removed after a multi-page import, found %v", files)
 	}
 }
+
+// TestImportLegacyEvictsWhenPageExceedsBudget reproduces fix round 2's regression:
+// batching deferred every accepted record's insert (and its addBytes) until the
+// whole page committed, so each record's evictFor check ran against the SAME
+// pre-page total — never advancing to account for its own page-mates. A page whose
+// records each individually "fit" against that stale baseline could commit a total
+// that blows through the byte budget with zero evictions and zero log lines. This
+// test pre-populates real "live" rows (standing in for already-queued work) sized so
+// there is enough headroom for a few of the page's legacy records but not all five,
+// then imports a same-sized-record page that only overflows once several of the
+// page's OWN records are counted — the exact shape the stale baseline missed — and
+// asserts eviction actually fires (consuming the live rows to make room) rather than
+// silently overrunning.
+func TestImportLegacyEvictsWhenPageExceedsBudget(t *testing.T) {
+	dir := setHome(t)
+	os.MkdirAll(filepath.Join(dir, "spool"), 0o700)
+
+	// Three already-queued "live" rows, written the normal way (not legacy files).
+	live := []string{"LIVE0", "LIVE1", "LIVE2"}
+	var liveBytes int64
+	for _, id := range live {
+		p := inlinePtr(id, "already queued live job")
+		b, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		liveBytes += int64(len(b))
+		if err := Write(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Five legacy files of identical size (same-length ids, identical body text),
+	// so each contributes the same delta.
+	legacy := []string{"OLD0", "OLD1", "OLD2", "OLD3", "OLD4"}
+	sampleBody, err := json.Marshal(inlinePtr(legacy[0], "legacy body of a representative size"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordSize := int64(len(sampleBody))
+	for _, id := range legacy {
+		writeLegacyFile(t, dir, id, inlinePtr(id, "legacy body of a representative size"))
+	}
+
+	// Budget covers the live rows plus only 3 of the 5 legacy records. Importing
+	// the whole page (5 records) therefore must evict something to fit — and since
+	// nothing from this page is committed until the page's transaction succeeds,
+	// the only real rows available to evict are the 3 live ones.
+	budget := liveBytes + recordSize*3
+	t.Setenv("KELD_SPOOL_MAX_BYTES", strconv.FormatInt(budget, 10))
+
+	evictedBefore := Evicted()
+	n, err := ImportLegacy()
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if n != len(legacy) {
+		t.Fatalf("expected all %d legacy files to import (evicting live rows to make room), got %d", len(legacy), n)
+	}
+	if got := Evicted() - evictedBefore; got == 0 {
+		t.Fatalf("page exceeded the byte budget but no eviction fired — the stale-baseline regression is back")
+	}
+
+	stats, err := Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Bytes > budget {
+		t.Fatalf("post-import total %d bytes exceeds the %d-byte budget — overrun was not caught", stats.Bytes, budget)
+	}
+
+	// The live rows were the eviction's only available victims (nothing else
+	// existed yet), so they must be gone; every legacy record must still have
+	// landed (imported, not silently dropped).
+	var got []string
+	Drain(func(p Pointer) error { got = append(got, p.Correlation.ID); return nil })
+	for _, id := range live {
+		for _, g := range got {
+			if g == id {
+				t.Fatalf("live row %s should have been evicted to make room, but it's still queued", id)
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, g := range got {
+		seen[g] = true
+	}
+	for _, id := range legacy {
+		if !seen[id] {
+			t.Fatalf("legacy record %s should have imported, got %v", id, got)
+		}
+	}
+}
