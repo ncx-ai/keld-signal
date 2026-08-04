@@ -317,6 +317,52 @@ func waitWarm(ready func() bool, bound time.Duration, done <-chan struct{}) (war
 	}
 }
 
+// bindAddr is the daemon's listen address. Default is loopback on an ephemeral port
+// (the historical behavior, with the port published via agent.json). Service
+// deployments set KELD_AGENT_BIND to a fixed address so the plugin can reach it from
+// another host.
+func bindAddr() string {
+	if v := os.Getenv("KELD_AGENT_BIND"); v != "" {
+		return v
+	}
+	return "127.0.0.1:0"
+}
+
+// isLoopbackBind reports whether addr's host resolves to loopback (or is empty
+// / "localhost", both of which bind every/loopback interfaces locally).
+func isLoopbackBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// serviceSecret resolves the /enrich secret. On loopback the daemon keeps generating
+// one into agent.json for the logged-in user. Off loopback there is no logged-in
+// human and the secret becomes the sole access control, so it must be supplied
+// explicitly and be long enough to be worth having.
+func serviceSecret() (string, error) {
+	addr := bindAddr()
+	if isLoopbackBind(addr) {
+		return "", nil // caller falls back to the generated agent.json secret
+	}
+	s := os.Getenv("KELD_AGENT_SECRET")
+	if s == "" {
+		return "", fmt.Errorf(
+			"keld-agent: KELD_AGENT_BIND=%s is not loopback; KELD_AGENT_SECRET must be set", addr)
+	}
+	if len(s) < 32 {
+		return "", fmt.Errorf(
+			"keld-agent: KELD_AGENT_SECRET must be at least 32 characters when binding off-loopback")
+	}
+	return s, nil
+}
+
 // queueCap is the in-memory job queue depth. The old hard-coded 256 overran on a
 // single agent burst (20 calls/run x 10 concurrent runs); service deployments raise
 // this via KELD_QUEUE_CAP.
@@ -619,7 +665,17 @@ func Run(ctx context.Context) error {
 	q := queue.New(queueCap())
 	pub := publish.New(enrichEndpoint(cfg.Endpoint), tok.Get, actor)
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	addr := bindAddr()
+	if svcSecret, err := serviceSecret(); err != nil {
+		return err
+	} else if svcSecret != "" {
+		secret = svcSecret // overrides the generated agent.json secret in service mode
+		if os.Getenv("KELD_AGENT_TLS_TERMINATED") == "" {
+			log.Printf("keld-agent: WARNING binding %s off-loopback with no TLS termination declared; "+
+				"the /enrich secret is the only control on this listener", addr)
+		}
+	}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
@@ -627,7 +683,7 @@ func Run(ctx context.Context) error {
 	if err := agentcfg.Write(agentcfg.Info{Port: port, Secret: secret}); err != nil {
 		return err
 	}
-	log.Printf("keld-agent: listening on 127.0.0.1:%d", port)
+	log.Printf("keld-agent: listening on %s", ln.Addr().String())
 	// EmitExempt: daemon.start is SevInfo but must surface even under the
 	// default warn floor (lifecycle narrative), and it fires once here before
 	// any poll could lower the floor — a plain Emit would always drop it.

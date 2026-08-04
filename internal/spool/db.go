@@ -304,7 +304,16 @@ func evictFor(db *sql.DB, gross, delta, pending int64) error {
 		}
 		rows.Close()
 		if len(ids) == 0 {
-			return nil // table already empty (or total overstated); nothing left to evict
+			// Table already empty (or total overstated): nothing left to evict.
+			// This can still leave the incoming write over budget (a near-empty
+			// spool taking a write bigger than what's left to evict from) — that
+			// is a real overrun, not a clean fit, so trace it rather than
+			// returning silently like a normal in-budget commit.
+			if total.Load()+pending+delta > limit {
+				debuglog.Append("spool: budget %d exceeded with nothing left to evict (total=%d pending=%d delta=%d)",
+					limit, total.Load(), pending, delta)
+			}
+			return nil
 		}
 
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
