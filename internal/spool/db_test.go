@@ -82,9 +82,12 @@ func TestDatabaseFileIsOwnerOnly(t *testing.T) {
 // TestHomePathWithHashOpensIntendedFile proves the fix for a real privacy bug: the
 // DSN used to be built as "file:" + path. modernc.org/sqlite's newConn parses
 // everything after a DSN's first '?' as a URI, and a bare '#' inside a "file:" URI
-// has fragment semantics — SQLite stops reading the path at the '#' and drops
-// everything from there on (including the rest of the path AND the pragma query
-// string). That silently opens a completely different file than the one open()
+// has fragment semantics — SQLite's own URI parsing stops reading the path at the
+// '#' and drops the rest of the path from there on. The pragma query string is
+// unaffected: modernc.org/sqlite's applyQueryParams already split it off the DSN
+// (at its first '?') and ran it before SQLite ever parses the "file:" URI's path,
+// so busy_timeout etc. still applied — the bug was purely in the path SQLite opens.
+// That silently opens a completely different file than the one open()
 // just pre-created and chmod'd 0600 — one level up from the intended spool
 // directory in this repro — and SQLite creates ITS file at its own default mode,
 // not 0600. A KELD_HOME with a '#' (an org id, a temp-dir name, anything a caller

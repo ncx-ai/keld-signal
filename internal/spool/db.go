@@ -144,8 +144,13 @@ func open() (*sql.DB, error) {
 	// just created and chmod'd 0600 above — measured empirically to come back
 	// at SQLite's default 0644, containing prompt text. (A literal '%XX'
 	// escape in the path is worse: it hard-fails SQLITE_CANTOPEN.) The bare
-	// form has no URI parsing at all, so neither failure mode exists — and it
-	// sidesteps an otherwise-unverified Windows question (windows/amd64 is a
+	// form removes both of those failure modes — SQLite never parses the
+	// path as a URI, so '#' and '%XX' are just ordinary bytes to it. It does
+	// NOT remove every DSN-parsing hazard: conn.go:62 splits on the DSN's
+	// first '?' regardless of the "file:" prefix, so a '?' anywhere in
+	// $KELD_HOME is still unhandled and would still truncate the path
+	// (pre-existing, out of scope here). It also sidesteps an
+	// otherwise-unverified Windows question (windows/amd64 is a
 	// shipped target with Linux-only CI; "file:C:\Users\…" is a URI form this
 	// codebase has never actually exercised).
 	dsn := path +
@@ -270,9 +275,13 @@ func Stats() (SpoolStats, error) {
 // Takes totalMu (see its doc comment) so this can never land in the gap
 // between Resync's SELECT and its Store. Every call site calls this only
 // after its own database operation (the INSERT/DELETE the delta describes)
-// has already returned — so this lock is never held while a database
-// connection is also checked out from the pool, and can't deadlock against
-// Resync/open() taking dbMu the other way around.
+// has already returned — so no caller of addBytes ever holds a database
+// connection while blocking on totalMu here. That's the weaker property
+// that actually matters: Resync itself does hold totalMu across its own
+// SELECT, connection and all (see its doc comment), but since no addBytes
+// call site is ever on the other side of that same pooled connection while
+// waiting, the two can only serialize, never deadlock. Also can't deadlock
+// against Resync/open() taking dbMu the other way around.
 func addBytes(db *sql.DB, delta int64) {
 	totalMu.Lock()
 	defer totalMu.Unlock()

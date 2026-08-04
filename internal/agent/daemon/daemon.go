@@ -789,7 +789,7 @@ func Run(ctx context.Context) error {
 				// ImportLegacy's errors nearby, and also surface it as a client
 				// event: a local log alone doesn't reach the platform dashboard.
 				log.Printf("keld-agent: spool drain failed: %v", err)
-				emitter.Emit("spool.drain_failed", clientevents.SevWarn,
+				emitter.Emit("spool.drain_failed", clientevents.SevError,
 					map[string]any{"error": clientevents.RedactError(err)})
 			}
 		}
