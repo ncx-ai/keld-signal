@@ -703,6 +703,11 @@ func Run(ctx context.Context) error {
 	// enabled: with it disabled there's no Worker to consume the queue, so
 	// draining/sweeping would just re-enqueue pointers nobody processes.
 	if enrichmentEnabled {
+		if n, err := spool.ImportLegacy(); err != nil {
+			log.Printf("keld-agent: legacy spool import failed: %v", err)
+		} else if n > 0 {
+			log.Printf("keld-agent: imported %d legacy spool records", n)
+		}
 		drainSpool := func() {
 			spool.Drain(func(p spool.Pointer) error {
 				if q.Offer(ingress.JobFrom(p)) {
