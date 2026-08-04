@@ -712,6 +712,7 @@ func Run(ctx context.Context) error {
 			})
 		}
 		drainSpool()
+		lastEvicted := int64(0)
 		go func() {
 			iv := 30 * time.Second
 			if v := os.Getenv("KELD_SPOOL_SWEEP"); v != "" {
@@ -742,6 +743,31 @@ func Run(ctx context.Context) error {
 						log.Printf("keld-agent: spool byte-total resync failed: %v", err)
 					}
 					drainSpool()
+
+					// Backlog visibility: depth/bytes/oldest-age is a gauge —
+					// a deep backlog is a designed steady state under agent
+					// load, not a problem, so it rides EmitGauge (info,
+					// floor-exempt) the same way resource.gauge does, rather
+					// than a plain Emit that a warn-and-above gate would
+					// silently drop. Evictions are the opposite: dropped rows
+					// are enrichment data that is gone, not merely late, so
+					// that's a real warn-level anomaly reported as a delta
+					// since the last sweep.
+					if st, err := spool.Stats(); err == nil {
+						oldestAgeS := 0.0
+						if st.OldestUnixNano != 0 {
+							oldestAgeS = time.Since(time.Unix(0, st.OldestUnixNano)).Seconds()
+						}
+						emitter.EmitGauge("spool.depth", map[string]any{
+							"rows":         st.Rows,
+							"bytes":        st.Bytes,
+							"oldest_age_s": oldestAgeS,
+						})
+					}
+					if n := spool.Evicted(); n > lastEvicted {
+						emitter.Emit("spool.evicted", clientevents.SevWarn, map[string]any{"dropped": n - lastEvicted})
+						lastEvicted = n
+					}
 				}
 			}
 		}()

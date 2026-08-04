@@ -176,6 +176,40 @@ func Resync() error {
 	return nil
 }
 
+// SpoolStats is the backlog snapshot the daemon reports as client events:
+// depth (Rows), disk pressure (Bytes), and staleness (OldestUnixNano, the
+// ts of the oldest queued row — 0 when the spool is empty).
+type SpoolStats struct {
+	Rows           int64
+	Bytes          int64
+	OldestUnixNano int64
+}
+
+// Stats snapshots the spool for the daemon's periodic backlog gauge. Bytes
+// comes from the in-memory running total (the same counter Write/evictFor/
+// Drain already keep exactly in sync, and that Resync just re-seeded on this
+// same sweep) rather than a second `SUM(bytes)` — the daemon's sweep already
+// runs that aggregate once via Resync immediately before calling this, and
+// re-deriving it here would just be a third independent aggregate over the
+// same table on the same tick. Rows and OldestUnixNano aren't tracked
+// in-memory anywhere else, so those two ride a single COUNT+MIN query.
+func Stats() (SpoolStats, error) {
+	db, err := open()
+	if err != nil {
+		return SpoolStats{}, err
+	}
+	var rows sql.NullInt64
+	var oldest sql.NullInt64
+	if err := db.QueryRow(`SELECT COUNT(*), MIN(ts) FROM spool`).Scan(&rows, &oldest); err != nil {
+		return SpoolStats{}, err
+	}
+	var bytes int64
+	if total := totalFor(db); total != nil {
+		bytes = total.Load()
+	}
+	return SpoolStats{Rows: rows.Int64, Bytes: bytes, OldestUnixNano: oldest.Int64}, nil
+}
+
 // addBytes adjusts db's in-memory running total by delta (positive on insert,
 // negative on delete/eviction). This is the single seam every mutation path
 // (Write's upsert, evictFor's eviction, Drain's batched delete, poison
