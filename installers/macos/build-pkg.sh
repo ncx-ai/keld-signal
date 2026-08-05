@@ -38,18 +38,10 @@ rm -rf "$STAGE/keld-agent-sidecar"
 # the tarball path is NOT notarized, and does not need to be — Gatekeeper's quarantine bit is
 # never set on a curl download.
 if [ -n "${APPLE_DEVELOPER_ID_APP:-}" ]; then
-  sign() { codesign --force --options runtime --timestamp --sign "$APPLE_DEVELOPER_ID_APP" "$1"; }
-  TOP=(keld keld-agent)
-  while IFS= read -r f; do
-    sign "$f"
-  done < <(find "$STAGE" -type f ! -name keld ! -name keld-agent \
-             -exec sh -c 'file -b "$1" | grep -q "Mach-O"' _ {} \; -print)
-  for b in "${TOP[@]}"; do
-    sign "$STAGE/$b"
-  done
+  "$ROOT/sign-macho.sh" "$STAGE"
   # Verify rather than trust: an unsigned or badly-sealed binary otherwise surfaces much
   # later as an opaque notarization rejection.
-  for b in "${TOP[@]}"; do
+  for b in keld keld-agent; do
     codesign --verify --strict --verbose=2 "$STAGE/$b"
   done
 fi
