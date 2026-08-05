@@ -97,8 +97,9 @@ echo "  ✓ $(printf '%-26s' 'keld + keld-agent') → ${DEST}"
 
 # Fetch the frozen GLiNER2 ML sidecar — REQUIRED on Linux AND macOS. Keld Signal runs on-device
 # ML; there is no deterministic alternative, so a failed sidecar install aborts the whole install
-# rather than degrading. macOS .pkg installs bundle the sidecar; this covers the curl|sh path,
-# which previously skipped it and left macOS with no sidecar. Published per-OS/arch as
+# rather than degrading. The macOS .pkg no longer bundles the sidecar either (Apple notarization
+# scans all ~15k of its files) — onboard.command fetches it the same way this does. Published
+# per-OS/arch as
 # keld-agent-sidecar_<os>_<arch>.tar.gz (macOS: darwin/arm64, Apple Silicon only).
 if { [ "$os" = "linux" ] || [ "$os" = "darwin" ]; } && [ -f "${DEST}/keld-agent" ]; then
   sc_archive="keld-agent-sidecar_${os}_${arch}.tar.gz"
