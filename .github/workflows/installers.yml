@@ -214,6 +214,19 @@ jobs:
           [ -z "$VER" ] && VER="0.0.0-dryrun"
           bash installers/macos/build-pkg.sh "$VER" stage "${{ matrix.goarch }}"
 
+      # The tarball below is built from dist/, which build-pkg.sh never touches — and
+      # since the pkg stopped bundling the sidecar, this tarball is the ONLY sidecar
+      # macOS users ever run. Sign it too, with the same content-based sweep the pkg
+      # payload uses. Must precede the keychain removal below.
+      #
+      # Not notarized, deliberately: it is fetched with curl (by onboard.command and by
+      # install.sh), and curl sets no com.apple.quarantine bit, so Gatekeeper never
+      # evaluates it and a ticket would buy nothing.
+      - name: Sign macOS sidecar for the standalone tarball
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: bash installers/macos/sign-macho.sh dist/keld-agent-sidecar
+
       # Runners are ephemeral, but a failed job can be re-run on a warm host and the
       # keychain is the one artifact holding private keys. Always remove it.
       - name: Remove signing keychain
