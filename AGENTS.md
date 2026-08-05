@@ -413,9 +413,21 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   a throwaway keychain and **derives the identity names from it** (a hand-typed
   name fails at `productsign` with an opaque error). Bundle the **G2 intermediate**
   in each p12 or a clean runner can't build a chain to a trusted root.
-  ⚠️ **Apple's notary queue is unbounded and unobservable** — that ~15k-file payload
-  has sat "In Progress" for **4+ hours** with no error, no log, and the service
-  reported healthy. So the release does NOT block on it: submit, wait only
+  ⚠️ **The pkg ships WITHOUT the sidecar.** Apple's notary service scans every file
+  in a submission, and the frozen sidecar is ~15k files / ~190MB of torch — which
+  put a real submission **4+ hours** into an unbounded queue. The pkg payload is now
+  just `keld`, `keld-agent`, `onboard.command`, `VERSION` (4 files, ~2 Mach-O to
+  sign instead of ~103). `onboard.command` fetches the sidecar tarball into
+  **`~/.local/bin`** — a well-known `sidecarBinPath()` dir that is user-writable, so
+  no sudo prompt, and the same place `install.sh` puts it. It fetches **before**
+  `keld-agent install`, because that command starts the daemon and the sidecar
+  should exist by then. Pinned to the pkg's own release via the staged `VERSION`
+  file (falls back to the latest-release API for dry-run builds), Apple-Silicon-only,
+  and non-fatal on failure: telemetry still works, enrichment jobs spool, re-running
+  the script retries.
+  ⚠️ **Apple's notary queue is unbounded and unobservable** — no error, no log, no
+  queue position, with the service reported healthy throughout. So the release does
+  NOT block on it either: submit, wait only
   `KELD_NOTARY_TIMEOUT` (default 15m), then ship. Safe because Gatekeeper validates
   **online**, so a ticket landing after we ship still passes; stapling only adds
   *offline* validation. A rejection (`Invalid`) still fails the build — that means a

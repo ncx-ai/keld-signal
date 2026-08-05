@@ -4,7 +4,7 @@
 # pkg (unsigned-first). macOS-only (uses pkgbuild/productbuild/xcrun) — CI-verified.
 set -euo pipefail
 VERSION="${1:?version}"
-STAGE="${2:?payload dir (contains keld, keld-agent, keld-agent-sidecar)}"
+STAGE="${2:?payload dir (contains keld, keld-agent, and possibly keld-agent-sidecar)}"
 ARCH="${3:?arch}"
 OUT="keld-${VERSION}-${ARCH}.pkg"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -13,24 +13,43 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cp "$ROOT/onboard.command" "$STAGE/onboard.command"
 chmod +x "$STAGE/onboard.command"
 
-# Optional codesign of the Mach-O binaries (hardened runtime) when a signing identity is present.
-# EVERY Mach-O in the payload must be signed, not just the three entrypoints: the frozen sidecar
-# is a PyInstaller one-dir tree carrying hundreds of .so/.dylib files from torch et al, and
-# notarization rejects the whole submission if any one of them is unsigned. Nested code signs
-# inside-out (dependencies before the executables that load them), so the three top-level
-# binaries are signed last.
+# Pin the sidecar download to THIS build's release, so an onboarding fetch can't
+# pair a new pkg with an older/newer sidecar. onboard.command falls back to the
+# latest-release API when this file is absent (e.g. an unreleased dry-run build).
+printf '%s\n' "$VERSION" > "$STAGE/VERSION"
+
+# The pkg ships WITHOUT the frozen sidecar: it is ~15k files / ~190MB of torch, and
+# Apple's notary service scans every one — the same payload sat "In Progress" for
+# 4+ hours. onboard.command fetches it from the release into ~/.local/bin instead
+# (a well-known sidecarBinPath() dir, user-writable so no sudo prompt), which is
+# also exactly what the curl|sh path already does. dist/ keeps the copy that
+# becomes the standalone keld-agent-sidecar_darwin_*.tar.gz release asset, so
+# dropping it from the pkg payload here costs nothing downstream.
+rm -rf "$STAGE/keld-agent-sidecar"
+
+# Codesign every Mach-O in the payload (hardened runtime) when a signing identity is present.
+# Notarization rejects the whole submission over a single unsigned binary, so this sweeps the
+# tree by content rather than trusting a hand-maintained list — it stays correct if the payload
+# ever regains nested code. Signing is inside-out (dependencies before the executables that load
+# them), so the top-level binaries go last.
+#
+# The sidecar's ~100 nested .so/.dylib files are no longer signed here because they are no longer
+# shipped in the pkg (see above). They are signed by whoever publishes the standalone tarball;
+# the tarball path is NOT notarized, and does not need to be — Gatekeeper's quarantine bit is
+# never set on a curl download.
 if [ -n "${APPLE_DEVELOPER_ID_APP:-}" ]; then
   sign() { codesign --force --options runtime --timestamp --sign "$APPLE_DEVELOPER_ID_APP" "$1"; }
+  TOP=(keld keld-agent)
   while IFS= read -r f; do
     sign "$f"
-  done < <(find "$STAGE/keld-agent-sidecar" -type f ! -name keld-agent-sidecar \
+  done < <(find "$STAGE" -type f ! -name keld ! -name keld-agent \
              -exec sh -c 'file -b "$1" | grep -q "Mach-O"' _ {} \; -print)
-  for b in keld keld-agent keld-agent-sidecar/keld-agent-sidecar; do
+  for b in "${TOP[@]}"; do
     sign "$STAGE/$b"
   done
   # Verify rather than trust: an unsigned or badly-sealed binary otherwise surfaces much
   # later as an opaque notarization rejection.
-  for b in keld keld-agent keld-agent-sidecar/keld-agent-sidecar; do
+  for b in "${TOP[@]}"; do
     codesign --verify --strict --verbose=2 "$STAGE/$b"
   done
 fi

@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
-# Payload staged to /usr/local/keld; symlink the CLIs onto PATH, keep the sidecar
-# and onboard.command beside keld-agent so sidecarBinPath()/the script resolve them.
+# Payload staged to /usr/local/keld; symlink the CLIs onto PATH and keep
+# onboard.command beside keld-agent. The ML sidecar is NOT in this payload (Apple
+# notarization scans every one of its ~15k files); onboard.command fetches it into
+# ~/.local/bin, which sidecarBinPath() already searches.
 PREFIX="/usr/local/keld"
 # /usr/local/bin isn't guaranteed to exist — on an Apple-Silicon Mac with no
 # Homebrew in /usr/local (Homebrew lives in /opt/homebrew), it's often absent.
