@@ -9,6 +9,7 @@ type SpeechActExtractor struct{}
 
 func (SpeechActExtractor) Name() string    { return "speech_act" }
 func (SpeechActExtractor) Version() string { return versioned("speech_act") }
+func (SpeechActExtractor) AlwaysRun() bool { return true }
 
 func (SpeechActExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	top, alts := classifyLabeled(ctx, "speech_act", SpeechActDefs, ctx.Text)

@@ -72,6 +72,7 @@ type SensitivityExtractor struct{}
 
 func (SensitivityExtractor) Name() string    { return "sensitivity" }
 func (SensitivityExtractor) Version() string { return versioned("sensitivity") }
+func (SensitivityExtractor) AlwaysRun() bool { return true }
 
 func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	res := ctx.Model.Extract(ctx.Text, SensitiveEntityLabels, map[string][]string{"sensitivity": Sensitivity})
