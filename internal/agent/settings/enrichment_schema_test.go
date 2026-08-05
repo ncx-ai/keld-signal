@@ -35,6 +35,26 @@ func TestRemoteParsesEnrichmentSchema(t *testing.T) {
 	}
 }
 
+// Atlas's distribution_schema() returns built-ins and custom passes in ONE flat
+// `passes` map, distinguished only by is_system. Dropping that flag on decode
+// leaves the daemon unable to tell them apart (keld-atlas#62).
+func TestRemotePassDecodesIsSystem(t *testing.T) {
+	const body = `{"stages":[["task_type"],["nsfw"]],"passes":{
+		"task_type":{"key":"task_type","kind":"single_label","title":"Task type","is_system":true},
+		"nsfw":{"key":"nsfw","kind":"single_label","title":"NSFW","version":"3"}}}`
+
+	var s EnrichmentSchema
+	if err := json.Unmarshal([]byte(body), &s); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !s.Passes["task_type"].IsSystem {
+		t.Errorf("built-in pass: IsSystem = false, want true")
+	}
+	if s.Passes["nsfw"].IsSystem {
+		t.Errorf("custom pass: IsSystem = true, want false")
+	}
+}
+
 func TestRemoteAbsentEnrichmentSchemaIsNil(t *testing.T) {
 	var r Remote
 	if err := json.Unmarshal([]byte(`{"include_entity_text":true}`), &r); err != nil {

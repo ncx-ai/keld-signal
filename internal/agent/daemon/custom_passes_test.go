@@ -19,17 +19,51 @@ func TestPassesFromSchemaSkipsBuiltinsAndStructure(t *testing.T) {
 		"weird":     {Key: "weird", Kind: "structure", Title: "W"},
 	}}
 	passes := passesFromSchema(s)
-	if len(passes) != 4 {
-		t.Fatalf("passesFromSchema forwarded %d, want 4", len(passes))
+	// task_type is built-in and dropped here, so it never reaches the collision
+	// guard; nsfw/art/weird forward and are sorted out downstream by kind.
+	if len(passes) != 3 {
+		t.Fatalf("passesFromSchema forwarded %d, want 3", len(passes))
 	}
 	w1, w2, rej := enrich.BuildCustomExtractors(passes)
 	_ = w2
 	if len(w1) != 2 { // nsfw + art
 		t.Fatalf("w1=%d want 2 (nsfw, art)", len(w1))
 	}
-	// task_type collides with built-in; weird is structure => 2 rejects
-	if len(rej) != 2 {
-		t.Fatalf("rejects=%v want 2", rej)
+	// weird is structure => the only reject
+	if len(rej) != 1 || rej[0].Key != "weird" {
+		t.Fatalf("rejects=%v want 1 (weird)", rej)
+	}
+}
+
+// A healthy Atlas response lists the 8 built-ins alongside the org's custom
+// passes, flagged is_system. Forwarding them made BuildCustomExtractors reject
+// all 8 on EVERY poll — 403 warn events in the dogfood org (keld-atlas#62).
+func TestPassesFromSchemaDropsSystemPasses(t *testing.T) {
+	s := &settings.EnrichmentSchema{Passes: map[string]settings.RemotePass{
+		"task_type": {Key: "task_type", Kind: "single_label", IsSystem: true,
+			Labels: []settings.RemoteLabel{{ID: "a", Text: "a"}}},
+		"nsfw": {Key: "nsfw", Kind: "single_label",
+			Labels: []settings.RemoteLabel{{ID: "safe", Text: "safe"}}},
+	}}
+	passes := passesFromSchema(s)
+	if len(passes) != 1 || passes[0].Key != "nsfw" {
+		t.Fatalf("forwarded %+v, want only the custom pass nsfw", passes)
+	}
+	if _, _, rej := enrich.BuildCustomExtractors(passes); len(rej) != 0 {
+		t.Fatalf("healthy schema produced rejects %+v, want none", rej)
+	}
+}
+
+// An Atlas predating the is_system flag still lists built-ins in `passes`. Key
+// is enough to recognize them, and must be, or the client only stops spamming
+// once every deployment has upgraded.
+func TestPassesFromSchemaDropsBuiltinKeyWithoutFlag(t *testing.T) {
+	s := &settings.EnrichmentSchema{Passes: map[string]settings.RemotePass{
+		"sensitivity": {Key: "sensitivity", Kind: "single_label",
+			Labels: []settings.RemoteLabel{{ID: "pii", Text: "pii"}}},
+	}}
+	if passes := passesFromSchema(s); len(passes) != 0 {
+		t.Fatalf("forwarded %+v, want none (sensitivity is built-in)", passes)
 	}
 }
 
@@ -91,6 +125,6 @@ func TestProcessThreadsCustomPassesIntoPublishedEnrichment(t *testing.T) {
 
 type customStub struct{}
 
-func (customStub) Name() string                                       { return "s" }
-func (customStub) Version() string                                    { return "s" }
+func (customStub) Name() string                                   { return "s" }
+func (customStub) Version() string                                { return "s" }
 func (customStub) Run(*enrich.JobContext) (map[string]any, error) { return nil, nil }
