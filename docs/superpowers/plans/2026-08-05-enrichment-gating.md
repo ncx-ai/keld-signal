@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Default off:** `KELD_ENRICH_GATE_ENABLED` unset ⇒ today's behavior exactly (every pass runs). The gate path is exercised only by tests until explicitly enabled.
+- **Default ON** (flipped post-validation; built default-off first — Task-code snippets below show the original default-off form): `KELD_ENRICH_GATE_ENABLED` unset ⇒ gating ON; set `0`/`false`/`off`/`no` ⇒ every pass runs (pre-flip behavior).
 - **Governance is never gated:** `sensitivity` (+ its deterministic `creddetect`) runs on every turn.
 - **Gate on `fragment` only — never `statement`** (validated: corrections are statements).
 - **Preserve pipeline invariants:** passes still run one-at-a-time (no goroutine fan-out — sidecar memory safety), results buffered-then-committed per group, per-pass timeout isolation (`runStageBounded`) unchanged. The gate only *removes* passes from the run.

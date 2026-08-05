@@ -162,11 +162,11 @@ func TestGateSkipsSemanticPassesOnPrefilteredTurn(t *testing.T) {
 			t.Errorf("gated pass %q must not hit the model", gated)
 		}
 	}
-	// governance + gate signal still ran
+	// governance + gate signal BOTH ran (asserted independently, not as an OR)
 	if m.entityHits == 0 && m.extractHits == 0 {
 		t.Error("sensitivity (governance) must always run")
 	}
-	if p.Sensitivity.Producer == "" && !hit(m.classifyHits, "speech_act") {
+	if !hit(m.classifyHits, "speech_act") {
 		t.Error("speech_act (gate signal) must always run")
 	}
 	// gated semantic fields are empty
@@ -201,7 +201,7 @@ func TestGateRunsAllPassesOnSubstantiveTurn(t *testing.T) {
 }
 
 func TestGateOffRunsEverything(t *testing.T) {
-	t.Setenv("KELD_ENRICH_GATE_ENABLED", "") // default off
+	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false") // explicitly disabled (default is ON)
 	m := &countingModel{}
 	p := enrich.Run("ok", "claude_code", enrich.Meta{}, m)
 	if p.PipelineStatus == "gated" {

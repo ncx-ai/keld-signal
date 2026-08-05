@@ -58,6 +58,10 @@ func TestCustomHolderSwapAndNilSafe(t *testing.T) {
 // published enrichment via process's customOpts... (the wiring the unit tests
 // above don't exercise).
 func TestProcessThreadsCustomPassesIntoPublishedEnrichment(t *testing.T) {
+	// This test exercises custom-pass threading through the full pipeline; disable
+	// enrichment gating (default ON) so the fake's speech_act=fragment fallback on
+	// "hello world" doesn't gate the semantic/custom passes out.
+	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false")
 	holder := newCustomHolder()
 	w1, w2, _ := enrich.BuildCustomExtractors([]enrich.CustomPass{
 		{Key: "nsfw", Kind: "single_label", Title: "NSFW", Version: "1",

@@ -109,6 +109,10 @@ func (c *captureModel) Extract(string, map[string]string, map[string][]string) e
 }
 
 func TestRunModelWithContextFeedsRecentPrompts(t *testing.T) {
+	// Measures raw context-feeding into the classifier; disable enrichment gating
+	// (default ON) so the content-free "ok do it" row isn't pre-filter-gated before
+	// the classifier runs.
+	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false")
 	gold := []GoldRow{{Text: "ok do it", RecentPrompts: []string{"add the compliance flag"}, Repo: "keld-atlas", Branch: "feat/x", Project: "Keld"}}
 	aug := &captureModel{}
 	_ = RunModelWithContext(aug, gold)

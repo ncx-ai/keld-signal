@@ -29,9 +29,10 @@ never drops a real request.
 2. **Gated turns still publish** a minimal enrichment (`sensitivity` + `speech_act` filled, semantic
    fields empty) with `pipeline_status = "gated"` — preserves turn count, safety coverage, and the
    "this was an approval" signal, and is distinguishable from `partial` (timeout) and `ok`.
-3. **Env flag, default-off first**: `KELD_ENRICH_GATE_ENABLED` (per-machine), following the
-   `gatingEnabled()` env precedent in `a6_tasktype.go` / `a4_compositional.go`. Org-level remote
-   policy is a deliberate follow-on, not v1.
+3. **Env flag, default ON**: `KELD_ENRICH_GATE_ENABLED` (per-machine), off-switch semantics
+   mirroring `taskTypeDescriptionsEnabled()` in `a6_tasktype.go` — set `0`/`false`/`off`/`no` to
+   disable. On by default given the empirical validation (0/24 dangerous). Org-level remote policy
+   is a deliberate follow-on, not v1. (Built default-off first, then flipped once validated.)
 
 ## Empirical validation (why this is safe)
 
@@ -136,11 +137,11 @@ Extend `internal/agent/enrich/pipeline_test.go` with a **call-counting fake `Mod
 
 ## Rollout
 
-1. Ship with `KELD_ENRICH_GATE_ENABLED` unset (default off) — zero behavior change; the code path
-   is exercised only by tests.
-2. Enable on a dev/canary machine; confirm gated turns publish with `pipeline_status="gated"`,
-   semantic fields empty, sensitivity present, and the inference-count drop in logs.
-3. Once validated, flip the default to on (and/or graduate to an org-level remote policy).
+Gating ships **on by default** (validated). To roll back on any machine, set
+`KELD_ENRICH_GATE_ENABLED=false` — every pass then runs on every turn (the pre-flip behavior).
+Confirm in the field that gated turns publish with `pipeline_status="gated"`, semantic fields
+empty, sensitivity present, and the inference-count drop shows in logs. Org-level remote policy
+(and Atlas rendering of the `gated` status) remain follow-ons.
 
 ## Open questions
 

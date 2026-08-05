@@ -4,18 +4,18 @@ import (
 	"testing"
 )
 
-func TestGateEnabledDefaultsOff(t *testing.T) {
+func TestGateEnabledDefaultsOn(t *testing.T) {
 	t.Setenv("KELD_ENRICH_GATE_ENABLED", "")
-	if gateEnabled() {
-		t.Fatal("gate must default OFF when unset")
+	if !gateEnabled() {
+		t.Fatal("gate must default ON when unset")
 	}
-	for _, on := range []string{"1", "true", "TRUE", "on"} {
+	for _, on := range []string{"1", "true", "TRUE", "on", "yes", "anything"} {
 		t.Setenv("KELD_ENRICH_GATE_ENABLED", on)
 		if !gateEnabled() {
 			t.Fatalf("gate should be ON for %q", on)
 		}
 	}
-	for _, off := range []string{"0", "false", "off", "no"} {
+	for _, off := range []string{"0", "false", "FALSE", "off", "no"} {
 		t.Setenv("KELD_ENRICH_GATE_ENABLED", off)
 		if gateEnabled() {
 			t.Fatalf("gate should be OFF for %q", off)

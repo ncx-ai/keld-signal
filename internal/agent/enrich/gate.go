@@ -7,15 +7,17 @@ import (
 	"strings"
 )
 
-// gateEnabled reports whether enrichment gating is on. Default OFF (unset/empty
-// ⇒ every pass runs, today's behavior); "1"/"true"/"on"/"yes" (case-insensitive)
-// turn it on. Mirrors taskTypeDescriptionsEnabled() in a6_tasktype.go.
+// gateEnabled reports whether enrichment gating is on. Default ON (empirically
+// validated at 0/24 dangerous false gate-offs); set KELD_ENRICH_GATE_ENABLED to
+// "0"/"false"/"off"/"no" (case-insensitive) to disable it and run every pass on
+// every turn. Mirrors the off-switch shape of taskTypeDescriptionsEnabled() in
+// a6_tasktype.go.
 func gateEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("KELD_ENRICH_GATE_ENABLED"))) {
-	case "1", "true", "on", "yes":
-		return true
-	default:
+	case "0", "false", "off", "no":
 		return false
+	default:
+		return true
 	}
 }
 
