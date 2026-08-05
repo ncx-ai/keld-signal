@@ -52,7 +52,21 @@ if [ -n "${APPLE_DEVELOPER_ID_INSTALLER:-}" ]; then
   pkgutil --check-signature "$OUT"
 fi
 
-# Notarize + staple when notarytool creds are present.
+# Notarize when notarytool creds are present — DECOUPLED from the release.
+#
+# Apple's notary queue is unbounded and unobservable: this payload (~190MB, ~15k
+# files, ~100 Mach-O + a Python.framework) has sat "In Progress" for >4h with no
+# error, no log, and no queue position, while Apple reported the service healthy.
+# `--wait` has no default timeout, so a release tag would hang on it indefinitely.
+#
+# So: submit, wait only KELD_NOTARY_TIMEOUT for a verdict, then ship regardless.
+# That is safe because Gatekeeper validates ONLINE against Apple's service — a pkg
+# whose ticket lands after we ship still passes on any online machine. Stapling
+# only adds offline validation, so it is an optimization, not a requirement.
+#
+# A REJECTION is different from a timeout and still fails the build: Invalid means
+# the payload is actually broken (unsigned nested binary, missing entitlement),
+# which no amount of waiting fixes.
 if [ -n "${APPLE_NOTARY_KEY:-}" ] && [ -n "${APPLE_NOTARY_KEY_ID:-}" ] && [ -n "${APPLE_NOTARY_ISSUER:-}" ]; then
   # `--key` takes a PATH to the App Store Connect .p8, but a CI secret naturally holds the key
   # CONTENTS — accept either, materializing contents into the trap-cleaned temp dir.
@@ -61,8 +75,47 @@ if [ -n "${APPLE_NOTARY_KEY:-}" ] && [ -n "${APPLE_NOTARY_KEY_ID:-}" ] && [ -n "
     KEYFILE="$TMP/notary.p8"
     (umask 077; printf '%s\n' "$APPLE_NOTARY_KEY" > "$KEYFILE")
   fi
-  xcrun notarytool submit "$OUT" --key "$KEYFILE" --key-id "$APPLE_NOTARY_KEY_ID" \
-    --issuer "$APPLE_NOTARY_ISSUER" --wait
-  xcrun stapler staple "$OUT"
+  AUTH=(--key "$KEYFILE" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER")
+  WAIT_FOR="${KELD_NOTARY_TIMEOUT:-15m}"
+
+  # Submit WITHOUT --wait so the id is captured even if every later step fails;
+  # without the id a pending submission is unrecoverable and must be redone.
+  xcrun notarytool submit "$OUT" "${AUTH[@]}" --output-format json > "$TMP/submit.json"
+  SUB=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$TMP/submit.json")
+  [ -n "$SUB" ] || { echo "notarytool submit returned no submission id"; cat "$TMP/submit.json"; exit 1; }
+  echo "notarization submitted: $SUB"
+  # Persist beside the pkg + surface in the run UI so a later staple needs no log archaeology.
+  printf '%s\n' "$SUB" > "$OUT.notarization-id"
+  [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "notarization submission for \`$OUT\`: \`$SUB\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # notarytool wait exits non-zero for BOTH rejection and timeout, so branch on the
+  # reported status rather than the exit code.
+  xcrun notarytool wait "$SUB" "${AUTH[@]}" --timeout "$WAIT_FOR" --output-format json \
+    > "$TMP/wait.json" 2>&1 || true
+  STATUS=$(python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1])).get("status",""))
+except Exception: print("")' "$TMP/wait.json")
+
+  case "$STATUS" in
+    Accepted)
+      xcrun stapler staple "$OUT"
+      echo "notarized + stapled ($SUB)"
+      ;;
+    Invalid | Rejected)
+      echo "NOTARIZATION $STATUS for $SUB — payload is broken, not slow. Log:"
+      xcrun notarytool log "$SUB" "${AUTH[@]}" || true
+      exit 1
+      ;;
+    *)
+      echo "notarization still pending after $WAIT_FOR (submission $SUB)."
+      echo "  Shipping SIGNED but UNSTAPLED — Gatekeeper validates online once Apple finishes."
+      echo "  To staple later: xcrun notarytool wait $SUB <auth> && xcrun stapler staple $OUT"
+      cat "$TMP/wait.json" || true
+      if [ -n "${KELD_NOTARY_REQUIRED:-}" ]; then
+        echo "  KELD_NOTARY_REQUIRED set — failing the build instead."
+        exit 1
+      fi
+      ;;
+  esac
 fi
 echo "built $OUT"
