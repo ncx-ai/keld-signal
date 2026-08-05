@@ -1,0 +1,120 @@
+name: staple
+
+# Attach notarization tickets to already-published macOS installers.
+#
+# Why this exists as a SEPARATE workflow: Apple's notary queue has no bounded
+# latency. Observed on this account, submissions have sat "In Progress" for 5+
+# hours with no error and no log. The release build therefore refuses to wait
+# (installers/macos/build-pkg.sh submits, waits only KELD_NOTARY_TIMEOUT, then
+# ships), which is correct — but it means the pkg is usually published BEFORE its
+# ticket exists, and nothing would ever staple it.
+#
+# An unstapled pkg is not broken: Gatekeeper validates online against Apple's
+# service, so once the ticket lands the pkg passes on any online machine. Stapling
+# only adds OFFLINE validation. This job supplies that after the fact, so the
+# release never has to guess how long Apple will take.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to staple (default: latest published release)."
+        type: string
+        default: ""
+      wait:
+        description: "How long to wait for a pending verdict (notarytool duration)."
+        type: string
+        default: "2h"
+  # Catch releases whose ticket landed after the build gave up. No-ops cheaply
+  # when the assets are already stapled, so a quiet schedule costs one download.
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  staple:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Staple pending macOS installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+          WAIT_FOR: ${{ inputs.wait || '2h' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_NOTARY_KEY:-}" ]; then
+            echo "notary secrets absent — nothing to staple"; exit 0
+          fi
+          TAG="${{ inputs.release_tag }}"
+          [ -n "$TAG" ] || TAG=$(gh release view --json tagName -q .tagName)
+          [ -n "$TAG" ] || { echo "no published release to staple"; exit 0; }
+          echo "target release: $TAG"
+
+          work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+          # `--key` wants a PATH; the secret holds the key CONTENTS (same as build-pkg.sh).
+          KEYFILE="$APPLE_NOTARY_KEY"
+          if [ ! -f "$KEYFILE" ]; then
+            KEYFILE="$work/notary.p8"
+            (umask 077; printf '%s\n' "$APPLE_NOTARY_KEY" > "$KEYFILE")
+          fi
+          AUTH=(--key "$KEYFILE" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER")
+
+          gh release download "$TAG" -p '*.pkg' -D "$work" || { echo "no .pkg assets on $TAG"; exit 0; }
+          shopt -s nullglob
+          pkgs=("$work"/*.pkg)
+          [ ${#pkgs[@]} -gt 0 ] || { echo "no .pkg assets on $TAG"; exit 0; }
+
+          # Resolve the submission from Apple's history by FILENAME rather than from a
+          # build artifact: the id is not a release asset, and history is authoritative
+          # even for a build whose logs have expired. Newest first, so a re-run of the
+          # same version resolves to its latest submission.
+          xcrun notarytool history "${AUTH[@]}" --output-format json > "$work/history.json"
+
+          rc=0
+          for pkg in "${pkgs[@]}"; do
+            name=$(basename "$pkg")
+            if xcrun stapler validate "$pkg" >/dev/null 2>&1; then
+              echo "✓ $name already stapled"
+              continue
+            fi
+            # jq, not an inline python heredoc: a `run: |` block scalar ends at the first
+            # column-0 line, and indenting python to survive that breaks python. jq is
+            # preinstalled on GitHub macOS runners.
+            sub=$(jq -r --arg n "$name" \
+              '[.history[] | select(.name == $n)] | sort_by(.createdDate) | last | .id // empty' \
+              "$work/history.json")
+            if [ -z "$sub" ]; then
+              echo "! $name — no submission on record; was it ever submitted?"; rc=1; continue
+            fi
+            echo "… $name -> submission $sub (waiting up to $WAIT_FOR)"
+            xcrun notarytool wait "$sub" "${AUTH[@]}" --timeout "$WAIT_FOR" \
+              --output-format json > "$work/wait.json" 2>&1 || true
+            # `|| true`: notarytool writes non-JSON on some failures, and an unparseable
+            # wait result must fall through to "still pending", never abort the sweep.
+            status=$(jq -r '.status // empty' "$work/wait.json" 2>/dev/null || true)
+            case "$status" in
+              Accepted)
+                xcrun stapler staple "$pkg"
+                gh release upload "$TAG" "$pkg" --clobber
+                echo "✓ $name stapled and re-uploaded"
+                ;;
+              Invalid | Rejected)
+                echo "✗ $name — notarization $status. Log:"
+                xcrun notarytool log "$sub" "${AUTH[@]}" || true
+                rc=1
+                ;;
+              *)
+                # Still pending is NOT a failure: the next scheduled run retries, and the
+                # published pkg keeps validating online in the meantime.
+                echo "· $name still pending after $WAIT_FOR (submission $sub) — will retry"
+                cat "$work/wait.json" || true
+                ;;
+            esac
+          done
+          exit $rc
