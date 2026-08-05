@@ -35,7 +35,7 @@ func TestPrefilterContentFree(t *testing.T) {
 		"Why is this test failing?",
 		"Use tabs, not spaces",
 		"Change the variable name to userCount",
-		"deploy the staging build now please",   // 6 tokens → over cap even though wordy-approval
+		"deploy the staging build now please", // 6 tokens → over cap even though wordy-approval
 	}
 	for _, p := range contentFree {
 		if !prefilterContentFree(p) {
