@@ -404,6 +404,24 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **Distribution packaging** freezes the sidecar with PyInstaller
   (`keld-agent-sidecar.spec`) into `keld-agent-sidecar`; the daemon resolves it
   beside `keld-agent` (flat or nested layout).
+- **macOS signing needs TWO certs, and notarization is decoupled from the release.**
+  `installers/macos/build-pkg.sh` signs **every** Mach-O in the payload with the
+  *Developer ID Application* cert — not just the three entrypoints, because the
+  frozen sidecar is a one-dir tree of ~15k files / ~100 native libs and
+  notarization rejects the whole submission over a single unsigned one — then signs
+  the pkg itself with the *Developer ID Installer* cert. CI imports both p12s into
+  a throwaway keychain and **derives the identity names from it** (a hand-typed
+  name fails at `productsign` with an opaque error). Bundle the **G2 intermediate**
+  in each p12 or a clean runner can't build a chain to a trusted root.
+  ⚠️ **Apple's notary queue is unbounded and unobservable** — that ~15k-file payload
+  has sat "In Progress" for **4+ hours** with no error, no log, and the service
+  reported healthy. So the release does NOT block on it: submit, wait only
+  `KELD_NOTARY_TIMEOUT` (default 15m), then ship. Safe because Gatekeeper validates
+  **online**, so a ticket landing after we ship still passes; stapling only adds
+  *offline* validation. A rejection (`Invalid`) still fails the build — that means a
+  broken payload, which waiting won't fix. The submission id is written to
+  `<pkg>.notarization-id` + the run summary so a later staple needs no log
+  archaeology. `KELD_NOTARY_REQUIRED=1` restores fail-on-timeout.
 - **Obfuscation (`KELD_OBFUSCATE=1`, CI-set, default off).** The installer/release
   freeze obfuscates the shipped sidecar — python-minifier **locals-only** rename
   (globals/Pydantic-fields/spawn-targets preserved; annotations kept so Pydantic
