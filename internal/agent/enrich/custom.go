@@ -1,7 +1,5 @@
 package enrich
 
-import "fmt"
-
 // BuiltinPassKeys are the compiled, hand-tuned built-in passes (see
 // extractors.go Wave1/Wave2). Remote custom passes with these keys are skipped:
 // built-in vocab is authoritative and never overridden.
@@ -48,21 +46,21 @@ func (p CustomPass) producer() string {
 func BuildCustomExtractors(passes []CustomPass) (wave1, wave2 []Extractor, rejected []CustomReject) {
 	for _, p := range passes {
 		if BuiltinPassKeys[p.Key] {
-			rejected = append(rejected, CustomReject{p.Key, "collides with built-in pass"})
+			rejected = append(rejected, CustomReject{p.Key, "builtin_collision"})
 			continue
 		}
 		switch p.Kind {
 		case "single_label", "multi_label":
 			if p.ConditionOn != "" {
 				if len(p.LabelsByCond) == 0 {
-					rejected = append(rejected, CustomReject{p.Key, "conditioned pass has no labels_by_cond"})
+					rejected = append(rejected, CustomReject{p.Key, "missing_labels_by_cond"})
 					continue
 				}
 				wave2 = append(wave2, customCondExtractor{p})
 				continue
 			}
 			if len(p.Labels) == 0 {
-				rejected = append(rejected, CustomReject{p.Key, "no labels"})
+				rejected = append(rejected, CustomReject{p.Key, "no_labels"})
 				continue
 			}
 			if p.Kind == "multi_label" {
@@ -72,12 +70,12 @@ func BuildCustomExtractors(passes []CustomPass) (wave1, wave2 []Extractor, rejec
 			}
 		case "entity":
 			if len(p.Labels) == 0 {
-				rejected = append(rejected, CustomReject{p.Key, "no entity labels"})
+				rejected = append(rejected, CustomReject{p.Key, "no_entity_labels"})
 				continue
 			}
 			wave1 = append(wave1, customEntityExtractor{p})
 		default:
-			rejected = append(rejected, CustomReject{p.Key, fmt.Sprintf("unsupported kind %q", p.Kind)})
+			rejected = append(rejected, CustomReject{p.Key, "unsupported_kind"})
 		}
 	}
 	return wave1, wave2, rejected

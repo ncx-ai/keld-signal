@@ -21,6 +21,10 @@ type RemotePass struct {
 	MultiLabel   bool                     `json:"multi_label"`
 	ClsThreshold *float64                 `json:"cls_threshold"`
 	Version      string                   `json:"version"`
+	// IsSystem marks one of the built-in passes compiled into this binary.
+	// distribution_schema() serves built-ins and custom passes in the same flat
+	// map, so this flag is the only thing distinguishing them.
+	IsSystem bool `json:"is_system"`
 }
 
 // RemoteLabel is one label. Classification passes use ID/Text (+Description);
