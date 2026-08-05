@@ -80,3 +80,134 @@ func TestRunIsolatesPanicAsPartial(t *testing.T) {
 		t.Fatalf("surviving stage should still populate: %+v", p.TaskType)
 	}
 }
+
+// countingModel records which passes hit the model and lets a test force the
+// speech_act label. Method-per-pass (confirmed against extractors.go, pass.go,
+// speechact.go, a4_compositional.go): task_type/activity_type/personal/
+// speech_act/subcategory all go through classifyPass/classifyLabeled →
+// Model.Classify; function_guess also calls Classify EXCEPT for a coding-tool
+// source ("claude_code" among them) under the default-on A4 compositional
+// override, where it's set structurally with no model call at all — gated
+// either way, so the tests below (which only assert gated tasks are NOT hit)
+// are unaffected. sensitivity (governance, AlwaysRun) and domain_entities
+// (gated) both call Model.Extract; no built-in pass calls Model.Entities (only
+// custom extractors do), so entityHits stays 0 in these tests by design.
+type countingModel struct {
+	speechAct    string   // label returned for the "speech_act" task
+	classifyHits []string // task names passed to Classify
+	entityHits   int
+	extractHits  int
+}
+
+func (m *countingModel) Classify(text string, tasks map[string][]string) map[string][]enrich.Ranked {
+	out := map[string][]enrich.Ranked{}
+	for task, labels := range tasks {
+		m.classifyHits = append(m.classifyHits, task)
+		lab := ""
+		if len(labels) > 0 {
+			lab = labels[0]
+		}
+		if task == "speech_act" && m.speechAct != "" {
+			// classifyLabeled classifies over the READABLE label text (e.g. "a
+			// short follow-up or acknowledgement") and maps the winning text
+			// back to its dotted id via SpeechActDefs — it never sees the id
+			// itself. So the fake must return that id's readable text, not the
+			// bare id, or the round trip drops the label to "".
+			lab = speechActText(m.speechAct)
+		}
+		out[task] = []enrich.Ranked{{Label: lab, Confidence: 0.9}}
+	}
+	return out
+}
+
+// speechActText maps a speech_act id (e.g. "fragment") back to the readable
+// label text enrich.SpeechActDefs classifies against, so countingModel can
+// force a speech_act outcome through the real id->text->id round trip in
+// classifyLabeled (see Classify above).
+func speechActText(id string) string {
+	for _, d := range enrich.SpeechActDefs {
+		if d.ID == id {
+			return d.Text
+		}
+	}
+	return id
+}
+func (m *countingModel) Entities(text string, labels map[string]string) []enrich.Entity {
+	m.entityHits++
+	return nil
+}
+func (m *countingModel) Extract(text string, labels map[string]string, tasks map[string][]string) enrich.ExtractResult {
+	m.extractHits++
+	return enrich.ExtractResult{}
+}
+
+func hit(hits []string, task string) bool {
+	for _, h := range hits {
+		if h == task {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGateSkipsSemanticPassesOnPrefilteredTurn(t *testing.T) {
+	t.Setenv("KELD_ENRICH_GATE_ENABLED", "1")
+	m := &countingModel{}
+	p := enrich.Run("ok, do that", "claude_code", enrich.Meta{}, m)
+	if p.PipelineStatus != "gated" {
+		t.Fatalf("status = %q, want gated", p.PipelineStatus)
+	}
+	for _, gated := range []string{"task_type", "activity_type", "personal", "function_guess", "subcategory"} {
+		if hit(m.classifyHits, gated) {
+			t.Errorf("gated pass %q must not hit the model", gated)
+		}
+	}
+	// governance + gate signal still ran
+	if m.entityHits == 0 && m.extractHits == 0 {
+		t.Error("sensitivity (governance) must always run")
+	}
+	if p.Sensitivity.Producer == "" && !hit(m.classifyHits, "speech_act") {
+		t.Error("speech_act (gate signal) must always run")
+	}
+	// gated semantic fields are empty
+	if p.TaskType.Value != "" || p.Activity.Value != "" {
+		t.Error("gated turn must leave semantic fields empty")
+	}
+}
+
+func TestGateSkipsOnSpeechActFragment(t *testing.T) {
+	t.Setenv("KELD_ENRICH_GATE_ENABLED", "1")
+	m := &countingModel{speechAct: "fragment"}
+	// A non-prefiltered input so ONLY the speech_act==fragment branch can gate it.
+	p := enrich.Run("well, alright then I suppose", "claude_code", enrich.Meta{}, m)
+	if p.PipelineStatus != "gated" {
+		t.Fatalf("status = %q, want gated (speech_act fragment)", p.PipelineStatus)
+	}
+	if hit(m.classifyHits, "task_type") {
+		t.Error("task_type must be skipped when gated on fragment")
+	}
+}
+
+func TestGateRunsAllPassesOnSubstantiveTurn(t *testing.T) {
+	t.Setenv("KELD_ENRICH_GATE_ENABLED", "1")
+	m := &countingModel{speechAct: "command"}
+	p := enrich.Run("Add a rate limiter to the login endpoint", "claude_code", enrich.Meta{}, m)
+	if p.PipelineStatus == "gated" {
+		t.Fatal("substantive turn must not be gated")
+	}
+	if !hit(m.classifyHits, "task_type") {
+		t.Error("task_type must run on a substantive turn")
+	}
+}
+
+func TestGateOffRunsEverything(t *testing.T) {
+	t.Setenv("KELD_ENRICH_GATE_ENABLED", "") // default off
+	m := &countingModel{}
+	p := enrich.Run("ok", "claude_code", enrich.Meta{}, m)
+	if p.PipelineStatus == "gated" {
+		t.Fatal("gate disabled: nothing should be gated even for 'ok'")
+	}
+	if !hit(m.classifyHits, "task_type") {
+		t.Error("gate disabled: task_type must still run")
+	}
+}

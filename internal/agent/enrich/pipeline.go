@@ -126,46 +126,70 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	ctx := NewJobContext(text, source, meta, m)
 	exs := append(Wave1(), cfg.customW1...)
 
-	type res struct {
-		name string
-		out  map[string]any
-		ok   bool
-	}
-	results := make([]res, len(exs))
-	for i, ex := range exs {
-		out, ok := runStageBounded(ex, ctx, cfg)
-		results[i] = res{name: ex.Name(), out: out, ok: ok}
+	// Partition Wave1 into always-run (governance + gate signal) and gated
+	// (semantic). Wave1 passes are mutually independent, so committing them in
+	// two sequential batches preserves order-independence.
+	var always, gated []Extractor
+	for _, ex := range exs {
+		if ar, ok := ex.(alwaysRunner); ok && ar.AlwaysRun() {
+			always = append(always, ex)
+		} else {
+			gated = append(gated, ex)
+		}
 	}
 
 	anyFailed := false
-	for _, r := range results {
-		if !r.ok {
-			anyFailed = true
-			continue
+	commit := func(group []Extractor) {
+		type res struct {
+			name string
+			out  map[string]any
+			ok   bool
 		}
-		ctx.Set(r.name, r.out)
+		results := make([]res, len(group))
+		for i, ex := range group {
+			out, ok := runStageBounded(ex, ctx, cfg)
+			results[i] = res{ex.Name(), out, ok}
+		}
+		for _, r := range results {
+			if !r.ok {
+				anyFailed = true
+				continue
+			}
+			ctx.Set(r.name, r.out)
+		}
 	}
 
-	// Wave2: extractors that depend on Wave1 output (run after commit).
+	// Always-run first, so speech_act is committed before the gate decision.
+	commit(always)
+
+	// Gate: only when enabled AND the turn is content-free (no-model pre-filter
+	// OR speech_act==fragment). Governance/gate passes above already ran.
+	gateOff := gateEnabled() && (prefilterContentFree(text) || speechActFragment(ctx))
+
+	ran := append([]Extractor{}, always...)
 	wave2 := append(Wave2(), cfg.customW2...)
-	for _, ex := range wave2 {
-		if out, ok := runStageBounded(ex, ctx, cfg); ok {
-			ctx.Set(ex.Name(), out)
-		} else {
-			anyFailed = true
+	if !gateOff {
+		commit(gated)
+		for _, ex := range wave2 {
+			if out, ok := runStageBounded(ex, ctx, cfg); ok {
+				ctx.Set(ex.Name(), out)
+			} else {
+				anyFailed = true
+			}
 		}
+		ran = append(append(ran, gated...), wave2...)
 	}
 
 	status := "enriched"
-	if anyFailed {
+	switch {
+	case gateOff:
+		status = "gated"
+	case anyFailed:
 		status = "partial"
 	}
 
 	versions := map[string]string{}
-	for _, ex := range exs {
-		versions[ex.Name()] = ex.Version()
-	}
-	for _, ex := range wave2 {
+	for _, ex := range ran {
 		versions[ex.Name()] = ex.Version()
 	}
 
