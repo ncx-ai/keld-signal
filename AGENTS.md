@@ -62,7 +62,24 @@ recently-completed set (`queue.Complete`, marked only on a real publish so retri
 and watcher fallbacks stay re-offerable). Sources: `~/.claude/projects` →
 `claude_code`, the Cowork `local-agent-mode-sessions/**/.claude/projects` trees →
 `cowork` (macOS), `~/.gemini/tmp/*/chats` → `gemini` (all platforms). Env: `KELD_WATCH` (default on), `KELD_WATCH_POLL` (default 5s),
-`KELD_WATCH_BACKFILL` (default off = forward-only). macOS + Linux; Windows deferred.
+`KELD_WATCH_BACKFILL` (default off = forward-only), `KELD_WATCH_ROOTS` (comma-separated
+`source:dir`, default empty). macOS + Linux; Windows deferred.
+
+**Cowork went VM-backed, and host-side capture cannot follow it.** Newer Claude
+desktop builds run Cowork inside a VM (`vm_bundles/claudevm.bundle`) whose
+transcripts live in the VM's disk image, not under `local-agent-mode-sessions`.
+Nothing on the host can read them: no folder is shared and the VM's address does
+not answer the host. Discovery therefore finds no *live* Cowork transcripts on
+these machines — and because the pre-VM session directories are never cleaned up,
+a root is still discovered, just permanently stale. `coworkHidden`
+(`internal/agent/watch/roots.go`) detects that exact shape — VM images touched
+within `coworkActiveWindow` while no Cowork `.jsonl` was written in the same
+window — and logs one advisory line per daemon run, because the failure is
+otherwise completely silent: Cowork just stops appearing in Atlas. It keys on
+transcript **freshness**, not root existence, precisely so the stale-directory
+machines are caught. Restoring capture needs a path the host can read (or an
+in-VM emitter); `KELD_WATCH_ROOTS=cowork:<dir>` points the watcher at one the day
+it exists.
 
 **Watched-source telemetry (`internal/agent/promptlog`).** Cowork's own OTEL is
 configured to Keld but its sandbox egress blocks `atlas.keld.co`, so the daemon
