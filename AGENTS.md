@@ -480,4 +480,6 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 
 Specs in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`; control
 plane in `docs/enrichment-settings.md`; sidecar resource safety + load testing in
-`sidecar/loadtest/README.md`.
+`sidecar/loadtest/README.md`; macOS Developer ID signing + the **unresolved**
+notarization problem (zero verdicts on this account; the account-provisioning check
+that still needs doing) in `docs/macos-signing-and-notarization.md`.
