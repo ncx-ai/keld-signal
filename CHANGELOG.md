@@ -7,7 +7,27 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+### Added
+- **`KELD_WATCH_ROOTS`** — comma-separated `source:dir` transcript roots to watch
+  in addition to the built-in ones (e.g. `cowork:/path/to/.claude/projects`).
+  Discovery is otherwise pinned to the directory layout each launch surface used
+  when a release shipped, so a surface that moves takes its coverage with it until
+  the next build; this is the escape hatch. Malformed entries and paths that don't
+  exist are skipped, never fatal.
+
 ### Fixed
+- **Cowork going VM-backed silently ended all Cowork capture, with nothing in the
+  log to say so.** Newer Claude desktop builds run Cowork inside a VM whose
+  transcripts stay in the VM's disk image rather than under
+  `local-agent-mode-sessions`, which the watcher tails. No host-readable path to
+  them exists (no shared folder; the VM's address does not answer the host), so
+  the agent cannot restore capture on its own — but it no longer fails silently:
+  when the VM has been used recently and no Cowork transcript has been written on
+  the host in the same window, `keld-agent` now logs one advisory line naming the
+  cause and the `KELD_WATCH_ROOTS` workaround. The check keys on transcript
+  **freshness**, not root existence, because machines that ran pre-VM sessions keep
+  those directories forever — an existence check stays quiet on exactly the
+  machines that have the problem.
 - **Sidecar RAM oscillated from a ~2.7 GB baseline to ~5.7 GB peaks, swapping and
   destabilizing the host, and `keld-agent` thrashed without completing any
   enrichment.** Three compounding causes, each fixed:

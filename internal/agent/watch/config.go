@@ -27,6 +27,19 @@ func PollFromEnv() time.Duration {
 	return 5 * time.Second
 }
 
+// envExtraRoots names the operator escape hatch documented on ExtraRootsFromEnv.
+const envExtraRoots = "KELD_WATCH_ROOTS"
+
+// ExtraRootsFromEnv returns transcript roots the built-in discovery doesn't
+// know about, from KELD_WATCH_ROOTS: a comma-separated list of `source:dir`
+// (e.g. `cowork:/path/to/.claude/projects`). Discovery is otherwise pinned to
+// the directory layouts each launch surface used when a given release shipped;
+// when one of them moves — as Cowork did when it went VM-backed — this restores
+// capture without waiting on a new agent build.
+func ExtraRootsFromEnv() []Root {
+	return extraRoots(os.Getenv(envExtraRoots))
+}
+
 // BackfillFromEnv reports whether pre-existing transcripts should be enriched
 // from the start (KELD_WATCH_BACKFILL in {on,1,true}); default false (forward-only).
 func BackfillFromEnv() bool {
