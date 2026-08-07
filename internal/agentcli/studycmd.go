@@ -47,6 +47,11 @@ func newStudyCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "study",
 		Short: "Offline prompted-LLM vs GLiNER2 classification study (not a product path).",
+		// Hidden from user-facing help: this is research tooling, not a feature
+		// anyone installing the daemon should be offered. It stays compiled in
+		// (measured at 108 KB, 0.75% of the stripped binary, and `keld-agent eval`
+		// sets the precedent that eval tooling ships) but is inert unless invoked.
+		Hidden: true,
 	}
 	c.AddCommand(newStudyMineCmd(), newStudyRunCmd(), newStudyAdjudicateCmd(),
 		newStudyReportCmd(), newStudyPreviewCmd())

@@ -39,3 +39,20 @@ func TestStudyRunRejectsUnknownKind(t *testing.T) {
 		t.Fatal("expected an error for an unknown --kind")
 	}
 }
+
+// The study command is research tooling, not a user feature: it must not appear in
+// keld-agent's help output, but must still be invocable.
+func TestStudyCmdIsHiddenFromHelp(t *testing.T) {
+	var found bool
+	for _, sub := range NewRootCmd().Commands() {
+		if sub.Name() == "study" {
+			found = true
+			if !sub.Hidden {
+				t.Error("study must be Hidden: it is not a user-facing feature")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("study must still be registered even though hidden")
+	}
+}
