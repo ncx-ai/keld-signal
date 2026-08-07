@@ -2,10 +2,14 @@ package llmstudy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
 // Answer is one arm's labels for one window, plus how the call went.
@@ -30,7 +34,10 @@ type Answer struct {
 type Llama struct {
 	BaseURL string
 	Timeout time.Duration
-	hc      *http.Client
+	// Policy governs transient-failure retries. Exported so tests can disable
+	// backoff; production callers should leave the default.
+	Policy retry.Policy
+	hc     *http.Client
 }
 
 // NewLlama returns a client for a llama-server base URL (e.g. http://127.0.0.1:8080).
@@ -38,7 +45,7 @@ type Llama struct {
 // the study measures that cost rather than hiding it behind a short deadline.
 func NewLlama(baseURL string) *Llama {
 	const to = 180 * time.Second
-	return &Llama{BaseURL: baseURL, Timeout: to, hc: &http.Client{Timeout: to}}
+	return &Llama{BaseURL: baseURL, Timeout: to, Policy: retry.DefaultPolicy(), hc: &http.Client{Timeout: to}}
 }
 
 type chatResp struct {
@@ -67,30 +74,53 @@ func (l *Llama) call(prompt string, schema map[string]any, out any) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, l.BaseURL+"/v1/chat/completions", bytes.NewReader(buf))
-	if err != nil {
-		return err
+	// Retry transient failures rather than recording them as model errors.
+	// llama-server answers /health OK while its slots are still initialising, so
+	// the first requests of a run can get 503 "no slot available" — a startup
+	// race, not a classification failure. Uses the canonical policy/classifier
+	// per the repo convention (don't hand-roll backoff loops).
+	return retry.DoClassify(context.Background(), l.Policy, isTransientHTTP, func() error {
+		req, err := http.NewRequest(http.MethodPost, l.BaseURL+"/v1/chat/completions", bytes.NewReader(buf))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := l.hc.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return statusErr(resp.StatusCode)
+		}
+		var cr chatResp
+		if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+			return err
+		}
+		if len(cr.Choices) == 0 {
+			return fmt.Errorf("llama-server returned no choices")
+		}
+		if err := json.Unmarshal([]byte(cr.Choices[0].Message.Content), out); err != nil {
+			return fmt.Errorf("content was not schema JSON: %w", err)
+		}
+		return nil
+	})
+}
+
+// statusErr carries an HTTP status so the retry classifier can see it.
+type statusErr int
+
+func (e statusErr) Error() string { return fmt.Sprintf("llama-server HTTP %d", int(e)) }
+
+// isTransientHTTP treats 408/429/5xx as retryable, matching retry.IsTransient's
+// contract, and delegates everything else to it. Unknown errors stay permanent.
+func isTransientHTTP(err error) bool {
+	var se statusErr
+	if errors.As(err, &se) {
+		c := int(se)
+		return c == http.StatusRequestTimeout || c == http.StatusTooManyRequests || c >= 500
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := l.hc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("llama-server HTTP %d", resp.StatusCode)
-	}
-	var cr chatResp
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return err
-	}
-	if len(cr.Choices) == 0 {
-		return fmt.Errorf("llama-server returned no choices")
-	}
-	if err := json.Unmarshal([]byte(cr.Choices[0].Message.Content), out); err != nil {
-		return fmt.Errorf("content was not schema JSON: %w", err)
-	}
-	return nil
+	return retry.IsTransient(err)
 }
 
 // validate confirms a label is in the facet's live vocabulary.

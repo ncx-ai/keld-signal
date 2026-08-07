@@ -2,6 +2,7 @@ package llmstudy
 
 import (
 	"encoding/json"
+	"github.com/ncx-ai/keld-signal/internal/retry"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -77,13 +78,21 @@ func TestClassifyRejectsOffVocabularyLabel(t *testing.T) {
 	}
 }
 
+// noRetry builds a client that fails fast, so failure-path tests do not sit
+// through the production backoff.
+func noRetry(url string) *Llama {
+	l := NewLlama(url)
+	l.Policy = retry.Policy{MaxAttempts: 1}
+	return l
+}
+
 func TestClassifySurvivesHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
-	got := NewLlama(srv.URL).Classify(mineFixture(t, 8)[1])
+	got := noRetry(srv.URL).Classify(mineFixture(t, 8)[1])
 	if got.Valid {
 		t.Fatal("HTTP 500 must not yield a valid answer")
 	}
@@ -174,7 +183,7 @@ func TestWaveTwoFailureKeepsWaveOneLabels(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got := NewLlama(srv.URL).Classify(mineFixture(t, 8)[1])
+	got := noRetry(srv.URL).Classify(mineFixture(t, 8)[1])
 	if got.Labels[FacetDomain] != "software" {
 		t.Errorf("wave-1 domain lost on wave-2 failure: %q", got.Labels[FacetDomain])
 	}
