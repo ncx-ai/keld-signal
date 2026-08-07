@@ -40,6 +40,54 @@ type AdjudicationSet struct {
 	// Provenance maps itemKey -> optionKey -> arm name(s), joined by "+" when
 	// several arms produced the same label. Keep this file closed while adjudicating.
 	Provenance map[string]map[string]string `json:"provenance"`
+	// Dropped records how many disagreements were sampled away per facet, so a
+	// bounded set never reads as full coverage.
+	Dropped map[string]int `json:"dropped,omitempty"`
+}
+
+// CapPerFacet returns a stratified, deterministic subsample with at most n items
+// per facet, recording what it dropped.
+//
+// Full disagreement sets are larger than a human will actually judge: 200 windows
+// against one arm produced 467 items, and adjudication quality collapses long
+// before someone finishes 467 judgements. A bounded per-facet sample keeps each
+// facet's win rate independently estimable — n=40 decided items puts a Wilson
+// bound clear of parity for a genuine effect — while the Dropped counts keep the
+// truncation visible rather than passing a partial sweep off as complete.
+func CapPerFacet(set AdjudicationSet, n int, seed int64) AdjudicationSet {
+	if n <= 0 {
+		return set
+	}
+	byFacet := map[string][]Item{}
+	for _, it := range set.Items {
+		byFacet[it.Facet] = append(byFacet[it.Facet], it)
+	}
+	facets := make([]string, 0, len(byFacet))
+	for f := range byFacet {
+		facets = append(facets, f)
+	}
+	sort.Strings(facets) // deterministic facet order
+
+	rng := rand.New(rand.NewSource(seed))
+	out := AdjudicationSet{
+		Provenance: map[string]map[string]string{},
+		Dropped:    map[string]int{},
+	}
+	for _, f := range facets {
+		items := byFacet[f]
+		rng.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
+		keep := items
+		if len(items) > n {
+			keep = items[:n]
+			out.Dropped[f] = len(items) - n
+		}
+		for _, it := range keep {
+			k := itemKey(it.ID, Facet(it.Facet))
+			out.Provenance[k] = set.Provenance[k]
+			out.Items = append(out.Items, it)
+		}
+	}
+	return out
 }
 
 // itemKey is the stable identity of one adjudication question.

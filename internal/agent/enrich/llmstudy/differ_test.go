@@ -2,6 +2,7 @@ package llmstudy
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -159,5 +160,65 @@ func TestArmsSharingALabelShareAnOption(t *testing.T) {
 	if !joined {
 		t.Errorf("provenance must record both arms on the shared option: %v",
 			got.Provenance[itemKey("p1", FacetDomain)])
+	}
+}
+
+func manyItems(facet string, n int) AdjudicationSet {
+	s := AdjudicationSet{Provenance: map[string]map[string]string{}}
+	for i := 0; i < n; i++ {
+		id := facet + "-" + strconv.Itoa(i)
+		s.Items = append(s.Items, Item{ID: id, Facet: facet,
+			Options: []Option{{Key: "a", Label: "x"}, {Key: "b", Label: "y"}}})
+		s.Provenance[itemKey(id, Facet(facet))] = map[string]string{"a": "arm", "b": "ctl"}
+	}
+	return s
+}
+
+func TestCapPerFacetBoundsEachFacetAndRecordsDrops(t *testing.T) {
+	s := manyItems("domain", 81)
+	s.Items = append(s.Items, manyItems("task_type", 115).Items...)
+	for k, v := range manyItems("task_type", 115).Provenance {
+		s.Provenance[k] = v
+	}
+
+	got := CapPerFacet(s, 40, 7)
+	counts := map[string]int{}
+	for _, it := range got.Items {
+		counts[it.Facet]++
+	}
+	if counts["domain"] != 40 || counts["task_type"] != 40 {
+		t.Fatalf("per-facet counts = %v, want 40 each", counts)
+	}
+	if got.Dropped["domain"] != 41 || got.Dropped["task_type"] != 75 {
+		t.Fatalf("Dropped = %v, want domain 41 / task_type 75", got.Dropped)
+	}
+	// Provenance must be carried for every surviving item, or scoring breaks.
+	for _, it := range got.Items {
+		if _, ok := got.Provenance[itemKey(it.ID, Facet(it.Facet))]; !ok {
+			t.Fatalf("provenance missing for kept item %s:%s", it.ID, it.Facet)
+		}
+	}
+}
+
+func TestCapPerFacetIsDeterministicAndDoesNotPadSmallFacets(t *testing.T) {
+	s := manyItems("domain", 5)
+	a, b := CapPerFacet(s, 40, 7), CapPerFacet(s, 40, 7)
+	if len(a.Items) != 5 {
+		t.Fatalf("a facet under the cap must be kept whole, got %d", len(a.Items))
+	}
+	if len(a.Dropped) != 0 {
+		t.Errorf("nothing was dropped, Dropped should be empty: %v", a.Dropped)
+	}
+	for i := range a.Items {
+		if a.Items[i].ID != b.Items[i].ID {
+			t.Fatal("same seed produced a different sample")
+		}
+	}
+}
+
+func TestCapPerFacetZeroMeansNoCap(t *testing.T) {
+	s := manyItems("domain", 81)
+	if got := CapPerFacet(s, 0, 7); len(got.Items) != 81 {
+		t.Fatalf("n<=0 must disable capping, got %d", len(got.Items))
 	}
 }

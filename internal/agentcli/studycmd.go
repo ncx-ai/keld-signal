@@ -308,7 +308,7 @@ func loadRuns(control string) (llmstudy.Run, []llmstudy.Run, error) {
 
 func newStudyAdjudicateCmd() *cobra.Command {
 	var control string
-	var seed int
+	var seed, maxPerFacet int
 	c := &cobra.Command{
 		Use:   "adjudicate",
 		Short: "Build the blinded adjudication set from arm disagreements.",
@@ -325,7 +325,9 @@ func newStudyAdjudicateCmd() *cobra.Command {
 				llmstudy.FacetDomain, llmstudy.FacetTaskType, llmstudy.FacetSubcategory,
 				llmstudy.FacetFunction, llmstudy.FacetActivity,
 			}
-			set := llmstudy.Disagreements(ws, ctl, arms, facets, int64(seed))
+			set := llmstudy.CapPerFacet(
+				llmstudy.Disagreements(ws, ctl, arms, facets, int64(seed)),
+				maxPerFacet, int64(seed))
 
 			ip := filepath.Join(studyDir(), "items.json")
 			pp := filepath.Join(studyDir(), "provenance.json")
@@ -344,9 +346,34 @@ func newStudyAdjudicateCmd() *cobra.Command {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
+			// Name the arms, don't just count them. loadRuns treats EVERY
+			// run-*.json as an arm, so a stale file from an earlier experiment
+			// silently enters the study as an extra arm — and if it is the same
+			// model under a different config it near-always agrees with its twin,
+			// distorting provenance and inflating agreement. Printing the roster
+			// makes that visible instead of silent.
+			names := make([]string, 0, len(arms))
+			for _, a := range arms {
+				names = append(names, fmt.Sprintf("%s(n=%d)", a.Arm, len(a.Answers)))
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "control: %s(n=%d)\narms:    %s\n",
+				ctl.Arm, len(ctl.Answers), strings.Join(names, ", "))
 			fmt.Fprintf(cmd.OutOrStdout(), "%d disagreements across %d arms\n", len(set.Items), len(arms))
 			for _, k := range keys {
 				fmt.Fprintf(cmd.OutOrStdout(), "  %-15s %d\n", k, byFacet[k])
+			}
+			// Never let a bounded set read as full coverage.
+			if len(set.Dropped) > 0 {
+				dk := make([]string, 0, len(set.Dropped))
+				for k := range set.Dropped {
+					dk = append(dk, k)
+				}
+				sort.Strings(dk)
+				fmt.Fprintf(cmd.OutOrStdout(), "SAMPLED to <=%d per facet; dropped:", maxPerFacet)
+				for _, k := range dk {
+					fmt.Fprintf(cmd.OutOrStdout(), " %s=%d", k, set.Dropped[k])
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "  (win rates estimate the full set; they do not cover it)")
 			}
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"\nadjudicate -> %s  (fill each item's \"choice\" with an option key, \"tie\", or \"both_wrong\")\n"+
@@ -356,6 +383,8 @@ func newStudyAdjudicateCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&control, "control", "gliner2", "control arm name")
 	c.Flags().IntVar(&seed, "seed", 7, "shuffle seed")
+	c.Flags().IntVar(&maxPerFacet, "max-per-facet", 40,
+		"cap adjudication items per facet (0 = no cap); keeps human effort bounded")
 	return c
 }
 
