@@ -220,6 +220,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newMetricsCmd())
 	root.AddCommand(newEnrichCmd())
 	root.AddCommand(newEvalCmd())
+	root.AddCommand(newStudyCmd())
 	root.AddCommand(&cobra.Command{
 		Use:   "status",
 		Short: "Show keld-agent service status.",

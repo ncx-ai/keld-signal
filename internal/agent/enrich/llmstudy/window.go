@@ -9,6 +9,7 @@ package llmstudy
 import (
 	"bufio"
 	"encoding/json"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -370,6 +371,24 @@ func trimToWindowCap(w *Window, cap int) {
 	for len(w.Turns) > 1 && len([]rune(Render(*w))) > cap {
 		w.Turns = w.Turns[1:]
 	}
+}
+
+// Sample deterministically picks up to n windows using a seeded shuffle. Windows
+// with no context turns are skipped: a single-turn window cannot show a context
+// effect, which is the thing being measured.
+func Sample(ws []Window, n int, seed int64) []Window {
+	eligible := make([]Window, 0, len(ws))
+	for _, w := range ws {
+		if len(w.Turns) > 1 {
+			eligible = append(eligible, w)
+		}
+	}
+	rng := rand.New(rand.NewSource(seed))
+	rng.Shuffle(len(eligible), func(i, j int) { eligible[i], eligible[j] = eligible[j], eligible[i] })
+	if n > 0 && n < len(eligible) {
+		eligible = eligible[:n]
+	}
+	return eligible
 }
 
 // Render formats the window for a prompt. Stable and deterministic.
