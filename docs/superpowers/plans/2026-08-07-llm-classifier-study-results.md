@@ -37,6 +37,29 @@ claim: that requires the blinded adjudication, which is the human's step.
 > **This is the same error three times: peaks read before the plateau.** The
 > plateau needs ~60 s / dozens of requests. Short probes are worthless for RSS, and
 > that is now the standing rule for this study.
+>
+> ### Resolved: `--cache-ram 512` is the deployable setting
+>
+> Measured on Qwen3-0.6B, CPU-only, **80 sustained windows per config**, RSS sampled
+> every 5 s throughout (so these numbers are past the plateau, unlike the table below):
+>
+> | 0.6B CPU-only | RSS | Peak | p50 | p95 | validity |
+> |---|---:|---:|---:|---:|---|
+> | `--cache-ram 8192` (default) | 9,157 MB | 9,197 MB | 9.0 s | — | 1.000 |
+> | `--cache-ram 0` | 1,007 MB | 1,018 MB | 19.9 s | 29.1 s | 1.000 |
+> | **`--cache-ram 512`** | **1,463 MB** | **1,520 MB** | **8.3 s** | **12.2 s** | 1.000 |
+> | *GLiNER2 (control)* | *2,894 MB* | *3,817 MB* | *6.8 s* | *17.8 s* | *1.000* |
+>
+> Both bounded configs are genuinely flat — `cache-ram 0` held 1,005 MB unchanged for
+> 7 minutes; `512` oscillated 1,439-1,510 MB. Neither drifts, so no recycle apparatus
+> is needed (contrast the sidecar, which needs one).
+>
+> **`--cache-ram 512` wins:** +456 MB over disabling the cache buys back nearly all
+> the speed, because our prompts share a long common prefix (the label menus). Versus
+> the shipped control it is **49% less RAM with a BETTER p95** (12.2 s vs 17.8 s) and
+> only a marginally worse p50. On cost, this is strictly better than what ships today
+> on every axis except p50, which is not on the critical path for a background
+> publisher.
 
 ## Headline: RAM is satisfiable; the 4B is not
 
@@ -131,7 +154,7 @@ produced a confidently wrong recommendation.
 
 ## Deployment envelope, if quality holds
 
-`--device none --ctx-size 2048 --parallel 1 --batch-size 256 --ubatch-size 64
+`--device none --ctx-size 2048 --parallel 1 --batch-size 256 --ubatch-size 64 --cache-ram 512
 --threads 2 --chat-template-kwargs '{"enable_thinking":false}'`
 
 Sizing note: `ctx 2048` is sound because the measured max window is 1,376 tokens
