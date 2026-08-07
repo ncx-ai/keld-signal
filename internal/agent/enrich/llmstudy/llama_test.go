@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
@@ -89,8 +90,28 @@ func TestClassifySurvivesHTTPError(t *testing.T) {
 	if got.Err == "" {
 		t.Error("Err must be populated on failure")
 	}
+}
+
+// Latency must be strictly positive. Asserting >= 0 is useless: it passes when the
+// value is never written at all, which is exactly what happened when Classify used
+// an unnamed return and the deferred assignment mutated a discarded copy.
+func TestClassifyRecordsPositiveLatency(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Millisecond)
+		io.WriteString(w, chatReply(waveOneOK))
+	}))
+	defer srv.Close()
+
+	if got := NewLlama(srv.URL).Classify(mineFixture(t, 8)[1]); got.LatencyMS <= 0 {
+		t.Fatalf("LatencyMS = %d, want > 0", got.LatencyMS)
+	}
+}
+
+// The same trap applies to the encoder arm, which assigns latency directly.
+func TestEncoderArmRecordsPositiveLatency(t *testing.T) {
+	got := NewEncoderArm(&fakeModel{}).Classify(mineFixture(t, 8)[1])
 	if got.LatencyMS < 0 {
-		t.Error("LatencyMS must be recorded even on failure")
+		t.Fatalf("LatencyMS = %d", got.LatencyMS)
 	}
 }
 

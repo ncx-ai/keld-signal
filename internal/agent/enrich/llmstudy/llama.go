@@ -104,8 +104,12 @@ func validate(f Facet, v string) error {
 }
 
 // Classify runs Wave 1 then, when the chosen function has subcategories, Wave 2.
-func (l *Llama) Classify(w Window) Answer {
-	a := Answer{Labels: map[Facet]string{}}
+//
+// The result is a NAMED return so the deferred latency assignment lands on the
+// value actually returned. With an unnamed result the defer would mutate a local
+// copy after the return value was set, and every latency would be reported as 0.
+func (l *Llama) Classify(w Window) (a Answer) {
+	a = Answer{Labels: map[Facet]string{}}
 	start := time.Now()
 	defer func() { a.LatencyMS = time.Since(start).Milliseconds() }()
 
