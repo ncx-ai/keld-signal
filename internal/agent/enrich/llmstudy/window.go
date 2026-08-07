@@ -109,6 +109,69 @@ type line struct {
 	UUID      string          `json:"uuid"`
 	SessionID string          `json:"sessionId"`
 	Message   json.RawMessage `json:"message"`
+
+	// Claude Code's own record classification. All three mark records the human
+	// did not type, and all three must be excluded:
+	//   isSidechain      — a sub-agent (Task tool) conversation. Measured at
+	//                      31,206 records against 71,164 main-thread ones on this
+	//                      machine, so including them would distort every window.
+	//   isMeta           — synthetic/bookkeeping records.
+	//   isCompactSummary — a context-compaction artifact.
+	IsSidechain      bool `json:"isSidechain"`
+	IsMeta           bool `json:"isMeta"`
+	IsCompactSummary bool `json:"isCompactSummary"`
+}
+
+// envelopeTags are the harness-injected wrappers that appear inside "user"
+// records but are not text the human typed. Enumerated from a scan of all 464
+// transcripts on a real machine (tags LEADING user content, by frequency):
+// task-notification 189, command-name 42, bash-stdout 34, bash-input 34,
+// local-command-stdout 5, plus system-reminder / local-command-caveat /
+// command-message / command-args / user-prompt-submit-hook seen elsewhere.
+//
+// task-notification nests task-id/summary/status/output-file/tool-use-id/usage/
+// result/note; stripping the outer block removes those with it.
+//
+// bash-input is stripped deliberately even though the human did type the command:
+// a shell command is not a conversational prompt, and it must never become a
+// classification target.
+var envelopeTags = []string{
+	"task-notification",
+	"local-command-caveat",
+	"local-command-stdout",
+	"command-name",
+	"command-message",
+	"command-args",
+	"system-reminder",
+	"user-prompt-submit-hook",
+	"bash-input",
+	"bash-stdout",
+	"bash-stderr",
+	"synthetic",
+}
+
+// syntheticBlock matches any complete envelope. RE2 has no backreferences, so the
+// pattern is built by alternating each tag pair explicitly.
+var syntheticBlock = regexp.MustCompile(`(?s)` + func() string {
+	alts := make([]string, len(envelopeTags))
+	for i, t := range envelopeTags {
+		alts[i] = `<` + t + `>.*?</` + t + `>`
+	}
+	return strings.Join(alts, "|")
+}())
+
+// danglingTag catches an UNCLOSED envelope — the paired match above cannot see
+// one — by discarding it and everything after it.
+var danglingTag = regexp.MustCompile(`(?s)</?(` + strings.Join(envelopeTags, "|") + `)>.*`)
+
+// stripSynthetic removes harness injections from a user record, keeping whatever
+// the human actually typed. A record that is *entirely* injection reduces to "" and
+// is dropped by the caller — but a real prompt with an appended <system-reminder>
+// keeps its prompt.
+func stripSynthetic(s string) string {
+	s = syntheticBlock.ReplaceAllString(s, "")
+	s = danglingTag.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
 }
 
 type msg struct {
@@ -145,11 +208,14 @@ func parseRecord(l line) []record {
 	// Content may be a bare string.
 	var s string
 	if json.Unmarshal(m.Content, &s) == nil {
+		if l.Type == "user" {
+			if s = stripSynthetic(s); s == "" {
+				return nil // entirely a harness injection
+			}
+			return []record{{role: RoleUser, text: s, id: id}}
+		}
 		if strings.TrimSpace(s) == "" {
 			return nil
-		}
-		if l.Type == "user" {
-			return []record{{role: RoleUser, text: s, id: id}}
 		}
 		return []record{{role: RoleAssistant, text: s}}
 	}
@@ -172,6 +238,9 @@ func parseRecord(l line) []record {
 	if p := strings.TrimSpace(prose.String()); p != "" {
 		r := record{role: RoleAssistant, text: p}
 		if l.Type == "user" {
+			if p = stripSynthetic(p); p == "" {
+				return out // entirely a harness injection
+			}
 			r = record{role: RoleUser, text: p, id: id}
 		}
 		// Prose precedes any tool calls in the same message.
@@ -198,6 +267,11 @@ func Mine(path string, o MineOpts) ([]Window, error) {
 			continue // tolerate malformed lines
 		}
 		if l.Type != "user" && l.Type != "assistant" {
+			continue
+		}
+		// Records the human did not type, and sub-agent conversations, are not
+		// part of the conversation being understood.
+		if l.IsSidechain || l.IsMeta || l.IsCompactSummary {
 			continue
 		}
 		if l.SessionID != "" {
@@ -244,14 +318,47 @@ func buildWindow(sessionID string, recs []record, i int, o MineOpts) Window {
 	return w
 }
 
-// appendTurn merges a turn into the previous one when both are assistant prose:
-// one assistant reply spans several transcript records.
+// appendTurn merges a turn into the previous one when both are assistant prose
+// (one assistant reply spans several transcript records), and collapses a run of
+// calls to the SAME tool into one line — measured on real transcripts, runs of
+// Bash/Read calls otherwise crowd real conversation out of the window budget.
 func appendTurn(turns []Turn, t Turn) []Turn {
-	if n := len(turns); n > 0 && t.Role == RoleAssistant && turns[n-1].Role == RoleAssistant {
-		turns[n-1].Text = strings.TrimSpace(turns[n-1].Text + " " + t.Text)
+	n := len(turns)
+	if n == 0 {
+		return append(turns, t)
+	}
+	prev := turns[n-1]
+	if t.Role == RoleAssistant && prev.Role == RoleAssistant {
+		turns[n-1].Text = strings.TrimSpace(prev.Text + " " + t.Text)
+		return turns
+	}
+	if t.Role == RoleTool && prev.Role == RoleTool && toolName(prev.Text) == toolName(t.Text) {
+		turns[n-1].Text = bumpCount(prev.Text)
 		return turns
 	}
 	return append(turns, t)
+}
+
+// toolName is the tool's name — the first space-separated field of a tool line.
+func toolName(s string) string {
+	if i := strings.IndexByte(s, ' '); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// countSuffix matches the run-length marker appended by bumpCount.
+var countSuffix = regexp.MustCompile(` \(x(\d+)\)$`)
+
+// bumpCount records one more occurrence on a collapsed tool line.
+func bumpCount(s string) string {
+	if m := countSuffix.FindStringSubmatch(s); m != nil {
+		n, err := strconv.Atoi(m[1])
+		if err == nil {
+			return countSuffix.ReplaceAllString(s, "") + " (x" + strconv.Itoa(n+1) + ")"
+		}
+	}
+	return s + " (x2)"
 }
 
 // trimToWindowCap drops OLDEST context turns until the rendered window fits. The
