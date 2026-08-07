@@ -47,7 +47,94 @@ func newStudyCmd() *cobra.Command {
 		Use:   "study",
 		Short: "Offline prompted-LLM vs GLiNER2 classification study (not a product path).",
 	}
-	c.AddCommand(newStudyMineCmd(), newStudyRunCmd(), newStudyAdjudicateCmd(), newStudyReportCmd())
+	c.AddCommand(newStudyMineCmd(), newStudyRunCmd(), newStudyAdjudicateCmd(),
+		newStudyReportCmd(), newStudyPreviewCmd())
+	return c
+}
+
+// newStudyPreviewCmd prints an arm's label distribution and a few worked examples,
+// so a run can be inspected without reading raw JSON.
+func newStudyPreviewCmd() *cobra.Command {
+	var arm string
+	var n int
+	c := &cobra.Command{
+		Use:   "preview",
+		Short: "Show one arm's label distribution and sample predictions.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var ws []llmstudy.Window
+			if err := studyReadJSON(filepath.Join(studyDir(), "windows.json"), &ws); err != nil {
+				return err
+			}
+			var r llmstudy.Run
+			if err := studyReadJSON(filepath.Join(studyDir(), "run-"+arm+".json"), &r); err != nil {
+				return fmt.Errorf("read run for arm %q: %w", arm, err)
+			}
+			out := cmd.OutOrStdout()
+			p50, p95, max := llmstudy.Latency(r)
+			fmt.Fprintf(out, "arm=%s n=%d validity=%.3f partial=%.3f p50=%dms p95=%dms max=%dms\n\n",
+				r.Arm, len(r.Answers), llmstudy.ValidityRate(r), llmstudy.PartialRate(r), p50, p95, max)
+
+			facets := []llmstudy.Facet{
+				llmstudy.FacetDomain, llmstudy.FacetTaskType, llmstudy.FacetFunction,
+				llmstudy.FacetActivity, llmstudy.FacetPersonal, llmstudy.FacetSubcategory,
+			}
+			for _, f := range facets {
+				counts := map[string]int{}
+				for _, a := range r.Answers {
+					if v := a.Labels[f]; v != "" {
+						counts[v]++
+					}
+				}
+				keys := make([]string, 0, len(counts))
+				for k := range counts {
+					keys = append(keys, k)
+				}
+				sort.Slice(keys, func(i, j int) bool {
+					if counts[keys[i]] != counts[keys[j]] {
+						return counts[keys[i]] > counts[keys[j]]
+					}
+					return keys[i] < keys[j]
+				})
+				var parts []string
+				for i, k := range keys {
+					if i == 6 {
+						break
+					}
+					parts = append(parts, fmt.Sprintf("%s=%d", k, counts[k]))
+				}
+				fmt.Fprintf(out, "%-15s %2d distinct | %s\n", f, len(counts), strings.Join(parts, ", "))
+			}
+
+			fmt.Fprintf(out, "\n%s\nSAMPLE PREDICTIONS\n%s\n", strings.Repeat("=", 72), strings.Repeat("=", 72))
+			for i := 0; i < len(r.Answers) && i < n; i++ {
+				a := r.Answers[i]
+				target := "?"
+				turns := 0
+				if i < len(ws) {
+					target = strings.Join(strings.Fields(ws[i].Target), " ")
+					if len(target) > 140 {
+						target = target[:140] + "…"
+					}
+					turns = len(ws[i].Turns)
+				}
+				fmt.Fprintf(out, "\n[%d] %s\n", i, target)
+				if !a.Valid {
+					fmt.Fprintf(out, "    INVALID: %s\n", a.Err)
+					continue
+				}
+				fmt.Fprintf(out, "    domain=%s task_type=%s function=%s subcat=%s\n",
+					a.Labels[llmstudy.FacetDomain], a.Labels[llmstudy.FacetTaskType],
+					a.Labels[llmstudy.FacetFunction], a.Labels[llmstudy.FacetSubcategory])
+				fmt.Fprintf(out, "    activity=%s personal=%s latency=%dms turns=%d\n",
+					a.Labels[llmstudy.FacetActivity], a.Labels[llmstudy.FacetPersonal],
+					a.LatencyMS, turns)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&arm, "arm", "", "arm name to preview")
+	c.Flags().IntVar(&n, "n", 8, "sample predictions to print")
+	_ = c.MarkFlagRequired("arm")
 	return c
 }
 

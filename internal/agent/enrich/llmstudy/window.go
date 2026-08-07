@@ -32,12 +32,19 @@ type Turn struct {
 	Text string `json:"text"`
 }
 
-// Window is the classification input: K context turns then the target prompt.
+// Window is the classification input. It carries two views of the transcript,
+// because the study asks two different questions:
+//
+//	Digest — broad coverage of the whole session, heavily compressed. Answers
+//	         "what is this session about".
+//	Turns  — the last K turns in detail, target LAST. Answers "what is being
+//	         discussed now".
 type Window struct {
 	SessionID string   `json:"session_id"`
 	PromptID  string   `json:"prompt_id"`
 	Target    string   `json:"target"`
 	Turns     []Turn   `json:"turns"`  // oldest-first; target is LAST
+	Digest    []Turn   `json:"digest"` // coarse session view, oldest-first
 	Recent    []string `json:"recent"` // prior user prompts, newest-first (production Meta)
 }
 
@@ -314,9 +321,62 @@ func buildWindow(sessionID string, recs []record, i int, o MineOpts) Window {
 		}
 	}
 
-	w := Window{SessionID: sessionID, PromptID: recs[i].id, Target: target, Turns: turns, Recent: recent}
+	w := Window{
+		SessionID: sessionID, PromptID: recs[i].id, Target: target,
+		Turns: turns, Digest: SessionDigest(recs, i), Recent: recent,
+	}
 	trimToWindowCap(&w, o.WindowChars)
 	return w
+}
+
+// digestTurns bounds the coarse session view.
+const digestTurns = 6
+
+// digestClip is the per-turn budget in the digest — much tighter than the recent
+// window, because the digest exists for gist, not detail.
+const digestClip = 240
+
+// SessionDigest builds the coarse session view for the records before index upto:
+// the opening user prompt (which usually states the session's goal) plus turns
+// sampled evenly across the rest. Tool lines are excluded — at session scale they
+// are noise, and the digest's budget is better spent on prose.
+func SessionDigest(recs []record, upto int) []Turn {
+	if upto <= 0 {
+		return nil
+	}
+	var out []Turn
+	for i := 0; i < upto; i++ {
+		if recs[i].role == RoleUser {
+			out = append(out, Turn{Role: RoleUser, Text: clip(elideCode(recs[i].text), digestClip)})
+			break
+		}
+	}
+	if upto == 1 {
+		return out
+	}
+	step := upto / digestTurns
+	if step < 1 {
+		step = 1
+	}
+	for i := step; i < upto && len(out) < digestTurns; i += step {
+		if recs[i].role == RoleTool {
+			continue
+		}
+		out = appendTurn(out, Turn{Role: recs[i].role, Text: clip(elideCode(recs[i].text), digestClip)})
+	}
+	return out
+}
+
+// renderDigest formats the coarse session view, same shape as Render.
+func renderDigest(w Window) string {
+	var b strings.Builder
+	for _, t := range w.Digest {
+		b.WriteString(string(t.Role))
+		b.WriteString(": ")
+		b.WriteString(t.Text)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // appendTurn merges a turn into the previous one when both are assistant prose
