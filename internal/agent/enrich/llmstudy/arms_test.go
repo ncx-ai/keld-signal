@@ -90,3 +90,28 @@ func TestEncoderArmRecordsLatency(t *testing.T) {
 		t.Error("LatencyMS not recorded")
 	}
 }
+
+// WithMaxLen must pass a non-sidecar Model through untouched — the daemon's
+// bindMaxLen has the same contract, so a test fake keeps working.
+func TestWithMaxLenPassesThroughNonSidecarModel(t *testing.T) {
+	fm := &fakeModel{}
+	arm := NewEncoderArm(fm)
+	if got := arm.WithMaxLen(768); got.Model != enrich.Model(fm) {
+		t.Fatal("a non-sidecar Model must pass through unchanged")
+	}
+	if got := arm.WithMaxLen(0); got != arm {
+		t.Fatal("n <= 0 must return the arm unchanged")
+	}
+}
+
+// A capped arm must still classify correctly — the cap binds the backend, it does
+// not change what the arm does.
+func TestCappedArmStillClassifies(t *testing.T) {
+	got := NewEncoderArm(&fakeModel{}).WithMaxLen(768).Classify(mineFixture(t, 8)[1])
+	if !got.Valid {
+		t.Fatalf("Valid=false, Err=%q", got.Err)
+	}
+	if got.Labels[FacetDomain] == "" {
+		t.Error("capped arm produced no domain label")
+	}
+}

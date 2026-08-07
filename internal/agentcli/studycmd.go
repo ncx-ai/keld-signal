@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/lenstat"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/llmstudy"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/paths"
@@ -219,7 +220,15 @@ func newStudyRunCmd() *cobra.Command {
 			case "llm":
 				cls = llmstudy.NewLlama(backend).Classify
 			case "encoder":
-				cls = llmstudy.NewEncoderArm(sidecar.New(backend, 180*time.Second)).Classify
+				// Bind the SAME adaptive token cap the daemon binds
+				// (daemon.go:246). Without it the control is not running as
+				// shipped, and gliner2 applies no truncation at all — which
+				// drove the sidecar worker to 45 mid-job hard kills on a first
+				// attempt, turning the control's answers into failures.
+				cap := lenstat.FromEnv(paths.PromptLengthsPath()).Cap()
+				fmt.Fprintf(cmd.OutOrStdout(), "encoder arm: max_len=%d (production lenstat cap)\n", cap)
+				cls = llmstudy.NewEncoderArm(sidecar.New(backend, 180*time.Second)).
+					WithMaxLen(cap).Classify
 			default:
 				return fmt.Errorf("--kind must be llm or encoder, got %q", kind)
 			}
