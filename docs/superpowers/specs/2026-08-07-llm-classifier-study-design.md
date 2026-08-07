@@ -38,10 +38,95 @@ Two mechanisms are suspected, and they compound:
 A prompted generative model addresses both: it reads rather than matches, and it
 can be given the conversation.
 
+## The goal is two-tier understanding
+
+Stated by the project owner on 2026-08-07, and it shapes both the window and the
+output:
+
+> understand what the **session** is about, and then, at a finer grain closer to
+> the more recent chat messages, what is **being discussed** within that context.
+
+and, restating the system's purpose:
+
+> The point of our system is to understand the conversation, what it's about, what
+> the user is trying to do, and what they are talking about.
+
+**This means the enum facets are a proxy for the goal, not the goal.** Three things
+are wanted — subject ("what it's about"), intent ("what the user is trying to do"),
+and topic ("what they are talking about") — and a 9-entry `domain` vocabulary
+cannot express the third at any useful fidelity. The study is therefore designed to
+measure the proxy *and* to test a representation that serves the actual goal.
+
+So the target output has **two tiers**, not one:
+
+- **Session tier** — what this session is about: subject matter, intent, the work
+  being done. Coarse, stable across the session, changes slowly.
+- **Prompt tier** — what the latest exchange is doing *within* that frame. Fine,
+  volatile, changes every turn.
+
+This is the capability GLiNER2 structurally cannot provide: it classifies a text,
+it has no notion of a session. Which means the two tiers are evaluated
+**differently**, and conflating them would make the study meaningless:
+
+| Tier | Control exists? | How it is evaluated |
+|---|---|---|
+| Prompt | Yes — production GLiNER2 | head-to-head, blinded disagreement adjudication |
+| Session | **No** | new capability: human quality review, no win/loss |
+
+**A consequence that constrains the design.** A free-text "what is this session
+about" is exactly the unmaskable prose ruled out under Non-goals — it can quote or
+paraphrase the prompt and no deterministic gate can prove otherwise. Therefore:
+
+- The **publishable** session signal must be **enum-shaped**, reusing the existing
+  vocabularies at session scope (session `domain`, session `function_guess`, and a
+  session `activity_type`), so masking stays structural and Atlas keeps aggregating.
+- The study *also* collects a short free-text session summary as a **local-only
+  diagnostic**, never published and never sent anywhere, purely to judge whether
+  the model genuinely comprehends the session. It is a measurement instrument, not
+  a proposed output. Any future attempt to publish it needs its own privacy design.
+
+### Topic terms: bounded open vocabulary, deterministically gated
+
+To serve "what they are talking about" at a fidelity no enum can reach, the model
+also emits **short topic terms** — a handful of 1–4 word noun phrases naming what
+the conversation is actually about (`retry logic`, `settings polling`,
+`notarization queue`).
+
+These are **verified, not trusted.** Each emitted term must be found in the source
+transcript by literal substring match (case-insensitive); **any term that cannot be
+located is dropped.** So the published set can only ever contain text that
+demonstrably occurred in the conversation — the same deterministic gate proposed for
+`sensitivity` spans, and the same guarantee `enrich.Mask` relies on. A hallucinated
+or paraphrased term fails the check and never reaches an output.
+
+This is a **new capability with no control**, evaluated on: verification pass rate
+(what fraction of emitted terms were real), and human quality review of whether the
+surviving terms actually name the conversation's subject. It is measured here, not
+shipped here — publishing topic terms would need a privacy review of its own, since
+a verified substring is still transcript-derived text. Note the existing precedent
+and its posture: `publish.Build` already carries `domain_entities` surface text
+behind `includeEntityText`, **gated off by default**.
+
+### Two-part window
+
+The two tiers want different views of the transcript, so the window has two parts:
+
+- **Session digest** — broad coverage of the whole session, aggressively
+  compressed: the opening user prompt (which usually states the goal) plus
+  compressed later turns sampled across the session.
+- **Recent window** — the last K turns in detail, target prompt last. This is the
+  fine-grain view.
+
+Both are assembled from the same parsed transcript in one pass, and both are
+rendered into the single prompt so one inference produces both tiers.
+
 ## Scope
 
-**In scope.** Round 1 scores `domain`, `task_type`, `subcategory` (the weak
-facets), with `function_guess` and `activity_type` as secondary readouts.
+**In scope.** Round 1 scores, at the **prompt tier**, `domain`, `task_type`,
+`subcategory` (the weak facets), with `function_guess` and `activity_type` as
+secondary readouts. At the **session tier** it produces session `domain`,
+`function_guess`, `activity_type` plus the local-only diagnostic summary,
+reviewed for quality rather than scored against a control.
 
 **Non-goals — explicitly excluded from this study:**
 
