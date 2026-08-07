@@ -61,26 +61,35 @@ claim: that requires the blinded adjudication, which is the human's step.
 > on every axis except p50, which is not on the critical path for a background
 > publisher.
 
-## Headline: RAM is satisfiable; the 4B is not
+## Superseded first pass (RAM figures INVALID — retained for the record)
 
-All rows CPU-only (`--device none`), `validity = 1.000`, `ctx 2048`, `parallel 1`.
+All rows CPU-only (`--device none`), `validity = 1.000`, `ctx 2048`, `parallel 1`,
+**`--cache-ram` left at its 8192 MiB default and RSS read after only 6 windows**.
+The latency column is sound; **every RAM figure here is void** — see the correction
+above for measured, plateaued numbers.
 
-| Model | Config | Peak RSS | p50/window | vs GLiNER2 RAM |
-|---|---|---:|---:|---|
-| Qwen3-4B-Instruct-2507 | b256/ub64, t8 | 5,500 MB | 46.7 s | **1.9x worse** |
-| Qwen3-1.7B (no-think) | b256/ub64, t8 | 2,864 MB | 14.6 s | parity (-30 MB) |
-| Qwen3-1.7B (no-think) | b256/ub64, t2 | 2,862 MB | 35.0 s | parity |
-| **Qwen3-0.6B** | b256/ub64, t8 | **1,757 MB** | 9.0 s | **39% less** |
-| **Qwen3-0.6B** | b128/ub32, t4 | **1,752 MB** | 14.9 s | **39% less** |
-| *GLiNER2 large-v1 (control)* | *production* | *2,894 MB* | *6.8 s* | — |
+| Model | Config | ~~Peak RSS~~ (invalid) | p50/window |
+|---|---|---:|---:|
+| Qwen3-4B-Instruct-2507 | b256/ub64, t8 | ~~5,500 MB~~ | 46.7 s |
+| Qwen3-1.7B (no-think) | b256/ub64, t8 | ~~2,864 MB~~ | 14.6 s |
+| Qwen3-1.7B (no-think) | b256/ub64, t2 | ~~2,862 MB~~ | 35.0 s |
+| Qwen3-0.6B | b256/ub64, t8 | ~~1,757 MB~~ | 9.0 s |
+| Qwen3-0.6B | b128/ub32, t4 | ~~1,752 MB~~ | 14.9 s |
 
-GLiNER2 reference, measured live: worker 2,861 MB + parent 32 MB = **2,894 MB**,
-`peak_rss_mb` 3,817 MB, `model_cost_mb` 2,731 MB.
+GLiNER2 reference, measured live and valid: worker 2,861 MB + parent 32 MB =
+**2,894 MB**, `peak_rss_mb` 3,817 MB, `model_cost_mb` 2,731 MB.
 
-**`--batch-size` is the dominant memory knob, not model size.** It took the 4B
-from 8,428 MB to 5,500 MB and is what brought the small models under budget.
-Thread count moves RSS by ~5 MB while changing speed 2-4x, so threads are a pure
-CPU-citizenship dial once wall-clock is not on the critical path.
+**`--cache-ram` is the dominant memory knob — not model size, and not
+`--batch-size`.** An earlier draft credited `--batch-size`, on the strength of the
+4B appearing to drop from 8,428 to 5,500 MB; both readings were pre-plateau and the
+apparent effect was an artifact. With `--cache-ram` bounded, the 0.6B sits at
+1,463 MB. Thread count moves RSS by ~5 MB while changing speed 2-4x, so threads
+remain a pure CPU-citizenship dial.
+
+⚠️ **The 4B and 1.7B RAM figures have NOT been re-measured with `--cache-ram`
+bounded.** Both are probably far below the struck-through values. The 4B was
+rejected on the invalid numbers, so that rejection is **not currently supported by
+evidence** — it should be re-tested if a larger model ever becomes interesting.
 
 ## Latency is not the constraint; throughput comfortably fits
 
@@ -138,10 +147,10 @@ produced a confidently wrong recommendation.
 
 ## Candidate assessment
 
-- **Qwen3-4B — rejected on RAM.** 5,500 MB CPU-only even tuned, ~1.9x the control,
-  against 4-8 GB of free headroom on a 16 GB laptop.
-- **Qwen3-1.7B — viable at parity.** 2,864 MB, no footprint win but no regression.
-- **Qwen3-0.6B — viable and *reduces* footprint.** 1,757 MB, 39% below the control.
+- **Qwen3-4B — rejection NOT currently evidenced.** Its 5,500 MB figure was pre-plateau and measured with --cache-ram unbounded. Re-test before relying on this.
+
+- **Qwen3-1.7B — RAM not yet re-measured** with --cache-ram bounded; likely well under the struck-through 2,864 MB.
+- **Qwen3-0.6B — viable and reduces footprint. 1,463 MB with --cache-ram 512, 49% below the control, flat under sustained load.**
 - **BitNet b1.58-2B-4T — deferred, conditionally interesting.** Its 0.4 GB figure is
   *non-embedding weights*, and our data shows runtime buffers dominate (1.03 GB of
   1.7B weights → 2,864 MB), so it would likely land near the 0.6B rather than at
