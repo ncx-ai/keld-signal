@@ -18,6 +18,26 @@ claim: that requires the blinded adjudication, which is the human's step.
 - Window size, measured: **p50 523, p95 1,000, max 1,376 word tokens**
   (chars p50 1,883 / p95 3,603 / max 4,957).
 
+> ⚠️ **CORRECTION 2026-08-07 (supersedes the RAM column below).** Every peak-RSS
+> figure in the next table came from a **6-window probe** and is invalid. Measured
+> over a sustained run, **Qwen3-0.6B — which probed at 1,757 MB — reached 9,157 MB**,
+> and the 4B reached 8,428 MB. RSS growth is **not model-size dependent**: it tracks
+> **request count** and converges near ~9 GB for every model.
+>
+> **Cause, identified:** `llama-server --cache-ram` defaults to **8192 MiB**. It is a
+> prompt-prefix cache that fills as distinct prompts arrive and plateaus at its
+> budget, so total RSS ≈ weights + ~8 GB of cache regardless of model.
+>
+> Our prompts share a large common prefix (the label menus), so the cache was doing
+> real work: capping it to 0 costs ~2.5x speed (9.0 -> 22.4 s/window on 0.6B).
+> Acceptable, since latency is not on the critical path — but the RAM figures must be
+> re-measured with `--cache-ram` bounded before any of them are trusted. A sweep of
+> `--cache-ram 0` and `512` over sustained 80-window runs is in progress.
+>
+> **This is the same error three times: peaks read before the plateau.** The
+> plateau needs ~60 s / dozens of requests. Short probes are worthless for RSS, and
+> that is now the standing rule for this study.
+
 ## Headline: RAM is satisfiable; the 4B is not
 
 All rows CPU-only (`--device none`), `validity = 1.000`, `ctx 2048`, `parallel 1`.
