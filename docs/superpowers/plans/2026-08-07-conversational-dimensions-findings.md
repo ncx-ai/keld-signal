@@ -235,3 +235,66 @@ model, or at minimum a far better feature than prefix matching.
   could still work; this rules out these features as single predictors, not all
   feature engineering.
 - One engineer's corpus.
+
+## Result 4: semantic judgement — effort is predictable, failure is not
+
+Per-turn `Judgement` (`capability.go`): `directive`, `specificity`, `scope`, `novelty`,
+`difficulty`, schema-constrained. Deliberately phrased about the REQUEST, with a test
+asserting no task-taxonomy vocabulary leaks into the prompt.
+
+Stratified design: `corrected` fires on 6.9% of turns, so a random sample yields too
+few positives. Took 60 corrected + 60 clean turns and compared judgement
+distributions — separation is measurable that way; accuracy on a distorted base rate
+would not be.
+
+### The 0.6B mode-collapses; the 4B does not
+
+Share of turns taking each value (both arms, all 120 turns):
+
+| field | Qwen3-0.6B | Qwen3-4B |
+|---|---|---|
+| `difficulty` (trivial/moderate/hard) | 0 / **100** / 0 | 28 / 70 / 2 |
+| `specificity` (under/adequate/precise) | 77 / 15 / 8 | 7 / 62 / 32 |
+| `scope` (single/multi/open) | **100** / 0 / 0 | 77 / 22 / 2 |
+| `novelty` (cont/ext/new) | 7 / 92 / 2 | 23 / 63 / 13 |
+
+100% on one value is mode collapse, not measurement. The 0.6B cannot make graded
+per-turn judgements; the 4B uses the range.
+
+### Failure is not predictable (4B)
+
+Corrected vs clean deltas: `difficulty` +0/−2/+2, `specificity` −3/+2/+2, `scope`
++5/+3/−8, `novelty` −2/+2/+0. All inside noise. Only `directive` separates, at
+**+12 pts** (80% corrected vs 68% clean), and weakly.
+
+### Effort IS predictable (4B)
+
+Observed tool calls, grouped by the model's PRE-HOC difficulty judgement:
+
+| judged difficulty | n | median tool_calls | mean |
+|---|---:|---:|---:|
+| `trivial` | 34 | **2** | 8.6 |
+| `moderate` | 85 | **7** | 14.5 |
+| `hard` | 1 | 15 | 15.0 |
+
+Monotone, with a **3.5x median separation** between trivial and moderate. Because
+`difficulty` shows no correlation with `corrected`, the 50/50 stratification is
+unlikely to have induced this — the relationship is probably genuine.
+
+### Consequences
+
+1. **Route on predicted effort, not predicted failure.** Effort separates; failure
+   does not. Effort is also the more useful routing target.
+2. **Capability estimation and session classification have DIFFERENT model
+   requirements.** The 0.6B matches the 4B at 1.00/0.99 on `domain`/`function` but
+   collapses entirely here. "The cheap model is enough" is true per-dimension, not
+   globally. Options: pay for a larger model; run judgement only on directive turns;
+   or run it only when a routing decision is actually pending.
+3. **The 3-tier difficulty scale is effectively 2 tiers** — `hard` drew n=1. Either
+   recalibrate the vocabulary or accept that this corpus lacks hard turns.
+
+### Not established
+
+Descriptive correlation on 120 turns, **not a validated predictor**: no held-out
+split, and n = 34/85/1 is thin. The shipping gate stands — beat the 93.1% base rate
+on held-out turns before any router goes live.
