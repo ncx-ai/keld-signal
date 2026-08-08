@@ -141,3 +141,97 @@ window would produce a feature with no variance.
   not that the taxonomy is *useful*. Only adjudication speaks to correctness.
 - `Focus` alpha = 0.3 was not tuned. Half-life ~2 observations; a different alpha
   would change the argmax percentages, though not the cosine ordering.
+
+---
+
+# Part 2: per-turn capability estimation
+
+Added 2026-08-07. Measured over **1,357 user turns** across 464 transcripts.
+
+## Why this one is on firmer ground than the taxonomy facets
+
+"How much intelligence does this turn need" looks like another classification
+problem needing a vocabulary — and the vocabulary-shaped facets above turned out not
+to be reliably measurable at all. But effort is not a judgement call: **it is
+recorded**. Every user turn is followed by an observable amount of work, and by a
+human reaction that reveals whether that work landed.
+
+So this is a **supervised problem with free labels**, validated by held-out
+prediction rather than by cross-model agreement. That is a fundamentally better
+epistemic position: a wrong answer here is detectable without human adjudication.
+
+`Outcome` (`outcome.go`) reads forward from each user turn to the next and records
+`assistant_turns`, `tool_calls`, `code_lines`, `corrected` (the human's next message
+pushes back) and `terminal`. Counts and one boolean; no text retained.
+
+## Result 1: the labels are strong
+
+| outcome | p50 | p90 | p99 | max |
+|---|---:|---:|---:|---:|
+| `assistant_turns` | 4 | 24 | 76 | 155 |
+| `tool_calls` | 5 | 38 | 129 | 240 |
+| `code_lines` | 0 | 1 | 11 | 23 |
+
+Effort per turn varies by 1-2 orders of magnitude — there is a great deal to predict.
+Base rates: **`corrected` 6.9%** (94/1,357), `terminal` 3.8%.
+
+## Result 2: the proposed pre-turn features do NOT predict it
+
+Each pre-turn feature split at its median, outcomes compared across the split:
+
+| pre-turn feature | low: corrected | high: corrected | low: tools/turn | high: tools/turn |
+|---|---:|---:|---:|---:|
+| `target_chars` | 6.2% | 7.7% | 12.9 | 15.0 |
+| session `tool_calls` | 6.8% | 7.1% | 13.4 | 15.0 |
+| prior `corrections` | 6.8% | 8.4% | 14.1 | 12.8 |
+| session `assistant_chars` | 8.5% | **5.3%** | 13.1 | 14.8 |
+
+Every split is inside noise, and `assistant_chars` runs the wrong way. **No
+structural pre-turn feature separates hard turns from easy ones.**
+
+With a 6.9% base rate, "always predict success" scores 93.1%. That is the bar any
+predictor must clear, and none of these come close.
+
+### The error this corrects
+
+Part 1 reported that structural signals span 2+ orders of magnitude at session scope
+and concluded they were therefore a good routing substrate. **That inference was
+invalid.** Spread and predictive power are different properties, and only spread had
+been measured. A feature can vary enormously and carry no information about the
+outcome — which is exactly what these do.
+
+**Recommendation withdrawn:** do not build per-turn routing on structural signals.
+They remain useful for *describing* a session's shape; they do not *predict* per-turn
+difficulty.
+
+## Result 3: the deterministic directive detector is too narrow
+
+`hasActionMarker` — imperative verb openings plus explicit go-aheads — fires on only
+**12.9%** of user turns. Real prompts in this corpus look like "the CLI CTA that is",
+"wire the sidecar into the mirror too", "now do the same for publish": directive in
+force, unrecognisable to a lexicon. Detecting whether a turn asks for work needs a
+model, or at minimum a far better feature than prefix matching.
+
+## Revised plan
+
+1. **Ship outcome harvesting now.** Deterministic, counts-only, and it accumulates a
+   labeled dataset from real usage *before* anyone knows which features work. That
+   dataset is the asset; the features are replaceable.
+2. **Test semantic features against those labels.** Have the model judge per-turn
+   properties plausibly linked to difficulty — is it a directive, how underspecified
+   is it, how wide is its scope — then check whether they beat 93.1%. Untested, and
+   given `task_type`'s failure the prior should be low, but it is now *falsifiable*.
+3. **Gate any router on beating base rate** on held-out turns. Not on plausibility.
+
+## Caveats
+
+- `corrected` has only 94 positives: enough to detect a strong effect, thin for
+  training, and it undercounts (a user often abandons rather than pushes back).
+- Effort reflects the model that actually did the work (Claude) and this user's
+  style, so labels are **model-specific** and would need recalibration per target
+  model. For model *recommendation* that is close to the quantity of interest, but it
+  is not intrinsic difficulty.
+- Median splits detect monotone effects only. A genuinely interacting feature set
+  could still work; this rules out these features as single predictors, not all
+  feature engineering.
+- One engineer's corpus.

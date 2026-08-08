@@ -257,11 +257,19 @@ func parseRecord(l line) []record {
 	return out
 }
 
-// Mine reads a transcript and returns one Window per user prompt, oldest-first.
-func Mine(path string, o MineOpts) ([]Window, error) {
+// records parses a transcript into the ordered record stream both Mine and Outcomes
+// read. Shared so the two cannot drift apart on which records they consider part of
+// the conversation — they must agree, or an Outcome would not align with its Window.
+func records(path string, o MineOpts) ([]record, error) {
+	recs, _, err := recordsAndSession(path, o)
+	return recs, err
+}
+
+// recordsAndSession is records plus the session id recovered from the transcript.
+func recordsAndSession(path string, o MineOpts) ([]record, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer f.Close()
 
@@ -288,9 +296,17 @@ func Mine(path string, o MineOpts) ([]Window, error) {
 		recs = append(recs, parseRecord(l)...)
 	}
 	if err := sc.Err(); err != nil {
+		return nil, "", err
+	}
+	return recs, sessionID, nil
+}
+
+// Mine reads a transcript and returns one Window per user prompt, oldest-first.
+func Mine(path string, o MineOpts) ([]Window, error) {
+	recs, sessionID, err := recordsAndSession(path, o)
+	if err != nil {
 		return nil, err
 	}
-
 	var out []Window
 	for i, r := range recs {
 		if r.role != RoleUser {
