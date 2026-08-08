@@ -166,9 +166,28 @@ produced a confidently wrong recommendation.
 `--device none --ctx-size 2048 --parallel 1 --batch-size 256 --ubatch-size 64 --cache-ram 512
 --threads 2 --chat-template-kwargs '{"enable_thinking":false}'`
 
-Sizing note: `ctx 2048` is sound because the measured max window is 1,376 tokens
-plus ~600 of label-menu scaffolding. It is **not** slack to spend — the
-agentic-scale payloads in `2026-07-24-agentic-scale-input-bounding.md` would blow it.
+⚠️ **`ctx 2048` was WRONG and caused silent data loss.** An earlier draft argued it
+was sound because "the max window is 1,376 tokens plus ~600 of label-menu
+scaffolding" — that underestimated the scaffolding. A real 200-window run rejected
+**3 windows (1.5%) with HTTP 400**: `request (2598 tokens) exceeds the available
+context size (2048 tokens)`. The failures were the **2nd, 3rd and 14th largest**
+windows, so the loss is systematically biased toward the longest, most
+context-rich conversations — exactly the ones the multi-turn window exists to
+capture.
+
+Sized on measurement instead of estimate: accepted prompts ran **p50 1,024 / p95
+1,536 / max 1,979** tokens, with rejections at **2,049 / 2,098 / 2,598**. `ctx 4096`
+leaves ~58% headroom over the largest observed request.
+
+`ctx 4096` is **not** slack to spend — the agentic-scale payloads in
+`2026-07-24-agentic-scale-input-bounding.md` would blow it regardless, and a 400
+there would be the same silent loss.
+
+**Lesson generalised:** a context cap must be derived from observed *request* sizes
+(window + prompt scaffolding + chat template), never from window size alone. And an
+HTTP 400 is correctly non-retryable, so it fails quietly in the validity rate rather
+than announcing itself — `validity < 1.000` must always be explained, never
+tolerated.
 
 ## Not yet answered
 
