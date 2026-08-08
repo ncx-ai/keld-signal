@@ -309,6 +309,7 @@ func loadRuns(control string) (llmstudy.Run, []llmstudy.Run, error) {
 func newStudyAdjudicateCmd() *cobra.Command {
 	var control string
 	var seed, maxPerFacet int
+	var burnedIDs []string
 	c := &cobra.Command{
 		Use:   "adjudicate",
 		Short: "Build the blinded adjudication set from arm disagreements.",
@@ -325,8 +326,12 @@ func newStudyAdjudicateCmd() *cobra.Command {
 				llmstudy.FacetDomain, llmstudy.FacetTaskType, llmstudy.FacetSubcategory,
 				llmstudy.FacetFunction, llmstudy.FacetActivity,
 			}
+			// Exclusions FIRST, then cap: a burned row must not consume a slot in
+			// the bounded sample.
 			set := llmstudy.CapPerFacet(
-				llmstudy.Disagreements(ws, ctl, arms, facets, int64(seed)),
+				llmstudy.ExcludeIDs(
+					llmstudy.Disagreements(ws, ctl, arms, facets, int64(seed)),
+					burnedIDs),
 				maxPerFacet, int64(seed))
 
 			ip := filepath.Join(studyDir(), "items.json")
@@ -385,6 +390,8 @@ func newStudyAdjudicateCmd() *cobra.Command {
 	c.Flags().IntVar(&seed, "seed", 7, "shuffle seed")
 	c.Flags().IntVar(&maxPerFacet, "max-per-facet", 40,
 		"cap adjudication items per facet (0 = no cap); keeps human effort bounded")
+	c.Flags().StringSliceVar(&burnedIDs, "exclude-id", nil,
+		"window ids whose provenance was already revealed; excluded to keep blinding real")
 	return c
 }
 

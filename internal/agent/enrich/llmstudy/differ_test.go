@@ -222,3 +222,31 @@ func TestCapPerFacetZeroMeansNoCap(t *testing.T) {
 		t.Fatalf("n<=0 must disable capping, got %d", len(got.Items))
 	}
 }
+
+// Provenance shown to a human is provenance spent: a discussed row must leave the
+// blinded set entirely, and be counted as dropped rather than vanish silently.
+func TestExcludeIDsRemovesDiscussedRowsAndCountsThem(t *testing.T) {
+	s := manyItems("domain", 5)
+	got := ExcludeIDs(s, []string{"domain-1", "domain-3"})
+	if len(got.Items) != 3 {
+		t.Fatalf("want 3 items after excluding 2, got %d", len(got.Items))
+	}
+	for _, it := range got.Items {
+		if it.ID == "domain-1" || it.ID == "domain-3" {
+			t.Errorf("excluded id survived: %s", it.ID)
+		}
+		if _, ok := got.Provenance[itemKey(it.ID, Facet(it.Facet))]; !ok {
+			t.Errorf("provenance lost for kept item %s", it.ID)
+		}
+	}
+	if got.Dropped["domain"] != 2 {
+		t.Errorf("Dropped[domain] = %d, want 2", got.Dropped["domain"])
+	}
+}
+
+func TestExcludeIDsEmptyIsNoOp(t *testing.T) {
+	s := manyItems("domain", 5)
+	if got := ExcludeIDs(s, nil); len(got.Items) != 5 {
+		t.Fatalf("no ids means no change, got %d items", len(got.Items))
+	}
+}

@@ -45,6 +45,39 @@ type AdjudicationSet struct {
 	Dropped map[string]int `json:"dropped,omitempty"`
 }
 
+// ExcludeIDs drops every item whose window id appears in ids.
+//
+// Needed because provenance shown to a human is provenance spent: once someone has
+// seen that arm X proposed label L for a given window, that window can no longer be
+// blindly adjudicated. Rows discussed outside the blinded flow must therefore be
+// removed rather than silently left in, or the blinding is only nominal.
+func ExcludeIDs(set AdjudicationSet, ids []string) AdjudicationSet {
+	if len(ids) == 0 {
+		return set
+	}
+	drop := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		drop[id] = true
+	}
+	out := AdjudicationSet{
+		Provenance: map[string]map[string]string{},
+		Dropped:    map[string]int{},
+	}
+	for k, v := range set.Dropped {
+		out.Dropped[k] = v
+	}
+	for _, it := range set.Items {
+		if drop[it.ID] {
+			out.Dropped[it.Facet]++
+			continue
+		}
+		k := itemKey(it.ID, Facet(it.Facet))
+		out.Provenance[k] = set.Provenance[k]
+		out.Items = append(out.Items, it)
+	}
+	return out
+}
+
 // CapPerFacet returns a stratified, deterministic subsample with at most n items
 // per facet, recording what it dropped.
 //
