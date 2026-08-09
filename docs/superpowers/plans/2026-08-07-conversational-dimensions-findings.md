@@ -330,11 +330,45 @@ Design choices that make it a test rather than a demo:
 
 Budget stated by the project owner: **resting <= 3 GB, peak may add ~1 GB.**
 
-| model | F1 | exact | hallucinated | resting RSS | peak | verdict |
-|---|---:|---:|---:|---:|---:|---|
-| Qwen3-0.6B | 0.49 | 17/54 | 11 | 1,463 MB | 1,520 MB | too weak |
-| **Qwen3-1.7B** | **0.84** | **40/54** | **2** | **2,547 MB** | **2,563 MB** | **fits budget** |
-| Qwen3-4B | 0.92 | 45/54 | 0 | 5,192 MB | 5,309 MB | over budget |
+| model | F1 | P | R | exact | halluc | resting RSS | peak | verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Qwen3-0.6B | 0.49 | — | — | 17/54 | 11 | 1,463 MB | 1,520 MB | too weak |
+| **Qwen3-1.7B** | **0.84** | 0.83 | 0.86 | **40/54** | **2** | **2,547 MB** | **2,563 MB** | **fits budget** |
+| Qwen3-4B | **0.93** | 0.94 | 0.92 | **46/54** | **0** | 5,192 MB | 5,309 MB | over budget (+73%) |
+
+⚠️ The 4B was first scored at F1 0.92 / 45-54 **before** two scoring bugs were fixed
+(a case-sensitive list sort and unnormalised separators). Re-run on the corrected
+scorer it is **0.93 / 46-54**, so the figures above are same-scorer comparable. The
+0.6B row predates the fixes and is mildly understated; it is far enough from the
+budget-and-quality frontier that re-running it would not change any conclusion.
+
+### 1.7B vs 4B, per template (same scorer)
+
+| template | 1.7B | 4B | gap |
+|---|---:|---:|---|
+| `models_mentioned` | 0.75 | **1.00** | **+0.25** — largest |
+| `product_area` | 0.67 | **0.83** | +0.16 |
+| `deployment` | 0.88 | **1.00** | +0.12 |
+| `sensitive_data` | 0.89 | **1.00** | +0.11 |
+| `support_topics` | 0.84 | **0.94** | +0.10 |
+| `external_vendors` | 0.78 | **0.88** | +0.10 |
+| `campaign_brief` | 0.94 | **1.00** | +0.06 |
+| `ticket_ids` | 0.86 | 0.89 | +0.03 |
+| `external_orgs` | 1.00 | 1.00 | tie |
+| `technologies_mentioned` | 0.88 | 0.88 | tie (1.7B better on exact rows, 3/4 vs 2/4) |
+| `billable_or_internal` | 0.75 | 0.75 | tie |
+
+**The trade:** the 4B buys +0.09 F1 and 6 exact rows for **2.0x the RAM**, and breaks
+the budget by 73%. Its baseline is 4,795 MB before serving a request and it plateaus
+flat at 5,309 MB, so tuning cannot rescue it.
+
+**The one gap worth mitigating rather than accepting** is `sensitive_data`
+(0.89 vs 1.00) — the privacy-facing template, where a false positive is expensive.
+But credentials do not depend on the model at all: `creddetect` already runs the
+deterministic gitleaks layer Go-side over the full text. The union of gitleaks and a
+1.7B is plausibly better than a 4B alone, and cheaper. Measure that before upsizing.
+`models_mentioned` (+0.25) is the 1.7B's clearest real weakness and also the least
+governance-critical template in the set.
 
 All CPU-only (`--device none`), `ctx 4096`, `--cache-ram 512`, `parallel 1`,
 `b256/ub64`, `enable_thinking:false`. Zero invalid answers on all three.

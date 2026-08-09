@@ -146,3 +146,47 @@ func TestNormaliseFieldSortsCaseInsensitively(t *testing.T) {
 		t.Errorf("normaliseField = %q, want \"email, LinkedIn\"", got)
 	}
 }
+
+// The aggregate Exact count must equal the number of rows that score exact when
+// scored alone. A discrepancy means one of the two is wrong, and the per-row detail
+// is what a human uses to diagnose failures — so they must agree.
+func TestAggregateExactMatchesPerRowExact(t *testing.T) {
+	gold, err := LoadGalleryGold("testdata/gallery_gold.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Synthesise answers: correct for odd rows, empty for even, so both paths occur.
+	answers := map[string]GalleryAnswer{}
+	for i, g := range gold {
+		a := GalleryAnswer{ID: g.ID, Template: g.Template, Valid: true}
+		if i%2 == 0 {
+			a.Entities, a.Fields = map[string][]string{}, map[string]string{}
+			for k, v := range g.Entities {
+				a.Entities[k] = append([]string(nil), v...)
+			}
+			for k, v := range g.Fields {
+				a.Fields[k] = v
+			}
+			a.Label = g.Label
+			a.Labels = append([]string(nil), g.Labels...)
+		} else {
+			a.Entities, a.Fields = map[string][]string{}, map[string]string{}
+		}
+		answers[g.ID] = a
+	}
+	agg := 0
+	for _, s := range ScoreGallery(gold, answers) {
+		agg += s.Exact
+	}
+	perRow := 0
+	for _, g := range gold {
+		one := ScoreGallery([]GalleryGold{g}, map[string]GalleryAnswer{g.ID: answers[g.ID]})[g.Template]
+		if one.Exact == 1 {
+			perRow++
+		}
+	}
+	if agg != perRow {
+		t.Fatalf("aggregate Exact = %d but per-row Exact = %d; the two scoring paths disagree", agg, perRow)
+	}
+	t.Logf("both paths agree: %d exact of %d rows", agg, len(gold))
+}
