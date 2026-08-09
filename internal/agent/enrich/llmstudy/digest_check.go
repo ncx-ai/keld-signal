@@ -48,29 +48,88 @@ func Identifiers(d Digest) []string {
 	return out
 }
 
-// promptLeakWords are words that appear only in the digest INSTRUCTIONS. A digest
-// that uses them is borrowing from the prompt rather than the conversation — the
-// failure mode observed when an instruction example ("the resolver was changed to
-// follow redirects") was copied verbatim into a report about an unrelated session.
+// LeakedPromptWords returns content words that appear in the digest and in the
+// digest INSTRUCTIONS but nowhere in the session — a direct check for the model
+// borrowing from its own prompt rather than from the conversation.
 //
-// The identifier gate cannot catch these: they are lowercase common nouns, and
-// identifierPat only matches dotted/hyphenated tokens or capitalised words.
-var promptLeakWords = []string{"resolver", "redirects"}
-
-// LeakedPromptWords returns instruction vocabulary that appears in the digest but not
-// in the source — a direct check for prompt-example bleed.
+// Generic on purpose. An earlier version hardcoded the two words from a since-removed
+// prompt example, and it misfired: a session containing "resolve" and
+// "internal/agent/resolve/claude.go" produced the legitimate nominalisation
+// "resolver", which exact-substring matching flagged as a leak. A manual list also
+// cannot catch the NEXT example someone adds. Comparing against the instruction text
+// itself needs no list and no maintenance.
+//
+// Morphology is handled by comparing word stems crudely (a source word counts as
+// covering a digest word if either is a prefix of the other, minimum 5 characters),
+// which is what the hardcoded version got wrong.
 func LeakedPromptWords(d Digest, source string) []string {
-	hay := strings.ToLower(source)
+	instr := strings.ToLower(digestSections + digestRules)
+	src := strings.ToLower(source)
 	body := strings.ToLower(strings.Join(append([]string{
 		d.Done, d.Happened, d.Structure, d.Current, d.Why, d.Next,
 	}, append(d.Insights, d.Unresolved...)...), " "))
+
+	seen := map[string]bool{}
 	var out []string
-	for _, w := range promptLeakWords {
-		if strings.Contains(body, w) && !strings.Contains(hay, w) {
-			out = append(out, w)
+	for _, w := range wordsOf(body) {
+		if len(w) < 5 || seen[w] || digestCommonWord(w) {
+			continue
 		}
+		seen[w] = true
+		// Only interesting if the instructions use it and the session does not.
+		if !containsWord(instr, w) || coveredByStem(src, w) {
+			continue
+		}
+		out = append(out, w)
 	}
 	return out
+}
+
+// wordsOf splits text into lowercase alphabetic words.
+func wordsOf(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+	})
+}
+
+// containsWord reports whether hay uses w as a whole word.
+func containsWord(hay, w string) bool {
+	for _, x := range wordsOf(hay) {
+		if x == w {
+			return true
+		}
+	}
+	return false
+}
+
+// coveredByStem reports whether the source contains w or a morphological relative,
+// so "resolve" in the source covers "resolver" in the digest.
+func coveredByStem(src, w string) bool {
+	for _, x := range wordsOf(src) {
+		if x == w {
+			return true
+		}
+		if len(x) >= 5 && len(w) >= 5 && (strings.HasPrefix(x, w[:5]) && strings.HasPrefix(w, x[:5])) {
+			return true
+		}
+	}
+	return false
+}
+
+// digestCommonWord filters vocabulary that any report shares with any instruction —
+// flagging these would drown the signal.
+func digestCommonWord(w string) bool {
+	switch w {
+	case "conversation", "report", "section", "sections", "entry", "entries",
+		"outcomes", "concrete", "described", "describe", "ything", "nothing",
+		"stopping", "point", "reached", "progress", "further", "understood",
+		"invent", "invented", "supports", "actually", "already", "should",
+		"anything", "everything", "specifics", "systems", "people", "amounts",
+		"blocked", "abandoned", "there", "these", "those", "their", "which",
+		"where", "while", "about", "above", "below", "other", "another":
+		return true
+	}
+	return false
 }
 
 // UnverifiedIdentifiers returns the specifics that do not appear in the source.
