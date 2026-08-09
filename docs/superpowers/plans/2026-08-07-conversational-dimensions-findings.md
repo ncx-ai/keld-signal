@@ -298,3 +298,97 @@ unlikely to have induced this — the relationship is probably genuine.
 Descriptive correlation on 120 turns, **not a validated predictor**: no held-out
 split, and n = 34/85/1 is thin. The shipping gate stands — beat the 93.1% base rate
 on held-out turns before any router goes live.
+
+---
+
+# Part 3: extraction against a hand-authored gold set
+
+Added 2026-08-09. **First measurement in this study with real ground truth** rather
+than cross-model agreement — so it can say whether an answer is right, not merely
+whether two models concur.
+
+## Why a gold set
+
+The mined corpus is one engineer's coding transcripts: it contains almost no vendor,
+billing, campaign or customer-account material, so the business half of the Atlas
+gallery cannot be evaluated on it at all. 54 rows were hand-authored against the
+real templates in `keld-atlas/services/web/lib/classification-templates.ts`
+(mirrored in `gallery.go`), covering `entity`, `structure`, `single_label` and
+`multi_label` kinds.
+
+Design choices that make it a test rather than a demo:
+- **Negatives on every template where "nothing" is expressible.** Precision matters
+  as much as recall; an eval with only positives cannot detect over-firing.
+- **Decoys**, e.g. a placeholder `YOUR_KEY_HERE` (must NOT be a credential), a
+  version `2.4.1` (must NOT be a ticket id), `HTTP-429` (matches the ticket regex,
+  is a status code), `AWS` (a platform we use, not an external customer).
+- **The gold set validates itself** — spans must be verbatim substrings, template
+  and type names must exist, every entity type must be stated explicitly so
+  negatives are deliberate. This caught two authoring bugs of mine before scoring.
+
+## Results
+
+Budget stated by the project owner: **resting <= 3 GB, peak may add ~1 GB.**
+
+| model | F1 | exact | hallucinated | resting RSS | peak | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| Qwen3-0.6B | 0.49 | 17/54 | 11 | 1,463 MB | 1,520 MB | too weak |
+| **Qwen3-1.7B** | **0.84** | **40/54** | **2** | **2,547 MB** | **2,563 MB** | **fits budget** |
+| Qwen3-4B | 0.92 | 45/54 | 0 | 5,192 MB | 5,309 MB | over budget |
+
+All CPU-only (`--device none`), `ctx 4096`, `--cache-ram 512`, `parallel 1`,
+`b256/ub64`, `enable_thinking:false`. Zero invalid answers on all three.
+
+The 4B's **baseline is 4,795 MB before any request**, so no cache tuning brings it
+under 3 GB. The 1.7B's peak is only **+16 MB** over resting, leaving the 1 GB
+inference allowance almost untouched and ~450 MB of headroom.
+
+### Qwen3-1.7B per template
+
+| template | kind | P | R | F1 | exact |
+|---|---|---:|---:|---:|---|
+| `external_orgs` | entity | 1.00 | 1.00 | **1.00** | 5/5 |
+| `campaign_brief` | structure | 0.89 | 1.00 | **0.94** | 3/4 |
+| `sensitive_data` | entity | 0.80 | 1.00 | 0.89 | 4/5 |
+| `deployment` | structure | 0.79 | 1.00 | 0.88 | 4/5 |
+| `technologies_mentioned` | entity | 1.00 | 0.78 | 0.88 | 3/4 |
+| `ticket_ids` | entity | 1.00 | 0.75 | 0.86 | 3/4 |
+| `support_topics` | multi_label | 0.73 | 1.00 | 0.84 | 5/7 |
+| `models_mentioned` | entity | 1.00 | 0.60 | 0.75 | 2/4 |
+| `billable_or_internal` | single_label | 0.75 | 0.75 | 0.75 | 3/4 |
+| `product_area` | single_label | 0.67 | 0.67 | 0.67 | 4/6 |
+
+## Two findings that matter more than the aggregate
+
+**1. The `structure` kind works, and Atlas currently cannot build it.** The gallery
+marks `deployment` and `campaign_brief` coming-soon because *"`structure` has no
+sidecar preview, so the Lab can't even test it"* — a GLiNER2 limitation, not a
+product decision. Both score **0.88-0.94** on a 1.7B inside budget. This is a
+capability unlock, not a like-for-like replacement.
+
+**2. The verbatim gate is load-bearing, with receipts.** The 0.6B's 11 hallucinated
+spans were the template's OWN EXAMPLES leaking from the task description into the
+answer: it reported "Slack connector" for a **Notion** prompt, and "Northwind" and
+"Acme Corp" for a **Globex** prompt. Those are exactly the plausible-but-wrong
+governance answers that would be impossible to spot downstream. The substring gate
+dropped every one. Any extraction backend must keep it.
+
+**Corroboration worth noting:** the two weakest templates — `product_area` 0.67 and
+`billable_or_internal` 0.75 — are precisely the two Atlas already flags as needing
+**off-prompt context**. The model's weakness there supports the gallery's own
+reasoning rather than contradicting it.
+
+## Caveats
+
+- 54 rows is small; per-template denominators are 4-7, so per-template F1 is
+  indicative, not precise. The aggregate is the more robust figure.
+- **The gold set is mine.** I authored both the examples and the expected answers,
+  so it encodes my judgement about what "vendor" or "billable" means. Several 4B
+  misses are arguably my gold being debatable (a Stripe webhook as `api` vs
+  `billing`; `HTTP-429` as a ticket id). It should be reviewed by someone else
+  before it gates a decision.
+- Scoring is lenient on span boundaries and separators by design (`Postgres` vs
+  `Postgres 16`, `billing-worker` vs `billing worker`), because boundary choice is a
+  different problem from finding the right thing. Two scoring bugs were found and
+  fixed during this run — a case-sensitive list sort and unnormalised separators.
+- Measured on a 20-core desktop; a laptop will be slower but no hungrier.
