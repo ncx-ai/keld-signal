@@ -99,7 +99,16 @@ func TestDigestSizing(t *testing.T) {
 		for i, s := range d.Unresolved {
 			t.Logf("  unresolved[%d]: %s", i, clipLog(s))
 		}
-		// Threshold 2, per digest: specifics must occur in the source.
+		// Thresholds 2 and 7, per digest.
+		if LooksFabricatedUnresolved(d, facts, Render(w)) {
+			t.Logf("  ⚠ FABRICATED unresolved (threshold 7)")
+		}
+		if UsesUnresolvedSentinel(d) {
+			t.Logf("  ✓ used the sentinel (nothing open)")
+		}
+		if leak := LeakedPromptWords(d, Render(w)); len(leak) > 0 {
+			t.Logf("  ⚠ PROMPT LEAK: %v (instruction vocabulary absent from the session)", leak)
+		}
 		if bad := UnverifiedIdentifiers(d, Render(w)); len(bad) > 0 {
 			t.Logf("  ⚠ unverified specifics: %v", bad)
 		}

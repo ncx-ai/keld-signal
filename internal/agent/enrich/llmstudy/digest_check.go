@@ -48,6 +48,31 @@ func Identifiers(d Digest) []string {
 	return out
 }
 
+// promptLeakWords are words that appear only in the digest INSTRUCTIONS. A digest
+// that uses them is borrowing from the prompt rather than the conversation — the
+// failure mode observed when an instruction example ("the resolver was changed to
+// follow redirects") was copied verbatim into a report about an unrelated session.
+//
+// The identifier gate cannot catch these: they are lowercase common nouns, and
+// identifierPat only matches dotted/hyphenated tokens or capitalised words.
+var promptLeakWords = []string{"resolver", "redirects"}
+
+// LeakedPromptWords returns instruction vocabulary that appears in the digest but not
+// in the source — a direct check for prompt-example bleed.
+func LeakedPromptWords(d Digest, source string) []string {
+	hay := strings.ToLower(source)
+	body := strings.ToLower(strings.Join(append([]string{
+		d.Done, d.Happened, d.Structure, d.Current, d.Why, d.Next,
+	}, append(d.Insights, d.Unresolved...)...), " "))
+	var out []string
+	for _, w := range promptLeakWords {
+		if strings.Contains(body, w) && !strings.Contains(hay, w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // UnverifiedIdentifiers returns the specifics that do not appear in the source.
 //
 // This is the same gate that caught 11 of 11 fabrications by Qwen3-0.6B in the
@@ -106,4 +131,71 @@ func RetainedFacts(after Digest, facts []string) int {
 		}
 	}
 	return n
+}
+
+// UnresolvedSentinel is the exact entry a digest must use when nothing is open.
+//
+// A required `unresolved` field defeats rubberstamping, but on a clean session it
+// pushes the model to invent blockers — observed on real output, where a session the
+// source described as "Fixed and verified live" produced "needs further testing" and
+// "not fully understood", neither of which appeared anywhere in the conversation.
+// An invented blocker is worse than a missing one, because a reader will act on it.
+//
+// The sentinel gives "nothing is open" a first-class expression, so the field can be
+// honoured without fabrication, and so a scorer can tell the two apart.
+const UnresolvedSentinel = "none - the work reached a stopping point"
+
+// UsesUnresolvedSentinel reports whether the digest declared nothing open.
+func UsesUnresolvedSentinel(d Digest) bool {
+	if len(d.Unresolved) != 1 {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(d.Unresolved[0])), "none -")
+}
+
+// speculationMarkers are the phrasings a model reaches for when it has nothing real
+// to report but a field it must fill.
+var speculationMarkers = []string{
+	"needs further", "need further", "further testing", "not fully understood",
+	"may need", "might need", "could be improved", "should be monitored",
+	"remains to be seen", "unclear whether", "not yet verified", "would benefit from",
+	"potential", "possibly", "consider whether",
+}
+
+// LooksFabricatedUnresolved reports whether `unresolved` asserts speculative open
+// items on work the source presents as finished.
+//
+// HEURISTIC, and weaker than LooksRubberstamped: that metric has real ground truth in
+// the harvested `corrected` label, whereas this one infers "the source says it is
+// done" from completion language. It will miss fabrications phrased confidently and
+// may flag a genuine open item phrased tentatively. It is a screen for review, not a
+// verdict — which is why the spec pairs it with the human usefulness gate.
+func LooksFabricatedUnresolved(d Digest, f DigestFacts, source string) bool {
+	if UsesUnresolvedSentinel(d) || len(d.Unresolved) == 0 {
+		return false
+	}
+	// If the work actually hit friction, open items are expected.
+	if f.Corrections > 0 || f.CorrectedTurns > 0 {
+		return false
+	}
+	low := strings.ToLower(source)
+	done := false
+	for _, m := range []string{"verified", "all pass", "tests pass", "9 pass", "complete", "fixed and", "landed", "committed"} {
+		if strings.Contains(low, m) {
+			done = true
+			break
+		}
+	}
+	if !done {
+		return false
+	}
+	for _, u := range d.Unresolved {
+		ul := strings.ToLower(u)
+		for _, m := range speculationMarkers {
+			if strings.Contains(ul, m) {
+				return true
+			}
+		}
+	}
+	return false
 }

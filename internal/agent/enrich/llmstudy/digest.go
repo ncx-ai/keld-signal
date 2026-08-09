@@ -80,7 +80,11 @@ const digestSections = `  done        What concrete outcomes are now in place? N
               restatement of what was done.
   next        Where is this going? The direction, plus the concrete immediate steps
               that follow from it.
-  unresolved  What is still open, blocked, or was abandoned. One per entry.
+  unresolved  What is still open, blocked, or was abandoned? One per entry.
+              If genuinely NOTHING is open, the entry must be exactly:
+                none - the work reached a stopping point
+              Do not invent an open item to fill this field. An invented blocker is
+              worse than no blocker, because a reader will act on it.
 `
 
 const digestRules = `
@@ -92,15 +96,19 @@ Rules:
     say so.
   - Name specifics (files, systems, people, amounts) only when they appear in the
     conversation. Do not invent plausible ones.
-  - unresolved must be addressed. If genuinely nothing is open, say so explicitly
-    rather than leaving it empty for convenience.
-  - Write about the WORK, not about the assistant or the conversation. Say "the
-    resolver was changed to follow redirects", never "the assistant modified the
-    resolver". The reader cares what happened to the work.
+  - unresolved must be addressed, but only with items the conversation actually
+    supports. If the work was verified and nothing remains, use the exact "none -"
+    entry above. Never speculate that something "needs further testing" or "is not
+    fully understood" unless the conversation says so.
+  - Write about the WORK, not about the assistant or the conversation. Describe what
+    changed and what state things are in, never who typed what. The reader cares
+    what happened to the work, not who did it.
   - Each section must add something the others do not. Do not restate one section's
     content in another.
   - The section descriptions above are QUESTIONS to answer, not text to copy. Never
     echo a description back as your answer.
+  - Every noun in your report must come from the conversation above. Nothing in
+    these instructions is subject matter — do not borrow words from them.
 `
 
 // DigestCreatePrompt builds the first-digest prompt.

@@ -66,3 +66,74 @@ func TestIdentifiersIgnoreSentenceStarters(t *testing.T) {
 		}
 	}
 }
+
+// The sentinel gives "nothing is open" a first-class expression so the required
+// field can be honoured without inventing a blocker.
+func TestUsesUnresolvedSentinel(t *testing.T) {
+	if !UsesUnresolvedSentinel(Digest{Unresolved: []string{UnresolvedSentinel}}) {
+		t.Error("the canonical sentinel must be recognised")
+	}
+	if !UsesUnresolvedSentinel(Digest{Unresolved: []string{"None - nothing remains"}}) {
+		t.Error("recognition must be case-insensitive on the marker")
+	}
+	if UsesUnresolvedSentinel(Digest{Unresolved: []string{"needs further testing"}}) {
+		t.Error("a real-looking item must not read as the sentinel")
+	}
+	if UsesUnresolvedSentinel(Digest{Unresolved: []string{UnresolvedSentinel, "and also X"}}) {
+		t.Error("the sentinel must stand alone; mixing it with items is not 'nothing open'")
+	}
+}
+
+// The exact observed failure: a session the source called "Fixed and verified live"
+// produced speculative blockers that appeared nowhere in the conversation.
+func TestLooksFabricatedUnresolvedCatchesTheObservedFailure(t *testing.T) {
+	src := "assistant: Fixed and verified live. 9 pass. Committing to main.\nuser: commit to main\n"
+	facts := DigestFacts{Turns: 13, UserTurns: 1} // no corrections
+	fabricated := Digest{Unresolved: []string{
+		"The resolver's behavior in different environments needs further testing.",
+		"The exact impact of the 5-minute cache TTL is not fully understood.",
+	}}
+	if !LooksFabricatedUnresolved(fabricated, facts, src) {
+		t.Error("speculative blockers on verified work must be flagged")
+	}
+	if LooksFabricatedUnresolved(Digest{Unresolved: []string{UnresolvedSentinel}}, facts, src) {
+		t.Error("the sentinel must never be flagged as fabrication")
+	}
+}
+
+// Where the work genuinely hit friction, open items are expected and must not be
+// flagged — otherwise the metric punishes honest reporting.
+func TestLooksFabricatedUnresolvedSilentWhenFrictionOccurred(t *testing.T) {
+	src := "assistant: verified live\n"
+	facts := DigestFacts{Turns: 13, UserTurns: 4, Corrections: 2}
+	d := Digest{Unresolved: []string{"The retry path may need further testing."}}
+	if LooksFabricatedUnresolved(d, facts, src) {
+		t.Error("with real corrections, open items are expected")
+	}
+}
+
+// And where the source never claims completion, tentative items are legitimate.
+func TestLooksFabricatedUnresolvedSilentWhenSourceDoesNotClaimDone(t *testing.T) {
+	src := "user: start looking into the resolver\nassistant: reading the config\n"
+	d := Digest{Unresolved: []string{"The approach may need further testing."}}
+	if LooksFabricatedUnresolved(d, DigestFacts{Turns: 4}, src) {
+		t.Error("unfinished work may legitimately carry tentative open items")
+	}
+}
+
+// Observed failure: an instruction example leaked verbatim into a report about an
+// unrelated session, and the identifier gate could not see it because the leaked
+// words were lowercase common nouns.
+func TestLeakedPromptWordsCatchesInstructionBleed(t *testing.T) {
+	src := "assistant: fixed the Manage column width\nuser: merge to main\n"
+	d := Digest{Unresolved: []string{"The resolver was changed to follow redirects, but no further action is needed."}}
+	got := LeakedPromptWords(d, src)
+	if len(got) == 0 {
+		t.Fatal("instruction vocabulary absent from the source must be flagged")
+	}
+	// And it must stay silent when the word is genuinely in the conversation.
+	realSrc := "assistant: the resolver now follows redirects\n"
+	if l := LeakedPromptWords(d, realSrc); len(l) != 0 {
+		t.Errorf("must not flag words the source actually contains: %v", l)
+	}
+}

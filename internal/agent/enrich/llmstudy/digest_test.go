@@ -98,7 +98,8 @@ func TestDigestPromptForbidsRestatementAndAssistantVoice(t *testing.T) {
 	p := DigestCreatePrompt("x", "user: hi\n", FactsFrom(Signals{Turns: 3}, nil).Block())
 	for _, want := range []string{
 		"Write about the WORK",
-		"never \"the assistant modified",
+		"never who typed what",
+		"Nothing in\n    these instructions is subject matter",
 		"must add something the others do not",
 		"QUESTIONS to answer, not text to copy",
 		"Describe the SUBJECT, not",
