@@ -126,6 +126,68 @@ func TestMergeInsightsCollapsesPossessiveRewording(t *testing.T) {
 	}
 }
 
+// stripPossessiveSuffix is the mechanism itself, tested directly: a possessive and its bare
+// base word must reduce to the IDENTICAL string, not merely to stems that happen to agree.
+// This is the case an earlier version of this fix (concatenating instead of removing the
+// suffix) got wrong for a base word that itself ends in "s": "boss's" concatenated to "bosss",
+// which is a different string from bare "boss" and stems differently (see significantWords'
+// doc comment). Straight and curly apostrophes are asserted in the same test since they are
+// handled by the same expression, not two paths that could drift apart.
+func TestStripPossessiveSuffixNormalizesToTheBaseWord(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"boss's", "boss"},
+		{"boss’s", "boss"}, // curly apostrophe (U+2019)
+		{"meridian's", "meridian"},
+		{"meridian’s", "meridian"},
+		{"bosses'", "bosses"}, // bare trailing apostrophe: plural possessive, no "s" added
+		{"bosses’", "bosses"},
+		{"doesn't", "doesn't"}, // mid-word: a contraction, not a trailing possessive — untouched
+	}
+	for _, c := range cases {
+		if got := stripPossessiveSuffix(c.in); got != c.want {
+			t.Errorf("stripPossessiveSuffix(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// The regression this whole round exists for: a base word that itself ends in "s" must still
+// match its own possessive form. wordsOf already isolates "boss" cleanly from "boss's" via the
+// apostrophe as a natural separator, so this also incidentally exercises that stemming a
+// possessive and stemming its bare base word take the identical input string either way.
+func TestSignificantWordsMatchesPossessiveEvenWhenBaseEndsInS(t *testing.T) {
+	bare := significantWords("boss")
+	possessive := significantWords("boss's")
+	curly := significantWords("boss’s")
+	if len(bare) != 1 || !bare[stemOf("boss")] {
+		t.Fatalf("unexpected stem set for bare %q: %v", "boss", bare)
+	}
+	for name, got := range map[string]map[string]bool{"boss's": possessive, "boss’s": curly} {
+		if len(got) != len(bare) || !mapsAgree(bare, got) {
+			t.Errorf("significantWords(%q) = %v does not match significantWords(\"boss\") = %v", name, got, bare)
+		}
+	}
+}
+
+// stemOf is a tiny test helper: the single element of a one-word significantWords set.
+func stemOf(s string) string {
+	for k := range significantWords(s) {
+		return k
+	}
+	return ""
+}
+
+func mapsAgree(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
+}
+
 // Defect 3, observed in a real digest: insight 7 stated the user's feedback BACKWARDS
 // (claiming a preference for pill components when the session reversed away from them),
 // and append-only merging meant it could never be removed. Retirement is the way out.

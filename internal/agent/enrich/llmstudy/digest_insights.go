@@ -1,6 +1,9 @@
 package llmstudy
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // clipProse bounds a prose section without breaking a word.
 //
@@ -128,33 +131,43 @@ func insightsMatch(a, b string) bool {
 // once articles were dropped, and the distinct pill-component pair scores well below.
 const insightMatchRatio = 0.8
 
+// possessiveSuffix matches a trailing possessive marker at a word boundary — "'s"/"’s", or a
+// bare trailing "'"/"’" for the plural-possessive form ("the bosses' meeting") — straight or
+// curly quote alike, both in the one expression. Group 1 is the letter/digit the marker rides
+// on; group 2 is whatever follows (another separator, or end of string).
+var possessiveSuffix = regexp.MustCompile(`([a-z0-9])['’]s?([^a-z0-9]|$)`)
+
+// stripPossessiveSuffix removes a trailing possessive marker so a possessive and its bare base
+// word enter the stemmer as the IDENTICAL string, and therefore match by construction — not by
+// relying on the stemmer, or a downstream guard, to happen to agree. "Meridian's" and
+// "Meridian" both become "Meridian" before stemming; "boss's" and "boss" both become "boss".
+//
+// That last case is why the suffix must be REMOVED, not merged into the preceding letters. An
+// earlier version of this fix concatenated instead ("boss's" -> "bosss"), and a base word that
+// itself ends in "s" broke: "bosss" stems (one trailing "s" removed) to "boss", while bare
+// "boss" stems to "bos" — two different results for what should be the same word. Removing the
+// suffix entirely means both spellings are the identical input string before stemming ever
+// runs, so whatever the stemmer does, it does the same thing to both, regardless of how the
+// stemmer itself behaves.
+//
+// Only a possessive AT a word boundary is touched. A contraction's apostrophe sits mid-word
+// ("doesn't", "we're") and is left alone, out of scope for this fix — wordsOf still splits on
+// it exactly as before.
+func stripPossessiveSuffix(s string) string {
+	return possessiveSuffix.ReplaceAllString(s, "$1$2")
+}
+
 // significantWords reduces an insight to the words that carry its meaning, stemming
 // regular plurals so "KPIs" and "KPI" agree.
-//
-// Apostrophes are stripped before splitting, not after. wordsOf treats "'" as a separator,
-// so left alone a possessive or contraction ("Meridian's", "doesn't") splits into a spurious
-// trailing fragment ("s", "t") that carries no meaning of its own. That fragment used to
-// survive as an empty stem once trailing-"s" stemming reduced the lone "s" to "" — a bug, not
-// a feature: an empty string was inserted as if it were a shared significant word. It moved
-// the match ratio in BOTH directions depending on which side carried the apostrophe, and
-// neither was intentional. Asymmetric (one side possessive, one side not — "Meridian's
-// ledger" vs "the ledger for Meridian") lost a genuine restatement below threshold, because
-// the empty stem was counted only against the non-possessive side's denominator. Symmetric
-// (the same apostrophe-bearing word on BOTH sides, ordinary wherever a contraction repeats
-// across two rewordings) inflated the opposite way: the phantom "" was shared AND counted in
-// both sets, nudging the ratio toward a false match. Stripping first makes "Meridian's"
-// tokenize as "meridians", which stems to "meridian" and correctly matches the base word
-// wherever it appears unpossessed — the possessive form now matches its OWN base word rather
-// than vanishing or double-counting, and no split-off remnant can ever produce an empty stem.
-// The empty-stem guard below stays regardless, as a defensive backstop against any other
-// route to a blank token.
 func significantWords(s string) map[string]bool {
 	out := map[string]bool{}
-	s = strings.ReplaceAll(s, "'", "")
-	for _, w := range wordsOf(strings.ToLower(s)) {
+	for _, w := range wordsOf(stripPossessiveSuffix(strings.ToLower(s))) {
 		if insightStopWord(w) {
 			continue
 		}
+		// A possessive can no longer produce an orphaned "s" fragment at all — see
+		// stripPossessiveSuffix — so this can't fire on that path anymore. Kept as a defensive
+		// backstop in case some other route to a blank token turns up.
 		if stem := strings.TrimSuffix(w, "s"); stem != "" {
 			out[stem] = true
 		}
