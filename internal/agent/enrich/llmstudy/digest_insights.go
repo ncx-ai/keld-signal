@@ -136,7 +136,14 @@ func significantWords(s string) map[string]bool {
 		if insightStopWord(w) {
 			continue
 		}
-		out[strings.TrimSuffix(w, "s")] = true
+		// wordsOf splits on the apostrophe in a possessive ("Meridian's" -> "meridian", "s"),
+		// and stemming that lone "s" leaves "". An empty stem is not a significant word — left
+		// in, it inflated the denominator on both sides equally only by accident, and on real
+		// possessive-vs-non-possessive rewordings ("Meridian's ledger" vs "the ledger for
+		// Meridian") it dragged a genuine restatement below the match threshold.
+		if stem := strings.TrimSuffix(w, "s"); stem != "" {
+			out[stem] = true
+		}
 	}
 	return out
 }
