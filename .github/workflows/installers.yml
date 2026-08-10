@@ -388,3 +388,27 @@ jobs:
           name: installers-linux-amd64
           if-no-files-found: ignore
           path: keld-agent-sidecar_linux_amd64.tar.gz
+
+  # Gate: a release must not serve `latest` while missing installer assets.
+  #
+  # `always()` is load-bearing. Default `needs` semantics SKIP a job when a
+  # dependency fails — which is exactly the case this exists to catch (v0.20.0's
+  # linux-sidecar was never acquired by a runner, so its asset never uploaded and
+  # the release published incomplete). Without always() the gate would be silent
+  # on the only runs that matter.
+  #
+  # The condition inlines the release test rather than using env.IS_RELEASE like
+  # the sibling jobs do: job-level `if` cannot see job-level `env`. The siblings
+  # get away with it because they use it in STEP-level ifs, where it resolves.
+  verify-release:
+    needs: [build, linux-sidecar]
+    if: always() && (github.event_name == 'release' || inputs.publish_release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify release asset completeness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KELD_VERIFY_DEMOTE: "1"
+          TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: bash scripts/verify-release-assets.sh "$TAG"
