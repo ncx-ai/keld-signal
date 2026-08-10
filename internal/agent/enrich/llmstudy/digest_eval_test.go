@@ -377,9 +377,10 @@ func TestDigestRefineQuality(t *testing.T) {
 // lostFacts is RetainedFacts (T4) with the miss list exposed. RetainedFacts itself returns
 // only a survival count — useful for the rate, useless for diagnosing a regression, which is
 // exactly the "print what was flagged, not just the count" gap the other thresholds in this
-// sweep were already fixed for.
+// sweep were already fixed for. Shares proseHay (digest_check.go) with RetainedFacts rather
+// than rebuilding the same join here — the two had drifted into separate copies once already.
 func lostFacts(after Digest, facts []string) []string {
-	hay := strings.ToLower(strings.Join(append(ProseFields(after), append(after.Insights, after.Unresolved...)...), " "))
+	hay := proseHay(after)
 	var out []string
 	for _, f := range facts {
 		if !strings.Contains(hay, strings.ToLower(f)) {

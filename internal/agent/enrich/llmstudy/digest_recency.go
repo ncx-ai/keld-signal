@@ -55,21 +55,40 @@ const minLagEvidence = 2
 // lowercase first). identifierPat goes the other way: it matches dotted, hyphenated and
 // Capitalised tokens but no ordinary lowercase word, and excludes "/", so neither "extracts"
 // nor "eval/mine" survives. Subject vocabulary needs both kinds.
+//
+// Emits the TRIMMED spelling, not the raw token subjectTokens produced. subjectTokens keeps
+// '.', '-', '_', '/' attached to a token rather than splitting on them (they are part of what
+// makes a path or identifier an identifier), so a subject noun sitting right before a
+// sentence-ending period comes out as "threshold.", not "threshold". distinctiveToken already
+// trims that punctuation to decide whether the token qualifies at all — but it only returned a
+// bool, so the untrimmed original was what callers actually stored. Comparing that against
+// Subjects/Projects (a clean word list, never punctuated) meant a sentence-final subject could
+// never match its own record: BeatContradictsRecord would flag "threshold." against a record
+// that plainly holds "threshold". Trimming here, once, is what every caller (SynopsisLag,
+// SubjectShifted, BeatContradictsRecord) needs and previously lacked.
 func distinctiveTerms(s string) map[string]bool {
 	out := map[string]bool{}
 	for _, tok := range subjectTokens(s) {
 		if !distinctiveToken(tok) {
 			continue
 		}
-		out[strings.ToLower(tok)] = true
+		out[strings.ToLower(trimTermPunct(tok))] = true
 	}
 	return out
+}
+
+// trimTermPunct strips the punctuation subjectTokens leaves attached to a token's ends —
+// the same cutset distinctiveToken already trims internally to judge a token's length and
+// stopword status, factored out so distinctiveTerms can store the identical trimmed spelling
+// instead of the raw one.
+func trimTermPunct(tok string) string {
+	return strings.Trim(tok, ".-_/")
 }
 
 // distinctiveToken is the shared test: a strong identifier, or a word long enough to be
 // subject vocabulary rather than glue.
 func distinctiveToken(tok string) bool {
-	tok = strings.Trim(tok, ".-_/")
+	tok = trimTermPunct(tok)
 	if len(tok) < 4 || digestStopWords[tok] || digestCommonWord(strings.ToLower(tok)) {
 		return false
 	}
@@ -174,32 +193,40 @@ const (
 )
 
 // BeatContradictsRecord reports a beat whose subject is absent from the measured record.
-// Abstains when the record holds too little to check against, because a verdict on thin
-// evidence is how every earlier version of a check like this over-reported.
+// Abstains (checked=false) when the record holds too little to check against, because a
+// verdict on thin evidence is how every earlier version of a check like this over-reported.
+//
+// checked is a SEPARATE return, not folded into terms, because abstention and "checked and
+// found nothing" must not collapse to the same nil. A caller computing a rate as
+// flagged/checked needs to know which digests to put in the denominator; a caller that only
+// looked at terms==nil cannot tell "nothing wrong" from "nothing measured" apart, and every
+// early-session beat (where the record has not yet accumulated minConsistencyEvidence
+// subjects) would silently count as consistent — the same false-confidence failure this
+// study exists to catch, just moved one level up from "no items logged" to "no verdict logged".
 //
 // Applied to beats rather than to a report paraphrase because beats are dense and cheap: the
 // check runs dozens of times per session instead of once an hour, so a drifting subject is
 // caught near where it started rather than after it has been folded into a report.
-func BeatContradictsRecord(beat string, r SessionRecord) []string {
+func BeatContradictsRecord(beat string, r SessionRecord) (terms []string, checked bool) {
 	if len(r.Subjects) < minConsistencyEvidence || strings.TrimSpace(beat) == "" {
-		return nil
+		return nil, false
 	}
-	terms := distinctiveTerms(beat)
-	if len(terms) == 0 {
-		return nil
+	subjectTerms := distinctiveTerms(beat)
+	if len(subjectTerms) == 0 {
+		return nil, false
 	}
 	hay := strings.ToLower(strings.Join(append(append([]string{}, r.Subjects...), r.Projects...), " "))
-	for t := range terms {
+	for t := range subjectTerms {
 		if strings.Contains(hay, t) || inflectionPresent(t, t, hay) {
-			return nil // one grounded subject term is enough; this is a contradiction check
+			return nil, true // one grounded subject term is enough; this is a contradiction check
 		}
 	}
-	out := make([]string, 0, len(terms))
-	for t := range terms {
+	out := make([]string, 0, len(subjectTerms))
+	for t := range subjectTerms {
 		out = append(out, t)
 	}
 	sort.Strings(out)
-	return out
+	return out, true
 }
 
 // minConsistencyEvidence is how many measured subjects the record must hold before its

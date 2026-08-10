@@ -391,15 +391,25 @@ func LooksRubberstamped(d Digest, f DigestFacts) bool {
 	return true
 }
 
+// proseHay lowercases and joins every prose field, insight, and unresolved item into one
+// substring-containment haystack. Factored out so RetainedFacts (production) and the eval
+// harness's lostFacts diagnostic (digest_eval_test.go, -tags llmstudy) share exactly one
+// build of it — the two had drifted into separate copies of the same join, which is the same
+// class of defect a hand-enumerated field list is: a future section addition only needs to be
+// remembered ONCE, here, instead of in every caller that wants "all the prose".
+func proseHay(d Digest) string {
+	return strings.ToLower(strings.Join(append(ProseFields(d), append(d.Insights, d.Unresolved...)...), " "))
+}
+
 // RetainedFacts counts how many of the given facts still appear after refinement.
 // Used by the drift test: inject known facts, refine, measure survival.
 //
-// Reads ProseFields rather than a hand-enumerated list of sections — the same defect
-// ProseFields was introduced to fix elsewhere in this package. This function hand-listed
-// six sections and so never checked Synopsis: the section a reader is most likely to read
-// was the one section this drift check never verified.
+// Reads ProseFields (via proseHay) rather than a hand-enumerated list of sections — the same
+// defect ProseFields was introduced to fix elsewhere in this package. This function
+// hand-listed six sections and so never checked Synopsis: the section a reader is most
+// likely to read was the one section this drift check never verified.
 func RetainedFacts(after Digest, facts []string) int {
-	hay := strings.ToLower(strings.Join(append(ProseFields(after), append(after.Insights, after.Unresolved...)...), " "))
+	hay := proseHay(after)
 	n := 0
 	for _, f := range facts {
 		if strings.Contains(hay, strings.ToLower(f)) {
