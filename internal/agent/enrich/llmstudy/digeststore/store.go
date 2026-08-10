@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS digest (
   PRIMARY KEY(session_id, seq)
 );
 CREATE INDEX IF NOT EXISTS ix_digest_session ON digest(session_id, seq DESC);
+-- Current state, not history: one row per session, overwritten. Digests are snapshots
+-- because their prose is a record; the session record is measured state.
+CREATE TABLE IF NOT EXISTS session_record (
+  session_id  TEXT    NOT NULL PRIMARY KEY,
+  updated_seq INTEGER NOT NULL,
+  body        TEXT    NOT NULL
+);
 `
 
 // Record is one digest snapshot.
@@ -183,4 +190,28 @@ FROM digest GROUP BY session_id ORDER BY t DESC`)
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// PutSessionRecord overwrites the measured state for a session.
+func (s *Store) PutSessionRecord(sessionID string, seq int, body string) error {
+	if sessionID == "" {
+		return fmt.Errorf("digeststore: session_id required")
+	}
+	_, err := s.db.Exec(`
+INSERT INTO session_record (session_id, updated_seq, body) VALUES (?,?,?)
+ON CONFLICT(session_id) DO UPDATE SET updated_seq=excluded.updated_seq, body=excluded.body`,
+		sessionID, seq, body)
+	return err
+}
+
+// SessionRecord returns the measured state and the digest seq that last consumed it. An
+// unknown session is the normal first-digest case, not an error.
+func (s *Store) SessionRecord(sessionID string) (body string, seq int, ok bool, err error) {
+	row := s.db.QueryRow(`SELECT body, updated_seq FROM session_record WHERE session_id = ?`, sessionID)
+	if err := row.Scan(&body, &seq); err == sql.ErrNoRows {
+		return "", 0, false, nil
+	} else if err != nil {
+		return "", 0, false, err
+	}
+	return body, seq, true, nil
 }

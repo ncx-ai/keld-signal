@@ -3,6 +3,7 @@ package digeststore
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -166,5 +167,47 @@ func TestConcurrentPutAndReadDoNotError(t *testing.T) {
 		if err != nil {
 			t.Fatalf("concurrent access errored: %v", err)
 		}
+	}
+}
+
+// The record is current state, not history: one row per session, overwritten.
+func TestSessionRecordIsOverwrittenNotAppended(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "d.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.PutSessionRecord("a", 1, `{"turns":10}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSessionRecord("a", 2, `{"turns":25}`); err != nil {
+		t.Fatal(err)
+	}
+	body, seq, ok, err := s.SessionRecord("a")
+	if err != nil || !ok {
+		t.Fatalf("read: %v %v", ok, err)
+	}
+	if seq != 2 || !strings.Contains(body, "25") {
+		t.Errorf("want the latest state, got seq=%d body=%s", seq, body)
+	}
+}
+
+func TestUnknownSessionRecordIsNotAnError(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "d.db"))
+	defer s.Close()
+	if _, _, ok, err := s.SessionRecord("nope"); err != nil || ok {
+		t.Errorf("want (false, nil) for an unknown session, got ok=%v err=%v", ok, err)
+	}
+}
+
+// A digest snapshot must still round-trip unchanged.
+func TestDigestSnapshotStillRoundTrips(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "d.db"))
+	defer s.Close()
+	if err := s.Put(Record{SessionID: "a", Seq: 1, Body: "{}", Signals: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.Latest("a"); err != nil || !ok {
+		t.Fatalf("latest: %v %v", ok, err)
 	}
 }
