@@ -130,17 +130,31 @@ const insightMatchRatio = 0.8
 
 // significantWords reduces an insight to the words that carry its meaning, stemming
 // regular plurals so "KPIs" and "KPI" agree.
+//
+// Apostrophes are stripped before splitting, not after. wordsOf treats "'" as a separator,
+// so left alone a possessive or contraction ("Meridian's", "doesn't") splits into a spurious
+// trailing fragment ("s", "t") that carries no meaning of its own. That fragment used to
+// survive as an empty stem once trailing-"s" stemming reduced the lone "s" to "" — a bug, not
+// a feature: an empty string was inserted as if it were a shared significant word. It moved
+// the match ratio in BOTH directions depending on which side carried the apostrophe, and
+// neither was intentional. Asymmetric (one side possessive, one side not — "Meridian's
+// ledger" vs "the ledger for Meridian") lost a genuine restatement below threshold, because
+// the empty stem was counted only against the non-possessive side's denominator. Symmetric
+// (the same apostrophe-bearing word on BOTH sides, ordinary wherever a contraction repeats
+// across two rewordings) inflated the opposite way: the phantom "" was shared AND counted in
+// both sets, nudging the ratio toward a false match. Stripping first makes "Meridian's"
+// tokenize as "meridians", which stems to "meridian" and correctly matches the base word
+// wherever it appears unpossessed — the possessive form now matches its OWN base word rather
+// than vanishing or double-counting, and no split-off remnant can ever produce an empty stem.
+// The empty-stem guard below stays regardless, as a defensive backstop against any other
+// route to a blank token.
 func significantWords(s string) map[string]bool {
 	out := map[string]bool{}
+	s = strings.ReplaceAll(s, "'", "")
 	for _, w := range wordsOf(strings.ToLower(s)) {
 		if insightStopWord(w) {
 			continue
 		}
-		// wordsOf splits on the apostrophe in a possessive ("Meridian's" -> "meridian", "s"),
-		// and stemming that lone "s" leaves "". An empty stem is not a significant word — left
-		// in, it inflated the denominator on both sides equally only by accident, and on real
-		// possessive-vs-non-possessive rewordings ("Meridian's ledger" vs "the ledger for
-		// Meridian") it dragged a genuine restatement below the match threshold.
 		if stem := strings.TrimSuffix(w, "s"); stem != "" {
 			out[stem] = true
 		}

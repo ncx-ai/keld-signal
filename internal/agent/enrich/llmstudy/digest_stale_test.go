@@ -71,6 +71,22 @@ func TestCurrentDescribingCompletionIsDetected(t *testing.T) {
 	}
 }
 
+// StaleUnresolved routes through the same significantWords/insightsMatch machinery, so it
+// inherits the possessive fix. Constructed at the exact boundary staleOverlapRatio sits on:
+// an apostrophe-bearing word ("bravo's") on BOTH sides used to contribute a phantom shared ""
+// stem, inflating the ratio from a real 2/3 (0.667, below staleOverlapRatio's 0.75) to a
+// phantom 3/4 (0.75, at threshold) — which would have wrongly flagged this as a
+// self-contradiction. Fixed, the ratio reports its real, lower value.
+func TestStaleUnresolvedSymmetricPossessiveDoesNotInflate(t *testing.T) {
+	d := Digest{
+		Done:       "alpha bravo's charlie",
+		Unresolved: []string{"alpha bravo's delta"},
+	}
+	if got := StaleUnresolved(d); len(got) != 0 {
+		t.Errorf("a phantom shared possessive token inflated the overlap ratio: flagged %v", got)
+	}
+}
+
 // The refinement must account for EVERY prior open item, in exactly one of the two lists.
 // An instruction to "drop what is now closed" did not achieve this; an accounting rule
 // that can be checked in code does.

@@ -47,6 +47,16 @@ func TestSynopsisRestatingWhyIsDetected(t *testing.T) {
 	}
 }
 
+// SynopsisRestatesAnotherSection routes through the same insightsMatch as MergeInsights and
+// StaleUnresolved, so a possessive rewording between synopsis and why must be caught here too.
+func TestSynopsisRestatementDetectedAcrossPossessive(t *testing.T) {
+	why := "The work is reconciling the March ledger for Meridian."
+	synopsis := "Work continues reconciling Meridian's March ledger."
+	if !SynopsisRestatesAnotherSection(Digest{Synopsis: synopsis, Why: why}) {
+		t.Error("a possessive rewording was not detected as a restatement of why")
+	}
+}
+
 // The whole-session view must actually reach the prompt. It was built by SessionDigest and
 // then never used, so a synopsis could only ever describe the newest window — a month-end
 // close would be summarised as "clearing the suspense account".

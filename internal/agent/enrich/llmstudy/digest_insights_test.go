@@ -89,6 +89,43 @@ func TestMergeInsightsKeepsDistinctInsightsSharingWords(t *testing.T) {
 	}
 }
 
+// A possessive on only ONE side must not defeat the match: wordsOf splits "Meridian's" into
+// "meridian" and a lone "s", and before significantWords stripped the apostrophe up front,
+// stemming that lone "s" left an empty string counted only against the non-possessive side's
+// word count — dragging a genuine restatement (0.714) below insightMatchRatio (0.8).
+func TestInsightsMatchAcrossPossessive(t *testing.T) {
+	a := "The work is reconciling the March ledger for Meridian."
+	b := "Work continues reconciling Meridian's March ledger."
+	if !insightsMatch(a, b) {
+		t.Error("a possessive rewording was not recognized as the same insight")
+	}
+}
+
+// The same apostrophe-bearing word on BOTH sides is the ordinary case for a contraction
+// repeated across two rewordings, not an edge case — and it moves the ratio the OTHER way
+// from the asymmetric case above. Unfixed, "charlie's" on both sides contributed a phantom ""
+// that was shared AND counted in both word sets: shared=4, larger=5, ratio=0.8 — exactly at
+// insightMatchRatio's threshold, so these two genuinely distinct insights (delta vs echo)
+// were wrongly called a match. Fixed: shared=3 (alpha, bravo, charlie — real words only),
+// larger=4, ratio=0.75, correctly below threshold.
+func TestInsightsMatchDoesNotInflateOnSharedPossessive(t *testing.T) {
+	a := "alpha bravo charlie's delta"
+	b := "alpha bravo charlie's echo"
+	if insightsMatch(a, b) {
+		t.Error("a shared possessive artifact inflated two distinct insights into a false match")
+	}
+}
+
+// The duplicate-collapse call site (MergeInsights' dedup, not just insightsMatch in
+// isolation) must benefit from the possessive fix too.
+func TestMergeInsightsCollapsesPossessiveRewording(t *testing.T) {
+	prev := Digest{Insights: []string{"The work is reconciling the March ledger for Meridian."}}
+	next := Digest{Insights: []string{"Work continues reconciling Meridian's March ledger."}}
+	if got := MergeInsights(prev, next).Insights; len(got) != 1 {
+		t.Fatalf("want the possessive restatement collapsed, got %d: %v", len(got), got)
+	}
+}
+
 // Defect 3, observed in a real digest: insight 7 stated the user's feedback BACKWARDS
 // (claiming a preference for pill components when the session reversed away from them),
 // and append-only merging meant it could never be removed. Retirement is the way out.
