@@ -1,6 +1,9 @@
 package llmstudy
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 // Default caps. Prose is per-section runes; lists are entry counts.
 //
@@ -79,6 +82,16 @@ func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) strin
 		b.WriteString("\n\nSPECIFICS ALREADY REPORTED (each must still appear in your updated report, unless the new part shows it was wrong):\n  ")
 		b.WriteString(strings.Join(named, ", "))
 	}
+	// Hand back the prior open items and require a verdict on each. Prose alone did not
+	// work: "drop what is now closed" left resolved items in the list across every
+	// refinement, because nothing checked. Naming them and requiring an accounting is the
+	// same deterministic anchoring that fixed fact retention.
+	if open := priorOpenItems(prev); len(open) > 0 {
+		b.WriteString("\n\nOPEN ITEMS FROM THAT REPORT — account for EVERY one, in exactly one place:")
+		b.WriteString("\n  keep it in unresolved if it is still open, or name it in closed if the new")
+		b.WriteString("\n  part resolved it. Do not silently drop one.\n  ")
+		b.WriteString(strings.Join(open, "\n  "))
+	}
 	b.WriteString("\n\nMEASURED CONTEXT for the whole session so far (authoritative — your report must be consistent with it):\n")
 	b.WriteString(facts)
 	b.WriteString("\nNEW PART OF THE CONVERSATION, since that report:\n")
@@ -89,6 +102,18 @@ func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) strin
 	b.WriteString(digestRules)
 	b.WriteString("\nRespond with JSON only.\n")
 	return b.String()
+}
+
+// priorOpenItems is the previous report's open list, excluding the sentinel — there is
+// nothing to account for when the last report said nothing was open.
+func priorOpenItems(prev Digest) []string {
+	var out []string
+	for _, item := range prev.Unresolved {
+		if !UsesUnresolvedSentinelText(item) {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // updateTailLen is the size of everything appended after the turns, so fitTurns can
@@ -114,8 +139,12 @@ Updating rules:
     it is WRONG or was reversed. This is for correcting the record, not for tidying it:
     an insight that is merely old, less interesting, or now less relevant stays. Use an
     empty list when nothing was contradicted.
-  - unresolved must describe the CURRENT state: drop what is now closed, add what has
-    newly opened.
+  - unresolved must describe the CURRENT state. An item the new part resolved goes in
+    the "closed" list, NOT in unresolved — a reader will act on anything left in
+    unresolved, so a resolved item left there costs them real work. Add what has newly
+    opened.
+  - current names what is underway RIGHT NOW. If the last thing described is finished,
+    the answer is "nothing in progress" — do not report a completed action here.
 `
 
 // digestUpdate is a refinement response: a digest plus the insights it retires.
@@ -126,26 +155,60 @@ Updating rules:
 type digestUpdate struct {
 	Digest
 	Retired []string `json:"retired"`
+	// Closed names prior open items the new part resolved. Like Retired it is an
+	// instruction to the merge, not report content: a reader wants the current open list,
+	// not a list of things that are no longer open.
+	Closed []string `json:"closed"`
 }
 
 // DigestUpdateSchema is the digest schema plus the retirement list.
 func DigestUpdateSchema() map[string]any {
 	sc := DigestSchema()
 	props, _ := sc["properties"].(map[string]any)
-	props["retired"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	strList := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	props["retired"] = strList
+	props["closed"] = strList
 	req, _ := sc["required"].([]string)
-	sc["required"] = append(append([]string{}, req...), "retired")
+	sc["required"] = append(append([]string{}, req...), "retired", "closed")
 	return sc
 }
 
 // RefineDigest produces the next digest, then merges insights and caps growth.
 func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) (Digest, error) {
+	// KELD_DIGEST_NO_CLOSURE=1 disables the code-side repairs, so the defect they address
+	// can be MEASURED rather than asserted: with it set the refinement is the
+	// prose-instruction-only version, and the T8 gap between runs is the repair's effect.
+	// Study harness only.
+	enforce := os.Getenv("KELD_DIGEST_NO_CLOSURE") == ""
+
 	var up digestUpdate
+
+	// Two deterministic repairs: closures the model declared are applied, and an open item
+	// the report itself contradicts under `done` is removed — one of those two claims is
+	// wrong regardless of the conversation, and the open item is the one a reader acts on.
+	//
+	// Both are done in CODE rather than demanded of the model, which was measured. An
+	// earlier version rejected a refinement whose accounting was incomplete: the model
+	// could not satisfy it, so 10 of 56 attempts burned all 5 retries and were dropped,
+	// trading T1 76.8% for T8 0%. A dropped digest is worse than a stale open item, and
+	// retrying a failure the model cannot pass is the same mistake as retrying a
+	// deterministic one.
+	repair := func(d Digest) Digest {
+		if !enforce {
+			return d
+		}
+		return dropStaleOpenItems(applyClosures(d, up.Closed))
+	}
+
+	// Validation runs on the REPAIRED digest, not the raw response. Validating the raw one
+	// rejected a legitimate answer that moved every open item into "closed", leaving
+	// unresolved momentarily empty — "unresolved is empty" then burned all 5 retries on a
+	// digest the repairs would have completed. The repair supplies the sentinel.
 	if err := l.callValid(DigestUpdatePrompt(prev, sessionLabel, newTurns, facts), DigestUpdateSchema(), &up,
-		func() error { return firstProblem(ValidateDigest(up.Digest)) }); err != nil {
+		func() error { return firstProblem(ValidateDigest(repair(up.Digest))) }); err != nil {
 		return Digest{}, err
 	}
-	merged := mergeWithRetirement(prev, up.Digest, up.Retired)
+	merged := mergeWithRetirement(prev, repair(up.Digest), up.Retired)
 	return CapSections(merged, DefaultProseCap, DefaultListCap), nil
 }
 

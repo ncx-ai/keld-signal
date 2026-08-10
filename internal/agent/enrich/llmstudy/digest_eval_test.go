@@ -161,6 +161,8 @@ func TestDigestRefineQuality(t *testing.T) {
 
 	var (
 		attempted, failed        int
+		stale, openItems         int
+		completedCurrent         int
 		digests, malformed       int
 		ids, unverified, leaks   int
 		withCorrections, stamped int
@@ -230,6 +232,18 @@ func TestDigestRefineQuality(t *testing.T) {
 			if UsesUnresolvedSentinel(d) {
 				sentinelUsed++
 			}
+			// T8: an open item the report itself contradicts. T7 only catches a blocker
+			// with no basis at all and scores a stale one as passing, though a reader
+			// acting on it wastes the same effort.
+			if st := StaleUnresolved(d); len(st) > 0 {
+				stale += len(st)
+				t.Logf("  STALE s%d step%d: %v", sessions, step, st)
+			}
+			openItems += len(d.Unresolved)
+			if CurrentDescribesCompletion(d) {
+				completedCurrent++
+				t.Logf("  CURRENT-IS-DONE s%d step%d: %s", sessions, step, clipLog(d.Current))
+			}
 			if facts.Corrections > 0 || facts.CorrectedTurns > 0 {
 				withCorrections++
 				if LooksRubberstamped(d, facts) {
@@ -290,6 +304,8 @@ func TestDigestRefineQuality(t *testing.T) {
 	t.Logf("T3 rubberstamped          %.1f%% of %d correction-bearing  (want <=10%%)", pct(stamped, withCorrections), withCorrections)
 	t.Logf("T4 retention to final     %.1f%% of %d  (want >=90%%)", pct(retNum, retDen), retDen)
 	t.Logf("T7 fabricated unresolved  %.1f%% of %d clean runs  (want <=10%%)", pct(fabricated, cleanRuns), cleanRuns)
+	t.Logf("T8 stale open items       %.1f%% of %d open items  (want <=2%%)", pct(stale, openItems), openItems)
+	t.Logf("T9 current-is-completed   %.1f%% of %d  (want <=5%%)", pct(completedCurrent, digests), digests)
 	t.Logf("   prompt leaks %d; sentinel used %d/%d", leaks, sentinelUsed, digests)
 }
 
