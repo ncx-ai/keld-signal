@@ -299,77 +299,47 @@ jobs:
   # target's glibc be >= the BUILD glibc; ubuntu-latest (glibc 2.39) would only run on the very
   # newest distros. Freezing against the manylinux 2.28 baseline makes the sidecar run on any
   # distro with glibc >= 2.28 — RHEL/Alma/Rocky 8+, Debian 10+, Ubuntu 18.04+, Arch, Fedora,
-  # Amazon Linux 2023. (manylinux_2_28 is also the oldest baseline whose glibc still satisfies
-  # GitHub Actions' bundled node20, so the JS actions below run inside the container.)
+  # Amazon Linux 2023. The 2.28 baseline is now purely about the glibc floor we target: the
+  # JS actions run natively on the host, not inside the image, so the image's own glibc no
+  # longer has to satisfy the Actions node runtime.
   # macOS/Windows bundle the sidecar inside their native installers, so only Linux ships it as a
   # standalone tarball — which install.sh downloads.
+  #
+  # This is deliberately NOT a `container:` job. Container jobs must be matched to a
+  # container-type hosted runner, and when GitHub couldn't ("The job was not acquired by
+  # Runner of type hosted even after multiple attempts" — runner_name empty, zero steps,
+  # cancelled after 15m) v0.20.0 published without this tarball and every Linux curl|sh
+  # install hard-failed. Invoking the same image via `docker run` keeps the identical build
+  # baseline without that acquisition path; checkout/cache/tar/upload run natively.
   linux-sidecar:
     runs-on: ubuntu-latest
-    container: quay.io/pypa/manylinux_2_28_x86_64
     env:
       IS_RELEASE: ${{ github.event_name == 'release' || inputs.publish_release }}
       TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
 
-      # manylinux's /opt/python CPython is built statically (no libpython.so), which PyInstaller
-      # cannot freeze against. manylinux_2_28 is AlmaLinux 8, whose python3.12 RPM IS built
-      # --enable-shared and links glibc 2.28 — exactly the shared interpreter + old baseline we
-      # need. Install and freeze against that instead.
-      # Reference /usr/bin/python3.12 by absolute path throughout: the manylinux image keeps its
-      # static /opt/python/cp312-cp312/bin first on PATH, so bare `python3.12` would resolve to
-      # the static interpreter we can't freeze against.
-      - name: Install shared CPython 3.12 (glibc 2.28)
-        run: |
-          dnf install -y python3.12 python3.12-devel
-          /usr/bin/python3.12 -m ensurepip --upgrade
-          /usr/bin/python3.12 -m pip install --upgrade pip
-
-      - name: Freeze sidecar (obfuscated, glibc 2.28 baseline)
-        shell: bash
-        env:
-          KELD_OBFUSCATE: "1"   # shipped artifacts are obfuscated; dev builds stay plain
-          PYTHON: /usr/bin/python3.12
-          # torch's default Linux wheel hard-depends on the CUDA 13 stack (cuda-toolkit,
-          # nvidia-*), so the frozen bundle needs libcudart.so.13 at runtime and won't load on
-          # CPU-only machines — which is every device the sidecar runs on (GLiNER2 runs on CPU;
-          # macOS/Windows already ship CPU torch). Pin the CPU build: pre-install it from the
-          # CPU index, and expose that index to build-freeze.sh's own requirements install (the
-          # `+cpu` local version outranks the plain PyPI wheel, so gliner2's torch dep stays CPU).
-          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
-        run: |
-          /usr/bin/python3.12 -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-          /usr/bin/python3.12 -m pip install --quiet python-minifier pyarmor
-          bash sidecar/build-freeze.sh
-
+      # Cache BEFORE the freeze step: the smoke run inside the container resolves the real
+      # model through HF_HOME, which is this directory bind-mounted into /work/hf-cache.
       - name: Cache HuggingFace model
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/hf-cache
           key: hf-gliner2-large-v1-b122b11eeaee4dabd32bed80412f3234c0d0e943
 
-      - name: Smoke the frozen sidecar
+      # The container-side half lives in sidecar/ci-freeze-linux.sh rather than inline here:
+      # quoting a ~40-line bash program through `docker run bash -c '...'` needs an escape on
+      # every quote it contains, which is how this kind of step rots.
+      - name: Freeze + smoke sidecar in manylinux_2_28 (glibc 2.28 baseline)
         shell: bash
-        env:
-          HF_HOME: ${{ github.workspace }}/hf-cache
         run: |
-          BIN="dist/keld-agent-sidecar/keld-agent-sidecar"
-          "$BIN" --port 8399 --host 127.0.0.1 &
-          for i in $(seq 1 180); do
-            if curl -sf http://127.0.0.1:8399/health | grep -q '"ok"'; then ok=1; break; fi
-            sleep 2
-          done
-          [ -n "${ok:-}" ] || { echo "sidecar did not become healthy"; exit 1; }
-          # Real /classify spawns the inference worker child, which must import the (obfuscated)
-          # modules from the frozen bundle — the only CI coverage for frozen worker spawn. It
-          # also proves the glibc-2.28-linked binary actually runs (here, inside the 2.28 image).
-          resp=$(curl -sf -m 120 -X POST http://127.0.0.1:8399/classify \
-            -H 'Content-Type: application/json' \
-            -d '{"text":"debug the login bug","tasks":{"task_type":["debug","other"]}}') \
-            || { echo "frozen worker /classify failed — spawn/import/bundle broke"; exit 1; }
-          echo "$resp" | grep -q '"task_type"' \
-            || { echo "frozen worker returned no result: $resp"; exit 1; }
-          echo "frozen worker spawn + inference OK (glibc 2.28 baseline)"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work" -w /work \
+            -e KELD_OBFUSCATE=1 \
+            -e HF_HOME=/work/hf-cache \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            bash sidecar/ci-freeze-linux.sh
 
       - name: Package Linux sidecar tarball
         shell: bash
