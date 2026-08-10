@@ -6,9 +6,23 @@ import (
 )
 
 // identifierPat matches the token shapes worth verifying: dotted/hyphenated
-// filenames and identifiers, and capitalised proper nouns. Deliberately narrow — a
-// broad pattern would flag ordinary prose and drown the signal.
-var identifierPat = regexp.MustCompile(`\b[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)+\b|\b[A-Z][a-zA-Z0-9]{2,}\b`)
+// filenames and identifiers, snake_case/SCREAMING_SNAKE_CASE names, and capitalised
+// proper nouns. Deliberately narrow — a broad pattern would flag ordinary prose and
+// drown the signal.
+//
+// The underscore alternative was added after INSTALL_SCRIPT_URL, enrichment_pass,
+// tool_events, session_record, MAX_LEN and KELD_WATCH were all found to return NO
+// match: `_` is a regex word character, so it blocks the `\b` the capitalised
+// alternative needs right after "INSTALL", and the dotted/hyphenated alternative
+// only fires on `.`/`-`, never `_`. strongIdentifier already special-cases an
+// underscore (its own doc names "an ALL_CAPS constant" as a target) — the gate in
+// front of it was the bug, silently discarding every candidate of that shape before
+// strongIdentifier ever saw it. Before this branch's retain-list replaced
+// CarryForward, that whole naming convention still reached a refinement prompt
+// verbatim, because CarryForward embedded the sentence it sat in regardless of
+// whether Identifiers could parse it out; the retain-list is now the ONLY channel,
+// so the gap had to be closed here rather than staying latent.
+var identifierPat = regexp.MustCompile(`\b[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)+\b|\b[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+\b|\b[A-Z][a-zA-Z0-9]{2,}\b`)
 
 var digestStopWords = map[string]bool{
 	"The": true, "This": true, "That": true, "These": true, "Those": true,

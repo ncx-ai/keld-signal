@@ -204,6 +204,38 @@ func TestIdentifiersArePositionAware(t *testing.T) {
 	}
 }
 
+// Before identifierPat gained its underscore alternative, a snake_case or
+// SCREAMING_SNAKE_CASE name reached Identifiers' OUTER regex not at all — `_` blocks
+// the `\b` the capitalised alternative needs right after e.g. "INSTALL", and the
+// dotted/hyphenated alternative only fires on `.`/`-`. strongIdentifier already
+// special-cased an underscore (it names "an ALL_CAPS constant" explicitly), so the
+// gap was purely in what got offered to it as a candidate in the first place — this
+// pins that it no longer does.
+func TestIdentifiersExtractSnakeCaseNames(t *testing.T) {
+	d := Digest{
+		Done:     "Updated enrichment_pass and tool_events, then bumped MAX_LEN.",
+		Happened: "Checked KELD_WATCH against session_record before shipping.",
+	}
+	got := map[string]bool{}
+	for _, id := range Identifiers(d) {
+		got[id] = true
+	}
+	for _, w := range []string{"enrichment_pass", "tool_events", "MAX_LEN", "KELD_WATCH", "session_record"} {
+		if !got[w] {
+			t.Errorf("snake_case name %q must be extracted; got %v", w, Identifiers(d))
+		}
+	}
+}
+
+// The widened pattern must still leave ordinary, underscore-free prose alone — the
+// gate stays narrow, it just no longer excludes an entire naming convention.
+func TestIdentifiersSnakeCaseWideningStaysNarrow(t *testing.T) {
+	d := Digest{Done: "This is ordinary prose about the work and its progress, nothing special here at all."}
+	if got := Identifiers(d); len(got) != 0 {
+		t.Errorf("ordinary prose must not be flagged, got %v", got)
+	}
+}
+
 func TestStrongIdentifierSignals(t *testing.T) {
 	for _, w := range []string{"agent-type-row.tsx", "/v1/enrichments", "Qwen3-0.6B",
 		"PostgreSQL", "INSTALL_SCRIPT_URL", "config.py"} {

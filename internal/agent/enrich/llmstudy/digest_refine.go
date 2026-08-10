@@ -43,6 +43,13 @@ type RefineInput struct {
 
 // DigestUpdatePromptFrom builds the refinement prompt.
 //
+// Refine loops fail in four known ways. Recency bias: earlier material must not be
+// dropped just because the new part is silent on it — it is carried forward unless
+// contradicted (see updateRules). Silent contradiction: revise in place and say what
+// changed. Drift: insights are merged in CODE, not re-prosed by the model, so it never
+// gets the chance to reword an old one. The fourth, unbounded growth, is handled by
+// CapSections.
+//
 // No prior prose is embedded. The previous report reaches the model as a paraphrase
 // ladder (the beat series) plus a deterministic retain-list (Identifiers) and open-item
 // accounting (priorOpenItems) — "the work has been on X, Y, Z; specifically A, B, C;
@@ -53,27 +60,33 @@ type RefineInput struct {
 // The measured record comes first, ahead of the beats and the window, because
 // everything after it is indicative (the model's own prior paraphrasing) or evidence
 // (raw turns) rather than authoritative — a model shown counts before prose holds its
-// prose consistent with them, the same reasoning DigestCreatePromptWithView uses.
+// prose consistent with them, the same reasoning DigestCreatePromptWithView uses. It
+// is written only when in.Record actually holds measured data (Populated()) — an
+// unpopulated SessionRecord's zero-value counts ("turns=0 corrections=0") would
+// otherwise be asserted as authoritative, and digestRules tells the model that
+// corrections are a measured fact it must be consistent with: a legacy caller with no
+// record to offer (see DigestUpdatePrompt below) must not have zero counts fabricated
+// on its behalf, which reads as "nothing happened" against digestRules' own
+// anti-rubberstamping instruction.
 //
 // Contains no worked examples, deliberately. An example in an earlier prompt here was
 // copied verbatim into a report about an unrelated session — the same failure this
 // branch documented for the extraction prompts.
 func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
-	var b strings.Builder
-	b.WriteString("You are updating a report on a work session, for the person doing the work and for a manager who was not present.\n\n")
-	b.WriteString("Session context: ")
-	b.WriteString(in.SessionLabel)
-
-	b.WriteString("\n\nSESSION RECORD (measured — authoritative):\n")
-	b.WriteString(in.Record.Block())
+	var head strings.Builder
+	head.WriteString("You are updating a report on a work session, for the person doing the work and for a manager who was not present.\n\n")
+	head.WriteString("Session context: ")
+	head.WriteString(in.SessionLabel)
 	if pop := in.Record.Populated(); len(pop) > 0 {
-		b.WriteString("populated fields: " + strings.Join(pop, ", ") + "\n")
+		head.WriteString("\n\nSESSION RECORD (measured — authoritative):\n")
+		head.WriteString(in.Record.Block())
+		head.WriteString("populated fields: " + strings.Join(pop, ", ") + "\n")
 	}
 
-	if bs := RenderBeats(SelectBeats(in.Beats, MaxBeatSelection)); bs != "" {
-		b.WriteString("\nBEATS, oldest first — each written from its own window (indicative):\n")
-		b.WriteString(bs)
-	}
+	// Everything below is load-bearing (the record above, and the window fitTurns
+	// writes last, are the other two) — it is never trimmed. Only the beat series and
+	// the whole-session view are discretionary; see fitDiscretionary.
+	var rest strings.Builder
 	// Hand back the previous report's named specifics as an explicit retain-list.
 	//
 	// Measured need: instrumenting retention showed 7 of 7 lost facts disappeared
@@ -86,9 +99,9 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	// section must still survive, and the retain-list is now the only place a
 	// refinement sees it at all — nothing else carries the prior report's text forward.
 	if named := Identifiers(prev); len(named) > 0 {
-		b.WriteString("\nSPECIFICS ALREADY REPORTED (each must still appear, unless the new part shows it was wrong):\n  ")
-		b.WriteString(strings.Join(named, ", "))
-		b.WriteString("\n")
+		rest.WriteString("\nSPECIFICS ALREADY REPORTED (each must still appear, unless the new part shows it was wrong):\n  ")
+		rest.WriteString(strings.Join(named, ", "))
+		rest.WriteString("\n")
 	}
 	// Hand back the prior open items and require a verdict on each. Prose alone did not
 	// work: "drop what is now closed" left resolved items in the list across every
@@ -96,11 +109,11 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	// same deterministic anchoring that fixed fact retention. Verbatim by design: this is
 	// an accounting requirement (account for EVERY one), not a leak of prior prose.
 	if open := priorOpenItems(prev); len(open) > 0 {
-		b.WriteString("\nOPEN ITEMS FROM THAT REPORT — account for EVERY one, in exactly one place:")
-		b.WriteString("\n  keep it in unresolved if it is still open, or name it in closed if the new")
-		b.WriteString("\n  part resolved it. Do not silently drop one.\n  ")
-		b.WriteString(strings.Join(open, "\n  "))
-		b.WriteString("\n")
+		rest.WriteString("\nOPEN ITEMS FROM THAT REPORT — account for EVERY one, in exactly one place:")
+		rest.WriteString("\n  keep it in unresolved if it is still open, or name it in closed if the new")
+		rest.WriteString("\n  part resolved it. Do not silently drop one.\n  ")
+		rest.WriteString(strings.Join(open, "\n  "))
+		rest.WriteString("\n")
 	}
 	// Hand over what the newest user turns are about. Gated on a MEASURED focus shift,
 	// not applied to every refinement. Unconditionally, the anchor bought recency at a
@@ -110,18 +123,32 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	// changed, so a routine refresh is left alone and only a genuine shift gets the pull.
 	if in.Why == TriggerFocusShift {
 		if subs := recentSubjectsOf(in.NewTurns); subs != "" {
-			b.WriteString("\nTHE LATEST TURNS ARE ABOUT: ")
-			b.WriteString(subs)
-			b.WriteString("\n  The subject of the work was measured to have CHANGED since that")
-			b.WriteString(" report. Re-scope the synopsis to the work as it now is, in its subject")
-			b.WriteString(" as well as its standing, and say what it grew out of. Leave the other")
-			b.WriteString(" sections' accumulated content alone.\n")
+			rest.WriteString("\nTHE LATEST TURNS ARE ABOUT: ")
+			rest.WriteString(subs)
+			rest.WriteString("\n  The subject of the work was measured to have CHANGED since that")
+			rest.WriteString(" report. Re-scope the synopsis to the work as it now is, in its subject")
+			rest.WriteString(" as well as its standing, and say what it grew out of. Leave the other")
+			rest.WriteString(" sections' accumulated content alone.\n")
 		}
 	}
-	if v := clipSessionViewFor(in.SessionView, b.Len()+updateTailLen()); v != "" {
+
+	// The beat series and the whole-session view are the only two DISCRETIONARY
+	// claimants on the budget — see fitDiscretionary's doc for why both must yield
+	// before the recent window, which current/why/next/unresolved are actually WRITTEN
+	// from, is allowed to starve.
+	beats, view := fitDiscretionary(in.Beats, in.SessionView, head.Len()+rest.Len(), updateTailLen())
+
+	var b strings.Builder
+	b.WriteString(head.String())
+	if beats != "" {
+		b.WriteString("\nBEATS, oldest first — each written from its own window (indicative):\n")
+		b.WriteString(beats)
+	}
+	b.WriteString(rest.String())
+	if view != "" {
 		b.WriteString("\nWHOLE SESSION, sampled from start to now (coarse — for the shape of the")
 		b.WriteString(" work, not its detail):\n")
-		b.WriteString(v)
+		b.WriteString(view)
 	}
 	b.WriteString("\nNEW PART OF THE CONVERSATION (evidence):\n")
 	b.WriteString(fitTurns(in.NewTurns, b.Len()+updateTailLen()))
@@ -131,6 +158,50 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	b.WriteString(digestRules)
 	b.WriteString("\nRespond with JSON only.\n")
 	return b.String()
+}
+
+// fitDiscretionary decides how much of the beat series and the whole-session view the
+// budget can afford, so that the recent window — what current, why, next and unresolved
+// are actually WRITTEN from — keeps at least MinTurnChars whenever there is anything
+// discretionary left to trim first.
+//
+// Before this, only the view ever yielded (clipSessionViewFor already reserves
+// MinTurnChars against the view's OWN encroachment). The beat series was written at
+// full size unconditionally, so a session with a long open-item list or a large
+// retain-list — both load-bearing, per DigestUpdatePromptFrom — plus a full 12-beat
+// series could exhaust the budget before the window's reserve was ever considered,
+// leaving fitTurns nothing to work with but its own omitted-turns notice: a report
+// written from zero conversation evidence, silently, because the prompt was still
+// under budget by the only measure anyone was checking.
+//
+// The view yields first (it always has — see clipSessionViewFor's doc, "the lowest-
+// priority claimant"), then the beat series, by SHRINKING its selection rather than
+// dropping it outright: SelectBeats already keeps the most informative beats as its
+// count shrinks (first, last, subject changes), so trimming the COUNT degrades
+// gracefully instead of blanking the ladder in one step.
+//
+// If even beats="" and view="" cannot free enough room for the floor, the load-bearing
+// content (the record, retain-list and open-item accounting) plus the fixed
+// instructional tail already exceed budget-MinTurnChars on their own — there is
+// nothing left here to trim, and this function does not paper over that: it returns
+// the smallest beats/view it tried, and the window gets whatever remains, which can be
+// less than MinTurnChars. That is a real finding for whoever owns the budget, not a
+// bug in this function.
+func fitDiscretionary(allBeats []Beat, view string, fixed, tail int) (beats, clippedView string) {
+	for k := MaxBeatSelection; k >= 0; k-- {
+		var cand string
+		if k > 0 {
+			cand = RenderBeats(SelectBeats(allBeats, k))
+		}
+		overhead := fixed + len(cand) + tail
+		// k == 0 (beats fully dropped) is the last possible attempt: whether or not the
+		// floor is actually reachable, there is nothing further to trim, so it always
+		// returns rather than falling through to the unreachable line below.
+		if overhead+MinTurnChars <= DefaultPromptCharBudget || k == 0 {
+			return cand, clipSessionViewFor(view, overhead)
+		}
+	}
+	return "", "" // unreachable: the k == 0 iteration above always returns.
 }
 
 // DigestUpdatePrompt, DigestUpdatePromptWithView and DigestUpdatePromptWithReason are the
@@ -198,10 +269,11 @@ func updateTailLen() int {
 
 const updateRules = `
 Updating rules:
-  - Build on the beats and the specifics above unless the new part contradicts them.
-    Every named specific listed above must still appear, unless the new part shows it
-    was wrong. Compression is fine — shorten or drop framing — as long as no named
-    specific and no open item is lost doing it.
+  - Do not drop earlier material simply because the new part does not mention it — build
+    on the beats and the specifics above unless the new part contradicts it. Every named
+    specific listed above must still appear, unless the new part shows it was wrong.
+    Compression is fine — shorten or drop framing — as long as no named specific and no
+    open item is lost doing it.
   - Where something changed, revise it in place and say what changed.
   - synopsis: decide first whether the new part CONTINUES the work the report describes or
     has moved to a different subject. If it continues, keep the subject and framing and

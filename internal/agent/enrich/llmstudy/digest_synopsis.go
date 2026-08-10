@@ -15,13 +15,17 @@ func RenderSessionView(w Window) string {
 }
 
 // SessionViewCap bounds the whole-session view's share of the prompt, and MinTurnChars is
-// what the recent window keeps regardless.
+// the floor the recent window keeps once anything discretionary has been trimmed.
 //
-// The view is the lowest-priority claimant on the budget. The carried report and the recent
-// window are both load-bearing — the window is what current, next and unresolved are written
-// from — while the view is a framing aid for the synopsis. So it takes whatever is left after
-// the fixed parts and the window's reserve, which can be nothing at all on a session whose
-// carried report is already large.
+// The view is the lowest-priority claimant on the budget, and the beat series yields
+// next — see fitDiscretionary in digest_refine.go. The session record, the retain-list,
+// the open-item accounting, and the recent window itself are all load-bearing: the window
+// is what current, next and unresolved are actually WRITTEN from, while the view is a
+// framing aid for the synopsis and the beats are an indicative paraphrase. So the view
+// takes whatever is left after everything load-bearing, the beat series (itself shrunk
+// first if needed), and the window's own reserve — which can be nothing at all on a
+// session whose retain-list or open-item accounting is already large, and beats can be
+// shrunk all the way to nothing before that floor is given up on.
 const (
 	SessionViewCap = 2200
 	MinTurnChars   = 1600

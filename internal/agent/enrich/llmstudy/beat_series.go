@@ -7,7 +7,11 @@ import (
 )
 
 // MaxBeatSelection caps how many beats a report reads. At BeatCap runes each that is ~2,400
-// worst case, against the 4,742 the embedded report cost.
+// worst case, against a fully-capped CarryForward-equivalent JSON embed, measured at 6,339
+// runes (not the ~4,742 an average real session showed — that figure was typical, not
+// worst-case). Beats are also the one discretionary claimant besides the whole-session
+// view: fitDiscretionary (digest_refine.go) shrinks the selection below MaxBeatSelection
+// when the budget is under pressure, so this is the ceiling, not a guarantee.
 const MaxBeatSelection = 12
 
 // AppendBeat stores a beat unless it restates the previous one, marking whether it changed the
