@@ -27,6 +27,21 @@ const (
 	DefaultListCap      = 12
 )
 
+// beatsHeader, viewHeader and windowHeader are the literal headings the assembly writes
+// immediately before the beat series, the whole-session view, and the recent window,
+// respectively. Defined once here and used by BOTH DigestUpdatePromptFrom's real
+// assembly and fitDiscretionary's overhead estimate, so the two cannot drift apart —
+// fitDiscretionary previously hardcoded neither and simply omitted them, so it could
+// certify a beat count as "leaves room for the floor" while the real assembly, which
+// writes these headings in addition to the content being budgeted, did not. A future
+// wording change to any of these three strings now automatically keeps both sides
+// honest instead of silently reopening that gap.
+const (
+	beatsHeader  = "\nBEATS, oldest first — each written from its own window (indicative):\n"
+	viewHeader   = "\nWHOLE SESSION, sampled from start to now (coarse — for the shape of the work, not its detail):\n"
+	windowHeader = "\nNEW PART OF THE CONVERSATION (evidence):\n"
+)
+
 // RefineInput is everything a refinement reads, grouped by truth-status: the record is
 // measured, the beat series is paraphrased, the window is evidence. None of it is the
 // previous report's own prose — that is the point: compression can only be deliberate,
@@ -141,16 +156,15 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	var b strings.Builder
 	b.WriteString(head.String())
 	if beats != "" {
-		b.WriteString("\nBEATS, oldest first — each written from its own window (indicative):\n")
+		b.WriteString(beatsHeader)
 		b.WriteString(beats)
 	}
 	b.WriteString(rest.String())
 	if view != "" {
-		b.WriteString("\nWHOLE SESSION, sampled from start to now (coarse — for the shape of the")
-		b.WriteString(" work, not its detail):\n")
+		b.WriteString(viewHeader)
 		b.WriteString(view)
 	}
-	b.WriteString("\nNEW PART OF THE CONVERSATION (evidence):\n")
+	b.WriteString(windowHeader)
 	b.WriteString(fitTurns(in.NewTurns, b.Len()+updateTailLen()))
 	b.WriteString("\nProduce the UPDATED report, same sections:\n")
 	b.WriteString(digestSections)
@@ -174,15 +188,27 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 // written from zero conversation evidence, silently, because the prompt was still
 // under budget by the only measure anyone was checking.
 //
+// `fixed` and `tail` cover everything load-bearing, but NOT the literal headings the
+// assembly writes around the two discretionary sections — beatsHeader, viewHeader and
+// windowHeader are added in explicitly below. Omitting them was itself a bug an earlier
+// version of this function had: it certified a beat count as leaving room for the floor
+// while the real, assembled prompt — which also pays for those headings — did not,
+// undershooting the floor by exactly their combined length. What this function
+// certifies must equal what DigestUpdatePromptFrom actually assembles, which is why the
+// header constants are shared between the two rather than re-derived or hardcoded here.
+//
 // The view yields first (it always has — see clipSessionViewFor's doc, "the lowest-
 // priority claimant"), then the beat series, by SHRINKING its selection rather than
 // dropping it outright: SelectBeats already keeps the most informative beats as its
 // count shrinks (first, last, subject changes), so trimming the COUNT degrades
-// gracefully instead of blanking the ladder in one step.
+// gracefully instead of blanking the ladder in one step. The beat count is chosen
+// ASSUMING the view is already fully yielded (view's own header costs nothing until a
+// candidate view size is found to survive on whatever the beat count leaves behind) —
+// consistent with the view yielding first.
 //
 // If even beats="" and view="" cannot free enough room for the floor, the load-bearing
-// content (the record, retain-list and open-item accounting) plus the fixed
-// instructional tail already exceed budget-MinTurnChars on their own — there is
+// content (the record, retain-list and open-item accounting) plus windowHeader plus the
+// fixed instructional tail already exceed budget-MinTurnChars on their own — there is
 // nothing left here to trim, and this function does not paper over that: it returns
 // the smallest beats/view it tried, and the window gets whatever remains, which can be
 // less than MinTurnChars. That is a real finding for whoever owns the budget, not a
@@ -193,12 +219,22 @@ func fitDiscretionary(allBeats []Beat, view string, fixed, tail int) (beats, cli
 		if k > 0 {
 			cand = RenderBeats(SelectBeats(allBeats, k))
 		}
-		overhead := fixed + len(cand) + tail
+		// windowHeader is unconditional — the assembly always writes it, beats or no
+		// beats, view or no view. beatsHeader is paid only when a beat is actually kept.
+		overhead := fixed + tail + len(windowHeader)
+		if cand != "" {
+			overhead += len(beatsHeader) + len(cand)
+		}
 		// k == 0 (beats fully dropped) is the last possible attempt: whether or not the
 		// floor is actually reachable, there is nothing further to trim, so it always
 		// returns rather than falling through to the unreachable line below.
 		if overhead+MinTurnChars <= DefaultPromptCharBudget || k == 0 {
-			return cand, clipSessionViewFor(view, overhead)
+			// clipSessionViewFor is given overhead PLUS viewHeader's own length: it computes
+			// room for the view's CONTENT only, and the header is written in addition to
+			// that content, so a view candidate that were sized against `overhead` alone
+			// would itself eat into the same MinTurnChars reservation the beat count above
+			// was just fitted around.
+			return cand, clipSessionViewFor(view, overhead+len(viewHeader))
 		}
 	}
 	return "", "" // unreachable: the k == 0 iteration above always returns.

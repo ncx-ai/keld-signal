@@ -420,11 +420,41 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 // unresolved — the four sections the window is the ONLY evidence for — would then be
 // written from zero conversation, silently, because the assembled prompt was still under
 // budget by the only measure anyone was checking.
-func TestWindowKeepsItsFloorUnderBeatAndOpenItemPressure(t *testing.T) {
-	var id int
+// Parameters are deliberately TIGHT, not generous: no session view at all (so there is
+// nothing left for the view to yield — the beat count alone has to get this right), and
+// an item length chosen to sit exactly on a decision boundary rather than comfortably
+// inside a k that would be chosen either way. Fix round 2 found that the first version
+// of this test (150-rune items plus a whole-session view) left 72 runes of slack —
+// enough that fitDiscretionary's THEN-undercounted overhead estimate (it omitted
+// beatsHeader and windowHeader, the literal headings the real assembly writes around
+// the content being budgeted) still happened to pick the same beat count either way, so
+// the window landed above the floor regardless and the test could not tell the two
+// versions of fitDiscretionary apart. A test with that much slack survives the bug
+// instead of catching it.
+//
+// This one does not survive it. Reverting the header accounting in fitDiscretionary
+// (dropping the `overhead += len(beatsHeader)` / `+ len(windowHeader)` terms, i.e.
+// going back to `overhead := fixed + len(cand) + tail`) was confirmed DIRECTLY, by
+// making that edit, running this exact test, and reading the failure, then restoring
+// the fix and re-running to confirm it passes:
+//   - reverted: fitDiscretionary certifies k=8 (the header-omitting estimate still
+//     satisfies its own floor check at that count), but the real assembled window is
+//     only 1,567 runes — 33 below MinTurnChars (1,600). Test fails.
+//   - fixed: fitDiscretionary correctly rejects k=8 (accounting for the ~114 omitted
+//     runes across the two headers pushes its own estimate past the budget at that
+//     count) and settles on k=7 instead; the real assembled window is 1,742 runes.
+//     Test passes.
+func TestWindowKeepsItsFloorAtTheBoundary(t *testing.T) {
+	// 124-rune items are not an arbitrary round number: at this exact size, omitting
+	// beatsHeader+windowHeader from the overhead estimate (~114 runes combined) flips
+	// which beat count fitDiscretionary chooses (8 with the headers omitted, 7 with them
+	// included) — the smallest gap at which the bug this test guards against actually
+	// changes the outcome, rather than being absorbed by a k that was going to be chosen
+	// either way.
+	const itemLen = 124
 	prev := Digest{}
 	for i := 0; i < DefaultListCap; i++ {
-		prev.Unresolved = append(prev.Unresolved, packSpecifics(&id, 150, 1))
+		prev.Unresolved = append(prev.Unresolved, strings.Repeat("z", itemLen))
 	}
 	beats := make([]Beat, MaxBeatSelection)
 	for i := range beats {
@@ -434,25 +464,27 @@ func TestWindowKeepsItsFloorUnderBeatAndOpenItemPressure(t *testing.T) {
 	in := RefineInput{
 		SessionLabel: "work session",
 		Beats:        beats,
-		SessionView:  strings.Repeat("user: an early turn about the work\n", 200),
-		NewTurns:     newTurns,
+		// No SessionView: nothing left for the view to yield, so the beat-count decision
+		// alone has to get the floor right — the failure mode this test targets.
+		NewTurns: newTurns,
 	}
 	p := DigestUpdatePromptFrom(prev, in)
 
-	const marker = "NEW PART OF THE CONVERSATION (evidence):\n"
-	const tailMarker = "\nProduce the UPDATED report, same sections:\n"
-	start := strings.Index(p, marker)
+	start := strings.Index(p, windowHeader)
 	if start < 0 {
-		t.Fatal("window marker missing from prompt")
+		t.Fatal("window header missing from prompt")
 	}
-	start += len(marker)
+	start += len(windowHeader)
+	const tailMarker = "\nProduce the UPDATED report, same sections:\n"
 	end := strings.Index(p[start:], tailMarker)
 	if end < 0 {
 		t.Fatal("tail marker missing from prompt")
 	}
 	window := p[start : start+end]
-	if got := len([]rune(window)); got < MinTurnChars {
-		t.Errorf("window starved to %d runes, below the documented floor of %d — beats/view "+
-			"did not yield enough room; window content: %.80q...", got, MinTurnChars, window)
+	got := len([]rune(window))
+	t.Logf("window: %d runes (floor %d, margin %d)", got, MinTurnChars, got-MinTurnChars)
+	if got < MinTurnChars {
+		t.Errorf("window starved to %d runes, below the documented floor of %d — beats did "+
+			"not yield enough room; window content: %.80q...", got, MinTurnChars, window)
 	}
 }
