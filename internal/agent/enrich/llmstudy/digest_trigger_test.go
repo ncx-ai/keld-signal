@@ -1,6 +1,9 @@
 package llmstudy
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func base() TriggerState {
 	return TriggerState{
@@ -81,5 +84,125 @@ func TestStaleFinalisationBypassesMinTurns(t *testing.T) {
 	s.TurnsSince = 40
 	if ok, why := p.ShouldRefresh(s); !ok || why != TriggerStale {
 		t.Fatalf("stale finalisation must fire, got ok=%v why=%s", ok, why)
+	}
+}
+
+func TestFloorSuppressesAnEarlyRefresh(t *testing.T) {
+	p := DefaultTriggerPolicy()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	s := TriggerState{
+		HasDigest: true, TurnsSince: 20, Now: now,
+		LastDigestAt: now.Add(-10 * time.Minute),
+		FocusDomain:  "b", PrevFocusDomain: "a",
+	}
+	if ok, why := p.ShouldRefresh(s); ok {
+		t.Errorf("fired %s inside the %v floor", why, p.MinInterval)
+	}
+}
+
+// A suppressed reason is DEFERRED, not dropped: a focus shift ten minutes after a digest must
+// still be the cause of the next one rather than being lost to a later volume trigger.
+func TestSuppressedReasonIsCarried(t *testing.T) {
+	p := DefaultTriggerPolicy()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	s := TriggerState{
+		HasDigest: true, TurnsSince: 20, Now: now,
+		LastDigestAt:  now.Add(-2 * time.Hour),
+		PendingReason: TriggerFocusShift,
+	}
+	ok, why := p.ShouldRefresh(s)
+	if !ok {
+		t.Fatal("the floor has elapsed; it must fire")
+	}
+	if why != TriggerFocusShift {
+		t.Errorf("want the carried reason, got %s", why)
+	}
+}
+
+// The first digest is not rate-limited: there is nothing to be stale relative to.
+func TestFirstDigestIgnoresTheFloor(t *testing.T) {
+	p := DefaultTriggerPolicy()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	if ok, why := p.ShouldRefresh(TriggerState{Now: now, LastDigestAt: now}); !ok || why != TriggerFirst {
+		t.Errorf("first digest was suppressed: ok=%v why=%s", ok, why)
+	}
+}
+
+// The floor applies to finalisation too — a stopped session is not going anywhere.
+func TestFloorAppliesToFinalisation(t *testing.T) {
+	p := DefaultTriggerPolicy()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	s := TriggerState{HasDigest: true, TurnsSince: p.StaleTurns + 1, Now: now,
+		LastDigestAt: now.Add(-time.Minute)}
+	if ok, _ := p.ShouldRefresh(s); ok {
+		t.Error("finalisation bypassed the floor")
+	}
+}
+
+func TestStrongerReasonOrdering(t *testing.T) {
+	if strongerReason(TriggerVolume, TriggerFocusShift) != TriggerFocusShift {
+		t.Error("focus shift must outrank volume")
+	}
+	if strongerReason(TriggerFriction, TriggerUnsettled) != TriggerFriction {
+		t.Error("friction must outrank unsettled")
+	}
+	if strongerReason(TriggerNone, TriggerVolume) != TriggerVolume {
+		t.Error("any reason must outrank none")
+	}
+}
+
+// A zero MinInterval must not silently disable the floor via a zero-value policy.
+func TestDefaultPolicyHasAnHourFloor(t *testing.T) {
+	if got := DefaultTriggerPolicy().MinInterval; got != time.Hour {
+		t.Errorf("want a 1h floor, got %v", got)
+	}
+}
+
+// TestSuppressedReasonSurvivesARoundTrip is the only test that exercises deferral
+// end to end: it derives PendingReason from a PRIOR suppressed call's own return
+// value, rather than hand-setting it the way TestSuppressedReasonIsCarried does.
+// That distinction matters because the brief this package was built from returned
+// TriggerNone on suppression while its own comment claimed the caller could persist
+// "effective" as PendingReason — a contradiction none of the other trigger tests
+// caught, since the two floor tests ignore the returned reason and the carry test
+// never obtains it from a real suppressed call. This test fails on that version:
+// call 1 would report `why == TriggerNone`, so call 2 (with the live focus signal
+// reverted, leaving only a below-MaxTurns turn count) would see no PendingReason to
+// rank against and stay quiet — silently losing the focus shift rather than merely
+// downgrading it to "volume".
+func TestSuppressedReasonSurvivesARoundTrip(t *testing.T) {
+	p := DefaultTriggerPolicy()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	lastDigest := now.Add(-10 * time.Minute)
+
+	// Call 1: focus shifted a -> b, ten minutes after the last digest — inside the
+	// 1h floor, so it must be suppressed. The reason must still be reported: that is
+	// the half of the contract a caller needs in order to defer it at all.
+	ok1, why1 := p.ShouldRefresh(TriggerState{
+		HasDigest: true, TurnsSince: 20, Now: now, LastDigestAt: lastDigest,
+		FocusDomain: "b", PrevFocusDomain: "a",
+	})
+	if ok1 {
+		t.Fatal("call 1 should be suppressed by the floor")
+	}
+	if why1 != TriggerFocusShift {
+		t.Fatalf("suppression must still report the reason so it can be carried; got %q", why1)
+	}
+
+	// Call 2: 70 minutes later, the floor has elapsed, and the live focus signal has
+	// reverted to "a" (matching PrevFocusDomain again) — the wobble-back case the
+	// requirement itself names. TurnsSince stays below MaxTurns, so the live cascade
+	// alone would report nothing at all. Only carrying why1 forward as PendingReason
+	// preserves the original cause.
+	ok2, why2 := p.ShouldRefresh(TriggerState{
+		HasDigest: true, TurnsSince: 5, Now: now.Add(70 * time.Minute), LastDigestAt: lastDigest,
+		FocusDomain: "a", PrevFocusDomain: "a",
+		PendingReason: why1,
+	})
+	if !ok2 {
+		t.Fatal("call 2 should fire; the floor has elapsed and a reason is pending")
+	}
+	if why2 != TriggerFocusShift {
+		t.Errorf("the deferred focus-shift reason was lost or downgraded: got %q, want %q", why2, TriggerFocusShift)
 	}
 }
