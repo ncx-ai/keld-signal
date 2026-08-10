@@ -95,6 +95,70 @@ rather than from the previous paraphrase, the coarse session view is re-derived 
 transcript, and now the framing itself is checkable against the session's own earlier
 framings. Drift becomes visible to the generation that would otherwise compound it.
 
+### The session record — a minimal measured spine
+
+The ladder and the window are both *narrative*: one paraphrased by a model, one raw
+transcript. Neither is authoritative. So the third input is a small structured record that
+spans the whole session, is measured rather than written, and is updated when the thing it
+describes actually changes.
+
+This splits the context by **truth-status**, which is the property that matters:
+
+| input | origin | authority |
+|---|---|---|
+| session record | measured, accumulated | authoritative |
+| story ladder | model-paraphrased | indicative |
+| recent window | raw transcript | evidence |
+
+**Contents — minimal and bounded.** Every list is capped, or it stops being minimal:
+
+- `projects` — repos or working directories touched (cap 5, by recency)
+- `focus` — domain, function, and concentration, from the EWMA the classification pipeline
+  already maintains
+- `activity` — the activity-type mix over the session
+- `subjects` — accumulated subject terms, **only those verified verbatim against the
+  transcript**, capped at 12 by frequency
+- `counts` — session-spanning turns, tool profile, corrections, corrected turns. Not the
+  window-scoped counts used today
+- `turning_points` — the `seq` and trigger reason of prior digests, so a focus shift is
+  recoverable as a fact rather than inferred from prose
+
+**Update policy.** Not regenerated each turn; each field changes only when its input does.
+
+- Deterministic fields (projects, counts, tool profile, turning points) are recomputed from
+  the transcript every window. No model, so this is free.
+- `focus` follows the EWMA as classifications arrive.
+- `subjects` is a union, gated by the existing verbatim check, then evicted to the cap. Union
+  plus verification means a term cannot enter by being plausible.
+
+**The change detection and the regeneration trigger are the same signal.** A focus shift that
+updates the record is the same event that `TriggerFocusShift` already fires on. They should
+not be two mechanisms — the record changing is *why* a refresh is worth spending.
+
+**Storage.** One mutable row per session, not snapshots, with the `seq` of the digest that
+last consumed it. Digests are snapshots because their prose is a record; the session record
+is current state and is overwritten.
+
+**This fixes a defect rather than only adding a feature.** `DigestFacts` today is
+window-scoped, and its `Topics`/`Entities` fields — the intended session-spanning
+anchor — come from `WithEnrichment`, which needs a classification pass the digest path never
+makes. They have been empty in every measurement taken. The session record is the right home
+for that accumulated view.
+
+**Privacy.** Terms are verified substrings of locally-read text, the same exposure the
+existing topic extraction has. No raw prose enters the record.
+
+### The consistency gate this buys
+
+With a measured spine, drift becomes machine-detectable instead of needing a human or a
+transcript re-read: if the story claims the work is about one thing while `focus`, `projects`
+and `subjects` say another, the report contradicts a measurement.
+
+That is a new threshold — story-versus-record consistency — and it is the first currency
+check that does not depend on judgement. It does not replace scoring a late paraphrase
+against the transcript, because the record is a coarse proxy, but it is cheap enough to run
+on every refinement.
+
 ### The specifics half
 
 `Identifiers(prev)` already extracts the previous report's named specifics and hands them
@@ -105,16 +169,22 @@ named things may not disappear.
 So the refinement prompt carries:
 
 ```
-THE STORY SO FAR, oldest first:
+SESSION RECORD (measured — authoritative):
+  projects, focus + concentration, activity mix, subjects,
+  session-spanning counts, turning points
+THE STORY SO FAR, oldest first (paraphrased — indicative):
   [1]  <= 140 runes   where the work started
   [3]  <= 140 runes   sampled
   [5]  <= 140 runes   sampled
   [6]  <= 600 runes   most recent, in full
 SPECIFICS ALREADY REPORTED: <deterministic list>
-MEASURED CONTEXT:        counts, project, tool profile
 WHOLE SESSION, sampled:  coarse view, start to now
-NEW PART:                recent window in detail
+NEW PART:                recent window in detail  (evidence)
 ```
+
+The order is deliberate: the measured record comes first, because everything after it is
+either indicative or evidence, and a model shown authoritative counts first has been observed
+to hold its prose consistent with them.
 
 `CarryForward` is deleted. Nothing embeds the prior digest's prose.
 
@@ -137,6 +207,10 @@ protect; the prose length was an implementation detail standing in for it.
 it improves without an anchor, because the framing is no longer pinned by verbatim prose.
 It has to be measured, not assumed — the anchor experiment is exactly the kind of plausible
 mechanism that failed.
+
+**A story-versus-record consistency threshold becomes possible**, and it is the first currency
+check independent of human judgement: a story whose subject contradicts the measured `focus`,
+`projects` and `subjects` is wrong against a measurement, not against an opinion.
 
 **A new threshold is needed for fabricated `next`.** Observed in real output: a `next`
 inventing schema fields ("tool name, call id, input, output, timestamp") that were never
@@ -166,6 +240,13 @@ specifics each round from the stored digest, never from a paraphrase; and the co
 view is re-derived from the transcript every time. None is a guarantee. Drift should still be
 measured directly, by scoring a late paraphrase against the transcript rather than against its
 predecessor — a chain of mutually consistent paraphrases can be consistently wrong.
+
+**The session record can go stale in the fields that need a model.** `projects`, counts and
+turning points are deterministic and cannot rot. `focus` depends on the EWMA from the
+classification pipeline, so on any deployment where classification is unavailable the
+authoritative-looking spine is silently partial. It must be explicit about which fields are
+populated rather than presenting an absent focus as an empty one — the same failure as
+`Topics` reading empty for months because nothing said it needed a pass that never ran.
 
 **The ladder can crowd out the detail it exists to frame.** It competes with the recent window
 for the same prompt budget, and the window is what the specific-action grain comes from. If a
