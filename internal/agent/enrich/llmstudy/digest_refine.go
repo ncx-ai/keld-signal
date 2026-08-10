@@ -16,6 +16,7 @@ import "strings"
 const (
 	DefaultProseCap     = 900
 	DefaultStructureCap = 1600
+	DefaultHappenedCap  = 1400
 	DefaultListCap      = 12
 )
 
@@ -215,7 +216,13 @@ func mergeWithRetirement(prev, next Digest, retired []string) Digest {
 // digest past the context the refine loop exists to keep bounded.
 func CapSections(d Digest, maxProse, maxList int) Digest {
 	d.Done = clipProse(d.Done, maxProse)
-	d.Happened = clipProse(d.Happened, maxProse)
+	// Happened gets its own larger budget because it is cumulative AND it is where
+	// difficulty belongs. At the shared 900 it sat at its cap in real sessions, and since
+	// clipping keeps the OLDEST text, the material lost was the most recent — which is
+	// where a reversal appears. A marketing session's positioning reversal vanished
+	// exactly this way while the opening survived, and that is a rubberstamped report
+	// produced by a cap rather than by the model.
+	d.Happened = clipProse(d.Happened, DefaultHappenedCap)
 	d.Structure = clipProse(d.Structure, DefaultStructureCap)
 	d.Current = clipProse(d.Current, maxProse)
 	d.Why = clipProse(d.Why, maxProse)

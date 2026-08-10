@@ -22,8 +22,24 @@ func clipProse(s string, n int) string {
 	if n <= 0 {
 		return s
 	}
+	// Clipping must be idempotent. `done` and `happened` are carried into the next
+	// refinement, the model copies them including the ellipsis, and a second clip then
+	// appended another — real digests showed "increasing from……". Strip any prior marker
+	// before measuring so re-clipping cannot accumulate.
+	s = strings.TrimRight(s, " \t\n")
+	marked := false
+	for strings.HasSuffix(s, "…") {
+		marked = true
+		s = strings.TrimRight(strings.TrimSuffix(s, "…"), " \t\n")
+	}
 	r := []rune(s)
 	if len(r) <= n {
+		// Already-clipped text fits once its marker is removed, but content WAS lost, so
+		// the marker is restored rather than dropped. Without this the second clip
+		// silently reports the section as complete.
+		if marked {
+			return s + "…"
+		}
 		return s
 	}
 	// Reserve room for the ellipsis so the result honours the budget.
@@ -37,9 +53,24 @@ func clipProse(s string, n int) string {
 		return strings.TrimSpace(head[:i])
 	}
 	if i := strings.LastIndexAny(head, " \t\n"); i > 0 {
-		return strings.TrimRight(strings.TrimSpace(head[:i]), ",;:") + "…"
+		return trimForMarker(head[:i]) + "…"
 	}
-	return head + "…"
+	return trimForMarker(head) + "…"
+}
+
+// trimForMarker prepares a clipped fragment to carry an ellipsis.
+//
+// A carried section can contain a marker MID-text — the previous refinement's clip, which
+// the model reproduced and then continued past. Stripping only the tail left it in place,
+// and when the new clip landed just after it the two became adjacent: a real digest read
+// "increasing from……". So the fragment is cleaned at the cut point too, not just at
+// the end of the whole string.
+func trimForMarker(frag string) string {
+	frag = strings.TrimRight(strings.TrimSpace(frag), ",;:")
+	for strings.HasSuffix(frag, "…") {
+		frag = strings.TrimRight(strings.TrimSuffix(frag, "…"), " \t\n,;:")
+	}
+	return frag
 }
 
 // sentencePreferPct is how far into the budget a sentence end must fall to be worth the

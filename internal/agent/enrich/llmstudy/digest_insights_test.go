@@ -163,3 +163,47 @@ func TestUpdatePromptConstrainsRetirement(t *testing.T) {
 		}
 	}
 }
+
+// Clipping must be idempotent: `done` and `happened` are carried forward, the model
+// copies the ellipsis, and a non-idempotent clip appended another — real digests read
+// "increasing from……".
+func TestClipDoesNotAccumulateEllipses(t *testing.T) {
+	once := clipProse(strings.Repeat("some prose about the close process ", 40), 300)
+	twice := clipProse(once, 300)
+	if strings.Contains(twice, "……") {
+		t.Fatalf("re-clipping accumulated ellipses: %q", twice[len(twice)-40:])
+	}
+	if twice != once {
+		t.Errorf("clip is not idempotent:\n once: %q\ntwice: %q", once, twice)
+	}
+}
+
+// Happened is cumulative AND carries the record of difficulty, so it must not be capped
+// as tightly as the present-state sections — clipping keeps the oldest text, so a tight
+// cap silently deletes the most recent reversal.
+func TestHappenedGetsARoomierBudgetThanPresentStateSections(t *testing.T) {
+	if DefaultHappenedCap <= DefaultProseCap {
+		t.Fatalf("happened cap %d must exceed the prose cap %d", DefaultHappenedCap, DefaultProseCap)
+	}
+	long := strings.Repeat("word ", 700)
+	got := CapSections(Digest{Happened: long, Current: long}, DefaultProseCap, DefaultListCap)
+	if len([]rune(got.Happened)) <= DefaultProseCap {
+		t.Errorf("happened was capped at the prose budget: %d runes", len([]rune(got.Happened)))
+	}
+	if len([]rune(got.Current)) > DefaultProseCap {
+		t.Errorf("current exceeded the prose budget: %d runes", len([]rune(got.Current)))
+	}
+}
+
+// A carried section can hold a marker MID-text from an earlier clip. When the new clip
+// lands just after it the two become adjacent — a real digest read "increasing from……".
+func TestClipDoesNotDoubleAnInteriorMarker(t *testing.T) {
+	s := "the provision increased from… " + strings.Repeat("and then more detail ", 30)
+	got := clipProse(s, 34)
+	if strings.Contains(got, "……") {
+		t.Fatalf("interior marker was doubled: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("clipped text must still be marked: %q", got)
+	}
+}

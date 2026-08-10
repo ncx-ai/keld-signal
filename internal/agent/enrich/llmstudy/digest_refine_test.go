@@ -52,13 +52,18 @@ func TestCapSectionsBoundsProseAndLists(t *testing.T) {
 		d.Unresolved[i] = "open item"
 	}
 	got := CapSections(d, 400, 12)
+	// structure and happened are excluded deliberately: both are cumulative and carry
+	// their own larger budgets. See TestStructureGetsALargerBudget and
+	// TestHappenedGetsARoomierBudgetThanPresentStateSections.
 	for name, v := range map[string]string{
-		"done": got.Done, "happened": got.Happened, "current": got.Current,
-		"why": got.Why, "next": got.Next,
+		"done": got.Done, "current": got.Current, "why": got.Why, "next": got.Next,
 	} {
 		if len([]rune(v)) > 400 {
 			t.Errorf("%s not capped: %d runes", name, len([]rune(v)))
 		}
+	}
+	if len([]rune(got.Happened)) > DefaultHappenedCap {
+		t.Errorf("happened exceeds its own cap: %d runes", len([]rune(got.Happened)))
 	}
 	if len(got.Insights) != 12 || len(got.Unresolved) != 12 {
 		t.Errorf("lists not capped: insights=%d unresolved=%d", len(got.Insights), len(got.Unresolved))
