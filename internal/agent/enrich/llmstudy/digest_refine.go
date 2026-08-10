@@ -1,7 +1,6 @@
 package llmstudy
 
 import (
-	"os"
 	"strings"
 )
 
@@ -13,9 +12,13 @@ import (
 // These are report-quality limits, NOT context limits. Lowering them to buy prompt
 // room was measured and rejected: 500/900 cut truncation from 5/20 to 2/20 but dropped
 // fact retention from 100% to 83.3%, because a shorter cap clips exactly the named
-// specifics the retain-list is there to preserve. Prompt room comes from CarryForward
-// instead, which costs no report content. Raising ctx was also measured and rejected:
-// 3008 MB at ctx 6144 and 3161 MB at ctx 8192, both over the 3 GB budget.
+// specifics the retain-list is there to preserve. Raising ctx was also measured and
+// rejected: 3008 MB at ctx 6144 and 3161 MB at ctx 8192, both over the 3 GB budget.
+//
+// Prompt room no longer comes from embedding a shrunk copy of the prior report
+// (CarryForward, since deleted): the refinement prompt now carries no prior prose at
+// all — a beat series (the paraphrase) plus Identifiers' retain-list (the deterministic
+// anchor) stand in for it, at a fraction of the character cost. See DigestUpdatePromptFrom.
 const (
 	DefaultProseCap     = 900
 	DefaultStructureCap = 1600
@@ -24,74 +27,53 @@ const (
 	DefaultListCap      = 12
 )
 
-// CarryForward reduces a digest to the parts a refinement actually needs to read.
-//
-// Synopsis is kept, and for a specific reason: its "what this work is" half is the most
-// stable and most valuable thing in the report, and rederiving it from a late window is
-// exactly how it would drift onto the last topic discussed. Its "where it stands" half is
-// updated in place instead.
-//
-// Dropped: current, why and next are rewritten wholesale from the new turns, so
-// embedding their prior text spent context on prose the model was told to replace.
-// That is ~675 tokens of the refine prompt.
-//
-// Everything else is kept, and each for its own reason — two of which unit tests
-// caught after a first version over-trimmed:
-//   - done, happened, structure are cumulative: losing their prior text loses history.
-//   - unresolved reads as present-state but its update is a DIFF ("drop what is now
-//     closed, add what has newly opened"), uncomputable against a list never seen.
-//   - insights are merged in CODE by MergeInsights, so they need not be carried — but
-//     the prompt also forbids restating an existing one, and MergeInsights dedups only
-//     on exact match, so a reworded restatement survives unless the model can see what
-//     it must not repeat.
-//
-// Unlike lowering the section caps, this removes no content from the report itself.
-// Specifics named in the dropped sections still survive, via the retain-list, which is
-// built from the FULL prior digest.
-func CarryForward(d Digest) Digest {
-	out := d
-	out.Current, out.Why, out.Next = "", "", ""
-	return out
+// RefineInput is everything a refinement reads, grouped by truth-status: the record is
+// measured, the beat series is paraphrased, the window is evidence. None of it is the
+// previous report's own prose — that is the point: compression can only be deliberate,
+// as opposed to forbidden, once the model is no longer shown text it must preserve
+// verbatim to avoid losing information nothing else carries.
+type RefineInput struct {
+	SessionLabel string
+	Record       SessionRecord
+	Beats        []Beat
+	SessionView  string
+	NewTurns     string
+	Why          TriggerReason
 }
 
-// DigestUpdatePrompt builds the refinement prompt.
+// DigestUpdatePromptFrom builds the refinement prompt.
 //
-// Refine loops fail in four known ways; this prompt addresses three. Recency bias:
-// carry earlier material forward unless contradicted. Silent contradiction: revise in
-// place and say what changed. Drift: insights are merged in CODE, not re-prosed by
-// the model, so it never gets the chance to reword an old one. The fourth, unbounded
-// growth, is handled by CapSections.
+// No prior prose is embedded. The previous report reaches the model as a paraphrase
+// ladder (the beat series) plus a deterministic retain-list (Identifiers) and open-item
+// accounting (priorOpenItems) — "the work has been on X, Y, Z; specifically A, B, C;
+// still open: D" — which is what allows compression to be deliberate instead of
+// forbidden: a refinement that moves on to a new subject is no longer fighting an
+// instruction to preserve the old report's exact wording.
+//
+// The measured record comes first, ahead of the beats and the window, because
+// everything after it is indicative (the model's own prior paraphrasing) or evidence
+// (raw turns) rather than authoritative — a model shown counts before prose holds its
+// prose consistent with them, the same reasoning DigestCreatePromptWithView uses.
 //
 // Contains no worked examples, deliberately. An example in an earlier prompt here was
 // copied verbatim into a report about an unrelated session — the same failure this
 // branch documented for the extraction prompts.
-func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) string {
-	return DigestUpdatePromptWithView(prev, sessionLabel, newTurns, "", facts)
-}
-
-// DigestUpdatePromptWithView is DigestUpdatePrompt plus the coarse whole-session view, so a
-// refinement can keep the synopsis about the WORK rather than drifting it onto the newest
-// window. See DigestCreatePromptWithView.
-func DigestUpdatePromptWithView(prev Digest, sessionLabel, newTurns, sessionView, facts string) string {
-	return DigestUpdatePromptWithReason(prev, sessionLabel, newTurns, sessionView, facts, TriggerNone)
-}
-
-// DigestUpdatePromptWithReason additionally tells the model WHY this refresh fired.
-//
-// The trigger policy already decides whether the subject of the work changed — that is what
-// TriggerFocusShift means — and the prompt was asking the model to infer the same thing
-// unaided. Measured on a real 44-window session, it inferred wrong in the costly direction:
-// the synopsis still described the branch discussed in the opening windows, forty windows
-// after the work had moved on, and asserted the session was "transitioning to a design
-// phase" for something long abandoned.
-func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionView, facts string, why TriggerReason) string {
+func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	var b strings.Builder
-	b.WriteString("You are updating an existing report on a work session, for the person doing the work and for a manager who was not present.\n\n")
+	b.WriteString("You are updating a report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	b.WriteString("Session context: ")
-	b.WriteString(sessionLabel)
-	b.WriteString("\n\nEXISTING REPORT (the cumulative sections; the present-state sections are")
-	b.WriteString(" rewritten from the new turns below):\n")
-	b.WriteString(DigestJSON(CarryForward(prev)))
+	b.WriteString(in.SessionLabel)
+
+	b.WriteString("\n\nSESSION RECORD (measured — authoritative):\n")
+	b.WriteString(in.Record.Block())
+	if pop := in.Record.Populated(); len(pop) > 0 {
+		b.WriteString("populated fields: " + strings.Join(pop, ", ") + "\n")
+	}
+
+	if bs := RenderBeats(SelectBeats(in.Beats, MaxBeatSelection)); bs != "" {
+		b.WriteString("\nBEATS, oldest first — each written from its own window (indicative):\n")
+		b.WriteString(bs)
+	}
 	// Hand back the previous report's named specifics as an explicit retain-list.
 	//
 	// Measured need: instrumenting retention showed 7 of 7 lost facts disappeared
@@ -100,58 +82,82 @@ func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionVi
 	// named specifics with it), and prose instructions to "keep what the report says"
 	// did not stop it. Naming the specifics deterministically is the same anchoring
 	// that made the counts authoritative.
-	// Identifiers reads the FULL prior digest, not CarryForward's subset: a specific
-	// first named in a present-state section must still survive, and the retain-list is
-	// now the only place a refinement sees it.
+	// Identifiers reads the FULL prior digest: a specific first named in a present-state
+	// section must still survive, and the retain-list is now the only place a
+	// refinement sees it at all — nothing else carries the prior report's text forward.
 	if named := Identifiers(prev); len(named) > 0 {
-		b.WriteString("\n\nSPECIFICS ALREADY REPORTED (each must still appear in your updated report, unless the new part shows it was wrong):\n  ")
+		b.WriteString("\nSPECIFICS ALREADY REPORTED (each must still appear, unless the new part shows it was wrong):\n  ")
 		b.WriteString(strings.Join(named, ", "))
+		b.WriteString("\n")
 	}
 	// Hand back the prior open items and require a verdict on each. Prose alone did not
 	// work: "drop what is now closed" left resolved items in the list across every
 	// refinement, because nothing checked. Naming them and requiring an accounting is the
-	// same deterministic anchoring that fixed fact retention.
+	// same deterministic anchoring that fixed fact retention. Verbatim by design: this is
+	// an accounting requirement (account for EVERY one), not a leak of prior prose.
 	if open := priorOpenItems(prev); len(open) > 0 {
-		b.WriteString("\n\nOPEN ITEMS FROM THAT REPORT — account for EVERY one, in exactly one place:")
+		b.WriteString("\nOPEN ITEMS FROM THAT REPORT — account for EVERY one, in exactly one place:")
 		b.WriteString("\n  keep it in unresolved if it is still open, or name it in closed if the new")
 		b.WriteString("\n  part resolved it. Do not silently drop one.\n  ")
 		b.WriteString(strings.Join(open, "\n  "))
+		b.WriteString("\n")
 	}
-	// Hand over what the newest user turns are about. The facts block was supposed to carry
-	// this as "recurring topics", but those fields are populated by WithEnrichment, which
-	// requires a classification pass the digest path never makes — so in practice the prompt
-	// had NO anchor pulling the synopsis toward the present, and the synopsis lagged by
-	// forty windows on a real session. Derived deterministically here, needing no model.
-	// Gated on a MEASURED focus shift, not applied to every refinement. Unconditionally, the
-	// anchor bought recency at a real price: fact retention fell 96.1% -> 88.3% and fabricated
-	// open items rose 4.1% -> 10.2%, both consistent with the model re-weighting toward the
-	// newest turns and shedding what came before. The trigger already decides when the subject
+	// Hand over what the newest user turns are about. Gated on a MEASURED focus shift,
+	// not applied to every refinement. Unconditionally, the anchor bought recency at a
+	// real price: fact retention fell 96.1% -> 88.3% and fabricated open items rose
+	// 4.1% -> 10.2%, both consistent with the model re-weighting toward the newest turns
+	// and shedding what came before. The trigger already decides when the subject
 	// changed, so a routine refresh is left alone and only a genuine shift gets the pull.
-	if why == TriggerFocusShift {
-		if subs := recentSubjectsOf(newTurns); subs != "" {
-			b.WriteString("\n\nTHE LATEST TURNS ARE ABOUT: ")
+	if in.Why == TriggerFocusShift {
+		if subs := recentSubjectsOf(in.NewTurns); subs != "" {
+			b.WriteString("\nTHE LATEST TURNS ARE ABOUT: ")
 			b.WriteString(subs)
 			b.WriteString("\n  The subject of the work was measured to have CHANGED since that")
 			b.WriteString(" report. Re-scope the synopsis to the work as it now is, in its subject")
 			b.WriteString(" as well as its standing, and say what it grew out of. Leave the other")
-			b.WriteString(" sections' accumulated content alone.")
+			b.WriteString(" sections' accumulated content alone.\n")
 		}
 	}
-	b.WriteString("\n\nMEASURED CONTEXT for the whole session so far (authoritative — your report must be consistent with it):\n")
-	b.WriteString(facts)
-	if v := clipSessionViewFor(sessionView, b.Len()+updateTailLen()); v != "" {
-		b.WriteString("\n\nWHOLE SESSION so far, sampled from start to now (coarse — for the shape")
-		b.WriteString(" of the work, not its detail):\n")
+	if v := clipSessionViewFor(in.SessionView, b.Len()+updateTailLen()); v != "" {
+		b.WriteString("\nWHOLE SESSION, sampled from start to now (coarse — for the shape of the")
+		b.WriteString(" work, not its detail):\n")
 		b.WriteString(v)
 	}
-	b.WriteString("\nNEW PART OF THE CONVERSATION, since that report:\n")
-	b.WriteString(fitTurns(newTurns, b.Len()+updateTailLen()))
+	b.WriteString("\nNEW PART OF THE CONVERSATION (evidence):\n")
+	b.WriteString(fitTurns(in.NewTurns, b.Len()+updateTailLen()))
 	b.WriteString("\nProduce the UPDATED report, same sections:\n")
 	b.WriteString(digestSections)
 	b.WriteString(updateRules)
 	b.WriteString(digestRules)
 	b.WriteString("\nRespond with JSON only.\n")
 	return b.String()
+}
+
+// DigestUpdatePrompt, DigestUpdatePromptWithView and DigestUpdatePromptWithReason are the
+// pre-beat entry points. Kept only so callers not yet carrying a RefineInput — several
+// eval-harness files build under -tags llmstudy and are rewired to it in a later task —
+// keep compiling. They have no beats and no session record to offer, so they delegate to
+// DigestUpdatePromptFrom with a RefineInput that has neither. `facts` (the window-scoped
+// DigestFacts block the old prompt embedded as "MEASURED CONTEXT") has no field on
+// RefineInput at all: SessionRecord is what replaced it for the refine path, and a caller
+// still on this legacy path has no record to hand over, so the parameter is accepted for
+// signature compatibility and dropped rather than smuggled in some other way.
+func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) string {
+	return DigestUpdatePromptFrom(prev, RefineInput{SessionLabel: sessionLabel, NewTurns: newTurns})
+}
+
+// DigestUpdatePromptWithView is DigestUpdatePrompt plus the coarse whole-session view.
+func DigestUpdatePromptWithView(prev Digest, sessionLabel, newTurns, sessionView, facts string) string {
+	return DigestUpdatePromptFrom(prev, RefineInput{
+		SessionLabel: sessionLabel, SessionView: sessionView, NewTurns: newTurns,
+	})
+}
+
+// DigestUpdatePromptWithReason is DigestUpdatePromptWithView told why the refresh fired.
+func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionView, facts string, why TriggerReason) string {
+	return DigestUpdatePromptFrom(prev, RefineInput{
+		SessionLabel: sessionLabel, SessionView: sessionView, NewTurns: newTurns, Why: why,
+	})
 }
 
 // priorOpenItems is the previous report's open list, excluding the sentinel — there is
@@ -192,11 +198,10 @@ func updateTailLen() int {
 
 const updateRules = `
 Updating rules:
-  - Keep what the existing report says unless the new part contradicts it. Do not
-    drop earlier material simply because the new part does not mention it.
-  - Your updated report must not become shorter or less specific than the existing
-    one. Refinement ADDS; it does not compress. Every named specific listed above
-    must survive.
+  - Build on the beats and the specifics above unless the new part contradicts them.
+    Every named specific listed above must still appear, unless the new part shows it
+    was wrong. Compression is fine — shorten or drop framing — as long as no named
+    specific and no open item is lost doing it.
   - Where something changed, revise it in place and say what changed.
   - synopsis: decide first whether the new part CONTINUES the work the report describes or
     has moved to a different subject. If it continues, keep the subject and framing and
@@ -247,32 +252,10 @@ func DigestUpdateSchema() map[string]any {
 	return sc
 }
 
-// RefineDigest produces the next digest, then merges insights and caps growth.
-func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) (Digest, error) {
-	return l.RefineDigestWithView(prev, sessionLabel, newTurns, "", facts)
-}
-
-// RefineDigestWithView is RefineDigest given the coarse whole-session view.
-func (l *Llama) RefineDigestWithView(prev Digest, sessionLabel, newTurns, sessionView, facts string) (Digest, error) {
-	return l.RefineDigestWithReason(prev, sessionLabel, newTurns, sessionView, facts, TriggerNone)
-}
-
-// RefineDigestWithReason is RefineDigestWithView told why the refresh fired.
-func (l *Llama) RefineDigestWithReason(prev Digest, sessionLabel, newTurns, sessionView, facts string, why TriggerReason) (Digest, error) {
-	// KELD_DIGEST_NO_CLOSURE=1 disables the code-side repairs. Study harness only.
-	//
-	// It does NOT isolate the staleness fix, and an earlier comment here claimed it did.
-	// The prompt's open-item accounting block and the "closed" field stay active when this
-	// is set, so only the repair is removed — and measured both ways, T8 is 0.0% either
-	// way (0 of 61 with, 0 of 51 without). The PROMPT is what fixed staleness; the repair
-	// guarantees the property rather than relying on compliance.
-	//
-	// What the repair demonstrably buys is delivery: T1 is 82.1% with it disabled versus
-	// 100% with it. Introducing "closed" lets the model empty "unresolved" legitimately,
-	// and without the sentinel substitution those refinements fail validation and are
-	// dropped after exhausting their retries.
-	enforce := os.Getenv("KELD_DIGEST_NO_CLOSURE") == ""
-
+// RefineFrom produces the next report from a RefineInput. No paraphrase of the previous
+// report's own prose: the beats already supply the history, so the closure/staleness
+// repairs below are the only code-side correction this path still needs.
+func (l *Llama) RefineFrom(prev Digest, in RefineInput) (Digest, error) {
 	var up digestUpdate
 
 	// Two deterministic repairs: closures the model declared are applied, and an open item
@@ -285,23 +268,42 @@ func (l *Llama) RefineDigestWithReason(prev Digest, sessionLabel, newTurns, sess
 	// trading T1 76.8% for T8 0%. A dropped digest is worse than a stale open item, and
 	// retrying a failure the model cannot pass is the same mistake as retrying a
 	// deterministic one.
-	repair := func(d Digest) Digest {
-		if !enforce {
-			return d
-		}
-		return dropStaleOpenItems(applyClosures(d, up.Closed))
-	}
+	repair := func(d Digest) Digest { return dropStaleOpenItems(applyClosures(d, up.Closed)) }
 
 	// Validation runs on the REPAIRED digest, not the raw response. Validating the raw one
 	// rejected a legitimate answer that moved every open item into "closed", leaving
 	// unresolved momentarily empty — "unresolved is empty" then burned all 5 retries on a
 	// digest the repairs would have completed. The repair supplies the sentinel.
-	if err := l.callValid(DigestUpdatePromptWithReason(prev, sessionLabel, newTurns, sessionView, facts, why), DigestUpdateSchema(), &up,
+	if err := l.callValid(DigestUpdatePromptFrom(prev, in), DigestUpdateSchema(), &up,
 		func() error { return firstProblem(ValidateDigest(repair(up.Digest))) }); err != nil {
 		return Digest{}, err
 	}
 	merged := mergeWithRetirement(prev, repair(up.Digest), up.Retired)
 	return CapSections(merged, DefaultProseCap, DefaultListCap), nil
+}
+
+// RefineDigest, RefineDigestWithView and RefineDigestWithReason are the pre-beat entry
+// points, kept only so callers not yet carrying a RefineInput keep compiling — several
+// eval-harness files build under -tags llmstudy and are rewired to it in a later task.
+// Like their prompt-builder counterparts they delegate to the new path with a RefineInput
+// that has no beats and no record; `facts` has nowhere to go (see DigestUpdatePrompt) so
+// it is accepted and dropped.
+func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) (Digest, error) {
+	return l.RefineFrom(prev, RefineInput{SessionLabel: sessionLabel, NewTurns: newTurns})
+}
+
+// RefineDigestWithView is RefineDigest given the coarse whole-session view.
+func (l *Llama) RefineDigestWithView(prev Digest, sessionLabel, newTurns, sessionView, facts string) (Digest, error) {
+	return l.RefineFrom(prev, RefineInput{
+		SessionLabel: sessionLabel, SessionView: sessionView, NewTurns: newTurns,
+	})
+}
+
+// RefineDigestWithReason is RefineDigestWithView told why the refresh fired.
+func (l *Llama) RefineDigestWithReason(prev Digest, sessionLabel, newTurns, sessionView, facts string, why TriggerReason) (Digest, error) {
+	return l.RefineFrom(prev, RefineInput{
+		SessionLabel: sessionLabel, SessionView: sessionView, NewTurns: newTurns, Why: why,
+	})
 }
 
 // MergeInsights carries prior insights forward verbatim and appends genuinely new

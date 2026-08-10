@@ -90,18 +90,6 @@ func TestSessionViewStaysInsideTheBudget(t *testing.T) {
 	}
 }
 
-// Synopsis is carried forward: the stable half of it is what the work IS, and rederiving
-// that from a late window is exactly how it would drift onto the last topic discussed.
-func TestSynopsisIsCarriedForward(t *testing.T) {
-	c := CarryForward(Digest{Synopsis: "a month-end close for Meridian", Current: "x", Why: "y", Next: "z"})
-	if c.Synopsis == "" {
-		t.Error("synopsis must be carried into the refinement")
-	}
-	if c.Current != "" || c.Why != "" || c.Next != "" {
-		t.Error("present-state sections must still be dropped")
-	}
-}
-
 // A coined compound whose parts are all in the source is generalisation, not fabrication.
 // This was the dominant flagged class once the synopsis existed.
 func TestCompoundsBuiltFromSourceWordsAreVerified(t *testing.T) {
