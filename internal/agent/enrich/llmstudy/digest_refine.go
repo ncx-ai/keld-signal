@@ -117,9 +117,25 @@ func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionVi
 		b.WriteString("\n  part resolved it. Do not silently drop one.\n  ")
 		b.WriteString(strings.Join(open, "\n  "))
 	}
+	// Hand over what the newest user turns are about. The facts block was supposed to carry
+	// this as "recurring topics", but those fields are populated by WithEnrichment, which
+	// requires a classification pass the digest path never makes — so in practice the prompt
+	// had NO anchor pulling the synopsis toward the present, and the synopsis lagged by
+	// forty windows on a real session. Derived deterministically here, needing no model.
+	// Gated on a MEASURED focus shift, not applied to every refinement. Unconditionally, the
+	// anchor bought recency at a real price: fact retention fell 96.1% -> 88.3% and fabricated
+	// open items rose 4.1% -> 10.2%, both consistent with the model re-weighting toward the
+	// newest turns and shedding what came before. The trigger already decides when the subject
+	// changed, so a routine refresh is left alone and only a genuine shift gets the pull.
 	if why == TriggerFocusShift {
-		b.WriteString("\n\nNOTE: the subject of the work was measured to have CHANGED since that")
-		b.WriteString(" report. Re-scope the synopsis to the work as it now is.")
+		if subs := recentSubjectsOf(newTurns); subs != "" {
+			b.WriteString("\n\nTHE LATEST TURNS ARE ABOUT: ")
+			b.WriteString(subs)
+			b.WriteString("\n  The subject of the work was measured to have CHANGED since that")
+			b.WriteString(" report. Re-scope the synopsis to the work as it now is, in its subject")
+			b.WriteString(" as well as its standing, and say what it grew out of. Leave the other")
+			b.WriteString(" sections' accumulated content alone.")
+		}
 	}
 	b.WriteString("\n\nMEASURED CONTEXT for the whole session so far (authoritative — your report must be consistent with it):\n")
 	b.WriteString(facts)
@@ -148,6 +164,23 @@ func priorOpenItems(prev Digest) []string {
 		}
 	}
 	return out
+}
+
+// recentSubjectsOf pulls distinctive terms from the newest user turn of an already-rendered
+// window, so the prompt builder needs no Window value.
+func recentSubjectsOf(rendered string) string {
+	lines := strings.Split(rendered, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !strings.HasPrefix(lines[i], "user: ") {
+			continue
+		}
+		w := Window{Turns: []Turn{{RoleUser, strings.TrimPrefix(lines[i], "user: ")}}}
+		if subs := RecentSubjects(w, 1); len(subs) > 0 {
+			return strings.Join(subs, ", ")
+		}
+		return ""
+	}
+	return ""
 }
 
 // updateTailLen is the size of everything appended after the turns, so fitTurns can

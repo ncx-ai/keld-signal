@@ -155,6 +155,8 @@ func TestDigestRefineQuality(t *testing.T) {
 		stale, openItems         int
 		completedCurrent         int
 		restated                 int
+		lagging, lagDen          int
+		shifts                   int
 		digests, malformed       int
 		ids, unverified, leaks   int
 		withCorrections, stamped int
@@ -177,6 +179,7 @@ func TestDigestRefineQuality(t *testing.T) {
 
 		var cur Digest
 		var injected []string
+		var firstSrc, prevSrc string
 		// The verification reference must be every window consumed so far. Scoring a
 		// refined digest against only the newest window counts correct carry-forward
 		// as fabrication — which is what an earlier run of this harness did, reporting
@@ -197,12 +200,24 @@ func TestDigestRefineQuality(t *testing.T) {
 			seenSrc.WriteString("\n")
 			cumulative := seenSrc.String()
 
+			if step == 0 {
+				firstSrc = src
+			}
 			var d Digest
 			var err error
 			if step == 0 {
 				d, err = l.CreateDigestWithView("work session", src, RenderSessionView(w), facts.Block())
 			} else {
-				d, err = l.RefineDigestWithView(cur, "work session", src, RenderSessionView(w), facts.Block())
+				// Stand-in for the production focus-shift trigger, which needs the EWMA
+				// focus this harness does not compute. Lets the GATED configuration be
+				// measured instead of merely argued for.
+				reason := TriggerVolume
+				if SubjectShifted(prevSrc, src) {
+					reason = TriggerFocusShift
+					shifts++
+				}
+				d, err = l.RefineDigestWithReason(cur, "work session", src, RenderSessionView(w),
+					facts.Block(), reason)
 			}
 			attempted++
 			if err != nil {
@@ -240,6 +255,14 @@ func TestDigestRefineQuality(t *testing.T) {
 			openItems += len(d.Unresolved)
 			// T10: a synthesis section can satisfy its instruction by copying the purpose
 			// sentence out of `why`, which would add nothing for the reader it exists for.
+			if step > 0 {
+				lagDen++
+				if rh, eh, lag := SynopsisLag(d, firstSrc, src); lag {
+					lagging++
+					t.Logf("  SYNOPSIS-LAGS s%d step%d (recent=%d early=%d): %s",
+						sessions, step, rh, eh, clipLog(d.Synopsis))
+				}
+			}
 			if SynopsisRestatesAnotherSection(d) {
 				restated++
 				t.Logf("  SYNOPSIS-RESTATES s%d step%d: %s", sessions, step, clipLog(d.Synopsis))
@@ -282,6 +305,7 @@ func TestDigestRefineQuality(t *testing.T) {
 				}
 			}
 			cur = d
+			prevSrc = src
 		}
 		if len(injected) > 0 {
 			retNum += RetainedFacts(cur, injected)
@@ -311,6 +335,8 @@ func TestDigestRefineQuality(t *testing.T) {
 	t.Logf("T8 stale open items       %.1f%% of %d open items  (want <=2%%)", pct(stale, openItems), openItems)
 	t.Logf("T9 current-is-completed   %.1f%% of %d  (want <=5%%)", pct(completedCurrent, digests), digests)
 	t.Logf("T10 synopsis restates      %.1f%% of %d  (want <=5%%)", pct(restated, digests), digests)
+	t.Logf("T11 synopsis lags          %.1f%% of %d refinements  (want <=10%%)", pct(lagging, lagDen), lagDen)
+	t.Logf("    anchor fired on %d of %d refinements (measured subject shift)", shifts, lagDen)
 	t.Logf("   prompt leaks %d; sentinel used %d/%d", leaks, sentinelUsed, digests)
 }
 
