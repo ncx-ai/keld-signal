@@ -65,6 +65,63 @@ func TestSessionRecordRecordsTurningPoints(t *testing.T) {
 	}
 }
 
+// weakProperNoun's job is to catch a short capitalised NAME that distinctiveToken's own
+// length floor would drop — not any capitalised word. A line-leading capital carries no
+// information (it is just how a new line or bullet opens, same as a new sentence), and a
+// review of round 1 found exactly that: sentenceInitial's newline-as-whitespace handling
+// (right for LLM-authored digest prose, its only other caller) let a line-leading capital
+// in raw turn text read as "mid-sentence" and get admitted. Each case here was verified
+// against the pre-fix Observe to actually reach Subjects before the fix landed.
+func TestSessionRecordSubjectsIgnoreLineLeadingCapitals(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"newline then verb", "Reading file\nFound 3 matches for the query"},
+		{"bullet list", "Fix the auth bug\nUpdate the README\nActivity type is wrong"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := Window{Turns: []Turn{{RoleUser, c.text}}}
+			r := SessionRecord{}.Observe(w, Extract(w))
+			for _, bad := range []string{"Found", "Update"} {
+				for _, s := range r.Subjects {
+					if s == bad {
+						t.Errorf("%q is a line-leading verb, not a name; got subjects %v", bad, r.Subjects)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A capitalised common word mid-sentence, with no adjacent newline at all, is the case a
+// pure line-boundary fix cannot touch — this is the length floor's job, not the position
+// check's. "Read" here has nothing else marking it a name: no internal caps, no digit, no
+// separator, and it is short (4 chars, under weakProperNounMinLen).
+func TestSessionRecordSubjectsRejectMidSentenceCommonWord(t *testing.T) {
+	w := Window{Turns: []Turn{{RoleUser, "Please check the Read Me file for details"}}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	for _, s := range r.Subjects {
+		if s == "Read" {
+			t.Errorf("%q is an ordinary word capitalised mid-sentence, not a name; got subjects %v", "Read", r.Subjects)
+		}
+	}
+}
+
+// The fix must not overcorrect: a genuine short proper noun — capitalised, mid-turn, no
+// other marker, at or above weakProperNounMinLen — must still reach Subjects on a single
+// occurrence. This is the exact shape TestSessionRecordAccumulatesAcrossWindows depends on
+// ("Larkin"), isolated here so a future change to the position/length rule fails fast and
+// specifically, rather than only via the accumulation test's broader assertion.
+func TestSessionRecordSubjectsKeepGenuineShortProperNoun(t *testing.T) {
+	w := Window{Turns: []Turn{{RoleUser, "now post the Larkin accrual"}}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	if !strings.Contains(strings.Join(r.Subjects, " "), "Larkin") {
+		t.Errorf("genuine mid-turn proper noun must still be admitted, got %v", r.Subjects)
+	}
+}
+
 // An absent field must read as absent. Topics read empty for months because nothing said a
 // pass had never run.
 func TestSessionRecordReportsWhichFieldsArePopulated(t *testing.T) {

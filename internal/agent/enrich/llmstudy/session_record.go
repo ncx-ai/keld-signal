@@ -85,13 +85,32 @@ func (r SessionRecord) Observe(w Window, s Signals) SessionRecord {
 	return r
 }
 
+// weakProperNounMinLen is the length floor for the position-based fallback below.
+// It sits one below distinctiveToken's own unconditional 7, deliberately not lower: this
+// path has only capitalisation and position as evidence — a signal weaker than a strong
+// identifier or distinctiveToken's length rule — so it needs a margin against the common
+// short English verbs (Read, Found, Told, Made, ...) that dominate high-frequency
+// vocabulary and would otherwise pass on capitalisation alone the moment they open a line.
+// Measured directly against Observe: "Read" (4 chars, mid-sentence, no adjacent newline)
+// was admitted as a candidate proper noun with no floor above 4 to stop it.
+const weakProperNounMinLen = 6
+
 // weakProperNoun catches a capitalised token too short for distinctiveToken's strong-
 // identifier-or-7-chars test, using the same position-aware reasoning Identifiers()
 // already applies to digest prose: a capital at the start of a turn is just how English
 // opens a sentence, but mid-turn it is presumed a proper noun. Still gated by the caller's
 // verbatim check, so this only widens which CANDIDATES get proposed, never what gets kept.
+//
+// Uses turnLineInitial, NOT sentenceInitial: sentenceInitial is tuned for LLM-authored
+// digest prose, where "." is a reliable sentence boundary and there is no reason to treat a
+// bare newline as anything but whitespace. Raw transcript turns are the opposite — bullet
+// lists and multi-line tool/status output routinely carry no terminal punctuation at all —
+// so reusing sentenceInitial unmodified let the scan run past a newline into the PREVIOUS
+// line and mislabel every line-leading capital ("Found", "Update", "Activity" opening their
+// own line) as mid-sentence. Left sentenceInitial itself untouched: Identifiers() depends on
+// its current newline handling for LLM prose, and that behaviour must not move.
 func weakProperNoun(tok, text string) bool {
-	if len(tok) < 4 || digestStopWords[tok] || digestCommonWord(strings.ToLower(tok)) {
+	if len(tok) < weakProperNounMinLen || digestStopWords[tok] || digestCommonWord(strings.ToLower(tok)) {
 		return false
 	}
 	if initial := tok[0]; initial < 'A' || initial > 'Z' {
@@ -101,7 +120,28 @@ func weakProperNoun(tok, text string) bool {
 		return false // an ordinary hyphenated compound, not a name
 	}
 	i := strings.Index(text, tok)
-	return i >= 0 && !sentenceInitial(text, i)
+	return i >= 0 && !turnLineInitial(text, i)
+}
+
+// turnLineInitial reports whether the byte offset i opens its own LINE within raw turn
+// text — the same "does a capital here carry information" question sentenceInitial answers
+// for digest prose, but with '\n' treated as a hard boundary rather than skippable
+// whitespace. A local copy, not a shared change: sentenceInitial's whitespace-skipping
+// newline handling is exactly right for its own caller and must stay that way.
+func turnLineInitial(text string, i int) bool {
+	for j := i - 1; j >= 0; j-- {
+		switch text[j] {
+		case '\n':
+			return true
+		case ' ', '\t', '"', '\'', '(', '*', '`':
+			continue
+		case '.', '!', '?', ':', ';', '-':
+			return true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // WithProject records where the work is happening, most recent first, deduplicated.
