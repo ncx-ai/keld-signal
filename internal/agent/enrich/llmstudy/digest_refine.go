@@ -107,19 +107,45 @@ Updating rules:
   - Where something changed, revise it in place and say what changed.
   - structure: EXTEND the picture with newly revealed parts, and correct anything the
     new part shows was wrong. Do not rewrite it from scratch.
-  - insights: add only genuinely new learnings. Do not restate existing ones.
+  - insights: add only genuinely new learnings. Do not restate existing ones in
+    different words — a reworded repeat is still a repeat.
+  - retired: list an existing insight here, copied as written, ONLY if the new part shows
+    it is WRONG or was reversed. This is for correcting the record, not for tidying it:
+    an insight that is merely old, less interesting, or now less relevant stays. Use an
+    empty list when nothing was contradicted.
   - unresolved must describe the CURRENT state: drop what is now closed, add what has
     newly opened.
 `
 
+// digestUpdate is a refinement response: a digest plus the insights it retires.
+//
+// Retired is deliberately NOT a field of Digest. It is an instruction to the merge, not
+// part of the report, and storing it would publish a list of things the report no longer
+// claims — noise for a reader and a second place for the record to disagree with itself.
+type digestUpdate struct {
+	Digest
+	Retired []string `json:"retired"`
+}
+
+// DigestUpdateSchema is the digest schema plus the retirement list.
+func DigestUpdateSchema() map[string]any {
+	sc := DigestSchema()
+	props, _ := sc["properties"].(map[string]any)
+	props["retired"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	req, _ := sc["required"].([]string)
+	sc["required"] = append(append([]string{}, req...), "retired")
+	return sc
+}
+
 // RefineDigest produces the next digest, then merges insights and caps growth.
 func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) (Digest, error) {
-	var next Digest
-	if err := l.callValid(DigestUpdatePrompt(prev, sessionLabel, newTurns, facts), DigestSchema(), &next,
-		func() error { return firstProblem(ValidateDigest(next)) }); err != nil {
+	var up digestUpdate
+	if err := l.callValid(DigestUpdatePrompt(prev, sessionLabel, newTurns, facts), DigestUpdateSchema(), &up,
+		func() error { return firstProblem(ValidateDigest(up.Digest)) }); err != nil {
 		return Digest{}, err
 	}
-	return CapSections(MergeInsights(prev, next), DefaultProseCap, DefaultListCap), nil
+	merged := mergeWithRetirement(prev, up.Digest, up.Retired)
+	return CapSections(merged, DefaultProseCap, DefaultListCap), nil
 }
 
 // MergeInsights carries prior insights forward verbatim and appends genuinely new
@@ -132,6 +158,14 @@ func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) 
 // Unresolved is NOT merged — it describes current state, so the new answer wins.
 // Merging it would accumulate stale blockers forever, which is the opposite failure.
 func MergeInsights(prev, next Digest) Digest {
+	return mergeWithRetirement(prev, next, nil)
+}
+
+// mergeWithRetirement is MergeInsights plus the ability to drop prior insights the new
+// material contradicted. Retirement is bounded by maxRetiredPerRefinement and an entry
+// that matches nothing is ignored, so a mis-stated retirement cannot delete the wrong
+// insight.
+func mergeWithRetirement(prev, next Digest, retired []string) Digest {
 	out := next
 	seen := map[string]bool{}
 	merged := make([]string, 0, len(prev.Insights)+len(next.Insights))
@@ -144,10 +178,30 @@ func MergeInsights(prev, next Digest) Digest {
 		if seen[k] {
 			return
 		}
+		// Exact match is not enough: a real digest carried the same sentence twice,
+		// differing only by a leading "The".
+		for _, existing := range merged {
+			if insightsMatch(existing, t) {
+				return
+			}
+		}
 		seen[k] = true
 		merged = append(merged, t)
 	}
+	retire := func(s string) bool {
+		for _, r := range retired {
+			if insightsMatch(r, s) {
+				return true
+			}
+		}
+		return false
+	}
+	dropped := 0
 	for _, s := range prev.Insights {
+		if dropped < maxRetiredPerRefinement && retire(s) {
+			dropped++
+			continue
+		}
 		add(s)
 	}
 	for _, s := range next.Insights {
@@ -160,12 +214,12 @@ func MergeInsights(prev, next Digest) Digest {
 // CapSections bounds prose length and list size so a long session cannot grow the
 // digest past the context the refine loop exists to keep bounded.
 func CapSections(d Digest, maxProse, maxList int) Digest {
-	d.Done = clip(d.Done, maxProse)
-	d.Happened = clip(d.Happened, maxProse)
-	d.Structure = clip(d.Structure, DefaultStructureCap)
-	d.Current = clip(d.Current, maxProse)
-	d.Why = clip(d.Why, maxProse)
-	d.Next = clip(d.Next, maxProse)
+	d.Done = clipProse(d.Done, maxProse)
+	d.Happened = clipProse(d.Happened, maxProse)
+	d.Structure = clipProse(d.Structure, DefaultStructureCap)
+	d.Current = clipProse(d.Current, maxProse)
+	d.Why = clipProse(d.Why, maxProse)
+	d.Next = clipProse(d.Next, maxProse)
 	d.Insights = tailN(d.Insights, maxList)
 	d.Unresolved = tailN(d.Unresolved, maxList)
 	return d
