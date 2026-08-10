@@ -4,7 +4,7 @@
 
 **Goal:** Replace embedding the previous digest whole with three inputs separated by truth-status — a measured session record, a ladder of sampled paraphrases, and the recent window — and bound the expensive digest call by wall clock.
 
-**Architecture:** Each refinement emits a short `story` paraphrase of the report it produced, persisted alongside the snapshot. The next refinement receives a chronological ladder of those paraphrases sampled at turning points, a deterministic session record spanning the whole session, the retain-list of named specifics, and the recent window. The stored digest is never regenerated from a paraphrase (store full, feed compressed). A wall-clock floor rate-limits generation while the deterministic record stays current every window.
+**Architecture:** Two cadences. Every few user turns a cheap **beat** states in one to three sentences what the work is about, derived from the recent window plus a deterministic session record — never from another beat. The expensive nine-section **report** is wall-clock bounded and written from the sampled beat series, the record, and the retain-list of named specifics — never from its own predecessor. So no model output is ever input to a later generation of the same kind, and there is no chain along which drift can compound.
 
 **Tech Stack:** Go (host toolchain, `CGO_ENABLED=0`), `modernc.org/sqlite`, `llama-server` OpenAI-compatible endpoint with `response_format: json_schema`, Qwen3-4B-Instruct-2507 Q4_K_M.
 
@@ -13,9 +13,9 @@ Spec: `docs/superpowers/specs/2026-08-10-session-story-rollup-design.md`
 ## Global Constraints
 
 - Scope is **one interactive session**. No cross-session or per-project tier.
-- **Store full, feed compressed.** No code path may regenerate a stored digest from a `story`.
+- **Nothing reads a summary of a summary.** A beat reads a transcript window plus the measured record; a report reads beats, measurements and the retain-list. No generation may be given output of its own kind. The retain-list is the one exception: named tokens, not prose, each verifiable against the transcript.
 - Privacy invariant: transcripts are read locally; only verified substrings enter the record. No raw prose is transmitted or stored outside `~/.keld`.
-- `story` cap **600 runes** (recent, full) and **140 runes** (ladder middles). Ladder cap **8 entries**.
+- `BeatCap` **200 runes**. Beat series selection cap **12 entries**. `KELD_DIGEST_BEAT_TURNS` default **3** user turns.
 - Session record caps: `projects` **5**, `subjects` **12**.
 - `KELD_DIGEST_MIN_INTERVAL` default **1h**, applies to every trigger reason including finalisation.
 - Existing caps unchanged in this plan: `DefaultSynopsisCap 650`, `DefaultProseCap 900`, `DefaultHappenedCap 1400`, `DefaultStructureCap 1600`, `DefaultListCap 12`.
@@ -157,7 +157,7 @@ type TurningPoint struct {
 
 // SessionRecord is the measured, session-spanning spine.
 //
-// It is the only authoritative input to a digest: the story ladder is model-paraphrased and
+// It is the only authoritative input to a digest: beats are model-written and
 // the window is raw evidence. Every field here is either counted or verified verbatim against
 // the transcript, so prose can be held against it.
 //
@@ -372,8 +372,8 @@ Expected: all five PASS.
 git add internal/agent/enrich/llmstudy/session_record.go internal/agent/enrich/llmstudy/session_record_test.go
 git commit -m "feat(digest): add the measured session record
 
-Session-spanning, deterministic, bounded. The only authoritative digest input: the story
-ladder is model-paraphrased and the window is raw evidence. Subjects enter only by the
+Session-spanning, deterministic, bounded. The only authoritative digest input: beats are
+model-written and the window is raw evidence. Subjects enter only by the
 verbatim gate, so a term cannot arrive by being plausible, and Populated() names what
 actually holds data so an absent focus does not read as an empty one — the failure that let
 DigestFacts.Topics read empty for months."
@@ -381,7 +381,7 @@ DigestFacts.Topics read empty for months."
 
 ---
 
-### Task 2: Persist the paraphrase and the record
+### Task 2: Persist the session record
 
 **Files:**
 - Modify: `internal/agent/enrich/llmstudy/digeststore/store.go`
@@ -389,30 +389,14 @@ DigestFacts.Topics read empty for months."
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `Record.Story string`; `(*Store) PutSessionRecord(sessionID string, seq int, body string) error`; `(*Store) SessionRecord(sessionID string) (string, int, bool, error)`.
+- Produces: `(*Store) PutSessionRecord(sessionID string, seq int, body string) error`; `(*Store) SessionRecord(sessionID string) (body string, seq int, ok bool, err error)`.
+
+The `beat` table arrives in Task 4, with the code that produces beats. No `story` column: the
+paraphrase field it would have held is dropped, because beats supersede it.
 
 - [ ] **Step 1: Write the failing test**
 
 ```go
-func TestStoryIsPersistedWithTheSnapshot(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "d.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if err := s.Put(Record{SessionID: "a", Seq: 1, Body: "{}", Signals: "{}",
-		Story: "work was on the March close; specifically the bank rec"}); err != nil {
-		t.Fatal(err)
-	}
-	got, ok, err := s.Latest("a")
-	if err != nil || !ok {
-		t.Fatalf("latest: %v %v", ok, err)
-	}
-	if got.Story == "" {
-		t.Error("story did not survive the round trip")
-	}
-}
-
 // The record is current state, not history: one row per session, overwritten.
 func TestSessionRecordIsOverwrittenNotAppended(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "d.db"))
@@ -442,24 +426,30 @@ func TestUnknownSessionRecordIsNotAnError(t *testing.T) {
 		t.Errorf("want (false, nil) for an unknown session, got ok=%v err=%v", ok, err)
 	}
 }
+
+// A digest snapshot must still round-trip unchanged.
+func TestDigestSnapshotStillRoundTrips(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "d.db"))
+	defer s.Close()
+	if err := s.Put(Record{SessionID: "a", Seq: 1, Body: "{}", Signals: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.Latest("a"); err != nil || !ok {
+		t.Fatalf("latest: %v %v", ok, err)
+	}
+}
 ```
 
 - [ ] **Step 2: Run it to confirm it fails**
 
 Run: `go test ./internal/agent/enrich/llmstudy/digeststore/`
-Expected: FAIL, `unknown field Story` / `undefined: PutSessionRecord`.
+Expected: FAIL, `undefined: PutSessionRecord`.
 
 - [ ] **Step 3: Implement**
 
-In `schema`, add `story` to the `digest` table and a new table. There is no deployed data, so
-the column is declared rather than migrated:
+Append to `schema`:
 
 ```sql
-CREATE TABLE IF NOT EXISTS digest (
-  ...
-  story          TEXT    NOT NULL DEFAULT '',
-  ...
-);
 -- Current state, not history: one row per session, overwritten. Digests are snapshots
 -- because their prose is a record; the session record is measured state.
 CREATE TABLE IF NOT EXISTS session_record (
@@ -468,16 +458,6 @@ CREATE TABLE IF NOT EXISTS session_record (
   body        TEXT    NOT NULL
 );
 ```
-
-Add `Story string` to `Record` with the comment:
-
-```go
-	// Story is the paraphrase this snapshot produced, persisted so the ladder replays what
-	// was ACTUALLY used rather than something re-derived by a later model.
-	Story string
-```
-
-Extend `selectCols`, `scanRec`, and the `Put` insert/update to carry `story`, then:
 
 ```go
 // PutSessionRecord overwrites the measured state for a session.
@@ -508,136 +488,29 @@ func (s *Store) SessionRecord(sessionID string) (body string, seq int, ok bool, 
 - [ ] **Step 4: Run the tests**
 
 Run: `go test ./internal/agent/enrich/llmstudy/digeststore/ -v`
-Expected: all PASS, including the pre-existing round-trip and history tests.
+Expected: all PASS, including the pre-existing snapshot and history tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/agent/enrich/llmstudy/digeststore/
-git commit -m "feat(digeststore): persist the paraphrase and the session record
+git commit -m "feat(digeststore): persist the measured session record
 
-story rides each snapshot so the ladder replays what was actually used rather than a later
-re-derivation. session_record is one overwritten row per session because it is current
-measured state, not history."
+One overwritten row per session, because the record is current measured state rather than
+history. Digests stay snapshots: their prose is a record."
 ```
 
 ---
 
-### Task 3: `story` on the refinement schema
+### Task 3: Beats — the cheap frequent pass
 
 **Files:**
-- Modify: `internal/agent/enrich/llmstudy/digest_refine.go`
-- Modify: `internal/agent/enrich/llmstudy/digest_synopsis_test.go`
+- Create: `internal/agent/enrich/llmstudy/beat.go`
+- Create: `internal/agent/enrich/llmstudy/beat_test.go`
 
 **Interfaces:**
-- Consumes: `DigestUpdateSchema`, `digestUpdate`, `callValid`.
-- Produces: `digestUpdate.Story string`; `StoryCap`, `LadderEntryCap` constants; `(*Llama) RefineDigestWithReason` returns `(Digest, string, error)` — the digest and its paraphrase.
-
-- [ ] **Step 1: Write the failing test**
-
-```go
-func TestRefinementSchemaRequiresAStory(t *testing.T) {
-	sc := DigestUpdateSchema()
-	props := sc["properties"].(map[string]any)
-	if props["story"] == nil {
-		t.Fatal("refinement schema has no story field")
-	}
-	var found bool
-	for _, r := range sc["required"].([]string) {
-		if r == "story" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("story must be required, so every refinement produces its own handover")
-	}
-	// Machinery, not report content: it must not appear on the stored digest.
-	if base := DigestSchema()["properties"].(map[string]any); base["story"] != nil {
-		t.Error("the base digest schema must not carry story")
-	}
-}
-
-func TestUpdatePromptAsksForTheParaphrase(t *testing.T) {
-	p := DigestUpdatePromptWithReason(Digest{Done: "x"}, "work session", "user: next\n", "", "counts: turns=2\n", TriggerNone)
-	for _, want := range []string{"story", "themes rather than actions"} {
-		if !strings.Contains(p, want) {
-			t.Errorf("refine prompt omits %q", want)
-		}
-	}
-}
-```
-
-- [ ] **Step 2: Run it to confirm it fails**
-
-Run: `go test ./internal/agent/enrich/llmstudy/ -run "RequiresAStory|AsksForTheParaphrase"`
-Expected: FAIL, `refinement schema has no story field`.
-
-- [ ] **Step 3: Implement**
-
-```go
-const (
-	// StoryCap bounds the most recent paraphrase; LadderEntryCap the older ones. The ladder is
-	// cheaper than the 4,742-character embedded digest it replaces: 600 + 7x140 is ~1,580.
-	StoryCap       = 600
-	LadderEntryCap = 140
-)
-```
-
-Add to `digestUpdate`:
-
-```go
-	// Story is a paraphrase of the report just produced, for the NEXT refinement to read.
-	// Kept off Digest: it is machinery, and a reader wants the report, not a summary of it.
-	Story string `json:"story"`
-```
-
-In `DigestUpdateSchema`, add `props["story"] = map[string]any{"type": "string", "minLength": digestMinProse}` and append `"story"` to `required`.
-
-Append to `updateRules`:
-
-```
-  - story: a short paraphrase of the report you just wrote, for the next update to read as
-    context. Name what the work has been about at the grain of THEMES rather than actions,
-    where it now stands, and where it is heading. Three sentences at most. It is context, not
-    a section of the report.
-```
-
-Change the signature so callers receive the paraphrase, and cap it:
-
-```go
-func (l *Llama) RefineDigestWithReason(prev Digest, sessionLabel, newTurns, sessionView, facts string, why TriggerReason) (Digest, string, error)
-```
-
-returning `CapSections(...), clipProse(up.Story, StoryCap), nil`. Update `RefineDigest` and
-`RefineDigestWithView` to discard the second value so existing callers keep compiling.
-
-- [ ] **Step 4: Run the tests**
-
-Run: `go test ./internal/agent/enrich/llmstudy/ -run "Story|Paraphrase" -v` then `go test ./...`
-Expected: PASS, whole suite green.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add internal/agent/enrich/llmstudy/
-git commit -m "feat(digest): every refinement emits its own paraphrase
-
-A required story field on the refinement schema only, capped at 600 runes and kept off
-Digest because it is machinery rather than report content. Produced in the same call, so
-compression costs no extra inference."
-```
-
----
-
-### Task 4: The story ladder, sampled at turning points
-
-**Files:**
-- Create: `internal/agent/enrich/llmstudy/story_ladder.go`
-- Create: `internal/agent/enrich/llmstudy/story_ladder_test.go`
-
-**Interfaces:**
-- Consumes: `TurningPoint`, `TriggerReason`, `clipProse`, `StoryCap`, `LadderEntryCap`.
-- Produces: `type LadderEntry struct{ Seq int; Reason TriggerReason; Text string }`; `BuildLadder(stories []LadderEntry, max int) []LadderEntry`; `RenderLadder(entries []LadderEntry) string`; `MaxLadderEntries`.
+- Consumes: `SessionRecord.Block`, `Render`, `callValid`, `clipProse`, `insightsMatch`.
+- Produces: `BeatCap`; `type Beat struct{ Ordinal int; Text string; ChangedSubject bool }`; `BeatPrompt(record, window string) string`; `BeatSchema() map[string]any`; `(*Llama) GenerateBeat(record, window string) (string, error)`; `BeatSaysNothingNew(text string, prev []Beat) bool`; `BeatTurnsFromEnv() int`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -649,115 +522,357 @@ import (
 	"testing"
 )
 
-func entries(n int, shiftAt ...int) []LadderEntry {
-	shift := map[int]bool{}
-	for _, s := range shiftAt {
-		shift[s] = true
+// A beat is given the window AND the measured record. Without the record it describes a local
+// action ("read three CSVs") instead of what the action was for.
+func TestBeatPromptCarriesWindowAndRecord(t *testing.T) {
+	rec := SessionRecord{Turns: 12}.WithProject("meridian")
+	p := BeatPrompt(rec.Block(), "user: reconcile the Larkin accrual\n")
+	if !strings.Contains(p, "meridian") {
+		t.Error("beat prompt omits the measured record")
 	}
-	var out []LadderEntry
-	for i := 1; i <= n; i++ {
-		reason := TriggerVolume
-		if shift[i] {
-			reason = TriggerFocusShift
-		}
-		out = append(out, LadderEntry{Seq: i, Reason: reason, Text: "story number " + string(rune('a'+i-1))})
+	if !strings.Contains(p, "Larkin") {
+		t.Error("beat prompt omits the window")
 	}
-	return out
-}
-
-// The first entry is where the work started — what lets the account say what the current
-// work grew out of. Dropping it is how a session loses its own origin.
-func TestLadderAlwaysKeepsTheFirstAndLast(t *testing.T) {
-	got := BuildLadder(entries(20), 5)
-	if got[0].Seq != 1 {
-		t.Errorf("first entry dropped: %v", got[0])
+	// The chain this design avoids: a beat must never be handed another beat.
+	if strings.Contains(strings.ToLower(p), "previous beat") {
+		t.Error("beat prompt refers to an earlier beat")
 	}
-	if got[len(got)-1].Seq != 20 {
-		t.Errorf("most recent entry dropped: %v", got[len(got)-1])
-	}
-	if len(got) > 5 {
-		t.Errorf("cap exceeded: %d", len(got))
-	}
-}
-
-// Turning points are the trajectory. Evenly spaced samples would mostly capture steady
-// progress.
-func TestLadderPrefersTurningPoints(t *testing.T) {
-	got := BuildLadder(entries(20, 7, 13), 5)
-	var seqs []int
-	for _, e := range got {
-		seqs = append(seqs, e.Seq)
-	}
-	for _, want := range []int{7, 13} {
-		var found bool
-		for _, s := range seqs {
-			if s == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("turning point %d missing from %v", want, seqs)
+	for _, want := range []string{"one to three sentences", "what the work is about"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("beat prompt omits %q", want)
 		}
 	}
 }
 
-// A steady session still needs its shape, so spacing is the fallback.
-func TestLadderFallsBackToEvenSpacing(t *testing.T) {
-	got := BuildLadder(entries(20), 5)
-	if len(got) != 5 {
-		t.Fatalf("want the cap filled by spacing, got %d", len(got))
+func TestBeatSchemaIsASingleRequiredString(t *testing.T) {
+	sc := BeatSchema()
+	props := sc["properties"].(map[string]any)
+	if len(props) != 1 || props["beat"] == nil {
+		t.Fatalf("a beat is one field, got %v", props)
 	}
-	for i := 1; i < len(got); i++ {
-		if got[i].Seq <= got[i-1].Seq {
-			t.Errorf("ladder must be chronological: %v", got)
-		}
+	if req := sc["required"].([]string); len(req) != 1 || req[0] != "beat" {
+		t.Errorf("beat must be required, got %v", req)
 	}
 }
 
-func TestLadderIsChronologicalAndUnique(t *testing.T) {
-	got := BuildLadder(entries(12, 3, 4, 5, 6, 7, 8, 9, 10), 4)
-	seen := map[int]bool{}
-	for i, e := range got {
-		if seen[e.Seq] {
-			t.Errorf("duplicate seq %d", e.Seq)
-		}
-		seen[e.Seq] = true
-		if i > 0 && e.Seq <= got[i-1].Seq {
-			t.Errorf("out of order: %v", got)
-		}
+// A run of acknowledgements must not pad the series and bury the moments that matter.
+func TestBeatSayingNothingNewIsDropped(t *testing.T) {
+	prev := []Beat{{Ordinal: 1, Text: "The work is reconciling the March ledger for Meridian."}}
+	if !BeatSaysNothingNew("Work continues reconciling Meridian's March ledger.", prev) {
+		t.Error("a restatement was not detected")
+	}
+	if BeatSaysNothingNew("The work has moved to the AR ageing provision policy.", prev) {
+		t.Error("a genuinely new beat was dropped")
+	}
+	if BeatSaysNothingNew("anything", nil) {
+		t.Error("the first beat can never be a restatement")
 	}
 }
 
-// Only the newest entry gets the full budget.
-func TestRenderLadderClipsOlderEntriesHarder(t *testing.T) {
-	long := strings.Repeat("word ", 400)
-	out := RenderLadder([]LadderEntry{
-		{Seq: 1, Reason: TriggerFirst, Text: long},
-		{Seq: 9, Reason: TriggerVolume, Text: long},
-	})
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("want one line per entry, got %d", len(lines))
-	}
-	if len([]rune(lines[0])) > LadderEntryCap+40 {
-		t.Errorf("older entry not clipped: %d runes", len([]rune(lines[0])))
-	}
-	if len([]rune(lines[1])) <= LadderEntryCap {
-		t.Errorf("newest entry should carry the larger budget: %d runes", len([]rune(lines[1])))
+func TestBeatIsClippedToItsCap(t *testing.T) {
+	if got := len([]rune(clipProse(strings.Repeat("word ", 200), BeatCap))); got > BeatCap {
+		t.Errorf("beat not clipped: %d runes", got)
 	}
 }
 
-func TestEmptyLadderRendersNothing(t *testing.T) {
-	if RenderLadder(nil) != "" {
-		t.Error("an empty ladder must render nothing, not a header")
+func TestBeatTurnsDefaultsToThree(t *testing.T) {
+	t.Setenv("KELD_DIGEST_BEAT_TURNS", "")
+	if got := BeatTurnsFromEnv(); got != 3 {
+		t.Errorf("want 3, got %d", got)
+	}
+	t.Setenv("KELD_DIGEST_BEAT_TURNS", "7")
+	if got := BeatTurnsFromEnv(); got != 7 {
+		t.Errorf("want 7, got %d", got)
 	}
 }
 ```
 
 - [ ] **Step 2: Run it to confirm it fails**
 
-Run: `go test ./internal/agent/enrich/llmstudy/ -run Ladder`
-Expected: FAIL, `undefined: LadderEntry`.
+Run: `go test ./internal/agent/enrich/llmstudy/ -run Beat`
+Expected: FAIL, `undefined: BeatPrompt`.
+
+- [ ] **Step 3: Implement**
+
+```go
+package llmstudy
+
+import (
+	"os"
+	"strconv"
+	"strings"
+)
+
+// BeatCap bounds one beat. One to three sentences; the cap is a backstop, not the target.
+const BeatCap = 200
+
+// Beat is one cheap statement of what the work is about, derived from its own window.
+type Beat struct {
+	Ordinal        int    `json:"ordinal"`
+	Text           string `json:"text"`
+	ChangedSubject bool   `json:"changed_subject"`
+}
+
+// BeatPrompt asks the cheap question. Deliberately NOT given a previous beat: a beat reads the
+// transcript and the measured record only, which is what keeps the series free of a chain
+// along which drift could compound.
+func BeatPrompt(record, window string) string {
+	var b strings.Builder
+	b.WriteString("State what the work in this conversation is about, in one to three sentences.\n\n")
+	b.WriteString("SESSION RECORD (measured — authoritative):\n")
+	b.WriteString(record)
+	b.WriteString("\nRECENT CONVERSATION:\n")
+	b.WriteString(window)
+	b.WriteString(`
+Rules:
+  - Say what the work is ABOUT — the subject and its purpose. Not a list of actions taken.
+  - Use the record to place the work. An action is only meaningful as part of something.
+  - Every noun must come from the conversation or the record above. Nothing in these
+    instructions is subject matter.
+  - No preamble, no headings. One to three sentences of plain prose.
+
+Respond with JSON only.
+`)
+	return b.String()
+}
+
+// BeatSchema constrains the response to one required string.
+func BeatSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"beat": map[string]any{"type": "string", "minLength": digestMinProse},
+		},
+		"required":             []string{"beat"},
+		"additionalProperties": false,
+	}
+}
+
+// GenerateBeat produces one beat.
+func (l *Llama) GenerateBeat(record, window string) (string, error) {
+	var out struct {
+		Beat string `json:"beat"`
+	}
+	if err := l.callValid(BeatPrompt(record, window), BeatSchema(), &out, func() error {
+		if strings.TrimSpace(out.Beat) == "" {
+			return firstProblem([]string{"beat is empty"})
+		}
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	return clipProse(out.Beat, BeatCap), nil
+}
+
+// BeatSaysNothingNew reports a beat that restates the most recent one.
+//
+// Compared on significant words, the same test that collapses duplicate insights, because a
+// restatement arrives reworded rather than identical. Only the most recent beat is compared:
+// a subject the session RETURNS to later is genuine history and should appear again.
+func BeatSaysNothingNew(text string, prev []Beat) bool {
+	if len(prev) == 0 {
+		return false
+	}
+	return insightsMatch(text, prev[len(prev)-1].Text)
+}
+
+// BeatTurnsFromEnv reads KELD_DIGEST_BEAT_TURNS, defaulting to 3 user turns.
+func BeatTurnsFromEnv() int {
+	if v := os.Getenv("KELD_DIGEST_BEAT_TURNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 3
+}
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `go test ./internal/agent/enrich/llmstudy/ -run Beat -v`
+Expected: all five PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/agent/enrich/llmstudy/beat.go internal/agent/enrich/llmstudy/beat_test.go
+git commit -m "feat(digest): cheap beats every few turns
+
+One to three sentences on what the work is about, from the recent window plus the measured
+record — never from another beat, which is what keeps the series free of a chain along which
+drift could compound. Roughly 60-90 output tokens against ~2,000 for a report, so twenty
+beats cost about one report and give twenty points of history instead of one. A beat that
+restates its predecessor is discarded rather than stored."
+```
+
+---
+
+### Task 4: The beat series — storage and sampling
+
+**Files:**
+- Create: `internal/agent/enrich/llmstudy/beat_series.go`
+- Create: `internal/agent/enrich/llmstudy/beat_series_test.go`
+- Modify: `internal/agent/enrich/llmstudy/digeststore/store.go`
+- Modify: `internal/agent/enrich/llmstudy/digeststore/store_test.go`
+
+**Interfaces:**
+- Consumes: `Beat`, `BeatCap`, `clipProse`, `insightsMatch`.
+- Produces: `MaxBeatSelection`; `AppendBeat(prev []Beat, text string) ([]Beat, bool)`; `SelectBeats(all []Beat, max int) []Beat`; `RenderBeats(sel []Beat) string`; `(*Store) PutBeat(sessionID string, b BeatRow) error`; `(*Store) Beats(sessionID string) ([]BeatRow, error)`.
+
+- [ ] **Step 1: Write the failing test**
+
+```go
+package llmstudy
+
+import (
+	"strings"
+	"testing"
+)
+
+func beats(n int, changedAt ...int) []Beat {
+	ch := map[int]bool{}
+	for _, c := range changedAt {
+		ch[c] = true
+	}
+	var out []Beat
+	for i := 1; i <= n; i++ {
+		out = append(out, Beat{Ordinal: i, Text: "beat " + strings.Repeat("x", i), ChangedSubject: ch[i]})
+	}
+	return out
+}
+
+// Appending marks whether the subject changed — the signal the report samples on, and the one
+// the recency work was previously blocked on.
+func TestAppendBeatMarksSubjectChange(t *testing.T) {
+	var bs []Beat
+	bs, ok := AppendBeat(bs, "The work is reconciling the March ledger for Meridian.")
+	if !ok || !bs[0].ChangedSubject {
+		t.Fatalf("the first beat establishes the subject: ok=%v %v", ok, bs)
+	}
+	bs, ok = AppendBeat(bs, "Work continues on Meridian's March ledger reconciliation.")
+	if ok {
+		t.Errorf("a restatement must not be stored: %v", bs)
+	}
+	bs, ok = AppendBeat(bs, "The work has moved to the AR ageing provision policy.")
+	if !ok || !bs[len(bs)-1].ChangedSubject {
+		t.Errorf("a new subject must be stored and marked: %v", bs)
+	}
+	if got := bs[len(bs)-1].Ordinal; got != 2 {
+		t.Errorf("ordinals must be contiguous over STORED beats, got %d", got)
+	}
+}
+
+func TestSelectBeatsKeepsFirstAndLatest(t *testing.T) {
+	got := SelectBeats(beats(30), 6)
+	if got[0].Ordinal != 1 {
+		t.Errorf("the first beat was dropped: %v", got[0])
+	}
+	if got[len(got)-1].Ordinal != 30 {
+		t.Errorf("the latest beat was dropped: %v", got[len(got)-1])
+	}
+	if len(got) > 6 {
+		t.Errorf("cap exceeded: %d", len(got))
+	}
+}
+
+func TestSelectBeatsPrefersSubjectChanges(t *testing.T) {
+	got := SelectBeats(beats(30, 9, 18), 6)
+	var have []int
+	for _, b := range got {
+		have = append(have, b.Ordinal)
+	}
+	for _, want := range []int{9, 18} {
+		var found bool
+		for _, h := range have {
+			if h == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("subject change at %d missing from %v", want, have)
+		}
+	}
+}
+
+func TestSelectBeatsFallsBackToSpacing(t *testing.T) {
+	got := SelectBeats(beats(30), 6)
+	if len(got) != 6 {
+		t.Fatalf("want the cap filled by spacing, got %d", len(got))
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].Ordinal <= got[i-1].Ordinal {
+			t.Fatalf("must be chronological and unique: %v", got)
+		}
+	}
+}
+
+func TestRenderBeatsMarksSubjectChanges(t *testing.T) {
+	out := RenderBeats([]Beat{
+		{Ordinal: 1, Text: "started on the ledger", ChangedSubject: true},
+		{Ordinal: 4, Text: "steady progress", ChangedSubject: false},
+	})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("one line per beat, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], "subject") {
+		t.Errorf("a subject change must be marked: %q", lines[0])
+	}
+	if strings.Contains(lines[1], "subject") {
+		t.Errorf("steady progress must not be marked: %q", lines[1])
+	}
+}
+
+func TestRenderEmptyBeatsIsEmpty(t *testing.T) {
+	if RenderBeats(nil) != "" {
+		t.Error("an empty series must render nothing, not a header")
+	}
+}
+```
+
+And in `digeststore`:
+
+```go
+func TestBeatsRoundTripInOrder(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "d.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 1; i <= 3; i++ {
+		if err := s.PutBeat("a", BeatRow{Ordinal: i, CreatedTS: int64(i),
+			Text: fmt.Sprintf("beat %d", i), ChangedSubject: i == 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.Beats("a")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("want 3 beats in order, got %d (%v)", len(got), err)
+	}
+	if got[0].Ordinal != 1 || got[2].Ordinal != 3 || !got[0].ChangedSubject {
+		t.Errorf("beats came back wrong: %+v", got)
+	}
+}
+
+// Re-putting the same ordinal is idempotent, so a retried generation is not a duplicate.
+func TestPutBeatIsIdempotent(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "d.db"))
+	defer s.Close()
+	for i := 0; i < 2; i++ {
+		if err := s.PutBeat("a", BeatRow{Ordinal: 1, Text: "same", CreatedTS: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, _ := s.Beats("a"); len(got) != 1 {
+		t.Errorf("want 1 row, got %d", len(got))
+	}
+}
+```
+
+- [ ] **Step 2: Run both to confirm they fail**
+
+Run: `go test ./internal/agent/enrich/llmstudy/ -run Beat` and `go test ./internal/agent/enrich/llmstudy/digeststore/`
+Expected: FAIL, `undefined: AppendBeat` / `undefined: BeatRow`.
 
 - [ ] **Step 3: Implement**
 
@@ -770,45 +885,53 @@ import (
 	"strings"
 )
 
-// MaxLadderEntries caps the ladder. Worst case 600 + 7x140 is ~1,580 runes against the 4,742
-// the embedded digest cost, so the ladder is cheaper than what it replaces while covering the
-// whole session rather than one step of it.
-const MaxLadderEntries = 8
+// MaxBeatSelection caps how many beats a report reads. At BeatCap runes each that is ~2,400
+// worst case, against the 4,742 the embedded report cost.
+const MaxBeatSelection = 12
 
-// LadderEntry is one stored paraphrase and why its digest fired.
-type LadderEntry struct {
-	Seq    int
-	Reason TriggerReason
-	Text   string
+// AppendBeat stores a beat unless it restates the previous one, marking whether it changed the
+// subject. Ordinals are contiguous over STORED beats, so a discarded restatement leaves no gap.
+//
+// ChangedSubject is the signal the report samples on, and it is measured here by comparing
+// against the accumulated beats rather than taken from the classification pipeline's EWMA
+// focus — which the digest path does not run. The EWMA is better where available; this makes
+// the signal usable without it.
+func AppendBeat(prev []Beat, text string) ([]Beat, bool) {
+	text = strings.TrimSpace(clipProse(text, BeatCap))
+	if text == "" {
+		return prev, false
+	}
+	if BeatSaysNothingNew(text, prev) {
+		return prev, false
+	}
+	changed := true
+	for _, b := range prev {
+		if insightsMatch(text, b.Text) {
+			// A subject the session has already covered is a return, not a change.
+			changed = false
+			break
+		}
+	}
+	return append(prev, Beat{Ordinal: len(prev) + 1, Text: text, ChangedSubject: changed}), true
 }
 
-// BuildLadder selects which paraphrases a refinement reads.
-//
-// Sampled at TURNING POINTS rather than evenly. A trajectory is made of the moments direction
-// changed, and even spacing across a long session mostly captures steady progress. Even
-// spacing remains the fallback so a steady session still shows its shape.
-//
-// The first entry is always kept: it is where the work started, and it is what lets the
-// account say what the current work grew out of.
-func BuildLadder(stories []LadderEntry, max int) []LadderEntry {
+// SelectBeats chooses which beats a report reads: the first, every subject change, the most
+// recent, and even spacing to fill the cap.
+func SelectBeats(all []Beat, max int) []Beat {
 	if max <= 0 {
-		max = MaxLadderEntries
+		max = MaxBeatSelection
 	}
-	if len(stories) <= max {
-		return stories
+	if len(all) <= max {
+		return all
 	}
-	sort.Slice(stories, func(i, j int) bool { return stories[i].Seq < stories[j].Seq })
-
-	pick := map[int]bool{0: true, len(stories) - 1: true}
-	// Turning points first, newest-first so the most relevant survive the cap.
-	for i := len(stories) - 2; i > 0 && len(pick) < max; i-- {
-		if stories[i].Reason == TriggerFocusShift || stories[i].Reason == TriggerFriction {
+	pick := map[int]bool{0: true, len(all) - 1: true}
+	for i := len(all) - 2; i > 0 && len(pick) < max; i-- {
+		if all[i].ChangedSubject {
 			pick[i] = true
 		}
 	}
-	// Even spacing fills whatever the cap leaves.
 	if len(pick) < max {
-		step := float64(len(stories)-1) / float64(max-1)
+		step := float64(len(all)-1) / float64(max-1)
 		for k := 1; k < max-1 && len(pick) < max; k++ {
 			pick[int(float64(k)*step)] = true
 		}
@@ -818,52 +941,107 @@ func BuildLadder(stories []LadderEntry, max int) []LadderEntry {
 		idx = append(idx, i)
 	}
 	sort.Ints(idx)
-	out := make([]LadderEntry, 0, len(idx))
+	out := make([]Beat, 0, len(idx))
 	for _, i := range idx {
-		out = append(out, stories[i])
+		out = append(out, all[i])
 	}
 	return out
 }
 
-// RenderLadder renders the ladder oldest-first, with only the newest entry at full budget.
-func RenderLadder(entries []LadderEntry) string {
-	if len(entries) == 0 {
+// RenderBeats renders the series oldest-first, marking where the subject changed so a report
+// can see the trajectory rather than only the endpoints.
+func RenderBeats(sel []Beat) string {
+	if len(sel) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	for i, e := range entries {
-		cap := LadderEntryCap
-		if i == len(entries)-1 {
-			cap = StoryCap
+	for _, x := range sel {
+		mark := ""
+		if x.ChangedSubject {
+			mark = " (subject changed)"
 		}
-		note := ""
-		if e.Reason == TriggerFocusShift || e.Reason == TriggerFriction {
-			note = fmt.Sprintf(" (%s)", e.Reason)
-		}
-		b.WriteString(fmt.Sprintf("[%d]%s %s\n", e.Seq, note, clipProse(oneLine(e.Text), cap)))
+		b.WriteString(fmt.Sprintf("[%d]%s %s\n", x.Ordinal, mark, oneLine(x.Text)))
 	}
 	return b.String()
 }
 
-// oneLine flattens a paraphrase so one entry stays one line.
+// oneLine flattens a beat so one entry stays one line.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 ```
 
+In `digeststore`, add the table and accessors:
+
+```sql
+CREATE TABLE IF NOT EXISTS beat (
+  session_id      TEXT    NOT NULL,
+  ordinal         INTEGER NOT NULL,
+  created_ts      INTEGER NOT NULL,
+  changed_subject INTEGER NOT NULL,
+  text            TEXT    NOT NULL,
+  PRIMARY KEY(session_id, ordinal)
+);
+```
+
+```go
+// BeatRow is one stored beat.
+type BeatRow struct {
+	Ordinal        int
+	CreatedTS      int64
+	ChangedSubject bool
+	Text           string
+}
+
+// PutBeat writes a beat, overwriting the same ordinal so a retried generation is idempotent
+// rather than a duplicate.
+func (s *Store) PutBeat(sessionID string, b BeatRow) error {
+	if sessionID == "" || b.Ordinal <= 0 {
+		return fmt.Errorf("digeststore: session_id required and ordinal must be >= 1")
+	}
+	_, err := s.db.Exec(`
+INSERT INTO beat (session_id, ordinal, created_ts, changed_subject, text) VALUES (?,?,?,?,?)
+ON CONFLICT(session_id, ordinal) DO UPDATE SET
+  created_ts=excluded.created_ts, changed_subject=excluded.changed_subject, text=excluded.text`,
+		sessionID, b.Ordinal, b.CreatedTS, b.ChangedSubject, b.Text)
+	return err
+}
+
+// Beats returns a session's beats in order.
+func (s *Store) Beats(sessionID string) ([]BeatRow, error) {
+	rows, err := s.db.Query(`SELECT ordinal, created_ts, changed_subject, text
+FROM beat WHERE session_id = ? ORDER BY ordinal ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BeatRow
+	for rows.Next() {
+		var b BeatRow
+		if err := rows.Scan(&b.Ordinal, &b.CreatedTS, &b.ChangedSubject, &b.Text); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+```
+
+Drop the `story` column from Task 2 — it is no longer produced.
+
 - [ ] **Step 4: Run the tests**
 
-Run: `go test ./internal/agent/enrich/llmstudy/ -run Ladder -v`
-Expected: all six PASS.
+Run: `go test ./internal/agent/enrich/llmstudy/... -run Beat -v`
+Expected: all PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/agent/enrich/llmstudy/story_ladder.go internal/agent/enrich/llmstudy/story_ladder_test.go
-git commit -m "feat(digest): story ladder sampled at turning points
+git add internal/agent/enrich/llmstudy/
+git commit -m "feat(digest): beat series storage and sampling
 
-A refinement reads several paraphrases across the session, not just the last one — a chain
-where each step sees one step back is how drift compounds unnoticed. Sampled at focus shifts
-and friction because that is what a trajectory is made of, with even spacing as the fallback,
-and the first entry always kept so a session cannot lose its own origin."
+Selection prefers subject changes over even spacing, because that is what a trajectory is
+made of, and always keeps the first beat so a session cannot lose its own origin. Subject
+change is measured by comparing against the accumulated beats, which is the signal the
+recency work was blocked on when it was to come from the classification pipeline's EWMA."
 ```
 
 ---
@@ -876,8 +1054,8 @@ and the first entry always kept so a session cannot lose its own origin."
 - Modify: `internal/agent/enrich/llmstudy/digest_fit.go`
 
 **Interfaces:**
-- Consumes: `SessionRecord.Block`, `RenderLadder`, `Identifiers`.
-- Produces: `DigestUpdatePromptFrom(prev Digest, in RefineInput) string`; `type RefineInput struct{ SessionLabel string; Record SessionRecord; Ladder []LadderEntry; SessionView, NewTurns string; Why TriggerReason }`; `(*Llama) RefineFrom(prev Digest, in RefineInput) (Digest, string, error)`. `CarryForward` deleted.
+- Consumes: `SessionRecord.Block`, `SelectBeats`, `RenderBeats`, `Identifiers`.
+- Produces: `DigestUpdatePromptFrom(prev Digest, in RefineInput) string`; `type RefineInput struct{ SessionLabel string; Record SessionRecord; Beats []Beat; SessionView, NewTurns string; Why TriggerReason }`; `(*Llama) RefineFrom(prev Digest, in RefineInput) (Digest, error)`. `CarryForward` deleted.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -892,7 +1070,7 @@ func TestRefinePromptCarriesNoPriorProse(t *testing.T) {
 	in := RefineInput{
 		SessionLabel: "work session",
 		Record:       SessionRecord{Turns: 20}.WithProject("meridian"),
-		Ladder:       []LadderEntry{{Seq: 1, Reason: TriggerFirst, Text: "work began on the March close"}},
+		Beats:        []Beat{{Ordinal: 1, Text: "work began on the March close", ChangedSubject: true}},
 		NewTurns:     "user: now do April\n",
 	}
 	p := DigestUpdatePromptFrom(prev, in)
@@ -911,7 +1089,7 @@ func TestRefinePromptCarriesNoPriorProse(t *testing.T) {
 		t.Error("prior open items must still be accounted for")
 	}
 	if !strings.Contains(p, "March close") {
-		t.Error("the ladder is missing")
+		t.Error("the beat series is missing")
 	}
 	if !strings.Contains(p, "turns=20") {
 		t.Error("the measured record is missing")
@@ -923,13 +1101,13 @@ func TestRecordPrecedesNarrative(t *testing.T) {
 	in := RefineInput{
 		SessionLabel: "work session",
 		Record:       SessionRecord{Turns: 9},
-		Ladder:       []LadderEntry{{Seq: 1, Text: "LADDERMARK"}},
+		Beats:        []Beat{{Ordinal: 1, Text: "LADDERMARK"}},
 		NewTurns:     "user: WINDOWMARK\n",
 	}
 	p := DigestUpdatePromptFrom(Digest{Done: "x"}, in)
-	rec, lad, win := strings.Index(p, "turns=9"), strings.Index(p, "LADDERMARK"), strings.Index(p, "WINDOWMARK")
-	if !(rec < lad && lad < win) {
-		t.Errorf("want record < ladder < window, got %d %d %d", rec, lad, win)
+	rec, bea, win := strings.Index(p, "turns=9"), strings.Index(p, "LADDERMARK"), strings.Index(p, "WINDOWMARK")
+	if !(rec < bea && bea < win) {
+		t.Errorf("want record < beats < window, got %d %d %d", rec, bea, win)
 	}
 }
 
@@ -960,7 +1138,7 @@ Delete `CarryForward` and its test. Delete the no-shrink clause from `updateRule
 type RefineInput struct {
 	SessionLabel string
 	Record       SessionRecord
-	Ladder       []LadderEntry
+	Beats        []Beat
 	SessionView  string
 	NewTurns     string
 	Why          TriggerReason
@@ -985,9 +1163,9 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 		b.WriteString("populated fields: " + strings.Join(pop, ", ") + "\n")
 	}
 
-	if l := RenderLadder(in.Ladder); l != "" {
-		b.WriteString("\nTHE STORY SO FAR, oldest first (paraphrased — indicative):\n")
-		b.WriteString(l)
+	if bs := RenderBeats(SelectBeats(in.Beats, MaxBeatSelection)); bs != "" {
+		b.WriteString("\nBEATS, oldest first — each written from its own window (indicative):\n")
+		b.WriteString(bs)
 	}
 	if named := Identifiers(prev); len(named) > 0 {
 		b.WriteString("\nSPECIFICS ALREADY REPORTED (each must still appear, unless the new part shows it was wrong):\n  ")
@@ -1015,16 +1193,16 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	return b.String()
 }
 
-// RefineFrom produces the next report and its paraphrase.
-func (l *Llama) RefineFrom(prev Digest, in RefineInput) (Digest, string, error) {
+// RefineFrom produces the next report. No paraphrase: beats supply the history.
+func (l *Llama) RefineFrom(prev Digest, in RefineInput) (Digest, error) {
 	var up digestUpdate
 	repair := func(d Digest) Digest { return dropStaleOpenItems(applyClosures(d, up.Closed)) }
 	if err := l.callValid(DigestUpdatePromptFrom(prev, in), DigestUpdateSchema(), &up,
 		func() error { return firstProblem(ValidateDigest(repair(up.Digest))) }); err != nil {
-		return Digest{}, "", err
+		return Digest{}, err
 	}
 	merged := mergeWithRetirement(prev, repair(up.Digest), up.Retired)
-	return CapSections(merged, DefaultProseCap, DefaultListCap), clipProse(up.Story, StoryCap), nil
+	return CapSections(merged, DefaultProseCap, DefaultListCap), nil
 }
 ```
 
@@ -1396,8 +1574,12 @@ prose fields and so never saw synopsis."
 - [ ] **Step 1: Wire the harness to the new inputs**
 
 Thread a `SessionRecord` through the sweep, accumulating with `Observe` per window and
-`NoteTurningPoint` per digest; collect each returned `story` into `[]LadderEntry`; call
-`RefineFrom`. Persist `story` and the record via the store so the ladder replays what was used.
+`NoteTurningPoint` per report. Generate a beat every `BeatTurnsFromEnv()` user turns via
+`GenerateBeat`, append with `AppendBeat`, and persist with `PutBeat`. Call `RefineFrom` with
+the accumulated beats. Persist the record so a run is replayable.
+
+Report the beat count and how many were discarded as restatements — a series that discards
+most of what it generates means the cadence is too tight for these sessions.
 
 - [ ] **Step 2: Run the stratified sweep**
 
@@ -1448,8 +1630,9 @@ transcripts.
 
 **Type consistency.** `RefineDigestWithReason` gains a third return value in Task 3 and is
 superseded by `RefineFrom` in Task 5; Task 5 removes the older wrappers once the harness moves
-across in Task 8. `LadderEntry` is produced in Task 4 and consumed by `RefineInput` in Task 5.
-`TurningPoint` (Task 1) and `LadderEntry.Reason` (Task 4) both key on `TriggerReason`.
+across in Task 8. `Beat` is produced in Task 3, stored and sampled in Task 4, and consumed by `RefineInput` in
+Task 5. `TurningPoint` (Task 1) still records why a REPORT fired; `Beat.ChangedSubject` records
+whether the subject moved, and the two are independent signals.
 
 **Risk to watch during execution.** Task 5 deletes `CarryForward` while Task 8 is what proves
 the replacement works. If the sweep regresses T4 below 90%, the cause is most likely the
