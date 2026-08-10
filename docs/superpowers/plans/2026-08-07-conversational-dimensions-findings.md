@@ -540,3 +540,69 @@ the flagged items, always.
 - **Residual T2 items are generic vocabulary** (`CSS`, `URL`, `11-task`) — the model
   adding domain words the transcript never used. Within threshold, but it is the same
   class of behaviour as a fabricated specific.
+
+---
+
+# Part 5 — Does it work for work that isn't code?
+
+The requirement is that the digest serves accountants and marketers as well as
+engineers. There was no evidence either way, and the corpus cannot supply it: all 14
+project directories under `~/.claude/projects` are code repositories, and Cowork — the
+surface non-engineers actually use — yields zero readable transcripts on VM-backed
+builds. Observed data cannot answer this question at all.
+
+So two sessions were hand-authored in the real transcript format: a **month-end close**
+(bank reconciliation, AR provisions, accruals, depreciation, revenue cutoff; 20 user
+turns) and a **product launch campaign** (positioning, channels, a five-email sequence,
+measurement; 19 turns). Each contains a genuine reversal.
+
+**What this can and cannot show.** It cannot measure accuracy — the transcripts and the
+expectations are both mine, so agreement proves nothing about the real world. It can
+find *structural* failure, which is the actual risk: a pipeline that silently presumes
+code. `internal/agent/enrich/llmstudy/testdata/nontech/`.
+
+## What held
+
+- **`structure` described a PROCESS, not an architecture.** The finance digest laid out
+  the eight-step close checklist and what each step validates; the marketing digest laid
+  out the two-track messaging strategy and channel plan. The instruction's "for other
+  work, the shape of the process" carried its weight.
+- **No engineering vocabulary appeared** in either report — asserted in the test against
+  a list (`codebase`, `refactor`, `deploy`, `pull request`, …), not eyeballed.
+- **The finance reversal was reported, not smoothed over.** A specific provision was
+  proposed against stated policy and corrected; `happened` says so.
+- Domain specifics survived accurately: named counterparties, ageing buckets, the
+  duplicate posting, newsletter reach and sponsorship costs.
+
+## What broke — and both were the clipper, not the model
+
+**The cap was manufacturing rubberstamped reports.** `happened` is cumulative AND is
+where difficulty belongs, but it shared the 900-rune prose cap and sat at it. Clipping
+keeps the OLDEST text, so what got deleted was the most recent material — which is
+exactly where a reversal appears. The marketing session's positioning reversal vanished
+this way while its opening survived. Giving `happened` its own 1400-rune budget, as
+`structure` already had, moved rubberstamp detection from 5.6% to **0.0% of 18**
+correction-bearing digests on the real corpus. **The model was not smoothing over
+difficulty; a constant was deleting it.**
+
+**Clipping was not idempotent**, and real digests read `increasing from……`. `done` and
+`happened` are carried into the next refinement, so the model reproduces the ellipsis
+and the next clip appends another. The first fix was incomplete — stripping the trailing
+marker missed one sitting mid-text, which becomes adjacent when the new cut lands just
+after it. Both the whole string and the cut point are now cleaned, and clipped-ness
+survives re-clipping, so a section that lost content stays marked rather than reading as
+complete.
+
+## Still open
+
+- **`happened` is still capped**, so a long session's latest reversal can still fall
+  outside it. 1400 moved the boundary; it did not remove it. A cumulative section with a
+  fixed budget cannot hold an arbitrarily long session, and the honest fix is probably
+  to summarise older difficulty rather than clip it.
+- **`current` and `unresolved` went stale** on both synthetic sessions, retaining items
+  the conversation had closed and, in one case, asserting no copy existed for a track
+  whose landing page had been drafted. The refine prompt tells the model to drop what is
+  closed; it does not reliably comply.
+- **The synthetic corpus proves structure, not accuracy.** Real non-engineering
+  transcripts remain the only way to measure whether these reports are *right*, and
+  that needs a readable Cowork path or an in-VM emitter.
