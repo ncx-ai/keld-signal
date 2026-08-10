@@ -1025,8 +1025,6 @@ FROM beat WHERE session_id = ? ORDER BY ordinal ASC`, sessionID)
 }
 ```
 
-Drop the `story` column from Task 2 — it is no longer produced.
-
 - [ ] **Step 4: Run the tests**
 
 Run: `go test ./internal/agent/enrich/llmstudy/... -run Beat -v`
@@ -1435,7 +1433,7 @@ deterministic record is unaffected and stays current every window."
 - Create: `internal/agent/enrich/llmstudy/digest_consistency_test.go`
 
 **Interfaces:**
-- Produces: `StoryContradictsRecord(story string, r SessionRecord) []string`; `FabricatedNext(d Digest, source string) []string`; `RetainedFacts` reads `ProseFields`.
+- Produces: `BeatContradictsRecord(beat string, r SessionRecord) []string`; `FabricatedNext(d Digest, source string) []string`; `RetainedFacts` reads `ProseFields`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1449,23 +1447,23 @@ import (
 
 // The first currency check independent of judgement: a story whose subject contradicts the
 // measured record is wrong against a measurement, not an opinion.
-func TestStoryContradictingTheRecordIsDetected(t *testing.T) {
+func TestBeatContradictingTheRecordIsDetected(t *testing.T) {
 	r := SessionRecord{Turns: 40}.WithProject("keld-signal").WithFocus("engineering", "software", 0.9)
 	r.Subjects = []string{"digest", "synopsis", "threshold"}
 
-	bad := StoryContradictsRecord("Work has focused on invoice reconciliation and vendor payment terms.", r)
+	bad := BeatContradictsRecord("Work has focused on invoice reconciliation and vendor payment terms.", r)
 	if len(bad) == 0 {
-		t.Error("a story sharing nothing with the measured subjects was not flagged")
+		t.Error("a beat sharing nothing with the measured subjects was not flagged")
 	}
-	ok := StoryContradictsRecord("Work has focused on the digest and its thresholds in keld-signal.", r)
+	ok := BeatContradictsRecord("Work has focused on the digest and its thresholds in keld-signal.", r)
 	if len(ok) > 0 {
-		t.Errorf("a story consistent with the record was flagged: %v", ok)
+		t.Errorf("a beat consistent with the record was flagged: %v", ok)
 	}
 }
 
 // Abstain when the record has nothing to check against.
 func TestConsistencyAbstainsWithoutSubjects(t *testing.T) {
-	if got := StoryContradictsRecord("anything at all", SessionRecord{Turns: 3}); len(got) > 0 {
+	if got := BeatContradictsRecord("anything at all", SessionRecord{Turns: 3}); len(got) > 0 {
 		t.Errorf("a verdict was returned with no measured subjects: %v", got)
 	}
 }
@@ -1507,14 +1505,18 @@ In `digest_check.go`, replace the hand-written field list in `RetainedFacts` wit
 In `digest_recency.go`:
 
 ```go
-// StoryContradictsRecord reports a paraphrase whose subject is absent from the measured
-// record. Abstains when the record holds too little to check against, because a verdict on
-// thin evidence is how every earlier version of a check like this over-reported.
-func StoryContradictsRecord(story string, r SessionRecord) []string {
-	if len(r.Subjects) < minConsistencyEvidence || strings.TrimSpace(story) == "" {
+// BeatContradictsRecord reports a beat whose subject is absent from the measured record.
+// Abstains when the record holds too little to check against, because a verdict on thin
+// evidence is how every earlier version of a check like this over-reported.
+//
+// Applied to beats rather than to a report paraphrase because beats are dense and cheap: the
+// check runs dozens of times per session instead of once an hour, so a drifting subject is
+// caught near where it started rather than after it has been folded into a report.
+func BeatContradictsRecord(beat string, r SessionRecord) []string {
+	if len(r.Subjects) < minConsistencyEvidence || strings.TrimSpace(beat) == "" {
 		return nil
 	}
-	terms := distinctiveTerms(story)
+	terms := distinctiveTerms(beat)
 	if len(terms) == 0 {
 		return nil
 	}
@@ -1556,8 +1558,9 @@ Expected: PASS.
 git add internal/agent/enrich/llmstudy/
 git commit -m "feat(digest): consistency and fabricated-next thresholds
 
-Story-versus-record consistency is the first currency check that does not depend on
-judgement. FabricatedNext closes a hole seen in real output, where next invented schema
+Beat-versus-record consistency is the first currency check that does not depend on
+judgement, and running it per beat catches a drifting subject near where it starts rather
+than after a report has absorbed it. FabricatedNext closes a hole seen in real output, where next invented schema
 field names and T7 could not see it. Also fixes RetainedFacts, which hand-enumerated the
 prose fields and so never saw synopsis."
 ```
@@ -1627,6 +1630,10 @@ Task 1.
 **Not covered, deliberately.** Cross-session rollup (out of scope). Usefulness (T5) — needs a
 human reader; no task can produce it. Non-engineering accuracy — needs readable Cowork
 transcripts.
+
+**One thing the beat design makes newly measurable.** T12 was going to check a report's own
+paraphrase against the record once an hour. Applied to beats it runs dozens of times per
+session at no extra inference cost, because the beat already exists.
 
 **Type consistency.** `RefineDigestWithReason` gains a third return value in Task 3 and is
 superseded by `RefineFrom` in Task 5; Task 5 removes the older wrappers once the harness moves
