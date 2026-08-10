@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -41,15 +40,9 @@ func TestDigestSizing(t *testing.T) {
 	if url == "" {
 		url = "http://127.0.0.1:8095"
 	}
-	root := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
-	var files []string
-	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".jsonl") {
-			files = append(files, p)
-		}
-		return nil
-	})
-	sort.Strings(files)
+	// Spread across projects rather than taking the first N in path order, which drew all
+	// 14 sessions from keld-atlas and reported one project's results as a corpus.
+	files := StratifiedTranscripts()
 	if len(files) == 0 {
 		t.Skip("no transcripts")
 	}
@@ -78,7 +71,7 @@ func TestDigestSizing(t *testing.T) {
 			WithPlace("", "", projectFromPath(f))
 		tried++
 
-		d, err := l.CreateDigest("work session", Render(w), facts.Block())
+		d, err := l.CreateDigestWithView("work session", Render(w), RenderSessionView(w), facts.Block())
 		if err != nil {
 			t.Errorf("[%d] call failed: %v", tried, err)
 			continue
@@ -139,15 +132,13 @@ func TestDigestRefineQuality(t *testing.T) {
 	if url == "" {
 		url = "http://127.0.0.1:8099"
 	}
-	root := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
-	var files []string
-	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".jsonl") {
-			files = append(files, p)
-		}
-		return nil
-	})
-	sort.Strings(files)
+	// Spread across projects rather than taking the first N in path order, which drew all
+	// 14 sessions from keld-atlas and reported one project's results as a corpus. This
+	// session's own transcript sat at index 51 of 59 and was never sampled.
+	files := StratifiedTranscripts()
+	if me := ThisSessionTranscript(); me != "" {
+		files = append([]string{me}, files...)
+	}
 
 	store, err := digeststore.Open(filepath.Join(t.TempDir(), "digest.db"))
 	if err != nil {
@@ -163,6 +154,7 @@ func TestDigestRefineQuality(t *testing.T) {
 		attempted, failed        int
 		stale, openItems         int
 		completedCurrent         int
+		restated                 int
 		digests, malformed       int
 		ids, unverified, leaks   int
 		withCorrections, stamped int
@@ -197,14 +189,20 @@ func TestDigestRefineQuality(t *testing.T) {
 			src := Render(w)
 			seenSrc.WriteString(src)
 			seenSrc.WriteString("\n")
+			// The reference must contain EVERYTHING the model was shown, including the
+			// coarse whole-session view. Omitting it scored correct carry-through from that
+			// view as fabrication and took unverified identifiers from 0.6% to 8.5% — the
+			// same defect as scoring a refined digest against only the newest window.
+			seenSrc.WriteString(RenderSessionView(w))
+			seenSrc.WriteString("\n")
 			cumulative := seenSrc.String()
 
 			var d Digest
 			var err error
 			if step == 0 {
-				d, err = l.CreateDigest("work session", src, facts.Block())
+				d, err = l.CreateDigestWithView("work session", src, RenderSessionView(w), facts.Block())
 			} else {
-				d, err = l.RefineDigest(cur, "work session", src, facts.Block())
+				d, err = l.RefineDigestWithView(cur, "work session", src, RenderSessionView(w), facts.Block())
 			}
 			attempted++
 			if err != nil {
@@ -240,6 +238,12 @@ func TestDigestRefineQuality(t *testing.T) {
 				t.Logf("  STALE s%d step%d: %v", sessions, step, st)
 			}
 			openItems += len(d.Unresolved)
+			// T10: a synthesis section can satisfy its instruction by copying the purpose
+			// sentence out of `why`, which would add nothing for the reader it exists for.
+			if SynopsisRestatesAnotherSection(d) {
+				restated++
+				t.Logf("  SYNOPSIS-RESTATES s%d step%d: %s", sessions, step, clipLog(d.Synopsis))
+			}
 			if CurrentDescribesCompletion(d) {
 				completedCurrent++
 				t.Logf("  CURRENT-IS-DONE s%d step%d: %s", sessions, step, clipLog(d.Current))
@@ -306,6 +310,7 @@ func TestDigestRefineQuality(t *testing.T) {
 	t.Logf("T7 fabricated unresolved  %.1f%% of %d clean runs  (want <=10%%)", pct(fabricated, cleanRuns), cleanRuns)
 	t.Logf("T8 stale open items       %.1f%% of %d open items  (want <=2%%)", pct(stale, openItems), openItems)
 	t.Logf("T9 current-is-completed   %.1f%% of %d  (want <=5%%)", pct(completedCurrent, digests), digests)
+	t.Logf("T10 synopsis restates      %.1f%% of %d  (want <=5%%)", pct(restated, digests), digests)
 	t.Logf("   prompt leaks %d; sentinel used %d/%d", leaks, sentinelUsed, digests)
 }
 

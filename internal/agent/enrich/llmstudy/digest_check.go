@@ -77,7 +77,7 @@ func strongIdentifier(tok string) bool {
 // "cross-checked against Globex" while ignoring "Key findings...".
 func Identifiers(d Digest) []string {
 	var b strings.Builder
-	for _, s := range []string{d.Done, d.Happened, d.Structure, d.Current, d.Why, d.Next} {
+	for _, s := range ProseFields(d) {
 		b.WriteString(s)
 		b.WriteString(". ")
 	}
@@ -187,9 +187,8 @@ func LeakedPromptWords(d Digest, source string) []string {
 		srcPhrases[strings.Join(srcWords[i:i+leakPhraseLen], " ")] = true
 	}
 
-	body := wordsOf(strings.ToLower(strings.Join(append([]string{
-		d.Done, d.Happened, d.Structure, d.Current, d.Why, d.Next,
-	}, append(d.Insights, d.Unresolved...)...), " ")))
+	body := wordsOf(strings.ToLower(strings.Join(
+		append(ProseFields(d), append(d.Insights, d.Unresolved...)...), " ")))
 
 	seen := map[string]bool{}
 	var out []string
@@ -278,7 +277,7 @@ func UnverifiedIdentifiers(d Digest, source string) []string {
 	hay := strings.ToLower(source)
 	var out []string
 	for _, t := range dropped {
-		if !pluralOfSomethingPresent(strings.ToLower(t), hay) {
+		if !inflectionPresent(strings.ToLower(t), t, hay) {
 			out = append(out, t)
 		}
 	}
@@ -289,6 +288,12 @@ func UnverifiedIdentifiers(d Digest, source string) []string {
 // source does contain. Only the two regular English plural forms; anything cleverer would
 // start excusing real fabrications.
 func pluralOfSomethingPresent(term, hay string) bool {
+	return inflectionPresent(term, term, hay)
+}
+
+// inflectionPresent takes both the lowercased term and the ORIGINAL spelling, because the
+// compound rule needs the capitalisation to tell a named part from a generic modifier.
+func inflectionPresent(term, orig, hay string) bool {
 	if hay == "" {
 		return false
 	}
@@ -302,13 +307,50 @@ func pluralOfSomethingPresent(term, hay string) bool {
 			return true
 		}
 	}
+	// A coined compound whose every part is in the source is not invention either. This was
+	// the dominant flagged class once the synopsis existed — "CPU-efficient", "CPU-based",
+	// "OAuth-first", "Signal-to-Atlas" — all formed from vocabulary the conversation used.
+	// A synopsis has to generalise to be worth reading, and compounding is how English
+	// generalises, so scoring it as fabrication penalises the section for doing its job.
+	if parts := strings.Split(orig, "-"); len(parts) > 1 {
+		checked, all := 0, true
+		for _, part := range parts {
+			// Only the capital-bearing parts are the claim. Such a token reaches this gate
+			// BECAUSE of its internal capitals, so those parts name the thing; a lowercase
+			// modifier like "first", "based" or "efficient" is generic English and requiring
+			// it in the source would flag "CPU-efficient" over the word "efficient".
+			if !hasUpper(part) || len(part) < 2 {
+				continue
+			}
+			checked++
+			if !strings.Contains(hay, strings.ToLower(part)) {
+				all = false
+				break
+			}
+		}
+		if checked > 0 && all {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUpper(s string) bool {
+	for _, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			return true
+		}
+	}
 	return false
 }
 
 // frictionWords are the vocabulary a report uses when it admits difficulty.
 var frictionWords = []string{
-	"revert", "reverse", "reversed", "fail", "failed", "failing", "broke", "broken",
-	"wrong", "incorrect", "retry", "retried", "again", "corrected", "correction",
+	// Stems, not inflections. The list previously mixed the two — "struggl" and "clarif"
+	// were stems while "reverse"/"reversed" were spelled out, so the noun "reversal" was
+	// missed entirely by a list that exists to find exactly that word.
+	"revert", "revers", "fail", "broke", "broken",
+	"wrong", "incorrect", "retr", "again", "correct",
 	"disagree", "mismatch", "blocked", "stuck", "abandoned", "unresolved", "issue",
 	"problem", "did not", "didn't", "unable", "reworked", "redo", "backtrack",
 	"struggl", "difficult", "confusion", "misunderstood", "clarif",
@@ -325,9 +367,8 @@ func LooksRubberstamped(d Digest, f DigestFacts) bool {
 	if f.Corrections == 0 && f.CorrectedTurns == 0 {
 		return false
 	}
-	hay := strings.ToLower(strings.Join(append([]string{
-		d.Done, d.Happened, d.Structure, d.Current, d.Why, d.Next,
-	}, append(d.Insights, d.Unresolved...)...), " "))
+	hay := strings.ToLower(strings.Join(
+		append(ProseFields(d), append(d.Insights, d.Unresolved...)...), " "))
 	for _, w := range frictionWords {
 		if strings.Contains(hay, w) {
 			return false

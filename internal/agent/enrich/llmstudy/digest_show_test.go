@@ -63,9 +63,9 @@ func TestDigestShow(t *testing.T) {
 			var d Digest
 			var err error
 			if step == 0 {
-				d, err = l.CreateDigest("work session", Render(w), facts.Block())
+				d, err = l.CreateDigestWithView("work session", Render(w), RenderSessionView(w), facts.Block())
 			} else {
-				d, err = l.RefineDigest(cur, "work session", Render(w), facts.Block())
+				d, err = l.RefineDigestWithView(cur, "work session", Render(w), RenderSessionView(w), facts.Block())
 			}
 			if err != nil {
 				t.Fatalf("step %d: %v", step, err)

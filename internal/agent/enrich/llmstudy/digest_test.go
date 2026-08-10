@@ -14,7 +14,7 @@ func TestDigestSchemaIsStrictAndComplete(t *testing.T) {
 	if !ok {
 		t.Fatal("schema has no properties")
 	}
-	want := []string{"done", "happened", "structure", "insights", "current", "why", "next", "unresolved"}
+	want := []string{"synopsis", "done", "happened", "structure", "insights", "current", "why", "next", "unresolved"}
 	for _, f := range want {
 		if _, ok := props[f]; !ok {
 			t.Errorf("schema missing required section %q", f)
@@ -29,7 +29,7 @@ func TestDigestSchemaIsStrictAndComplete(t *testing.T) {
 			t.Errorf("%s must be an array", f)
 		}
 	}
-	for _, f := range []string{"done", "happened", "structure", "current", "why", "next"} {
+	for _, f := range []string{"synopsis", "done", "happened", "structure", "current", "why", "next"} {
 		if props[f].(map[string]any)["type"] != "string" {
 			t.Errorf("%s must be a string", f)
 		}
@@ -77,17 +77,19 @@ func TestDigestPromptTreatsFactsAsAuthoritative(t *testing.T) {
 }
 
 func TestValidateDigestRejectsEmptyProseAndEmptyUnresolved(t *testing.T) {
-	full := Digest{Done: "d", Happened: "h", Structure: "s", Current: "c", Why: "w", Next: "n",
-		Unresolved: []string{"nothing open"}}
+	full := Digest{Synopsis: "y", Done: "d", Happened: "h", Structure: "s", Current: "c",
+		Why: "w", Next: "n", Unresolved: []string{"nothing open"}}
 	if p := ValidateDigest(full); len(p) != 0 {
 		t.Fatalf("a complete digest must validate, got %v", p)
 	}
-	if p := ValidateDigest(Digest{Done: "d", Happened: "h", Structure: "s", Current: "c", Why: "w", Next: "n"}); len(p) != 1 {
+	if p := ValidateDigest(Digest{Synopsis: "y", Done: "d", Happened: "h", Structure: "s",
+		Current: "c", Why: "w", Next: "n"}); len(p) != 1 {
 		t.Errorf("empty unresolved must be flagged, got %v", p)
 	}
+	// Seven prose sections now: synopsis leads them.
 	missing := ValidateDigest(Digest{Unresolved: []string{"x"}})
-	if len(missing) != 6 {
-		t.Errorf("all six prose sections must be flagged when empty, got %v", missing)
+	if len(missing) != 7 {
+		t.Errorf("all seven prose sections must be flagged when empty, got %v", missing)
 	}
 }
 

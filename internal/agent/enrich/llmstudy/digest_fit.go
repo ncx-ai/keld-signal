@@ -17,7 +17,7 @@ import "strings"
 // This exists because retrying could not fix the overflow. One session truncated
 // mid-JSON on all 5 attempts at the same step — the prompt was simply too large for the
 // window, deterministically, so the only fix is to not send it.
-const DefaultPromptCharBudget = 9000
+const DefaultPromptCharBudget = 11000
 
 // fitTurns clips a rendered window so a prompt of `overhead` characters plus the turns
 // stays inside the budget.

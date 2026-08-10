@@ -66,9 +66,9 @@ func TestDigestNonTechnical(t *testing.T) {
 			var d Digest
 			var err error
 			if step == 0 {
-				d, err = l.CreateDigest("work session", Render(w), facts.Block())
+				d, err = l.CreateDigestWithView("work session", Render(w), RenderSessionView(w), facts.Block())
 			} else {
-				d, err = l.RefineDigest(cur, "work session", Render(w), facts.Block())
+				d, err = l.RefineDigestWithView(cur, "work session", Render(w), RenderSessionView(w), facts.Block())
 			}
 			if err != nil {
 				t.Fatalf("%s step %d: %v", f, step, err)
@@ -101,7 +101,7 @@ func TestDigestNonTechnical(t *testing.T) {
 				t.Errorf("%s: engineering vocabulary %q appeared in non-code work", f, w)
 			}
 		}
-		src := Render(ws[len(ws)-1])
+		src := Render(ws[len(ws)-1]) + "\n" + RenderSessionView(ws[len(ws)-1])
 		if bad := UnverifiedIdentifiers(cur, src); len(bad) > 0 {
 			t.Logf("  ⚠ unverified against the final window only: %v", bad)
 		}

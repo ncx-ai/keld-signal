@@ -20,10 +20,16 @@ const (
 	DefaultProseCap     = 900
 	DefaultStructureCap = 1600
 	DefaultHappenedCap  = 1400
+	DefaultSynopsisCap  = 650
 	DefaultListCap      = 12
 )
 
 // CarryForward reduces a digest to the parts a refinement actually needs to read.
+//
+// Synopsis is kept, and for a specific reason: its "what this work is" half is the most
+// stable and most valuable thing in the report, and rederiving it from a late window is
+// exactly how it would drift onto the last topic discussed. Its "where it stands" half is
+// updated in place instead.
 //
 // Dropped: current, why and next are rewritten wholesale from the new turns, so
 // embedding their prior text spent context on prose the model was told to replace.
@@ -60,6 +66,13 @@ func CarryForward(d Digest) Digest {
 // copied verbatim into a report about an unrelated session — the same failure this
 // branch documented for the extraction prompts.
 func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) string {
+	return DigestUpdatePromptWithView(prev, sessionLabel, newTurns, "", facts)
+}
+
+// DigestUpdatePromptWithView is DigestUpdatePrompt plus the coarse whole-session view, so a
+// refinement can keep the synopsis about the WORK rather than drifting it onto the newest
+// window. See DigestCreatePromptWithView.
+func DigestUpdatePromptWithView(prev Digest, sessionLabel, newTurns, sessionView, facts string) string {
 	var b strings.Builder
 	b.WriteString("You are updating an existing report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	b.WriteString("Session context: ")
@@ -94,6 +107,11 @@ func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) strin
 	}
 	b.WriteString("\n\nMEASURED CONTEXT for the whole session so far (authoritative — your report must be consistent with it):\n")
 	b.WriteString(facts)
+	if v := clipSessionViewFor(sessionView, b.Len()+updateTailLen()); v != "" {
+		b.WriteString("\n\nWHOLE SESSION so far, sampled from start to now (coarse — for the shape")
+		b.WriteString(" of the work, not its detail):\n")
+		b.WriteString(v)
+	}
 	b.WriteString("\nNEW PART OF THE CONVERSATION, since that report:\n")
 	b.WriteString(fitTurns(newTurns, b.Len()+updateTailLen()))
 	b.WriteString("\nProduce the UPDATED report, same sections:\n")
@@ -131,6 +149,8 @@ Updating rules:
     one. Refinement ADDS; it does not compress. Every named specific listed above
     must survive.
   - Where something changed, revise it in place and say what changed.
+  - synopsis: keep the subject and framing; update only where the work now STANDS and where
+    it is going. Do not re-scope it to whatever the new part happens to be about.
   - structure: EXTEND the picture with newly revealed parts, and correct anything the
     new part shows was wrong. Do not rewrite it from scratch.
   - insights: add only genuinely new learnings. Do not restate existing ones in
@@ -175,6 +195,11 @@ func DigestUpdateSchema() map[string]any {
 
 // RefineDigest produces the next digest, then merges insights and caps growth.
 func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) (Digest, error) {
+	return l.RefineDigestWithView(prev, sessionLabel, newTurns, "", facts)
+}
+
+// RefineDigestWithView is RefineDigest given the coarse whole-session view.
+func (l *Llama) RefineDigestWithView(prev Digest, sessionLabel, newTurns, sessionView, facts string) (Digest, error) {
 	// KELD_DIGEST_NO_CLOSURE=1 disables the code-side repairs. Study harness only.
 	//
 	// It does NOT isolate the staleness fix, and an earlier comment here claimed it did.
@@ -212,7 +237,7 @@ func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) 
 	// rejected a legitimate answer that moved every open item into "closed", leaving
 	// unresolved momentarily empty — "unresolved is empty" then burned all 5 retries on a
 	// digest the repairs would have completed. The repair supplies the sentinel.
-	if err := l.callValid(DigestUpdatePrompt(prev, sessionLabel, newTurns, facts), DigestUpdateSchema(), &up,
+	if err := l.callValid(DigestUpdatePromptWithView(prev, sessionLabel, newTurns, sessionView, facts), DigestUpdateSchema(), &up,
 		func() error { return firstProblem(ValidateDigest(repair(up.Digest))) }); err != nil {
 		return Digest{}, err
 	}
@@ -286,6 +311,9 @@ func mergeWithRetirement(prev, next Digest, retired []string) Digest {
 // CapSections bounds prose length and list size so a long session cannot grow the
 // digest past the context the refine loop exists to keep bounded.
 func CapSections(d Digest, maxProse, maxList int) Digest {
+	// Synopsis is capped tighter than the rest on purpose: it is the one section a reader is
+	// guaranteed to read, and three or four sentences is the whole point of it.
+	d.Synopsis = clipProse(d.Synopsis, DefaultSynopsisCap)
 	d.Done = clipProse(d.Done, maxProse)
 	// Happened gets its own larger budget because it is cumulative AND it is where
 	// difficulty belongs. At the shared 900 it sat at its cap in real sessions, and since

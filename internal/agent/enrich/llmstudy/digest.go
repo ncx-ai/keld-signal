@@ -21,6 +21,11 @@ const DigestSchemaVersion = 1
 // failure. A required field the model must address means an all-positive report
 // cannot validate, which is a guarantee where "please be honest" is a hope.
 type Digest struct {
+	// Synopsis leads because the other eight sections are a decomposed status board:
+	// answering "what is this work about" from them required a reader to assemble why +
+	// structure + done themselves. This is the standalone answer — subject, standing,
+	// direction — and it is the one section deliberately allowed to synthesise.
+	Synopsis string `json:"synopsis"`
 	Done     string `json:"done"`
 	Happened string `json:"happened"`
 	// Structure is the cumulative view of what has been built or established and how
@@ -54,6 +59,7 @@ func DigestSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"synopsis":   prose,
 			"done":       prose,
 			"happened":   prose,
 			"structure":  prose,
@@ -63,7 +69,7 @@ func DigestSchema() map[string]any {
 			"next":       prose,
 			"unresolved": list,
 		},
-		"required": []string{"done", "happened", "structure", "insights",
+		"required": []string{"synopsis", "done", "happened", "structure", "insights",
 			"current", "why", "next", "unresolved"},
 		"additionalProperties": false,
 	}
@@ -72,7 +78,13 @@ func DigestSchema() map[string]any {
 // digestSections describes each field to the model. Deliberately profession-neutral:
 // it names no code, tests or deploys, because the same digest must serve an
 // accountant reconciling ledgers and a marketer drafting a campaign.
-const digestSections = `  done        What concrete outcomes are now in place? Name them. Do not describe
+const digestSections = `  synopsis    What is this work ABOUT, where does it stand, and where is it going?
+              Three or four sentences, readable on its own by someone who reads nothing
+              else. Name the subject in the first sentence — not the activity, the
+              THING. This is the one section that may draw on the others; it is a
+              synthesis, not another status field. Do not restate the purpose sentence
+              from "why" — the reader wants the shape of the work, not its justification.
+  done        What concrete outcomes are now in place? Name them. Do not describe
               effort or intent here — only what is finished.
   happened    How did it actually go? Include obstacles, wrong turns, reversals, and
               how they were resolved. This is where difficulty belongs.
@@ -112,7 +124,8 @@ Rules:
     changed and what state things are in, never who typed what. The reader cares
     what happened to the work, not who did it.
   - Each section must add something the others do not. Do not restate one section's
-    content in another.
+    content in another. The single exception is synopsis, whose job IS to synthesise —
+    but it must still be written, not assembled by copying sentences from elsewhere.
   - The section descriptions above are QUESTIONS to answer, not text to copy. Never
     echo a description back as your answer.
   - Every noun in your report must come from the conversation above. Nothing in
@@ -126,15 +139,31 @@ func createTailLen() int {
 		len("\nRespond with JSON only.\n")
 }
 
-// DigestCreatePrompt builds the first-digest prompt.
+// DigestCreatePrompt builds the first-digest prompt with no whole-session view.
 func DigestCreatePrompt(sessionLabel, turns, facts string) string {
+	return DigestCreatePromptWithView(sessionLabel, turns, "", facts)
+}
+
+// DigestCreatePromptWithView is DigestCreatePrompt plus a coarse view of the WHOLE session.
+//
+// The miner has always built this view — SessionDigest samples six turns across the session
+// — and it was never given to the digest prompt, which saw only the recent window. A
+// synopsis written from the recent window alone can only describe the last thing discussed:
+// a month-end close would be summarised as "clearing the suspense account". The view is what
+// makes the leading question answerable.
+func DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts string) string {
 	var b strings.Builder
 	b.WriteString("You are writing a short report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	b.WriteString("Session context: ")
 	b.WriteString(sessionLabel)
 	b.WriteString("\n\nMEASURED COUNTS (authoritative — your report must be consistent with these):\n  ")
 	b.WriteString(facts)
-	b.WriteString("\n\nCONVERSATION:\n")
+	if v := clipSessionViewFor(sessionView, b.Len()+createTailLen()); v != "" {
+		b.WriteString("\n\nWHOLE SESSION so far, sampled from start to now (coarse — for the shape")
+		b.WriteString(" of the work, not its detail):\n")
+		b.WriteString(v)
+	}
+	b.WriteString("\n\nMOST RECENT PART OF THE CONVERSATION, in detail:\n")
 	b.WriteString(fitTurns(turns, b.Len()+createTailLen()))
 	b.WriteString("\nWrite these sections:\n")
 	b.WriteString(digestSections)
@@ -145,8 +174,13 @@ func DigestCreatePrompt(sessionLabel, turns, facts string) string {
 
 // CreateDigest produces the first digest for a session.
 func (l *Llama) CreateDigest(sessionLabel, turns, facts string) (Digest, error) {
+	return l.CreateDigestWithView(sessionLabel, turns, "", facts)
+}
+
+// CreateDigestWithView is CreateDigest given the coarse whole-session view.
+func (l *Llama) CreateDigestWithView(sessionLabel, turns, sessionView, facts string) (Digest, error) {
 	var d Digest
-	if err := l.callValid(DigestCreatePrompt(sessionLabel, turns, facts), DigestSchema(), &d,
+	if err := l.callValid(DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts), DigestSchema(), &d,
 		func() error { return firstProblem(ValidateDigest(d)) }); err != nil {
 		return Digest{}, err
 	}
@@ -172,6 +206,7 @@ func ValidateDigest(d Digest) []string {
 	for _, f := range []struct {
 		name, val string
 	}{
+		{"synopsis", d.Synopsis},
 		{"done", d.Done}, {"happened", d.Happened}, {"structure", d.Structure},
 		{"current", d.Current}, {"why", d.Why}, {"next", d.Next},
 	} {
