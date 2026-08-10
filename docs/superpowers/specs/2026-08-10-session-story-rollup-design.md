@@ -79,12 +79,17 @@ So the refinement receives a chronological ladder of stored paraphrases:
 - **The first** always. It is where the work started, and it is what lets the account say what
   the current work grew out of. Dropping it is how a session loses its own origin.
 - **The most recent, in full** (≤600 runes). The immediate handover.
-- **Evenly spaced entries between**, clipped short (≤140 runes each), so the trajectory is
-  visible without paying full price for every step.
-- Capped at **8 entries total**; beyond that the middles are resampled, not appended.
+- **The turning points between** — digests whose trigger reason was a focus shift or friction,
+  clipped short (≤140 runes each). These are where the work changed direction, which is what a
+  trajectory is made of; evenly spaced samples would mostly capture steady progress. The
+  session record already carries them as facts.
+- **Even spacing as the fallback** when a session has no turning points, so a long steady
+  session still shows its shape.
+- Capped at **8 entries total**; beyond that turning points are preferred over spacing, and
+  the oldest middles drop first — never the first entry.
 
-Dense at the recent end, sparse toward the start — the same shape `SessionDigest` already
-uses for turns, for the same reason.
+Dense at the recent end, sparse toward the start, and biased to the moments where direction
+changed.
 
 Worst case that is 600 + 7×140 ≈ 1,580 runes, against the 4,742 the embedded digest cost.
 The ladder is therefore *cheaper* than what it replaces while covering the whole session
@@ -195,6 +200,32 @@ to hold its prose consistent with them.
 - **Most of the budget pressure.** The carried report drops from ~4,700 characters to ~600
   plus the retain-list, which is the entire reason the prompt budget went to 11,000 and `ctx`
   to 6144. Both can come back down; measure rather than assume.
+
+## Bounding the cost
+
+The digest is the only expensive operation here, and turn-based triggers alone do not bound
+it: a burst of activity can satisfy `MaxTurns` repeatedly within minutes. So the policy gains
+a **wall-clock floor**, `KELD_DIGEST_MIN_INTERVAL`, default **1 hour**.
+
+- The floor applies to every reason, including finalisation. A session that has stopped is not
+  going anywhere, so producing its final account an hour later costs nothing.
+- **A suppressed reason is deferred, not dropped.** The strongest reason seen during the
+  interval is carried and fires when the floor elapses, so a focus shift ten minutes after a
+  digest still becomes the cause of the next one rather than being lost to a later
+  `volume` trigger.
+- **Deferral needs a timer, not only turn-driven evaluation.** If the trigger is consulted
+  only when new turns arrive, a session that goes quiet with a pending reason never fires. The
+  periodic sweep must re-evaluate.
+
+**The cheap and expensive paths separate cleanly.** The session record is deterministic and
+recomputed every window at no model cost, so the authoritative state is always current. Only
+the narrative is rate-limited. A reader looking at a 20-minute-old digest still sees
+up-to-date counts, projects and focus beside it.
+
+Rough duty cycle at the default: a nine-section digest generates on the order of 2,000 output
+tokens, and CPU-only decode for this model was measured at 27–35 tok/s, so roughly one to two
+minutes of CPU per hour. That is derived from earlier measurements rather than measured for
+the nine-section report, and should be confirmed.
 
 ## Metric consequences
 
