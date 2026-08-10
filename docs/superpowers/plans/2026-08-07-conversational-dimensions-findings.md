@@ -426,3 +426,117 @@ reasoning rather than contradicting it.
   different problem from finding the right thing. Two scoring bugs were found and
   fixed during this run — a case-sensitive list sort and unnormalised separators.
 - Measured on a 20-core desktop; a laptop will be slower but no hungrier.
+
+---
+
+# Part 4 — Session digest: verification results
+
+The digest is the second deliverable of this study: a standing report on a session's
+work, refined as the session proceeds, for the person doing the work **and** for a
+manager who was not present. Part 4 records what it measures at, and — more usefully —
+what the act of measuring it revealed about the measurements themselves.
+
+Model: Qwen3-4B-Instruct-2507 Q4_K_M, `ctx 5120`, constrained decoding, temperature 0.
+Corpus: 14 real Claude Code sessions of >=16 mined windows each, four refinement steps
+per session.
+
+## Results
+
+| Threshold | Result | Want |
+|---|---:|---:|
+| T1 usable digests | **100.0%** of 56 attempts | 100% |
+| T2 unverified identifiers | **1.3%** of 790 | <=2% |
+| T3 rubberstamped | **0.0%** of 18 correction-bearing | <=10% |
+| T4 retention to final | **92.4%** of 79 | >=90% |
+| T7 fabricated blockers | **2.6%** of 38 clean runs | <=10% |
+| instruction leakage | **0** | — |
+
+**T4 is at its threshold, not above it.** Successive runs scored 89.9% and 92.4%, so
+run-to-run movement is a couple of points and 90% is not comfortably cleared. Treat it
+as "roughly meets" rather than "passes".
+
+**T5 (blind usefulness) is not measured here** and cannot be self-assessed: it needs a
+reader who did not write the prompts. Everything above is a structural or
+consistency property, not evidence that the reports are *useful*.
+
+## Memory
+
+`ctx` is the memory lever, and it was measured rather than assumed. CPU-only, after
+plateau, `--no-repack -ctk q8_0 -ctv q8_0 --cache-ram 0`:
+
+| ctx | baseline RSS | anonymous |
+|---:|---:|---:|
+| 4096 | 2855 MB | 371 MB |
+| **5120** | **2932 MB** | 448 MB |
+| 6144 | 3008 MB | 525 MB |
+| 8192 | 3161 MB | 677 MB |
+
+5120 is the largest window inside the 3 GB budget, which is why the prompt is bounded
+in characters instead of by widening the context.
+
+## Four metrics that were measuring the wrong thing
+
+This is the part worth carrying forward. In each case a plausible-looking number was
+reported for several runs before the flagged items were logged, and in each case the
+number was mostly an artifact.
+
+1. **Unverified identifiers measured English.** Any capitalised token absent from the
+   source was flagged, so `Key`, `Initial`, `four-screen` and `e.g` all counted — 37
+   of 37 flagged tokens were ordinary words behind a reported 22.6%. Requiring a
+   strong signal (path, digit, internal caps, extension), or for a weak token
+   mid-sentence position, took it to under 1%.
+
+2. **Leak detection measured its own instruction.** Same defect at word grain: the
+   vocabulary is the instruction prose, so a digest saying "changed" or "structure"
+   was flagged whenever the transcript lacked that stem (~100/sweep). Moving to
+   5-word phrases dropped it to 39 — **all 39 being `UnresolvedSentinel`, the string
+   the model is told to emit verbatim.** Copying it is compliance. True leakage: 0.
+
+3. **Pluralisation was scored as fabrication.** "KPI" in the transcript against "KPIs"
+   in the digest counted as invented; 6 of 22 flagged tokens were that. Folded into
+   the metric — but deliberately NOT into `VerifyTopics`, which is the publish gate
+   and must stay strict.
+
+4. **T1 hid a quarter of the work.** It counted valid/produced rather than
+   succeeded/attempted, and reported **100% while 5 of 20 digests were being dropped**
+   to truncated JSON. A dropped digest is worse than a malformed one, not exempt from
+   the metric.
+
+The pattern: a bare count gives no way to distinguish a defect from an artifact. Log
+the flagged items, always.
+
+## Three fixes that the measurement contradicted
+
+- **`CapSections` was blamed twice for retention loss.** Instrumentation showed all 7
+  lost facts disappeared while sections still had **room** under their caps, never at
+  a cap. The model was recompressing (`done`: 860 -> 306 runes, taking two specifics
+  with it). Handing back the prior digest's named specifics as an explicit retain-list
+  fixed it — the same deterministic anchoring that made the counts authoritative.
+
+- **Lowering the caps to buy prompt room made things worse.** 500/900 cut truncation
+  from 5/20 to 2/20 but dropped retention to 83.3%, because a shorter cap clips
+  exactly what the retain-list exists to preserve. Prompt room came instead from
+  `CarryForward`, which drops the three sections a refinement rewrites wholesale
+  (`current`, `why`, `next`) — ~675 tokens, no report content lost. Two unit tests
+  caught a first version that over-trimmed: `unresolved` must carry because its update
+  is a diff against the prior list, and `insights` must carry because the prompt
+  forbids restating them while the code-side dedup is exact-match only.
+
+- **Retrying does not fix a deterministic failure.** "next is empty" and one
+  truncation both reproduced through all 5 attempts on identical input. Prevention
+  replaced them: `minLength` in the schema so the grammar cannot emit an empty
+  section, and a prompt character budget with the window clipped to its tail. Retries
+  were kept for genuine sampling flukes, with validation moved inside the retry loop
+  where it can act.
+
+## Open
+
+- **T5 needs a human reader.** Nothing above shows the reports are useful.
+- **Sentinel adherence is 18/56 (32%).** Better than the 15% it started at, but the
+  model still often writes prose where it should say "nothing is open".
+- **The non-technical audience is still unmeasured.** Every session here is
+  engineering work from `~/.claude/projects`. Cowork yields 0 readable transcripts on
+  VM-backed builds, so the accountant/marketer case this must serve remains untested.
+- **Residual T2 items are generic vocabulary** (`CSS`, `URL`, `11-task`) — the model
+  adding domain words the transcript never used. Within threshold, but it is the same
+  class of behaviour as a fabricated specific.
