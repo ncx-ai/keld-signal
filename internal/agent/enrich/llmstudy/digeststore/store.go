@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS session_record (
   updated_seq INTEGER NOT NULL,
   body        TEXT    NOT NULL
 );
+CREATE TABLE IF NOT EXISTS beat (
+  session_id      TEXT    NOT NULL,
+  ordinal         INTEGER NOT NULL,
+  created_ts      INTEGER NOT NULL,
+  changed_subject INTEGER NOT NULL,
+  text            TEXT    NOT NULL,
+  PRIMARY KEY(session_id, ordinal)
+);
 `
 
 // Record is one digest snapshot.
@@ -214,4 +222,45 @@ func (s *Store) SessionRecord(sessionID string) (body string, seq int, ok bool, 
 		return "", 0, false, err
 	}
 	return body, seq, true, nil
+}
+
+// BeatRow is one stored beat.
+type BeatRow struct {
+	Ordinal        int
+	CreatedTS      int64
+	ChangedSubject bool
+	Text           string
+}
+
+// PutBeat writes a beat, overwriting the same ordinal so a retried generation is idempotent
+// rather than a duplicate.
+func (s *Store) PutBeat(sessionID string, b BeatRow) error {
+	if sessionID == "" || b.Ordinal <= 0 {
+		return fmt.Errorf("digeststore: session_id required and ordinal must be >= 1")
+	}
+	_, err := s.db.Exec(`
+INSERT INTO beat (session_id, ordinal, created_ts, changed_subject, text) VALUES (?,?,?,?,?)
+ON CONFLICT(session_id, ordinal) DO UPDATE SET
+  created_ts=excluded.created_ts, changed_subject=excluded.changed_subject, text=excluded.text`,
+		sessionID, b.Ordinal, b.CreatedTS, b.ChangedSubject, b.Text)
+	return err
+}
+
+// Beats returns a session's beats in order.
+func (s *Store) Beats(sessionID string) ([]BeatRow, error) {
+	rows, err := s.db.Query(`SELECT ordinal, created_ts, changed_subject, text
+FROM beat WHERE session_id = ? ORDER BY ordinal ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BeatRow
+	for rows.Next() {
+		var b BeatRow
+		if err := rows.Scan(&b.Ordinal, &b.CreatedTS, &b.ChangedSubject, &b.Text); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }

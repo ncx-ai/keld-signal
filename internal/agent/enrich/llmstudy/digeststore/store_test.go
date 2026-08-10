@@ -1,6 +1,7 @@
 package digeststore
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,5 +210,40 @@ func TestDigestSnapshotStillRoundTrips(t *testing.T) {
 	}
 	if _, ok, err := s.Latest("a"); err != nil || !ok {
 		t.Fatalf("latest: %v %v", ok, err)
+	}
+}
+
+func TestBeatsRoundTripInOrder(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "d.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 1; i <= 3; i++ {
+		if err := s.PutBeat("a", BeatRow{Ordinal: i, CreatedTS: int64(i),
+			Text: fmt.Sprintf("beat %d", i), ChangedSubject: i == 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.Beats("a")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("want 3 beats in order, got %d (%v)", len(got), err)
+	}
+	if got[0].Ordinal != 1 || got[2].Ordinal != 3 || !got[0].ChangedSubject {
+		t.Errorf("beats came back wrong: %+v", got)
+	}
+}
+
+// Re-putting the same ordinal is idempotent, so a retried generation is not a duplicate.
+func TestPutBeatIsIdempotent(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "d.db"))
+	defer s.Close()
+	for i := 0; i < 2; i++ {
+		if err := s.PutBeat("a", BeatRow{Ordinal: 1, Text: "same", CreatedTS: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, _ := s.Beats("a"); len(got) != 1 {
+		t.Errorf("want 1 row, got %d", len(got))
 	}
 }

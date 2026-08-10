@@ -69,14 +69,17 @@ func (l *Llama) GenerateBeat(record, window string) (string, error) {
 
 // BeatSaysNothingNew reports a beat that restates the most recent one.
 //
-// Compared on significant words, the same test that collapses duplicate insights, because a
-// restatement arrives reworded rather than identical. Only the most recent beat is compared:
-// a subject the session RETURNS to later is genuine history and should appear again.
+// Compared on significant words via beatsRestate — the same style of test that collapses
+// duplicate insights, but with wider stemming: a restatement arrives reworded rather than
+// identical, and a beat reworks the same verb (gerund/nominalisation) far more often than a
+// full insight does, so insightsMatch's plural-only stemming is too weak here (see beatStem
+// in beat_series.go). Only the most recent beat is compared: a subject the session RETURNS to
+// later is genuine history and should appear again.
 func BeatSaysNothingNew(text string, prev []Beat) bool {
 	if len(prev) == 0 {
 		return false
 	}
-	return insightsMatch(text, prev[len(prev)-1].Text)
+	return beatsRestate(text, prev[len(prev)-1].Text)
 }
 
 // BeatTurnsFromEnv reads KELD_DIGEST_BEAT_TURNS, defaulting to 3 user turns.
