@@ -26,7 +26,16 @@ var digestStopWords = map[string]bool{
 // strongIdentifier reports whether a token is unambiguously an identifier regardless
 // of where it appears: a path, a file with an extension, anything containing a digit,
 // internal capitalisation, or an ALL_CAPS constant.
+// escapeRemnant matches a token carrying a JSON \uXXXX escape the model emitted
+// double-escaped, e.g. "u003cToast.Provider" for "<Toast.Provider". It reached the
+// identifier gate as an unverifiable specific — a defect in the extractor, not a
+// fabrication by the model.
+var escapeRemnant = regexp.MustCompile(`^u[0-9a-fA-F]{4}`)
+
 func strongIdentifier(tok string) bool {
+	if escapeRemnant.MatchString(tok) {
+		return false
+	}
 	if strings.ContainsAny(tok, "/_") {
 		return true
 	}
@@ -146,6 +155,15 @@ func sentenceInitial(text string, i int) bool {
 // Ordinary English coincides for a word or two, effectively never for five.
 const leakPhraseLen = 5
 
+// allPhrases returns every leakPhraseLen-word run in ws.
+func allPhrases(ws []string) []string {
+	var out []string
+	for i := 0; i+leakPhraseLen <= len(ws); i++ {
+		out = append(out, strings.Join(ws[i:i+leakPhraseLen], " "))
+	}
+	return out
+}
+
 func LeakedPromptWords(d Digest, source string) []string {
 	instr := wordsOf(strings.ToLower(digestSections + digestRules))
 	if len(instr) < leakPhraseLen {
@@ -154,6 +172,13 @@ func LeakedPromptWords(d Digest, source string) []string {
 	instrPhrases := make(map[string]bool, len(instr))
 	for i := 0; i+leakPhraseLen <= len(instr); i++ {
 		instrPhrases[strings.Join(instr[i:i+leakPhraseLen], " ")] = true
+	}
+	// UnresolvedSentinel is prescribed text the model is TOLD to emit verbatim when
+	// nothing is open, so reproducing it is compliance, not borrowing. Left in, it was
+	// the entire leak signal: 39 of 39 flagged phrases across a 54-digest sweep were its
+	// three overlapping 5-grams, and genuine borrowing was zero.
+	for _, sw := range allPhrases(wordsOf(strings.ToLower(UnresolvedSentinel))) {
+		delete(instrPhrases, sw)
 	}
 
 	srcWords := wordsOf(strings.ToLower(source))
@@ -236,9 +261,48 @@ func digestCommonWord(w string) bool {
 // It bounds fabricated SPECIFICS only. A fabricated judgement — "the team decided to
 // prioritise X" — contains no verifiable token and passes untouched, which is why the
 // spec keeps a human review gate that cannot be automated away.
+// UnverifiedIdentifiers reports named specifics the source does not support.
+//
+// It deliberately does NOT reuse VerifyTopics' exact-substring rule unchanged. That rule
+// is the open-vocabulary publish gate and must stay strict, but as a FABRICATION metric
+// it counted plain plurals: a transcript saying "KPI" and a digest saying "KPIs" was
+// scored a fabrication. Six of 22 flagged tokens in one sweep were that (KPIs, CTAs,
+// PRs). Pluralisation is not invention, so the metric folds it in — while the genuine
+// catches it found stay caught, e.g. a DNS record completed with a domain the source
+// never stated.
 func UnverifiedIdentifiers(d Digest, source string) []string {
 	_, dropped := VerifyTopics(Identifiers(d), source)
-	return dropped
+	if len(dropped) == 0 {
+		return nil
+	}
+	hay := strings.ToLower(source)
+	var out []string
+	for _, t := range dropped {
+		if !pluralOfSomethingPresent(strings.ToLower(t), hay) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// pluralOfSomethingPresent reports whether the term is merely an inflection of text the
+// source does contain. Only the two regular English plural forms; anything cleverer would
+// start excusing real fabrications.
+func pluralOfSomethingPresent(term, hay string) bool {
+	if hay == "" {
+		return false
+	}
+	for _, suf := range []string{"s", "es"} {
+		if base := strings.TrimSuffix(term, suf); base != term && len(base) >= 2 {
+			if strings.Contains(hay, base) {
+				return true
+			}
+		}
+		if strings.Contains(hay, term+suf) {
+			return true
+		}
+	}
+	return false
 }
 
 // frictionWords are the vocabulary a report uses when it admits difficulty.

@@ -40,19 +40,27 @@ type Digest struct {
 }
 
 // DigestSchema is the JSON schema every digest must satisfy.
+// digestMinProse is a floor on required prose sections, low enough that a genuinely
+// short honest answer still fits and high enough to exclude "", "n/a" and "none".
+const digestMinProse = 12
+
 func DigestSchema() map[string]any {
-	str := map[string]any{"type": "string"}
 	list := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	// minLength is enforced by the grammar, so an empty required section cannot be
+	// generated at all. Retrying could not fix it: "next is empty" reproduced through
+	// all 5 attempts on the same input, i.e. it was deterministic for that prompt, not
+	// a sampling fluke. Prevention beats a retry that cannot converge.
+	prose := map[string]any{"type": "string", "minLength": digestMinProse}
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"done":       str,
-			"happened":   str,
-			"structure":  str,
+			"done":       prose,
+			"happened":   prose,
+			"structure":  prose,
 			"insights":   list,
-			"current":    str,
-			"why":        str,
-			"next":       str,
+			"current":    prose,
+			"why":        prose,
+			"next":       prose,
 			"unresolved": list,
 		},
 		"required": []string{"done", "happened", "structure", "insights",
@@ -111,6 +119,13 @@ Rules:
     these instructions is subject matter — do not borrow words from them.
 `
 
+// createTailLen is the size of everything appended after the turns, so fitTurns budgets
+// against the whole prompt rather than only the part built so far.
+func createTailLen() int {
+	return len("\nWrite these sections:\n") + len(digestSections) + len(digestRules) +
+		len("\nRespond with JSON only.\n")
+}
+
 // DigestCreatePrompt builds the first-digest prompt.
 func DigestCreatePrompt(sessionLabel, turns, facts string) string {
 	var b strings.Builder
@@ -120,7 +135,7 @@ func DigestCreatePrompt(sessionLabel, turns, facts string) string {
 	b.WriteString("\n\nMEASURED COUNTS (authoritative — your report must be consistent with these):\n  ")
 	b.WriteString(facts)
 	b.WriteString("\n\nCONVERSATION:\n")
-	b.WriteString(turns)
+	b.WriteString(fitTurns(turns, b.Len()+createTailLen()))
 	b.WriteString("\nWrite these sections:\n")
 	b.WriteString(digestSections)
 	b.WriteString(digestRules)
@@ -131,7 +146,8 @@ func DigestCreatePrompt(sessionLabel, turns, facts string) string {
 // CreateDigest produces the first digest for a session.
 func (l *Llama) CreateDigest(sessionLabel, turns, facts string) (Digest, error) {
 	var d Digest
-	if err := l.call(DigestCreatePrompt(sessionLabel, turns, facts), DigestSchema(), &d); err != nil {
+	if err := l.callValid(DigestCreatePrompt(sessionLabel, turns, facts), DigestSchema(), &d,
+		func() error { return firstProblem(ValidateDigest(d)) }); err != nil {
 		return Digest{}, err
 	}
 	return d, nil
@@ -167,4 +183,13 @@ func ValidateDigest(d Digest) []string {
 		p = append(p, "unresolved is empty — it must be addressed explicitly")
 	}
 	return p
+}
+
+// firstProblem turns ValidateDigest's report into a retryable error, so a digest that
+// parses but is structurally unusable is re-requested rather than counted as a defect.
+func firstProblem(problems []string) error {
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("invalid digest: %s", strings.Join(problems, "; "))
 }

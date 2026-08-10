@@ -81,10 +81,23 @@ func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) strin
 	b.WriteString("\n\nMEASURED CONTEXT for the whole session so far (authoritative — your report must be consistent with it):\n")
 	b.WriteString(facts)
 	b.WriteString("\nNEW PART OF THE CONVERSATION, since that report:\n")
-	b.WriteString(newTurns)
+	b.WriteString(fitTurns(newTurns, b.Len()+updateTailLen()))
 	b.WriteString("\nProduce the UPDATED report, same sections:\n")
 	b.WriteString(digestSections)
-	b.WriteString(`
+	b.WriteString(updateRules)
+	b.WriteString(digestRules)
+	b.WriteString("\nRespond with JSON only.\n")
+	return b.String()
+}
+
+// updateTailLen is the size of everything appended after the turns, so fitTurns can
+// budget against the whole prompt rather than just the part built so far.
+func updateTailLen() int {
+	return len("\nProduce the UPDATED report, same sections:\n") + len(digestSections) +
+		len(updateRules) + len(digestRules) + len("\nRespond with JSON only.\n")
+}
+
+const updateRules = `
 Updating rules:
   - Keep what the existing report says unless the new part contradicts it. Do not
     drop earlier material simply because the new part does not mention it.
@@ -97,16 +110,13 @@ Updating rules:
   - insights: add only genuinely new learnings. Do not restate existing ones.
   - unresolved must describe the CURRENT state: drop what is now closed, add what has
     newly opened.
-`)
-	b.WriteString(digestRules)
-	b.WriteString("\nRespond with JSON only.\n")
-	return b.String()
-}
+`
 
 // RefineDigest produces the next digest, then merges insights and caps growth.
 func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) (Digest, error) {
 	var next Digest
-	if err := l.call(DigestUpdatePrompt(prev, sessionLabel, newTurns, facts), DigestSchema(), &next); err != nil {
+	if err := l.callValid(DigestUpdatePrompt(prev, sessionLabel, newTurns, facts), DigestSchema(), &next,
+		func() error { return firstProblem(ValidateDigest(next)) }); err != nil {
 		return Digest{}, err
 	}
 	return CapSections(MergeInsights(prev, next), DefaultProseCap, DefaultListCap), nil

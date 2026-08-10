@@ -58,6 +58,24 @@ type chatResp struct {
 
 // call issues one constrained-decoding request and unmarshals the JSON content.
 func (l *Llama) call(prompt string, schema map[string]any, out any) error {
+	return l.callValid(prompt, schema, out, nil)
+}
+
+// callValid is call with a validator that runs INSIDE the retry loop.
+//
+// Two generation-quality failures used to escape retrying entirely. A response cut off
+// mid-object failed json.Unmarshal, and retry.IsTransient classifies unknown errors as
+// permanent — correct for the dependency fetches that convention was written for, since
+// hammering a broken endpoint helps nobody, but wrong for sampling: a truncated sample
+// is self-correcting and a re-request nearly always succeeds. Separately, a response
+// that parsed but was semantically empty ("next is empty") failed validation in the
+// CALLER, after the loop had already returned success, so it could not be retried at
+// all. Together those two were the whole of the T1 shortfall at n=56 (2 of 56).
+//
+// Both are now retryable and bounded by the same policy. This is a deliberate, narrow
+// exception to "unknown errors are permanent": the condition is identified, not unknown,
+// and it is a property of one sample rather than of the server.
+func (l *Llama) callValid(prompt string, schema map[string]any, out any, validate func() error) error {
 	body := map[string]any{
 		"messages":    []any{map[string]any{"role": "user", "content": prompt}},
 		"temperature": 0,
@@ -101,7 +119,12 @@ func (l *Llama) call(prompt string, schema map[string]any, out any) error {
 			return fmt.Errorf("llama-server returned no choices")
 		}
 		if err := json.Unmarshal([]byte(cr.Choices[0].Message.Content), out); err != nil {
-			return fmt.Errorf("content was not schema JSON: %w", err)
+			return sampleErr{fmt.Errorf("content was not schema JSON: %w", err)}
+		}
+		if validate != nil {
+			if err := validate(); err != nil {
+				return sampleErr{err}
+			}
 		}
 		return nil
 	})
@@ -112,9 +135,22 @@ type statusErr int
 
 func (e statusErr) Error() string { return fmt.Sprintf("llama-server HTTP %d", int(e)) }
 
+// sampleErr marks a failure caused by THIS sample rather than by the server, so it is
+// worth re-requesting. Nothing about the request changes on retry: temperature is 0, but
+// llama.cpp sampling is not bit-reproducible across slot state, and in practice a
+// re-request of a truncated or empty generation succeeds.
+type sampleErr struct{ err error }
+
+func (e sampleErr) Error() string { return e.err.Error() }
+func (e sampleErr) Unwrap() error { return e.err }
+
 // isTransientHTTP treats 408/429/5xx as retryable, matching retry.IsTransient's
 // contract, and delegates everything else to it. Unknown errors stay permanent.
 func isTransientHTTP(err error) bool {
+	var sa sampleErr
+	if errors.As(err, &sa) {
+		return true
+	}
 	var se statusErr
 	if errors.As(err, &se) {
 		c := int(se)

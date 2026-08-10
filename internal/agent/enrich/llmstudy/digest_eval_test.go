@@ -216,8 +216,17 @@ func TestDigestRefineQuality(t *testing.T) {
 				t.Logf("session %d step %d malformed: %v", sessions, step, p)
 			}
 			ids += len(Identifiers(d))
-			unverified += len(UnverifiedIdentifiers(d, cumulative))
-			leaks += len(LeakedPromptWords(d, cumulative))
+			// Log the flagged items, not just the count. Both of these gates have
+			// reported large numbers that turned out to be ordinary English, and a bare
+			// count gives no way to tell a real defect from a measurement artifact.
+			if bad := UnverifiedIdentifiers(d, cumulative); len(bad) > 0 {
+				unverified += len(bad)
+				t.Logf("  UNVERIFIED s%d step%d: %v", sessions, step, bad)
+			}
+			if lk := LeakedPromptWords(d, cumulative); len(lk) > 0 {
+				leaks += len(lk)
+				t.Logf("  LEAK s%d step%d: %q", sessions, step, lk)
+			}
 			if UsesUnresolvedSentinel(d) {
 				sentinelUsed++
 			}
