@@ -119,3 +119,34 @@ func TestUpdatePromptCarriesNoWorkedExamples(t *testing.T) {
 		}
 	}
 }
+
+// Retention instrumentation showed all 7 lost facts vanished while sections had room
+// under their caps — the model was recompressing, not being truncated. So the prompt
+// hands back the prior report's named specifics as an explicit retain-list.
+func TestUpdatePromptCarriesARetainList(t *testing.T) {
+	prev := Digest{
+		Done:     "Edited agent-type-row.tsx and bumped INSTALL_SCRIPT_URL.",
+		Happened: "Verified against ledger-2026-03.csv.",
+	}
+	p := DigestUpdatePrompt(prev, "x", "user: continue\n", "counts: turns=9\n")
+	if !strings.Contains(p, "SPECIFICS ALREADY REPORTED") {
+		t.Fatal("update prompt must carry an explicit retain-list")
+	}
+	for _, want := range []string{"agent-type-row.tsx", "INSTALL_SCRIPT_URL", "ledger-2026-03.csv"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("retain-list omits %q", want)
+		}
+	}
+	if !strings.Contains(p, "must not become shorter") {
+		t.Error("prompt must forbid recompression, the observed cause of fact loss")
+	}
+}
+
+// A first digest has no specifics, and the section must then be omitted rather than
+// printed empty — an empty label invites the model to fill it.
+func TestUpdatePromptOmitsRetainListWhenEmpty(t *testing.T) {
+	p := DigestUpdatePrompt(Digest{}, "x", "user: hi\n", "counts: turns=1\n")
+	if strings.Contains(p, "SPECIFICS ALREADY REPORTED") {
+		t.Error("empty retain-list must be omitted")
+	}
+}

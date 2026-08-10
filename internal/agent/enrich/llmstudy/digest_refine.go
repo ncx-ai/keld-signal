@@ -7,11 +7,42 @@ import "strings"
 // Structure gets a larger budget than the other prose sections because it is
 // cumulative — it describes everything built so far, and truncating it loses the
 // earliest parts of the picture, which are exactly the parts a newcomer needs.
+// These are report-quality limits, NOT context limits. Lowering them to buy prompt
+// room was measured and rejected: 500/900 cut truncation from 5/20 to 2/20 but dropped
+// fact retention from 100% to 83.3%, because a shorter cap clips exactly the named
+// specifics the retain-list is there to preserve. Prompt room comes from CarryForward
+// instead, which costs no report content. Raising ctx was also measured and rejected:
+// 3008 MB at ctx 6144 and 3161 MB at ctx 8192, both over the 3 GB budget.
 const (
 	DefaultProseCap     = 900
 	DefaultStructureCap = 1600
 	DefaultListCap      = 12
 )
+
+// CarryForward reduces a digest to the parts a refinement actually needs to read.
+//
+// Dropped: current, why and next are rewritten wholesale from the new turns, so
+// embedding their prior text spent context on prose the model was told to replace.
+// That is ~675 tokens of the refine prompt.
+//
+// Everything else is kept, and each for its own reason — two of which unit tests
+// caught after a first version over-trimmed:
+//   - done, happened, structure are cumulative: losing their prior text loses history.
+//   - unresolved reads as present-state but its update is a DIFF ("drop what is now
+//     closed, add what has newly opened"), uncomputable against a list never seen.
+//   - insights are merged in CODE by MergeInsights, so they need not be carried — but
+//     the prompt also forbids restating an existing one, and MergeInsights dedups only
+//     on exact match, so a reworded restatement survives unless the model can see what
+//     it must not repeat.
+//
+// Unlike lowering the section caps, this removes no content from the report itself.
+// Specifics named in the dropped sections still survive, via the retain-list, which is
+// built from the FULL prior digest.
+func CarryForward(d Digest) Digest {
+	out := d
+	out.Current, out.Why, out.Next = "", "", ""
+	return out
+}
 
 // DigestUpdatePrompt builds the refinement prompt.
 //
@@ -29,8 +60,24 @@ func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) strin
 	b.WriteString("You are updating an existing report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	b.WriteString("Session context: ")
 	b.WriteString(sessionLabel)
-	b.WriteString("\n\nEXISTING REPORT:\n")
-	b.WriteString(DigestJSON(prev))
+	b.WriteString("\n\nEXISTING REPORT (the cumulative sections; the present-state sections are")
+	b.WriteString(" rewritten from the new turns below):\n")
+	b.WriteString(DigestJSON(CarryForward(prev)))
+	// Hand back the previous report's named specifics as an explicit retain-list.
+	//
+	// Measured need: instrumenting retention showed 7 of 7 lost facts disappeared
+	// while sections still had room under their caps — never at a cap. The model was
+	// RECOMPRESSING on refinement (a section shrinking from 860 to 306 runes took two
+	// named specifics with it), and prose instructions to "keep what the report says"
+	// did not stop it. Naming the specifics deterministically is the same anchoring
+	// that made the counts authoritative.
+	// Identifiers reads the FULL prior digest, not CarryForward's subset: a specific
+	// first named in a present-state section must still survive, and the retain-list is
+	// now the only place a refinement sees it.
+	if named := Identifiers(prev); len(named) > 0 {
+		b.WriteString("\n\nSPECIFICS ALREADY REPORTED (each must still appear in your updated report, unless the new part shows it was wrong):\n  ")
+		b.WriteString(strings.Join(named, ", "))
+	}
 	b.WriteString("\n\nMEASURED CONTEXT for the whole session so far (authoritative — your report must be consistent with it):\n")
 	b.WriteString(facts)
 	b.WriteString("\nNEW PART OF THE CONVERSATION, since that report:\n")
@@ -41,6 +88,9 @@ func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) strin
 Updating rules:
   - Keep what the existing report says unless the new part contradicts it. Do not
     drop earlier material simply because the new part does not mention it.
+  - Your updated report must not become shorter or less specific than the existing
+    one. Refinement ADDS; it does not compress. Every named specific listed above
+    must survive.
   - Where something changed, revise it in place and say what changed.
   - structure: EXTEND the picture with newly revealed parts, and correct anything the
     new part shows was wrong. Do not rewrite it from scratch.

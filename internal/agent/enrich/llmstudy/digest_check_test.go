@@ -142,3 +142,78 @@ func TestLeakedPromptWordsCatchesInstructionBleed(t *testing.T) {
 		t.Errorf("morphological variant of a source word must not be flagged: %v", got)
 	}
 }
+
+// T2 hit 22.6% largely because the gate treated hyphenated English adjectives as
+// invented identifiers. An identifier must LOOK like one.
+func TestIdentifiersExcludeEnglishCompounds(t *testing.T) {
+	d := Digest{Done: "A follow-up on the security-sensitive, well-known read-only path."}
+	for _, id := range Identifiers(d) {
+		switch id {
+		case "follow-up", "security-sensitive", "well-known", "read-only":
+			t.Errorf("English compound %q treated as an identifier", id)
+		}
+	}
+	// Real identifiers must still be caught.
+	real := Digest{Done: "Edited agent-type-row.tsx and ledger-2026-03.csv; bumped Qwen3-0.6B."}
+	found := map[string]bool{}
+	for _, id := range Identifiers(real) {
+		found[id] = true
+	}
+	for _, want := range []string{"agent-type-row.tsx", "ledger-2026-03.csv", "Qwen3-0.6B"} {
+		if !found[want] {
+			t.Errorf("real identifier %q was dropped; found %v", want, Identifiers(real))
+		}
+	}
+}
+
+// T2 was measuring English, not fabrication: of 71 flags across 19 digests the top
+// tokens were "Key", "Initial", "four-screen", "well-documented", "e.g". Prose needs a
+// position-aware rule, since a capital at a sentence boundary carries no information.
+func TestIdentifiersArePositionAware(t *testing.T) {
+	d := Digest{
+		Done:     "Key findings are in place. Initial review passed. Verify the totals.",
+		Happened: "Reviewing the data, we cross-checked against Globex and read ledger-2026-03.csv.",
+		Current:  "Specifically, the page-level and well-documented parts are done. See e.g the notes.",
+	}
+	got := map[string]bool{}
+	for _, id := range Identifiers(d) {
+		got[id] = true
+	}
+	// Sentence-initial English must be ignored.
+	for _, w := range []string{"Key", "Initial", "Verify", "Reviewing", "Specifically"} {
+		if got[w] {
+			t.Errorf("sentence-initial English %q treated as an identifier", w)
+		}
+	}
+	// Hyphenated English compounds must be ignored.
+	for _, w := range []string{"page-level", "well-documented", "cross-checked"} {
+		if got[w] {
+			t.Errorf("hyphenated English %q treated as an identifier", w)
+		}
+	}
+	// "e.g" is not a filename.
+	if got["e.g"] {
+		t.Error(`"e.g" treated as an identifier`)
+	}
+	// A mid-sentence proper noun and a real filename MUST still be caught — these are
+	// the fabrications the gate exists for.
+	for _, w := range []string{"Globex", "ledger-2026-03.csv"} {
+		if !got[w] {
+			t.Errorf("%q must be checked; got %v", w, Identifiers(d))
+		}
+	}
+}
+
+func TestStrongIdentifierSignals(t *testing.T) {
+	for _, w := range []string{"agent-type-row.tsx", "/v1/enrichments", "Qwen3-0.6B",
+		"PostgreSQL", "INSTALL_SCRIPT_URL", "config.py"} {
+		if !strongIdentifier(w) {
+			t.Errorf("%q should be a strong identifier", w)
+		}
+	}
+	for _, w := range []string{"Key", "Review", "user-facing", "e.g", "follow-up"} {
+		if strongIdentifier(w) {
+			t.Errorf("%q should not be a strong identifier", w)
+		}
+	}
+}
