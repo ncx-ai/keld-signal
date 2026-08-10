@@ -163,6 +163,7 @@ func TestDigestRefineQuality(t *testing.T) {
 		cleanRuns, fabricated    int
 		retNum, retDen           int
 		sentinelUsed             int
+		nextIDs, fabricatedNext  int
 	)
 	sessions := 0
 	for _, f := range files {
@@ -238,6 +239,19 @@ func TestDigestRefineQuality(t *testing.T) {
 				unverified += len(bad)
 				t.Logf("  UNVERIFIED s%d step%d: %v", sessions, step, bad)
 			}
+			// T13: T2 (unverified identifiers) reads the whole digest, so a fabrication
+			// confined to `next` is diluted by every other section's identifiers rather than
+			// scored against its own. Observed directly in real output: a next inventing
+			// schema field names ("tool name, call id, input, output, timestamp") never
+			// discussed anywhere in the conversation. T7 inspects only `unresolved`, so
+			// nothing caught it. Denominator is identifiers found IN NEXT ONLY, so the rate
+			// answers "how often does next specifically fabricate", not "how often does the
+			// whole digest".
+			nextIDs += len(Identifiers(Digest{Next: d.Next}))
+			if fab := FabricatedNext(d, cumulative); len(fab) > 0 {
+				fabricatedNext += len(fab)
+				t.Logf("  FABRICATED-NEXT s%d step%d: %v", sessions, step, fab)
+			}
 			if lk := LeakedPromptWords(d, cumulative); len(lk) > 0 {
 				leaks += len(lk)
 				t.Logf("  LEAK s%d step%d: %q", sessions, step, lk)
@@ -310,6 +324,14 @@ func TestDigestRefineQuality(t *testing.T) {
 		if len(injected) > 0 {
 			retNum += RetainedFacts(cur, injected)
 			retDen += len(injected)
+			// RetainedFacts (T4) returns a bare survival count. Log which of the injected
+			// facts did NOT survive — the same "print what was flagged, not just the rate"
+			// requirement as every other threshold here, and the direction a regression in
+			// this metric actually needs: knowing a fact was lost is only useful if it says
+			// which one.
+			if lost := lostFacts(cur, injected); len(lost) > 0 {
+				t.Logf("  LOST-FACT s%d: %v", sessions, lost)
+			}
 		}
 		// The store must actually hold the trail the drift metric replays.
 		if h, err := store.History(sid); err != nil || len(h) == 0 {
@@ -337,7 +359,34 @@ func TestDigestRefineQuality(t *testing.T) {
 	t.Logf("T10 synopsis restates      %.1f%% of %d  (want <=5%%)", pct(restated, digests), digests)
 	t.Logf("T11 synopsis lags          %.1f%% of %d refinements  (want <=10%%)", pct(lagging, lagDen), lagDen)
 	t.Logf("    anchor fired on %d of %d refinements (measured subject shift)", shifts, lagDen)
+	// T12 (BeatContradictsRecord) is deliberately absent from the measured lines above, not
+	// silently skipped: this sweep still calls the legacy CreateDigestWithView/
+	// RefineDigestWithReason entry points, so it builds no SessionRecord (Observe is never
+	// called) and generates no beats (GenerateBeat is never called) — both pieces of
+	// plumbing BeatContradictsRecord needs to have anything to check. That wiring is Task
+	// 8's job ("wire the harness to the new inputs"), not this one's. Printing NO line here
+	// would read to a later reader as "not a problem", the identical silent-discard failure
+	// a bare count with no examples is elsewhere in this block — so the line below states
+	// plainly that this is not a result, with no number on it a scanner could mistake for a
+	// clean 0%.
+	t.Logf("T12 beat-vs-record consistency: UNMEASURED — beats and record are wired in Task 8")
+	t.Logf("T13 fabricated next        %.1f%% of %d next-only identifiers  (want <=5%%)", pct(fabricatedNext, nextIDs), nextIDs)
 	t.Logf("   prompt leaks %d; sentinel used %d/%d", leaks, sentinelUsed, digests)
+}
+
+// lostFacts is RetainedFacts (T4) with the miss list exposed. RetainedFacts itself returns
+// only a survival count — useful for the rate, useless for diagnosing a regression, which is
+// exactly the "print what was flagged, not just the count" gap the other thresholds in this
+// sweep were already fixed for.
+func lostFacts(after Digest, facts []string) []string {
+	hay := strings.ToLower(strings.Join(append(ProseFields(after), append(after.Insights, after.Unresolved...)...), " "))
+	var out []string
+	for _, f := range facts {
+		if !strings.Contains(hay, strings.ToLower(f)) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // sessionBudget sets how many sessions the sweep covers. Default 5 is a fast

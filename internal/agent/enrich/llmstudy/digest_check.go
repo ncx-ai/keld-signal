@@ -393,10 +393,13 @@ func LooksRubberstamped(d Digest, f DigestFacts) bool {
 
 // RetainedFacts counts how many of the given facts still appear after refinement.
 // Used by the drift test: inject known facts, refine, measure survival.
+//
+// Reads ProseFields rather than a hand-enumerated list of sections — the same defect
+// ProseFields was introduced to fix elsewhere in this package. This function hand-listed
+// six sections and so never checked Synopsis: the section a reader is most likely to read
+// was the one section this drift check never verified.
 func RetainedFacts(after Digest, facts []string) int {
-	hay := strings.ToLower(strings.Join(append([]string{
-		after.Done, after.Happened, after.Structure, after.Current, after.Why, after.Next,
-	}, append(after.Insights, after.Unresolved...)...), " "))
+	hay := strings.ToLower(strings.Join(append(ProseFields(after), append(after.Insights, after.Unresolved...)...), " "))
 	n := 0
 	for _, f := range facts {
 		if strings.Contains(hay, strings.ToLower(f)) {

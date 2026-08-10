@@ -1,6 +1,9 @@
 package llmstudy
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // SynopsisLag reports a synopsis grounded in the session's opening while ignoring its
 // present, returning the distinctive-term hits against each so a verdict is never a bare
@@ -169,3 +172,43 @@ const (
 	minShiftEvidence  = 4
 	shiftOverlapFloor = 0.25
 )
+
+// BeatContradictsRecord reports a beat whose subject is absent from the measured record.
+// Abstains when the record holds too little to check against, because a verdict on thin
+// evidence is how every earlier version of a check like this over-reported.
+//
+// Applied to beats rather than to a report paraphrase because beats are dense and cheap: the
+// check runs dozens of times per session instead of once an hour, so a drifting subject is
+// caught near where it started rather than after it has been folded into a report.
+func BeatContradictsRecord(beat string, r SessionRecord) []string {
+	if len(r.Subjects) < minConsistencyEvidence || strings.TrimSpace(beat) == "" {
+		return nil
+	}
+	terms := distinctiveTerms(beat)
+	if len(terms) == 0 {
+		return nil
+	}
+	hay := strings.ToLower(strings.Join(append(append([]string{}, r.Subjects...), r.Projects...), " "))
+	for t := range terms {
+		if strings.Contains(hay, t) || inflectionPresent(t, t, hay) {
+			return nil // one grounded subject term is enough; this is a contradiction check
+		}
+	}
+	out := make([]string, 0, len(terms))
+	for t := range terms {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// minConsistencyEvidence is how many measured subjects the record must hold before its
+// silence about a beat's subject counts as a contradiction rather than a thin record.
+const minConsistencyEvidence = 3
+
+// FabricatedNext reports named specifics in `next` that the conversation never mentions.
+// Observed in real output as a next inventing schema field names; T7 inspects only
+// `unresolved`, so nothing caught it.
+func FabricatedNext(d Digest, source string) []string {
+	return UnverifiedIdentifiers(Digest{Next: d.Next}, source)
+}
