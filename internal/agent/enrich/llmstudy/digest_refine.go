@@ -73,6 +73,18 @@ func DigestUpdatePrompt(prev Digest, sessionLabel, newTurns, facts string) strin
 // refinement can keep the synopsis about the WORK rather than drifting it onto the newest
 // window. See DigestCreatePromptWithView.
 func DigestUpdatePromptWithView(prev Digest, sessionLabel, newTurns, sessionView, facts string) string {
+	return DigestUpdatePromptWithReason(prev, sessionLabel, newTurns, sessionView, facts, TriggerNone)
+}
+
+// DigestUpdatePromptWithReason additionally tells the model WHY this refresh fired.
+//
+// The trigger policy already decides whether the subject of the work changed — that is what
+// TriggerFocusShift means — and the prompt was asking the model to infer the same thing
+// unaided. Measured on a real 44-window session, it inferred wrong in the costly direction:
+// the synopsis still described the branch discussed in the opening windows, forty windows
+// after the work had moved on, and asserted the session was "transitioning to a design
+// phase" for something long abandoned.
+func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionView, facts string, why TriggerReason) string {
 	var b strings.Builder
 	b.WriteString("You are updating an existing report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	b.WriteString("Session context: ")
@@ -104,6 +116,10 @@ func DigestUpdatePromptWithView(prev Digest, sessionLabel, newTurns, sessionView
 		b.WriteString("\n  keep it in unresolved if it is still open, or name it in closed if the new")
 		b.WriteString("\n  part resolved it. Do not silently drop one.\n  ")
 		b.WriteString(strings.Join(open, "\n  "))
+	}
+	if why == TriggerFocusShift {
+		b.WriteString("\n\nNOTE: the subject of the work was measured to have CHANGED since that")
+		b.WriteString(" report. Re-scope the synopsis to the work as it now is.")
 	}
 	b.WriteString("\n\nMEASURED CONTEXT for the whole session so far (authoritative — your report must be consistent with it):\n")
 	b.WriteString(facts)
@@ -149,8 +165,13 @@ Updating rules:
     one. Refinement ADDS; it does not compress. Every named specific listed above
     must survive.
   - Where something changed, revise it in place and say what changed.
-  - synopsis: keep the subject and framing; update only where the work now STANDS and where
-    it is going. Do not re-scope it to whatever the new part happens to be about.
+  - synopsis: decide first whether the new part CONTINUES the work the report describes or
+    has moved to a different subject. If it continues, keep the subject and framing and
+    update only where the work now stands and where it is going. If the subject has genuinely
+    moved on, RE-SCOPE it to the work as it now is, and say what it grew out of. A synopsis
+    that still describes an abandoned starting point is worse than one that changed, because
+    a reader will believe it. Do not re-scope merely because the newest turns are about a
+    detail of the same work.
   - structure: EXTEND the picture with newly revealed parts, and correct anything the
     new part shows was wrong. Do not rewrite it from scratch.
   - insights: add only genuinely new learnings. Do not restate existing ones in
@@ -200,6 +221,11 @@ func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) 
 
 // RefineDigestWithView is RefineDigest given the coarse whole-session view.
 func (l *Llama) RefineDigestWithView(prev Digest, sessionLabel, newTurns, sessionView, facts string) (Digest, error) {
+	return l.RefineDigestWithReason(prev, sessionLabel, newTurns, sessionView, facts, TriggerNone)
+}
+
+// RefineDigestWithReason is RefineDigestWithView told why the refresh fired.
+func (l *Llama) RefineDigestWithReason(prev Digest, sessionLabel, newTurns, sessionView, facts string, why TriggerReason) (Digest, error) {
 	// KELD_DIGEST_NO_CLOSURE=1 disables the code-side repairs. Study harness only.
 	//
 	// It does NOT isolate the staleness fix, and an earlier comment here claimed it did.
@@ -237,7 +263,7 @@ func (l *Llama) RefineDigestWithView(prev Digest, sessionLabel, newTurns, sessio
 	// rejected a legitimate answer that moved every open item into "closed", leaving
 	// unresolved momentarily empty — "unresolved is empty" then burned all 5 retries on a
 	// digest the repairs would have completed. The repair supplies the sentinel.
-	if err := l.callValid(DigestUpdatePromptWithView(prev, sessionLabel, newTurns, sessionView, facts), DigestUpdateSchema(), &up,
+	if err := l.callValid(DigestUpdatePromptWithReason(prev, sessionLabel, newTurns, sessionView, facts, why), DigestUpdateSchema(), &up,
 		func() error { return firstProblem(ValidateDigest(repair(up.Digest))) }); err != nil {
 		return Digest{}, err
 	}

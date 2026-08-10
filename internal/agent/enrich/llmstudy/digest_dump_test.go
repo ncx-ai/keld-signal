@@ -110,12 +110,30 @@ func TestDigestDump(t *testing.T) {
 		}
 		s.Steps = append(s.Steps, step{"create", view0, facts0.Block(), win0, p0, d0})
 
+		// Production refreshes at most every MaxTurns user turns, so a 44-window session gets
+		// several refinements, not one. Stepping through them is what lets a synopsis
+		// re-scope; a single leap from window 3 to window 43 cannot.
+		mid := []int{}
+		for i := i0 + DefaultTriggerPolicy().MaxTurns; i < len(ws)-1; i += DefaultTriggerPolicy().MaxTurns {
+			mid = append(mid, i)
+		}
+		cur := d0
+		for _, mi := range mid {
+			fm := FactsFrom(Extract(ws[mi]), ocs[:mi+1]).WithWindow(ws[mi]).WithPlace("", "", proj)
+			nx, err := l.RefineDigestWithReason(cur, "work session", Render(ws[mi]),
+				RenderSessionView(ws[mi]), fm.Block(), TriggerFocusShift)
+			if err != nil {
+				t.Fatalf("%s mid-refine: %v", src.label, err)
+			}
+			cur = nx
+		}
+
 		i1 := len(ws) - 1
 		facts1 := FactsFrom(Extract(ws[i1]), ocs[:i1+1]).WithWindow(ws[i1]).WithPlace("", "", proj)
 		win1 := Render(ws[i1])
 		view1 := RenderSessionView(ws[i1])
-		p1 := DigestUpdatePromptWithView(d0, "work session", win1, view1, facts1.Block())
-		d1, err := l.RefineDigestWithView(d0, "work session", win1, view1, facts1.Block())
+		p1 := DigestUpdatePromptWithReason(cur, "work session", win1, view1, facts1.Block(), TriggerFocusShift)
+		d1, err := l.RefineDigestWithReason(cur, "work session", win1, view1, facts1.Block(), TriggerFocusShift)
 		if err != nil {
 			t.Fatalf("%s refine: %v", src.label, err)
 		}
