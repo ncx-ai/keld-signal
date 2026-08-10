@@ -31,6 +31,7 @@ jobs:
           bash scripts/verify-release-assets_test.sh
           bash scripts/test-install-sh.sh
           bash sidecar/test_build_freeze.sh
+          bash installers/macos/onboard_command_test.sh
 
   goreleaser-check:
     runs-on: ubuntu-latest
