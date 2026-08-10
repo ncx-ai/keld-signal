@@ -175,10 +175,18 @@ func DigestUpdateSchema() map[string]any {
 
 // RefineDigest produces the next digest, then merges insights and caps growth.
 func (l *Llama) RefineDigest(prev Digest, sessionLabel, newTurns, facts string) (Digest, error) {
-	// KELD_DIGEST_NO_CLOSURE=1 disables the code-side repairs, so the defect they address
-	// can be MEASURED rather than asserted: with it set the refinement is the
-	// prose-instruction-only version, and the T8 gap between runs is the repair's effect.
-	// Study harness only.
+	// KELD_DIGEST_NO_CLOSURE=1 disables the code-side repairs. Study harness only.
+	//
+	// It does NOT isolate the staleness fix, and an earlier comment here claimed it did.
+	// The prompt's open-item accounting block and the "closed" field stay active when this
+	// is set, so only the repair is removed — and measured both ways, T8 is 0.0% either
+	// way (0 of 61 with, 0 of 51 without). The PROMPT is what fixed staleness; the repair
+	// guarantees the property rather than relying on compliance.
+	//
+	// What the repair demonstrably buys is delivery: T1 is 82.1% with it disabled versus
+	// 100% with it. Introducing "closed" lets the model empty "unresolved" legitimately,
+	// and without the sentinel substitution those refinements fail validation and are
+	// dropped after exhausting their retries.
 	enforce := os.Getenv("KELD_DIGEST_NO_CLOSURE") == ""
 
 	var up digestUpdate

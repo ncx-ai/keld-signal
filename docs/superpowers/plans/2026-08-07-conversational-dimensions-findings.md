@@ -606,3 +606,69 @@ complete.
 - **The synthetic corpus proves structure, not accuracy.** Real non-engineering
   transcripts remain the only way to measure whether these reports are *right*, and
   that needs a readable Cowork path or an in-VM emitter.
+
+---
+
+# Part 6 — Stale open items, and an ablation that refuted its own headline
+
+Part 5 found `unresolved` retaining items the conversation had closed. T7 scored it as
+passing, because T7 only catches a blocker with **no basis in the conversation at all**.
+The harm is the same one the design already names — a reader acts on it — so two
+thresholds were added:
+
+- **T8** counts open items the report itself contradicts: listed as open while `done`
+  claims them in place. Checkable without comprehension, which is what makes it usable.
+- **T9** counts `current` describing a finished action rather than one underway.
+
+## Result
+
+| | result | want |
+|---|---:|---:|
+| T1 usable digests | 100.0% of 56 | 100% |
+| T2 unverified identifiers | 0.6% of 711 | ≤2% |
+| T3 rubberstamped | 0.0% of 18 | ≤10% |
+| T4 retention | 94.9% of 79 | ≥90% |
+| T7 fabricated blockers | 0.0% of 38 | ≤10% |
+| T8 stale open items | 0.0% of 61 | ≤2% |
+| T9 current-is-completed | 3.6% of 56 | ≤5% |
+| instruction leakage | 0 | — |
+
+On the finance fixture that exposed the defect, `current` now reads "nothing in progress"
+and `unresolved` holds the sentinel — correct, since that session completed all eight
+checklist steps.
+
+## Enforcement as validation was wrong, and measuring it said so
+
+The first implementation rejected any refinement whose open-item accounting was
+incomplete. It produced **T8 0.0% and T1 76.8%**: the model could not satisfy the rule, so
+10 of 56 refinements burned all five retries and were discarded. That is the same error as
+retrying a deterministic failure, already paid for earlier in this branch. **A dropped
+digest is worse than a stale open item.**
+
+Staleness is therefore repaired in code — declared closures applied, self-contradicted
+items removed — needing no model cooperation, exactly as insight merging already works.
+Validation moved onto the **repaired** digest, because validating the raw response rejected
+a legitimate answer that moved every open item into `closed` and then spent five retries on
+"unresolved is empty", a state the repair completes by supplying the sentinel.
+
+## The ablation refuted the claim it was built to support
+
+`KELD_DIGEST_NO_CLOSURE=1` was added to measure the repair's effect rather than assert it.
+It showed **T8 is 0.0% with the repair disabled as well** (0 of 51). There is no gap, and
+the hatch never isolated what it was supposed to: the prompt's accounting block and the
+`closed` field remain active when it is set. **The prompt change is what fixed staleness.**
+The repair's measurable contribution is delivery instead — **T1 82.1% disabled versus
+100% enabled** — because introducing `closed` lets the model legitimately empty
+`unresolved`, and without the sentinel substitution those digests are rejected and lost.
+
+Worth stating plainly: an ablation designed to confirm a mechanism instead attributed the
+effect elsewhere. Both changes are needed; the reasons are not the ones assumed.
+
+## The recurring error, four times in one session
+
+T9's first detector over-counted by half. Two of four flagged cases were genuine live
+states whose completion clause was subordinate — "the running API service is currently
+blocked from loading" and "a pull request is open for review". This is the same failure as
+unverified identifiers reading 22.6%, leakage reading ~100 per sweep, and plurals counting
+as fabrications: **a phrase's presence is not a statement's meaning.** Every one of these
+was found by logging the flagged items; none was visible in the count.
