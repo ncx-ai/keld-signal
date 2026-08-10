@@ -26,26 +26,31 @@ forced the prompt budget to 11,000 characters and `ctx` to 6144.
 
 ## The design
 
-Two grains, and a compression step between them.
+Three grains, produced at two cadences.
 
 - **Specific actions** — the recent conversation window, in detail. What was just done.
-- **The session story** — the accumulated account of the session, coarsening as it grows.
+- **Beats** — every few turns, one to three sentences on what the work is about. Cheap, dense,
+  each derived independently from its own window. The history of how the work changed.
+- **The report** — the full nine-section account, rare and wall-clock bounded, written from the
+  beats and the measured record rather than from its own predecessor.
 
 The register to aim for is how an engineering lead or PM describes work: *"the work has been
 on X, Y and Z; specifically A, B and C."* Coarse framing, carrying a few concrete instances.
 
-### The invariant: store full, feed compressed
+### The invariant: nothing reads a summary of a summary
 
-This is what makes re-summarisation safe, and it is not optional.
+The stored report is the record and a reader sees it whole; it is never regenerated from a
+condensed form. That much was in the first draft as "store full, feed compressed".
 
-- **Stored** — the full digest. The record, and what a reader is shown. Never regenerated
-  from a compression.
-- **Fed to the next generation** — a short paraphrase of it, plus the deterministic list of
-  named specifics.
+The two-tier split makes it stronger, and the stronger form is what the design now rests on:
+**no model output is ever input to a later generation of the same kind.** A beat reads a
+transcript window and the measured record. A report reads beats, measurements and the
+retain-list. Neither reads its own predecessor.
 
-Repeated re-summarisation erodes the most valuable content; that finding stands. It is
-acceptable here only because the lossy path is the *prompt*, never the artifact. A digest
-is compressed to produce context and is otherwise left alone.
+Repeated re-summarisation eroding the most valuable content is a measured finding and it still
+stands — this design simply has nowhere for it to happen. The one deliberate exception is the
+retain-list, which carries named tokens rather than prose and is independently verifiable
+against the transcript.
 
 ### Two tiers: cheap beats, expensive reports
 
@@ -94,29 +99,14 @@ The EWMA remains better when available; this is not a replacement, it is an unbl
 that changed the subject, the first, the most recent few, and even spacing to fill the cap.
 The same rule the ladder used, applied to a denser and cheaper series.
 
-### The paraphrase (`story`) — superseded
+### The paraphrase (`story`) — dropped
 
-Retained here for the record: an earlier draft had each report emit a paraphrase of itself for
-the next report to read. Beats make it unnecessary. A transcript-derived beat is cheaper,
-denser, and not self-referential, and the report's own prose has no remaining reason to reach
-the next generation. `story` is dropped.
-
-Each refinement emits a paraphrase of the report it just produced: one short paragraph or a
-handful of bullets answering only
-
-- what the work has been about, at the grain of themes rather than actions
-- where it now stands
-- what it is heading toward
-
-It carries **no** `insights`, `unresolved`, or `structure` prose. Those either live in code
-(insight merging), are diffed deterministically (open items), or are cumulative content the
-paraphrase has no business rewriting.
-
-It is a `story` field on the refinement schema, alongside `retired` and `closed`, and like
-them kept **off** `Digest` because it is machinery rather than report content. Produced in
-the same call, so it costs no extra inference, and **persisted with its snapshot** — the
-store gains a `story` column, so the paraphrase that was actually used is recoverable
-rather than re-derived.
+Recorded because the reasoning matters: an earlier draft had each report emit a paraphrase of
+itself for the next report to read. Beats make it unnecessary and worse. A transcript-derived
+beat is cheaper, denser, and not self-referential, while a paraphrase of a report is model
+output feeding the next generation of the same kind — the chain this design removes. The
+report's own prose has no remaining reason to reach the next generation, so `story` is gone
+and the store needs no column for it.
 
 ### The beat series — dense, transcript-derived history
 
