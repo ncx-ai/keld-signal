@@ -6,12 +6,15 @@ import (
 	"strings"
 )
 
-// MaxBeatSelection caps how many beats a report reads. At BeatCap runes each that is ~2,400
-// worst case, against a fully-capped CarryForward-equivalent JSON embed, measured at 6,339
-// runes (not the ~4,742 an average real session showed — that figure was typical, not
-// worst-case). Beats are also the one discretionary claimant besides the whole-session
-// view: fitDiscretionary (digest_refine.go) shrinks the selection below MaxBeatSelection
-// when the budget is under pressure, so this is the ceiling, not a guarantee.
+// MaxBeatSelection caps how many beats a report reads. At BeatCap runes each that is ~6,144
+// worst case — it was ~2,400 while BeatCap was 200, and BeatCap was raised to 512 because at 200
+// essentially every beat was cut mid-clause (see its doc) — against a fully-capped
+// CarryForward-equivalent JSON embed, measured at 6,339 runes (not the ~4,742 an average real
+// session showed — that figure was typical, not worst-case). Beats are also the one discretionary
+// claimant besides the whole-session view: fitDiscretionary (digest_refine.go) shrinks the
+// selection below MaxBeatSelection when the budget is under pressure, so this is the ceiling, not
+// a guarantee — and after the cap rise that shrinking is the ordinary case rather than the
+// exception, which is the price of a beat that reads as an answer.
 const MaxBeatSelection = 12
 
 // AppendBeat stores a beat unless it restates the previous one, marking whether it changed the
@@ -23,8 +26,12 @@ const MaxBeatSelection = 12
 // the signal usable without it.
 //
 // Both comparisons below use beatsRestate, not the shared insightsMatch — see its doc for why.
+//
+// Clipping is ClipBeat, not clipProse: a stored beat ends at a sentence boundary or it is not
+// stored at all. AppendBeat is the second gate on that invariant (GenerateBeat is the first), so
+// a caller that assembles beat text some other way cannot get a fragment into the series.
 func AppendBeat(prev []Beat, text string) ([]Beat, bool) {
-	text = strings.TrimSpace(clipProse(text, BeatCap))
+	text = ClipBeat(text, BeatCap)
 	if text == "" {
 		return prev, false
 	}

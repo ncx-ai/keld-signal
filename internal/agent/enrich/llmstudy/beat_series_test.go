@@ -38,6 +38,28 @@ func TestAppendBeatMarksSubjectChange(t *testing.T) {
 	}
 }
 
+// AppendBeat is the second gate on the shape invariant. GenerateBeat validates and re-requests,
+// but a caller assembling beat text some other way must not be able to get a fragment into the
+// series either — that is how the defect reached 46 of 47 beats without any test noticing.
+func TestAppendBeatNeverStoresAFragment(t *testing.T) {
+	var bs []Beat
+	bs, ok := AppendBeat(bs, "Closing March for Meridian, focusing on the bank reconciliation. "+
+		"The outstanding cheques to Halberd Supply still need")
+	if !ok {
+		t.Fatal("the complete first sentence must still be stored")
+	}
+	if got := bs[0].Text; got != "Closing March for Meridian, focusing on the bank reconciliation." {
+		t.Errorf("the incomplete tail was stored: %q", got)
+	}
+	if _, ok := AppendBeat(bs, "no complete sentence here at all"); ok {
+		t.Error("a beat with no complete sentence must not be stored")
+	}
+	long := strings.Repeat("padding words that never terminate ", 40)
+	if _, ok := AppendBeat(bs, long); ok {
+		t.Error("an over-cap beat with no sentence boundary must not be stored")
+	}
+}
+
 func TestSelectBeatsKeepsFirstAndLatest(t *testing.T) {
 	got := SelectBeats(beats(30), 6)
 	if got[0].Ordinal != 1 {
