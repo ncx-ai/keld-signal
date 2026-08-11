@@ -672,3 +672,258 @@ blocked from loading" and "a pull request is open for review". This is the same 
 unverified identifiers reading 22.6%, leakage reading ~100 per sweep, and plurals counting
 as fabrications: **a phrase's presence is not a statement's meaning.** Every one of these
 was found by logging the flagged items; none was visible in the count.
+
+---
+
+# Part 7 — Session story rollup: the beats work, fact retention does not
+
+The design in `docs/superpowers/specs/2026-08-10-session-story-rollup-design.md` replaced the
+refine loop's embedded prior report with three inputs split by truth-status: a **measured
+session record**, a **beat series** written every few turns from the transcript, and the
+**recent window**. `CarryForward` is gone, so no model output is ever input to a later
+generation of the same kind. The no-shrink rule went with it.
+
+This is the measurement of that design running end to end.
+
+## Method
+
+14 stratified sessions, this branch's own development transcript first. Four reports per
+session at windows 4/8/12/15 — the same spacing every earlier configuration used, so only the
+*inputs* changed. A beat every 3 user turns. Qwen3-4B-Instruct-2507 Q4_K_M, `ctx` 8192,
+temperature 0, prompt budget 14,000 runes.
+
+Two arms, because the design makes a prediction about the recency anchor:
+
+- **anchor ON** — the `SubjectShifted` stand-in decides. It fired on 41 of 42 refinements, so
+  this arm is *anchor-always*, not the gated design. That remains unmeasurable without the
+  EWMA focus the digest path does not compute.
+- **anchor OFF** — no anchor on any refinement. This is the arm the prediction is about.
+
+The two arms were each run twice. Every figure below reproduced **exactly** across the
+independent pairs, so nothing here is sampling noise.
+
+## Results
+
+| | anchor ON | anchor OFF | want |
+|---|---:|---:|---:|
+| T1 usable digests | 100.0% of 56 | 100.0% of 56 | 100% |
+| T2 unverified identifiers | 1.0% of 719 | 0.6% of 779 | ≤2% |
+| T3 rubberstamped | **16.7% of 12** | 8.3% of 12 | ≤10% |
+| **T4 retention to final** | **50.0% of 80** | **56.2% of 80** | **≥90%** |
+| — identifier-shaped specifics | **38.6% of 44** | **47.7% of 44** | — |
+| — bare capitalised words | 63.9% of 36 | 66.7% of 36 | — |
+| T7 fabricated blockers | 4.5% of 44 | 2.3% of 44 | ≤10% |
+| T8 stale open items | 0.0% of 75 | 0.0% of 66 | ≤2% |
+| T9 current-is-completed | 0.0% of 56 | 1.8% of 56 | ≤5% |
+| T10 synopsis restates | 0.0% of 56 | 0.0% of 56 | ≤5% |
+| T11 synopsis lags | 0.0% of 25 judged | 0.0% of 29 judged | ≤10% |
+| T12 beat-vs-record | **15.7% of 70 checked** | **15.7% of 70 checked** | ≤5% |
+| T13 fabricated `next` | 1.4% of 73 | 0.0% of 73 | ≤5% |
+| instruction leakage | 0 | 0 | — |
+| recovered panics | **0** | **0** | 0 |
+
+Three thresholds fail: T4 badly and in both arms, T12 for a reason that turns out not to be
+about beats at all, and T3 on a denominator of 12 where a single item moves the rate 8 points.
+
+## T4 is the design's failure, and it is not the retain-list cap
+
+Half the named specifics injected at the first report are gone from the final one. The plan's
+own pre-registered explanation was that the retain-list, no longer reinforced by embedded
+prose, needed a bigger cap. **That is refuted by measurement.** Over 240
+(refinement × fact) pairs:
+
+| | ON | OFF |
+|---|---:|---:|
+| fact was named in the retain-list the prompt carried | 161 | 161 |
+| fact was dropped by `boundRetainList`'s cap | **0** | **0** |
+| fact had already fallen out of the prior report, so no channel could carry it | 79 | 79 |
+| largest retain-list observed | 24 entries / 280 runes | 32 / 336 |
+| caps | 60 entries / 700 runes | 60 / 700 |
+
+Neither cap ever bound, on any refinement, in either arm. Raising `retainListMaxCount` or
+`retainListMaxTotal` cannot move T4 by one point.
+
+The mechanism is instead a **one-way cascade**. The retain-list is re-derived from the
+*previous report* (`Identifiers(prev)`), so the moment the model drops a specific, the next
+refinement's retain-list can no longer name it, and the loss is permanent. Session 6 shows the
+shape exactly: `agentcfg.Info`, `SetSidecarPort`, `daemon.go` and `metrics.go` were all named
+in the retain-list at the first refinement, dropped anyway, and then reported as
+`RETAIN-ALREADY-GONE` at both later steps. 161 of 240 pairs had the fact explicitly named
+under the instruction *"each must still appear, unless the new part shows it was wrong"* — so
+the primary failure is the model disobeying an explicit, deterministic instruction, and the
+retain-list's derivation from the last report rather than from the union of all reports is what
+makes each disobedience irreversible.
+
+**The split makes it worse, not better.** Because `Identifiers()` is position-aware over prose,
+its output legitimately mixes real specifics with bare capitalised English. Splitting T4 by the
+code's own `strongIdentifier` rule was expected to show the aggregate overstating the loss.
+It shows the opposite: identifier-shaped specifics survive at **38.6%** while bare capitalised
+words survive at **63.9%**. The 50% aggregate *understates* the failure on exactly the
+population T4 exists to protect. The expectation was recorded before the split was measured and
+it was wrong in the flattering direction — one more instance of the pattern this study keeps
+hitting, where the composition of a rate is only visible in its items.
+
+## T11: the prediction held, but the measurement cannot discriminate it
+
+The design predicted synopsis lag would improve **without** the recency anchor, because framing
+is no longer pinned by verbatim prior prose — and flagged that as the same class of
+plausible-mechanism reasoning that failed for the anchor itself.
+
+Measured: **0.0% in both arms.** No judged refinement in either arm produced a lagging
+synopsis. The prediction is *consistent* with that, and the anchor is demonstrably unnecessary
+for currency — but the measurement cannot discriminate the prediction, because lag is at the
+floor with the anchor as well. What the run does establish is the stronger practical point: the
+currency/durability trade-off the anchor existed to manage **is gone**. Every earlier
+configuration bought recency by paying fact retention; here the anchor buys nothing measurable
+in either direction (T4 is in fact 6 points *worse* with it, T7 twice as high, T3 twice as
+high). **The anchor should stay gated, and on this evidence there is no case for enabling it.**
+
+The old 14.3% is **not** a baseline for this. It was measured under the untrimmed-token bug,
+which caused `SynopsisLag` to abstain on synopses that were lagging.
+
+**And T11 had the same abstention defect the T12 denominator was corrected for.**
+`SynopsisLag` returns `lag=false` both when it judges a synopsis current and when it *abstains*
+for want of opening evidence (`earlyHits < minLagEvidence`). A rate over all refinements counts
+every abstention as a pass. Corrected here: **17 of 42 refinements abstained (ON), 13 of 42
+(OFF)** — 40% and 31% of the sample carry no verdict at all. The rate is 0.0% of the 25 and 29
+that were actually judged. Every previously published lag figure in this study shares the
+uncorrected denominator.
+
+## The beats are the design's success
+
+| | ON | OFF |
+|---|---:|---:|
+| beats asked / generated / kept | 70 / 70 / 70 | 70 / 70 / 70 |
+| discarded as restatement | **0 (0.0%)** | **0 (0.0%)** |
+| marked "subject changed" | **70 (100%)** | **70 (100%)** |
+| consecutive-beat overlap ratio, mean / max | 0.256 / 0.500 | 0.250 / 0.500 |
+| `beatsRestate` discard threshold | 0.80 | 0.80 |
+
+Nothing was discarded, and the cadence is **not** the reason. The largest overlap any real
+consecutive pair produced was 0.500 against a 0.800 threshold — the comparator was never close
+to firing. At a 3-user-turn cadence on real sessions, consecutive beats genuinely differ, so the
+"beats that say nothing are not stored" mechanism is **inert on this corpus** rather than
+mis-tuned. It cost 70 generations to discard nothing; that is cheap, but it is also unexercised
+machinery, and its behaviour on a run of acknowledgement turns is **not established** by this
+run.
+
+The series itself reads as the design claimed. Session 1, verbatim:
+
+```
+[1] evaluating and improving the classification of multi-turn conversation transcripts…
+[2] designing a study to evaluate whether a prompted LLM performs better than production…
+[3] comparing memory usage and latency of different LLM configurations…
+[4] evaluating the feasibility of running smaller, CPU-only LLMs within a strict RAM budget…
+[5] determining the memory and performance footprint of a 0.6B Qwen3 model CPU-only…
+```
+
+That is an accurate trajectory of a session the author lived. Whether it is a *better* answer to
+"what happened over the session" than a single report is the design's claim, and it remains a
+judgement — the same unmeasured usefulness question every part of this study has left open. What
+is measured is that the series is accurate, cheap, and free of any chain: each beat was written
+from its own window and no beat read another.
+
+**But `ChangedSubject` is degenerate, and demonstrably wrong.** Marked on 100% of beats, it
+carries no information: `SelectBeats`' preference for subject-changing beats degenerates to
+"prefer everything". Beats [4] and [5] above are plainly the same subject; the comparator that
+cannot see a restatement also cannot see continuity, because both use the same 0.8 test. This is
+the same failure as `SubjectShifted` firing on 41 of 42 refinements, now confirmed on a second,
+independent mechanism: **thin token overlap does not distinguish a change of subject from a
+rewording of one.** The design's claim that beats "unblock" the turning-point signal is
+**not established** — the signal exists but is stuck at 1.
+
+Selection was never exercised either. With a 16-window prefix and a 3-turn cadence only 5 beats
+accumulate against a cap of 12, so the sampling rule (first + subject changes + recent + even
+spacing) never had to choose. Refinements carried 4.0 beats on average, all of them, and
+`fitDiscretionary` never shrank a selection.
+
+## T12 became measurable, and immediately measured the wrong thing
+
+T12 (`BeatContradictsRecord`) printed `UNMEASURED` before this task because nothing built a
+record or generated beats. It now runs: 70 beats checked, 0 abstentions, **15.7% flagged**
+against a ≤5% threshold.
+
+All 11 flagged beats are **accurate**. Two, in full:
+
+- *"…ensuring visual consistency in UI components by aligning the opacity and background
+  styling of floating dropdown menus with established design patterns…"* — flagged against a
+  record whose subjects were `README.md, service.name, confirm, acme.test, actor_name_short`.
+- *"…finalizing and verifying the password reset flow in the authentication system…"* — flagged
+  against `OAuth, /dev/null, buttons, confirm, provider, KELD_OAUTH_, TaskUpdate`.
+
+Two independent defects produce this, neither of them about beats:
+
+1. **`distinctiveTerms` admits ordinary English.** `distinctiveToken`'s unconditional 7-character
+   rule passes `aligning`, `ensuring`, `designing`, `specifically`, `consistent`,
+   `correctly` — so a beat's "subject terms" are mostly gerunds and adverbs that no record
+   could ever contain.
+2. **`SessionRecord.Subjects` is dominated by tool names and workflow vocabulary.** Measured
+   subject lists contain `WebSearch`, `WebFetch`, `TaskUpdate`, `SendMessage`, `DONE`,
+   `Awaiting`, `dispatching`, `re-review`, `existing`, `confirm`, `running`, `because`,
+   `changes`, `numbers`. `Observe` reads the whole delta including tool lines and assistant
+   prose, then frequency-ranks, and agentic sessions are overwhelmingly tool traffic.
+
+The two never intersect, so "no grounded term" fires on correct beats. **T12's 15.7% is a
+measure of vocabulary mismatch between two extractors, not of beat accuracy**, and whether it
+would catch a *genuine* contradiction is **unmeasured** — no genuine one occurred. The
+threshold is not usable until the record holds subjects rather than tool names. That makes it the
+fifth metric in this study to report a large number that was mostly ordinary English — after
+unverified identifiers at 22.6%, leakage at ~100 per sweep, plurals counted as fabrications, and
+T9's first detector.
+
+## What did not come back down: the prompt budget or `ctx`
+
+The design expected both to fall, since the carried report drops from ~4,700 runes to the
+retain-list. Measured, they did not — and the budget went *up*, 11,000 → 14,000, during the
+prompt-integrity work that had to land first.
+
+| | measured |
+|---|---:|
+| largest assembled prompt, sweep | 13,997 of 14,000 (ON), 13,982 (OFF) |
+| largest assembled prompt, full corpus probe | 14,000 of 14,000 |
+| tightest window margin over the 1,600 floor, sweep | +3,019 (ON), +3,244 (OFF) |
+| tightest window margin, full corpus probe | **+20**, over 1,087 steps / 2,174 prompts |
+| refine instructional tail | 5,673 runes (41% of the prompt) |
+
+The sweep alone would have licensed a smaller budget — its tightest step left the window 4,619
+runes, so ~11,100 would have sufficed. The **corpus probe refutes that**: across 29 sessions the
+tightest real margin is +20 runes at the full 14,000. Removing `CarryForward` did free
+3,200–4,400 runes, but the instructional tail and the enforced 1,600-rune window floor consume
+more than it returned. `ctx` 8192 has roughly 170 tokens of worst-case headroom once a
+schema-legal nine-section report is allowed for, so it cannot come down either.
+
+Both figures are **prompt-side**; no `n_predict` bound exists, and the output side is what
+would need to move first.
+
+## Two harness defects found while wiring this
+
+**`Observe` cannot be fed `Mine`'s windows.** `SessionRecord.Observe` sums what it is given, and
+`Mine` returns one window per user prompt carrying up to K=12 context turns, so consecutive
+windows overlap by ~11. Folding them straight in produces counts wrong in *both* directions —
+measured over a 16-window prefix, `user_turns` inflated 2.4× (38 vs 16) while `tool_calls`
+*deflated* 2.6× (117 vs 299), because K=12 and the 12,000-rune window cap truncate any long
+agentic gap between two user prompts. Those counts are labelled "measured — authoritative" in
+the prompt and `digestRules` tells the model corrections are a fact it must be consistent with,
+so the error is not cosmetic: it biases T3 in the flattering direction. The sweep now folds
+disjoint per-user-prompt deltas (`sessionDeltas`), which reproduce `user_turns` exactly.
+
+**`WithFocus` is deliberately never called.** The EWMA focus needs the classification pipeline
+the digest path does not run, so writing a plausible focus into an authoritative block would be
+the fabricated-record failure this plan was already corrected for once. `Populated()` reports
+`[counts projects subjects turning_points]` and omits focus, which is what it exists to do — the
+spine is honestly partial, and the design's own risk note about model-dependent fields is
+realized rather than avoided.
+
+## Not established
+
+- **Usefulness.** Unchanged: every threshold here is structural or consistency-based.
+- **The gated anchor.** `SubjectShifted` fired on 41 of 42 refinements. What was measured is
+  anchor-always versus anchor-never.
+- **Turning-point detection from beats.** `ChangedSubject` is 100% and wrong on at least one
+  demonstrable pair.
+- **Restatement suppression.** 0 discards, comparator never within 0.3 of firing.
+- **Beat selection at the cap.** Only 5 beats per session against a cap of 12.
+- **T12 as a consistency check.** No genuine contradiction occurred; its 15.7% is extractor
+  mismatch.
+- **Non-engineering accuracy.** Cowork is still VM-backed and yields no readable transcripts.
+- **Long sessions.** Every measurement is a 16-window prefix, 4 reports, ≤5 beats.

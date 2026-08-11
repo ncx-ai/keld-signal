@@ -62,6 +62,32 @@ func corpusFitSessions() int {
 // test ./...`.
 func TestRealCorpusPromptsNeverTripTheBackstop(t *testing.T) {
 	files := StratifiedTranscripts()
+	// The sweep (TestDigestRefineQuality) prepends ThisSessionTranscript(), so a probe that
+	// does not is measuring a DIFFERENT file list from the one it is the gate for. That file
+	// is this branch's own development transcript: the densest multi-byte and
+	// prompt-literal content in the corpus, and the one file whose content quotes the
+	// assembly's own heading literals — the exact shape of the two backstop holes closed in
+	// task-7b fix round 4. It IS reachable from StratifiedTranscripts on this machine (it
+	// lives under ~/.claude/projects like the rest), but only if the session budget runs far
+	// enough to reach its round-robin position, which is a coincidence rather than a
+	// guarantee. Prepending makes the coverage a property of the probe instead.
+	//
+	// Deduplicated, so it is probed once rather than twice, and so `sessions` still counts
+	// distinct sessions.
+	if me := ThisSessionTranscript(); me != "" {
+		keep := make([]string, 0, len(files)+1)
+		keep = append(keep, me)
+		for _, f := range files {
+			if f != me {
+				keep = append(keep, f)
+			}
+		}
+		files = keep
+		t.Logf("this session's own transcript is FIRST in the probe's list: %s", me)
+	} else {
+		t.Logf("NOTE: KELD_STUDY_SESSION_ID unset, so this session's own transcript is only " +
+			"covered if the round-robin reaches it — the sweep's file list is not fully mirrored")
+	}
 	if len(files) == 0 {
 		t.Skip("no transcripts on this machine")
 	}
@@ -78,6 +104,11 @@ func TestRealCorpusPromptsNeverTripTheBackstop(t *testing.T) {
 		worstCreateTotal   int
 		tightestRefineWhen string
 		tightestCreateWhen string
+		// Whether the file the precondition is ABOUT actually contributed steps. Prepending it
+		// only guarantees it is offered; the len(ws)<16 gate skips 508 of 537 files, and a
+		// silently-skipped first file would make this probe read as a gate it is not.
+		mine        = ThisSessionTranscript()
+		mineCovered bool
 	)
 	for _, f := range files {
 		if sessions >= corpusFitSessions() {
@@ -89,6 +120,10 @@ func TestRealCorpusPromptsNeverTripTheBackstop(t *testing.T) {
 			continue
 		}
 		sessions++
+		if mine != "" && f == mine {
+			mineCovered = true
+			t.Logf("this session's transcript qualified: %d windows, %d bytes", len(ws), fileSize(f))
+		}
 		project := projectFromPath(f)
 
 		rec := SessionRecord{}
@@ -177,6 +212,16 @@ func TestRealCorpusPromptsNeverTripTheBackstop(t *testing.T) {
 	}
 	t.Logf("real corpus: %d sessions, %d steps, both prompt paths per step (%d prompts)",
 		sessions, steps, steps*2)
+	switch {
+	case mine == "":
+		t.Logf("this session's own transcript: NOT IDENTIFIED (KELD_STUDY_SESSION_ID unset)")
+	case mineCovered:
+		t.Logf("this session's own transcript: COVERED")
+	default:
+		t.Errorf("this session's own transcript was offered but never probed — it failed the "+
+			"len(ws)>=16 gate or the session budget cut it off (%d sessions probed): %s",
+			sessions, mine)
+	}
 	t.Logf("PANICS: refine %d, create %d (the bar is zero — a panic aborts a sweep)",
 		refinePanics, createPanics)
 	t.Logf("tightest window margin over the floor: refine %s, create %s",
@@ -217,6 +262,17 @@ func marginReport(margin int, when string) string {
 
 func sprintStep(session, idx int, project string) string {
 	return fmt.Sprintf("s%d i%d %s", session, idx, project)
+}
+
+// fileSize is for the log line only — a transcript's size is the one-number answer to "is this
+// the dense file the precondition claims it is", and -1 rather than a fatal keeps a logging
+// helper from being able to fail a measurement.
+func fileSize(p string) int64 {
+	fi, err := os.Stat(p)
+	if err != nil {
+		return -1
+	}
+	return fi.Size()
 }
 
 // corpusPrev builds the prior report a refinement at step idx would be given, out of the
