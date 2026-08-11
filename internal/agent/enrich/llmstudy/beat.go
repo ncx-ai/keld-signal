@@ -246,12 +246,19 @@ func BeatSaysNothingNew(text string, prev []Beat) bool {
 	return beatsRestate(text, prev[len(prev)-1].Text)
 }
 
-// BeatTurnsFromEnv reads KELD_DIGEST_BEAT_TURNS, defaulting to 3 user turns.
+// BeatTurnsFromEnv reads KELD_DIGEST_BEAT_TURNS, defaulting to 5 user turns.
+//
+// Three was too often, and repetitiveness was the symptom: over three user turns there is
+// frequently nothing new to say, so the model restates the same subject in slightly different
+// words. Some of those restatements are caught and discarded (BeatSaysNothingNew), which is pure
+// waste — the generation was paid for — and the ones just under the threshold survive as
+// near-duplicates that dilute the series. Five spaces the question far enough apart that there is
+// usually something to answer.
 func BeatTurnsFromEnv() int {
 	if v := os.Getenv("KELD_DIGEST_BEAT_TURNS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
-	return 3
+	return 5
 }

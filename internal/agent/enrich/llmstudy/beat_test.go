@@ -288,10 +288,10 @@ func TestGenerateBeatRejectsADegenerateSentence(t *testing.T) {
 	}
 }
 
-func TestBeatTurnsDefaultsToThree(t *testing.T) {
+func TestBeatTurnsDefaultsToFive(t *testing.T) {
 	t.Setenv("KELD_DIGEST_BEAT_TURNS", "")
-	if got := BeatTurnsFromEnv(); got != 3 {
-		t.Errorf("want 3, got %d", got)
+	if got := BeatTurnsFromEnv(); got != 5 {
+		t.Errorf("want 5, got %d", got)
 	}
 	t.Setenv("KELD_DIGEST_BEAT_TURNS", "7")
 	if got := BeatTurnsFromEnv(); got != 7 {
