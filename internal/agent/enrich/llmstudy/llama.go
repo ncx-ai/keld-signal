@@ -139,6 +139,12 @@ func (e statusErr) Error() string { return fmt.Sprintf("llama-server HTTP %d", i
 // worth re-requesting. Nothing about the request changes on retry: temperature is 0, but
 // llama.cpp sampling is not bit-reproducible across slot state, and in practice a
 // re-request of a truncated or empty generation succeeds.
+//
+// ⚠️ "in practice ... succeeds" is not universal, and one counterexample was measured. A beat
+// generation that came back as an unpunctuated headline clause repeated BYTE-IDENTICALLY across
+// all five attempts, so every retry was wasted work (see GenerateBeat). The exception here is
+// still the right classification — a shape failure of one sample is not a failure of the server
+// — but a caller must not assume the re-request differs.
 type sampleErr struct{ err error }
 
 func (e sampleErr) Error() string { return e.err.Error() }

@@ -199,6 +199,17 @@ func abbreviationBefore(r []rune, i int) bool {
 // JSON-schema-constrained, so a token limit cuts the string mid-value and the object never
 // closes; brevity is asked for in the prompt and enforced here by shape, never by truncating
 // the decode.
+//
+// ⚠️ The retry does NOT recover every rejection, and one class it cannot recover was measured
+// here. Asked about a one-turn window, the model sometimes answers with an unpunctuated headline
+// clause — "Syncing the README with the actual state of the world", 53 runes, no terminator
+// anywhere — which holds no sentence and is rejected. At temperature 0 the re-request returns the
+// byte-identical string, so all five attempts fail and that window contributes no beat: 1 of 28
+// asked at the shipped five-turn cadence, 2 of 47 at three. That is the intended trade (no beat
+// beats a fragment) but it also refutes sampleErr's claim that "in practice a re-request of a
+// truncated or empty generation succeeds" for this class — it is only true where sampling can
+// actually differ. Recovering these needs the re-request to differ (a nudged temperature on
+// retry), not a looser shape rule.
 func (l *Llama) GenerateBeat(record, window string) (string, error) {
 	_, kept, err := l.generateBeat(record, window)
 	return kept, err
