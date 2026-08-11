@@ -398,11 +398,16 @@ func TestWellFormedInputsDoNotTripTheBackstop(t *testing.T) {
 // real session produces — a record holding path-shaped Subjects, a path-heavy recency
 // anchor, a large measured-facts block on the create path — with every bound in this
 // package honoured. Confirmed by setting DefaultPromptCharBudget back to 11,000 and running
-// this exact test: BOTH subtests fail, refine with a window of 517 runes against the 1,600
-// floor and create with 1,147 (the review's independently measured figure for the create
-// path was 1,141). A panic is the RIGHT response to a starved window, but it aborts the
-// measurement sweep instead of costing one digest, so the input scale had to be admitted
-// rather than the failure tolerated. Restored to 14,000: refine window 1,675, create 1,847.
+// this exact test: every subtest fails, refine at 474 runes of window CONTENT against the
+// 1,600 floor and create at 1,079. A panic is the RIGHT response to a starved window, but it
+// aborts the measurement sweep instead of costing one digest, so the input scale had to be
+// admitted rather than the failure tolerated. Restored to 14,000: refine content 1,604,
+// create 1,768.
+//
+// (Those four figures replace "refine 517 / create 1,147 reverted, 1,675 / 1,847 fixed". All
+// four were stale: 517 measured 541 once updateTailLen's bytes->runes correction landed, and
+// none of them had the notice separated from the conversation, so each was 97 runes
+// optimistic. They are re-measured here rather than adjusted, on the current construction.)
 //
 // Nothing here is an adversarial construction: no hand-built list exceeds its own
 // accumulation-time cap, prev is what CapSections returns, the beats are a full ladder and

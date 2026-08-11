@@ -612,36 +612,62 @@ func densePrev(unresolved int) Digest {
 // versions of fitDiscretionary apart. A test with that much slack survives the bug
 // instead of catching it.
 //
-// RECALIBRATED in fix round 3: fix round 2 added promptOpenItemCap (80), which clips
-// any open item over 80 runes for the prompt — this test's original 124-rune items were
-// silently clipped down to ~80 by that later fix, moving the effective overhead this
-// test exercises and, per an independent review, making it pass the header-omission
-// revert regardless (window landed at 1,637 against the 1,600 floor either way — the
-// test could no longer tell the two versions of fitDiscretionary apart, the exact
-// failure mode its own docstring warns about). itemLen is now 53 — small enough to pass
-// through promptOpenItemCap untouched — re-derived the same way the original 124 was:
-// scanning itemLen for the smallest value at which the fixed and reverted code diverge
-// on whether the floor holds, rather than picked to merely "look" tight.
+// RECALIBRATED TWICE, and the second time is the point. Fix round 2 added
+// promptOpenItemCap (80), which silently clipped this test's original 124-rune items down
+// to ~80 and moved the overhead it exercised, so it passed the header-omission revert
+// either way (window 1,637 both ways) — a 25-line docstring describing a dead test. Round 3
+// re-derived itemLen as 53. Then the budget went 11,000 -> 14,000, which decalibrated it
+// AGAIN: it reported 4,612 runes (margin 3,012) and the revert left it PASSING. Same
+// finding, twice, for the same reason — the construction's total pressure was fixed while
+// the budget under it moved.
 //
-// Confirmed DIRECTLY, by making the revert edit, running this exact test, and reading
-// the failure, then restoring the fix and re-running to confirm it passes:
-//   - reverted: DigestUpdatePromptFrom now PANICS via the backstop (task-7b fix round
-//     3, finding A) rather than merely returning a bad prompt for a manual assertion to
-//     catch: "assembled prompt's conversation window was clipped to 1567 runes, below
-//     the 1600-rune floor". The backstop existing does not make this test redundant —
-//     it still isolates and documents fitDiscretionary's OWN mechanism, rather than
-//     only proving something eventually notices.
-//   - fixed: window measures 1,777 against the 1,600 floor (margin 177) — a real
-//     margin, not a graze, because fitDiscretionary correctly accounts for the header
-//     costs and settles on a smaller beat count.
+// So the third calibration does not rest on itemLen alone. 12 beats plus 12 short open
+// items cannot reach the boundary at a 14,000 budget AT ALL: even at itemLen 80, the
+// largest promptOpenItemCap admits, the margin is +2,600. The load-bearing pressure a real
+// refinement carries is what closes that gap, and it is added here in the form the design
+// actually produces it — the SESSION RECORD block, the retain-list from an
+// identifier-dense prev (densePrev, the shared builder the worst-case test uses), and the
+// focus-shift recency anchor. All three are load-bearing, none is discretionary, and none
+// of them is a number this test invents: they come from realisticRefineInput and densePrev.
+// The session view is still absent, which is what keeps this a test of the BEAT-count
+// decision specifically: there is nothing else left to yield.
+//
+// itemLen = 9 is then the smallest value (scanned from 1) at which the fixed and reverted
+// accounting diverge on whether the floor holds. Confirmed DIRECTLY, by removing
+// runeLen(windowHeader) and runeLen(beatsHeader) from fitDiscretionary's overhead, running
+// this exact test, then restoring them:
+//   - reverted: PANICS via the backstop — "assembled prompt's conversation window was
+//     clipped to 1,589 runes of content, below the 1,600-rune floor". The backstop existing
+//     does not make this test redundant: it isolates and documents fitDiscretionary's OWN
+//     mechanism rather than only proving that something eventually notices.
+//   - fixed: 1,788 runes of content against the 1,600 floor (margin 188) — a real margin,
+//     because the correct accounting settles on a smaller beat count.
+//
+// The scan is recorded rather than summarised, because the step function is the whole
+// reason a single sample misleads. FIXED holds at every itemLen from 1 to 80; REVERTED
+// breaches at 9, 10, 15, 30, 45, 50, 60 and 80 and survives at 1, 5, 6, 7, 8, 20, 25, 35,
+// 40, 53 and 70. Landing on a surviving value is exactly what happened twice before.
 func TestWindowKeepsItsFloorAtTheBoundary(t *testing.T) {
-	// 53 is not a round number: it is the smallest item length (scanned from 1) at which
-	// the fixed and reverted overhead accounting settle on different beat counts and the
+	// 9 is not a round number: it is the smallest item length (scanned from 1) at which the
+	// fixed and reverted overhead accounting settle on different beat counts AND the
 	// difference actually breaches the floor on the reverted side — the smallest gap at
 	// which the bug this test guards against changes the outcome, rather than being
 	// absorbed by a k that was going to be chosen either way.
-	const itemLen = 53
-	prev := Digest{}
+	const itemLen = 9
+	// A bare panic stack mid-suite is not a legible result, so the backstop's panic is
+	// recovered into a failure that names THIS mechanism — the reverted accounting trips it
+	// before the assertion below is ever reached.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("fitDiscretionary chose a beat count that starved the window past its "+
+				"floor — it is not accounting for the headings the assembly writes around the "+
+				"content it is budgeting: %v", r)
+		}
+	}()
+	// densePrev(0) supplies prose at every section's cap, identifier-dense, so
+	// Identifiers(prev) fills the retain-list to its bound: load-bearing pressure the real
+	// refinement carries. Its own open items are replaced below so itemLen stays the knob.
+	prev := densePrev(0)
 	for i := 0; i < DefaultListCap; i++ {
 		prev.Unresolved = append(prev.Unresolved, strings.Repeat("z", itemLen))
 	}
@@ -649,30 +675,29 @@ func TestWindowKeepsItsFloorAtTheBoundary(t *testing.T) {
 	for i := range beats {
 		beats[i] = Beat{Ordinal: i + 1, Text: strings.Repeat("w", BeatCap), ChangedSubject: i%2 == 0}
 	}
-	newTurns := strings.Repeat("user: a filler turn about the work\n", 200) // well over MinTurnChars
+	// The record, the label at its cap and the focus-shift anchor come from the shared
+	// realistic input rather than being re-invented here, so this test cannot drift away
+	// from what a refinement really carries the way its first two calibrations did.
+	realistic := realisticRefineInput()
 	in := RefineInput{
-		SessionLabel: "work session",
+		SessionLabel: realistic.SessionLabel,
+		Record:       realistic.Record,
 		Beats:        beats,
 		// No SessionView: nothing left for the view to yield, so the beat-count decision
 		// alone has to get the floor right — the failure mode this test targets.
-		NewTurns: newTurns,
+		NewTurns: realistic.NewTurns,
+		Why:      TriggerFocusShift,
 	}
-	p := DigestUpdatePromptFrom(prev, in)
+	p, window := updatePromptAndWindow(prev, in)
 
-	start := strings.Index(p, windowHeader)
-	if start < 0 {
-		t.Fatal("window header missing from prompt")
-	}
-	start += len(windowHeader)
-	end := strings.Index(p[start:], updateSectionsMarker)
-	if end < 0 {
-		t.Fatal("tail marker missing from prompt")
-	}
-	window := p[start : start+end]
-	got := len([]rune(window))
-	t.Logf("window: %d runes (floor %d, margin %d)", got, MinTurnChars, got-MinTurnChars)
+	// The window fitTurns produced, not a landmark search of the finished prompt, and its
+	// CONTENT rather than content-plus-notice — the same quantity the backstop checks.
+	content := windowOf(window)
+	got := len([]rune(content))
+	t.Logf("window content: %d runes (floor %d, margin %d); total %d runes",
+		got, MinTurnChars, got-MinTurnChars, len([]rune(p)))
 	if got < MinTurnChars {
-		t.Errorf("window starved to %d runes, below the documented floor of %d — beats did "+
-			"not yield enough room; window content: %.80q...", got, MinTurnChars, window)
+		t.Errorf("window starved to %d runes of content, below the documented floor of %d — "+
+			"beats did not yield enough room; window content: %.80q...", got, MinTurnChars, content)
 	}
 }
