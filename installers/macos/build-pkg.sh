@@ -63,21 +63,29 @@ if [ -n "${APPLE_DEVELOPER_ID_INSTALLER:-}" ]; then
   pkgutil --check-signature "$OUT"
 fi
 
-# Notarize when notarytool creds are present — DECOUPLED from the release.
+# Notarize. A shipped pkg MUST be notarized — this is a hard gate by default.
 #
-# Apple's notary queue is unbounded and unobservable: this payload (~190MB, ~15k
-# files, ~100 Mach-O + a Python.framework) has sat "In Progress" for >4h with no
-# error, no log, and no queue position, while Apple reported the service healthy.
-# `--wait` has no default timeout, so a release tag would hang on it indefinitely.
+# `KELD_NOTARY_REQUIRED` (default 1) fails the build unless Apple returns Accepted.
+# Set it to 0 only for local/unsigned builds that are never distributed.
 #
-# So: submit, wait only KELD_NOTARY_TIMEOUT for a verdict, then ship regardless.
-# That is safe because Gatekeeper validates ONLINE against Apple's service — a pkg
-# whose ticket lands after we ship still passes on any online machine. Stapling
-# only adds offline validation, so it is an optimization, not a requirement.
+# Why a gate and not the old "ship regardless": an unstapled pkg is only safe once a
+# ticket EXISTS, because Gatekeeper then validates it online. With no verdict at all
+# there is no ticket, so Gatekeeper blocks the installer outright — meaning the old
+# behaviour could ship a genuinely unusable release. That hedge existed because
+# Apple's queue was returning ZERO verdicts for days (one submission sat >5h with no
+# error, no log, no queue position, service reported healthy). It resolved 2026-08-06
+# account-side, and verdicts now land in ~25s (23s on v0.20.0, 24s on v0.21.0), so
+# tolerating "no verdict" buys nothing and risks everything.
 #
-# A REJECTION is different from a timeout and still fails the build: Invalid means
-# the payload is actually broken (unsigned nested binary, missing entitlement),
-# which no amount of waiting fixes.
+# KELD_NOTARY_TIMEOUT (default 15m) is now the stall tolerance before failing —
+# ~36x the observed verdict latency, so it only trips on a real Apple-side stall.
+# The submission id is still persisted first, so a failed build can be diagnosed or
+# stapled later without log archaeology.
+#
+# A REJECTION fails the build for a different reason: Invalid means the payload is
+# actually broken (unsigned nested binary, missing entitlement), which no amount of
+# waiting fixes.
+NOTARY_REQUIRED="${KELD_NOTARY_REQUIRED:-1}"
 if [ -n "${APPLE_NOTARY_KEY:-}" ] && [ -n "${APPLE_NOTARY_KEY_ID:-}" ] && [ -n "${APPLE_NOTARY_ISSUER:-}" ]; then
   # `--key` takes a PATH to the App Store Connect .p8, but a CI secret naturally holds the key
   # CONTENTS — accept either, materializing contents into the trap-cleaned temp dir.
@@ -119,14 +127,29 @@ except Exception: print("")' "$TMP/wait.json")
       ;;
     *)
       echo "notarization still pending after $WAIT_FOR (submission $SUB)."
-      echo "  Shipping SIGNED but UNSTAPLED — Gatekeeper validates online once Apple finishes."
-      echo "  To staple later: xcrun notarytool wait $SUB <auth> && xcrun stapler staple $OUT"
       cat "$TMP/wait.json" || true
-      if [ -n "${KELD_NOTARY_REQUIRED:-}" ]; then
-        echo "  KELD_NOTARY_REQUIRED set — failing the build instead."
+      if [ "$NOTARY_REQUIRED" != "0" ]; then
+        echo "FAILING: a shipped pkg must be notarized. With no verdict there is no"
+        echo "  ticket, so Gatekeeper blocks this installer outright — it is not merely"
+        echo "  'unstapled but valid online'."
+        echo "  Verdicts normally land in ~25s, so $WAIT_FOR of silence is an Apple-side stall."
+        echo "  To recover once Apple resolves it:"
+        echo "    xcrun notarytool wait $SUB <auth> && xcrun stapler staple $OUT"
+        echo "  Or re-run the job. Set KELD_NOTARY_REQUIRED=0 only for builds you will"
+        echo "  never distribute."
         exit 1
       fi
+      echo "  KELD_NOTARY_REQUIRED=0 — shipping SIGNED but NOT NOTARIZED (not distributable)."
+      echo "  To staple later: xcrun notarytool wait $SUB <auth> && xcrun stapler staple $OUT"
       ;;
   esac
+elif [ "$NOTARY_REQUIRED" != "0" ]; then
+  # Creds absent entirely. The workflow sets KELD_NOTARY_REQUIRED=0 for its documented
+  # no-secrets dry-run path, so reaching here means a build that intends to ship has no
+  # way to notarize — which must not pass silently.
+  echo "FAILING: no notarytool credentials (APPLE_NOTARY_KEY / _KEY_ID / _ISSUER), so"
+  echo "  this pkg cannot be notarized, and an un-notarized pkg is blocked by Gatekeeper."
+  echo "  Set KELD_NOTARY_REQUIRED=0 for an intentionally unsigned, non-distributable build."
+  exit 1
 fi
 echo "built $OUT"

@@ -7,9 +7,9 @@ is verified, and how the notarization stall resolved.
 
 **One-line summary:** signing works and is proven in CI, and **notarization now
 works too** — verdicts land in ~25 seconds, stapled inline by the release build
-(measured on v0.20.0 and v0.21.0). The decoupling built to tolerate an unbounded
-queue is retained deliberately: it costs nothing when verdicts are fast and is the
-reason a future stall cannot block a release.
+(measured on v0.20.0 and v0.21.0). Notarization is therefore a **hard gate**: a
+release that does not get an `Accepted` verdict fails the build rather than shipping,
+because an un-notarized pkg has no ticket and Gatekeeper blocks it outright.
 
 ---
 
@@ -137,18 +137,37 @@ the exact remedy was applied outside CI and is not evidenced here.
 **Do not read v0.19.0's timeout as flakiness.** It predates the fix. Every
 submission after the transition has been fast and consistent.
 
-### What this means for the pipeline
+### What this means for the pipeline — notarization is now a HARD GATE
 
-The decoupling (submit, wait `KELD_NOTARY_TIMEOUT`, ship regardless; sweep later via
-`staple.yml`) is **kept on purpose**. It costs nothing now that verdicts are fast —
-the release staples inline and the sweep is a ~13s no-op — and it means a future
-Apple-side stall degrades to "ships unstapled, still validates online" instead of
-blocking releases. `KELD_NOTARY_REQUIRED=1` remains available to make a timeout fatal;
-that is now a defensible default rather than a trap, but it is deliberately still
-opt-in, since a green release should not depend on Apple's queue latency.
+`KELD_NOTARY_REQUIRED` defaults to **1**: `build-pkg.sh` fails unless Apple returns
+`Accepted`. The workflow relaxes it to `0` only for the documented **no-secrets**
+path (forks and dry runs on a repo without the Apple secrets, which are meant to
+produce unsigned, non-distributable output rather than fail).
 
-`staple.yml` runs daily (was 6-hourly, which swept an already-stapled release four
-times a day forever).
+**Why the old "ship regardless" was wrong.** That path reasoned that Gatekeeper
+validates online, so a ticket landing after we ship still passes. True — *but only
+once a ticket exists*. With no verdict there is no ticket, and Gatekeeper then blocks
+the installer outright. So the old default could ship a genuinely unusable release.
+It was a reasonable hedge while Apple returned zero verdicts for days; at ~25s
+verdicts it is pure downside.
+
+`KELD_NOTARY_TIMEOUT` (default 15m) changes meaning accordingly: it is no longer "how
+long before we give up and ship", it is **stall tolerance before failing** — roughly
+36x the observed verdict latency, so it only trips on a real Apple-side stall.
+
+The submission id is still persisted to `<pkg>.notarization-id` and the run summary
+*before* waiting, so a failed build can be recovered (`notarytool wait` +
+`stapler staple`) or re-run without log archaeology.
+
+`staple.yml` stays as a backstop and now runs daily (it was 6-hourly, sweeping an
+already-stapled release four times a day forever). With the gate in place it should
+find nothing — the release staples inline.
+
+The gate's invariants are pinned by
+`installers/macos/build_pkg_notarization_test.sh`. Those are **static assertions over
+the script text**, not an execution test: `pkgbuild`/`notarytool` are macOS-only, so
+the gate cannot be exercised on the Linux CI runner. They exist to catch the specific
+regression of someone restoring the permissive default.
 
 ### Historical: the stall as it was diagnosed
 
