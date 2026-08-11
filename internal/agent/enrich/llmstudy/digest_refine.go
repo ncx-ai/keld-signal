@@ -25,6 +25,26 @@ const (
 	DefaultHappenedCap  = 1400
 	DefaultSynopsisCap  = 650
 	DefaultListCap      = 12
+	// DefaultListEntryCap bounds a single insights/unresolved ENTRY's length, separately
+	// from DefaultListCap's bound on entry COUNT. Neither DigestSchema (which only floors
+	// prose length, via digestMinProse — there is no ceiling) nor CapSections bounded this
+	// before, so a schema-legal digest with DefaultListCap Unresolved items of 2,000 runes
+	// each blew a refine prompt to ~30,180 runes against the 11,000 budget once fed back
+	// verbatim as priorOpenItems — and fitTurns then dropped the new turn outright because
+	// its room went negative, which is the worst-consequence failure mode this package has
+	// (an over-budget prompt truncates mid-JSON and drops the digest).
+	//
+	// A list entry is ONE insight or ONE open item, not a section — it should hold a real
+	// sentence or two ("waiting on vendor confirmation of the rollback window" is 47 runes;
+	// this package's own real examples run 20-60) but nothing near 2,000. 300 is roughly
+	// two generous sentences: 5-15x this package's own real usage, so an honest entry is
+	// never touched, while a full DefaultListCap list of them still leaves the refine
+	// prompt's fixed instructional tail (updateRules+digestSections+digestRules, ~5,700
+	// runes on its own) room for the window to survive at all — 400 measurably did not:
+	// the assembled worst-case prompt landed inside budget (10,991 of 11,000) but with
+	// ZERO of the new turn kept, because the fixed tail plus a full list at 400/item left
+	// fitTurns nothing.
+	DefaultListEntryCap = 300
 )
 
 // beatsHeader, viewHeader and windowHeader are the literal headings the assembly writes
@@ -495,9 +515,25 @@ func CapSections(d Digest, maxProse, maxList int) Digest {
 	d.Current = clipProse(d.Current, maxProse)
 	d.Why = clipProse(d.Why, maxProse)
 	d.Next = clipProse(d.Next, maxProse)
-	d.Insights = tailN(d.Insights, maxList)
-	d.Unresolved = tailN(d.Unresolved, maxList)
+	// Count first, then length: tailN already keeps only the most recent maxList entries,
+	// so capEntryLength only has to clip the entries that actually survive into the digest.
+	d.Insights = capEntryLength(tailN(d.Insights, maxList), DefaultListEntryCap)
+	d.Unresolved = capEntryLength(tailN(d.Unresolved, maxList), DefaultListEntryCap)
 	return d
+}
+
+// capEntryLength clips every list entry to n runes via clipProse — see DefaultListEntryCap.
+// Independent of the entry COUNT bound (maxList/tailN): this bounds each entry that
+// survives, not how many of them do.
+func capEntryLength(v []string, n int) []string {
+	if len(v) == 0 {
+		return v
+	}
+	out := make([]string, len(v))
+	for i, s := range v {
+		out[i] = clipProse(s, n)
+	}
+	return out
 }
 
 // tailN keeps the last n entries — the most recent, since older insights have already

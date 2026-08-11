@@ -97,6 +97,38 @@ func TestCapSectionsDropsOldestInsights(t *testing.T) {
 	}
 }
 
+// TestCapSectionsBoundsListEntryLength is the fix for task-7b finding (a): CapSections
+// bounded entry COUNT (maxList) but never entry LENGTH, so a schema-legal digest with
+// DefaultListCap Unresolved items of 2,000 runes each survived it untouched. Measured
+// before this fix (by constructing exactly this digest, running it through CapSections,
+// and feeding the result into DigestUpdatePromptFrom as `prev` — priorOpenItems embeds
+// Unresolved verbatim): the assembled prompt came out at 30,191 runes against the 11,000
+// budget, and the new turn ("a filler turn about the work") did not appear anywhere in it
+// — fitTurns' room had gone negative and it returned nothing but its own omitted-turns
+// notice. Confirmed by commenting out the two capEntryLength calls in CapSections and
+// re-running this test: it fails on both assertions with those exact numbers restored.
+func TestCapSectionsBoundsListEntryLength(t *testing.T) {
+	prev := Digest{}
+	for i := 0; i < DefaultListCap; i++ {
+		prev.Unresolved = append(prev.Unresolved, strings.Repeat("x", 2000))
+	}
+	capped := CapSections(prev, DefaultProseCap, DefaultListCap)
+	for i, item := range capped.Unresolved {
+		if n := len([]rune(item)); n > DefaultListEntryCap {
+			t.Errorf("unresolved[%d] not capped: %d runes (cap %d)", i, n, DefaultListEntryCap)
+		}
+	}
+
+	newTurns := strings.Repeat("user: a filler turn about the work\n", 200)
+	p := DigestUpdatePromptFrom(capped, RefineInput{SessionLabel: "work session", NewTurns: newTurns})
+	if got := len([]rune(p)); got > DefaultPromptCharBudget {
+		t.Errorf("prompt %d runes exceeds budget %d", got, DefaultPromptCharBudget)
+	}
+	if !strings.Contains(p, "a filler turn about the work") {
+		t.Error("the new turn did not survive into the prompt")
+	}
+}
+
 // The updated report must build on the new turns and say what changed — checked against
 // the instructions the prompt always carries, since (per the beat/retain-list redesign)
 // the prior report's own prose is no longer embedded for a specific prior digest to
@@ -332,12 +364,15 @@ func packSpecifics(next *int, n, specifics int) string {
 // It does not assert "always fits": an earlier version of this test did, but its
 // specifics all collided on the same ~10 names (see packSpecifics), which understated
 // the retain-list by more than an order of magnitude and let the test certify a margin
-// (+46 runes) that the design does not actually have. Neither DigestSchema nor
-// CapSections bounds insights/unresolved PER-ITEM length, so there is no finite "the
-// worst case" to assert against — only a chosen, documented assumption (60 runes/item,
-// generous against this package's own real examples: "ledger totals disagree",
-// "waiting on vendor", 20-60 runes) that this test measures honestly rather than
-// certifies safe. At that assumption the realistic worst case is currently ABOVE
+// (+46 runes) that the design does not actually have. `prev` is built by hand here rather
+// than passed through CapSections — the same as a digest reaching DigestUpdatePromptFrom
+// straight out of CreateDigestWithView, which does not call CapSections at all — so this
+// still measures against a chosen, documented assumption (60 runes/item, generous against
+// this package's own real examples: "ledger totals disagree", "waiting on vendor", 20-60
+// runes) rather than DefaultListEntryCap (task-7b finding (a); see digest_refine.go),
+// which now bounds a CAPPED digest's per-item length at 300 — five times looser than this
+// test's assumption, and so a worse realistic worst case than this test measures, not a
+// better one. At the 60-rune assumption the realistic worst case is currently ABOVE
 // budget — see the fix-round report for the exact number and what it means for the
 // later task that owns the budget/ctx decision. Nothing in DigestUpdatePromptFrom
 // clamps the ASSEMBLED prompt to the budget as a whole; clipSessionViewFor and
