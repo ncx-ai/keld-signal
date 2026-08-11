@@ -115,6 +115,24 @@ func TestPromptBudgetViolationCatchesEachInvariant(t *testing.T) {
 		}
 	})
 
+	// The notice is not conversation. Both reservations upstream (clipSessionViewFor and
+	// fitDiscretionary) reserve MinTurnChars PLUS omittedNotice, so the floor is a promise
+	// about CONTENT — and this check used to measure the window with the notice counted in,
+	// making it looser than the invariant it guards by exactly the notice's 97 runes. One
+	// rune under the floor is the tightest statement of that: with the notice counted, this
+	// window measures 1,696 and passes; measured as content it is 1,599 and must fail.
+	t.Run("a clipped window one rune of CONTENT under the floor is flagged", func(t *testing.T) {
+		window := omittedNotice + strings.Repeat("z", MinTurnChars-1)
+		err := promptBudgetViolation("head"+window+"tail", window)
+		if err == nil {
+			t.Errorf("a window with %d runes of content (plus a %d-rune notice) passed the "+
+				"%d-rune floor — the notice is being counted as conversation",
+				MinTurnChars-1, len([]rune(omittedNotice)), MinTurnChars)
+		} else {
+			t.Logf("flagged as expected: %v", err)
+		}
+	})
+
 	t.Run("a window quoting a marker is measured as itself", func(t *testing.T) {
 		// The whole point of taking the window as an argument: its CONTENT is arbitrary
 		// conversation text and may contain either literal the assembly writes around it.
@@ -496,18 +514,25 @@ func failOnBackstop(t *testing.T) {
 	}
 }
 
+// assertFitsAndKeepsTheFloor checks the two invariants the backstop checks, on the same
+// quantities: the whole prompt against the budget, and the window's CONTENT — omittedNotice
+// stripped, via windowOf — against MinTurnChars.
+//
+// Measuring the notice as part of the window was worth 97 runes of phantom margin, which is
+// the same off-by-the-notice this round fixed in promptBudgetViolation itself. A test that
+// reports a looser margin than the code enforces is how a graze gets read as comfortable.
 func assertFitsAndKeepsTheFloor(t *testing.T, p, marker, tail string) {
 	t.Helper()
 	total := len([]rune(p))
-	window := len([]rune(promptWindow(t, p, marker, tail)))
-	t.Logf("total %d runes (budget %d, margin %d), window %d (floor %d, margin %d)",
+	window := len([]rune(windowOf(promptWindow(t, p, marker, tail))))
+	t.Logf("total %d runes (budget %d, margin %d), window content %d (floor %d, margin %d)",
 		total, DefaultPromptCharBudget, DefaultPromptCharBudget-total,
 		window, MinTurnChars, window-MinTurnChars)
 	if total > DefaultPromptCharBudget {
 		t.Errorf("prompt %d runes exceeds the %d-rune budget", total, DefaultPromptCharBudget)
 	}
 	if window < MinTurnChars {
-		t.Errorf("window starved to %d runes, below the %d-rune floor", window, MinTurnChars)
+		t.Errorf("window starved to %d runes of content, below the %d-rune floor", window, MinTurnChars)
 	}
 }
 
@@ -608,11 +633,20 @@ func pathOfLen(n, seed int) string {
 //
 // RESIDUAL, named rather than hidden: because the block is caller-supplied, uncapped and
 // pure fixed overhead on the create path (which has no beat ladder to yield, only the
-// view), a big enough block starves the window at ANY budget. Measured on this
-// construction at the 14,000 budget: ~6,000 runes leaves the floor intact with room to
-// spare, ~8,800 does not (window 1,357). Bounding DigestFacts' two unbounded lists is the
-// fix; it is not in task-7b's scope, and the backstop makes the failure loud rather than
-// silent in the meantime.
+// view), a big enough block starves the window at ANY budget.
+//
+// RE-MEASURED once the floor was read as CONTENT rather than content-plus-notice (this
+// round's notice-accounting fix), by padding this block one rune at a time against the
+// worst-case create construction: the floor HOLDS all the way to 8,267 runes of facts and
+// breaches at 8,268 ("clipped to 1,599 runes of content"). Up to that point clipSessionViewFor
+// keeps handing the window exactly its reserve, so the content margin sits at +1 to +3 the
+// whole way rather than degrading — the reserve working as designed, not a graze. It breaks
+// at the point the view has nothing left to yield. The earlier note here read "~6,000 leaves
+// the floor intact with room to spare, ~8,800 does not (window 1,357)": the first half was
+// measuring the notice as conversation (at 5,971 runes of facts the real content margin is
+// +2, not +99) and the second was 500 runes optimistic. Bounding DigestFacts' two unbounded
+// lists is the fix; it is not in task-7b's scope, and the backstop makes the failure loud
+// rather than silent in the meantime.
 func realisticFactsBlock() string {
 	var topics, entities []string
 	for i := 0; i < 40; i++ {

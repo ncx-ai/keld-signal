@@ -401,8 +401,10 @@ func TestWorstCasePromptOnBothPaths(t *testing.T) {
 
 		p := DigestUpdatePromptFrom(prev, in)
 		total := len([]rune(p))
-		window := len([]rune(promptWindow(t, p, windowHeader, updateSectionsMarker)))
-		t.Logf("WORST CASE refine: total %d runes (budget %d, margin %d), window %d "+
+		// CONTENT, notice stripped — the quantity the backstop and both reservations
+		// upstream actually promise; counting the notice inflated every margin by 97.
+		window := len([]rune(windowOf(promptWindow(t, p, windowHeader, updateSectionsMarker))))
+		t.Logf("WORST CASE refine: total %d runes (budget %d, margin %d), window content %d "+
 			"(floor %d, margin %d)", total, DefaultPromptCharBudget,
 			DefaultPromptCharBudget-total, window, MinTurnChars, window-MinTurnChars)
 		logContributors(t, p, prev, in, window)
@@ -410,7 +412,7 @@ func TestWorstCasePromptOnBothPaths(t *testing.T) {
 			t.Errorf("worst-case refine prompt %d runes exceeds the %d-rune budget", total, DefaultPromptCharBudget)
 		}
 		if window < MinTurnChars {
-			t.Errorf("worst-case refine window starved to %d runes, below the %d-rune floor", window, MinTurnChars)
+			t.Errorf("worst-case refine window starved to %d runes of content, below the %d-rune floor", window, MinTurnChars)
 		}
 	})
 
@@ -424,8 +426,8 @@ func TestWorstCasePromptOnBothPaths(t *testing.T) {
 			strings.Repeat("user: an early turn about the work\n", 400),
 			realisticFactsBlock())
 		total := len([]rune(p))
-		window := len([]rune(promptWindow(t, p, createWindowHeader, createSectionsMarker)))
-		t.Logf("WORST CASE create: total %d runes (budget %d, margin %d), window %d "+
+		window := len([]rune(windowOf(promptWindow(t, p, createWindowHeader, createSectionsMarker))))
+		t.Logf("WORST CASE create: total %d runes (budget %d, margin %d), window content %d "+
 			"(floor %d, margin %d); largest single contributor is the facts block at %d runes, "+
 			"ahead of the instructional tail at %d", total, DefaultPromptCharBudget,
 			DefaultPromptCharBudget-total, window, MinTurnChars, window-MinTurnChars,
@@ -434,7 +436,7 @@ func TestWorstCasePromptOnBothPaths(t *testing.T) {
 			t.Errorf("worst-case create prompt %d runes exceeds the %d-rune budget", total, DefaultPromptCharBudget)
 		}
 		if window < MinTurnChars {
-			t.Errorf("worst-case create window starved to %d runes, below the %d-rune floor", window, MinTurnChars)
+			t.Errorf("worst-case create window starved to %d runes of content, below the %d-rune floor", window, MinTurnChars)
 		}
 	})
 }

@@ -201,13 +201,24 @@ func assertPromptWithinBudget(p, window string) {
 // not a starvation bug, and flagging one would make this backstop fire constantly on
 // completely healthy prompts, which is exactly the "fires so often it gets ignored"
 // failure a backstop must not have.
+//
+// The floor is measured on the window's CONTENT, with omittedNotice's own 97 runes cut off
+// first. That is what the two reservations upstream promise — clipSessionViewFor and
+// fitDiscretionary each reserve MinTurnChars PLUS the notice, precisely so the notice is not
+// paid for out of the floor (see clipSessionViewFor's doc: task-7b fix round 3, finding F) —
+// and it is what fitTurns' own boundary-trim guard compares. Measuring the notice as if it
+// were conversation made this check the only one of the four sites that disagreed, and it
+// disagreed in the unsafe direction: 1,503 runes of real content plus a 97-rune notice reads
+// as 1,600 and passes, so a breach of up to 97 runes shipped silently. A backstop that is
+// looser than the invariant it guards is not a backstop.
 func promptBudgetViolation(p, window string) error {
-	if total := len([]rune(p)); total > DefaultPromptCharBudget {
+	if total := runeLen(p); total > DefaultPromptCharBudget {
 		return fmt.Errorf("assembled prompt is %d runes, over the %d-rune budget", total, DefaultPromptCharBudget)
 	}
-	if strings.HasPrefix(window, omittedNotice) {
-		if n := len([]rune(window)); n < MinTurnChars {
-			return fmt.Errorf("assembled prompt's conversation window was clipped to %d runes, below the %d-rune floor", n, MinTurnChars)
+	if content, clipped := strings.CutPrefix(window, omittedNotice); clipped {
+		if n := runeLen(content); n < MinTurnChars {
+			return fmt.Errorf("assembled prompt's conversation window was clipped to %d runes of "+
+				"content, below the %d-rune floor", n, MinTurnChars)
 		}
 	}
 	return nil
