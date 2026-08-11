@@ -58,6 +58,14 @@ var completionWords = map[string]bool{
 // completionReach is how many tokens after a whole-work subject still count as its predicate —
 // enough for "the work is now fully complete", short enough that a completion word belonging to a
 // later clause is not attributed to it.
+//
+// It doubles as the QUALIFIER test, and that is worth stating because a regenerated beat exercised
+// it: "The work on refining the LLM classification prompt structure is complete" puts 8 tokens
+// between subject and predicate, so it does not match — correctly, because the subject there is a
+// named piece of work rather than the session. "The work is complete" matches at a distance of 1.
+// The reach is therefore what separates a scoped completion claim (allowed, and observable) from an
+// unqualified one (forbidden). A beat that scopes its claim to something it names is making the
+// kind of claim a window can support.
 const completionReach = 5
 
 // degreeClaims are the fraction-remaining phrases. Unobservable regardless of subject: a beat

@@ -98,7 +98,8 @@ func TestBeatProgressAbstainsWhenTheConversationStatesIt(t *testing.T) {
 // back byte-identical (see GenerateBeat).
 func TestBeatPromptForbidsOverallProgressClaims(t *testing.T) {
 	p := BeatPrompt("counts: turns=4", "user: close March")
-	for _, want := range []string{"the work is complete", "nearly complete", "how much is left"} {
+	for _, want := range []string{"characterise the job as a whole", "nearly complete",
+		"only X pending", "how little is left"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("the prompt does not forbid %q:\n%s", want, p)
 		}

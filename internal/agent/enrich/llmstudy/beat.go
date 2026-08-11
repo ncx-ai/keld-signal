@@ -89,7 +89,7 @@ func BeatPrompt(record, window string) string {
 	var b strings.Builder
 	b.WriteString("You are the engineer working in the session below. A colleague asks you at " +
 		"standup what you are working on. Answer them in two or three sentences: what you are " +
-		"working on, and where it has got to according to the conversation below.\n\n")
+		"working on, and where it has got to.\n\n")
 	b.WriteString("SESSION RECORD (measured — authoritative):\n")
 	b.WriteString(record)
 	b.WriteString("\nRECENT CONVERSATION:\n")
@@ -100,14 +100,16 @@ Rules:
     plainly, saying what the work is and where it stands.
   - Vary how you open, and never use a stock opener. Do not begin with any of these:
     "The work is about", "The work is", "This session", "The user", "Currently".
-    No fixed formula at all — begin with the thing being worked on.
+    Nor with any other continuation of "The work". No fixed formula at all — begin with
+    the thing being worked on, named.
   - Say what the work IS — the subject and why it is being done. Not a list of actions
     taken.
-  - Where it stands means where THIS window shows it standing. You have not seen the rest
-    of the job, so do not say how far along the work overall is and do not say
-    how much is left: never "the work is complete", "nearly complete", "almost done",
-    "only the reconciliations are pending", "all that remains is".
-    You MAY say that a specific named thing was finished when the conversation shows it.
+  - Where it stands means where THIS WINDOW shows it standing. You have not seen the
+    rest of the job, so never characterise the job as a whole — not that it is
+    finished, not how far along it is, not how little is left. Phrasings like
+    "nearly complete", "almost done", "only X pending" and "all that remains is"
+    are forbidden. You MAY say that a specific named thing was finished when the
+    conversation shows it finished.
   - Use the record to place the work. An action is only meaningful as part of something.
   - Every noun must come from the conversation or the record above. Nothing in these
     instructions is subject matter.
