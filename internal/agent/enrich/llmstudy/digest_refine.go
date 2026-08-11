@@ -11,16 +11,35 @@ import (
 // earliest parts of the picture, which are exactly the parts a newcomer needs.
 // These are report-quality limits, NOT context limits. Lowering them to buy prompt
 // room was measured and rejected: 500/900 cut truncation from 5/20 to 2/20 but dropped
-// fact retention from 100% to 83.3%, because a shorter cap clips exactly the named
-// specifics the retain-list is there to preserve. The room came from the CONTEXT instead
-// — the study runs at ctx 8192 (3,161 MB measured, inside the ~3 GB target's tolerance)
-// with the prompt budget at 14,000; see DefaultPromptCharBudget, which supersedes the
-// earlier note here that read the 3 GB figure as a hard ceiling and rejected 8192 for it.
+// fact retention from 100% to 83.3%.
+//
+// ⚠️ The MECHANISM that figure used to be attributed to here is REFUTED, and the
+// attribution is withdrawn. This doc used to say the drop happened "because a shorter cap
+// clips exactly the named specifics the retain-list is there to preserve" — which is
+// verbatim the hypothesis the task-8 sweep tested and refuted. Measured over 240
+// (refinement x fact) pairs, in both arms: NEITHER retain-list cap ever bound (largest list
+// observed 24 of 60 entries / 280 of 700 runes), and 161 of 240 named specifics were carried
+// in the retain-list and dropped by the model anyway. Retention itself measured 50.0%
+// (anchor on) / 56.2% (off) against a >=90% threshold. So a cap is not what deletes named
+// specifics — the model dropping them under an explicit instruction not to is, and the
+// retain-list's re-derivation from the LAST report is what makes each drop permanent (see
+// boundRetainList and docs/superpowers/plans/2026-08-07-conversational-dimensions-findings.md
+// Part 7). The 100%->83.3% number stands as a MEASUREMENT, taken under the superseded
+// embedded-prose scheme (CarryForward + the no-shrink rule), and is not comparable to the
+// figures above; what remains true without any mechanism claim is that these caps govern
+// report quality and lowering them bought nothing measurable.
+//
+// The room came from the CONTEXT instead — the study runs at ctx 8192 (3,161 MB measured,
+// inside the ~3 GB target's tolerance) with the prompt budget at 14,000; see
+// DefaultPromptCharBudget, which supersedes the earlier note here that read the 3 GB figure
+// as a hard ceiling and rejected 8192 for it.
 //
 // Prompt room no longer comes from embedding a shrunk copy of the prior report
 // (CarryForward, since deleted): the refinement prompt now carries no prior prose at
 // all — a beat series (the paraphrase) plus Identifiers' retain-list (the deterministic
 // anchor) stand in for it, at a fraction of the character cost. See DigestUpdatePromptFrom.
+// That substitution is MEASURED NOT TO WORK as built: retention fell 94.9% (embedded prose,
+// no-shrink rule) -> 50.0%. The branch ships as a negative result, not as a fix.
 const (
 	DefaultProseCap     = 900
 	DefaultStructureCap = 1600
@@ -50,8 +69,11 @@ const (
 	// insensitive to this value. Measured directly against
 	// TestWorstCasePromptOnBothPaths' construction (then named
 	// TestRefinePromptFromRealisticWorstCaseMargin) with insights/
-	// unresolved items sized at 300, 400, 800 and 2000: all four yield the identical
-	// 10,921-rune worst-case prompt. This constant's only remaining job is report
+	// unresolved items sized at 300, 400, 800 and 2000: all four yield an identical
+	// worst-case prompt. (The rune figure that used to be quoted here, 10,921, was
+	// measured against the 11,000 budget; the live number at the 14,000 budget is
+	// 13,994 — TestWorstCasePromptOnBothPaths/refine prints it. The insensitivity is
+	// the point, not the absolute value.) This constant's only remaining job is report
 	// quality: what a human reads in the stored digest. See promptOpenItemCap and
 	// boundRetainList for the prompt-facing bounds, and store-full-feed-bounded
 	// generally.
@@ -159,6 +181,17 @@ func updatePromptAndWindow(prev Digest, in RefineInput) (prompt, window string) 
 	// named specifics with it), and prose instructions to "keep what the report says"
 	// did not stop it. Naming the specifics deterministically is the same anchoring
 	// that made the counts authoritative.
+	//
+	// ⚠️ MEASURED INSUFFICIENT ON ITS OWN. That reasoning held while the retain-list
+	// REINFORCED embedded prior prose. As the ONLY channel carrying the prior report's
+	// specifics — which is what it became once CarryForward was deleted — it does not
+	// hold: task-8 measured fact retention at 50.0% (anchor on) / 56.2% (off) against a
+	// >=90% threshold, down from 94.9% under the embedded-prose scheme, with 161 of 240
+	// named specifics dropped by the model while explicitly listed below under "each must
+	// still appear". The list is re-derived from the LAST report only, so every drop is
+	// permanent (the one-way cascade). Raising either cap cannot help — neither ever
+	// bound. The next experiment is a CUMULATIVE retain-list (a union over all prior
+	// reports), which is a design change and is deliberately not landed unmeasured.
 	// Identifiers reads the FULL prior digest: a specific first named in a present-state
 	// section must still survive, and the retain-list is now the only place a
 	// refinement sees it at all — nothing else carries the prior report's text forward.
@@ -181,7 +214,12 @@ func updatePromptAndWindow(prev Digest, in RefineInput) (prompt, window string) 
 	// Hand back the prior open items and require a verdict on each. Prose alone did not
 	// work: "drop what is now closed" left resolved items in the list across every
 	// refinement, because nothing checked. Naming them and requiring an accounting is the
-	// same deterministic anchoring that fixed fact retention. A single item's TEXT is
+	// same deterministic-anchoring shape the retain-list above uses — and note that shape
+	// is NOT uniformly effective: it worked here (T8 stale open items 0.0%) and it did NOT
+	// work for fact retention once it became the only channel (50.0%/56.2% vs >=90%; see
+	// the retain-list note above). What is measured is that naming beats prose
+	// instructions for open-item CLOSURE, not that naming fixes retention. A single
+	// item's TEXT is
 	// bounded for the prompt (promptOpenItemCap on priorOpenItems): store full, feed
 	// bounded, the same principle DefaultListEntryCap applies to the stored report — two
 	// deliberately different numbers for different readers, since the report a person
@@ -203,10 +241,23 @@ func updatePromptAndWindow(prev Digest, in RefineInput) (prompt, window string) 
 	}
 	// Hand over what the newest user turns are about. Gated on a MEASURED focus shift,
 	// not applied to every refinement. Unconditionally, the anchor bought recency at a
-	// real price: fact retention fell 96.1% -> 88.3% and fabricated open items rose
+	// real price: fact retention fell 97.4% -> 88.3% and fabricated open items rose
 	// 4.1% -> 10.2%, both consistent with the model re-weighting toward the newest turns
 	// and shedding what came before. The trigger already decides when the subject
 	// changed, so a routine refresh is left alone and only a genuine shift gets the pull.
+	//
+	// 97.4%, not 96.1%: this comment and SubjectShifted's doc (digest_recency.go) quoted
+	// two different baselines for the SAME experiment. 97.4% is the figure the design doc
+	// records and is the one both sites now use.
+	//
+	// Those figures predate the story rollup and are NOT the current evidence for gating.
+	// Under the current scheme, task-8 measured anchor-always vs anchor-never at T4 50.0%
+	// vs 56.2%, T7 4.5% vs 2.3%, T3 16.7% vs 8.3% — the same direction, and the reason
+	// the anchor stays gated. But that comparison is CONFOUNDED and the magnitudes are not
+	// attributable to the anchor: the sweep derived one `reason` value that fed both this
+	// block and SessionRecord.NoteTurningPoint, so the anchor-off arm also ran with an
+	// empty TurningPoints list for its entire duration (see digest_eval_test.go). The
+	// harness is fixed; the corrected comparison is UNMEASURED.
 	if in.Why == TriggerFocusShift {
 		if subs := recentSubjectsOf(in.NewTurns); subs != "" {
 			rest.WriteString("\nTHE LATEST TURNS ARE ABOUT: ")
@@ -382,16 +433,19 @@ func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionVi
 // Lowering DefaultListEntryCap instead was rejected (per the fix-round instruction this
 // responds to): that constant governs what a human reads in the stored report, and
 // shrinking it to buy prompt room is the exact trade DefaultListEntryCap's own doc
-// already rejected once (500/900 prose caps dropped fact retention 100%->83.3%). The
-// report keeps its richer items; only the prompt's rendering of them is bounded.
+// already rejected once (500/900 prose caps measured fact retention 100%->83.3% under the
+// then-current embedded-prose scheme — a measurement, but NOT evidence that caps are what
+// delete named specifics; task-8 refuted that mechanism outright, see
+// DefaultListEntryCap's doc). The report-quality argument stands on its own: the report
+// keeps its richer items; only the prompt's rendering of them is bounded.
 //
 // 80 is still generous against this package's own real item lengths (20-60 runes, per
 // DefaultListEntryCap's doc) — real items are essentially never truncated — while
 // cutting the worst case enough to matter. Measured in ISOLATION against fix round 3's
 // own worst-case construction (now TestWorstCasePromptOnBothPaths, which by
 // then also carries boundRetainList and the open-item COUNT bound — reverting only this
-// clip, temporarily, to a no-op): assembled prompt 11,681 runes against the 11,000
-// budget (margin -681), window 97 against the 1,600 floor. Restored: prompt 10,921
+// clip, temporarily, to a no-op): assembled prompt 11,681 runes against the THEN-CURRENT
+// 11,000 budget (margin -681), window 97 against the 1,600 floor. Restored: prompt 10,921
 // runes (margin +79), window 1,797 (margin +197) — both real margins, not a graze,
 // which matters because a bound that only just clears was exactly what let an earlier
 // worst-case measurement here read "+44" while the design's own enforced constants
@@ -399,6 +453,12 @@ func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionVi
 // reproduced at a denser, more adversarial construction in fix round 3 — see
 // boundRetainList). TestWindowKeepsItsFloorAtTheBoundary is the sibling test isolating
 // the window floor under beat pressure alone (no open items, no view).
+//
+// The -681/+79 pair above is stated against the 11,000 budget it was measured at, and is
+// left as-is deliberately: it is a BEFORE/AFTER pair for this clip, and both halves move
+// together when the budget does. The budget is now 14,000 (DefaultPromptCharBudget), at
+// which TestWorstCasePromptOnBothPaths/refine reports 13,994 with this clip in place —
+// re-derive from the test rather than from this comment when an absolute number is needed.
 const promptOpenItemCap = 80
 
 // priorOpenItems is the previous report's open list, excluding the sentinel — there is

@@ -90,6 +90,13 @@ func strongIdentifier(tok string) bool {
 // caps) are always checked wherever they appear. This keeps a fabricated
 // "cross-checked against Globex" while ignoring "Key findings...".
 func Identifiers(d Digest) []string {
+	// A fourth independent join over the same fields as proseHay (ProseFields + Insights +
+	// Unresolved), separated by ". " rather than " " because sentenceInitial below needs
+	// real sentence boundaries. It was absent from the inventory comment at
+	// LeakedPromptWords / LooksRubberstamped, which is the wrong copy to have missed: this
+	// one produces the refinement prompt's retain-list (see boundRetainList), so a
+	// prose-like field added to Digest and not to this loop stops being carried forward at
+	// all, silently.
 	var b strings.Builder
 	for _, s := range ProseFields(d) {
 		b.WriteString(s)
@@ -201,13 +208,18 @@ func LeakedPromptWords(d Digest, source string) []string {
 		srcPhrases[strings.Join(srcWords[i:i+leakPhraseLen], " ")] = true
 	}
 
-	// This is a THIRD copy of proseHay's join (ProseFields + Insights + Unresolved) —
-	// RetainedFacts/proseHay and the eval harness's lostFacts diagnostic are the other
-	// two — not refactored to call it (task-7b brief item, "also, cheaply"; not fixed,
-	// flagged). All current copies key off ProseFields, so a new STRING field on Digest
-	// is picked up everywhere automatically; the residual risk is a future non-string
-	// prose-like field (as Insights/Unresolved themselves are) being added to only one
-	// of the four copies.
+	// One of three INDEPENDENT copies of proseHay's join (ProseFields + Insights +
+	// Unresolved) — not refactored to call it (task-7b brief item, "also, cheaply"; not
+	// fixed, flagged). The complete inventory, corrected: proseHay itself (used by
+	// RetainedFacts AND by the eval harness's lostFacts, which calls proseHay rather than
+	// re-joining, so lostFacts is NOT a separate copy as an earlier version of this note
+	// claimed), this one, LooksRubberstamped's, and Identifiers' own ". "-separated join.
+	// The Identifiers copy was missing from the earlier inventory and is the one that
+	// matters most: its output IS the refinement prompt's retain-list, so a field this
+	// join misses is a field whose specifics silently stop being carried forward.
+	// All four key off ProseFields, so a new STRING field on Digest is picked up
+	// everywhere automatically; the residual risk is a future non-string prose-like field
+	// (as Insights/Unresolved themselves are) being added to only one of the four.
 	body := wordsOf(strings.ToLower(strings.Join(
 		append(ProseFields(d), append(d.Insights, d.Unresolved...)...), " ")))
 
@@ -388,8 +400,8 @@ func LooksRubberstamped(d Digest, f DigestFacts) bool {
 	if f.Corrections == 0 && f.CorrectedTurns == 0 {
 		return false
 	}
-	// This is a FOURTH copy of proseHay's join (ProseFields + Insights + Unresolved) —
-	// see the identical note above LeakedPromptWords' body join. Not refactored here
+	// Another independent copy of proseHay's join (ProseFields + Insights + Unresolved) —
+	// see the corrected inventory above LeakedPromptWords' body join. Not refactored here
 	// either (task-7b brief item, "also, cheaply"): same risk, same reasoning, flagged
 	// rather than fixed.
 	hay := strings.ToLower(strings.Join(
