@@ -157,6 +157,46 @@ func TestPromptBudgetViolationCatchesEachInvariant(t *testing.T) {
 	})
 }
 
+// TestSessionLabelIsCappedOnBothPaths pins sessionLabelCap, which was unpinned on BOTH
+// prompt paths — reverting either clipProse call broke no test at all.
+//
+// The label is fixed overhead written ahead of everything else each path budgets around, and
+// nothing about a caller's label is under this package's control. Measured before the cap
+// existed: a 12,000-rune label alone produced a 15,954-rune create prompt.
+//
+// Asserted on the label's own text rather than on the prompt's total length, so it stays a
+// test of THIS bound: with the cap reverted, the uncapped label is present verbatim, which
+// the run-length check catches directly instead of via whichever budget it happens to blow.
+// The panic path is caught too, because at 12,000 runes the reverted assembly trips the
+// backstop before returning — and a bare panic mid-suite is not a legible failure. Confirmed
+// by reverting both clipProse calls: create fails at 15,954 runes and refine at 17,944, both
+// over the 14,000 budget (15,954 is the same figure the round-3 review measured).
+func TestSessionLabelIsCappedOnBothPaths(t *testing.T) {
+	label := strings.Repeat("L", 12000)
+	overCap := strings.Repeat("L", sessionLabelCap+1)
+
+	build := map[string]func() string{
+		"create": func() string {
+			return DigestCreatePrompt(label, "user: hi\n", "counts: turns=1\n")
+		},
+		"refine": func() string {
+			return DigestUpdatePrompt(Digest{Done: "x"}, label, "user: hi\n", "counts: turns=1\n")
+		},
+	}
+	for name, f := range build {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("an uncapped session label blew the prompt budget: %v", r)
+				}
+			}()
+			if p := f(); strings.Contains(p, overCap) {
+				t.Errorf("session label reached the prompt at over %d runes uncapped", sessionLabelCap)
+			}
+		})
+	}
+}
+
 // TestTailLenMeasuresWhatTheAssemblyAppends pins both tail-length functions to the thing
 // they claim to measure: the runes each assembly writes AFTER the window.
 //

@@ -99,6 +99,36 @@ func TestSessionRecordRecordsTurningPoints(t *testing.T) {
 	}
 }
 
+// TestTurningPointsAreCappedAtTheirBound pins MaxRecordTurningPoints, which was unpinned:
+// the pre-existing turning-point test only checks WHICH reasons qualify, so deleting the cap
+// from NoteTurningPoint broke nothing. Every other list on this record caps itself at
+// accumulation time; this one appended forever until fix round 3, and an unbounded
+// direction-change history is the realistic shape of exactly the long, friction-heavy
+// session the record exists to describe (measured by the review: 60 turning points starved
+// the window to 1,313 runes).
+//
+// Both halves matter: the count is bounded, and what survives is the RECENT history, the
+// same recency-over-history preference tailN applies to insights and open items. Confirmed
+// by deleting the cap from NoteTurningPoint: "noted 36 turning points, want 12 kept, got 36".
+func TestTurningPointsAreCappedAtTheirBound(t *testing.T) {
+	r := SessionRecord{}
+	const noted = MaxRecordTurningPoints * 3
+	for i := 1; i <= noted; i++ {
+		r = r.NoteTurningPoint(i, TriggerFocusShift)
+	}
+	if len(r.TurningPoints) != MaxRecordTurningPoints {
+		t.Fatalf("noted %d turning points, want %d kept, got %d",
+			noted, MaxRecordTurningPoints, len(r.TurningPoints))
+	}
+	if got := r.TurningPoints[len(r.TurningPoints)-1].Seq; got != noted {
+		t.Errorf("the newest turning point must survive: last seq %d, want %d", got, noted)
+	}
+	if got := r.TurningPoints[0].Seq; got != noted-MaxRecordTurningPoints+1 {
+		t.Errorf("the cap must drop the OLDEST points: first seq %d, want %d",
+			got, noted-MaxRecordTurningPoints+1)
+	}
+}
+
 // weakProperNoun's job is to catch a short capitalised NAME that distinctiveToken's own
 // length floor would drop — not any capitalised word. A line-leading capital carries no
 // information (it is just how a new line or bullet opens, same as a new sentence), and a

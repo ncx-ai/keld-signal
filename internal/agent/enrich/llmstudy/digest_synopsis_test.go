@@ -90,6 +90,31 @@ func TestSessionViewStaysInsideTheBudget(t *testing.T) {
 	}
 }
 
+// TestClipSessionViewForReservesTheOmittedNotice pins the second half of
+// clipSessionViewFor's reservation: MinTurnChars *plus* omittedNotice's own length.
+//
+// The notice term was unpinned — removing it broke no test — even though it is the whole of
+// task-7b fix round 3's finding (F): the reserve is a floor on what fitTurns hands back as
+// CONTENT, but fitTurns pays for the notice out of its own `room` whenever the turns do not
+// already fit, which is the case in every scenario this reserve exists to protect. Reserving
+// only MinTurnChars let this function certify a view that left `room` at exactly
+// MinTurnChars, and the window then came back MinTurnChars-97 runes short.
+//
+// Asserted as an EXACT length, which is possible because the view here contains no
+// whitespace: clipProse then has no word boundary to trim back to and returns precisely its
+// budget. Confirmed by deleting the `- len([]rune(omittedNotice))` term and re-running: the
+// returned view is 1,097 runes against the 1,000 the window was promised — longer by exactly
+// omittedNotice's own length.
+func TestClipSessionViewForReservesTheOmittedNotice(t *testing.T) {
+	const room = 1000 // under SessionViewCap and over the 240-rune give-up floor
+	overhead := DefaultPromptCharBudget - MinTurnChars - len([]rune(omittedNotice)) - room
+	got := clipSessionViewFor(strings.Repeat("v", room*5), overhead)
+	if n := len([]rune(got)); n != room {
+		t.Errorf("view clipped to %d runes, want exactly %d — the reserve is off by %d, and "+
+			"%d is omittedNotice's own length", n, room, n-room, len([]rune(omittedNotice)))
+	}
+}
+
 // A coined compound whose parts are all in the source is generalisation, not fabrication.
 // This was the dominant flagged class once the synopsis existed.
 func TestCompoundsBuiltFromSourceWordsAreVerified(t *testing.T) {
