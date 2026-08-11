@@ -100,18 +100,29 @@ func TestSessionViewStaysInsideTheBudget(t *testing.T) {
 // only MinTurnChars let this function certify a view that left `room` at exactly
 // MinTurnChars, and the window then came back MinTurnChars-97 runes short.
 //
-// Asserted as an EXACT length, which is possible because the view here contains no
-// whitespace: clipProse then has no word boundary to trim back to and returns precisely its
-// budget. Confirmed by deleting the `- len([]rune(omittedNotice))` term and re-running: the
-// returned view is 1,097 runes against the 1,000 the window was promised — longer by exactly
-// omittedNotice's own length.
+// ⚠️ RECALIBRATED for the never-cut-mid-sentence rule (AGENTS.md): the view is now bounded by
+// clipLines (whole lines plus viewOmittedNotice), not clipProse, so a whitespace-free blob is
+// no longer a legal view and the old exact-length construction returned "".
+//
+// Exactness is kept, and it is still derived rather than quoted. The view is 2-rune lines
+// ("v\n"), so clipLines fills to the largest even number of runes inside
+// room - len(viewOmittedNotice) and then writes the notice: an exact function of the two
+// constants. Confirmed by deleting the `- len([]rune(omittedNotice))` term and re-running:
+// room becomes 1,097, every rune of it is fillable, and the view comes back 1,097 runes
+// against the 1,000 the window was promised — longer by exactly omittedNotice's own length.
 func TestClipSessionViewForReservesTheOmittedNotice(t *testing.T) {
 	const room = 1000 // under SessionViewCap and over the 240-rune give-up floor
 	overhead := DefaultPromptCharBudget - MinTurnChars - len([]rune(omittedNotice)) - room
-	got := clipSessionViewFor(strings.Repeat("v", room*5), overhead)
-	if n := len([]rune(got)); n != room {
-		t.Errorf("view clipped to %d runes, want exactly %d — the reserve is off by %d, and "+
-			"%d is omittedNotice's own length", n, room, n-room, len([]rune(omittedNotice)))
+	got := clipSessionViewFor(strings.Repeat("v\n", room*3), overhead)
+	notice := len([]rune(viewOmittedNotice))
+	want := 2*((room-notice)/2) + notice
+	if n := len([]rune(got)); n != want {
+		t.Errorf("view clipped to %d runes, want exactly %d (room %d, notice %d) — the reserve "+
+			"is off by %d, and %d is omittedNotice's own length", n, want, room, notice,
+			n-want, len([]rune(omittedNotice)))
+	}
+	if !strings.HasSuffix(got, viewOmittedNotice) {
+		t.Error("a clipped view must say that it was clipped")
 	}
 }
 

@@ -74,6 +74,10 @@ func elideCode(s string) string {
 }
 
 // clip truncates to n runes. n <= 0 means unbounded.
+//
+// ⚠️ NOT for text read as language. Every such site now uses clipTurn / clipUnits / clipLines
+// (clipbound.go) so a bound lands on a sentence, line, unit or entry boundary rather than
+// mid-clause. This remains only for the callers that genuinely want a rune count.
 func clip(s string, n int) string {
 	if n <= 0 {
 		return s
@@ -90,6 +94,13 @@ func clip(s string, n int) string {
 // 2000 lines of window.
 var toolArgKeys = []string{"file_path", "path", "notebook_path", "command", "pattern", "url", "query"}
 
+// toolArgCap bounds the rendered argument. clipUnits, not clip: a bare rune count cut
+// 3,376 of 3,596 shell commands (93.9%) mid-token on this corpus, and window text is both
+// T2's verification reference and the source SessionRecord.Observe extracts verbatim-verified
+// Subjects from — so half a token became an authoritative subject that never existed. See
+// clipbound.go.
+const toolArgCap = 80
+
 // toolLine renders a tool_use as "Name arg". Paths are reduced to their base name
 // so absolute paths never enter the window.
 func toolLine(name string, input map[string]json.RawMessage) string {
@@ -105,7 +116,7 @@ func toolLine(name string, input map[string]json.RawMessage) string {
 		if k == "file_path" || k == "path" || k == "notebook_path" {
 			v = filepath.Base(v)
 		}
-		return name + " " + clip(v, 80)
+		return name + " " + clipUnits(v, toolArgCap)
 	}
 	return name
 }
@@ -325,15 +336,15 @@ func buildWindow(sessionID string, recs []record, i int, o MineOpts) Window {
 	}
 	turns := make([]Turn, 0, o.K+1)
 	for _, c := range recs[start:i] {
-		turns = appendTurn(turns, Turn{Role: c.role, Text: clip(elideCode(c.text), o.PerTurnChars)})
+		turns = appendTurn(turns, Turn{Role: c.role, Text: clipTurn(elideCode(c.text), o.PerTurnChars)})
 	}
-	target := clip(elideCode(recs[i].text), o.PerTurnChars)
+	target := clipTurn(elideCode(recs[i].text), o.PerTurnChars)
 	turns = append(turns, Turn{Role: RoleUser, Text: target})
 
 	var recent []string
 	for j := i - 1; j >= 0 && len(recent) < recentCount; j-- {
 		if recs[j].role == RoleUser {
-			recent = append(recent, clip(recs[j].text, o.PerTurnChars))
+			recent = append(recent, clipTurn(recs[j].text, o.PerTurnChars))
 		}
 	}
 
@@ -363,7 +374,7 @@ func SessionDigest(recs []record, upto int) []Turn {
 	var out []Turn
 	for i := 0; i < upto; i++ {
 		if recs[i].role == RoleUser {
-			out = append(out, Turn{Role: RoleUser, Text: clip(elideCode(recs[i].text), digestClip)})
+			out = append(out, Turn{Role: RoleUser, Text: clipTurn(elideCode(recs[i].text), digestClip)})
 			break
 		}
 	}
@@ -378,7 +389,7 @@ func SessionDigest(recs []record, upto int) []Turn {
 		if recs[i].role == RoleTool {
 			continue
 		}
-		out = appendTurn(out, Turn{Role: recs[i].role, Text: clip(elideCode(recs[i].text), digestClip)})
+		out = appendTurn(out, Turn{Role: recs[i].role, Text: clipTurn(elideCode(recs[i].text), digestClip)})
 	}
 	return out
 }

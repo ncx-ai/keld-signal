@@ -220,7 +220,9 @@ func createPromptAndWindow(sessionLabel, turns, sessionView, facts string) (prom
 	// budgets around; measured (DigestCreatePrompt, an otherwise-tiny turns/facts), a
 	// 12,000-rune label alone produced a 15,954-rune prompt.
 	// sessionLabelCap lives in digest_fit.go, shared with the refine path's identical fix.
-	b.WriteString(clipProse(sessionLabel, sessionLabelCap))
+	// clipTurn, not clipProse — see the refine path's identical fix and clipbound.go: a label
+	// over the cap is cut at a sentence or line boundary, never mid-clause.
+	b.WriteString(clipTurn(sessionLabel, sessionLabelCap))
 	b.WriteString("\n\nMEASURED COUNTS (authoritative — your report must be consistent with these):\n  ")
 	b.WriteString(facts)
 	viewOverhead := runeLen(b.String()) + createTailLen() +

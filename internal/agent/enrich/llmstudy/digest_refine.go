@@ -1,6 +1,7 @@
 package llmstudy
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -141,8 +142,10 @@ func updatePromptAndWindow(prev Digest, in RefineInput) (prompt, window string) 
 	head.WriteString("You are updating a report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	head.WriteString("Session context: ")
 	// Bounded, not verbatim — task-7b fix round 3 (minor G); see sessionLabelCap's doc
-	// in digest_fit.go and DigestCreatePromptWithView's identical fix.
-	head.WriteString(clipProse(in.SessionLabel, sessionLabelCap))
+	// in digest_fit.go and DigestCreatePromptWithView's identical fix. clipTurn, not
+	// clipProse: a label over the cap is cut at a sentence or line boundary, or dropped to
+	// the bare elision mark, never mid-clause (clipbound.go).
+	head.WriteString(clipTurn(in.SessionLabel, sessionLabelCap))
 	if pop := in.Record.Populated(); len(pop) > 0 {
 		head.WriteString("\n\nSESSION RECORD (measured — authoritative):\n")
 		head.WriteString(in.Record.Block())
@@ -470,7 +473,69 @@ func priorOpenItems(prev Digest) []string {
 		}
 	}
 	out = tailN(out, DefaultListCap)
-	return capEntryLength(out, promptOpenItemCap)
+	return boundOpenItems(out)
+}
+
+// promptOpenItemsMaxTotal bounds the open-item block's total CONTENT as embedded in the prompt.
+//
+// Deliberately DefaultListCap x promptOpenItemCap, i.e. exactly the worst case the per-item
+// clip already permitted (12 items x 80 runes), so moving from "clip every item to 80" to
+// "keep whole items inside a total" changes no budget arithmetic and decalibrates no floor
+// test. What changes is which text a reader and the model actually get.
+const promptOpenItemsMaxTotal = DefaultListCap * promptOpenItemCap
+
+// boundOpenItems keeps WHOLE open items inside promptOpenItemsMaxTotal, newest first, and says
+// how many it dropped.
+//
+// Per-item clipping was the non-compliant site with the worst consequence: the block's own
+// instruction is "account for EVERY one, in exactly one place", and the items being accounted
+// for were amputated mid-clause — measured on this package's own real examples, a 133-rune
+// item rendered as "The server-side entity storage does not apply redaction, creating a
+// potential…". A model asked to decide whether that is still open is being asked about a
+// sentence it has not been shown.
+//
+// Whole items with a total bound is strictly better on real data rather than a trade: the
+// largest `unresolved` list this corpus produces is ~500 runes across up to 12 entries, well
+// inside 960, so nothing is dropped and nothing is cut — while the per-item clip fired on
+// every item over 80 runes. The drop path exists for the schema-legal pathological case, and
+// it is VISIBLE: a notice entry names the count, because an open item that vanishes silently
+// is the failure the accounting block exists to prevent.
+//
+// Newest-first for the same reason tailN is: an older open item has already survived several
+// refinements' accounting, a newly opened one has not been seen at all.
+func boundOpenItems(items []string) []string {
+	if len(items) == 0 {
+		return items
+	}
+	var kept []string
+	used := 0
+	dropped := 0
+	for i := len(items) - 1; i >= 0; i-- {
+		n := runeLen(items[i])
+		// An item too long for the whole block on its own is dropped rather than clipped —
+		// the same skip-not-stop shape boundRetainList uses, so one outsized entry costs
+		// exactly itself instead of everything behind it.
+		if used+n > promptOpenItemsMaxTotal {
+			dropped++
+			continue
+		}
+		kept = append([]string{items[i]}, kept...)
+		used += n
+	}
+	if dropped == 0 {
+		return kept
+	}
+	notice := fmt.Sprintf("(%d earlier open item(s) omitted to fit the context — they were not closed)", dropped)
+	// The notice is paid for out of the same total, so the block's bound is unchanged. If it
+	// cannot fit, the oldest kept item yields to it: a reader must be able to tell that the
+	// list is partial, which matters more than one more item.
+	for len(kept) > 0 && used+runeLen(notice) > promptOpenItemsMaxTotal {
+		used -= runeLen(kept[0])
+		kept = kept[1:]
+		dropped++
+		notice = fmt.Sprintf("(%d earlier open item(s) omitted to fit the context — they were not closed)", dropped)
+	}
+	return append([]string{notice}, kept...)
 }
 
 // retainListMaxCount and retainListMaxTotal bound the retain-list — Identifiers(prev)'s
@@ -828,16 +893,20 @@ func CapSections(d Digest, maxList int) Digest {
 	return d
 }
 
-// capEntryLength clips every list entry to n runes via clipProse — see DefaultListEntryCap.
-// Independent of the entry COUNT bound (maxList/tailN): this bounds each entry that
-// survives, not how many of them do.
+// capEntryLength bounds every list entry at a sentence boundary via clipEntry — see
+// DefaultListEntryCap. Independent of the entry COUNT bound (maxList/tailN): this bounds each
+// entry that survives, not how many of them do.
+//
+// clipEntry, not clipProse: an insight or an open item is read as a sentence by a person, and
+// clipProse cuts at a word boundary at any length under 92% of room. See clipbound.go for why
+// an over-long SINGLE sentence is kept whole instead.
 func capEntryLength(v []string, n int) []string {
 	if len(v) == 0 {
 		return v
 	}
 	out := make([]string, len(v))
 	for i, s := range v {
-		out[i] = clipProse(s, n)
+		out[i] = clipEntry(s, n)
 	}
 	return out
 }

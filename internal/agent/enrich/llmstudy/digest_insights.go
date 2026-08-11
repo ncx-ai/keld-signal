@@ -28,6 +28,17 @@ import (
 //
 // The ellipsis is not decoration: without it a clipped section is indistinguishable from
 // a section the model chose to end there.
+// ⚠️ clipProse HAS NO PRODUCTION CALLERS as of the never-cut-mid-sentence rule (AGENTS.md,
+// clipbound.go). Its word-boundary cut is the mid-clause cut the rule forbids, so every caller
+// moved to clipTurn / clipUnits / clipLines / clipEntry. What remains are test constructions
+// that use it as a SIZING helper (digest_corpus_fit_test.go fills sections to a rune count) and
+// its own unit tests.
+//
+// Left in place rather than deleted, and that is a judgement, not an oversight: it is the same
+// vestigial shape Part 8 removed four constants of, but deleting it now would rewrite the
+// fixtures the window-floor and worst-case prompt tests are calibrated on, inside a commit
+// whose measured effect is a behaviour change. Two changes, two measurements. Recorded as a
+// follow-up in the report rather than left for the next reader to rediscover.
 func clipProse(s string, n int) string {
 	if n <= 0 {
 		return s

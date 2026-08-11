@@ -128,17 +128,57 @@ func TestCapSectionsDropsOldestInsights(t *testing.T) {
 // intercepts EVERY item regardless of its stored length, structurally, not as a matter
 // of degree. So only the assertion that is still live is kept: capEntryLength's actual,
 // current contract is bounding what gets STORED, and that is what this test now checks.
+// ⚠️ RECALIBRATED for the never-cut-mid-sentence rule (AGENTS.md). capEntryLength now bounds
+// via clipEntry, which cuts at a SENTENCE END and keeps an over-long single sentence WHOLE
+// rather than amputate it — so DefaultListEntryCap is advisory for exactly one input shape,
+// and this test's original input (2,000 undifferentiated "x") is that shape. Both halves are
+// asserted now, because the interesting property has become which of the two a given entry
+// gets:
+//
+//   - an entry with sentence structure is bounded, and bounded at a full stop;
+//   - an entry that is one un-terminated run is kept whole, because clipping it would store a
+//     sentence that was never written. Nothing downstream can overflow on it: the prompt is
+//     measured insensitive to stored entry length
+//     (TestRefinePromptIsInsensitiveToStoredProseLength), promptOpenItemCap/boundOpenItems
+//     intercept every item the prompt embeds, and boundRetainList bounds what Identifiers
+//     pulls out of it.
 func TestCapSectionsBoundsListEntryLength(t *testing.T) {
+	sentences := strings.Repeat("This is one sentence about the close. ", 20) // 740 runes
 	prev := Digest{}
 	for i := 0; i < DefaultListCap; i++ {
-		prev.Unresolved = append(prev.Unresolved, strings.Repeat("x", 2000))
+		prev.Unresolved = append(prev.Unresolved, sentences)
+		prev.Insights = append(prev.Insights, sentences)
 	}
 	capped := CapSections(prev, DefaultListCap)
-	for i, item := range capped.Unresolved {
-		if n := len([]rune(item)); n > DefaultListEntryCap {
-			t.Errorf("unresolved[%d] not capped: %d runes (cap %d)", i, n, DefaultListEntryCap)
+	for _, l := range []struct {
+		name string
+		v    []string
+	}{{"unresolved", capped.Unresolved}, {"insights", capped.Insights}} {
+		for i, item := range l.v {
+			if n := len([]rune(item)); n > DefaultListEntryCap {
+				t.Errorf("%s[%d] not capped: %d runes (cap %d)", l.name, i, n, DefaultListEntryCap)
+			}
+			if !strings.HasSuffix(item, "."+elisionMark) {
+				t.Errorf("%s[%d] was not cut at a sentence end: %q", l.name, i, tailOf(item))
+			}
 		}
 	}
+	// The single-sentence case: kept whole, never amputated.
+	blob := strings.Repeat("x", 2000)
+	whole := CapSections(Digest{Unresolved: []string{blob}}, DefaultListCap)
+	if whole.Unresolved[0] != blob {
+		t.Errorf("an un-terminated entry was cut to %d runes; it must be kept whole rather "+
+			"than stored as a sentence nobody wrote", len([]rune(whole.Unresolved[0])))
+	}
+}
+
+// tailOf is the last few runes of a string, for an error message about where a cut landed.
+func tailOf(s string) string {
+	r := []rune(s)
+	if len(r) <= 24 {
+		return s
+	}
+	return "..." + string(r[len(r)-24:])
 }
 
 // The updated report must build on the new turns and say what changed — checked against
@@ -553,7 +593,10 @@ func logContributors(t *testing.T, p string, prev Digest, in RefineInput, window
 		{"open-item accounting", open},
 		{"retain-list (Identifiers, bounded)", retain},
 		{"recency anchor", len([]rune(recentSubjectsOf(in.NewTurns)))},
-		{"session label", len([]rune(clipProse(in.SessionLabel, sessionLabelCap)))},
+		// clipTurn, matching the assembly. Using clipProse here would report a size the
+		// production path no longer produces — the shape of decalibration this branch keeps
+		// paying for, where a test computes its expectation with a different function.
+		{"session label", len([]rune(clipTurn(in.SessionLabel, sessionLabelCap)))},
 	}
 	sum := 0
 	for _, x := range parts {

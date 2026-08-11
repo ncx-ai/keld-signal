@@ -58,7 +58,11 @@ func clipSessionViewFor(v string, overhead int) string {
 	if room < 240 {
 		return ""
 	}
-	return clipProse(v, room)
+	// clipLines, not clipProse: the view is line-structured ("role: text\n" per turn), so a
+	// line is its delimiter, and clipProse cut the last kept line mid-clause. The result is
+	// still <= room runes (the notice is paid for out of it), so every reservation upstream
+	// keeps its arithmetic. See clipbound.go.
+	return clipLines(v, room)
 }
 
 // SynopsisRestatesAnotherSection reports a synopsis that merely repeats another section.

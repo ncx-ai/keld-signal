@@ -1030,7 +1030,9 @@ func lostFacts(after Digest, facts []string) []string {
 //
 // Built from records() — the same parse Mine and Outcomes share, so the three cannot disagree
 // about what counts as a conversational record — and through appendTurn/elideCode/clip so a
-// delta's turns are rendered and collapsed identically to a mined window's. Tool-run collapse
+// delta's turns are rendered and collapsed identically to a mined window's — clipTurn, matching
+// buildWindow, so the record's verbatim-verified Subjects cannot be extracted from a token this
+// harness cut in half (see clipbound.go). Tool-run collapse
 // (the "(xN)" marker Extract and mergeToolCounts both read) therefore still applies within a
 // delta; a run split across two deltas counts as two runs, which is what actually happened.
 func sessionDeltas(path string, o MineOpts) ([]Window, error) {
@@ -1046,11 +1048,11 @@ func sessionDeltas(path string, o MineOpts) ([]Window, error) {
 		}
 		turns := make([]Turn, 0, i-prev+1)
 		for _, c := range recs[prev : i+1] {
-			turns = appendTurn(turns, Turn{Role: c.role, Text: clip(elideCode(c.text), o.PerTurnChars)})
+			turns = appendTurn(turns, Turn{Role: c.role, Text: clipTurn(elideCode(c.text), o.PerTurnChars)})
 		}
 		out = append(out, Window{
 			SessionID: sessionID, PromptID: r.id,
-			Target: clip(elideCode(r.text), o.PerTurnChars), Turns: turns,
+			Target: clipTurn(elideCode(r.text), o.PerTurnChars), Turns: turns,
 		})
 		prev = i + 1
 	}
