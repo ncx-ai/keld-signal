@@ -3,15 +3,23 @@ package llmstudy
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 // fakeModel records every text it was asked to classify and returns the first
 // label of each task, giving a deterministic in-vocabulary answer.
-type fakeModel struct{ seen []string }
+type fakeModel struct {
+	seen []string
+	// delay makes a call take measurable wall-clock time so a latency assertion can be
+	// strictly positive rather than the useless >= 0 (see
+	// TestEncoderArmRecordsPositiveLatency). Zero by default, so no other test is affected.
+	delay time.Duration
+}
 
 func (m *fakeModel) Classify(text string, tasks map[string][]string) map[string][]enrich.Ranked {
+	time.Sleep(m.delay)
 	m.seen = append(m.seen, text)
 	out := map[string][]enrich.Ranked{}
 	for name, labels := range tasks {

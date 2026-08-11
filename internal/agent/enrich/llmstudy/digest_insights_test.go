@@ -11,8 +11,23 @@ import (
 func TestClipEndsOnAWordBoundary(t *testing.T) {
 	s := "the migration was saved as worktree-cleanup-blockers and then reviewed"
 	got := clipProse(s, 32)
-	if strings.HasSuffix(got, "blocke") || strings.Contains(got, "blocke ") {
-		t.Fatalf("clipped mid-word: %q", got)
+	// ⚠️ This used to assert only that the result did not end in the literal "blocke",
+	// which the naive head-cut never produces: at n=32 the raw head is
+	// "the migration was saved as work", so deleting clipProse's word-boundary branch
+	// yielded "the migration was saved as work…" — mid-word, and the test PASSED. Verified
+	// by deleting the branch: whole suite green.
+	//
+	// Asserted structurally instead: whatever survives must be a prefix of the input that
+	// ENDS where the input has whitespace, which is what "a word boundary" means and which
+	// no hardcoded fragment can be relied on to express. Requires a fixture free of the
+	// trailing punctuation trimForMarker strips, or the prefix relation would not hold for
+	// a correct clip either.
+	body := strings.TrimSuffix(got, "…")
+	if !strings.HasPrefix(s, body) {
+		t.Fatalf("clip is not a prefix of the input: %q", got)
+	}
+	if rest := s[len(body):]; rest != "" && !strings.ContainsAny(rest[:1], " \t\n") {
+		t.Fatalf("clipped mid-word — %q continues as %q in the source", got, body+rest[:1])
 	}
 	if len([]rune(got)) > 32 {
 		t.Errorf("clip exceeded the budget: %d runes", len([]rune(got)))

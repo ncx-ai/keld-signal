@@ -135,10 +135,26 @@ func TestCompoundsBuiltFromSourceWordsAreVerified(t *testing.T) {
 
 // The friction vocabulary must be stems: the noun "reversal" is precisely what the list
 // exists to find, and spelling out "reverse"/"reversed" missed it.
+//
+// ⚠️ The original fixture read "A reversal in interpretation followed the user's correction."
+// and did not pin this at all: "correction" matches the pre-existing "correct" entry, which
+// short-circuits LooksRubberstamped's loop before "revers" is ever reached. Verified —
+// reverting the list to "reverse"/"reversed" left this test and the whole suite green.
+//
+// So the fixture now contains exactly ONE friction word, "reversal", and the paired control
+// is what makes that claim checkable: the same sentence with "reversal" replaced by a neutral
+// word MUST be scored as rubberstamped. If it is not, some other word in the fixture is doing
+// the work and this test has stopped measuring the stem again.
 func TestFrictionVocabularyCatchesReversal(t *testing.T) {
 	f := DigestFacts{Corrections: 1}
-	d := Digest{Happened: "A reversal in interpretation followed the user's correction."}
+	d := Digest{Happened: "A reversal in the team's reading of the policy followed."}
 	if LooksRubberstamped(d, f) {
 		t.Error("a report naming a reversal was scored as rubberstamped")
+	}
+	control := Digest{Happened: "A shift in the team's reading of the policy followed."}
+	if !LooksRubberstamped(control, f) {
+		t.Errorf("the control must be rubberstamped — otherwise a word other than %q is "+
+			"satisfying the friction check and the stem is not what this test measures: %q",
+			"reversal", control.Happened)
 	}
 }

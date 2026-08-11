@@ -75,8 +75,17 @@ func TestSynopsisLagAbstainsOnThinEvidence(t *testing.T) {
 }
 
 // The deterministic anchor: distinctive terms from the newest user turns, handed to the
-// model rather than left for it to infer. This is the pattern that fixed fact retention and
-// open-item closure; inference alone failed in the costly direction.
+// model rather than left for it to infer.
+//
+// ⚠️ The prompt half of this test used to certify nothing. It passed TriggerNone — so the
+// anchor block was never even reached — and then asserted strings.Contains(p, "DigestSchema"),
+// which the RAW CONVERSATION WINDOW satisfies on its own, since Render(w) is embedded in
+// every refine prompt. Verified: disabling the entire "THE LATEST TURNS ARE ABOUT:" block
+// left this test green.
+//
+// So the assertion is now on the anchor's own marker, under the reason that gates it, plus
+// the gate itself in the negative direction. Both halves are needed: the marker alone would
+// not catch an ungated anchor, and the gate alone would not catch a missing one.
 func TestRecentSubjectsAreExtractedAndHandedOver(t *testing.T) {
 	w := Window{Turns: []Turn{
 		{RoleUser, "look at the eval/mine module"},
@@ -91,9 +100,27 @@ func TestRecentSubjectsAreExtractedAndHandedOver(t *testing.T) {
 	if strings.Contains(joined, "eval/mine") {
 		t.Errorf("a term from an OLDER turn leaked into the recent anchor: %v", subs)
 	}
-	p := DigestUpdatePromptWithReason(Digest{Done: "x"}, "work session", Render(w), "", "counts: turns=3\n", TriggerNone)
-	if !strings.Contains(p, "DigestSchema") {
-		t.Error("refine prompt does not hand over the latest subjects")
+
+	const marker = "THE LATEST TURNS ARE ABOUT: "
+	shift := DigestUpdatePromptWithReason(Digest{Done: "x"}, "work session", Render(w), "", "counts: turns=3\n", TriggerFocusShift)
+	i := strings.Index(shift, marker)
+	if i < 0 {
+		t.Fatalf("a measured focus shift did not hand over the latest subjects — %q absent", marker)
+	}
+	// The subjects must be in the ANCHOR LINE, not merely somewhere in the prompt: the
+	// conversation window contains them too, which is what made the old assertion vacuous.
+	line := shift[i+len(marker):]
+	if j := strings.IndexByte(line, '\n'); j >= 0 {
+		line = line[:j]
+	}
+	if !strings.Contains(line, "DigestSchema") {
+		t.Errorf("the anchor line does not name the latest subjects: %q", line)
+	}
+
+	// And the gate: a routine refresh must NOT pay the anchor's cost. See
+	// DigestUpdatePromptFrom — unconditionally, the anchor measured 97.4% -> 88.3% retention.
+	if routine := DigestUpdatePromptWithReason(Digest{Done: "x"}, "work session", Render(w), "", "counts: turns=3\n", TriggerVolume); strings.Contains(routine, marker) {
+		t.Error("the anchor fired on a routine refresh — it is gated on a measured focus shift")
 	}
 }
 

@@ -117,10 +117,17 @@ func TestClassifyRecordsPositiveLatency(t *testing.T) {
 }
 
 // The same trap applies to the encoder arm, which assigns latency directly.
+//
+// ⚠️ And this test used to WALK INTO that trap, two lines under the comment naming it: it
+// asserted LatencyMS < 0, which no assignment can produce, so deleting arms.go's
+// `a.LatencyMS = time.Since(start).Milliseconds()` left it green. It asserted the weak form
+// for a real reason — a fake model returns in microseconds, and an honest assignment then
+// legitimately records 0 ms — so the fix is the one the llama arm's test above already uses:
+// make the call take measurable time, then require > 0.
 func TestEncoderArmRecordsPositiveLatency(t *testing.T) {
-	got := NewEncoderArm(&fakeModel{}).Classify(mineFixture(t, 8)[1])
-	if got.LatencyMS < 0 {
-		t.Fatalf("LatencyMS = %d", got.LatencyMS)
+	got := NewEncoderArm(&fakeModel{delay: 2 * time.Millisecond}).Classify(mineFixture(t, 8)[1])
+	if got.LatencyMS <= 0 {
+		t.Fatalf("LatencyMS = %d, want > 0", got.LatencyMS)
 	}
 }
 
