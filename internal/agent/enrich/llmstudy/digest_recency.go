@@ -255,10 +255,31 @@ const maxRecentSubjects = 10
 // A term over the cap is DROPPED, not clipped. Clipping an identifier mid-name manufactures
 // a specific that never appeared — the same reasoning boundRetainList's doc gives for
 // dropping whole entries — and both callers feed a model that is told every named specific
-// is real. 64 is measured against what a genuine subject term looks like here: the longest
-// source path in this package is 54 runes
-// (internal/agent/enrich/llmstudy/capability_eval_test.go), and dotted identifiers are
-// shorter still, so a real path-shaped subject passes with margin while a blob cannot.
+// is real.
+//
+// ⚠️ 64 DOES drop real paths, and the "54 runes is the longest" claim this doc used to make
+// was wrong. Re-measured against the repository rather than from memory:
+//
+//	longest tracked .go path      57  internal/agent/enrich/llmstudy/digest_consistency_test.go
+//	longest tracked path, any     83  docs/superpowers/specs/2026-07-05-keld-agent-loadtest-and-memory-eviction-design.md
+//	(the 54-rune capability_eval_test.go path is merely the one a test happens to use)
+//
+// So every design/spec path in docs/ — the paths this branch's own sessions discuss most —
+// is silently deleted from both the anchor and the record. That matters because it is a
+// SECOND mechanism removing named specifics, alongside the one T4 measures at 50.0%/56.2%
+// (see DefaultListEntryCap's doc and Part 7); a term the record never holds is a term no
+// consistency check can ground a beat against, and T12's tool-name-dominated subject lists
+// are the visible symptom.
+//
+// Raising it is NOT free, and that was measured rather than assumed. Both callers are
+// count-capped (maxRecentSubjects 10, MaxRecordSubjects 12), so the cap multiplies by 22 in
+// the worst case. At 96 — enough to admit an 83-rune docs path —
+// TestWorstCasePromptOnBothPaths/refine goes to exactly 14,000 of 14,000 with a 1-rune
+// window margin, and the CREATE arm PANICS on the backstop: window content 1,336 against
+// the 1,600 floor. There is no room at the current budget. Widening this therefore needs
+// either a larger budget/ctx (which the corpus probe already says cannot come down, so it
+// would have to go up) or a smaller count cap, and either is a measured change, not a
+// constant edit. Left at 64 with the cost recorded.
 const maxSubjectTermLen = 64
 
 // SubjectShifted reports whether two windows are about substantially different things,

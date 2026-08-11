@@ -65,9 +65,15 @@ func blobToken() string {
 // Subjects entry of 1,025 runes and a Block() of 1,102 — one dimension able to exceed the
 // whole prompt budget by itself, which the backstop then has to fail the prompt over.
 //
-// The second half is the over-correction guard: a genuine path-shaped subject (54 runes,
-// the longest source path in this package) must still be admitted, or the cap has bought
-// safety by deleting exactly the specifics the record exists to hold.
+// The second half is the over-correction guard: a genuine path-shaped subject must still be
+// admitted, or the cap has bought safety by deleting exactly the specifics the record exists
+// to hold. The 54-rune path below is a real one, but ⚠️ it is NOT "the longest source path in
+// this package" as this docstring used to claim — the longest tracked .go path is 57 runes
+// (internal/agent/enrich/llmstudy/digest_consistency_test.go) and the longest tracked path of
+// any kind is 83 (a docs/superpowers/specs design doc). The 83-rune one IS silently dropped
+// by maxSubjectTermLen, which is precisely the harm this guard exists to rule out — so the
+// guard is real but narrower than it read. See maxSubjectTermLen's doc for why the cap cannot
+// simply be raised (measured: at 96 the create-path worst case breaches the window floor).
 func TestSessionRecordSubjectsBoundEachTermsLength(t *testing.T) {
 	const realPath = "internal/agent/enrich/llmstudy/capability_eval_test.go"
 	w := Window{Turns: []Turn{
@@ -82,6 +88,59 @@ func TestSessionRecordSubjectsBoundEachTermsLength(t *testing.T) {
 	if !strings.Contains(strings.Join(r.Subjects, " "), realPath) {
 		t.Errorf("a genuine %d-rune path-shaped subject must still be admitted, got %v",
 			len([]rune(realPath)), r.Subjects)
+	}
+}
+
+// Observe's frequency map keyed on the UNTRIMMED token, so the same subject appearing once
+// before a period and once mid-sentence became two entries. Third site of a bug already fixed
+// in distinctiveTerms and RecentSubjects, and the one site the design calls verbatim-verified
+// and tells the model to trust — Block() rendered "DigestSchema., DigestSchema" under an
+// "authoritative" heading, and the duplicate also consumed one of only MaxRecordSubjects
+// slots. Reverting r.freq[trimTermPunct(tok)]++ to r.freq[tok]++ makes this fail.
+func TestSessionRecordSubjectsAreNotDuplicatedByPunctuation(t *testing.T) {
+	w := Window{Turns: []Turn{
+		{RoleUser, "The DigestSchema. And again DigestSchema is the DigestSchema."},
+	}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	seen := map[string]bool{}
+	for _, s := range r.Subjects {
+		if strings.HasSuffix(s, ".") {
+			t.Errorf("subject kept its terminal punctuation: %q in %v", s, r.Subjects)
+		}
+		if seen[strings.Trim(s, ".-_/")] {
+			t.Errorf("the same subject appears twice modulo punctuation: %v", r.Subjects)
+		}
+		seen[strings.Trim(s, ".-_/")] = true
+	}
+	if !seen["DigestSchema"] {
+		t.Fatalf("the subject itself was lost: %v", r.Subjects)
+	}
+}
+
+// Populated() and Block() must key off the SAME predicate for counts. They did not: a record
+// holding only a project was non-empty by Populated()'s test, and Block() then asserted
+// "counts: turns=0 ... corrections=0" under DigestUpdatePromptFrom's
+// "SESSION RECORD (measured — authoritative)" heading — the fabricated zero-correction record
+// task 5's Critical was raised for, and digestRules tells the model corrections are a measured
+// fact its prose must be consistent with, so it inverts anti-rubberstamping. Unreachable via
+// today's callers; a trap for the wiring task, and silent when it springs.
+func TestBlockOmitsCountsWhenNothingWasCounted(t *testing.T) {
+	r := SessionRecord{}.WithProject("keld-signal")
+	if got := r.Populated(); len(got) == 0 {
+		t.Fatalf("a record with a project must be populated, got %v", got)
+	}
+	block := r.Block()
+	if strings.Contains(block, "counts:") {
+		t.Errorf("an uncounted record asserted counts as measured truth:\n%s", block)
+	}
+	if !strings.Contains(block, "projects: keld-signal") {
+		t.Errorf("the field that IS measured was omitted:\n%s", block)
+	}
+	// And the positive direction: a real record must still state its counts.
+	w := Window{Turns: []Turn{{RoleUser, "reconcile the ledger"}}}
+	got := SessionRecord{}.Observe(w, Extract(w)).Block()
+	if !strings.Contains(got, "counts:") {
+		t.Errorf("a counted record must state its counts:\n%s", got)
 	}
 }
 

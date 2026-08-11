@@ -97,11 +97,24 @@ func (r SessionRecord) Observe(w Window, s Signals) SessionRecord {
 				continue
 			}
 			// Verbatim gate: a term enters only by appearing in the source, never by being
-			// plausible. Same rule the publish-side topic gate uses.
+			// plausible. Same rule the publish-side topic gate uses. Run on the RAW token,
+			// which is the spelling that actually appears in src.
 			if kept, _ := VerifyTopics([]string{tok}, src); len(kept) == 0 {
 				continue
 			}
-			r.freq[tok]++
+			// Keyed on the TRIMMED spelling — the THIRD site of a bug already fixed twice,
+			// in distinctiveTerms (d717ea3) and in RecentSubjects (b4bd516), and the one site
+			// the design calls verbatim-verified and instructs the model to trust. subjectTokens
+			// keeps '.', '-', '_', '/' attached to a token's ends, so a subject noun before a
+			// sentence-ending period arrives as "DigestSchema." — distinct from the same
+			// subject mid-sentence. Measured before this fix, from one turn saying
+			// "The DigestSchema. And again DigestSchema is the DigestSchema.":
+			//   recurring subjects: DigestSchema., DigestSchema
+			// i.e. the authoritative block showed a reader and a model the same specific twice,
+			// with the period glued on, and the duplicate consumed one of only
+			// MaxRecordSubjects slots. Trimming can only shorten from the ends, so the trimmed
+			// spelling is still a verbatim substring of src — the gate above is not weakened.
+			r.freq[trimTermPunct(tok)]++
 		}
 	}
 	r.Subjects = topByFrequency(r.freq, MaxRecordSubjects)
@@ -212,9 +225,28 @@ func (r SessionRecord) NoteTurningPoint(seq int, reason TriggerReason) SessionRe
 
 // Populated names the fields that actually hold measured data, so an absent field reads as
 // absent rather than as an empty one.
+//
+// hasCounts is the single predicate Populated() and Block() both key off. They used to
+// disagree: Populated() reported "counts" only when Turns > 0, while Block() wrote the counts
+// line unconditionally — so a record holding nothing but a project was non-empty by
+// Populated()'s test, and DigestUpdatePromptFrom (which gates the whole record block on
+// len(Populated()) > 0) then emitted
+//
+//	SESSION RECORD (measured — authoritative):
+//	counts: turns=0 user_turns=0 tool_calls=0 corrections=0
+//	projects: keld-signal
+//	populated fields: projects
+//
+// which is exactly the fabricated zero-correction record task 5's Critical was raised for,
+// only half-closed: digestRules tells the model corrections are a MEASURED fact its prose
+// must be consistent with, so an asserted "corrections=0" inverts anti-rubberstamping. It is
+// unreachable today — every caller that sets a project also calls Observe — but it is a trap
+// laid for the wiring task, and the failure is silent when it springs.
+func (r SessionRecord) hasCounts() bool { return r.Turns > 0 }
+
 func (r SessionRecord) Populated() []string {
 	var out []string
-	if r.Turns > 0 {
+	if r.hasCounts() {
 		out = append(out, "counts")
 	}
 	if len(r.Projects) > 0 {
@@ -232,11 +264,15 @@ func (r SessionRecord) Populated() []string {
 	return out
 }
 
-// Block renders the record for a prompt. Omits what is not populated.
+// Block renders the record for a prompt. Omits what is not populated — including the counts
+// line, which is now gated on the same hasCounts() predicate Populated() reports "counts"
+// from. See hasCounts for the fabricated zero-correction record that gate closes.
 func (r SessionRecord) Block() string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("counts: turns=%d user_turns=%d tool_calls=%d corrections=%d\n",
-		r.Turns, r.UserTurns, r.ToolCalls, r.Corrections))
+	if r.hasCounts() {
+		b.WriteString(fmt.Sprintf("counts: turns=%d user_turns=%d tool_calls=%d corrections=%d\n",
+			r.Turns, r.UserTurns, r.ToolCalls, r.Corrections))
+	}
 	if len(r.Projects) > 0 {
 		b.WriteString("projects: " + strings.Join(r.Projects, ", ") + "\n")
 	}
