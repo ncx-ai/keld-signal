@@ -22,12 +22,18 @@ func TestClipEndsOnAWordBoundary(t *testing.T) {
 	}
 }
 
-// A sentence end is preferred when it costs almost nothing.
+// A sentence end is preferred when it costs almost nothing — but task-7b fix round 3
+// found the un-marked version of this: content WAS discarded (there is a second
+// sentence beyond the cut), so the result must still carry the ellipsis. An earlier
+// version of this test asserted the bare, un-marked suffix "devices table." — exactly
+// the silently-amputated shape a 12-item open-items block could contain zero markers
+// in, invisible to any check that only looks for a marker somewhere, because ordinary
+// English sentences routinely end within the last 8% of a budget.
 func TestClipPrefersANearbySentenceEnd(t *testing.T) {
 	s := "The layout was paired with the devices table. Then the card grew taller."
 	got := clipProse(s, 47)
-	if !strings.HasSuffix(got, "devices table.") {
-		t.Errorf("want a clip at the nearby sentence end, got %q", got)
+	if !strings.HasSuffix(got, "devices table.…") {
+		t.Errorf("want a MARKED clip at the nearby sentence end, got %q", got)
 	}
 }
 

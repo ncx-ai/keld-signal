@@ -11,6 +11,16 @@ import (
 const (
 	MaxRecordProjects = 5
 	MaxRecordSubjects = 12
+	// MaxRecordTurningPoints bounds TurningPoints — task-7b fix round 3 (minor G): every
+	// other SessionRecord list caps itself at accumulation time (WithProject, Observe's
+	// topByFrequency), but NoteTurningPoint appended forever. A long session with
+	// frequent focus shifts and friction is exactly the kind of session this record
+	// exists to describe, so unbounded growth here is not a synthetic edge case — an
+	// independent review reported 60 turning points, combined with other pressure
+	// already fixed elsewhere in this round, starving the recent-turns window to 1,313
+	// runes, below the 1,600 floor. Same scale as MaxRecordSubjects: a reader wants the
+	// recent shape of the work, not its entire history of direction changes.
+	MaxRecordTurningPoints = 12
 )
 
 // TurningPoint is a digest that fired because the work changed direction.
@@ -172,11 +182,18 @@ func (r SessionRecord) WithFocus(domain, function string, concentration float64)
 
 // NoteTurningPoint records a digest that fired because direction changed. Volume and
 // unsettled are not turning points — steady progress is not a change of direction.
+//
+// Capped at MaxRecordTurningPoints, keeping the most recent — the same recency-over-
+// history preference tailN applies to Insights/Unresolved. A long session with frequent
+// shifts is the realistic case this bound protects, not a synthetic one.
 func (r SessionRecord) NoteTurningPoint(seq int, reason TriggerReason) SessionRecord {
 	if reason != TriggerFocusShift && reason != TriggerFriction {
 		return r
 	}
 	r.TurningPoints = append(r.TurningPoints, TurningPoint{Seq: seq, Reason: reason})
+	if len(r.TurningPoints) > MaxRecordTurningPoints {
+		r.TurningPoints = r.TurningPoints[len(r.TurningPoints)-MaxRecordTurningPoints:]
+	}
 	return r
 }
 

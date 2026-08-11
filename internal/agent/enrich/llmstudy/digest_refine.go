@@ -38,12 +38,20 @@ const (
 	// sentence or two ("waiting on vendor confirmation of the rollback window" is 47 runes;
 	// this package's own real examples run 20-60) but nothing near 2,000. 300 is roughly
 	// two generous sentences: 5-15x this package's own real usage, so an honest entry is
-	// never touched, while a full DefaultListCap list of them still leaves the refine
-	// prompt's fixed instructional tail (updateRules+digestSections+digestRules, ~5,700
-	// runes on its own) room for the window to survive at all — 400 measurably did not:
-	// the assembled worst-case prompt landed inside budget (10,991 of 11,000) but with
-	// ZERO of the new turn kept, because the fixed tail plus a full list at 400/item left
-	// fitTurns nothing.
+	// never touched.
+	//
+	// NOT justified on prompt-room grounds (an earlier version of this doc was, and that
+	// justification is now WRONG): task-7b fix round 3 added promptOpenItemCap (clips
+	// every open item to 80 runes for the PROMPT) and boundRetainList (bounds
+	// Identifiers(prev)'s output, which reads Insights too), both independent of what
+	// this constant allows in STORAGE — so the assembled prompt is now completely
+	// insensitive to this value. Measured directly against
+	// TestRefinePromptFromRealisticWorstCaseMargin's construction with insights/
+	// unresolved items sized at 300, 400, 800 and 2000: all four yield the identical
+	// 10,921-rune worst-case prompt. This constant's only remaining job is report
+	// quality: what a human reads in the stored digest. See promptOpenItemCap and
+	// boundRetainList for the prompt-facing bounds, and store-full-feed-bounded
+	// generally.
 	DefaultListEntryCap = 300
 )
 
@@ -60,6 +68,14 @@ const (
 	beatsHeader  = "\nBEATS, oldest first — each written from its own window (indicative):\n"
 	viewHeader   = "\nWHOLE SESSION, sampled from start to now (coarse — for the shape of the work, not its detail):\n"
 	windowHeader = "\nNEW PART OF THE CONVERSATION (evidence):\n"
+	// updateSectionsMarker is the literal line the assembly writes immediately after the
+	// window (i.e. where it ENDS) — the refine path's counterpart to
+	// createSectionsMarker in digest.go. Named for the same reason: updateTailLen, the
+	// assembly below, and the backstop's window-extraction all reference the identical
+	// string instead of independently-typed copies (this exact string used to be
+	// duplicated in two tests as a local `const tailMarker`, which is exactly the kind
+	// of copy that can drift).
+	updateSectionsMarker = "\nProduce the UPDATED report, same sections:\n"
 )
 
 // RefineInput is everything a refinement reads, grouped by truth-status: the record is
@@ -111,7 +127,9 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	var head strings.Builder
 	head.WriteString("You are updating a report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	head.WriteString("Session context: ")
-	head.WriteString(in.SessionLabel)
+	// Bounded, not verbatim — task-7b fix round 3 (minor G); see sessionLabelCap's doc
+	// in digest_fit.go and DigestCreatePromptWithView's identical fix.
+	head.WriteString(clipProse(in.SessionLabel, sessionLabelCap))
 	if pop := in.Record.Populated(); len(pop) > 0 {
 		head.WriteString("\n\nSESSION RECORD (measured — authoritative):\n")
 		head.WriteString(in.Record.Block())
@@ -133,7 +151,18 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	// Identifiers reads the FULL prior digest: a specific first named in a present-state
 	// section must still survive, and the retain-list is now the only place a
 	// refinement sees it at all — nothing else carries the prior report's text forward.
-	if named := Identifiers(prev); len(named) > 0 {
+	//
+	// boundRetainList is applied HERE, at the rendering layer — Identifiers() itself
+	// stays unbounded (task-7b constraint: its regex and dedup logic are untouched, and
+	// its full output is what UnverifiedIdentifiers/FabricatedNext/the eval harness need
+	// to check a report's specifics against the source, not just what a prompt can
+	// afford). CRITICAL per task-7b fix round 3 (finding B): Identifiers reads
+	// d.Insights and d.Unresolved, not just prose, and NOTHING bounded its output's
+	// count or total length before this — a digest whose sections are densely full of
+	// distinct identifier-shaped names (not the sparse "2 specifics + filler" shape
+	// packSpecifics tests exercised) can produce a retain-list many times the entire
+	// prompt budget on its own; see boundRetainList's doc for the measured numbers.
+	if named := boundRetainList(Identifiers(prev)); len(named) > 0 {
 		rest.WriteString("\nSPECIFICS ALREADY REPORTED (each must still appear, unless the new part shows it was wrong):\n  ")
 		rest.WriteString(strings.Join(named, ", "))
 		rest.WriteString("\n")
@@ -141,12 +170,19 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	// Hand back the prior open items and require a verdict on each. Prose alone did not
 	// work: "drop what is now closed" left resolved items in the list across every
 	// refinement, because nothing checked. Naming them and requiring an accounting is the
-	// same deterministic anchoring that fixed fact retention. EVERY item is still named —
-	// count is never dropped here — but a single item's TEXT is bounded for the prompt
-	// (see promptOpenItemCap on priorOpenItems): store full, feed bounded, the same
-	// principle DefaultListEntryCap applies to the stored report. The two are deliberately
-	// different numbers for different readers — the report a person reads can afford a
-	// richer item than the accounting block a model must fit alongside everything else.
+	// same deterministic anchoring that fixed fact retention. A single item's TEXT is
+	// bounded for the prompt (promptOpenItemCap on priorOpenItems): store full, feed
+	// bounded, the same principle DefaultListEntryCap applies to the stored report — two
+	// deliberately different numbers for different readers, since the report a person
+	// reads can afford a richer item than the accounting block a model must fit
+	// alongside everything else. As of task-7b fix round 3 (finding C), COUNT is bounded
+	// there too, not just length: DefaultListCap is meant to hold this at 12, but that
+	// bound is enforced by CapSections, which runs on a REFINEMENT's OUTPUT — the very
+	// FIRST prev a session ever sees comes straight from CreateDigestWithView, which
+	// returns straight from callValid with no cap at all (DigestSchema places no
+	// maxItems on Unresolved), so the first refinement's prev can carry far more than 12
+	// items. priorOpenItems now bounds count defensively, independent of whether
+	// CapSections ever ran on this particular prev.
 	if open := priorOpenItems(prev); len(open) > 0 {
 		rest.WriteString("\nOPEN ITEMS FROM THAT REPORT — account for EVERY one, in exactly one place:")
 		rest.WriteString("\n  keep it in unresolved if it is still open, or name it in closed if the new")
@@ -190,12 +226,15 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	}
 	b.WriteString(windowHeader)
 	b.WriteString(fitTurns(in.NewTurns, b.Len()+updateTailLen()))
-	b.WriteString("\nProduce the UPDATED report, same sections:\n")
+	b.WriteString(updateSectionsMarker)
 	b.WriteString(digestSections)
 	b.WriteString(updateRules)
 	b.WriteString(digestRules)
 	b.WriteString("\nRespond with JSON only.\n")
-	return b.String()
+	p := b.String()
+	// The backstop (task-7b fix round 3, finding A) — see its doc in digest_fit.go.
+	assertPromptWithinBudget(p, windowHeader, updateSectionsMarker)
+	return p
 }
 
 // fitDiscretionary decides how much of the beat series and the whole-session view the
@@ -245,20 +284,38 @@ func fitDiscretionary(allBeats []Beat, view string, fixed, tail int) (beats, cli
 		}
 		// windowHeader is unconditional — the assembly always writes it, beats or no
 		// beats, view or no view. beatsHeader is paid only when a beat is actually kept.
-		overhead := fixed + tail + len(windowHeader)
+		// RUNES throughout (task-7b fix round 3, minor G): len() on these literals counts
+		// bytes, which this package's em-dash-heavy prose makes larger than the rune
+		// count everything here is actually meant to be measured in — always safe
+		// (over- not under-estimating overhead) but not what the number is supposed to
+		// mean, and worth being exact about given how many rounds this budget has needed.
+		overhead := fixed + tail + len([]rune(windowHeader))
 		if cand != "" {
-			overhead += len(beatsHeader) + len(cand)
+			overhead += len([]rune(beatsHeader)) + len([]rune(cand))
 		}
+		// + len(omittedNotice) is task-7b fix round 3 (finding F): fitTurns reserves
+		// omittedNotice's own length out of `room` whenever the turns it is handed do
+		// not already fit — which is the case in every one of these worst-case
+		// scenarios, and in general whenever this function's own k==0 fallback is
+		// reached, since that is exactly "nothing discretionary is left to give the
+		// window more room". Without this term, fitDiscretionary could certify a k that
+		// leaves EXACTLY MinTurnChars of `room`, and fitTurns would then hand back
+		// room-97 runes of actual window content once the notice is written — the same
+		// unaccounted-constant shape as findings (b) and (c), just one level up: an
+		// overhead estimate omitting a cost the real assembly (here, fitTurns) always
+		// pays once it needs to clip at all.
+		//
 		// k == 0 (beats fully dropped) is the last possible attempt: whether or not the
 		// floor is actually reachable, there is nothing further to trim, so it always
 		// returns rather than falling through to the unreachable line below.
-		if overhead+MinTurnChars <= DefaultPromptCharBudget || k == 0 {
+		if overhead+MinTurnChars+len([]rune(omittedNotice)) <= DefaultPromptCharBudget || k == 0 {
 			// clipSessionViewFor is given overhead PLUS viewHeader's own length: it computes
 			// room for the view's CONTENT only, and the header is written in addition to
 			// that content, so a view candidate that were sized against `overhead` alone
 			// would itself eat into the same MinTurnChars reservation the beat count above
-			// was just fitted around.
-			return cand, clipSessionViewFor(view, overhead+len(viewHeader))
+			// was just fitted around. clipSessionViewFor folds in its own omittedNotice
+			// reservation (see its doc in digest_synopsis.go), so it is not repeated here.
+			return cand, clipSessionViewFor(view, overhead+len([]rune(viewHeader)))
 		}
 	}
 	return "", "" // unreachable: the k == 0 iteration above always returns.
@@ -294,17 +351,13 @@ func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionVi
 // promptOpenItemCap bounds a single open item's length AS EMBEDDED IN THE PROMPT — a
 // separate, tighter number from DefaultListEntryCap, which bounds the STORED report.
 //
-// This is task-7b's fix-round finding: DefaultListEntryCap (300) is a report-quality
+// This is task-7b's fix-round 2 finding: DefaultListEntryCap (300) is a report-quality
 // limit, tuned so a human reader never loses a real item's substance — but 12 items at
 // 300 runes each (the actual result of a digest that has passed through CapSections,
 // not the looser 60-rune assumption an earlier version of the worst-case test used)
 // push the FIXED part of a refine prompt — before a single beat, view rune, or
 // conversation turn is added — past what's left once MinTurnChars and the instructional
-// tail are reserved. Measured directly via TestRefinePromptFromRealisticWorstCaseMargin
-// with this clip reverted to a no-op: assembled prompt 11,860 runes against an 11,000
-// budget (margin -860), and — worse — the recent-turns window itself measured only 97
-// runes against the 1,600 floor, because fitDiscretionary can only trade away beats and
-// the view; it has no lever over this block, which it must treat as fixed overhead.
+// tail are reserved.
 //
 // Lowering DefaultListEntryCap instead was rejected (per the fix-round instruction this
 // responds to): that constant governs what a human reads in the stored report, and
@@ -314,35 +367,107 @@ func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionVi
 //
 // 80 is still generous against this package's own real item lengths (20-60 runes, per
 // DefaultListEntryCap's doc) — real items are essentially never truncated — while
-// cutting the worst case enough to matter: 12 items at 80 instead of 300 removes
-// (300-80)*12 = 2,640 runes from the fixed part of the prompt. Restoring the clip and
-// re-running the same test: assembled prompt 10,930 runes against 11,000 (margin +70),
-// and the recent-turns window measures 1,855 runes against the 1,600 floor (margin
-// +255) — both real margins, not a graze, which matters because a bound that only just
-// clears was exactly what let an earlier worst-case measurement here read "+44" while
-// the design's own enforced constants actually produced "-860". See
-// TestRefinePromptFromRealisticWorstCaseMargin, which now derives its per-item length
-// from DefaultListEntryCap (the constant actually enforced) rather than a hardcoded
-// assumption, and asserts both the budget and the window floor rather than only logging
-// them; TestWindowKeepsItsFloorAtTheBoundary is the sibling test isolating the window
-// floor under beat pressure alone (no open items, no view).
+// cutting the worst case enough to matter. Measured in ISOLATION against fix round 3's
+// own worst-case construction (TestRefinePromptFromRealisticWorstCaseMargin, which by
+// then also carries boundRetainList and the open-item COUNT bound — reverting only this
+// clip, temporarily, to a no-op): assembled prompt 11,681 runes against the 11,000
+// budget (margin -681), window 97 against the 1,600 floor. Restored: prompt 10,921
+// runes (margin +79), window 1,797 (margin +197) — both real margins, not a graze,
+// which matters because a bound that only just clears was exactly what let an earlier
+// worst-case measurement here read "+44" while the design's own enforced constants
+// actually produced "-860" (task-7b fix round 2's own finding, since independently
+// reproduced at a denser, more adversarial construction in fix round 3 — see
+// boundRetainList). TestWindowKeepsItsFloorAtTheBoundary is the sibling test isolating
+// the window floor under beat pressure alone (no open items, no view).
 const promptOpenItemCap = 80
 
 // priorOpenItems is the previous report's open list, excluding the sentinel — there is
 // nothing to account for when the last report said nothing was open. Every surviving
 // item is clipped to promptOpenItemCap for the PROMPT (clipProse marks a truncated item
 // with a trailing "…" so the model is not misled into thinking it has the item's full
-// text) — count is untouched, only an individual item's length is bounded, so "account
-// for EVERY one" still holds for whatever the digest's own caps (DefaultListCap) let
-// through.
+// text).
+//
+// COUNT is also bounded here, at DefaultListCap — task-7b fix round 3 (finding C): an
+// earlier version of this doc claimed count was "untouched" because DefaultListCap was
+// assumed to already hold it there via CapSections. That is true for `prev` on the
+// SECOND refinement onward (RefineFrom caps its own output before returning it) but
+// NOT for the very first one: CreateDigestWithView returns straight from callValid, and
+// DigestSchema places no maxItems on Unresolved, so a schema-legal first digest can
+// carry far more than DefaultListCap items. Measured directly with 40 identifier-dense
+// items (this count cap reverted, promptOpenItemCap's length clip left active): window
+// 1,107 against the 1,600 floor (-493), total still inside budget (10,940 of 11,000) —
+// silent, because nothing was checking the window specifically. Bounded here,
+// independent of whether CapSections ever ran on this particular prev, the same fix
+// shape as promptOpenItemCap's own length bound.
 func priorOpenItems(prev Digest) []string {
 	var out []string
 	for _, item := range prev.Unresolved {
 		if !UsesUnresolvedSentinelText(item) {
-			out = append(out, clipProse(item, promptOpenItemCap))
+			out = append(out, item)
 		}
 	}
-	return out
+	out = tailN(out, DefaultListCap)
+	return capEntryLength(out, promptOpenItemCap)
+}
+
+// retainListMaxCount and retainListMaxTotal bound the retain-list — Identifiers(prev)'s
+// output — AS EMBEDDED IN THE PROMPT. task-7b fix round 3 (finding B, marked CRITICAL):
+// Identifiers has no count or length cap of its own (by design — task-7b's own
+// constraints keep its regex and dedup logic untouched, and its full output is what
+// UnverifiedIdentifiers/FabricatedNext/the eval harness check a report's specifics
+// against the source with, not just what one prompt can afford), and DigestUpdatePromptFrom
+// used to splice its ENTIRE output into the prompt verbatim.
+//
+// The earlier worst-case test's packSpecifics-based construction (2 named specifics +
+// filler WORDS per field/item) badly understated this: filler words are not
+// identifier-shaped (no digit, no internal capital, no separator) and contribute
+// essentially nothing to Identifiers()' output, so that test's own retain-list measured
+// only 938 runes across 94 distinct identifiers — a real number for THAT input, but not
+// a worst case, because ordinary English can occupy the exact same rune budget while
+// contributing dozens of times as many identifiers if every "word" is identifier-shaped
+// instead of filler. An independent review reported finding a threshold as low as 90
+// distinct identifiers already breaching the window floor with the total still inside
+// budget (silent), 304 pushing the total itself over budget, and a worst case — every
+// OTHER constant honoured post-CapSections — of 24,689 runes with a 97-rune window.
+// Reproduced directly with this fix reverted, using packIdentifiers (not packSpecifics)
+// against TestRefinePromptFromRealisticWorstCaseMargin's own construction (which also
+// combines finding (C)'s 40-item count pressure): 33,566 runes, 97-rune window — the
+// window figure matches the review's exactly; the total is larger here because that
+// test's construction is more adversarial again, per the instruction not to report a
+// worst case without deriving every length from an enforced constant.
+//
+// Both count AND total length are bounded, independently, because identifiers vary
+// wildly in length (a bare short word vs. a long dotted path) — a count cap alone
+// cannot bound total rune cost, and a length cap alone cannot bound how many distinct
+// names a densely-specific report can still cram into it. Recency-preferring on both
+// axes: tailN's own reasoning (older specifics have already survived several
+// refinements; newer ones have not yet been seen at all) extended to a second pass that
+// drops from the OLDEST end of whatever tailN kept, since Identifiers' output order
+// follows the underlying digest's own field order (prose fields, then insights, then
+// unresolved) — later text is newer state. A dropped specific is a real drop, never a
+// silent truncation of one — clipping an identifier mid-name would manufacture a fake
+// one, so only which ENTRIES survive changes, never their spelling.
+const (
+	retainListMaxCount = 60
+	retainListMaxTotal = 700
+)
+
+func boundRetainList(named []string) []string {
+	kept := tailN(named, retainListMaxCount)
+	for len(kept) > 0 && retainListJoinedLen(kept) > retainListMaxTotal {
+		kept = kept[1:]
+	}
+	return kept
+}
+
+// retainListJoinedLen is the rune length of the retain-list exactly as it is written
+// into the prompt (strings.Join(named, ", ")), so the total-length bound above measures
+// what the prompt actually pays, not a proxy for it.
+func retainListJoinedLen(v []string) int {
+	if len(v) == 0 {
+		return 0
+	}
+	return len([]rune(strings.Join(v, ", ")))
 }
 
 // recentSubjectsOf pulls distinctive terms from the newest user turn of an already-rendered

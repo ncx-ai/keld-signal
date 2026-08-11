@@ -1,6 +1,9 @@
 package llmstudy
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // DefaultPromptCharBudget bounds a digest prompt so prompt plus output fits the context.
 //
@@ -70,3 +73,80 @@ func fitTurns(turns string, overhead int) string {
 // of a mid-session window as the start of the work.
 const omittedNotice = "[earlier turns omitted to fit the context; they are covered by " +
 	"the report's cumulative sections]\n"
+
+// sessionLabelCap bounds SessionLabel/sessionLabel as embedded in EITHER prompt path —
+// task-7b fix round 3 (minor G): the label was written verbatim with no cap at all, and
+// it sits ahead of everything else both paths budget around. A label is meant to be a
+// short descriptor ("finance / invoicing", "work session") — real callers never
+// approach this — but nothing stopped a caller from handing over an entire paragraph;
+// measured (DigestCreatePrompt, an otherwise-tiny turns/facts), a 12,000-rune label
+// alone produced a 15,954-rune prompt. 200 is generous
+// against any real label while bounding the pathological one.
+const sessionLabelCap = 200
+
+// assertPromptWithinBudget is the backstop task-7b's fix rounds kept discovering they
+// needed: FOUR rounds so far have each fixed a named, measured leak — the retain-list,
+// open-item count, TurningPoints, SessionLabel, the omitted-turns notice, the header
+// pairs on both prompt paths — and every review since has found the round after had
+// missed one. That pattern (fix an instance, find another instance) does not end by
+// finding one more instance; it ends by asserting the FINISHED PRODUCT, once, after
+// everything else has been assembled, so that whichever leak has not yet been found
+// fails HERE — loudly — instead of shipping a prompt that silently truncates mid-JSON
+// and drops the digest, the worst-consequence failure mode this package has (already
+// paid for once on this branch: five of twenty digests lost that way before diagnosis).
+//
+// Checks the two invariants that actually matter architecturally, not every constant
+// individually: the WHOLE prompt fits DefaultPromptCharBudget, and the recent-turns
+// window — the only evidence current/why/next/unresolved are written from — still holds
+// at least MinTurnChars. Panics rather than returning an error: both
+// DigestCreatePromptWithView and DigestUpdatePromptFrom are pure string builders with no
+// error channel and ~20 call sites (production and test) that assume a bare string back,
+// so widening their signature to thread an error through is the "patch one more
+// instance" move this backstop exists to stop needing. A violation here means a
+// programming error in THIS package's own budgeting, not a bad but valid caller input —
+// exactly the shape Go reserves panic for. windowMarker/tailMarker are supplied by the
+// caller because the two prompt paths use different literal headings around their
+// window (createWindowHeader/createSectionsMarker vs windowHeader/updateSectionsMarker);
+// the check itself is otherwise identical, which is why it lives here once rather than
+// as two near-duplicate checks in digest.go and digest_refine.go.
+func assertPromptWithinBudget(p, windowMarker, tailMarker string) {
+	if err := promptBudgetViolation(p, windowMarker, tailMarker); err != nil {
+		panic("llmstudy: " + err.Error())
+	}
+}
+
+// promptBudgetViolation is assertPromptWithinBudget's check, factored out so a test can
+// assert "the backstop fires" by inspecting a returned error directly rather than only
+// via recover — and so it can be exercised on a hand-built prompt string too, independent
+// of how a violating one might arise.
+//
+// The window floor is checked ONLY when fitTurns actually clipped (the window starts
+// with omittedNotice) — caught live by TestSmallWindowIsNotClipped, whose entire point
+// is that a genuinely short conversation ("user: hello\n", 12 runes) must pass through
+// untouched. MinTurnChars is a floor on how much room fitTurns is GUARANTEED when it
+// has to clip a conversation that does not fit, not a padding requirement on every
+// window regardless of how little conversation there actually is — a short session is
+// not a starvation bug, and flagging one would make this backstop fire constantly on
+// completely healthy prompts, which is exactly the "fires so often it gets ignored"
+// failure a backstop must not have.
+func promptBudgetViolation(p, windowMarker, tailMarker string) error {
+	if total := len([]rune(p)); total > DefaultPromptCharBudget {
+		return fmt.Errorf("assembled prompt is %d runes, over the %d-rune budget", total, DefaultPromptCharBudget)
+	}
+	start := strings.Index(p, windowMarker)
+	if start < 0 {
+		return fmt.Errorf("assembled prompt is missing its window marker %q", windowMarker)
+	}
+	start += len(windowMarker)
+	end := strings.Index(p[start:], tailMarker)
+	if end < 0 {
+		return fmt.Errorf("assembled prompt is missing its tail marker %q", tailMarker)
+	}
+	window := p[start : start+end]
+	if strings.HasPrefix(window, omittedNotice) {
+		if n := len([]rune(window)); n < MinTurnChars {
+			return fmt.Errorf("assembled prompt's conversation window was clipped to %d runes, below the %d-rune floor", n, MinTurnChars)
+		}
+	}
+	return nil
+}

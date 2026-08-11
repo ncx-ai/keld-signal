@@ -201,6 +201,13 @@ func LeakedPromptWords(d Digest, source string) []string {
 		srcPhrases[strings.Join(srcWords[i:i+leakPhraseLen], " ")] = true
 	}
 
+	// This is a THIRD copy of proseHay's join (ProseFields + Insights + Unresolved) —
+	// RetainedFacts/proseHay and the eval harness's lostFacts diagnostic are the other
+	// two — not refactored to call it (task-7b brief item, "also, cheaply"; not fixed,
+	// flagged). All current copies key off ProseFields, so a new STRING field on Digest
+	// is picked up everywhere automatically; the residual risk is a future non-string
+	// prose-like field (as Insights/Unresolved themselves are) being added to only one
+	// of the four copies.
 	body := wordsOf(strings.ToLower(strings.Join(
 		append(ProseFields(d), append(d.Insights, d.Unresolved...)...), " ")))
 
@@ -381,6 +388,10 @@ func LooksRubberstamped(d Digest, f DigestFacts) bool {
 	if f.Corrections == 0 && f.CorrectedTurns == 0 {
 		return false
 	}
+	// This is a FOURTH copy of proseHay's join (ProseFields + Insights + Unresolved) —
+	// see the identical note above LeakedPromptWords' body join. Not refactored here
+	// either (task-7b brief item, "also, cheaply"): same risk, same reasoning, flagged
+	// rather than fixed.
 	hay := strings.ToLower(strings.Join(
 		append(ProseFields(d), append(d.Insights, d.Unresolved...)...), " "))
 	for _, w := range frictionWords {

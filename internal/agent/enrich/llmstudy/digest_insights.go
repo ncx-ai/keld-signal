@@ -52,8 +52,16 @@ func clipProse(s string, n int) string {
 	}
 	head := string(r[:room])
 
+	// Reaching this branch already means len(r) > n — content beyond `head` was always
+	// discarded here, sentence-boundary cut or not. An earlier version returned bare
+	// `head[:i]` with NO marker whenever a terminator landed at >=sentencePreferPct of
+	// room, on the theory that a complete-looking sentence doesn't need one — but
+	// "complete-looking" is exactly the problem: a 145-rune open item can render as a
+	// full sentence with half of it gone, and this package's prompts tell the model to
+	// "account for EVERY one" of a list it must not be shown a silently amputated
+	// version of. Marked the same way the other two branches below already are.
 	if i := lastSentenceEnd(head); i >= room*sentencePreferPct/100 {
-		return strings.TrimSpace(head[:i])
+		return trimForMarker(strings.TrimSpace(head[:i])) + "…"
 	}
 	if i := strings.LastIndexAny(head, " \t\n"); i > 0 {
 		return trimForMarker(head[:i]) + "…"

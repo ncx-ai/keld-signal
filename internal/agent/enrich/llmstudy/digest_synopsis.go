@@ -35,12 +35,23 @@ const (
 // are accounted for. Returns "" when there is no room, rather than pushing the prompt over
 // budget — which is what a fixed cap did, taking a maximal refinement prompt to 9,577
 // characters against a 9,000 budget.
+//
+// The window's reserve is MinTurnChars PLUS omittedNotice's own length — task-7b fix
+// round 3 (finding F): "the window's reserve" is a floor on what fitTurns eventually
+// hands back as CONTENT, but fitTurns pays omittedNotice's length out of its `room`
+// budget whenever the turns it receives do not already fit, which is the case in every
+// scenario this reserve exists to protect against (there being little room left is
+// exactly when the notice fires). Reserving only MinTurnChars here let this function
+// certify a view size that left `room` (for fitTurns) at exactly MinTurnChars, which
+// then handed back MinTurnChars-97 runes of actual window content once the notice was
+// written — the floor breached by exactly the constant this reservation had not
+// accounted for, the same shape as findings (b) and (c).
 func clipSessionViewFor(v string, overhead int) string {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return ""
 	}
-	room := DefaultPromptCharBudget - overhead - MinTurnChars
+	room := DefaultPromptCharBudget - overhead - MinTurnChars - len([]rune(omittedNotice))
 	if room > SessionViewCap {
 		room = SessionViewCap
 	}

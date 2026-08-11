@@ -100,13 +100,26 @@ func TestCapSectionsDropsOldestInsights(t *testing.T) {
 // TestCapSectionsBoundsListEntryLength is the fix for task-7b finding (a): CapSections
 // bounded entry COUNT (maxList) but never entry LENGTH, so a schema-legal digest with
 // DefaultListCap Unresolved items of 2,000 runes each survived it untouched. Measured
-// before this fix (by constructing exactly this digest, running it through CapSections,
-// and feeding the result into DigestUpdatePromptFrom as `prev` — priorOpenItems embeds
-// Unresolved verbatim): the assembled prompt came out at 30,191 runes against the 11,000
-// budget, and the new turn ("a filler turn about the work") did not appear anywhere in it
-// — fitTurns' room had gone negative and it returned nothing but its own omitted-turns
-// notice. Confirmed by commenting out the two capEntryLength calls in CapSections and
-// re-running this test: it fails on both assertions with those exact numbers restored.
+// before that fix (by constructing exactly this digest, running it through CapSections,
+// and feeding the result into DigestUpdatePromptFrom as `prev` — priorOpenItems embedded
+// Unresolved verbatim at the time): the assembled prompt came out at 30,191 runes
+// against the 11,000 budget, and the new turn ("a filler turn about the work") did not
+// appear anywhere in it.
+//
+// RETIRED in fix round 3: this test used to also assert against the ASSEMBLED PROMPT
+// (budget + new-turn survival) after building it from `capped`. Those two assertions
+// are now VACUOUS — an independent review found that reverting the two capEntryLength
+// calls this test names and re-running leaves the prompt-level assertions passing
+// regardless (10,931 runes, well in budget, new turn present either way): task-7b fix
+// round 2 added promptOpenItemCap, which clips every open item to 80 runes FOR THE
+// PROMPT (priorOpenItems) independent of whatever CapSections did or did not do to the
+// STORED digest, so by the time a prompt is assembled this test's own bug (an uncapped
+// capEntryLength) can no longer be observed there — the prompt layer's bound papers
+// over the storage layer's absence. There is no way to recalibrate this test to make
+// the prompt-level assertions distinguish the two states again: promptOpenItemCap
+// intercepts EVERY item regardless of its stored length, structurally, not as a matter
+// of degree. So only the assertion that is still live is kept: capEntryLength's actual,
+// current contract is bounding what gets STORED, and that is what this test now checks.
 func TestCapSectionsBoundsListEntryLength(t *testing.T) {
 	prev := Digest{}
 	for i := 0; i < DefaultListCap; i++ {
@@ -117,15 +130,6 @@ func TestCapSectionsBoundsListEntryLength(t *testing.T) {
 		if n := len([]rune(item)); n > DefaultListEntryCap {
 			t.Errorf("unresolved[%d] not capped: %d runes (cap %d)", i, n, DefaultListEntryCap)
 		}
-	}
-
-	newTurns := strings.Repeat("user: a filler turn about the work\n", 200)
-	p := DigestUpdatePromptFrom(capped, RefineInput{SessionLabel: "work session", NewTurns: newTurns})
-	if got := len([]rune(p)); got > DefaultPromptCharBudget {
-		t.Errorf("prompt %d runes exceeds budget %d", got, DefaultPromptCharBudget)
-	}
-	if !strings.Contains(p, "a filler turn about the work") {
-		t.Error("the new turn did not survive into the prompt")
 	}
 }
 
@@ -351,56 +355,86 @@ func packSpecifics(next *int, n, specifics int) string {
 	return string(r)
 }
 
-// TestRefinePromptFromRealisticWorstCaseMargin is deviation 2 from the brief's dispatch:
-// no live sweep here (the eval harness still calls the pre-beat entry points and is only
-// rewired to RefineInput in a later task, so a sweep now would measure the OLD prompt
-// path). Instead, this constructs the largest RefineInput the design can plausibly
-// produce — every prior-digest section at its own cap with GLOBALLY DISTINCT retain-list
-// specifics (see packSpecifics), the full DefaultListCap of insights and unresolved
-// items, all MaxBeatSelection beats at BeatCap, a maximally-populated SessionRecord, a
-// focus-shift anchor, a session view sized past its own cap, and turns far larger than
-// any remaining room — and MEASURES the result against DefaultPromptCharBudget.
+// packIdentifiers fills n runes with sequential, GLOBALLY DISTINCT identifier-shaped
+// tokens and NOTHING else — no filler prose at all. This is deliberately the OPPOSITE
+// density from packSpecifics (2 specifics + filler words per call): an independent
+// review found that packSpecifics' filler ("word word word...") is not identifier-shaped
+// at all (no digit, no internal capital, no separator), so it contributes nothing to
+// Identifiers()' output and every packSpecifics-based worst-case measurement of the
+// retain-list badly UNDERSTATES what a digest whose sections are genuinely, densely full
+// of names can produce — 94 distinct identifiers / 938 runes from packSpecifics, against
+// several times that from the identical rune budget filled this way. Every token here
+// contains a digit, so strongIdentifier accepts it unconditionally regardless of
+// sentence position — this is the true worst case for Identifiers' OWN output, not an
+// artifact of how specifics happen to be phrased.
+func packIdentifiers(next *int, n int) string {
+	var b strings.Builder
+	for b.Len() < n {
+		b.WriteString(fmt.Sprintf("Id%06d ", *next))
+		*next++
+	}
+	r := []rune(b.String())
+	if len(r) > n {
+		r = r[:n]
+	}
+	return string(r)
+}
+
+// TestRefinePromptFromRealisticWorstCaseMargin constructs the largest RefineInput the
+// design can plausibly produce and MEASURES the result against DefaultPromptCharBudget
+// and MinTurnChars, deriving every length from an enforced constant rather than a
+// hand-picked assumption.
 //
-// insights/unresolved items are sized at DefaultListEntryCap, not a hand-picked number.
-// An earlier version of this test used a hardcoded 60-rune/item assumption "generous
-// against this package's own real examples" — but the constant CapSections actually
-// enforces (task-7b finding (a)) is DefaultListEntryCap, 300, five times looser. Because
-// `prev` here plays the role of a digest that has already been through one refinement
-// (RefineFrom calls CapSections on its own output, so from the second refinement onward
-// every prev.Unresolved item can genuinely be as long as DefaultListEntryCap allows),
-// the 60-rune version was measuring a worst case the design does not actually enforce
-// against — a test drifting from the code it is supposed to pin. At DefaultListEntryCap
-// the previous version of this test (which asserted only a sanity range, not a real
-// budget check) would have reported a false-comfortable "+44" while the self-consistent
-// number was actually "-860": the assembled prompt over budget, AND — worse — the
-// recent-turns window itself down to 97 runes against the 1,600 floor, because
-// fitDiscretionary has no lever over the open-items block; it can only trade away beats
-// and the view, which it did, fully, and still could not reach the floor. Fixed via
-// promptOpenItemCap (digest_refine.go): the prompt's rendering of an open item is
-// bounded independently of what CapSections stores, so the report keeps its richer
-// items while the prompt gets a bounded, visibly-truncated rendering of them. This test
-// now asserts the two invariants that fix must hold, not just logs a number: the
-// assembled prompt fits DefaultPromptCharBudget, and the window — current, why, next and
-// unresolved are written from nothing else — still clears MinTurnChars. Nothing here
-// clamps the ASSEMBLED prompt as a WHOLE by any single mechanism; clipSessionViewFor and
-// fitTurns each clip only their own input, fitDiscretionary (see digest_refine.go)
-// protects the window's floor by trading away beats/view, and promptOpenItemCap keeps
-// the open-items block from being the thing that leaves fitDiscretionary nothing left to
-// trade — together they are what makes both assertions below hold.
+// RECONSTRUCTED in task-7b fix round 3, after an independent review rebuilt the worst
+// case from constants and found the round-2 version's reported margins ("+70"/"+255")
+// true only for THAT construction, not as a genuine worst case. Two things this
+// version fixes about how the worst case itself was built:
+//
+//   - Identifier DENSITY, not just length. packSpecifics (2 named specifics + filler
+//     WORDS per field/item) is not identifier-shaped in its filler — no digit, no
+//     internal capital, no separator — so it contributes almost nothing to
+//     Identifiers()' output beyond the 2 specifics it deliberately names. That badly
+//     understated the retain-list Identifiers(prev) can produce: this version uses
+//     packIdentifiers, which fills every section entirely with distinct
+//     identifier-shaped tokens. Measured with every section at its own cap this way:
+//     Identifiers(prev) alone returns 1,599 distinct tokens joining to 15,979 runes —
+//     nearly 1.5x the ENTIRE prompt budget, from ONE contributor, before boundRetainList
+//     (finding B, CRITICAL) bounds it to retainListMaxCount/retainListMaxTotal.
+//   - Open-item COUNT beyond DefaultListCap. The round-2 version capped Unresolved at
+//     exactly DefaultListCap (12) — correct for `prev` on the SECOND refinement onward,
+//     but not for the very FIRST one: CreateDigestWithView returns straight from
+//     callValid, and DigestSchema places no maxItems on Unresolved, so a schema-legal
+//     first digest can carry far more (finding C). This version uses 40.
+//
+// Reverting boundRetainList to a no-op (`return named`) and re-running THIS exact test:
+// assembled prompt 33,566 runes against the 11,000 budget (margin -22,566), and the
+// window itself measures 97 runes against the 1,600 floor (margin -1,503) — the window
+// figure matches the independent review's own "24,689 runes, window 97" finding exactly
+// (this test's total is larger because it also combines finding (C)'s 40-item count
+// pressure on top, per the instruction not to report a worst case without deriving
+// every length from an enforced constant). Restoring boundRetainList: both margins
+// logged by the test below are real, not a graze, which matters because a bound that
+// only just clears is exactly what let two earlier worst-case measurements on this
+// branch read comfortable while the self-consistent number was not.
 func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 	var id int
 	prev := Digest{
-		Synopsis:  packSpecifics(&id, DefaultSynopsisCap, 4),
-		Done:      packSpecifics(&id, DefaultProseCap, 6),
-		Happened:  packSpecifics(&id, DefaultHappenedCap, 8),
-		Structure: packSpecifics(&id, DefaultStructureCap, 10),
-		Current:   packSpecifics(&id, DefaultProseCap, 6),
-		Why:       packSpecifics(&id, DefaultProseCap, 6),
-		Next:      packSpecifics(&id, DefaultProseCap, 6),
+		Synopsis:  packIdentifiers(&id, DefaultSynopsisCap),
+		Done:      packIdentifiers(&id, DefaultProseCap),
+		Happened:  packIdentifiers(&id, DefaultHappenedCap),
+		Structure: packIdentifiers(&id, DefaultStructureCap),
+		Current:   packIdentifiers(&id, DefaultProseCap),
+		Why:       packIdentifiers(&id, DefaultProseCap),
+		Next:      packIdentifiers(&id, DefaultProseCap),
 	}
 	for i := 0; i < DefaultListCap; i++ {
-		prev.Insights = append(prev.Insights, packSpecifics(&id, DefaultListEntryCap, 2))
-		prev.Unresolved = append(prev.Unresolved, packSpecifics(&id, DefaultListEntryCap, 2))
+		prev.Insights = append(prev.Insights, packIdentifiers(&id, DefaultListEntryCap))
+	}
+	// 40, not DefaultListCap: the first-refinement bypass finding (C) describes — a
+	// schema-legal prev straight out of CreateDigestWithView is not bounded by
+	// DefaultListCap at all.
+	for i := 0; i < 40; i++ {
+		prev.Unresolved = append(prev.Unresolved, packIdentifiers(&id, DefaultListEntryCap))
 	}
 
 	beats := make([]Beat, MaxBeatSelection)
@@ -420,10 +454,14 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 		Function:      "software-development",
 		Concentration: 0.87,
 		hasFocus:      true,
+		// At MaxRecordTurningPoints (finding G bounds this at accumulation time via
+		// NoteTurningPoint; a hand-built SessionRecord like this one can still exceed
+		// it, which is exactly the shape of gap the backstop — finding A — exists for,
+		// not something this specific test needs to additionally exercise).
 		TurningPoints: []TurningPoint{
 			{1, TriggerFocusShift}, {2, TriggerFriction}, {3, TriggerFocusShift}, {4, TriggerFriction},
 			{5, TriggerFocusShift}, {6, TriggerFriction}, {7, TriggerFocusShift}, {8, TriggerFriction},
-			{9, TriggerFocusShift}, {10, TriggerFriction},
+			{9, TriggerFocusShift}, {10, TriggerFriction}, {11, TriggerFocusShift}, {12, TriggerFriction},
 		},
 	}
 
@@ -434,7 +472,10 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 		"user: now turn to the DistinctiveAprilRollover work\n"
 
 	in := RefineInput{
-		SessionLabel: "a reasonably long session label describing the kind of work underway",
+		// Near sessionLabelCap (200), not just "a reasonably long" label: finding G
+		// bounds SessionLabel too, and the worst case should sit against that bound
+		// like everything else here, not comfortably under it.
+		SessionLabel: strings.Repeat("a reasonably long session label describing the kind of work underway ", 5),
 		Record:       rec,
 		Beats:        beats,
 		SessionView:  strings.Repeat("user: an early turn about the work\n", 400), // > SessionViewCap
@@ -446,10 +487,6 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 	got := len([]rune(p))
 	margin := DefaultPromptCharBudget - got
 	t.Logf("realistic worst-case refine prompt: %d runes (budget %d, margin %d)", got, DefaultPromptCharBudget, margin)
-	// This DOES now assert "fits" — unlike the sanity-range-only check an earlier version
-	// of this test used, which is exactly what let a self-inconsistent per-item
-	// assumption go unnoticed: a test that only bounds against 4x budget passes whether
-	// the real margin is +44 or -860.
 	if got > DefaultPromptCharBudget {
 		t.Errorf("worst-case prompt %d runes exceeds budget %d (margin %d)", got, DefaultPromptCharBudget, margin)
 	}
@@ -466,8 +503,7 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 		t.Fatal("window header missing from prompt")
 	}
 	start += len(windowHeader)
-	const tailMarker = "\nProduce the UPDATED report, same sections:\n"
-	end := strings.Index(p[start:], tailMarker)
+	end := strings.Index(p[start:], updateSectionsMarker)
 	if end < 0 {
 		t.Fatal("tail marker missing from prompt")
 	}
@@ -478,10 +514,10 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 	}
 }
 
-// TestWindowKeepsItsFloorUnderBeatAndOpenItemPressure is the fix for finding 3: before
-// fitDiscretionary existed, only the whole-session view ever yielded room to the recent
-// window (clipSessionViewFor already reserved MinTurnChars against ITSELF) — the beat
-// series was written at full size unconditionally. So a full 12-item open-item list
+// TestWindowKeepsItsFloorAtTheBoundary is the fix for finding 3: before fitDiscretionary
+// existed, only the whole-session view ever yielded room to the recent window
+// (clipSessionViewFor already reserved MinTurnChars against ITSELF) — the beat series
+// was written at full size unconditionally. So a full 12-item open-item list
 // (load-bearing) plus a full 12-beat series (previously NOT discretionary in practice)
 // could exhaust the budget before the window's own reserve was ever considered, leaving
 // fitTurns nothing to work with but its own omitted-turns notice: current, why, next and
@@ -500,26 +536,35 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 // versions of fitDiscretionary apart. A test with that much slack survives the bug
 // instead of catching it.
 //
-// This one does not survive it. Reverting the header accounting in fitDiscretionary
-// (dropping the `overhead += len(beatsHeader)` / `+ len(windowHeader)` terms, i.e.
-// going back to `overhead := fixed + len(cand) + tail`) was confirmed DIRECTLY, by
-// making that edit, running this exact test, and reading the failure, then restoring
-// the fix and re-running to confirm it passes:
-//   - reverted: fitDiscretionary certifies k=8 (the header-omitting estimate still
-//     satisfies its own floor check at that count), but the real assembled window is
-//     only 1,567 runes — 33 below MinTurnChars (1,600). Test fails.
-//   - fixed: fitDiscretionary correctly rejects k=8 (accounting for the ~114 omitted
-//     runes across the two headers pushes its own estimate past the budget at that
-//     count) and settles on k=7 instead; the real assembled window is 1,742 runes.
-//     Test passes.
+// RECALIBRATED in fix round 3: fix round 2 added promptOpenItemCap (80), which clips
+// any open item over 80 runes for the prompt — this test's original 124-rune items were
+// silently clipped down to ~80 by that later fix, moving the effective overhead this
+// test exercises and, per an independent review, making it pass the header-omission
+// revert regardless (window landed at 1,637 against the 1,600 floor either way — the
+// test could no longer tell the two versions of fitDiscretionary apart, the exact
+// failure mode its own docstring warns about). itemLen is now 53 — small enough to pass
+// through promptOpenItemCap untouched — re-derived the same way the original 124 was:
+// scanning itemLen for the smallest value at which the fixed and reverted code diverge
+// on whether the floor holds, rather than picked to merely "look" tight.
+//
+// Confirmed DIRECTLY, by making the revert edit, running this exact test, and reading
+// the failure, then restoring the fix and re-running to confirm it passes:
+//   - reverted: DigestUpdatePromptFrom now PANICS via the backstop (task-7b fix round
+//     3, finding A) rather than merely returning a bad prompt for a manual assertion to
+//     catch: "assembled prompt's conversation window was clipped to 1567 runes, below
+//     the 1600-rune floor". The backstop existing does not make this test redundant —
+//     it still isolates and documents fitDiscretionary's OWN mechanism, rather than
+//     only proving something eventually notices.
+//   - fixed: window measures 1,777 against the 1,600 floor (margin 177) — a real
+//     margin, not a graze, because fitDiscretionary correctly accounts for the header
+//     costs and settles on a smaller beat count.
 func TestWindowKeepsItsFloorAtTheBoundary(t *testing.T) {
-	// 124-rune items are not an arbitrary round number: at this exact size, omitting
-	// beatsHeader+windowHeader from the overhead estimate (~114 runes combined) flips
-	// which beat count fitDiscretionary chooses (8 with the headers omitted, 7 with them
-	// included) — the smallest gap at which the bug this test guards against actually
-	// changes the outcome, rather than being absorbed by a k that was going to be chosen
-	// either way.
-	const itemLen = 124
+	// 53 is not a round number: it is the smallest item length (scanned from 1) at which
+	// the fixed and reverted overhead accounting settle on different beat counts and the
+	// difference actually breaches the floor on the reverted side — the smallest gap at
+	// which the bug this test guards against changes the outcome, rather than being
+	// absorbed by a k that was going to be chosen either way.
+	const itemLen = 53
 	prev := Digest{}
 	for i := 0; i < DefaultListCap; i++ {
 		prev.Unresolved = append(prev.Unresolved, strings.Repeat("z", itemLen))
@@ -543,8 +588,7 @@ func TestWindowKeepsItsFloorAtTheBoundary(t *testing.T) {
 		t.Fatal("window header missing from prompt")
 	}
 	start += len(windowHeader)
-	const tailMarker = "\nProduce the UPDATED report, same sections:\n"
-	end := strings.Index(p[start:], tailMarker)
+	end := strings.Index(p[start:], updateSectionsMarker)
 	if end < 0 {
 		t.Fatal("tail marker missing from prompt")
 	}

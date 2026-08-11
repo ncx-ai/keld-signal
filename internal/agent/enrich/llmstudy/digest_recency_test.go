@@ -78,3 +78,28 @@ func TestRecentSubjectsTrimsTerminalPunctuation(t *testing.T) {
 		t.Fatalf("expected a trimmed DigestSchema in the output: %v", subs)
 	}
 }
+
+// task-7b fix round 3 (minor G): the fix above trimmed the EMITTED value but left the
+// dedup key as `strings.ToLower(tok)` — the RAW, still-punctuated token — so a subject
+// appearing once bare ("DigestSchema") and once sentence-final ("DigestSchema.") hashed
+// to two different keys despite both trimming to the identical emitted string, and both
+// survived into the live recency anchor as an exact duplicate. Two user turns are used so
+// both spellings are actually scanned (RecentSubjects walks the newest n user turns).
+func TestRecentSubjectsSeenKeyMatchesTheEmittedTrimmedValue(t *testing.T) {
+	w := Window{Turns: []Turn{
+		{RoleUser, "DigestSchema needs work"},
+		{RoleAssistant, "ok"},
+		{RoleUser, "back to DigestSchema."},
+	}}
+	subs := RecentSubjects(w, 2)
+	count := 0
+	for _, s := range subs {
+		if s == "DigestSchema" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("DigestSchema should be deduped to one entry regardless of trailing "+
+			"punctuation on the raw token, got %d occurrences in %v", count, subs)
+	}
+}

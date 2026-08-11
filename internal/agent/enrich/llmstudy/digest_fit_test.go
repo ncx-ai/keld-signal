@@ -84,6 +84,92 @@ func windowOf(clipped string) string {
 // trimming to the boundary would have breached the floor, so fitTurns falls back to the
 // untrimmed (mid-line) window instead — a mid-line open is a smaller loss than starving the
 // four sections the window is the only evidence for.
+// TestPromptBudgetViolationCatchesEachInvariant exercises promptBudgetViolation
+// directly, on hand-built strings — independent of how a violating prompt might arise —
+// so the backstop's own logic (task-7b fix round 3, finding A) is proven correct in
+// isolation before anything else relies on it firing.
+func TestPromptBudgetViolationCatchesEachInvariant(t *testing.T) {
+	const marker = "\nWINDOW:\n"
+	const tail = "\nTAIL\n"
+
+	t.Run("over budget", func(t *testing.T) {
+		p := strings.Repeat("x", DefaultPromptCharBudget+1) + marker + strings.Repeat("y", 2000) + tail
+		if err := promptBudgetViolation(p, marker, tail); err == nil {
+			t.Error("an over-budget prompt was not flagged")
+		}
+	})
+
+	t.Run("clipped window below the floor", func(t *testing.T) {
+		p := "head" + marker + omittedNotice + "short" + tail
+		if err := promptBudgetViolation(p, marker, tail); err == nil {
+			t.Error("a clipped window below MinTurnChars was not flagged")
+		}
+	})
+
+	t.Run("short window WITHOUT clipping is not flagged", func(t *testing.T) {
+		// The exact case TestSmallWindowIsNotClipped guards in the real assembly: a
+		// window under MinTurnChars that was never clipped (no omittedNotice prefix) is
+		// a genuinely short conversation, not starvation, and must not be flagged.
+		p := "head" + marker + "hi" + tail
+		if err := promptBudgetViolation(p, marker, tail); err != nil {
+			t.Errorf("an unclipped short window was flagged: %v", err)
+		}
+	})
+
+	t.Run("within budget, clipped window at the floor is not flagged", func(t *testing.T) {
+		p := "head" + marker + omittedNotice + strings.Repeat("z", MinTurnChars) + tail
+		if err := promptBudgetViolation(p, marker, tail); err != nil {
+			t.Errorf("a healthy prompt was flagged: %v", err)
+		}
+	})
+}
+
+// TestBackstopCatchesAnUnboundedInputNoOtherFixTouches is the fix for task-7b finding
+// (A): four rounds have each fixed a NAMED leak, and every review since has found the
+// round after had missed one (the retain-list, open-item count, TurningPoints,
+// SessionLabel, the omitted-turns notice). This backstop exists so the pattern does not
+// need a fifth instance found by hand — so this test deliberately does NOT use any of
+// the leaks findings (B)-(G) already named and fixed. It uses SessionRecord.Subjects,
+// constructed directly rather than through Observe (which caps it at
+// MaxRecordSubjects): SessionRecord.Block() joins ALL of Subjects with no cap of its
+// own, exactly the same "accumulation-time cap, no render-time backstop" shape
+// MaxRecordTurningPoints has for TurningPoints — proving the backstop protects a
+// dimension none of this round's specific fixes touch, not just the ones that were
+// found and named.
+func TestBackstopCatchesAnUnboundedInputNoOtherFixTouches(t *testing.T) {
+	subjects := make([]string, 2000)
+	for i := range subjects {
+		subjects[i] = strings.Repeat("s", 20)
+	}
+	rec := SessionRecord{Subjects: subjects, Turns: 1, hasFocus: false}
+	in := RefineInput{SessionLabel: "work session", Record: rec, NewTurns: "user: hi\n"}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected the backstop to panic on an unbounded SessionRecord.Subjects, it did not")
+		} else {
+			t.Logf("backstop fired as expected: %v", r)
+		}
+	}()
+	DigestUpdatePromptFrom(Digest{}, in)
+}
+
+// TestWellFormedInputsDoNotTripTheBackstop is the negative case: the backstop must not
+// fire on ordinary, healthy prompts, or it becomes noise no one can trust. Every other
+// passing test in this package that calls DigestUpdatePromptFrom/DigestCreatePromptWithView
+// already demonstrates this implicitly (a panic would fail them too); this test names
+// the property explicitly.
+func TestWellFormedInputsDoNotTripTheBackstop(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("backstop fired on an ordinary, healthy prompt: %v", r)
+		}
+	}()
+	_ = DigestCreatePrompt("work session", "user: hello, this is a short conversation\n", "counts: turns=1\n")
+	_ = DigestUpdatePrompt(Digest{Done: "x", Insights: []string{"a"}, Unresolved: []string{"b"}},
+		"work session", "user: hello again\n", "counts: turns=2\n")
+}
+
 func TestFitTurnsLineBoundaryTrimCannotBreachTheFloor(t *testing.T) {
 	overhead := DefaultPromptCharBudget - (MinTurnChars + len([]rune(omittedNotice)))
 

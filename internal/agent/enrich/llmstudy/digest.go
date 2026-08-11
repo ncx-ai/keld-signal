@@ -132,11 +132,28 @@ Rules:
     these instructions is subject matter — do not borrow words from them.
 `
 
+// createSectionsMarker is the literal line DigestCreatePromptWithView writes immediately
+// after the window (i.e. where the window ENDS) — named so createTailLen, the assembly
+// below, and the backstop's window-extraction (assertPromptWithinBudget in digest_fit.go)
+// all reference the identical string rather than three independently-typed copies that
+// could drift apart the way the header constants already had to be unified for (task-7b
+// finding (c)).
+const createSectionsMarker = "\nWrite these sections:\n"
+
 // createTailLen is the size of everything appended after the turns, so fitTurns budgets
 // against the whole prompt rather than only the part built so far.
+//
+// RUNES, not bytes: task-7b fix round 3 (minor G) — len() on a string literal containing
+// any multi-byte rune (this package's prose leans on em dashes throughout) counts bytes,
+// while every budget this figure is compared against (DefaultPromptCharBudget,
+// MinTurnChars) is a RUNE count, measured elsewhere with len([]rune(p)). The mismatch
+// was always safe (byte length >= rune length, so this only ever OVER-estimates overhead
+// and under-estimates available room — conservative, never a floor or budget breach) but
+// silently wrong as documentation: it is not the number this function actually needs to
+// mean.
 func createTailLen() int {
-	return len("\nWrite these sections:\n") + len(digestSections) + len(digestRules) +
-		len("\nRespond with JSON only.\n")
+	return len([]rune(createSectionsMarker)) + len([]rune(digestSections)) +
+		len([]rune(digestRules)) + len([]rune("\nRespond with JSON only.\n"))
 }
 
 // createViewHeader and createWindowHeader are the literal headings
@@ -178,21 +195,36 @@ func DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts string) 
 	var b strings.Builder
 	b.WriteString("You are writing a short report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	b.WriteString("Session context: ")
-	b.WriteString(sessionLabel)
+	// Bounded here, not by mutating the caller's label — task-7b fix round 3 (minor G):
+	// SessionLabel had no cap at all, and a pathological label (a caller passing a whole
+	// paragraph, or worse) is fixed overhead ahead of everything else this function
+	// budgets around; measured (DigestCreatePrompt, an otherwise-tiny turns/facts), a
+	// 12,000-rune label alone produced a 15,954-rune prompt.
+	// sessionLabelCap lives in digest_fit.go, shared with the refine path's identical fix.
+	b.WriteString(clipProse(sessionLabel, sessionLabelCap))
 	b.WriteString("\n\nMEASURED COUNTS (authoritative — your report must be consistent with these):\n  ")
 	b.WriteString(facts)
-	viewOverhead := b.Len() + createTailLen() + len(createViewHeader) + len(createWindowHeader)
+	viewOverhead := b.Len() + createTailLen() + len([]rune(createViewHeader)) + len([]rune(createWindowHeader))
 	if v := clipSessionViewFor(sessionView, viewOverhead); v != "" {
 		b.WriteString(createViewHeader)
 		b.WriteString(v)
 	}
 	b.WriteString(createWindowHeader)
 	b.WriteString(fitTurns(turns, b.Len()+createTailLen()))
-	b.WriteString("\nWrite these sections:\n")
+	b.WriteString(createSectionsMarker)
 	b.WriteString(digestSections)
 	b.WriteString(digestRules)
 	b.WriteString("\nRespond with JSON only.\n")
-	return b.String()
+	p := b.String()
+	// The backstop (task-7b fix round 3, finding A): every prior round fixed a NAMED
+	// leak, and every review since has found another one the fix rounds had not — the
+	// retain-list, open-item count, TurningPoints, SessionLabel, omittedNotice. This is
+	// what stops that pattern: whatever leak is still unfound, THIS is where it fails,
+	// loudly, on the actually-assembled prompt, instead of shipping a prompt that
+	// truncates mid-JSON and silently drops the digest. See assertPromptWithinBudget's
+	// doc in digest_fit.go.
+	assertPromptWithinBudget(p, createWindowHeader, createSectionsMarker)
+	return p
 }
 
 // CreateDigest produces the first digest for a session.

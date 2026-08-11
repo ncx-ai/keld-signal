@@ -120,7 +120,13 @@ func RecentSubjects(w Window, n int) []string {
 			if !distinctiveToken(tok) {
 				continue
 			}
-			k := strings.ToLower(tok)
+			// Keyed on the TRIMMED spelling, matching what is actually emitted below —
+			// task-7b fix round 3: this was still `strings.ToLower(tok)` (the RAW,
+			// punctuated token) even after the emitted value itself was fixed to trim,
+			// so "DigestSchema." and "DigestSchema," (or "DigestSchema." repeated across
+			// two turns) hashed to different keys and both survived, handing the live
+			// recency anchor an exact duplicate the dedup was supposed to prevent.
+			k := strings.ToLower(trimTermPunct(tok))
 			if seen[k] {
 				continue
 			}
