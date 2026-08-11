@@ -246,16 +246,22 @@ func abbreviationBefore(r []rune, i int) bool {
 // closes; brevity is asked for in the prompt and enforced here by shape, never by truncating
 // the decode.
 //
-// ⚠️ The retry does NOT recover every rejection, and one class it cannot recover was measured
-// here. Asked about a one-turn window, the model sometimes answers with an unpunctuated headline
-// clause — "Syncing the README with the actual state of the world", 53 runes, no terminator
-// anywhere — which holds no sentence and is rejected. At temperature 0 the re-request returns the
-// byte-identical string, so all five attempts fail and that window contributes no beat: 1 of 28
-// asked at the shipped five-turn cadence, 2 of 47 at three. That is the intended trade (no beat
-// beats a fragment) but it also refutes sampleErr's claim that "in practice a re-request of a
-// truncated or empty generation succeeds" for this class — it is only true where sampling can
-// actually differ. Recovering these needs the re-request to differ (a nudged temperature on
-// retry), not a looser shape rule.
+// THE RETRY NOW DIFFERS, and that is this function's one deliberate departure from every other
+// caller of callValid. Asked about a one-turn window, the model sometimes answers with an
+// unpunctuated headline clause — "Syncing the README with the actual state of the world", 53
+// runes, no terminator anywhere — which holds no sentence and is rejected. At temperature 0 the
+// re-request returns the BYTE-IDENTICAL string, so all five attempts failed on the same string
+// and the window contributed no beat: 2 of 42 asked, identically in all six sweeps of the last
+// round (s6 i9 and s10 i4), recorded in no artifact but a concerns list. A 5% silent loss of the
+// history the whole design leans on.
+//
+// beatSampling is the fix, and it is deliberately NOT a looser shape rule: the sentence-
+// completeness standard is the point (see BeatCap — at 200 runes, 46 of 47 beats ended
+// mid-clause and the median count of complete sentences was ZERO). What was wrong was retrying
+// an unchanged request. The first attempt is still the greedy temperature-0 request, so a beat
+// that succeeds first time — 40 of 42 — is byte-identical to before and the study's
+// reproducibility is untouched; only a REJECTED generation is re-requested differently, and the
+// seed makes even that reproducible.
 func (l *Llama) GenerateBeat(record, window string) (string, error) {
 	_, kept, err := l.generateBeat(record, window)
 	return kept, err
@@ -263,11 +269,38 @@ func (l *Llama) GenerateBeat(record, window string) (string, error) {
 
 // generateBeat is GenerateBeat plus the unclipped generation, which the measurement harnesses
 // need in order to report what the cap actually costs (see BeatCap).
+// beatSampling is the beat path's retry schedule: greedy first, then a widening temperature at
+// a fixed seed.
+//
+// Attempt 0 is temperature 0 with no seed field at all, so the request is byte-identical to
+// every other caller's and the 95% of beats that pass first time are unaffected. Each retry
+// then raises the temperature by beatRetryTempStep — enough for the sampler to leave a
+// degenerate mode, far below the level at which a 4B instruct model starts inventing (the
+// prompt's "every noun must come from the conversation" rule is what T2 and T12 police, and a
+// beat generated at 0.8 is scored by exactly the same gates as one generated at 0).
+//
+// The seed is the attempt index, not a clock or a random value: a re-run of the same sweep
+// re-requests with the same seed and gets the same recovery, which is what keeps "both arms run
+// twice with identical figures" true for the recovered beats as well as the greedy ones.
+func beatSampling(attempt int) sampling {
+	if attempt <= 0 {
+		return sampling{}
+	}
+	return sampling{Temp: float64(attempt) * beatRetryTempStep, Seed: attempt}
+}
+
+// beatRetryTempStep is how much each retry widens sampling. With retry.DefaultPolicy's 5
+// attempts the schedule is 0, 0.2, 0.4, 0.6, 0.8 — the last of those is still a conservative
+// temperature for an instruct model, and the shape gates (BeatCap, BeatMinRunes,
+// BeatClaimsUnobservableProgress) apply unchanged to every attempt, so a wilder sample is
+// rejected rather than stored.
+const beatRetryTempStep = 0.2
+
 func (l *Llama) generateBeat(record, window string) (raw, kept string, err error) {
 	var out struct {
 		Beat string `json:"beat"`
 	}
-	err = l.callValid(BeatPrompt(record, window), BeatSchema(), &out, func() error {
+	err = l.callValidSampled(BeatPrompt(record, window), BeatSchema(), &out, func() error {
 		raw, kept = strings.TrimSpace(out.Beat), ClipBeat(out.Beat, BeatCap)
 		switch {
 		case raw == "":
@@ -286,7 +319,7 @@ func (l *Llama) generateBeat(record, window string) (raw, kept string, err error
 				"does not show: " + strings.Join(beatProgressClaims(kept), "; ")})
 		}
 		return nil
-	})
+	}, beatSampling)
 	if err != nil {
 		return raw, "", err
 	}

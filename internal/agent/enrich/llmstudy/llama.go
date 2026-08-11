@@ -76,28 +76,72 @@ func (l *Llama) call(prompt string, schema map[string]any, out any) error {
 // exception to "unknown errors are permanent": the condition is identified, not unknown,
 // and it is a property of one sample rather than of the server.
 func (l *Llama) callValid(prompt string, schema map[string]any, out any, validate func() error) error {
-	body := map[string]any{
-		"messages":    []any{map[string]any{"role": "user", "content": prompt}},
-		"temperature": 0,
-		"response_format": map[string]any{
-			"type": "json_schema",
-			"json_schema": map[string]any{
-				"name":   "facets",
-				"strict": true,
-				"schema": schema,
-			},
-		},
-	}
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
+	return l.callValidSampled(prompt, schema, out, validate, nil)
+}
+
+// sampling says how attempt n of a retry loop should be sampled. Nil means every attempt is
+// the greedy temperature-0 request callValid has always sent.
+//
+// This exists because ONE caller needs the re-request to differ, and it needs it for a
+// measured reason rather than a plausible one. GenerateBeat rejects a generation holding no
+// complete sentence; at temperature 0 the re-request comes back BYTE-IDENTICAL, so all five
+// attempts fail on the same string and the beat is lost — 2 of 42 asked, identically in all
+// six sweeps of the last round, and recorded in no artifact but a concerns list. sampleErr's
+// own doc already carried the counterexample ("a caller must not assume the re-request
+// differs"); this is the mechanism that makes it false.
+//
+// Seeded, not merely warmed. A bare temperature raise would make the recovered beat
+// irreproducible, and "both arms run TWICE with identical figures" is what retired "is it
+// variance?" for this whole study. An explicit per-attempt seed keeps a re-run byte-identical
+// while still giving the sampler somewhere else to go.
+type sampling struct {
+	// Temp is the temperature for this attempt, Seed its sampling seed.
+	Temp float64
+	Seed int
+}
+
+// callValidSampled is callValid with per-attempt sampling.
+//
+// ⚠️ SCOPE. With sample == nil the request body is byte-identical to what callValid has always
+// sent — temperature 0, no seed field — so every existing caller (Classify, the digest create
+// and refine paths, the extraction study) is unchanged. Pinned by
+// TestCallValidStillSendsTheGreedyRequest. The only caller passing a non-nil sample is
+// GenerateBeat.
+func (l *Llama) callValidSampled(prompt string, schema map[string]any, out any,
+	validate func() error, sample func(attempt int) sampling) error {
+	// Attempt counter for the sampling schedule. retry.DoClassify calls op sequentially, so a
+	// plain counter is the attempt index — no shared state and no need for the retry package
+	// to expose one.
+	attempt := -1
 	// Retry transient failures rather than recording them as model errors.
 	// llama-server answers /health OK while its slots are still initialising, so
 	// the first requests of a run can get 503 "no slot available" — a startup
 	// race, not a classification failure. Uses the canonical policy/classifier
 	// per the repo convention (don't hand-roll backoff loops).
 	return retry.DoClassify(context.Background(), l.Policy, isTransientHTTP, func() error {
+		attempt++
+		body := map[string]any{
+			"messages":    []any{map[string]any{"role": "user", "content": prompt}},
+			"temperature": 0,
+			"response_format": map[string]any{
+				"type": "json_schema",
+				"json_schema": map[string]any{
+					"name":   "facets",
+					"strict": true,
+					"schema": schema,
+				},
+			},
+		}
+		if sample != nil {
+			if s := sample(attempt); s.Temp > 0 {
+				body["temperature"] = s.Temp
+				body["seed"] = s.Seed
+			}
+		}
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
 		req, err := http.NewRequest(http.MethodPost, l.BaseURL+"/v1/chat/completions", bytes.NewReader(buf))
 		if err != nil {
 			return err
@@ -136,15 +180,15 @@ type statusErr int
 func (e statusErr) Error() string { return fmt.Sprintf("llama-server HTTP %d", int(e)) }
 
 // sampleErr marks a failure caused by THIS sample rather than by the server, so it is
-// worth re-requesting. Nothing about the request changes on retry: temperature is 0, but
-// llama.cpp sampling is not bit-reproducible across slot state, and in practice a
-// re-request of a truncated or empty generation succeeds.
+// worth re-requesting.
 //
-// ⚠️ "in practice ... succeeds" is not universal, and one counterexample was measured. A beat
-// generation that came back as an unpunctuated headline clause repeated BYTE-IDENTICALLY across
-// all five attempts, so every retry was wasted work (see GenerateBeat). The exception here is
-// still the right classification — a shape failure of one sample is not a failure of the server
-// — but a caller must not assume the re-request differs.
+// ⚠️ A retry only helps if the re-request can DIFFER, and by default it cannot: temperature is
+// 0, so a beat that came back as an unpunctuated headline clause repeated byte-identically
+// across all five attempts and the beat was lost. That is why `sampling` exists — a caller
+// whose rejection is a property of the sample now asks for a different sample explicitly
+// instead of hoping slot state makes one. Callers that pass no schedule still get five
+// identical requests, which is correct for the failures that ARE transient (a truncated
+// response, a 503 from an initialising slot) and useless for the rest.
 type sampleErr struct{ err error }
 
 func (e sampleErr) Error() string { return e.err.Error() }
