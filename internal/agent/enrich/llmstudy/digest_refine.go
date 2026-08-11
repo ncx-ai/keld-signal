@@ -520,9 +520,22 @@ func recentSubjectsOf(rendered string) string {
 
 // updateTailLen is the size of everything appended after the turns, so fitTurns can
 // budget against the whole prompt rather than just the part built so far.
+//
+// RUNES, and via updateSectionsMarker rather than a re-typed copy of it — task-7b fix round
+// 4 (finding 5), following createTailLen, which already did both. The two defects were the
+// same defect twice: a hardcoded literal is the drift updateSectionsMarker was introduced to
+// prevent (fix round 3 unified the assembly and the backstop on the constant but left this
+// function's copy behind), and len() on a literal carrying em dashes — which this package's
+// prose leans on throughout — counts BYTES, while every budget this figure is compared
+// against (DefaultPromptCharBudget, MinTurnChars) is a rune count. The byte version was
+// always safe (bytes >= runes, so it only ever over-estimated overhead and under-estimated
+// room) but it is not the number this function is documented to return, and a conservative
+// error still spends real window room: the three prose blocks below carry enough multi-byte
+// runes to matter.
 func updateTailLen() int {
-	return len("\nProduce the UPDATED report, same sections:\n") + len(digestSections) +
-		len(updateRules) + len(digestRules) + len("\nRespond with JSON only.\n")
+	return len([]rune(updateSectionsMarker)) + len([]rune(digestSections)) +
+		len([]rune(updateRules)) + len([]rune(digestRules)) +
+		len([]rune("\nRespond with JSON only.\n"))
 }
 
 const updateRules = `

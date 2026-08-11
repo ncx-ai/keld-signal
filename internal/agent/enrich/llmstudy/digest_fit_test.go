@@ -157,6 +157,63 @@ func TestPromptBudgetViolationCatchesEachInvariant(t *testing.T) {
 	})
 }
 
+// TestTailLenMeasuresWhatTheAssemblyAppends pins both tail-length functions to the thing
+// they claim to measure: the runes each assembly writes AFTER the window.
+//
+// Positional, not by search — the last createTailLen()/updateTailLen() runes of the finished
+// prompt must begin exactly at the sections marker. That catches both defects fix round 4
+// found in updateTailLen (finding 5) with one assertion: a byte count is larger than the
+// rune count on these em-dash-bearing blocks, so the slice starts too early and lands inside
+// the conversation window; and a re-typed copy of the marker literal that drifts from
+// updateSectionsMarker changes the length without changing what the assembly writes.
+//
+// Both were live: updateTailLen counted bytes AND re-hardcoded "\nProduce the UPDATED
+// report, same sections:\n" after fix round 3 introduced the constant precisely to stop that
+// (its commit message claimed the fix; the code did not have it). createTailLen was already
+// correct, which is why it is pinned here too — the correct one is as easy to regress as the
+// wrong one was to miss.
+//
+// Confirmed by restoring the byte-counting, literal-duplicating version and re-running:
+// the refine subtest fails, reporting 5,697 (bytes) where the tail is 5,673 runes — the
+// slice starts 24 runes early, inside the window ("ON (evidence):\nuser: hi\n\nProduce the
+// UPDATED report..."). 5,697 is also the "instructional tail" figure earlier rounds of this
+// task quoted as runes; it was bytes.
+func TestTailLenMeasuresWhatTheAssemblyAppends(t *testing.T) {
+	cases := []struct {
+		name   string
+		p      string
+		n      int
+		marker string
+	}{
+		{
+			name:   "refine",
+			p:      DigestUpdatePrompt(Digest{Done: "x"}, "work session", "user: hi\n", "counts: turns=2\n"),
+			n:      updateTailLen(),
+			marker: updateSectionsMarker,
+		},
+		{
+			name:   "create",
+			p:      DigestCreatePrompt("work session", "user: hi\n", "counts: turns=2\n"),
+			n:      createTailLen(),
+			marker: createSectionsMarker,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := []rune(c.p)
+			if c.n > len(r) {
+				t.Fatalf("tail length %d exceeds the whole prompt (%d runes)", c.n, len(r))
+			}
+			tail := string(r[len(r)-c.n:])
+			if !strings.HasPrefix(tail, c.marker) {
+				t.Errorf("the last %d runes do not begin at the sections marker — the tail "+
+					"length measures something other than what the assembly appends; got %.70q",
+					c.n, tail)
+			}
+		})
+	}
+}
+
 // TestQuotedMarkersCannotDefeatTheBackstop is the fix for task-7b fix round 4 (findings 1
 // and 2): the backstop used to re-derive the window by strings.Index-ing the literal
 // headings around it, so CONTENT quoting a heading moved the measured span. Both directions
