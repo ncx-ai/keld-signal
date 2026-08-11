@@ -497,8 +497,12 @@ var measuredWindows = map[string]int{}
 func assertSameWindowInBothEncodings(t *testing.T, path string) {
 	t.Helper()
 	a, m := measuredWindows["ascii"], measuredWindows["multi-byte"]
+	if a == 0 && m == 0 {
+		return // both subtests filtered out by -run; nothing to compare
+	}
 	if a == 0 || m == 0 {
-		t.Fatalf("%s: a flavour did not report its window (ascii %d, multi-byte %d)", path, a, m)
+		t.Fatalf("%s: only one encoding reported a window (ascii %d, multi-byte %d) — the pair "+
+			"must run together or the comparison proves nothing", path, a, m)
 	}
 	if a != m {
 		t.Errorf("%s: same text at the same rune length produced different windows — ascii %d "+
