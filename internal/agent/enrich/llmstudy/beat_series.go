@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // MaxBeatSelection caps how many beats a report reads. At BeatCap runes each that is ~6,144
@@ -25,7 +26,8 @@ const MaxBeatSelection = 12
 // focus — which the digest path does not run. The EWMA is better where available; this makes
 // the signal usable without it.
 //
-// Both comparisons below use beatsRestate, not the shared insightsMatch — see its doc for why.
+// The restatement test uses beatsRestate, not the shared insightsMatch — see its doc for why.
+// The subject-change test does NOT: see beatChangedSubject for what replaced it and why.
 //
 // Clipping is ClipBeat, not clipProse: a stored beat ends at a sentence boundary or it is not
 // stored at all. AppendBeat is the second gate on that invariant (GenerateBeat is the first), so
@@ -38,15 +40,153 @@ func AppendBeat(prev []Beat, text string) ([]Beat, bool) {
 	if BeatSaysNothingNew(text, prev) {
 		return prev, false
 	}
-	changed := true
+	changed := beatChangedSubject(text, prev)
+	return append(prev, Beat{Ordinal: len(prev) + 1, Text: text, ChangedSubject: changed}), true
+}
+
+// beatChangedSubject reports whether a beat is about something no earlier beat was about.
+//
+// What it replaced carried NO information. The previous rule ran beatsRestate — the
+// near-duplicate test, at insightMatchRatio 0.8 — against every prior beat and called the
+// subject changed unless one of them matched. But a beat that restates its predecessor has
+// already been discarded by then, so every beat reaching the test was a non-restatement by
+// construction, and at 0.8 on short varied prose nothing else matched either: measured over
+// three real sessions, 47 of 47 beats came out ChangedSubject=true. SelectBeats samples on this
+// flag, so beat selection for the expensive report was choosing on a constant.
+//
+// The rule now is novelty of NAMED SUBJECTS against the accumulated series: more than half of
+// the things this beat names are things no earlier beat named, and at least two of them are. A
+// return to an earlier subject is therefore not a change (its names are already in the union),
+// which is the semantics the old doc claimed and the old code could not deliver.
+//
+// It is a LOWER BOUND, and the abstention is the reason. A beat that names nothing concrete —
+// "designing a schema-enforced digest that prevents rubberstamping" is a real one — yields too
+// few subject terms to judge, and is reported unchanged rather than guessed at, on the same
+// "continuity is the default" principle SubjectShifted uses. Measured: 17 of 47 beats abstained
+// that way, so genuine changes are missed. What is NOT permitted is the other error, an
+// undiscriminating signal: see beatSubjectTerms for why the obvious vocabulary is unusable here.
+func beatChangedSubject(text string, prev []Beat) bool {
+	if len(prev) == 0 {
+		return true // the first beat establishes the subject
+	}
+	terms := beatSubjectTerms(text)
+	if len(terms) < minBeatSubjectTerms {
+		return false
+	}
+	seen := map[string]bool{}
 	for _, b := range prev {
-		if beatsRestate(text, b.Text) {
-			// A subject the session has already covered is a return, not a change.
-			changed = false
-			break
+		for t := range beatSubjectTerms(b.Text) {
+			seen[t] = true
 		}
 	}
-	return append(prev, Beat{Ordinal: len(prev) + 1, Text: text, ChangedSubject: changed}), true
+	novel := 0
+	for t := range terms {
+		if !seen[t] {
+			novel++
+		}
+	}
+	return novel >= minNovelBeatTerms &&
+		float64(novel)/float64(len(terms)) >= beatSubjectNoveltyFloor
+}
+
+// The novelty rule's constants, calibrated on the 47-beat corpus (three real sessions) rather
+// than chosen: at floor 0.5 / 2 novel terms the flag fires on 22 of 47, and the verdicts stand up
+// to reading — three consecutive beats about one CSV export mark the first and not the other two,
+// four consecutive beats about one team-budget display mark only the first, and a jump to an
+// unrelated component marks. Sweeping the floor from 0.4 to 0.7 moves the rate 49% -> 32%, so the
+// signal is not balanced on the threshold; the floor is set at "more than half" because that is a
+// statement about the beat rather than a tuned number.
+const (
+	beatSubjectNoveltyFloor = 0.5
+	minNovelBeatTerms       = 2
+	minBeatSubjectTerms     = 2
+)
+
+// beatSubjectTerms reduces a beat to the things it NAMES: files, paths, identifiers, versions,
+// and proper nouns used mid-sentence.
+//
+// ⚠️ It deliberately does not use distinctiveTerms, and that is the whole design. distinctiveToken
+// admits any lowercase word of 7+ characters, which is documented in this package as the
+// mechanical reason two other thresholds are unusable (T11's SynopsisLag certifying an unrelated
+// synopsis on the strength of "remains"/"whether"; T12's beat subject terms coming out as gerunds
+// and adverbs). Built on that, a novelty count would compare "specifically" against "identified"
+// and report a subject change — another signal that measures English rather than subject matter.
+//
+// So admission is Identifiers' notion of a specific instead: a strong identifier anywhere (path,
+// dotted filename, snake/SCREAMING_SNAKE, internal capital, anything carrying a digit), or a
+// capitalised token that is NOT sentence-initial and not an ordinary hyphenated compound. No
+// ordinary lowercase English can enter by any route. Identifiers itself is left untouched — its
+// regex feeds the retain-list and the T2/T4 metrics — so this reuses its RULE (strongIdentifier +
+// the position-aware capital test) over subjectTokens' tokenisation, which unlike identifierPat
+// keeps '/' attached and so sees "feat/multiturn-context" and "app/main.py" whole.
+//
+// Two exclusions beyond that rule, both from reading the corpus:
+//   - a token with no letter at all ("1,650.55", "0.22") is an amount, not a subject, and amounts
+//     change in every beat about unchanged work — pure novelty noise;
+//   - digestStopWords, looked up case-insensitively (via stopWord), because a capitalised opener
+//     mid-sentence after a quote is still English.
+func beatSubjectTerms(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range subjectTokenSpans(s) {
+		tok := trimTermPunct(s[m[0]:m[1]])
+		if len(tok) < 3 || stopWord(tok) || !containsLetter(tok) {
+			continue
+		}
+		if !strongIdentifier(tok) {
+			// A weak token is a proper-noun candidate only where a capital carries
+			// information: capitalised, mid-sentence, and not a hyphenated compound.
+			r := []rune(tok)
+			if !unicode.IsUpper(r[0]) || sentenceInitial(s, m[0]) || strings.Contains(tok, "-") {
+				continue
+			}
+		}
+		out[strings.ToLower(tok)] = true
+	}
+	return out
+}
+
+// subjectTokenSpans is subjectTokens' tokenisation reported as byte spans, because the
+// position-aware capital test needs to know WHERE a token sits — a capital at a sentence start is
+// English, the same capital mid-sentence is a name. subjectTokens returns the strings only.
+func subjectTokenSpans(s string) [][2]int {
+	var out [][2]int
+	start := -1
+	for i, r := range s {
+		if subjectTokenRune(r) {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 {
+			out = append(out, [2]int{start, i})
+			start = -1
+		}
+	}
+	if start >= 0 {
+		out = append(out, [2]int{start, len(s)})
+	}
+	return out
+}
+
+// subjectTokenRune is subjectTokens' character class, factored out so the two cannot drift.
+func subjectTokenRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	case r == '/' || r == '.' || r == '_' || r == '-':
+		return true
+	}
+	return false
+}
+
+func containsLetter(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // beatStem folds common morphological variants — gerund, nominalisation, plural, past tense —

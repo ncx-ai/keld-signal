@@ -222,15 +222,11 @@ func RecentSubjects(w Window, n int) []string {
 // subjectTokens splits text into candidate subject terms, preserving case and keeping the
 // characters that make an identifier an identifier.
 func subjectTokens(s string) []string {
-	return strings.FieldsFunc(s, func(r rune) bool {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			return false
-		case r == '/' || r == '.' || r == '_' || r == '-':
-			return false
-		}
-		return true
-	})
+	// The character class lives in subjectTokenRune (beat_series.go) because
+	// subjectTokenSpans needs the identical class to report the same tokens as byte
+	// SPANS — a position-aware caller cannot use the strings alone. One predicate, so the
+	// two tokenisers cannot drift apart.
+	return strings.FieldsFunc(s, func(r rune) bool { return !subjectTokenRune(r) })
 }
 
 // maxRecentSubjects bounds the anchor. It is a nudge toward the present, not a vocabulary

@@ -29,12 +29,121 @@ func TestAppendBeatMarksSubjectChange(t *testing.T) {
 	if ok {
 		t.Errorf("a restatement must not be stored: %v", bs)
 	}
-	bs, ok = AppendBeat(bs, "The work has moved to the AR ageing provision policy.")
+	bs, ok = AppendBeat(bs, "Applying the Northwind provision under the Larkin blanket policy.")
 	if !ok || !bs[len(bs)-1].ChangedSubject {
 		t.Errorf("a new subject must be stored and marked: %v", bs)
 	}
 	if got := bs[len(bs)-1].Ordinal; got != 2 {
 		t.Errorf("ordinals must be contiguous over STORED beats, got %d", got)
+	}
+}
+
+// ChangedSubject carried no information at all: 47 of 47 beats over three real sessions were
+// flagged as a change, because the old rule ran the near-duplicate test (beatsRestate at 0.8)
+// against beats that were non-duplicates by construction. SelectBeats samples on this flag, so
+// selection for the expensive report was choosing on a constant.
+//
+// The discrimination that matters is between beats that continue a subject and beats that leave
+// it — both of which are stored, since neither restates the other. This fixture is the shape the
+// real corpus showed: one subject carried across three beats, then a jump.
+func TestChangedSubjectDistinguishesContinuationFromAJump(t *testing.T) {
+	var bs []Beat
+	for _, text := range []string{
+		"Working on the CSV export for the overview page, which delivers five files in one ZIP.",
+		"The CSV export now ships summary, spend-over-time and breakdowns from the same ZIP endpoint.",
+		"The CSV export is finished and pushed, with the confirmation modal explaining the ZIP.",
+		"Fixing the ConfirmDialog nesting warning that RemoveMember and remove-key-button both trip.",
+	} {
+		var ok bool
+		bs, ok = AppendBeat(bs, text)
+		if !ok {
+			t.Fatalf("beat was discarded as a restatement, so the flag cannot be judged: %q", text)
+		}
+	}
+	if !bs[0].ChangedSubject {
+		t.Error("the first beat establishes the subject and must be marked")
+	}
+	for _, i := range []int{1, 2} {
+		if bs[i].ChangedSubject {
+			t.Errorf("beat %d continues the CSV export subject and must not be marked: %q",
+				i+1, bs[i].Text)
+		}
+	}
+	if !bs[3].ChangedSubject {
+		t.Errorf("a jump to an unrelated component must be marked: %q", bs[3].Text)
+	}
+}
+
+// The trap this package documents twice: distinctiveToken admits ANY lowercase word of 7+
+// characters, which is why SynopsisLag can match on "remains"/"whether" and why T12's beat
+// subject terms came out as gerunds and adverbs. A novelty count built on that vocabulary would
+// call a reworded beat a new subject. Two beats naming the same things in different English must
+// not be a subject change.
+func TestChangedSubjectIgnoresOrdinaryEnglish(t *testing.T) {
+	first := "Working on the CSV export for the overview page, which delivers five files in one ZIP."
+	second := "The CSV export endpoint is progressing steadily, although the ZIP assembly " +
+		"remains unfinished and consequently the overview download is currently unavailable."
+	if terms := beatSubjectTerms(second); len(terms) == 0 {
+		t.Fatalf("fixture names nothing, so it cannot exercise the rule: %v", terms)
+	}
+	bs, _ := AppendBeat(nil, first)
+	bs, ok := AppendBeat(bs, second)
+	if !ok {
+		t.Fatalf("the second beat was discarded, so the flag cannot be judged: %v", bs)
+	}
+	if bs[1].ChangedSubject {
+		t.Errorf("long ordinary English words must not read as a new subject: %q", bs[1].Text)
+	}
+	for _, bad := range []string{"progressing", "steadily", "although", "remains",
+		"consequently", "currently", "unavailable", "unfinished"} {
+		if beatSubjectTerms(second)[bad] {
+			t.Errorf("%q is ordinary English and must not be a subject term", bad)
+		}
+	}
+}
+
+// A beat that names nothing concrete cannot be judged, and is reported unchanged rather than
+// guessed at — the same "continuity is the default" rule SubjectShifted follows. This is a real
+// limit, not a nicety: it is why the flag is a lower bound on subject changes (17 of 47 beats in
+// the measured corpus abstained this way), and it is pinned so the abstention stays visible
+// rather than being mistaken for a verdict.
+func TestChangedSubjectAbstainsWhenTheBeatNamesNothing(t *testing.T) {
+	bs, _ := AppendBeat(nil, "Reconciling the March ledger for Meridian against the statement.")
+	abstaining := "Designing a schema that allows free-form prose while preventing " +
+		"rubberstamping, resting on measurable evidence rather than judgement."
+	if n := len(beatSubjectTerms(abstaining)); n >= minBeatSubjectTerms {
+		t.Fatalf("fixture names %d subjects, so it does not exercise abstention", n)
+	}
+	bs, ok := AppendBeat(bs, abstaining)
+	if !ok {
+		t.Fatalf("the beat was discarded, so the flag cannot be judged: %v", bs)
+	}
+	if bs[1].ChangedSubject {
+		t.Errorf("a beat naming nothing must not be reported as a subject change: %q", bs[1].Text)
+	}
+}
+
+// A return to a subject the session has already covered is history repeating, not a change —
+// the semantics the old doc claimed and the old code could not deliver, since it compared only
+// against near-duplicates.
+func TestChangedSubjectTreatsAReturnAsUnchanged(t *testing.T) {
+	var bs []Beat
+	for _, text := range []string{
+		"Fixing the budget saliency in members-by-team.tsx so the amount reads on mint rows.",
+		"Working on the CSV export for the overview page, which delivers five files in one ZIP.",
+		"Back on members-by-team.tsx, where the budget saliency still clashes with the pill.",
+	} {
+		var ok bool
+		bs, ok = AppendBeat(bs, text)
+		if !ok {
+			t.Fatalf("beat discarded, cannot judge the flag: %q", text)
+		}
+	}
+	if !bs[1].ChangedSubject {
+		t.Errorf("the CSV export is a new subject: %q", bs[1].Text)
+	}
+	if bs[2].ChangedSubject {
+		t.Errorf("returning to a covered subject is not a change: %q", bs[2].Text)
 	}
 }
 
