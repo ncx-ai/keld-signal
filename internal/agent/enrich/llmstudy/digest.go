@@ -146,11 +146,12 @@ const createSectionsMarker = "\nWrite these sections:\n"
 // RUNES, not bytes: task-7b fix round 3 (minor G) — len() on a string literal containing
 // any multi-byte rune (this package's prose leans on em dashes throughout) counts bytes,
 // while every budget this figure is compared against (DefaultPromptCharBudget,
-// MinTurnChars) is a RUNE count, measured elsewhere with len([]rune(p)). The mismatch
-// was always safe (byte length >= rune length, so this only ever OVER-estimates overhead
-// and under-estimates available room — conservative, never a floor or budget breach) but
-// silently wrong as documentation: it is not the number this function actually needs to
-// mean.
+// MinTurnChars) is a RUNE count, measured elsewhere with runeLen. The mismatch was
+// described here as "conservative, never a floor or budget breach". Half of that was wrong,
+// and the wrong half is the one that mattered: over-estimating overhead is conservative for
+// the BUDGET and hostile to the FLOOR, because every rune of phantom overhead comes straight
+// out of the window's room. Applied to the assembly's own prefix (b.Len(), bytes) the same
+// mistake starved the floor on 2% of real mined transcripts — see runeLen in digest_fit.go.
 func createTailLen() int {
 	return runeLen(createSectionsMarker) + runeLen(digestSections) +
 		runeLen(digestRules) + runeLen("\nRespond with JSON only.\n")

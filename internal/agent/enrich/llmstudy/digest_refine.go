@@ -301,11 +301,14 @@ func fitDiscretionary(allBeats []Beat, view string, fixed, tail int) (beats, cli
 		}
 		// windowHeader is unconditional — the assembly always writes it, beats or no
 		// beats, view or no view. beatsHeader is paid only when a beat is actually kept.
-		// RUNES throughout (task-7b fix round 3, minor G): len() on these literals counts
-		// bytes, which this package's em-dash-heavy prose makes larger than the rune
-		// count everything here is actually meant to be measured in — always safe
-		// (over- not under-estimating overhead) but not what the number is supposed to
-		// mean, and worth being exact about given how many rounds this budget has needed.
+		// RUNES throughout, via runeLen — and `fixed` MUST be a rune count too. An earlier
+		// version of this comment argued the byte/rune mixture was "always safe (over- not
+		// under-estimating overhead)". It is not, and that reasoning is what let the defect
+		// live: this function reserves MinTurnChars in RUNES, so if the ASSEMBLY then charges
+		// its own prefix in bytes, the reservation this function certified is short by the
+		// prefix's multi-byte excess. Over-estimating overhead is safe for the BUDGET and
+		// unsafe for the FLOOR, which is the invariant this function exists to protect. Six
+		// of 293 real refine steps panicked on exactly that.
 		overhead := fixed + tail + runeLen(windowHeader)
 		if cand != "" {
 			overhead += runeLen(beatsHeader) + runeLen(cand)
@@ -538,10 +541,10 @@ func recentSubjectsOf(rendered string) string {
 // function's copy behind), and len() on a literal carrying em dashes — which this package's
 // prose leans on throughout — counts BYTES, while every budget this figure is compared
 // against (DefaultPromptCharBudget, MinTurnChars) is a rune count. The byte version was
-// always safe (bytes >= runes, so it only ever over-estimated overhead and under-estimated
-// room) but it is not the number this function is documented to return, and a conservative
-// error still spends real window room: the three prose blocks below carry enough multi-byte
-// runes to matter.
+// described here as "always safe (bytes >= runes, so it only ever over-estimated overhead)":
+// safe for the BUDGET, and NOT for the floor — over-estimated overhead spends real window
+// room, and the round-3 review measured that same reasoning, applied to the assemblies'
+// b.Len(), starving the floor on 2% of real transcripts. See runeLen in digest_fit.go.
 func updateTailLen() int {
 	return len([]rune(updateSectionsMarker)) + len([]rune(digestSections)) +
 		len([]rune(updateRules)) + len([]rune(digestRules)) +
