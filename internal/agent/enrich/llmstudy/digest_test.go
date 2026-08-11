@@ -134,19 +134,56 @@ func TestDigestPromptForbidsRestatementAndAssistantVoice(t *testing.T) {
 // amount that has nothing to do with header accounting. Measuring room directly isolates
 // this fix from that one.
 //
-// Confirmed by reverting viewOverhead to `b.Len()+createTailLen()` (both header-length
-// terms dropped) and re-running: room measured 1542 runes, 58 below the 1600 floor. Test
-// fails. With the fix restored, room measures 1605, 5 above the floor — the small
-// residual slack either side of an exact 1600 is clipProse's own ellipsis reservation on
-// the view content (see clipProse's doc) and sub-rune rounding from the header text's
-// em-dash, both unrelated to the header-omission bug this test guards, hence the
-// tolerance below rather than an exact-equality assertion.
+// ⚠️ RE-CALIBRATED, and the figures this docstring used to quote were wrong. It said
+// "reverting viewOverhead to b.Len()+createTailLen() … room measured 1542 runes, 58 below
+// the 1600 floor. Test fails. With the fix restored, room measures 1605". That was true at
+// the 11,000 budget. The 11,000 -> 14,000 raise decalibrated it: room measured 4554 BOTH
+// ways, bit-identical, and reverting the fix left the test PASSING — the SIXTH instance in
+// this branch of a test certifying a bound the code does not enforce, and the third caused
+// by that budget raise (the two refine-path ones were fixed; this create-path one was never
+// re-checked).
+//
+// The mechanism that disarmed it is worth naming, because it is not "the margin got
+// comfortable". clipSessionViewFor sizes the view as
+// min(SessionViewCap, budget-overhead-MinTurnChars-notice). The header terms this test
+// guards only appear in `overhead`, so they can only change the view's size while the ROOM
+// term is the smaller of the two. At 14,000 with a ~3,300-rune facts block the room term was
+// ~8,800 and the view was SessionViewCap-bound, in which regime the headers are provably
+// irrelevant — precisely the "where the bug is invisible" regime the old fixture comment
+// named, which it had silently drifted into.
+//
+// So the fixture is now sized FROM THE LIVE CONSTANTS rather than from a literal repeat
+// count, and the room-bound regime is asserted as a PRECONDITION with t.Fatal. A future
+// budget/cap change can therefore make this test fail loudly, but it cannot silently disarm
+// it again.
+//
+// Re-verified by revert, and the failure MODE has changed since this test was written:
+// restored, view 1,554 runes (under SessionViewCap, so room-bound) and room 1,705 (105 above
+// the floor — clipSessionViewFor's own omittedNotice reservation plus clipProse's ellipsis
+// slack) — PASSES. Reverted, it fails inside DigestCreatePromptWithView, on
+// assertPromptWithinBudget: "conversation window was clipped to 1449 runes of content, below
+// the 1600-rune floor". The backstop landed after this test and now catches the same defect
+// first, so the revert panics rather than reaching the room assertion below. Both are
+// failures and the panic is the more precise one; the room measurement is kept because it
+// isolates header accounting from fitTurns' boundary trim, which the backstop's figure mixes.
 func TestCreatePathAccountsForItsOwnHeadersBeforeComputingRoom(t *testing.T) {
 	base := "counts: turns=900 corrections=3 tool_calls=400 domain=engineering function=software-development "
-	// Large enough that the VIEW's own room, not SessionViewCap, is the binding
-	// constraint on its size — only in that regime does the header omission matter,
-	// since a cap-bound view is sized the same whether or not the headers are accounted.
-	facts := base + strings.Repeat("extra=1 ", 400)
+	// The VIEW's own room, not SessionViewCap, must be the binding constraint on its size —
+	// only in that regime does the header omission change anything at all. That needs the
+	// FIXED part of the prompt to be large enough that budget-overhead-floor-notice falls
+	// below SessionViewCap, and this derives the threshold from the constants that decide it
+	// rather than from a repeat count that a budget change can invalidate.
+	fixedNeeded := DefaultPromptCharBudget - SessionViewCap - MinTurnChars -
+		runeLen(omittedNotice) - createTailLen() -
+		runeLen(createViewHeader) - runeLen(createWindowHeader)
+	// A margin past the crossover so the view is comfortably room-bound, and the facts block
+	// carries it because it is the one caller-supplied section on this path with no cap.
+	const roomBoundMargin = 400
+	pad := fixedNeeded + roomBoundMargin - len(base)
+	if pad < 0 {
+		pad = 0
+	}
+	facts := base + strings.Repeat("extra=1 ", pad/8+1)
 	// Long enough that the view is clipped to fill its allotted room exactly, rather than
 	// passing through short and making the header accounting moot.
 	sessionView := strings.Repeat("user: an early turn about the work in this session, discussing details\n", 100)
@@ -158,6 +195,21 @@ func TestCreatePathAccountsForItsOwnHeadersBeforeComputingRoom(t *testing.T) {
 	if bytePos < 0 {
 		t.Fatal("createWindowHeader missing from prompt")
 	}
+	// PRECONDITION, not an assertion about the fix: a SessionViewCap-bound view makes this
+	// test vacuous. Fatal rather than skip — a test that can no longer see its own bug must
+	// say so, which is the whole lesson of the decalibration above.
+	viewStart := strings.Index(p, createViewHeader)
+	if viewStart < 0 {
+		t.Fatal("createViewHeader missing from prompt — the view was dropped entirely")
+	}
+	viewLen := runeLen(p[viewStart+len(createViewHeader) : bytePos])
+	t.Logf("view content: %d runes (SessionViewCap %d)", viewLen, SessionViewCap)
+	if viewLen >= SessionViewCap {
+		t.Fatalf("the view is SessionViewCap-bound at %d runes, so this test cannot see the "+
+			"header-accounting bug it exists to guard — re-calibrate the fixture (see the "+
+			"docstring: this is how the 11,000 -> 14,000 budget raise disarmed it)", viewLen)
+	}
+
 	// Rune count, not the raw byte index: several of the fixed strings ahead of it
 	// (e.g. the "MEASURED COUNTS" header) contain an em-dash, a multi-byte rune, and
 	// DefaultPromptCharBudget/MinTurnChars are both rune budgets.
