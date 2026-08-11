@@ -442,15 +442,21 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   file (falls back to the latest-release API for dry-run builds), Apple-Silicon-only,
   and non-fatal on failure: telemetry still works, enrichment jobs spool, re-running
   the script retries.
-  ⚠️ **Apple's notary queue is unbounded and unobservable** — no error, no log, no
-  queue position, with the service reported healthy throughout. So the release does
-  NOT block on it either: submit, wait only
-  `KELD_NOTARY_TIMEOUT` (default 15m), then ship. Safe because Gatekeeper validates
-  **online**, so a ticket landing after we ship still passes; stapling only adds
-  *offline* validation. A rejection (`Invalid`) still fails the build — that means a
-  broken payload, which waiting won't fix. The submission id is written to
-  `<pkg>.notarization-id` + the run summary so a later staple needs no log
-  archaeology. `KELD_NOTARY_REQUIRED=1` restores fail-on-timeout.
+  **Notarization works, and the release still doesn't block on it — on purpose.**
+  Verdicts now land in **~25s** and the build staples inline (23s on v0.20.0, 24s on
+  v0.21.0). It was not always so: submissions returned *zero* verdicts for days, one
+  sitting 5h32m with no error, no log, no queue position and the service reported
+  healthy. That resolved 2026-08-06 via an **account-side** change, not a repo one.
+  The decoupling is retained regardless: submit, wait only `KELD_NOTARY_TIMEOUT`
+  (default 15m), then ship. It costs nothing when verdicts are fast and means a
+  future Apple-side stall degrades to "ships unstapled" rather than blocking a
+  release — safe because Gatekeeper validates **online**, so a ticket landing after
+  we ship still passes; stapling only adds *offline* validation. A rejection
+  (`Invalid`) still fails the build — that means a broken payload, which waiting
+  won't fix. The submission id is written to `<pkg>.notarization-id` + the run
+  summary so a later staple needs no log archaeology. `KELD_NOTARY_REQUIRED=1`
+  restores fail-on-timeout (now defensible, still opt-in — a green release
+  shouldn't depend on Apple's queue latency). `staple.yml` sweeps daily.
 - **Obfuscation (`KELD_OBFUSCATE=1`, CI-set, default off).** The installer/release
   freeze obfuscates the shipped sidecar — python-minifier **locals-only** rename
   (globals/Pydantic-fields/spawn-targets preserved; annotations kept so Pydantic
@@ -497,6 +503,8 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 
 Specs in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`; control
 plane in `docs/enrichment-settings.md`; sidecar resource safety + load testing in
-`sidecar/loadtest/README.md`; macOS Developer ID signing + the **unresolved**
-notarization problem (zero verdicts on this account; the account-provisioning check
-that still needs doing) in `docs/macos-signing-and-notarization.md`.
+`sidecar/loadtest/README.md`; macOS Developer ID signing + the notarization stall
+(**resolved** 2026-08-06 account-side after days of zero verdicts; verdicts now land
+in ~25s, and what to check if it recurs) in `docs/macos-signing-and-notarization.md`.
+Release asset completeness gate in
+`docs/superpowers/specs/2026-08-10-release-asset-completeness-gate-design.md`.

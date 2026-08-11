@@ -1,14 +1,15 @@
 # macOS signing & notarization — state of play
 
-**Last updated:** 2026-08-06 (session "apple-signing")
+**Last updated:** 2026-08-11 (notarization resolved; see §3)
 
 Read this before touching macOS installer signing. It records what was built, what
-is verified, what is **still broken**, and the one check that has not been done.
+is verified, and how the notarization stall resolved.
 
-**One-line summary:** signing works and is proven in CI; **notarization has never
-once succeeded on this Apple account**, and the evidence points at account
-provisioning rather than anything in this repo. The pipeline is now built to
-tolerate that indefinitely, which is not the same as fixing it.
+**One-line summary:** signing works and is proven in CI, and **notarization now
+works too** — verdicts land in ~25 seconds, stapled inline by the release build
+(measured on v0.20.0 and v0.21.0). The decoupling built to tolerate an unbounded
+queue is retained deliberately: it costs nothing when verdicts are fast and is the
+reason a future stall cannot block a release.
 
 ---
 
@@ -115,16 +116,52 @@ Note `notarytool --key` wants a **path**, but a CI secret naturally holds the ke
 
 ---
 
-## 3. The unresolved problem
+## 3. The notarization stall — RESOLVED 2026-08-06
 
-**Zero notarizations have ever completed for this team.**
+Notarization now returns verdicts in **~25 seconds**, and the release build staples
+inline. Measured:
+
+| release | submitted | outcome | elapsed |
+|---|---|---|---|
+| v0.19.0 | 2026-08-06 12:23Z | `still pending after 15m` → shipped unstapled | **>15m** |
+| v0.20.0 | 2026-08-06 21:28Z | `notarized + stapled` | **23s** |
+| v0.21.0 | 2026-08-11 00:54Z | `notarized + stapled` | **24s** |
+
+The transition happened between v0.19.0 and v0.20.0, and was an **account-side
+change, not a repo change** — nothing in this repository touched signing or
+notarization between those two builds. That is consistent with the leading
+hypothesis recorded below (an unaccepted App Store Connect agreement gating account
+services while still allowing certs to issue and the API to authenticate), though
+the exact remedy was applied outside CI and is not evidenced here.
+
+**Do not read v0.19.0's timeout as flakiness.** It predates the fix. Every
+submission after the transition has been fast and consistent.
+
+### What this means for the pipeline
+
+The decoupling (submit, wait `KELD_NOTARY_TIMEOUT`, ship regardless; sweep later via
+`staple.yml`) is **kept on purpose**. It costs nothing now that verdicts are fast —
+the release staples inline and the sweep is a ~13s no-op — and it means a future
+Apple-side stall degrades to "ships unstapled, still validates online" instead of
+blocking releases. `KELD_NOTARY_REQUIRED=1` remains available to make a timeout fatal;
+that is now a defensible default rather than a trap, but it is deliberately still
+opt-in, since a green release should not depend on Apple's queue latency.
+
+`staple.yml` runs daily (was 6-hourly, which swept an already-stapled release four
+times a day forever).
+
+### Historical: the stall as it was diagnosed
+
+The following was the state as of 2026-08-06 00:13Z, when zero notarizations had
+ever completed for this team. Retained because the reasoning is what narrowed the
+cause to the account, and because it documents what to check if it recurs.
 
 | submitted | payload | status as of 2026-08-06 00:13Z |
 |---|---|---|
 | 2026-08-05 18:41Z | ~15k files, ~190MB | `In Progress` — **5h32m** |
 | 2026-08-05 23:18Z | 4 files | `In Progress` — **55m** |
 
-Total submissions this team has ever made: **2**. Verdicts: **0**.
+Total submissions at that point: **2**. Verdicts: **0**.
 
 ### Ruled out
 
@@ -141,7 +178,7 @@ Total submissions this team has ever made: **2**. Verdicts: **0**.
   not implemented). Submissions sit until Apple resolves them; they are inert and
   do not block future work.
 
-### Leading hypothesis — NOT YET CHECKED
+### Leading hypothesis (this is what it turned out to be — account-side)
 
 **The account is not fully provisioned for notarization.** Certs were issued
 2026-08-05 16:03Z, only ~2.6h before the first-ever submission. This fits every
@@ -153,7 +190,8 @@ A pending Apple Developer Program License Agreement gates account services while
 still allowing certificates to issue and the API to authenticate — exactly what we
 see.
 
-**➡️ The one action worth taking when resuming:**
+**➡️ If notarization ever stalls again, check this first** (it is what resolved it
+in 2026-08-06):
 
 1. developer.apple.com → **Account** — look for banners about agreements or
    enrollment still finalizing.
