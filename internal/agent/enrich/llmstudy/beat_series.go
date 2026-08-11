@@ -32,7 +32,7 @@ const MaxBeatSelection = 12
 // Clipping is ClipBeat, not clipProse: a stored beat ends at a sentence boundary or it is not
 // stored at all. AppendBeat is the second gate on that invariant (GenerateBeat is the first), so
 // a caller that assembles beat text some other way cannot get a fragment into the series.
-func AppendBeat(prev []Beat, text string) ([]Beat, bool) {
+func AppendBeat(prev []Beat, text string, g BeatGround) ([]Beat, bool) {
 	text = ClipBeat(text, BeatCap)
 	if text == "" {
 		return prev, false
@@ -40,8 +40,55 @@ func AppendBeat(prev []Beat, text string) ([]Beat, bool) {
 	if BeatSaysNothingNew(text, prev) {
 		return prev, false
 	}
-	changed := beatChangedSubject(text, prev)
-	return append(prev, Beat{Ordinal: len(prev) + 1, Text: text, ChangedSubject: changed}), true
+	terms := beatSubjectTermsGrounded(text, g)
+	return append(prev, Beat{
+		Ordinal:        len(prev) + 1,
+		Text:           text,
+		ChangedSubject: beatChangedSubject(terms, prev),
+		SubjectTerms:   sortedTerms(terms),
+	}), true
+}
+
+// beatSubjectTermsGrounded is what a beat's subject is judged on: the things the beat names, plus
+// the things the USER TURN that prompted its window names.
+//
+// The grounded half exists because the beat's half is not always there. A beat is written by the
+// model and can be entirely abstract ("Designing a schema-enforced digest that prevents
+// rubberstamping"); the turn that prompted the window is raw transcript, so it names what the
+// person actually asked about. Both halves go through the SAME admission rule (beatSubjectTerms),
+// so nothing lowercase and ordinary enters by either route — the grounding widens the evidence,
+// not the vocabulary.
+//
+// The grounded half is capped at maxBeatGroundTerms. A user turn can be a pasted file or diff, and
+// an unbounded ground would let one paste supply a term set large enough to decide the flag on its
+// own — the same "a count cap without a length cap is not a bound" reasoning maxSubjectTermLen
+// records for the record's subjects. Measured over the corpus the real turns yielded 0-4 terms, so
+// the cap binds only on the pathological case it exists for.
+func beatSubjectTermsGrounded(text string, g BeatGround) map[string]bool {
+	terms := beatSubjectTerms(text)
+	for i, t := range beatSubjectTermList(g.Turn) {
+		if i == maxBeatGroundTerms {
+			break
+		}
+		terms[t] = true
+	}
+	return terms
+}
+
+// maxBeatGroundTerms bounds the grounded half of a beat's term set. Set at the same scale as
+// maxRecentSubjects (10), which bounds the same kind of thing for the same reason.
+const maxBeatGroundTerms = 8
+
+func sortedTerms(m map[string]bool) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for t := range m {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // beatChangedSubject reports whether a beat is about something no earlier beat was about.
@@ -59,47 +106,85 @@ func AppendBeat(prev []Beat, text string) ([]Beat, bool) {
 // return to an earlier subject is therefore not a change (its names are already in the union),
 // which is the semantics the old doc claimed and the old code could not deliver.
 //
-// It is a LOWER BOUND, and the abstention is the reason. A beat that names nothing concrete —
-// "designing a schema-enforced digest that prevents rubberstamping" is a real one — yields too
-// few subject terms to judge, and is reported unchanged rather than guessed at, on the same
-// "continuity is the default" principle SubjectShifted uses. Measured: 17 of 47 beats abstained
-// that way, so genuine changes are missed. What is NOT permitted is the other error, an
-// undiscriminating signal: see beatSubjectTerms for why the obvious vocabulary is unusable here.
-func beatChangedSubject(text string, prev []Beat) bool {
+// It under-reported, and two changes close most of that gap. Both are stated as measurements
+// below, because the previous version's abstention was 17 of 47 beats and was about to be read off
+// a dashboard timeline as "no milestone here".
+//
+//  1. THE TERM SET IS GROUNDED. It is no longer only what the model wrote: the user turn that
+//     prompted the window contributes its named subjects too (beatSubjectTermsGrounded), so a beat
+//     that describes its work abstractly can still be judged on what the person asked for. This is
+//     what catches the shift the flat version missed in this repo's own session — beat 1 is about
+//     finding CPU-friendly alternatives to GLiNER2, beat 2 is about removing a prompt-truncation
+//     confound from the study design, and the beat halves alone shared enough vocabulary
+//     ({gliner2, llm} against {gliner2, ner, hugging, face, cpu-friendly}) that only one term was
+//     novel. The turn ("I installed lamma.cpp") supplies the second.
+//
+//  2. ONE NOVEL STRONG IDENTIFIER IS ENOUGH. minNovelBeatTerms exists because a lone weak
+//     proper-noun candidate (a capitalised mid-sentence word) is thin evidence. A STRONG
+//     identifier is not thin: a path, a dotted filename, a versioned or snake_case token names one
+//     thing and nothing else. Requiring two of them made a beat about `border-1px` on the
+//     compliance flags a continuation of a beat about `pb-4` on the activity rows.
+//
+//     ⚠️ strongIdentifier is applied to the term as STORED, i.e. lowercased, so its internal-
+//     capitalisation branch cannot fire here: "ConfirmDialog" and "CSV" arrive as "confirmdialog"
+//     and "csv" and count as WEAK on this route. That is deliberate and it is the conservative
+//     direction — the single-name route admits only the forms that survive lowercasing
+//     unambiguously (paths, dotted filenames, digits, snake_case) — but it is a real limit, and it
+//     is why a lone new CamelCase component name still needs a second novel term.
+//
+// It is still a LOWER BOUND, and the abstention is still the reason: when neither the beat nor its
+// turn names anything concrete — a beat about "a schema-enforced digest that prevents
+// rubberstamping" answering "How does it look so far?" — there is no grounded subject to compare,
+// and continuity is the default (the principle SubjectShifted follows). Measured over the three
+// corpus sessions, 4 of 27 beats name nothing at all and 2 more name only one already-seen or weak
+// term, against 13 of 27 that the text-only rule could not judge. What is NOT permitted is the
+// other error, an undiscriminating signal: see beatSubjectTerms for why the obvious vocabulary is
+// unusable here.
+func beatChangedSubject(terms map[string]bool, prev []Beat) bool {
 	if len(prev) == 0 {
 		return true // the first beat establishes the subject
 	}
-	terms := beatSubjectTerms(text)
-	if len(terms) < minBeatSubjectTerms {
-		return false
+	if len(terms) == 0 {
+		return false // nothing named, on either side: abstain
 	}
 	seen := map[string]bool{}
 	for _, b := range prev {
-		for t := range beatSubjectTerms(b.Text) {
+		for _, t := range b.SubjectTerms {
 			seen[t] = true
 		}
 	}
-	novel := 0
+	novel, strongNovel := 0, 0
 	for t := range terms {
-		if !seen[t] {
-			novel++
+		if seen[t] {
+			continue
+		}
+		novel++
+		if strongIdentifier(t) {
+			strongNovel++
 		}
 	}
-	return novel >= minNovelBeatTerms &&
-		float64(novel)/float64(len(terms)) >= beatSubjectNoveltyFloor
+	if float64(novel)/float64(len(terms)) < beatSubjectNoveltyFloor {
+		return false
+	}
+	return novel >= minNovelBeatTerms || strongNovel >= 1
 }
 
-// The novelty rule's constants, calibrated on the 47-beat corpus (three real sessions) rather
-// than chosen: at floor 0.5 / 2 novel terms the flag fires on 22 of 47, and the verdicts stand up
-// to reading — three consecutive beats about one CSV export mark the first and not the other two,
-// four consecutive beats about one team-budget display mark only the first, and a jump to an
-// unrelated component marks. Sweeping the floor from 0.4 to 0.7 moves the rate 49% -> 32%, so the
-// signal is not balanced on the threshold; the floor is set at "more than half" because that is a
-// statement about the beat rather than a tuned number.
+// The novelty rule's constants, calibrated on the corpus (three real sessions) rather than chosen.
+// The floor at "more than half" and 2 novel terms gave 22 of 47 on the original corpus and 13 of 27
+// on the regenerated one; with the grounded term set and the single-strong-identifier route above,
+// the same constants give 19 of 27 (70.4%) — 8/12, 3/4, 8/11 across the three sessions — and the
+// verdicts still stand up to reading: three consecutive beats about one CSV export mark the first
+// and not the other two, four consecutive beats about one team-budget display mark only the first,
+// and a jump to an unrelated component marks. Sweeping the floor from 0.4 to 0.7 moved the
+// text-only rate 49% -> 32%, so the signal is not balanced on the threshold; the floor is set at
+// "more than half" because that is a statement about the beat rather than a tuned number.
+//
+// The floor is what bounds the strong-identifier route: with novel/total >= 0.5 required, a single
+// novel term can only carry a set of at most two, so "one new filename" marks a change in a beat
+// that names one or two things and never in a beat that names five.
 const (
 	beatSubjectNoveltyFloor = 0.5
 	minNovelBeatTerms       = 2
-	minBeatSubjectTerms     = 2
 )
 
 // beatSubjectTerms reduces a beat to the things it NAMES: files, paths, identifiers, versions,
@@ -127,6 +212,18 @@ const (
 //     mid-sentence after a quote is still English.
 func beatSubjectTerms(s string) map[string]bool {
 	out := map[string]bool{}
+	for _, t := range beatSubjectTermList(s) {
+		out[t] = true
+	}
+	return out
+}
+
+// beatSubjectTermList is beatSubjectTerms in ORDER OF APPEARANCE, deduplicated. Order matters to
+// exactly one caller: the grounded half of a beat's term set is capped (maxBeatGroundTerms), and a
+// cap applied to a Go map iteration would pick a different eight terms on every run.
+func beatSubjectTermList(s string) []string {
+	var out []string
+	seen := map[string]bool{}
 	for _, m := range subjectTokenSpans(s) {
 		tok := trimTermPunct(s[m[0]:m[1]])
 		if len(tok) < 3 || stopWord(tok) || !containsLetter(tok) {
@@ -140,7 +237,12 @@ func beatSubjectTerms(s string) map[string]bool {
 				continue
 			}
 		}
-		out[strings.ToLower(tok)] = true
+		k := strings.ToLower(tok)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
 	}
 	return out
 }

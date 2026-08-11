@@ -143,7 +143,7 @@ func TestDigestDump(t *testing.T) {
 					continue
 				}
 				var kept bool
-				beats, kept = AppendBeat(beats, text)
+				beats, kept = AppendBeat(beats, text, GroundOf(ws[i]))
 				s.BeatDumps = append(s.BeatDumps, beatDump{
 					Ordinal: len(beats), Window: i, Prompt: bp, Text: text, Kept: kept,
 				})

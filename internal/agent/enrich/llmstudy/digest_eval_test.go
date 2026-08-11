@@ -395,7 +395,7 @@ func TestDigestRefineQuality(t *testing.T) {
 						}
 					}
 					var kept bool
-					beats, kept = AppendBeat(beats, text)
+					beats, kept = AppendBeat(beats, text, GroundOf(w))
 					if kept {
 						beatsKept++
 						b := beats[len(beats)-1]

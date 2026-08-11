@@ -21,15 +21,15 @@ func beats(n int, changedAt ...int) []Beat {
 // the recency work was previously blocked on.
 func TestAppendBeatMarksSubjectChange(t *testing.T) {
 	var bs []Beat
-	bs, ok := AppendBeat(bs, "The work is reconciling the March ledger for Meridian.")
+	bs, ok := AppendBeat(bs, "The work is reconciling the March ledger for Meridian.", BeatGround{})
 	if !ok || !bs[0].ChangedSubject {
 		t.Fatalf("the first beat establishes the subject: ok=%v %v", ok, bs)
 	}
-	bs, ok = AppendBeat(bs, "Work continues on Meridian's March ledger reconciliation.")
+	bs, ok = AppendBeat(bs, "Work continues on Meridian's March ledger reconciliation.", BeatGround{})
 	if ok {
 		t.Errorf("a restatement must not be stored: %v", bs)
 	}
-	bs, ok = AppendBeat(bs, "Applying the Northwind provision under the Larkin blanket policy.")
+	bs, ok = AppendBeat(bs, "Applying the Northwind provision under the Larkin blanket policy.", BeatGround{})
 	if !ok || !bs[len(bs)-1].ChangedSubject {
 		t.Errorf("a new subject must be stored and marked: %v", bs)
 	}
@@ -55,7 +55,7 @@ func TestChangedSubjectDistinguishesContinuationFromAJump(t *testing.T) {
 		"Fixing the ConfirmDialog nesting warning that RemoveMember and remove-key-button both trip.",
 	} {
 		var ok bool
-		bs, ok = AppendBeat(bs, text)
+		bs, ok = AppendBeat(bs, text, BeatGround{})
 		if !ok {
 			t.Fatalf("beat was discarded as a restatement, so the flag cannot be judged: %q", text)
 		}
@@ -86,8 +86,8 @@ func TestChangedSubjectIgnoresOrdinaryEnglish(t *testing.T) {
 	if terms := beatSubjectTerms(second); len(terms) == 0 {
 		t.Fatalf("fixture names nothing, so it cannot exercise the rule: %v", terms)
 	}
-	bs, _ := AppendBeat(nil, first)
-	bs, ok := AppendBeat(bs, second)
+	bs, _ := AppendBeat(nil, first, BeatGround{})
+	bs, ok := AppendBeat(bs, second, BeatGround{})
 	if !ok {
 		t.Fatalf("the second beat was discarded, so the flag cannot be judged: %v", bs)
 	}
@@ -102,24 +102,133 @@ func TestChangedSubjectIgnoresOrdinaryEnglish(t *testing.T) {
 	}
 }
 
-// A beat that names nothing concrete cannot be judged, and is reported unchanged rather than
-// guessed at — the same "continuity is the default" rule SubjectShifted follows. This is a real
-// limit, not a nicety: it is why the flag is a lower bound on subject changes (17 of 47 beats in
-// the measured corpus abstained this way), and it is pinned so the abstention stays visible
-// rather than being mistaken for a verdict.
-func TestChangedSubjectAbstainsWhenTheBeatNamesNothing(t *testing.T) {
-	bs, _ := AppendBeat(nil, "Reconciling the March ledger for Meridian against the statement.")
+// A beat that names nothing concrete AND was prompted by a turn that names nothing either cannot
+// be judged, and is reported unchanged rather than guessed at — the same "continuity is the
+// default" rule SubjectShifted follows. This is the flag's remaining lower bound (6 of 27 beats in
+// the regenerated corpus), and it is pinned so the abstention stays visible rather than being
+// mistaken for a verdict.
+func TestChangedSubjectAbstainsWhenNothingIsNamedAtAll(t *testing.T) {
+	bs, _ := AppendBeat(nil, "Reconciling the March ledger for Meridian against the statement.", BeatGround{})
 	abstaining := "Designing a schema that allows free-form prose while preventing " +
 		"rubberstamping, resting on measurable evidence rather than judgement."
-	if n := len(beatSubjectTerms(abstaining)); n >= minBeatSubjectTerms {
+	ground := BeatGround{Turn: "how does it look so far?"}
+	if n := len(beatSubjectTermsGrounded(abstaining, ground)); n != 0 {
 		t.Fatalf("fixture names %d subjects, so it does not exercise abstention", n)
 	}
-	bs, ok := AppendBeat(bs, abstaining)
+	bs, ok := AppendBeat(bs, abstaining, ground)
 	if !ok {
 		t.Fatalf("the beat was discarded, so the flag cannot be judged: %v", bs)
 	}
 	if bs[1].ChangedSubject {
 		t.Errorf("a beat naming nothing must not be reported as a subject change: %q", bs[1].Text)
+	}
+}
+
+// The under-reporting defect, on the pair it was reported on. Both beats are verbatim from the
+// shipped dump of this repo's own session, with the user turns that prompted their windows: beat 1
+// is about finding CPU-friendly alternatives to GLiNER2, beat 2 about removing a prompt-truncation
+// confound from the study design. Different subjects. The text-only rule missed it because the two
+// beats share GLiNER2 and only one term ("LLM") was novel; the grounded turn supplies the second.
+func TestChangedSubjectUsesTheGroundedTurn(t *testing.T) {
+	first := "Exploring CPU-friendly language models for text classification and NER that " +
+		"match GLINER2’s footprint and performance, focusing on lightweight, open-source " +
+		"alternatives from Hugging Face."
+	firstTurn := "besides gliner2, which doesn't need specialized hardware or GPU's, is there " +
+		"any other language model out there that could be used for text classification?"
+	second := "Fixing the LLM classifier study design to ensure it properly isolates model " +
+		"performance from input changes. The spec has been updated to feed only the LLM arms " +
+		"with the mined conversation window, while control and arm C receive full production " +
+		"prompts, removing the confound where GLiNER2 would lose due to prompt truncation."
+	secondTurn := "I installed lamma.cpp"
+
+	bs, _ := AppendBeat(nil, first, BeatGround{Turn: firstTurn})
+	ungrounded, ok := AppendBeat(bs, second, BeatGround{})
+	if !ok {
+		t.Fatal("the second beat was discarded, so the flag cannot be judged")
+	}
+	if ungrounded[1].ChangedSubject {
+		t.Fatal("the text-only rule now flags this pair, so it no longer demonstrates the gap " +
+			"the grounded term set closes")
+	}
+	got, ok := AppendBeat(bs, second, BeatGround{Turn: secondTurn})
+	if !ok {
+		t.Fatal("the second beat was discarded, so the flag cannot be judged")
+	}
+	if !got[1].ChangedSubject {
+		t.Errorf("the grounded turn must carry this subject change: terms=%v", got[1].SubjectTerms)
+	}
+}
+
+// One novel STRONG identifier is enough; one novel weak proper-noun candidate is not. A path,
+// dotted filename or versioned token names one thing and nothing else, which is why requiring two
+// of them made "a confirmation modal on the CSV download" a continuation of a ConfirmDialog fix. A
+// bare capitalised word is thin evidence and still needs a second.
+func TestChangedSubjectAcceptsOneStrongIdentifierButNotOneWeakName(t *testing.T) {
+	base := "Fixing the ConfirmDialog nesting warning that RemoveMember trips."
+	bs, _ := AppendBeat(nil, base, BeatGround{})
+
+	strong, ok := AppendBeat(bs, "Adding a confirmation modal to the export in overview.tsx.", BeatGround{})
+	if !ok {
+		t.Fatal("beat discarded")
+	}
+	if !strong[1].ChangedSubject {
+		t.Errorf("one novel strong identifier must mark a change: terms=%v", strong[1].SubjectTerms)
+	}
+
+	weak, ok := AppendBeat(bs, "Still chasing the same nesting warning, now under Halberd.", BeatGround{})
+	if !ok {
+		t.Fatal("beat discarded")
+	}
+	if weak[1].ChangedSubject {
+		t.Errorf("one novel weak proper-noun candidate must not mark a change: terms=%v",
+			weak[1].SubjectTerms)
+	}
+}
+
+// The grounded half is bounded. A user turn can be a pasted file or diff, and an unbounded ground
+// would let one paste supply enough terms to decide the flag on its own — the same reasoning
+// maxSubjectTermLen records for the record's subjects.
+func TestGroundedSubjectTermsAreBounded(t *testing.T) {
+	var paste strings.Builder
+	paste.WriteString("here is the whole file: ")
+	for i := 0; i < 40; i++ {
+		paste.WriteString("internal/agent/enrich/mod")
+		paste.WriteByte(byte('a' + i%26))
+		paste.WriteString(".go ")
+	}
+	terms := beatSubjectTermsGrounded("Working on the mask enforcement.", BeatGround{Turn: paste.String()})
+	if len(terms) > maxBeatGroundTerms+2 {
+		t.Errorf("a pasted turn contributed %d terms, past the cap of %d", len(terms), maxBeatGroundTerms)
+	}
+	// Deterministic: order of appearance, not map order.
+	for i := 0; i < 5; i++ {
+		again := beatSubjectTermsGrounded("Working on the mask enforcement.", BeatGround{Turn: paste.String()})
+		if len(again) != len(terms) {
+			t.Fatalf("term set is not stable across runs: %d vs %d", len(again), len(terms))
+		}
+		for k := range again {
+			if !terms[k] {
+				t.Fatalf("term set is not stable across runs: %q appeared", k)
+			}
+		}
+	}
+}
+
+// GroundOf takes the turn that PROMPTED the window — its last user turn (Mine emits one window per
+// user prompt). Taking the first would ground every beat in the window's oldest turn, which is the
+// previous subject.
+func TestGroundOfTakesThePromptingTurn(t *testing.T) {
+	w := Window{Turns: []Turn{
+		{Role: RoleUser, Text: "reconcile the bank statement"},
+		{Role: RoleAssistant, Text: "done, two differences"},
+		{Role: RoleUser, Text: "now do the AP accruals for Calder"},
+		{Role: RoleTool, Text: "Read(gl-mar.csv)"},
+	}}
+	if got := GroundOf(w).Turn; got != "now do the AP accruals for Calder" {
+		t.Errorf("want the last user turn, got %q", got)
+	}
+	if got := GroundOf(Window{}).Turn; got != "" {
+		t.Errorf("a window with no user turn must ground on nothing, got %q", got)
 	}
 }
 
@@ -134,7 +243,7 @@ func TestChangedSubjectTreatsAReturnAsUnchanged(t *testing.T) {
 		"Back on members-by-team.tsx, where the budget saliency still clashes with the pill.",
 	} {
 		var ok bool
-		bs, ok = AppendBeat(bs, text)
+		bs, ok = AppendBeat(bs, text, BeatGround{})
 		if !ok {
 			t.Fatalf("beat discarded, cannot judge the flag: %q", text)
 		}
@@ -153,18 +262,18 @@ func TestChangedSubjectTreatsAReturnAsUnchanged(t *testing.T) {
 func TestAppendBeatNeverStoresAFragment(t *testing.T) {
 	var bs []Beat
 	bs, ok := AppendBeat(bs, "Closing March for Meridian, focusing on the bank reconciliation. "+
-		"The outstanding cheques to Halberd Supply still need")
+		"The outstanding cheques to Halberd Supply still need", BeatGround{})
 	if !ok {
 		t.Fatal("the complete first sentence must still be stored")
 	}
 	if got := bs[0].Text; got != "Closing March for Meridian, focusing on the bank reconciliation." {
 		t.Errorf("the incomplete tail was stored: %q", got)
 	}
-	if _, ok := AppendBeat(bs, "no complete sentence here at all"); ok {
+	if _, ok := AppendBeat(bs, "no complete sentence here at all", BeatGround{}); ok {
 		t.Error("a beat with no complete sentence must not be stored")
 	}
 	long := strings.Repeat("padding words that never terminate ", 40)
-	if _, ok := AppendBeat(bs, long); ok {
+	if _, ok := AppendBeat(bs, long, BeatGround{}); ok {
 		t.Error("an over-cap beat with no sentence boundary must not be stored")
 	}
 }

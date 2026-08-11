@@ -37,10 +37,49 @@ const BeatCap = 512
 const BeatMinRunes = 60
 
 // Beat is one cheap statement of what the work is about, derived from its own window.
+//
+// SubjectTerms is what ChangedSubject was decided on — the names the beat and its grounded turn
+// between them put on the table (see beatChangedSubject). Carried on the beat rather than
+// recomputed, because the comparison is against the ACCUMULATED series and the grounded half of
+// an earlier beat's terms cannot be recovered from its text.
 type Beat struct {
-	Ordinal        int    `json:"ordinal"`
-	Text           string `json:"text"`
-	ChangedSubject bool   `json:"changed_subject"`
+	Ordinal        int      `json:"ordinal"`
+	Text           string   `json:"text"`
+	ChangedSubject bool     `json:"changed_subject"`
+	SubjectTerms   []string `json:"subject_terms,omitempty"`
+}
+
+// BeatGround is the grounded, non-model-authored context one beat was generated from.
+//
+// Turn is the user turn that prompted the window. It is the one statement of what a window is
+// about that no model wrote, which is what makes it usable where the beat itself names nothing:
+// see beatChangedSubject.
+//
+// SessionRecord.Subjects is deliberately NOT here, and that is a measured rejection rather than an
+// omission. Folding the record's accumulated subject terms into the same novelty test was tried
+// over the three corpus sessions and made the signal WORSE — 40.7% against the 48.1% baseline,
+// turning four subject changes that read as genuine (the enrichment-arrival investigation, the KPI
+// card, the spend-card toggle, the test email) into "unchanged". The reason is structural: Subjects
+// is cumulative and capped at MaxRecordSubjects by frequency, so it is dominated by terms every
+// earlier beat has already been credited with, and adding it inflates the denominator of the
+// novelty ratio with things that are already seen by construction. It also carries ordinary
+// English into the term set by a route beatSubjectTerms refuses ("Confirmed", "Activity",
+// "Adjustment" reach Subjects via weakProperNoun, and standing alone in a list there is no
+// sentence position left to judge them by).
+type BeatGround struct {
+	Turn string
+}
+
+// GroundOf builds the grounded context for a beat over w. The window's LAST user turn is the turn
+// that prompted it — Mine returns exactly one window per user prompt (see its doc), so that turn is
+// the question this beat is answering.
+func GroundOf(w Window) BeatGround {
+	for i := len(w.Turns) - 1; i >= 0; i-- {
+		if w.Turns[i].Role == RoleUser {
+			return BeatGround{Turn: w.Turns[i].Text}
+		}
+	}
+	return BeatGround{}
 }
 
 // BeatPrompt asks the cheap question. Deliberately NOT given a previous beat: a beat reads the
