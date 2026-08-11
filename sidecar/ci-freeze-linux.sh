@@ -57,7 +57,13 @@ done
 # Real /classify spawns the inference worker child, which must import the (obfuscated)
 # modules from the frozen bundle — the only CI coverage for frozen worker spawn. It
 # also proves the glibc-2.28-linked binary actually runs (here, inside the 2.28 image).
-resp=$(curl -sf -m 120 -X POST http://127.0.0.1:8399/classify \
+#
+# The timeout is deliberately generous. This first /classify also pays for the model
+# download (~1.8 GB) whenever the HF cache misses, so a tight cap bounds the DOWNLOAD
+# rather than the inference it is meant to check. At the previous -m 120 the step was a
+# coin flip: the same cold download took 100s on one run (passed, 20s of margin) and
+# 116s on the next (failed), which is how v0.21.0 shipped without its Linux sidecar.
+resp=$(curl -sf -m 900 -X POST http://127.0.0.1:8399/classify \
   -H 'Content-Type: application/json' \
   -d '{"text":"debug the login bug","tasks":{"task_type":["debug","other"]}}') \
   || { echo "frozen worker /classify failed — spawn/import/bundle broke"; exit 1; }
