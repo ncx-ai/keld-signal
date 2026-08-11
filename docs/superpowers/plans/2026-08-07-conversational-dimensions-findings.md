@@ -451,9 +451,21 @@ per session.
 | T7 fabricated blockers | **2.6%** of 38 clean runs | <=10% |
 | instruction leakage | **0** | — |
 
+⚠️ **SUPERSEDED BY PART 7 (T4 only).** Every T4 figure in Parts 4–6 was measured with
+the previous report embedded whole in the refinement prompt (`CarryForward`) under a
+"must not become shorter or less specific" rule. Both are gone. Part 7 measures the
+replacement at **50.0% / 56.2%**. The other rows in this table are unaffected by that
+change and stand as measured.
+
 **T4 is at its threshold, not above it.** Successive runs scored 89.9% and 92.4%, so
 run-to-run movement is a couple of points and 90% is not comfortably cleared. Treat it
 as "roughly meets" rather than "passes".
+
+⚠️ "Roughly meets" was the right reading and it was not conservative enough. The
+threshold was never comfortably held on this metric at any point in the study, and once
+the embedded prose was removed it collapsed rather than drifted (Part 7). Read this
+paragraph as the earliest signal of the branch's headline negative result, not as a
+qualified pass.
 
 **T5 (blind usefulness) is not measured here** and cannot be self-assessed: it needs a
 reader who did not write the prompts. Everything above is a structural or
@@ -513,6 +525,14 @@ the flagged items, always.
   with it). Handing back the prior digest's named specifics as an explicit retain-list
   fixed it — the same deterministic anchoring that made the counts authoritative.
 
+  ⚠️ **SUPERSEDED BY PART 7.** "Handing back the named specifics fixed it" held while the
+  retain-list *reinforced* the embedded prior prose. As the **only** channel carrying the
+  previous report's specifics — which is what it became when `CarryForward` was deleted —
+  it does not fix it: retention measures **50.0% / 56.2%** against ≥90%, with **161 of 240**
+  specifics dropped by the model while explicitly listed under *"each must still appear"*.
+  The first sentence (caps are not the cause) is *confirmed* by Part 7; the second (naming
+  is the cure) is refuted.
+
 - **Lowering the caps to buy prompt room made things worse.** 500/900 cut truncation
   from 5/20 to 2/20 but dropped retention to 83.3%, because a shorter cap clips
   exactly what the retain-list exists to preserve. Prompt room came instead from
@@ -521,6 +541,14 @@ the flagged items, always.
   caught a first version that over-trimmed: `unresolved` must carry because its update
   is a diff against the prior list, and `insights` must carry because the prompt
   forbids restating them while the code-side dedup is exact-match only.
+
+  ⚠️ **The measurement stands; the explanation is REFUTED.** 500/900 did drop retention to
+  83.3%. But *"because a shorter cap clips exactly what the retain-list exists to
+  preserve"* is the pre-registered hypothesis Part 7 tested and refuted: neither retain-list
+  cap ever bound on any refinement in either arm (largest list observed 24 of 60 entries /
+  280 of 700 runes), and specifics were dropped anyway. Caps are not the mechanism that
+  deletes named specifics. `CarryForward` is also gone (Part 7), so the second half of this
+  bullet describes code that no longer exists.
 
 - **Retrying does not fix a deterministic failure.** "next is empty" and one
   truncation both reproduced through all 5 attempts on identical input. Prevention
@@ -585,6 +613,12 @@ this way while its opening survived. Giving `happened` its own 1400-rune budget,
 correction-bearing digests on the real corpus. **The model was not smoothing over
 difficulty; a constant was deleting it.**
 
+⚠️ **The 0.0% is superseded; the finding is not.** T3 measures **16.7% of 12 / 8.3% of 12**
+in Part 7, on a much smaller denominator and against a ≤10% threshold. The cap *was*
+deleting difficulty and giving `happened` its own budget *did* remove that cause — but "T3
+is clean" is not a standing result, and Part 7's denominator of 12 is too small to read the
+difference between its arms.
+
 **Clipping was not idempotent**, and real digests read `increasing from……`. `done` and
 `happened` are carried into the next refinement, so the model reproduces the ellipsis
 and the next clip appends another. The first fix was incomplete — stripping the trailing
@@ -633,6 +667,20 @@ thresholds were added:
 | T9 current-is-completed | 3.6% of 56 | ≤5% |
 | instruction leakage | 0 | — |
 
+⚠️ **Three rows here are superseded, for different reasons.**
+
+- **T4 94.9%** is the last measurement taken under the embedded-prose scheme, and it is the
+  *before* half of this branch's headline result: **94.9% → 50.0%** (Part 7). It is not a
+  current figure.
+- **T3 0.0% of 18** does not hold either: Part 7 measures 16.7% / 8.3% of 12, a *failure* in
+  the anchor-on arm. See the note in Part 5.
+- **T8 0.0% of 61** and every T8/T10 figure reported before the beat work was measured with
+  a defect in `significantWords` (a phantom empty token that under-matched asymmetric
+  possessives — 0.714 vs 0.833 on a real pair). Per the implementation ledger these numbers
+  **must not be carried forward**; T8 was re-measured in Part 7 (0.0% of 75 / 0.0% of 66) on
+  corrected code. The conclusion below that "the prompt change is what fixed staleness"
+  rests on the superseded pair and is re-stated there.
+
 On the finance fixture that exposed the defect, `current` now reads "nothing in progress"
 and `unresolved` holds the sentinel — correct, since that session completed all eight
 checklist steps.
@@ -664,6 +712,21 @@ The repair's measurable contribution is delivery instead — **T1 82.1% disabled
 Worth stating plainly: an ablation designed to confirm a mechanism instead attributed the
 effect elsewhere. Both changes are needed; the reasons are not the ones assumed.
 
+⚠️ **Both T8 numbers in this section (0.0% of 61 and 0 of 51) predate the
+`significantWords` fix and must not be carried forward** — see the note under the table.
+The comparison is 0.0% against 0.0%, so a systematic under-match affects both arms in the
+same direction and the *no-gap* observation survives; what does not survive is treating
+either figure as a measured T8 rate. Part 7 re-measured T8 at 0.0% of 75 / 0.0% of 66 on
+corrected code, so the conclusion holds — but it holds on Part 7's evidence, not this
+section's. The **T1 82.1% vs 100%** figures are unaffected: they count delivery, not
+staleness.
+
+⚠️ There is also a second, structural caveat that applies to every ablation in this study,
+including this one and the anchor ON/OFF arms in Part 7: an environment flag that gates
+more than one thing measures the bundle, not the mechanism. This section caught that case
+(the hatch left the prompt block active). Part 7's anchor ablation did **not** — see its
+own caveat.
+
 ## The recurring error, four times in one session
 
 T9's first detector over-counted by half. Two of four flagged cases were genuine live
@@ -685,6 +748,29 @@ generation of the same kind. The no-shrink rule went with it.
 
 This is the measurement of that design running end to end.
 
+## The headline, in one line
+
+The design removed the *"must not become shorter or less specific"* rule on the theory that
+cheap transcript-derived beats plus a deterministic retain-list would substitute for embedding
+the previous report's prose. **Measured: they do not.**
+
+> **Fact retention: 94.9% → 50.0%.**
+> (94.9% of 79, Part 6, embedded prose + no-shrink rule → 50.0% of 80 with the recency anchor
+> on, 56.2% off, against a ≥90% threshold. Split by kind it is worse on the population that
+> matters: real identifiers 38.6%, bare capitalised words 63.9%.)
+
+**The deliverable of this branch is a negative result.** The substitute for the no-shrink rule
+does not work as built, and it fails for a reason the plan explicitly did not predict — not
+the retain-list's caps (neither ever bound) but the model dropping specifics it was handed
+under an instruction not to, compounded by a retain-list derived from the last report only, so
+every drop is permanent. It should merge **as** that result: the measurement is clean
+(temperature 0, both arms run twice, every figure reproduced exactly), the prompt-budget work
+underneath it is sound and tightly pinned, and the next experiment it points at — a cumulative
+retain-list — is a design change that was deliberately not landed unmeasured.
+
+Three thresholds fail. A fourth (T11) reports a passing number that is **not a measurement**;
+see its section.
+
 ## Method
 
 14 stratified sessions, this branch's own development transcript first. Four reports per
@@ -702,6 +788,27 @@ Two arms, because the design makes a prediction about the recency anchor:
 The two arms were each run twice. Every figure below reproduced **exactly** across the
 independent pairs, so nothing here is sampling noise.
 
+⚠️ **The ON/OFF ablation is CONFOUNDED, and no magnitude below may be attributed to the
+anchor.** The harness derived one `reason` value and gave it to two consumers: the anchor
+(`RefineInput.Why`) and the measured record's turning-point list
+(`SessionRecord.NoteTurningPoint`). `NoteTurningPoint` keeps only `focus_shift`/`friction`, so
+because the arm switch gated that single value, the **OFF arm ran with an empty
+`TurningPoints` list for its entire duration** while the ON arm fired on ~41 of 42 steps — a
+~220-rune difference in the `SESSION RECORD (measured — authoritative)` block on *every step*.
+The confound is **aligned** with the anchor, so it inflates the anchor's apparent cost.
+
+What survives: the **direction** (every difference favoured OFF, and the anchor's own
+pre-rollup measurement — 97.4% → 88.3% retention, 4.1% → 10.2% fabricated blockers — carried
+no such confound), and therefore the conclusion that the anchor stays gated. What does not
+survive: *"the anchor costs 6 points of T4"*, and any other per-metric attribution across the
+arms. The harness is fixed (`reason` is now computed independently of the arm and only
+`RefineInput.Why` is gated, so both arms see identical records); **the corrected comparison is
+UNMEASURED** and the sweep was deliberately not re-run for a comment-and-doc fix wave.
+
+Note the aggregate figures are unaffected by this: T4 at 50.0% and 56.2% both fail ≥90%, and
+the T4 diagnosis below (161 of 240 named-and-dropped, 0 cap evictions) is identical in the two
+arms.
+
 ## Results
 
 | | anchor ON | anchor OFF | want |
@@ -716,20 +823,26 @@ independent pairs, so nothing here is sampling noise.
 | T8 stale open items | 0.0% of 75 | 0.0% of 66 | ≤2% |
 | T9 current-is-completed | 0.0% of 56 | 1.8% of 56 | ≤5% |
 | T10 synopsis restates | 0.0% of 56 | 0.0% of 56 | ≤5% |
-| T11 synopsis lags | 0.0% of 25 judged | 0.0% of 29 judged | ≤10% |
+| T11 synopsis lags | 0.0% of 25 judged † | 0.0% of 29 judged † | ≤10% |
 | T12 beat-vs-record | **15.7% of 70 checked** | **15.7% of 70 checked** | ≤5% |
 | T13 fabricated `next` | 1.4% of 73 | 0.0% of 73 | ≤5% |
 | instruction leakage | 0 | 0 | — |
 | recovered panics | **0** | **0** | 0 |
 
+† **T11's 0.0% is NOT a pass.** The check cannot detect the failure it scores — two ordinary
+English words shared between a synopsis and an unrelated window certify the synopsis current.
+Read it as *not established*, alongside T12, which shares its root cause. See its section.
+
 Three thresholds fail: T4 badly and in both arms, T12 for a reason that turns out not to be
 about beats at all, and T3 on a denominator of 12 where a single item moves the rate 8 points.
+T11 is a fourth failure of a different kind — the instrument, not the model.
 
 ## T4 is the design's failure, and it is not the retain-list cap
 
-Half the named specifics injected at the first report are gone from the final one. The plan's
-own pre-registered explanation was that the retain-list, no longer reinforced by embedded
-prose, needed a bigger cap. **That is refuted by measurement.** Over 240
+**94.9% → 50.0%.** Half the named specifics injected at the first report are gone from the
+final one, against 94.9% of 79 under the embedded-prose scheme this design replaced (Part 6).
+The plan's own pre-registered explanation was that the retain-list, no longer reinforced by
+embedded prose, needed a bigger cap. **That is refuted by measurement.** Over 240
 (refinement × fact) pairs:
 
 | | ON | OFF |
@@ -763,31 +876,56 @@ population T4 exists to protect. The expectation was recorded before the split w
 it was wrong in the flattering direction — one more instance of the pattern this study keeps
 hitting, where the composition of a rate is only visible in its items.
 
-## T11: the prediction held, but the measurement cannot discriminate it
+## T11: NOT ESTABLISHED — the check cannot detect what it scores
 
-The design predicted synopsis lag would improve **without** the recency anchor, because framing
-is no longer pinned by verbatim prior prose — and flagged that as the same class of
-plausible-mechanism reasoning that failed for the anchor itself.
+An earlier version of this section was headed *"the prediction held"* and drew a live action
+item from T11's 0.0%. **That is withdrawn.** T11 is moved into the same *not established*
+status as T12, because it has the **same root cause in the same function**, and Part 7
+diagnosed that function for T12 while leaving the reassuring small number unaudited. That is
+the study's own recurring error — a rate is only as trustworthy as its items — appearing one
+more time, in the flattering direction, in a document that names the error four times.
 
-Measured: **0.0% in both arms.** No judged refinement in either arm produced a lagging
-synopsis. The prediction is *consistent* with that, and the anchor is demonstrably unnecessary
-for currency — but the measurement cannot discriminate the prediction, because lag is at the
-floor with the anchor as well. What the run does establish is the stronger practical point: the
-currency/durability trade-off the anchor existed to manage **is gone**. Every earlier
-configuration bought recency by paying fact retention; here the anchor buys nothing measurable
-in either direction (T4 is in fact 6 points *worse* with it, T7 twice as high, T3 twice as
-high). **The anchor should stay gated, and on this evidence there is no case for enabling it.**
+**The defect.** `SynopsisLag` compares `distinctiveTerms(synopsis)` against
+`distinctiveTerms(recent window)` and reports lag only when the intersection is **empty**. Its
+docstring claimed comparison is *"on DISTINCTIVE terms only, never bare word overlap"*. It is
+not: `distinctiveToken`'s unconditional 7-character rule admits ordinary English. Reproduced
+directly — a synopsis entirely about a ledger reconciliation, measured against a recent window
+entirely about dropdown opacity, returns `recentHits=2`, on the words **"remains"** and
+**"whether"**. Two ordinary English words shared between any two passages certify a synopsis as
+current. So **0.0% is close to a tautology of the tokeniser, not a floor.**
 
-The old 14.3% is **not** a baseline for this. It was measured under the untrimmed-token bug,
-which caused `SynopsisLag` to abstain on synopses that were lagging.
+**What is therefore unmeasured.** The design's prediction — that lag improves *without* the
+anchor because framing is no longer pinned by verbatim prose — is neither confirmed nor
+refuted, and it cannot be until the tokeniser is fixed. Nor is the *opposite* excluded: a run
+producing lagging synopses in both arms would report the same 0.0%.
 
-**And T11 had the same abstention defect the T12 denominator was corrected for.**
-`SynopsisLag` returns `lag=false` both when it judges a synopsis current and when it *abstains*
-for want of opening evidence (`earlyHits < minLagEvidence`). A rate over all refinements counts
-every abstention as a pass. Corrected here: **17 of 42 refinements abstained (ON), 13 of 42
-(OFF)** — 40% and 31% of the sample carry no verdict at all. The rate is 0.0% of the 25 and 29
-that were actually judged. Every previously published lag figure in this study shares the
-uncorrected denominator.
+**The action item survives, on different evidence.** *Leave the anchor gated; there is no case
+for enabling it.* That now rests on T4 (worse with the anchor in both the pre-rollup
+measurement, 97.4% → 88.3%, and here), T3 and T7 (both higher with it here) — **not** on T11,
+whose justification is withdrawn. Note the ON/OFF magnitudes here are confounded (see Method),
+so the argument leans on the direction and on the unconfounded pre-rollup anchor experiment.
+
+**Two denominator corrections, both real.**
+
+- `SynopsisLag` had the same abstention defect the T12 denominator was corrected for: it returns
+  `lag=false` both when it judges a synopsis current and when it *abstains* for want of opening
+  evidence (`earlyHits < minLagEvidence`), so a rate over all refinements counts every
+  abstention as a pass. Corrected here: **17 of 42 abstained (ON), 13 of 42 (OFF)** — 40% and
+  31% of the sample carries no verdict. The rate is 0.0% of the 25 and 29 actually judged.
+  Every previously published lag figure in this study shares the uncorrected denominator.
+- The old **14.3%** is not a baseline: it predates the trimming fix and was measured while the
+  untrimmed-token bug made `SynopsisLag` abstain on synopses that *were* lagging.
+
+**Partially mitigated, and explicitly not fixed.** `digestStopWords` is capitalised-keyed (it
+was built for `Identifiers`, which only offers capitalised tokens) and `distinctiveToken` looked
+it up case-sensitively, so roughly half the list was dead on the one path that admits lowercase
+words: `distinctiveToken("Currently")` was false while `("currently")` was true, and likewise
+for however/although/completed/reconciled/because/without/several. That is now
+case-insensitive — the mechanical root of both this and T12 — and it changed **no** committed
+test's term set, so nothing was silently re-baselined. It does **not** close the hole: neither
+"remains" nor "whether" is in any stopword list at any casing, and a test asserts that so the
+mitigation cannot be mistaken for a fix. A real distinctiveness rule is a design change that
+would re-open T11 and T12 for measurement.
 
 ## The beats are the design's success
 
@@ -871,6 +1009,12 @@ fifth metric in this study to report a large number that was mostly ordinary Eng
 unverified identifiers at 22.6%, leakage at ~100 per sweep, plurals counted as fabrications, and
 T9's first detector.
 
+**And T11 is the sixth, running the other way.** Defect (1) above is in
+`distinctiveTerms`, which also backs `SynopsisLag` — so the same ordinary-English admission that
+produced T12's large *wrong* number produced T11's small *reassuring* one, by making a match
+easy to find rather than hard. Diagnosing it here and not there is the single most instructive
+mistake in this document: the number that needed auditing was the one that looked fine.
+
 ## What did not come back down: the prompt budget or `ctx`
 
 The design expected both to fall, since the carried report drops from ~4,700 runes to the
@@ -914,16 +1058,78 @@ the fabricated-record failure this plan was already corrected for once. `Populat
 spine is honestly partial, and the design's own risk note about model-dependent fields is
 realized rather than avoided.
 
+## The pattern is systemic: a green test suite cannot detect this class of defect
+
+Four sections of this document describe *a metric that measured ordinary English*. There is a
+second, structurally identical pattern running through the branch, and it has now been found
+**at least ten times across two independent audits** — more than the five the earlier text
+implied. Anyone inheriting this suite needs to know it by name:
+
+> **A test certifying a bound the code does not enforce.** The test passes. Its docstring
+> states a measured before/after. And removing the mechanism it names changes nothing.
+
+Confirmed instances, each verified by removing the mechanism and observing a green suite:
+
+| # | site | how it was vacuous |
+|---|---|---|
+| 1–5 | the prompt-budget work (task 7b, rounds 1–4) | recorded in the implementation ledger |
+| 6 | `TestCreatePathAccountsForItsOwnHeadersBeforeComputingRoom` | decalibrated by the 11,000→14,000 budget raise; reverting gave 4554 **both ways** |
+| 7 | `frictionWords`' `"revers"` stem | the fixture's word "correction" matched the pre-existing `"correct"` entry and short-circuited |
+| 8 | `clipProse`'s word-boundary branch | asserted the absence of a literal the naive cut never produces |
+| 9 | the whole `THE LATEST TURNS ARE ABOUT:` block | the test passed `TriggerNone`, and its `Contains(p, "DigestSchema")` was satisfied by the raw window |
+| 10 | `arms.go`'s latency assignment | the test asserted `< 0`, the exact trap a comment two lines above it names |
+| 11 | `digest_consistency_test.go`'s "all three punctuation shapes" | `,` and `)` are `subjectTokens` separators; one of the three cases did all the work |
+| 12 | `digeststore`'s `SetMaxOpenConns(1)` credit | `busy_timeout` alone is sufficient; the test pins the conjunction and can attribute nothing |
+
+**Three lessons, all paid for.**
+
+1. **A green `-count=1` run is not evidence.** Only *revert-and-fail* detects this class. Every
+   repair in this wave was verified that way, and the verification is recorded in the docstring
+   next to the number, not only in a commit message.
+2. **Raising a global budget silently disarms every test calibrated against it.** Three of the
+   instances above are that one cause. The fix is to size fixtures **from the live constants**
+   and to assert the *regime* as a `t.Fatal` precondition, so a future change fails loudly
+   instead of quietly widening the margin past where the bug lives.
+3. **The reassuring number is the one nobody audits.** T12's 15.7% got a root-cause diagnosis;
+   T11's 0.0%, produced by the same defect in the same function, got a section headed "the
+   prediction held". Large surprising numbers attract scrutiny automatically. Small confirming
+   ones need it scheduled.
+
 ## Not established
 
 - **Usefulness.** Unchanged: every threshold here is structural or consistency-based.
 - **The gated anchor.** `SubjectShifted` fired on 41 of 42 refinements. What was measured is
   anchor-always versus anchor-never.
+- **The anchor's cost, per metric.** The ON/OFF ablation was confounded by
+  `NoteTurningPoint` sharing the arm switch (see Method). Direction only; the corrected
+  comparison is unmeasured.
 - **Turning-point detection from beats.** `ChangedSubject` is 100% and wrong on at least one
   demonstrable pair.
 - **Restatement suppression.** 0 discards, comparator never within 0.3 of firing.
 - **Beat selection at the cap.** Only 5 beats per session against a cap of 12.
+- **T11 as a currency check.** Its 0.0% is near-tautological: `distinctiveToken` admits ordinary
+  English, so two shared English words certify a synopsis current.
 - **T12 as a consistency check.** No genuine contradiction occurred; its 15.7% is extractor
-  mismatch.
+  mismatch — the same root cause as T11.
+- **`TriggerPolicy`, including the wall-clock floor and reason deferral.** No non-test caller
+  exists anywhere in the repository; the sweep computes its reason from `SubjectShifted`
+  directly and never calls `ShouldRefresh`. Unit-tested, not measured.
 - **Non-engineering accuracy.** Cowork is still VM-backed and yields no readable transcripts.
 - **Long sessions.** Every measurement is a 16-window prefix, 4 reports, ≤5 beats.
+
+## What to do next, in order
+
+1. **A cumulative retain-list** (a union over all prior reports, not just the last). It is the
+   only change the T4 diagnosis actually points at: 161 of 240 drops were already named, and
+   79 were unnameable *because* the list is re-derived from the last report. Not landed here,
+   deliberately, because it is a design change that must be measured, not asserted.
+2. **A real distinctiveness rule** for `distinctiveToken`, not a longer stopword list. It gates
+   T11 and T12 both, and until it lands neither threshold means anything.
+3. **`SessionRecord.Subjects` must hold subjects, not tool names.** `Observe` reads the whole
+   delta including tool lines and frequency-ranks it, and agentic sessions are overwhelmingly
+   tool traffic. This is the other half of T12.
+4. **Re-run the ablation** on the de-confounded harness before quoting any anchor magnitude.
+5. **`maxSubjectTermLen`** drops every `docs/` path (longest tracked path 83 runes vs a 64-rune
+   cap) — a second mechanism deleting named specifics. Raising it is not free: measured at 96,
+   the create-path worst case breaches the 1,600-rune window floor. It needs budget headroom
+   the corpus probe says does not exist.
