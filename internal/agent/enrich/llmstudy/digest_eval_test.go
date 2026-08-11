@@ -118,6 +118,14 @@ func TestDigestSizing(t *testing.T) {
 	}
 }
 
+// pctInt is an integer percentage for a log line, 0 when there is no denominator.
+func pctInt(n, d int) int {
+	if d == 0 {
+		return 0
+	}
+	return 100 * n / d
+}
+
 func clipLog(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > 260 {
@@ -288,6 +296,12 @@ func TestDigestRefineQuality(t *testing.T) {
 		beatErrs                   int
 		beatsChangedSubject        int
 		beatsShownTotal, beatSteps int
+		// Beat window geometry, per the design spec's Part 1. Neither number existed
+		// before: coverage answers "how much of the transcript does any beat actually
+		// read" — the old K=12 geometry left most of every stride unread and nothing
+		// reported it — and overlap answers whether consecutive beats share ground at
+		// all, without which ChangedSubject is comparing two disjoint texts.
+		beatCov                    BeatCoverage
 		beatRatioSum, beatRatioMax float64
 		beatRatioN                 int
 		// T12: BeatContradictsRecord returns (terms, checked). checked==false is an
@@ -353,6 +367,9 @@ func TestDigestRefineQuality(t *testing.T) {
 		var firstSrc, prevReportSrc string
 		var rec SessionRecord
 		var beats []Beat
+		// One windower per session: a beat's stride is "since the previous beat of THIS
+		// session", so the state must not carry across sessions.
+		var bw BeatWindower
 		// The verification reference must be every window consumed so far. Scoring a
 		// refined digest against only the newest window counts correct carry-forward
 		// as fabrication — which is what an earlier run of this harness did, reporting
@@ -411,10 +428,31 @@ func TestDigestRefineQuality(t *testing.T) {
 			// which would count the same turn a dozen times.
 			if (idx+1)%beatTurns == 0 {
 				beatAsks++
+				// The beat reads its OWN window — contiguous since the previous beat, with a
+				// reserved stride overlap — not the K=12 classification window the report
+				// reads. See beat_window.go for the geometry and what it cannot do.
+				bwin := bw.Next(deltas, idx)
+				beatCov.Add(bwin)
+				// The beat window is RAW TRANSCRIPT, so it belongs in the verification
+				// reference. With contiguous windows a beat legitimately sees material no
+				// mined window carries, and without this a specific correctly carried out of
+				// it would be scored as a fabrication by T2/T13 — a measurement artifact
+				// rather than a model failure. Beat TEXT is still excluded (see above): that
+				// is model output, and laundering an invented name through it is precisely
+				// what T2 exists to catch.
+				seenSrc.WriteString(bwin.Rendered)
+				seenSrc.WriteString("\n")
+				cumulative = seenSrc.String() + rec.Block()
+				t.Logf("  BEAT-WINDOW s%d i%d: span %d turns, kept %d (%d dropped by the "+
+					"%d-rune bound), overlap %d turns / %d runes (%d%% of the previous span), "+
+					"window %d runes",
+					sessions, idx, bwin.SpanTurns, bwin.KeptTurns, bwin.Dropped(),
+					BeatWindowChars, bwin.OverlapTurns, bwin.OverlapRunes,
+					pctInt(bwin.OverlapRunes, bwin.PrevSpanRunes), bwin.TotalRunes)
 				var text string
 				var berr error
 				if recovered(t, fmt.Sprintf("beat s%d i%d", sessions, idx), func() {
-					text, berr = l.GenerateBeat(rec.Block(), src)
+					text, berr = l.GenerateBeat(rec.Block(), bwin.Rendered)
 				}) {
 					panicsBeat++
 				} else if berr != nil {
@@ -453,7 +491,9 @@ func TestDigestRefineQuality(t *testing.T) {
 						}
 					}
 					var kept bool
-					beats, kept = AppendBeat(beats, text, GroundOf(w))
+					// Grounded on the turn that prompted THIS BEAT's window — the same user prompt
+					// idx names, carried as bwin.Window's newest user turn.
+					beats, kept = AppendBeat(beats, text, GroundOf(bwin.Window))
 					if kept {
 						beatsKept++
 						b := beats[len(beats)-1]
@@ -906,6 +946,20 @@ func TestDigestRefineQuality(t *testing.T) {
 		beatAsks, beatsGenerated, beatsKept, beatsDiscarded, pct(beatsDiscarded, beatsGenerated),
 		beatErrs, beatTurns)
 	t.Logf("   of the kept beats, %d changed the subject (%.1f%%)", beatsChangedSubject, pct(beatsChangedSubject, beatsKept))
+	// Beat window geometry. Reported unconditionally, because "coverage was not measured"
+	// is the state this replaces. Both overlap figures are printed because they are
+	// different quantities: the spec's "~25-30%" is a share of the PREVIOUS window, which
+	// for two spans of similar size is a smaller share of the new one.
+	if beatCov.Windows > 0 {
+		t.Logf("BEAT WINDOWS  turn coverage %.1f%% of %d turns spanned (%d turns dropped by "+
+			"the %d-rune bound and covered by NO window); %d windows, largest %d runes",
+			beatCov.TurnCoverage(), beatCov.SpanTurns, beatCov.SpanTurns-beatCov.KeptTurns,
+			BeatWindowChars, beatCov.Windows, beatCov.LargestRunes)
+		t.Logf("   consecutive-window overlap: mean %.1f%% of window runes, %.1f%% of the "+
+			"previous window (reserve %d%%) — shared transcript, not shared model output, so "+
+			"it cannot compound drift",
+			beatCov.OverlapPct(), beatCov.OverlapOfPrevPct(), beatOverlapPct)
+	}
 	if beatRatioN > 0 {
 		t.Logf("   consecutive-beat overlap ratio: mean %.3f, max %.3f over %d pairs, against the "+
 			"%.2f threshold beatsRestate discards at — a max far below it means the beats really "+
@@ -1005,58 +1059,6 @@ func lostFacts(after Digest, facts []string) []string {
 		}
 	}
 	return out
-}
-
-// sessionDeltas returns one Window per user prompt like Mine does, but holding ONLY the
-// records that are NEW since the previous user prompt — disjoint slices whose union is the
-// whole record stream, in the same order and with the same PromptIDs as Mine's windows.
-//
-// This exists because SessionRecord.Observe SUMS what it is given
-// (r.Turns += s.Turns, r.Corrections += s.Corrections, mergeToolCounts adds), and Mine's
-// windows OVERLAP: each carries up to K=12 context turns before its target, so consecutive
-// windows share ~11 turns. Folding Mine's windows straight into the record therefore counts
-// most turns about a dozen times, and the record is the one input the refine prompt labels
-// "measured — authoritative". digestRules tells the model that corrections in particular are a
-// measured fact its prose must be consistent with, so an inflated correction count is not a
-// cosmetic error: it pushes the model toward reporting friction, which is exactly what T3
-// (rubberstamping) scores, and in the direction that makes T3 look BETTER than the truth.
-// Measured on this corpus before this fix, over 16 windows: turns 190 vs 51 (3.7x),
-// tool_calls 87 vs 22 (4.0x), corrections 20 vs 5 (4.0x) on the first session, with the same
-// shape on every other session probed.
-//
-// Observe's own unit test pairs it with disjoint two-turn windows (turns=4 from 2+2), so
-// disjoint input is the contract it was written against; Mine's overlap is the harness's
-// problem to solve, not a reason to change shared accumulation code.
-//
-// Built from records() — the same parse Mine and Outcomes share, so the three cannot disagree
-// about what counts as a conversational record — and through appendTurn/elideCode/clip so a
-// delta's turns are rendered and collapsed identically to a mined window's — clipTurn, matching
-// buildWindow, so the record's verbatim-verified Subjects cannot be extracted from a token this
-// harness cut in half (see clipbound.go). Tool-run collapse
-// (the "(xN)" marker Extract and mergeToolCounts both read) therefore still applies within a
-// delta; a run split across two deltas counts as two runs, which is what actually happened.
-func sessionDeltas(path string, o MineOpts) ([]Window, error) {
-	recs, sessionID, err := recordsAndSession(path, o)
-	if err != nil {
-		return nil, err
-	}
-	var out []Window
-	prev := 0
-	for i, r := range recs {
-		if r.role != RoleUser {
-			continue
-		}
-		turns := make([]Turn, 0, i-prev+1)
-		for _, c := range recs[prev : i+1] {
-			turns = appendTurn(turns, Turn{Role: c.role, Text: clipTurn(elideCode(c.text), o.PerTurnChars)})
-		}
-		out = append(out, Window{
-			SessionID: sessionID, PromptID: r.id,
-			Target: clipTurn(elideCode(r.text), o.PerTurnChars), Turns: turns,
-		})
-		prev = i + 1
-	}
-	return out, nil
 }
 
 // anchorEnabled reports whether the sweep offers the recency anchor at all.

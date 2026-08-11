@@ -118,7 +118,12 @@ Rules:
 
 Respond with JSON only.
 `)
-	return b.String()
+	p := b.String()
+	// The backstop BeatPrompt never had — see BeatPromptCharBudget. A contiguous beat window is
+	// bounded by BeatWindowChars, so this only fires on a caller that assembled one some other
+	// way, which is precisely the case that used to overflow ctx in silence.
+	assertBeatPromptWithinBudget(p)
+	return p
 }
 
 // BeatSchema constrains the response to one required string.

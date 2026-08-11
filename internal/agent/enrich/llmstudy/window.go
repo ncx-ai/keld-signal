@@ -356,6 +356,63 @@ func buildWindow(sessionID string, recs []record, i int, o MineOpts) Window {
 	return w
 }
 
+// sessionDeltas returns one Window per user prompt like Mine does, but holding ONLY the
+// records that are NEW since the previous user prompt — disjoint slices whose union is the
+// whole record stream, in the same order and with the same PromptIDs as Mine's windows.
+//
+// This exists because SessionRecord.Observe SUMS what it is given
+// (r.Turns += s.Turns, r.Corrections += s.Corrections, mergeToolCounts adds), and Mine's
+// windows OVERLAP: each carries up to K=12 context turns before its target, so consecutive
+// windows share ~11 turns. Folding Mine's windows straight into the record therefore counts
+// most turns about a dozen times, and the record is the one input the refine prompt labels
+// "measured — authoritative". digestRules tells the model that corrections in particular are a
+// measured fact its prose must be consistent with, so an inflated correction count is not a
+// cosmetic error: it pushes the model toward reporting friction, which is exactly what T3
+// (rubberstamping) scores, and in the direction that makes T3 look BETTER than the truth.
+// Measured on this corpus before this fix, over 16 windows: turns 190 vs 51 (3.7x),
+// tool_calls 87 vs 22 (4.0x), corrections 20 vs 5 (4.0x) on the first session, with the same
+// shape on every other session probed.
+//
+// Observe's own unit test pairs it with disjoint two-turn windows (turns=4 from 2+2), so
+// disjoint input is the contract it was written against; Mine's overlap is the harness's
+// problem to solve, not a reason to change shared accumulation code.
+//
+// MOVED here from the eval harness (digest_eval_test.go) when beat windows started needing
+// the same primitive: a beat's contiguous stride is built from these disjoint slices, and two
+// independent constructions of "the records new since the previous user prompt" is exactly the
+// duplication this package keeps paying for elsewhere.
+//
+// Built from records() — the same parse Mine and Outcomes share, so the three cannot disagree
+// about what counts as a conversational record — and through appendTurn/elideCode/clip so a
+// delta's turns are rendered and collapsed identically to a mined window's — clipTurn, matching
+// buildWindow, so the record's verbatim-verified Subjects cannot be extracted from a token this
+// harness cut in half (see clipbound.go). Tool-run collapse
+// (the "(xN)" marker Extract and mergeToolCounts both read) therefore still applies within a
+// delta; a run split across two deltas counts as two runs, which is what actually happened.
+func sessionDeltas(path string, o MineOpts) ([]Window, error) {
+	recs, sessionID, err := recordsAndSession(path, o)
+	if err != nil {
+		return nil, err
+	}
+	var out []Window
+	prev := 0
+	for i, r := range recs {
+		if r.role != RoleUser {
+			continue
+		}
+		turns := make([]Turn, 0, i-prev+1)
+		for _, c := range recs[prev : i+1] {
+			turns = appendTurn(turns, Turn{Role: c.role, Text: clipTurn(elideCode(c.text), o.PerTurnChars)})
+		}
+		out = append(out, Window{
+			SessionID: sessionID, PromptID: r.id,
+			Target: clipTurn(elideCode(r.text), o.PerTurnChars), Turns: turns,
+		})
+		prev = i + 1
+	}
+	return out, nil
+}
+
 // digestTurns bounds the coarse session view.
 const digestTurns = 6
 
