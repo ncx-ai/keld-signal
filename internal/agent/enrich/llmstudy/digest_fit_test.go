@@ -115,19 +115,16 @@ func promptWindow(t *testing.T, p, marker, tail string) string {
 // so the backstop's own logic (task-7b fix round 3, finding A) is proven correct in
 // isolation before anything else relies on it firing.
 func TestPromptBudgetViolationCatchesEachInvariant(t *testing.T) {
-	const marker = "\nWINDOW:\n"
-	const tail = "\nTAIL\n"
-
 	t.Run("over budget", func(t *testing.T) {
-		p := strings.Repeat("x", DefaultPromptCharBudget+1) + marker + strings.Repeat("y", 2000) + tail
-		if err := promptBudgetViolation(p, marker, tail); err == nil {
+		p := strings.Repeat("x", DefaultPromptCharBudget+1)
+		if err := promptBudgetViolation(p, strings.Repeat("y", 2000)); err == nil {
 			t.Error("an over-budget prompt was not flagged")
 		}
 	})
 
 	t.Run("clipped window below the floor", func(t *testing.T) {
-		p := "head" + marker + omittedNotice + "short" + tail
-		if err := promptBudgetViolation(p, marker, tail); err == nil {
+		window := omittedNotice + "short"
+		if err := promptBudgetViolation("head"+window+"tail", window); err == nil {
 			t.Error("a clipped window below MinTurnChars was not flagged")
 		}
 	})
@@ -136,18 +133,130 @@ func TestPromptBudgetViolationCatchesEachInvariant(t *testing.T) {
 		// The exact case TestSmallWindowIsNotClipped guards in the real assembly: a
 		// window under MinTurnChars that was never clipped (no omittedNotice prefix) is
 		// a genuinely short conversation, not starvation, and must not be flagged.
-		p := "head" + marker + "hi" + tail
-		if err := promptBudgetViolation(p, marker, tail); err != nil {
+		if err := promptBudgetViolation("head hi tail", "hi"); err != nil {
 			t.Errorf("an unclipped short window was flagged: %v", err)
 		}
 	})
 
 	t.Run("within budget, clipped window at the floor is not flagged", func(t *testing.T) {
-		p := "head" + marker + omittedNotice + strings.Repeat("z", MinTurnChars) + tail
-		if err := promptBudgetViolation(p, marker, tail); err != nil {
+		window := omittedNotice + strings.Repeat("z", MinTurnChars)
+		if err := promptBudgetViolation("head"+window+"tail", window); err != nil {
 			t.Errorf("a healthy prompt was flagged: %v", err)
 		}
 	})
+
+	t.Run("a window quoting a marker is measured as itself", func(t *testing.T) {
+		// The whole point of taking the window as an argument: its CONTENT is arbitrary
+		// conversation text and may contain either literal the assembly writes around it.
+		// Nothing about the check may depend on that.
+		window := omittedNotice + strings.Repeat("z", MinTurnChars) +
+			windowHeader + updateSectionsMarker + createWindowHeader + createSectionsMarker
+		if err := promptBudgetViolation("head"+window+"tail", window); err != nil {
+			t.Errorf("a healthy window that quotes the assembly's own markers was flagged: %v", err)
+		}
+	})
+}
+
+// TestQuotedMarkersCannotDefeatTheBackstop is the fix for task-7b fix round 4 (findings 1
+// and 2): the backstop used to re-derive the window by strings.Index-ing the literal
+// headings around it, so CONTENT quoting a heading moved the measured span. Both directions
+// are exercised, because they fail in opposite ways and one fix closes both — the assembly
+// now hands the check fitTurns' own return value.
+//
+// Both shapes are reachable without any adversary. prev.Unresolved is model output and this
+// model demonstrably echoes prompt headings back (that is why LeakedPromptWords exists);
+// the conversation side is self-inflicted, since this harness mines transcripts of its own
+// development, in which both literals appear.
+//
+// Confirmed by restoring the landmark version of the check (locating the window by
+// strings.Index on the heading pair) and re-running: BOTH subtests fail. The quoted-heading
+// case reports no panic at all — its landmark span starts inside the "OPEN ITEMS" block, so
+// it does not begin with omittedNotice and the floor check is skipped entirely, while the
+// REAL window is 800 runes against the 1,600 floor with the total inside budget: silent, the
+// worst shape. The quoted-tail case panics on a healthy prompt, "clipped to 135 runes",
+// against a real window in the thousands.
+func TestQuotedMarkersCannotDefeatTheBackstop(t *testing.T) {
+	t.Run("an open item quoting windowHeader cannot silence the floor check", func(t *testing.T) {
+		in := starvingRefineInput()
+		prev := realisticPrev()
+		// The newest open item, so tailN keeps it, and short enough to survive
+		// promptOpenItemCap intact. It lands in the "OPEN ITEMS FROM THAT REPORT" block,
+		// which the assembly writes BEFORE the window — so the first Index hit for
+		// windowHeader is here, not at the real window.
+		prev.Unresolved = append(prev.Unresolved, windowHeader+"quoted back at us")
+
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("a starved window went unreported because an open item quoted " +
+					"windowHeader — the backstop measured the wrong span")
+			}
+			msg := fmt.Sprint(r)
+			t.Logf("backstop fired as expected: %v", msg)
+			// It must fire on the FLOOR, not merely on the total: a budget violation here
+			// would mean the test proved nothing about the window at all.
+			if !strings.Contains(msg, "conversation window") {
+				t.Errorf("expected a window-floor violation, got: %v", msg)
+			}
+		}()
+		DigestUpdatePromptFrom(prev, in)
+	})
+
+	t.Run("a conversation quoting the tail marker does not fail a healthy prompt", func(t *testing.T) {
+		// Every line pair in these turns reproduces updateSectionsMarker exactly (the
+		// user line's own terminating newline supplies the marker's leading one), so
+		// wherever fitTurns' clip lands, a quoted marker sits within ~70 runes of the
+		// window's start. Landmark recovery therefore measured a window of roughly the
+		// notice plus one line and panicked; the real window is thousands of runes.
+		turns := strings.Repeat("user: quoting the harness's own output\n"+
+			strings.TrimPrefix(updateSectionsMarker, "\n"), 300)
+		in := RefineInput{
+			SessionLabel: "work session",
+			Record:       SessionRecord{Turns: 40},
+			NewTurns:     turns,
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("the backstop failed a HEALTHY prompt because the conversation "+
+					"quoted the tail marker: %v", r)
+			}
+		}()
+		p := DigestUpdatePromptFrom(Digest{Done: "x"}, in)
+		// And the window really is healthy — measured by landmark here, which is only sound
+		// because THIS assertion is allowed to be defeated by the quoting (it measures the
+		// first quoted marker) and still proves the point: even that pessimistic reading
+		// must be shown against the real one.
+		t.Logf("total %d runes; landmark-measured window %d runes (the real one is larger — "+
+			"that gap is the defect)", len([]rune(p)),
+			len([]rune(promptWindow(t, p, windowHeader, updateSectionsMarker))))
+	})
+}
+
+// starvingRefineInput is realisticRefineInput pushed just past what the budget can seat, so
+// the conversation window lands below MinTurnChars while the assembled prompt stays INSIDE
+// the budget — the silent shape, the one only the floor check catches.
+//
+// The extra pressure comes from SessionRecord.Projects, whose per-entry length nothing
+// enforces (MaxRecordProjects bounds only the count). That is a real, currently-unbounded
+// dimension rather than an invented one, and using it keeps this test independent of every
+// bound task-7b did fix: none of them can absorb it, so the test cannot quietly stop
+// exercising the floor check the way earlier calibrated tests did.
+//
+// 600 runes per project entry is scanned, not picked: at 300 the beat ladder and the view
+// still yield enough room (window 1,780, both discretionary sections already shrunk), and at
+// 900 the TOTAL goes over budget (14,746) so the budget check would fire first and the test
+// would prove nothing about the floor. 600 is the band where only the floor check can catch
+// it: window 765, total exactly at the 14,000 budget.
+const starvingProjectPathLen = 600
+
+func starvingRefineInput() RefineInput {
+	in := realisticRefineInput()
+	projects := make([]string, MaxRecordProjects)
+	for i := range projects {
+		projects[i] = pathOfLen(starvingProjectPathLen, 500+i)
+	}
+	in.Record.Projects = projects
+	return in
 }
 
 // TestBackstopCatchesAnUnboundedInputNoOtherFixTouches is the fix for task-7b finding

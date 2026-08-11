@@ -126,21 +126,39 @@ const sessionLabelCap = 200
 // so widening their signature to thread an error through is the "patch one more
 // instance" move this backstop exists to stop needing. A violation here means a
 // programming error in THIS package's own budgeting, not a bad but valid caller input —
-// exactly the shape Go reserves panic for. windowMarker/tailMarker are supplied by the
-// caller because the two prompt paths use different literal headings around their
-// window (createWindowHeader/createSectionsMarker vs windowHeader/updateSectionsMarker);
-// the check itself is otherwise identical, which is why it lives here once rather than
-// as two near-duplicate checks in digest.go and digest_refine.go.
-func assertPromptWithinBudget(p, windowMarker, tailMarker string) {
-	if err := promptBudgetViolation(p, windowMarker, tailMarker); err != nil {
+// exactly the shape Go reserves panic for.
+//
+// `window` is fitTurns' OWN RETURN VALUE, passed in by the assembly — not re-derived from
+// `p`. Task-7b fix round 4: an earlier version located the window by strings.Index-ing the
+// literal headings that surround it, which any CONTENT quoting one of those headings
+// defeats, in both directions.
+//
+//   - A quoted windowHeader (reachable: prev.Unresolved is model output, and
+//     LeakedPromptWords exists in this package precisely because this model echoes prompt
+//     headings back) moves the measured start EARLIER, into the open-items block. The
+//     measured span then does not begin with omittedNotice, so the floor check is skipped
+//     entirely: measured 1,717 while the real window was 757 against a 1,600 floor, total
+//     in budget, backstop silent — a starved window shipping unnoticed, which is the exact
+//     failure this backstop exists to prevent.
+//   - A quoted tail marker inside the conversation moves the measured END earlier, making a
+//     HEALTHY prompt panic: measured 867 against a real window of 5,102. Self-inflictable,
+//     since this harness mines transcripts of its own development and that literal gets
+//     dumped into them.
+//
+// Measure the quantity you produced. The assembly HAS fitTurns' output — it just wrote it —
+// so there is no reason to go looking for it again in a string that also contains
+// arbitrary conversation text. (Tests that hold only a finished prompt still recover the
+// window by landmark; see promptWindow's doc for why that is sound there and not here.)
+func assertPromptWithinBudget(p, window string) {
+	if err := promptBudgetViolation(p, window); err != nil {
 		panic("llmstudy: " + err.Error())
 	}
 }
 
 // promptBudgetViolation is assertPromptWithinBudget's check, factored out so a test can
 // assert "the backstop fires" by inspecting a returned error directly rather than only
-// via recover — and so it can be exercised on a hand-built prompt string too, independent
-// of how a violating one might arise.
+// via recover — and so it can be exercised on hand-built strings too, independent of how a
+// violating prompt might arise.
 //
 // The window floor is checked ONLY when fitTurns actually clipped (the window starts
 // with omittedNotice) — caught live by TestSmallWindowIsNotClipped, whose entire point
@@ -151,20 +169,10 @@ func assertPromptWithinBudget(p, windowMarker, tailMarker string) {
 // not a starvation bug, and flagging one would make this backstop fire constantly on
 // completely healthy prompts, which is exactly the "fires so often it gets ignored"
 // failure a backstop must not have.
-func promptBudgetViolation(p, windowMarker, tailMarker string) error {
+func promptBudgetViolation(p, window string) error {
 	if total := len([]rune(p)); total > DefaultPromptCharBudget {
 		return fmt.Errorf("assembled prompt is %d runes, over the %d-rune budget", total, DefaultPromptCharBudget)
 	}
-	start := strings.Index(p, windowMarker)
-	if start < 0 {
-		return fmt.Errorf("assembled prompt is missing its window marker %q", windowMarker)
-	}
-	start += len(windowMarker)
-	end := strings.Index(p[start:], tailMarker)
-	if end < 0 {
-		return fmt.Errorf("assembled prompt is missing its tail marker %q", tailMarker)
-	}
-	window := p[start : start+end]
 	if strings.HasPrefix(window, omittedNotice) {
 		if n := len([]rune(window)); n < MinTurnChars {
 			return fmt.Errorf("assembled prompt's conversation window was clipped to %d runes, below the %d-rune floor", n, MinTurnChars)

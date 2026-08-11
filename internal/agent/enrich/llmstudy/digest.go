@@ -210,7 +210,11 @@ func DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts string) 
 		b.WriteString(v)
 	}
 	b.WriteString(createWindowHeader)
-	b.WriteString(fitTurns(turns, b.Len()+createTailLen()))
+	// Held in a variable so the backstop below measures the window fitTurns produced
+	// instead of re-locating it by landmark — see assertPromptWithinBudget's doc, and the
+	// identical line in DigestUpdatePromptFrom.
+	window := fitTurns(turns, b.Len()+createTailLen())
+	b.WriteString(window)
 	b.WriteString(createSectionsMarker)
 	b.WriteString(digestSections)
 	b.WriteString(digestRules)
@@ -223,7 +227,7 @@ func DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts string) 
 	// loudly, on the actually-assembled prompt, instead of shipping a prompt that
 	// truncates mid-JSON and silently drops the digest. See assertPromptWithinBudget's
 	// doc in digest_fit.go.
-	assertPromptWithinBudget(p, createWindowHeader, createSectionsMarker)
+	assertPromptWithinBudget(p, window)
 	return p
 }
 

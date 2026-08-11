@@ -227,7 +227,12 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 		b.WriteString(view)
 	}
 	b.WriteString(windowHeader)
-	b.WriteString(fitTurns(in.NewTurns, b.Len()+updateTailLen()))
+	// Held in a variable, not just written: the backstop is handed the window fitTurns
+	// actually produced rather than re-deriving it from the finished prompt, which content
+	// quoting windowHeader or updateSectionsMarker defeats in both directions (task-7b fix
+	// round 4 — see assertPromptWithinBudget's doc).
+	window := fitTurns(in.NewTurns, b.Len()+updateTailLen())
+	b.WriteString(window)
 	b.WriteString(updateSectionsMarker)
 	b.WriteString(digestSections)
 	b.WriteString(updateRules)
@@ -235,7 +240,7 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	b.WriteString("\nRespond with JSON only.\n")
 	p := b.String()
 	// The backstop (task-7b fix round 3, finding A) — see its doc in digest_fit.go.
-	assertPromptWithinBudget(p, windowHeader, updateSectionsMarker)
+	assertPromptWithinBudget(p, window)
 	return p
 }
 
