@@ -58,3 +58,23 @@ func TestRecentSubjectsAreExtractedAndHandedOver(t *testing.T) {
 		t.Error("refine prompt does not hand over the latest subjects")
 	}
 }
+
+// RecentSubjects called distinctiveToken (which trims only internally, to decide whether a
+// token qualifies) but stored the RAW token, so a subject sitting at the end of a sentence
+// kept its terminal punctuation glued on. recentSubjectsOf splices the result straight into
+// a live prompt (THE LATEST TURNS ARE ABOUT: ...), so the model was shown "DigestSchema."
+// with the period attached. Sibling distinctiveTerms had the identical bug, fixed via
+// trimTermPunct in d717ea3; this is the same fix applied to RecentSubjects' emitted value.
+func TestRecentSubjectsTrimsTerminalPunctuation(t *testing.T) {
+	w := Window{Turns: []Turn{
+		{RoleUser, "We need to extend DigestSchema."},
+	}}
+	subs := RecentSubjects(w, 1)
+	joined := strings.Join(subs, " ")
+	if strings.Contains(joined, "DigestSchema.") {
+		t.Errorf("emitted subject kept its terminal punctuation: %v", subs)
+	}
+	if !strings.Contains(joined, "DigestSchema") {
+		t.Fatalf("expected a trimmed DigestSchema in the output: %v", subs)
+	}
+}

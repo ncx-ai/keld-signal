@@ -126,8 +126,13 @@ func RecentSubjects(w Window, n int) []string {
 			}
 			seen[k] = true
 			// Original spelling, not the lowercased key: an identifier a reader would
-			// recognise is worth handing over as written.
-			out = append(out, tok)
+			// recognise is worth handing over as written. But trimmed, not raw: tok still
+			// carries whatever punctuation subjectTokens left attached to its ends (a
+			// sentence-final subject comes out "DigestSchema."), and this value is spliced
+			// straight into the model's recency anchor by recentSubjectsOf — unlike
+			// distinctiveTerms' map keys, nothing downstream of RecentSubjects trims it.
+			// trimTermPunct only strips leading/trailing punctuation, so casing is untouched.
+			out = append(out, trimTermPunct(tok))
 			if len(out) == maxRecentSubjects {
 				return out
 			}
