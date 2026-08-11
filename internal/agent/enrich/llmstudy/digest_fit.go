@@ -3,6 +3,7 @@ package llmstudy
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // DefaultPromptCharBudget bounds a digest prompt so prompt plus output fits the context.
@@ -44,6 +45,30 @@ import (
 // two things the design is judged on, and both are content.
 const DefaultPromptCharBudget = 14000
 
+// runeLen is the ONE unit every figure in the prompt-budget arithmetic is measured in.
+//
+// This existed as scattered `len([]rune(x))` calls and, at four sites, as `b.Len()` — and
+// that mixture was the round-3 review's CRITICAL finding, the one that panicked on 2% of
+// real mined transcripts. Both budgets are rune counts (DefaultPromptCharBudget is compared
+// against len([]rune(p)), MinTurnChars against the window's rune length) and fitTurns slices
+// runes, but the two assemblies charged their prefix in BYTES: `b.Len()`. On ASCII the two
+// agree exactly, so every synthetic test certified the arithmetic as sound; on real
+// transcript text — em dashes, arrows, box-drawing, emoji — the assembled prefix carried
+// 8-18 bytes of multi-byte excess, so `room` landed that many runes BELOW what
+// fitDiscretionary and clipSessionViewFor had reserved for the window, and the floor broke.
+//
+// RUNES is the direction the reconciliation had to go, not bytes. The floor is a promise
+// about how much CONVERSATION the window holds, and a rune is the unit a reader and a
+// tokenizer both count in; MinTurnChars bytes of multi-byte text is fewer than MinTurnChars
+// characters of it, so a byte-denominated floor would silently shrink on exactly the
+// non-English or symbol-heavy content it most needs to hold. Bytes are an encoding detail
+// that no budget in this package is expressed in.
+//
+// Named rather than inlined so the unit is visible at every site and a `b.Len()` reappearing
+// in this arithmetic reads as the anomaly it is. utf8.RuneCountInString, not len([]rune(s)),
+// so measuring a prompt does not allocate a copy of it.
+func runeLen(s string) int { return utf8.RuneCountInString(s) }
+
 // fitTurns clips a rendered window so a prompt of `overhead` characters plus the turns
 // stays inside the budget.
 //
@@ -62,7 +87,7 @@ func fitTurns(turns string, overhead int) string {
 	}
 	// The notice is part of the prompt, so it comes out of the same room. Omitting it
 	// from the arithmetic put the prompt over budget by exactly its own length.
-	room -= len([]rune(omittedNotice))
+	room -= runeLen(omittedNotice)
 	if room < 0 {
 		room = 0
 	}

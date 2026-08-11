@@ -51,7 +51,7 @@ func clipSessionViewFor(v string, overhead int) string {
 	if v == "" {
 		return ""
 	}
-	room := DefaultPromptCharBudget - overhead - MinTurnChars - len([]rune(omittedNotice))
+	room := DefaultPromptCharBudget - overhead - MinTurnChars - runeLen(omittedNotice)
 	if room > SessionViewCap {
 		room = SessionViewCap
 	}

@@ -152,8 +152,8 @@ const createSectionsMarker = "\nWrite these sections:\n"
 // silently wrong as documentation: it is not the number this function actually needs to
 // mean.
 func createTailLen() int {
-	return len([]rune(createSectionsMarker)) + len([]rune(digestSections)) +
-		len([]rune(digestRules)) + len([]rune("\nRespond with JSON only.\n"))
+	return runeLen(createSectionsMarker) + runeLen(digestSections) +
+		runeLen(digestRules) + runeLen("\nRespond with JSON only.\n")
 }
 
 // createViewHeader and createWindowHeader are the literal headings
@@ -192,6 +192,21 @@ func DigestCreatePrompt(sessionLabel, turns, facts string) string {
 // a month-end close would be summarised as "clearing the suspense account". The view is what
 // makes the leading question answerable.
 func DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts string) string {
+	p, _ := createPromptAndWindow(sessionLabel, turns, sessionView, facts)
+	return p
+}
+
+// createPromptAndWindow is DigestCreatePromptWithView's body, returning the conversation
+// window fitTurns produced alongside the prompt.
+//
+// The window is returned rather than left to be recovered by landmark because landmark
+// recovery is defeated by content quoting a heading — the defect fix round 4 removed from
+// the backstop (see assertPromptWithinBudget's doc). The backstop already needed the real
+// value; a MEASUREMENT needs it for the same reason, and the real-corpus probe measures
+// window margins over transcripts of this harness's own development, in which every
+// literal this assembly writes actually appears. Same seam on the refine path
+// (updatePromptAndWindow).
+func createPromptAndWindow(sessionLabel, turns, sessionView, facts string) (prompt, window string) {
 	var b strings.Builder
 	b.WriteString("You are writing a short report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	b.WriteString("Session context: ")
@@ -204,7 +219,8 @@ func DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts string) 
 	b.WriteString(clipProse(sessionLabel, sessionLabelCap))
 	b.WriteString("\n\nMEASURED COUNTS (authoritative — your report must be consistent with these):\n  ")
 	b.WriteString(facts)
-	viewOverhead := b.Len() + createTailLen() + len([]rune(createViewHeader)) + len([]rune(createWindowHeader))
+	viewOverhead := runeLen(b.String()) + createTailLen() +
+		runeLen(createViewHeader) + runeLen(createWindowHeader)
 	if v := clipSessionViewFor(sessionView, viewOverhead); v != "" {
 		b.WriteString(createViewHeader)
 		b.WriteString(v)
@@ -213,7 +229,7 @@ func DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts string) 
 	// Held in a variable so the backstop below measures the window fitTurns produced
 	// instead of re-locating it by landmark — see assertPromptWithinBudget's doc, and the
 	// identical line in DigestUpdatePromptFrom.
-	window := fitTurns(turns, b.Len()+createTailLen())
+	window = fitTurns(turns, runeLen(b.String())+createTailLen())
 	b.WriteString(window)
 	b.WriteString(createSectionsMarker)
 	b.WriteString(digestSections)
@@ -228,7 +244,7 @@ func DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts string) 
 	// truncates mid-JSON and silently drops the digest. See assertPromptWithinBudget's
 	// doc in digest_fit.go.
 	assertPromptWithinBudget(p, window)
-	return p
+	return p, window
 }
 
 // CreateDigest produces the first digest for a session.

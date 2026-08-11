@@ -421,22 +421,98 @@ func TestWellFormedInputsDoNotTripTheBackstop(t *testing.T) {
 // the view is over its cap (both discretionary, both expected to yield). The two
 // deliberately UNBOUNDED dimensions used — SessionRecord.Projects' per-entry length and
 // DigestFacts' Topics/Entities counts — are named as such where they are built.
+//
+// EVERY SUBTEST RUNS TWICE, ASCII and multi-byte, and that is the whole reason this test
+// still exists in its own right rather than as a duplicate of the worst-case test. Its
+// earlier form was ASCII-only, and the round-3 review found it certifying the exact opposite
+// of the truth: the assemblies charged their prefix in BYTES while the reservations were in
+// RUNES, which is invisible in ASCII (the two counts are equal) and broke on 2% of real
+// mined transcripts, where an em dash or an arrow makes them differ. That was the FIFTH test
+// on this branch certifying a bound the code did not enforce, so the pairing is structural:
+// nonASCII rewrites the conversation ONE CHARACTER FOR ONE into the multi-byte characters
+// these transcripts really contain, so the two runs are the same text at the same RUNE
+// length and must therefore produce the SAME window — asserted directly, not just "both
+// clear the floor". Confirmed by reverting runeLen back to b.Len() in the two assemblies:
+// the ASCII refine run passes at 1,604 runes of content while the multi-byte one PANICS at
+// 1,510 — the same shape the real corpus produced — and on the create path, where the floor
+// happens to survive, the equality assertion catches it anyway: 1,768 runes of content in
+// ASCII against 1,602 in multi-byte, a 166-rune difference from the identical text. That is
+// why the pairing asserts equality and not merely "both clear the floor": one of the two
+// paths only breached, and the other only differed.
+//
+// (The 11,000-budget figures above were measured with the ASCII-only version, so they are the
+// ASCII run's numbers; the capacity decision they justify is unaffected — the byte/rune bug
+// made the window smaller than the budget allowed, never larger.)
 func TestFloorIsReachableAtRealisticInputScale(t *testing.T) {
-	t.Run("refine, record at realistic scale", func(t *testing.T) {
-		defer failOnBackstop(t)
-		p := DigestUpdatePromptFrom(realisticPrev(), realisticRefineInput())
-		assertFitsAndKeepsTheFloor(t, p, windowHeader, updateSectionsMarker)
-	})
+	for _, f := range flavours {
+		t.Run("refine, record at realistic scale, "+f.name, func(t *testing.T) {
+			defer failOnBackstop(t)
+			p := DigestUpdatePromptFrom(realisticPrev(), realisticRefineInputLines(f.line()))
+			assertFitsAndKeepsTheFloor(t, p, windowHeader, updateSectionsMarker)
+			f.record(len([]rune(windowOf(promptWindow(t, p, windowHeader, updateSectionsMarker)))))
+		})
+	}
+	assertSameWindowInBothEncodings(t, "refine")
 
-	t.Run("create, large measured-facts block", func(t *testing.T) {
-		defer failOnBackstop(t)
-		facts := realisticFactsBlock()
-		t.Logf("facts block: %d runes", len([]rune(facts)))
-		p := DigestCreatePromptWithView("work session",
-			strings.Repeat("user: a filler turn about the work\n", 400),
-			strings.Repeat("user: an early turn about the work\n", 400), facts)
-		assertFitsAndKeepsTheFloor(t, p, createWindowHeader, createSectionsMarker)
-	})
+	for _, f := range flavours {
+		t.Run("create, large measured-facts block, "+f.name, func(t *testing.T) {
+			defer failOnBackstop(t)
+			facts := realisticFactsBlock()
+			line := f.line()
+			t.Logf("facts block: %d runes; conversation line %d runes / %d bytes",
+				len([]rune(facts)), len([]rune(line)), len(line))
+			p := DigestCreatePromptWithView("work session",
+				strings.Repeat(line, 400), strings.Repeat(line, 400), facts)
+			assertFitsAndKeepsTheFloor(t, p, createWindowHeader, createSectionsMarker)
+			f.record(len([]rune(windowOf(promptWindow(t, p, createWindowHeader, createSectionsMarker)))))
+		})
+	}
+	assertSameWindowInBothEncodings(t, "create")
+}
+
+// nonASCII rewrites ASCII punctuation into the multi-byte characters this corpus actually
+// contains, ONE RUNE FOR ONE: an em dash, an arrow, a check mark, a curly apostrophe. Rune
+// count identical, byte count larger — which is exactly the difference the prompt budget was
+// getting wrong, and nothing else about the input changes.
+var nonASCII = strings.NewReplacer("-", "—", ">", "→", "*", "✓", "'", "’")
+
+// realisticTurnLine is one conversation line for the realistic-scale test, carrying the
+// ordinary prose punctuation real turns carry — the characters nonASCII has something to
+// rewrite. realisticRefineInput's own default line is deliberately left alone (other tests
+// are calibrated against it), so this pairing adds a variant rather than moving anyone's
+// baseline.
+const realisticTurnLine = "user: an early turn - about the work, 2 of 3 > next\n"
+
+// flavours is the ASCII/multi-byte pair every subtest above runs under, plus the recorder
+// that lets the two runs be compared with each other rather than only against the floor.
+var flavours = []struct {
+	name   string
+	line   func() string
+	record func(int)
+}{
+	{"ascii", func() string { return realisticTurnLine }, func(n int) { measuredWindows["ascii"] = n }},
+	{"multi-byte", func() string { return nonASCII.Replace(realisticTurnLine) },
+		func(n int) { measuredWindows["multi-byte"] = n }},
+}
+
+var measuredWindows = map[string]int{}
+
+// assertSameWindowInBothEncodings is the invariant the ASCII/multi-byte pairing exists to
+// state: two inputs of identical RUNE length must yield windows of identical rune length,
+// because the budget is denominated in runes. A difference means something in the arithmetic
+// is counting bytes.
+func assertSameWindowInBothEncodings(t *testing.T, path string) {
+	t.Helper()
+	a, m := measuredWindows["ascii"], measuredWindows["multi-byte"]
+	if a == 0 || m == 0 {
+		t.Fatalf("%s: a flavour did not report its window (ascii %d, multi-byte %d)", path, a, m)
+	}
+	if a != m {
+		t.Errorf("%s: same text at the same rune length produced different windows — ascii %d "+
+			"runes of content, multi-byte %d (difference %d). The budget is in runes; something "+
+			"is charging bytes.", path, a, m, a-m)
+	}
+	measuredWindows = map[string]int{}
 }
 
 // failOnBackstop turns the backstop's panic into a test failure naming it, so a capacity
@@ -476,6 +552,14 @@ func realisticPrev() Digest { return densePrev(DefaultListCap) }
 // (subjects and projects path-shaped, tools, focus, turning points at their cap), a full
 // beat ladder, an over-cap session view, and a focus shift whose newest turn names files.
 func realisticRefineInput() RefineInput {
+	return realisticRefineInputLines("user: an early turn about the work\n")
+}
+
+// realisticRefineInputLines is realisticRefineInput with the conversation and view built from
+// a caller-chosen line, so the same input can be assembled in two encodings of the same text
+// (see nonASCII and TestFloorIsReachableAtRealisticInputScale). Everything else is identical
+// between the two, which is what makes the comparison a controlled one.
+func realisticRefineInputLines(line string) RefineInput {
 	rec := SessionRecord{Turns: 900, UserTurns: 300, ToolCalls: 2100, Corrections: 11}
 	// Subjects at maxSubjectTermLen, the bound Observe now enforces per term, and at
 	// MaxRecordSubjects entries — the largest record Observe can actually build.
@@ -500,9 +584,17 @@ func realisticRefineInput() RefineInput {
 		rec = rec.NoteTurningPoint(i*7, TriggerFocusShift)
 	}
 
+	// Beat text is built from the same line as the conversation, at exactly BeatCap RUNES.
+	// It has to be, for the ASCII/multi-byte pairing to mean anything: the beat ladder is the
+	// only one of these inputs that reaches the assembled PREFIX (the view yields to zero at
+	// this input scale, and the turns are what is being budgeted, not overhead), so beats
+	// written as strings.Repeat("w", BeatCap) left the prefix pure ASCII in both runs and the
+	// multi-byte variant could not see the defect at all. Rune-exact slicing rather than
+	// clipProse, so both encodings are the same length to the rune.
+	beatText := string([]rune(strings.Repeat(strings.TrimSuffix(line, "\n")+" ", 40))[:BeatCap])
 	beats := make([]Beat, MaxBeatSelection)
 	for i := range beats {
-		beats[i] = Beat{Ordinal: i + 1, Text: strings.Repeat("w", BeatCap), ChangedSubject: i%2 == 0}
+		beats[i] = Beat{Ordinal: i + 1, Text: beatText, ChangedSubject: i%2 == 0}
 	}
 
 	// The newest user turn names maxRecentSubjects path-shaped files, so the focus-shift
@@ -519,8 +611,8 @@ func realisticRefineInput() RefineInput {
 		SessionLabel: strings.Repeat("a real session label about the work underway ", 5),
 		Record:       rec,
 		Beats:        beats,
-		SessionView:  strings.Repeat("user: an early turn about the work\n", 400), // > SessionViewCap
-		NewTurns:     strings.Repeat("user: a filler turn about the work\n", 400) + last.String(),
+		SessionView:  strings.Repeat(line, 400), // > SessionViewCap
+		NewTurns:     strings.Repeat(line, 400) + last.String(),
 		Why:          TriggerFocusShift,
 	}
 }

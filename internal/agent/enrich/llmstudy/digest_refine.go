@@ -127,6 +127,14 @@ type RefineInput struct {
 // copied verbatim into a report about an unrelated session — the same failure this
 // branch documented for the extraction prompts.
 func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
+	p, _ := updatePromptAndWindow(prev, in)
+	return p
+}
+
+// updatePromptAndWindow is DigestUpdatePromptFrom's body, returning the conversation window
+// fitTurns produced alongside the prompt — see createPromptAndWindow's doc in digest.go for
+// why the window is returned rather than recovered by landmark.
+func updatePromptAndWindow(prev Digest, in RefineInput) (prompt, window string) {
 	var head strings.Builder
 	head.WriteString("You are updating a report on a work session, for the person doing the work and for a manager who was not present.\n\n")
 	head.WriteString("Session context: ")
@@ -214,7 +222,8 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	// claimants on the budget — see fitDiscretionary's doc for why both must yield
 	// before the recent window, which current/why/next/unresolved are actually WRITTEN
 	// from, is allowed to starve.
-	beats, view := fitDiscretionary(in.Beats, in.SessionView, head.Len()+rest.Len(), updateTailLen())
+	beats, view := fitDiscretionary(in.Beats, in.SessionView,
+		runeLen(head.String())+runeLen(rest.String()), updateTailLen())
 
 	var b strings.Builder
 	b.WriteString(head.String())
@@ -232,7 +241,7 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	// actually produced rather than re-deriving it from the finished prompt, which content
 	// quoting windowHeader or updateSectionsMarker defeats in both directions (task-7b fix
 	// round 4 — see assertPromptWithinBudget's doc).
-	window := fitTurns(in.NewTurns, b.Len()+updateTailLen())
+	window = fitTurns(in.NewTurns, runeLen(b.String())+updateTailLen())
 	b.WriteString(window)
 	b.WriteString(updateSectionsMarker)
 	b.WriteString(digestSections)
@@ -242,7 +251,7 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	p := b.String()
 	// The backstop (task-7b fix round 3, finding A) — see its doc in digest_fit.go.
 	assertPromptWithinBudget(p, window)
-	return p
+	return p, window
 }
 
 // fitDiscretionary decides how much of the beat series and the whole-session view the
@@ -297,9 +306,9 @@ func fitDiscretionary(allBeats []Beat, view string, fixed, tail int) (beats, cli
 		// count everything here is actually meant to be measured in — always safe
 		// (over- not under-estimating overhead) but not what the number is supposed to
 		// mean, and worth being exact about given how many rounds this budget has needed.
-		overhead := fixed + tail + len([]rune(windowHeader))
+		overhead := fixed + tail + runeLen(windowHeader)
 		if cand != "" {
-			overhead += len([]rune(beatsHeader)) + len([]rune(cand))
+			overhead += runeLen(beatsHeader) + runeLen(cand)
 		}
 		// + len(omittedNotice) is task-7b fix round 3 (finding F): fitTurns reserves
 		// omittedNotice's own length out of `room` whenever the turns it is handed do
@@ -316,14 +325,14 @@ func fitDiscretionary(allBeats []Beat, view string, fixed, tail int) (beats, cli
 		// k == 0 (beats fully dropped) is the last possible attempt: whether or not the
 		// floor is actually reachable, there is nothing further to trim, so it always
 		// returns rather than falling through to the unreachable line below.
-		if overhead+MinTurnChars+len([]rune(omittedNotice)) <= DefaultPromptCharBudget || k == 0 {
+		if overhead+MinTurnChars+runeLen(omittedNotice) <= DefaultPromptCharBudget || k == 0 {
 			// clipSessionViewFor is given overhead PLUS viewHeader's own length: it computes
 			// room for the view's CONTENT only, and the header is written in addition to
 			// that content, so a view candidate that were sized against `overhead` alone
 			// would itself eat into the same MinTurnChars reservation the beat count above
 			// was just fitted around. clipSessionViewFor folds in its own omittedNotice
 			// reservation (see its doc in digest_synopsis.go), so it is not repeated here.
-			return cand, clipSessionViewFor(view, overhead+len([]rune(viewHeader)))
+			return cand, clipSessionViewFor(view, overhead+runeLen(viewHeader))
 		}
 	}
 	return "", "" // unreachable: the k == 0 iteration above always returns.
@@ -499,7 +508,7 @@ func retainListJoinedLen(v []string) int {
 	if len(v) == 0 {
 		return 0
 	}
-	return len([]rune(strings.Join(v, ", ")))
+	return runeLen(strings.Join(v, ", "))
 }
 
 // recentSubjectsOf pulls distinctive terms from the newest user turn of an already-rendered
