@@ -17,7 +17,7 @@ func plistPath() string {
 }
 
 func Install() error {
-	exe, err := os.Executable()
+	exe, err := agentExecPath()
 	if err != nil {
 		return err
 	}
@@ -77,9 +77,12 @@ func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// currentPlist is the plist this binary should be installed with.
+// currentPlist is the plist this binary should be installed with. The program
+// is always keld-agent (resolved via agentExecPath), never the invoking binary,
+// so `keld signal start` and `keld-agent restart` converge on the same plist
+// instead of fighting over `keld run` vs `keld-agent run`.
 func currentPlist() (string, error) {
-	exe, err := os.Executable()
+	exe, err := agentExecPath()
 	if err != nil {
 		return "", err
 	}
@@ -94,6 +97,43 @@ func reloadJob() error {
 	return exec.Command("launchctl", "bootstrap", uid, p).Run()
 }
 
+// runCmd is the seam for launchctl invocations so startJob/restartJob are
+// unit-testable without shelling out.
+type runCmd func(name string, args ...string) error
+
+// launchctlRun runs a launchctl command with no stdio, returning its error.
+func launchctlRun(name string, args ...string) error { return exec.Command(name, args...).Run() }
+
+// startJob enables, loads, and kickstarts the launchd job. It runs `launchctl
+// enable` first because launchd refuses to bootstrap a job carrying a stale
+// `disabled` override (bootstrap fails with error 5), after which `kickstart`
+// fails with a cryptic exit 113 — which is all the caller used to see, since
+// the bootstrap error was discarded. bootstrap errors remain benign (the job
+// may already be loaded) and are ignored; a kickstart failure is the real
+// "did not start" signal and is surfaced.
+func startJob(run runCmd, uid, plist string) error {
+	target := uid + "/" + Label
+	_ = run("launchctl", "enable", target)
+	_ = run("launchctl", "bootstrap", uid, plist)
+	if err := run("launchctl", "kickstart", target); err != nil {
+		return fmt.Errorf("launchctl kickstart %s: %w", target, err)
+	}
+	return nil
+}
+
+// restartJob clears any disabled override, ensures the job is loaded, then
+// force-kickstarts it (`-k` kills a running daemon so a new binary is picked
+// up). Like startJob, it surfaces a kickstart failure rather than swallowing it.
+func restartJob(run runCmd, uid, plist string) error {
+	target := uid + "/" + Label
+	_ = run("launchctl", "enable", target)
+	_ = run("launchctl", "bootstrap", uid, plist)
+	if err := run("launchctl", "kickstart", "-k", target); err != nil {
+		return fmt.Errorf("launchctl kickstart -k %s: %w", target, err)
+	}
+	return nil
+}
+
 // Start loads the agent if needed, then (re)starts the job. It first syncs a
 // stale plist so an agent installed before log paths existed adopts them.
 func Start() error {
@@ -104,9 +144,7 @@ func Start() error {
 	if _, err := syncPlist(plistPath(), paths.AgentLogDir(), want, writeFile, reloadJob); err != nil {
 		return err
 	}
-	uid := fmt.Sprintf("gui/%d", os.Getuid())
-	_ = exec.Command("launchctl", "bootstrap", uid, plistPath()).Run() // no-op if already loaded
-	return exec.Command("launchctl", "kickstart", uid+"/"+Label).Run()
+	return startJob(launchctlRun, fmt.Sprintf("gui/%d", os.Getuid()), plistPath())
 }
 
 // Stop unloads the agent (KeepAlive would otherwise respawn it); Install/Start reload it.
@@ -125,7 +163,7 @@ func Restart() error {
 	if _, err := syncPlist(plistPath(), paths.AgentLogDir(), want, writeFile, reloadJob); err != nil {
 		return err
 	}
-	return exec.Command("launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/%s", os.Getuid(), Label)).Run()
+	return restartJob(launchctlRun, fmt.Sprintf("gui/%d", os.Getuid()), plistPath())
 }
 
 func Status() (string, error) {
