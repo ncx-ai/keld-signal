@@ -141,8 +141,12 @@ func DigestUpdatePromptFrom(prev Digest, in RefineInput) string {
 	// Hand back the prior open items and require a verdict on each. Prose alone did not
 	// work: "drop what is now closed" left resolved items in the list across every
 	// refinement, because nothing checked. Naming them and requiring an accounting is the
-	// same deterministic anchoring that fixed fact retention. Verbatim by design: this is
-	// an accounting requirement (account for EVERY one), not a leak of prior prose.
+	// same deterministic anchoring that fixed fact retention. EVERY item is still named —
+	// count is never dropped here — but a single item's TEXT is bounded for the prompt
+	// (see promptOpenItemCap on priorOpenItems): store full, feed bounded, the same
+	// principle DefaultListEntryCap applies to the stored report. The two are deliberately
+	// different numbers for different readers — the report a person reads can afford a
+	// richer item than the accounting block a model must fit alongside everything else.
 	if open := priorOpenItems(prev); len(open) > 0 {
 		rest.WriteString("\nOPEN ITEMS FROM THAT REPORT — account for EVERY one, in exactly one place:")
 		rest.WriteString("\n  keep it in unresolved if it is still open, or name it in closed if the new")
@@ -287,13 +291,55 @@ func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionVi
 	})
 }
 
+// promptOpenItemCap bounds a single open item's length AS EMBEDDED IN THE PROMPT — a
+// separate, tighter number from DefaultListEntryCap, which bounds the STORED report.
+//
+// This is task-7b's fix-round finding: DefaultListEntryCap (300) is a report-quality
+// limit, tuned so a human reader never loses a real item's substance — but 12 items at
+// 300 runes each (the actual result of a digest that has passed through CapSections,
+// not the looser 60-rune assumption an earlier version of the worst-case test used)
+// push the FIXED part of a refine prompt — before a single beat, view rune, or
+// conversation turn is added — past what's left once MinTurnChars and the instructional
+// tail are reserved. Measured directly via TestRefinePromptFromRealisticWorstCaseMargin
+// with this clip reverted to a no-op: assembled prompt 11,860 runes against an 11,000
+// budget (margin -860), and — worse — the recent-turns window itself measured only 97
+// runes against the 1,600 floor, because fitDiscretionary can only trade away beats and
+// the view; it has no lever over this block, which it must treat as fixed overhead.
+//
+// Lowering DefaultListEntryCap instead was rejected (per the fix-round instruction this
+// responds to): that constant governs what a human reads in the stored report, and
+// shrinking it to buy prompt room is the exact trade DefaultListEntryCap's own doc
+// already rejected once (500/900 prose caps dropped fact retention 100%->83.3%). The
+// report keeps its richer items; only the prompt's rendering of them is bounded.
+//
+// 80 is still generous against this package's own real item lengths (20-60 runes, per
+// DefaultListEntryCap's doc) — real items are essentially never truncated — while
+// cutting the worst case enough to matter: 12 items at 80 instead of 300 removes
+// (300-80)*12 = 2,640 runes from the fixed part of the prompt. Restoring the clip and
+// re-running the same test: assembled prompt 10,930 runes against 11,000 (margin +70),
+// and the recent-turns window measures 1,855 runes against the 1,600 floor (margin
+// +255) — both real margins, not a graze, which matters because a bound that only just
+// clears was exactly what let an earlier worst-case measurement here read "+44" while
+// the design's own enforced constants actually produced "-860". See
+// TestRefinePromptFromRealisticWorstCaseMargin, which now derives its per-item length
+// from DefaultListEntryCap (the constant actually enforced) rather than a hardcoded
+// assumption, and asserts both the budget and the window floor rather than only logging
+// them; TestWindowKeepsItsFloorAtTheBoundary is the sibling test isolating the window
+// floor under beat pressure alone (no open items, no view).
+const promptOpenItemCap = 80
+
 // priorOpenItems is the previous report's open list, excluding the sentinel — there is
-// nothing to account for when the last report said nothing was open.
+// nothing to account for when the last report said nothing was open. Every surviving
+// item is clipped to promptOpenItemCap for the PROMPT (clipProse marks a truncated item
+// with a trailing "…" so the model is not misled into thinking it has the item's full
+// text) — count is untouched, only an individual item's length is bounded, so "account
+// for EVERY one" still holds for whatever the digest's own caps (DefaultListCap) let
+// through.
 func priorOpenItems(prev Digest) []string {
 	var out []string
 	for _, item := range prev.Unresolved {
 		if !UsesUnresolvedSentinelText(item) {
-			out = append(out, item)
+			out = append(out, clipProse(item, promptOpenItemCap))
 		}
 	}
 	return out

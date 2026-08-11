@@ -361,23 +361,32 @@ func packSpecifics(next *int, n, specifics int) string {
 // focus-shift anchor, a session view sized past its own cap, and turns far larger than
 // any remaining room — and MEASURES the result against DefaultPromptCharBudget.
 //
-// It does not assert "always fits": an earlier version of this test did, but its
-// specifics all collided on the same ~10 names (see packSpecifics), which understated
-// the retain-list by more than an order of magnitude and let the test certify a margin
-// (+46 runes) that the design does not actually have. `prev` is built by hand here rather
-// than passed through CapSections — the same as a digest reaching DigestUpdatePromptFrom
-// straight out of CreateDigestWithView, which does not call CapSections at all — so this
-// still measures against a chosen, documented assumption (60 runes/item, generous against
-// this package's own real examples: "ledger totals disagree", "waiting on vendor", 20-60
-// runes) rather than DefaultListEntryCap (task-7b finding (a); see digest_refine.go),
-// which now bounds a CAPPED digest's per-item length at 300 — five times looser than this
-// test's assumption, and so a worse realistic worst case than this test measures, not a
-// better one. At the 60-rune assumption the realistic worst case is currently ABOVE
-// budget — see the fix-round report for the exact number and what it means for the
-// later task that owns the budget/ctx decision. Nothing in DigestUpdatePromptFrom
-// clamps the ASSEMBLED prompt to the budget as a whole; clipSessionViewFor and
-// fitTurns each clip only their own input, and fitDiscretionary (see digest_refine.go)
-// protects the WINDOW's floor specifically, not the total.
+// insights/unresolved items are sized at DefaultListEntryCap, not a hand-picked number.
+// An earlier version of this test used a hardcoded 60-rune/item assumption "generous
+// against this package's own real examples" — but the constant CapSections actually
+// enforces (task-7b finding (a)) is DefaultListEntryCap, 300, five times looser. Because
+// `prev` here plays the role of a digest that has already been through one refinement
+// (RefineFrom calls CapSections on its own output, so from the second refinement onward
+// every prev.Unresolved item can genuinely be as long as DefaultListEntryCap allows),
+// the 60-rune version was measuring a worst case the design does not actually enforce
+// against — a test drifting from the code it is supposed to pin. At DefaultListEntryCap
+// the previous version of this test (which asserted only a sanity range, not a real
+// budget check) would have reported a false-comfortable "+44" while the self-consistent
+// number was actually "-860": the assembled prompt over budget, AND — worse — the
+// recent-turns window itself down to 97 runes against the 1,600 floor, because
+// fitDiscretionary has no lever over the open-items block; it can only trade away beats
+// and the view, which it did, fully, and still could not reach the floor. Fixed via
+// promptOpenItemCap (digest_refine.go): the prompt's rendering of an open item is
+// bounded independently of what CapSections stores, so the report keeps its richer
+// items while the prompt gets a bounded, visibly-truncated rendering of them. This test
+// now asserts the two invariants that fix must hold, not just logs a number: the
+// assembled prompt fits DefaultPromptCharBudget, and the window — current, why, next and
+// unresolved are written from nothing else — still clears MinTurnChars. Nothing here
+// clamps the ASSEMBLED prompt as a WHOLE by any single mechanism; clipSessionViewFor and
+// fitTurns each clip only their own input, fitDiscretionary (see digest_refine.go)
+// protects the window's floor by trading away beats/view, and promptOpenItemCap keeps
+// the open-items block from being the thing that leaves fitDiscretionary nothing left to
+// trade — together they are what makes both assertions below hold.
 func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 	var id int
 	prev := Digest{
@@ -390,8 +399,8 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 		Next:      packSpecifics(&id, DefaultProseCap, 6),
 	}
 	for i := 0; i < DefaultListCap; i++ {
-		prev.Insights = append(prev.Insights, packSpecifics(&id, 60, 2))
-		prev.Unresolved = append(prev.Unresolved, packSpecifics(&id, 60, 2))
+		prev.Insights = append(prev.Insights, packSpecifics(&id, DefaultListEntryCap, 2))
+		prev.Unresolved = append(prev.Unresolved, packSpecifics(&id, DefaultListEntryCap, 2))
 	}
 
 	beats := make([]Beat, MaxBeatSelection)
@@ -437,11 +446,35 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 	got := len([]rune(p))
 	margin := DefaultPromptCharBudget - got
 	t.Logf("realistic worst-case refine prompt: %d runes (budget %d, margin %d)", got, DefaultPromptCharBudget, margin)
-	// A sanity bound only — not a claim the design fits. Catches a gross regression
-	// (an infinite loop, a runaway builder) without certifying a specific margin this
-	// package does not actually guarantee.
-	if got <= 0 || got > 4*DefaultPromptCharBudget {
+	// This DOES now assert "fits" — unlike the sanity-range-only check an earlier version
+	// of this test used, which is exactly what let a self-inconsistent per-item
+	// assumption go unnoticed: a test that only bounds against 4x budget passes whether
+	// the real margin is +44 or -860.
+	if got > DefaultPromptCharBudget {
+		t.Errorf("worst-case prompt %d runes exceeds budget %d (margin %d)", got, DefaultPromptCharBudget, margin)
+	}
+	if got <= 0 {
 		t.Errorf("worst-case prompt length %d runes is out of sane range", got)
+	}
+
+	// The window is the ONLY evidence current/why/next/unresolved are written from — a
+	// prompt that fits the total budget by starving the window below MinTurnChars is not
+	// a fix, it is finding (b)'s failure mode reopened by a different route. Extracted
+	// the same way TestWindowKeepsItsFloorAtTheBoundary does.
+	start := strings.Index(p, windowHeader)
+	if start < 0 {
+		t.Fatal("window header missing from prompt")
+	}
+	start += len(windowHeader)
+	const tailMarker = "\nProduce the UPDATED report, same sections:\n"
+	end := strings.Index(p[start:], tailMarker)
+	if end < 0 {
+		t.Fatal("tail marker missing from prompt")
+	}
+	window := len([]rune(p[start : start+end]))
+	t.Logf("window at the realistic worst case: %d runes (floor %d, margin %d)", window, MinTurnChars, window-MinTurnChars)
+	if window < MinTurnChars {
+		t.Errorf("window starved to %d runes at the realistic worst case, below the %d floor", window, MinTurnChars)
 	}
 }
 
