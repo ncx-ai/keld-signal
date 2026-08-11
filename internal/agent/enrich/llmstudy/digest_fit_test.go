@@ -47,3 +47,69 @@ func TestSmallWindowIsNotClipped(t *testing.T) {
 		t.Error("a small window must not be clipped")
 	}
 }
+
+// windowOf strips fitTurns' own notice prefix so callers measure the actual turn content
+// (what current/why/next/unresolved are written from), not the notice that precedes it.
+func windowOf(clipped string) string {
+	return strings.TrimPrefix(clipped, omittedNotice)
+}
+
+// TestFitTurnsLineBoundaryTrimCannotBreachTheFloor is the fix for task-7b finding (b):
+// after slicing to `room` runes, fitTurns used to trim back to the next '\n' UNCONDITIONALLY
+// so the window would not open mid-word. That discards up to one whole line beyond what
+// `room` already computed, so the window could land below MinTurnChars even though `room`
+// itself cleared it. Both shapes from the brief are exercised here — many short lines
+// (a small, compounding overshoot) and one long pasted turn straddling the cut (a
+// near-total collapse, because the first '\n' the trim finds is that turn's own terminator,
+// deep into the clipped window).
+//
+// overhead is chosen so the room LEFT FOR CONTENT after fitTurns' own internal reservation
+// for omittedNotice (len 97) lands at exactly MinTurnChars — no slack at all, the tightest
+// boundary at which the bug can bite. (Using DefaultPromptCharBudget-MinTurnChars directly
+// as the overhead would test a confound instead: the notice reservation alone already
+// eats 97 runes out of that room regardless of trim behaviour, so the pre-trim content
+// would already sit below the floor and the test could not isolate the trim bug from that
+// separate, expected reservation.) Any slack beyond this exact boundary would let the naive
+// trim's loss be absorbed without the floor actually being breached, and a test with that
+// much slack survives the bug instead of catching it (the same lesson
+// TestWindowKeepsItsFloorAtTheBoundary documents for fitDiscretionary).
+//
+// Confirmed by reverting the `room < MinTurnChars || ... >= MinTurnChars` guard back to an
+// unconditional trim and re-running:
+//   - many short lines: window measured 1575 runes, 25 below the 1600 floor. Test fails.
+//   - one long line straddling the cut: window measured 11 runes, 1589 below the floor.
+//     Test fails.
+//
+// With the guard restored both report the full `room` (1600), because in both cases
+// trimming to the boundary would have breached the floor, so fitTurns falls back to the
+// untrimmed (mid-line) window instead — a mid-line open is a smaller loss than starving the
+// four sections the window is the only evidence for.
+func TestFitTurnsLineBoundaryTrimCannotBreachTheFloor(t *testing.T) {
+	overhead := DefaultPromptCharBudget - (MinTurnChars + len([]rune(omittedNotice)))
+
+	t.Run("many short lines", func(t *testing.T) {
+		const lineLen = 35 // matches the brief's own measurement of this shape
+		var b strings.Builder
+		for i := 0; i < 500; i++ {
+			b.WriteString(strings.Repeat("a", lineLen-1))
+			b.WriteString("\n")
+		}
+		got := windowOf(fitTurns(b.String(), overhead))
+		n := len([]rune(got))
+		t.Logf("window: %d runes (floor %d, margin %d)", n, MinTurnChars, n-MinTurnChars)
+		if n < MinTurnChars {
+			t.Errorf("window %d runes breached the floor of %d", n, MinTurnChars)
+		}
+	})
+
+	t.Run("one long line straddling the cut", func(t *testing.T) {
+		huge := strings.Repeat("x", 5000)
+		turns := "user: filler\n" + huge + "\nuser: tail\n"
+		got := windowOf(fitTurns(turns, overhead))
+		n := len([]rune(got))
+		t.Logf("window: %d runes (floor %d, margin %d)", n, MinTurnChars, n-MinTurnChars)
+		if n < MinTurnChars {
+			t.Errorf("window %d runes breached the floor of %d", n, MinTurnChars)
+		}
+	})
+}

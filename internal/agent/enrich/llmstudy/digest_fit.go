@@ -42,9 +42,26 @@ func fitTurns(turns string, overhead int) string {
 		room = 0
 	}
 	clipped := string(r[len(r)-room:])
-	// Start at a line boundary so the window does not open mid-word.
+	// Start at a line boundary so the window does not open mid-word — but only when doing
+	// so cannot breach MinTurnChars beyond what `room` already promised. The naive version
+	// of this trimmed unconditionally, discarding up to one whole line BEYOND `room`: with
+	// many short lines that is a small overshoot (measured -25 runes at 35-rune lines,
+	// window 1575 against a 1600 floor), but with a single long pasted turn straddling the
+	// cut, the first '\n' found is that turn's own terminator deep into `clipped`, and the
+	// trim can collapse the window to almost nothing (measured -1589 runes, window 11).
+	//
+	// `clipped` is exactly `room` runes before any trim, so it already clears the floor
+	// whenever `room` does — falling back to it is never worse than trimming, and trimming
+	// is applied only when it does not lose that guarantee. If `room` itself is already
+	// short of MinTurnChars, the floor was unreachable before this function ran (a finding
+	// for whoever owns the budget upstream — see fitDiscretionary's doc — not something a
+	// trim choice here can fix), so there is nothing left to protect and the boundary trim
+	// is applied unconditionally for cleanliness.
 	if i := strings.IndexByte(clipped, '\n'); i >= 0 && i < len(clipped)-1 {
-		clipped = clipped[i+1:]
+		kept := clipped[i+1:]
+		if room < MinTurnChars || len([]rune(kept)) >= MinTurnChars {
+			clipped = kept
+		}
 	}
 	return omittedNotice + clipped
 }
