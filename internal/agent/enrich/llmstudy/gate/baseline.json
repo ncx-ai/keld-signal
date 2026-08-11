@@ -1,0 +1,339 @@
+{
+  "comment": "Re-measured on a PINNED corpus snapshot so later runs are attributable; reproduces untruncate-report.md's shipping-tree figures to the digit in both arms.",
+  "commit": "b361b5a",
+  "corpus": "567 transcripts snapshotted 2026-08-11T15:13-04:00 from ~/.claude/projects; 14 stratified sessions, this session's transcript (43492104) first; reports at windows 4/8/12/15; a beat every 5 user turns; Qwen3-4B-Instruct-2507 Q4_K_M, ctx 8192, temperature 0, budget 14000",
+  "on": {
+    "arm": "on",
+    "label": "baseline ON arm",
+    "sessions": 14,
+    "attempted": 56,
+    "produced": 56,
+    "failed": 0,
+    "values": {
+      "beat_errors": {
+        "num": 2,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_asked": {
+        "num": 42,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_discarded": {
+        "num": 0,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_generated": {
+        "num": 40,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_kept": {
+        "num": 40,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_lost": {
+        "num": 2,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_subject_changed": {
+        "num": 36,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "largest_prompt": {
+        "num": 13929,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "leaks": {
+        "num": 0,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "panics": {
+        "num": 0,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "retain_evicted": {
+        "num": 0,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "t10_synopsis_restates": {
+        "num": 0,
+        "den": 56,
+        "rate": 0,
+        "has_rate": true
+      },
+      "t11_synopsis_lags": {
+        "num": 0,
+        "den": 30,
+        "rate": 0,
+        "has_rate": true
+      },
+      "t12_beat_vs_record": {
+        "num": 10,
+        "den": 40,
+        "rate": 25,
+        "has_rate": true
+      },
+      "t13_fabricated_next": {
+        "num": 3,
+        "den": 90,
+        "rate": 3.3,
+        "has_rate": true
+      },
+      "t1_usable": {
+        "num": 56,
+        "den": 56,
+        "rate": 100,
+        "has_rate": true
+      },
+      "t2_unverified": {
+        "num": 7,
+        "den": 762,
+        "rate": 0.9,
+        "has_rate": true
+      },
+      "t3_rubberstamped": {
+        "num": 0,
+        "den": 12,
+        "rate": 0,
+        "has_rate": true
+      },
+      "t4_retention": {
+        "num": 46,
+        "den": 79,
+        "rate": 58.2,
+        "has_rate": true
+      },
+      "t4_retention_strong": {
+        "num": 20,
+        "den": 42,
+        "rate": 47.6,
+        "has_rate": true
+      },
+      "t4_retention_weak": {
+        "num": 26,
+        "den": 37,
+        "rate": 70.3,
+        "has_rate": true
+      },
+      "t7_fabricated_unresolved": {
+        "num": 2,
+        "den": 44,
+        "rate": 4.5,
+        "has_rate": true
+      },
+      "t8_stale_open_items": {
+        "num": 0,
+        "den": 74,
+        "rate": 0,
+        "has_rate": true
+      },
+      "t9_current_is_done": {
+        "num": 1,
+        "den": 56,
+        "rate": 1.8,
+        "has_rate": true
+      },
+      "window_margin_create": {
+        "num": -1,
+        "den": 0,
+        "rate": 0,
+        "has_rate": false,
+        "missing": true
+      },
+      "window_margin_refine": {
+        "num": 2967,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      }
+    }
+  },
+  "off": {
+    "arm": "off",
+    "label": "baseline OFF arm",
+    "sessions": 14,
+    "attempted": 56,
+    "produced": 56,
+    "failed": 0,
+    "values": {
+      "beat_errors": {
+        "num": 2,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_asked": {
+        "num": 42,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_discarded": {
+        "num": 0,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_generated": {
+        "num": 40,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_kept": {
+        "num": 40,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_lost": {
+        "num": 2,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "beats_subject_changed": {
+        "num": 36,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "largest_prompt": {
+        "num": 13992,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "leaks": {
+        "num": 0,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "panics": {
+        "num": 0,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "retain_evicted": {
+        "num": 0,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      },
+      "t10_synopsis_restates": {
+        "num": 0,
+        "den": 56,
+        "rate": 0,
+        "has_rate": true
+      },
+      "t11_synopsis_lags": {
+        "num": 2,
+        "den": 35,
+        "rate": 5.7,
+        "has_rate": true
+      },
+      "t12_beat_vs_record": {
+        "num": 10,
+        "den": 40,
+        "rate": 25,
+        "has_rate": true
+      },
+      "t13_fabricated_next": {
+        "num": 6,
+        "den": 92,
+        "rate": 6.5,
+        "has_rate": true
+      },
+      "t1_usable": {
+        "num": 56,
+        "den": 56,
+        "rate": 100,
+        "has_rate": true
+      },
+      "t2_unverified": {
+        "num": 18,
+        "den": 770,
+        "rate": 2.3,
+        "has_rate": true
+      },
+      "t3_rubberstamped": {
+        "num": 0,
+        "den": 12,
+        "rate": 0,
+        "has_rate": true
+      },
+      "t4_retention": {
+        "num": 49,
+        "den": 79,
+        "rate": 62,
+        "has_rate": true
+      },
+      "t4_retention_strong": {
+        "num": 21,
+        "den": 42,
+        "rate": 50,
+        "has_rate": true
+      },
+      "t4_retention_weak": {
+        "num": 28,
+        "den": 37,
+        "rate": 75.7,
+        "has_rate": true
+      },
+      "t7_fabricated_unresolved": {
+        "num": 2,
+        "den": 44,
+        "rate": 4.5,
+        "has_rate": true
+      },
+      "t8_stale_open_items": {
+        "num": 0,
+        "den": 74,
+        "rate": 0,
+        "has_rate": true
+      },
+      "t9_current_is_done": {
+        "num": 1,
+        "den": 56,
+        "rate": 1.8,
+        "has_rate": true
+      },
+      "window_margin_create": {
+        "num": -1,
+        "den": 0,
+        "rate": 0,
+        "has_rate": false,
+        "missing": true
+      },
+      "window_margin_refine": {
+        "num": 3422,
+        "den": -1,
+        "rate": 0,
+        "has_rate": false
+      }
+    }
+  }
+}
