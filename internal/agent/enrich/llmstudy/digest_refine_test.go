@@ -655,28 +655,37 @@ func densePrevScaled(unresolved, scale int) Digest {
 // The session view is still absent, which is what keeps this a test of the BEAT-count
 // decision specifically: there is nothing else left to yield.
 //
-// itemLen = 9 is then the smallest value (scanned from 1) at which the fixed and reverted
+// RECALIBRATED A THIRD TIME, and by the same cause a third time: the prompt's fixed size
+// moved. Adding the per-section length guidance to digestSections (see CapSections — length is
+// now stated in the prompt because nothing enforces it after generation) grew the instructional
+// tail by 401 runes, which moved fitDiscretionary's chosen beat count at itemLen 9 and left the
+// header-omission revert PASSING (window 1,613 both ways). That is the FOURTH occurrence of this
+// branch's signature defect and the first one caused by a change made in the same commit as the
+// recalibration, which is the only reason it was caught rather than shipped: the scan below was
+// re-run rather than the docstring re-worded.
+//
+// itemLen = 12 is the smallest value (scanned from 1 to 80) at which the fixed and reverted
 // accounting diverge on whether the floor holds. Confirmed DIRECTLY, by removing
-// runeLen(windowHeader) and runeLen(beatsHeader) from fitDiscretionary's overhead, running
-// this exact test, then restoring them:
-//   - reverted: PANICS via the backstop — "assembled prompt's conversation window was
-//     clipped to 1,589 runes of content, below the 1,600-rune floor". The backstop existing
-//     does not make this test redundant: it isolates and documents fitDiscretionary's OWN
-//     mechanism rather than only proving that something eventually notices.
-//   - fixed: 1,788 runes of content against the 1,600 floor (margin 188) — a real margin,
+// runeLen(windowHeader) and runeLen(beatsHeader) from fitDiscretionary's overhead, running the
+// full scan, then restoring them:
+//   - reverted: PANICS via the backstop at itemLen 12. The backstop existing does not make this
+//     test redundant: it isolates and documents fitDiscretionary's OWN mechanism rather than
+//     only proving that something eventually notices.
+//   - fixed: 2,103 runes of content against the 1,600 floor (margin 503) — a real margin,
 //     because the correct accounting settles on a smaller beat count.
 //
 // The scan is recorded rather than summarised, because the step function is the whole
-// reason a single sample misleads. FIXED holds at every itemLen from 1 to 80; REVERTED
-// breaches at 9, 10, 15, 30, 45, 50, 60 and 80 and survives at 1, 5, 6, 7, 8, 20, 25, 35,
-// 40, 53 and 70. Landing on a surviving value is exactly what happened twice before.
+// reason a single sample misleads. FIXED holds at every itemLen from 1 to 80 (windows 1,611 to
+// 2,103, never below the floor); REVERTED breaches at 12-21 and 57-65 and survives everywhere
+// else, including at the old calibration point 9 and at 22, 40 and 53. Landing on a surviving
+// value is exactly what happened three times now.
 func TestWindowKeepsItsFloorAtTheBoundary(t *testing.T) {
-	// 9 is not a round number: it is the smallest item length (scanned from 1) at which the
+	// 12 is not a round number: it is the smallest item length (scanned from 1) at which the
 	// fixed and reverted overhead accounting settle on different beat counts AND the
 	// difference actually breaches the floor on the reverted side — the smallest gap at
 	// which the bug this test guards against changes the outcome, rather than being
 	// absorbed by a k that was going to be chosen either way.
-	const itemLen = 9
+	const itemLen = 12
 	// A bare panic stack mid-suite is not a legible result, so the backstop's panic is
 	// recovered into a failure that names THIS mechanism — the reverted accounting trips it
 	// before the assertion below is ever reached.
@@ -687,9 +696,11 @@ func TestWindowKeepsItsFloorAtTheBoundary(t *testing.T) {
 				"content it is budgeting: %v", r)
 		}
 	}()
-	// densePrev(0) supplies prose at every section's cap, identifier-dense, so
-	// Identifiers(prev) fills the retain-list to its bound: load-bearing pressure the real
-	// refinement carries. Its own open items are replaced below so itemLen stays the knob.
+	// densePrev(0) supplies prose at the stored size these tests are calibrated to
+	// (storedProseRunes and friends — the former prose caps; nothing caps prose now),
+	// identifier-dense, so Identifiers(prev) fills the retain-list to its bound: load-bearing
+	// pressure the real refinement carries. Its own open items are replaced below so itemLen
+	// stays the knob.
 	prev := densePrev(0)
 	for i := 0; i < DefaultListCap; i++ {
 		prev.Unresolved = append(prev.Unresolved, strings.Repeat("z", itemLen))

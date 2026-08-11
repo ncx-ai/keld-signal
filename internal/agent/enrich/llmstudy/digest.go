@@ -88,9 +88,10 @@ const digestSections = `  synopsis    What is this work ABOUT, where does it sta
               synthesis, not another status field. Do not restate the purpose sentence
               from "why" — the reader wants the shape of the work, not its justification.
   done        What concrete outcomes are now in place? Name them. Do not describe
-              effort or intent here — only what is finished.
+              effort or intent here — only what is finished. A few sentences.
   happened    How did it actually go? Include obstacles, wrong turns, reversals, and
-              how they were resolved. This is where difficulty belongs.
+              how they were resolved. This is where difficulty belongs. A few
+              sentences, and more when there was real difficulty to account for.
   structure   How does the thing being worked on fit together? Its parts, what each
               is for, and how they relate. For technical work this is the architecture;
               for other work, the shape of the process. Describe the SUBJECT, not
@@ -98,16 +99,20 @@ const digestSections = `  synopsis    What is this work ABOUT, where does it sta
   insights    Key thoughts and learnings. One per entry. Only things a reader could
               not infer from the bare facts.
   current     What single thing is in progress right now? Answer "nothing in
-              progress" if the work reached a stopping point.
+              progress" if the work reached a stopping point. A sentence or two.
   why         What purpose does this serve? The goal behind the work — not a
-              restatement of what was done.
+              restatement of what was done. A sentence or two.
   next        Where is this going? The direction, plus the concrete immediate steps
-              that follow from it.
+              that follow from it. A few sentences.
   unresolved  What is still open, blocked, or was abandoned? One per entry.
               If genuinely NOTHING is open, the entry must be exactly:
                 none - the work reached a stopping point
               Do not invent an open item to fill this field. An invented blocker is
               worse than no blocker, because a reader will act on it.
+
+The lengths named above are GUIDES, not limits. Nothing cuts your answer short, so
+write what a section needs and then stop: a section is the right length when it has
+said everything once. Padding and repetition are the failure, not length.
 `
 
 const digestRules = `

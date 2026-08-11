@@ -502,13 +502,18 @@ func TestWellFormedInputsDoNotTripTheBackstop(t *testing.T) {
 // nonASCII rewrites the conversation ONE CHARACTER FOR ONE into the multi-byte characters
 // these transcripts really contain, so the two runs are the same text at the same RUNE
 // length and must therefore produce the SAME window — asserted directly, not just "both
-// clear the floor". Confirmed by reverting runeLen back to b.Len() in the two assemblies:
-// the ASCII refine run passes at 1,604 runes of content while the multi-byte one PANICS at
-// 1,510 — the same shape the real corpus produced — and on the create path, where the floor
-// happens to survive, the equality assertion catches it anyway: 1,768 runes of content in
-// ASCII against 1,602 in multi-byte, a 166-rune difference from the identical text. That is
-// why the pairing asserts equality and not merely "both clear the floor": one of the two
-// paths only breached, and the other only differed.
+// clear the floor". Confirmed by reverting runeLen back to b.Len() in the two assemblies.
+//
+// RE-CONFIRMED, and the failure MOVED PATHS, after the length guidance was added to
+// digestSections (see CapSections): the tail grew 401 runes, so the reverted refine path now
+// clears the floor in both encodings and is caught by the EQUALITY assertion instead (ASCII
+// 1,916 runes of content against multi-byte 1,812, a 104-rune difference from identical text),
+// while both create subtests now breach outright (backstop: 1,597 and 1,445 against the 1,600
+// floor). Before the guidance the shape was the mirror image — ASCII refine passing at 1,604
+// while multi-byte PANICKED at 1,510, and create differing at 1,768 vs 1,602 without breaching.
+// The defect is detected either way, and only because the test asserts BOTH properties: at any
+// given prompt size one of the two paths merely differs while the other breaches, and which is
+// which depends on where the line-boundary trim happens to land.
 //
 // (The 11,000-budget figures above were measured with the ASCII-only version, so they are the
 // ASCII run's numbers; the capacity decision they justify is unaffected — the byte/rune bug
