@@ -364,10 +364,13 @@ jobs:
       #      against a 10 GB repo budget. They then evicted each other, so the cache
       #      consumed the entire quota while delivering nothing: every run downloaded
       #      cold anyway.
-      # Restores still work everywhere, because a run can read the default branch's
-      # caches as well as its own ref's. Releases build from a tag and so never write —
-      # the cache refreshes when installers.yml is dispatched on main. A miss is now
-      # merely slower, not fatal, since the smoke timeout no longer bounds the download.
+      # MEASURED, not assumed: a tag-ref run does NOT restore this main-scoped cache.
+      # v0.21.0's re-run (refs/tags/v0.21.0) reported "Cache not found" while main held
+      # exactly one healthy copy with ~8 GB of headroom, so eviction was not the cause.
+      # Releases therefore always download the model cold, and the cache only ever helps
+      # workflow_dispatch runs on main. That is tolerable purely because the smoke
+      # timeout no longer bounds the download (-m 900); if this cache is ever dropped
+      # entirely to reclaim its 1.79 GB, nothing breaks — builds just get ~2 min slower.
       - name: Save HuggingFace model cache (main only)
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
