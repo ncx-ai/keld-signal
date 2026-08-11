@@ -51,6 +51,40 @@ func TestSessionRecordIsBounded(t *testing.T) {
 	}
 }
 
+// blobToken is a base64url/JWT-shaped run of the kind a real transcript dumps into a turn
+// (a pasted token, a data-URI fragment, a long trace id). subjectTokens preserves
+// [A-Za-z0-9._/-] deliberately — that is what keeps a path in one piece — so the whole
+// thing arrives as ONE candidate subject term.
+func blobToken() string {
+	return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + strings.Repeat("aB3dE7fG9hJ2kL4mN6pQ8rS0tU", 38)
+}
+
+// TestSessionRecordSubjectsBoundEachTermsLength pins maxSubjectTermLen on the record side.
+// MaxRecordSubjects caps how many terms Block() joins; before this cap nothing capped how
+// long one of them could be. Measured through this exact turn before the fix: a single
+// Subjects entry of 1,025 runes and a Block() of 1,102 — one dimension able to exceed the
+// whole prompt budget by itself, which the backstop then has to fail the prompt over.
+//
+// The second half is the over-correction guard: a genuine path-shaped subject (54 runes,
+// the longest source path in this package) must still be admitted, or the cap has bought
+// safety by deleting exactly the specifics the record exists to hold.
+func TestSessionRecordSubjectsBoundEachTermsLength(t *testing.T) {
+	const realPath = "internal/agent/enrich/llmstudy/capability_eval_test.go"
+	w := Window{Turns: []Turn{
+		{RoleUser, "please decode the token " + blobToken() + " and check " + realPath + " for details"},
+	}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	for _, s := range r.Subjects {
+		if n := len([]rune(s)); n > maxSubjectTermLen {
+			t.Errorf("subject term is %d runes, over the %d-rune cap: %.40q...", n, maxSubjectTermLen, s)
+		}
+	}
+	if !strings.Contains(strings.Join(r.Subjects, " "), realPath) {
+		t.Errorf("a genuine %d-rune path-shaped subject must still be admitted, got %v",
+			len([]rune(realPath)), r.Subjects)
+	}
+}
+
 // Turning points are facts, so a shift is recoverable rather than inferred from prose.
 func TestSessionRecordRecordsTurningPoints(t *testing.T) {
 	r := SessionRecord{}.

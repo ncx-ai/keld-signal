@@ -10,6 +10,10 @@ import (
 // Bounds. Every list is capped, or the record stops being minimal.
 const (
 	MaxRecordProjects = 5
+	// MaxRecordSubjects bounds how MANY subject terms the record holds. How LONG any one
+	// of them may be is bounded separately, at candidate time in Observe below, by
+	// maxSubjectTermLen (digest_recency.go) — a count cap alone bounds nothing, since
+	// subjectTokens keeps a base64/dotted blob together as one token.
 	MaxRecordSubjects = 12
 	// MaxRecordTurningPoints bounds TurningPoints — task-7b fix round 3 (minor G): every
 	// other SessionRecord list caps itself at accumulation time (WithProject, Observe's
@@ -81,6 +85,15 @@ func (r SessionRecord) Observe(w Window, s Signals) SessionRecord {
 			// position-aware fallback Identifiers() already uses for prose — capitalised and
 			// not sentence-initial is presumed a name, everywhere else is presumed English.
 			if !distinctiveToken(tok) && !weakProperNoun(tok, t.Text) {
+				continue
+			}
+			// Bounded in LENGTH as well as in count — see maxSubjectTermLen in
+			// digest_recency.go. MaxRecordSubjects caps how many terms Block() joins, not
+			// how long any one of them is, and subjectTokens keeps a base64/dotted blob
+			// together as a single token; measured, one such token produced a 1,025-rune
+			// Subjects entry. Dropped rather than clipped: a clipped identifier is a
+			// specific that never appeared, and this record is the authoritative input.
+			if len([]rune(tok)) > maxSubjectTermLen {
 				continue
 			}
 			// Verbatim gate: a term enters only by appearing in the source, never by being

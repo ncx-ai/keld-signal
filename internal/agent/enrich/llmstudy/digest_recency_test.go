@@ -79,6 +79,29 @@ func TestRecentSubjectsTrimsTerminalPunctuation(t *testing.T) {
 	}
 }
 
+// TestRecentSubjectsBoundEachTermsLength pins maxSubjectTermLen on the anchor side.
+// maxRecentSubjects bounds how MANY terms reach the live "THE LATEST TURNS ARE ABOUT"
+// block, which bounds nothing about its size: subjectTokens keeps a base64/dotted blob
+// together as one token, so ten of them is ten thousand runes spliced into a prompt.
+// The path-shaped assertion is the over-correction guard — the anchor's whole job is
+// handing over recognisable identifiers, and a 54-rune source path is one.
+func TestRecentSubjectsBoundEachTermsLength(t *testing.T) {
+	const realPath = "internal/agent/enrich/llmstudy/capability_eval_test.go"
+	w := Window{Turns: []Turn{
+		{RoleUser, "decode " + blobToken() + " then look at " + realPath},
+	}}
+	subs := RecentSubjects(w, 1)
+	for _, s := range subs {
+		if n := len([]rune(s)); n > maxSubjectTermLen {
+			t.Errorf("anchor term is %d runes, over the %d-rune cap: %.40q...", n, maxSubjectTermLen, s)
+		}
+	}
+	if !strings.Contains(strings.Join(subs, " "), realPath) {
+		t.Errorf("a genuine %d-rune path-shaped term must still reach the anchor, got %v",
+			len([]rune(realPath)), subs)
+	}
+}
+
 // task-7b fix round 3 (minor G): the fix above trimmed the EMITTED value but left the
 // dedup key as `strings.ToLower(tok)` — the RAW, still-punctuated token — so a subject
 // appearing once bare ("DigestSchema") and once sentence-final ("DigestSchema.") hashed

@@ -120,6 +120,12 @@ func RecentSubjects(w Window, n int) []string {
 			if !distinctiveToken(tok) {
 				continue
 			}
+			// A single over-long token is dropped, not clipped — see maxSubjectTermLen.
+			// maxRecentSubjects bounds how MANY terms reach the live anchor; without this
+			// it bounds nothing about how large the anchor actually is.
+			if len([]rune(tok)) > maxSubjectTermLen {
+				continue
+			}
 			// Keyed on the TRIMMED spelling, matching what is actually emitted below —
 			// task-7b fix round 3: this was still `strings.ToLower(tok)` (the RAW,
 			// punctuated token) even after the emitted value itself was fixed to trim,
@@ -164,6 +170,30 @@ func subjectTokens(s string) []string {
 // maxRecentSubjects bounds the anchor. It is a nudge toward the present, not a vocabulary
 // the report must exhaust.
 const maxRecentSubjects = 10
+
+// maxSubjectTermLen bounds ONE subject term's length, wherever a subject term is emitted
+// into a prompt: the recency anchor (RecentSubjects, capped in COUNT by maxRecentSubjects)
+// and the session record (SessionRecord.Subjects, capped in count by MaxRecordSubjects).
+//
+// A count cap without a length cap is not a bound. subjectTokens deliberately preserves
+// [A-Za-z0-9._/-] — that is what keeps a path or a dotted name in one piece — so a single
+// base64url blob, JWT, data-URI fragment or long trace id pasted into a real transcript
+// arrives as ONE token of unbounded length. Measured directly through Observe with a
+// 1,000-rune blob in one user turn: a single Subjects entry of 1,025 runes, a
+// SessionRecord.Block() of 1,102, and (per the round-2 review) an 18,173-rune prompt from
+// the same shape once the other sections are populated — i.e. this one dimension can
+// exceed the entire prompt budget on its own. The backstop (assertPromptWithinBudget)
+// catches that as a violation, which is correct but is a hard failure; bounding the term
+// itself is the prevention.
+//
+// A term over the cap is DROPPED, not clipped. Clipping an identifier mid-name manufactures
+// a specific that never appeared — the same reasoning boundRetainList's doc gives for
+// dropping whole entries — and both callers feed a model that is told every named specific
+// is real. 64 is measured against what a genuine subject term looks like here: the longest
+// source path in this package is 54 runes
+// (internal/agent/enrich/llmstudy/capability_eval_test.go), and dotted identifiers are
+// shorter still, so a real path-shaped subject passes with margin while a blob cannot.
+const maxSubjectTermLen = 64
 
 // SubjectShifted reports whether two windows are about substantially different things,
 // measured on shared distinctive terms.
