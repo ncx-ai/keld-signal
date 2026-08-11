@@ -37,16 +37,21 @@ func TestBeatDump(t *testing.T) {
 	l := NewLlama(url)
 
 	type beatOut struct {
-		Ordinal        int    `json:"ordinal"`
-		ChangedSubject bool   `json:"changed_subject"`
-		AtWindow       int    `json:"at_window"`
-		Sentences      int    `json:"sentences"`
-		Runes          int    `json:"runes"`
-		RawRunes       int    `json:"raw_runes"`
-		Clipped        bool   `json:"clipped"`
-		UserTurn       string `json:"user_turn"`
-		Text           string `json:"text"`
-		Raw            string `json:"raw"`
+		Ordinal        int      `json:"ordinal"`
+		ChangedSubject bool     `json:"changed_subject"`
+		SubjectTerms   []string `json:"subject_terms"`
+		AtWindow       int      `json:"at_window"`
+		Sentences      int      `json:"sentences"`
+		Runes          int      `json:"runes"`
+		RawRunes       int      `json:"raw_runes"`
+		Clipped        bool     `json:"clipped"`
+		// ProgressClaims is the overall-progress characterisation the beat makes, if any. It
+		// must be empty on every beat: the check runs inside GenerateBeat's retry loop, so a
+		// non-empty entry here means an offending generation reached the series anyway.
+		ProgressClaims []string `json:"progress_claims,omitempty"`
+		UserTurn       string   `json:"user_turn"`
+		Text           string   `json:"text"`
+		Raw            string   `json:"raw"`
 	}
 	type sessOut struct {
 		Label      string    `json:"label"`
@@ -106,27 +111,26 @@ func TestBeatDump(t *testing.T) {
 				continue
 			}
 			var stored bool
-			beats, stored = AppendBeat(beats, text)
+			// The user turn that prompted this window is grounded, non-model-authored
+			// evidence of what the window is about, and it is what ChangedSubject falls back
+			// on when the beat names nothing concrete (see beatSubjectTermsGrounded).
+			ground := GroundOf(w)
+			beats, stored = AppendBeat(beats, text, ground)
 			if !stored {
 				s.Restated++
 				t.Logf("  DISCARDED as restatement at window %d: %s", i, text)
 				continue
 			}
 			b := beats[len(beats)-1]
-			// The user turn that prompted this window, for grounding.
-			turn := ""
-			for j := len(w.Turns) - 1; j >= 0; j-- {
-				if w.Turns[j].Role == RoleUser {
-					turn = w.Turns[j].Text
-					break
-				}
-			}
+			turn := ground.Turn
 			if len(turn) > 150 {
 				turn = turn[:150] + "…"
 			}
 			s.Beats = append(s.Beats, beatOut{
 				Ordinal:        b.Ordinal,
 				ChangedSubject: b.ChangedSubject,
+				SubjectTerms:   b.SubjectTerms,
+				ProgressClaims: beatProgressClaims(b.Text),
 				AtWindow:       i,
 				Sentences:      countBeatSentences(b.Text),
 				Runes:          len([]rune(b.Text)),
@@ -140,8 +144,15 @@ func TestBeatDump(t *testing.T) {
 		s.Kept = len(beats)
 		s.Record = rec.Block()
 		all = append(all, s)
-		t.Logf("%s: %d windows, %d asked, %d kept, %d restated, %d failed (every %d turns)",
-			src.label, len(ws), s.Asked, s.Kept, s.Restated, s.Failed, every)
+		var chg int
+		for _, b := range beats {
+			if b.ChangedSubject {
+				chg++
+			}
+		}
+		t.Logf("%s: %d windows, %d asked, %d kept, %d restated, %d failed (every %d turns), "+
+			"changed_subject %d/%d", src.label, len(ws), s.Asked, s.Kept, s.Restated, s.Failed,
+			every, chg, len(beats))
 	}
 
 	blob, _ := json.MarshalIndent(all, "", "  ")
@@ -151,7 +162,7 @@ func TestBeatDump(t *testing.T) {
 
 	// The acceptance figures, computed here rather than by eye: the defect they catch passed
 	// every length threshold in the suite.
-	var midSentence, changed, n int
+	var midSentence, changed, n, claiming, abstained int
 	var runes, raws []int
 	sentences := map[int]int{}
 	openings := map[string]int{}
@@ -163,6 +174,17 @@ func TestBeatDump(t *testing.T) {
 			}
 			if b.ChangedSubject {
 				changed++
+			}
+			if len(b.ProgressClaims) > 0 {
+				claiming++
+				t.Errorf("beat %d claims unobservable progress %v: %s",
+					b.Ordinal, b.ProgressClaims, b.Text)
+			}
+			// A beat whose own text and whose prompting turn between them name nothing
+			// concrete cannot be judged for a subject change, and is reported unchanged. The
+			// count is the honest size of ChangedSubject's remaining lower bound.
+			if len(b.SubjectTerms) == 0 {
+				abstained++
 			}
 			sentences[b.Sentences]++
 			runes = append(runes, b.Runes)
@@ -183,6 +205,8 @@ func TestBeatDump(t *testing.T) {
 	}
 	t.Logf("n=%d  ending mid-sentence: %d (%.1f%%)  changed_subject: %d (%.1f%%)",
 		n, midSentence, 100*float64(midSentence)/float64(n), changed, 100*float64(changed)/float64(n))
+	t.Logf("claiming unobservable progress: %d (%.1f%%)  changed_subject abstentions: %d (%.1f%%)",
+		claiming, 100*float64(claiming)/float64(n), abstained, 100*float64(abstained)/float64(n))
 	t.Logf("sentences per beat: %s", strings.Join(dist, ", "))
 	t.Logf("distinct openings (first four words): %d of %d", len(openings), n)
 	t.Logf("kept runes: min=%d median=%d max=%d | unclipped: min=%d median=%d max=%d",
