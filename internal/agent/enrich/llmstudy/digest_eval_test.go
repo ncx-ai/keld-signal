@@ -443,10 +443,32 @@ func TestDigestRefineQuality(t *testing.T) {
 			// REPORT, not the previous window: the question the trigger answers is whether
 			// the work moved since the last report, and comparing adjacent windows would
 			// measure something else and break comparability with the earlier runs.
+			//
+			// CONFOUND FIX. `reason` has TWO consumers with different jobs, and one derived
+			// value used to serve both: RefineInput.Why (the recency anchor — what the arms
+			// are meant to differ on) and rec.NoteTurningPoint below (the measured record's
+			// turning-point list, which has nothing to do with the anchor). Because the
+			// anchor arm gated the single value, the OFF arm's `reason` was ALWAYS
+			// TriggerVolume, NoteTurningPoint filters to FocusShift/Friction, and so the OFF
+			// arm ran with an EMPTY TurningPoints list for its entire duration while the ON
+			// arm fired on ~41 of 42 steps — a ~220-rune difference in the
+			// "SESSION RECORD (measured — authoritative)" block on every single step. The
+			// confound is ALIGNED with the anchor, so it inflates the apparent anchor cost,
+			// and "the anchor costs 6 points of T4" was not attributable to the anchor.
+			//
+			// So the trigger reason is now computed ONCE, independent of the arm, and only
+			// RefineInput.Why is gated. Both arms therefore see identical records, and the
+			// arms differ in exactly one thing.
 			reason := TriggerVolume
-			if anchorEnabled() && step > 0 && SubjectShifted(prevReportSrc, src) {
+			if step > 0 && SubjectShifted(prevReportSrc, src) {
 				reason = TriggerFocusShift
 				shifts++
+			}
+			// What the PROMPT is told. The anchor is what the ablation is about; the record
+			// above is not.
+			why := reason
+			if !anchorEnabled() {
+				why = TriggerVolume
 			}
 			// T4 diagnosis, computed BEFORE the call and from the same functions the prompt
 			// builder uses, so it describes the retain-list this refinement actually carried
@@ -507,7 +529,7 @@ func TestDigestRefineQuality(t *testing.T) {
 					Beats:        beats,
 					SessionView:  view,
 					NewTurns:     src,
-					Why:          reason,
+					Why:          why, // gated on the arm; `reason` is not — see the confound note above
 				}
 				p, window := updatePromptAndWindow(cur, in)
 				if m := windowMargin(window); m < tightestRefine {
@@ -631,6 +653,9 @@ func TestDigestRefineQuality(t *testing.T) {
 			// from the record as a FACT by every later report rather than inferred from prose.
 			// Noted after the report succeeded, not when the reason was chosen: a step that
 			// produced nothing did not turn anything.
+			//
+			// `reason`, NOT `why`: the record is measured and is the same in both arms. Using
+			// the anchor-gated value here is what confounded the ablation — see above.
 			rec = rec.NoteTurningPoint(step+1, reason)
 
 			body, _ := json.Marshal(d)
@@ -750,7 +775,17 @@ func TestDigestRefineQuality(t *testing.T) {
 			"abstained for want of opening evidence)",
 			pct(lagging, lagJudged), lagJudged, lagAbstained, lagDen)
 	}
-	t.Logf("    anchor fired on %d of %d refinements (measured subject shift)", shifts, lagDen)
+	// `shifts` is the measured subject-shift rate, now computed identically in BOTH arms (see
+	// the confound note at its assignment). In the OFF arm the shift is measured and recorded
+	// in the session record but the anchor is not offered, which is the only difference
+	// between the arms.
+	if anchorEnabled() {
+		t.Logf("    subject shift measured on %d of %d refinements; anchor offered on all of them",
+			shifts, lagDen)
+	} else {
+		t.Logf("    subject shift measured on %d of %d refinements; anchor offered on NONE "+
+			"(the record still records them, identically to the ON arm)", shifts, lagDen)
+	}
 	// T12, measurable for the first time now that this sweep builds the record and the beats.
 	// The DENOMINATOR is t12Checked, not the number of beats: BeatContradictsRecord abstains
 	// while the record holds fewer than minConsistencyEvidence subjects, and dividing by all
@@ -934,6 +969,15 @@ func sessionDeltas(path string, o MineOpts) ([]Window, error) {
 // MISCALIBRATED at this window spacing — it fires on essentially every refinement — so the
 // "on" arm is in practice anchor-always, and must be reported as such rather than as "gated".
 // "off" removes the anchor entirely, which is the arm the design's prediction is about.
+//
+// ⚠️ The published ON/OFF figures (T4 50.0% vs 56.2%, T7 4.5% vs 2.3%, T3 16.7% vs 8.3%) were
+// measured while this flag ALSO gated SessionRecord.NoteTurningPoint, so the OFF arm ran with
+// an empty TurningPoints list throughout — a confound aligned with the anchor, which inflates
+// its apparent cost. That is fixed at the `reason`/`why` split above; the corrected comparison
+// is UNMEASURED, and nothing should attribute a magnitude to the anchor until it is re-run.
+// The DIRECTION survives (every difference favoured OFF, and the anchor's own earlier
+// measurement, 97.4% -> 88.3% retention, was taken without this confound), which is why the
+// anchor stays gated regardless.
 func anchorEnabled() bool { return os.Getenv("KELD_STUDY_ANCHOR") != "off" }
 
 // sessionBudget sets how many sessions the sweep covers. Default 5 is a fast
