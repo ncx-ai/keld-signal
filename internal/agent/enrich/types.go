@@ -101,24 +101,24 @@ type HealthFunc func() bool
 
 // Profile is the full enrichment result for one prompt.
 type Profile struct {
-	TaskType          Labeled           `json:"task_type"`
-	TaskTypeAlt       []Labeled         `json:"task_type_alt,omitempty"`
-	Domain            Labeled           `json:"domain"`
-	Entities          []Entity          `json:"entities,omitempty"`
-	Sensitivity       Labeled           `json:"sensitivity"`
-	SensitivitySpans  []Entity          `json:"sensitivity_spans,omitempty"`
-	Activity          Labeled           `json:"activity_type"`
-	Personal          Labeled           `json:"personal"`
-	FunctionGuess     Labeled           `json:"function_guess"`
-	SpeechAct         Labeled           `json:"speech_act"`
-	SpeechActAlt      []Labeled         `json:"speech_act_alt,omitempty"`
-	Subcategory       Labeled           `json:"subcategory"`
-	SubcategoryAlt    []Labeled         `json:"subcategory_alt,omitempty"`
-	PipelineStatus    string            `json:"pipeline_status"`
-	ExtractorVersions map[string]string `json:"extractor_versions"`
-	SchemaVersion     int               `json:"schema_version"`
+	TaskType          Labeled                 `json:"task_type"`
+	TaskTypeAlt       []Labeled               `json:"task_type_alt,omitempty"`
+	Domain            Labeled                 `json:"domain"`
+	Entities          []Entity                `json:"entities,omitempty"`
+	Sensitivity       Labeled                 `json:"sensitivity"`
+	SensitivitySpans  []Entity                `json:"sensitivity_spans,omitempty"`
+	Activity          Labeled                 `json:"activity_type"`
+	Personal          Labeled                 `json:"personal"`
+	FunctionGuess     Labeled                 `json:"function_guess"`
+	SpeechAct         Labeled                 `json:"speech_act"`
+	SpeechActAlt      []Labeled               `json:"speech_act_alt,omitempty"`
+	Subcategory       Labeled                 `json:"subcategory"`
+	SubcategoryAlt    []Labeled               `json:"subcategory_alt,omitempty"`
+	PipelineStatus    string                  `json:"pipeline_status"`
+	ExtractorVersions map[string]string       `json:"extractor_versions"`
+	SchemaVersion     int                     `json:"schema_version"`
 	Custom            map[string]CustomResult `json:"custom,omitempty"`
-	EnrichedAt        time.Time         `json:"-"`
+	EnrichedAt        time.Time               `json:"-"`
 }
 
 // CustomResult is one org-defined (custom) pass's output, shaped by kind. It

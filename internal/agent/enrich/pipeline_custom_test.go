@@ -65,6 +65,6 @@ func TestPipelineCustomEntityCarriesProducer(t *testing.T) {
 
 type panicExtractor struct{}
 
-func (panicExtractor) Name() string                           { return "boom" }
-func (panicExtractor) Version() string                        { return "boom" }
+func (panicExtractor) Name() string                            { return "boom" }
+func (panicExtractor) Version() string                         { return "boom" }
 func (panicExtractor) Run(*JobContext) (map[string]any, error) { panic("boom") }

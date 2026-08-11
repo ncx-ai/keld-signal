@@ -19,6 +19,20 @@ jobs:
       - name: go test
         run: go test ./...
 
+  shell-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The repo's shell tests are standalone scripts (same convention as the
+      # sidecar's Python tests — no framework). They were previously wired into
+      # nothing, so they could rot unnoticed; run them here.
+      - name: shell test suite
+        run: |
+          bash scripts/verify-release-assets_test.sh
+          bash scripts/test-install-sh.sh
+          bash sidecar/test_build_freeze.sh
+          bash installers/macos/onboard_command_test.sh
+
   goreleaser-check:
     runs-on: ubuntu-latest
     steps:
