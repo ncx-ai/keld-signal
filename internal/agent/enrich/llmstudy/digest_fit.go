@@ -100,16 +100,23 @@ func fitTurns(turns string, overhead int) string {
 	// cut, the first '\n' found is that turn's own terminator deep into `clipped`, and the
 	// trim can collapse the window to almost nothing (measured -1589 runes, window 11).
 	//
-	// `clipped` is exactly `room` runes before any trim, so it already clears the floor
-	// whenever `room` does — falling back to it is never worse than trimming, and trimming
-	// is applied only when it does not lose that guarantee. If `room` itself is already
-	// short of MinTurnChars, the floor was unreachable before this function ran (a finding
-	// for whoever owns the budget upstream — see fitDiscretionary's doc — not something a
-	// trim choice here can fix), so there is nothing left to protect and the boundary trim
-	// is applied unconditionally for cleanliness.
+	// `clipped` is exactly `room` runes before any trim, so trimming is applied ONLY when
+	// what remains still clears the floor. Otherwise the untrimmed window is kept, mid-line
+	// and all: a window opening mid-word is a cosmetic loss, and starving the four sections
+	// the window is the only evidence for is not.
+	//
+	// The earlier guard read `room < MinTurnChars || runeLen(kept) >= MinTurnChars` — i.e. it
+	// ALSO trimmed unconditionally once `room` was already short of the floor, on the theory
+	// that "the floor was unreachable before this function ran, so there is nothing left to
+	// protect". That is exactly backwards, and it was an AMPLIFIER: when room is short the
+	// window is the thing most worth protecting, and the round-3 review measured what the
+	// inversion cost — room 1600 yields 1600 runes of content, room 1599 yields 1200, so a
+	// ONE-rune miss upstream threw away up to PerTurnChars (1200) more on a mined turn. Six
+	// of 293 real refine steps panicked that way: the byte/rune mismatch (see runeLen) put
+	// room 9-18 runes under the floor, and this branch then turned that into a 100+ rune
+	// breach. Both halves are fixed; this half means a future one-rune miss costs one rune.
 	if i := strings.IndexByte(clipped, '\n'); i >= 0 && i < len(clipped)-1 {
-		kept := clipped[i+1:]
-		if room < MinTurnChars || len([]rune(kept)) >= MinTurnChars {
+		if kept := clipped[i+1:]; runeLen(kept) >= MinTurnChars {
 			clipped = kept
 		}
 	}
