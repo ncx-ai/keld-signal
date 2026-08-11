@@ -442,21 +442,24 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   file (falls back to the latest-release API for dry-run builds), Apple-Silicon-only,
   and non-fatal on failure: telemetry still works, enrichment jobs spool, re-running
   the script retries.
-  **Notarization works, and the release still doesn't block on it — on purpose.**
-  Verdicts now land in **~25s** and the build staples inline (23s on v0.20.0, 24s on
-  v0.21.0). It was not always so: submissions returned *zero* verdicts for days, one
-  sitting 5h32m with no error, no log, no queue position and the service reported
-  healthy. That resolved 2026-08-06 via an **account-side** change, not a repo one.
-  The decoupling is retained regardless: submit, wait only `KELD_NOTARY_TIMEOUT`
-  (default 15m), then ship. It costs nothing when verdicts are fast and means a
-  future Apple-side stall degrades to "ships unstapled" rather than blocking a
-  release — safe because Gatekeeper validates **online**, so a ticket landing after
-  we ship still passes; stapling only adds *offline* validation. A rejection
-  (`Invalid`) still fails the build — that means a broken payload, which waiting
-  won't fix. The submission id is written to `<pkg>.notarization-id` + the run
-  summary so a later staple needs no log archaeology. `KELD_NOTARY_REQUIRED=1`
-  restores fail-on-timeout (now defensible, still opt-in — a green release
-  shouldn't depend on Apple's queue latency). `staple.yml` sweeps daily.
+  ⚠️ **Notarization is a HARD GATE — a release cannot ship un-notarized.**
+  `KELD_NOTARY_REQUIRED` defaults to **1**, so `build-pkg.sh` fails unless Apple
+  returns `Accepted`; the workflow relaxes it to 0 only for the documented
+  **no-secrets** path (forks/dry runs without the Apple secrets, which are meant to
+  produce unsigned non-distributable output). The earlier design shipped regardless
+  of verdict, which was wrong: "unstapled but valid online" only holds once a ticket
+  **exists**, and with no verdict there is no ticket, so Gatekeeper blocks the
+  installer outright. That hedge existed because Apple returned *zero* verdicts for
+  days (one submission sat 5h32m — no error, no log, no queue position, service
+  healthy); it resolved 2026-08-06 **account-side**, and verdicts now land in ~25s
+  (23s v0.20.0, 24s v0.21.0), so tolerating "no verdict" buys nothing.
+  `KELD_NOTARY_TIMEOUT` (default 15m) is now the **stall tolerance before failing**,
+  ~36x observed latency. A rejection (`Invalid`) fails for a different reason — a
+  broken payload, which waiting won't fix. The submission id is still written to
+  `<pkg>.notarization-id` + the run summary first, so a failed build can be stapled
+  or diagnosed without log archaeology. `staple.yml` sweeps daily as a backstop.
+  Invariants pinned by `installers/macos/build_pkg_notarization_test.sh` (static
+  assertions — the gate can't execute off macOS).
 - **Obfuscation (`KELD_OBFUSCATE=1`, CI-set, default off).** The installer/release
   freeze obfuscates the shipped sidecar — python-minifier **locals-only** rename
   (globals/Pydantic-fields/spawn-targets preserved; annotations kept so Pydantic

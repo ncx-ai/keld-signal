@@ -227,6 +227,13 @@ jobs:
           APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+          # Notarization is a HARD GATE whenever we have creds: build-pkg.sh fails unless
+          # Apple returns Accepted, because an un-notarized pkg has no ticket and so is
+          # blocked by Gatekeeper outright — "ships unstapled" is only safe once a ticket
+          # exists. Explicitly relaxed ONLY for the documented no-secrets path (forks, and
+          # dry runs on a repo without the Apple secrets), which is meant to produce
+          # unsigned, non-distributable output rather than fail.
+          KELD_NOTARY_REQUIRED: ${{ secrets.APPLE_NOTARY_KEY != '' && '1' || '0' }}
         run: |
           # Flatten sidecar one-dir beside keld-agent in the payload.
           VER="$TAG"
