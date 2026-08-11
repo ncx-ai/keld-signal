@@ -31,21 +31,21 @@ func KeldHome() string {
 	return filepath.Join(home, ".keld")
 }
 
-func AuthPath() string              { return filepath.Join(KeldHome(), "auth.json") }
-func ManifestPath() string          { return filepath.Join(KeldHome(), "manifest.json") }
-func HookConfigPath() string        { return filepath.Join(KeldHome(), "hook.json") }
-func AgentInfoPath() string         { return filepath.Join(KeldHome(), "agent.json") }
-func AgentConfigPath() string       { return filepath.Join(KeldHome(), "agent-config.json") }
-func DebugLogPath() string          { return filepath.Join(KeldHome(), "agent.log") }
-func AgentLogDir() string           { return filepath.Join(KeldHome(), "logs") }
-func AgentStdoutLog() string        { return filepath.Join(AgentLogDir(), "agent.out.log") }
-func AgentStderrLog() string        { return filepath.Join(AgentLogDir(), "agent.err.log") }
-func StateDir() string              { return filepath.Join(KeldHome(), "state") }
+func AuthPath() string        { return filepath.Join(KeldHome(), "auth.json") }
+func ManifestPath() string    { return filepath.Join(KeldHome(), "manifest.json") }
+func HookConfigPath() string  { return filepath.Join(KeldHome(), "hook.json") }
+func AgentInfoPath() string   { return filepath.Join(KeldHome(), "agent.json") }
+func AgentConfigPath() string { return filepath.Join(KeldHome(), "agent-config.json") }
+func DebugLogPath() string    { return filepath.Join(KeldHome(), "agent.log") }
+func AgentLogDir() string     { return filepath.Join(KeldHome(), "logs") }
+func AgentStdoutLog() string  { return filepath.Join(AgentLogDir(), "agent.out.log") }
+func AgentStderrLog() string  { return filepath.Join(AgentLogDir(), "agent.err.log") }
+func StateDir() string        { return filepath.Join(KeldHome(), "state") }
 
 // PromptLengthsPath holds the streaming prompt-length distribution the daemon
 // uses to size enrichment's input truncation (see agent/enrich/lenstat).
 // Lengths only — never prompt text.
-func PromptLengthsPath() string { return filepath.Join(StateDir(), "prompt-lengths.json") }
+func PromptLengthsPath() string     { return filepath.Join(StateDir(), "prompt-lengths.json") }
 func BackupsDir() string            { return filepath.Join(KeldHome(), "backups") }
 func ModelsDir(model string) string { return filepath.Join(KeldHome(), "models", model) }
 func InstallIDPath() string         { return filepath.Join(KeldHome(), "install-id") }
