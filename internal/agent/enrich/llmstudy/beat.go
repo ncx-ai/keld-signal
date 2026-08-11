@@ -48,18 +48,27 @@ type Beat struct {
 // along which drift could compound.
 func BeatPrompt(record, window string) string {
 	var b strings.Builder
-	b.WriteString("State what the work is about, in one to three sentences.\n\n")
+	b.WriteString("You are the engineer working in the session below. A colleague asks you at " +
+		"standup what you are working on. Answer them in two or three sentences: what you are " +
+		"working on, and where it has got to.\n\n")
 	b.WriteString("SESSION RECORD (measured — authoritative):\n")
 	b.WriteString(record)
 	b.WriteString("\nRECENT CONVERSATION:\n")
 	b.WriteString(window)
 	b.WriteString(`
 Rules:
-  - Say what the work is ABOUT — the subject and its purpose. Not a list of actions taken.
+  - Answer the way a person answers that question out loud: two or three sentences,
+    plainly, saying what the work is and where it stands.
+  - Vary how you open, and never use a stock opener. Do not begin with any of these:
+    "The work is about", "The work is", "This session", "The user", "Currently".
+    No fixed formula at all — begin with the thing being worked on.
+  - Say what the work IS — the subject and why it is being done. Not a list of actions
+    taken.
   - Use the record to place the work. An action is only meaningful as part of something.
   - Every noun must come from the conversation or the record above. Nothing in these
     instructions is subject matter.
-  - No preamble, no headings. One to three sentences of plain prose.
+  - Finish every sentence. End the last one with a full stop; never trail off mid-clause.
+  - No preamble, no headings, no bullets. Plain prose only.
 
 Respond with JSON only.
 `)

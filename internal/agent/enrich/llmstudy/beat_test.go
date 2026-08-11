@@ -23,9 +23,42 @@ func TestBeatPromptCarriesWindowAndRecord(t *testing.T) {
 	if strings.Contains(strings.ToLower(p), "previous beat") {
 		t.Error("beat prompt refers to an earlier beat")
 	}
-	for _, want := range []string{"one to three sentences", "what the work is about"} {
+}
+
+// The register the prompt must ask for, and the one it must not.
+//
+// The monotony was caused by the instruction itself: "State what the work is about" produced 46
+// of 47 beats opening with the identical four words, "The work is about". A prompt that dictates
+// a subject and a verb dictates a sentence. So it now asks the question a colleague asks —
+// which is what the answer should sound like — and names the stock openers as forbidden rather
+// than hoping variety emerges.
+func TestBeatPromptAsksTheStandupQuestionAndForbidsAFormula(t *testing.T) {
+	p := BeatPrompt("record", "window")
+	low := strings.ToLower(p)
+	for _, want := range []string{"standup", "two or three sentences"} {
+		if !strings.Contains(low, want) {
+			t.Errorf("beat prompt omits %q — it must ask for a spoken answer, not a statement", want)
+		}
+	}
+	// The instruction that caused the template must be gone as an INSTRUCTION.
+	if strings.Contains(p, "State what the work is about") {
+		t.Error("beat prompt still dictates the sentence it wants")
+	}
+	// And the formula must be named and forbidden.
+	i := strings.Index(p, `"The work is about"`)
+	if i < 0 {
+		t.Fatal("beat prompt does not forbid the opener 46 of 47 beats used")
+	}
+	if !strings.Contains(strings.ToLower(p[:i]), "do not begin with") {
+		t.Errorf("the opener is mentioned but not forbidden: %q", p[:i])
+	}
+	// Constraints that must survive the rewrite.
+	for _, want := range []string{
+		"Every noun must come from the conversation or the record",
+		"Not a list of actions",
+	} {
 		if !strings.Contains(p, want) {
-			t.Errorf("beat prompt omits %q", want)
+			t.Errorf("beat prompt dropped the constraint %q", want)
 		}
 	}
 }
