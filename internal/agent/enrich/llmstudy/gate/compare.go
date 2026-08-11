@@ -80,6 +80,9 @@ func Compare(base, cur *Sweep) []Row {
 				"an abstention scored as a pass is how T11/T12 reported a clean 0.0% for a round")
 		case m.Dir == Info:
 			r.Verdict = Moot
+			// An informational row still reports a BREACH of its own absolute invariant, so
+			// making prompt geometry informational cannot hide a prompt over budget or a window
+			// under the floor — see the note on those metrics in sweep.go.
 		default:
 			r.Verdict = judge(m, b, c)
 		}
