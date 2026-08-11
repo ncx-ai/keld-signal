@@ -85,8 +85,16 @@ jobs:
           python -m pip install --quiet python-minifier pyarmor
           bash sidecar/build-freeze.sh
 
-      - name: Cache HuggingFace model
-        uses: actions/cache@v4
+      # RESTORE-ONLY, deliberately. The cache is written by exactly one job
+      # (linux-sidecar, and only on main) — see the note there. This job must not save:
+      # the matrix runs on 2 OSes, so with a plain `actions/cache` the two legs plus
+      # linux-sidecar all raced to save the SAME key, each seeing a miss and each
+      # writing its own ~1.79 GB copy. That is how three duplicates of one key ended up
+      # on refs/heads/main, and how six copies (10.02 GB) consumed the repo's entire
+      # 10 GB budget until they evicted each other and every run downloaded cold.
+      # The model weights are platform-independent, so one cache serves all three jobs.
+      - name: Restore HuggingFace model cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/hf-cache
           key: hf-gliner2-large-v1-b122b11eeaee4dabd32bed80412f3234c0d0e943
@@ -109,7 +117,12 @@ jobs:
           # bundle. /health alone never spawns a worker, so this is the ONLY CI
           # coverage for frozen-distribution worker spawn (freeze_support, pyarmor
           # runtime bundling, multiprocessing under PyInstaller).
-          resp=$(curl -sf -m 120 -X POST http://127.0.0.1:8399/classify \
+          # Generous timeout: this first /classify also pays for the ~1.8 GB model
+          # download on a cache miss, so a tight cap bounds the DOWNLOAD rather than the
+          # inference it exists to check. At -m 120 the equivalent Linux step was a coin
+          # flip — 100s (pass) vs 116s (fail) on identical cold downloads — which is how
+          # v0.21.0 published without its Linux sidecar tarball.
+          resp=$(curl -sf -m 900 -X POST http://127.0.0.1:8399/classify \
             -H 'Content-Type: application/json' \
             -d '{"text":"debug the login bug","tasks":{"task_type":["debug","other"]}}') \
             || { echo "frozen worker /classify failed — spawn/import/bundle broke"; exit 1; }
@@ -319,10 +332,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Cache BEFORE the freeze step: the smoke run inside the container resolves the real
-      # model through HF_HOME, which is this directory bind-mounted into /work/hf-cache.
-      - name: Cache HuggingFace model
-        uses: actions/cache@v4
+      # Restore BEFORE the freeze step: the smoke run inside the container resolves the
+      # real model through HF_HOME, which is this directory bind-mounted into
+      # /work/hf-cache.
+      - name: Restore HuggingFace model cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/hf-cache
           key: hf-gliner2-large-v1-b122b11eeaee4dabd32bed80412f3234c0d0e943
@@ -340,6 +354,27 @@ jobs:
             -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
             quay.io/pypa/manylinux_2_28_x86_64 \
             bash sidecar/ci-freeze-linux.sh
+
+      # THE ONLY JOB THAT WRITES THIS CACHE, AND ONLY ON main. Two rules, both learned
+      # the hard way:
+      #   1. One writer. Three jobs sharing one key all raced to save it, each writing
+      #      its own ~1.79 GB copy of identical platform-independent weights.
+      #   2. main only. Every branch that ran this workflow saved its own copy too, so
+      #      copies accumulated per-ref as well as per-job — six in total, 10.02 GB
+      #      against a 10 GB repo budget. They then evicted each other, so the cache
+      #      consumed the entire quota while delivering nothing: every run downloaded
+      #      cold anyway.
+      # Restores still work everywhere, because a run can read the default branch's
+      # caches as well as its own ref's. Releases build from a tag and so never write —
+      # the cache refreshes when installers.yml is dispatched on main. A miss is now
+      # merely slower, not fatal, since the smoke timeout no longer bounds the download.
+      - name: Save HuggingFace model cache (main only)
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/hf-cache
+          key: hf-gliner2-large-v1-b122b11eeaee4dabd32bed80412f3234c0d0e943
 
       - name: Package Linux sidecar tarball
         shell: bash
