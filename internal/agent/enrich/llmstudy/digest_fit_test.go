@@ -1,6 +1,7 @@
 package llmstudy
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -52,6 +53,31 @@ func TestSmallWindowIsNotClipped(t *testing.T) {
 // (what current/why/next/unresolved are written from), not the notice that precedes it.
 func windowOf(clipped string) string {
 	return strings.TrimPrefix(clipped, omittedNotice)
+}
+
+// promptWindow recovers the conversation window from an ASSEMBLED prompt by landmark, for
+// tests that have only the finished string.
+//
+// Deliberately NOT what the backstop does: assertPromptWithinBudget is handed fitTurns'
+// own return value, because landmark recovery is defeated by content that quotes a
+// landmark (task-7b fix round 4 — a quoted windowHeader silences the floor check, a quoted
+// tail marker fails a healthy prompt). A test that builds its own input knows its content
+// contains no such quote, so landmark recovery is sound HERE and is the only option: the
+// window is not otherwise observable from outside. See
+// TestQuotedMarkersCannotDefeatTheBackstop for the two shapes this helper would get wrong,
+// and note that they are exactly why the production check does not use it.
+func promptWindow(t *testing.T, p, marker, tail string) string {
+	t.Helper()
+	start := strings.Index(p, marker)
+	if start < 0 {
+		t.Fatalf("assembled prompt is missing its window marker %q", marker)
+	}
+	start += len(marker)
+	end := strings.Index(p[start:], tail)
+	if end < 0 {
+		t.Fatalf("assembled prompt is missing its tail marker %q", tail)
+	}
+	return p[start : start+end]
 }
 
 // TestFitTurnsLineBoundaryTrimCannotBreachTheFloor is the fix for task-7b finding (b):
@@ -168,6 +194,185 @@ func TestWellFormedInputsDoNotTripTheBackstop(t *testing.T) {
 	_ = DigestCreatePrompt("work session", "user: hello, this is a short conversation\n", "counts: turns=1\n")
 	_ = DigestUpdatePrompt(Digest{Done: "x", Insights: []string{"a"}, Unresolved: []string{"b"}},
 		"work session", "user: hello again\n", "counts: turns=2\n")
+}
+
+// TestFloorIsReachableAtRealisticInputScale is the capacity decision's regression test —
+// the reason DefaultPromptCharBudget went to 14,000 at ctx 8192.
+//
+// The round-2 review's finding was NOT that some pathological input breaches MinTurnChars;
+// the round-3 bounds handle those. It was that the floor is unreachable at input scales a
+// real session produces — a record holding path-shaped Subjects, a path-heavy recency
+// anchor, a large measured-facts block on the create path — with every bound in this
+// package honoured. Confirmed by setting DefaultPromptCharBudget back to 11,000 and running
+// this exact test: BOTH subtests fail, refine with a window of 517 runes against the 1,600
+// floor and create with 1,147 (the review's independently measured figure for the create
+// path was 1,141). A panic is the RIGHT response to a starved window, but it aborts the
+// measurement sweep instead of costing one digest, so the input scale had to be admitted
+// rather than the failure tolerated. Restored to 14,000: refine window 1,675, create 1,847.
+//
+// Nothing here is an adversarial construction: no hand-built list exceeds its own
+// accumulation-time cap, prev is what CapSections returns, the beats are a full ladder and
+// the view is over its cap (both discretionary, both expected to yield). The two
+// deliberately UNBOUNDED dimensions used — SessionRecord.Projects' per-entry length and
+// DigestFacts' Topics/Entities counts — are named as such where they are built.
+func TestFloorIsReachableAtRealisticInputScale(t *testing.T) {
+	t.Run("refine, record at realistic scale", func(t *testing.T) {
+		defer failOnBackstop(t)
+		p := DigestUpdatePromptFrom(realisticPrev(), realisticRefineInput())
+		assertFitsAndKeepsTheFloor(t, p, windowHeader, updateSectionsMarker)
+	})
+
+	t.Run("create, large measured-facts block", func(t *testing.T) {
+		defer failOnBackstop(t)
+		facts := realisticFactsBlock()
+		t.Logf("facts block: %d runes", len([]rune(facts)))
+		p := DigestCreatePromptWithView("work session",
+			strings.Repeat("user: a filler turn about the work\n", 400),
+			strings.Repeat("user: an early turn about the work\n", 400), facts)
+		assertFitsAndKeepsTheFloor(t, p, createWindowHeader, createSectionsMarker)
+	})
+}
+
+// failOnBackstop turns the backstop's panic into a test failure naming it, so a capacity
+// regression reads as "the floor is unreachable again" rather than as a bare panic
+// stack in the middle of a sweep.
+func failOnBackstop(t *testing.T) {
+	t.Helper()
+	if r := recover(); r != nil {
+		t.Fatalf("the backstop fired on a realistic input scale — the budget no longer "+
+			"admits it: %v", r)
+	}
+}
+
+func assertFitsAndKeepsTheFloor(t *testing.T, p, marker, tail string) {
+	t.Helper()
+	total := len([]rune(p))
+	window := len([]rune(promptWindow(t, p, marker, tail)))
+	t.Logf("total %d runes (budget %d, margin %d), window %d (floor %d, margin %d)",
+		total, DefaultPromptCharBudget, DefaultPromptCharBudget-total,
+		window, MinTurnChars, window-MinTurnChars)
+	if total > DefaultPromptCharBudget {
+		t.Errorf("prompt %d runes exceeds the %d-rune budget", total, DefaultPromptCharBudget)
+	}
+	if window < MinTurnChars {
+		t.Errorf("window starved to %d runes, below the %d-rune floor", window, MinTurnChars)
+	}
+}
+
+// realisticPrev is a steady-state prior report: every prose section at its own cap and a
+// full list of insights/unresolved at DefaultListEntryCap — i.e. exactly what CapSections
+// returns, with identifier-dense content so the retain-list is at its bound too.
+func realisticPrev() Digest {
+	var id int
+	prev := Digest{
+		Synopsis:  packIdentifiers(&id, DefaultSynopsisCap),
+		Done:      packIdentifiers(&id, DefaultProseCap),
+		Happened:  packIdentifiers(&id, DefaultHappenedCap),
+		Structure: packIdentifiers(&id, DefaultStructureCap),
+		Current:   packIdentifiers(&id, DefaultProseCap),
+		Why:       packIdentifiers(&id, DefaultProseCap),
+		Next:      packIdentifiers(&id, DefaultProseCap),
+	}
+	for i := 0; i < DefaultListCap; i++ {
+		prev.Insights = append(prev.Insights, packIdentifiers(&id, DefaultListEntryCap))
+		prev.Unresolved = append(prev.Unresolved, packIdentifiers(&id, DefaultListEntryCap))
+	}
+	return prev
+}
+
+// realisticRefineInput is one refinement of a long engineering session: a full record
+// (subjects and projects path-shaped, tools, focus, turning points at their cap), a full
+// beat ladder, an over-cap session view, and a focus shift whose newest turn names files.
+func realisticRefineInput() RefineInput {
+	rec := SessionRecord{Turns: 900, UserTurns: 300, ToolCalls: 2100, Corrections: 11}
+	// Subjects at maxSubjectTermLen, the bound Observe now enforces per term, and at
+	// MaxRecordSubjects entries — the largest record Observe can actually build.
+	subjects := make([]string, MaxRecordSubjects)
+	for i := range subjects {
+		subjects[i] = pathOfLen(maxSubjectTermLen, i)
+	}
+	rec.Subjects = subjects
+	// Projects' PER-ENTRY LENGTH IS UNENFORCED (only MaxRecordProjects bounds the count),
+	// so this length is a realistic figure and not derived from a constant: a checkout
+	// path in a nested monorepo. Named here rather than quietly used, because "a test
+	// certified a bound the code does not enforce" is the recurring defect on this branch.
+	const realisticProjectPathLen = 56
+	projects := make([]string, MaxRecordProjects)
+	for i := range projects {
+		projects[i] = pathOfLen(realisticProjectPathLen, 100+i)
+	}
+	rec.Projects = projects
+	rec.Tools = []ToolCount{{"Read", 900}, {"Edit", 800}, {"Bash", 700}, {"Write", 600}, {"Grep", 500}, {"Glob", 400}}
+	rec = rec.WithFocus("engineering", "software-development", 0.87)
+	for i := 1; i <= MaxRecordTurningPoints; i++ {
+		rec = rec.NoteTurningPoint(i*7, TriggerFocusShift)
+	}
+
+	beats := make([]Beat, MaxBeatSelection)
+	for i := range beats {
+		beats[i] = Beat{Ordinal: i + 1, Text: strings.Repeat("w", BeatCap), ChangedSubject: i%2 == 0}
+	}
+
+	// The newest user turn names maxRecentSubjects path-shaped files, so the focus-shift
+	// anchor fires at its own bound rather than being skipped.
+	var last strings.Builder
+	last.WriteString("user: now look at")
+	for i := 0; i < maxRecentSubjects; i++ {
+		last.WriteString(" " + pathOfLen(maxSubjectTermLen, 200+i))
+	}
+	last.WriteString("\n")
+
+	return RefineInput{
+		// At sessionLabelCap: the label is fixed overhead ahead of everything else.
+		SessionLabel: strings.Repeat("a real session label about the work underway ", 5),
+		Record:       rec,
+		Beats:        beats,
+		SessionView:  strings.Repeat("user: an early turn about the work\n", 400), // > SessionViewCap
+		NewTurns:     strings.Repeat("user: a filler turn about the work\n", 400) + last.String(),
+		Why:          TriggerFocusShift,
+	}
+}
+
+// pathOfLen builds a distinct, path-shaped token of exactly n runes, so a test can size a
+// subject or project against a constant instead of a literal string.
+func pathOfLen(n, seed int) string {
+	head := fmt.Sprintf("internal/agent/enrich/llmstudy/p%03d_", seed)
+	if len(head) >= n {
+		return head[:n]
+	}
+	return head + strings.Repeat("x", n-len(head)-3) + ".go"
+}
+
+// realisticFactsBlock is the create path's measured-context block, rendered by DigestFacts
+// itself rather than hand-assembled.
+//
+// DigestFacts.Topics and Entities have NO enforced count bound (an earlier note in this
+// package called the facts block "naturally bounded", which is true of the counts and the
+// tool profile but not of these two lists), so the counts below are realistic figures for a
+// long session, not derived ones — flagged for the same reason as the project path length.
+// Sized to the ~6,000-rune block the capacity decision was taken against.
+//
+// RESIDUAL, named rather than hidden: because the block is caller-supplied, uncapped and
+// pure fixed overhead on the create path (which has no beat ladder to yield, only the
+// view), a big enough block starves the window at ANY budget. Measured on this
+// construction at the 14,000 budget: ~6,000 runes leaves the floor intact with room to
+// spare, ~8,800 does not (window 1,357). Bounding DigestFacts' two unbounded lists is the
+// fix; it is not in task-7b's scope, and the backstop makes the failure loud rather than
+// silent in the meantime.
+func realisticFactsBlock() string {
+	var topics, entities []string
+	for i := 0; i < 40; i++ {
+		topics = append(topics, pathOfLen(maxSubjectTermLen, 300+i))
+	}
+	for i := 0; i < 40; i++ {
+		entities = append(entities, "vendor: "+pathOfLen(maxSubjectTermLen, 400+i))
+	}
+	return DigestFacts{
+		Turns: 900, UserTurns: 300, ToolCalls: 2100, ToolVariety: 9, Corrections: 11, CorrectedTurns: 7,
+		Tools: []ToolCount{{"Read", 900}, {"Edit", 800}, {"Bash", 700}, {"Write", 600}, {"Grep", 500}, {"Glob", 400}},
+	}.WithPlace("keld-signal", "feat/llm-classify-study", "keld").
+		WithFocus("engineering", "software-development", 0.87).
+		WithEnrichment(topics, entities).Block()
 }
 
 func TestFitTurnsLineBoundaryTrimCannotBreachTheFloor(t *testing.T) {

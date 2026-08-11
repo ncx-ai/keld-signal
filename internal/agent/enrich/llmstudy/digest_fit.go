@@ -7,20 +7,42 @@ import (
 
 // DefaultPromptCharBudget bounds a digest prompt so prompt plus output fits the context.
 //
-// Derived, not guessed. At ctx 5120 the output can reach ~6500 runes across eight
-// sections (five prose caps of 900, structure at 1600, two lists), which is ~1800
-// tokens; reserving ~2100 for output and slack leaves ~3000 tokens for the prompt, and
-// at the ~3.6 chars/token this corpus measures that is ~10800 characters.
+// It exists because retrying could not fix an overflow. One session truncated mid-JSON on
+// all 5 attempts at the same step — the prompt was simply too large for the window,
+// deterministically — so the only fix is to not send it. Five of twenty digests were lost
+// that way on this branch before diagnosis.
 //
-// Measured down from 10800 to 9000. At 10800 one session of 14 still truncated on all 5
-// attempts, and since the guard already bounded the PROMPT, the overrun had to be the
-// output: the reserve was too small for the longest reports, not the prompt too large.
-// Trading ~500 tokens of window for generation room closed it.
+// **14,000 at `ctx` 8192.** The context is the lever and it was MEASURED, not estimated,
+// CPU-only after plateau (`--no-repack -ctk q8_0 -ctv q8_0 --cache-ram 0`):
 //
-// This exists because retrying could not fix the overflow. One session truncated
-// mid-JSON on all 5 attempts at the same step — the prompt was simply too large for the
-// window, deterministically, so the only fix is to not send it.
-const DefaultPromptCharBudget = 11000
+//	ctx    baseline RSS
+//	4096   2855 MB
+//	5120   2932 MB
+//	6144   3008 MB
+//	8192   3161 MB   <- the study now runs here
+//
+// The earlier rounds read the ~3 GB figure as a hard ceiling and so treated 5120/6144 as
+// the only admissible windows, which is what forced the prompt budget to absorb every
+// subsequent finding. It is an eyeball target with roughly +/-100 MB of tolerance, and
+// 3,161 MB is inside that: DECIDED, and not to be optimised back down.
+//
+// Prompt plus output at this size: 14,000 characters is ~3,889 tokens at the ~3.6
+// chars/token this corpus measures, and a nine-section report runs 2,000-2,400 output
+// tokens (~7,200-8,600 runes), so the worst case is ~6,289 of 8,192 — about 1,900 tokens
+// (23%) of margin. At the old 11,000/5120 pairing the same output sat at ~5,456 of 5,120,
+// i.e. over, which is why the budget had to keep shrinking to hold T1.
+//
+// Superseded reasoning, recorded so it is not re-derived: the budget was previously
+// justified as "~10,800 characters at ctx 5120, measured down to 9,000 because one session
+// of 14 still truncated on all 5 attempts", then back up to 11,000. That whole line of
+// argument is obsolete — it was arithmetic against a context this study no longer uses,
+// and squeezing content to fit it is what made MinTurnChars unreachable at REALISTIC input
+// scale (12 path-shaped record Subjects, or a path-heavy recency anchor, or a large facts
+// block on the create path: each starved the window below its floor, which the backstop
+// then correctly panics on — aborting a measurement sweep rather than losing one digest).
+// Raising the context was the right lever because the floor and the retain-list are the
+// two things the design is judged on, and both are content.
+const DefaultPromptCharBudget = 14000
 
 // fitTurns clips a rendered window so a prompt of `overhead` characters plus the turns
 // stays inside the budget.

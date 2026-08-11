@@ -12,8 +12,10 @@ import (
 // These are report-quality limits, NOT context limits. Lowering them to buy prompt
 // room was measured and rejected: 500/900 cut truncation from 5/20 to 2/20 but dropped
 // fact retention from 100% to 83.3%, because a shorter cap clips exactly the named
-// specifics the retain-list is there to preserve. Raising ctx was also measured and
-// rejected: 3008 MB at ctx 6144 and 3161 MB at ctx 8192, both over the 3 GB budget.
+// specifics the retain-list is there to preserve. The room came from the CONTEXT instead
+// — the study runs at ctx 8192 (3,161 MB measured, inside the ~3 GB target's tolerance)
+// with the prompt budget at 14,000; see DefaultPromptCharBudget, which supersedes the
+// earlier note here that read the 3 GB figure as a hard ceiling and rejected 8192 for it.
 //
 // Prompt room no longer comes from embedding a shrunk copy of the prior report
 // (CarryForward, since deleted): the refinement prompt now carries no prior prose at
