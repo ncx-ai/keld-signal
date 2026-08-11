@@ -1,5 +1,32 @@
 # Session story rollup — design
 
+> ## ⚠️ STATUS: BUILT AND MEASURED. Its central claim is REFUTED.
+>
+> This document is the design as *proposed*. It was implemented in full and measured end to
+> end. **The measurement is in
+> `docs/superpowers/plans/2026-08-07-conversational-dimensions-findings.md` Part 7, which is
+> the authority wherever the two disagree.**
+>
+> **Headline: fact retention 94.9% → 50.0%** (56.2% with the recency anchor off), against a
+> ≥90% threshold. Removing the no-shrink rule on the theory that beats plus a deterministic
+> retain-list would substitute for embedding the previous report's prose **does not work as
+> built**. The beat series itself is accurate and cheap; the retention substitution is not.
+>
+> Individual claims below carry ⚠️ markers where they were refuted or are unestablished. In
+> summary:
+>
+> | claim | status |
+> |---|---|
+> | the retain-list "cannot drift the way a paraphrase can" | ⚠️ true and beside the point — it is *dropped*, not drifted (161 of 240) |
+> | beats "supply a usable form of" the turning-point signal | ⚠️ refuted — `ChangedSubject` is 100% and demonstrably wrong |
+> | story-vs-record is "the first currency check that does not depend on judgement" | ⚠️ refuted — T12 15.7%, all 11 flags accurate; unusable as shipped |
+> | "both can come back down" (prompt budget, `ctx`) | ⚠️ refuted — both went **up**, 11,000→14,000 and 6144→8192 |
+> | "beats that say nothing are not stored" | ⚠️ unexercised — 0 of 70 discarded, comparator never within 0.3 of firing |
+> | T11 (synopsis lag) becomes "the primary currency measure" | ⚠️ not established — the check cannot detect the failure it scores |
+> | the lag table at the top of "The problem this replaces" | ⚠️ **invalid** — see the note there |
+> | beats are cheap, dense, chain-free, and read as an accurate trajectory | ✅ confirmed |
+> | the record's model-dependent fields must be reported as absent | ✅ confirmed and realized (`Populated()` omits focus) |
+
 **Scope: one interactive session.** No cross-session or per-project tier. The digest store
 stays keyed by session id, as built.
 
@@ -16,9 +43,27 @@ sessions:
 
 | configuration | fact retention | fabricated blockers | synopsis lag |
 |---|---:|---:|---:|
-| no recency anchor | 97.4% | 4.1% | 14.3% |
-| anchor, wording v1 | 88.3% | 10.2% | **7.1%** |
-| anchor, wording v2 | 90.9% | 2.0% | 14.3% |
+| no recency anchor | 97.4% | 4.1% | ~~14.3%~~ ⚠️ |
+| anchor, wording v1 | 88.3% | 10.2% | ~~**7.1%**~~ ⚠️ |
+| anchor, wording v2 | 90.9% | 2.0% | ~~14.3%~~ ⚠️ |
+
+⚠️ **The synopsis-lag column is INVALID and this document is its only home.** All three figures
+carry two independent defects, both found later in the branch:
+>
+> 1. **The abstention denominator.** `SynopsisLag` returns `lag=false` both when it judges a
+>    synopsis current and when it *abstains* for want of opening evidence. These rates were
+>    computed over all refinements, so every abstention was scored as a pass — and abstention
+>    is not rare: measured on the same corpus later, 17 of 42 and 13 of 42 (40% and 31%).
+> 2. **The untrimmed-token bug.** `distinctiveTerms` stored the raw token with trailing
+>    punctuation attached, so a sentence-final subject could not match its own record. That
+>    *suppressed* `earlyHits`, pushing verdicts below `minLagEvidence` and abstaining on
+>    synopses that were genuinely lagging — so the true rates were likely **higher**, not lower.
+>
+> A third problem makes the column unusable even once those are fixed: `distinctiveToken`
+> admits ordinary English, so a synopsis matching an unrelated window on two common words is
+> certified current (Part 7, T11). **Do not use 14.3% / 7.1% / 14.3% as a baseline for
+> anything.** The fact-retention and fabricated-blocker columns are unaffected and remain the
+> evidence for gating the anchor.
 
 Every configuration trades currency against durability, because the only two options the
 design offers are *keep the prose verbatim* or *let the model rewrite it freely*. It also
@@ -79,6 +124,15 @@ The one exception is deliberate and narrow: the **retain-list** is derived from 
 report. It carries *named tokens*, not prose, and each is independently verifiable against the
 transcript, so it cannot drift the way a paraphrase can.
 
+⚠️ **Measured: true, and beside the point.** Nothing in the retain-list drifted. Specifics were
+**dropped** instead — 161 of 240 were named in the list the prompt carried, under the explicit
+instruction *"each must still appear, unless the new part shows it was wrong"*, and the model
+dropped them anyway. And because the list is re-derived from the **previous report only**, the
+first drop is permanent: no later retain-list can name it (79 of 240 pairs). Immunity to drift
+does not buy immunity to loss, and this exception is where the design's retention failure lives.
+The follow-up the measurement points at is a **cumulative** retain-list — a union over all prior
+reports — which is a change to *this* clause, not to a cap.
+
 **What a beat is given.** The recent window, plus the session record for framing. Not the
 previous beat — that is the chain this design exists to avoid. The record is what stops a beat
 describing a local action ("read three CSVs") instead of a subject; with `projects`, `focus`
@@ -89,11 +143,30 @@ of subject, and a series padded with near-identical beats would bury the moments
 A beat matching the previous one on significant words is dropped, reusing the comparison that
 collapses duplicate insights.
 
+⚠️ **UNEXERCISED, not confirmed.** 70 beats asked, 70 generated, 70 kept, **0 discarded**. The
+cadence is not the reason: the largest overlap any real consecutive pair produced was 0.500
+against the 0.800 threshold, so the comparator never came within 0.3 of firing. At a 3-user-turn
+cadence on real sessions consecutive beats genuinely differ, so this mechanism is **inert on
+this corpus** rather than mis-tuned — and its behaviour on the acknowledgement-run case it was
+designed for is not established. It cost 70 generations to discard nothing, which is cheap, but
+it is unexercised machinery.
+
 **Turning points become measurable without the classification pipeline.** Comparing a new beat
 against the accumulated ones detects a change of subject directly. That is the signal the
 recency work was blocked on — it was to come from the EWMA focus in the classification
 pipeline, which the digest path does not run — and beats supply a usable form of it here.
 The EWMA remains better when available; this is not a replacement, it is an unblocking.
+
+⚠️ **REFUTED.** Beats do not supply a usable form of it. `ChangedSubject` was marked on **70 of
+70** beats — the signal is stuck at 1, so `SelectBeats`' preference for subject-changing beats
+degenerates to "prefer everything" — and it is demonstrably *wrong*, not merely saturated:
+session 1's beats [4] and [5] ("feasibility of running smaller, CPU-only LLMs within a strict
+RAM budget" and "the memory and performance footprint of a 0.6B Qwen3 model CPU-only") are
+plainly the same subject. This is the *second* mechanism to fail this way — `SubjectShifted`
+fired on 41 of 42 refinements — and the shared cause is that **thin token overlap does not
+distinguish a change of subject from a rewording of one.** Both use the same 0.8 comparison, so
+the comparator that cannot see a restatement cannot see continuity either. The unblocking claim
+needs a real subject comparison, not a cheaper trigger for the existing one.
 
 **Sampling for the report.** The beat series is dense, so the report samples it: every beat
 that changed the subject, the first, the most recent few, and even spacing to fill the cap.
@@ -198,6 +271,24 @@ check that does not depend on judgement. It does not replace scoring a late para
 against the transcript, because the record is a coarse proxy, but it is cheap enough to run
 on every refinement.
 
+⚠️ **REFUTED as shipped (T12).** It is cheap and it does run on every beat, but it is not a
+usable check: **15.7% of 70 flagged against a ≤5% threshold, and all 11 flagged beats are
+accurate.** It measures a vocabulary mismatch between two extractors, not consistency. Two
+independent causes, neither about beats:
+>
+> 1. `distinctiveTerms` admits ordinary English (`distinctiveToken`'s unconditional 7-character
+>    rule passes *aligning*, *ensuring*, *specifically*, *correctly*), so a beat's "subject
+>    terms" are largely gerunds and adverbs.
+> 2. `SessionRecord.Subjects` is dominated by **tool names and workflow vocabulary**
+>    (`WebSearch`, `TaskUpdate`, `SendMessage`, `dispatching`, `confirm`, `because`), because
+>    `Observe` reads the whole delta including tool lines and frequency-ranks it, and agentic
+>    sessions are overwhelmingly tool traffic.
+>
+> The two populations never intersect, so "no grounded term" fires on correct beats. Whether it
+> would catch a **genuine** contradiction is unmeasured — none occurred. "Independent of
+> judgement" was the right ambition and it is not what was built: an automated check that
+> reliably flags correct output is worse than judgement, not better than it.
+
 ### The specifics half
 
 `Identifiers(prev)` already extracts the previous report's named specifics and hands them
@@ -235,6 +326,16 @@ to hold its prose consistent with them.
 - **Most of the budget pressure.** The carried report drops from ~4,700 characters to ~600
   plus the retain-list, which is the entire reason the prompt budget went to 11,000 and `ctx`
   to 6144. Both can come back down; measure rather than assume.
+
+  ⚠️ **REFUTED — both went UP.** Measured rather than assumed, as this bullet asked, and the
+  answer was the opposite: the prompt budget went **11,000 → 14,000** and `ctx` **6144 → 8192**.
+  Removing `CarryForward` did free 3,200–4,400 runes, but the instructional tail (5,673 runes,
+  41% of the refine prompt) plus the enforced 1,600-rune window floor consume more than it
+  returned. Neither can come back down: the full-corpus probe's tightest real window margin is
+  **+20 runes at the full 14,000** across 29 sessions / 1,087 steps, and `ctx` 8192 has roughly
+  170 tokens of worst-case headroom once a schema-legal nine-section report is allowed for.
+  Note the sweep *alone* would have licensed ~11,100 — its 4 steps per session never reach the
+  tight case — so the probe, not the sweep, is the authority on the budget.
 
 ## Bounding the cost
 
@@ -284,6 +385,21 @@ protect; the prose length was an implementation detail standing in for it.
 it improves without an anchor, because the framing is no longer pinned by verbatim prose.
 It has to be measured, not assumed — the anchor experiment is exactly the kind of plausible
 mechanism that failed.
+
+⚠️ **T11 CANNOT be the primary currency measure, and the prediction is still unmeasured.**
+`SynopsisLag` flags only when the synopsis shares **no** distinctive term with the recent
+window, and `distinctiveToken` admits any 7+-character word that is not an explicit stopword —
+so two ordinary English words are enough to certify a synopsis current. Reproduced: a synopsis
+entirely about a ledger reconciliation, measured against a window entirely about dropdown
+opacity, returns `recentHits=2` on *"remains"* and *"whether"*. The measured 0.0% in both arms is
+therefore near-tautological, and the prediction is neither confirmed nor refuted. The caution in
+this paragraph was exactly right and was applied to the wrong risk: the mechanism under
+suspicion was the *anchor*, and the one that failed was the *instrument*.
+
+**T4's redefinition, by contrast, worked as intended.** Measuring named specifics against the
+retain-list rather than prose length is what made the retention failure legible and localisable
+(161 named-and-dropped, 0 cap evictions, 79 already-gone). The metric change is a success even
+though what it measures is a failure.
 
 **A story-versus-record consistency threshold becomes possible**, and it is the first currency
 check independent of human judgement: a story whose subject contradicts the measured `focus`,

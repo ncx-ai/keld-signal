@@ -1610,6 +1610,14 @@ hold, say so and leave the anchor gated.
 Also record the observed maximum prompt length and whether the budget and `ctx` came back
 down.
 
+> ⚠️ **DONE, with the outcome recorded.** T4 before/after: **94.9% → 50.0%** (56.2% anchor off).
+> T11: **0.0% in both arms, and NOT a measurement** — `SynopsisLag` cannot detect the failure it
+> scores, so the prediction is neither confirmed nor refuted and the anchor stays gated on T4/T3/T7
+> instead. Prompt length: largest assembled 14,000 of 14,000 (corpus probe). The budget and `ctx`
+> did **not** come back down — both went up, 11,000→14,000 and 6144→8192. Part 7 also had to be
+> corrected after a whole-branch review: the ON/OFF ablation was confounded, so no anchor
+> magnitude is attributable.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -1645,3 +1653,29 @@ whether the subject moved, and the two are independent signals.
 the replacement works. If the sweep regresses T4 below 90%, the cause is most likely the
 retain-list no longer being reinforced by embedded prose — increase the retain-list cap before
 restoring any prose, since restoring prose reinstates the trade-off this plan exists to remove.
+
+> ## ⚠️ THE RISK MATERIALISED, AND THIS GUIDANCE IS REFUTED. DO NOT FOLLOW IT.
+>
+> T4 regressed to **50.0%** (anchor on) / **56.2%** (off), against ≥90% — down from 94.9%. The
+> pre-registered explanation above was tested directly and **refuted**:
+>
+> | | measured, both arms |
+> |---|---:|
+> | refinements on which `retainListMaxCount` or `retainListMaxTotal` bound | **0** |
+> | largest retain-list observed | 24 of 60 entries / 280 of 700 runes |
+> | facts named in the retain-list and dropped anyway | **161 of 240** |
+> | facts already gone from the prior report, so no channel could carry them | 79 of 240 |
+>
+> **Raising either cap cannot move T4 by one point** — whoever resumes this work and follows the
+> sentence above will do provably useless work. The failure is (a) the model dropping specifics
+> it was explicitly handed under *"each must still appear, unless the new part shows it was
+> wrong"*, and (b) the retain-list being re-derived from the **previous report only**, so the
+> first drop is permanent.
+>
+> The change the measurement points at is a **cumulative retain-list** — a union over all prior
+> reports rather than the last one. That is a design change, it was deliberately not landed
+> unmeasured, and it must be measured rather than asserted. Restoring prose is still the wrong
+> move for the reason this paragraph originally gave.
+>
+> Full measurement:
+> `docs/superpowers/plans/2026-08-07-conversational-dimensions-findings.md` Part 7.
