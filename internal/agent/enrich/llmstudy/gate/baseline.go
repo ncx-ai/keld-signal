@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"os"
 )
 
 // baselineFS carries the committed baseline into the binary, so the gate cannot be run
@@ -13,9 +14,19 @@ import (
 //go:embed baseline.json
 var baselineFS embed.FS
 
-// LoadBaseline returns the committed baseline.
+// LoadBaseline returns the committed baseline, or the one named by GATE_BASELINE_FILE.
+//
+// The override exists for ATTRIBUTION, not for convenience. A stack of gated changes each compare
+// against the committed baseline — that is the contract, and it is what catches an accumulated
+// regression — but "what did THIS step change" needs the previous step as the reference, and
+// deriving that by reading two logs side by side is exactly the manual comparison this package
+// replaced. The committed file remains the default and the one that governs; a run using the
+// override says so in its own output.
 func LoadBaseline() (*Baseline, error) {
 	b, err := baselineFS.ReadFile("baseline.json")
+	if p := os.Getenv("GATE_BASELINE_FILE"); p != "" {
+		b, err = os.ReadFile(p)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -52,7 +52,13 @@ func TestSweepHasNotRegressed(t *testing.T) {
 	if len(res.Rows) == 0 {
 		t.Fatal("nothing compared: the baseline is missing the arm(s) supplied")
 	}
-	t.Logf("baseline: %s (%s)\ncorpus: %s\n%s", base.Comment, base.Commit, base.Corpus, res.Render())
+	ref := "the COMMITTED baseline"
+	if p := os.Getenv("GATE_BASELINE_FILE"); p != "" {
+		ref = "an OVERRIDE baseline from " + p + " (attribution run — the committed baseline is " +
+			"what governs)"
+	}
+	t.Logf("compared against %s: %s (%s)\ncorpus: %s\n%s", ref, base.Comment, base.Commit,
+		base.Corpus, res.Render())
 	if regs := res.Regressions(); len(regs) > 0 {
 		t.Errorf("%d threshold regression(s) against the committed baseline — revert the change "+
 			"or justify each one with the flagged items as evidence", len(regs))
