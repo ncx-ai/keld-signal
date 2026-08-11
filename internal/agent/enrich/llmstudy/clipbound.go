@@ -53,6 +53,33 @@ import "strings"
 //   - ClipBeat is the model the rule generalises from: it cuts at a sentence boundary and
 //     returns "" rather than store a fragment.
 
+// clipAllowancePct lets a delimiter-respecting cut reach FORWARD to the next boundary instead of
+// retreating to the previous one, when the next one is within half a budget again.
+//
+// This is the difference between the rule being free and the rule being expensive, and it was
+// measured rather than reasoned. Retreating to the last sentence end inside the budget throws
+// away everything between it and the cut, and at a small budget that is most of the text: over
+// the sweep's own 14 sessions, retreating cost 40.3% of the coarse session view's content
+// (146,426 runes) and 10.4% of the mined turns'. Reaching forward instead costs +2.5% and +7.7%
+// — i.e. the delimiter-respecting cut carries slightly MORE text than the rune-count cut it
+// replaces, while landing on a full stop rather than mid-word.
+//
+// That 40% mattered. The first measured pair of sweeps under the retreating rule regressed four
+// thresholds in the anchor-ON arm (T2 0.9%->1.2%, T4 58.2%->53.8%, T7 4.5%->6.8%,
+// T11 0.0%->3.6%), and the coarse view is what the synopsis is framed from. Honouring a
+// convention at a 40% content cost is the trade this study exists to refuse; honouring it at zero
+// cost is just correctness.
+//
+// Overshooting is safe because these are SHAPING budgets, not hard bounds: a mined turn is
+// bounded downstream by trimToWindowCap and fitTurns, a view turn by clipSessionViewFor and
+// SessionViewCap, a beat window by tailTurnsWithin measuring what it actually holds. The real
+// context bounds (DefaultPromptCharBudget, BeatPromptCharBudget) are enforced by assertions that
+// measure the assembled product, not by these per-turn numbers.
+//
+// 50%, not more: at +100% the view grows 21.6% and the reach becomes "find a sentence end
+// eventually" rather than "the boundary is nearby".
+const clipAllowancePct = 50
+
 // elisionMark is the one marker this package uses to say "text was removed here". Shared with
 // clipProse (which appends the identical rune) so a reader meets one convention, and so a
 // re-clip can recognise and strip a previous mark instead of accumulating them.
@@ -88,6 +115,12 @@ func clipTurn(s string, n int) string {
 	if room <= 0 {
 		return elisionMark
 	}
+	// Forward first: the nearest sentence end at or beyond the budget, inside the allowance.
+	// Preferred over the retreat below because it keeps the text between the two boundaries,
+	// which at a small budget is most of the turn — see clipAllowancePct.
+	if end := nextSentenceStop(r, room, room+room*clipAllowancePct/100); end > 0 {
+		return strings.TrimSpace(string(r[:end])) + elisionMark
+	}
 	head := r[:room]
 	if end := lastSentenceStop(head); end > 0 {
 		return strings.TrimSpace(string(head[:end])) + elisionMark
@@ -96,6 +129,22 @@ func clipTurn(s string, n int) string {
 		return strings.TrimRight(string(head[:i]), " \t\n") + elisionMark
 	}
 	return elisionMark
+}
+
+// nextSentenceStop is the first sentence end at or after `from`, no later than `limit`, or -1.
+func nextSentenceStop(r []rune, from, limit int) int {
+	if limit > len(r) {
+		limit = len(r)
+	}
+	if from >= limit {
+		return -1
+	}
+	for _, e := range sentenceStops(r[:limit]) {
+		if e >= from {
+			return e
+		}
+	}
+	return -1
 }
 
 // lastRune is the index of the last occurrence of c in r, or -1.
@@ -123,8 +172,12 @@ func clipUnits(s string, n int) string {
 	if n <= 0 || runeLen(s) <= n {
 		return s
 	}
-	// Room for the units themselves, once the " …" that marks the drop is paid for.
+	// Room for the units themselves, once the " …" that marks the drop is paid for — plus the
+	// same forward allowance clipTurn uses, so a unit that straddles the budget is kept whole
+	// rather than the budget's last 20 runes being thrown away to avoid it. Measured over the
+	// sweep's corpus: retreating strictly cost 22.7% of the rendered tool-argument text.
 	room := n - runeLen(elisionMark) - 1
+	limit := room + room*clipAllowancePct/100
 	var b strings.Builder
 	used := 0
 	for _, f := range strings.Fields(s) {
@@ -132,7 +185,9 @@ func clipUnits(s string, n int) string {
 		if used > 0 {
 			add++
 		}
-		if used+add > room {
+		// A unit is admitted if it fits the room, or if it straddles the room and still lands
+		// inside the allowance. Either way it is a WHOLE unit: no token is ever halved.
+		if used+add > limit || (used > 0 && used+add > room) {
 			break
 		}
 		if used > 0 {
@@ -195,6 +250,12 @@ func clipLines(s string, n int) string {
 
 // clipEntry bounds one stored list entry (an insight, an open item) at a sentence end, and
 // keeps an over-long SINGLE sentence whole rather than amputate it.
+//
+// No forward allowance here, unlike clipTurn and clipUnits, and for a measured reason rather
+// than an oversight: an entry is one or two sentences by construction, so the retreat either
+// finds a sentence end (losing the second sentence, which is the intent of a length cap on a
+// list entry) or finds none and keeps the entry whole. There is no 40%-of-the-text loss to
+// recover, so there is nothing to buy with an overshoot.
 //
 // Keeping it whole means DefaultListEntryCap is advisory for that one shape, and that is the
 // deliberate choice rather than an oversight. The cap governs only what a PERSON reads in the

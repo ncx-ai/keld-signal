@@ -48,17 +48,22 @@ func TestToolArgIsCutAtAnArgumentBoundary(t *testing.T) {
 	}
 }
 
-// TestTurnTextIsCutAtASentenceEnd pins the window's own bound. Measured on the corpus: 379 of
-// 11,554 turns exceed PerTurnChars and every one of them has a sentence end inside the cap, at
-// a mean cost of 83 runes — so this costs a little material and buys a window with no
-// half-sentences in it.
+// TestTurnTextIsCutAtASentenceEnd pins the window's own bound, including the forward allowance
+// that makes it affordable: retreating to the last sentence end inside the budget cost 40.3% of
+// the coarse view's content and 10.4% of the mined turns'; reaching forward to the next one costs
+// +2.5% and +7.7%, so the delimiter-respecting cut carries slightly MORE text than the rune-count
+// cut it replaces. See clipAllowancePct.
+//
+// The budget is therefore a SHAPING number, not a hard bound — the real context limits are
+// asserted on the assembled prompt (assertPromptWithinBudget, assertBeatPromptWithinBudget) — so
+// this asserts the allowance rather than the budget.
 //
 // Fails before the fix: clip() returns exactly PerTurnChars runes ending mid-word.
 func TestTurnTextIsCutAtASentenceEnd(t *testing.T) {
 	long := strings.Repeat("The close is reconciled against the ledger for Meridian. ", 40)
 	got := clipTurn(long, 1200)
-	if n := runeLen(got); n > 1200 {
-		t.Fatalf("clipTurn returned %d runes over a 1200 budget", n)
+	if n, limit := runeLen(got), 1200+1200*clipAllowancePct/100; n > limit {
+		t.Fatalf("clipTurn returned %d runes, past the %d-rune allowance", n, limit)
 	}
 	if !strings.HasSuffix(got, "."+elisionMark) {
 		t.Errorf("turn text was not cut at a full stop: %q", tailOf(got))
@@ -77,6 +82,18 @@ func TestTurnTextIsCutAtASentenceEnd(t *testing.T) {
 	// Text that fits is untouched.
 	if got := clipTurn("short and whole", 1200); got != "short and whole" {
 		t.Errorf("fitting text was altered: %q", got)
+	}
+	// The allowance reaches FORWARD, and only that far. A sentence ending just past the budget
+	// is kept; one ending far past it is not, and the cut retreats or drops instead.
+	near := strings.Repeat("x", 110) + ". tail"
+	if got := clipTurn(near, 100); !strings.HasSuffix(got, "."+elisionMark) || runeLen(got) < 100 {
+		t.Errorf("a sentence ending just past the budget was not reached: %d runes, %q",
+			runeLen(got), tailOf(got))
+	}
+	far := strings.Repeat("y", 400) + ". tail"
+	if got := clipTurn(far, 100); runeLen(got) > 100 {
+		t.Errorf("the allowance reached %d runes for a boundary 400 runes out; it must retreat "+
+			"or drop instead", runeLen(got))
 	}
 }
 

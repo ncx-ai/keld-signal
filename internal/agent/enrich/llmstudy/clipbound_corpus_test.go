@@ -186,3 +186,67 @@ func rawLines(path string) ([]line, error) {
 	}
 	return out, sc.Err()
 }
+
+// TestCorpusDelimiterCutIsAffordable re-derives clipAllowancePct's figures: what a
+// delimiter-respecting cut costs against the rune-count cut it replaces, per site, over the
+// sweep's own corpus.
+//
+// It ASSERTS affordability rather than only logging it, because the first measured pair of sweeps
+// under a strictly-retreating rule regressed four thresholds in the anchor-ON arm — the cut was
+// throwing away 40% of the coarse session view — and a convention honoured at that price is the
+// trade this study exists to refuse. If the forward allowance ever stops paying for itself on a
+// real corpus, that is a finding, not a rounding error.
+func TestCorpusDelimiterCutIsAffordable(t *testing.T) {
+	files := StratifiedTranscripts()
+	if me := ThisSessionTranscript(); me != "" {
+		files = append([]string{me}, files...)
+	}
+	o := DefaultMineOpts()
+	type acc struct{ old, now, drops int }
+	var view, turn acc
+	n := 0
+	for _, f := range files {
+		if n >= 14 {
+			break
+		}
+		recs, err := records(f, o)
+		if err != nil || len(recs) < 40 {
+			continue
+		}
+		n++
+		for _, r := range recs {
+			txt := elideCode(r.text)
+			for _, tc := range []struct {
+				cap int
+				a   *acc
+			}{{digestClip, &view}, {o.PerTurnChars, &turn}} {
+				if runeLen(txt) <= tc.cap {
+					continue
+				}
+				tc.a.old += runeLen(clip(txt, tc.cap))
+				got := clipTurn(txt, tc.cap)
+				tc.a.now += runeLen(got)
+				if got == elisionMark {
+					tc.a.drops++
+				}
+			}
+		}
+	}
+	if n == 0 {
+		t.Skip("no transcripts")
+	}
+	for _, x := range []struct {
+		name string
+		a    acc
+	}{{"coarse view (digestClip)", view}, {"mined turns (PerTurnChars)", turn}} {
+		delta := 100 * float64(x.a.now-x.a.old) / float64(x.a.old)
+		t.Logf("%-28s rune-count cut %d runes -> delimiter cut %d (%+.1f%%), whole-turn drops %d",
+			x.name, x.a.old, x.a.now, delta, x.a.drops)
+		// -5% is the affordability bar: the delimiter cut may cost a little, never a lot. Under
+		// a strictly-retreating rule the view measured -40.3%.
+		if delta < -5 {
+			t.Errorf("%s: the delimiter cut costs %+.1f%% of the text — clipAllowancePct is no "+
+				"longer paying for itself on this corpus", x.name, delta)
+		}
+	}
+}
