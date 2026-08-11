@@ -50,7 +50,7 @@ func BeatPrompt(record, window string) string {
 	var b strings.Builder
 	b.WriteString("You are the engineer working in the session below. A colleague asks you at " +
 		"standup what you are working on. Answer them in two or three sentences: what you are " +
-		"working on, and where it has got to.\n\n")
+		"working on, and where it has got to according to the conversation below.\n\n")
 	b.WriteString("SESSION RECORD (measured — authoritative):\n")
 	b.WriteString(record)
 	b.WriteString("\nRECENT CONVERSATION:\n")
@@ -64,6 +64,11 @@ Rules:
     No fixed formula at all — begin with the thing being worked on.
   - Say what the work IS — the subject and why it is being done. Not a list of actions
     taken.
+  - Where it stands means where THIS window shows it standing. You have not seen the rest
+    of the job, so do not say how far along the work overall is and do not say
+    how much is left: never "the work is complete", "nearly complete", "almost done",
+    "only the reconciliations are pending", "all that remains is".
+    You MAY say that a specific named thing was finished when the conversation shows it.
   - Use the record to place the work. An action is only meaningful as part of something.
   - Every noun must come from the conversation or the record above. Nothing in these
     instructions is subject matter.
@@ -233,6 +238,11 @@ func (l *Llama) generateBeat(record, window string) (raw, kept string, err error
 			return firstProblem([]string{"beat is " + strconv.Itoa(len([]rune(kept))) +
 				" runes after dropping its incomplete tail, under the floor of " +
 				strconv.Itoa(BeatMinRunes)})
+		case BeatClaimsUnobservableProgress(kept, window+"\n"+record):
+			// Judged on the CLIPPED text: that is what would be stored and read, and a
+			// claim in a dropped tail was never going to be published.
+			return firstProblem([]string{"beat characterises overall progress the window " +
+				"does not show: " + strings.Join(beatProgressClaims(kept), "; ")})
 		}
 		return nil
 	})
