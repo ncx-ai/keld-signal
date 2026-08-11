@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -123,6 +124,50 @@ func clipLog(s string) string {
 		return s[:260] + "…"
 	}
 	return s
+}
+
+// sectionLen is one prose section's name and rune length. See sectionRunes.
+type sectionLen struct {
+	name string
+	n    int
+}
+
+// sectionRunes returns every prose section's name and RUNE length, in declaration order.
+//
+// Derived by reflection over Digest's string fields, for the same reason ProseFields is: a
+// hand-listed set silently omits the next section someone adds, which is exactly how synopsis
+// escaped every quality gate once already.
+//
+// Length is a measurement in its own right, not a diagnostic. A report is read by a person, and
+// "how long did the sections get" is answerable only from the run — a rate cannot show it. It
+// matters most for the cumulative sections (structure, happened, done) which four refinements
+// under an EXTEND instruction can grow without limit once nothing clips them.
+func sectionRunes(d Digest) []sectionLen {
+	v := reflect.ValueOf(d)
+	t := v.Type()
+	out := make([]sectionLen, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).Type.Kind() != reflect.String {
+			continue
+		}
+		name := t.Field(i).Tag.Get("json")
+		if name == "" {
+			name = strings.ToLower(t.Field(i).Name)
+		}
+		out = append(out, sectionLen{name: name, n: runeLen(v.Field(i).String())})
+	}
+	return out
+}
+
+// listRunes is the total rune length of a list section as a reader meets it, joined the way the
+// stored report renders one item per line. Counted alongside the prose sections because
+// insights and unresolved accumulate across refinements too, and a report is long or short as a
+// whole rather than section by section.
+func listRunes(v []string) int {
+	if len(v) == 0 {
+		return 0
+	}
+	return runeLen(strings.Join(v, "\n"))
 }
 
 // reportWindows are the window indices a report is produced at. Four steps, four apart, on a
@@ -271,6 +316,15 @@ func TestDigestRefineQuality(t *testing.T) {
 		tightestCreateWhen string
 		worstPrompt        int
 		worstPromptWhen    string
+		// Report LENGTH, per section, measured on the FINAL report of each session — the one
+		// that has been through every refinement and is therefore the longest a session
+		// produces. Reported as a table plus a max, because "let the sections be as long as
+		// they need" is a product decision whose cost is only visible as runes: a structure
+		// section of several thousand runes is a finding about what a person is asked to read,
+		// and no quality threshold here would show it.
+		maxSectionRunes = map[string]int{}
+		maxSectionWhen  = map[string]string{}
+		finalReports    int
 	)
 	sessions := 0
 	for _, f := range files {
@@ -291,6 +345,10 @@ func TestDigestRefineQuality(t *testing.T) {
 		project := projectFromPath(f)
 
 		var cur Digest
+		// How many reports this session actually produced, so the section-length table below
+		// describes a real final report rather than a zero Digest left behind by a session
+		// whose every step failed.
+		curSteps := 0
 		var injected []string
 		var firstSrc, prevReportSrc string
 		var rec SessionRecord
@@ -685,7 +743,31 @@ func TestDigestRefineQuality(t *testing.T) {
 				}
 			}
 			cur = d
+			curSteps++
 			prevReportSrc = src
+		}
+		if curSteps > 0 {
+			finalReports++
+			parts := make([]string, 0, 9)
+			for _, s := range sectionRunes(cur) {
+				parts = append(parts, fmt.Sprintf("%s=%d", s.name, s.n))
+				if s.n > maxSectionRunes[s.name] {
+					maxSectionRunes[s.name] = s.n
+					maxSectionWhen[s.name] = fmt.Sprintf("s%d %s", sessions, project)
+				}
+			}
+			for _, l := range []struct {
+				name string
+				v    []string
+			}{{"insights", cur.Insights}, {"unresolved", cur.Unresolved}} {
+				parts = append(parts, fmt.Sprintf("%s=%d(%d entries)", l.name, listRunes(l.v), len(l.v)))
+				if n := listRunes(l.v); n > maxSectionRunes[l.name] {
+					maxSectionRunes[l.name] = n
+					maxSectionWhen[l.name] = fmt.Sprintf("s%d %s", sessions, project)
+				}
+			}
+			t.Logf("   FINAL REPORT RUNES s%d after %d reports: %s", sessions, curSteps,
+				strings.Join(parts, " "))
 		}
 		if len(injected) > 0 {
 			retNum += RetainedFacts(cur, injected)
@@ -850,6 +932,24 @@ func TestDigestRefineQuality(t *testing.T) {
 		"%d refinements, the rune cap on %d",
 		retainMaxCount, retainMaxRunes, retainListMaxCount, retainListMaxTotal,
 		retainCountBound, retainRunesBound)
+
+	// Report length, as the largest each section reached over the final reports. Printed as a
+	// per-section max rather than a single "longest report" figure because the sections do not
+	// grow alike: the cumulative ones (structure, happened, done) are the ones an EXTEND
+	// instruction grows on every refinement, and a single total would hide which.
+	if finalReports > 0 {
+		names := make([]string, 0, 9)
+		for _, s := range sectionRunes(Digest{}) {
+			names = append(names, s.name)
+		}
+		names = append(names, "insights", "unresolved")
+		parts := make([]string, 0, len(names))
+		for _, n := range names {
+			parts = append(parts, fmt.Sprintf("%s=%d(%s)", n, maxSectionRunes[n], maxSectionWhen[n]))
+		}
+		t.Logf("REPORT LENGTH  largest per section over %d final reports, in runes: %s",
+			finalReports, strings.Join(parts, " "))
+	}
 
 	t.Logf("PROMPT  largest %d runes of %d budget (%s)", worstPrompt, DefaultPromptCharBudget, worstPromptWhen)
 	t.Logf("   tightest window margin over the %d-rune floor: refine %s, create %s",
