@@ -47,6 +47,12 @@ permissions:
 
 jobs:
   build:
+    # Named for what it produces, not just "build". This job freezes the SIDECAR as well as
+    # packaging the installer, and with the default name the Actions graph showed a
+    # `linux-sidecar` node next to an opaque `build (macos-14, arm64)` — so the macOS sidecar
+    # tarball (~200MB, and since the pkg stopped bundling it, the ONLY way macOS users get the
+    # sidecar) was invisible at a glance. The job ID stays `build`, so `needs:` is unaffected.
+    name: sidecar + installer (${{ matrix.os }}, ${{ matrix.goarch }})
     # `IS_RELEASE`: attach to a GitHub release when triggered by a `release` event OR chained
     # from release.yml (`inputs.publish_release`). `TAG`: the release tag in either mode.
     # (github.event_name inside a workflow_call reflects the CALLER's event — `push` — not
