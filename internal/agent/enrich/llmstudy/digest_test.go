@@ -64,51 +64,6 @@ func TestDigestPromptIsDomainNeutral(t *testing.T) {
 	}
 }
 
-// Length is the model's business, and it is stated where the model can act on it.
-//
-// CapSections used to enforce it after the fact, clipping each section at a rune count. That is
-// removed (see its doc), which leaves length unsaid unless the prompt says it — so the section
-// descriptions carry it, in sentences, and say explicitly that the figures are guides. A guide
-// the writer can weigh is a different instruction from a cut applied to a finished paragraph:
-// only one of them can produce "…" mid-clause.
-//
-// Both paths are checked. digestSections is shared between create and refine, and a guide that
-// reached only the first report would leave every refinement writing to no guidance at all.
-func TestPromptStatesLengthAsGuidanceNotALimit(t *testing.T) {
-	for name, p := range map[string]string{
-		"create": DigestCreatePrompt("work session", "user: reconcile the ledger\n", "counts: turns=4\n"),
-		"refine": DigestUpdatePrompt(Digest{Done: "x"}, "work session", "user: now do April\n", "counts: turns=8\n"),
-	} {
-		if !strings.Contains(p, "GUIDE, not a limit") {
-			t.Errorf("%s prompt does not say the lengths are guides", name)
-		}
-		if !strings.Contains(p, "nothing cuts your\n  answer short") {
-			t.Errorf("%s prompt does not tell the model its answer is not truncated", name)
-		}
-		// The note must lead the section list, not trail it. Measured: as a trailing paragraph
-		// — immediately after `unresolved`'s "if genuinely NOTHING is open" rule — it cost two
-		// digests to "unresolved is empty" through all 5 retries, deterministically at
-		// temperature 0, taking T1 from 100% to 96.4%. A length note is not allowed to be the
-		// last thing read before a required list.
-		if i := strings.Index(p, "GUIDE, not a limit"); i > strings.Index(p, "unresolved  What is still open") {
-			t.Errorf("%s prompt puts the length note AFTER the section list; it must lead it", name)
-		}
-		// One guide per prose section that used to be governed by a cap instead. The synopsis's
-		// was always here; the other six had a rune cap and no wording at all.
-		for _, want := range []string{
-			"Three or four sentences", // synopsis
-			"A few sentences.",        // done, next
-			"A sentence or two.",      // current, why
-			"and more when there was real difficulty to account for", // happened
-			"Build the fullest picture the conversation supports",    // structure
-		} {
-			if !strings.Contains(p, want) {
-				t.Errorf("%s prompt omits the length guide %q", name, want)
-			}
-		}
-	}
-}
-
 // The measured context must be presented as binding, or the prose can contradict it
 // and rubberstamping becomes unmeasurable.
 func TestDigestPromptTreatsFactsAsAuthoritative(t *testing.T) {

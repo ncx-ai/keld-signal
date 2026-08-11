@@ -81,19 +81,16 @@ func DigestSchema() map[string]any {
 // digestSections describes each field to the model. Deliberately profession-neutral:
 // it names no code, tests or deploys, because the same digest must serve an
 // accountant reconciling ledgers and a marketer drafting a campaign.
-const digestSections = `  Where a length is named below it is a GUIDE, not a limit: nothing cuts your
-  answer short, and a section that needs more should have more.
-  synopsis    What is this work ABOUT, where does it stand, and where is it going?
+const digestSections = `  synopsis    What is this work ABOUT, where does it stand, and where is it going?
               Three or four sentences, readable on its own by someone who reads nothing
               else. Name the subject in the first sentence — not the activity, the
               THING. This is the one section that may draw on the others; it is a
               synthesis, not another status field. Do not restate the purpose sentence
               from "why" — the reader wants the shape of the work, not its justification.
   done        What concrete outcomes are now in place? Name them. Do not describe
-              effort or intent here — only what is finished. A few sentences.
+              effort or intent here — only what is finished.
   happened    How did it actually go? Include obstacles, wrong turns, reversals, and
-              how they were resolved. This is where difficulty belongs. A few
-              sentences, and more when there was real difficulty to account for.
+              how they were resolved. This is where difficulty belongs.
   structure   How does the thing being worked on fit together? Its parts, what each
               is for, and how they relate. For technical work this is the architecture;
               for other work, the shape of the process. Describe the SUBJECT, not
@@ -101,11 +98,11 @@ const digestSections = `  Where a length is named below it is a GUIDE, not a lim
   insights    Key thoughts and learnings. One per entry. Only things a reader could
               not infer from the bare facts.
   current     What single thing is in progress right now? Answer "nothing in
-              progress" if the work reached a stopping point. A sentence or two.
+              progress" if the work reached a stopping point.
   why         What purpose does this serve? The goal behind the work — not a
-              restatement of what was done. A sentence or two.
+              restatement of what was done.
   next        Where is this going? The direction, plus the concrete immediate steps
-              that follow from it. A few sentences.
+              that follow from it.
   unresolved  What is still open, blocked, or was abandoned? One per entry.
               If genuinely NOTHING is open, the entry must be exactly:
                 none - the work reached a stopping point

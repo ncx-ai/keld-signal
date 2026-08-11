@@ -502,20 +502,13 @@ func TestWellFormedInputsDoNotTripTheBackstop(t *testing.T) {
 // nonASCII rewrites the conversation ONE CHARACTER FOR ONE into the multi-byte characters
 // these transcripts really contain, so the two runs are the same text at the same RUNE
 // length and must therefore produce the SAME window — asserted directly, not just "both
-// clear the floor". Confirmed by reverting runeLen back to b.Len() in the two assemblies.
-//
-// RE-CONFIRMED after the length guidance was added to digestSections (see CapSections), and the
-// failure's SHAPE moved twice while the wording was being measured, which is the reason this
-// docstring reports a shape rather than a single pair of numbers. With the guidance as finally
-// worded, ALL FOUR subtests breach under the revert (backstop: refine 1,597 in both encodings,
-// create 1,497 ASCII and 1,439 multi-byte). With an earlier, longer wording the reverted refine
-// path cleared the floor in both encodings and was caught by the EQUALITY assertion instead
-// (1,916 ASCII against 1,812 multi-byte — identical text, 104 runes apart), while create
-// breached. Before the guidance existed it was the mirror image: ASCII refine passed at 1,604
-// while multi-byte PANICKED at 1,510, and create differed at 1,768 vs 1,602 without breaching.
-// The defect is caught in all three states, and only because the test asserts BOTH properties:
-// at any given prompt size one path may merely differ while the other breaches, and which is
-// which depends on where the line-boundary trim happens to land.
+// clear the floor". Confirmed by reverting runeLen back to b.Len() in the two assemblies:
+// the ASCII refine run passes at 1,604 runes of content while the multi-byte one PANICS at
+// 1,510 — the same shape the real corpus produced — and on the create path, where the floor
+// happens to survive, the equality assertion catches it anyway: 1,768 runes of content in
+// ASCII against 1,602 in multi-byte, a 166-rune difference from the identical text. That is
+// why the pairing asserts equality and not merely "both clear the floor": one of the two
+// paths only breached, and the other only differed.
 //
 // (The 11,000-budget figures above were measured with the ASCII-only version, so they are the
 // ASCII run's numbers; the capacity decision they justify is unaffected — the byte/rune bug
