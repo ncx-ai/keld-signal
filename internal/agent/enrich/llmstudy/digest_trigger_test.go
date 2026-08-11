@@ -152,9 +152,21 @@ func TestStrongerReasonOrdering(t *testing.T) {
 }
 
 // A zero MinInterval must not silently disable the floor via a zero-value policy.
+//
+// DefaultTriggerPolicy reads KELD_DIGEST_MIN_INTERVAL, so asserting an hour as a constant
+// made this test env-dependent: verified, it fails under KELD_DIGEST_MIN_INTERVAL=30m even
+// though nothing is wrong. The env is therefore cleared for the duration — the property under
+// test is "the DEFAULT is an hour, not zero", which is a statement about the fallback and not
+// about whatever the operator has exported.
 func TestDefaultPolicyHasAnHourFloor(t *testing.T) {
+	t.Setenv("KELD_DIGEST_MIN_INTERVAL", "")
 	if got := DefaultTriggerPolicy().MinInterval; got != time.Hour {
 		t.Errorf("want a 1h floor, got %v", got)
+	}
+	// And the override still works, so clearing the env above cannot hide a broken reader.
+	t.Setenv("KELD_DIGEST_MIN_INTERVAL", "30m")
+	if got := DefaultTriggerPolicy().MinInterval; got != 30*time.Minute {
+		t.Errorf("KELD_DIGEST_MIN_INTERVAL override ignored: got %v", got)
 	}
 }
 

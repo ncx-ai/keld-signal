@@ -29,6 +29,15 @@ const (
 //
 // MinTurns is a floor, not a cadence: it stops a shift being re-reported every turn
 // while the focus is still settling.
+//
+// ⚠️ NOT VALIDATED BY ANY MEASUREMENT, and no doc may describe it as such. There is no
+// non-test caller of TriggerPolicy or ShouldRefresh anywhere in the repository: the sweep
+// (digest_eval_test.go) computes its trigger reason from SubjectShifted directly and never
+// consults this policy, and production has not been wired to it. So the whole cascade —
+// including the wall-clock MinInterval floor and the deferral of a suppressed reason — is
+// exercised only by its own unit tests. Those tests are real (one of them derives
+// PendingReason from a prior suppressed call's return value and found a contradiction in the
+// design brief), but "the trigger policy was measured" would be false.
 type TriggerPolicy struct {
 	MinTurns       int     // never refresh sooner than this many new user turns
 	MaxTurns       int     // refresh regardless once this many have accumulated

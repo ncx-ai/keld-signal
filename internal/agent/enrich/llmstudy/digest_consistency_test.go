@@ -44,17 +44,33 @@ func TestConsistencyAbstainsWithoutSubjects(t *testing.T) {
 // sentence boundary can never match a clean word list. subjectTokens keeps '.', '-', '_', '/'
 // attached to a token (they can be part of an identifier), so "threshold." reached
 // BeatContradictsRecord as a token distinct from the record's plain "threshold" — a beat is
-// short sentences, so a subject noun immediately before a period, comma, or parenthesis is
-// the ORDINARY case, not an edge case. Pins the class across all three punctuation shapes,
-// plus the negative direction: a genuinely absent term must still be flagged regardless.
+// short sentences, so a subject noun immediately before a period is the ORDINARY case, not an
+// edge case.
+//
+// ⚠️ An earlier version of this docstring claimed to pin "all three punctuation shapes",
+// naming period, comma and parenthesis. It did not: ',' and ')' are not in subjectTokens'
+// keep-set, so they are SEPARATORS — "threshold," is split into a bare "threshold" that never
+// reaches the trimming path at all. Those two cases pass with or without the fix, so a third
+// of the claim was doing all of the work.
+//
+// The cases below are now the actual cutset trimTermPunct strips and subjectTokens keeps —
+// '.', '-', '_', '/' — so every one of them exercises the mechanism. The comma and
+// parenthesis cases are kept as well, correctly labelled as separator cases, because a
+// change to subjectTokens' keep-set would move them into the trimming path and they should
+// still hold when it does.
 func TestBeatContradictsRecordTrimsTrailingPunctuation(t *testing.T) {
 	r := SessionRecord{Turns: 40}
 	r.Subjects = []string{"digest", "synopsis", "threshold"}
 
 	consistent := []string{
-		"Work continues on the threshold.",              // sentence-final period
-		"Work continues on the threshold, still going.", // comma-final
-		"Work continues on the threshold) as planned.",  // parenthesis-final
+		// The cutset subjectTokens KEEPS attached, i.e. what trimTermPunct exists for.
+		"Work continues on the threshold.",             // sentence-final period
+		"Work continues on the threshold- as planned.", // trailing hyphen
+		"Work continues on the threshold_ as planned.", // trailing underscore
+		"Work continues on the threshold/ as planned.", // trailing slash
+		// Separators today, not trimming cases — kept so they still hold if the keep-set moves.
+		"Work continues on the threshold, still going.",
+		"Work continues on the threshold) as planned.",
 	}
 	for _, beat := range consistent {
 		got, checked := BeatContradictsRecord(beat, r)

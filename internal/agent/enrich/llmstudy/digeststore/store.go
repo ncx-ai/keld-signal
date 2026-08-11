@@ -103,6 +103,12 @@ func Open(path string) (*Store, error) {
 	}
 	// One writer: SQLite permits a single writer anyway, so serialising here turns
 	// lock contention into queueing instead of SQLITE_BUSY.
+	//
+	// Redundant with busy_timeout above, deliberately: measured, either one alone makes
+	// TestConcurrentPutAndReadDoNotError pass and only removing BOTH fails it. They cover
+	// different scopes — this bounds contention inside one process, busy_timeout also covers
+	// a second process (another daemon, a sweep, sqlite3 on the CLI) that this pool cannot
+	// see. Do not drop one on the grounds that the test still passes.
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
