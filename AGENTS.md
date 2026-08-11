@@ -410,6 +410,20 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   **unknown errors are permanent by design** (never hammer). The HF model download
   (`sidecar/hf.go`) uses it; settings-poll / publish / api adopt it when next
   touched — don't hand-roll new backoff loops.
+- **Never cut text mid-sentence.** Any text read as language — a prompt, a
+  generated report, a conversation window handed to a model, a span shown to a
+  person — is bounded at a **logical delimiter**: a sentence end, a line break, a
+  turn boundary, an entry boundary. Never at a rune count that lands mid-clause.
+  An **identifier is never truncated at all**: a path or symbol cut short is a
+  *false* identifier, so drop the whole term instead. And **dropping must be
+  visible** — `omittedNotice` is the precedent; a silently shorter input is the
+  same defect one level up. Measured cost of getting this wrong: beats were
+  generated with a 200-rune cap against a "two or three sentences" instruction,
+  and **46 of 47 came out mid-clause with a median of zero complete sentences**
+  — unusable output from a correct model, caused entirely by the cut.
+  This does **not** govern the ML token caps (`lenstat`'s `max_len`,
+  `KELD_SIDECAR_MAX_CHARS`), where head-truncation is deliberate and the
+  constraint is activation memory rather than legibility.
 
 ## Gotchas
 
