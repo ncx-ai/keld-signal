@@ -28,6 +28,44 @@ func TestSynopsisLagIsDetected(t *testing.T) {
 	}
 }
 
+// digestStopWords is capitalised-keyed (it was built for Identifiers, which only ever offers
+// capitalised tokens) and distinctiveToken used to look it up case-SENSITIVELY, so roughly
+// half the list was dead on the one path that admits lowercase words at all. Measured before
+// the fix: distinctiveToken("Currently") false, distinctiveToken("currently") TRUE — and the
+// same for however/although/completed/reconciled/because/without/several. Those words then
+// became "subject terms" in distinctiveTerms, which is the mechanical root of T12's
+// unusability and of SynopsisLag's false confidence.
+//
+// The paired lowercase/capitalised assertions are the point: a case-sensitive lookup passes
+// the second half and fails the first. Both halves must agree, in both directions.
+func TestStopwordsAreCaseInsensitiveForDistinctiveTokens(t *testing.T) {
+	for _, w := range []string{"Currently", "However", "Although", "Completed", "Reconciled",
+		"Because", "Without", "Several", "Everything"} {
+		if distinctiveToken(w) {
+			t.Errorf("%q is a stopword and must not be distinctive", w)
+		}
+		if lower := strings.ToLower(w); distinctiveToken(lower) {
+			t.Errorf("%q is the same stopword in lowercase and must not be distinctive either", lower)
+		}
+	}
+	// The over-correction guard: the fix must not swallow real subject vocabulary that
+	// merely shares an initial letter with a stopword.
+	for _, w := range []string{"WebSearch", "concurrency", "DigestSchema", "boundRetainList"} {
+		if !distinctiveToken(w) {
+			t.Errorf("%q is real subject vocabulary and must stay distinctive", w)
+		}
+	}
+	// And the hole it does NOT close, asserted so nobody reads the fix as a fix for T11:
+	// neither of the two words that made SynopsisLag certify an unrelated synopsis as
+	// current is in either stopword list at any casing. See SynopsisLag's doc.
+	for _, w := range []string{"remains", "whether"} {
+		if !distinctiveToken(w) {
+			t.Errorf("%q unexpectedly became a stopword — SynopsisLag's documented defect "+
+				"and T11's status both need re-measuring if this changed", w)
+		}
+	}
+}
+
 // Too little distinctive vocabulary to judge must not produce a verdict. Every previous
 // version of a check like this over-reported by ruling on thin evidence.
 func TestSynopsisLagAbstainsOnThinEvidence(t *testing.T) {

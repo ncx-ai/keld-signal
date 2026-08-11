@@ -15,10 +15,29 @@ import (
 // in it was fabricated (T7 passes) and nothing contradicted itself (T8 passes) — it was
 // simply out of date, and a reader with no other view believes it.
 //
-// Comparison is on DISTINCTIVE terms only, never bare word overlap. Ordinary English is
-// shared by any two passages about anything, and measuring it is the error that made
-// unverified identifiers read 22.6%, leakage read ~100 per sweep, and plurals count as
-// fabrication. A verdict is withheld unless the opening actually offers something to match.
+// Comparison is on distinctiveTerms, NOT on bare word overlap — but ⚠️ the immunity an
+// earlier version of this doc claimed from that ("DISTINCTIVE terms only, never bare word
+// overlap") is FALSE, and it is false in the direction that makes this check look clean.
+// distinctiveToken admits any lowercase word of 7+ characters that is not in its stopword
+// lists, and ordinary English is full of those. Reproduced directly: a synopsis entirely
+// about one subject (a ledger reconciliation), measured against a recent window about an
+// unrelated one (dropdown opacity), yields recentHits=2 — on the words "remains" and
+// "whether" — and this function only reports lag when recentHits == 0. Two ordinary English
+// words shared between any two passages are enough to certify a synopsis current.
+//
+// So T11 and T12 have the SAME root cause, and Part 7 diagnosed distinctiveTerms for T12
+// only. **T11's 0.0% is close to a tautology of the tokeniser, not a floor**: it is not
+// evidence that synopses are current, and it must not be read as support for the design's
+// currency prediction. It is recorded as "not established" alongside T12 in Part 7.
+//
+// Measuring bare word overlap is the error that made unverified identifiers read 22.6%,
+// leakage read ~100 per sweep, and plurals count as fabrication — and this function is a
+// partial instance of that error rather than a counterexample to it. Fixing it needs a real
+// distinctiveness rule (see distinctiveToken's note); the stopword-case fix landed alongside
+// this comment narrows the hole but does not close it — neither "remains" nor "whether" is
+// in either stopword list at any casing.
+//
+// A verdict is withheld unless the opening actually offers something to match.
 func SynopsisLag(d Digest, earlySrc, recentSrc string) (recentHits, earlyHits int, lag bool) {
 	syn := distinctiveTerms(d.Synopsis)
 	if len(syn) == 0 {
@@ -46,8 +65,16 @@ func SynopsisLag(d Digest, earlySrc, recentSrc string) (recentHits, earlyHits in
 const minLagEvidence = 2
 
 // distinctiveTerms reduces text to terms that identify a subject: paths, dotted or
-// underscored names, digits, internal capitals, and long uncommon words. The same notion of
-// "distinctive" the identifier gate uses, so the two checks agree about what a specific is.
+// underscored names, digits, internal capitals, and long uncommon words.
+//
+// ⚠️ It does NOT share Identifiers' notion of "distinctive", and an earlier version of this
+// doc claimed it did ("the same notion the identifier gate uses, so the two checks agree
+// about what a specific is"). They disagree, materially: Identifiers admits a token only if
+// strongIdentifier(tok) OR it is capitalised AND mid-sentence, so ordinary lowercase English
+// never enters it; distinctiveToken additionally admits ANY lowercase word of 7+ characters.
+// That is why a beat's "subject terms" come out as gerunds and adverbs (T12) and why a
+// synopsis can match an unrelated window on two English words (T11 — see SynopsisLag).
+// Do not reason about one from the other.
 //
 // Neither existing tokeniser fits, so this one is its own. wordsOf keeps only [a-z0-9], so
 // every uppercase letter is a separator and it shreds exactly the tokens that matter here —
@@ -87,12 +114,51 @@ func trimTermPunct(tok string) string {
 
 // distinctiveToken is the shared test: a strong identifier, or a word long enough to be
 // subject vocabulary rather than glue.
+//
+// The stopword lookup is CASE-INSENSITIVE, via stopWord. digestStopWords was built for
+// Identifiers, which only ever offers capitalised tokens, so every key in it is capitalised
+// ("Currently", "However", "Although", "Completed", "Reconciled", "Because", "Without",
+// "Several", ...). This function's own 7-character rule admits ordinary LOWERCASE words, and
+// a case-sensitive lookup therefore missed all of them: measured, distinctiveToken("Currently")
+// was false while distinctiveToken("currently") was true, and the same for however/although/
+// completed/reconciled/because/without/several. Roughly half the list was dead on this path.
+// That is the mechanical root of T12's unusability (beat "subject terms" are gerunds and
+// adverbs) and of SynopsisLag's false confidence.
+//
+// It NARROWS the hole rather than closing it: the 7-character rule still admits any long
+// lowercase word neither list names, and the pair that made SynopsisLag certify an unrelated
+// synopsis as current ("remains", "whether") is in neither list at any casing. A real
+// distinctiveness rule — not a longer stopword list — is the fix, and it is a design change
+// that would re-open T11/T12 for measurement.
+//
+// Deliberately scoped to this function. Identifiers (digest_check.go) and weakProperNoun
+// (session_record.go) both look digestStopWords up with a token that is capitalised by
+// construction, so widening the lookup there would change which ALL-CAPS tokens they admit —
+// a live change to the retain-list and to SessionRecord.Subjects, i.e. to what T2 and T4
+// measure — for no defect anyone has observed. Left alone.
 func distinctiveToken(tok string) bool {
 	tok = trimTermPunct(tok)
-	if len(tok) < 4 || digestStopWords[tok] || digestCommonWord(strings.ToLower(tok)) {
+	if len(tok) < 4 || stopWord(tok) || digestCommonWord(strings.ToLower(tok)) {
 		return false
 	}
 	return strongIdentifier(tok) || len(tok) >= 7
+}
+
+// stopWord is digestStopWords looked up without regard to case. The map's keys are
+// capitalised (see digestStopWords), so a lowercase token needs its initial upcased to reach
+// them; the rest of the token's spelling is left alone, since a key like "It" must not be
+// matched by an unrelated all-caps identifier ("IT_HOME" arrives as one token because
+// subjectTokens keeps '_' attached, and strongIdentifier claims it anyway).
+func stopWord(tok string) bool {
+	if digestStopWords[tok] {
+		return true
+	}
+	if tok == "" {
+		return false
+	}
+	r := []rune(strings.ToLower(tok))
+	r[0] = []rune(strings.ToUpper(string(r[0])))[0]
+	return digestStopWords[string(r)]
 }
 
 // RecentSubjects returns distinctive terms from the last n USER turns.
