@@ -112,36 +112,53 @@ func trimTermPunct(tok string) string {
 	return strings.Trim(tok, ".-_/")
 }
 
-// distinctiveToken is the shared test: a strong identifier, or a word long enough to be
-// subject vocabulary rather than glue.
+// distinctiveToken is the shared test: a strong identifier, or a term the local corpus shows is
+// SPECIFIC rather than ordinary.
 //
-// The stopword lookup is CASE-INSENSITIVE, via stopWord. digestStopWords was built for
-// Identifiers, which only ever offers capitalised tokens, so every key in it is capitalised
-// ("Currently", "However", "Although", "Completed", "Reconciled", "Because", "Without",
-// "Several", ...). This function's own 7-character rule admits ordinary LOWERCASE words, and
-// a case-sensitive lookup therefore missed all of them: measured, distinctiveToken("Currently")
-// was false while distinctiveToken("currently") was true, and the same for however/although/
-// completed/reconciled/because/without/several. Roughly half the list was dead on this path.
-// That is the mechanical root of T12's unusability (beat "subject terms" are gerunds and
-// adverbs) and of SynopsisLag's false confidence.
+// ⚠️ THE ">=7 CHARACTERS" CLAUSE IS GONE. It was the documented mechanical root of four defects
+// (see docfreq.go for all four and for the measured DF table), and no stopword list could close
+// it because the offending words — failure, control, question, remains, whether — are content
+// words, not function words.
 //
-// It NARROWS the hole rather than closing it: the 7-character rule still admits any long
-// lowercase word neither list names, and the pair that made SynopsisLag certify an unrelated
-// synopsis as current ("remains", "whether") is in neither list at any casing. A real
-// distinctiveness rule — not a longer stopword list — is the fix, and it is a design change
-// that would re-open T11/T12 for measurement.
+// The three routes, in order, and why each exists:
 //
-// Deliberately scoped to this function. Identifiers (digest_check.go) and weakProperNoun
-// (session_record.go) both look digestStopWords up with a token that is capitalised by
-// construction, so widening the lookup there would change which ALL-CAPS tokens they admit —
-// a live change to the retain-list and to SessionRecord.Subjects, i.e. to what T2 and T4
-// measure — for no defect anyone has observed. Left alone.
+//  1. stopWord / digestCommonWord, case-insensitively. Kept: cheap, and right about the words it
+//     names. The case-insensitive lookup was itself a fix — digestStopWords was built for
+//     Identifiers, which only offers capitalised tokens, so every key is capitalised and a
+//     case-sensitive lookup missed the lowercase forms this function sees. Measured,
+//     distinctiveToken("Currently") was false while distinctiveToken("currently") was true.
+//  2. strongIdentifier, unchanged and unconditional. A path, a dotted filename, a versioned or
+//     snake_case token names one thing whatever its frequency — the spec keeps this as an
+//     independent sufficient condition, and it is also the whole of the rule during cold start.
+//  3. document frequency below dfMaxFraction, reached only when the table is REPRESENTATIVE.
+//     Otherwise the answer is no: cold start falls back to the narrow rule, never the broad one,
+//     because admitting too few subjects is recoverable and poisoning a block labelled
+//     authoritative is not.
+//
+// Still deliberately scoped to this function plus weakProperNoun (session_record.go), which now
+// consults the same table for the same reason: those two decide SessionRecord.Subjects, the
+// headline number this change is judged on. Identifiers (digest_check.go) is untouched — it feeds
+// the retain-list and the T2/T4 metrics, and moving it would re-baseline what those measure for
+// no defect anyone has observed.
 func distinctiveToken(tok string) bool {
 	tok = trimTermPunct(tok)
-	if len(tok) < 4 || stopWord(tok) || digestCommonWord(strings.ToLower(tok)) {
+	if len(tok) < dfMinTermLen || stopWord(tok) || digestCommonWord(strings.ToLower(tok)) {
 		return false
 	}
-	return strongIdentifier(tok) || len(tok) >= 7
+	if strongIdentifier(tok) {
+		return true
+	}
+	return corpusDistinctive(tok)
+}
+
+// corpusDistinctive is route 3: is this term rare enough across the local corpus to name a
+// subject? False during cold start, which is the narrow direction on purpose.
+func corpusDistinctive(tok string) bool {
+	df := documentFrequency()
+	if !df.representative() {
+		return false
+	}
+	return df.fraction(trimTermPunct(tok)) < dfMaxFraction
 }
 
 // stopWord is digestStopWords looked up without regard to case. The map's keys are

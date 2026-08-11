@@ -6,6 +6,10 @@ import (
 )
 
 func TestSessionRecordAccumulatesAcrossWindows(t *testing.T) {
+	// "Meridian" and "Larkin" are short capitalised names, so they reach Subjects by the
+	// weakProperNoun route — which now also requires corpus rarity. The fixture table supplies
+	// it; in cold start neither is admitted, which is the conservative direction by design.
+	installTestDocFreq(t)
 	var r SessionRecord
 	w1 := Window{Turns: []Turn{{RoleUser, "reconcile the Meridian ledger"}, {RoleTool, "Read bank-mar.csv"}}}
 	w2 := Window{Turns: []Turn{{RoleUser, "now post the Larkin accrual"}, {RoleTool, "Write journals/mar-adj-04.csv"}}}
@@ -238,6 +242,7 @@ func TestSessionRecordSubjectsRejectMidSentenceCommonWord(t *testing.T) {
 // ("Larkin"), isolated here so a future change to the position/length rule fails fast and
 // specifically, rather than only via the accumulation test's broader assertion.
 func TestSessionRecordSubjectsKeepGenuineShortProperNoun(t *testing.T) {
+	installTestDocFreq(t)
 	w := Window{Turns: []Turn{{RoleUser, "now post the Larkin accrual"}}}
 	r := SessionRecord{}.Observe(w, Extract(w))
 	if !strings.Contains(strings.Join(r.Subjects, " "), "Larkin") {

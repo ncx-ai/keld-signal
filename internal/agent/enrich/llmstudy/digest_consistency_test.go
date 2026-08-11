@@ -7,6 +7,9 @@ import (
 // The first currency check independent of judgement: a story whose subject contradicts the
 // measured record is wrong against a measurement, not an opinion.
 func TestBeatContradictingTheRecordIsDetected(t *testing.T) {
+	// A representative DF table, so the distinctiveness rule's corpus route is live: without
+	// one the rule is in cold start (strong identifiers only) and every prose beat abstains.
+	installTestDocFreq(t)
 	r := SessionRecord{Turns: 40}.WithProject("keld-signal").WithFocus("engineering", "software", 0.9)
 	r.Subjects = []string{"digest", "synopsis", "threshold"}
 
@@ -59,6 +62,7 @@ func TestConsistencyAbstainsWithoutSubjects(t *testing.T) {
 // change to subjectTokens' keep-set would move them into the trimming path and they should
 // still hold when it does.
 func TestBeatContradictsRecordTrimsTrailingPunctuation(t *testing.T) {
+	installTestDocFreq(t)
 	r := SessionRecord{Turns: 40}
 	r.Subjects = []string{"digest", "synopsis", "threshold"}
 

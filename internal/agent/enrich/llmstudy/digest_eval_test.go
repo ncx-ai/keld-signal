@@ -261,6 +261,19 @@ func TestDigestRefineQuality(t *testing.T) {
 	o.K = 12
 	l := NewLlama(url)
 	beatTurns := BeatTurnsFromEnv()
+	// The distinctiveness rule reads a document-frequency table built from the local corpus, and
+	// it is UNINITIALISED by default so unit tests cannot depend on the machine's transcripts.
+	// Initialising it here, and REPORTING what it got, is the difference between measuring the DF
+	// rule and measuring its cold-start fallback — two behaviours that would otherwise produce
+	// one indistinguishable set of numbers.
+	df := InitDocFreqFromCorpus()
+	t.Logf("DOC FREQUENCY  %d sessions, %d distinct terms, threshold df<%.2f (representative: %v; "+
+		"cold start would fall back to strong identifiers only)",
+		df.sessions, len(df.count), dfMaxFraction, df.representative())
+	if !df.representative() {
+		t.Errorf("the DF table holds %d sessions, under dfMinSessions=%d — this run measures the "+
+			"cold-start fallback, not the distinctiveness rule", df.sessions, dfMinSessions)
+	}
 
 	var (
 		attempted, failed        int

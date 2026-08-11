@@ -39,6 +39,7 @@ func TestSynopsisLagIsDetected(t *testing.T) {
 // The paired lowercase/capitalised assertions are the point: a case-sensitive lookup passes
 // the second half and fails the first. Both halves must agree, in both directions.
 func TestStopwordsAreCaseInsensitiveForDistinctiveTokens(t *testing.T) {
+	installTestDocFreq(t)
 	for _, w := range []string{"Currently", "However", "Although", "Completed", "Reconciled",
 		"Because", "Without", "Several", "Everything"} {
 		if distinctiveToken(w) {
@@ -55,13 +56,16 @@ func TestStopwordsAreCaseInsensitiveForDistinctiveTokens(t *testing.T) {
 			t.Errorf("%q is real subject vocabulary and must stay distinctive", w)
 		}
 	}
-	// And the hole it does NOT close, asserted so nobody reads the fix as a fix for T11:
-	// neither of the two words that made SynopsisLag certify an unrelated synopsis as
-	// current is in either stopword list at any casing. See SynopsisLag's doc.
+	// ⚠️ INVERTED by the distinctiveness rule. This block used to assert that "remains" and
+	// "whether" WERE distinctive — the hole the stopword-case fix could not close, since neither
+	// word is in any stopword list at any casing. Document frequency closes it: both appear in
+	// every session of the fixture corpus, so neither can name a subject. That is the pair that
+	// made SynopsisLag certify an unrelated synopsis as current, so T11 is measurable for the
+	// first time and its previous 0.0% must not be carried forward as a comparison.
 	for _, w := range []string{"remains", "whether"} {
-		if !distinctiveToken(w) {
-			t.Errorf("%q unexpectedly became a stopword — SynopsisLag's documented defect "+
-				"and T11's status both need re-measuring if this changed", w)
+		if distinctiveToken(w) {
+			t.Errorf("%q is ordinary English the corpus shows in every session; it must no "+
+				"longer be distinctive, or T11 is still near-tautological", w)
 		}
 	}
 }

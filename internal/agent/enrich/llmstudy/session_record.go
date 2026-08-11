@@ -131,11 +131,20 @@ func (r SessionRecord) Observe(w Window, s Signals) SessionRecord {
 // was admitted as a candidate proper noun with no floor above 4 to stop it.
 const weakProperNounMinLen = 6
 
-// weakProperNoun catches a capitalised token too short for distinctiveToken's strong-
-// identifier-or-7-chars test, using the same position-aware reasoning Identifiers()
+// weakProperNoun catches a capitalised token distinctiveToken's own routes miss, using the same
+// position-aware reasoning Identifiers()
 // already applies to digest prose: a capital at the start of a turn is just how English
 // opens a sentence, but mid-turn it is presumed a proper noun. Still gated by the caller's
 // verbatim check, so this only widens which CANDIDATES get proposed, never what gets kept.
+//
+// ⚠️ It now ALSO requires corpus distinctiveness, and that is the second half of retiring the
+// >=7-character rule. Position and capitalisation alone admitted ordinary capitalised English —
+// "Confirmed", "Activity", "Adjustment" were measured reaching Subjects by this route, and
+// beatSubjectTermsGrounded's own doc names them as the reason the record's terms are unusable as
+// a novelty vocabulary. A capital mid-sentence is evidence of a NAME; it is not evidence that the
+// name is this session's subject, and Subjects is a 12-slot list the prompt calls authoritative.
+// During cold start this route therefore admits nothing, the same conservative direction
+// distinctiveToken takes.
 //
 // Uses turnLineInitial, NOT sentenceInitial: sentenceInitial is tuned for LLM-authored
 // digest prose, where "." is a reliable sentence boundary and there is no reason to treat a
@@ -147,6 +156,9 @@ const weakProperNounMinLen = 6
 // its current newline handling for LLM prose, and that behaviour must not move.
 func weakProperNoun(tok, text string) bool {
 	if len(tok) < weakProperNounMinLen || digestStopWords[tok] || digestCommonWord(strings.ToLower(tok)) {
+		return false
+	}
+	if !corpusDistinctive(tok) {
 		return false
 	}
 	if initial := tok[0]; initial < 'A' || initial > 'Z' {
