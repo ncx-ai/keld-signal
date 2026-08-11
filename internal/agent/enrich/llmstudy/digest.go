@@ -139,6 +139,29 @@ func createTailLen() int {
 		len("\nRespond with JSON only.\n")
 }
 
+// createViewHeader and createWindowHeader are the literal headings
+// DigestCreatePromptWithView writes immediately before the whole-session view and the
+// recent-turns window, respectively. Defined once and used by BOTH the real assembly below
+// and the room computation handed to clipSessionViewFor, so a wording change cannot
+// silently reopen the header-omission bug fixed on the refine path in 1531ef0 (see
+// beatsHeader, viewHeader and windowHeader in digest_refine.go for the same pattern — that
+// fix accounts for all THREE of its headers, not just the view's, for exactly the reason
+// createWindowHeader is included here too). This path needed its own constants rather than
+// reusing the refine path's viewHeader/windowHeader because the wording differs ("so far"
+// and a leading blank line the refine path's viewHeader does not have; "MOST RECENT PART OF
+// THE CONVERSATION, in detail" instead of "NEW PART OF THE CONVERSATION (evidence)").
+//
+// clipSessionViewFor already reserves MinTurnChars for the turns that follow the view, but
+// that reservation is only correct if it is a floor on the TURNS CONTENT alone — any header
+// written between the view and the turns is overhead on top of it, the same distinction
+// fitDiscretionary's doc draws for windowHeader. createWindowHeader is written between the
+// view and turns just like windowHeader is on the refine path, so it needs the same
+// accounting; omitting it (as the code did before this fix) left the window able to land up
+// to len(createWindowHeader) below MinTurnChars even with createViewHeader fixed.
+const createViewHeader = "\n\nWHOLE SESSION so far, sampled from start to now (coarse — for the shape" +
+	" of the work, not its detail):\n"
+const createWindowHeader = "\n\nMOST RECENT PART OF THE CONVERSATION, in detail:\n"
+
 // DigestCreatePrompt builds the first-digest prompt with no whole-session view.
 func DigestCreatePrompt(sessionLabel, turns, facts string) string {
 	return DigestCreatePromptWithView(sessionLabel, turns, "", facts)
@@ -158,12 +181,12 @@ func DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts string) 
 	b.WriteString(sessionLabel)
 	b.WriteString("\n\nMEASURED COUNTS (authoritative — your report must be consistent with these):\n  ")
 	b.WriteString(facts)
-	if v := clipSessionViewFor(sessionView, b.Len()+createTailLen()); v != "" {
-		b.WriteString("\n\nWHOLE SESSION so far, sampled from start to now (coarse — for the shape")
-		b.WriteString(" of the work, not its detail):\n")
+	viewOverhead := b.Len() + createTailLen() + len(createViewHeader) + len(createWindowHeader)
+	if v := clipSessionViewFor(sessionView, viewOverhead); v != "" {
+		b.WriteString(createViewHeader)
 		b.WriteString(v)
 	}
-	b.WriteString("\n\nMOST RECENT PART OF THE CONVERSATION, in detail:\n")
+	b.WriteString(createWindowHeader)
 	b.WriteString(fitTurns(turns, b.Len()+createTailLen()))
 	b.WriteString("\nWrite these sections:\n")
 	b.WriteString(digestSections)

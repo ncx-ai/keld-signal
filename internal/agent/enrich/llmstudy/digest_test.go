@@ -111,3 +111,63 @@ func TestDigestPromptForbidsRestatementAndAssistantVoice(t *testing.T) {
 		}
 	}
 }
+
+// TestCreatePathAccountsForItsOwnHeadersBeforeComputingRoom is the fix for task-7b
+// finding (c): DigestCreatePromptWithView called
+// clipSessionViewFor(sessionView, b.Len()+createTailLen()) and only THEN wrote its own
+// "\n\nWHOLE SESSION so far..." header — the same header-omission bug already fixed on
+// the refine path in commit 1531ef0, still live here. The same gap existed a second time
+// on this path: "\n\nMOST RECENT PART OF THE CONVERSATION, in detail:\n" (this path's
+// equivalent of the refine path's windowHeader) is ALSO written between the view and the
+// turns, and its length was never subtracted either — omitting it left the window able
+// to land short even with the view's own header fixed. clipSessionViewFor's MinTurnChars
+// reservation is meant to be a floor on the TURNS CONTENT alone (see its doc and
+// fitDiscretionary's, which draws the identical distinction for windowHeader on the
+// refine path), so any header written between the view and the turns is overhead on top
+// of that reservation, not something the floor is supposed to absorb.
+//
+// Measures the ROOM actually left for the turns — the point where fitTurns is invoked,
+// immediately after createWindowHeader — rather than the post-fitTurns window content.
+// fitTurns' own line-boundary trim (task-7b finding (b), digest_fit.go) applies
+// unconditionally once room already sits below MinTurnChars, so once room is pushed
+// under the floor by ANY margin the actual trimmed window can lose a further, unrelated
+// amount that has nothing to do with header accounting. Measuring room directly isolates
+// this fix from that one.
+//
+// Confirmed by reverting viewOverhead to `b.Len()+createTailLen()` (both header-length
+// terms dropped) and re-running: room measured 1542 runes, 58 below the 1600 floor. Test
+// fails. With the fix restored, room measures 1605, 5 above the floor — the small
+// residual slack either side of an exact 1600 is clipProse's own ellipsis reservation on
+// the view content (see clipProse's doc) and sub-rune rounding from the header text's
+// em-dash, both unrelated to the header-omission bug this test guards, hence the
+// tolerance below rather than an exact-equality assertion.
+func TestCreatePathAccountsForItsOwnHeadersBeforeComputingRoom(t *testing.T) {
+	base := "counts: turns=900 corrections=3 tool_calls=400 domain=engineering function=software-development "
+	// Large enough that the VIEW's own room, not SessionViewCap, is the binding
+	// constraint on its size — only in that regime does the header omission matter,
+	// since a cap-bound view is sized the same whether or not the headers are accounted.
+	facts := base + strings.Repeat("extra=1 ", 400)
+	// Long enough that the view is clipped to fill its allotted room exactly, rather than
+	// passing through short and making the header accounting moot.
+	sessionView := strings.Repeat("user: an early turn about the work in this session, discussing details\n", 100)
+	turns := strings.Repeat("user: hi\n", 400)
+
+	p := DigestCreatePromptWithView("work session", turns, sessionView, facts)
+
+	bytePos := strings.Index(p, createWindowHeader)
+	if bytePos < 0 {
+		t.Fatal("createWindowHeader missing from prompt")
+	}
+	// Rune count, not the raw byte index: several of the fixed strings ahead of it
+	// (e.g. the "MEASURED COUNTS" header) contain an em-dash, a multi-byte rune, and
+	// DefaultPromptCharBudget/MinTurnChars are both rune budgets.
+	before := len([]rune(p[:bytePos])) + len([]rune(createWindowHeader))
+	room := DefaultPromptCharBudget - (before + createTailLen())
+	t.Logf("room for turns: %d (floor %d, margin %d)", room, MinTurnChars, room-MinTurnChars)
+
+	const tolerance = 10 // clipProse's ellipsis reservation + the em-dash byte/rune gap, not this bug
+	if room < MinTurnChars-tolerance {
+		t.Errorf("room for turns starved to %d, more than %d below the %d floor — the create "+
+			"path's own headers were not fully accounted for before sizing the view", room, tolerance, MinTurnChars)
+	}
+}
