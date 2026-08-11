@@ -355,6 +355,77 @@ func packSpecifics(next *int, n, specifics int) string {
 	return string(r)
 }
 
+// TestBoundRetainListDropsTheOffendingEntryNotEverythingOlder is the fix for task-7b fix
+// round 4 (finding 3). The eviction pass dropped only from the OLDEST end, so a single
+// entry longer than retainListMaxTotal could never itself be removed: the loop shrank the
+// list from the far end while the offending entry survived every iteration, until
+// `len(kept) > 0` failed and the whole retain-list came back EMPTY.
+//
+// That is the worst possible outcome of a bound: the retain-list is the ONLY channel
+// carrying the prior report's named specifics into a refinement, so this silently deleted
+// the entire fact-retention anchor — over one long path-shaped name, which is exactly the
+// kind of identifier real transcripts produce.
+//
+// Every length here derives from the enforced constants: retainListMaxCount-1 ordinary
+// specifics (so the count bound is not what is being tested) plus one entry of
+// retainListMaxTotal+1 runes, at the NEWEST end, where the old loop could never reach it.
+//
+// Confirmed by restoring the oldest-end eviction loop and re-running: "one oversized entry
+// deleted the whole retain-list: 60 entries in, 0 out". The sibling test below still passes
+// under that revert, which is the point of having both — the old loop was correct for the
+// ordinary case and wrong only for the entry it could not evict.
+func TestBoundRetainListDropsTheOffendingEntryNotEverythingOlder(t *testing.T) {
+	var named []string
+	for i := 0; i < retainListMaxCount-1; i++ {
+		named = append(named, fmt.Sprintf("Id%06d", i))
+	}
+	oversized := strings.Repeat("a", retainListMaxTotal+1)
+	named = append(named, oversized)
+
+	got := boundRetainList(named)
+	if len(got) == 0 {
+		t.Fatalf("one oversized entry deleted the whole retain-list: %d entries in, 0 out", len(named))
+	}
+	if n := retainListJoinedLen(got); n > retainListMaxTotal {
+		t.Errorf("retain-list joins to %d runes, over the %d-rune bound", n, retainListMaxTotal)
+	}
+	for _, s := range got {
+		if s == oversized {
+			t.Error("the oversized entry survived — it cannot fit and must be the one dropped")
+		}
+	}
+	// The ordinary specifics all fit within the bound together (59 x 8 runes plus 58
+	// separators = 588 of 700), so every one of them must survive: the fix must drop the
+	// offending entry ONLY, not take a share of the innocent ones with it.
+	if len(got) != retainListMaxCount-1 {
+		t.Errorf("want all %d ordinary specifics kept, got %d: %v",
+			retainListMaxCount-1, len(got), got)
+	}
+}
+
+// The oversized entry must not be able to hide behind the count bound either: an entry
+// beyond retainListMaxCount is dropped for being old (tailN), and one over
+// retainListMaxTotal is dropped for being long. Neither may take the rest with it.
+func TestBoundRetainListPrefersTheNewestThatFit(t *testing.T) {
+	var named []string
+	for i := 0; i < retainListMaxCount*2; i++ {
+		named = append(named, fmt.Sprintf("Id%06d", i))
+	}
+	got := boundRetainList(named)
+	if n := retainListJoinedLen(got); n > retainListMaxTotal {
+		t.Errorf("retain-list joins to %d runes, over the %d-rune bound", n, retainListMaxTotal)
+	}
+	if len(got) > retainListMaxCount {
+		t.Errorf("retain-list kept %d entries, over the %d bound", len(got), retainListMaxCount)
+	}
+	// Newest-first: the very last input entry is the newest state and must be present,
+	// while the very first has already survived several refinements.
+	if got[len(got)-1] != named[len(named)-1] {
+		t.Errorf("the newest specific was dropped: last kept %q, newest input %q",
+			got[len(got)-1], named[len(named)-1])
+	}
+}
+
 // packIdentifiers fills n runes with sequential, GLOBALLY DISTINCT identifier-shaped
 // tokens and NOTHING else — no filler prose at all. This is deliberately the OPPOSITE
 // density from packSpecifics (2 specifics + filler words per call): an independent

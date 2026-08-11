@@ -449,7 +449,7 @@ func priorOpenItems(prev Digest) []string {
 // names a densely-specific report can still cram into it. Recency-preferring on both
 // axes: tailN's own reasoning (older specifics have already survived several
 // refinements; newer ones have not yet been seen at all) extended to a second pass that
-// drops from the OLDEST end of whatever tailN kept, since Identifiers' output order
+// fills from the NEWEST end of whatever tailN kept, since Identifiers' output order
 // follows the underlying digest's own field order (prose fields, then insights, then
 // unresolved) — later text is newer state. A dropped specific is a real drop, never a
 // silent truncation of one — clipping an identifier mid-name would manufacture a fake
@@ -459,12 +459,36 @@ const (
 	retainListMaxTotal = 700
 )
 
+// boundRetainList keeps the newest specifics that fit, dropping the ones that do not.
+//
+// Fills newest-first and SKIPS an entry too long to fit, rather than dropping everything
+// older than it — task-7b fix round 4 (finding 3). The earlier version evicted only from
+// the oldest end (`for len(kept) > 0 && ... { kept = kept[1:] }`), which cannot remove an
+// entry that exceeds retainListMaxTotal ON ITS OWN: the loop shrank from the far end while
+// the offending entry survived every iteration, until `len(kept) > 0` finally failed and the
+// function returned EMPTY. Measured: retainListMaxCount-1 ordinary specifics plus one
+// 1,118-rune path-shaped identifier at the newest end kept ZERO entries.
+//
+// The retain-list is the only channel carrying the prior report's named specifics into a
+// refinement — nothing else carries its text forward at all — so that silently deleted the
+// entire fact-retention anchor, the metric this design is judged on, over one oversized
+// name, and on the input shape most likely to produce one: a long real path.
+//
+// Skipping rather than stopping is what makes the drop proportionate: one unusable entry
+// costs exactly itself, and the older entries behind it, which DO fit, are still offered.
 func boundRetainList(named []string) []string {
 	kept := tailN(named, retainListMaxCount)
-	for len(kept) > 0 && retainListJoinedLen(kept) > retainListMaxTotal {
-		kept = kept[1:]
+	var out []string
+	for i := len(kept) - 1; i >= 0; i-- {
+		// Measured with retainListJoinedLen rather than a running sum, so what is bounded is
+		// exactly what the prompt writes, separators included.
+		cand := append([]string{kept[i]}, out...)
+		if retainListJoinedLen(cand) > retainListMaxTotal {
+			continue
+		}
+		out = cand
 	}
-	return kept
+	return out
 }
 
 // retainListJoinedLen is the rune length of the retain-list exactly as it is written
