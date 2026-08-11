@@ -79,11 +79,19 @@ func TestPromptStatesLengthAsGuidanceNotALimit(t *testing.T) {
 		"create": DigestCreatePrompt("work session", "user: reconcile the ledger\n", "counts: turns=4\n"),
 		"refine": DigestUpdatePrompt(Digest{Done: "x"}, "work session", "user: now do April\n", "counts: turns=8\n"),
 	} {
-		if !strings.Contains(p, "GUIDES, not limits") {
+		if !strings.Contains(p, "GUIDE, not a limit") {
 			t.Errorf("%s prompt does not say the lengths are guides", name)
 		}
-		if !strings.Contains(p, "Nothing cuts your answer short") {
+		if !strings.Contains(p, "nothing cuts your\n  answer short") {
 			t.Errorf("%s prompt does not tell the model its answer is not truncated", name)
+		}
+		// The note must lead the section list, not trail it. Measured: as a trailing paragraph
+		// — immediately after `unresolved`'s "if genuinely NOTHING is open" rule — it cost two
+		// digests to "unresolved is empty" through all 5 retries, deterministically at
+		// temperature 0, taking T1 from 100% to 96.4%. A length note is not allowed to be the
+		// last thing read before a required list.
+		if i := strings.Index(p, "GUIDE, not a limit"); i > strings.Index(p, "unresolved  What is still open") {
+			t.Errorf("%s prompt puts the length note AFTER the section list; it must lead it", name)
 		}
 		// One guide per prose section that used to be governed by a cap instead. The synopsis's
 		// was always here; the other six had a rune cap and no wording at all.

@@ -81,7 +81,9 @@ func DigestSchema() map[string]any {
 // digestSections describes each field to the model. Deliberately profession-neutral:
 // it names no code, tests or deploys, because the same digest must serve an
 // accountant reconciling ledgers and a marketer drafting a campaign.
-const digestSections = `  synopsis    What is this work ABOUT, where does it stand, and where is it going?
+const digestSections = `  Where a length is named below it is a GUIDE, not a limit: nothing cuts your
+  answer short, and a section that needs more should have more.
+  synopsis    What is this work ABOUT, where does it stand, and where is it going?
               Three or four sentences, readable on its own by someone who reads nothing
               else. Name the subject in the first sentence — not the activity, the
               THING. This is the one section that may draw on the others; it is a
@@ -109,10 +111,6 @@ const digestSections = `  synopsis    What is this work ABOUT, where does it sta
                 none - the work reached a stopping point
               Do not invent an open item to fill this field. An invented blocker is
               worse than no blocker, because a reader will act on it.
-
-The lengths named above are GUIDES, not limits. Nothing cuts your answer short, so
-write what a section needs and then stop: a section is the right length when it has
-said everything once. Padding and repetition are the failure, not length.
 `
 
 const digestRules = `

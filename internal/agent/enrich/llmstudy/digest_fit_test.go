@@ -504,15 +504,17 @@ func TestWellFormedInputsDoNotTripTheBackstop(t *testing.T) {
 // length and must therefore produce the SAME window — asserted directly, not just "both
 // clear the floor". Confirmed by reverting runeLen back to b.Len() in the two assemblies.
 //
-// RE-CONFIRMED, and the failure MOVED PATHS, after the length guidance was added to
-// digestSections (see CapSections): the tail grew 401 runes, so the reverted refine path now
-// clears the floor in both encodings and is caught by the EQUALITY assertion instead (ASCII
-// 1,916 runes of content against multi-byte 1,812, a 104-rune difference from identical text),
-// while both create subtests now breach outright (backstop: 1,597 and 1,445 against the 1,600
-// floor). Before the guidance the shape was the mirror image — ASCII refine passing at 1,604
-// while multi-byte PANICKED at 1,510, and create differing at 1,768 vs 1,602 without breaching.
-// The defect is detected either way, and only because the test asserts BOTH properties: at any
-// given prompt size one of the two paths merely differs while the other breaches, and which is
+// RE-CONFIRMED after the length guidance was added to digestSections (see CapSections), and the
+// failure's SHAPE moved twice while the wording was being measured, which is the reason this
+// docstring reports a shape rather than a single pair of numbers. With the guidance as finally
+// worded, ALL FOUR subtests breach under the revert (backstop: refine 1,597 in both encodings,
+// create 1,497 ASCII and 1,439 multi-byte). With an earlier, longer wording the reverted refine
+// path cleared the floor in both encodings and was caught by the EQUALITY assertion instead
+// (1,916 ASCII against 1,812 multi-byte — identical text, 104 runes apart), while create
+// breached. Before the guidance existed it was the mirror image: ASCII refine passed at 1,604
+// while multi-byte PANICKED at 1,510, and create differed at 1,768 vs 1,602 without breaching.
+// The defect is caught in all three states, and only because the test asserts BOTH properties:
+// at any given prompt size one path may merely differ while the other breaches, and which is
 // which depends on where the line-boundary trim happens to land.
 //
 // (The 11,000-budget figures above were measured with the ASCII-only version, so they are the

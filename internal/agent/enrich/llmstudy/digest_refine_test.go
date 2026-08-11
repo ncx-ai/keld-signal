@@ -658,34 +658,37 @@ func densePrevScaled(unresolved, scale int) Digest {
 // RECALIBRATED A THIRD TIME, and by the same cause a third time: the prompt's fixed size
 // moved. Adding the per-section length guidance to digestSections (see CapSections — length is
 // now stated in the prompt because nothing enforces it after generation) grew the instructional
-// tail by 401 runes, which moved fitDiscretionary's chosen beat count at itemLen 9 and left the
+// tail, which moved fitDiscretionary's chosen beat count at itemLen 9 and left the
 // header-omission revert PASSING (window 1,613 both ways). That is the FOURTH occurrence of this
 // branch's signature defect and the first one caused by a change made in the same commit as the
 // recalibration, which is the only reason it was caught rather than shipped: the scan below was
-// re-run rather than the docstring re-worded.
+// re-run rather than the docstring re-worded. It was then re-run AGAIN when the guidance wording
+// was narrowed after measurement (tail +301 runes rather than +401), which moved the divergence
+// window from 12-21 to 21-29 — the clearest possible demonstration that this calibration is a
+// function of the prompt's exact size and cannot be reasoned about.
 //
-// itemLen = 12 is the smallest value (scanned from 1 to 80) at which the fixed and reverted
+// itemLen = 21 is the smallest value (scanned from 1 to 80) at which the fixed and reverted
 // accounting diverge on whether the floor holds. Confirmed DIRECTLY, by removing
 // runeLen(windowHeader) and runeLen(beatsHeader) from fitDiscretionary's overhead, running the
 // full scan, then restoring them:
-//   - reverted: PANICS via the backstop at itemLen 12. The backstop existing does not make this
+//   - reverted: PANICS via the backstop at itemLen 21. The backstop existing does not make this
 //     test redundant: it isolates and documents fitDiscretionary's OWN mechanism rather than
 //     only proving that something eventually notices.
 //   - fixed: 2,103 runes of content against the 1,600 floor (margin 503) — a real margin,
 //     because the correct accounting settles on a smaller beat count.
 //
 // The scan is recorded rather than summarised, because the step function is the whole
-// reason a single sample misleads. FIXED holds at every itemLen from 1 to 80 (windows 1,611 to
-// 2,103, never below the floor); REVERTED breaches at 12-21 and 57-65 and survives everywhere
-// else, including at the old calibration point 9 and at 22, 40 and 53. Landing on a surviving
-// value is exactly what happened three times now.
+// reason a single sample misleads. FIXED holds at every itemLen from 1 to 80 (never below the
+// floor); REVERTED breaches at 21-29 and 65-74 and survives everywhere else, including at both
+// former calibration points (9 and 12) and at 40 and 53. Landing on a surviving value is exactly
+// what happened three times now.
 func TestWindowKeepsItsFloorAtTheBoundary(t *testing.T) {
-	// 12 is not a round number: it is the smallest item length (scanned from 1) at which the
+	// 21 is not a round number: it is the smallest item length (scanned from 1) at which the
 	// fixed and reverted overhead accounting settle on different beat counts AND the
 	// difference actually breaches the floor on the reverted side — the smallest gap at
 	// which the bug this test guards against changes the outcome, rather than being
 	// absorbed by a k that was going to be chosen either way.
-	const itemLen = 12
+	const itemLen = 21
 	// A bare panic stack mid-suite is not a legible result, so the backstop's panic is
 	// recovered into a failure that names THIS mechanism — the reverted accounting trips it
 	// before the assertion below is ever reached.
