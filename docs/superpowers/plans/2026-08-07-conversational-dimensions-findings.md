@@ -604,6 +604,12 @@ code. `internal/agent/enrich/llmstudy/testdata/nontech/`.
 
 ## What broke — and both were the clipper, not the model
 
+> **Followed to its conclusion in Part 8:** the clipper is now **gone**. Every prose cap named
+> in this section was deleted, not resized. What this section found — that a constant, not the
+> model, was deleting the most recent material from a cumulative section — is the argument for
+> removing them; the sizing decision it describes (900 → 1400 for `happened`) is superseded by
+> having no cap at all. Part 8 also measures what the removal did *not* buy.
+
 **The cap was manufacturing rubberstamped reports.** `happened` is cumulative AND is
 where difficulty belongs, but it shared the 900-rune prose cap and sat at it. Clipping
 keeps the OLDEST text, so what got deleted was the most recent material — which is
@@ -759,6 +765,15 @@ the previous report's prose. **Measured: they do not.**
 > on, 56.2% off, against a ≥90% threshold. Split by kind it is worse on the population that
 > matters: real identifiers 38.6%, bare capitalised words 63.9%.)
 
+> ⚠️ **AMENDED by Part 8 — the magnitude, not the failure.** Re-measured on the current tree
+> with everything about the caps left in place, T4 is **58.2% (ON) / 62.0% (OFF) of 79**. The
+> difference is the beat work that landed after this sweep (cadence 3 → 5 user turns,
+> `ChangedSubject` grounded, the progress and forbidden-opener rules), not anything about
+> retention machinery. So the headline is **94.9% → 58.2%** on the code as it now stands; it
+> fails ≥90% either way and every conclusion below is unaffected. Part 8 also **refutes a second
+> candidate mechanism**: prose clipping. It is now removed, and retention did not move by one
+> item in either arm.
+
 **The deliverable of this branch is a negative result.** The substitute for the no-shrink rule
 does not work as built, and it fails for a reason the plan explicitly did not predict — not
 the retain-list's caps (neither ever bound) but the model dropping specifics it was handed
@@ -838,6 +853,13 @@ about beats at all, and T3 on a denominator of 12 where a single item moves the 
 T11 is a fourth failure of a different kind — the instrument, not the model.
 
 ## T4 is the design's failure, and it is not the retain-list cap
+
+> **Nor the prose clip, measured in Part 8.** `CapSections`' character-level truncation of
+> sections is now gone entirely, and T4 is unchanged **to the item** in both arms — the same
+> lost-fact lists, not merely the same rate. Both storage-side explanations for the retention
+> failure are therefore refuted by measurement, and what this section says about the mechanism
+> is what is left. The rates quoted below are this sweep's; see the amendment under the headline
+> for the current-tree figures.
 
 **94.9% → 50.0%.** Half the named specifics injected at the first report are gone from the
 final one, against 94.9% of 79 under the embedded-prose scheme this design replaced (Part 6).
@@ -928,6 +950,15 @@ mitigation cannot be mistaken for a fix. A real distinctiveness rule is a design
 would re-open T11 and T12 for measurement.
 
 ## The beats are the design's success
+
+> ⚠️ **This table is superseded by the beat work that landed after this sweep** (cadence 3 → 5
+> user turns, and the three beat fixes). Re-measured in Part 8's runs, identically in all four
+> arms: **42 asked / 40 generated / 40 kept**, 2 generation failures ("holds no complete sentence
+> within 512 runes", both after 5 retries), **0 discarded**, **36 of 40 marked subject-changed
+> (90.0%)**, consecutive-beat overlap mean 0.134 / max 0.268 over 26 pairs, and refinements
+> carrying **1.9** beats on average. The two conclusions below survive: nothing is discarded and
+> the comparator is nowhere near firing, and `ChangedSubject` is still degenerate at 90%. Two
+> beats are now *lost* per run, which the 3-turn cadence did not produce.
 
 | | ON | OFF |
 |---|---:|---:|
@@ -1128,8 +1159,294 @@ Confirmed instances, each verified by removing the mechanism and observing a gre
 3. **`SessionRecord.Subjects` must hold subjects, not tool names.** `Observe` reads the whole
    delta including tool lines and frequency-ranks it, and agentic sessions are overwhelmingly
    tool traffic. This is the other half of T12.
-4. **Re-run the ablation** on the de-confounded harness before quoting any anchor magnitude.
+4. ~~**Re-run the ablation** on the de-confounded harness before quoting any anchor magnitude.~~
+   **DONE in Part 8** — all four of its runs use the de-confounded harness. T4 is 58.2% (ON) vs
+   62.0% (OFF): the same direction as before, unconfounded, and a 3-fact difference on 79. ON is
+   still *anchor-always*, so the gated design remains unmeasured.
 5. **`maxSubjectTermLen`** drops every `docs/` path (longest tracked path 83 runes vs a 64-rune
    cap) — a second mechanism deleting named specifics. Raising it is not free: measured at 96,
    the create-path worst case breaches the 1,600-rune window floor. It needs budget headroom
-   the corpus probe says does not exist.
+   the corpus probe says does not exist — and Part 8 measures the real-corpus window margin at
+   **+0**, down from +20, so there is now none at all.
+
+---
+
+# Part 8 — Untruncating the reports: the clipper was doing nothing to retention
+
+`CapSections` clipped all seven prose sections of every refinement's output at rune counts and
+appended an ellipsis (synopsis 650, `done`/`current`/`why`/`next` 900, `happened` 1400,
+`structure` 1600). It is **removed** — enforcement and constants both. Moving the length
+statement into the prompt as guidance was the intended companion change; it was measured on two
+further pairs of sweeps and **reverted**, because it costs thresholds that were passing (see its
+section below).
+
+The instruction was a product judgement ("we shouldn't be truncating the reports… 2-3 sentences
+is a guide, it's stupid to just lop off words at the end"). The measurement question was
+different and specific: Part 7 left fact retention as the design's headline failure, and one
+hypothesis was that the clip contributed — the retain-list is derived from `Identifiers(prev)`,
+so a specific clipped off the end of a section was never in the retain-list and could never be
+carried forward.
+
+**Measured: it contributed nothing.** Retention is unchanged, to the item, in both arms.
+
+## The caps were vestigial, and that was traced rather than assumed
+
+`CapSections` was introduced when the previous report was embedded verbatim in the next prompt
+(`CarryForward`, deleted in Part 7's redesign), so a section's length *was* prompt length. After
+that redesign nothing embeds prior prose. Every consumer was checked:
+
+- `CapSections` has **one** production caller — `RefineFrom`, on its return value.
+- **No prompt builder reads a `Digest`'s prose.** `DigestUpdatePromptFrom` is the only prompt
+  taking a `prev Digest` and it reads it through exactly two channels, each bounded by its own
+  constants: `Identifiers(prev)` via `boundRetainList` (60 entries / 700 runes) and the
+  open-item accounting via `priorOpenItems` (`DefaultListCap` 12 × `promptOpenItemCap` 80).
+- `BeatPrompt` takes record and window strings; `beat.go`, `beat_series.go` and
+  `session_record.go` do not reference `Digest` at all. The create path takes no digest.
+- `DigestJSON`, whose doc still read *"renders a digest for embedding in a refine prompt"*, has
+  **no callers**. It was the last trace of the embedding scheme.
+
+Pinned, not argued: `TestRefinePromptIsInsensitiveToStoredProseLength` assembles the real refine
+prompt from a prior report with 7,250 runes of identifier-dense prose and again with 72,500, and
+gets the same prompt **to the rune** — 13,973 of 14,000, window content 1,788 over the
+1,600 floor, retain-list 598 of 700 (from 25,219 and 97,719 runes offered). Ten times the prose,
+zero difference, because the bound is on the channel and not on the section.
+
+## Results: every threshold, before and after, both arms
+
+Same 14 stratified sessions, this branch's own transcript first; reports at windows 4/8/12/15;
+a beat every 5 user turns; Qwen3-4B-Instruct-2507 Q4_K_M, `ctx` 8192, temperature 0, budget
+14,000 runes. The only difference between the *before* and *after* columns is the removal of
+prose clipping — same harness binary shape, same corpus, same arm definitions.
+
+| | ON before | ON after | OFF before | OFF after | want |
+|---|---:|---:|---:|---:|---:|
+| T1 usable digests | 100.0% of 56 | 100.0% of 56 | 100.0% of 56 | 100.0% of 56 | 100% |
+| T2 unverified identifiers | 0.9% of 762 | 0.9% of 762 | 2.3% of 769 | 2.3% of 770 | ≤2% |
+| T3 rubberstamped | 0.0% of 12 | 0.0% of 12 | **16.7% of 12** | **0.0% of 12** | ≤10% |
+| **T4 retention to final** | **58.2% of 79** | **58.2% of 79** | **62.0% of 79** | **62.0% of 79** | **≥90%** |
+| — identifier-shaped specifics | 47.6% of 42 | 47.6% of 42 | 50.0% of 42 | 50.0% of 42 | — |
+| — bare capitalised words | 70.3% of 37 | 70.3% of 37 | 75.7% of 37 | 75.7% of 37 | — |
+| T7 fabricated blockers | 4.5% of 44 | 4.5% of 44 | 4.5% of 44 | 4.5% of 44 | ≤10% |
+| T8 stale open items | 0.0% of 74 | 0.0% of 74 | 0.0% of 74 | 0.0% of 74 | ≤2% |
+| T9 current-is-completed | 1.8% of 56 | 1.8% of 56 | 1.8% of 56 | 1.8% of 56 | ≤5% |
+| T10 synopsis restates | 0.0% of 56 | 0.0% of 56 | 0.0% of 56 | 0.0% of 56 | ≤5% |
+| T11 synopsis lags † | 0.0% of 30 judged | 0.0% of 30 judged | 2.9% of 35 judged | **5.7% of 35 judged** | ≤10% |
+| T12 beat-vs-record † | 25.0% of 40 | 25.0% of 40 | 25.0% of 40 | 25.0% of 40 | ≤5% |
+| T13 fabricated `next` | 3.3% of 90 | 3.3% of 90 | 6.5% of 92 | 6.5% of 92 | ≤5% |
+| instruction leakage | 0 | 0 | 0 | 0 | — |
+| recovered panics | **0** | **0** | **0** | **0** | 0 |
+| retain-list: named / cap-evicted / already gone | 164 / **0** / 73 | 164 / **0** / 73 | 168 / **0** / 69 | 167 / **0** / 70 | — |
+| largest retain-list | 30 / 292 runes | 30 / 292 | 29 / 278 | 29 / 278 | 60 / 700 |
+| largest prompt | 13,929 | 13,929 | 13,992 | 13,992 | ≤14,000 |
+
+† T11 and T12 remain **not established** for the reasons Part 7 gives (`distinctiveToken` admits
+ordinary English). Their numbers move here; that does not make them measurements.
+
+**The ON arm is byte-identical apart from length.** Diffing the two ON logs line by line yields
+**10 changed lines out of 217**: three `FINAL REPORT RUNES` lines, the summary length line, and
+the wall-clock. Every beat, every flagged item, every rate is the same text. At temperature 0
+with an identical prompt the generation is identical, and the prompt is identical because it
+never contained the prose — so the clip's entire observable effect was on the stored text.
+
+**T4's lost facts are the same items, not just the same rate.** ON, both before and after:
+
+```
+s1 [CPU-based GPU Claude JSONL]      s8  [Activity]
+s2 [Downloads]                        s10 [telemetry.py KPI]
+s3 [Overview Spend Observability]     s11 [custom.go enrichments.custom.product_name.entities]
+s4 [PID signal-client-telemetry.md]   s12 [pass-test-drawer.tsx PassRow classifications-catalog-view.tsx]
+s5 [CTAs Dimension]                   s13 [Atlas Classify Integrations]
+s6 [agentcfg.Info SetSidecarPort daemon.go metrics.go]
+s14 [organizations.slug slug.py ensure_unique_slug auth.py orgs.py Acme]
+```
+
+Not one of those specifics was lost to a clip. They were dropped from the middle of a report the
+model rewrote, which is what Part 7's diagnosis already said (161 of 240 pairs named in the
+retain-list and dropped anyway; 0 cap evictions, reproduced here as 0 again in all four arms).
+
+## The one movement, and it is one session
+
+The OFF arm diverged on **session 13 only**, and the divergence starts at step 2 — so an earlier
+step's clipped output changed the next prompt (through the retain-list) and the generation
+cascaded from there. Three metrics move, all on that one session:
+
+- **T3 16.7% → 0.0% of 12.** The two flagged reports were both session 13 (steps 2 and 3), the
+  same report re-flagged twice. Verbatim, the step-2 flag that disappeared: *"The initial focus
+  was on aligning text in enrichment schema cards to the top, but the primary work shifted to
+  improving the visual hierarchy and consistency of the lead-in text. A first attempt to fix the
+  lead-in styling replaced an outdated `COLUMN_HEADER_CLA…"*. Session 13's `happened` grew from
+  754 to 1,046 runes across the change. This is **consistent with** Part 6's finding that the
+  clipper was deleting the account of difficulty, and it is **not established as that**: the
+  whole step-2 report differs, not only a clipped tail, and `LooksRubberstamped` searches every
+  prose field, so any friction word anywhere flips it. On a denominator of 12, one session's two
+  flags are 16.7 points.
+- **T11 2.9% → 5.7% of 35 judged.** One new flag, also session 13 step 3, and T11 is not a
+  measurement (see Part 7).
+- **T2 769 → 770 identifiers**, same 2.3%. One more identifier in the corpus, same flagged set.
+
+Nothing else moved anywhere: T4, T7, T8, T9, T10, T12, T13, leakage, panics and every cap
+statistic are identical in both arms.
+
+## Do the reports become unreadably long? No — 3 sections in 98
+
+The measurable risk of removing a cap is that four refinements under an *extend the picture*
+instruction grow a section without limit. Largest value each section reached in the **final**
+report of each session, in runes:
+
+| section | ON before | ON after | OFF before | OFF after | former cap |
+|---|---:|---:|---:|---:|---:|
+| synopsis | 644 | **755** | 642 | 642 | 650 |
+| done | 896 | **954** | 842 | **1,253** | 900 |
+| happened | 962 | 962 | 916 | **1,046** | 1400 |
+| structure | 840 | 840 | 932 | 932 | 1600 |
+| current | 268 | 268 | 271 | 271 | 900 |
+| why | 288 | 288 | 288 | 288 | 900 |
+| next | 361 | 361 | 407 | 407 | 900 |
+| insights (12 entries) | 2,190 | 2,190 | 2,248 | 2,248 | — (300/entry) |
+| unresolved | 479 | 479 | 500 | 500 | — (300/entry) |
+
+**3 of 98 final prose sections exceeded a former cap** (s1 synopsis 755, s3 `done` 954, s9
+synopsis 688 in the ON arm). The largest section anywhere in the four runs is `done` at 1,253
+runes — about 200 words. Nothing approaches "several thousand runes"; on this corpus the model
+does not run on when nothing stops it, and the caps were binding on a handful of sections rather
+than shaping the output.
+
+Two things this does not establish. Every measurement here is a **16-window prefix with four
+refinements** — the same coverage limit as Part 7 — so accumulation over a long session is
+unmeasured, and `structure`, the section most exposed to it, never came close to its old cap.
+And the *content* of the restored text is not scored: what is measured is that removing the clip
+changed no threshold, not that the extra 105 or 353 runes are good writing.
+
+## The prompt budget still holds
+
+The real-corpus probe (`TestRealCorpusPromptsNeverTripTheBackstop`, 200 sessions requested,
+this session's 11.4 MB transcript first, no model needed) after the change:
+
+| | before removal | after removal (**ships**) | + guidance (since reverted) |
+|---|---|---|---|
+| sessions / steps / prompts | 29 / 1,100 / 2,200 | 29 / 1,101 / 2,202 | 29 / 1,100 / 2,200 |
+| **panics** | **0** | **0** | **0** |
+| tightest refine window margin | **+0** (s1 i8) | **+0** (s1 i8) | **+0** (s12 i8) |
+| largest refine prompt | 14,000 | 14,000 | 14,000 |
+
+(Step counts differ by one between probe runs because the corpus includes this session's own
+transcript, which grows while the work is done.)
+
+The margin is **+0**, and that is not caused by any change in this part: it is +0 before the
+removal too. Part 7 reported +20 on the same probe; the corpus has since grown (1,100 steps
+against 1,087, this session's transcript now 11.4 MB), and the last 20 runes went with it. Zero
+is the exact reserve met — correct by construction, with nothing left over. **The budget cannot
+absorb another instructional paragraph** without either raising it or taking the room from
+somewhere else.
+
+## Length as prompt guidance was measured too, and it does not ship
+
+Removing the caps leaves length unstated, so the obvious companion change is to say it in the
+prompt, where a length is a guide the writer can weigh rather than a cut applied afterwards.
+That was written, measured on **both arms of two further sweeps**, and **reverted**: on this
+model it costs thresholds that were passing.
+
+Two wordings. The first put a paragraph after the section list — *"The lengths named above are
+GUIDES, not limits. Nothing cuts your answer short, so write what a section needs and then stop…
+Padding and repetition are the failure, not length"* — plus per-section sentence guides (`done`
+"A few sentences", `current`/`why` "A sentence or two", and so on). The second moved that note
+**ahead** of the list and deleted "and then stop … Padding and repetition are the failure".
+
+| | baseline (caps removed) | wording 1 | wording 2 | want |
+|---|---:|---:|---:|---:|
+| T1 usable digests | 100.0% / 100.0% | **96.4% / 96.4%** | 100.0% / 100.0% | 100% |
+| T2 unverified identifiers | 0.9% / 2.3% | 1.8% / **2.9%** | **2.2%** / 2.0% | ≤2% |
+| T3 rubberstamped | 0.0% / 0.0% | 9.1% of 11 / 9.1% of 11 | 0.0% / 0.0% | ≤10% |
+| T4 retention | 58.2% / 62.0% | 55.8% / 55.8% | 51.2% / 57.3% | ≥90% |
+| T7 fabricated blockers | 4.5% / 4.5% | 2.3% / 2.3% | 6.8% / 9.1% | ≤10% |
+| **T9 current-is-completed** | **1.8% / 1.8%** | **7.4% / 13.0%** | **10.7% / 16.1%** | **≤5%** |
+| T13 fabricated `next` | 3.3% / 6.5% | 3.6% / **5.4%** | 3.6% / 2.6% | ≤5% |
+| recovered panics | 0 / 0 | 0 / 0 | 0 / 0 | 0 |
+
+(ON / OFF. T4's denominator moves between configurations — 79, 77, 82 — because the injected
+facts are taken from the *first* report, which the prompt change alters, so T4 is rate-comparable
+across these columns but not item-comparable.)
+
+**Wording 1 lost two digests**, in both arms, deterministically: `session 7 step 2` and
+`session 13 step 0` both failed `unresolved is empty — it must be addressed explicitly` through
+all five retries. The note was the last thing read before a required list and "write what a
+section needs and then stop" is evidently readable as licence to omit. By this study's own
+standard a dropped digest is the worst outcome available, so that wording was not a candidate.
+
+**Wording 2 fixed T1 and made T9 worse.** Moving the note and deleting the offending clause
+returned T1 to 100%, and T9 went from 1 flagged report at baseline to **6 (ON) and 9 (OFF)**.
+The flags are real, not the ordinary-English artifact this study keeps hitting: six reports whose
+`current` reads *"is complete"*, *"has successfully signed"*, *"is complete. The next step is…"* —
+a finished action reported as in progress, which is precisely what T9 exists to catch. The
+plausible mechanism is the guide itself: `current`'s "A sentence or two" invites a sentence where
+the section's own instruction says the answer may be "nothing in progress". T2's extra flags in
+the same runs are the artifact class (`Extended Usage`, `Next.js`, `PostgreSQL`, `Conduct
+Refactor`), so T2 is not what the decision rests on.
+
+The decision rule was recorded before the second pair of runs finished — keep it only if T1
+returns to 100% **and** nothing that passed now fails — and it says revert. Both commits are
+reverted. Moving the note a third time would be tuning a prompt against a threshold panel until
+it passes, which is the failure mode this study has documented under a different name five times.
+
+**What that leaves.** Length is stated nowhere except the synopsis's original "Three or four
+sentences", and on this corpus that is what the measurement supports: without any cap the largest
+section is 1,253 runes, so there is nothing for guidance to fix and it is demonstrably not free
+to add. **Not established:** that no wording can work. Two were tried on one model at one budget.
+A third attempt should leave `current` alone — the section whose guide is the plausible driver of
+the only decisive regression.
+
+**A cost worth recording even though it is reverted.** `digestSections` sits inside both
+instructional tails, so the guidance was 401 runes of prompt budget (301 after narrowing) and the
+worst-case refine window margin fell from +188 to +4. It also **decalibrated a calibrated test**
+twice — the fourth and fifth instances of this branch's signature defect, and the first caused by
+a change made in the same commit as its own recalibration. `TestWindowKeepsItsFloorAtTheBoundary`
+passed with the bug it guards reverted (window 1,613 both ways), and the `itemLen` scan had to be
+re-run for each wording (9 → 12 → 21, divergence band 12-21 → 21-29).
+`TestFloorIsReachableAtRealisticInputScale`'s revert changed *shape* twice as well. **Any change
+to prompt text decalibrates these tests, and nothing detects it automatically.**
+
+That last point produced one more finding, independent of this task's changes: the same test's
+docstring was **already** stale before any of this. Its figures (reverted 1,589 / fixed 1,788)
+were measured in task-7b round 4 and invalidated by the beat work raising `BeatCap` 200 → 512 —
+the test's entire pressure is `MaxBeatSelection × BeatCap`. Re-scanned in the shipping state:
+fixed never breaches (smallest window 1,604; 2,033 at `itemLen` 9), reverted breaches at 1-10 and
+46-54 (1,501 at 9). It kept *detecting* the defect the whole time, which is why nothing caught the
+drift: **a docstring can go stale while its assertion stays live**, and that is the softer half of
+the signature defect rather than a separate one. Corrected, with the band rather than the point
+documented.
+
+## What this eliminates, and what it does not
+
+**Eliminated as a cause of the T4 failure: character-level truncation of prose.** It was not
+deleting the specifics that go missing, and removing it moves retention by zero in both arms.
+Combined with Part 7's 0 cap evictions across all 240 pairs, both *storage-side* explanations
+for the retention failure are now refuted by measurement. What remains is what Part 7 named: the
+model drops specifics it was explicitly handed, and the retain-list's derivation from the last
+report alone makes each drop permanent.
+
+**Not established here**
+
+- **That length guidance in the prompt can be made safe.** Two wordings measured, both regress
+  a passing threshold; reverted. A third attempt should leave `current` alone.
+- **That the removal improves the report.** It restores text a reader was losing (3 sections in
+  98, plus whatever was clipped at intermediate steps, which this run does not count) and
+  removes a defect that was visible only on reading — an ellipsis mid-clause. Neither is scored
+  by any threshold in this study.
+- **Accumulation over a long session.** 16-window prefix, four refinements, `structure` never
+  near its old cap.
+- **The T3 improvement.** One session, two flags, denominator 12, OFF arm only; mechanism
+  consistent with Part 6 but not isolated.
+- **Anything about the anchor.** The ON/OFF ablation is de-confounded in the harness now
+  (Part 7's must-fix 3) and these four runs are the first to use it, but `SubjectShifted` still
+  fires on nearly every refinement, so ON remains *anchor-always*. The ON/OFF gap in T4 here is
+  58.2% vs 62.0% — the same direction as Part 7's, now unconfounded, and still a 3-fact
+  difference on a denominator of 79.
+
+**A correction to Part 7's figures, for the same code path.** Part 7 reports T4 at 50.0% (ON) /
+56.2% (OFF) of 80. Re-measured *with the clipping still in place* on the current tree, it is
+**58.2% / 62.0% of 79** — the *before* column above. Nothing about the caps explains that gap:
+between Part 7's sweep and this one the beat work landed (cadence 3 → 5 user turns,
+`ChangedSubject` grounded in the prompting turn, the progress and forbidden-opener rules), which
+changes what every refinement reads. Part 7's numbers stand for the code they were taken on;
+these are the current ones, and the ≥90% threshold fails either way. The retention *failure* is
+unchanged; its magnitude is 4-6 points less bad than published.

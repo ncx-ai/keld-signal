@@ -788,11 +788,23 @@ func mergeWithRetirement(prev, next Digest, retired []string) Digest {
 // that: prose an order of magnitude past the old caps moves neither the budget nor the window
 // floor.
 //
-// PRODUCT: length guidance belongs in the prompt, where it is guidance. "Three or four
-// sentences" is advice a writer can follow; cutting the last words off a finished paragraph
-// after the fact is not the same instruction, it is damage — and clipProse's own doc records
-// what it cost, a real digest reading "...saved as `worktree-cleanup-blocke". The guidance now
-// lives in digestSections, per section, in sentences.
+// PRODUCT: cutting the last words off a finished paragraph is not a length instruction, it is
+// damage — clipProse's own doc records what it cost, a real digest reading "...saved as
+// `worktree-cleanup-blocke". Length guidance belongs in the prompt instead, where a writer can
+// weigh it.
+//
+// ⚠️ But putting it there was MEASURED AND REVERTED, so digestSections says nothing about length
+// beyond the synopsis's original "Three or four sentences". Two wordings were run over both arms
+// of the full sweep. The first (a note after the section list, plus per-section sentence guides)
+// LOST TWO DIGESTS in each arm to "unresolved is empty" through all 5 retries — the note was the
+// last thing read before a required list. Moving it ahead of the list fixed that and made T9
+// (current-describes-completion) worse instead: 1 flagged report at baseline against 6 (anchor
+// ON) and 9 (OFF), real items reading "is complete" in `current`, plausibly because that
+// section's guide competes with its own "nothing in progress" instruction. Nothing about a
+// section's LENGTH needed fixing either: without any cap the largest section measured is 1,253
+// runes. See Part 8 of
+// docs/superpowers/plans/2026-08-07-conversational-dimensions-findings.md before adding length
+// wording here again — and leave `current` out of it.
 //
 // What the caps' own measurements do and do not establish. Lowering them was tried and rejected:
 // 500/900 cut visible truncation from 5/20 to 2/20 but dropped fact retention 100% -> 83.3%.
