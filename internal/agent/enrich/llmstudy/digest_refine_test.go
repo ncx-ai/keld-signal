@@ -42,57 +42,64 @@ func TestMergeInsightsKeepsNewProse(t *testing.T) {
 	}
 }
 
-// Unbounded growth would eventually blow the context the refine loop exists to bound.
-func TestCapSectionsBoundsProseAndLists(t *testing.T) {
-	long := strings.Repeat("word ", 800)
+// CapSections bounds the lists and LEAVES PROSE ALONE. Both halves are asserted in one test
+// because the removal is only safe if the list bounds survived it: DefaultListCap is applied to
+// what a prompt is shown (priorOpenItems), so dropping it would move prompt size, while prose
+// reaches no prompt at all.
+//
+// The prose half fails against the previous implementation, which is the point of writing it.
+// Verified by restoring the seven clipProse calls with their literal former caps and re-running:
+// all SEVEN sections fail, each on both assertions, at exactly the caps that used to apply —
+// synopsis 645 of 4,000, done/current/why/next 895, happened 1,395, structure 1,595, every one
+// of them ending "…". (645 not 650, and 895 not 900, because clipProse reserves a rune for the
+// marker and then backs up to a word boundary — the truncation is not even at the number the
+// cap names.)
+func TestCapSectionsBoundsListsAndLeavesProseAlone(t *testing.T) {
+	long := strings.Repeat("word ", 800) // 4,000 runes, past every cap that used to apply
 	d := Digest{
-		Done: long, Happened: long, Structure: long, Current: long, Why: long, Next: long,
+		Synopsis: long, Done: long, Happened: long, Structure: long, Current: long,
+		Why: long, Next: long,
 		Insights: make([]string, 40), Unresolved: make([]string, 40),
 	}
 	for i := range d.Insights {
 		d.Insights[i] = "insight"
 		d.Unresolved[i] = "open item"
 	}
-	got := CapSections(d, 400, 12)
-	// structure and happened are excluded deliberately: both are cumulative and carry
-	// their own larger budgets. See TestStructureGetsALargerBudget and
-	// TestHappenedGetsARoomierBudgetThanPresentStateSections.
+	got := CapSections(d, 12)
 	for name, v := range map[string]string{
-		"done": got.Done, "current": got.Current, "why": got.Why, "next": got.Next,
+		"synopsis": got.Synopsis, "done": got.Done, "happened": got.Happened,
+		"structure": got.Structure, "current": got.Current, "why": got.Why, "next": got.Next,
 	} {
-		if len([]rune(v)) > 400 {
-			t.Errorf("%s not capped: %d runes", name, len([]rune(v)))
+		if v != long {
+			t.Errorf("%s was altered: %d runes of %d, ends %q — prose must be passed through "+
+				"untouched", name, len([]rune(v)), len([]rune(long)), lastRunes(v, 24))
 		}
-	}
-	if len([]rune(got.Happened)) > DefaultHappenedCap {
-		t.Errorf("happened exceeds its own cap: %d runes", len([]rune(got.Happened)))
+		// Stated separately from the equality above so a failure says WHICH defect it is: a
+		// truncation mark is the visible half of the one being removed.
+		if strings.HasSuffix(strings.TrimSpace(v), "…") {
+			t.Errorf("%s was truncated and marked: %q", name, lastRunes(v, 40))
+		}
 	}
 	if len(got.Insights) != 12 || len(got.Unresolved) != 12 {
 		t.Errorf("lists not capped: insights=%d unresolved=%d", len(got.Insights), len(got.Unresolved))
 	}
 }
 
-// Structure is cumulative, so truncating it at the same budget as the others would
-// lose the earliest parts of the picture — exactly what a newcomer needs.
-func TestStructureGetsALargerBudget(t *testing.T) {
-	if DefaultStructureCap <= DefaultProseCap {
-		t.Fatalf("structure cap %d must exceed the prose cap %d", DefaultStructureCap, DefaultProseCap)
+// lastRunes is the tail of a string for a failure message, in runes so a multi-byte section
+// cannot be cut mid-character by the error report itself.
+func lastRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
 	}
-	long := strings.Repeat("word ", 800)
-	got := CapSections(Digest{Structure: long, Done: long}, 400, 12)
-	if len([]rune(got.Structure)) <= 400 {
-		t.Errorf("structure was capped at the prose budget: %d runes", len([]rune(got.Structure)))
-	}
-	if len([]rune(got.Structure)) > DefaultStructureCap {
-		t.Errorf("structure exceeds its own cap: %d runes", len([]rune(got.Structure)))
-	}
+	return string(r[len(r)-n:])
 }
 
 // Capping keeps the most recent entries; older ones have already survived several
 // refinements.
 func TestCapSectionsDropsOldestInsights(t *testing.T) {
 	d := Digest{Insights: []string{"first", "second", "third"}}
-	got := CapSections(d, 100, 2)
+	got := CapSections(d, 2)
 	if len(got.Insights) != 2 || got.Insights[0] != "second" {
 		t.Fatalf("want the two most recent, got %v", got.Insights)
 	}
@@ -126,7 +133,7 @@ func TestCapSectionsBoundsListEntryLength(t *testing.T) {
 	for i := 0; i < DefaultListCap; i++ {
 		prev.Unresolved = append(prev.Unresolved, strings.Repeat("x", 2000))
 	}
-	capped := CapSections(prev, DefaultProseCap, DefaultListCap)
+	capped := CapSections(prev, DefaultListCap)
 	for i, item := range capped.Unresolved {
 		if n := len([]rune(item)); n > DefaultListEntryCap {
 			t.Errorf("unresolved[%d] not capped: %d runes (cap %d)", i, n, DefaultListEntryCap)
@@ -449,10 +456,14 @@ func packIdentifiers(next *int, n int) string {
 //     the first prev out of CreateDigestWithView is unbounded — priorOpenItems is what holds
 //     the count), the retain-list at retainListMaxCount/retainListMaxTotal, beats at
 //     MaxBeatSelection x BeatCap, the view over SessionViewCap, the label at
-//     sessionLabelCap, turning points at MaxRecordTurningPoints, prose at each section's own
-//     cap. Where a dimension has NO enforced bound it is named as such at its construction
-//     site (SessionRecord.Projects' per-entry length; DigestFacts' Topics/Entities counts) —
-//     see the closing note below on what that means for "worst case".
+//     sessionLabelCap, turning points at MaxRecordTurningPoints. Where a dimension has NO
+//     enforced bound it is named as such at its construction site (SessionRecord.Projects'
+//     per-entry length; DigestFacts' Topics/Entities counts) — see the closing note below on
+//     what that means for "worst case". PROSE IS NOW ONE OF THOSE: CapSections clips none of
+//     it, so densePrev's sections are a measured stored size (storedProseRunes and friends,
+//     the former caps) rather than a bound. Prose is not a free variable for THIS prompt,
+//     which is the point of TestRefinePromptIsInsensitiveToStoredProseLength: at ten times
+//     these sizes the total, the window and the retain-list are identical to the rune.
 //   - Identifiers are GLOBALLY DISTINCT, from one shared counter, so Identifiers' exact-string
 //     dedup cannot understate the retain-list the way a per-field counter did (68 runes
 //     measured across a whole Digest, against 1,126 once the names are distinct).
@@ -566,20 +577,32 @@ func logContributors(t *testing.T, p string, prev Digest, in RefineInput, window
 		strings.Contains(p, beatsHeader), strings.Contains(p, viewHeader))
 }
 
-// densePrev builds a prior report with every prose section at its own cap, DefaultListCap
+// densePrev builds a prior report with every prose section at the stored size these
+// budget tests are calibrated to (storedProseRunes and friends — formerly the enforced prose
+// caps, now just sizes; see their doc), DefaultListCap
 // insights, and `unresolved` open items — every rune of it a GLOBALLY DISTINCT
 // identifier-shaped token, from one shared counter, so Identifiers' dedup cannot understate
 // what the retain-list would carry.
-func densePrev(unresolved int) Digest {
+func densePrev(unresolved int) Digest { return densePrevScaled(unresolved, 1) }
+
+// densePrevScaled is densePrev with every prose section multiplied by `scale`.
+//
+// It exists because prose length is now unbounded: nothing in the code stops a stored section
+// from being ten times the size the old caps allowed, so a budget claim that only ever tries
+// the old sizes is asserting a bound over inputs the code no longer restricts — the exact
+// defect ("a test certifies a bound the code does not enforce") this branch hit five times.
+// scale 1 keeps every calibrated figure where it was measured; the larger scale is used by
+// TestRefinePromptIsInsensitiveToStoredProseLength.
+func densePrevScaled(unresolved, scale int) Digest {
 	var id int
 	prev := Digest{
-		Synopsis:  packIdentifiers(&id, DefaultSynopsisCap),
-		Done:      packIdentifiers(&id, DefaultProseCap),
-		Happened:  packIdentifiers(&id, DefaultHappenedCap),
-		Structure: packIdentifiers(&id, DefaultStructureCap),
-		Current:   packIdentifiers(&id, DefaultProseCap),
-		Why:       packIdentifiers(&id, DefaultProseCap),
-		Next:      packIdentifiers(&id, DefaultProseCap),
+		Synopsis:  packIdentifiers(&id, storedSynopsisRunes*scale),
+		Done:      packIdentifiers(&id, storedProseRunes*scale),
+		Happened:  packIdentifiers(&id, storedHappenedRunes*scale),
+		Structure: packIdentifiers(&id, storedStructureRunes*scale),
+		Current:   packIdentifiers(&id, storedProseRunes*scale),
+		Why:       packIdentifiers(&id, storedProseRunes*scale),
+		Next:      packIdentifiers(&id, storedProseRunes*scale),
 	}
 	for i := 0; i < DefaultListCap; i++ {
 		prev.Insights = append(prev.Insights, packIdentifiers(&id, DefaultListEntryCap))

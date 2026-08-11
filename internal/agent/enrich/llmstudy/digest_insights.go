@@ -5,18 +5,25 @@ import (
 	"strings"
 )
 
-// clipProse bounds a prose section without breaking a word.
+// clipProse bounds a run of text without breaking a word.
+//
+// NOT used on a report's prose sections any more: CapSections clips no prose (see its doc).
+// The live callers are all bounded-channel renderings — one beat (ClipBeat), a list entry
+// (capEntryLength), an open item as embedded in a prompt (priorOpenItems), the session label,
+// the whole-session view — where something must fit a budget that is not negotiable.
 //
 // The plain rune clip it replaces produced "...saved as `worktree-cleanup-blocke" in a
 // real digest. That is structurally valid JSON, so every automated threshold passed it,
-// and it was only visible on reading the report — which is the audience that matters.
+// and it was only visible on reading the report — which is the audience that matters. It is
+// also the reason prose clipping was removed rather than tuned: a word boundary makes the cut
+// less ugly, it does not make cutting a finished paragraph the right thing to do.
 //
 // A word boundary is the fix — the defect was a broken WORD, not a broken sentence — and
 // a sentence end is preferred only when it costs almost nothing. An earlier version
 // accepted any sentence end past two thirds of the budget, which could discard a third of
 // a section, and that measurably deleted evidence: rubberstamp detection went from 0% to
-// 11.1% because `happened` sits right at its cap in this corpus, so the sentence
-// describing a reversal was often what got trimmed. Losing content is worse than an
+// 11.1% because `happened` sat right at its (since-removed) cap in this corpus, so the
+// sentence describing a reversal was often what got trimmed. Losing content is worse than an
 // ellipsis mid-sentence.
 //
 // The ellipsis is not decoration: without it a clipped section is indistinguishable from
@@ -25,10 +32,12 @@ func clipProse(s string, n int) string {
 	if n <= 0 {
 		return s
 	}
-	// Clipping must be idempotent. `done` and `happened` are carried into the next
-	// refinement, the model copies them including the ellipsis, and a second clip then
-	// appended another — real digests showed "increasing from……". Strip any prior marker
-	// before measuring so re-clipping cannot accumulate.
+	// Clipping must be idempotent. The case that produced "increasing from……" in a real
+	// digest was `done`/`happened` being carried into the next refinement with the ellipsis
+	// copied, then clipped again — that path is gone with prose clipping, but the property is
+	// still load-bearing: an INSIGHT is carried forward verbatim by MergeInsights and re-clipped
+	// by capEntryLength on every refinement, which is the same accumulation over more steps.
+	// Strip any prior marker before measuring so re-clipping cannot accumulate.
 	s = strings.TrimRight(s, " \t\n")
 	marked := false
 	for strings.HasSuffix(s, "…") {

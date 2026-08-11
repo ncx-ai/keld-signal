@@ -298,22 +298,12 @@ func TestClipDoesNotAccumulateEllipses(t *testing.T) {
 	}
 }
 
-// Happened is cumulative AND carries the record of difficulty, so it must not be capped
-// as tightly as the present-state sections — clipping keeps the oldest text, so a tight
-// cap silently deletes the most recent reversal.
-func TestHappenedGetsARoomierBudgetThanPresentStateSections(t *testing.T) {
-	if DefaultHappenedCap <= DefaultProseCap {
-		t.Fatalf("happened cap %d must exceed the prose cap %d", DefaultHappenedCap, DefaultProseCap)
-	}
-	long := strings.Repeat("word ", 700)
-	got := CapSections(Digest{Happened: long, Current: long}, DefaultProseCap, DefaultListCap)
-	if len([]rune(got.Happened)) <= DefaultProseCap {
-		t.Errorf("happened was capped at the prose budget: %d runes", len([]rune(got.Happened)))
-	}
-	if len([]rune(got.Current)) > DefaultProseCap {
-		t.Errorf("current exceeded the prose budget: %d runes", len([]rune(got.Current)))
-	}
-}
+// TestHappenedGetsARoomierBudgetThanPresentStateSections is DELETED, not adapted. It asserted
+// one thing only — that `happened`'s prose cap exceeded the shared prose cap — and neither cap
+// exists: CapSections clips no prose. Its reasoning is preserved where it is still true, in
+// clipProse's doc: clipping keeps the OLDEST text, so a cap on a cumulative section silently
+// deletes the most recent reversal, which is a rubberstamped report produced by a cap rather
+// than by the model. That is now an argument for having removed the caps, not for sizing them.
 
 // A carried section can hold a marker MID-text from an earlier clip. When the new clip
 // lands just after it the two become adjacent — a real digest read "increasing from……".

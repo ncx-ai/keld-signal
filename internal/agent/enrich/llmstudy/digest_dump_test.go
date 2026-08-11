@@ -217,7 +217,11 @@ func TestDigestDump(t *testing.T) {
 		"sections": digestSections,
 		"rules":    digestRules,
 		"model":    "Qwen3-4B-Instruct-2507 Q4_K_M",
-		"caps":     map[string]int{"prose": DefaultProseCap, "structure": DefaultStructureCap, "happened": DefaultHappenedCap, "list": DefaultListCap, "promptChars": DefaultPromptCharBudget},
+		// Only the caps that exist. The four prose caps this map used to publish were removed
+		// with prose clipping (see CapSections); listing them would tell a reader of the dump
+		// that a section length is enforced when nothing enforces it.
+		"caps": map[string]int{"list": DefaultListCap, "listEntry": DefaultListEntryCap,
+			"promptOpenItem": promptOpenItemCap, "promptChars": DefaultPromptCharBudget},
 	}, "", "  ")
 	if err := os.WriteFile(out, blob, 0o600); err != nil {
 		t.Fatal(err)

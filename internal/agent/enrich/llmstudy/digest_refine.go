@@ -4,48 +4,25 @@ import (
 	"strings"
 )
 
-// Default caps. Prose is per-section runes; lists are entry counts.
+// The report's caps are LIST caps, and only list caps: how many insights and open items a
+// report carries (DefaultListCap) and how long one entry may be (DefaultListEntryCap).
 //
-// Structure gets a larger budget than the other prose sections because it is
-// cumulative — it describes everything built so far, and truncating it loses the
-// earliest parts of the picture, which are exactly the parts a newcomer needs.
-// These are report-quality limits, NOT context limits. Lowering them to buy prompt
-// room was measured and rejected: 500/900 cut truncation from 5/20 to 2/20 but dropped
-// fact retention from 100% to 83.3%.
+// There is no prose cap. Seven per-section rune caps used to live here — synopsis 650,
+// done/current/why/next 900, happened 1400, structure 1600 — and CapSections clipped every
+// refinement's output to them. They are removed, both the enforcement and the constants; see
+// CapSections for why, for what the measurements taken under them do and do not establish,
+// and for where length guidance lives now (the prompt, as guidance).
 //
-// ⚠️ The MECHANISM that figure used to be attributed to here is REFUTED, and the
-// attribution is withdrawn. This doc used to say the drop happened "because a shorter cap
-// clips exactly the named specifics the retain-list is there to preserve" — which is
-// verbatim the hypothesis the task-8 sweep tested and refuted. Measured over 240
-// (refinement x fact) pairs, in both arms: NEITHER retain-list cap ever bound (largest list
-// observed 24 of 60 entries / 280 of 700 runes), and 161 of 240 named specifics were carried
-// in the retain-list and dropped by the model anyway. Retention itself measured 50.0%
-// (anchor on) / 56.2% (off) against a >=90% threshold. So a cap is not what deletes named
-// specifics — the model dropping them under an explicit instruction not to is, and the
-// retain-list's re-derivation from the LAST report is what makes each drop permanent (see
-// boundRetainList and docs/superpowers/plans/2026-08-07-conversational-dimensions-findings.md
-// Part 7). The 100%->83.3% number stands as a MEASUREMENT, taken under the superseded
-// embedded-prose scheme (CarryForward + the no-shrink rule), and is not comparable to the
-// figures above; what remains true without any mechanism claim is that these caps govern
-// report quality and lowering them bought nothing measurable.
-//
-// The room came from the CONTEXT instead — the study runs at ctx 8192 (3,161 MB measured,
-// inside the ~3 GB target's tolerance) with the prompt budget at 14,000; see
-// DefaultPromptCharBudget, which supersedes the earlier note here that read the 3 GB figure
-// as a hard ceiling and rejected 8192 for it.
-//
-// Prompt room no longer comes from embedding a shrunk copy of the prior report
-// (CarryForward, since deleted): the refinement prompt now carries no prior prose at
-// all — a beat series (the paraphrase) plus Identifiers' retain-list (the deterministic
-// anchor) stand in for it, at a fraction of the character cost. See DigestUpdatePromptFrom.
-// That substitution is MEASURED NOT TO WORK as built: retention fell 94.9% (embedded prose,
-// no-shrink rule) -> 50.0%. The branch ships as a negative result, not as a fix.
+// The two survive for different reasons, and only one of them is a prompt bound.
+// DefaultListCap is: priorOpenItems applies it directly to what a refinement is shown, so it
+// bounds the prompt's open-item accounting whether or not this function ever ran on that prev.
+// DefaultListEntryCap is NOT — promptOpenItemCap intercepts every item at 80 runes regardless
+// of its stored length, and the prompt is measured insensitive to this value (see its own doc).
+// It stays as a REPORT-QUALITY bound on a single entry: a list entry is one sentence or two by
+// construction, so a 2,000-rune "entry" is a section in the wrong field, which is a different
+// thing from a prose section being long.
 const (
-	DefaultProseCap     = 900
-	DefaultStructureCap = 1600
-	DefaultHappenedCap  = 1400
-	DefaultSynopsisCap  = 650
-	DefaultListCap      = 12
+	DefaultListCap = 12
 	// DefaultListEntryCap bounds a single insights/unresolved ENTRY's length, separately
 	// from DefaultListCap's bound on entry COUNT. Neither DigestSchema (which only floors
 	// prose length, via digestMinProse — there is no ceiling) nor CapSections bounded this
@@ -123,8 +100,11 @@ type RefineInput struct {
 // dropped just because the new part is silent on it — it is carried forward unless
 // contradicted (see updateRules). Silent contradiction: revise in place and say what
 // changed. Drift: insights are merged in CODE, not re-prosed by the model, so it never
-// gets the chance to reword an old one. The fourth, unbounded growth, is handled by
-// CapSections.
+// gets the chance to reword an old one. The fourth, unbounded growth, is handled for the
+// LISTS by CapSections; prose growth is no longer bounded at all — it was, by a rune cap per
+// section, when the previous report's prose was embedded here and its length was this prompt's
+// length. Nothing embeds it now, so length is a question about the report's reader rather than
+// about this prompt, and it is asked in the prompt as guidance. See CapSections.
 //
 // No prior prose is embedded. The previous report reaches the model as a paraphrase
 // ladder (the beat series) plus a deterministic retain-list (Identifiers) and open-item
@@ -180,7 +160,10 @@ func updatePromptAndWindow(prev Digest, in RefineInput) (prompt, window string) 
 	// RECOMPRESSING on refinement (a section shrinking from 860 to 306 runes took two
 	// named specifics with it), and prose instructions to "keep what the report says"
 	// did not stop it. Naming the specifics deterministically is the same anchoring
-	// that made the counts authoritative.
+	// that made the counts authoritative. (Those caps no longer exist — CapSections
+	// clips no prose. The measurement is quoted for what it always said: the losses
+	// were not happening at a cap, so removing the caps was never going to be the fix,
+	// and Part 8 of the findings doc measures exactly that.)
 	//
 	// ⚠️ MEASURED INSUFFICIENT ON ITS OWN. That reasoning held while the retain-list
 	// REINFORCED embedded prior prose. As the ONLY channel carrying the prior report's
@@ -432,12 +415,12 @@ func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionVi
 //
 // Lowering DefaultListEntryCap instead was rejected (per the fix-round instruction this
 // responds to): that constant governs what a human reads in the stored report, and
-// shrinking it to buy prompt room is the exact trade DefaultListEntryCap's own doc
-// already rejected once (500/900 prose caps measured fact retention 100%->83.3% under the
-// then-current embedded-prose scheme — a measurement, but NOT evidence that caps are what
-// delete named specifics; task-8 refuted that mechanism outright, see
-// DefaultListEntryCap's doc). The report-quality argument stands on its own: the report
-// keeps its richer items; only the prompt's rendering of them is bounded.
+// shrinking it to buy prompt room is the exact trade the prose caps were shrunk on once
+// (500/900 measured fact retention 100%->83.3% under the then-current embedded-prose
+// scheme — a measurement, but NOT evidence that caps are what delete named specifics;
+// task-8 refuted that mechanism outright, and the prose caps are now gone entirely — see
+// CapSections). The report-quality argument stands on its own: the report keeps its richer
+// items; only the prompt's rendering of them is bounded.
 //
 // 80 is still generous against this package's own real item lengths (20-60 runes, per
 // DefaultListEntryCap's doc) — real items are essentially never truncated — while
@@ -695,7 +678,7 @@ func (l *Llama) RefineFrom(prev Digest, in RefineInput) (Digest, error) {
 		return Digest{}, err
 	}
 	merged := mergeWithRetirement(prev, repair(up.Digest), up.Retired)
-	return CapSections(merged, DefaultProseCap, DefaultListCap), nil
+	return CapSections(merged, DefaultListCap), nil
 }
 
 // RefineDigest, RefineDigestWithView and RefineDigestWithReason are the pre-beat entry
@@ -785,24 +768,47 @@ func mergeWithRetirement(prev, next Digest, retired []string) Digest {
 	return out
 }
 
-// CapSections bounds prose length and list size so a long session cannot grow the
-// digest past the context the refine loop exists to keep bounded.
-func CapSections(d Digest, maxProse, maxList int) Digest {
-	// Synopsis is capped tighter than the rest on purpose: it is the one section a reader is
-	// guaranteed to read, and three or four sentences is the whole point of it.
-	d.Synopsis = clipProse(d.Synopsis, DefaultSynopsisCap)
-	d.Done = clipProse(d.Done, maxProse)
-	// Happened gets its own larger budget because it is cumulative AND it is where
-	// difficulty belongs. At the shared 900 it sat at its cap in real sessions, and since
-	// clipping keeps the OLDEST text, the material lost was the most recent — which is
-	// where a reversal appears. A marketing session's positioning reversal vanished
-	// exactly this way while the opening survived, and that is a rubberstamped report
-	// produced by a cap rather than by the model.
-	d.Happened = clipProse(d.Happened, DefaultHappenedCap)
-	d.Structure = clipProse(d.Structure, DefaultStructureCap)
-	d.Current = clipProse(d.Current, maxProse)
-	d.Why = clipProse(d.Why, maxProse)
-	d.Next = clipProse(d.Next, maxProse)
+// CapSections bounds the report's LISTS — how many insights and open items it carries, and how
+// long a single entry may be. It does not touch prose.
+//
+// It used to clip all seven prose sections at rune counts and append an ellipsis. That is
+// removed, for two reasons — one structural, one about the product.
+//
+// STRUCTURAL: the caps existed to bound the digest's length because the digest's length WAS
+// prompt length. The previous report was embedded verbatim in the next prompt (CarryForward,
+// since deleted), so every rune a section kept was a rune the next refinement paid for. Nothing
+// embeds prior prose any more: a refinement reads the measured record, a beat series, the
+// retain-list and the recent window (see DigestUpdatePromptFrom). Traced rather than assumed —
+// this function has exactly ONE production caller, RefineFrom, applied to its return value, and
+// no prompt builder in this package reads a Digest's prose at all. The only two channels by
+// which a stored report still reaches a prompt are bounded independently, by their own
+// constants: Identifiers(prev) by retainListMaxCount/retainListMaxTotal (boundRetainList) and
+// the open-item accounting by DefaultListCap + promptOpenItemCap (priorOpenItems). So prose
+// clipping bought no prompt room, and TestRefinePromptIsInsensitiveToStoredProseLength pins
+// that: prose an order of magnitude past the old caps moves neither the budget nor the window
+// floor.
+//
+// PRODUCT: length guidance belongs in the prompt, where it is guidance. "Three or four
+// sentences" is advice a writer can follow; cutting the last words off a finished paragraph
+// after the fact is not the same instruction, it is damage — and clipProse's own doc records
+// what it cost, a real digest reading "...saved as `worktree-cleanup-blocke". The guidance now
+// lives in digestSections, per section, in sentences.
+//
+// What the caps' own measurements do and do not establish. Lowering them was tried and rejected:
+// 500/900 cut visible truncation from 5/20 to 2/20 but dropped fact retention 100% -> 83.3%.
+// That is a real measurement of a scheme that no longer exists (embedded prose + the no-shrink
+// rule), and the MECHANISM it was attributed to here — "a shorter cap clips exactly the named
+// specifics the retain-list preserves" — is the hypothesis task-8 refuted: 161 of 240 specifics
+// were named in the retain-list and dropped anyway, and neither retain-list cap ever bound.
+// Removing the caps entirely is the other end of that same experiment, and its effect on
+// retention is measured, not argued — see Part 8 of
+// docs/superpowers/plans/2026-08-07-conversational-dimensions-findings.md.
+//
+// Unbounded prose is a real cost, and it is a cost to the READER, not to the context: nothing
+// stops four refinements under an EXTEND instruction from growing structure or happened
+// without limit. That is measured per section by the sweep (REPORT LENGTH in
+// TestDigestRefineQuality) rather than prevented here.
+func CapSections(d Digest, maxList int) Digest {
 	// Count first, then length: tailN already keeps only the most recent maxList entries,
 	// so capEntryLength only has to clip the entries that actually survive into the digest.
 	d.Insights = capEntryLength(tailN(d.Insights, maxList), DefaultListEntryCap)

@@ -281,8 +281,12 @@ func fileSize(p string) int64 {
 // The point is that every rune the prompt pays for is real: the retain-list comes from
 // Identifiers over real prose (so real identifier shapes and real density), the open items
 // are real sentences, and the multi-byte characters are the ones the corpus actually
-// contains. Sections are filled to their caps from the windows already consumed, which is
-// what a steady-state prev looks like after CapSections has run on it.
+// contains. Sections are filled from the windows already consumed, to the stored sizes these
+// budget probes are calibrated to (storedProseRunes and friends — the former prose caps, now
+// only sizes, since CapSections clips no prose). Those sizes are no longer an upper bound on a
+// real report, so this construction is not a worst case over report LENGTH — it does not need
+// to be: prose reaches a prompt only through Identifiers, which boundRetainList bounds, and
+// TestRefinePromptIsInsensitiveToStoredProseLength pins that at ten times these sizes.
 func corpusPrev(ws []Window, idx int) Digest {
 	var seen strings.Builder
 	for i := 0; i <= idx && i < len(ws); i++ {
@@ -294,13 +298,13 @@ func corpusPrev(ws []Window, idx int) Digest {
 		return Digest{}
 	}
 	d := Digest{
-		Synopsis:  clipProse(prose, DefaultSynopsisCap),
-		Done:      clipProse(prose, DefaultProseCap),
-		Happened:  clipProse(prose, DefaultHappenedCap),
-		Structure: clipProse(prose, DefaultStructureCap),
-		Current:   clipProse(prose, DefaultProseCap),
-		Why:       clipProse(prose, DefaultProseCap),
-		Next:      clipProse(prose, DefaultProseCap),
+		Synopsis:  clipProse(prose, storedSynopsisRunes),
+		Done:      clipProse(prose, storedProseRunes),
+		Happened:  clipProse(prose, storedHappenedRunes),
+		Structure: clipProse(prose, storedStructureRunes),
+		Current:   clipProse(prose, storedProseRunes),
+		Why:       clipProse(prose, storedProseRunes),
+		Next:      clipProse(prose, storedProseRunes),
 	}
 	// Real sentences as list entries, at the count and per-entry length the stored report
 	// is actually capped to.

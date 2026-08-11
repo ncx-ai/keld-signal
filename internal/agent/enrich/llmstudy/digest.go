@@ -35,7 +35,10 @@ type Digest struct {
 	//
 	// It is the section most exposed to both growth and drift, because unlike
 	// insights it must be REVISED as understanding changes rather than only appended
-	// to. Hence a larger prose cap and an explicit extend-and-revise instruction.
+	// to. Hence the explicit extend-and-revise instruction. It carried the largest
+	// prose cap too (1,600 runes) until prose clipping was removed — so it is now the
+	// section most able to grow without limit, which is why the sweep measures its
+	// length per session rather than capping it. See CapSections.
 	Structure  string   `json:"structure"`
 	Insights   []string `json:"insights"`
 	Current    string   `json:"current"`
@@ -263,7 +266,14 @@ func (l *Llama) CreateDigestWithView(sessionLabel, turns, sessionView, facts str
 	return d, nil
 }
 
-// DigestJSON renders a digest for embedding in a refine prompt.
+// DigestJSON renders a digest as JSON.
+//
+// It has NO callers. Its name and its former doc ("for embedding in a refine prompt") are the
+// last trace of the scheme where a refinement was shown the previous report verbatim; nothing
+// embeds a digest in a prompt now (see DigestUpdatePromptFrom), and no prompt builder in this
+// package reads a Digest's prose at all — which is what makes prose length a question about
+// the report's reader rather than about the context. Kept as a debugging/dump convenience,
+// with the claim corrected rather than left to mislead the next reader of it.
 func DigestJSON(d Digest) string {
 	b, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {

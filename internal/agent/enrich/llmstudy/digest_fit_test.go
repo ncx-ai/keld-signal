@@ -6,6 +6,26 @@ import (
 	"testing"
 )
 
+// Stored section sizes these prompt-budget tests build a prior report out of.
+//
+// They were the ENFORCED prose caps (DefaultProseCap and friends) until CapSections stopped
+// clipping prose, which is what made "a section at its cap" the largest a stored report could
+// be, by construction. Nothing bounds prose now, so these bound nothing: they are kept at the
+// old cap values purely so every rune-exact margin these tests were calibrated to stays
+// calibrated — recalibrating a dozen measured figures at the same time as removing the caps
+// would make it impossible to tell which change moved what, and this package has decalibrated
+// three tests that way already.
+//
+// The "prose is unbounded now" case is NOT folded in here. It is a separate assertion, at a
+// deliberately larger scale, in TestRefinePromptIsInsensitiveToStoredProseLength — which is the
+// claim that lets these numbers stay put.
+const (
+	storedProseRunes     = 900
+	storedStructureRunes = 1600
+	storedHappenedRunes  = 1400
+	storedSynopsisRunes  = 650
+)
+
 // The whole point: no prompt may exceed the budget, however large the window.
 func TestPromptsStayInsideTheBudget(t *testing.T) {
 	huge := strings.Repeat("user: do a thing\nassistant: did the thing\n", 4000)
@@ -14,13 +34,70 @@ func TestPromptsStayInsideTheBudget(t *testing.T) {
 		t.Errorf("create prompt %d runes exceeds budget %d", got, DefaultPromptCharBudget)
 	}
 	prev := Digest{
-		Done: strings.Repeat("a", DefaultProseCap), Happened: strings.Repeat("b", DefaultProseCap),
-		Structure: strings.Repeat("c", DefaultStructureCap), Current: strings.Repeat("d", DefaultProseCap),
-		Why: strings.Repeat("e", DefaultProseCap), Next: strings.Repeat("f", DefaultProseCap),
+		Done: strings.Repeat("a", storedProseRunes), Happened: strings.Repeat("b", storedProseRunes),
+		Structure: strings.Repeat("c", storedStructureRunes), Current: strings.Repeat("d", storedProseRunes),
+		Why: strings.Repeat("e", storedProseRunes), Next: strings.Repeat("f", storedProseRunes),
 		Insights: []string{"one", "two"}, Unresolved: []string{"three"},
 	}
 	if got := len([]rune(DigestUpdatePrompt(prev, "work session", huge, facts))); got > DefaultPromptCharBudget {
 		t.Errorf("update prompt %d runes exceeds budget %d", got, DefaultPromptCharBudget)
+	}
+}
+
+// TestRefinePromptIsInsensitiveToStoredProseLength is the claim that made removing the prose
+// caps safe for the budget, asserted rather than argued.
+//
+// The structural argument is that a stored report's prose reaches a prompt through exactly two
+// channels, both bounded by their own constants — Identifiers(prev) by
+// retainListMaxCount/retainListMaxTotal via boundRetainList, and the open-item accounting by
+// DefaultListCap + promptOpenItemCap via priorOpenItems — so section length cannot move prompt
+// size. This runs the real assembly at ten times the old caps, with every rune of it a distinct
+// identifier-shaped token (so the retain-list channel is driven as hard as it can be driven),
+// and checks the three things that would break if the argument were wrong: the budget, the
+// conversation-window floor, and the retain-list's own bound.
+//
+// It does NOT fail against the pre-removal code — CapSections is not on this path at all, and
+// that is the finding, not a gap: the caps were never what held this prompt inside its budget.
+// The test that fails before the removal and passes after is
+// TestCapSectionsBoundsListsAndLeavesProseAlone. This one exists so that a later change which
+// DOES make prompt size depend on stored prose length fails here instead of in a sweep.
+func TestRefinePromptIsInsensitiveToStoredProseLength(t *testing.T) {
+	const scale = 10
+	in := realisticRefineInput()
+	for _, tc := range []struct {
+		name  string
+		scale int
+	}{{"at the former caps", 1}, {"ten times the former caps", scale}} {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := densePrevScaled(40, tc.scale)
+			prose := 0
+			for _, s := range ProseFields(prev) {
+				prose += runeLen(s)
+			}
+			// The assembly's own backstop panics on a breach, so a bare call is already an
+			// assertion; the figures are still logged and re-checked here, because "it did not
+			// panic" is not a margin.
+			p := DigestUpdatePromptFrom(prev, in)
+			total := runeLen(p)
+			window := runeLen(windowOf(promptWindow(t, p, windowHeader, updateSectionsMarker)))
+			retain := retainListJoinedLen(boundRetainList(Identifiers(prev)))
+			offered := retainListJoinedLen(Identifiers(prev))
+			t.Logf("stored prose %d runes -> prompt %d of %d (margin %d), window content %d "+
+				"(floor %d, margin %d), retain-list %d of %d runes from %d offered",
+				prose, total, DefaultPromptCharBudget, DefaultPromptCharBudget-total,
+				window, MinTurnChars, window-MinTurnChars, retain, retainListMaxTotal, offered)
+			if total > DefaultPromptCharBudget {
+				t.Errorf("prompt %d runes exceeds the %d-rune budget with %d runes of stored prose",
+					total, DefaultPromptCharBudget, prose)
+			}
+			if window < MinTurnChars {
+				t.Errorf("window starved to %d runes of content (floor %d) with %d runes of stored prose",
+					window, MinTurnChars, prose)
+			}
+			if retain > retainListMaxTotal {
+				t.Errorf("retain-list %d runes exceeds its %d-rune bound", retain, retainListMaxTotal)
+			}
+		})
 	}
 }
 
