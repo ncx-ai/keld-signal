@@ -467,24 +467,10 @@ func assertFitsAndKeepsTheFloor(t *testing.T, p, marker, tail string) {
 
 // realisticPrev is a steady-state prior report: every prose section at its own cap and a
 // full list of insights/unresolved at DefaultListEntryCap — i.e. exactly what CapSections
-// returns, with identifier-dense content so the retain-list is at its bound too.
-func realisticPrev() Digest {
-	var id int
-	prev := Digest{
-		Synopsis:  packIdentifiers(&id, DefaultSynopsisCap),
-		Done:      packIdentifiers(&id, DefaultProseCap),
-		Happened:  packIdentifiers(&id, DefaultHappenedCap),
-		Structure: packIdentifiers(&id, DefaultStructureCap),
-		Current:   packIdentifiers(&id, DefaultProseCap),
-		Why:       packIdentifiers(&id, DefaultProseCap),
-		Next:      packIdentifiers(&id, DefaultProseCap),
-	}
-	for i := 0; i < DefaultListCap; i++ {
-		prev.Insights = append(prev.Insights, packIdentifiers(&id, DefaultListEntryCap))
-		prev.Unresolved = append(prev.Unresolved, packIdentifiers(&id, DefaultListEntryCap))
-	}
-	return prev
-}
+// returns, with identifier-dense content so the retain-list is at its bound too. densePrev
+// (digest_refine_test.go) is the shared builder; the worst-case test uses it with a larger
+// open-item count, so the two constructions cannot drift apart.
+func realisticPrev() Digest { return densePrev(DefaultListCap) }
 
 // realisticRefineInput is one refinement of a long engineering session: a full record
 // (subjects and projects path-shaped, tools, focus, turning points at their cap), a full

@@ -2,6 +2,7 @@ package llmstudy
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -327,105 +328,6 @@ func TestNoShrinkRuleIsRemoved(t *testing.T) {
 	}
 }
 
-// packSpecifics fills exactly n runes of ordinary filler, sprinkling in `specifics`
-// distinct, digit-bearing, capitalised tokens ("Id000000 changed. ", "Id000001 changed.
-// ", ...) drawn from `next`, a counter SHARED across every call within one test.
-//
-// Sharing matters because Identifiers dedups by exact string: an earlier version of
-// this helper restarted its own counter at 0 on every call, so every field of a Digest
-// named the same ~10 tokens and the retain-list built from all of them together
-// collapsed to a fraction of its true size (68 runes measured across the whole
-// Digest, against 1,126 once names are globally distinct) — understating the very
-// thing this helper exists to stress. Every specific is written BEFORE the filler
-// tail and the final rune-cut only ever lands inside that trailing filler, so a
-// truncated field can clip "word " but never split a specific token in half.
-func packSpecifics(next *int, n, specifics int) string {
-	var b strings.Builder
-	for i := 0; i < specifics; i++ {
-		b.WriteString(fmt.Sprintf("Id%06d changed. ", *next))
-		*next++
-	}
-	for b.Len() < n {
-		b.WriteString("word ")
-	}
-	r := []rune(b.String())
-	if len(r) > n {
-		r = r[:n]
-	}
-	return string(r)
-}
-
-// TestBoundRetainListDropsTheOffendingEntryNotEverythingOlder is the fix for task-7b fix
-// round 4 (finding 3). The eviction pass dropped only from the OLDEST end, so a single
-// entry longer than retainListMaxTotal could never itself be removed: the loop shrank the
-// list from the far end while the offending entry survived every iteration, until
-// `len(kept) > 0` failed and the whole retain-list came back EMPTY.
-//
-// That is the worst possible outcome of a bound: the retain-list is the ONLY channel
-// carrying the prior report's named specifics into a refinement, so this silently deleted
-// the entire fact-retention anchor — over one long path-shaped name, which is exactly the
-// kind of identifier real transcripts produce.
-//
-// Every length here derives from the enforced constants: retainListMaxCount-1 ordinary
-// specifics (so the count bound is not what is being tested) plus one entry of
-// retainListMaxTotal+1 runes, at the NEWEST end, where the old loop could never reach it.
-//
-// Confirmed by restoring the oldest-end eviction loop and re-running: "one oversized entry
-// deleted the whole retain-list: 60 entries in, 0 out". The sibling test below still passes
-// under that revert, which is the point of having both — the old loop was correct for the
-// ordinary case and wrong only for the entry it could not evict.
-func TestBoundRetainListDropsTheOffendingEntryNotEverythingOlder(t *testing.T) {
-	var named []string
-	for i := 0; i < retainListMaxCount-1; i++ {
-		named = append(named, fmt.Sprintf("Id%06d", i))
-	}
-	oversized := strings.Repeat("a", retainListMaxTotal+1)
-	named = append(named, oversized)
-
-	got := boundRetainList(named)
-	if len(got) == 0 {
-		t.Fatalf("one oversized entry deleted the whole retain-list: %d entries in, 0 out", len(named))
-	}
-	if n := retainListJoinedLen(got); n > retainListMaxTotal {
-		t.Errorf("retain-list joins to %d runes, over the %d-rune bound", n, retainListMaxTotal)
-	}
-	for _, s := range got {
-		if s == oversized {
-			t.Error("the oversized entry survived — it cannot fit and must be the one dropped")
-		}
-	}
-	// The ordinary specifics all fit within the bound together (59 x 8 runes plus 58
-	// separators = 588 of 700), so every one of them must survive: the fix must drop the
-	// offending entry ONLY, not take a share of the innocent ones with it.
-	if len(got) != retainListMaxCount-1 {
-		t.Errorf("want all %d ordinary specifics kept, got %d: %v",
-			retainListMaxCount-1, len(got), got)
-	}
-}
-
-// The oversized entry must not be able to hide behind the count bound either: an entry
-// beyond retainListMaxCount is dropped for being old (tailN), and one over
-// retainListMaxTotal is dropped for being long. Neither may take the rest with it.
-func TestBoundRetainListPrefersTheNewestThatFit(t *testing.T) {
-	var named []string
-	for i := 0; i < retainListMaxCount*2; i++ {
-		named = append(named, fmt.Sprintf("Id%06d", i))
-	}
-	got := boundRetainList(named)
-	if n := retainListJoinedLen(got); n > retainListMaxTotal {
-		t.Errorf("retain-list joins to %d runes, over the %d-rune bound", n, retainListMaxTotal)
-	}
-	if len(got) > retainListMaxCount {
-		t.Errorf("retain-list kept %d entries, over the %d bound", len(got), retainListMaxCount)
-	}
-	// Newest-first: the very last input entry is the newest state and must be present,
-	// while the very first has already survived several refinements.
-	if got[len(got)-1] != named[len(named)-1] {
-		t.Errorf("the newest specific was dropped: last kept %q, newest input %q",
-			got[len(got)-1], named[len(named)-1])
-	}
-}
-
 // packIdentifiers fills n runes with sequential, GLOBALLY DISTINCT identifier-shaped
 // tokens and NOTHING else — no filler prose at all. This is deliberately the OPPOSITE
 // density from packSpecifics (2 specifics + filler words per call): an independent
@@ -438,6 +340,12 @@ func TestBoundRetainListPrefersTheNewestThatFit(t *testing.T) {
 // contains a digit, so strongIdentifier accepts it unconditionally regardless of
 // sentence position — this is the true worst case for Identifiers' OWN output, not an
 // artifact of how specifics happen to be phrased.
+//
+// It replaced a packSpecifics helper (2 named specifics plus filler WORDS per call), which is
+// what the "94 distinct identifiers / 938 runes" figures quoted in digest_refine.go's docs
+// were measured with. That helper is gone with the construction it served — nothing called it
+// after the worst case was rebuilt — but its numbers are kept in those docs because they are
+// the evidence for why density, not length, is what a retain-list worst case turns on.
 func packIdentifiers(next *int, n int) string {
 	var b strings.Builder
 	for b.Len() < n {
@@ -451,43 +359,138 @@ func packIdentifiers(next *int, n int) string {
 	return string(r)
 }
 
-// TestRefinePromptFromRealisticWorstCaseMargin constructs the largest RefineInput the
-// design can plausibly produce and MEASURES the result against DefaultPromptCharBudget
-// and MinTurnChars, deriving every length from an enforced constant rather than a
-// hand-picked assumption.
+// TestWorstCasePromptOnBothPaths is the honest worst-case re-derivation — the fifth on this
+// branch, because the previous four were each wrong the same way: a test certified a bound
+// using a number the code did not enforce.
 //
-// RECONSTRUCTED in task-7b fix round 3, after an independent review rebuilt the worst
-// case from constants and found the round-2 version's reported margins ("+70"/"+255")
-// true only for THAT construction, not as a genuine worst case. Two things this
-// version fixes about how the worst case itself was built:
+// Rules this construction follows, all of them lessons from those four:
 //
-//   - Identifier DENSITY, not just length. packSpecifics (2 named specifics + filler
-//     WORDS per field/item) is not identifier-shaped in its filler — no digit, no
-//     internal capital, no separator — so it contributes almost nothing to
-//     Identifiers()' output beyond the 2 specifics it deliberately names. That badly
-//     understated the retain-list Identifiers(prev) can produce: this version uses
-//     packIdentifiers, which fills every section entirely with distinct
-//     identifier-shaped tokens. Measured with every section at its own cap this way:
-//     Identifiers(prev) alone returns 1,599 distinct tokens joining to 15,979 runes —
-//     nearly 1.5x the ENTIRE prompt budget, from ONE contributor, before boundRetainList
-//     (finding B, CRITICAL) bounds it to retainListMaxCount/retainListMaxTotal.
-//   - Open-item COUNT beyond DefaultListCap. The round-2 version capped Unresolved at
-//     exactly DefaultListCap (12) — correct for `prev` on the SECOND refinement onward,
-//     but not for the very FIRST one: CreateDigestWithView returns straight from
-//     callValid, and DigestSchema places no maxItems on Unresolved, so a schema-legal
-//     first digest can carry far more (finding C). This version uses 40.
+//   - EVERY length comes from an enforced constant. Subjects at maxSubjectTermLen x
+//     MaxRecordSubjects, the recency anchor at maxRecentSubjects tokens of maxSubjectTermLen,
+//     open items at DefaultListCap x promptOpenItemCap (fed MORE than DefaultListCap, since
+//     the first prev out of CreateDigestWithView is unbounded — priorOpenItems is what holds
+//     the count), the retain-list at retainListMaxCount/retainListMaxTotal, beats at
+//     MaxBeatSelection x BeatCap, the view over SessionViewCap, the label at
+//     sessionLabelCap, turning points at MaxRecordTurningPoints, prose at each section's own
+//     cap. Where a dimension has NO enforced bound it is named as such at its construction
+//     site (SessionRecord.Projects' per-entry length; DigestFacts' Topics/Entities counts) —
+//     see the closing note below on what that means for "worst case".
+//   - Identifiers are GLOBALLY DISTINCT, from one shared counter, so Identifiers' exact-string
+//     dedup cannot understate the retain-list the way a per-field counter did (68 runes
+//     measured across a whole Digest, against 1,126 once the names are distinct).
+//   - Identifier DENSITY, not just length: packIdentifiers fills every rune with an
+//     identifier-shaped token. Filler prose contributes nothing to Identifiers' output, so a
+//     filler-based construction understates the retain-list by an order of magnitude
+//     (measured here: Identifiers(prev) alone returns tokens joining to over 15,000 runes,
+//     more than the entire prompt budget, before boundRetainList bounds it).
+//   - BOTH paths are probed, not just refine. The create path has no beat ladder to yield and
+//     an unbounded caller-supplied facts block, so it fails differently.
 //
-// Reverting boundRetainList to a no-op (`return named`) and re-running THIS exact test:
-// assembled prompt 33,566 runes against the 11,000 budget (margin -22,566), and the
-// window itself measures 97 runes against the 1,600 floor (margin -1,503) — the window
-// figure matches the independent review's own "24,689 runes, window 97" finding exactly
-// (this test's total is larger because it also combines finding (C)'s 40-item count
-// pressure on top, per the instruction not to report a worst case without deriving
-// every length from an enforced constant). Restoring boundRetainList: both margins
-// logged by the test below are real, not a graze, which matters because a bound that
-// only just clears is exactly what let two earlier worst-case measurements on this
-// branch read comfortable while the self-consistent number was not.
-func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
+// What the numbers mean: the TOTAL is not really a free variable, because fitTurns fills
+// whatever room is left with conversation — so a healthy worst case sits just under the
+// budget by construction, and the number that carries information is the WINDOW. A total
+// under budget with a starved window is the silent failure; both are asserted.
+func TestWorstCasePromptOnBothPaths(t *testing.T) {
+	t.Run("refine", func(t *testing.T) {
+		// worstCaseOpenItems exceeds DefaultListCap deliberately: a schema-legal first prev
+		// straight out of CreateDigestWithView has no maxItems on Unresolved, so the count
+		// bound that actually holds is priorOpenItems' own.
+		const worstCaseOpenItems = 40
+		prev := densePrev(worstCaseOpenItems)
+		in := realisticRefineInput()
+
+		p := DigestUpdatePromptFrom(prev, in)
+		total := len([]rune(p))
+		window := len([]rune(promptWindow(t, p, windowHeader, updateSectionsMarker)))
+		t.Logf("WORST CASE refine: total %d runes (budget %d, margin %d), window %d "+
+			"(floor %d, margin %d)", total, DefaultPromptCharBudget,
+			DefaultPromptCharBudget-total, window, MinTurnChars, window-MinTurnChars)
+		logContributors(t, p, prev, in, window)
+		if total > DefaultPromptCharBudget {
+			t.Errorf("worst-case refine prompt %d runes exceeds the %d-rune budget", total, DefaultPromptCharBudget)
+		}
+		if window < MinTurnChars {
+			t.Errorf("worst-case refine window starved to %d runes, below the %d-rune floor", window, MinTurnChars)
+		}
+	})
+
+	t.Run("create", func(t *testing.T) {
+		// The create path's own maximum: label at its cap, a large measured-facts block
+		// (unbounded — realisticFactsBlock names that), an over-cap session view, and more
+		// turns than any remaining room.
+		p := DigestCreatePromptWithView(
+			strings.Repeat("a real session label about the work underway ", 5),
+			strings.Repeat("user: filler turn about the close\nassistant: acknowledged\n", 4000),
+			strings.Repeat("user: an early turn about the work\n", 400),
+			realisticFactsBlock())
+		total := len([]rune(p))
+		window := len([]rune(promptWindow(t, p, createWindowHeader, createSectionsMarker)))
+		t.Logf("WORST CASE create: total %d runes (budget %d, margin %d), window %d "+
+			"(floor %d, margin %d); largest single contributor is the facts block at %d runes, "+
+			"ahead of the instructional tail at %d", total, DefaultPromptCharBudget,
+			DefaultPromptCharBudget-total, window, MinTurnChars, window-MinTurnChars,
+			len([]rune(realisticFactsBlock())), createTailLen())
+		if total > DefaultPromptCharBudget {
+			t.Errorf("worst-case create prompt %d runes exceeds the %d-rune budget", total, DefaultPromptCharBudget)
+		}
+		if window < MinTurnChars {
+			t.Errorf("worst-case create window starved to %d runes, below the %d-rune floor", window, MinTurnChars)
+		}
+	})
+}
+
+// logContributors prints what each named block of a refine prompt actually costs, so "the
+// worst case is N runes" is never reported without saying WHERE the runes went.
+//
+// Each figure is recomputed from the same function the assembly used, not measured off the
+// finished string by landmark — the mistake fix round 4 removed from the backstop. beats and
+// view are reported as a residual because fitDiscretionary's inputs are internal to the
+// assembly; that residual also carries the fixed intro and the section headings, and is
+// labelled accordingly rather than attributed to beats alone.
+func logContributors(t *testing.T, p string, prev Digest, in RefineInput, window int) {
+	t.Helper()
+	type part struct {
+		name string
+		n    int
+	}
+	retain := retainListJoinedLen(boundRetainList(Identifiers(prev)))
+	open := len([]rune(strings.Join(priorOpenItems(prev), "\n  ")))
+	parts := []part{
+		{"instructional tail (updateTailLen)", updateTailLen()},
+		{"conversation window (fitTurns)", window},
+		{"session record block", len([]rune(in.Record.Block()))},
+		{"open-item accounting", open},
+		{"retain-list (Identifiers, bounded)", retain},
+		{"recency anchor", len([]rune(recentSubjectsOf(in.NewTurns)))},
+		{"session label", len([]rune(clipProse(in.SessionLabel, sessionLabelCap)))},
+	}
+	sum := 0
+	for _, x := range parts {
+		sum += x.n
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i].n > parts[j].n })
+	for _, x := range parts {
+		t.Logf("  %-38s %5d runes", x.name, x.n)
+	}
+	t.Logf("  %-38s %5d runes (beats + whole-session view + intro + all section headings)",
+		"residual", len([]rune(p))-sum)
+	t.Logf("  LARGEST single contributor: %s at %d runes (%.0f%% of the prompt)",
+		parts[0].name, parts[0].n, 100*float64(parts[0].n)/float64(len([]rune(p))))
+	t.Logf("  unbounded, for the record: Identifiers(prev) offered %d runes of retain-list "+
+		"before boundRetainList cut it to %d",
+		retainListJoinedLen(Identifiers(prev)), retain)
+	// How much slack the FLOOR really has: the window's own margin plus whatever the two
+	// discretionary claimants would still give up before it. A window margin read on its own
+	// is a step-function sample — the mistake an earlier round's "+255" reported.
+	t.Logf("  discretionary still present (would yield to the window first): beats=%v view=%v",
+		strings.Contains(p, beatsHeader), strings.Contains(p, viewHeader))
+}
+
+// densePrev builds a prior report with every prose section at its own cap, DefaultListCap
+// insights, and `unresolved` open items — every rune of it a GLOBALLY DISTINCT
+// identifier-shaped token, from one shared counter, so Identifiers' dedup cannot understate
+// what the retain-list would carry.
+func densePrev(unresolved int) Digest {
 	var id int
 	prev := Digest{
 		Synopsis:  packIdentifiers(&id, DefaultSynopsisCap),
@@ -501,88 +504,10 @@ func TestRefinePromptFromRealisticWorstCaseMargin(t *testing.T) {
 	for i := 0; i < DefaultListCap; i++ {
 		prev.Insights = append(prev.Insights, packIdentifiers(&id, DefaultListEntryCap))
 	}
-	// 40, not DefaultListCap: the first-refinement bypass finding (C) describes — a
-	// schema-legal prev straight out of CreateDigestWithView is not bounded by
-	// DefaultListCap at all.
-	for i := 0; i < 40; i++ {
+	for i := 0; i < unresolved; i++ {
 		prev.Unresolved = append(prev.Unresolved, packIdentifiers(&id, DefaultListEntryCap))
 	}
-
-	beats := make([]Beat, MaxBeatSelection)
-	for i := range beats {
-		beats[i] = Beat{Ordinal: i + 1, Text: strings.Repeat("w", BeatCap), ChangedSubject: i%2 == 0}
-	}
-
-	rec := SessionRecord{
-		Projects:      []string{"alpha-project", "beta-project", "gamma-project", "delta-project", "epsilon-project"},
-		Subjects:      []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"},
-		Tools:         []ToolCount{{"Read", 900}, {"Edit", 800}, {"Bash", 700}, {"Write", 600}, {"Grep", 500}, {"Glob", 400}, {"Task", 300}, {"WebFetch", 200}},
-		Turns:         99999,
-		UserTurns:     50000,
-		ToolCalls:     40000,
-		Corrections:   9999,
-		Domain:        "engineering",
-		Function:      "software-development",
-		Concentration: 0.87,
-		hasFocus:      true,
-		// At MaxRecordTurningPoints (finding G bounds this at accumulation time via
-		// NoteTurningPoint; a hand-built SessionRecord like this one can still exceed
-		// it, which is exactly the shape of gap the backstop — finding A — exists for,
-		// not something this specific test needs to additionally exercise).
-		TurningPoints: []TurningPoint{
-			{1, TriggerFocusShift}, {2, TriggerFriction}, {3, TriggerFocusShift}, {4, TriggerFriction},
-			{5, TriggerFocusShift}, {6, TriggerFriction}, {7, TriggerFocusShift}, {8, TriggerFriction},
-			{9, TriggerFocusShift}, {10, TriggerFriction}, {11, TriggerFocusShift}, {12, TriggerFriction},
-		},
-	}
-
-	// The final line is a distinct, capitalised subject so recentSubjectsOf (gated on
-	// TriggerFocusShift below) actually finds something and the anchor block fires — the
-	// worst case must include its conditional text, not skip it by having nothing to anchor.
-	huge := strings.Repeat("user: filler turn about the close\nassistant: acknowledged\n", 4000) +
-		"user: now turn to the DistinctiveAprilRollover work\n"
-
-	in := RefineInput{
-		// Near sessionLabelCap (200), not just "a reasonably long" label: finding G
-		// bounds SessionLabel too, and the worst case should sit against that bound
-		// like everything else here, not comfortably under it.
-		SessionLabel: strings.Repeat("a reasonably long session label describing the kind of work underway ", 5),
-		Record:       rec,
-		Beats:        beats,
-		SessionView:  strings.Repeat("user: an early turn about the work\n", 400), // > SessionViewCap
-		NewTurns:     huge,
-		Why:          TriggerFocusShift,
-	}
-
-	p := DigestUpdatePromptFrom(prev, in)
-	got := len([]rune(p))
-	margin := DefaultPromptCharBudget - got
-	t.Logf("realistic worst-case refine prompt: %d runes (budget %d, margin %d)", got, DefaultPromptCharBudget, margin)
-	if got > DefaultPromptCharBudget {
-		t.Errorf("worst-case prompt %d runes exceeds budget %d (margin %d)", got, DefaultPromptCharBudget, margin)
-	}
-	if got <= 0 {
-		t.Errorf("worst-case prompt length %d runes is out of sane range", got)
-	}
-
-	// The window is the ONLY evidence current/why/next/unresolved are written from — a
-	// prompt that fits the total budget by starving the window below MinTurnChars is not
-	// a fix, it is finding (b)'s failure mode reopened by a different route. Extracted
-	// the same way TestWindowKeepsItsFloorAtTheBoundary does.
-	start := strings.Index(p, windowHeader)
-	if start < 0 {
-		t.Fatal("window header missing from prompt")
-	}
-	start += len(windowHeader)
-	end := strings.Index(p[start:], updateSectionsMarker)
-	if end < 0 {
-		t.Fatal("tail marker missing from prompt")
-	}
-	window := len([]rune(p[start : start+end]))
-	t.Logf("window at the realistic worst case: %d runes (floor %d, margin %d)", window, MinTurnChars, window-MinTurnChars)
-	if window < MinTurnChars {
-		t.Errorf("window starved to %d runes at the realistic worst case, below the %d floor", window, MinTurnChars)
-	}
+	return prev
 }
 
 // TestWindowKeepsItsFloorAtTheBoundary is the fix for finding 3: before fitDiscretionary

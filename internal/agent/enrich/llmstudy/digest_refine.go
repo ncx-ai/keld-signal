@@ -48,7 +48,8 @@ const (
 	// Identifiers(prev)'s output, which reads Insights too), both independent of what
 	// this constant allows in STORAGE — so the assembled prompt is now completely
 	// insensitive to this value. Measured directly against
-	// TestRefinePromptFromRealisticWorstCaseMargin's construction with insights/
+	// TestWorstCasePromptOnBothPaths' construction (then named
+	// TestRefinePromptFromRealisticWorstCaseMargin) with insights/
 	// unresolved items sized at 300, 400, 800 and 2000: all four yield the identical
 	// 10,921-rune worst-case prompt. This constant's only remaining job is report
 	// quality: what a human reads in the stored digest. See promptOpenItemCap and
@@ -375,7 +376,7 @@ func DigestUpdatePromptWithReason(prev Digest, sessionLabel, newTurns, sessionVi
 // 80 is still generous against this package's own real item lengths (20-60 runes, per
 // DefaultListEntryCap's doc) — real items are essentially never truncated — while
 // cutting the worst case enough to matter. Measured in ISOLATION against fix round 3's
-// own worst-case construction (TestRefinePromptFromRealisticWorstCaseMargin, which by
+// own worst-case construction (now TestWorstCasePromptOnBothPaths, which by
 // then also carries boundRetainList and the open-item COUNT bound — reverting only this
 // clip, temporarily, to a no-op): assembled prompt 11,681 runes against the 11,000
 // budget (margin -681), window 97 against the 1,600 floor. Restored: prompt 10,921
@@ -437,7 +438,7 @@ func priorOpenItems(prev Digest) []string {
 // budget (silent), 304 pushing the total itself over budget, and a worst case — every
 // OTHER constant honoured post-CapSections — of 24,689 runes with a 97-rune window.
 // Reproduced directly with this fix reverted, using packIdentifiers (not packSpecifics)
-// against TestRefinePromptFromRealisticWorstCaseMargin's own construction (which also
+// against the worst-case construction now in TestWorstCasePromptOnBothPaths (which also
 // combines finding (C)'s 40-item count pressure): 33,566 runes, 97-rune window — the
 // window figure matches the review's exactly; the total is larger here because that
 // test's construction is more adversarial again, per the instruction not to report a
