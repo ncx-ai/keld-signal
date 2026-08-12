@@ -23,15 +23,13 @@ import (
 // path, whose parent directory encodes the working directory (e.g.
 // "-home-dg-keld-keld-signal"). Gives the digest a real "working in" anchor without
 // inventing one.
-func projectFromPath(p string) string {
-	d := filepath.Base(filepath.Dir(p))
-	d = strings.TrimPrefix(d, "-")
-	parts := strings.Split(d, "-")
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[len(parts)-1]
-}
+//
+// It used to take the last hyphen-separated piece, which reported `signal` for
+// /home/dg/keld/keld-signal and `study` for a worktree of it — measured in a real packet, inside
+// the block the prompt calls authoritative. RepoFromTranscriptPath inverts the encoding against
+// the filesystem instead of guessing, and resolves a worktree to the repository it is a checkout
+// of; see record_paths.go.
+func projectFromPath(p string) string { return RepoFromTranscriptPath(p) }
 
 // TestDigestSizing is verification test 6: can a budget-fitting model write a usable
 // digest at all? Free generation is the capability class where Qwen3-0.6B collapsed

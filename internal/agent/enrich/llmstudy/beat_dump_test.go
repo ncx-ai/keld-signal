@@ -92,7 +92,15 @@ func TestBeatDump(t *testing.T) {
 		}
 		every := BeatTurnsFromEnv()
 		s := sessOut{Label: src.label, Windows: len(ws), EveryTurns: every}
+		// A corpus transcript's own filename is a session UUID, so the record's "working in"
+		// anchor read `projects: 43492104-1861-4682-9890-506bd7f41e67` — the same family of
+		// defect as `projects: signal`, a name taken from a path by a rule that does not know
+		// what the path's parts mean. The hand-authored fixtures ARE named for their subject, so
+		// only the corpus paths need resolving. See record_paths.go.
 		proj := strings.TrimSuffix(filepath.Base(src.path), ".jsonl")
+		if !strings.HasPrefix(src.path, "testdata/") {
+			proj = projectFromPath(src.path)
+		}
 
 		var rec SessionRecord
 		var beats []Beat

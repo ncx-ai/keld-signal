@@ -1,6 +1,7 @@
 package llmstudy
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -22,6 +23,16 @@ import (
 // makes this pass checkable: a name it returns must be one of the candidates, verbatim, and a
 // kind it returns must be in a closed vocabulary. Neither is a judgement about how far along
 // anything is, and neither can introduce a name the transcript does not contain.
+
+// passProblem is the three passes' counterpart to firstProblem.
+//
+// Retry behaviour is identical and does not come from here — callValid wraps any validator error
+// in sampleErr — but it names the pass instead of borrowing the digest's prefix. That mattered in
+// a real recorded failure, which read "invalid digest: event ... is 350 runes, over the cap of
+// 300": the artifact's job is to say what happened, and that sentence named the wrong thing.
+func passProblem(pass, problem string) error {
+	return fmt.Errorf("invalid %s: %s", pass, problem)
+}
 
 // BeatEntityKind is the closed vocabulary of kinds. Written as readable words rather than ids
 // for the reason the classifier labels are (see AGENTS.md): the wording is what the model scores
@@ -199,8 +210,8 @@ func checkBeatEntities(raw []BeatEntity, candidates []string) (kept []BeatEntity
 		name := strings.ToLower(strings.TrimSpace(e.Name))
 		canon, ok := byLower[name]
 		if !ok {
-			return nil, nil, firstProblem([]string{"entity " + strconv.Quote(e.Name) +
-				" is not one of the listed terms"})
+			return nil, nil, passProblem("entity pass", "entity "+strconv.Quote(e.Name)+
+				" is not one of the listed terms")
 		}
 		if answered[name] {
 			continue // the same term twice is a repeat, not a conflict; the first answer stands
@@ -214,7 +225,7 @@ func checkBeatEntities(raw []BeatEntity, candidates []string) (kept []BeatEntity
 		}
 	}
 	if len(kept) == 0 {
-		return nil, nil, firstProblem([]string{"no listed term was typed"})
+		return nil, nil, passProblem("entity pass", "no listed term was typed")
 	}
 	return kept, unjudged, nil
 }

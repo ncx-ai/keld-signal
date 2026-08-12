@@ -108,11 +108,11 @@ func checkBeatEvents(raw []string) ([]string, error) {
 			continue
 		}
 		if n := runeLen(e); n < beatEventMinRunes {
-			return nil, firstProblem([]string{"event " + strconv.Quote(e) + " is " +
-				strconv.Itoa(n) + " runes, under the floor of " + strconv.Itoa(beatEventMinRunes)})
+			return nil, passProblem("event list", "event "+strconv.Quote(e)+" is "+
+				strconv.Itoa(n)+" runes, under the floor of "+strconv.Itoa(beatEventMinRunes))
 		} else if n > beatEventMaxRunes {
-			return nil, firstProblem([]string{"event " + strconv.Quote(e) + " is " +
-				strconv.Itoa(n) + " runes, over the cap of " + strconv.Itoa(beatEventMaxRunes)})
+			return nil, passProblem("event list", "event "+strconv.Quote(e)+" is "+
+				strconv.Itoa(n)+" runes, over the cap of "+strconv.Itoa(beatEventMaxRunes))
 		}
 		k := strings.ToLower(e)
 		if seen[k] {
@@ -122,7 +122,7 @@ func checkBeatEvents(raw []string) ([]string, error) {
 		out = append(out, e)
 	}
 	if len(out) == 0 {
-		return nil, firstProblem([]string{"events is empty"})
+		return nil, passProblem("event list", "events is empty")
 	}
 	return out, nil
 }

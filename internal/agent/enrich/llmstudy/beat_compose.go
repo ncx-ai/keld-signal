@@ -159,21 +159,21 @@ func (l *Llama) GenerateBeatSplit(rec SessionRecord, window string) (BeatSplit, 
 		s.Raw, s.Text = strings.TrimSpace(out.Beat), ClipBeat(out.Beat, BeatCap)
 		switch {
 		case s.Raw == "":
-			return firstProblem([]string{"beat is empty"})
+			return passProblem("beat", "beat is empty")
 		case s.Text == "":
-			return firstProblem([]string{"beat holds no complete sentence within " +
-				strconv.Itoa(BeatCap) + " runes"})
+			return passProblem("beat", "beat holds no complete sentence within "+
+				strconv.Itoa(BeatCap)+" runes")
 		case runeLen(s.Text) < BeatMinRunes:
-			return firstProblem([]string{"beat is " + strconv.Itoa(runeLen(s.Text)) +
-				" runes after dropping its incomplete tail, under the floor of " +
-				strconv.Itoa(BeatMinRunes)})
+			return passProblem("beat", "beat is "+strconv.Itoa(runeLen(s.Text))+
+				" runes after dropping its incomplete tail, under the floor of "+
+				strconv.Itoa(BeatMinRunes))
 		// The evidence handed to the progress check is the COMPOSITION PROMPT, which is
 		// exactly and provably what this beat was written from. On the control path the
 		// evidence is the window plus the record for the same reason; here the window is not
 		// evidence the writer had.
 		case BeatClaimsUnobservableProgress(s.Text, s.ComposePrompt):
-			return firstProblem([]string{"beat characterises overall progress the notes " +
-				"do not show: " + strings.Join(beatProgressClaims(s.Text), "; ")})
+			return passProblem("beat", "beat characterises overall progress the notes "+
+				"do not show: "+strings.Join(beatProgressClaims(s.Text), "; "))
 		}
 		return nil
 	}, beatSampling)
