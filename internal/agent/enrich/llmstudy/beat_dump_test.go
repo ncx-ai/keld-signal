@@ -41,10 +41,20 @@ func TestBeatDump(t *testing.T) {
 		ChangedSubject bool     `json:"changed_subject"`
 		SubjectTerms   []string `json:"subject_terms"`
 		AtWindow       int      `json:"at_window"`
-		Sentences      int      `json:"sentences"`
-		Runes          int      `json:"runes"`
-		RawRunes       int      `json:"raw_runes"`
-		Clipped        bool     `json:"clipped"`
+		// The geometry the beat was generated from. Recorded per beat because a reader judging
+		// whether a beat tracks the work has to know what it was shown: a beat that missed
+		// something is a different observation depending on whether the material was in its
+		// window at all. Attempts is how many requests the generation took (1 is clean).
+		SpanTurns    int  `json:"span_turns"`
+		KeptTurns    int  `json:"kept_turns"`
+		OverlapTurns int  `json:"overlap_turns"`
+		WindowRunes  int  `json:"window_runes"`
+		PromptRunes  int  `json:"prompt_runes"`
+		Attempts     int  `json:"attempts"`
+		Sentences    int  `json:"sentences"`
+		Runes        int  `json:"runes"`
+		RawRunes     int  `json:"raw_runes"`
+		Clipped      bool `json:"clipped"`
 		// ProgressClaims is the overall-progress characterisation the beat makes, if any. It
 		// must be empty on every beat: the check runs inside GenerateBeat's retry loop, so a
 		// non-empty entry here means an offending generation reached the series anyway.
@@ -90,6 +100,15 @@ func TestBeatDump(t *testing.T) {
 			t.Logf("skip %s", src.label)
 			continue
 		}
+		// The disjoint per-user-prompt deltas: the beat window's stride is built from them, and
+		// so is the record. Observing Mine's OVERLAPPING windows into the record — which this
+		// harness did — counts most turns about a dozen times, and the record is the one input the
+		// prompt labels "measured — authoritative" (see sessionDeltas: turns 190 vs 51 measured).
+		deltas, derr := sessionDeltas(src.path, o)
+		if derr != nil || len(deltas) != len(ws) {
+			t.Logf("skip %s: deltas %v (%d vs %d)", src.label, derr, len(deltas), len(ws))
+			continue
+		}
 		every := BeatTurnsFromEnv()
 		s := sessOut{Label: src.label, Windows: len(ws), EveryTurns: every}
 		// A corpus transcript's own filename is a session UUID, so the record's "working in"
@@ -104,25 +123,41 @@ func TestBeatDump(t *testing.T) {
 
 		var rec SessionRecord
 		var beats []Beat
-		for i, w := range ws {
-			rec = rec.Observe(w, Extract(w)).WithProject(proj)
-			if i%every != 0 {
+		// One windower per session: a beat's stride is "since the previous beat of THIS session".
+		var bw BeatWindower
+		var cov BeatCoverage
+		for i := range ws {
+			rec = rec.Observe(deltas[i], Extract(deltas[i])).WithProject(proj)
+			// Every beatTurns USER prompts, counted from the fifth rather than the zeroth: at
+			// i%every the first beat fires on a one-prompt stride, which is not the cadence the
+			// design is stated in and not the one the sweep measures.
+			if (i+1)%every != 0 {
 				continue
 			}
 			s.Asked++
+			// The beat reads its OWN window — contiguous since the previous beat, with a reserved
+			// stride overlap — not the K=12 classification window. K was inherited from
+			// classification, where a window exists to judge ONE prompt in context; five user
+			// prompts span far more than 12 turns, so a mined window read about a fifth of the
+			// stride and nothing read the rest. See beat_window.go.
+			bwin := bw.Next(deltas, i)
+			cov.Add(bwin)
+			prompt := BeatPrompt(rec.Block(), bwin.Rendered)
+			before := l.Attempts()
 			// generateBeat, not GenerateBeat, for the unclipped generation: the cap can only
 			// be judged against what it clipped (see BeatCap).
-			raw, text, err := l.generateBeat(rec.Block(), Render(w))
+			raw, text, err := l.generateBeat(rec.Block(), bwin.Rendered)
+			attempts := l.Attempts() - before
 			if err != nil {
 				s.Failed++
-				t.Logf("  beat at window %d failed: %v", i, err)
+				t.Logf("  beat at window %d FAILED after %d attempt(s): %v", i, attempts, err)
 				continue
 			}
 			var stored bool
 			// The user turn that prompted this window is grounded, non-model-authored
 			// evidence of what the window is about, and it is what ChangedSubject falls back
 			// on when the beat names nothing concrete (see beatSubjectTermsGrounded).
-			ground := GroundOf(w)
+			ground := GroundOf(bwin.Window)
 			beats, stored = AppendBeat(beats, text, ground)
 			if !stored {
 				s.Restated++
@@ -140,6 +175,12 @@ func TestBeatDump(t *testing.T) {
 				SubjectTerms:   b.SubjectTerms,
 				ProgressClaims: beatProgressClaims(b.Text),
 				AtWindow:       i,
+				SpanTurns:      bwin.SpanTurns,
+				KeptTurns:      bwin.KeptTurns,
+				OverlapTurns:   bwin.OverlapTurns,
+				WindowRunes:    bwin.TotalRunes,
+				PromptRunes:    runeLen(prompt),
+				Attempts:       attempts,
 				Sentences:      countBeatSentences(b.Text),
 				Runes:          len([]rune(b.Text)),
 				RawRunes:       len([]rune(raw)),
@@ -161,6 +202,14 @@ func TestBeatDump(t *testing.T) {
 		t.Logf("%s: %d windows, %d asked, %d kept, %d restated, %d failed (every %d turns), "+
 			"changed_subject %d/%d", src.label, len(ws), s.Asked, s.Kept, s.Restated, s.Failed,
 			every, chg, len(beats))
+		// The geometry, in counts, beside the series it produced: coverage is a property of the
+		// SEQUENCE of windows, so it cannot be read off any one beat's record above.
+		if cov.Windows > 0 {
+			t.Logf("   windows: %d turns spanned, %d read, %d read by NO window; overlap %d runes "+
+				"(%.1f%% of what the previous beat read); largest window %d runes",
+				cov.SpanTurns, cov.KeptTurns, cov.SpanTurns-cov.KeptTurns, cov.OverlapRunes,
+				cov.OverlapOfPrevWindowPct(), cov.LargestRunes)
+		}
 	}
 
 	blob, _ := json.MarshalIndent(all, "", "  ")

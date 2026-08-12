@@ -345,6 +345,16 @@ func TestDigestRefineQuality(t *testing.T) {
 		tightestCreateWhen string
 		worstPrompt        int
 		worstPromptWhen    string
+		// The BEAT tier's own prompt, which nothing measured. It has its own builder and its own
+		// budget (BeatPromptCharBudget), and it is the tier the contiguous window widened, so the
+		// report tier's figure above says nothing about it. Reported with the headroom, because a
+		// budget is only certified by the largest thing that was actually assembled against it.
+		worstBeatPrompt     int
+		worstBeatPromptWhen string
+		// Retries that SUCCEEDED. An error line reports its own attempt count, but a beat that
+		// took four attempts and one that took one are different observations and only the
+		// failure was visible before.
+		beatRetried, beatRetryAttempts int
 		// Report LENGTH, per section, measured on the FINAL report of each session — the one
 		// that has been through every refinement and is therefore the longest a session
 		// produces. Reported as a table plus a max, because "let the sections be as long as
@@ -464,16 +474,35 @@ func TestDigestRefineQuality(t *testing.T) {
 					sessions, idx, bwin.SpanTurns, bwin.KeptTurns, bwin.Dropped(),
 					BeatWindowChars, bwin.OverlapTurns, bwin.OverlapRunes,
 					pctInt(bwin.OverlapRunes, bwin.PrevSpanRunes), bwin.TotalRunes)
+				// The BEAT prompt against the BEAT budget. The report tier's worstPrompt says
+				// nothing about this one: they are assembled by different builders against
+				// different budgets (24,000 here, DefaultPromptCharBudget there), and it is the
+				// beat tier whose input this geometry widened. Assembled here rather than read
+				// back out of GenerateBeat because BeatPrompt is pure, and left inside the
+				// recover below so an over-budget assembly is counted as the panic it is.
 				var text string
 				var berr error
+				attemptsBefore := l.Attempts()
 				if recovered(t, fmt.Sprintf("beat s%d i%d", sessions, idx), func() {
+					if n := runeLen(BeatPrompt(rec.Block(), bwin.Rendered)); n > worstBeatPrompt {
+						worstBeatPrompt, worstBeatPromptWhen = n, sprintStep(sessions, idx, project)
+					}
 					text, berr = l.GenerateBeat(rec.Block(), bwin.Rendered)
 				}) {
 					panicsBeat++
 				} else if berr != nil {
 					beatErrs++
-					t.Logf("  beat s%d i%d failed: %v", sessions, idx, berr)
+					// With the attempt count, because "failed" and "failed after five identical
+					// requests" are different observations and the difference was recoverable
+					// only from an error string before Attempts existed.
+					t.Logf("  beat s%d i%d FAILED after %d attempt(s): %v",
+						sessions, idx, l.Attempts()-attemptsBefore, berr)
 				} else {
+					if n := l.Attempts() - attemptsBefore; n > 1 {
+						beatRetried++
+						beatRetryAttempts += n
+						t.Logf("  beat s%d i%d recovered on attempt %d", sessions, idx, n)
+					}
 					beatsGenerated++
 					// T12, on the beat as generated — including one about to be discarded as a
 					// restatement, because a contradiction is a property of the model's output
@@ -982,15 +1011,23 @@ func TestDigestRefineQuality(t *testing.T) {
 		beatAsks, beatsGenerated, beatsKept, beatsDiscarded, pct(beatsDiscarded, beatsGenerated),
 		beatErrs, beatTurns)
 	t.Logf("   of the kept beats, %d changed the subject (%.1f%%)", beatsChangedSubject, pct(beatsChangedSubject, beatsKept))
+	t.Logf("   %d of the generated beats needed more than one attempt (%d attempts spent on them); "+
+		"largest assembled BEAT prompt %d runes of the %d budget (%s) — %d runes of headroom, "+
+		"backstop fired %d times", beatRetried, beatRetryAttempts, worstBeatPrompt,
+		BeatPromptCharBudget, worstBeatPromptWhen, BeatPromptCharBudget-worstBeatPrompt, panicsBeat)
 	// Beat window geometry. Reported unconditionally, because "coverage was not measured"
 	// is the state this replaces. Both overlap figures are printed because they are
 	// different quantities: the spec's "~25-30%" is a share of the PREVIOUS window, which
 	// for two spans of similar size is a smaller share of the new one.
 	if beatCov.Windows > 0 {
-		t.Logf("BEAT WINDOWS  turn coverage %.1f%% of %d turns spanned (%d turns dropped by "+
-			"the %d-rune bound and covered by NO window); %d windows, largest %d runes",
-			beatCov.TurnCoverage(), beatCov.SpanTurns, beatCov.SpanTurns-beatCov.KeptTurns,
-			BeatWindowChars, beatCov.Windows, beatCov.LargestRunes)
+		// Counts lead, the rate follows: both numerator and denominator move with the corpus, and
+		// a rate over a moved denominator is what produced five unreadable verdicts on this
+		// branch. See TestCorpusBeatWindowGeometry for the same figures against the OLD geometry.
+		t.Logf("BEAT WINDOWS  turn coverage %d of %d turns spanned read (%.1f%%); %d turns dropped "+
+			"by the %d-rune bound and covered by NO window; %d windows, largest %d runes",
+			beatCov.KeptTurns, beatCov.SpanTurns, beatCov.TurnCoverage(),
+			beatCov.SpanTurns-beatCov.KeptTurns, BeatWindowChars, beatCov.Windows,
+			beatCov.LargestRunes)
 		t.Logf("   consecutive-window overlap: %d runes carried — mean %.1f%% of window runes, "+
 			"%.1f%% of what the previous beat READ (the spec's 25-30%%), %.1f%% of its whole "+
 			"stride (reserve %d%%) — shared transcript, not shared model output, so it cannot "+

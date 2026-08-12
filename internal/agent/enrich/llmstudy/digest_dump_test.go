@@ -49,6 +49,13 @@ func TestDigestDump(t *testing.T) {
 		Prompt  string `json:"prompt"`
 		Text    string `json:"text"`
 		Kept    bool   `json:"kept"`
+		// The geometry of the window that prompt carries, so a reader can tell a beat that
+		// missed something from a beat that was never shown it.
+		SpanTurns   int `json:"span_turns"`
+		KeptTurns   int `json:"kept_turns"`
+		WindowRunes int `json:"window_runes"`
+		PromptRunes int `json:"prompt_runes"`
+		Attempts    int `json:"attempts"`
 	}
 	type sess struct {
 		Name      string     `json:"name"`
@@ -127,6 +134,11 @@ func TestDigestDump(t *testing.T) {
 		rec := SessionRecord{}
 		var beats []Beat
 		beatTurns := BeatTurnsFromEnv()
+		// One windower per session. Beats read their OWN contiguous window, not the K=12
+		// classification window the report reads — K was inherited from classification, where a
+		// window exists to judge one prompt in context, and five user prompts span far more than
+		// 12 turns. See beat_window.go.
+		var bw BeatWindower
 		// observe folds every window up to and including `upto` into the record, generating
 		// beats on the way at the same cadence the sweep uses, so the record and series a
 		// dumped prompt carries are the ones that prompt would really have.
@@ -136,16 +148,22 @@ func TestDigestDump(t *testing.T) {
 				if (i+1)%beatTurns != 0 {
 					continue
 				}
-				bp := BeatPrompt(rec.Block(), Render(ws[i]))
-				text, err := l.GenerateBeat(rec.Block(), Render(ws[i]))
+				bwin := bw.Next(deltas, i)
+				bp := BeatPrompt(rec.Block(), bwin.Rendered)
+				before := l.Attempts()
+				text, err := l.GenerateBeat(rec.Block(), bwin.Rendered)
+				attempts := l.Attempts() - before
 				if err != nil {
-					t.Logf("%s beat at window %d: %v", src.label, i, err)
+					t.Logf("%s beat at window %d FAILED after %d attempt(s): %v",
+						src.label, i, attempts, err)
 					continue
 				}
 				var kept bool
-				beats, kept = AppendBeat(beats, text, GroundOf(ws[i]))
+				beats, kept = AppendBeat(beats, text, GroundOf(bwin.Window))
 				s.BeatDumps = append(s.BeatDumps, beatDump{
 					Ordinal: len(beats), Window: i, Prompt: bp, Text: text, Kept: kept,
+					SpanTurns: bwin.SpanTurns, KeptTurns: bwin.KeptTurns,
+					WindowRunes: bwin.TotalRunes, PromptRunes: runeLen(bp), Attempts: attempts,
 				})
 			}
 		}
