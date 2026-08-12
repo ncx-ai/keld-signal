@@ -45,7 +45,24 @@ func TestReportArtifact(t *testing.T) {
 	var b strings.Builder
 	writeArtifactHeader(&b, run)
 
-	var reports, failed, retried, substituted, panicked, beatFail int
+	var reports, failed, retried, substituted, panicked int
+	var beatsAsked, beatFail, beatDiscarded, beatRetried int
+	var maxPrompt, minPrompt, clipped, tightest int
+	minPrompt = run.Budget
+	tightest = run.Budget
+	var obliged, retained int
+	countBeat := func(ev beatEvent) {
+		beatsAsked++
+		switch {
+		case ev.Err != "" || ev.Panicked:
+			beatFail++
+		case !ev.Kept:
+			beatDiscarded++
+		}
+		if ev.Attempts > 1 {
+			beatRetried++
+		}
+	}
 	for _, s := range run.Sessions {
 		fmt.Fprintf(&b, "\n---\n\n# Session %d — %s\n\n", s.Index, s.Label)
 		fmt.Fprintf(&b, "*%s · project `%s` · %d mined windows*\n\n", s.Kind, s.Project, s.Windows)
@@ -67,25 +84,36 @@ func TestReportArtifact(t *testing.T) {
 					panicked++
 				}
 				for _, ev := range r.Beats {
-					if ev.Err != "" || ev.Panicked {
-						beatFail++
+					countBeat(ev)
+				}
+				if r.PromptRunes > maxPrompt {
+					maxPrompt = r.PromptRunes
+				}
+				if r.PromptRunes < minPrompt {
+					minPrompt = r.PromptRunes
+				}
+				if r.WindowClipped {
+					clipped++
+					if r.WindowMargin < tightest {
+						tightest = r.WindowMargin
 					}
 				}
+				obliged += len(r.FactsObliged)
+				retained += len(r.FactsRetained)
 				writeReport(&b, run, s, a, r)
 			}
 			if len(a.TrailingBeats) > 0 {
 				fmt.Fprintf(&b, "\n### Beats generated after the last report (no report read them)\n\n")
 				for _, ev := range a.TrailingBeats {
 					writeBeatEvent(&b, ev)
-					if ev.Err != "" || ev.Panicked {
-						beatFail++
-					}
+					countBeat(ev)
 				}
 			}
 		}
 	}
 
 	fmt.Fprintf(&b, "\n---\n\n# What this run contained\n\n")
+	fmt.Fprintf(&b, "Every figure here is a count over the entries above, not a threshold from the sweep.\n\n")
 	fmt.Fprintf(&b, "| | |\n|---|---:|\n")
 	fmt.Fprintf(&b, "| sessions | %d |\n", len(run.Sessions))
 	fmt.Fprintf(&b, "| reports shown | %d |\n", reports)
@@ -93,12 +121,70 @@ func TestReportArtifact(t *testing.T) {
 	fmt.Fprintf(&b, "| reports that took more than one attempt | %d |\n", retried)
 	fmt.Fprintf(&b, "| recovered backstop panics | %d |\n", panicked)
 	fmt.Fprintf(&b, "| empty-open-list substitutions | %d |\n", substituted)
-	fmt.Fprintf(&b, "| beat generations that failed | %d |\n", beatFail)
+	fmt.Fprintf(&b, "| beats asked for | %d |\n", beatsAsked)
+	fmt.Fprintf(&b, "| beat generations that failed outright | %d |\n", beatFail)
+	fmt.Fprintf(&b, "| beats discarded as a restatement | %d |\n", beatDiscarded)
+	fmt.Fprintf(&b, "| beats that took more than one attempt | %d |\n", beatRetried)
+	fmt.Fprintf(&b, "| largest prompt / smallest prompt | %d / %d of %d |\n", maxPrompt, minPrompt, run.Budget)
+	fmt.Fprintf(&b, "| reports whose window had to be clipped | %d |\n", clipped)
+	if clipped > 0 {
+		fmt.Fprintf(&b, "| tightest window margin over the floor, of those | %+d runes |\n", tightest)
+	}
+	fmt.Fprintf(&b, "| retain-list entries obliged / still present | %d / %d |\n", obliged, retained)
+	if p := pairedArms(run); p.pairs > 0 {
+		fmt.Fprintf(&b, "| paired steps where the two arms sent a byte-identical prompt | %d of %d |\n",
+			p.samePrompt, p.pairs)
+		fmt.Fprintf(&b, "| of those, paired steps returning a byte-identical report | %d |\n", p.sameReport)
+		fmt.Fprintf(&b, "\n**Where the arms are identical there is nothing to compare**, and that is most of the "+
+			"early steps: until the trigger measures a subject shift, both arms are told the same thing and "+
+			"temperature 0 returns the same report to the byte. Divergence starts at the first step where the "+
+			"anchor fires and persists after it, because the next refinement reads a different previous "+
+			"report.\n")
+	}
+	fmt.Fprintf(&b, `
+**Two cautions about the retain-list row.** It counts every retain-list entry of every refinement, so
+it is NOT the sweep's T4 figure, which follows six specifics injected by the first report of a
+session. And the entries themselves are not all specifics: `+"`Identifiers`"+` is position-aware
+over prose, so it also yields bare capitalised words, and it splits a two-word proper noun into
+two entries — a report that drops one of those has not necessarily dropped a fact. Read the
+dropped lists, not the ratio.
+`)
 
 	if err := os.WriteFile(out, []byte(b.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("wrote %s (%d bytes, %d reports across %d sessions)", out, b.Len(), reports, len(run.Sessions))
+}
+
+// pairedArms counts, over steps present in BOTH arms of a session, how often the two arms sent
+// the same prompt and got the same report back.
+//
+// It is the cheapest honest answer to "which of these 128 entries are worth comparing": a step
+// whose prompts are byte-identical cannot show an arm difference, and a reader who does not know
+// that will read agreement as evidence.
+func pairedArms(run runDump) struct{ pairs, samePrompt, sameReport int } {
+	var out struct{ pairs, samePrompt, sameReport int }
+	for _, s := range run.Sessions {
+		if len(s.Arms) != 2 {
+			continue
+		}
+		on, off := s.Arms[0].Reports, s.Arms[1].Reports
+		for i := 0; i < len(on) && i < len(off); i++ {
+			out.pairs++
+			if on[i].Prompt != off[i].Prompt {
+				continue
+			}
+			out.samePrompt++
+			// Compared as JSON because a Digest holds slices; reflect.DeepEqual would do, but
+			// the marshalled form is exactly what the artifact shows a reader.
+			a, _ := json.Marshal(on[i].Digest)
+			c, _ := json.Marshal(off[i].Digest)
+			if on[i].Digest != nil && off[i].Digest != nil && string(a) == string(c) {
+				out.sameReport++
+			}
+		}
+	}
+	return out
 }
 
 func writeArtifactHeader(b *strings.Builder, run runDump) {
@@ -124,6 +210,20 @@ func writeArtifactHeader(b *strings.Builder, run runDump) {
 	fmt.Fprintf(b, "| retain-list caps | %d entries / %d runes |\n", run.RetainCap, run.RetainRuneCap)
 	fmt.Fprintf(b, "| distinctiveness table | %d corpus sessions, %d distinct terms, representative=%v |\n",
 		run.DFSessions, run.DFTerms, run.DFRepresentative)
+	var hand, corpus, reports int
+	for _, s := range run.Sessions {
+		if strings.HasPrefix(s.Kind, "hand-authored") {
+			hand++
+		} else {
+			corpus++
+		}
+		for _, a := range s.Arms {
+			reports += len(a.Reports)
+		}
+	}
+	fmt.Fprintf(b, "| sessions shown | %d: %d from the pinned corpus, %d hand-authored non-engineering |\n",
+		hand+corpus, corpus, hand)
+	fmt.Fprintf(b, "| reports shown | %d (each session: 4 reports x 2 arms) |\n", reports)
 
 	fmt.Fprintf(b, `
 **The two arms.** They differ in exactly one thing: whether a report whose subject was measured
@@ -157,7 +257,20 @@ contains — not by parsing the prompt between headings, which conversation text
 heading defeats.
 
 **Prompt sizes are observed on the assembled string**, not derived from a bound the code is
-supposed to enforce. Failures are shown in place, labelled, with their attempt count.
+supposed to enforce. Failures are shown in place, labelled, with their attempt count — a
+refusal, an exhausted retry ladder, a recovered budget panic, or an open list the model left
+empty that code then filled. The counts at the end say how many of each this run produced.
+
+**How the pinning was confirmed rather than assumed.** Each session prints the transcript it was
+mined from, and every corpus one is under the snapshot path above — session selection reads
+`+"`corpusRoot()`"+` now, which it did not before `+"`ad55212`"+`, when a pinned run still
+selected sessions from the live, growing directory. The distinctiveness table above was built
+from the same root.
+
+**The two hand-authored non-engineering sessions come first** (a month-end close and a product
+launch). They are here because the audience requirement is that a non-technical org admin can
+read the work out of Atlas, and a file of nothing but code sessions cannot support a judgement
+about that.
 
 **Order:** session, then arm, then report step.
 `)
@@ -188,6 +301,9 @@ func writeReport(b *strings.Builder, run runDump, s sessionDump, a armDump, r re
 		fenced(b, r.Facts)
 		fmt.Fprintf(b, "\n*A first report reads no beats, no retain-list and no open items: there is no previous "+
 			"report to carry anything from. The refinements below read the record instead of this block.*\n")
+		fmt.Fprintf(b, "\n*The counts here are scoped to THIS WINDOW — the last few turns — while the record "+
+			"above is cumulative over the session so far. Where the two differ they are measuring different "+
+			"spans, not disagreeing.*\n")
 	} else {
 		fmt.Fprintf(b, "\n#### Input 2 — the beat series as selected and rendered (indicative: model-generated)\n\n")
 		fmt.Fprintf(b, "%d beats accumulated, %d carried by this prompt.\n\n", len(r.BeatsAccumulated), r.BeatsShown)
