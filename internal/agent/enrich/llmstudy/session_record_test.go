@@ -1,6 +1,7 @@
 package llmstudy
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -247,6 +248,111 @@ func TestSessionRecordSubjectsKeepGenuineShortProperNoun(t *testing.T) {
 	r := SessionRecord{}.Observe(w, Extract(w))
 	if !strings.Contains(strings.Join(r.Subjects, " "), "Larkin") {
 		t.Errorf("genuine mid-turn proper noun must still be admitted, got %v", r.Subjects)
+	}
+}
+
+// The recency fixtures below use snake_case tokens deliberately: strongIdentifier claims them
+// unconditionally, so these tests exercise the RANKING and nothing else — no DF table, no
+// position rule, no length floor in the way. What is being pinned is which admitted terms get the
+// twelve slots, never which terms are admitted.
+func recencyTurn(prefix string, n int) Window {
+	var b strings.Builder
+	b.WriteString("touching")
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, " %s_%02d", prefix, i)
+	}
+	return Window{Turns: []Turn{{RoleUser, b.String()}}}
+}
+
+func observeN(r SessionRecord, w Window, times int) SessionRecord {
+	for i := 0; i < times; i++ {
+		r = r.Observe(w, Extract(w))
+	}
+	return r
+}
+
+func subjectsWithPrefix(subjects []string, prefix string) int {
+	n := 0
+	for _, s := range subjects {
+		if strings.HasPrefix(s, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSubjectsDoNotGoStaleWhenTheWorkMoves is the defect, and it is the one the series review
+// measured rather than a synthetic edge case: Subjects was ranked by CUMULATIVE frequency alone,
+// so early vocabulary took an insurmountable lead and later work could never enter — inside a
+// block labelled "measured — authoritative" that the prompt leans on to place the work. A
+// reviewer failed a real timeline's `recognisable_week` because 10 of 14 beats used vocabulary
+// absent from the record, and two reviewers split between `dropped_middle` and
+// `cross_session_contamination` on another because the record held no evidence either way.
+//
+// The fixture is the same shape: thirteen early terms mentioned in ten windows, then five windows
+// — exactly one beat stride — about six new ones. Reverting rankSubjects to
+// topByFrequency(r.freq, MaxRecordSubjects) reproduces the failure exactly: "the record never
+// mentions the work of the last 5 windows: [alpha_01 ... alpha_12]".
+func TestSubjectsDoNotGoStaleWhenTheWorkMoves(t *testing.T) {
+	r := observeN(SessionRecord{}, recencyTurn("alpha", 13), 10)
+	r = observeN(r, recencyTurn("omega", 6), recentRecordWindows)
+
+	if got := subjectsWithPrefix(r.Subjects, "omega"); got != recentRecordSubjects {
+		t.Errorf("the record never mentions the work of the last %d windows: got %d recent "+
+			"terms of a reserved %d, subjects %v", recentRecordWindows, got,
+			recentRecordSubjects, r.Subjects)
+	}
+	// And the other direction, or the record has stopped being session-spanning: the cumulative
+	// half keeps the majority of the slots.
+	if got := subjectsWithPrefix(r.Subjects, "alpha"); got != MaxRecordSubjects-recentRecordSubjects {
+		t.Errorf("the session-spanning spine lost its slots: got %d of %d, subjects %v",
+			got, MaxRecordSubjects-recentRecordSubjects, r.Subjects)
+	}
+	if len(r.Subjects) != MaxRecordSubjects {
+		t.Errorf("subjects must still fill their bound: %d of %d", len(r.Subjects), MaxRecordSubjects)
+	}
+}
+
+// A reserved slot that nothing claims must go back to the session ranking. Otherwise the fix
+// would SHORTEN the record on a thin recent stretch, which is a second way to lose specifics.
+func TestUnusedRecentSlotsReturnToTheSessionRanking(t *testing.T) {
+	r := observeN(SessionRecord{}, recencyTurn("alpha", 13), 10)
+	r = observeN(r, recencyTurn("omega", 1), recentRecordWindows)
+	if len(r.Subjects) != MaxRecordSubjects {
+		t.Fatalf("a thin recent stretch shortened the record: %v", r.Subjects)
+	}
+	if got := subjectsWithPrefix(r.Subjects, "omega"); got != 1 {
+		t.Errorf("the one recent term must be held, got %d: %v", got, r.Subjects)
+	}
+	if got := subjectsWithPrefix(r.Subjects, "alpha"); got != MaxRecordSubjects-1 {
+		t.Errorf("the four unclaimed slots must return to the session ranking, got %d alphas: %v",
+			got, r.Subjects)
+	}
+}
+
+// TestATurningPointRestartsTheRecentStretch is the record USING the movement it already detects.
+// TurningPoints and the EWMA focus were both being recorded while Subjects — the field that
+// actually places the work — ignored them entirely.
+//
+// Without the ring reset the pre-shift vocabulary is still inside the recency window and still
+// outranks the post-shift work (three windows against one), so the reserved slots go back to the
+// terms the shift moved away from. Deleting `r.recent = nil` from NoteTurningPoint reproduces
+// that: zero omega terms.
+func TestATurningPointRestartsTheRecentStretch(t *testing.T) {
+	r := observeN(SessionRecord{}, recencyTurn("alpha", 13), 3)
+	r = r.NoteTurningPoint(4, TriggerFocusShift)
+	w := recencyTurn("omega", 6)
+	r = r.Observe(w, Extract(w))
+	if got := subjectsWithPrefix(r.Subjects, "omega"); got != recentRecordSubjects {
+		t.Errorf("after a turning point the recent slots must hold the new direction's terms: "+
+			"got %d of %d, subjects %v", got, recentRecordSubjects, r.Subjects)
+	}
+	// A turning point does not itself re-rank: ranking happens in Observe where the counts are
+	// built. A record whose Subjects were set directly (the prompt-budget worst cases do exactly
+	// that, then note twelve turning points) must keep the list it was given.
+	given := SessionRecord{Subjects: []string{"handed_in_directly"}}
+	if got := given.NoteTurningPoint(1, TriggerFocusShift).Subjects; len(got) != 1 {
+		t.Errorf("a directly-set subject list was rewritten by a turning point: %v", got)
 	}
 }
 

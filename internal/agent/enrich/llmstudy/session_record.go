@@ -15,6 +15,36 @@ const (
 	// maxSubjectTermLen (digest_recency.go) — a count cap alone bounds nothing, since
 	// subjectTokens keeps a base64/dotted blob together as one token.
 	MaxRecordSubjects = 12
+	// recentRecordSubjects is how many of those MaxRecordSubjects slots are RESERVED for the
+	// terms of the recent stretch, and it is the fix for a record that went stale under a
+	// heading calling itself authoritative.
+	//
+	// Subjects was ranked by CUMULATIVE frequency alone, so a term that arrived early
+	// accumulated an insurmountable lead and later work could never enter — while the block is
+	// labelled "measured — authoritative" and the prompt leans on it to place the work. Measured
+	// by the series review, on real timelines:
+	//
+	//   - a reviewer failed a timeline's `recognisable_week` because 10 of 14 beats used
+	//     vocabulary absent from the record. The beats were right; the record was stale.
+	//   - the two reviewers SPLIT on one timeline — `dropped_middle` versus
+	//     `cross_session_contamination` — because the record held no evidence either way. A
+	//     stale record does not only cause false failures, it destabilises the reading between
+	//     two careful readers.
+	//   - both reviewers independently noticed a real filename (`fa-register.csv`) missing from
+	//     the subject list while the session's other three files were present.
+	//
+	// FIVE of twelve, so the session-spanning spine keeps the majority (7) and the record does
+	// not become a window with extra steps. Reserved rather than hoped for: a recency WEIGHT
+	// only makes fresh vocabulary likely, and "likely" is what the review already measured
+	// failing. Unused reserved slots are given back to the cumulative ranking, so a thin recent
+	// stretch shortens nothing.
+	recentRecordSubjects = 5
+	// recentRecordWindows is how many observations count as recent, and it is tied to the beat
+	// stride rather than chosen: Observe folds one delta per user prompt and beats fire every
+	// BeatTurnsFromEnv() = 5 user prompts, so five observations is exactly the stretch the beat
+	// being written is about — the vocabulary the reviewer found missing from the record while
+	// the beats were using it.
+	recentRecordWindows = 5
 	// MaxRecordTurningPoints bounds TurningPoints — task-7b fix round 3 (minor G): every
 	// other SessionRecord list caps itself at accumulation time (WithProject, Observe's
 	// topByFrequency), but NoteTurningPoint appended forever. A long session with
@@ -43,8 +73,11 @@ type TurningPoint struct {
 // the intended session-spanning view — come from WithEnrichment, a classification pass the
 // digest path never makes, so they were empty in every measurement taken.
 type SessionRecord struct {
-	Projects []string    `json:"projects"`
-	Subjects []string    `json:"subjects"` // verbatim-verified terms, by frequency
+	Projects []string `json:"projects"`
+	// Subjects are verbatim-verified terms: the recent stretch's most frequent first (up to
+	// recentRecordSubjects of them), then the whole session's, each by frequency. See
+	// rankSubjects — ranking by cumulative frequency alone is what made this field go stale.
+	Subjects []string    `json:"subjects"`
 	Tools    []ToolCount `json:"tools"`
 
 	Turns       int `json:"turns"`
@@ -59,7 +92,12 @@ type SessionRecord struct {
 
 	TurningPoints []TurningPoint `json:"turning_points"`
 
-	freq map[string]int
+	// freq is the cumulative term frequency of the whole session; recent holds the last
+	// recentRecordWindows observations' own counts, newest last, and is what earns the reserved
+	// slots. Both are unexported: Subjects is the field, and a caller that sets Subjects
+	// directly (the prompt-budget worst cases do) must keep working untouched.
+	freq   map[string]int
+	recent []map[string]int
 }
 
 // Observe folds one window's measured signals into the record. Deterministic and free of any
@@ -75,6 +113,10 @@ func (r SessionRecord) Observe(w Window, s Signals) SessionRecord {
 	if r.freq == nil {
 		r.freq = map[string]int{}
 	}
+	// This observation's own counts, folded into the recency ring below. Every term that enters
+	// r.freq enters here too — one gate, two horizons, so the reserved slots cannot admit a term
+	// the cumulative half would have rejected.
+	here := map[string]int{}
 	src := Render(w)
 	for _, t := range w.Turns {
 		for _, tok := range subjectTokens(t.Text) {
@@ -120,11 +162,71 @@ func (r SessionRecord) Observe(w Window, s Signals) SessionRecord {
 			// substring of src. See record_paths.go for the measured packet this fixes —
 			// `recurring subjects: home/dg/keld/keld-signal/.claude/worktrees/…` sitting in
 			// the block the prompt calls authoritative.
-			r.freq[resolveSubjectTerm(trimTermPunct(tok))]++
+			term := resolveSubjectTerm(trimTermPunct(tok))
+			r.freq[term]++
+			here[term]++
 		}
 	}
-	r.Subjects = topByFrequency(r.freq, MaxRecordSubjects)
+	// The recency ring. Copied on append rather than mutated in place because SessionRecord is
+	// passed and returned BY VALUE everywhere in this package — two records derived from a shared
+	// ancestor must not silently share a slice's backing array.
+	r.recent = append(append([]map[string]int{}, r.recent...), here)
+	if len(r.recent) > recentRecordWindows {
+		r.recent = r.recent[len(r.recent)-recentRecordWindows:]
+	}
+	r.Subjects = r.rankSubjects()
 	return r
+}
+
+// recentFreq sums the ring: how often each term was used in the last recentRecordWindows
+// observations.
+func (r SessionRecord) recentFreq() map[string]int {
+	out := map[string]int{}
+	for _, obs := range r.recent {
+		for t, c := range obs {
+			out[t] += c
+		}
+	}
+	return out
+}
+
+// rankSubjects fills the subject slots from two horizons: the recent stretch, which owns
+// recentRecordSubjects of them, and the session so far, which owns the rest and backfills
+// whatever the recent stretch did not use.
+//
+// The gate is UNCHANGED. Both halves rank terms that already passed distinctiveToken in Observe
+// — document frequency, the thing that let `depreciation`, `accruals`, `Meridian` and `Larkin`
+// survive at DF .00-.03 where a hand-built engineering stoplist would have deleted the whole
+// accounting vocabulary. Recency decides which admitted terms get the slots; it never admits a
+// term the salience gate rejected, and the verbatim-substring contract is untouched because these
+// are the same stored spellings, only reordered.
+//
+// The recent terms LEAD, so a consumer that walks Subjects in order under a cap of its own sees
+// the current work first, and a reader looking for where the work IS reads it at the head of the
+// line rather than at the end. That ordering is also what makes an unused reserved slot free: the
+// second call simply continues down the cumulative ranking.
+//
+// Ties inside each half break alphabetically (topByFrequency), so the list is still stable across
+// runs — reproducibility is what retired "is it variance?" for this study.
+func (r SessionRecord) rankSubjects() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(terms []string) {
+		for _, t := range terms {
+			if len(out) == MaxRecordSubjects {
+				return
+			}
+			k := strings.ToLower(t)
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, t)
+		}
+	}
+	add(topByFrequency(r.recentFreq(), recentRecordSubjects))
+	add(topByFrequency(r.freq, MaxRecordSubjects))
+	return out
 }
 
 // weakProperNounMinLen is the length floor for the position-based fallback below.
@@ -238,6 +340,17 @@ func (r SessionRecord) NoteTurningPoint(seq int, reason TriggerReason) SessionRe
 	if len(r.TurningPoints) > MaxRecordTurningPoints {
 		r.TurningPoints = r.TurningPoints[len(r.TurningPoints)-MaxRecordTurningPoints:]
 	}
+	// The direction changed, so the recent stretch starts here: the ring is cleared and the
+	// reserved slots refill from post-shift observations. This is the record USING the movement
+	// it already detects — TurningPoints and the EWMA focus were both recorded while Subjects,
+	// the field that actually places the work, ignored them entirely.
+	//
+	// It does NOT recompute Subjects. Ranking happens in Observe, where the term counts are
+	// built, so a turning point takes effect at the next observation — and a record whose
+	// Subjects were set directly (the prompt-budget worst cases do exactly that, then note
+	// twelve turning points) keeps the list it was given instead of having it silently emptied,
+	// which would make those tests certify a bound on an input smaller than the real one.
+	r.recent = nil
 	return r
 }
 
