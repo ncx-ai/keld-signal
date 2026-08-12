@@ -1457,7 +1457,7 @@ changes what every refinement reads. Part 7's numbers stand for the code they we
 these are the current ones, and the ≥90% threshold fails either way. The retention *failure* is
 unchanged; its magnitude is 4-6 points less bad than published.
 
-# Part 9 — Five gated changes, measured in counts: the delimiter rule is the whole gain
+# Part 9 — Five gated changes, measured in COUNTS: the delimiter rule is the whole gain
 
 Six sweeps × two arms on a **pinned corpus snapshot** (567 transcripts frozen 2026-08-11T15:13,
 14 stratified sessions, this branch's own transcript first; Qwen3-4B-Instruct-2507 Q4_K_M,
@@ -1587,7 +1587,19 @@ output against its source. These thresholds should not be extended in the meanti
 
 ---
 
-# Part 9 — A gate, a delimiter rule, and what a subject is
+# Part 9b — the same five steps in rates, and the gate's per-step verdicts
+
+⚠️ **Two agents wrote a Part 9 into this file within minutes of each other, working the same five
+steps from the same logs.** Both are kept. Part 9 above is count-based and carries the
+fact-versus-judgement classification, written after the owner's instruction that rates over moving
+denominators are not what he trusts; Part 9b here is the rate-based narrative with the gate's
+per-step verdicts, which the counts supersede where the two disagree. **They differ on one figure
+and it should be resolved by a human:** the hand audit of `Subjects` is 88 of 168 → 145 of 168
+(this part) versus 69 of 168 → 102 of 168 (Part 9). Same 168 terms, two independent judgements,
+and the difference is entirely where the line sits for generic technical vocabulary
+(`latency`, `heap`, `arena`, `trim`, `keychain`, `secrets`). The two agree on direction, on
+magnitude (+57 versus +33 terms), and on which sessions improved; neither is a measurement in the
+sense the rest of this document uses the word.
 
 Five gated changes, each measured on both arms against a committed baseline, each with the gate's
 verdict recorded whether or not it was flattering. Full detail, per step, including the variant
