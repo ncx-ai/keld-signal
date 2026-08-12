@@ -732,17 +732,33 @@ func (l *Llama) RefineFrom(prev Digest, in RefineInput) (Digest, error) {
 	// trading T1 76.8% for T8 0%. A dropped digest is worse than a stale open item, and
 	// retrying a failure the model cannot pass is the same mistake as retrying a
 	// deterministic one.
-	repair := func(d Digest) Digest { return dropStaleOpenItems(applyClosures(d, up.Closed)) }
+	// Three repairs, and the third is the one the first two cannot reach: if the model returns
+	// `unresolved` empty AND `closed` empty, neither of the others fires (no closures, nothing
+	// stale) and the list stays empty. See ensureUnresolvedIsAddressed — it substitutes the
+	// sentinel and REPORTS that it did, because an empty list is also the rubberstamping signal
+	// ValidateDigest exists to catch and papering over it silently would delete a measurement.
+	repair := func(d Digest) (Digest, bool) {
+		return ensureUnresolvedIsAddressed(dropStaleOpenItems(applyClosures(d, up.Closed)))
+	}
 
 	// Validation runs on the REPAIRED digest, not the raw response. Validating the raw one
 	// rejected a legitimate answer that moved every open item into "closed", leaving
 	// unresolved momentarily empty — "unresolved is empty" then burned all 5 retries on a
 	// digest the repairs would have completed. The repair supplies the sentinel.
 	if err := l.callValid(DigestUpdatePromptFrom(prev, in), DigestUpdateSchema(), &up,
-		func() error { return firstProblem(ValidateDigest(repair(up.Digest))) }); err != nil {
+		func() error {
+			fixed, _ := repair(up.Digest)
+			return firstProblem(ValidateDigest(fixed))
+		}); err != nil {
 		return Digest{}, err
 	}
-	merged := mergeWithRetirement(prev, repair(up.Digest), up.Retired)
+	// Counted HERE, once, on the digest that is actually committed — not inside the validator,
+	// which runs on every attempt, nor inside the repair, which runs twice per call.
+	fixed, substituted := repair(up.Digest)
+	if substituted {
+		l.emptyUnresolved++
+	}
+	merged := mergeWithRetirement(prev, fixed, up.Retired)
 	return CapSections(merged, DefaultListCap), nil
 }
 

@@ -1,6 +1,7 @@
 package llmstudy
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -159,5 +160,132 @@ func TestClosingEveryItemYieldsTheSentinel(t *testing.T) {
 		[]string{"data residency unanswered"})
 	if len(got.Unresolved) != 1 || !UsesUnresolvedSentinelText(got.Unresolved[0]) {
 		t.Fatalf("want the sentinel, got %v", got.Unresolved)
+	}
+}
+
+// The gap that cost three digests: NEITHER existing repair fires when the model returns
+// `unresolved` empty AND `closed` empty. applyClosures returns early on no closures,
+// dropStaleOpenItems returns early on nothing stale, so the list a reader acts on stays empty
+// and ValidateDigest rejects it — five times over, since the digest path re-requests
+// byte-identically at temperature 0.
+//
+// This test states the diagnosis as well as the fix: the two named early returns are exercised
+// on the exact input, and their output is asserted to still be empty.
+func TestNeitherRepairFiresOnAnAllEmptyAccounting(t *testing.T) {
+	// Prose-complete on purpose, so the only problem ValidateDigest can report is the empty
+	// list. A fixture failing on five other fields would pass this test for the wrong reason.
+	raw := Digest{
+		Synopsis: "The March ledger reconciliation for Meridian was completed.",
+		Done:     "The accrual journals for unbilled work from Calder have been posted to the ledger.",
+		Happened: "Calder and Halberd journals were posted and the ledger balanced.",
+		Structure: "The session moved from identifying unbilled work to posting the accrual " +
+			"journals.",
+		Current: "The ledger reconciliation is complete.",
+		Why:     "The quarter closes on Friday and the accruals gate it.",
+		Next:    "Post the Halberd accrual for April.",
+	}
+	repaired := dropStaleOpenItems(applyClosures(raw, nil))
+	if len(repaired.Unresolved) != 0 {
+		t.Fatalf("the diagnosis no longer holds — a repair now fills the list: %v", repaired.Unresolved)
+	}
+	if p := ValidateDigest(repaired); len(p) != 1 || !strings.Contains(p[0], "unresolved is empty") {
+		t.Fatalf("want the empty-open-list rejection and nothing else, got %v", p)
+	}
+	got, substituted := ensureUnresolvedIsAddressed(repaired)
+	if !substituted {
+		t.Fatal("the substitution did not report itself, so the sweep cannot count it")
+	}
+	if len(got.Unresolved) != 1 || !UsesUnresolvedSentinelText(got.Unresolved[0]) {
+		t.Fatalf("want the sentinel, got %v", got.Unresolved)
+	}
+	if p := ValidateDigest(got); len(p) > 0 {
+		t.Fatalf("the repaired digest still fails validation: %v", p)
+	}
+}
+
+// A list the model actually filled must be left alone, and must NOT be counted: the count
+// answers "how often did the model return nothing", and inflating it with ordinary digests
+// would make it as useless as the silent substitution it exists to prevent.
+func TestAnAddressedOpenListIsNeitherChangedNorCounted(t *testing.T) {
+	for _, d := range []Digest{
+		{Unresolved: []string{"data residency unanswered"}},
+		{Unresolved: []string{UnresolvedSentinel}},
+	} {
+		got, substituted := ensureUnresolvedIsAddressed(d)
+		if substituted {
+			t.Fatalf("counted a substitution that was not needed: %v", d.Unresolved)
+		}
+		if len(got.Unresolved) != len(d.Unresolved) || got.Unresolved[0] != d.Unresolved[0] {
+			t.Fatalf("an addressed list was rewritten: %v -> %v", d.Unresolved, got.Unresolved)
+		}
+	}
+}
+
+// emptyAccountingJSON is the measured response shape: every prose field answered, `unresolved`
+// AND `closed` both empty. This is what lost three digests — 3 of 56, all five attempts spent on
+// `unresolved is empty` because the digest path re-requests byte-identically at temperature 0.
+func emptyAccountingJSON() string {
+	b, _ := json.Marshal(map[string]any{
+		"synopsis":  "The March ledger reconciliation for Meridian was completed.",
+		"done":      "The accrual journals for unbilled work from Calder have been posted.",
+		"happened":  "Calder and Halberd journals were posted and the ledger balanced.",
+		"structure": "The session moved from identifying unbilled work to posting the journals.",
+		"current":   "The ledger reconciliation is complete.",
+		"why":       "The quarter closes on Friday and the accruals gate it.",
+		"next":      "Post the Halberd accrual for April.",
+		"insights":  []string{"Unbilled work was the only gap in the March ledger."},
+
+		"unresolved": []string{},
+		"retired":    []string{},
+		"closed":     []string{},
+	})
+	return string(b)
+}
+
+// The end-to-end statement of the fix: an all-empty accounting now PRODUCES a digest instead of
+// burning five identical attempts, in ONE request, and the substitution is counted.
+//
+// Fails before the fix: the repair leaves `unresolved` empty, ValidateDigest rejects it, the
+// deterministic server returns the same body four more times and RefineFrom errors.
+func TestAnEmptyOpenListProducesADigestAndIsCounted(t *testing.T) {
+	srv, bodies := recordingServer(t, []string{emptyAccountingJSON()})
+	l := NewLlama(srv.URL)
+	// fastPolicy so the pre-fix behaviour — five attempts at DefaultPolicy's second-scale
+	// backoff — fails in milliseconds rather than looking like a hang.
+	l.Policy = fastPolicy()
+	d, err := l.RefineFrom(Digest{Unresolved: []string{UnresolvedSentinel}},
+		RefineInput{SessionLabel: "ledger", NewTurns: "user: post the Calder accrual"})
+	if err != nil {
+		t.Fatalf("an empty open list still loses the digest: %v", err)
+	}
+	if len(*bodies) != 1 {
+		t.Fatalf("want one request, got %d — the empty list is still being retried", len(*bodies))
+	}
+	if len(d.Unresolved) != 1 || !UsesUnresolvedSentinelText(d.Unresolved[0]) {
+		t.Fatalf("want the sentinel in the committed digest, got %v", d.Unresolved)
+	}
+	// The count is the whole point of the substitution being acceptable. One call, one count —
+	// not two (the repair runs twice per call) and not five (the validator runs per attempt).
+	if got := l.EmptyUnresolvedSubstitutions(); got != 1 {
+		t.Fatalf("want exactly 1 counted substitution, got %d", got)
+	}
+}
+
+// An ordinary refinement must not be counted, or the number stops answering its question.
+func TestARefinementThatNamesOpenItemsIsNotCounted(t *testing.T) {
+	body := strings.Replace(emptyAccountingJSON(), `"unresolved":[]`,
+		`"unresolved":["The Halberd accrual for April is not yet posted."]`, 1)
+	if body == emptyAccountingJSON() {
+		t.Fatal("the fixture substitution did not apply; the JSON shape changed")
+	}
+	srv, _ := recordingServer(t, []string{body})
+	l := NewLlama(srv.URL)
+	l.Policy = fastPolicy()
+	if _, err := l.RefineFrom(Digest{Unresolved: []string{UnresolvedSentinel}},
+		RefineInput{SessionLabel: "ledger", NewTurns: "user: post the Calder accrual"}); err != nil {
+		t.Fatalf("refinement failed: %v", err)
+	}
+	if got := l.EmptyUnresolvedSubstitutions(); got != 0 {
+		t.Fatalf("an addressed open list was counted as a substitution: %d", got)
 	}
 }

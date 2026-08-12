@@ -299,6 +299,10 @@ func TestDigestRefineQuality(t *testing.T) {
 		retWeakNum, retWeakDen     int
 		sentinelUsed               int
 		nextIDs, fabricatedNext    int
+		// refineSteps is the denominator for emptyUnresolved: the substitution lives on the
+		// refine path only (the create path validates the raw response and has no repair
+		// chain), so counting it over all attempts would dilute it by one step per session.
+		refineSteps, emptyUnresolved int
 		// Beat accounting. "Generated" is what the model was asked for and returned;
 		// "kept" is what AppendBeat stored; "discarded" is what it dropped as a restatement
 		// of the previous beat. If most of what a 3-turn cadence generates is discarded, the
@@ -651,9 +655,20 @@ func TestDigestRefineQuality(t *testing.T) {
 				}
 				// How many beats the prompt actually carried, so a series silently shrunk by
 				// budget pressure is visible instead of assumed away.
+				refineSteps++
 				beatSteps++
 				beatsShownTotal += beatsShownIn(p, beats)
+				subsBefore := l.EmptyUnresolvedSubstitutions()
 				d, err = l.RefineFrom(cur, in)
+				// Attributed per step, not only totalled. Three digests were lost to
+				// `unresolved is empty` and the log was the only place that said WHICH — a
+				// bare count would substitute the sentinel and take that with it.
+				if l.EmptyUnresolvedSubstitutions() > subsBefore {
+					emptyUnresolved++
+					t.Logf("  EMPTY-UNRESOLVED s%d step%d: the model returned no open list at "+
+						"all; code supplied the sentinel (this step would have been LOST "+
+						"before the substitution existed)", sessions, step)
+				}
 			})
 			if panicked {
 				failed++
@@ -938,6 +953,16 @@ func TestDigestRefineQuality(t *testing.T) {
 	}
 	t.Logf("T13 fabricated next        %.1f%% of %d next-only identifiers  (want <=5%%)", pct(fabricatedNext, nextIDs), nextIDs)
 	t.Logf("   prompt leaks %d; sentinel used %d/%d", leaks, sentinelUsed, digests)
+	// Reported next to "sentinel used" because it is the other half of the same question, and
+	// reported at all because ValidateDigest rejects an empty open list DELIBERATELY — an empty
+	// list is what a rubberstamping model produces. Substituting the sentinel keeps the digest
+	// (3 of 56 were lost to five exhausted attempts on `unresolved is empty`); printing the count
+	// keeps "the model said nothing is open" distinguishable from "the model said nothing", which
+	// a silent substitution would have erased along with the failure.
+	t.Logf("   EMPTY-UNRESOLVED SUBSTITUTED %d of %d refinements  (the model answered with an "+
+		"empty open list; each would have been a LOST digest before the substitution, and each "+
+		"is a rubberstamping signal ValidateDigest exists to catch)",
+		emptyUnresolved, refineSteps)
 
 	// Recovered panics, as a metric rather than a log line. A run with silent losses is what
 	// made earlier numbers in this study meaningless, and every rate above is computed over a

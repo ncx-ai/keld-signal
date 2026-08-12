@@ -170,6 +170,36 @@ func UsesUnresolvedSentinelText(s string) bool {
 	return insightsMatch(s, UnresolvedSentinel)
 }
 
+// ensureUnresolvedIsAddressed supplies the sentinel when the open list is empty, and reports
+// whether it had to.
+//
+// This is the gap the other two repairs cannot close, and it cost three digests. Both of them
+// substitute the sentinel when THEY empty the list — but each returns early when it has nothing
+// to do, and when the model answers with `unresolved` empty AND `closed` empty there are no
+// closures to apply and nothing stale to drop. The list stays empty, ValidateDigest rejects it,
+// and all five attempts fail on the same rejection because the digest path samples greedily (no
+// `sampling` schedule; the temperature ladder is GenerateBeat's alone), so the re-request is
+// byte-identical. Measured: `unresolved is empty` exhausted every attempt on 3 of 56 digests
+// (ON at 66042cc s1 step 3; both arms at f62b80e, ON s1 step 2 and OFF s3 step 2).
+//
+// If the model returns nothing open, its answer IS "nothing is open", and the sentinel is that
+// answer's prescribed form — the same reasoning applyClosures and dropStaleOpenItems already
+// use for the lists they empty themselves.
+//
+// ⚠️ The bool is not decoration. ValidateDigest rejects an empty list DELIBERATELY, because an
+// empty list is what a rubberstamping model produces, and substituting silently would erase
+// exactly that signal — the defect class this branch keeps finding. The count is reported by the
+// sweep so "the model said nothing is open" stays distinguishable from "the model said nothing".
+// It fires only on the model-returned-nothing case: a list the other two repairs emptied means
+// the model DID name open items and code resolved them, which is a derivation, not a silence.
+func ensureUnresolvedIsAddressed(d Digest) (Digest, bool) {
+	if len(d.Unresolved) > 0 {
+		return d, false
+	}
+	d.Unresolved = []string{UnresolvedSentinel}
+	return d, true
+}
+
 // dropStaleOpenItems removes open items the report itself contradicts.
 //
 // Done in code, not asked of the model. Asking was measured and rejected: enforcing the

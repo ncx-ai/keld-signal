@@ -38,7 +38,25 @@ type Llama struct {
 	// backoff; production callers should leave the default.
 	Policy retry.Policy
 	hc     *http.Client
+	// emptyUnresolved counts refinements where the model returned no open list at all and
+	// ensureUnresolvedIsAddressed supplied the sentinel. Unexported with a reader, because it
+	// is an observation the sweep prints rather than a knob: see EmptyUnresolvedSubstitutions.
+	emptyUnresolved int
 }
+
+// EmptyUnresolvedSubstitutions reports how many refinements answered with an EMPTY open list,
+// which code then rendered as the "nothing is open" sentinel.
+//
+// It exists so the substitution does not hide what it papers over. ValidateDigest rejects an
+// empty list on purpose — its own comment says an empty list is what a rubberstamping model
+// produces — and before the substitution existed those refinements were simply LOST (5 exhausted
+// attempts on `unresolved is empty`, 3 of 56 digests). Substituting keeps the digest; counting
+// keeps the difference between "the model said nothing is open" and "the model said nothing"
+// visible in the sweep's own output, where a reader comparing runs will see it.
+//
+// Not concurrency-safe, and does not need to be: the sweep is sequential and the server is
+// --parallel 1.
+func (l *Llama) EmptyUnresolvedSubstitutions() int { return l.emptyUnresolved }
 
 // NewLlama returns a client for a llama-server base URL (e.g. http://127.0.0.1:8080).
 // The timeout is generous because CPU prefill over a multi-turn window is slow —
