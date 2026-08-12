@@ -178,6 +178,13 @@ func TestRegressionIsTheLoudCase(t *testing.T) {
 // TestDenominatorMoveIsNeverHidden is the T12 case stated as a test. 15.7% of 70 -> 25.0% of
 // 40 is a WORSE rate over a smaller sample, and the reverse direction — a rate that improves
 // while its denominator collapses — is the one that reads as a win and is not one.
+//
+// CORRECTION to this test's first form, which asserted plain REGRESSED on the 70 -> 40 case.
+// The report that accompanied it had already worked out that "the sample shrank; the behaviour
+// did not worsen" — 11 flagged beats became 10 — so the gate and the prose disagreed and the
+// gate was wrong. A rate that worsens while the COUNT improves is not a behavioural regression
+// and must not be one of the rows that triggers the revert rule; it is UNATTRIBUTABLE, which is
+// loud in its own right and demands the denominator be explained.
 func TestDenominatorMoveIsNeverHidden(t *testing.T) {
 	base := parseFixture(t, strings.Replace(fixture,
 		"T12 beat-vs-record         25.0% of 40 CHECKED",
@@ -187,8 +194,8 @@ func TestDenominatorMoveIsNeverHidden(t *testing.T) {
 		if r.Metric.Key != "t12_beat_vs_record" {
 			continue
 		}
-		if r.Verdict != Regressed {
-			t.Errorf("verdict = %s, want REGRESSED", r.Verdict)
+		if r.Verdict != Unattributable {
+			t.Errorf("verdict = %s, want %s", r.Verdict, Unattributable)
 		}
 		joined := strings.Join(r.Notes, " | ")
 		if !strings.Contains(joined, "DENOMINATOR MOVED 70 -> 40") {
@@ -212,6 +219,116 @@ func TestDenominatorMoveIsNeverHidden(t *testing.T) {
 		if joined := strings.Join(r.Notes, " | "); !strings.Contains(joined, "NOT attributable") {
 			t.Errorf("an improvement over a collapsed denominator was reported as a plain win: %s", joined)
 		}
+	}
+}
+
+// TestSameCountOverAMovedDenominatorIsNotARegression is the noise floor, and the reason the
+// first five gated steps on this branch all reported REGRESSED.
+//
+// "T13 3.3% of 90 -> 3.4% of 88" is the SAME THREE flagged items measured over two fewer
+// candidates. Reported as a regression it costs the reader the same attention as T1 losing a
+// digest, and a gate whose loud rows are mostly arithmetic is a gate that gets skimmed. So a
+// rate that moves adversely while its count stands still, across a moved denominator, is a
+// rate ARTIFACT: printed with both numbers, excluded from the revert class.
+func TestSameCountOverAMovedDenominatorIsNotARegression(t *testing.T) {
+	base := parseFixture(t, fixture)
+	cur := parseFixture(t, strings.Replace(fixture,
+		"T13 fabricated next        3.3% of 90", "T13 fabricated next        3.4% of 88", 1))
+	var row Row
+	for _, r := range Compare(base, cur) {
+		if r.Metric.Key == "t13_fabricated_next" {
+			row = r
+		}
+	}
+	if row.Verdict != Artifact {
+		t.Errorf("verdict = %s, want %s", row.Verdict, Artifact)
+	}
+	joined := strings.Join(row.Notes, " | ")
+	for _, want := range []string{"DENOMINATOR MOVED 90 -> 88", "count is UNCHANGED at 3"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("notes missing %q: %s", want, joined)
+		}
+	}
+	// The revert class must not contain it, and the reader must still see it.
+	res := &Result{Rows: map[string][]Row{"on": Compare(base, cur)}}
+	if regs := res.Regressions(); len(regs) != 0 {
+		t.Errorf("a denominator artifact entered the revert class: %v", regs)
+	}
+	out := res.Render()
+	if !strings.Contains(out, "GATE: PASS") {
+		t.Errorf("render did not pass on an artifact-only run:\n%s", out)
+	}
+	if !strings.Contains(out, "T13") || !strings.Contains(out, "NOT the revert class") {
+		t.Errorf("render hid the artifact instead of separating it:\n%s", out)
+	}
+}
+
+// TestAnImprovementTheCountAgreesWithIsAttributable is the same scepticism pointed at a WIN.
+//
+// T4 rising from 58.2% of 79 to 67.9% of 81 is the movement this branch's headline failure
+// turns on, and the question that decides whether it is real is whether the retained COUNT rose
+// too, or whether fewer facts were merely injected. Both are printed, and the caveat is
+// attached to exactly one of the two cases.
+func TestAnImprovementTheCountAgreesWithIsAttributable(t *testing.T) {
+	base := parseFixture(t, fixture)
+	real := parseFixture(t, strings.Replace(fixture,
+		"T4 retention to final     58.2% of 79", "T4 retention to final     67.9% of 81", 1))
+	var row Row
+	for _, r := range Compare(base, real) {
+		if r.Metric.Key == "t4_retention" {
+			row = r
+		}
+	}
+	if row.Verdict != Improved {
+		t.Fatalf("verdict = %s, want improved", row.Verdict)
+	}
+	joined := strings.Join(row.Notes, " | ")
+	if !strings.Contains(joined, "count 46 -> 55") {
+		t.Errorf("notes did not carry the retained count: %s", joined)
+	}
+	if !strings.Contains(joined, "the count moved the SAME way") {
+		t.Errorf("an improvement the count corroborates was not said to be attributable: %s", joined)
+	}
+	if strings.Contains(joined, "NOT attributable") {
+		t.Errorf("a corroborated improvement was caveated as unattributable: %s", joined)
+	}
+	// And the shape that is not progress: the same 46 facts retained out of fewer injected.
+	flattered := parseFixture(t, strings.Replace(fixture,
+		"T4 retention to final     58.2% of 79", "T4 retention to final     71.9% of 64", 1))
+	for _, r := range Compare(base, flattered) {
+		if r.Metric.Key != "t4_retention" {
+			continue
+		}
+		if r.Verdict != Artifact {
+			t.Errorf("a rate that rose only because the denominator fell: verdict %s, want %s",
+				r.Verdict, Artifact)
+		}
+	}
+}
+
+// TestAbstentionsTravelWithTheirMetric covers the loss the study has already published twice:
+// T11 and T12 each spent a round reporting a reassuring 0.0% that was really an abstention. A
+// FULL loss of the verdict is already loud (Vanished). A partial one — the same 0.0% over half
+// as many judged cases — looked identical to a healthy run.
+func TestAbstentionsTravelWithTheirMetric(t *testing.T) {
+	base := parseFixture(t, fixture)
+	if v := base.Values["t11_abstained"]; v.Num != 5 {
+		t.Errorf("t11_abstained = %d, want 5", v.Num)
+	}
+	if v := base.Values["t12_abstained"]; v.Num != 0 {
+		t.Errorf("t12_abstained = %d, want 0", v.Num)
+	}
+	cur := parseFixture(t, strings.Replace(fixture,
+		"T11 synopsis lags          0.0% of 30 JUDGED refinements  (want <=10%; 5 of 35 abstained)",
+		"T11 synopsis lags          0.0% of 18 JUDGED refinements  (want <=10%; 23 of 41 abstained)", 1))
+	var row Row
+	for _, r := range Compare(base, cur) {
+		if r.Metric.Key == "t11_synopsis_lags" {
+			row = r
+		}
+	}
+	if joined := strings.Join(row.Notes, " | "); !strings.Contains(joined, "ABSTENTIONS ROSE 5 -> 23") {
+		t.Errorf("a metric judged on 12 fewer cases said nothing about it: %s", joined)
 	}
 }
 

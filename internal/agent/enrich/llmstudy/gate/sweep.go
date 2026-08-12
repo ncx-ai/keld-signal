@@ -172,6 +172,12 @@ var Metrics = []Metric{
 	{Key: "window_margin_create", Label: "tightest create window margin", Dir: Info, Want: ">=0", WantMin: 0, WantMax: nan()},
 	{Key: "largest_prompt", Label: "largest prompt (runes)", Dir: Info, Want: "<=14000", WantMax: 14000, WantMin: nan()},
 	{Key: "retain_evicted", Label: "retain-list entries evicted by a cap", Dir: Info, Want: "—", WantMin: nan(), WantMax: nan()},
+	// Abstentions are INFORMATIONAL as a row and load-bearing as a NOTE (abstentionNotes
+	// attaches them to T11/T12, whose denominators they explain). Judged on their own they
+	// would flag a two-case drift as a threshold regression; unreported, a rate judged on 18
+	// of 41 refinements reads exactly like one judged on 32.
+	{Key: "t11_abstained", Label: "  T11 refinements that abstained", Dir: Info, Want: "—", WantMin: nan(), WantMax: nan()},
+	{Key: "t12_abstained", Label: "  T12 beats that abstained", Dir: Info, Want: "—", WantMin: nan(), WantMax: nan()},
 }
 
 func nan() float64 { return math.NaN() }
@@ -206,6 +212,8 @@ var (
 	reT11None   = regexp.MustCompile(`T11 synopsis lags\s+NO VERDICT`)
 	reT12       = regexp.MustCompile(`T12 beat-vs-record\s+([\d.]+)% of (\d+) CHECKED`)
 	reT12None   = regexp.MustCompile(`T12 beat-vs-record\s+NO VERDICT`)
+	reT11Abs    = regexp.MustCompile(`T11 synopsis lags.*?(\d+) of (\d+) abstained`)
+	reT12Abs    = regexp.MustCompile(`T12 beat-vs-record.*?(\d+) abstained on a thin record`)
 	reT13       = regexp.MustCompile(`T13 fabricated next\s+([\d.]+)% of (\d+)`)
 	reLeaks     = regexp.MustCompile(`prompt leaks (\d+); sentinel used (\d+)/(\d+)`)
 	rePanics    = regexp.MustCompile(`RECOVERED PANICS\s+(\d+) total`)
@@ -247,6 +255,17 @@ func Parse(r io.Reader) (*Sweep, error) {
 	sc.Buffer(make([]byte, 0, 1<<16), 1<<22) // a sweep log line can carry a whole beat
 	for sc.Scan() {
 		line := sc.Text()
+		// The abstention counts share a LINE with the rate they qualify, so they are read
+		// outside the switch: as a case they would shadow the rate on the same line. They are
+		// carried because a metric that keeps answering over half as many judged cases is a
+		// weaker instrument, and that is the shape both of this study's published false 0.0%s
+		// actually had — a whole verdict lost is already loud, half of one was invisible.
+		if m := reT11Abs.FindStringSubmatch(line); m != nil {
+			s.Values["t11_abstained"] = count(atoi(m[1]))
+		}
+		if m := reT12Abs.FindStringSubmatch(line); m != nil {
+			s.Values["t12_abstained"] = count(atoi(m[1]))
+		}
 		switch {
 		case reArm.MatchString(line):
 			s.Arm = strings.ToLower(reArm.FindStringSubmatch(line)[1])
@@ -280,7 +299,11 @@ func Parse(r io.Reader) (*Sweep, error) {
 			m := reCoverage.FindStringSubmatch(line)
 			s.Values["beat_turn_coverage"] = rate(m[1], m[2])
 		case reOverlap.MatchString(line):
-			s.Values["beat_window_overlap"] = Value{Rate: atof(reOverlap.FindStringSubmatch(line)[1]), HasRate: true, Num: -1}
+			// Den -1, not 0: this rate has no population of its own (it is a mean over
+			// consecutive pairs), and "15.9% of 0" is how show() renders a denominator
+			// nobody set.
+			s.Values["beat_window_overlap"] = Value{
+				Rate: atof(reOverlap.FindStringSubmatch(line)[1]), HasRate: true, Num: -1, Den: -1}
 		case rePrompt.MatchString(line):
 			s.Values["largest_prompt"] = count(atoi(rePrompt.FindStringSubmatch(line)[1]))
 		case reMargins.MatchString(line):
