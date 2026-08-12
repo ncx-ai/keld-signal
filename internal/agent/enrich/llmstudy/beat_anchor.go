@@ -1,6 +1,9 @@
 package llmstudy
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // Verbatim anchoring: every entry in a beat must carry at least one TERM that occurs, verbatim,
 // in that beat's own window or in the measured record.
@@ -63,6 +66,16 @@ import "strings"
 //     over strong identifiers alone, so it cannot flag "Key", "Initial" or "e.g" the way the
 //     22.6% measurement did.
 
+// ⚠️ THE EVIDENCE IS THE CONVERSATION, NOT THE SCAFFOLDING WE WRAPPED IT IN. Both inputs carry
+// words this harness put there — the window's per-turn role labels ("assistant: ") and its hole
+// marker ("[turns since the previous update omitted to fit the context ...]"), the record's own
+// field labels ("recurring subjects:", "corrections=") — and every one of those words is present
+// in EVERY window by construction. An entry anchoring on "assistant", "context" or "corrections"
+// would be anchoring on the instrument, which is precisely the defect that made leak detection
+// worthless: it flagged only the sentinel the model was instructed to emit. So anchorEvidence
+// strips the scaffolding before the occurrence test runs, and the guard only ever matches against
+// text a person or a tool actually produced.
+//
 // beatAnchorMinRunes is the shortest ordinary word that may anchor an entry. Below it the token
 // is a fragment or a function word and its occurrence in a 16,000-rune window says nothing; a
 // strongIdentifier bypasses it, since "pb-4" is not a fragment.
@@ -85,14 +98,59 @@ func beatAnchorIn(s, window, record string) BeatAnchor {
 	if len(terms) == 0 {
 		return BeatAnchor{}
 	}
-	if kept, _ := VerifyTopics(terms, window); len(kept) > 0 {
+	if kept, _ := VerifyTopics(terms, windowEvidence(window)); len(kept) > 0 {
 		return BeatAnchor{Term: kept[0], InWindow: true}
 	}
-	if kept, _ := VerifyTopics(terms, record); len(kept) > 0 {
+	if kept, _ := VerifyTopics(terms, recordEvidence(record)); len(kept) > 0 {
 		return BeatAnchor{Term: kept[0]}
 	}
 	return BeatAnchor{}
 }
+
+// windowEvidence is the rendered window with this harness's own words removed: the "role: " label
+// each turn is written with, and the hole marker a bounded window leaves where turns were
+// dropped. Both are in every window by construction, so a term matching one of them says nothing
+// about this beat.
+func windowEvidence(window string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(window, "\n") {
+		if strings.HasPrefix(line, strings.TrimSpace(beatOmittedNotice)) {
+			continue
+		}
+		for _, r := range []Role{RoleUser, RoleAssistant, RoleTool} {
+			if p := string(r) + ": "; strings.HasPrefix(line, p) {
+				line = strings.TrimPrefix(line, p)
+				break
+			}
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// recordEvidence is the measured record's VALUES, without the field labels the block writes them
+// under ("recurring subjects: ", "counts: ") or the key of each count ("user_turns=").
+//
+// The labels are this harness's vocabulary and appear in every record; the values are what was
+// measured on device. One residual is documented rather than stripped: "settled" appears inside
+// the focus line's own parenthetical, so a beat could in principle anchor on it. It is one word,
+// it is not a subject, and stripping by parenthesis would eat real values.
+func recordEvidence(record string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(record, "\n") {
+		if i := strings.Index(line, ": "); i >= 0 {
+			line = line[i+2:]
+		}
+		b.WriteString(recordKeyPrefix.ReplaceAllString(line, ""))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// recordKeyPrefix matches the "key=" of a counted field, so "user_turns=10" contributes 10 rather
+// than a word every record carries.
+var recordKeyPrefix = regexp.MustCompile(`[A-Za-z_]+=`)
 
 // beatAnchorTerms is the terms of one entry, deduplicated, STRONG IDENTIFIERS FIRST.
 //

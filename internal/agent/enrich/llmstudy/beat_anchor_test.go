@@ -149,3 +149,31 @@ func TestUnverifiedSpecificsNamesOnlyAbsentNames(t *testing.T) {
 		t.Error("a present name was reported as unverified")
 	}
 }
+
+// ⚠️ THE SENTINEL DEFECT, AS A TEST. Both inputs carry words this harness put there — the
+// window's role labels and its hole marker, the record's field labels and count keys — and every
+// one of them is in EVERY window by construction. An entry anchoring on those would be anchoring
+// on the instrument, which is exactly how leak detection came to flag only the sentinel the model
+// is instructed to emit.
+func TestAnchoringNeverMatchesTheHarnessOwnWords(t *testing.T) {
+	window := "user: rerun it\n" + beatOmittedNotice + "assistant: done\n"
+	record := "counts: turns=31 user_turns=10 tool_calls=9 corrections=1\n" +
+		"recurring subjects: Northwind, 1,400.00\n"
+	for _, entry := range []string{
+		"the assistant reran the export",                  // role label
+		"turns since the previous update were omitted",    // hole marker
+		"the context was covered by a later window",       // hole marker
+		"corrections were made to the recurring subjects", // record labels and keys
+	} {
+		if got := beatAnchorIn(entry, window, record); got.Term != "" {
+			t.Errorf("%q anchored on the harness's own word %q", entry, got.Term)
+		}
+	}
+	// And the material a person or a tool actually produced still anchors.
+	if got := beatAnchorIn("the Northwind provision was applied", window, record); got.Term == "" {
+		t.Error("a measured record value no longer anchors")
+	}
+	if got := beatAnchorIn("1,400.00 remained unexplained", window, record); got.Term == "" {
+		t.Error("a measured amount no longer anchors")
+	}
+}
