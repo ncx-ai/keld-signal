@@ -88,6 +88,39 @@ The old numbers are computed on the same corpus, not remembered, and by a method
 **overstate** them: a stride turn counts as read if it matches, as a multiset, any turn of any
 mined beat window of that session.
 
+**Live, with the model, on the same snapshot** — 14 sessions, 56 digests, 42 beats, ~17 min CPU-only,
+**at commit `bbe4ff7`** and from an isolated checkout of it, so a concurrently-edited working tree
+could not contaminate it (the record's own `Subjects` block changed in `456aefa`, immediately after;
+these figures predate that). Log kept at
+`/home/dg/keld/sweep-logs/2026-08-12-beat-geometry-on.log`, since losing Part 9's two sweep logs is
+why its steps can no longer be compared:
+
+- **Recovered panics 0** — create 0, refine 0, beat 0. Prompt sizes: largest **beat** prompt 17,999
+  of the 24,000 budget (s11 i9), **6,001 runes of headroom**; largest **report** prompt 13,996 of
+  14,000, i.e. **4 runes**, with `create` never clipped and the refine window floor clearing by
+  +2,623. The report tier is as tight as it has always been and this change does not touch it: a
+  beat reaches that prompt only as a ≤`BeatCap` item in the ladder, and `BeatCap` is unchanged.
+- **Beats: 42 asked, 40 generated, 2 failed, 0 discarded as restatement.** Both failures are
+  `beat characterises overall progress the window does not show`, each after **5 attempts** — s5
+  i14 and s7 i14, which are the *same* transcript (the stratified selector offered it twice: both
+  sessions report `turns:279/user:16/corr:2` and an identical subject list), so it is one distinct
+  window failing twice rather than two independent losses. Three generations were **recovered by
+  the temperature ladder**: s4 i14 on attempt 3, s11 i4 and s11 i9 on attempt 5 — 13 attempts spent
+  on those three.
+- Coverage and overlap reproduce the offline probe **to the digit** on the sweep's own 16-window
+  prefix (2,377 of 4,164 turns; 91,337 overlap runes; largest window 15,997 ≤ 16,000), which is the
+  cross-check that the probe measures the thing the sweep runs.
+- `ChangedSubject` **32 of 40 kept beats (80.0%)**, against 36 of 40 on the committed baseline.
+  T12 (beat-vs-record) **improved 25.0% → 12.5% of 40**.
+
+The gate flags 5 rows against the committed baseline (T2 7→12, T4 46→39 with both splits, T9 1→2).
+**None of them is attributable to this geometry, and the reason is arithmetic rather than
+argument:** the baseline was measured on a corpus snapshot that no longer exists (Part 10 already
+records that its fact counts are incomparable), and six unswept commits sit between it and this
+tree. The window fix in `ad174a6` changed the *content* of exactly the windows that had exceeded the
+bound — 5 of 137 on the whole corpus, of which one (keld-cli i9) falls inside this sweep's prefix.
+One changed window of 42 cannot move T4 by 7 facts.
+
 ⚠️ **"Coverage must be 100%" is refuted, and not narrowly.** The largest stride is 52,148 runes;
 20,000 runes of real transcript measures 5,433 tokens (`llama-server /tokenize`, worst of four
 chunks), so a whole-stride window needs ~14,200 tokens against a context of 8,192 that must also
