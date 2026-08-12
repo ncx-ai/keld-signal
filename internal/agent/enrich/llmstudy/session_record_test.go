@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 func TestSessionRecordAccumulatesAcrossWindows(t *testing.T) {
@@ -406,5 +407,77 @@ func TestSessionRecordReportsWhichFieldsArePopulated(t *testing.T) {
 	}
 	if strings.Contains(SessionRecord{}.Block(), "focus:") {
 		t.Error("Block must omit an unpopulated focus rather than showing it empty")
+	}
+}
+
+// TestRecordSubjectsHoldWholeAmountsNotThousandsFragments is the revert-and-fail check for the
+// comma split, and it runs on REAL fixture text rather than a construction built to fail.
+//
+// Before the fix, subjectTokens split on every ',', so the amounts written in
+// testdata/nontech/finance-close.jsonl arrived as their last group of digits and THAT is what the
+// record stored. Measured, the whole twelve-slot list read
+//
+//	900.00 INV-2340 fa-register.csv 100.00 180.00 200.00 400.00 148.00 gl-mar.csv 31st 629.60 640.00
+//
+// — seven of twelve slots holding numbers nobody wrote (400.00 for 1,400.00, 200.00 for 1,200.00,
+// 629.60 for 412,629.60, ...), under a heading the prompt calls "measured — authoritative".
+//
+// The verbatim gate cannot catch this and it is worth saying why: it is a SUBSTRING test, and
+// "400.00" is a substring of "1,400.00". So the fragment passes every check the record has, and a
+// beat anchoring against the record inherits a wrong figure with the record's own authority
+// behind it.
+//
+// The general property is asserted first (no numeric subject may be the tail of a longer number
+// in the source) and the named case second, so this keeps failing on a fragment the corpus grows
+// later that the named case would miss.
+func TestRecordSubjectsHoldWholeAmountsNotThousandsFragments(t *testing.T) {
+	deltas, err := sessionDeltas("testdata/nontech/finance-close.jsonl", DefaultMineOpts())
+	if err != nil || len(deltas) == 0 {
+		t.Fatalf("finance-close fixture: %v (%d deltas)", err, len(deltas))
+	}
+	var r SessionRecord
+	var src strings.Builder
+	for _, d := range deltas {
+		r = r.Observe(d, Extract(d))
+		src.WriteString(Render(d))
+	}
+	text := src.String()
+	if len(r.Subjects) == 0 {
+		t.Fatal("the fixture produced no subjects; it is not exercising the record")
+	}
+	t.Logf("subjects: %v", r.Subjects)
+
+	for _, s := range r.Subjects {
+		if strings.ContainsFunc(s, unicode.IsLetter) {
+			continue
+		}
+		// Every occurrence, not just the first: a fragment like "400.00" occurs only inside
+		// larger amounts, so "some occurrence stands alone" is the property that separates a
+		// real figure from a fractured one.
+		whole := false
+		for i := 0; i < len(text); {
+			j := strings.Index(text[i:], s)
+			if j < 0 {
+				break
+			}
+			at := i + j
+			if at == 0 || text[at-1] != ',' {
+				whole = true
+				break
+			}
+			i = at + 1
+		}
+		if !whole {
+			t.Errorf("subject %q never appears in the transcript except after a comma — it is the "+
+				"tail of a longer number, and the record calls itself authoritative", s)
+		}
+	}
+
+	joined := " " + strings.Join(r.Subjects, " ") + " "
+	if !strings.Contains(joined, " 1,400.00 ") {
+		t.Errorf("the amount the session turns on is missing from the record: %v", r.Subjects)
+	}
+	if strings.Contains(joined, " 400.00 ") {
+		t.Errorf("the record still holds the fractured amount 400.00: %v", r.Subjects)
 	}
 }

@@ -243,13 +243,21 @@ func RecentSubjects(w Window, n int) []string {
 }
 
 // subjectTokens splits text into candidate subject terms, preserving case and keeping the
-// characters that make an identifier an identifier.
+// characters that make an identifier an identifier — including the thousands separators that
+// make an amount one number.
 func subjectTokens(s string) []string {
-	// The character class lives in subjectTokenRune (beat_series.go) because
-	// subjectTokenSpans needs the identical class to report the same tokens as byte
-	// SPANS — a position-aware caller cannot use the strings alone. One predicate, so the
-	// two tokenisers cannot drift apart.
-	return strings.FieldsFunc(s, func(r rune) bool { return !subjectTokenRune(r) })
+	// ONE tokeniser, not two agreeing loops: subjectTokenSpans (beat_series.go) is the
+	// implementation and this returns its spans as strings. It used to be a FieldsFunc over the
+	// shared subjectTokenRune predicate, which was equivalent only as long as the rule fitted in
+	// a per-rune class — and the thousands-separator rule does not, since a ',' is a token
+	// character only between digits. Two loops, one of them context-free, is exactly how the two
+	// would have drifted.
+	spans := subjectTokenSpans(s)
+	out := make([]string, 0, len(spans))
+	for _, m := range spans {
+		out = append(out, s[m[0]:m[1]])
+	}
+	return out
 }
 
 // maxRecentSubjects bounds the anchor. It is a nudge toward the present, not a vocabulary

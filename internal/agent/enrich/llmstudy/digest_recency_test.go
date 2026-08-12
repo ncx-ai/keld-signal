@@ -195,3 +195,70 @@ func TestRecentSubjectsSeenKeyMatchesTheEmittedTrimmedValue(t *testing.T) {
 			"punctuation on the raw token, got %d occurrences in %v", count, subs)
 	}
 }
+
+// TestSubjectTokensKeepNumbersWholeAcrossThousandsSeparators pins the tokeniser rule itself, and
+// pins its LIMITS: a comma joins digits only where it is a thousands separator, so ordinary
+// comma-separated text still splits the way it reads.
+//
+// The sentences are lifted from testdata/nontech/finance-close.jsonl rather than invented, since
+// the defect this closes was found in that transcript's record and every synthetic worst case on
+// this branch has so far been wrong in the same direction.
+func TestSubjectTokensKeepNumbersWholeAcrossThousandsSeparators(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want []string
+		gone []string
+	}{
+		{
+			text: "That still leaves 1,400.00 unexplained.",
+			want: []string{"1,400.00"},
+			gone: []string{"400.00"},
+		},
+		{
+			text: "412,880.15 less 1,302.55 of outstanding cheques gives 412,629.60.",
+			want: []string{"412,880.15", "1,302.55", "412,629.60."},
+			gone: []string{"880.15", "302.55", "629.60."},
+		},
+		// A clause-ending comma is not a separator: nothing follows it but a space.
+		{
+			text: "debit bank charges 148.00, and credit cash",
+			want: []string{"148.00"},
+			gone: []string{"148.00,"},
+		},
+		// Nor is a date's comma, for the same reason — and "2026" keeps its own token.
+		{
+			text: "posted on March 5, 2026 by the bureau",
+			want: []string{"March", "2026"},
+			gone: []string{"5,", "5, 2026"},
+		},
+		// Exactly three digits after, so a numeric list is still a list of numbers.
+		{
+			text: "buckets 1,2,3 and 12,34567 remain",
+			want: []string{"1", "2", "3", "12", "34567"},
+			gone: []string{"1,2,3", "12,34567"},
+		},
+	} {
+		got := map[string]bool{}
+		for _, tok := range subjectTokens(tc.text) {
+			got[tok] = true
+		}
+		for _, w := range tc.want {
+			if !got[w] {
+				t.Errorf("%q: token %q missing, got %v", tc.text, w, subjectTokens(tc.text))
+			}
+		}
+		for _, g := range tc.gone {
+			if got[g] {
+				t.Errorf("%q: token %q must not survive, got %v", tc.text, g, subjectTokens(tc.text))
+			}
+		}
+		// The two tokenisers are one: the spans must yield exactly the strings.
+		var spanned []string
+		for _, m := range subjectTokenSpans(tc.text) {
+			spanned = append(spanned, tc.text[m[0]:m[1]])
+		}
+		if strings.Join(spanned, "\x00") != strings.Join(subjectTokens(tc.text), "\x00") {
+			t.Errorf("%q: spans %v disagree with tokens %v", tc.text, spanned, subjectTokens(tc.text))
+		}
+	}
+}
