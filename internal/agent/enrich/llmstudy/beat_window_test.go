@@ -120,6 +120,49 @@ func TestBeatWindowDropsWholeTurnsAndSaysSo(t *testing.T) {
 	}
 }
 
+// TestBeatWindowChargesItselfForTheHoleMarker pins the bound against the one thing in the window
+// that is not a turn.
+//
+// The notice is written INTO the window, so the window's size includes it, but the fit was
+// computed over turns alone — so a span that filled the bound exactly came out at
+// BeatWindowChars + len(notice). Nothing caught it: the drop test's fixture leaves hundreds of
+// runes of slack (whole-turn granularity rarely lands on the boundary), so the assertion it
+// makes about TotalRunes passed for a reason unrelated to the arithmetic. That is the branch's
+// recorded failure mode exactly — a test asserting a limit the implementation does not apply —
+// so this fixture is sized to land ON the boundary: 16 turns of 1,000 rendered runes fit
+// 16,000 exactly, and the 17th onward must be dropped.
+func TestBeatWindowChargesItselfForTheHoleMarker(t *testing.T) {
+	// renderedTurnLen = len("assistant") + 2 + len(text) + 1, so 988 runes of text costs 1,000.
+	var deltas []Window
+	for i := 0; i < 40; i++ {
+		deltas = append(deltas, Window{PromptID: "p", Turns: []Turn{
+			assistantTurn(strings.Repeat("ledger entry. ", 70) + strings.Repeat("x", 8)),
+		}})
+	}
+	if got := renderedTurnLen(deltas[0].Turns[0]); got != 1000 {
+		t.Fatalf("fixture turn costs %d runes, want exactly 1000 so the fit lands on the bound", got)
+	}
+	var bw BeatWindower
+	b := bw.Next(deltas, 39)
+	if b.Dropped() == 0 {
+		t.Fatalf("a %d-turn span fitted; the fixture is not exercising the bound", b.SpanTurns)
+	}
+	if !strings.Contains(b.Rendered, beatOmittedNotice) {
+		t.Fatal("turns were dropped without the window saying so")
+	}
+	if b.TotalRunes > BeatWindowChars {
+		t.Errorf("the window is %d runes against the %d bound — %d over, and the overrun is the "+
+			"hole marker, which the fit did not reserve for",
+			b.TotalRunes, BeatWindowChars, b.TotalRunes-BeatWindowChars)
+	}
+	// And the number the coverage report is computed from must be the size of the string the
+	// prompt actually carries, marker included, or the bound would be certified against a
+	// quantity nothing sends.
+	if b.TotalRunes != runeLen(b.Rendered) {
+		t.Errorf("TotalRunes = %d but the rendered window is %d runes", b.TotalRunes, runeLen(b.Rendered))
+	}
+}
+
 // TestBeatPromptHasABudgetNow closes the gap four fix rounds deferred: BeatPrompt asserted
 // nothing about its arguments, on the grounds that trimToWindowCap bounded a mined window to
 // 12,000 runes. Contiguous windows remove that accident — the stride is up to 52,148 runes

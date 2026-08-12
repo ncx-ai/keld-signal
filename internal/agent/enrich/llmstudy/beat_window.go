@@ -70,6 +70,8 @@ const (
 // sits BETWEEN the overlap and the kept turns — where the missing material actually is — rather
 // than at the top, because a leading notice reads as "the session started earlier" while this
 // one means "these particular turns are missing".
+//
+// It is charged to the window's own bound (see Next): it is not a turn, but it is in the window.
 const beatOmittedNotice = "[turns since the previous update omitted to fit the context — " +
 	"they are not covered by any later window either]\n"
 
@@ -144,7 +146,21 @@ func (b *BeatWindower) Next(deltas []Window, upto int) BeatWindow {
 	}
 	overlap := tailTurnsWithin(b.prevSpan, budget)
 	overlapRunes := turnsRuneLen(overlap)
+	// The window pays for its own hole marker. The notice is not a turn, but it IS in the
+	// rendered window, so a fit computed over turns alone overruns the bound by the notice's
+	// length on any span that filled it — measured at 16,111 against 16,000 on a fixture sized to
+	// land on the boundary. Charged in RUNES, the unit tailTurnsWithin and BeatWindowChars are
+	// both in: the rune-versus-byte mismatch this package already paid for once (a reserve made in
+	// runes against an assembly charged in bytes) starved the floor and panicked on real
+	// multi-byte transcripts.
+	//
+	// Two-pass rather than one: whether the notice is needed at all is only known after fitting,
+	// and re-fitting inside a smaller budget can only drop MORE turns, so the hole — and the
+	// notice — remain. One iteration is therefore a fixed point, not the first step of a loop.
 	kept := tailTurnsWithin(span, BeatWindowChars-overlapRunes)
+	if len(kept) < len(span) {
+		kept = tailTurnsWithin(span, BeatWindowChars-overlapRunes-runeLen(beatOmittedNotice))
+	}
 
 	w := deltas[upto]
 	w.Turns = append(append([]Turn{}, overlap...), kept...)
