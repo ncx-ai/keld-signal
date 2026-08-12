@@ -35,19 +35,26 @@ func recordingServer(t *testing.T, contents []string) (*httptest.Server, *[]map[
 }
 
 // beatJSON wraps a beat the way the schema-constrained response does.
-func beatJSON(s string) string {
-	b, _ := json.Marshal(map[string]string{"beat": s})
+func beatJSON(subject string, events ...string) string {
+	b, _ := json.Marshal(map[string]any{"subject": subject, "events": events})
 	return string(b)
 }
 
-// unpunctuated is the measured failure: a headline clause with no terminator anywhere, which
-// holds no complete sentence and is therefore rejected. At temperature 0 the re-request returned
-// this same string five times and the beat was lost — 2 of 42 asked, in all six sweeps.
-const unpunctuated = "Syncing the README with the actual state of the world and the branch it describes"
+// The rejected sample: a subject under its floor and entries naming nothing the window or the
+// record contains. Both are properties of THIS SAMPLE, which is the whole point — at temperature
+// 0 the re-request returned the identical string five times and the beat was lost (2 of 42 asked,
+// in all six sweeps of one round), and the split experiment's reading passes then repeated the
+// mistake with no ladder at all.
+var rejected = beatJSON("Work", "the Ganymede migration was signed off by the steering group")
 
-// A valid replacement: two complete sentences, over BeatMinRunes.
-const punctuated = "The README is being brought back in line with what the branch actually does. " +
-	"The stale sections about the old prompt scheme are gone and the remaining diff is the beat cadence."
+// A valid replacement: a named subject and an entry anchored in the window below.
+var accepted = beatJSON("the README sync on this branch",
+	"README.md was rewritten to match what the branch does",
+	"the stale sections about the old prompt scheme were deleted")
+
+// beatWindow/beatRecord are the evidence every request in this file is made against.
+const beatWindow = "user: sync README.md with the branch\n"
+const beatRecord = "counts: turns=10\n"
 
 // TestBeatRetryDiffersFromTheFirstAttempt is the fix for the two beats lost per run. The point
 // is not that a retry happens — it always did — but that the SECOND REQUEST IS DIFFERENT, which
@@ -57,15 +64,15 @@ const punctuated = "The README is being brought back in line with what the branc
 // (like a real one at temperature 0) returns the identical rejected string and GenerateBeat
 // errors.
 func TestBeatRetryDiffersFromTheFirstAttempt(t *testing.T) {
-	srv, bodies := recordingServer(t, []string{beatJSON(unpunctuated), beatJSON(punctuated)})
+	srv, bodies := recordingServer(t, []string{rejected, accepted})
 	l := NewLlama(srv.URL)
 	l.Policy = fastPolicy()
 
-	got, err := l.GenerateBeat("counts: turns=10\n", "user: sync the readme\n")
+	got, err := l.GenerateBeat(beatRecord, beatWindow)
 	if err != nil {
 		t.Fatalf("a rejected generation was not recovered: %v", err)
 	}
-	if !strings.HasPrefix(got, "The README is being brought back") {
+	if !strings.HasPrefix(got, "the README sync") {
 		t.Fatalf("unexpected beat: %q", got)
 	}
 	if len(*bodies) != 2 {
@@ -114,19 +121,18 @@ func TestBeatRetryScheduleWidensAndStaysConservative(t *testing.T) {
 	}
 }
 
-// TestBeatShapeStandardIsUnchangedByTheRetry is the guard on the fix's boundary. The brief's one
-// forbidden fix was lowering the sentence-completeness standard, so a beat that never becomes a
-// complete sentence must still be refused after all five attempts rather than stored as a
-// fragment.
+// TestBeatShapeStandardIsUnchangedByTheRetry is the guard on the fix's boundary. Widening the
+// sampling must not widen the standard: a generation that never satisfies it is refused after all
+// five attempts rather than stored.
 func TestBeatShapeStandardIsUnchangedByTheRetry(t *testing.T) {
-	srv, bodies := recordingServer(t, []string{beatJSON(unpunctuated)})
+	srv, bodies := recordingServer(t, []string{rejected})
 	l := NewLlama(srv.URL)
 	l.Policy = fastPolicy()
-	got, err := l.GenerateBeat("counts: turns=10\n", "user: sync the readme\n")
+	got, err := l.GenerateBeat(beatRecord, beatWindow)
 	if err == nil {
-		t.Fatalf("an unpunctuated generation was accepted as a beat: %q", got)
+		t.Fatalf("a rejected generation was accepted as a beat: %q", got)
 	}
-	if !strings.Contains(err.Error(), "no complete sentence") {
+	if !strings.Contains(err.Error(), "subject is") {
 		t.Errorf("wrong rejection reason: %v", err)
 	}
 	if len(*bodies) != l.Policy.MaxAttempts {

@@ -8,6 +8,39 @@ import (
 	"testing"
 )
 
+// beatServer answers every request with the nth scripted {subject, events} pair, repeating the
+// last one once the script runs out. It returns the request count so a test can assert that a
+// rejection was RE-REQUESTED rather than accepted or dropped.
+func beatServer(t *testing.T, script ...struct {
+	Subject string
+	Events  []string
+}) (*Llama, *int) {
+	t.Helper()
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		i := n
+		n++
+		if i >= len(script) {
+			i = len(script) - 1
+		}
+		blob, _ := json.Marshal(map[string]any{
+			"subject": script[i].Subject, "events": script[i].Events,
+		})
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": string(blob)}}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	l := NewLlama(srv.URL)
+	l.Policy = fastPolicy()
+	return l, &n
+}
+
+type beatAnswer = struct {
+	Subject string
+	Events  []string
+}
+
 // A beat is given the window AND the measured record. Without the record it describes a local
 // action ("read three CSVs") instead of what the action was for.
 func TestBeatPromptCarriesWindowAndRecord(t *testing.T) {
@@ -25,75 +58,240 @@ func TestBeatPromptCarriesWindowAndRecord(t *testing.T) {
 	}
 }
 
-// The register the prompt must ask for, and the one it must not.
-//
-// The monotony was caused by the instruction itself: "State what the work is about" produced 46
-// of 47 beats opening with the identical four words, "The work is about". A prompt that dictates
-// a subject and a verb dictates a sentence. So it now asks the question a colleague asks —
-// which is what the answer should sound like — and names the stock openers as forbidden rather
-// than hoping variety emerges.
-func TestBeatPromptAsksTheStandupQuestionAndForbidsAFormula(t *testing.T) {
+// THE design decision, as a test: the prompt asks what HAPPENED and never how far along anything
+// is. The fused question ("what you are working on, and where it has got to") demanded a progress
+// claim on every firing, and blind judges failed 22 of 36 untampered beats on rubberstamping.
+func TestBeatPromptAsksWhatHappenedAndNeverForProgress(t *testing.T) {
 	p := BeatPrompt("record", "window")
 	low := strings.ToLower(p)
-	for _, want := range []string{"standup", "two or three sentences"} {
-		if !strings.Contains(low, want) {
-			t.Errorf("beat prompt omits %q — it must ask for a spoken answer, not a statement", want)
+	for _, gone := range []string{
+		"where it has got to", "how far", "where it stands", "where things stand",
+		"status", "progress so far", "nearly", "complete", "remaining",
+	} {
+		if strings.Contains(low, gone) {
+			t.Errorf("the beat prompt still invites a progress claim (%q)", gone)
 		}
 	}
-	// The instruction that caused the template must be gone as an INSTRUCTION.
-	if strings.Contains(p, "State what the work is about") {
-		t.Error("beat prompt still dictates the sentence it wants")
-	}
-	// And the formula must be named and forbidden.
-	i := strings.Index(p, `"The work is about"`)
-	if i < 0 {
-		t.Fatal("beat prompt does not forbid the opener 46 of 47 beats used")
-	}
-	if !strings.Contains(strings.ToLower(p[:i]), "do not begin with") {
-		t.Errorf("the opener is mentioned but not forbidden: %q", p[:i])
-	}
-	// Constraints that must survive the rewrite.
-	for _, want := range []string{
-		"Every noun must come from the conversation or the record",
-		"Not a list of actions",
-	} {
-		if !strings.Contains(p, want) {
-			t.Errorf("beat prompt dropped the constraint %q", want)
+	for _, want := range []string{"past tense", "subject", "events"} {
+		if !strings.Contains(low, want) {
+			t.Errorf("the beat prompt omits %q", want)
 		}
 	}
 }
 
-func TestBeatSchemaIsASingleRequiredString(t *testing.T) {
+// The empty answer is MODELLED, not prohibited. When the old stock-opener rule was reworded to
+// NAME the phrasings it forbade, those openings went from 2 to 4: a prompt summons what it names.
+// So one worked example is the nothing-was-finished shape, sitting among the others as an
+// ordinary answer, and there is no forbidden-phrase list anywhere in the prompt.
+func TestBeatPromptModelsTheEmptyAnswerWithoutNamingAProhibition(t *testing.T) {
+	p := BeatPrompt("record", "window")
+	if !strings.Contains(p, "the depreciation task was assigned") {
+		t.Error("the window in which nothing was finished is not modelled as an example answer")
+	}
+	if !strings.Contains(p, "each of these is a normal answer") {
+		t.Error("the examples are not presented as normal answers")
+	}
+	for _, forbidden := range []string{"do not", "never", "forbidden", "must not", "avoid"} {
+		if strings.Contains(strings.ToLower(p), forbidden) {
+			t.Errorf("the beat prompt names a prohibition (%q); prompts summon what they name",
+				forbidden)
+		}
+	}
+}
+
+// The schema is the other place a status field could come back from, so it is asserted
+// separately: two fields, both required, nothing else admitted.
+func TestBeatSchemaHasNoStatusField(t *testing.T) {
 	sc := BeatSchema()
 	props := sc["properties"].(map[string]any)
-	if len(props) != 1 || props["beat"] == nil {
-		t.Fatalf("a beat is one field, got %v", props)
+	if len(props) != 2 || props["subject"] == nil || props["events"] == nil {
+		t.Fatalf("a beat is a subject and its events, got %v", props)
 	}
-	if req := sc["required"].([]string); len(req) != 1 || req[0] != "beat" {
-		t.Errorf("beat must be required, got %v", req)
+	req := sc["required"].([]string)
+	if len(req) != 2 {
+		t.Errorf("both fields must be required, got %v", req)
+	}
+	if sc["additionalProperties"] != false {
+		t.Error("the schema admits fields the design does not define")
 	}
 }
 
-// A run of acknowledgements must not pad the series and bury the moments that matter.
-func TestBeatSayingNothingNewIsDropped(t *testing.T) {
+// One unanchored entry is DROPPED and the drop is MARKED. It is not a reason to lose the rest of
+// the beat, and it is never silent: a guard that drops without saying so is how T1 reported 100%
+// while discarding 5 of 20 digests.
+func TestGenerateBeatDropsAnUnanchoredEntryAndMarksIt(t *testing.T) {
+	l, n := beatServer(t, beatAnswer{
+		Subject: "the fixed-asset register review",
+		Events: []string{
+			"fa-register.csv was opened and read against the schedule",
+			"the Ganymede migration was signed off by the steering group",
+		},
+	})
+	d, err := l.generateBeat("counts: turns=4\n", "user: open fa-register.csv and check it\n")
+	if err != nil {
+		t.Fatalf("one unanchored entry failed the whole beat: %v", err)
+	}
+	if *n != 1 {
+		t.Errorf("a drop is not a rejection; want one attempt, got %d", *n)
+	}
+	if len(d.Events) != 1 || !strings.Contains(d.Events[0], "fa-register.csv") {
+		t.Errorf("the anchored entry did not survive: %v", d.Events)
+	}
+	if len(d.Unanchored) != 1 || !strings.Contains(d.Unanchored[0], "Ganymede") {
+		t.Errorf("the unanchored entry was not recorded: %v", d.Unanchored)
+	}
+	if !strings.Contains(d.Text, "1 entry dropped: no term in it occurs") {
+		t.Errorf("the drop is not marked in the stored beat:\n%s", d.Text)
+	}
+	if strings.Contains(d.Text, "Ganymede") {
+		t.Errorf("the dropped entry survived into the stored beat:\n%s", d.Text)
+	}
+	if d.Anchors[0] != "fa-register.csv" {
+		t.Errorf("the anchoring term is not reported: %v", d.Anchors)
+	}
+}
+
+// Every entry unanchored is a generation with nothing of the evidence in it, which is the one
+// case where losing the beat is the honest outcome — and it is re-requested first, at a wider
+// temperature, rather than failed on the spot.
+func TestGenerateBeatRetriesWhenNoEntryIsAnchored(t *testing.T) {
+	l, n := beatServer(t,
+		beatAnswer{
+			Subject: "the fixed-asset register review",
+			Events:  []string{"the Ganymede migration was signed off by the steering group"},
+		},
+		beatAnswer{
+			Subject: "the fixed-asset register review",
+			Events:  []string{"fa-register.csv was opened and read against the schedule"},
+		})
+	d, err := l.generateBeat("counts: turns=4\n", "user: open fa-register.csv and check it\n")
+	if err != nil {
+		t.Fatalf("generateBeat: %v", err)
+	}
+	if *n < 2 {
+		t.Errorf("a wholly unanchored beat must be re-requested, got %d attempt(s)", *n)
+	}
+	if len(d.Events) != 1 {
+		t.Errorf("want the recovered entry, got %v", d.Events)
+	}
+}
+
+// The cap drops WHOLE entries and marks that too. Never a cut inside an entry: half an entry is
+// the mid-clause truncation AGENTS.md forbids, and the defect BeatCap was raised to fix.
+func TestGenerateBeatFitsTheCapByDroppingWholeEntries(t *testing.T) {
+	long := func(i int) string {
+		return "run-" + string(rune('a'+i)) + ".log was written, " +
+			strings.Repeat("and the exporter wrote another row, ", 2) + "and it finished"
+	}
+	var events []string
+	for i := 0; i < 6; i++ {
+		events = append(events, long(i))
+	}
+	window := "user: check run-a.log run-b.log run-c.log run-d.log run-e.log run-f.log\n"
+	l, _ := beatServer(t, beatAnswer{Subject: "the exporter run logs", Events: events})
+	d, err := l.generateBeat("counts: turns=4\n", window)
+	if err != nil {
+		t.Fatalf("generateBeat: %v", err)
+	}
+	if runeLen(d.Text) > BeatCap {
+		t.Errorf("stored beat is %d runes, over BeatCap %d", runeLen(d.Text), BeatCap)
+	}
+	if len(d.Overflowed) == 0 {
+		t.Fatal("nothing overflowed a beat built to exceed the cap")
+	}
+	if !strings.Contains(d.Text, "dropped to fit the beat cap") {
+		t.Errorf("the cap drop is not marked:\n%s", d.Text)
+	}
+	for _, e := range d.Events {
+		if !strings.HasSuffix(e, "and it finished") {
+			t.Errorf("an entry was cut rather than dropped: %q", e)
+		}
+	}
+}
+
+// A one-word subject is structurally valid and says nothing, so it is re-requested.
+func TestGenerateBeatRejectsADegenerateSubject(t *testing.T) {
+	l, n := beatServer(t,
+		beatAnswer{Subject: "Work", Events: []string{"fa-register.csv was opened and read"}},
+		beatAnswer{
+			Subject: "the fixed-asset register review",
+			Events:  []string{"fa-register.csv was opened and read"},
+		})
+	d, err := l.generateBeat("counts: turns=4\n", "user: open fa-register.csv\n")
+	if err != nil {
+		t.Fatalf("generateBeat: %v", err)
+	}
+	if *n < 2 {
+		t.Errorf("a one-word subject must be re-requested, got %d attempt(s) and %q", *n, d.Subject)
+	}
+}
+
+// The stored text is the rendering everything downstream reads, so its shape is pinned here: the
+// subject on its own line, one "- " entry per event, and no max_tokens on the request (a token
+// limit on a schema-constrained decode cuts the string mid-value and the object never closes).
+func TestGenerateBeatRendersSubjectThenBullets(t *testing.T) {
+	var sawMaxTokens bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if _, ok := body["max_tokens"]; ok {
+			sawMaxTokens = true
+		}
+		blob, _ := json.Marshal(map[string]any{
+			"subject": "the fixed-asset register review",
+			"events": []string{"fa-register.csv was opened and read",
+				"the schedule and fa-register.csv disagreed on three assets"},
+		})
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": string(blob)}}},
+		})
+	}))
+	defer srv.Close()
+	l := NewLlama(srv.URL)
+	l.Policy = fastPolicy()
+	got, err := l.GenerateBeat("counts: turns=4\n", "user: open fa-register.csv\n")
+	if err != nil {
+		t.Fatalf("GenerateBeat: %v", err)
+	}
+	lines := strings.Split(got, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want a subject line and two entries, got %q", got)
+	}
+	if strings.HasPrefix(lines[0], "-") {
+		t.Errorf("the subject is not on its own line: %q", got)
+	}
+	for _, l := range lines[1:] {
+		if !strings.HasPrefix(l, "- ") {
+			t.Errorf("an entry is not a bullet: %q", l)
+		}
+	}
+	if sawMaxTokens {
+		t.Error("the request carried max_tokens; a schema-constrained decode must not be token-bounded")
+	}
+}
+
+// BeatSaysNothingNew is retired as a signal (AppendBeat no longer calls it) but must still
+// COMPUTE, because the blind review harness lists it among the heuristics under comparison and
+// scoring an earlier round means running it against that round's beats.
+func TestBeatSaysNothingNewStillComputesForTheReviewHarness(t *testing.T) {
 	prev := []Beat{{Ordinal: 1, Text: "The work is reconciling the March ledger for Meridian."}}
 	if !BeatSaysNothingNew("Work continues reconciling Meridian's March ledger.", prev) {
 		t.Error("a restatement was not detected")
 	}
 	if BeatSaysNothingNew("The work has moved to the AR ageing provision policy.", prev) {
-		t.Error("a genuinely new beat was dropped")
+		t.Error("a genuinely new beat was flagged")
 	}
 	if BeatSaysNothingNew("anything", nil) {
 		t.Error("the first beat can never be a restatement")
 	}
 }
 
-// THE headline defect: a beat that ends mid-sentence.
+// ClipBeat is off the beat path — a bulleted beat holds no sentence terminators — but the
+// sentence machinery under it is clipbound.go's, so its behaviour is still pinned here.
 //
-// Nothing asserted the SHAPE of a beat, only its length, so 46 of 47 real beats ended in an
+// Nothing asserted the SHAPE of a clip, only its length, so 46 of 47 real prose beats ended in an
 // ellipsis mid-clause and every automated threshold passed them. Length is not shape: this
-// asserts that whatever comes out of the clipper, at any cap, either ends a sentence or is
-// empty. It fails against the old clipProse-based clip on every case below.
+// asserts that whatever comes out, at any cap, either ends a sentence or is empty.
 func TestClipBeatNeverEndsMidSentence(t *testing.T) {
 	const two = "Closing March for Meridian, focusing on the bank reconciliation. " +
 		"The fee has been journaled and the deposit in transit still needs to clear."
@@ -113,13 +311,13 @@ func TestClipBeatNeverEndsMidSentence(t *testing.T) {
 	for _, c := range cases {
 		got := ClipBeat(c.in, c.cap)
 		if got == "" {
-			continue // a failed generation, which is the documented alternative
+			continue // nothing complete fits, which is the documented alternative
 		}
 		if strings.HasSuffix(got, "…") {
-			t.Errorf("%s: beat ends in an ellipsis: %q", c.name, got)
+			t.Errorf("%s: text ends in an ellipsis: %q", c.name, got)
 		}
 		if end := lastSentenceStop([]rune(got)); end != len([]rune(got)) {
-			t.Errorf("%s: beat does not end at a sentence boundary: %q", c.name, got)
+			t.Errorf("%s: text does not end at a sentence boundary: %q", c.name, got)
 		}
 		if c.cap > 0 && len([]rune(got)) > c.cap {
 			t.Errorf("%s: cap %d exceeded: %d runes", c.name, c.cap, len([]rune(got)))
@@ -139,8 +337,6 @@ func TestClipBeatDropsTheTrailingFragment(t *testing.T) {
 	}
 }
 
-// If nothing complete fits, that is a FAILED generation — the retry path's job — not a beat.
-// Emitting the fragment is what shipped; emitting a truncated first sentence would be worse.
 func TestClipBeatReturnsNothingWhenNoSentenceFits(t *testing.T) {
 	long := "Fixing the ConfirmDialog nesting warning in the members table so the press " +
 		"responder stops warning about invalid button nesting across every trigger."
@@ -155,8 +351,8 @@ func TestClipBeatReturnsNothingWhenNoSentenceFits(t *testing.T) {
 	}
 }
 
-// Beats are full of identifiers, so "any period ends a sentence" cuts inside them. Every input
-// here is one sentence and must survive whole.
+// This study's text is full of identifiers, so "any period ends a sentence" cuts inside them.
+// Every input here is one sentence and must survive whole.
 func TestClipBeatDoesNotCutInsideAnIdentifier(t *testing.T) {
 	for _, in := range []string{
 		"Fixed the bottom padding on the row container in turn-row.tsx for consistent spacing.",
@@ -172,119 +368,26 @@ func TestClipBeatDoesNotCutInsideAnIdentifier(t *testing.T) {
 	}
 }
 
-// BeatCap is a measured figure, and this is the measurement: the most expensive complete
-// two-sentence answer in the 47-beat corpus ends at rune 505, so the cap must keep both of its
-// sentences. At the old cap of 200 this beat arrived as a fragment of its first clause.
-func TestBeatCapKeepsTheMostExpensiveMeasuredTwoSentenceAnswer(t *testing.T) {
-	const measured = "The work is refining the LLM prompt structure to ensure accurate, " +
-		"non-echoed summaries that reflect actual task outcomes — specifically, fixing the " +
-		"model from copying section labels as content and maintaining a work-centric voice. " +
-		"It’s now validated across four runs, with v3 showing clean structural fidelity, " +
-		"under 3GB memory use, and real-world anchoring from user actions like 'commit to " +
-		"main', though one unverified detail remains — 'rate-limiting' — which is a compound " +
-		"from real text, not inferred. The sentinel fix and threshold 7 are now applied, and " +
-		"the feature passes structural validity at 4/4."
-	got := ClipBeat(measured, BeatCap)
-	if n := strings.Count(got, ". ") + 1; n < 2 {
-		t.Errorf("BeatCap %d keeps %d sentences of a measured two-sentence answer: %q",
-			BeatCap, n, got)
+// fitBeatText is AppendBeat's gate against a beat assembled some other way. Whole lines, marked.
+func TestFitBeatTextDropsWholeLinesAndMarksIt(t *testing.T) {
+	subject := "the exporter run logs"
+	entry := "- " + strings.Repeat("x", 120) + "\n"
+	over := subject + "\n" + strings.Repeat(entry, 6)
+	got := fitBeatText(over, BeatCap)
+	if runeLen(got) > BeatCap {
+		t.Errorf("fit left %d runes, over BeatCap %d", runeLen(got), BeatCap)
 	}
-	if !strings.Contains(got, "validated across four runs") {
-		t.Errorf("the second sentence did not survive BeatCap=%d: %q", BeatCap, got)
+	if !strings.Contains(got, "dropped to fit the beat cap") {
+		t.Errorf("the drop is not marked:\n%s", got)
 	}
-}
-
-// A fragment must be RE-REQUESTED, not emitted and not dropped. GenerateBeat validates inside
-// callValid's retry loop precisely so the sample is re-drawn; the bound on the request is the
-// prompt asking for brevity, never max_tokens — a token limit on a schema-constrained decode
-// cuts the string mid-value and the JSON object never closes.
-func TestGenerateBeatRetriesAFragment(t *testing.T) {
-	var n int
-	var sawMaxTokens bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n++
-		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
-		if _, ok := body["max_tokens"]; ok {
-			sawMaxTokens = true
+	for _, line := range strings.Split(got, "\n")[1:] {
+		if strings.HasPrefix(line, "- ") && runeLen(line) != runeLen(entry)-1 {
+			t.Errorf("a line was cut rather than dropped: %q", line)
 		}
-		beat := "Closing March for Meridian, focusing on the bank reconciliation and the"
-		if n >= 2 {
-			beat = "Closing March for Meridian, focusing on the bank reconciliation. " +
-				"The bank fee is journaled and the deposit in transit still needs to clear."
-		}
-		blob, _ := json.Marshal(map[string]string{"beat": beat})
-		json.NewEncoder(w).Encode(map[string]any{
-			"choices": []any{map[string]any{"message": map[string]any{"content": string(blob)}}},
-		})
-	}))
-	defer srv.Close()
-
-	l := NewLlama(srv.URL)
-	l.Policy = fastPolicy()
-	got, err := l.GenerateBeat("record", "window")
-	if err != nil {
-		t.Fatalf("a fragment was not re-requested: %v", err)
 	}
-	if n < 2 {
-		t.Errorf("want a second attempt, got %d", n)
-	}
-	if !strings.HasSuffix(got, "clear.") {
-		t.Errorf("want the complete generation, got %q", got)
-	}
-	if sawMaxTokens {
-		t.Error("the request carried max_tokens; a schema-constrained decode must not be token-bounded")
-	}
-}
-
-// A generation that only ever yields a fragment is a failure, reported as such. Silently
-// emitting the fragment is the defect; silently emitting nothing would be worse.
-func TestGenerateBeatFailsWhenNothingCompleteEverArrives(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		blob, _ := json.Marshal(map[string]string{"beat": "Closing March for Meridian and the"})
-		json.NewEncoder(w).Encode(map[string]any{
-			"choices": []any{map[string]any{"message": map[string]any{"content": string(blob)}}},
-		})
-	}))
-	defer srv.Close()
-
-	l := NewLlama(srv.URL)
-	l.Policy = fastPolicy()
-	got, err := l.GenerateBeat("record", "window")
-	if err == nil {
-		t.Fatalf("a beat with no complete sentence must be an error, got %q", got)
-	}
-	if got != "" {
-		t.Errorf("a failed generation must yield no text, got %q", got)
-	}
-}
-
-// A complete but degenerate sentence is not an answer to the question. "Fixed." is structurally
-// valid, ends a sentence, and would sail past every shape check here.
-func TestGenerateBeatRejectsADegenerateSentence(t *testing.T) {
-	var n int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n++
-		beat := "Fixed."
-		if n >= 2 {
-			beat = "Closing March for Meridian, focusing on the bank reconciliation. " +
-				"The bank fee is journaled and the deposit in transit still needs to clear."
-		}
-		blob, _ := json.Marshal(map[string]string{"beat": beat})
-		json.NewEncoder(w).Encode(map[string]any{
-			"choices": []any{map[string]any{"message": map[string]any{"content": string(blob)}}},
-		})
-	}))
-	defer srv.Close()
-
-	l := NewLlama(srv.URL)
-	l.Policy = fastPolicy()
-	got, err := l.GenerateBeat("record", "window")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n < 2 {
-		t.Errorf("a one-word beat must be re-requested, got %d attempts and %q", n, got)
+	whole := subject + "\n- one entry that fits"
+	if got := fitBeatText(whole, BeatCap); got != whole {
+		t.Errorf("a beat within the cap was altered:\n got %q\nwant %q", got, whole)
 	}
 }
 

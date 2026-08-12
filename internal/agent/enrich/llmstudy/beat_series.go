@@ -18,35 +18,39 @@ import (
 // exception, which is the price of a beat that reads as an answer.
 const MaxBeatSelection = 12
 
-// AppendBeat stores a beat unless it restates the previous one, marking whether it changed the
-// subject. Ordinals are contiguous over STORED beats, so a discarded restatement leaves no gap.
+// AppendBeat stores a beat. Ordinals are contiguous over stored beats.
 //
-// ChangedSubject is the signal the report samples on, and it is measured here by comparing
-// against the accumulated beats rather than taken from the classification pipeline's EWMA
-// focus — which the digest path does not run. The EWMA is better where available; this makes
-// the signal usable without it.
+// ⚠️ TWO SIGNALS WERE REMOVED FROM HERE, BOTH BECAUSE THEY WERE MEASURED. The restatement
+// suppression (BeatSaysNothingNew) discarded 0 of 70 beats — inert, and paid for with a
+// generation each time it might have fired. ChangedSubject fired on 41 of 42 refinements and then
+// on 0 of 46 packets, because it measured window adjacency rather than subject change; it is no
+// longer computed, and nothing downstream samples on it (see SelectBeats). A near-duplicate beat
+// is now STORED: a window that repeated itself is a fact about the session, and suppressing it
+// deleted that fact rather than reporting it.
 //
-// The restatement test uses beatsRestate, not the shared insightsMatch — see its doc for why.
-// The subject-change test does NOT: see beatChangedSubject for what replaced it and why.
-//
-// Clipping is ClipBeat, not clipProse: a stored beat ends at a sentence boundary or it is not
-// stored at all. AppendBeat is the second gate on that invariant (GenerateBeat is the first), so
-// a caller that assembles beat text some other way cannot get a fragment into the series.
+// Bounding is fitBeatText, not ClipBeat. A bulleted beat holds no sentence terminators, so the
+// prose clip would return "" for every beat; whole entries are dropped instead and the drop is
+// marked. AppendBeat is the second gate on that bound (generateBeat is the first), so a caller
+// assembling beat text some other way cannot get an over-cap beat into the series.
 func AppendBeat(prev []Beat, text string, g BeatGround) ([]Beat, bool) {
-	text = ClipBeat(text, BeatCap)
-	if text == "" {
+	text = fitBeatText(text, BeatCap)
+	if runeLen(text) < BeatMinRunes {
 		return prev, false
 	}
-	if BeatSaysNothingNew(text, prev) {
+	return append(prev, Beat{Ordinal: len(prev) + 1, Text: text}), true
+}
+
+// AppendBeatDraft stores a generated beat whole — its subject and entries beside the rendered
+// text — so a reader of the series is not left re-parsing the rendering to recover the fields the
+// model actually answered with.
+func AppendBeatDraft(prev []Beat, d BeatDraft) ([]Beat, bool) {
+	out, ok := AppendBeat(prev, d.Text, BeatGround{})
+	if !ok {
 		return prev, false
 	}
-	terms := beatSubjectTermsGrounded(text, g)
-	return append(prev, Beat{
-		Ordinal:        len(prev) + 1,
-		Text:           text,
-		ChangedSubject: beatChangedSubject(terms, prev),
-		SubjectTerms:   sortedTerms(terms),
-	}), true
+	b := &out[len(out)-1]
+	b.Subject, b.Events = d.Subject, d.Events
+	return out, true
 }
 
 // beatSubjectTermsGrounded is what a beat's subject is judged on: the things the beat names, plus
@@ -247,14 +251,28 @@ func beatSubjectTermList(s string) []string {
 	return out
 }
 
-// subjectTokenSpans is subjectTokens' tokenisation reported as byte spans, because the
-// position-aware capital test needs to know WHERE a token sits — a capital at a sentence start is
-// English, the same capital mid-sentence is a name. subjectTokens returns the strings only.
+// subjectTokenSpans is THE tokenisation, reported as byte spans; subjectTokens is a thin wrapper
+// that returns the strings. It is spans-first because the position-aware capital test needs to
+// know WHERE a token sits — a capital at a sentence start is English, the same capital
+// mid-sentence is a name — and because the comma rule below needs a token's neighbours, which a
+// per-rune predicate cannot see.
+//
+// The two used to be separate loops over a shared rune class. They agreed, but only by
+// inspection, and the class alone can no longer express the rule.
 func subjectTokenSpans(s string) [][2]int {
 	var out [][2]int
 	start := -1
 	for i, r := range s {
-		if subjectTokenRune(r) {
+		// A ',' is a separator everywhere EXCEPT between the digits of one number. Without
+		// that exception "1,400.00" is tokenised as "1" and "400.00", and the fragment is what
+		// gets stored: measured on testdata/nontech/finance-close.jsonl, six of the twelve
+		// slots in SessionRecord.Subjects — the block the prompt labels "measured —
+		// authoritative" — held amounts that were never written (400.00 for 1,400.00, 200.00
+		// for 1,200.00, 629.60 for 412,629.60, ...). Nothing downstream could catch it: the
+		// verbatim gate is a SUBSTRING test and "400.00" is a substring of "1,400.00", so a
+		// fractured amount passes every check the record has, and a beat anchoring against the
+		// record inherits a false number under a heading that says it is measured.
+		if subjectTokenRune(r) || (start >= 0 && r == ',' && thousandsSeparatorAt(s, i)) {
 			if start < 0 {
 				start = i
 			}
@@ -271,7 +289,36 @@ func subjectTokenSpans(s string) [][2]int {
 	return out
 }
 
-// subjectTokenRune is subjectTokens' character class, factored out so the two cannot drift.
+// thousandsSeparatorAt reports whether the ',' at byte offset i separates the digit groups of a
+// single number: a digit immediately before it and EXACTLY three digits after it.
+//
+// Exactly three, not "some digits", so the rule stays a thousands-separator rule rather than a
+// general "commas join numbers" rule: "1,400.00" and "412,629.60" are one token each, while
+// "1,2,3" — a list, a CSV row, a tuple — still splits the way it reads. Both sides are required,
+// so a clause-ending comma ("posted 148.00, then reversed") and a date ("March 5, 2026") are
+// untouched: a comma followed by a space is not followed by three digits.
+//
+// Bytes rather than runes deliberately: every character it tests is ASCII, so a byte compare
+// cannot mis-index a multi-byte rune — it can only fail to match one, which is the safe direction.
+func thousandsSeparatorAt(s string, i int) bool {
+	if i == 0 || i+3 >= len(s) {
+		return false
+	}
+	if s[i-1] < '0' || s[i-1] > '9' {
+		return false
+	}
+	for j := i + 1; j <= i+3; j++ {
+		if s[j] < '0' || s[j] > '9' {
+			return false
+		}
+	}
+	// A fourth digit means the groups are not thousands (e.g. "12,34567"), so this comma is not
+	// a separator and the token splits there.
+	return i+4 >= len(s) || s[i+4] < '0' || s[i+4] > '9'
+}
+
+// subjectTokenRune is the character class every subject token is built from. The ',' exception is
+// NOT here: it depends on a token's neighbours, and this predicate sees one rune.
 func subjectTokenRune(r rune) bool {
 	switch {
 	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -374,8 +421,14 @@ func beatsRestate(a, b string) bool {
 	return float64(shared)/float64(larger) >= insightMatchRatio
 }
 
-// SelectBeats chooses which beats a report reads: the first, every subject change, the most
-// recent, and even spacing to fill the cap.
+// SelectBeats chooses which beats a report reads: the first, the most recent, and even spacing
+// between them to fill the cap.
+//
+// ⚠️ IT NO LONGER SAMPLES ON ChangedSubject. That flag was the middle term of this selection and
+// it carried no information — 41 of 42 true in the round that set it up, then 0 of 46 in the
+// round that measured it against a reader — so the "interesting" beats it picked were whichever
+// ones the flag happened to be true for. Even spacing over a disjoint, contiguous window sequence
+// is a statement about the transcript rather than about a heuristic's mood.
 func SelectBeats(all []Beat, max int) []Beat {
 	if max <= 0 {
 		max = MaxBeatSelection
@@ -391,11 +444,6 @@ func SelectBeats(all []Beat, max int) []Beat {
 		return []Beat{all[len(all)-1]}
 	}
 	pick := map[int]bool{0: true, len(all) - 1: true}
-	for i := len(all) - 2; i > 0 && len(pick) < max; i-- {
-		if all[i].ChangedSubject {
-			pick[i] = true
-		}
-	}
 	if len(pick) < max {
 		step := float64(len(all)-1) / float64(max-1)
 		for k := 1; k < max-1 && len(pick) < max; k++ {
@@ -414,19 +462,18 @@ func SelectBeats(all []Beat, max int) []Beat {
 	return out
 }
 
-// RenderBeats renders the series oldest-first, marking where the subject changed so a report
-// can see the trajectory rather than only the endpoints.
+// RenderBeats renders the series oldest-first, one beat per line.
+//
+// The "(subject changed)" annotation is gone with the flag that produced it (see SelectBeats).
+// It only ever said what a retired heuristic thought; a reader of the rendered series can see a
+// change of subject in the subjects themselves, which are the first thing each line names.
 func RenderBeats(sel []Beat) string {
 	if len(sel) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	for _, x := range sel {
-		mark := ""
-		if x.ChangedSubject {
-			mark = " (subject changed)"
-		}
-		b.WriteString(fmt.Sprintf("[%d]%s %s\n", x.Ordinal, mark, oneLine(x.Text)))
+		b.WriteString(fmt.Sprintf("[%d] %s\n", x.Ordinal, oneLine(x.Text)))
 	}
 	return b.String()
 }

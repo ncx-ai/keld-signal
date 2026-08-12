@@ -93,38 +93,23 @@ func TestBeatProgressAbstainsWhenTheConversationStatesIt(t *testing.T) {
 	}
 }
 
-// The prompt half of the fix. Validation re-requests an offending generation, but a generation that
-// is never asked for is cheaper than one re-requested, and at temperature 0 a re-request can come
-// back byte-identical (see GenerateBeat).
-func TestBeatPromptForbidsOverallProgressClaims(t *testing.T) {
-	p := BeatPrompt("counts: turns=4", "user: close March")
-	for _, want := range []string{"characterise the job as a whole", "nearly complete",
-		"only X pending", "how little is left"} {
-		if !strings.Contains(p, want) {
-			t.Errorf("the prompt does not forbid %q:\n%s", want, p)
-		}
+// ⚠️ THE DETECTOR IS RETIRED AS A GUARD, AND THIS IS THE TEST OF THAT. It is not wired into
+// generateBeat: a beat naming a completion the window shows is an ordinary observed event, and
+// the rule that used to police completion read ZERO claims over a corpus where blind judges
+// failed 22 of 36 beats on rubberstamping (see beat_progress.go). What replaced it is the prompt
+// no longer asking for a status at all, plus a fact check on each entry (beat_anchor.go).
+func TestGenerateBeatDoesNotRunTheProgressDetector(t *testing.T) {
+	claim := "the work is complete and integrated into the adjusting journal"
+	if len(beatProgressClaims(claim)) == 0 {
+		t.Fatal("the fixture no longer trips the retired detector, so this proves nothing")
 	}
-	if !strings.Contains(p, "a specific named thing was finished") {
-		t.Error("the prompt must still permit reporting a specific finished thing, or it " +
-			"forbids accurate beats")
-	}
-}
-
-// The validator must run INSIDE the retry loop, like every other beat shape rule: an offending
-// generation is re-requested, not emitted and not dropped.
-func TestGenerateBeatRetriesAnUnobservableProgressClaim(t *testing.T) {
 	var n int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n++
-		beat := "Closing out March for the Meridian entity. The books are in " +
-			"~/finance/meridian and the work is nearly complete, with only final " +
-			"reconciliations pending."
-		if n >= 2 {
-			beat = "Closing out March for the Meridian entity, starting from the books in " +
-				"~/finance/meridian. The bank reconciliation is the first step and the " +
-				"statement has just been opened."
-		}
-		blob, _ := json.Marshal(map[string]string{"beat": beat})
+		blob, _ := json.Marshal(map[string]any{
+			"subject": "the March adjusting journal",
+			"events":  []string{claim + " for fa-register.csv"},
+		})
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []any{map[string]any{"message": map[string]any{"content": string(blob)}}},
 		})
@@ -133,14 +118,14 @@ func TestGenerateBeatRetriesAnUnobservableProgressClaim(t *testing.T) {
 
 	l := NewLlama(srv.URL)
 	l.Policy = fastPolicy()
-	got, err := l.GenerateBeat("counts: turns=2", "user: help me close out March for Meridian")
+	got, err := l.GenerateBeat("counts: turns=2", "user: post the journal from fa-register.csv")
 	if err != nil {
-		t.Fatalf("the retry did not recover: %v", err)
+		t.Fatalf("an anchored entry was rejected by a retired rule: %v", err)
 	}
-	if n < 2 {
-		t.Errorf("an unobservable progress claim must be re-requested, got %d attempts", n)
+	if n != 1 {
+		t.Errorf("the entry was re-requested %d times; the detector is still on the path", n)
 	}
-	if strings.Contains(got, "nearly complete") {
-		t.Errorf("the offending generation was emitted: %q", got)
+	if !strings.Contains(got, "fa-register.csv") {
+		t.Errorf("the entry did not survive: %q", got)
 	}
 }

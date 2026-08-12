@@ -5,37 +5,10 @@ import (
 	"testing"
 )
 
-// TestEventPromptModelsTheEmptyAnswerWithoutNamingAProhibition is the diagnosis, as a test.
-//
-// The empty answer has to LOOK like a normal output, so it appears inside the worked examples
-// rather than as a permission. And the prompt must not name the behaviour it is trying to avoid:
-// when the stock-opener rule was reworded to name forbidden phrasings, those openings went from
-// 2 to 4 — a prompt summons what it names.
-func TestEventPromptModelsTheEmptyAnswerWithoutNamingAProhibition(t *testing.T) {
-	p := BeatEventPrompt("user: reconcile the March ledger\n")
-	if !strings.Contains(p, "nothing was completed in this stretch") {
-		t.Error("the empty answer is not modelled as one of the example answers")
-	}
-	if !strings.Contains(p, "each of these is a normal answer") {
-		t.Error("the examples are not presented as normal answers")
-	}
-	for _, forbidden := range []string{"do not", "never", "forbidden", "must not", "avoid"} {
-		if strings.Contains(strings.ToLower(p), forbidden) {
-			t.Errorf("the event prompt names a prohibition (%q); prompts summon what they name",
-				forbidden)
-		}
-	}
-	if !strings.Contains(p, "what happened") || !strings.Contains(p, "past tense") {
-		t.Error("the event prompt does not ask what happened")
-	}
-	// The fused question is the thing being replaced; asking it here would reinstate it.
-	if strings.Contains(p, "where it has got to") || strings.Contains(p, "how far") {
-		t.Error("the event prompt asks for a state rather than for events")
-	}
-}
-
-// TestEventCheckIsShapeOnly documents where the line is: this pass reads the evidence, so nothing
-// above it can judge whether an event is true, and the checks are the ones that can be made.
+// TestEventCheckIsShapeOnly documents where the line is: this check reads only the answer, so it
+// cannot judge whether an entry is true — that is the anchoring guard's fact test and the blind
+// reviewers' judgement, in that order. What it can enforce is that each entry is a whole
+// one-line statement of usable length and that the list does not repeat itself.
 func TestEventCheckIsShapeOnly(t *testing.T) {
 	if _, err := checkBeatEvents([]string{"too short"}); err == nil {
 		t.Error("an entry under the floor was accepted")
@@ -46,6 +19,9 @@ func TestEventCheckIsShapeOnly(t *testing.T) {
 	if _, err := checkBeatEvents([]string{"", "  "}); err == nil {
 		t.Error("an all-blank list was accepted")
 	}
+	if _, err := checkBeatEvents([]string{"the ledger was reconciled\nand then reopened"}); err == nil {
+		t.Error("a multi-line entry was accepted; one entry is one bullet")
+	}
 	got, err := checkBeatEvents([]string{"the ledger was reconciled", "The Ledger Was Reconciled",
 		"the export was rerun and failed"})
 	if err != nil {
@@ -53,5 +29,16 @@ func TestEventCheckIsShapeOnly(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("duplicate event kept: %v", got)
+	}
+}
+
+// The per-entry cap is set against BeatCap, not chosen: a subject and three entries at the cap
+// must still fit the stored beat, or an ordinary answer would be trimmed by fitBeatEvents.
+func TestEventCapLetsThreeEntriesFitTheBeatCap(t *testing.T) {
+	subject := strings.Repeat("s", beatSubjectMaxRunes)
+	entry := strings.Repeat("e", beatEventMaxRunes)
+	if n := runeLen(renderBeat(subject, []string{entry, entry, entry}, nil, nil)); n > BeatCap {
+		t.Errorf("a subject and three max-length entries render to %d runes, over BeatCap %d",
+			n, BeatCap)
 	}
 }

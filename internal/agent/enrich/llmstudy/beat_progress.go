@@ -2,7 +2,29 @@ package llmstudy
 
 import "strings"
 
-// A beat answers "what are you working on, and where has it got to" from ONE window. It can see
+// ⚠️ RETIRED AS THE HONESTY CHECK. This file is kept for its reasoning, which is correct and was
+// expensive to get; what it is no longer is a guard on the beat path. Nothing in generateBeat
+// calls it.
+//
+// It read ZERO overall-progress claims across a corpus in which blind judges, reading the same
+// beats against the same windows, failed `not_rubberstamping` on 22 of 36. The reason is stated
+// in this file's own docstring, deliberately and in advance: a NAMED subject reaching a
+// completion word "is not matched at all, because a specific thing finishing is exactly what a
+// beat is allowed to report". That carve-out is the shape of nearly every span the judges
+// flagged. The check was sound on its own terms and structurally blind to the defect — which is
+// the general lesson this branch keeps re-learning, that a string rule encoding a JUDGEMENT
+// measures its own carve-outs rather than the thing it is named for.
+//
+// What replaced it is not a better phrase list. The defect had a MECHANISM — a fused prompt that
+// demanded a progress claim on every firing — and the replacement removes the demand (BeatPrompt
+// has no status field and asks only what happened) and guards what remains with a fact rather
+// than a judgement (beat_anchor.go: does this entry name anything the evidence contains). A
+// completion that the window shows is now an ordinary event, which is what this file's central
+// distinction always said it should be.
+//
+// The measurements below stand as recorded. Read on for what the defect looked like.
+//
+// A beat answered "what are you working on, and where has it got to" from ONE window. It can see
 // what that window shows. It cannot see how much of the job is left, and the two beats below are
 // what happens when it guesses anyway — both from the accounting session, both read as fact:
 //

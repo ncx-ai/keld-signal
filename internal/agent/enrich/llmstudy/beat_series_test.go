@@ -17,24 +17,41 @@ func beats(n int, changedAt ...int) []Beat {
 	return out
 }
 
-// Appending marks whether the subject changed — the signal the report samples on, and the one
-// the recency work was previously blocked on.
-func TestAppendBeatMarksSubjectChange(t *testing.T) {
+// ⚠️ THE RETIRED RULE, EXERCISED DIRECTLY. AppendBeat no longer computes ChangedSubject and no
+// longer discards a restatement (see its doc: 41 of 42 then 0 of 46, and 0 of 70 discarded), so
+// the tests below call the rule where they used to read it off a stored beat. They are kept
+// because the rule is kept — as documentation, and because the blind review corpus records what
+// earlier rounds decided with it.
+func appendJudged(prev []Beat, text string, g BeatGround) []Beat {
+	terms := beatSubjectTermsGrounded(text, g)
+	return append(prev, Beat{
+		Ordinal:        len(prev) + 1,
+		Text:           text,
+		ChangedSubject: beatChangedSubject(terms, prev),
+		SubjectTerms:   sortedTerms(terms),
+	})
+}
+
+// AppendBeat stores every beat it is given, including one that restates its predecessor. The
+// suppression it used to apply discarded 0 of 70 — inert — and a window that repeated itself is a
+// fact about the session rather than something to hide.
+func TestAppendBeatStoresEveryBeatIncludingARestatement(t *testing.T) {
 	var bs []Beat
-	bs, ok := AppendBeat(bs, "The work is reconciling the March ledger for Meridian.", BeatGround{})
-	if !ok || !bs[0].ChangedSubject {
-		t.Fatalf("the first beat establishes the subject: ok=%v %v", ok, bs)
+	bs, ok := AppendBeat(bs, "the March ledger for Meridian\n- the statement was opened", BeatGround{})
+	if !ok {
+		t.Fatal("the first beat was not stored")
 	}
-	bs, ok = AppendBeat(bs, "Work continues on Meridian's March ledger reconciliation.", BeatGround{})
-	if ok {
-		t.Errorf("a restatement must not be stored: %v", bs)
+	bs, ok = AppendBeat(bs, "Meridian's March ledger\n- the statement was opened again", BeatGround{})
+	if !ok {
+		t.Fatal("a restatement must now be stored, not discarded")
 	}
-	bs, ok = AppendBeat(bs, "Applying the Northwind provision under the Larkin blanket policy.", BeatGround{})
-	if !ok || !bs[len(bs)-1].ChangedSubject {
-		t.Errorf("a new subject must be stored and marked: %v", bs)
+	if len(bs) != 2 || bs[1].Ordinal != 2 {
+		t.Errorf("ordinals must be contiguous over stored beats: %v", bs)
 	}
-	if got := bs[len(bs)-1].Ordinal; got != 2 {
-		t.Errorf("ordinals must be contiguous over STORED beats, got %d", got)
+	for _, b := range bs {
+		if b.ChangedSubject {
+			t.Errorf("ChangedSubject must no longer be computed on the production path: %+v", b)
+		}
 	}
 }
 
@@ -54,11 +71,7 @@ func TestChangedSubjectDistinguishesContinuationFromAJump(t *testing.T) {
 		"The CSV export is finished and pushed, with the confirmation modal explaining the ZIP.",
 		"Fixing the ConfirmDialog nesting warning that RemoveMember and remove-key-button both trip.",
 	} {
-		var ok bool
-		bs, ok = AppendBeat(bs, text, BeatGround{})
-		if !ok {
-			t.Fatalf("beat was discarded as a restatement, so the flag cannot be judged: %q", text)
-		}
+		bs = appendJudged(bs, text, BeatGround{})
 	}
 	if !bs[0].ChangedSubject {
 		t.Error("the first beat establishes the subject and must be marked")
@@ -86,11 +99,8 @@ func TestChangedSubjectIgnoresOrdinaryEnglish(t *testing.T) {
 	if terms := beatSubjectTerms(second); len(terms) == 0 {
 		t.Fatalf("fixture names nothing, so it cannot exercise the rule: %v", terms)
 	}
-	bs, _ := AppendBeat(nil, first, BeatGround{})
-	bs, ok := AppendBeat(bs, second, BeatGround{})
-	if !ok {
-		t.Fatalf("the second beat was discarded, so the flag cannot be judged: %v", bs)
-	}
+	bs := appendJudged(nil, first, BeatGround{})
+	bs = appendJudged(bs, second, BeatGround{})
 	if bs[1].ChangedSubject {
 		t.Errorf("long ordinary English words must not read as a new subject: %q", bs[1].Text)
 	}
@@ -108,17 +118,14 @@ func TestChangedSubjectIgnoresOrdinaryEnglish(t *testing.T) {
 // the regenerated corpus), and it is pinned so the abstention stays visible rather than being
 // mistaken for a verdict.
 func TestChangedSubjectAbstainsWhenNothingIsNamedAtAll(t *testing.T) {
-	bs, _ := AppendBeat(nil, "Reconciling the March ledger for Meridian against the statement.", BeatGround{})
+	bs := appendJudged(nil, "Reconciling the March ledger for Meridian against the statement.", BeatGround{})
 	abstaining := "Designing a schema that allows free-form prose while preventing " +
 		"rubberstamping, resting on measurable evidence rather than judgement."
 	ground := BeatGround{Turn: "how does it look so far?"}
 	if n := len(beatSubjectTermsGrounded(abstaining, ground)); n != 0 {
 		t.Fatalf("fixture names %d subjects, so it does not exercise abstention", n)
 	}
-	bs, ok := AppendBeat(bs, abstaining, ground)
-	if !ok {
-		t.Fatalf("the beat was discarded, so the flag cannot be judged: %v", bs)
-	}
+	bs = appendJudged(bs, abstaining, ground)
 	if bs[1].ChangedSubject {
 		t.Errorf("a beat naming nothing must not be reported as a subject change: %q", bs[1].Text)
 	}
@@ -141,19 +148,13 @@ func TestChangedSubjectUsesTheGroundedTurn(t *testing.T) {
 		"prompts, removing the confound where GLiNER2 would lose due to prompt truncation."
 	secondTurn := "I installed lamma.cpp"
 
-	bs, _ := AppendBeat(nil, first, BeatGround{Turn: firstTurn})
-	ungrounded, ok := AppendBeat(bs, second, BeatGround{})
-	if !ok {
-		t.Fatal("the second beat was discarded, so the flag cannot be judged")
-	}
+	bs := appendJudged(nil, first, BeatGround{Turn: firstTurn})
+	ungrounded := appendJudged(bs, second, BeatGround{})
 	if ungrounded[1].ChangedSubject {
 		t.Fatal("the text-only rule now flags this pair, so it no longer demonstrates the gap " +
 			"the grounded term set closes")
 	}
-	got, ok := AppendBeat(bs, second, BeatGround{Turn: secondTurn})
-	if !ok {
-		t.Fatal("the second beat was discarded, so the flag cannot be judged")
-	}
+	got := appendJudged(bs, second, BeatGround{Turn: secondTurn})
 	if !got[1].ChangedSubject {
 		t.Errorf("the grounded turn must carry this subject change: terms=%v", got[1].SubjectTerms)
 	}
@@ -165,20 +166,14 @@ func TestChangedSubjectUsesTheGroundedTurn(t *testing.T) {
 // bare capitalised word is thin evidence and still needs a second.
 func TestChangedSubjectAcceptsOneStrongIdentifierButNotOneWeakName(t *testing.T) {
 	base := "Fixing the ConfirmDialog nesting warning that RemoveMember trips."
-	bs, _ := AppendBeat(nil, base, BeatGround{})
+	bs := appendJudged(nil, base, BeatGround{})
 
-	strong, ok := AppendBeat(bs, "Adding a confirmation modal to the export in overview.tsx.", BeatGround{})
-	if !ok {
-		t.Fatal("beat discarded")
-	}
+	strong := appendJudged(bs, "Adding a confirmation modal to the export in overview.tsx.", BeatGround{})
 	if !strong[1].ChangedSubject {
 		t.Errorf("one novel strong identifier must mark a change: terms=%v", strong[1].SubjectTerms)
 	}
 
-	weak, ok := AppendBeat(bs, "Still chasing the same nesting warning, now under Halberd.", BeatGround{})
-	if !ok {
-		t.Fatal("beat discarded")
-	}
+	weak := appendJudged(bs, "Still chasing the same nesting warning, now under Halberd.", BeatGround{})
 	if weak[1].ChangedSubject {
 		t.Errorf("one novel weak proper-noun candidate must not mark a change: terms=%v",
 			weak[1].SubjectTerms)
@@ -242,11 +237,7 @@ func TestChangedSubjectTreatsAReturnAsUnchanged(t *testing.T) {
 		"Working on the CSV export for the overview page, which delivers five files in one ZIP.",
 		"Back on members-by-team.tsx, where the budget saliency still clashes with the pill.",
 	} {
-		var ok bool
-		bs, ok = AppendBeat(bs, text, BeatGround{})
-		if !ok {
-			t.Fatalf("beat discarded, cannot judge the flag: %q", text)
-		}
+		bs = appendJudged(bs, text, BeatGround{})
 	}
 	if !bs[1].ChangedSubject {
 		t.Errorf("the CSV export is a new subject: %q", bs[1].Text)
@@ -256,25 +247,32 @@ func TestChangedSubjectTreatsAReturnAsUnchanged(t *testing.T) {
 	}
 }
 
-// AppendBeat is the second gate on the shape invariant. GenerateBeat validates and re-requests,
-// but a caller assembling beat text some other way must not be able to get a fragment into the
-// series either — that is how the defect reached 46 of 47 beats without any test noticing.
-func TestAppendBeatNeverStoresAFragment(t *testing.T) {
+// AppendBeat is the second gate on the BOUND, and the bound is now whole entries rather than a
+// sentence boundary: a bulleted beat holds no sentence terminators, so the prose clip that used
+// to sit here would return "" and lose every beat.
+func TestAppendBeatBoundsAtWholeLinesAndMarksTheDrop(t *testing.T) {
 	var bs []Beat
-	bs, ok := AppendBeat(bs, "Closing March for Meridian, focusing on the bank reconciliation. "+
-		"The outstanding cheques to Halberd Supply still need", BeatGround{})
+	bs, ok := AppendBeat(bs, "the March close\n- the bank statement was opened", BeatGround{})
 	if !ok {
-		t.Fatal("the complete first sentence must still be stored")
+		t.Fatal("a beat inside the cap must be stored")
 	}
-	if got := bs[0].Text; got != "Closing March for Meridian, focusing on the bank reconciliation." {
-		t.Errorf("the incomplete tail was stored: %q", got)
+	if got := bs[0].Text; got != "the March close\n- the bank statement was opened" {
+		t.Errorf("a beat inside the cap was altered: %q", got)
 	}
-	if _, ok := AppendBeat(bs, "no complete sentence here at all", BeatGround{}); ok {
-		t.Error("a beat with no complete sentence must not be stored")
+	over := "the March close\n" + strings.Repeat("- "+strings.Repeat("x", 120)+"\n", 6)
+	bs, ok = AppendBeat(bs, over, BeatGround{})
+	if !ok {
+		t.Fatal("an over-cap beat must be bounded, not discarded")
 	}
-	long := strings.Repeat("padding words that never terminate ", 40)
-	if _, ok := AppendBeat(bs, long, BeatGround{}); ok {
-		t.Error("an over-cap beat with no sentence boundary must not be stored")
+	last := bs[len(bs)-1].Text
+	if runeLen(last) > BeatCap {
+		t.Errorf("stored beat is %d runes, over BeatCap %d", runeLen(last), BeatCap)
+	}
+	if !strings.Contains(last, "dropped to fit the beat cap") {
+		t.Errorf("the drop is not marked: %q", last)
+	}
+	if _, ok := AppendBeat(bs, "tiny", BeatGround{}); ok {
+		t.Error("a beat under the floor must not be stored")
 	}
 }
 
@@ -291,21 +289,20 @@ func TestSelectBeatsKeepsFirstAndLatest(t *testing.T) {
 	}
 }
 
-func TestSelectBeatsPrefersSubjectChanges(t *testing.T) {
-	got := SelectBeats(beats(30, 9, 18), 6)
-	var have []int
-	for _, b := range got {
-		have = append(have, b.Ordinal)
+// SelectBeats no longer samples on ChangedSubject: the flag carried no information (41 of 42
+// true, then 0 of 46), so "the interesting ones" were whichever the flag happened to be true for.
+// Selection is the first, the latest, and even spacing between them — a statement about the
+// transcript rather than about a heuristic.
+func TestSelectBeatsIgnoresTheRetiredSubjectFlag(t *testing.T) {
+	flagged := SelectBeats(beats(30, 9, 18), 6)
+	plain := SelectBeats(beats(30), 6)
+	if len(flagged) != len(plain) {
+		t.Fatalf("the flag changed how many beats were selected: %d vs %d", len(flagged), len(plain))
 	}
-	for _, want := range []int{9, 18} {
-		var found bool
-		for _, h := range have {
-			if h == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("subject change at %d missing from %v", want, have)
+	for i := range flagged {
+		if flagged[i].Ordinal != plain[i].Ordinal {
+			t.Errorf("the flag changed the selection at %d: %d vs %d",
+				i, flagged[i].Ordinal, plain[i].Ordinal)
 		}
 	}
 }
@@ -322,20 +319,24 @@ func TestSelectBeatsFallsBackToSpacing(t *testing.T) {
 	}
 }
 
-func TestRenderBeatsMarksSubjectChanges(t *testing.T) {
+// The "(subject changed)" annotation went with the flag that produced it. It only ever said what
+// a retired heuristic thought, and it cost runes in the one prompt tier with 4 of them to spare.
+func TestRenderBeatsDoesNotAnnotateTheRetiredFlag(t *testing.T) {
 	out := RenderBeats([]Beat{
-		{Ordinal: 1, Text: "started on the ledger", ChangedSubject: true},
-		{Ordinal: 4, Text: "steady progress", ChangedSubject: false},
+		{Ordinal: 1, Text: "the ledger\n- the statement was opened", ChangedSubject: true},
+		{Ordinal: 4, Text: "the ledger\n- two differences were found", ChangedSubject: false},
 	})
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("one line per beat, got %d", len(lines))
+		t.Fatalf("one line per beat, got %d: %q", len(lines), out)
 	}
-	if !strings.Contains(lines[0], "subject") {
-		t.Errorf("a subject change must be marked: %q", lines[0])
+	for _, l := range lines {
+		if strings.Contains(l, "subject changed") {
+			t.Errorf("a retired heuristic is still annotated in the report's input: %q", l)
+		}
 	}
-	if strings.Contains(lines[1], "subject") {
-		t.Errorf("steady progress must not be marked: %q", lines[1])
+	if !strings.Contains(lines[0], "[1] the ledger - the statement was opened") {
+		t.Errorf("a beat must render whole on one line: %q", lines[0])
 	}
 }
 
