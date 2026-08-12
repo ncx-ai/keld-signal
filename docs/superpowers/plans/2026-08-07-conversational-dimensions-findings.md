@@ -1835,3 +1835,140 @@ moves one of them by a lot is still worth looking at, not because the number mea
   re-request at temperature 0) and fixed, with the case the fix does not cover stated above.
 - **Part 8's "+0 runes of headroom"**: still +0 on the shipping tree, and the delimiter rule's
   forward allowance did not consume it.
+
+# Part 10 — The three lost digests: an empty open list is an answer, and it is now counted
+
+Part 9 recorded three digests lost to `unresolved is empty — it must be addressed explicitly` with
+all five attempts exhausted: ON at `66042cc` s1 step 3, and both arms at `f62b80e`, ON s1 step 2 and
+OFF s3 step 2. This is the diagnosis, the fix, and one sweep of both arms.
+
+## The diagnosis, and it was not what the retry story said
+
+**Two independent causes, and the code says so.**
+
+1. **Neither existing repair fires.** `applyClosures` and `dropStaleOpenItems` each substitute
+   `UnresolvedSentinel` when *they* empty the open list — but each returns early when it has
+   nothing to do (`len(closed) == 0`, `len(stale) == 0`). When the model answers with `unresolved`
+   empty **and** `closed` empty there are no closures to apply and nothing stale to drop, so the
+   list stays empty. Moving validation onto the *repaired* digest, which an earlier round did and
+   documented, does not help here: on this input the repaired digest **is** the raw digest.
+2. **The retry cannot differ.** The digest path calls `callValid`, i.e. `sample == nil`, so all five
+   attempts are the byte-identical greedy request. `d4343df`'s temperature ladder (0 → 0.2 → 0.4 →
+   0.6 → 0.8 at an explicit seed) is `GenerateBeat`'s alone and was never wired to the digest path.
+
+⚠️ **Correction to the brief that commissioned this work**, which asserted the retries were already
+temperature-varied and seeded and concluded that the model therefore "genuinely returns an empty
+open list five times running". It returns it *once*, and is then asked four more identical
+questions. Both halves matter, but they are different defects and only the first is fixed here.
+
+## The fix, and the signal it must not erase
+
+`ensureUnresolvedIsAddressed` is a third repair, last in the chain: if the repaired list is still
+empty, the sentinel takes its place. If the model returns nothing open, its answer **is** "nothing
+is open", and the sentinel is that answer's prescribed form — the same reasoning the other two
+repairs already use for the lists they empty themselves.
+
+**`ValidateDigest` rejects an empty list deliberately**, and its own comment says why: an empty list
+is what a rubberstamping model produces. A silent substitution would have deleted that signal along
+with the failure — the exact defect class this branch keeps finding, applied to the branch's own
+fix. So the repair **reports whether it fired**, `Llama` counts it, and the sweep prints both an
+attributable per-step line and a summary row:
+
+```
+EMPTY-UNRESOLVED s3 step2: the model returned no open list at all; code supplied the
+  sentinel (this step would have been LOST before the substitution existed)
+EMPTY-UNRESOLVED SUBSTITUTED 1 of 42 refinements
+```
+
+It fires **only** on the model-returned-nothing case. A list one of the other two repairs emptied
+means the model did name open items and code resolved them, which is a derivation, not a silence,
+and counting it would make the number as useless as hiding it.
+
+Counted once per committed digest — not inside the validator, which runs per attempt, nor inside
+the repair closure, which runs twice per call.
+
+## What the sweep measured
+
+Both arms, 14 sessions, 56 attempts each, on a **fresh pinned snapshot** (558 transcripts,
+2026-08-11T21:26).
+
+| | ON | OFF |
+|---|---:|---:|
+| **T1 usable digests** | **100.0% of 56** | **100.0% of 56** |
+| digests produced / attempted | 56 / 56 | 56 / 56 |
+| **EMPTY-UNRESOLVED substituted** | **0 of 42** | **1 of 42** (s3 step2) |
+| recovered panics | 0 | 0 |
+| instruction leakage | 0 | 0 |
+| T4 retention (facts) | 49 of 71 | 50 of 71 |
+| beats asked / generated / kept | 42 / 40 / 40 | 42 / 40 / 40 |
+| largest prompt | 13,896 | 13,968 |
+| tightest refine window margin | 2,088 | 2,623 |
+
+**T1 is back to 56/56 in both arms**, from 55/56 in both arms at `f62b80e`.
+
+**One of the three named cases reproduced and was recovered: `OFF s3 step 2`** — same arm, same
+session, same step, and the substitution line names it. That is the mechanism observed on real
+data rather than argued.
+
+**The other two did not recur, and the sweep therefore cannot speak to them.** The ON arm
+substituted **zero** times, so on this corpus the model never returned an empty open list in that
+arm at all. `66042cc` s1 step 3 and `f62b80e` s1 step 2 are not reproduced; their recovery rests on
+the unit-level revert-and-fail, which reverting the substitution reproduces exactly, error string
+included: `gave up after 5 attempt(s): invalid digest: unresolved is empty`.
+
+### The zero is also what makes "nothing else moved" checkable
+
+With **0 substitutions in the ON arm, that arm ran the byte-identical pre-fix code path** —
+`ensureUnresolvedIsAddressed` returns its input untouched when the list is non-empty. So every ON
+movement in this sweep is attributable to the corpus, not to the change. That is a stronger
+statement than a threshold comparison could make, and it is worth more than the arms being
+identical would have been.
+
+⚠️ **The corpus is NOT the one Part 9 measured on, and this could not be avoided.** That round's
+pinned snapshot (567 transcripts, 2026-08-11T15:13) was not preserved and no longer exists on disk,
+and neither were its two sweep logs — so a step-to-step comparison against `f62b80e` is impossible.
+This sweep pins a fresh snapshot and both arms share it. Its T4 denominator is 71 against Part 9's
+81, so **none of Part 9's fact counts may be compared with this Part's**.
+
+**The snapshot is kept this time**, which is the whole lesson:
+`/home/dg/keld/study-corpus-snapshot-2026-08-11T2130/projects` (558 transcripts, 783 MB, outside the
+repo). Point a run at it with
+`KELD_STUDY_CORPUS_ROOT=/home/dg/keld/study-corpus-snapshot-2026-08-11T2130/projects`, and anything
+measured against Part 10 must use it or say that it did not.
+
+While fixing this, a second reason the earlier pinning was weaker than believed came out:
+`corpusRoot()`'s doc promised pinnability but only the document-frequency table read it —
+`StratifiedTranscripts` and `ThisSessionTranscript` each built `$HOME/.claude/projects`
+themselves, so `KELD_STUDY_CORPUS_ROOT` pinned the DF table and left **session selection on the
+live, growing directory**, which contains this harness's own transcript. Both now read
+`corpusRoot()`.
+
+### Gate verdict: 3 rows, none of them this change
+
+Against the committed `fdb1a23` baseline, all three in the ON arm — the arm with zero substitutions:
+
+| row | baseline ON | now ON | reading |
+|---|---:|---:|---|
+| T2 unverified identifiers | 0.9% of 762 | 1.5% of 744 (count 7 → 11) | **inherited**: `f62b80e` already measured 1.5% of 810 |
+| T3 rubberstamped | 0.0% of 12 | 6.7% of 15 (count 0 → 1) | **improved** against the step before it — `f62b80e` was 16.7% of 12, over its ≤10% threshold; this is back under |
+| T13 fabricated `next` | 3.3% of 90 | 5.6% of 72 (count 3 → 4) | one item on a denominator that fell 20%; corpus, not this change |
+
+Improved against the baseline in both arms: T4, T7 (to zero), T9, T12 (25.0% → 12.5%), and T2/T11
+in the OFF arm.
+
+**Nothing is reverted, and for once the reason is not a judgement call**: the arm carrying all three
+flagged rows executed code that cannot differ from the pre-fix tree, so no gate row in this sweep
+can be caused by the substitution.
+
+## Known gap, recorded not fixed
+
+`CreateDigestWithView` validates the raw response and has no repair chain, so a **create** answering
+with an empty `unresolved` would lose the digest the same way. Never observed — all three measured
+losses were step 2 or step 3, because a first report over a whole session prefix always has
+something open — so extending the substitution there would change create-path output with no sweep
+behind it. Named at its site.
+
+Also unfixed, and the larger of the two causes above: **the digest path's five attempts are still
+byte-identical.** The beat path proves a temperature-and-seed ladder is cheap and keeps a recovered
+sample reproducible. Applying it to the digest path would change every retried digest and needs its
+own sweep.
