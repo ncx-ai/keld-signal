@@ -91,10 +91,19 @@ func TestEmitRound(t *testing.T) {
 }
 
 func TestScoreRound(t *testing.T) {
-	dir := os.Getenv("REVIEW_SCORE_DIR")
-	if dir == "" {
+	raw := os.Getenv("REVIEW_SCORE_DIR")
+	if raw == "" {
 		t.Skip("set REVIEW_SCORE_DIR to score a round")
 	}
+	// REVIEW_SCORE_DIR used to be handed to filepath.Join as typed, and `go test` runs each test
+	// with its working directory set to the PACKAGE directory — so a relative path was resolved
+	// against internal/agent/enrich/llmstudy/review/ rather than against the shell's cwd, and the
+	// answer key was silently not found. Resolve it explicitly and say which directory was read.
+	dir, how, err := ResolveRoundDir(repoRoot, raw)
+	if err != nil {
+		t.Fatalf("REVIEW_SCORE_DIR: %v", err)
+	}
+	t.Logf("scoring %s (%s)", dir, how)
 	s, err := ScoreRound(
 		filepath.Join(dir, "withheld", "answer-key.json"),
 		filepath.Join(dir, "packets"),
