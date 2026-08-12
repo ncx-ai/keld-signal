@@ -268,15 +268,20 @@ type armsTally struct {
 	cUngroundedBeats            int
 	sUngroundedBeats            int
 	kinds                       map[string]int
-	events                      []int
-	cands                       []int
-	unjudged                    int
-	noise                       int
+	// byKind is what each kind was actually assigned to, counted. The histogram of kinds says
+	// how often the pass used each label; this says WHICH terms it used them on, which is the
+	// only way a reader can see a mistyping without opening every beat.
+	byKind   map[string]map[string]int
+	events   []int
+	cands    []int
+	unjudged int
+	noise    int
 }
 
 func newArmsTally() *armsTally {
 	return &armsTally{
 		failedPass: map[string]int{}, kinds: map[string]int{},
+		byKind:     map[string]map[string]int{},
 		cSentences: map[int]int{}, sSentences: map[int]int{},
 		cOpenings: map[string]int{}, sOpenings: map[string]int{},
 	}
@@ -316,6 +321,10 @@ func (a *armsTally) add(p beatArmsPoint) {
 	a.cands = append(a.cands, len(sp.Candidates))
 	for _, e := range sp.Entities {
 		a.kinds[string(e.Kind)]++
+		if a.byKind[string(e.Kind)] == nil {
+			a.byKind[string(e.Kind)] = map[string]int{}
+		}
+		a.byKind[string(e.Kind)][e.Name]++
 		if e.Kind == KindNoise {
 			a.noise++
 		}
@@ -411,12 +420,53 @@ func (a *armsTally) lines() []string {
 	}
 }
 
+// histogramTop is histogram bounded to the n most-used terms, with the remainder counted rather
+// than dropped.
+func histogramTop(m map[string]int, n int) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if m[keys[i]] != m[keys[j]] {
+			return m[keys[i]] > m[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	rest := 0
+	if len(keys) > n {
+		for _, k := range keys[n:] {
+			rest += m[k]
+		}
+		keys = keys[:n]
+	}
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("`%s` %d", k, m[k]))
+	}
+	if rest > 0 {
+		parts = append(parts, fmt.Sprintf("and %d more assignment(s)", rest))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func writeArmsTally(b *strings.Builder, a *armsTally) {
 	b.WriteString("\n---\n\n# What was generated\n\n")
 	b.WriteString("Counts of this run's own observations. No arm is scored, ranked or preferred " +
 		"here; the series-level metric belongs to a separate review.\n\n")
 	for _, line := range a.lines() {
 		b.WriteString("- " + line + "\n")
+	}
+	b.WriteString("\n## What each kind was assigned to\n\n")
+	b.WriteString("The terms each kind was used on, most-used first, so a mistyping is visible " +
+		"without opening every beat. Recorded, not corrected.\n\n")
+	kinds := make([]string, 0, len(a.byKind))
+	for k := range a.byKind {
+		kinds = append(kinds, k)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return a.kinds[kinds[i]] > a.kinds[kinds[j]] })
+	for _, k := range kinds {
+		fmt.Fprintf(b, "- **%s** (%d): %s\n", k, a.kinds[k], histogramTop(a.byKind[k], 10))
 	}
 	b.WriteString("\nTwo notes on how to read the last two lines. *Progress claims surviving " +
 		"into a stored beat* should be zero on both arms — the check runs inside the retry " +
