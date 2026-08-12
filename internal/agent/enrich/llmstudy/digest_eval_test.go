@@ -991,10 +991,11 @@ func TestDigestRefineQuality(t *testing.T) {
 			"the %d-rune bound and covered by NO window); %d windows, largest %d runes",
 			beatCov.TurnCoverage(), beatCov.SpanTurns, beatCov.SpanTurns-beatCov.KeptTurns,
 			BeatWindowChars, beatCov.Windows, beatCov.LargestRunes)
-		t.Logf("   consecutive-window overlap: mean %.1f%% of window runes, %.1f%% of the "+
-			"previous window (reserve %d%%) — shared transcript, not shared model output, so "+
-			"it cannot compound drift",
-			beatCov.OverlapPct(), beatCov.OverlapOfPrevPct(), beatOverlapPct)
+		t.Logf("   consecutive-window overlap: %d runes carried — mean %.1f%% of window runes, "+
+			"%.1f%% of what the previous beat READ (the spec's 25-30%%), %.1f%% of its whole "+
+			"stride (reserve %d%%) — shared transcript, not shared model output, so it cannot "+
+			"compound drift", beatCov.OverlapRunes, beatCov.OverlapPct(),
+			beatCov.OverlapOfPrevWindowPct(), beatCov.OverlapOfPrevSpanPct(), beatOverlapPct)
 	}
 	if beatRatioN > 0 {
 		t.Logf("   consecutive-beat overlap ratio: mean %.3f, max %.3f over %d pairs, against the "+

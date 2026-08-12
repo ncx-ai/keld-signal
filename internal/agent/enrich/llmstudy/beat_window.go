@@ -92,10 +92,16 @@ type BeatWindow struct {
 	KeptTurns    int // of those, how many the character bound left in
 	OverlapTurns int // turns carried from the previous beat's span
 	OverlapRunes int
-	// PrevSpanRunes is the previous beat's whole stride, so the overlap can be reported
-	// against the quantity the dial is set in as well as against this window's size.
+	// PrevSpanRunes is the previous beat's whole stride — the quantity the dial is SET in.
 	PrevSpanRunes int
-	TotalRunes    int
+	// PrevWindowRunes is what the previous beat actually READ, which is a different and smaller
+	// number whenever the bound dropped turns from its stride. It is carried because it is the
+	// spec's own denominator: "the last ~25-30% of the previous WINDOW carried into the next".
+	// Reporting the carry against the stride instead understates it by however much of that
+	// stride no window ever read — measured 16.6% of stride against 24.7% of window on the same
+	// 28 pairs, i.e. the difference between missing the spec's band and sitting inside it.
+	PrevWindowRunes int
+	TotalRunes      int
 }
 
 // Dropped is how many turns of this beat's own stride the bound discarded. Those turns are
@@ -109,10 +115,22 @@ func (b BeatWindow) Dropped() int { return b.SpanTurns - b.KeptTurns }
 type BeatWindower struct {
 	// next is the first delta index no beat has consumed yet.
 	next int
-	// prevSpan is the previous beat's own stride, kept whole so the overlap can be taken from
-	// its newest end. The turns the bound dropped are deliberately NOT in it: an overlap
-	// carrying material the previous beat never saw would not be shared ground.
-	prevSpan []Turn
+	// prevKept is what the previous beat actually READ — its bounded window's turns, not its
+	// whole stride. The overlap is taken from here rather than from the stride so that "shared
+	// ground" is true by construction: material the bound dropped was never on the previous
+	// beat's screen, and carrying it forward would be presenting new text as shared.
+	//
+	// It used to hold the whole stride, and the tail of a stride IS the tail of its window in
+	// every case this corpus produces (per-turn clipping bounds a turn at PerTurnChars = 1,200
+	// runes, so a window that dropped anything still kept >10,000 runes, far more than the
+	// <=4,480-rune overlap can ask for). That made the field's own comment — "the turns the bound
+	// dropped are deliberately NOT in it" — false as written and true only by an argument about
+	// two other constants. Holding the kept turns costs nothing and needs no argument.
+	prevKept []Turn
+	// prevSpanRunes is the previous beat's whole stride, which is what the dial is set in, and
+	// prevWindowRunes is what that beat read. Both are reported; they are different quantities.
+	prevSpanRunes   int
+	prevWindowRunes int
 }
 
 // Next returns the beat window ending at delta index upto (inclusive).
@@ -139,12 +157,11 @@ func (b *BeatWindower) Next(deltas []Window, upto int) BeatWindow {
 	// the whole window. A small previous span therefore contributes its own tail rather than
 	// all of itself — carrying a whole short span forward would make consecutive beats mostly
 	// re-reads, which is the opposite of the "shared ground" the overlap is for.
-	prevRunes := turnsRuneLen(b.prevSpan)
-	budget := prevRunes * beatOverlapPct / 100
+	budget := b.prevSpanRunes * beatOverlapPct / 100
 	if cap := BeatWindowChars * beatOverlapPct / 100; budget > cap {
 		budget = cap
 	}
-	overlap := tailTurnsWithin(b.prevSpan, budget)
+	overlap := tailTurnsWithin(b.prevKept, budget)
 	overlapRunes := turnsRuneLen(overlap)
 	// The window pays for its own hole marker. The notice is not a turn, but it IS in the
 	// rendered window, so a fit computed over turns alone overruns the bound by the notice's
@@ -165,16 +182,17 @@ func (b *BeatWindower) Next(deltas []Window, upto int) BeatWindow {
 	w := deltas[upto]
 	w.Turns = append(append([]Turn{}, overlap...), kept...)
 	out := BeatWindow{
-		Window:        w,
-		Rendered:      renderBeatWindow(overlap, len(kept) < len(span), kept),
-		SpanTurns:     len(span),
-		KeptTurns:     len(kept),
-		OverlapTurns:  len(overlap),
-		OverlapRunes:  overlapRunes,
-		PrevSpanRunes: prevRunes,
+		Window:          w,
+		Rendered:        renderBeatWindow(overlap, len(kept) < len(span), kept),
+		SpanTurns:       len(span),
+		KeptTurns:       len(kept),
+		OverlapTurns:    len(overlap),
+		OverlapRunes:    overlapRunes,
+		PrevSpanRunes:   b.prevSpanRunes,
+		PrevWindowRunes: b.prevWindowRunes,
 	}
 	out.TotalRunes = runeLen(out.Rendered)
-	b.prevSpan = span
+	b.prevKept, b.prevSpanRunes, b.prevWindowRunes = kept, turnsRuneLen(span), out.TotalRunes
 	b.next = upto + 1
 	return out
 }
@@ -267,13 +285,14 @@ func assertBeatPromptWithinBudget(p string) {
 // the strides are contiguous and disjoint by construction, so their union is the transcript and
 // anything the character bound drops is covered by nothing.
 type BeatCoverage struct {
-	SpanTurns     int
-	KeptTurns     int
-	OverlapRunes  int
-	PrevSpanRunes int
-	WindowRunes   int
-	Windows       int
-	LargestRunes  int
+	SpanTurns       int
+	KeptTurns       int
+	OverlapRunes    int
+	PrevSpanRunes   int
+	PrevWindowRunes int
+	WindowRunes     int
+	Windows         int
+	LargestRunes    int
 }
 
 // Add folds one beat window in.
@@ -286,6 +305,7 @@ func (c *BeatCoverage) Add(b BeatWindow) {
 	c.KeptTurns += b.KeptTurns
 	c.OverlapRunes += b.OverlapRunes
 	c.PrevSpanRunes += b.PrevSpanRunes
+	c.PrevWindowRunes += b.PrevWindowRunes
 	c.WindowRunes += b.TotalRunes
 	if b.TotalRunes > c.LargestRunes {
 		c.LargestRunes = b.TotalRunes
@@ -309,12 +329,26 @@ func (c BeatCoverage) OverlapPct() float64 {
 	return 100 * float64(c.OverlapRunes) / float64(c.WindowRunes)
 }
 
-// OverlapOfPrevPct is the same carry-forward measured against the quantity the dial is set in:
-// what share of the PREVIOUS window the next one re-reads. The spec's "~25-30%" is this number,
-// not OverlapPct.
-func (c BeatCoverage) OverlapOfPrevPct() float64 {
+// OverlapOfPrevSpanPct is the carry-forward against the quantity the dial is SET in: the previous
+// beat's whole stride, including the part of it the character bound dropped.
+//
+// It is NOT the spec's number, and this was mislabelled as "share of the previous window" until it
+// was measured against both: 16.6% of stride versus 24.7% of window over the same 28 pairs. The
+// gap is entirely the material no window read, so on a session whose strides fit the bound the two
+// coincide and on a long-stride session they do not. Reporting the wrong one made a design sitting
+// inside the spec's 25-30% band look like it was missing the band by 8 points.
+func (c BeatCoverage) OverlapOfPrevSpanPct() float64 {
 	if c.PrevSpanRunes == 0 {
 		return 0
 	}
 	return 100 * float64(c.OverlapRunes) / float64(c.PrevSpanRunes)
+}
+
+// OverlapOfPrevWindowPct is the spec's quantity: what share of what the previous beat actually
+// READ the next beat re-reads.
+func (c BeatCoverage) OverlapOfPrevWindowPct() float64 {
+	if c.PrevWindowRunes == 0 {
+		return 0
+	}
+	return 100 * float64(c.OverlapRunes) / float64(c.PrevWindowRunes)
 }

@@ -188,15 +188,22 @@ func TestBeatPromptHasABudgetNow(t *testing.T) {
 func TestBeatCoverageCountsWhatNoWindowRead(t *testing.T) {
 	var c BeatCoverage
 	c.Add(BeatWindow{SpanTurns: 10, KeptTurns: 10, TotalRunes: 1000})
-	c.Add(BeatWindow{SpanTurns: 10, KeptTurns: 5, OverlapRunes: 280, PrevSpanRunes: 1000, TotalRunes: 1000})
+	c.Add(BeatWindow{SpanTurns: 10, KeptTurns: 5, OverlapRunes: 280, PrevSpanRunes: 1000,
+		PrevWindowRunes: 800, TotalRunes: 1000})
 	if got := c.TurnCoverage(); got != 75 {
 		t.Errorf("coverage = %.1f%%, want 75", got)
 	}
 	if got := c.OverlapPct(); got != 14 {
 		t.Errorf("overlap = %.1f%%, want 14", got)
 	}
-	if got := c.OverlapOfPrevPct(); got != 28 {
-		t.Errorf("overlap of previous = %.1f%%, want 28", got)
+	if got := c.OverlapOfPrevSpanPct(); got != 28 {
+		t.Errorf("overlap of previous stride = %.1f%%, want 28", got)
+	}
+	// The spec's denominator is what the previous beat READ, which is smaller than its stride
+	// whenever the bound dropped turns — so the same carry is a LARGER share of it. Reporting the
+	// stride figure as if it were this one understated the overlap by 8 points on real sessions.
+	if got := c.OverlapOfPrevWindowPct(); got != 35 {
+		t.Errorf("overlap of previous window = %.1f%%, want 35 (280 of 800)", got)
 	}
 	if c.Windows != 2 || c.LargestRunes != 1000 {
 		t.Errorf("windows=%d largest=%d", c.Windows, c.LargestRunes)
