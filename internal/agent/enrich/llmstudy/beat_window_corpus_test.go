@@ -26,9 +26,9 @@ import (
 // conclusion is that the new number is higher.
 //
 // Offline: no model, no generation. Prompt assembly is deterministic, so the budget and the
-// backstop are measured over EVERY beat window of the walked prefix rather than over the sampled
-// few a generation run can afford — and the panic count means what it says, since assembling the
-// prompt is where the panic lives.
+// backstop are measured over EVERY beat window of EVERY probed session rather than over the
+// sampled few a generation run can afford — and the panic count means what it says, since
+// assembling the prompt is where the panic lives.
 func TestCorpusBeatWindowGeometry(t *testing.T) {
 	files := StratifiedTranscripts()
 	if me := ThisSessionTranscript(); me != "" {
@@ -38,9 +38,9 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 	o.K = 12
 	cadence := BeatTurnsFromEnv()
 
-	// Coverage, in turns. spanTurns is every turn of the walked prefix: the strides are
-	// contiguous and disjoint by construction, so their union IS the prefix and anything neither
-	// geometry keeps is read by nothing.
+	// Coverage, in turns. spanTurns is every turn the beats' strides span — which is the whole
+	// session up to its last beat, since the strides are contiguous and disjoint by construction.
+	// Anything neither geometry keeps is read by nothing.
 	var spanTurns, oldCovered, newKept int
 	// Overlap, in runes of rendered window, for consecutive beats within a session.
 	var oldOverlapRunes, oldPairWindowRunes int
@@ -55,8 +55,13 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 	// What 100% coverage would actually cost, in beats. See the report line.
 	var beatsAt100 int
 	sessions := 0
+	// WHOLE sessions, and as many of them as the report tier's probe uses. The spec's question is
+	// "what fraction of a SESSION's turns", the walked prefix is where the long strides are (a
+	// prefix of 16 windows never reaches the 52,148-rune stride the corpus's tail holds), and
+	// every window is another assembly the backstop is exercised on. corpusFitSessions() is shared
+	// with TestRealCorpusPromptsNeverTripTheBackstop so widening the corpus widens both.
 	for _, f := range files {
-		if sessions >= 14 {
+		if sessions >= corpusFitSessions() {
 			break
 		}
 		ws, e1 := Mine(f, o)
@@ -70,23 +75,21 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 		// Pass 1: the mined windows the OLD geometry would have handed to beats, as a multiset of
 		// rendered turns, so "in at least one beat window" is scored over all of them.
 		seen := map[string]int{}
-		var beatIdx []int
-		for idx := 0; idx < 16; idx++ {
+		for idx := range ws {
 			if (idx+1)%cadence != 0 {
 				continue
 			}
-			beatIdx = append(beatIdx, idx)
 			for _, tn := range ws[idx].Turns {
 				seen[string(tn.Role)+":"+tn.Text]++
 			}
 		}
 
-		// Pass 2: walk the prefix, accumulating the record the prompt really carries.
+		// Pass 2: walk the session, accumulating the record the prompt really carries.
 		var rec SessionRecord
 		var bw BeatWindower
 		prevDelta := 0
 		prevOld := -1
-		for idx := 0; idx < 16; idx++ {
+		for idx := range ws {
 			rec = rec.Observe(deltas[idx], Extract(deltas[idx])).WithProject(project)
 			if (idx+1)%cadence != 0 {
 				continue
@@ -192,8 +195,8 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 		}
 		return 100 * float64(a) / float64(b)
 	}
-	t.Logf("sessions=%d beat windows=%d (cadence every %d user prompts, first 16 windows of each "+
-		"session — the sweep's prefix)", sessions, windows, cadence)
+	t.Logf("sessions=%d beat windows=%d (cadence every %d user prompts, whole sessions)",
+		sessions, windows, cadence)
 
 	// 1. Turn coverage, as counts.
 	t.Logf("TURN COVERAGE  %d turns spanned by the beats' strides", spanTurns)
