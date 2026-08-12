@@ -259,6 +259,15 @@ func (l *Llama) CreateDigest(sessionLabel, turns, facts string) (Digest, error) 
 }
 
 // CreateDigestWithView is CreateDigest given the coarse whole-session view.
+//
+// ⚠️ KNOWN GAP, not fixed here because it has never been observed and fixing it blind would
+// change create-path output unmeasured: this path validates the RAW response and has no repair
+// chain, so a create answering with `unresolved` empty loses the digest to five identical
+// attempts on `unresolved is empty`. That is exactly the defect ensureUnresolvedIsAddressed
+// closes on the refine path (digest_refine.go), one level up. All three measured losses were
+// refinements — step 2 and step 3, never step 0 — because a first report over a whole session
+// prefix always has something open. If a create ever loses a digest this way, the fix is the
+// same substitution and the same count, and it must be measured on its own sweep.
 func (l *Llama) CreateDigestWithView(sessionLabel, turns, sessionView, facts string) (Digest, error) {
 	var d Digest
 	if err := l.callValid(DigestCreatePromptWithView(sessionLabel, turns, sessionView, facts), DigestSchema(), &d,
