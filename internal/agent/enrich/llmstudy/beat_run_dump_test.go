@@ -170,6 +170,7 @@ func TestBeatRunDump(t *testing.T) {
 			} else {
 				p.Subject, p.Events = d.Subject, d.Events
 				p.Unanchored, p.Overflowed, p.Anchors = d.Unanchored, d.Overflowed, d.Anchors
+				p.Unverified = d.Unverified
 				p.SubjectAnchored, p.Raw, p.Text = d.SubjectAnchored, d.Raw, d.Text
 				var stored bool
 				beats, stored = AppendBeatDraft(beats, d)
@@ -180,9 +181,11 @@ func TestBeatRunDump(t *testing.T) {
 			p.Attempts = l.Attempts() - before
 
 			t.Logf("  s%d i%d  window %d runes (prompt %d of %d) | %d attempt(s) err=%q | "+
-				"%d entries, %d unanchored, %d over cap",
+				"%d entries, %d unanchored, %d over cap, %d anchored only in the record, "+
+				"%d unverified identifier(s)",
 				sd.Index, idx, p.TotalRunes, p.PromptRunes, BeatPromptCharBudget, p.Attempts,
-				p.Err, len(p.Events), len(p.Unanchored), len(p.Overflowed))
+				p.Err, len(p.Events), len(p.Unanchored), len(p.Overflowed), p.RecordOnlyAnchors(),
+				len(p.Unverified))
 			sd.Beats = append(sd.Beats, p)
 		}
 		sd.Record = rec.Block()
@@ -294,11 +297,16 @@ type beatRunPoint struct {
 	Err      string `json:"err,omitempty"`
 	Panicked bool   `json:"panicked,omitempty"`
 
-	Subject         string   `json:"subject,omitempty"`
-	Events          []string `json:"events,omitempty"`
-	Unanchored      []string `json:"unanchored,omitempty"`
-	Overflowed      []string `json:"overflowed,omitempty"`
-	Anchors         []string `json:"anchors,omitempty"`
+	Subject    string   `json:"subject,omitempty"`
+	Events     []string `json:"events,omitempty"`
+	Unanchored []string `json:"unanchored,omitempty"`
+	Overflowed []string `json:"overflowed,omitempty"`
+	// Anchors is where each kept entry was anchored. An entry anchored only in the RECORD is the
+	// seam signal: its antecedent fell on the other side of a window boundary.
+	Anchors []BeatAnchor `json:"anchors,omitempty"`
+	// Unverified are the strong identifiers the stored beat uses that occur nowhere in the
+	// evidence. Recorded, never enforced.
+	Unverified      []string `json:"unverified,omitempty"`
 	SubjectAnchored bool     `json:"subject_anchored"`
 	Raw             string   `json:"raw,omitempty"`
 	Text            string   `json:"text,omitempty"`
@@ -306,3 +314,15 @@ type beatRunPoint struct {
 
 // Failed reports a beat that produced no text, whether by error or by panic.
 func (p beatRunPoint) Failed() bool { return p.Panicked || p.Err != "" }
+
+// RecordOnlyAnchors counts the entries anchored in the measured record and NOT in this beat's own
+// window — the seam signal, and the one figure that says what dropping window overlap cost.
+func (p beatRunPoint) RecordOnlyAnchors() int {
+	var n int
+	for _, a := range p.Anchors {
+		if !a.InWindow {
+			n++
+		}
+	}
+	return n
+}

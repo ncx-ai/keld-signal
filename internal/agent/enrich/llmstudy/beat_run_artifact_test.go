@@ -163,12 +163,24 @@ func writeRunPoint(b *strings.Builder, s beatRunSession, p beatRunPoint) {
 	b.WriteString("> " + blockquote(p.Text) + "\n\n")
 
 	if len(p.Anchors) > 0 {
+		var terms []string
+		for _, a := range p.Anchors {
+			t := a.Term
+			if !a.InWindow {
+				t += " (record only)"
+			}
+			terms = append(terms, t)
+		}
 		fmt.Fprintf(b, "Anchoring term each entry was kept on: `%s`.%s\n\n",
-			strings.Join(p.Anchors, "`, `"),
+			strings.Join(terms, "`, `"),
 			map[bool]string{
 				true:  "",
 				false: " The subject line carries no term occurring in the evidence.",
 			}[p.SubjectAnchored])
+	}
+	if len(p.Unverified) > 0 {
+		fmt.Fprintf(b, "Identifiers this beat names that occur nowhere in its evidence: `%s`. "+
+			"Recorded, not dropped.\n\n", strings.Join(p.Unverified, "`, `"))
 	}
 	if len(p.Unanchored) > 0 {
 		fmt.Fprintf(b, "**Dropped by the anchoring guard (%d):** no term in these occurs "+
@@ -201,6 +213,9 @@ type runTally struct {
 	overflowEntries             int
 	overflowBeats               int
 	subjectUnanchored           int
+	recordOnly                  int
+	unverified                  int
+	unverifiedBeats             int
 	promptRunes                 []int
 	promptOverBudget            int
 	spanTurns, keptTurns, holed int
@@ -254,6 +269,11 @@ func (r beatRun) tally() *runTally {
 			if !p.SubjectAnchored {
 				t.subjectUnanchored++
 			}
+			t.recordOnly += p.RecordOnlyAnchors()
+			if n := len(p.Unverified); n > 0 {
+				t.unverified += n
+				t.unverifiedBeats++
+			}
 		}
 	}
 	return t
@@ -277,6 +297,10 @@ func (t *runTally) lines() []string {
 			t.overflowEntries, t.overflowBeats),
 		fmt.Sprintf("beats whose SUBJECT carries no term occurring in the evidence: %d of %d",
 			t.subjectUnanchored, t.generated),
+		fmt.Sprintf("entries anchored in the record and NOT in their own window (the seam signal): "+
+			"%d of %d kept", t.recordOnly, offered-t.unanchoredEntries),
+		fmt.Sprintf("identifiers named that occur nowhere in the evidence: %d across %d of %d beats",
+			t.unverified, t.unverifiedBeats, t.generated),
 		fmt.Sprintf("turn coverage: %d of %d turns read by a window (%.1f%%), %d read by none; "+
 			"%d of %d windows hole-marked", t.keptTurns, t.spanTurns,
 			100*float64(t.keptTurns)/float64(max(1, t.spanTurns)), t.spanTurns-t.keptTurns,

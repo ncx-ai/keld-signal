@@ -20,15 +20,25 @@ const (
 	// beatEventMinRunes is short enough for a real one-clause event ("the export was rerun")
 	// and long enough to reject a fragment that says nothing.
 	beatEventMinRunes = 12
-	// beatEventMaxRunes bounds ONE entry, and it is set against BeatCap rather than taste: a
-	// subject at its own cap plus THREE entries at this one still fit the stored beat (480 of
-	// 512 runes), so fitBeatEvents never trims an ordinary answer and only fires on a long list.
-	// An event needing more than this is a paragraph, and a paragraph is what the fused prose
-	// beat was.
-	beatEventMaxRunes = 130
-	// beatEventMaxCount bounds the list. Five is what the prompt asks for; six is the schema's
-	// slack, so a model that adds one is not thrown away.
-	beatEventMaxCount = 6
+	// beatEventMaxRunes bounds ONE entry, and it is MEASURED rather than chosen — twice, in
+	// opposite directions.
+	//
+	// It was first set at 130 against BeatCap, so that a subject and three entries always fit the
+	// stored beat. The first pilot then lost a whole beat to it: all five ladder attempts were
+	// rejected for one 179-rune entry ("The Sub-CA selection for Apple Developer certificates was
+	// discussed and confirmed to be G2 ..."), which is the exact failure this design exists to
+	// stop — a bound that discards the answer rather than bounding it.
+	//
+	// 200 is above the longest entry the pilot produced with margin, so a rejection here now means
+	// a paragraph rather than a long sentence. The TOTAL is bounded where it can be bounded
+	// without losing the generation: fitBeatEvents drops whole trailing entries and MARKS the
+	// drop, so an over-long list costs one visible entry instead of the beat.
+	beatEventMaxRunes = 200
+	// beatEventMaxCount bounds the list. Four is what the prompt asks for — the pilot answered
+	// five-and-six-entry lists that ran the stored beat up against BeatCap, and the entries past
+	// the fourth were the ones the cap then dropped — and five is the schema's slack, so a model
+	// that adds one is not thrown away.
+	beatEventMaxCount = 5
 )
 
 // passProblem names the pass a validation failure belongs to.

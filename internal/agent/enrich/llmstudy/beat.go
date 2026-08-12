@@ -129,7 +129,8 @@ Answers look like this, and each of these is a normal answer:
 Rules:
   - subject: one line naming what is being worked on, in the words this session uses for it.
   - events: one entry per thing the conversation shows happening, in order, in the past tense.
-    Between one and five entries, and fewer when the conversation shows fewer.
+    Between one and four entries, one short line each, and fewer when the conversation
+    shows fewer.
   - Each entry names what it is about, using the conversation's own words for names.
   - Where the conversation shows something being asked for, started, or discussed and left
     open, that is what the entry says.
@@ -186,9 +187,14 @@ type BeatDraft struct {
 	Unanchored []string `json:"unanchored,omitempty"`
 	// Overflowed are the entries dropped to fit BeatCap, newest-last order preserved.
 	Overflowed []string `json:"overflowed,omitempty"`
-	// Anchors names, per kept entry, the term that anchored it — the fact the guard was decided
-	// on, so a reader can check the decision rather than trust it.
-	Anchors []string `json:"anchors,omitempty"`
+	// Anchors names, per kept entry, the term that anchored it and which side it was found on —
+	// the fact the guard was decided on, so a reader can check the decision rather than trust it.
+	// An entry anchored only in the RECORD is the seam signal (see beat_anchor.go).
+	Anchors []BeatAnchor `json:"anchors,omitempty"`
+	// Unverified are the NAMES the stored beat uses that occur nowhere in the evidence.
+	// Recorded, never enforced — the narrow form of the identifier check, kept as an observation
+	// because enforcing it is how the 22.6% "unverified identifier" measurement happened.
+	Unverified []string `json:"unverified,omitempty"`
 	// SubjectAnchored records whether the subject line itself carries a term occurring in the
 	// evidence. Recorded, never enforced: dropping a subject would leave no beat, and the design
 	// only claims the guard for bullets.
@@ -466,8 +472,8 @@ func (l *Llama) generateBeat(record, window string) (BeatDraft, error) {
 			return err
 		}
 		d.Subject, d.Raw = subject, renderBeat(subject, events, nil, nil)
-		d.SubjectAnchored = beatAnchor(subject, evidence) != ""
-		anchored, unanchored, anchors := anchorBeatEvents(events, evidence)
+		d.SubjectAnchored = beatAnchorIn(subject, window, record).Term != ""
+		anchored, unanchored, anchors := anchorBeatEvents(events, window, record)
 		if len(anchored) == 0 {
 			// Every entry unanchored is not a drop, it is a generation with nothing in it that
 			// the window or the record carries — the one case where losing the beat is the
@@ -478,6 +484,7 @@ func (l *Llama) generateBeat(record, window string) (BeatDraft, error) {
 		kept, overflowed := fitBeatEvents(subject, anchored, unanchored, BeatCap)
 		d.Events, d.Unanchored, d.Overflowed, d.Anchors = kept, unanchored, overflowed, anchors[:len(kept)]
 		d.Text = renderBeat(subject, kept, unanchored, overflowed)
+		d.Unverified = unverifiedSpecifics(d.Text, evidence)
 		if runeLen(d.Text) < BeatMinRunes {
 			return passProblem("beat", "beat is "+strconv.Itoa(runeLen(d.Text))+
 				" runes, under the floor of "+strconv.Itoa(BeatMinRunes))

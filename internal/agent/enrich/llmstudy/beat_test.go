@@ -146,7 +146,7 @@ func TestGenerateBeatDropsAnUnanchoredEntryAndMarksIt(t *testing.T) {
 	if strings.Contains(d.Text, "Ganymede") {
 		t.Errorf("the dropped entry survived into the stored beat:\n%s", d.Text)
 	}
-	if d.Anchors[0] != "fa-register.csv" {
+	if d.Anchors[0].Term != "fa-register.csv" || !d.Anchors[0].InWindow {
 		t.Errorf("the anchoring term is not reported: %v", d.Anchors)
 	}
 }

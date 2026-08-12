@@ -32,13 +32,20 @@ func TestEventCheckIsShapeOnly(t *testing.T) {
 	}
 }
 
-// The per-entry cap is set against BeatCap, not chosen: a subject and three entries at the cap
-// must still fit the stored beat, or an ordinary answer would be trimmed by fitBeatEvents.
-func TestEventCapLetsThreeEntriesFitTheBeatCap(t *testing.T) {
-	subject := strings.Repeat("s", beatSubjectMaxRunes)
-	entry := strings.Repeat("e", beatEventMaxRunes)
-	if n := runeLen(renderBeat(subject, []string{entry, entry, entry}, nil, nil)); n > BeatCap {
-		t.Errorf("a subject and three max-length entries render to %d runes, over BeatCap %d",
-			n, BeatCap)
+// The per-entry cap is MEASURED, and the measurement is a pilot beat that was lost to the
+// previous value: all five ladder attempts rejected over one 179-rune entry. A bound that
+// discards the answer is the defect this whole design exists to remove, so the entry cap now sits
+// above the longest entry the pilot produced and the TOTAL is bounded where bounding costs only a
+// marked drop (fitBeatEvents).
+func TestEventCapAdmitsTheLongestPilotEntry(t *testing.T) {
+	const measured = "The Sub-CA selection for Apple Developer certificates was discussed and " +
+		"confirmed to be G2 (Xcode 11.4.1 or later) due to its longer validity and " +
+		"compatibility with modern tooling"
+	if runeLen(measured) > beatEventMaxRunes {
+		t.Errorf("the entry that cost a beat is still over the cap: %d runes against %d",
+			runeLen(measured), beatEventMaxRunes)
+	}
+	if _, err := checkBeatEvents([]string{measured}); err != nil {
+		t.Errorf("the entry that cost a beat is still rejected: %v", err)
 	}
 }
