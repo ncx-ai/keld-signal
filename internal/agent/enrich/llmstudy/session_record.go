@@ -114,7 +114,13 @@ func (r SessionRecord) Observe(w Window, s Signals) SessionRecord {
 			// with the period glued on, and the duplicate consumed one of only
 			// MaxRecordSubjects slots. Trimming can only shorten from the ends, so the trimmed
 			// spelling is still a verbatim substring of src — the gate above is not weakened.
-			r.freq[trimTermPunct(tok)]++
+			//
+			// resolveSubjectTerm is the same property one step further: a worktree checkout
+			// path resolves to the repository SEGMENT of itself, which is also a verbatim
+			// substring of src. See record_paths.go for the measured packet this fixes —
+			// `recurring subjects: home/dg/keld/keld-signal/.claude/worktrees/…` sitting in
+			// the block the prompt calls authoritative.
+			r.freq[resolveSubjectTerm(trimTermPunct(tok))]++
 		}
 	}
 	r.Subjects = topByFrequency(r.freq, MaxRecordSubjects)

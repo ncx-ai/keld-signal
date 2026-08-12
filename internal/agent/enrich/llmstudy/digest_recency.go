@@ -215,7 +215,13 @@ func RecentSubjects(w Window, n int) []string {
 			// so "DigestSchema." and "DigestSchema," (or "DigestSchema." repeated across
 			// two turns) hashed to different keys and both survived, handing the live
 			// recency anchor an exact duplicate the dedup was supposed to prevent.
-			k := strings.ToLower(trimTermPunct(tok))
+			// resolveSubjectTerm runs on BOTH the key and the emitted value, for the same
+			// reason the trim does: a worktree checkout path and the repository it is a
+			// checkout of are the same subject, and the anchor should say the repository (see
+			// record_paths.go). Keyed on the resolved spelling so the path and a bare mention
+			// of the repository do not both take a slot.
+			term := resolveSubjectTerm(trimTermPunct(tok))
+			k := strings.ToLower(term)
 			if seen[k] {
 				continue
 			}
@@ -227,7 +233,7 @@ func RecentSubjects(w Window, n int) []string {
 			// straight into the model's recency anchor by recentSubjectsOf — unlike
 			// distinctiveTerms' map keys, nothing downstream of RecentSubjects trims it.
 			// trimTermPunct only strips leading/trailing punctuation, so casing is untouched.
-			out = append(out, trimTermPunct(tok))
+			out = append(out, term)
 			if len(out) == maxRecentSubjects {
 				return out
 			}
