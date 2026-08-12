@@ -1,7 +1,13 @@
 # The qualitative review harness — blind packets, a calibration set, and a scorer
 
-Status: **built and cut, unreviewed.** Round `r1` exists; no verdict has been returned. Nothing
-in this document reports a review result, because none has happened yet.
+Status: two rounds are cut. **`r1` (per beat)** has been dispatched to one of its two reviewer
+slots and scored — its numbers live in that round's own `score.md` and are not restated here.
+**`s1` (per series)**, the followability metric described at the end of this document, is cut and
+**unreviewed**: no series verdict has been returned, so nothing here reports a series result.
+
+The two are **independent metrics** and the harness never merges them. Per-beat honesty is a
+guard; followability is the goal. A set of individually honest beats can still have no thread, and
+a followable series can contain a defective beat.
 
 ## Why this exists
 
@@ -213,3 +219,155 @@ packets, from the answer key:
 8. **The rubric's own yield is unmeasured.** No review has been run, so nothing here says the
    five dimensions discriminate or that two reviewers disagree at a usable rate. The first scored
    round is what answers that, and it is the point of the calibration set.
+
+---
+
+# The series metric — round `s1`, "can the timeline be read back as a narrative?"
+
+Every number the study had produced before this was **per beat**. The requirement is not:
+
+> "we want a developer using claude code to be able to look back and follow the narrative of what
+> they were doing and what was being worked on, along with references to product, repo, project and
+> other specifics relevant to his company or endeavor."
+
+Followability is a property of the **sequence**, and no per-item check can see it. Thirty
+individually honest beats can have no thread; a followable series can contain one defective beat.
+So the series round is a second, independent measurement — same discipline, different unit — and
+the scorer keeps it that way: it reports the two side by side and never combines them.
+
+## What a series packet is
+
+One session's ordered beat timeline plus that session's measured record, and nothing else.
+
+**There is no conversation window.** That is the metric's first requirement rather than an
+omission: `followable` asks whether a reader can reconstruct the work *without* the transcript, and
+a packet carrying the transcript cannot ask it.
+
+**Beats are numbered by POSITION**, never by their real ordinal, because the ordinal is the answer
+to the order-shuffle and dropped-middle plants. The session, the domain, each beat's real ordinal,
+the window coordinates, which beats were removed, whether anything was mutated at all — all
+provenance, all in the withheld key.
+
+**The record is derived, and every part of it is still measured.** A beat packet shows its own
+beat's record block verbatim; a series has one block per beat and their counts are cumulative, so
+showing them would hand the reader the chronology in numbers — the shuffle and the drop would then
+be caught by reading turn counts instead of by reading the narrative. Therefore:
+
+- `counts`, `projects` and `tool profile` are the **last** block's lines, verbatim: the session
+  totals as counted at its end;
+- `recurring subjects` is the **union** of every term counted across the session, **alphabetised** —
+  each term was counted on the machine, the union invents none, and the per-block order is recency
+  order, which is chronology again.
+
+A mutation may never touch the record: it is always derived from the original session. That is what
+makes several plants checkable at all — an entity renamed throughout the beats still contradicts
+the project and subject terms the machine counted.
+
+Withholding is verified the same two ways as `r1`, over the files on disk: **structurally** (each
+file must equal a render over its record and beats alone) and **by grep** (every answer-key value
+that can legitimately be searched for). Round `s1`: **26 values grepped, 0 hits, 0 coincidences, 0
+structural mismatches** over 16 packets. An independent re-grep of all 241 string- and
+integer-valued key fields against all 16 files found exactly one value present outside a packet's
+own evidence: `location_by` = `"position"`, which is the English word in the packet's own
+instruction line ("Beats are numbered by their position in this timeline"). It is excluded by name
+with its reason recorded — the same treatment `r1` gives heuristic verdict words, and the same
+lesson as `Key`/`e.g`: a check keyed on ordinary English measures ordinary English. Presented
+ordinals and located-by positions are excluded too, because a bare number search over a transcript
+full of amounts is noise; the structural check is what guarantees they are absent.
+
+## The series calibration set
+
+Five classes, **two plants each**, every one a transformation of a real timeline, and every claimed
+property verified by `ApplySeries` against the real evidence:
+
+| class | what is planted | verified |
+|---|---|---|
+| `order_shuffle` | beats reordered so chronology is wrong, every beat still true | a real permutation with a real adjacent inversion; the junction positions are **derived** from it, not authored |
+| `cross_session_contamination` | a beat spliced in from a different session | its foreign tokens are absent from everything the host session produced and present in the donor's |
+| `entity_swap` | a repo/product/client renamed consistently throughout | the new name occurs **nowhere in the corpus**; the replaced name **is in the measured record**, so the swap contradicts something counted; ≥2 beats touched |
+| `dropped_middle` | the beats where the work turned, removed | interior, contiguous, and covering a beat the source document itself marked `SUBJECT CHANGED` — "where the subject turned" is recorded provenance, not the author's opinion |
+| `invented_arc` | the final beat replaced by an asserted conclusion | asserts completion in checked vocabulary, keeps the length band and the delimiter rule, and introduces a word the session never used |
+
+**How a plant can be located is part of the answer key.** `order_shuffle` and `dropped_middle`
+write no text at all, so there is no vocabulary to quote and location is **by beat position only**
+(`location_by: position`). A reviewer who describes the break without naming a beat number scores
+as a miss — a floor on the measurement, not on the reader, and printed beside the class so a
+position-only class is never read as comparable to a signature class. The signature that credits a
+reviewer is filtered for distinctiveness (≥5 runes or carrying a digit/separator, and never a
+rubric word like `complete` or `left`), because crediting a reviewer for using the rubric's own
+vocabulary is this branch's oldest defect one level up.
+
+Round `s1` composition, from `withheld/answer-key.json`:
+
+- **16 packets** = **3 clean series** + **10 planted** + **3 clean duplicates**
+- planted, 2 per class; per session: digest 4, engineering 3, month-end close 3 — the accounting
+  session over-represented on purpose, as in `r1`
+- all three clean series are duplicated (there are only three, so every one gets the strict
+  self-consistency test rather than a sample)
+
+## The rubric
+
+`review/reviewer-dispatch-series.md`. Five dimensions, explicit `pass`/`fail`, never a score:
+`followable`, `continuous` (**name the breaks** by beat number), `specifics_present` (names used to
+*place* the work, not merely listed), `recognisable_week`, `no_false_thread` (the series-level
+analogue of the per-beat completion defect). Evidence is required for every verdict, as in `r1`,
+and a quote now carries `quote_source` — `record` or `series` — because "the record says" and "the
+timeline says" are different claims about where a fact came from, and both are checked.
+
+## The scorer
+
+    REVIEW_SERIES_DIR="$PWD/<round>" REVIEW_BEAT_DIR="$PWD/<r1 round>" \
+      go test ./internal/agent/enrich/llmstudy/review/ -run TestScoreSeriesRound -v
+
+⚠️ **Use absolute paths, and know why.** `go test` runs each test with its working directory set to
+the **package** directory, so a relative path is resolved against
+`internal/agent/enrich/llmstudy/review/` rather than the shell's cwd — round `r1` lost a scoring run
+to exactly that, silently. `ResolveRoundDir` now tries absolute, then cwd, then the repository root,
+and logs which it used; `TestScoreRound` uses it too.
+
+It reports calibration by class (with `location_by`), false positives **on clean series and on
+clean duplicates separately**, inter-reviewer disagreement, unevidenced and mis-evidenced verdicts
+(including `quote_source_wrong` and `beat_out_of_range`), problems — and, kept in its own section
+and never folded into either metric, the **series-versus-beat cross-tabulation** per session. It
+names the cell the whole exercise exists for, in words: *every reviewed beat of this session passed
+the per-beat round and its clean series still fails `followable`* — the guard passing while the goal
+is missed — and the converse, a defective beat inside a followable series. `r1`'s planted packets are
+excluded from that table: they carry defects this round never planted.
+
+## Limits — and the first one is severe
+
+1. **There are only THREE real series.** Sixteen packets are three timelines, clean or mutated, so
+   the round cannot separate "the reader catches this class" from "the reader reads these particular
+   sessions well". Ten plants over three timelines also means each timeline appears four to six
+   times in the round; reviewers are fresh per dispatch, so that is not a leak, but it is not
+   independence either. Every conclusion from `s1` is provisional in a way `r1`'s are not, and the
+   report prints the source-series count above every table for that reason. More series needs more
+   generated beats, which needs the model server.
+2. **Clean series are not certified thread-free.** `r1` found reviewers claiming a defect on many
+   genuine beats, largely completion claims the beats really do make; a break reported on a clean
+   series may be a real finding this harness never planted. Only the duplicates are controls in the
+   strict sense, and what they measure is self-consistency.
+3. **Two classes are position-only.** For them the measurement floor is a reviewer's willingness to
+   cite beat numbers, not their ability to see the break.
+4. **Absence is still a substring test**, case-insensitively, so a paraphrase-supported claim could
+   pass it. `invented_arc` is anchored by checked vocabulary and an author's note instead, and it is
+   the weakest joint here as it is in `r1`.
+5. **One session of the three is hand-authored** and one is the study's own session. Domain
+   neutrality is exercised, not established.
+6. **The series rubric's own yield is unmeasured.** No series verdict has been returned. Nothing in
+   this section says the five dimensions discriminate, or that two reviewers agree at a usable rate.
+
+## Where round `s1` lives
+
+    .superpowers/sdd/2026-08-12-series-review/
+      README.md                    coordinator guide (no composition counts, and the path warning)
+      packets/                     SER-*.md + manifest.json
+      reviewer-dispatch-series.md  the rubric as it stood when the round was cut
+      dispatch-plan.tsv            32 rows — 16 packets x 2 reviewers
+      verdicts/                    verdict JSON lands here
+      withheld/                    answer-key.json, leak-check.json, README.md — NOT for reviewers
+
+Gitignored, like `r1`'s, because the packets quote the owner's untracked document. Reproducible:
+
+    REVIEW_SERIES_EMIT_DIR="$PWD/<dir>" REVIEW_SERIES_ROUND=s1 \
+      go test ./internal/agent/enrich/llmstudy/review/ -run TestEmitSeriesRound -v
