@@ -42,7 +42,24 @@ type Llama struct {
 	// ensureUnresolvedIsAddressed supplied the sentinel. Unexported with a reader, because it
 	// is an observation the sweep prints rather than a knob: see EmptyUnresolvedSubstitutions.
 	emptyUnresolved int
+	// attempts counts requests actually issued, across every call this client makes. See
+	// Attempts.
+	attempts int
 }
+
+// Attempts reports how many requests this client has issued in total, retries included.
+//
+// A caller subtracting the value before a call from the value after learns how many attempts
+// that one call took: 1 is a clean generation, more means a refusal or a truncated sample was
+// re-requested, and an exhausted call's error already names its own count ("gave up after 5
+// attempt(s)"). It exists because a review artifact has to show the retries — a report that
+// took four attempts and one that took one are not the same observation, and before this the
+// difference was recoverable only from a failure. Observation, not a knob, like
+// EmptyUnresolvedSubstitutions: nothing reads it to make a decision.
+//
+// Not concurrency-safe, and does not need to be: the sweep is sequential and the server is
+// --parallel 1.
+func (l *Llama) Attempts() int { return l.attempts }
 
 // EmptyUnresolvedSubstitutions reports how many refinements answered with an EMPTY open list,
 // which code then rendered as the "nothing is open" sentinel.
@@ -138,6 +155,10 @@ func (l *Llama) callValidSampled(prompt string, schema map[string]any, out any,
 	// per the repo convention (don't hand-roll backoff loops).
 	return retry.DoClassify(context.Background(), l.Policy, isTransientHTTP, func() error {
 		attempt++
+		// Counted per request issued, so a caller can attribute retries to the call that
+		// paid for them (see Attempts). Incremented here rather than on success: an attempt
+		// that failed is the one worth being able to see.
+		l.attempts++
 		body := map[string]any{
 			"messages":    []any{map[string]any{"role": "user", "content": prompt}},
 			"temperature": 0,
