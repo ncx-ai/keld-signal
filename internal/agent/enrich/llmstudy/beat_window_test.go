@@ -1,6 +1,7 @@
 package llmstudy
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -41,39 +42,44 @@ func TestBeatWindowsAreContiguous(t *testing.T) {
 	}
 }
 
-// TestBeatWindowsShareGroundWithTheirPredecessor pins the stride overlap. Without it,
-// consecutive beat windows are disjoint and ChangedSubject is asked whether the subject changed
-// while being shown material that shares nothing with the previous beat's — everything looks new.
-func TestBeatWindowsShareGroundWithTheirPredecessor(t *testing.T) {
-	line := func(i int) Turn { return assistantTurn("turn " + strings.Repeat("z", 200)) }
+// TestBeatWindowsAreDisjoint pins stride equals window: no turn is read by two beats.
+//
+// It replaces the test that pinned the OPPOSITE property. That test asserted a carried overlap of
+// ~28% of the previous window, and the overlap existed to give ChangedSubject shared ground —
+// which measured 41 of 42 on refinements and then 0 of 46 on packets, because it was reading
+// window adjacency rather than subject change. Nothing compares a beat to its predecessor now, so
+// the re-read quarter of every window is spent instead on turns no window has ever carried.
+func TestBeatWindowsAreDisjoint(t *testing.T) {
+	// Distinct text per delta, so a turn appearing in two windows is unambiguous rather than a
+	// coincidence of repeated boilerplate.
 	var deltas []Window
 	for i := 0; i < 20; i++ {
-		deltas = append(deltas, Window{PromptID: "p", Turns: []Turn{userTurn("ask"), line(i)}})
+		deltas = append(deltas, Window{PromptID: "p", Turns: []Turn{
+			userTurn(fmt.Sprintf("ask %d", i)),
+			assistantTurn(fmt.Sprintf("answer %d %s", i, strings.Repeat("z", 200))),
+		}})
 	}
 	var bw BeatWindower
 	first := bw.Next(deltas, 9)
 	second := bw.Next(deltas, 19)
-	if first.OverlapTurns != 0 {
-		t.Errorf("the first beat has no predecessor but reports %d overlap turns", first.OverlapTurns)
+	if first.Dropped() != 0 || second.Dropped() != 0 {
+		t.Fatalf("the fixture must fit the bound to isolate the overlap question: dropped %d and %d",
+			first.Dropped(), second.Dropped())
 	}
-	if second.OverlapTurns == 0 {
-		t.Fatal("the second beat shares no ground with the first — consecutive windows are disjoint")
+	seen := map[string]bool{}
+	for _, ln := range strings.Split(strings.TrimRight(first.Rendered, "\n"), "\n") {
+		seen[ln] = true
 	}
-	// The overlap must be the previous span's TAIL, i.e. text the first beat actually read.
-	head := strings.SplitN(second.Rendered, "\n", 2)[0]
-	if !strings.Contains(first.Rendered, head) {
-		t.Errorf("the overlap is not material the previous beat read: %.60q", head)
+	for _, ln := range strings.Split(strings.TrimRight(second.Rendered, "\n"), "\n") {
+		if seen[ln] {
+			t.Errorf("the second beat re-reads a line of the first: %.60q", ln)
+		}
 	}
-	// The dial is a share of the PREVIOUS window, which is the quantity the spec states.
-	ofPrev := 100 * float64(second.OverlapRunes) / float64(second.PrevSpanRunes)
-	if ofPrev < 20 || ofPrev > beatOverlapPct+1 {
-		t.Errorf("overlap is %.1f%% of the previous window, want ~%d%%", ofPrev, beatOverlapPct)
-	}
-	// Which for two spans of similar size is a smaller share of the NEW window. Both are
-	// reported by the sweep; neither is the other.
-	ofWindow := 100 * float64(second.OverlapRunes) / float64(second.TotalRunes)
-	if ofWindow < 10 || ofWindow > 30 {
-		t.Errorf("overlap is %.1f%% of the new window, which is neither incidental nor dominant", ofWindow)
+	// And the second window starts where the first stopped: disjoint AND contiguous, not
+	// disjoint by skipping.
+	if !strings.HasPrefix(second.Rendered, "user: ask 10\n") {
+		t.Errorf("the second window does not begin at the turn after the first ended: %.40q",
+			second.Rendered)
 	}
 }
 
@@ -113,10 +119,11 @@ func TestBeatWindowDropsWholeTurnsAndSaysSo(t *testing.T) {
 	if !strings.Contains(b.Rendered, big[:60]) {
 		t.Error("the newest material was dropped; the bound must keep the tail")
 	}
-	// The notice sits between the overlap and the kept turns, where the hole actually is,
-	// rather than at the top where it would read as "the session started earlier".
-	if strings.HasPrefix(b.Rendered, beatOmittedNotice) && b.OverlapTurns > 0 {
-		t.Error("the hole marker is at the top of a window that has overlap above it")
+	// The notice sits where the hole is. With stride equal to window the dropped turns are the
+	// head of this beat's own stride, so the marker leads — and the turns below it must all be
+	// the ones that were kept, i.e. nothing is marked as missing that is actually present.
+	if !strings.HasPrefix(b.Rendered, beatOmittedNotice) {
+		t.Errorf("the hole is at the oldest end but the marker is not: %.60q", b.Rendered)
 	}
 }
 
@@ -188,22 +195,18 @@ func TestBeatPromptHasABudgetNow(t *testing.T) {
 func TestBeatCoverageCountsWhatNoWindowRead(t *testing.T) {
 	var c BeatCoverage
 	c.Add(BeatWindow{SpanTurns: 10, KeptTurns: 10, TotalRunes: 1000})
-	c.Add(BeatWindow{SpanTurns: 10, KeptTurns: 5, OverlapRunes: 280, PrevSpanRunes: 1000,
-		PrevWindowRunes: 800, TotalRunes: 1000})
+	c.Add(BeatWindow{SpanTurns: 10, KeptTurns: 5, TotalRunes: 1000})
 	if got := c.TurnCoverage(); got != 75 {
 		t.Errorf("coverage = %.1f%%, want 75", got)
 	}
-	if got := c.OverlapPct(); got != 14 {
-		t.Errorf("overlap = %.1f%%, want 14", got)
+	// The count, not only the rate: 5 turns of this transcript were read by nothing.
+	if got := c.UnreadTurns(); got != 5 {
+		t.Errorf("turns read by no window = %d, want 5", got)
 	}
-	if got := c.OverlapOfPrevSpanPct(); got != 28 {
-		t.Errorf("overlap of previous stride = %.1f%%, want 28", got)
-	}
-	// The spec's denominator is what the previous beat READ, which is smaller than its stride
-	// whenever the bound dropped turns — so the same carry is a LARGER share of it. Reporting the
-	// stride figure as if it were this one understated the overlap by 8 points on real sessions.
-	if got := c.OverlapOfPrevWindowPct(); got != 35 {
-		t.Errorf("overlap of previous window = %.1f%%, want 35 (280 of 800)", got)
+	// A window that dropped turns carries the marker, so the two counts must agree — a hole
+	// counted here but not marked in the window is the silent skip the design forbids.
+	if c.Holed != 1 {
+		t.Errorf("windows carrying a hole marker = %d, want 1", c.Holed)
 	}
 	if c.Windows != 2 || c.LargestRunes != 1000 {
 		t.Errorf("windows=%d largest=%d", c.Windows, c.LargestRunes)

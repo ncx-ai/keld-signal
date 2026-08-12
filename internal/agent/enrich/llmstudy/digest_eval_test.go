@@ -469,11 +469,11 @@ func TestDigestRefineQuality(t *testing.T) {
 				seenSrc.WriteString("\n")
 				cumulative = seenSrc.String() + rec.Block()
 				t.Logf("  BEAT-WINDOW s%d i%d: span %d turns, kept %d (%d dropped by the "+
-					"%d-rune bound), overlap %d turns / %d runes (%d%% of the previous span), "+
-					"window %d runes",
+					"%d-rune bound and read by NO window%s), window %d runes",
 					sessions, idx, bwin.SpanTurns, bwin.KeptTurns, bwin.Dropped(),
-					BeatWindowChars, bwin.OverlapTurns, bwin.OverlapRunes,
-					pctInt(bwin.OverlapRunes, bwin.PrevSpanRunes), bwin.TotalRunes)
+					BeatWindowChars,
+					map[bool]string{true: ", hole marked", false: ""}[bwin.Holed()],
+					bwin.TotalRunes)
 				// The BEAT prompt against the BEAT budget. The report tier's worstPrompt says
 				// nothing about this one: they are assembled by different builders against
 				// different budgets (24,000 here, DefaultPromptCharBudget there), and it is the
@@ -1016,9 +1016,9 @@ func TestDigestRefineQuality(t *testing.T) {
 		"backstop fired %d times", beatRetried, beatRetryAttempts, worstBeatPrompt,
 		BeatPromptCharBudget, worstBeatPromptWhen, BeatPromptCharBudget-worstBeatPrompt, panicsBeat)
 	// Beat window geometry. Reported unconditionally, because "coverage was not measured"
-	// is the state this replaces. Both overlap figures are printed because they are
-	// different quantities: the spec's "~25-30%" is a share of the PREVIOUS window, which
-	// for two spans of similar size is a smaller share of the new one.
+	// is the state this replaces. Coverage is now the whole of the geometry's account of
+	// itself: the windows are disjoint, so there is no overlap left to report and every turn
+	// the bound dropped is a turn no window read.
 	if beatCov.Windows > 0 {
 		// Counts lead, the rate follows: both numerator and denominator move with the corpus, and
 		// a rate over a moved denominator is what produced five unreadable verdicts on this
@@ -1028,11 +1028,9 @@ func TestDigestRefineQuality(t *testing.T) {
 			beatCov.KeptTurns, beatCov.SpanTurns, beatCov.TurnCoverage(),
 			beatCov.SpanTurns-beatCov.KeptTurns, BeatWindowChars, beatCov.Windows,
 			beatCov.LargestRunes)
-		t.Logf("   consecutive-window overlap: %d runes carried — mean %.1f%% of window runes, "+
-			"%.1f%% of what the previous beat READ (the spec's 25-30%%), %.1f%% of its whole "+
-			"stride (reserve %d%%) — shared transcript, not shared model output, so it cannot "+
-			"compound drift", beatCov.OverlapRunes, beatCov.OverlapPct(),
-			beatCov.OverlapOfPrevWindowPct(), beatCov.OverlapOfPrevSpanPct(), beatOverlapPct)
+		t.Logf("   %d of %d windows carry a hole marker; stride equals window, so no run of "+
+			"transcript is read twice and every unread turn is a turn the bound dropped",
+			beatCov.Holed, beatCov.Windows)
 	}
 	if beatRatioN > 0 {
 		t.Logf("   consecutive-beat overlap ratio: mean %.3f, max %.3f over %d pairs, against the "+

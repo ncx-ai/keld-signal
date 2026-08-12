@@ -483,8 +483,9 @@ func writeDiff(b *strings.Builder, r reportDump) {
 }
 
 func writeBeatEvent(b *strings.Builder, ev beatEvent) {
-	span := fmt.Sprintf("window %d · stride %d turns, %d kept, %d overlapping, %d runes",
-		ev.WindowIndex, ev.SpanTurns, ev.KeptTurns, ev.OverlapTurns, ev.TotalRunes)
+	span := fmt.Sprintf("window %d · stride %d turns, %d kept%s, %d runes",
+		ev.WindowIndex, ev.SpanTurns, ev.KeptTurns,
+		map[bool]string{true: " (hole marked)", false: ""}[ev.Holed], ev.TotalRunes)
 	switch {
 	case ev.Panicked:
 		fmt.Fprintf(b, "- **BEAT GENERATION PANICKED AND WAS RECOVERED** (%s, %d attempt(s))\n", span, ev.Attempts)

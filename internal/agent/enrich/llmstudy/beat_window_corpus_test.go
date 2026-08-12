@@ -8,9 +8,10 @@ import (
 )
 
 // TestCorpusBeatWindowGeometry is the real-corpus probe for the beat-window design, and it
-// reports the four quantities that design is judged on IN COUNTS: how many turns any beat window
-// reads, how much of a window the previous beat also read, how large the assembled beat prompt
-// gets against its budget, and how many times the budget backstop fires.
+// reports the five quantities that design is judged on IN COUNTS: how many turns any beat window
+// reads, how many turns NO window reads, how many windows carry a hole marker, how much of a
+// window the previous beat also read (zero by design now), and how large the assembled beat
+// prompt gets against its budget — plus how many times the budget backstop fires.
 //
 // Counts, not only rates, deliberately. Every denominator here moves — the two geometries span
 // the same turns but keep different numbers of them, and the old geometry's window is a different
@@ -42,10 +43,16 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 	// session up to its last beat, since the strides are contiguous and disjoint by construction.
 	// Anything neither geometry keeps is read by nothing.
 	var spanTurns, oldCovered, newKept int
-	// Overlap, in runes of rendered window, for consecutive beats within a session.
+	// Text RECURRING between consecutive windows, in runes, matched as a multiset of whole turns.
+	// ⚠️ This is text recurrence, NOT shared turns: two different tool lines reading "tool: Read
+	// file" are one match, and the new windows are four times the size of the old ones so they
+	// have four times the chance of holding one. Disjointness is a structural property and is
+	// asserted structurally instead — every window's turns must be a suffix of that beat's OWN
+	// stride, which is what fails the moment anything is carried forward from the previous one.
 	var oldOverlapRunes, oldPairWindowRunes int
-	var newOverlapRunes, newWindowRunes, newPrevSpanRunes, newPrevWindowRunes int
-	var oldWindowRunes, windows, pairs int
+	var newOverlapRunes, newPairWindowRunes int
+	var newWindowRunes int
+	var oldWindowRunes, windows int
 	// The budget, in runes of assembled prompt, and the backstop's own count.
 	var oldWorstPrompt, newWorstPrompt, panics int
 	var newWorstWhere string
@@ -89,6 +96,7 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 		var bw BeatWindower
 		prevDelta := 0
 		prevOld := -1
+		var prevNew []Turn
 		for idx := range ws {
 			rec = rec.Observe(deltas[idx], Extract(deltas[idx])).WithProject(project)
 			if (idx+1)%cadence != 0 {
@@ -131,14 +139,29 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 					"windows are not contiguous with the strides they are measured against",
 					project, idx, b.SpanTurns, newSpanCheck)
 			}
+			// DISJOINT, structurally: everything in the window comes from this beat's own stride,
+			// and from its newest end. A carried overlap puts the previous stride's turns at the
+			// head of the window and fails this immediately.
+			if k := len(b.Window.Turns); k > len(span) {
+				t.Errorf("%s idx %d: the window holds %d turns, more than the %d its stride has",
+					project, idx, k, len(span))
+			} else {
+				for i, tn := range b.Window.Turns {
+					if src := span[len(span)-k+i]; src.Role != tn.Role || src.Text != tn.Text {
+						t.Errorf("%s idx %d: window turn %d is not the corresponding turn of "+
+							"this beat's own stride — material is being carried across the "+
+							"boundary", project, idx, i)
+						break
+					}
+				}
+			}
 			newKept += b.KeptTurns
 			newWindowRunes += b.TotalRunes
-			newOverlapRunes += b.OverlapRunes
-			newPrevSpanRunes += b.PrevSpanRunes
-			newPrevWindowRunes += b.PrevWindowRunes
-			if b.OverlapTurns > 0 {
-				pairs++
+			if prevNew != nil {
+				newOverlapRunes += sharedTurnRunes(b.Window.Turns, prevNew)
+				newPairWindowRunes += b.TotalRunes
 			}
+			prevNew = b.Window.Turns
 			windows++
 			// The bound, on real multi-byte transcripts rather than an ASCII fixture.
 			if b.TotalRunes > BeatWindowChars {
@@ -148,7 +171,7 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 			if d := b.Dropped(); d > 0 {
 				holed++
 				droppedTurns += d
-				if strings.Contains(b.Rendered, beatOmittedNotice) {
+				if strings.Contains(b.Rendered, beatOmittedNotice) && b.Holed() {
 					holedMarked++
 				} else {
 					t.Errorf("%s idx %d: %d turns dropped and the window does not say so",
@@ -176,8 +199,9 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 			}
 			// What 100% coverage costs, measured rather than argued: the number of beats this
 			// stride would need if a beat also fired whenever the uncovered stride reached the
-			// bound. The reserve is the overlap the next window would carry.
-			usable := BeatWindowChars - BeatWindowChars*beatOverlapPct/100
+			// bound. Every such window still pays for its own hole marker, so that is what one
+			// has to spend on turns.
+			usable := BeatWindowChars - runeLen(beatOmittedNotice)
 			need := 1
 			if r := turnsRuneLen(span); r > usable {
 				need = (r + usable - 1) / usable
@@ -211,17 +235,14 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 		"inference), firing an extra beat whenever the uncovered stride reaches the bound",
 		beatsAt100, windows, float64(beatsAt100)/float64(windows))
 
-	// 2. Consecutive-window overlap, as counts of runes.
-	t.Logf("CONSECUTIVE-WINDOW OVERLAP")
+	// 2. Recurring text, as counts of runes. Not the same question as disjointness (see above).
+	t.Logf("TEXT RECURRING BETWEEN CONSECUTIVE WINDOWS (identical turns, not carried material)")
 	t.Logf("   OLD: %d of %d window runes were also in the previous beat's window (%.1f%%), over "+
 		"%d pairs", oldOverlapRunes, oldPairWindowRunes, pc(oldOverlapRunes, oldPairWindowRunes),
 		windows-sessions)
-	t.Logf("   NEW: %d of %d window runes carried forward (%.1f%% of the window; %.1f%% of what "+
-		"the previous beat READ — the spec's 25-30%%; %.1f%% of its whole stride, reserve %d%%), "+
-		"over %d pairs with any overlap",
-		newOverlapRunes, newWindowRunes, pc(newOverlapRunes, newWindowRunes),
-		pc(newOverlapRunes, newPrevWindowRunes), pc(newOverlapRunes, newPrevSpanRunes),
-		beatOverlapPct, pairs)
+	t.Logf("   NEW: %d of %d window runes were also in the previous beat's window (%.1f%%), over "+
+		"%d pairs", newOverlapRunes, newPairWindowRunes, pc(newOverlapRunes, newPairWindowRunes),
+		windows-sessions)
 	t.Logf("   mean window: OLD %d runes, NEW %d runes", oldWindowRunes/windows, newWindowRunes/windows)
 
 	// 3. The budget, and the backstop.
@@ -233,9 +254,6 @@ func TestCorpusBeatWindowGeometry(t *testing.T) {
 	if newKept <= oldCovered {
 		t.Errorf("the new geometry reads %d turns against the old %d — contiguous coverage is the "+
 			"whole point of the change", newKept, oldCovered)
-	}
-	if newOverlapRunes == 0 {
-		t.Error("consecutive windows share no ground; ChangedSubject is comparing disjoint texts")
 	}
 	if panics != 0 {
 		t.Errorf("%d assemblies tripped the budget backstop", panics)

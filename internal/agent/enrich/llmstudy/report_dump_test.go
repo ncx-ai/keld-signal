@@ -203,7 +203,7 @@ func TestReportDump(t *testing.T) {
 					bwin := bw.Next(deltas, idx)
 					ev := beatEvent{
 						WindowIndex: idx, SpanTurns: bwin.SpanTurns, KeptTurns: bwin.KeptTurns,
-						OverlapTurns: bwin.OverlapTurns, TotalRunes: bwin.TotalRunes,
+						Holed: bwin.Holed(), TotalRunes: bwin.TotalRunes,
 						Prompt: BeatPrompt(rec.Block(), bwin.Rendered),
 					}
 					before := l.Attempts()
@@ -409,7 +409,7 @@ type beatEvent struct {
 	Ordinal        int    `json:"ordinal,omitempty"`
 	SpanTurns      int    `json:"span_turns"`
 	KeptTurns      int    `json:"kept_turns"`
-	OverlapTurns   int    `json:"overlap_turns"`
+	Holed          bool   `json:"holed"`
 	TotalRunes     int    `json:"total_runes"`
 	Prompt         string `json:"prompt"`
 	Text           string `json:"text,omitempty"`
