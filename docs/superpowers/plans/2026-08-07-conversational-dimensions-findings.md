@@ -1442,6 +1442,12 @@ report alone makes each drop permanent.
   58.2% vs 62.0% — the same direction as Part 7's, now unconfounded, and still a 3-fact
   difference on a denominator of 79.
 
+> **⚠️ SUPERSEDED IN PART BY PART 9.** The two beats lost per run are diagnosed and fixed there
+> (a byte-identical re-request at temperature 0); T12's 15.7% → 25.0% is explained there (the
+> sample shrank with the cadence change, the flagged count fell 11 → 10); and the T4 figures below
+> are the *baseline* Part 9 measures against, not the current tree's — Part 9's shipping tree
+> measures 64.2% (ON) / 66.7% (OFF) of 81.
+
 **A correction to Part 7's figures, for the same code path.** Part 7 reports T4 at 50.0% (ON) /
 56.2% (OFF) of 80. Re-measured *with the clipping still in place* on the current tree, it is
 **58.2% / 62.0% of 79** — the *before* column above. Nothing about the caps explains that gap:
@@ -1450,3 +1456,287 @@ between Part 7's sweep and this one the beat work landed (cadence 3 → 5 user t
 changes what every refinement reads. Part 7's numbers stand for the code they were taken on;
 these are the current ones, and the ≥90% threshold fails either way. The retention *failure* is
 unchanged; its magnitude is 4-6 points less bad than published.
+
+# Part 9 — Five gated changes, measured in counts: the delimiter rule is the whole gain
+
+Six sweeps × two arms on a **pinned corpus snapshot** (567 transcripts frozen 2026-08-11T15:13,
+14 stratified sessions, this branch's own transcript first; Qwen3-4B-Instruct-2507 Q4_K_M,
+ctx 8192, temperature 0, budget 14,000). Rates are omitted on purpose. Every denominator here
+moves — the delimiter rule carries slightly *more* text, so slightly more facts get injected —
+and a retention rate over a moving denominator is what made the previous five verdicts
+unreadable. Facts are counted instead.
+
+## Fact retention, in facts
+
+| step | arm | injected | **retained** | lost | identifier-shaped retained/injected |
+|---|---|---:|---:|---:|---:|
+| `fdb1a23` baseline | ON | 79 | 46 | 33 | 20/42 |
+| | OFF | 79 | 49 | 30 | 21/42 |
+| `556667b` delimiter, **retreating** (superseded) | ON | 78 | 42 | 36 | 18/43 |
+| | OFF | 78 | 43 | 35 | 19/43 |
+| `3986c78` delimiter, **reaching forward** | ON | 81 | **53** | 28 | **26/45** |
+| | OFF | 81 | **53** | 28 | **25/45** |
+| `d4343df` beat retry at rising temperature | ON | 81 | 53 | 28 | 26/45 |
+| | OFF | 81 | 53 | 28 | 25/45 |
+| `66042cc` beat window geometry | ON | 81 | 54 | 27 | 24/45 |
+| | OFF | 81 | 55 | 26 | 25/45 |
+| `f62b80e` DF-based subjects (shipping tree) | ON | 81 | 52 | 29 | 24/45 |
+| | OFF | 81 | 54 | 27 | 26/45 |
+
+**The gain is real and it is one change.** Net over the whole sequence: 46 → 52 facts retained
+(ON) and 49 → 54 (OFF), against 33 → 29 and 30 → 27 lost, with 2 more facts injected. Of that,
+the reach-forward delimiter rule accounts for +7 (ON) and +4 (OFF) on its own; the three changes
+after it move retention by −1 to +2 and are within one fact of each other. The
+identifier-shaped half — the population T4 exists to protect — moves 20 → 24 (ON) and 21 → 26
+(OFF).
+
+This is the first movement on this branch's headline failure that survives being counted rather
+than rated. It is also nowhere near the ≥90% the design asks for: 29 named facts still vanish
+between the report that held them and the final one.
+
+**The retreating form was genuinely harmful, and the counts say so plainly**: 46 → 42 retained
+while *fewer* facts were injected. Cutting back to the previous sentence boundary threw away
+40.3% of the coarse session view. It is superseded by `3986c78`, not shipped.
+
+## Beats asked versus generated, and what the temperature schedule actually bought
+
+| step | asked | generated | lost | which |
+|---|---:|---:|---:|---|
+| baseline | 42 | 40 | 2 | s6 i9, s10 i4 — no complete sentence |
+| delimiter (retreat) | 42 | 40 | 2 | same two |
+| delimiter (forward) | 42 | 39 | 3 | those two + s12 i14 |
+| **beat retry** | 42 | **42** | **0** | — |
+| beat windows | 42 | 41 | 1 | s3 i9 |
+| DF subjects | 42 | 40 | 2 | s10 i4, s10 i9 |
+
+Identical in both arms at every step. `d4343df` **held**: all three known failures recovered and
+nothing was lost at the geometry it was measured on. It is not a guarantee — at the new window
+geometry one generation exhausted all five temperature-varied, explicitly seeded attempts, and at
+DF subjects two did. The honest statement is that varying the sample recovers *some* rejected
+generations, not that a rejected generation is now recoverable.
+
+## Digests produced (a fact, and the one cost worth your attention)
+
+56 of 56 at baseline, retreat, forward and beat-retry, in both arms. Then **55 of 56**: ON at
+`66042cc` (s1 step 3), and both arms at `f62b80e` (ON s1 step 2, OFF s3 step 2). All three are
+the same failure — five attempts exhausted on `unresolved is empty — it must be addressed
+explicitly`. The model is asked to address a list it has emptied, cannot, and the digest is lost.
+The cheap fix is for the repair path to supply `UnresolvedSentinel` when the repaired list comes
+back empty, rather than burning attempts on a validation the model cannot pass. Not landed
+unmeasured.
+
+## Subjects: document frequency is the one quality measure here that measures something
+
+`f62b80e` replaced "a subject is a strong identifier **or any token ≥7 characters**" with "a
+subject is a term the corpus shows is rare" (document frequency ≤0.35 of sampled sessions,
+cold-start to identifiers-only under 12 sessions). Judged by hand over all 14 sessions' 12-term
+`Subjects` blocks — a term counts as a subject if it names something specific to *that* session
+(identifier, path, file, symbol, flag, env var, product or technology name, or a domain term the
+session was about) and not if it is ordinary English or generic software vocabulary:
+
+**69 of 168 → 102 of 168.** Better in 11 of 14 sessions, unchanged in 3, worse in none.
+
+The clearest case is the memory session, whose record is what the model is told is
+*authoritative*:
+
+- before: `sidecar, home/dg/keld/keld-cli, metrics, command, keld-agent, process, package, service, running, inference, fragmentation, restart`
+- after: `home/dg/keld/keld-cli, daemon, trim, fragmentation, glibc, MALLOC_ARENA_MAX, malloc_trim, spawn, agent.json, daemon.go, arena, heap`
+
+`exactly`, `confirm`, `existing`, `changes`, `running`, `question`, `complete` — the words a
+"≥7 characters" rule cannot tell from a subject — are gone corpus-wide.
+
+**The audience requirement holds, measured on the pinned corpus** (34 sessions, 22,610 distinct
+terms): `depreciation` .03, `accruals` .03, `larkin` .03, `meridian` .00, all far under the 0.35
+cut, so an accountant's vocabulary survives a rule tuned on nobody's stoplist. Against that,
+`keld-signal` (.41) and `enrichment` (.56) are *excluded* — correct IDF behaviour on a corpus
+where every session is about them, and a real cost.
+
+Two defects the audit surfaced, neither fixed here: the same term at two casings can occupy two
+of the twelve slots (`Cowork` and `cowork` in s9), and one session lost three genuine specifics
+the old rule held (`KELD_TEST_DATABASE_URL`, `asyncpg`, `postgresql`).
+
+## What in this harness measures a fact, and what encodes a judgement
+
+The reason five gated steps produced five unreadable verdicts is not the gate. It is that most of
+these thresholds are string heuristics standing in for semantic judgements, and a heuristic that
+cannot make the judgement fails in a way that costs more to diagnose than the thing it measures.
+For whoever comes next:
+
+**Facts — mechanically checkable, worth trusting.** Digests produced (T1: a schema-valid object
+exists or does not); recovered panics; prompt within budget, largest prompt, window margin over
+the floor (arithmetic on the assembled prompt); beats asked / generated / kept / discarded and
+the difference between the first two; retain-list offered / evicted / already-gone; beat-window
+turn coverage; document frequency itself. **T4 retention is the one quality-flavoured metric that
+is a fact** — it asks whether a string present in report *N* is present in report *N+3* — with
+the caveat that *which* strings enter the population is a judged extraction, so the denominator is
+judged even though the test is verbatim.
+
+**Judgements a string heuristic cannot make — do not trust the number.** T3 rubberstamping,
+T7 fabricated blockers, T8 stale open items, T9 current-is-completed, T10 synopsis restates,
+T11 synopsis lag, T12 beat-vs-record, `ChangedSubject`/`SubjectShifted`, `beatsRestate`
+suppression, and "is this token a specific". Each is a significant-word overlap ratio or a
+stopword lookup standing in for a semantic relation, and each has now been shown to fail: T12's
+every flag was an accurate beat, T11's 0.0% was near-tautological *and* is now judged on 18 of 41
+refinements rather than 32, `SubjectShifted` fires on 41 of 42, `ChangedSubject` on ~90%. T2 and
+T13 sit in between: "this identifier appears nowhere in the source" is verbatim-checkable, but
+whether the token is an identifier is the same judged extraction, and naming something from
+earlier context is not necessarily fabrication.
+
+Evaluation of the judged half is moving to qualitative review by a stronger model reading the
+output against its source. These thresholds should not be extended in the meantime.
+
+---
+
+# Part 9 — A gate, a delimiter rule, and what a subject is
+
+Five gated changes, each measured on both arms against a committed baseline, each with the gate's
+verdict recorded whether or not it was flattering. Full detail, per step, including the variant
+that was measured and rejected:
+`.superpowers/sdd/2026-08-10-session-story-rollup/gate-and-subjects-report.md`.
+
+## The gate, and the thing it exists to stop
+
+Four regressions on this branch were each found by the *next* review rather than blocked at the
+change — the recency anchor, two length-guidance wordings, and the beat work, which gained ~8
+points of retention while silently losing two beats per run. Nothing enforced "no net regression".
+`internal/agent/enrich/llmstudy/gate/` now parses the sweep's own log and reports, per threshold
+and per arm, improved / unchanged / REGRESSED, with regressions first.
+
+Three properties those four failures needed and no artifact had: **denominators travel with
+rates** (a rate that improves while its denominator collapses is marked not attributable);
+**losing a verdict is a regression** (`NO VERDICT` parses as absent, not as 0.0%); and **an
+incomplete log is not comparable** (a half-finished sweep would parse into zeroes, and zeroes read
+as a sweeping improvement).
+
+The baseline is measured on a **pinned corpus snapshot**, because this branch's own transcript is
+in the corpus and grows while the work is being done. It reproduces Part 8's shipping-tree figures
+**to the digit in both arms**, which is the evidence that the snapshot is the same corpus.
+
+### T12's 15.7% → 25.0%, settled
+
+**The sample shrank; the behaviour did not worsen.** 15.7% of 70 is 11 flagged beats, 25.0% of 40
+is 10. The denominator fell because the cadence went from 3 user turns to 5 — 42 beats asked
+instead of 70 — and `t12Checked` tracks the cadence directly. One *fewer* flagged beat over a 43%
+smaller sample, reported as a 9-point rise. Neither artifact recorded which number had moved.
+
+## The delimiter rule cost 40% of the coarse view, until it reached forward
+
+AGENTS.md's never-cut-mid-sentence rule was applied to five sites. The largest was not cosmetic:
+`toolLine`'s 80-rune clip **truncated 3,376 of 3,596 shell commands (93.9%) mid-token**, and window
+text is both T2's verification reference and the source `SessionRecord.Observe` extracts
+verbatim-verified `Subjects` from — so half a token became an authoritative subject that never
+existed.
+
+The first implementation retreated to the last sentence end *inside* the budget and **cost 40.3%
+of the coarse session view** (146,426 runes; 83 turns dropped whole). Measured, it regressed four
+thresholds in the ON arm — T2, T4 58.2 → 53.8, T7, T11. Reaching **forward** to the next boundary
+within 50% of the budget instead costs **+2.1%** on the view and **+7.8%** on mined turns: the
+delimiter-respecting cut now carries slightly *more* text than the rune-count cut it replaces.
+
+With that, the rule is a net gain: **T4 58.2% → 65.4% (ON) and 62.0% → 65.4% (OFF)**, T7 to zero
+in both arms, T2 improved in both.
+
+**Two findings that are not changes.** `fitTurns`' line trim cannot be made unconditionally
+compliant at this budget — making it so is the amplifier that panicked 6 of 293 real steps, and
+reserving a line's worth needs 1,200 runes that do not exist at +0. And **`maxSubjectTermLen`
+already drops rather than truncates**: the brief's claim that it truncates a term is wrong, and its
+own doc says so. What was missing was a *test*.
+
+## Two beats lost per run: the retry could not differ
+
+At temperature 0 a rejected generation is re-requested **byte-identically**, so all five attempts
+failed on the same string and 2 of 42 beats were lost, in all six sweeps of the last round. The
+beat path now samples 0 → 0.2 → 0.4 → 0.6 → 0.8 **at an explicit seed**, so a recovered beat is
+still reproducible. Result: **42 asked / 42 generated / 42 kept / 0 errors in both arms.**
+
+`callValid` is unchanged for every other caller, asserted. The shape standard is unchanged,
+asserted. ⚠️ But the nudge is **not a general guarantee**: at the wider beat windows of the next
+change, `beat s3 i9` failed all five attempts anyway.
+
+## Beat windows: coverage 11% → 59.5%, and the spec's 100% is unreachable
+
+`K = 12` was inherited from classification. A five-prompt stride runs **median 13,956 / max 52,148
+runes**; a `K=12` window is median 2,578. So consecutive beat windows were disjoint and most of
+each stride was read by nothing — **11.0% turn coverage**, a number that did not previously exist.
+
+Contiguous spans with a reserved 28% stride overlap, bounded at 16,000 runes: **coverage 59.5%,
+overlap 18.0% of the previous window, `ChangedSubject` 90.0% → 82.9%, T12 25.0% → 9.8%.**
+
+⚠️ **100% coverage is unachievable at `ctx` 8192, and not narrowly.** 20,000 runes of real
+transcript measures 5,433 tokens (`/tokenize`, worst of four chunks), so the largest stride needs
+~14,200 tokens against a context of 8,192 that must also hold the record, the instructions and the
+generation. **The spec's "must be 100%" is a defect**, and the shortfall is now marked inside the
+window instead of being silent.
+
+⚠️ **The spec's named check does not exist.** It asks for "the beat-1 → beat-2 case this session's
+series currently misses", but every beat of session 1 is marked subject-changed on the baseline and
+the corpus rate is 90% — `ChangedSubject` is *over*-reporting, the opposite of the premise.
+
+## A subject is a rare term, not a long one — and it measures 52.4% → 86.3%
+
+`distinctiveToken` accepted anything ≥7 characters. Document frequency over the local transcripts
+replaces it (sessions, not occurrences; cold start falls back to the **narrow** rule, following
+`lenstat`'s precedent with the direction reversed, because here the risk is noise in a block
+labelled authoritative rather than a memory spike).
+
+**`SessionRecord.Subjects` that a reader would call subjects: 88 of 168 (52.4%) → 145 of 168
+(86.3%).** The accounting vocabulary survives — `depreciation` .03, `accruals` .03, `Meridian`
+.00, `Larkin` .03 — which is the audience requirement.
+
+**The DF table does not show two separated populations**, which is the honest version of the
+design's expectation: the generic and specific lists overlap between ~.12 and ~.56, so 0.35 is a
+cut through a contested band. `enrichment` (.56) and `keld-signal` (.41) are excluded though a
+reader would call them subjects — IDF behaving correctly on a corpus where every session is about
+them.
+
+### T11 and T12 re-measured: a finding about the checks, as the spec allowed for
+
+**T12 got worse where it mattered** — 9.8% → 17.5% against the immediately preceding step —
+and the mechanism was predicted from the DF table before the run: DF is measured over
+**transcripts**, and T12's problem terms are **model-prose gerunds** that are *rare* there
+(`analyzing` .00, `ensuring` .03). They pass a rarity test comfortably, while the record's side
+became genuinely narrower, so fewer terms match. T12 compares a model-prose term set against a
+transcript-derived one, and document frequency can only discipline the second.
+
+**T11 did not move and lost half its power**: 0.0% of 30 judged → 0.0% of 18, abstentions 12 → 23
+of 41. It is near-tautological for a *different* reason now — not two English words certifying a
+synopsis, but rarely rendering a verdict at all.
+
+## The gate's verdicts, and what was not decided here
+
+| step | gate vs baseline | 
+|---|---|
+| delimiter rule, retreating | **REGRESSED** — T4 in both arms. **Rejected**, superseded. |
+| delimiter rule, reaching forward | REGRESSED — T9 1.8 → 3.6% (1 → 2 items), beats lost 2 → 3 |
+| beat retry | REGRESSED — T9 only, **inherited**; beats lost 2 → 0 |
+| beat windows | REGRESSED — **T1 100% → 98.2%**, T3 OFF 8.3%, T2 ON 1.1% |
+| DF distinctiveness | REGRESSED — T1 98.2%, **T3 16.7% (crosses ≤10%)**, T2 ON 1.5% |
+
+**Nothing was reverted after the first step, and that is escalated rather than decided.** The
+delimiter rule, the beat geometry and the distinctiveness rule are each the project owner's own
+convention or spec, which is the brief's exception (b): *stop and ask*. The retreating variant,
+which no spec required, **was** rejected and replaced.
+
+**T1 is the row that matters.** One digest of 56 is lost in both arms, to *"unresolved is empty"*
+retry exhaustion — the same mode that killed the first length-guidance wording. The cheap fix is
+for `RefineFrom`'s repair to supply `UnresolvedSentinel` when the repaired list is empty; it is a
+new change and is deliberately not landed unmeasured.
+
+## Not established
+
+- **That any of these changes caused its T4 movement.** T4's denominator derives from the first
+  report, so every input change moves both the rate and the items; this round measured 58.2 → 53.8
+  → 65.4 → 66.7 → 64.2 across five configurations. The gate cannot tell chaos from causation and
+  neither can this Part.
+- **That no beat is lost.** Two known failures recovered; a third appeared at a new geometry.
+- **T11 and T12 as instruments.** Still not established (Part 7), for new reasons.
+- **`SubjectShifted`.** Still 41 of 42. It needs the production EWMA focus, not a tokeniser.
+
+## Amendments to earlier Parts
+
+- **Part 7 and Part 8's T12 discussion**: the 15.7% → 25.0% move is now explained — the sample
+  shrank with the cadence change and the flagged count fell 11 → 10. Neither Part could say which.
+- **Part 8's "two beats are lost per run" (concern 5)**: cause identified (a byte-identical
+  re-request at temperature 0) and fixed; see above, including the case the fix does not cover.
+- **Part 8's "+0 runes of headroom"**: still +0 on the shipping tree (29 sessions / 1,102 steps /
+  2,204 prompts, 0 panics), and the delimiter rule's forward allowance did not consume it.
