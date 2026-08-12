@@ -214,19 +214,28 @@ func anchorBeatEvents(events []string, window, record string) (kept, dropped []s
 // Occurrence is the same VerifyTopics test the anchor uses, so the two facts are measured the
 // same way.
 func unverifiedSpecifics(s, evidence string) []string {
-	var terms []string
+	hay := strings.ToLower(evidence)
+	var out []string
 	seen := map[string]bool{}
 	for _, tok := range subjectTokens(s) {
 		t := trimTermPunct(tok)
-		if t == "" || !strongIdentifier(t) || seen[strings.ToLower(t)] {
+		k := strings.ToLower(t)
+		if t == "" || !strongIdentifier(t) || seen[k] || runeLen(t) < unverifiedMinRunes {
 			continue
 		}
-		seen[strings.ToLower(t)] = true
-		terms = append(terms, t)
+		seen[k] = true
+		if strings.Contains(hay, k) || strings.Contains(hay, strings.TrimSuffix(k, "s")) {
+			continue
+		}
+		out = append(out, t)
 	}
-	if len(terms) == 0 {
-		return nil
-	}
-	_, dropped := VerifyTopics(terms, evidence)
-	return dropped
+	return out
 }
+
+// unverifiedMinRunes and the singular fallback above are both from the first full sweep, where
+// this measure named three terms across 19 beats and two of them were noise of exactly the kinds
+// this package has already paid for: `UI` (two letters, an "internal capital" by the shared rule)
+// and `CTAs` (a plural whose singular is in the window — plurals scored as fabrication is a
+// mistake made here before). Reporting either as an unverified specific is the 22.6% failure in
+// miniature.
+const unverifiedMinRunes = 4

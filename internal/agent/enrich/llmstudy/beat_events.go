@@ -34,11 +34,15 @@ const (
 	// without losing the generation: fitBeatEvents drops whole trailing entries and MARKS the
 	// drop, so an over-long list costs one visible entry instead of the beat.
 	beatEventMaxRunes = 200
-	// beatEventMaxCount bounds the list. Four is what the prompt asks for — the pilot answered
-	// five-and-six-entry lists that ran the stored beat up against BeatCap, and the entries past
-	// the fourth were the ones the cap then dropped — and five is the schema's slack, so a model
-	// that adds one is not thrown away.
-	beatEventMaxCount = 5
+	// beatEventMaxCount bounds the list, and it is the SCHEMA's bound rather than a rule the
+	// prompt hopes for: a constrained decode cannot emit a fifth entry, so nothing is generated
+	// that would then be thrown away.
+	//
+	// Four is measured. At five, the first full sweep dropped 11 of 70 entries to BeatCap across
+	// 7 of 19 beats — real observed events, lost to a budget number after the model had already
+	// paid to write them. Four entries at the lengths that sweep produced fit the stored beat, so
+	// the cap becomes the backstop it was meant to be instead of the ordinary case.
+	beatEventMaxCount = 4
 )
 
 // passProblem names the pass a validation failure belongs to.
