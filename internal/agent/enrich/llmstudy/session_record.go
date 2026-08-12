@@ -110,9 +110,17 @@ func (r SessionRecord) Observe(w Window, s Signals) SessionRecord {
 	r.Corrections += s.Corrections
 	r.Tools = mergeToolCounts(r.Tools, w)
 
-	if r.freq == nil {
-		r.freq = map[string]int{}
+	// COPIED, not mutated in place. SessionRecord is passed and returned by value everywhere in
+	// this package, so a caller may hold one record and fold different windows into two records
+	// derived from it — and a shared map would silently merge the two, inside the one input the
+	// prompt calls authoritative. No caller forks a record today; this was a trap laid for the
+	// wiring task, the same shape hasCounts' doc describes, and it was found by the ring's own
+	// aliasing test rather than reasoned about. The copy costs one map per observation.
+	freq := make(map[string]int, len(r.freq)+16)
+	for term, c := range r.freq {
+		freq[term] = c
 	}
+	r.freq = freq
 	// This observation's own counts, folded into the recency ring below. Every term that enters
 	// r.freq enters here too — one gate, two horizons, so the reserved slots cannot admit a term
 	// the cumulative half would have rejected.

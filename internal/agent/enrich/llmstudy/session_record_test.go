@@ -356,6 +356,39 @@ func TestATurningPointRestartsTheRecentStretch(t *testing.T) {
 	}
 }
 
+// Two records derived from the same ancestor must not share accumulation state. SessionRecord is
+// passed and returned by value, so this reads as safe and is not: both the cumulative map and the
+// recency ring are references, and a fork silently merges two sessions inside the one input the
+// prompt calls authoritative. No caller forks a record today — this is the trap, found by writing
+// the test rather than by reasoning about it.
+//
+// It asserts on the two accumulators directly rather than on Subjects, and that is not
+// convenience — it is the only version that catches both reverts. Subjects is computed during the
+// Observe that builds each fork, i.e. BEFORE the other fork writes, so a Subjects-only assertion
+// passes on a corrupt ring and on a merged map alike. Exactly one Observe per fork, because that
+// is the case where the ring's shared backing array is still the base's: a second Observe would
+// reallocate it and hide the defect.
+func TestAForkedRecordDoesNotShareAccumulationState(t *testing.T) {
+	base := observeN(SessionRecord{}, recencyTurn("alpha", 13), 3)
+	omega, sigma := recencyTurn("omega", 6), recencyTurn("sigma", 6)
+	a := base.Observe(omega, Extract(omega))
+	_ = base.Observe(sigma, Extract(sigma))
+
+	for term := range a.freq {
+		if strings.HasPrefix(term, "sigma") {
+			t.Errorf("the other fork's terms are in this record's cumulative counts: %q", term)
+			break
+		}
+	}
+	for term := range a.recentFreq() {
+		if strings.HasPrefix(term, "sigma") {
+			t.Errorf("the other fork's window overwrote this record's recency ring: %v",
+				a.recentFreq())
+			break
+		}
+	}
+}
+
 // An absent field must read as absent. Topics read empty for months because nothing said a
 // pass had never run.
 func TestSessionRecordReportsWhichFieldsArePopulated(t *testing.T) {
