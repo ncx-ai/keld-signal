@@ -19,8 +19,13 @@ import (
 //
 // Round-robin also front-loads project diversity, so a small budget still spans several
 // projects instead of exhausting the largest one.
+// ⚠️ It reads corpusRoot(), i.e. KELD_STUDY_CORPUS_ROOT when set. It previously read
+// $HOME/.claude/projects directly while corpusRoot()'s own doc promised pinnability — so
+// KELD_STUDY_CORPUS_ROOT moved the document-frequency table and nothing else, and a sweep
+// believed to be pinned was in fact selecting sessions from the live, growing directory. This
+// harness's own transcript is IN that directory and is appended to while the sweep runs.
 func StratifiedTranscripts() []string {
-	root := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
+	root := corpusRoot()
 	byProject := map[string][]string{}
 	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".jsonl") {
@@ -65,7 +70,9 @@ func StratifiedTranscripts() []string {
 // who can judge a synopsis without trusting the harness.
 func ThisSessionTranscript() string {
 	if id := os.Getenv("KELD_STUDY_SESSION_ID"); id != "" {
-		root := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
+		// corpusRoot(), for the same reason as above: looking this up in the live directory
+		// while the rest of the corpus is pinned would put the ONE growing transcript back in.
+		root := corpusRoot()
 		var found string
 		filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 			if err == nil && !d.IsDir() && strings.HasSuffix(p, id+".jsonl") {
