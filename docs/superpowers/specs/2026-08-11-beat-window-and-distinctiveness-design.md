@@ -6,6 +6,11 @@ beat see, and which of the words in it name the work?**
 Neither is scheduled yet. Both wait on the in-flight prose-untruncation measurement, because
 changing beat inputs mid-flight would confound its before/after sweep.
 
+> **Part 1 is BUILT AND MEASURED** (`66042cc`, then `ad174a6` / `bbe4ff7` / `5b184b9`). One of its
+> requirements — 100% turn coverage — was measured to be **unachievable at `ctx` 8192** and is
+> refuted below rather than met. Part 2 is separate work. Read *Part 1, measured* before quoting
+> anything from *The change*.
+
 ## Part 1 — beats need their own window geometry
 
 ### What is wrong now
@@ -61,6 +66,61 @@ safe.
   series as a named check.
 - Prompt size: a wider window costs budget. The backstop must still report zero panics on the
   real-corpus probe.
+
+### Part 1, measured
+
+`TestCorpusBeatWindowGeometry`, offline over the pinned snapshot
+(`/home/dg/keld/study-corpus-snapshot-2026-08-11T2130/projects`), 20 whole sessions, 137 beat
+windows, both geometries computed on the same walk. Counts lead; every denominator here moves
+between the geometries.
+
+| | OLD (`K = 12`) | NEW (contiguous, 16,000 runes) |
+|---|---:|---:|
+| turns read by some beat window, of 14,154 spanned | **1,567** (11.1%) | **7,926** (56.0%) |
+| turns read by NO window | 12,587 | 6,228 |
+| windows carrying a marked hole | n/a — holes were unreported | 75 of 137, **75 of 75 marked** |
+| overlap with the previous beat's window | **2,960** of 379,587 runes (0.8%) | **381,272** of 1,870,860 runes |
+| — as a share of what the previous beat READ | 0.8% | **23.7%** (spec asks 25-30%) |
+| largest assembled beat prompt, budget 24,000 | 7,695 | **18,047** (5,953 headroom) |
+| budget backstop fired | — | **0 times in 137 assemblies** |
+
+The old numbers are computed on the same corpus, not remembered, and by a method that can only
+**overstate** them: a stride turn counts as read if it matches, as a multiset, any turn of any
+mined beat window of that session.
+
+⚠️ **"Coverage must be 100%" is refuted, and not narrowly.** The largest stride is 52,148 runes;
+20,000 runes of real transcript measures 5,433 tokens (`llama-server /tokenize`, worst of four
+chunks), so a whole-stride window needs ~14,200 tokens against a context of 8,192 that must also
+hold the record, the instructions and the generation. 100% coverage and a bounded window are
+mutually exclusive here. **The price is measured rather than argued:** firing an extra beat
+whenever the uncovered stride reaches the bound reaches 100% at **285 beats instead of 137 — 2.1x
+the inference on the tier that already dominates sweep cost.** That is the trade to decide, not a
+defect to fix silently. Until it is decided, the shortfall is 6,228 turns and every one of them is
+inside a window that says so.
+
+Two things the measurement corrected in the implementation, both of the class this branch keeps
+paying for:
+
+- **The hole marker was in the window and charged to nobody**, so a stride that filled the bound
+  produced a window over it. Reverting the fix puts five real windows over the bound (keld-signal
+  i19 +10, i24 +24 and +84, i29 +79, keld-cli i9 +38). The existing drop test *did* assert the
+  bound — its fixture just left hundreds of runes of slack, so it passed for a reason unrelated to
+  the arithmetic. A test asserting a limit the code does not apply is exactly what put five wrong
+  worst-case numbers into this branch's record.
+- **The overlap was reported against the previous STRIDE while its doc claimed the previous
+  WINDOW**: 16.9% versus 23.7% on the same 117 pairs. The design was inside the spec's band and
+  reporting itself outside it.
+
+**What this does NOT measure is the series-level effect, and the reason is worth recording.** The
+blind series round (`.superpowers/sdd/2026-08-12-series-review`) failed `continuous` on 6 of 6
+clean-series reviews and 6 of 6 clean duplicates — every timeline, both reviewers. Those timelines
+were generated **on the old geometry**: the artifact's own numbers say so (30 windows, min 70 /
+median 2,227 / max 6,734 runes, zero hole markers, beats at windows 0/5/10/15), where the
+contiguous geometry means 13,655 runes and 75 of 137 windows carrying a marker. `66042cc` migrated
+the sweep, the report dump and the arms dump; it missed `beat_dump_test.go` and
+`digest_dump_test.go`, and the review corpus came from the former. `bbe4ff7` retires `K` there
+too. **So the 6-of-6 continuity failure is not evidence about this geometry — it is evidence about
+the geometry this change replaced, and re-measuring it needs a fresh timeline round.**
 
 ## Part 2 — a real distinctiveness rule
 
