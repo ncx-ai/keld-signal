@@ -137,6 +137,15 @@ func (r SessionRecord) Observe(w Window, s Signals) SessionRecord {
 			if !distinctiveToken(tok) && !weakProperNoun(tok, t.Text) {
 				continue
 			}
+			// ⚠️ RECORDED, NOT FIXED: a collapsed tool run arrives as "(x100)" — appendTurn's
+			// own marker, not transcript — and "x100" passes distinctiveToken by
+			// strongIdentifier's digit rule, which returns BEFORE the document-frequency gate
+			// is consulted. So a marker this package writes can take a slot in the block the
+			// prompt calls authoritative, and the corpus rule that would reject it never runs.
+			// Not observed in 20 corpus sessions (real runs collapse to x2/x3, below
+			// dfMinTermLen), so it is latent rather than live; the fix belongs with the digit
+			// rule, which Identifiers and the T2/T4 metrics also depend on.
+			//
 			// Bounded in LENGTH as well as in count — see maxSubjectTermLen in
 			// digest_recency.go. MaxRecordSubjects caps how many terms Block() joins, not
 			// how long any one of them is, and subjectTokens keeps a base64/dotted blob

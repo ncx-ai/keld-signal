@@ -72,6 +72,14 @@ const (
 // window covers them either.
 //
 // It is charged to the window's own bound (see Next): it is not a turn, but it is in the window.
+//
+// ⚠️ RECORDED, NOT FIXED: the notice's own words are IN the rendered window, so any route that
+// tokenises or substring-matches Rendered treats "omitted", "turns", "context" as if they were
+// transcript content — the same way the role labels do, which is how `assistant` reached a beat's
+// candidate term list. It is not a leak into SessionRecord.Subjects: Observe reads Turn.Text,
+// which never carries the notice or a label, and a walk of 20 corpus sessions with a
+// representative DF table found no such term in any record. It is a leak into anything reading
+// the rendered string, which now includes the verbatim anchoring check.
 const beatOmittedNotice = "[turns since the previous update omitted to fit the context — " +
 	"they are not covered by any later window either]\n"
 
