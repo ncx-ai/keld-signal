@@ -190,15 +190,25 @@ func TestGenerateBeatRetriesWhenNoEntryIsAnchored(t *testing.T) {
 // The cap drops WHOLE entries and marks that too. Never a cut inside an entry: half an entry is
 // the mid-clause truncation AGENTS.md forbids, and the defect BeatCap was raised to fix.
 func TestGenerateBeatFitsTheCapByDroppingWholeEntries(t *testing.T) {
+	// Each entry is padded to just under beatEventMaxRunes and enough of them are offered to
+	// exceed BeatCap whatever those two constants are, so this fixture cannot quietly stop
+	// testing the cap the way a hardcoded six-by-120 did when the cap moved.
 	long := func(i int) string {
-		return "run-" + string(rune('a'+i)) + ".log was written, " +
-			strings.Repeat("and the exporter wrote another row, ", 2) + "and it finished"
+		s := "run-" + string(rune('a'+i)) + ".log was written, "
+		for runeLen(s)+len("and the exporter wrote another row, and it finished") <= beatEventMaxRunes {
+			s += "and the exporter wrote another row, "
+		}
+		return s + "and it finished"
 	}
 	var events []string
-	for i := 0; i < 6; i++ {
+	for i := 0; runeLen(renderBeat("the exporter run logs", events, nil, nil)) <= BeatCap; i++ {
 		events = append(events, long(i))
 	}
-	window := "user: check run-a.log run-b.log run-c.log run-d.log run-e.log run-f.log\n"
+	window := "user: check"
+	for i := range events {
+		window += " run-" + string(rune('a'+i)) + ".log"
+	}
+	window += "\n"
 	l, _ := beatServer(t, beatAnswer{Subject: "the exporter run logs", Events: events})
 	d, err := l.generateBeat("counts: turns=4\n", window)
 	if err != nil {
@@ -383,7 +393,7 @@ func TestClipBeatDoesNotCutInsideAnIdentifier(t *testing.T) {
 func TestFitBeatTextDropsWholeLinesAndMarksIt(t *testing.T) {
 	subject := "the exporter run logs"
 	entry := "- " + strings.Repeat("x", 120) + "\n"
-	over := subject + "\n" + strings.Repeat(entry, 6)
+	over := subject + "\n" + strings.Repeat(entry, BeatCap/runeLen(entry)+2)
 	got := fitBeatText(over, BeatCap)
 	if runeLen(got) > BeatCap {
 		t.Errorf("fit left %d runes, over BeatCap %d", runeLen(got), BeatCap)

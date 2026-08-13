@@ -259,7 +259,8 @@ func TestAppendBeatBoundsAtWholeLinesAndMarksTheDrop(t *testing.T) {
 	if got := bs[0].Text; got != "the March close\n- the bank statement was opened" {
 		t.Errorf("a beat inside the cap was altered: %q", got)
 	}
-	over := "the March close\n" + strings.Repeat("- "+strings.Repeat("x", 120)+"\n", 6)
+	line := "- " + strings.Repeat("x", 120) + "\n"
+	over := "the March close\n" + strings.Repeat(line, BeatCap/runeLen(line)+2)
 	bs, ok = AppendBeat(bs, over, BeatGround{})
 	if !ok {
 		t.Fatal("an over-cap beat must be bounded, not discarded")

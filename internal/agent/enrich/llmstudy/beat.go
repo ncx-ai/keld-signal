@@ -23,15 +23,27 @@ import (
 // SAME 512 runes the prose beat claimed, by dropping whole trailing entries with the drop marked
 // (fitBeatEvents), never by cutting an entry.
 //
-// ⚠️ WHAT RAISING THIS COSTS IS NOT WHAT IT WAS THOUGHT TO COST. The report tier was recorded at
-// 4 runes of headroom (13,996 of 14,000) and the inference drawn from that — a larger beat pushes
-// the refine prompt over DefaultPromptCharBudget and panics the backstop — is wrong. Setting this
-// to 640 leaves the entire package green, because fitDiscretionary shrinks the beat SELECTION
-// until the prompt fits. The cost is quieter and lands on the reader: at the realistic worst-case
-// refine input, 4 of 12 beats reach the report at 512 and 2 at 774. Measured in
-// TestBeatCapTradesBeatsInTheReportRatherThanTrippingTheBackstop, and the trade this constant
-// actually makes is entries lost per beat against beats lost per report.
-const BeatCap = 512
+// ⚠️ IT IS SET FROM THE SHAPE THE PROMPT ASKS FOR, BECAUSE ANYTHING SMALLER DISCARDS THE ANSWER.
+// At 512 the three numbers were mutually inconsistent: the schema admits beatEventMaxCount (4)
+// entries of beatEventMaxRunes (200) beside a subject of beatSubjectMaxRunes (80), which renders
+// to 892 runes, so the prompt asked for an answer its own budget could not hold. That was not a
+// backstop firing rarely — over the 14-session sweep it dropped 68 of 274 offered entries (25%)
+// across 47 of 69 beats, with the model emitting the full four entries on 67 of 69. 892 is that
+// worst case exactly (TestBeatCapHoldsTheAnswerTheSchemaAdmits), so the cap can no longer discard
+// an answer the schema permitted.
+//
+// ⚠️ WHAT RAISING IT COSTS IS NOT WHAT IT WAS THOUGHT TO COST, AND THE PRIORITY IS THE TIMELINE.
+// The report tier was recorded at 4 runes of headroom (13,996 of 14,000) and the inference drawn
+// from that — a larger beat pushes the refine prompt over DefaultPromptCharBudget and panics the
+// backstop — is wrong. fitDiscretionary (digest_refine.go) shrinks the beat SELECTION until the
+// prompt fits, so the prompt stays inside its budget at any beat size and the cost lands on the
+// reader instead: at the realistic worst-case refine input, 4 of 12 beats reach the report at 512
+// and 2 of 12 here — measured in TestBeatCapTradesBeatsInTheReportRatherThanTrippingTheBackstop.
+// The timeline a person reads back is the primary product and the report is derived from it, so
+// the trade is taken in favour of entries. Note where it stops costing anything: 774 runes (the
+// largest beat the sweep would have needed to lose nothing) already leaves 2 of 12, so covering
+// the schema's whole worst case costs nothing beyond covering the observed one.
+const BeatCap = 892
 
 // BeatMinRunes is the floor below which the answer is degenerate rather than terse.
 //

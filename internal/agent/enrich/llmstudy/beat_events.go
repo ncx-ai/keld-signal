@@ -37,9 +37,10 @@ const (
 	// ⚠️ IT STILL LOSES WHOLE BEATS ON REAL MATERIAL. Every one of the 3 generation failures over
 	// the rebalanced 14-session sweep was this bound, all 3 on real transcripts, all 3 after five
 	// ladder attempts: a 235-rune entry twice and a 219-rune entry once, each a single sentence
-	// that ran long rather than a paragraph. Raising the cap again would trade those beats for
-	// more entries dropped at BeatCap, which is the same content lost one step later — the fix is
-	// a shorter entry, which is a prompt question, not a constant.
+	// that ran long rather than a paragraph. Raising it further is no longer paid for at BeatCap
+	// (that trade is gone — see below), but it is still paid for in the report, since BeatCap must
+	// rise with it to keep the three numbers consistent. Left where it is: the fix for a 235-rune
+	// sentence is a shorter entry, which is a prompt question, not a constant.
 	beatEventMaxRunes = 200
 	// beatEventMaxCount bounds the list, and it is the SCHEMA's bound rather than a rule the
 	// prompt hopes for: a constrained decode cannot emit a fifth entry, so nothing is generated
@@ -49,14 +50,16 @@ const (
 	// 7 of 19 beats — real observed events, lost to a budget number after the model had already
 	// paid to write them.
 	//
-	// ⚠️ "FOUR ENTRIES FIT THE STORED BEAT" WAS TRUE OF THAT SWEEP AND IS FALSE OF REAL MATERIAL.
-	// That sweep was half hand-authored, where the entries are short. Over the rebalanced
-	// 14-session corpus the cap dropped 68 of 274 offered entries across 47 of 69 beats — on the
-	// 12 real transcripts alone, 67 of 248 across 46 of 62 — so on real sessions the cap is the
-	// ORDINARY case, not the backstop. It is arithmetic, not luck: four entries at
-	// beatEventMaxRunes plus a subject at its own cap is 880 runes against a 512-rune BeatCap, so
-	// the schema admits an answer that cannot be stored whole. The drop is at least whole-entry
-	// and marked. What moving either number would cost is measured in
+	// ⚠️ THE COUNT IS NOW WHAT BeatCap IS SIZED FROM, RATHER THAN A HOPE ABOUT WHAT WILL FIT.
+	// "Four entries fit the stored beat" was true of that first half-hand-authored sweep, where
+	// entries are short, and false of real material: over the rebalanced 14-session corpus the cap
+	// dropped 68 of 274 offered entries across 47 of 69 beats — 67 of 248 across 46 of 62 on the
+	// real transcripts alone — because four entries at beatEventMaxRunes beside a subject at its
+	// own cap renders to 892 runes against a 512-rune BeatCap. That was arithmetic, not luck, and
+	// the fix was the cap rather than the count: the model offered the full four entries on 67 of
+	// 69 beats, so asking for three would have discarded a real observed event by construction on
+	// nearly every beat. TestBeatCapHoldsTheAnswerTheSchemaAdmits pins the three numbers against
+	// each other; what the larger cap costs the report is measured in
 	// TestBeatCapTradesBeatsInTheReportRatherThanTrippingTheBackstop.
 	beatEventMaxCount = 4
 )

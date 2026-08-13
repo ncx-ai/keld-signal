@@ -196,8 +196,15 @@ corpus was half synthetic, so its figures — including `19 of 19 on the first a
 anchoring firings` — describe neither population and are not comparable with anything measured
 after this section was written.
 
-**Report-tier prompt headroom is 4 runes** (13,996 of 14,000). Nothing here widens it, but any
-future change to the beat ladder lands there.
+**The report tier's 4 runes of headroom (13,996 of 14,000) is not a constraint on the beat cap,
+and treating it as one was wrong.** `fitDiscretionary` shrinks the beat *selection* until the
+refine prompt fits, so a larger beat never trips the backstop; it costs beats reaching the report
+instead — measured, 4 of 12 at 512 and 2 of 12 at 774 and above. That warning is retracted, and it
+is what left the dominant defect unfixed for a sweep: 68 of 274 entries dropped for length across
+47 of 69 beats, because four entries at the 200-rune entry cap beside an 80-rune subject renders to
+892 against a 512-rune `BeatCap`. **The three numbers must be able to hold the answer the prompt
+asks for**, and the timeline is the primary product, so the trade is taken in favour of entries:
+`BeatCap` is the schema's worst case (892) and the report reads fewer beats under pressure.
 
 ## Tasks
 
