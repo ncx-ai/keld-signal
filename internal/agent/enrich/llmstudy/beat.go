@@ -106,6 +106,8 @@ func GroundOf(w Window) BeatGround {
 // forbade, those openings went from 2 to 4. A prompt summons what it names. So the second worked
 // example IS the nothing-was-finished shape, sitting among the others as an ordinary answer — a
 // form to copy instead of a trap to avoid.
+//
+// ⚠️ THE WORKED EXAMPLES ARE READ FROM HELD-OUT REAL SESSIONS — see beatExamples.
 func BeatPrompt(record, window string) string {
 	var b strings.Builder
 	b.WriteString("You are the engineer working in the session below. A colleague asks you at " +
@@ -115,17 +117,9 @@ func BeatPrompt(record, window string) string {
 	b.WriteString(record)
 	b.WriteString("\nRECENT CONVERSATION:\n")
 	b.WriteString(window)
+	b.WriteString("\nAnswers look like this, and each of these is a normal answer:\n")
+	b.WriteString(beatExampleBlock())
 	b.WriteString(`
-Answers look like this, and each of these is a normal answer:
-  {"subject": "the CSV export in the Atlas exporter",
-   "events": ["the CSV export was added to the exporter",
-              "the export came back empty for a date range holding no rows"]}
-  {"subject": "the March depreciation review for Meridian",
-   "events": ["the depreciation task was assigned, and the register was named as fa-register.csv"]}
-  {"subject": "the trial balance for the March close",
-   "events": ["the adjusting journal was posted and the ledger reopened",
-              "the schedule and the register still disagree on three assets"]}
-
 Rules:
   - subject: one line naming what is being worked on, in the words this session uses for it.
   - events: one entry per thing the conversation shows happening, in order, in the past tense.
@@ -147,6 +141,88 @@ Respond with JSON only.
 	// way, which is precisely the case that used to overflow ctx in silence.
 	assertBeatPromptWithinBudget(p)
 	return p
+}
+
+// beatExample is one worked answer shown in the prompt, together with the transcript it was read
+// from.
+//
+// ⚠️ EVERY EXAMPLE IS READ FROM A REAL SESSION THAT IS HELD OUT OF THE EVAL CORPUS. That is a
+// property of the MEASUREMENT, not a matter of taste, and the set this replaces violated it:
+// two of its three answers were invented out of a hand-authored session that was itself being
+// scored, so `fa-register.csv` stood in the instructions and in that session's window at once.
+// The model was shown something close to the answer for a quarter of the material it was then
+// judged on, and the anchoring guard was meaningless on those beats — a term copied out of the
+// instructions occurs in the window too, so it anchors exactly as if it had been read from the
+// evidence. The prompt's own rule, "Nothing in these instructions is subject matter", exists to
+// stop precisely this, and an example drawn from the corpus makes that rule unenforceable.
+//
+// Source names the transcript each example was read from. TestBeatExamplesAreHeldOut checks the
+// separation MECHANICALLY rather than by intention: no example's subject line, and no strong
+// identifier or capitalised term any example uses, may occur anywhere in any eval session's
+// window or measured record — over the real sessions and the synthetic ones alike.
+//
+// ⚠️ ALL THREE ARE ENGINEERING SESSIONS, because the pinned corpus holds nothing else. The
+// non-engineering examples that went with the old set are gone with it, so whether a
+// non-technical session still gets a legible beat is now something the run MEASURES (the two
+// synthetic sessions are kept in the corpus for that) rather than something the prompt is
+// steering.
+//
+// The SHAPES they teach are what they were chosen for:
+//
+//   - the first, work that happened and a check that passed;
+//   - the second, THE NOTHING-WAS-FINISHED CASE — a stretch where batching was argued over and
+//     an approach chosen, with nothing built. Modelling the empty answer is what stops the model
+//     inventing progress, so this one is load-bearing and must stay;
+//   - the third, work that happened beside something deliberately left alone.
+type beatExample struct {
+	Subject string
+	Events  []string
+	Source  string
+}
+
+var beatExamples = []beatExample{
+	{
+		Subject: "the daily-jar rewrite of seat_capex_split",
+		Events: []string{
+			"the phase-1 plan was rewritten around the daily-jar model after the explainer document landed",
+			"seat_capex_split was rewritten to settle each closed day, and the collateral suites passed unchanged",
+		},
+		Source: "c2019c5e-7578-442f-95a4-d191687153a3.jsonl, window 4",
+	},
+	{
+		Subject: "batched enrichment writes on the ingest path",
+		Events: []string{
+			"batching the enrichment writes was raised, and the stream-and-consumer approach was picked out of three, gated on KELD_ENRICH_INGEST_MODE",
+		},
+		Source: "aa59ef4c-53f5-4ca7-bb9f-4a9b6c750eac.jsonl, window 4",
+	},
+	{
+		Subject: "the demo seed and its signal clients",
+		Events: []string{
+			"signal_clients.py was written, and four seeded members were left without a device",
+			"ensure_unique_slug was read, and the slug race it leaves was recorded rather than fixed",
+		},
+		Source: "51476fbe-9c7e-449a-a19f-10806932d326.jsonl, window 4",
+	},
+}
+
+// beatExampleBlock renders the worked examples as the JSON objects the prompt shows. Rendered
+// from the data rather than written out inline, so the hold-out check reads the same strings the
+// model is shown and cannot drift from them.
+func beatExampleBlock() string {
+	var b strings.Builder
+	for _, ex := range beatExamples {
+		b.WriteString("  {\"subject\": " + strconv.Quote(ex.Subject) + ",\n")
+		b.WriteString("   \"events\": [")
+		for i, e := range ex.Events {
+			if i > 0 {
+				b.WriteString(",\n              ")
+			}
+			b.WriteString(strconv.Quote(e))
+		}
+		b.WriteString("]}\n")
+	}
+	return b.String()
 }
 
 // BeatSchema constrains the response to a subject line and a list of events.

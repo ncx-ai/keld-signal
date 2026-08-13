@@ -85,8 +85,19 @@ func TestBeatPromptAsksWhatHappenedAndNeverForProgress(t *testing.T) {
 // ordinary answer, and there is no forbidden-phrase list anywhere in the prompt.
 func TestBeatPromptModelsTheEmptyAnswerWithoutNamingAProhibition(t *testing.T) {
 	p := BeatPrompt("record", "window")
-	if !strings.Contains(p, "the depreciation task was assigned") {
+	// Asserted through beatExamples rather than against a literal, because the examples are read
+	// from held-out real transcripts and a literal here would have to be re-typed every time one
+	// is re-read — and a stale literal is how a prompt loses the empty-answer shape in silence.
+	// TestBeatExamplesNameSomething holds the second example TO that shape; this holds the prompt
+	// to showing it.
+	empty := beatExamples[1]
+	if len(empty.Events) != 1 || !strings.Contains(p, empty.Events[0]) {
 		t.Error("the window in which nothing was finished is not modelled as an example answer")
+	}
+	for _, ex := range beatExamples {
+		if !strings.Contains(p, ex.Subject) {
+			t.Errorf("worked example %q is not shown in the prompt", ex.Subject)
+		}
 	}
 	if !strings.Contains(p, "each of these is a normal answer") {
 		t.Error("the examples are not presented as normal answers")
