@@ -21,12 +21,24 @@ import (
 // which directory it actually read. An absolute path remains the only one that cannot be misread,
 // and the round README says so.
 func ResolveRoundDir(repoRoot, p string) (dir, how string, err error) {
+	return resolvePath(repoRoot, p, "round directory")
+}
+
+// resolveScoreFile is the same three-way resolution for a FILE — the previous round's score.json,
+// which the production round is compared against. Same trap, same fix, different noun: a relative
+// path is resolved against the package directory under `go test`, and a comparison that silently
+// does not happen is worse than one that fails.
+func resolveScoreFile(repoRoot, p string) (path, how string, err error) {
+	return resolvePath(repoRoot, p, "score file")
+}
+
+func resolvePath(repoRoot, p, what string) (out, how string, err error) {
 	if p == "" {
-		return "", "", fmt.Errorf("no round directory given")
+		return "", "", fmt.Errorf("no %s given", what)
 	}
 	if filepath.IsAbs(p) {
 		if _, err := os.Stat(p); err != nil {
-			return "", "", fmt.Errorf("round directory %s: %w", p, err)
+			return "", "", fmt.Errorf("%s %s: %w", what, p, err)
 		}
 		return p, "absolute path", nil
 	}
@@ -42,5 +54,5 @@ func ResolveRoundDir(repoRoot, p string) (dir, how string, err error) {
 			return rooted, "relative to the repository root", nil
 		}
 	}
-	return "", "", fmt.Errorf("round directory %q found neither at %s nor at %s — pass an absolute path", p, cwdRel, rooted)
+	return "", "", fmt.Errorf("%s %q found neither at %s nor at %s — pass an absolute path", what, p, cwdRel, rooted)
 }
