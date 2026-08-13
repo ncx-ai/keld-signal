@@ -106,6 +106,12 @@ func writeRunHeader(b *strings.Builder, run beatRun) {
 		"is reported for each population separately as well as together. They are kept because "+
 		"the pinned snapshot holds only Claude Code transcripts and they are the only "+
 		"non-engineering material there is.\n\n", real, synth)
+	b.WriteString("**The corpus is deduplicated on window content, not on session id.** Two of " +
+		"the previous sweep's twelve real sessions were the same conversation under two ids — a " +
+		"fork or resume, byte-identical over all six of their beat windows — so twelve sessions " +
+		"were eleven conversations and two of its three generation failures were one window " +
+		"counted twice. Selection now fingerprints the turns each session would show the model " +
+		"and skips a repeat.\n\n")
 	b.WriteString("**The sessions the prompt's worked examples were read from are held out of " +
 		"this corpus**, and the separation is checked mechanically rather than asserted: no " +
 		"example's subject line, and no strong identifier or capitalised term any example uses, " +
@@ -197,18 +203,24 @@ func writeRunPoint(b *strings.Builder, s beatRunSession, p beatRunPoint) {
 	if len(p.Anchors) > 0 {
 		var terms []string
 		for _, a := range p.Anchors {
-			t := a.Term
-			if !a.InWindow {
-				t += " (record only)"
+			switch {
+			case a.Specifics == 0:
+				terms = append(terms, "(names nothing checkable)")
+			case !a.InWindow:
+				terms = append(terms, a.Term+" (record only)")
+			default:
+				terms = append(terms, a.Term)
 			}
-			terms = append(terms, t)
 		}
-		fmt.Fprintf(b, "Anchoring term each entry was kept on: `%s`.%s\n\n",
-			strings.Join(terms, "`, `"),
-			map[bool]string{
-				true:  "",
-				false: " The subject line carries no term occurring in the evidence.",
-			}[p.SubjectAnchored])
+		fmt.Fprintf(b, "What each kept entry was checked on — every specific it names had to occur "+
+			"in this window or the record, and an entry naming none is unconstrained: %s.\n\n",
+			"`"+strings.Join(terms, "`, `")+"`")
+	}
+	if p.SubjectRejects > 0 {
+		fmt.Fprintf(b, "The subject rule re-requested this beat %d time(s) before the subject "+
+			"stood: a subject carrying no term from the evidence is the signature of a copied "+
+			"instruction, so it is re-sampled at a wider temperature rather than stored.\n\n",
+			p.SubjectRejects)
 	}
 	if len(p.Unverified) > 0 {
 		fmt.Fprintf(b, "Identifiers this beat names that occur nowhere in its evidence: `%s`. "+
@@ -225,10 +237,16 @@ func writeRunPoint(b *strings.Builder, s beatRunSession, p beatRunPoint) {
 			strings.Join(echoed, "`, `"))
 	}
 	if len(p.Unanchored) > 0 {
-		fmt.Fprintf(b, "**Dropped by the anchoring guard (%d):** no term in these occurs "+
-			"verbatim in this window or the record.\n\n", len(p.Unanchored))
-		for _, e := range p.Unanchored {
-			b.WriteString("- " + e + "\n")
+		fmt.Fprintf(b, "**Dropped by the anchoring guard (%d):** each of these names a specific — "+
+			"an identifier, a number, a proper noun — that occurs in neither this window nor the "+
+			"record. The specific is named after the entry, so the decision can be checked rather "+
+			"than trusted.\n\n", len(p.Unanchored))
+		for i, e := range p.Unanchored {
+			b.WriteString("- " + e)
+			if i < len(p.Fabricated) && p.Fabricated[i] != "" {
+				b.WriteString("  — not in the evidence: `" + p.Fabricated[i] + "`")
+			}
+			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}
@@ -254,6 +272,10 @@ type runTally struct {
 	unanchoredBeats             int
 	overflowEntries             int
 	overflowBeats               int
+	unconstrained               int
+	subjectRejects              int
+	subjectRetriedBeats         int
+	subjectResidualFailures     int
 	subjectUnanchored           int
 	recordOnly                  int
 	exampleEcho                 int
@@ -298,6 +320,15 @@ func (r beatRun) tallyWhere(pred func(beatRunSession) bool) *runTally {
 			if p.PromptRunes > r.PromptBudget {
 				t.promptOverBudget++
 			}
+			// Counted over every beat asked, not only the ones that survived: a beat the subject
+			// rule re-requested four times and then lost is exactly what this figure is for.
+			t.subjectRejects += p.SubjectRejects
+			if p.SubjectRejects > 0 {
+				t.subjectRetriedBeats++
+			}
+			if p.FailedOnSubject() {
+				t.subjectResidualFailures++
+			}
 			switch {
 			case p.Panicked:
 				t.panicked++
@@ -324,6 +355,11 @@ func (r beatRun) tallyWhere(pred func(beatRunSession) bool) *runTally {
 			}
 			if !p.SubjectAnchored {
 				t.subjectUnanchored++
+			}
+			for _, a := range p.Anchors {
+				if a.Specifics == 0 {
+					t.unconstrained++
+				}
 			}
 			t.recordOnly += p.RecordOnlyAnchors()
 			if n := len(echoedExampleNames(p.Text)); n > 0 {
@@ -353,13 +389,18 @@ func (t *runTally) lines() []string {
 			spread(t.attempts), histogram(t.attempts), t.firstAttempt, t.retried),
 		fmt.Sprintf("entries per stored beat: %s; stored beat runes: %s",
 			spread(t.entries), spread(t.beatRunes)),
-		fmt.Sprintf("entries dropped by the anchoring guard: %d of %d offered, across %d of %d beats",
+		fmt.Sprintf("entries dropped by the anchoring guard (a specific occurring in neither the "+
+			"window nor the record): %d of %d offered, across %d of %d beats",
 			t.unanchoredEntries, offered, t.unanchoredBeats, t.generated),
+		fmt.Sprintf("kept entries naming NO specific, so unconstrained by the guard: %d of %d kept",
+			t.unconstrained, offered-t.unanchoredEntries),
 		fmt.Sprintf("entries dropped to fit the beat cap: %d across %d beats",
 			t.overflowEntries, t.overflowBeats),
-		fmt.Sprintf("beats whose SUBJECT carries no term occurring in the evidence: %d of %d",
-			t.subjectUnanchored, t.generated),
-		fmt.Sprintf("entries anchored in the record and NOT in their own window (the seam signal): "+
+		fmt.Sprintf("beats re-requested for an unanchored SUBJECT: %d beats, %d attempts; still "+
+			"failing after the ladder: %d; stored beats whose subject carries no term from the "+
+			"evidence: %d of %d", t.subjectRetriedBeats, t.subjectRejects,
+			t.subjectResidualFailures, t.subjectUnanchored, t.generated),
+		fmt.Sprintf("entries checked against the record and NOT their own window (the seam signal): "+
 			"%d of %d kept", t.recordOnly, offered-t.unanchoredEntries),
 		fmt.Sprintf("identifiers named that occur nowhere in the evidence: %d across %d of %d beats",
 			t.unverified, t.unverifiedBeats, t.generated),
@@ -398,11 +439,17 @@ func writeRunTally(b *strings.Builder, run beatRun) {
 			b.WriteString("- " + line + "\n")
 		}
 	}
-	b.WriteString("\nHow to read the anchoring line: an entry is dropped when no term in it " +
-		"occurs verbatim in that beat's own window or in the measured record. It is a fact about " +
-		"a string's occurrence, not a judgement about the entry — see `beat_anchor.go` for what " +
-		"counts as a term. The subject line is measured the same way but never dropped, since " +
-		"dropping it would leave no beat.\n")
+	b.WriteString("\nHow to read the anchoring line: an entry is dropped when a SPECIFIC it " +
+		"names — an identifier-shaped token, a number or amount, or a proper noun capitalised " +
+		"somewhere other than the start of its sentence — occurs in neither that beat's own " +
+		"window nor the measured record. Every specific must hold, not one of them; an entry " +
+		"naming no specific is unconstrained and passes, since it cannot fabricate a specific it " +
+		"does not have. It is a fact about a string's occurrence, not a judgement about the " +
+		"entry — see `beat_anchor.go`. The SUBJECT line is measured by the wider rule (any term " +
+		"of four or more runes that is not a function word) and is not dropped but RE-REQUESTED " +
+		"at a wider temperature, because a subject carrying nothing from the evidence was, on " +
+		"the previous sweep, exactly and only the beats that copied the prompt's worked " +
+		"examples.\n")
 }
 
 // histogram renders every observed value with its count, ascending: "1 attempt x63, 2 x4".

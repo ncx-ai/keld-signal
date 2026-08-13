@@ -3,8 +3,11 @@
 package llmstudy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,7 +86,14 @@ func TestBeatRunDump(t *testing.T) {
 		}
 		files = keep
 	}
+	// ⚠️ SESSION ID IS NOT IDENTITY. Two of the twelve real sessions in the previous sweep were
+	// the same conversation under two ids — byte-identical over all six of their beat windows and
+	// their measured records, a fork or resume that got a new id — so 12 sessions were 11
+	// conversations and two of the three generation failures were the same window counted twice.
+	// StratifiedTranscripts cannot see that (it selects on path and project), so the corpus is
+	// deduplicated here on the WINDOW CONTENT the sweep would actually show the model.
 	kept := 0
+	seenWindows := map[string]string{}
 	for _, f := range files {
 		if kept >= envInt("BEAT_RUN_SESSIONS", 12) {
 			break
@@ -94,9 +104,17 @@ func TestBeatRunDump(t *testing.T) {
 			t.Logf("held out of the corpus (a worked example was read from it): %s", filepath.Base(f))
 			continue
 		}
-		if ws, err := Mine(f, o); err != nil || len(ws) < 16 {
+		ws, err := Mine(f, o)
+		if err != nil || len(ws) < 16 {
 			continue
 		}
+		fp := windowFingerprint(ws)
+		if first, dup := seenWindows[fp]; dup {
+			t.Logf("deduplicated (same conversation as %s under a second id): %s",
+				first, filepath.Base(f))
+			continue
+		}
+		seenWindows[fp] = filepath.Base(f)
 		sources = append(sources, source{path: f, label: filepath.Base(f),
 			kind: "real transcript (engineering)"})
 		kept++
@@ -200,14 +218,21 @@ func TestBeatRunDump(t *testing.T) {
 					p.Ordinal = beats[len(beats)-1].Ordinal
 				}
 			}
+			// Recorded whatever the outcome: the subject rule now re-requests, so a run has to
+			// be able to say how many beats it re-requested as well as how many it still lost.
+			p.SubjectRejects = d.SubjectRejects
+			for _, e := range p.Unanchored {
+				p.Fabricated = append(p.Fabricated,
+					strings.Join(beatFabricatedSpecifics(e, p.Window, p.Record), ", "))
+			}
 			p.Attempts = l.Attempts() - before
 
 			t.Logf("  s%d i%d  window %d runes (prompt %d of %d) | %d attempt(s) err=%q | "+
-				"%d entries, %d unanchored, %d over cap, %d anchored only in the record, "+
-				"%d unverified identifier(s)",
+				"%d entries, %d dropped by the guard, %d over cap, %d subject re-request(s), "+
+				"%d checked only against the record, %d unverified identifier(s)",
 				sd.Index, idx, p.TotalRunes, p.PromptRunes, BeatPromptCharBudget, p.Attempts,
-				p.Err, len(p.Events), len(p.Unanchored), len(p.Overflowed), p.RecordOnlyAnchors(),
-				len(p.Unverified))
+				p.Err, len(p.Events), len(p.Unanchored), len(p.Overflowed), p.SubjectRejects,
+				p.RecordOnlyAnchors(), len(p.Unverified))
 			sd.Beats = append(sd.Beats, p)
 		}
 		sd.Record = rec.Block()
@@ -238,6 +263,25 @@ func TestBeatRunDump(t *testing.T) {
 		t.Log(line)
 	}
 	t.Logf("wrote %s", out)
+}
+
+// windowFingerprint identifies a session by what it would SHOW THE MODEL rather than by its id or
+// its path: every mined window's turns, roles included, in order. A fork or a resume writes a new
+// transcript under a new id whose windows are byte-identical to the original's, and counting that
+// twice inflates every figure the sweep reports — beats asked, entries offered, and, in the
+// previous run, two of the three generation failures.
+func windowFingerprint(ws []Window) string {
+	h := sha256.New()
+	for _, w := range ws {
+		for _, tn := range w.Turns {
+			io.WriteString(h, string(tn.Role))
+			io.WriteString(h, "\x1f")
+			io.WriteString(h, tn.Text)
+			io.WriteString(h, "\x00")
+		}
+		io.WriteString(h, "\x01")
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // envInt reads a positive integer from the environment, or returns def.
@@ -325,6 +369,10 @@ type beatRunPoint struct {
 	Subject    string   `json:"subject,omitempty"`
 	Events     []string `json:"events,omitempty"`
 	Unanchored []string `json:"unanchored,omitempty"`
+	// Fabricated names, per dropped entry, the specifics that occur in neither the window nor the
+	// record — the reason the guard dropped it. Printed beside the entry so a reader can check
+	// the decision rather than re-derive it.
+	Fabricated []string `json:"fabricated,omitempty"`
 	Overflowed []string `json:"overflowed,omitempty"`
 	// Anchors is where each kept entry was anchored. An entry anchored only in the RECORD is the
 	// seam signal: its antecedent fell on the other side of a window boundary.
@@ -333,8 +381,17 @@ type beatRunPoint struct {
 	// evidence. Recorded, never enforced.
 	Unverified      []string `json:"unverified,omitempty"`
 	SubjectAnchored bool     `json:"subject_anchored"`
-	Raw             string   `json:"raw,omitempty"`
-	Text            string   `json:"text,omitempty"`
+	// SubjectRejects counts the attempts this beat lost to the subject rule before the one that
+	// stood — the cost of enforcing it, which a run that only counted catches could not report.
+	SubjectRejects int    `json:"subject_rejects,omitempty"`
+	Raw            string `json:"raw,omitempty"`
+	Text           string `json:"text,omitempty"`
+}
+
+// FailedOnSubject reports a beat lost after the whole temperature ladder to the subject rule,
+// which is a different fact from a beat lost to any other rejection and is counted apart.
+func (p beatRunPoint) FailedOnSubject() bool {
+	return p.Err != "" && strings.Contains(p.Err, beatSubjectUnanchored)
 }
 
 // Failed reports a beat that produced no text, whether by error or by panic.

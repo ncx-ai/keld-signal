@@ -293,18 +293,23 @@ type BeatDraft struct {
 	// because enforcing it is how the 22.6% "unverified identifier" measurement happened.
 	Unverified []string `json:"unverified,omitempty"`
 	// SubjectAnchored records whether the subject line itself carries a term occurring in the
-	// evidence. Recorded, never enforced: dropping a subject would leave no beat, and the design
-	// only claims the guard for bullets.
+	// evidence. It is now ENFORCED, by re-request rather than by dropping — see generateBeat.
 	//
 	// ⚠️ IT IS THE ONLY MEASURE THAT CAUGHT INSTRUCTION COPYING, exactly. Over the 14-session
 	// rebalanced sweep three beats were near-verbatim copies of the prompt's own worked examples,
 	// and those three are precisely the three whose SUBJECT carried no term from the evidence —
-	// 3 of 3, no others. The per-entry anchoring guard caught none of them, and cannot: a copied
-	// entry still carries ordinary words the window contains, and anchoring is an OR over an
-	// entry's terms. Enforcing this (fail the beat, re-request at a wider temperature, rather
-	// than drop a line) is the obvious next move and is deliberately NOT taken here, because it
-	// would change what this run measured; it needs its own measured round.
+	// 3 of 3, no others, on a corpus of 69. That is what licenses enforcing it: a measure that
+	// fires on the defect and on nothing else.
+	//
+	// The term rule here is the WIDE one (beatAnchorIn: any term of four or more runes that is
+	// not a function word), deliberately kept as it was measured. It is too lenient to be a
+	// per-entry guard — that is why the entry guard was narrowed to specifics — but leniency is
+	// the right direction for a whole-beat rejection, and narrowing it would fail beats this
+	// measurement says nothing about.
 	SubjectAnchored bool `json:"subject_anchored"`
+	// SubjectRejects counts the attempts rejected for an unanchored subject, so a run can report
+	// what enforcement cost in re-requests rather than only what it caught.
+	SubjectRejects int `json:"subject_rejects,omitempty"`
 	// Raw is the model's own answer rendered before any dropping, so what the cap and the guard
 	// cost is visible rather than inferred.
 	Raw string `json:"raw"`
@@ -563,6 +568,7 @@ func (l *Llama) generateBeat(record, window string) (BeatDraft, error) {
 		Events  []string `json:"events"`
 	}
 	evidence := window + "\n" + record
+	var subjectRejects int
 	err := l.callValidSampled(BeatPrompt(record, window), BeatSchema(), &out, func() error {
 		d = BeatDraft{}
 		subject := strings.Join(strings.Fields(out.Subject), " ")
@@ -579,7 +585,15 @@ func (l *Llama) generateBeat(record, window string) (BeatDraft, error) {
 			return err
 		}
 		d.Subject, d.Raw = subject, renderBeat(subject, events, nil, nil)
-		d.SubjectAnchored = beatAnchorIn(subject, window, record).Term != ""
+		// ⚠️ AN UNANCHORED SUBJECT IS RE-REQUESTED, NOT STORED AND NOT DROPPED. It is the one
+		// measure that caught instruction copying — 3 of 3 near-verbatim copies of the prompt's
+		// worked examples, and no other beat of 69 — and the failure is a SAMPLING artifact, so a
+		// fresh sample at a wider temperature is the cheap and correct fix. Dropping is not
+		// available here the way it is for an entry: a beat without its subject is not a beat.
+		if d.SubjectAnchored = beatAnchorIn(subject, window, record).Term != ""; !d.SubjectAnchored {
+			subjectRejects++
+			return passProblem("beat", beatSubjectUnanchored+": "+strconv.Quote(subject))
+		}
 		anchored, unanchored, anchors := anchorBeatEvents(events, window, record)
 		if len(anchored) == 0 {
 			// Every entry dropped is not a drop, it is a generation in which every entry names
@@ -598,11 +612,20 @@ func (l *Llama) generateBeat(record, window string) (BeatDraft, error) {
 		}
 		return nil
 	}, beatSampling)
+	// Carried on the draft in both directions: a run has to be able to say how many beats the
+	// subject rule re-requested AND how many it still lost after the whole ladder, and the
+	// second of those is only visible on a draft returned beside an error.
+	d.SubjectRejects = subjectRejects
 	if err != nil {
 		return d, err
 	}
 	return d, nil
 }
+
+// beatSubjectUnanchored is the rejection text, named rather than spelled out at the site, so the
+// sweep can tell a residual subject failure from any other lost beat without matching prose that
+// might be reworded.
+const beatSubjectUnanchored = "the subject line carries no term occurring in the window or the record"
 
 // quoteAll renders a list for an error message, so a rejection names what it rejected.
 func quoteAll(v []string) []string {

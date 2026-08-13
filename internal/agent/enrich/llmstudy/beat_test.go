@@ -187,6 +187,57 @@ func TestGenerateBeatRetriesWhenNoEntryIsAnchored(t *testing.T) {
 	}
 }
 
+// ⚠️ AN UNANCHORED SUBJECT IS RE-REQUESTED ON THE TEMPERATURE LADDER, which is the enforcement
+// of the one measure that caught instruction copying exactly (3 of 3 near-verbatim copies of the
+// prompt's worked examples over a 69-beat sweep, and no other beat). Copying is a sampling
+// artifact, so a fresh sample is the fix; dropping is not available, since a beat without its
+// subject is not a beat.
+func TestGenerateBeatRetriesAnUnanchoredSubject(t *testing.T) {
+	l, n := beatServer(t,
+		beatAnswer{
+			// The shape observed: a subject copied out of the instructions, on a window that
+			// carries none of its words, with entries that still anchor on ordinary English.
+			Subject: "the daily-jar rewrite of seat_capex_split",
+			Events:  []string{"fa-register.csv was opened and read against the schedule"},
+		},
+		beatAnswer{
+			Subject: "the fixed-asset register review",
+			Events:  []string{"fa-register.csv was opened and read against the schedule"},
+		})
+	d, err := l.generateBeat("counts: turns=4\n", "user: open fa-register.csv and check it\n")
+	if err != nil {
+		t.Fatalf("generateBeat: %v", err)
+	}
+	if *n != 2 {
+		t.Errorf("an unanchored subject must be re-requested; attempts %d", *n)
+	}
+	if d.SubjectRejects != 1 {
+		t.Errorf("the re-request was not counted: %d", d.SubjectRejects)
+	}
+	if !d.SubjectAnchored || d.Subject != "the fixed-asset register review" {
+		t.Errorf("the stored beat kept the unanchored subject: %+v", d)
+	}
+}
+
+// And a subject that never anchors loses the beat, with the reason nameable: a run must be able
+// to report residual failures separately from every other way a beat can be lost.
+func TestGenerateBeatFailsWhenTheSubjectNeverAnchors(t *testing.T) {
+	l, _ := beatServer(t, beatAnswer{
+		Subject: "the daily-jar rewrite of seat_capex_split",
+		Events:  []string{"fa-register.csv was opened and read against the schedule"},
+	})
+	d, err := l.generateBeat("counts: turns=4\n", "user: open fa-register.csv and check it\n")
+	if err == nil {
+		t.Fatal("a subject that never anchors must lose the beat")
+	}
+	if !strings.Contains(err.Error(), beatSubjectUnanchored) {
+		t.Errorf("the failure does not name the rule that caused it: %v", err)
+	}
+	if d.SubjectRejects < 2 {
+		t.Errorf("every rejected attempt must be counted, got %d", d.SubjectRejects)
+	}
+}
+
 // The cap drops WHOLE entries and marks that too. Never a cut inside an entry: half an entry is
 // the mid-clause truncation AGENTS.md forbids, and the defect BeatCap was raised to fix.
 func TestGenerateBeatFitsTheCapByDroppingWholeEntries(t *testing.T) {
@@ -204,7 +255,7 @@ func TestGenerateBeatFitsTheCapByDroppingWholeEntries(t *testing.T) {
 	for i := 0; runeLen(renderBeat("the exporter run logs", events, nil, nil)) <= BeatCap; i++ {
 		events = append(events, long(i))
 	}
-	window := "user: check"
+	window := "user: check the exporter run logs:"
 	for i := range events {
 		window += " run-" + string(rune('a'+i)) + ".log"
 	}
