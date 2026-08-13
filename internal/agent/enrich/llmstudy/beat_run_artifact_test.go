@@ -214,6 +214,16 @@ func writeRunPoint(b *strings.Builder, s beatRunSession, p beatRunPoint) {
 		fmt.Fprintf(b, "Identifiers this beat names that occur nowhere in its evidence: `%s`. "+
 			"Recorded, not dropped.\n\n", strings.Join(p.Unverified, "`, `"))
 	}
+	if echoed := echoedExampleNames(p.Text); len(echoed) > 0 {
+		fmt.Fprintf(b, "⚠️ **This beat names %s from the prompt's own worked examples**, which "+
+			"belong to a held-out session and cannot have come from this window: `%s`. The "+
+			"anchoring guard does not catch it — the entry carrying it also carries an ordinary "+
+			"word that does occur in the window, and that is what it anchors on. It is visible "+
+			"at all only because the examples are held out of this corpus; against the "+
+			"contaminated set it would have read as a correct, anchored beat.\n\n",
+			map[bool]string{true: "a term", false: "terms"}[len(echoed) == 1],
+			strings.Join(echoed, "`, `"))
+	}
 	if len(p.Unanchored) > 0 {
 		fmt.Fprintf(b, "**Dropped by the anchoring guard (%d):** no term in these occurs "+
 			"verbatim in this window or the record.\n\n", len(p.Unanchored))
@@ -246,6 +256,8 @@ type runTally struct {
 	overflowBeats               int
 	subjectUnanchored           int
 	recordOnly                  int
+	exampleEcho                 int
+	exampleEchoBeats            int
 	unverified                  int
 	unverifiedBeats             int
 	promptRunes                 []int
@@ -314,6 +326,10 @@ func (r beatRun) tallyWhere(pred func(beatRunSession) bool) *runTally {
 				t.subjectUnanchored++
 			}
 			t.recordOnly += p.RecordOnlyAnchors()
+			if n := len(echoedExampleNames(p.Text)); n > 0 {
+				t.exampleEcho += n
+				t.exampleEchoBeats++
+			}
 			if n := len(p.Unverified); n > 0 {
 				t.unverified += n
 				t.unverifiedBeats++
@@ -347,6 +363,8 @@ func (t *runTally) lines() []string {
 			"%d of %d kept", t.recordOnly, offered-t.unanchoredEntries),
 		fmt.Sprintf("identifiers named that occur nowhere in the evidence: %d across %d of %d beats",
 			t.unverified, t.unverifiedBeats, t.generated),
+		fmt.Sprintf("names taken from the prompt's OWN worked examples: %d across %d of %d beats",
+			t.exampleEcho, t.exampleEchoBeats, t.generated),
 		fmt.Sprintf("turn coverage: %d of %d turns read by a window (%.1f%%), %d read by none; "+
 			"%d of %d windows hole-marked", t.keptTurns, t.spanTurns,
 			100*float64(t.keptTurns)/float64(max(1, t.spanTurns)), t.spanTurns-t.keptTurns,
@@ -407,6 +425,33 @@ func histogram(v []int) string {
 		parts = append(parts, fmt.Sprintf("%d x%d", k, n[k]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// echoedExampleNames returns the names a stored beat took from the prompt's own worked examples.
+//
+// ⚠️ THIS FACT ONLY EXISTS BECAUSE THE EXAMPLES ARE HELD OUT. Every example is read from a
+// session excluded from this corpus, and the hold-out test proves none of their names occurs in
+// any window or record here — so a beat carrying one cannot have read it, and instruction copying
+// becomes a measurable event rather than an unfalsifiable worry. Against the contaminated set it
+// was invisible by construction: an example drawn FROM the corpus supplies names the window also
+// has, and a copied beat reads as an anchored one.
+//
+// The anchoring guard does not and cannot catch this: an entry that copies an example still
+// carries ordinary words the window contains, and anchoring is an OR over the entry's terms.
+func echoedExampleNames(text string) []string {
+	hay := strings.ToLower(text)
+	var out []string
+	seen := map[string]bool{}
+	for _, ex := range beatExamples {
+		for _, name := range beatExampleNames(ex) {
+			k := strings.ToLower(name)
+			if !seen[k] && strings.Contains(hay, k) {
+				seen[k] = true
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
 
 func spread(v []int) string {

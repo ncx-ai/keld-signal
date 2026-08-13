@@ -33,6 +33,13 @@ const (
 	// a paragraph rather than a long sentence. The TOTAL is bounded where it can be bounded
 	// without losing the generation: fitBeatEvents drops whole trailing entries and MARKS the
 	// drop, so an over-long list costs one visible entry instead of the beat.
+	//
+	// ⚠️ IT STILL LOSES WHOLE BEATS ON REAL MATERIAL. Every one of the 3 generation failures over
+	// the rebalanced 14-session sweep was this bound, all 3 on real transcripts, all 3 after five
+	// ladder attempts: a 235-rune entry twice and a 219-rune entry once, each a single sentence
+	// that ran long rather than a paragraph. Raising the cap again would trade those beats for
+	// more entries dropped at BeatCap, which is the same content lost one step later — the fix is
+	// a shorter entry, which is a prompt question, not a constant.
 	beatEventMaxRunes = 200
 	// beatEventMaxCount bounds the list, and it is the SCHEMA's bound rather than a rule the
 	// prompt hopes for: a constrained decode cannot emit a fifth entry, so nothing is generated
@@ -40,8 +47,17 @@ const (
 	//
 	// Four is measured. At five, the first full sweep dropped 11 of 70 entries to BeatCap across
 	// 7 of 19 beats — real observed events, lost to a budget number after the model had already
-	// paid to write them. Four entries at the lengths that sweep produced fit the stored beat, so
-	// the cap becomes the backstop it was meant to be instead of the ordinary case.
+	// paid to write them.
+	//
+	// ⚠️ "FOUR ENTRIES FIT THE STORED BEAT" WAS TRUE OF THAT SWEEP AND IS FALSE OF REAL MATERIAL.
+	// That sweep was half hand-authored, where the entries are short. Over the rebalanced
+	// 14-session corpus the cap dropped 68 of 274 offered entries across 47 of 69 beats — on the
+	// 12 real transcripts alone, 67 of 248 across 46 of 62 — so on real sessions the cap is the
+	// ORDINARY case, not the backstop. It is arithmetic, not luck: four entries at
+	// beatEventMaxRunes plus a subject at its own cap is 880 runes against a 512-rune BeatCap, so
+	// the schema admits an answer that cannot be stored whole. The drop is at least whole-entry
+	// and marked. What moving either number would cost is measured in
+	// TestBeatCapTradesBeatsInTheReportRatherThanTrippingTheBackstop.
 	beatEventMaxCount = 4
 )
 

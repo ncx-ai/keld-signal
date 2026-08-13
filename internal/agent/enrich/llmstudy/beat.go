@@ -282,6 +282,15 @@ type BeatDraft struct {
 	// SubjectAnchored records whether the subject line itself carries a term occurring in the
 	// evidence. Recorded, never enforced: dropping a subject would leave no beat, and the design
 	// only claims the guard for bullets.
+	//
+	// ⚠️ IT IS THE ONLY MEASURE THAT CAUGHT INSTRUCTION COPYING, exactly. Over the 14-session
+	// rebalanced sweep three beats were near-verbatim copies of the prompt's own worked examples,
+	// and those three are precisely the three whose SUBJECT carried no term from the evidence —
+	// 3 of 3, no others. The per-entry anchoring guard caught none of them, and cannot: a copied
+	// entry still carries ordinary words the window contains, and anchoring is an OR over an
+	// entry's terms. Enforcing this (fail the beat, re-request at a wider temperature, rather
+	// than drop a line) is the obvious next move and is deliberately NOT taken here, because it
+	// would change what this run measured; it needs its own measured round.
 	SubjectAnchored bool `json:"subject_anchored"`
 	// Raw is the model's own answer rendered before any dropping, so what the cap and the guard
 	// cost is visible rather than inferred.
