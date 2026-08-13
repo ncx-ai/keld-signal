@@ -53,6 +53,17 @@ func TestBeatRunArtifact(t *testing.T) {
 	for _, line := range tl.lines() {
 		t.Log(line)
 	}
+	for _, split := range []struct {
+		name string
+		pred func(beatRunSession) bool
+	}{
+		{"REAL", func(s beatRunSession) bool { return !s.Synthetic }},
+		{"SYNTHETIC", func(s beatRunSession) bool { return s.Synthetic }},
+	} {
+		for _, line := range run.tallyWhere(split.pred).lines() {
+			t.Logf("%s  %s", split.name, line)
+		}
+	}
 }
 
 func writeRunHeader(b *strings.Builder, run beatRun) {
@@ -81,7 +92,28 @@ func writeRunHeader(b *strings.Builder, run beatRun) {
 		"representative %v. Commit `%s`.\n\n", run.CorpusRoot, run.DFSessions, run.DFTerms,
 		run.DFRepresentative, run.Commit)
 
-	b.WriteString("**The prompt is one template, shown once.** It is identical for every beat " +
+	var real, synth int
+	for _, s := range run.Sessions {
+		if s.Synthetic {
+			synth++
+		} else {
+			real++
+		}
+	}
+	fmt.Fprintf(b, "**Corpus: %d real transcripts and %d hand-authored sessions.** The real "+
+		"transcripts are the corpus; the two hand-authored non-engineering sessions are a "+
+		"labelled minority check, marked SYNTHETIC wherever they appear, and every figure below "+
+		"is reported for each population separately as well as together. They are kept because "+
+		"the pinned snapshot holds only Claude Code transcripts and they are the only "+
+		"non-engineering material there is.\n\n", real, synth)
+	b.WriteString("**The sessions the prompt's worked examples were read from are held out of " +
+		"this corpus**, and the separation is checked mechanically rather than asserted: no " +
+		"example's subject line, and no strong identifier or capitalised term any example uses, " +
+		"occurs anywhere in any of these sessions' windows or records. The examples are:\n\n")
+	for _, ex := range beatExamples {
+		fmt.Fprintf(b, "- `%s` — read from `%s`\n", ex.Subject, ex.Source)
+	}
+	b.WriteString("\n**The prompt is one template, shown once.** It is identical for every beat " +
 		"apart from the two inputs it embeds, which are shown per beat below; embedding it again " +
 		"under each would repeat every window twice. `{record}` and `{window}` mark where they go.\n\n")
 	fenced(b, promptTemplate(run))
@@ -224,9 +256,21 @@ type runTally struct {
 	beatRunes                   []int
 }
 
-func (r beatRun) tally() *runTally {
+// tally counts every session; tallyWhere counts the ones a predicate admits.
+//
+// ⚠️ THE SPLIT IS THE POINT. Real and synthetic sessions are different material — the synthetic
+// pair is short, clean and invented, the real transcripts carry pasted code, tool dumps,
+// interruptions and mid-task redirections — so a single figure over both describes neither. The
+// previous run's "19 of 19 on the first attempt" was 7 of those 19 beats from hand-authored
+// sessions, and nothing in the artifact said so.
+func (r beatRun) tally() *runTally { return r.tallyWhere(func(beatRunSession) bool { return true }) }
+
+func (r beatRun) tallyWhere(pred func(beatRunSession) bool) *runTally {
 	t := &runTally{}
 	for _, s := range r.Sessions {
+		if !pred(s) {
+			continue
+		}
 		t.sessions++
 		t.spanTurns += s.Coverage.SpanTurns
 		t.keptTurns += s.Coverage.KeptTurns
@@ -287,8 +331,10 @@ func (t *runTally) lines() []string {
 	return []string{
 		fmt.Sprintf("sessions %d; beats asked %d, generated %d, failed %d, recovered panics %d",
 			t.sessions, t.asked, t.generated, t.failed, t.panicked),
-		fmt.Sprintf("attempts per beat: %s; first attempt %d, more than one %d",
-			spread(t.attempts), t.firstAttempt, t.retried),
+		// The distribution, not just the spread: "first attempt every time" is the figure most
+		// likely to move on messier material, and a median cannot show one beat that took five.
+		fmt.Sprintf("attempts per beat: %s; distribution %s; first attempt %d, more than one %d",
+			spread(t.attempts), histogram(t.attempts), t.firstAttempt, t.retried),
 		fmt.Sprintf("entries per stored beat: %s; stored beat runes: %s",
 			spread(t.entries), spread(t.beatRunes)),
 		fmt.Sprintf("entries dropped by the anchoring guard: %d of %d offered, across %d of %d beats",
@@ -317,11 +363,50 @@ func writeRunTally(b *strings.Builder, run beatRun) {
 	for _, line := range run.tally().lines() {
 		b.WriteString("- " + line + "\n")
 	}
+	b.WriteString("\n## The same figures, real transcripts and synthetic sessions apart\n\n")
+	b.WriteString("The two hand-authored non-engineering sessions are short, clean and invented; " +
+		"the real transcripts carry pasted code, tool output, interruptions and mid-task " +
+		"redirections. A figure averaged over both describes neither, so both populations are " +
+		"counted separately here as well as together above.\n")
+	for _, split := range []struct {
+		name string
+		pred func(beatRunSession) bool
+	}{
+		{"Real transcripts", func(s beatRunSession) bool { return !s.Synthetic }},
+		{"Synthetic sessions", func(s beatRunSession) bool { return s.Synthetic }},
+	} {
+		fmt.Fprintf(b, "\n**%s**\n\n", split.name)
+		for _, line := range run.tallyWhere(split.pred).lines() {
+			b.WriteString("- " + line + "\n")
+		}
+	}
 	b.WriteString("\nHow to read the anchoring line: an entry is dropped when no term in it " +
 		"occurs verbatim in that beat's own window or in the measured record. It is a fact about " +
 		"a string's occurrence, not a judgement about the entry — see `beat_anchor.go` for what " +
 		"counts as a term. The subject line is measured the same way but never dropped, since " +
 		"dropping it would leave no beat.\n")
+}
+
+// histogram renders every observed value with its count, ascending: "1 attempt x63, 2 x4".
+// Counts, not a summary — the whole point of printing it is that a rare high value stays visible.
+func histogram(v []int) string {
+	if len(v) == 0 {
+		return "none"
+	}
+	n := map[int]int{}
+	keys := []int{}
+	for _, x := range v {
+		if n[x] == 0 {
+			keys = append(keys, x)
+		}
+		n[x]++
+	}
+	sort.Ints(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%d x%d", k, n[k]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func spread(v []int) string {

@@ -54,18 +54,25 @@ func TestBeatRunDump(t *testing.T) {
 	t.Logf("DOC FREQUENCY  %d sessions, %d distinct terms, representative=%v (root %s)",
 		df.sessions, len(df.count), df.representative(), corpusRoot())
 
-	// The two hand-authored non-engineering transcripts lead and are not counted against the
-	// corpus budget: the audience requirement is that a non-technical reader can follow the
-	// series, and an artifact of nothing but code sessions cannot support a judgement about it.
-	type source struct{ path, label, kind string }
-	var sources []source
-	for _, f := range []string{
-		"testdata/nontech/finance-close.jsonl",
-		"testdata/nontech/marketing-launch.jsonl",
-	} {
-		sources = append(sources, source{f, strings.TrimSuffix(filepath.Base(f), ".jsonl"),
-			"hand-authored non-engineering"})
+	// ⚠️ REAL TRANSCRIPTS ARE THE CORPUS; THE SYNTHETIC PAIR IS A LABELLED MINORITY CHECK.
+	//
+	// The run this replaces drew two of its four sessions from hand-authored non-engineering
+	// transcripts, so "19 of 19 generated on the first attempt" rested substantially on short,
+	// clean, invented material. The difficulty lives in the real sessions — long tool outputs,
+	// pasted code, interruptions, corrections, a user redirecting mid-task — and a figure that
+	// averages the two says nothing about either. So the real sessions lead and are the
+	// majority, the two hand-authored ones are kept and marked SYNTHETIC wherever they appear,
+	// and every figure is reported once for each population as well as overall.
+	//
+	// The synthetic pair is kept rather than dropped because the project owner's requirement is
+	// that this work for accountants and marketers as well as for codegen, and the pinned corpus
+	// holds only Claude Code transcripts. It is the only non-engineering check available — now
+	// as a control read against the real majority, not as half the evidence.
+	type source struct {
+		path, label, kind string
+		synthetic         bool
 	}
+	var sources []source
 	files := StratifiedTranscripts()
 	if me := ThisSessionTranscript(); me != "" {
 		keep := []string{me}
@@ -78,14 +85,29 @@ func TestBeatRunDump(t *testing.T) {
 	}
 	kept := 0
 	for _, f := range files {
-		if kept >= envInt("BEAT_RUN_SESSIONS", 2) {
+		if kept >= envInt("BEAT_RUN_SESSIONS", 12) {
 			break
+		}
+		// The sessions the prompt's worked examples were read from are held out, so no beat is
+		// scored on material the model was shown an answer for. See beatExamples.
+		if beatHeldOutSessions[filepath.Base(f)] {
+			t.Logf("held out of the corpus (a worked example was read from it): %s", filepath.Base(f))
+			continue
 		}
 		if ws, err := Mine(f, o); err != nil || len(ws) < 16 {
 			continue
 		}
-		sources = append(sources, source{f, filepath.Base(f), "corpus (engineering)"})
+		sources = append(sources, source{path: f, label: filepath.Base(f),
+			kind: "real transcript (engineering)"})
 		kept++
+	}
+	for _, f := range []string{
+		"testdata/nontech/finance-close.jsonl",
+		"testdata/nontech/marketing-launch.jsonl",
+	} {
+		sources = append(sources, source{path: f,
+			label: strings.TrimSuffix(filepath.Base(f), ".jsonl"),
+			kind:  "SYNTHETIC — hand-authored non-engineering", synthetic: true})
 	}
 
 	run := beatRun{
@@ -113,7 +135,7 @@ func TestBeatRunDump(t *testing.T) {
 			continue
 		}
 		project := strings.TrimSuffix(filepath.Base(src.path), ".jsonl")
-		if src.kind != "hand-authored non-engineering" {
+		if !src.synthetic {
 			project = RepoFromTranscriptPath(src.path)
 		}
 		last := lastWindow
@@ -122,7 +144,7 @@ func TestBeatRunDump(t *testing.T) {
 		}
 		sd := beatRunSession{
 			Index: si + 1, Label: src.label, Path: src.path, Project: project,
-			Kind: src.kind, Windows: len(ws), WalkedTo: last,
+			Kind: src.kind, Synthetic: src.synthetic, Windows: len(ws), WalkedTo: last,
 		}
 		t.Logf("SESSION %d  %s  (%s, %d windows, walking to %d, project %s)\n    %s",
 			sd.Index, sd.Label, sd.Kind, sd.Windows, last, sd.Project, sd.Path)
@@ -252,16 +274,19 @@ type beatRun struct {
 }
 
 type beatRunSession struct {
-	Index    int             `json:"index"`
-	Label    string          `json:"label"`
-	Path     string          `json:"path"`
-	Project  string          `json:"project"`
-	Kind     string          `json:"kind"`
-	Windows  int             `json:"windows"`
-	WalkedTo int             `json:"walked_to"`
-	Record   string          `json:"record"`
-	Coverage beatRunCoverage `json:"coverage"`
-	Beats    []beatRunPoint  `json:"beats"`
+	Index   int    `json:"index"`
+	Label   string `json:"label"`
+	Path    string `json:"path"`
+	Project string `json:"project"`
+	Kind    string `json:"kind"`
+	// Synthetic marks a hand-authored session. It rides every session so no figure taken from
+	// this dump can mix invented material into a real one without saying so.
+	Synthetic bool            `json:"synthetic"`
+	Windows   int             `json:"windows"`
+	WalkedTo  int             `json:"walked_to"`
+	Record    string          `json:"record"`
+	Coverage  beatRunCoverage `json:"coverage"`
+	Beats     []beatRunPoint  `json:"beats"`
 }
 
 // beatRunCoverage is the geometry's own figures, which are properties of the SEQUENCE of windows
