@@ -151,7 +151,7 @@ func TestGenerateBeatDropsAnUnanchoredEntryAndMarksIt(t *testing.T) {
 	if len(d.Unanchored) != 1 || !strings.Contains(d.Unanchored[0], "Ganymede") {
 		t.Errorf("the unanchored entry was not recorded: %v", d.Unanchored)
 	}
-	if !strings.Contains(d.Text, "1 entry dropped: no term in it occurs") {
+	if !strings.Contains(d.Text, "1 entry dropped: it names something that occurs nowhere") {
 		t.Errorf("the drop is not marked in the stored beat:\n%s", d.Text)
 	}
 	if strings.Contains(d.Text, "Ganymede") {

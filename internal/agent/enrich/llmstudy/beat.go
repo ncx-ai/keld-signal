@@ -277,9 +277,10 @@ func BeatSchema() map[string]any {
 type BeatDraft struct {
 	Subject string   `json:"subject"`
 	Events  []string `json:"events"`
-	// Unanchored are the entries dropped because no term in them occurs in the window or the
-	// record. Recorded, always, and rendered into Text as a marker: a guard that drops silently
-	// is how T1 reported 100% while discarding 5 of 20 digests.
+	// Unanchored are the entries dropped because a SPECIFIC they name — an identifier, a number,
+	// a proper noun — occurs in neither the window nor the record. Recorded, always, and rendered
+	// into Text as a marker: a guard that drops silently is how T1 reported 100% while discarding
+	// 5 of 20 digests.
 	Unanchored []string `json:"unanchored,omitempty"`
 	// Overflowed are the entries dropped to fit BeatCap, newest-last order preserved.
 	Overflowed []string `json:"overflowed,omitempty"`
@@ -346,7 +347,8 @@ func renderBeat(subject string, events, unanchored, overflowed []string) string 
 // claim nothing in the evidence carries" are different things to a reader.
 func beatUnanchoredNotice(n int) string {
 	return "[" + strconv.Itoa(n) + " " + plural(n, "entry", "entries") +
-		" dropped: no term in it occurs in this window or the record]\n"
+		" dropped: " + plural(n, "it names", "they name") +
+		" something that occurs nowhere in this window or the record]\n"
 }
 
 func beatOverflowNotice(n int) string {
@@ -580,11 +582,11 @@ func (l *Llama) generateBeat(record, window string) (BeatDraft, error) {
 		d.SubjectAnchored = beatAnchorIn(subject, window, record).Term != ""
 		anchored, unanchored, anchors := anchorBeatEvents(events, window, record)
 		if len(anchored) == 0 {
-			// Every entry unanchored is not a drop, it is a generation with nothing in it that
-			// the window or the record carries — the one case where losing the beat is the
+			// Every entry dropped is not a drop, it is a generation in which every entry names
+			// something the evidence does not carry — the one case where losing the beat is the
 			// honest outcome. Re-requested at a wider temperature like any other rejection.
-			return passProblem("beat", "no entry carries a term occurring in the window or "+
-				"the record: "+strings.Join(quoteAll(unanchored), "; "))
+			return passProblem("beat", "every entry names something occurring in neither the "+
+				"window nor the record: "+strings.Join(quoteAll(unanchored), "; "))
 		}
 		kept, overflowed := fitBeatEvents(subject, anchored, unanchored, BeatCap)
 		d.Events, d.Unanchored, d.Overflowed, d.Anchors = kept, unanchored, overflowed, anchors[:len(kept)]

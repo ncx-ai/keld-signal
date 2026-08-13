@@ -112,11 +112,39 @@ material there is, **all three are engineering sessions**. Whether a non-technic
 gets a legible beat is therefore something the run *measures* rather than something the prompt
 steers, which is what the synthetic pair is now for.
 
-## The guard: verbatim anchoring
+## The guard: verbatim anchoring, narrowed to specifics
 
-Every bullet must contain at least one term appearing **verbatim in its own window or in the
-measured record**. This is substring presence — a fact, not a heuristic encoding a judgement, and
-it is the standard the project owner set: reliable, not string matching that pretends to judge.
+**"At least one term" is retired: it fired 0 times across two sweeps, 0 of 274 entries.** Any token
+of four or more runes that was not a function word qualified, which made it close to
+unfalsifiable — its own artifact shows it accepting **`each`** as an anchor on a beat that was a
+near-verbatim copy of the prompt's worked examples. That is the ninth check on this branch whose
+vocabulary turned out to be ordinary English.
+
+The guard reads **fabricated specifics** instead:
+
+- a **specific** is an identifier-shaped token (path, filename, dotted or snake_case name, flag,
+  symbol, anything carrying a digit or an internal capital), a number or an amount, or a proper
+  noun capitalised somewhere other than the start of its sentence;
+- **every specific in an entry must occur in that entry's own window or in the measured record** —
+  not one of them, because a bullet carrying two specifics of which one is invented is a
+  fabrication and an OR passes it on the other;
+- **an entry carrying no specifics is unconstrained and passes.** It cannot fabricate a specific it
+  does not have, and dropping it would be dropping ordinary English.
+
+Matching is case-insensitive, folds simple plurals and possessives, and is substring — every one of
+those is a mistake this branch has already paid for (`KPIs` scored against a window holding `KPI`).
+A `/`-joined token whose every part is in the evidence counts as present: the tokeniser keeps `/`
+attached because that is what makes `app/main.py` one name, but a model also writes `/` as prose
+punctuation, and on real material that produced 5 of 17 candidate drops (`installer/JSON`,
+`start/callback`, `telemetry.py/_event_values`, `forest/amber`, `NULL/empty`).
+
+**Not the DF gate**, measured rather than preferred: document frequency would drop *"the export came
+back empty for that date range"* while anchoring a bare-verb bullet.
+
+Replayed over the previous sweep's 274 real entries the narrowed rule drops **12**, of which 9 are
+the instruction-copying entries the old guard passed — the failure it could not catch by
+construction. This is substring presence over a defined vocabulary: a fact, not a heuristic
+encoding a judgement, and it is the standard the project owner set.
 
 A bullet that fails is **dropped, and the drop is marked** (`AGENTS.md`: dropping must be
 visible). The beat is not failed — one unanchored bullet is not a reason to lose the rest.

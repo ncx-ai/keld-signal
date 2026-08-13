@@ -3,10 +3,12 @@ package llmstudy
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
-// Verbatim anchoring: every entry in a beat must carry at least one TERM that occurs, verbatim,
-// in that beat's own window or in the measured record.
+// Verbatim anchoring: every SPECIFIC an entry names must occur, verbatim, in that entry's own
+// window or in the measured record. (The "at least one term of any kind" form of this rule is
+// retired — it fired 0 of 274 and accepted `each` as an anchor; see the narrowing below.)
 //
 // ⚠️ THIS IS A FACT TEST, NOT A JUDGEMENT. Substring presence is checkable and cannot be wrong
 // about what it measured; it is the standard set after four metrics on this branch turned out to
@@ -88,6 +90,12 @@ type BeatAnchor struct {
 	// InWindow is true when the term occurs in the beat's own window. When it is false and Term
 	// is non-empty, the entry is anchored ONLY in the measured record — the seam signal.
 	InWindow bool `json:"in_window"`
+	// Specifics is how many specifics the entry carried. Zero says the entry is UNCONSTRAINED —
+	// it named nothing that could be checked, so it passed without being evidence of anything.
+	// Reported rather than folded into Term, because "kept because everything it named is in the
+	// evidence" and "kept because it named nothing" are different facts about a beat, and a
+	// reader counting the second one is counting how often the guard had nothing to say.
+	Specifics int `json:"specifics"`
 }
 
 // beatAnchorIn returns where s is anchored, given its window and the measured record. The window
@@ -182,22 +190,189 @@ func beatAnchorTerms(s string) []string {
 	return append(strong, plain...)
 }
 
-// anchorBeatEvents splits a beat's entries into the anchored and the unanchored, and reports
-// where each survivor was anchored.
+// ⚠️ THE PER-ENTRY GUARD IS NARROWED TO SPECIFICS, BECAUSE "AT LEAST ONE TERM" WAS UNFALSIFIABLE.
+//
+// The rule above — one token of four or more runes that is not a function word — fired 0 times
+// across two sweeps, 0 of 274 entries. Its own artifact shows why: it accepted `each` as an
+// anchor, on a beat that was a near-verbatim copy of the prompt's worked examples. Practically
+// every English sentence carries a four-rune non-function word that a 16,000-rune window also
+// carries, so the guard could be satisfied without the entry saying anything the evidence says.
+// That is the ninth check on this branch whose vocabulary turned out to be ordinary English.
+//
+// What it was for is FABRICATED SPECIFICS, so specifics are what it now reads:
+//
+//   - a SPECIFIC is an identifier-shaped token (path, filename, dotted or snake_case name, flag,
+//     symbol, anything carrying a digit or an internal capital), a number or an amount, or a
+//     proper noun that is capitalised somewhere other than the start of its sentence;
+//   - EVERY specific in an entry must occur in that entry's own window or in the measured record.
+//     Not "at least one": an entry carrying two specifics of which one is invented is a
+//     fabrication, and an OR would pass it on the other one;
+//   - an entry carrying NO specifics is UNCONSTRAINED and passes. It cannot fabricate a specific
+//     it does not have, and dropping it would be dropping ordinary English — which is the
+//     mistake this branch has now made eight times.
+//
+// ⚠️ IT IS NOT THE DF GATE, and that is measured rather than preferred — see the table above:
+// document frequency would drop "the export came back empty for that date range", every noun of
+// which is in the window, while anchoring "the issue was discussed and identified" on a bare verb.
+//
+// The normalisation is the other half of the rule, and every part of it is a mistake this study
+// has already paid for: matching is case-insensitive (a beat writing "Atlas" about a window that
+// wrote "atlas" has named the thing), simple plurals and possessives are folded (scoring "KPIs"
+// against a window holding "KPI" as a fabrication is exactly the 22.6% failure), punctuation at a
+// term's ends is trimmed, and occurrence is SUBSTRING so a morphological variant still counts.
+// The tokenisation is subjectTokens', which keeps '/', '.', '_' and '-' attached — identifierPat
+// splits those, and a rule that reads "app/main.py" as "app" and "main.py" measures fragments.
+
+// beatSpecifics returns the checkable specifics an entry names, in order and deduplicated.
+func beatSpecifics(s string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range subjectTokenSpans(s) {
+		t, ok := specificAt(s, m)
+		if !ok {
+			continue
+		}
+		k := strings.ToLower(t)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, t)
+	}
+	return out
+}
+
+// specificAt decides whether the token at span m is a specific, and returns its trimmed spelling.
+//
+// The three routes are the three shapes a fabrication takes. strongIdentifier covers the first
+// (paths, dotted filenames, snake_case, internal capitals, anything with a digit) and is used
+// unchanged, because it is the package's narrow rule and the one that does not flag English. A
+// letterless token carrying a digit is the second — "1,650.55", "15/15", "0.22" — and it is
+// separated out only because containsLetter would otherwise exclude it. The third is the
+// position-aware proper noun: a capital mid-sentence is a name, the same capital at a sentence
+// start is English, which is the distinction the 22.6% over-detection lacked. An ordinary
+// hyphenated compound is excluded for the same reason it is in Identifiers.
+func specificAt(s string, m [2]int) (string, bool) {
+	tok := trimTermPunct(s[m[0]:m[1]])
+	if tok == "" || stopWord(tok) {
+		return "", false
+	}
+	if !containsLetter(tok) {
+		return tok, hasDigit(tok)
+	}
+	if strongIdentifier(tok) {
+		return tok, true
+	}
+	r := []rune(tok)
+	if len(r) >= specificProperNounMinRunes && unicode.IsUpper(r[0]) &&
+		!sentenceInitial(s, m[0]) && !strings.Contains(tok, "-") {
+		return tok, true
+	}
+	return "", false
+}
+
+// specificProperNounMinRunes keeps two-letter capitals out of the proper-noun route. `UI` was one
+// of the two noise terms the unverified-identifier measure produced over 19 beats, and the same
+// token would be flagged here for the same reason.
+const specificProperNounMinRunes = 3
+
+func hasDigit(s string) bool {
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+// specificPresent reports whether a specific occurs in the evidence, normalised.
+//
+// Case-insensitive substring, then the plural/possessive fold. inflectionPresent is the package's
+// existing rule for exactly this (see its doc: a transcript saying "KPI" and a report saying
+// "KPIs" is not a fabrication), reused rather than reimplemented so the two measures cannot drift
+// into disagreeing about what a plural is.
+// ⚠️ A '/'-JOINED TOKEN WHOSE EVERY PART IS IN THE EVIDENCE IS NOT A FABRICATION. The tokeniser
+// keeps '/' attached because that is what makes "app/main.py" one name — but a model also writes
+// '/' as prose punctuation, and on the last sweep's real material that produced FIVE of the
+// seventeen entries this rule would otherwise have dropped: `installer/JSON`, `start/callback`,
+// `telemetry.py/_event_values`, `forest/amber`, `NULL/empty`. Every part of each is in its own
+// window; only the joining is the model's. That is the same defect as scoring a plural a
+// fabrication, one level up, so the parts are checked when the whole is absent. It is the lenient
+// direction and it costs something real: an invented path every component of which appears
+// separately now passes. The failure this guard exists to catch is a name from nowhere.
+func specificPresent(term, hay string) bool {
+	k := strings.ToLower(term)
+	if strings.Contains(hay, k) {
+		return true
+	}
+	if inflectionPresent(k, term, hay) {
+		return true
+	}
+	parts := strings.Split(k, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	var checked int
+	for _, p := range parts {
+		if runeLen(p) < 2 {
+			continue
+		}
+		if !strings.Contains(hay, p) && !inflectionPresent(p, p, hay) {
+			return false
+		}
+		checked++
+	}
+	return checked > 0
+}
+
+// anchorBeatEvents splits a beat's entries into the kept and the dropped, and reports what each
+// survivor was checked on.
 //
 // A guard whose decision cannot be checked is a guard nobody can audit, so the term is returned
 // rather than discarded: the sweep prints it, and a reader can see that an entry survived on
 // "fa-register.csv" and not on "the".
 func anchorBeatEvents(events []string, window, record string) (kept, dropped []string, anchors []BeatAnchor) {
+	win, rec := strings.ToLower(windowEvidence(window)), strings.ToLower(recordEvidence(record))
 	for _, e := range events {
-		if a := beatAnchorIn(e, window, record); a.Term != "" {
-			kept = append(kept, e)
-			anchors = append(anchors, a)
+		specifics := beatSpecifics(e)
+		a := BeatAnchor{Specifics: len(specifics)}
+		var fabricated bool
+		for _, t := range specifics {
+			switch {
+			case specificPresent(t, win):
+				if a.Term == "" || !a.InWindow {
+					a.Term, a.InWindow = t, true
+				}
+			case specificPresent(t, rec):
+				if a.Term == "" {
+					a.Term = t
+				}
+			default:
+				fabricated = true
+			}
+		}
+		if fabricated {
+			dropped = append(dropped, e)
 			continue
 		}
-		dropped = append(dropped, e)
+		kept = append(kept, e)
+		anchors = append(anchors, a)
 	}
 	return kept, dropped, anchors
+}
+
+// beatFabricatedSpecifics returns the specifics of an entry that occur in neither the window nor
+// the record — what anchorBeatEvents dropped it for, so the sweep can print the reason beside the
+// entry rather than leaving a reader to re-derive it.
+func beatFabricatedSpecifics(entry, window, record string) []string {
+	win, rec := strings.ToLower(windowEvidence(window)), strings.ToLower(recordEvidence(record))
+	var out []string
+	for _, t := range beatSpecifics(entry) {
+		if !specificPresent(t, win) && !specificPresent(t, rec) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // unverifiedSpecifics returns the strong IDENTIFIERS a beat uses that do not occur in the

@@ -107,6 +107,90 @@ func TestBeatAnchorTermsReportStrongIdentifiersFirst(t *testing.T) {
 	}
 }
 
+// ⚠️ THE GUARD READS SPECIFICS, AND THESE ARE THE CASES THAT DECIDE WHETHER IT MEANS ANYTHING.
+// The rule it replaces accepted `each` as an anchor and fired 0 of 274 entries over two sweeps.
+// Every case below was read off the last sweep's real entries before it was written down: the
+// drops are the shapes it caught, and the passes are the shapes it must not start catching.
+func TestBeatGuardDropsFabricatedSpecificsAndNothingElse(t *testing.T) {
+	const window = "user: open fa-register.csv and check it against the depreciation schedule\n" +
+		"assistant: I read app/main.py, reran the exporter for 1,650.55, and it came back empty " +
+		"for that date range; the KPI board and the installer both use telemetry.py and " +
+		"_event_values, and the Northwind provision was applied\n"
+	cases := []struct {
+		name  string
+		entry string
+		drop  bool
+	}{
+		// The failure it exists for: a name from nowhere, in an entry otherwise full of
+		// ordinary English the window does carry. This is the shape of instruction copying —
+		// 9 of the 12 entries it flagged on the last sweep's material were exactly this, on
+		// identifiers belonging to the prompt's held-out worked examples.
+		{"a fabricated identifier", "seat_capex_split was rewritten to settle each closed day", true},
+		{"a fabricated constant", "the approach was gated on KELD_ENRICH_INGEST_MODE", true},
+		{"a fabricated proper noun", "the Ganymede migration was signed off", true},
+		// ⚠️ EVERY specific must hold, not one of them: an entry carrying a real name beside an
+		// invented one is a fabrication, and an OR over its terms passes it on the real one.
+		{"one real name and one invented", "fa-register.csv was reconciled against Ganymede", true},
+		// An entry naming nothing checkable is UNCONSTRAINED and passes. It cannot fabricate a
+		// specific it does not have, and dropping it would be dropping ordinary English — which
+		// is the mistake every retired measure on this branch made.
+		{"no specifics at all", "the export came back empty for that date range", false},
+		{"ordinary verbs only", "the change was discussed and left open", false},
+		{"named in the window", "app/main.py was read end to end", false},
+		{"an amount from the window", "1,650.55 was posted to the register", false},
+		{"case differs", "FA-Register.csv was opened", false},
+		{"a plural of a name the window has", "the KPIs were rechecked", false},
+		{"a possessive", "app/main.py's exporter was rerun", false},
+		// The '/' the tokeniser keeps attached is also prose punctuation. Five of seventeen
+		// flags on real material were this, every part in the window and only the joining the
+		// model's.
+		{"a slash compound of window words", "telemetry.py/_event_values sets the row", false},
+	}
+	for _, c := range cases {
+		kept, dropped, _ := anchorBeatEvents([]string{c.entry}, window, "counts: turns=4\n")
+		if got := len(dropped) == 1; got != c.drop {
+			t.Errorf("%s: dropped=%v want %v for %q (specifics %v, missing %v)",
+				c.name, got, c.drop, c.entry, beatSpecifics(c.entry),
+				beatFabricatedSpecifics(c.entry, window, "counts: turns=4\n"))
+		}
+		if !c.drop && len(kept) != 1 {
+			t.Errorf("%s: %q was not kept", c.name, c.entry)
+		}
+	}
+}
+
+// An entry that names nothing is reported as such rather than as anchored, because "kept because
+// everything it names is in the evidence" and "kept because it names nothing" are different facts
+// and a run that cannot tell them apart cannot say what the guard measured.
+func TestUnconstrainedEntriesAreCountedSeparately(t *testing.T) {
+	_, _, anchors := anchorBeatEvents([]string{
+		"the change was discussed and left open",
+		"app/main.py was read",
+	}, "assistant: read app/main.py\n", "")
+	if len(anchors) != 2 {
+		t.Fatalf("want an anchor per kept entry, got %v", anchors)
+	}
+	if anchors[0].Specifics != 0 || anchors[0].Term != "" {
+		t.Errorf("an entry naming nothing must be reported unconstrained: %+v", anchors[0])
+	}
+	if anchors[1].Specifics != 1 || !anchors[1].InWindow || anchors[1].Term != "app/main.py" {
+		t.Errorf("a checked entry must name what it was checked on: %+v", anchors[1])
+	}
+}
+
+// The seam signal survives the narrowing: an entry whose specifics are in the RECORD but not in
+// its own window is the signature of an event whose antecedent fell the other side of a boundary.
+func TestGuardReportsAnEntryCheckedOnlyAgainstTheRecord(t *testing.T) {
+	_, dropped, anchors := anchorBeatEvents([]string{"fa-register.csv was reconciled"},
+		"user: rerun the exporter\n", "recurring subjects: fa-register.csv, depreciation\n")
+	if len(dropped) != 0 || len(anchors) != 1 {
+		t.Fatalf("dropped %v anchors %v", dropped, anchors)
+	}
+	if anchors[0].InWindow || anchors[0].Term != "fa-register.csv" {
+		t.Errorf("an entry checked only against the record must be reported as such: %+v", anchors[0])
+	}
+}
+
 // The split is per entry, and it reports which term each survivor was anchored by.
 func TestAnchorBeatEventsSplitsPerEntry(t *testing.T) {
 	const window = "user: open fa-register.csv\nassistant: read app/main.py\n"
