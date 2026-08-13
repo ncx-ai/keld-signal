@@ -84,11 +84,21 @@ from a twelve-session corpus is impossible, and measures on this branch that rea
 English have all measured English. What contaminates a run is a **name** shared between the
 instructions and the material, because a name is what the anchoring guard would then accept.
 
+The hold-out earns something beyond hygiene: it makes **instruction copying measurable**. Because
+no example name occurs in any window, a beat carrying one cannot have read it. The first
+rebalanced sweep found three such beats — near-verbatim copies of the worked examples, on windows
+whose subject matter is itself prompt work — which the per-entry anchoring guard passed, and could
+only pass, since a copied entry still carries ordinary words the window contains. Against an
+example drawn from the corpus that beat would have read as correctly anchored. The artifact now
+counts it.
+
 **2. The eval corpus is real-majority.** The first sweep ran four sessions, two of them
 hand-authored, so its headline figures rested substantially on short, clean, invented material.
 The difficulty is in the real transcripts — long tool outputs, pasted code, interruptions,
 corrections, a user redirecting mid-task — and a figure averaged over both populations describes
-neither. Twelve real transcripts is the floor.
+neither. Twelve real transcripts is the floor. Session **id** is not identity, either: two of the first
+twelve selected turned out to be the same conversation under two ids (byte-identical windows and
+records), so a later sweep should dedupe on window content.
 
 **3. Synthetic sessions are a labelled minority check.** `finance-close` and `marketing-launch`
 stay, because the requirement is that this works for accountants and marketers as well as for
