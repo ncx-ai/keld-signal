@@ -46,6 +46,15 @@ type Item struct {
 	// produced the document. Recorded, never recomputed here: it is one of the
 	// judgement-class heuristics under comparison.
 	MarkedSubjectChanged bool
+	// Population is "real" or "synthetic" in the production-beat corpus and empty in the
+	// fused-prompt corpus, which had no such split. Provenance: a reviewer told an item is
+	// hand-authored reviews it differently, so it reaches the answer key only.
+	Population string
+	// DroppedEntries are the entries the anchoring guard removed from this beat before it was
+	// stored, as the document prints them. Provenance for the same reason
+	// MarkedSubjectChanged is: it is a mechanism's verdict on this item, and showing it would
+	// ask a reviewer to agree with it.
+	DroppedEntries []string
 
 	Record string // the measured record block, verbatim
 	Window string // the conversation window, verbatim
