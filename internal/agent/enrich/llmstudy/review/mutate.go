@@ -109,7 +109,20 @@ var completionWords = []string{
 //  6. the result stays within a length band of the genuine output and still ends at a
 //     sentence boundary — a planted item that is visibly longer, or that trails off
 //     mid-clause, is caught for its shape rather than its content.
-func Apply(c Corpus, m Mutation) (Planted, error) {
+func Apply(c Corpus, m Mutation) (Planted, error) { return applyMutation(c, m, checkRegister) }
+
+// ApplyProd plants a mutation into a PRODUCTION beat: the same verifications, with the register
+// rule that fits a subject line plus bullets rather than prose (see checkProdRegister). Everything
+// else about a plant — one defect per item, cut from a real output, absence verified against the
+// item's own evidence — is identical, because the calibration set is only worth anything if the two
+// rounds plant the same way.
+func ApplyProd(c Corpus, m Mutation) (Planted, error) { return applyMutation(c, m, checkProdRegister) }
+
+// register is the shape check a mutated statement must pass. It differs between the two output
+// shapes and nothing else does.
+type register func(id, before, after string) error
+
+func applyMutation(c Corpus, m Mutation, reg register) (Planted, error) {
 	src, err := c.Find(m.Session, m.Ordinal)
 	if err != nil {
 		return Planted{}, fmt.Errorf("mutation %s: %w", m.ID, err)
@@ -175,7 +188,7 @@ func Apply(c Corpus, m Mutation) (Planted, error) {
 	}
 
 	out := strings.Replace(src.Output, m.Original, m.Replacement, 1)
-	if err := checkRegister(m.ID, src.Output, out); err != nil {
+	if err := reg(m.ID, src.Output, out); err != nil {
 		return Planted{}, err
 	}
 
