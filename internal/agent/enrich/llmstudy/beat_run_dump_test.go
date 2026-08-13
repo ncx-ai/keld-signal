@@ -418,12 +418,18 @@ func (p beatRunPoint) FailedOnSubject() bool {
 // Failed reports a beat that produced no text, whether by error or by panic.
 func (p beatRunPoint) Failed() bool { return p.Panicked || p.Err != "" }
 
-// RecordOnlyAnchors counts the entries anchored in the measured record and NOT in this beat's own
-// window — the seam signal, and the one figure that says what dropping window overlap cost.
+// RecordOnlyAnchors counts the entries checked against the measured record and NOT against this
+// beat's own window — the seam signal, and the one figure that says what dropping window overlap
+// cost.
+//
+// ⚠️ ONLY ENTRIES THAT NAME SOMETHING COUNT. An entry naming no specific is unconstrained: it was
+// checked against neither side, and reading its InWindow=false as "anchored in the record" turns
+// the seam signal into a second copy of the unconstrained count — measured, both read 76 of 268
+// on the first run of this tally, which is how the confusion was caught.
 func (p beatRunPoint) RecordOnlyAnchors() int {
 	var n int
 	for _, a := range p.Anchors {
-		if !a.InWindow {
+		if a.Specifics > 0 && !a.InWindow {
 			n++
 		}
 	}

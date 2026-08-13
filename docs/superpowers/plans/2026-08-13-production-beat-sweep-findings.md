@@ -1,171 +1,180 @@
-# The production beat, re-measured on a real-majority corpus
+# The production beat, re-measured after the cap, the guard and the subject rule
 
-The first production sweep is **retracted**, not compared against. Its worked examples were
-invented out of a session that was itself in the eval corpus, and half its corpus was
-hand-authored, so neither its figures nor its zero-firings guard mean anything. This run replaces
-it: the artifact at `docs/qwen-beat-inputs-and-outputs.md` and the dump at `beat-run.json` are
-overwritten, not set beside it.
+This **replaces** the sweep of the same name, which is retracted along with the one before it. It
+measures three changes made because that run measured their absence:
 
-**Nothing here judges the output.** A blind round scores it against a metric this document does
-not own. Every figure below is a count over the run's own observations, and each was read against
-the items behind it before it was written down.
+1. **the beat cap now holds the answer the prompt asks for** (`BeatCap` 512 → 892) — the previous
+   run discarded 68 of 274 offered entries (25%) across 47 of 69 beats;
+2. **the anchoring guard reads specifics rather than any four-rune word** — the previous rule fired
+   0 times across two sweeps and accepted `each` as an anchor;
+3. **`SubjectAnchored` is enforced** by re-request rather than recorded — it flagged the three
+   instruction-copying beats and nothing else.
+
+The corpus is also deduplicated on window content, so 12 real sessions are 12 distinct
+conversations rather than 11.
+
+**Nothing here judges the output.** A blind round scores it against a metric this document does not
+own. Every figure below is a count over the run's own observations, and each was read against the
+items behind it before it was written down.
 
 ⚠️ **No latency or RAM figure appears anywhere.** The server ran `--threads 18` without
-`--no-repack`, which is not the viability configuration, so any resource number taken from this
-run would misrepresent the case. That question needs its own run at the viability flags.
+`--no-repack`, which is not the viability configuration, so any resource number taken from this run
+would misrepresent the case. That question needs its own run at the viability flags.
 
-## The worked examples, and how the hold-out was verified
+## Corpus
 
-All three are read from real transcripts that are **excluded from the corpus** (`beatHeldOutSessions`):
+12 real transcripts (keld-atlas 8, keld-signal 3, keld-cli 1), 65 beat windows; 2 hand-authored
+sessions, 7 beat windows. The worked examples' three sessions remain held out, verified mechanically
+against the corpus the sweep actually selects (`TestBeatExamplesAreHeldOut`, 14 sessions, 856,997
+runes of window and record evidence).
 
-| Example | Shape it teaches | Read from |
-|---|---|---|
-| `the daily-jar rewrite of seat_capex_split` | work done, and a check that passed | `c2019c5e-…a3.jsonl`, window 4 |
-| `batched enrichment writes on the ingest path` | **nothing was finished** — raised, argued, an approach picked, nothing built | `aa59ef4c-…ac.jsonl`, window 4 |
-| `the demo seed and its signal clients` | work done beside something deliberately left alone | `51476fbe-…26.jsonl`, window 4 |
+**The fork/resume duplicate is gone.** `16c69396` is byte-identical to `129e9a80` over the walked
+prefix and is now dropped at selection, with `36821116` admitted behind it. Fingerprinting the whole
+session does **not** work — a fork shares its parent's history and then diverges, so that pair has
+31 and 39 mined windows while the material the sweep reads is identical; the fingerprint is over the
+walked prefix for that reason. The hold-out check runs the same selection function, so the newly
+admitted session is checked for contamination rather than assumed clean.
 
-There is still **no forbidden-phrase list**; naming a phrasing summons it (measured, 2 → 4).
-
-**Verified mechanically, not by intention** (`TestBeatExamplesAreHeldOut`). It assembles the
-windows and records the sweep actually shows the model — all 14 sessions, 841,888 runes — and
-fails if any example's subject line, or any strong identifier or capitalised term any example
-uses, occurs in it as a case-insensitive substring. Ordinary English is deliberately out of scope:
-requiring "written" or "picked" to be absent from a twelve-session corpus is impossible, and every
-measure on this branch that reached for ordinary English ended up measuring English.
-
-**Revert-and-fail, on real input:** restoring the previous examples makes it fail on
-`fa-register.csv`, `Meridian`, `March`, `Atlas` and `CSV` — the actual contamination, named.
-
-## Corpus composition
-
-12 real transcripts across 3 projects (keld-atlas 7, keld-signal 4, keld-cli 1), 65 beat windows;
-2 hand-authored sessions, 7 beat windows.
-
-⚠️ **Two of the twelve are the same conversation.** `129e9a80` and `16c69396` are byte-identical
-over all six of their beat windows and their measured records — a forked or resumed session that
-got a second id, which `StratifiedTranscripts` does not detect. So the real corpus is **11
-distinct conversations, 59 distinct beat windows**, and six beats are the same work counted twice.
-Where that matters it is called out below rather than divided out silently.
-
-| session | project | mined windows | beats asked | generated |
-|---|---|---|---|---|
-| `0ac739ad-…90.jsonl` | keld-signal | 34 | 6 | 6 |
-| `02fd750d-…41.jsonl` | keld-atlas | 60 | 6 | 6 |
-| `bf277ad6-…d8.jsonl` | keld-cli | 44 | 6 | 6 |
-| `129e9a80-…39.jsonl` | keld-signal | 31 | 6 | 5 |
-| `12c80ab4-…9b.jsonl` | keld-atlas | 25 | 5 | 5 |
-| `16c69396-…1b.jsonl` | keld-signal | 39 | 6 | 5 |
-| `13695eef-…0b.jsonl` | keld-atlas | 20 | 4 | 4 |
-| `139be731-…bc.jsonl` | keld-atlas | 20 | 4 | 3 |
-| `43492104-…67.jsonl` | keld-signal | 72 | 6 | 6 |
-| `1a3aa6d2-…5c.jsonl` | keld-atlas | 39 | 6 | 6 |
-| `2927f65b-…93.jsonl` | keld-atlas | 21 | 4 | 4 |
-| `32b52295-…db.jsonl` | keld-atlas | 33 | 6 | 6 |
-| **`finance-close`** | **SYNTHETIC** | 20 | 4 | 4 |
-| **`marketing-launch`** | **SYNTHETIC** | 19 | 3 | 3 |
-
-## What the two populations did, separately
+## Every figure, three ways
 
 | | real (12) | synthetic (2) | together |
 |---|---|---|---|
-| beats asked / generated / failed / panicked | 65 / 62 / 3 / 0 | 7 / 7 / 0 / 0 | 72 / 69 / 3 / 0 |
-| attempts | **1×54, 2×3, 3×4, 5×4** | **1×7** | 1×61, 2×3, 3×4, 5×4 |
-| entries offered / kept | 248 / 181 | 26 / 25 | 274 / 206 |
-| dropped by the anchoring guard | **0 of 248** | **0 of 26** | 0 of 274 |
-| dropped to fit the 512-rune cap | 67, across 46 of 62 beats | 1, across 1 of 7 | 68, across 47 of 69 |
-| subject carrying no term from the evidence | 3 of 62 | 0 of 7 | 3 of 69 |
-| anchored in the record but not the window (seam) | 0 of 181 | 0 of 25 | 0 of 206 |
-| names taken from the prompt's own examples | 8, across 3 of 62 | 0 | 8, across 3 of 69 |
-| turn coverage | 4,021 of 5,681 (70.8%) | 104 of 104 (100%) | 4,125 of 5,785 (71.3%) |
+| beats asked / generated / failed / panicked | 65 / 61 / 4 / 0 | 7 / 7 / 0 / 0 | 72 / 68 / 4 / 0 |
+| attempts | **1×51, 2×3, 3×6, 5×5** | **1×7** | 1×58, 2×3, 3×6, 5×5 |
+| entries offered / kept | 244 / 243 | 26 / 25 | 270 / 268 |
+| **dropped to fit the beat cap** | **0** | **0** | **0 of 270** |
+| dropped by the anchoring guard | 1 of 244, 1 of 61 beats | 1 of 26, 1 of 7 | 2 of 270 |
+| kept entries naming no specific (unconstrained) | 65 of 243 | 11 of 25 | 76 of 268 |
+| beats re-requested for an unanchored subject | 2 beats, 10 attempts | 0 | 2 beats, 10 attempts |
+| subject still unanchored after the ladder | **2** | 0 | 2 |
+| stored beats whose subject carries no evidence term | 0 of 61 | 0 of 7 | 0 of 68 |
+| entries checked only against the record (seam) | 0 of 243 | 0 of 25 | 0 of 268 |
+| names taken from the prompt's own examples | **0** | 0 | **0 of 68** |
+| identifiers named that occur nowhere in the evidence | 8 across 7 of 61 | 0 | 8 across 7 of 68 |
+| entries per stored beat | min 3 / med 4 / max 4 | 3 / 4 / 4 | 3 / 4 / 4 |
+| stored beat runes | 324 / 582 / **774** | 322 / 410 / 459 | 322 / 578 / 774 |
+| turn coverage | 4,386 of 6,181 (71.0%) | 104 of 104 (100%) | 4,490 of 6,285 (71.4%) |
 | largest assembled prompt | 18,188 of 24,000 | 4,261 | 18,188; **0 over budget, 0 panics** |
 
-**The split is the finding.** `19 of 19 on the first attempt` did not survive the rebalance:
-on real transcripts 8 of 62 beats needed more than one attempt and 3 were lost outright, while the
-synthetic pair generated 7 of 7 first time with one entry dropped between them. The two
-populations are not the same measurement, and averaging them describes neither.
+## The cap: 68 entries dropped became 0
 
-**All three failures are the 200-rune entry cap**, on real transcripts, after five ladder
-attempts each: a 235-rune entry twice — the same window in the duplicate pair, so **2 distinct
-failing windows** — (`"The staleness defect in the digest system was identified and fixed by
-introducing prompt-level accounting rules …"`) and a 219-rune one. Each is a single
-long sentence, not a paragraph — the shape the cap was raised from 130 to 200 to admit. Raising it
-again would only move the loss to the beat cap.
+**0 of 270 offered entries were dropped for length, on either population.** The largest stored beat
+is 774 runes against the 892-rune cap — exactly the figure the previous run named as the size a
+lossless beat would have needed, now with 118 runes of headroom. The model still offers the full
+four entries on nearly every beat (median 4, min 3), so the previous 25% loss was the schema's
+arithmetic rather than the model's verbosity: four entries at the 200-rune entry cap beside an
+80-rune subject renders to 892, and the cap was 512.
 
-## The anchoring guard fired zero times, and that is what it is
+**What it cost, measured, not estimated:** at the realistic worst-case refine input, **2 of 12 beats
+reach the report** where 4 did at 512
+(`TestBeatCapTradesBeatsInTheReportRatherThanTrippingTheBackstop`). The trade is entries per beat
+against beats per report and it was taken in favour of entries, because the timeline a person reads
+back is the primary product and the report is derived from it. Nothing panics: `fitDiscretionary`
+shrinks the beat selection until the refine prompt fits, which is why the earlier warning about the
+report tier's 4 runes of headroom was wrong. `TestBeatCapHoldsTheAnswerTheSchemaAdmits` now pins the
+three constants against each other, so the inconsistency cannot reappear silently.
 
-**0 of 274 entries, 0 of 69 beats, on messier real material than it has ever seen.** That is not
-evidence of grounding and it is not presented as any: substring presence over a 16,000-rune window
-is easy to satisfy, and the guard's sensitivity outside its unit tests remains **unmeasured** for
-the second run running. There are no dropped bullets to show, because there are none.
+## The guard: 2 drops of 270, both shown
 
-What the run does show is a case it demonstrably does **not** catch. Three beats — **2 distinct windows**, one of them the
-duplicated pair, all on material whose subject matter is itself prompt and digest work — are
-near-verbatim copies of the prompt's worked examples:
+The rule is now: every **specific** an entry names — an identifier-shaped token, a number or amount,
+or a proper noun capitalised somewhere other than the start of its sentence — must occur in that
+entry's own window or in the measured record; an entry naming no specific is unconstrained and
+passes. Both drops, in full:
+
+**real, `bf277ad6…d8.jsonl` window 14** — subject *"admin-web's PG query scalability under 100 keld
+signal clients"*:
 
 ```
-the daily-jar rewrite of seat_capex_split
-- the phase-1 plan was rewritten around the daily-jar model after the explainer document landed
-- seat_capex_split was rewritten to settle each closed day, and the collateral suites passed unchanged
-- batching the enrichment writes was raised, and the stream-and-consumer approach was picked out of three, gated on KELD_ENRICH_INGEST_MODE
-- signal_clients.py was written, and four seeded members were left without a device
+- the need for index optimization on the `install_id`, `severity`, and `timestamp` columns was
+  discussed as a follow-up          → not in the evidence: install_id
 ```
 
-Every entry anchored — on `plan`, `each`, `enrichment`, `written`. Anchoring is an OR over an
-entry's terms, so an entry that copies an instruction still passes on the ordinary English it
-carries. **This is only visible because the examples are held out**: an example drawn from the
-corpus supplies names the window also has, so against the previous set a copied beat would have
-read as a correctly anchored one.
+The window carries the UI column **`Install ID`** and the route **`/signal/{installId}`**; it does
+not carry `install_id`. The guard normalises case, simple plurals and possessives, but not separator
+style, so a snake_case column name the conversation never writes is reported as named-from-nowhere.
+That is the intended standard (verbatim occurrence) applied to a mild case, and it is shown rather
+than argued.
 
-One measure did catch them, exactly: `SubjectAnchored`, recorded and never enforced, is false on
-those 3 beats and on no others — 3 of 3. Enforcing it (fail the beat, re-request at a wider
-temperature) is the obvious next move and is deliberately not taken here, because it would change
-what this run measured.
+**synthetic, `marketing-launch` window 14**:
 
-## Entries lost to the cap: measured, and left alone
+```
+- the landing page includes a one-line problem statement, a 15-second capture-to-sync
+  demonstration, …                  → not in the evidence: 15-second
+```
 
-**68 of 274 offered entries (25%) were dropped across 47 of 69 beats** — on real transcripts
-alone, 67 of 248 across 46 of 62. This is not incidental: four entries at their 200-rune cap plus
-an 80-rune subject is 880 runes against a 512-rune `BeatCap`, so the schema admits an answer that
-cannot be stored whole. To keep every dropped entry, a beat would need up to **774 runes** (median
-604 over the 47 beats that overflowed).
+The window says *"a fifteen second capture-to-sync demonstration"*. The number is real and the
+rendering is the model's. This is the one arguable drop of the two.
 
-**The premise for leaving it was wrong, and the correction is the measurement.** Raising `BeatCap`
-was believed to panic the prompt backstop, on the report tier's 4 runes of headroom. It does not:
-setting it to 640 leaves the whole package green, because `fitDiscretionary` shrinks the beat
-*selection* until the refine prompt fits. The cost lands somewhere quieter — the report reads
-fewer beats. Measured at the realistic worst-case refine input the budget tests already use
-(`TestBeatCapTradesBeatsInTheReportRatherThanTrippingTheBackstop`):
+**Zero flags were ordinary English**, which was the risk: eight earlier measures on this branch
+turned out to be measuring English. The rule was settled by replaying it over the previous sweep's
+274 real entries before it was adopted — 12 flags there, 9 of them the instruction-copying entries
+the old guard passed by construction — and two false shapes found in that replay were fixed:
+plurals/possessives/case, and the `/`-joined compound (`installer/JSON`, `start/callback`,
+`telemetry.py/_event_values`, `forest/amber`, `NULL/empty`, every part in its own window, only the
+joining the model's).
 
-| beat size | beats reaching the refine prompt |
-|---|---|
-| 512 (`BeatCap`) | 4 of 12 |
-| 640 | 3 of 12 |
-| 774 (lossless) | 2 of 12 |
+**76 of 268 kept entries (28%) name no specific at all** and are therefore unconstrained. That is
+the honest measure of the guard's reach and it is reported rather than folded into a pass rate: on
+more than a quarter of entries the guard had nothing to check.
 
-So the trade is **entries lost per beat against beats lost per report**, and buying back a quarter
-of the entries costs half the beats a report can read under pressure. It is left at 512, for two
-reasons: the report tier's own quality was measured at this value and moving it invalidates that
-round without a fresh one, and the drop here is at whole-entry granularity and marked in the beat,
-while the loss at the report tier is a whole beat vanishing from a timeline. That is a real cost
-either way and it is recorded, not resolved.
+**The seam signal is 0 of 268.** No kept entry was checked only against the record, so dropping
+window overlap cost nothing measurable here — the second run in a row it reads zero.
+
+**The 8 unverified identifiers are the same normalisation, seen from the other side**:
+`installer/JSON`, `start/callback`, `telemetry.py/_event_values`, `forest/amber`, `NULL/empty`,
+`OAuth-first`, `LLM-based`, `CPU-based`. That measure is recorded and never enforced and has no
+compound rule, so it flags exactly what the guard forgives. Both figures are printed; neither is
+evidence of fabrication.
+
+## The subject rule: 2 beats re-requested, 2 beats lost, 0 copies stored
+
+**Instruction copying is 0 of 68 stored beats**, down from 8 names across 3 beats. It did not become
+correct output: both windows that produced copies before produced them again, on all five ladder
+attempts, and the beats were lost.
+
+- `129e9a80…39.jsonl` window 9 — 5 attempts, 5 rejected, subject *"the daily-jar rewrite of
+  seat_capex_split"*
+- `43492104…67.jsonl` window 29 — 5 attempts, 5 rejected, same subject
+
+Both are windows whose subject matter is itself prompt and digest work, which is where copying was
+concentrated before. **A wider temperature did not move this model off the copy**, so the honest
+statement is that enforcement converted stored fabrication into lost beats: 2 windows of 65 now have
+no beat rather than a beat naming a held-out session's work. Whether the copy or the hole is worse
+is a question for the review round; what the ladder cannot do is now measured rather than assumed.
+
+## Generation failures, all four, shown
+
+| session | window | attempts | rule |
+|---|---|---|---|
+| `129e9a80…39.jsonl` | 4 | 5 | entry cap: 235 runes (*"The staleness defect in the digest system was identified and fixed by introducing prompt-level accounting rules…"*) |
+| `129e9a80…39.jsonl` | 9 | 5 | subject unanchored (copy of a worked example) |
+| `139be731…bc.jsonl` | 4 | 5 | entry cap: *"the subject of the work is designing the UI/UX for managing Agents alongside People in Atlas' Teams page…"* |
+| `43492104…67.jsonl` | 29 | 5 | subject unanchored (copy of a worked example) |
+
+All four are real transcripts; the synthetic pair generated 7 of 7 first time. **The two entry-cap
+failures are the same defect the previous sweep reported** — a single sentence that runs past 200
+runes, not a paragraph — and raising `beatEventMaxRunes` no longer trades them against entries lost
+at `BeatCap`, but it would raise `BeatCap` with it and cost the report further beats. Left alone
+here, with the two lost beats counted rather than absorbed.
 
 ## Geometry
 
-4,125 of 5,785 spanned turns read by a window (71.3%); 1,660 read by none; 27 of 72 windows carry
-a hole marker. Largest assembled prompt 18,188 runes of the 24,000 budget, **0 over budget, 0
-panics, 0 recovered panics**. Two real sessions reached 100% coverage, one 47%.
+4,490 of 6,285 spanned turns read by a window (71.4%); 1,795 read by none; 30 of 72 windows carry a
+hole marker. Largest assembled prompt 18,188 of the 24,000 budget, **0 over budget, 0 panics, 0
+recovered panics**. Two real sessions reached 100% coverage (and both synthetic ones); the lowest real session read 47%.
 
 ## Concerns
 
-1. **Instruction copying is real and unhandled** — 3 of 62 real beats (2 distinct windows),
-   concentrated on material about prompt work. Held-out examples make it *visible*; nothing yet makes it *fail*.
-2. **The anchoring guard has still never fired on real data.** Two sweeps, 0 of 274 here. Either
-   it is measuring something that does not happen, or it is too lenient to measure it; the run
-   above shows one shape it cannot catch by construction.
-3. **The examples are all engineering now**, because the pinned snapshot holds nothing else. The
-   prompt no longer steers a non-technical answer at all, so the synthetic pair carries the whole
-   domain-neutrality question on 7 beats.
-4. **Two of the twelve real sessions are the same conversation** (`129e9a80` and `16c69396`,
-   byte-identical over all six windows), so the real corpus is 11 distinct conversations and 59
-   distinct windows. Corpus selection has no fork/resume detection; a later sweep should dedupe
-   on window content rather than on session id.
+1. **Two windows now produce no beat rather than a copied one.** The subject rule caught exactly
+   what it was measured to catch, and the temperature ladder failed to recover either one. The fix
+   for a model that insists on copying an instruction is a prompt change, and nothing here has
+   measured one.
+2. **The guard's reach is 72% of entries.** 76 of 268 name nothing checkable. That is not a defect
+   in the rule — an entry cannot fabricate a specific it does not have — but no run should read
+   "2 of 270 dropped" as "268 entries verified."
+3. **The report reads 2 of 12 beats under pressure**, down from 4. Measured, deliberate, and the
+   quality consequence for the report tier is unmeasured: the last report round was scored at
+   `BeatCap` 512.
+4. **The entry cap still loses whole beats**, 2 of 65 on real material, both single long sentences.
+5. **The synthetic pair carries the whole domain-neutrality question on 7 beats**, and the worked
+   examples remain all-engineering because the pinned snapshot holds nothing else.

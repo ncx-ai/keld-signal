@@ -8,11 +8,13 @@ Model: Qwen3-4B-Instruct-2507 Q4_K_M. Server: `llama-server -m Qwen3-4B-Instruct
 
 ⚠️ **No resource figure is reported anywhere in this artifact, and that is deliberate.** The viability case for this model rests on CPU-only measurements at the documented flags (`--cache-ram` and `--no-repack` load-bearing). This run is CPU-only but at a thread count no laptop deployment would use and without `--no-repack`, so any latency or RAM number taken from it would misrepresent the case. That question needs its own run at the viability flags.
 
-Geometry and bounds, as they were set: beat every 5 user prompts · beat window 16000 runes, disjoint (stride equals window, holes marked in the window) · stored beat capped at 512 runes · one entry capped at 200 runes, at most 4 entries · assembled prompt budget 24000 runes.
+Geometry and bounds, as they were set: beat every 5 user prompts · beat window 16000 runes, disjoint (stride equals window, holes marked in the window) · stored beat capped at 892 runes · one entry capped at 200 runes, at most 4 entries · assembled prompt budget 24000 runes.
 
-Corpus root `/home/dg/keld/study-corpus-snapshot-2026-08-11T2130/projects`; document-frequency table 33 sessions, 20998 distinct terms, representative true. Commit `0ba79dd`.
+Corpus root `/home/dg/keld/study-corpus-snapshot-2026-08-11T2130/projects`; document-frequency table 33 sessions, 20998 distinct terms, representative true. Commit `c294a72`.
 
 **Corpus: 12 real transcripts and 2 hand-authored sessions.** The real transcripts are the corpus; the two hand-authored non-engineering sessions are a labelled minority check, marked SYNTHETIC wherever they appear, and every figure below is reported for each population separately as well as together. They are kept because the pinned snapshot holds only Claude Code transcripts and they are the only non-engineering material there is.
+
+**The corpus is deduplicated on window content, not on session id.** Two of the previous sweep's twelve real sessions were the same conversation under two ids — a fork or resume, byte-identical over all six of their beat windows — so twelve sessions were eleven conversations and two of its three generation failures were one window counted twice. Selection now fingerprints the turns each session would show the model and skips a repeat.
 
 **The sessions the prompt's worked examples were read from are held out of this corpus**, and the separation is checked mechanically rather than asserted: no example's subject line, and no strong identifier or capitalised term any example uses, occurs anywhere in any of these sessions' windows or records. The examples are:
 
@@ -178,14 +180,10 @@ user: Here's a new installer cert, I think. verify. /home/dg/Downloads/Certifica
 > Apple Developer ID certificate generation and validation for Signal pkg signing
 > - the selection of G2 Sub-CA for Apple Developer ID certificates is confirmed as the correct intermediate for long-term signing infrastructure
 > - the distinction between Developer ID Application and Developer ID Installer certificates is explained and validated as required for pkg signing
-> [2 entries dropped to fit the beat cap]
+> - the user's downloaded .p12 files are identified as incorrect self-signed local-machine certificates and not valid Apple Developer ID certificates
+> - the correct Developer ID certificates are located on the Mac mini by checking the keychain identities and confirmed to be present and usable
 
-Anchoring term each entry was kept on: `G2`, `ID`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the user's downloaded .p12 files are identified as incorrect self-signed local-machine certificates and not valid Apple Developer ID certificates
-- the correct Developer ID certificates are located on the Mac mini by checking the keychain identities and confirmed to be present and usable
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `G2`, `Developer`, `p12`, `Developer`.
 
 
 ---
@@ -354,13 +352,9 @@ user: the p8 and associated metadta: /home/dg/Downloads/AuthKey_8XUL4QJ8PU.p8 /h
 > - the G2 intermediate cert is not bundled in the leaf certificate chain, causing signing failures on clean CI runners
 > - the keychain import step is added to installers.yml to import both installer and application p12s with correct identity names derived from the keychain
 > - the build-pkg.sh script is updated to handle .p8 key contents via temporary file writing and to use proper key paths
-> [1 entry dropped to fit the beat cap]
+> - a workflow_dispatch run is kicked off on the fix/macos-signing-ci branch to test the full signing pipeline without merging changes
 
-Anchoring term each entry was kept on: `G2`, `installers.yml`, `build-pkg.sh`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- a workflow_dispatch run is kicked off on the fix/macos-signing-ci branch to test the full signing pipeline without merging changes
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `G2`, `installers.yml`, `build-pkg.sh`, `workflow_dispatch`.
 
 
 ---
@@ -471,13 +465,9 @@ user: it's still going. 20 min so far
 > - All six Apple secrets are set on the repo and the signing workflow is now fully configured
 > - The macOS signing path successfully signs 103 nested files in the sidecar bundle, including embedded frameworks, with zero errors
 > - The G2 intermediate certificate is imported and validated, enabling full chain resolution and identity derivation from the keychain
-> [1 entry dropped to fit the beat cap]
+> - The second run is dispatched to exercise notarization and staple, with the .p8 secret now available at run start
 
-Anchoring term each entry was kept on: `Apple`, `macOS`, `G2`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- The second run is dispatched to exercise notarization and staple, with the .p8 secret now available at run start
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Apple`, `macOS`, `G2`, `p8`.
 
 
 ---
@@ -665,7 +655,7 @@ user: Do the fix
 > - the client-side fix for issue #62 was completed, adding is_system filtering in passesFromSchema and shortening reason codes
 > - the Atlas route and payload contract compatibility was audited against local main, confirming no route gaps or data loss
 
-Anchoring term each entry was kept on: `macOS`, `CI`, `62`, `Atlas`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `macOS`, `Apple`, `62`, `Atlas`.
 
 
 ---
@@ -843,7 +833,7 @@ user: yes, implement it
 > - the fix merged to main with a commit that resolves the event storm from #62
 > - notarization is still in progress due to a large payload size, not an error, and the release process should decouple notarization from the build
 
-Anchoring term each entry was kept on: `TDD`, `clientevents`, `62`, `notarization`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `TDD`, `(names nothing checkable)`, `62`, `(names nothing checkable)`.
 
 
 ---
@@ -1028,14 +1018,10 @@ user: I don't understand what you are thinking. The most recent attempt ACTUALLY
 > slimming the macOS installer payload and fixing sidecar signing
 > - The slim installer was implemented by excluding the sidecar from the pkg payload and adding a fetch in onboard.command to download it on first run
 > - The sidecar fetch was directed to ~/.local/bin, a user-writable location already in the darwin search path, avoiding root-owned /usr/local/keld
-> [2 entries dropped to fit the beat cap]
+> - The fetch logic was corrected to use arm64 arch for Apple-Silicon-only builds, fixing a stale fallback that would have triggered 404 errors
+> - The sidecar tarball was found to be unsigned in the workflow, and a new signing step was added before the tarball step to sign dist/keld-agent-sidecar
 
-Anchoring term each entry was kept on: `slim`, `local/bin`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- The fetch logic was corrected to use arm64 arch for Apple-Silicon-only builds, fixing a stale fallback that would have triggered 404 errors
-- The sidecar tarball was found to be unsigned in the workflow, and a new signing step was added before the tarball step to sign dist/keld-agent-sidecar
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `local/bin`, `arm64`, `dist/keld-agent-sidecar`.
 
 
 ---
@@ -1230,13 +1216,9 @@ user: add a tad more bottom padding to the main activity table rows
 > - the README.md was synchronized with the actual codebase state by correcting login credentials, seed orgs, navigation groups, and architecture diagrams
 > - the Relay surface and telemetry detail panel were investigated to ensure accurate representation of live features
 > - the `service.name` attribute was confirmed to reach telemetry event attributes in the activity feed
-> [1 entry dropped to fit the beat cap]
+> - the live feed display logic was updated to show full names instead of initials in the activity log
 
-Anchoring term each entry was kept on: `README.md`, `Relay`, `service.name`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the live feed display logic was updated to show full names instead of initials in the activity log
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `README.md`, `Relay`, `service.name`, `(names nothing checkable)`.
 
 
 ---
@@ -1291,7 +1273,7 @@ user: try reducing border width to 1px
 > - added slight drop shadow to enrichment pills and compliance flag for visual consistency
 > - increased shadow radius to shadow-md for a more pronounced blur effect on pills and compliance flag
 
-Anchoring term each entry was kept on: `turn-row.tsx`, `bottom`, `slight`, `shadow`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `turn-row.tsx`, `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
@@ -1362,7 +1344,7 @@ user: Are enrichments not flowing from my local keld-agent?
 > - Removed agent_runs from DEFAULT_VISIBLE in kpi.ts and updated the corresponding test to pass
 > - Fixed the Configure Metrics dropdown to use bg-keld-bg (opaque) instead of bg-keld-surface (translucent), matching InfoTooltip's style
 
-Anchoring term each entry was kept on: `border-2`, `README`, `agent_runs`, `InfoTooltip`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `border-2`, `README`, `agent_runs`, `Configure`.
 
 
 ---
@@ -1473,13 +1455,9 @@ user: [Image #2] when no budget is set, it should have an emphasized CTA to set 
 > - confidentiality flags hidden behind a non-fetching use-enrichment-settings hook in turn-row.tsx, gated by a hardcoded false value for now
 > - price-tag glyph introduced in the price column and header prominence increased using text-2xs and bg-keld-bg-deep/50 styling
 > - live feed truncation issue resolved by noting that the actor_name_short logic change is in the API backend but not yet deployed to prod
-> [1 entry dropped to fit the beat cap]
+> - a CTA to set budgets is proposed for the no-budget case, with dynamic deviation from rolling average based on selected timeframe
 
-Anchoring term each entry was kept on: `turn-row.tsx`, `text-2xs`, `actor_name_short`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- a CTA to set budgets is proposed for the no-budget case, with dynamic deviation from rolling average based on selected timeframe
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `turn-row.tsx`, `text-2xs`, `actor_name_short`, `CTA`.
 
 
 ---
@@ -1677,14 +1655,10 @@ user: Instead of the "set budget and edit" button, make it again just "edit" but
 > the spend vs budget no-budget state and team budget CTA redesign
 > - The spend vs budget KPI card was redesigned to show 'Spend vs Run-rate' when no budget and baseline is available, with an emphasized CTA to set a budget
 > - A trailing run-rate baseline was implemented in the backend using a new helper in spend.py, anchored before the current window and requiring at least 7 days of history
-> [2 entries dropped to fit the beat cap]
+> - The KpiCard component was updated to include an 'emphasized CTA' variant that displays a clear 'Set a budget →' link when no budget is set
+> - The Teams page button label was changed to show 'Set budget & edit' when no budget is set, with a clear CTA link to open the budget side pane and focus on budget input
 
-Anchoring term each entry was kept on: `KPI`, `spend.py`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- The KpiCard component was updated to include an 'emphasized CTA' variant that displays a clear 'Set a budget →' link when no budget is set
-- The Teams page button label was changed to show 'Set budget & edit' when no budget is set, with a clear CTA link to open the budget side pane and focus on budget input
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `KPI`, `spend.py`, `KpiCard`, `Teams`.
 
 
 ---
@@ -1824,13 +1798,9 @@ user: bump the inset alpha up a bit. no change is perceptible
 > - added a focus budget signal to the team edit drawer and linked it to the members-by-team component
 > - implemented a separate 'Set budget' CTA in the team group header that opens the drawer focused on budget input
 > - refactored the spend card to support a cog toggle between spend-vs-budget and run-rate views via a new mode system
-> [1 entry dropped to fit the beat cap]
+> - added an inset box shadow to the 'Spend by Cost Center' and 'Spend by Job Type' cards to create a beveled visual effect
 
-Anchoring term each entry was kept on: `focus`, `CTA`, `refactored`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- added an inset box shadow to the 'Spend by Cost Center' and 'Spend by Job Type' cards to create a beveled visual effect
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `Set`, `(names nothing checkable)`, `Spend`.
 
 
 ---
@@ -1998,7 +1968,7 @@ user: It doesn't seem like the Gliner2 model is loaded right now
 > - A test-hardening fix was implemented to assert survivor identity instead of just counts in the retention test
 > - The final review confirmed B is merge-ready with three high-value hardening fixes applied
 
-Anchoring term each entry was kept on: `7`, `auth/models/orgs`, `test-hardening`, `final`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `7`, `auth/models/orgs`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
@@ -2178,13 +2148,9 @@ user: what api-url do I use with `keld login` for local dev
 > - the Signal Client monitoring dashboard was designed with a single `/signal` page featuring summary tiles, installs table, and anomaly feed
 > - the implementation plan was written and verified against admin-web's existing patterns and toolchain
 > - the data layer, shared components, installs table, anomaly feed, install detail, and recharts resource chart were developed and tested
-> [1 entry dropped to fit the beat cap]
+> - the dashboard was seeded with synthetic data and made live at http://localhost:3002, accessible with admin@keld.co / keld2026
 
-Anchoring term each entry was kept on: `Signal`, `implementation`, `data`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the dashboard was seeded with synthetic data and made live at http://localhost:3002, accessible with admin@keld.co / keld2026
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Signal`, `(names nothing checkable)`, `(names nothing checkable)`, `3002`.
 
 
 ---
@@ -2314,11 +2280,13 @@ user: Is the admin's backing pg queries scalable when we have, say, 100 keld sig
 > - admin-web's PG query scalability under 100 keld signal clients was assessed for filtering and searching
 > - the query performance under load was observed to be linear with client count, with no signs of degradation
 > - a potential bottleneck in the signal filtering pipeline was identified in the raw event ingestion layer
-> - the need for index optimization on the `install_id`, `severity`, and `timestamp` columns was discussed as a follow-up
+> [1 entry dropped: it names something that occurs nowhere in this window or the record]
 
-Anchoring term each entry was kept on: `PG`, `query`, `signal`, `need`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `PG`, `(names nothing checkable)`, `(names nothing checkable)`.
 
-Identifiers this beat names that occur nowhere in its evidence: `install_id`. Recorded, not dropped.
+**Dropped by the anchoring guard (1):** each of these names a specific — an identifier, a number, a proper noun — that occurs in neither this window nor the record. The specific is named after the entry, so the decision can be checked rather than trusted.
+
+- the need for index optimization on the `install_id`, `severity`, and `timestamp` columns was discussed as a follow-up  — not in the evidence: `install_id`
 
 
 ---
@@ -2470,14 +2438,10 @@ user: commit outstanding work
 > the Signal Client monitoring feature and gauge-distribution redesign
 > - the gauge-distribution redesign (sub-project D) was fully implemented across keld-cli, keld-atlas, and admin-web with per-interval min/max/mean/std/last fields and backward-compat tolerance
 > - the (install_id, org_id) tuple-scoping edge case was identified and fixed to prevent aggregation conflation in cross-org views
-> [2 entries dropped to fit the beat cap]
+> - the pre-existing date-hardcoded test was fixed to remove a flaky signal suite test that failed due to hardcoded timestamps
+> - all sub-projects (A, B, C, #1/#2, #3) were merged to main with full test coverage and independent reviews
 
-Anchoring term each entry was kept on: `min/max/mean/std/last`, `install_id`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the pre-existing date-hardcoded test was fixed to remove a flaky signal suite test that failed due to hardcoded timestamps
-- all sub-projects (A, B, C, #1/#2, #3) were merged to main with full test coverage and independent reviews
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `min/max/mean/std/last`, `install_id`, `(names nothing checkable)`, `1`.
 
 
 ---
@@ -2645,16 +2609,12 @@ user: good
 > the pre-auth onboarding feature and its installer integration
 > - the pre-auth onboarding feature (keld-cli login + installer, keld-atlas api mint/redeem, keld-atlas web setup-code UI) was fully implemented and merged across all three components
 > - a live end-to-end e2e test was run and passed, verifying mint → redeem → auth.json output and single-use enforcement across both human and installer/JSON paths
-> [2 entries dropped to fit the beat cap]
+> - a stray design doc commit (6f1deb3) from a prior session was identified and surfaced as a side effect of the merge, with no code impact
+> - a new design for token-aware CLI installers via a `keld onboard` command was proposed, to unify onboarding across installers and align with Go-side auth logic
 
-Anchoring term each entry was kept on: `mint/redeem`, `e2e`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `mint/redeem`, `e2e`, `6f1deb3`, `CLI`.
 
 Identifiers this beat names that occur nowhere in its evidence: `installer/JSON`. Recorded, not dropped.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- a stray design doc commit (6f1deb3) from a prior session was identified and surfaced as a side effect of the merge, with no code impact
-- a new design for token-aware CLI installers via a `keld onboard` command was proposed, to unify onboarding across installers and align with Go-side auth logic
 
 
 ---
@@ -2833,14 +2793,10 @@ user: I just did `make release-dry` now how do I install the linux installer
 > token-aware onboarding via extended keld-agent install and Windows wizard
 > - the Linux `curl | sh` onboarding flow was fully integrated with a code-aware `keld-agent install` command, fixing a TTY detection bug by switching from stdin to stdout detection
 > - the `keld-agent install` command was extended with `--code`, `--yes`, `--api-url`, and `--json` flags to unify installer behavior across platforms
-> [2 entries dropped to fit the beat cap]
+> - the Windows onboarding wizard was designed as a single custom input page inserted in the installer sequence to collect setup code and drive onboarding via `keld-agent install --code`
+> - the keld-cli changes were merged to `main` with full test coverage and integration validation, including a real RED→GREEN test for `curl|sh` and a fix for the `--yes` prompt regression
 
-Anchoring term each entry was kept on: `TTY`, `keld-agent`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the Windows onboarding wizard was designed as a single custom input page inserted in the installer sequence to collect setup code and drive onboarding via `keld-agent install --code`
-- the keld-cli changes were merged to `main` with full test coverage and integration validation, including a real RED→GREEN test for `curl|sh` and a fix for the `--yes` prompt regression
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Linux`, `(names nothing checkable)`, `Windows`, `RED`.
 
 
 ---
@@ -2864,186 +2820,16 @@ retry: gave up after 5 attempt(s): invalid beat: entry "The staleness defect in 
 
 ---
 
-## Beat 1 (window 9 of 31) · 1 attempt(s)
-
-Window geometry: 90 turns in the stride since the previous beat, 55 kept, 35 dropped by the character bound (a hole marker sits where they were). 15978 runes in the window; 18151 runes in the assembled prompt against a 24000-rune budget.
-
-### Input 1 — measured record (counted on device — authoritative)
+## Beat at window 9 — GENERATION FAILED after 5 attempt(s)
 
 ```
-counts: turns=251 user_turns=10 tool_calls=196 corrections=1
-projects: keld-signal
-tool profile: Bash x189, Artifact x3, Write x2, AskUserQuestion x1, Skill x1
-recurring subjects: keld-signal, synopsis, python3, retention, windows, digest, digests, reversal, unresolved, fabricated, transcript, accounting
+retry: gave up after 5 attempt(s): invalid beat: the subject line carries no term occurring in the window or the record: "the daily-jar rewrite of seat_capex_split"
 ```
-
-### Input 2 — conversation window (15978 runes — evidence)
-
-```
-[turns since the previous update omitted to fit the context — they are not covered by any later window either]
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Suite green. Running the stratified sweep with all gates now covering the synopsis:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study … (x2)
-assistant: All ten thresholds pass on the stratified corpus, and the T2 residual is a single *genuine* catch — `agentcfg.SetSidecarPort`, a plausible-looking Go identifier absent from the source, carried across four steps:
-
-[code block, 2 lines]
-
-Committing, then regenerating the artifact with this session in it:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study git add -A …
-assistant: This session mined 44 windows. Here's the synopsis it wrote about our own work — the one you can check from memory:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-assistant: This is the most useful result of the session, and it's a failure. **The synopsis is badly stale.** It describes `feat/multiturn-context` and "integrating tool use into the context window" — the topic from the *first* few windows, ~40 windows ago. The real current state is prompt-and-metric iteration on the digest. It even asserts the work is "now transitioning to a design phase" for something long since abandoned.
-
-Two causes, and one is my instruction:
-
-1. My refine rule says *"keep the subject and framing… Do not re-scope it to whatever the new part happens to be about."* That guards against drift onto the newest topic, but **forbids legitimate re-scoping when a long session genuinely changes subject** — which is exactly what happened here.
-2. The dump does one refinement across 44 windows; production would fire many more (`MaxTurns 15`).
-
-The trigger already detects this — `TriggerFocusShift` exists precisely for it — and that signal never reaches the prompt.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - … (x2)
-assistant: Better, and honest about the limit. It **did** re-scope — it now says *"The work has shifted from a pure context window design to a hybrid approach"* and describes the turn/tool-count routing features and the 52-of-464 coverage anomaly. But that's **mid**-session material, not the latest work. A 44-window session still ends with a synopsis lagging the current topic, because carry-forward plus the no-shrink and retain rules bias hard toward preservation.
-
-That's a real limitation, not something I'll keep tuning blind. Rebuilding the artifact with all four sessions and this finding stated plainly:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-tool: Artifact digest-examples.html
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study go test …
-assistant: Artifact updated at the same URL: **https://claude.ai/code/artifact/232bd28f-639a-4bf5-a3f5-b5b04d073c26**
-
-## The synopsis section
-
-`synopsis` now leads the report: subject, standing, direction, in three or four sentences readable on their own. It needed something the prompt never had — `SessionDigest` has always sampled a coarse whole-session view, and **it was built and then never passed to the digest prompt**. Written from the recent window alone, a month-end close would be summarised as "clearing the suspense account".
-
-That growth didn't fit: a worst-case refinement prompt is 5,245 chars of instructions plus 4,742 of carried report, and the ninth section grew the output too. So I took you up on pushing the ceiling — `ctx 6144`, measured at **3,008 MB**, 8 MB over. The alternative was cutting content the retention metric exists to protect.
-
-## Your question found a bigger problem than the artifact
-
-**The corpus was a monoculture and nothing said so.** Transcripts were walked in path order, first 14 taken — but keld-atlas holds 43 of 59, so *every* session I've measured came from one codebase while I reported it as a corpus. This session sat at **index 51 of 59** and was never sampled.…
-user: Dude, it's fine to use 8MB over. the limit of 3GB is just an eyeball range
-assistant: Understood — I'll stop treating 3,008 MB as something needing a defence.
-tool: Bash ls /home/dg/.claude/projects/-home-dg-keld-keld-signal/memory/ 2>/dev/null | …
-tool: Write ram-budget-is-approximate.md (x2)
-assistant: Noted and saved so it sticks.
-
-`ctx 6144` at 3,008 MB stands, and I'll stop trading content against the budget — that pressure is what drove the cap-shrinking experiments and the "session view yields first" priority scheme. With ±100 MB of slack those were solving a non-problem.
-
-One thing I won't do: re-run at `ctx 8192` to chase the synopsis lag. More context wouldn't fix it — the lag comes from carry-forward plus the no-shrink and retain-list rules biasing toward preservation, not from the window being clipped. Spending another 20-minute sweep there would be exactly the over-optimising you're telling me to drop.
-
-So the real next step for the synopsis is a **recency check** — does it reflect the latest turns, or a topic the session left behind? That's the threshold I don't have, and the one this session's own transcript proved I need. Otherwise the integration design is still queued behind it.
-user: lets look into it
-assistant: Right. Measurement first — a recency threshold, built to avoid the word-level over-detection that's bitten me five times now.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study grep -n …
-assistant: Two things there. The facts block has **no `recurring topics` or `extracted specifics` lines at all** — so the one deterministic recency anchor in the design is empty in practice. And the recent window's final turns are literally you asking for the synopsis feature, while the synopsis talks about turn/tool-count routing. The lag is real and large.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study sed -n …
-assistant: `Extract` computes counts only — `Topics`/`Entities` come from a separate call the harness never makes. So the "recurring topics / extracted specifics" part of the context pack has been **dead in every measurement I've run**, and there's no deterministic pull toward the present at all.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study sed -n …
-assistant: Now the metric and a deterministic recency anchor — the same pattern that fixed retention and closures:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study cat > … (x2)
-assistant: Both failures are tokenizer behaviour I should verify rather than guess at:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study sed -n …
-assistant: Found it — `wordsOf` treats **uppercase letters as separators** (it only keeps `a-z0-9`), so `DigestSchema` becomes `igest`+`chema` and `ElideCode` becomes `lide`+`ode`. It's only safe on already-lowercased input, which every existing caller does. My new code passed raw text. Let me find the case-preserving tokenizer `Identifiers` must use:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study sed -n … (x2)
-assistant: `RecentSubjects` passes. The remaining failure: `identifierPat` only matches dotted/hyphenated tokens or Capitalised words — it never yields lowercase words like `extracts`, and it excludes `/`, so `eval/mine` isn't matched either. A lag measure needs ordinary subject vocabulary too, so it needs its own tokenizer:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Detector works and the suite is green. Now measure the actual lag rate — with the anchor in place and, separately, without it, so I know whether the anchor does anything:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - … (x3)
-assistant: T11 lands at 7.1% of 42 (3 cases) — under threshold. But **T4 fell to 88.3%** (from 96.1%) and **T7 rose to 10.2%** (from 4.1%), and those two moving together is exactly what you'd expect from an anchor that re-weights the model toward the newest turns: it drops earlier facts and invents open items about the new subject.
-
-I introduced the anchor unconditionally, which was sloppy — the trigger already measures whether the subject changed. Gating it on that, which also gives me the no-anchor baseline for T11 since the sweep fires `TriggerVolume`:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Suite green. Now the one measurement I'm missing: T11 **without** the anchor, to quantify what the anchor actually buys. The sweep fires `TriggerVolume`, so it now exercises the un-anchored path:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study … (x2)
-assistant: Clean A/B now, and neither extreme passes everything:
-
-| | anchor off (routine) | anchor on (always) |
-|---|---:|---:|
-| T4 retention | **97.4%** | 88.3% |
-| T7 fabricated | **4.1%** | 10.2% |
-| T11 lag | 14.3% (6/42) | **7.1%** (3/42) |
-| T2 unverified | 3.2% | **1.7%** |
-
-The anchor halves lag but costs retention and doubles fabricated blockers. Gating on a measured shift should get both — but I can't claim that from reasoning alone, and the sweep has no focus data. Let me give it a deterministic stand-in for the production signal so the gated case is *measured*:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study cat >> … (x3)
-assistant: That result invalidates its own label, and I should say so: **the anchor fired on 42 of 42 refinements** — my `SubjectShifted` proxy calls every refresh a shift, because these windows sit 4 apart and their distinctive-term overlap is naturally thin. So "gated" was never measured; that run is anchor-always with *different wording*.
-
-Which is itself the finding. Comparing the two anchor-always runs, the only difference being the text:
-
-| | anchor text v1 | anchor text v2 (+"leave other sections alone") |
-|---|---:|---:|
-| T4 retention | 88.3% | **90.9%** |
-| T7 fabricated | 10.2% | **2.0%** |
-| T2 unverified | 1.7% | **0.7%** |
-| T11 lag | **7.1%** | 14.3% |
-
-Adding one clause protected the other sections and gave the recency gain straight back. **Recency and retention are in direct tension, and no configuration yet clears T11 without paying for it.**
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: We looked, and the answer is a measured trade-off rather than a fix.
-
-**Two things were wrong beneath the symptom.** First, the facts block was designed to carry `recurring topics` as a recency anchor — but those fields come from `WithEnrichment`, which needs a classification pass the digest path never makes. **They have been empty in every measurement I've taken**, so the prompt had no pull toward the present at all. Second, building the metric needed a third tokenizer: `wordsOf` keeps only `[a-z0-9]`, so uppercase letters are *separators* and it shreds `DigestSchema` into `igest`+`chema` — safe for its existing callers only because they all lowercase first — while `identifierPat` matches no ordinary lowercase word and excludes `/`.
-
-**T11 is now a real threshold**: does the synopsis reflect the session's present, or a subject it left behind? It's the one failure nothing else caught — a lagging synopsis has nothing fabricated (T7 passes) and contradicts nothing (T8 passes). It's just out of date, which is precisely what a reader can't detect.
-
-**The result, over 14 stratified sessions:**
-
-| | T4 retention | T7 fabricated | T2 unverified | T11 lag |
-|---|---:|---:|---:|---:|
-| anchor off | **97.4%** | 4.1% | 3.2% | 14.3% |
-| anchor, text v1 | 88.3% | 10.2% | 1.7% | **7.1%** |
-| anchor, text v2 | 90.9% | **2.0%** | **0.7%** | 14.3% |
-
-The anchor halves lag but costs retention and doubles fabricated blockers — the model re-weights toward the newest turns and sheds what came before.…
-user: In short, what problems outstanding do we have? And can you show examples of what this thing is doing now?
-assistant: Regenerating examples on the current code first, since the last dump predates the anchor and wording changes:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study … (x2)
-assistant: Both failure modes are now visible side by side, and one is a problem I hadn't measured. Updating the artifact with this current output:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-tool: Artifact digest-examples.html
-assistant: Artifact refreshed with current output: **https://claude.ai/code/artifact/232bd28f-639a-4bf5-a3f5-b5b04d073c26**
-
-## What it's doing now — two examples
-
-**This session, after 47 windows.** The synopsis still describes *"designing a lightweight metadata schema for tool use events"* — the topic of the opening windows. And `next` invents detail that was never discussed: *"fields for tool name, call ID, input, output, and timestamp."* That's a fabrication nothing currently measures, because the fabricated-blocker check only inspects `unresolved`.
-
-**Month-end close, the opposite failure.** It leads with *"The classification of a boiler repair at Larkin as a repair expense... has been finalized"* — treating the last small task as the subject, and demoting the actual work (an eight-step financial close) to background it *"grew out of"*.
-
-What works: `happened` on the finance session correctly reports the Larkin reclassification and the INV-2340 revenue cutoff with real figures, and `unresolved` correctly returns the sentinel because that session genuinely finished.
-
-## Outstanding problems, short
-
-**Blocking quality**
-1. **Synopsis subject is unreliable in both directions** — lags on long sessions, over-anchors on short ones.…
-user: What is your understanding of my goals with this? What do you think I am askign for?
-assistant: Here's my read, layered from the immediate to the actual.
-
-**What you're building.** Keld sells organizations visibility into AI-assisted work. Two consumers need it: a human one — the admin or PM who wants to know what a team is working on, how it's going, where it's heading — and a machine one, the Inference Exchange, which needs to know what *kind* of work a request is so it can route it to the right-sized model. That's why you kept pushing on "complexity and precision intelligence required" and on adaptive model recommendation.
-
-**Why this study exists.** The GLiNER2 pipeline answers a question nobody asked. It classifies isolated prompts against fixed taxonomies, but the real input is freeform multi-turn agentic conversation — so you reframed twice: first "an LLM would understand a transcript better than a bi-encoder," then the sharper one, "reconsider what dimensions we can *reliably* capture at all, because our classifications assume task-like prompts and that's not what we have." The digest came out of the same instinct: a status board of eight fields isn't what a manager reads.
-
-**The constraints are product constraints, not preferences.** On-device, laptop-sized RAM, privacy invariant intact, works for an accountant in Cowork as well as an engineer in Claude Code.…
-user: Ideally what we want is to understand what's happening in recent chat history, how it rolls up into the larger story over time, from specific actions tied to the larger coarser grain info, like what projects are being worked on and the higher level views on the work. That said, when it comes to using prior digests as context for generating the next one, we could instead generate concise bulleted or small paragraph paraphrases of the previous digests used as context for the next, to the effect of "work was focused on X, Y, Z and specifically they were doing A, B, C. or something of that nature. Again, over time, we want to understand how a PM or engineering lead would describe the work and the focus of the work
-```
-
-### Output
-
-> the daily-jar rewrite of seat_capex_split
-> - the daily-jar rewrite of seat_capex_split was rewritten around the daily-jar model after the explainer document landed
-> - seat_capex_split was rewritten to settle each closed day, and the collateral suites passed unchanged
-> - batched enrichment writes on the ingest path were raised, and the stream-and-consumer approach was picked out of three, gated on KELD_ENRICH_INGEST_MODE
-> [1 entry dropped to fit the beat cap]
-
-Anchoring term each entry was kept on: `model`, `each`, `enrichment`. The subject line carries no term occurring in the evidence.
-
-Identifiers this beat names that occur nowhere in its evidence: `seat_capex_split`, `KELD_ENRICH_INGEST_MODE`. Recorded, not dropped.
-
-⚠️ **This beat names terms from the prompt's own worked examples**, which belong to a held-out session and cannot have come from this window: `seat_capex_split`, `KELD_ENRICH_INGEST_MODE`. The anchoring guard does not catch it — the entry carrying it also carries an ordinary word that does occur in the window, and that is what it anchors on. It is visible at all only because the examples are held out of this corpus; against the contaminated set it would have read as a correct, anchored beat.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the demo seed and its signal clients were written, and four seeded members were left without a device
 
 
 ---
 
-## Beat 2 (window 14 of 31) · 1 attempt(s)
+## Beat 1 (window 14 of 31) · 1 attempt(s)
 
 Window geometry: 20 turns in the stride since the previous beat, 20 kept, 0 dropped by the character bound. 7645 runes in the window; 9822 runes in the assembled prompt against a 24000-rune budget.
 
@@ -3130,18 +2916,14 @@ user: use turning points for sampling, then write the plan, but we should bound 
 > - the session-story-rollup design was written and updated to include a story ladder with chronological paraphrased digests
 > - a minimal session record was defined with metadata fields like projects, focus, activity, subjects, and turning points
 > - the frequency of the expensive digest operation was bounded to once per hour in the real-world setting
-> [1 entry dropped to fit the beat cap]
+> - the invariant of storing full digests and feeding compressed ones was validated as safe and implemented in the spec
 
-Anchoring term each entry was kept on: `session-story-rollup`, `minimal`, `frequency`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the invariant of storing full digests and feeding compressed ones was validated as safe and implemented in the spec
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
 
-## Beat 3 (window 19 of 31) · 1 attempt(s)
+## Beat 2 (window 19 of 31) · 1 attempt(s)
 
 Window geometry: 222 turns in the stride since the previous beat, 49 kept, 173 dropped by the character bound (a hole marker sits where they were). 15705 runes in the window; 17888 runes in the assembled prompt against a 24000-rune budget.
 
@@ -3314,18 +3096,14 @@ user: fix the cap and ChangedSubject, then regenerate. I mean, dude, we OBVIUOSL
 > - the beat generation cap was fixed to prevent mid-sentence truncation and ensure complete, grammatically sound sentences
 > - a fixed interval beat generation schedule was implemented, triggering every 5 user turns to maintain consistent session-level context
 > - the `ChangedSubject` flag was removed as it was found to be redundant and caused false turning-point selection
-> [1 entry dropped to fit the beat cap]
+> - the beat generation system was re-aligned with established best practices used in trusted applications to provide clear, contextual summaries of ongoing work
 
-Anchoring term each entry was kept on: `beat`, `5`, `ChangedSubject`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the beat generation system was re-aligned with established best practices used in trusted applications to provide clear, contextual summaries of ongoing work
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `5`, `ChangedSubject`, `(names nothing checkable)`.
 
 
 ---
 
-## Beat 4 (window 24 of 31) · 1 attempt(s)
+## Beat 3 (window 24 of 31) · 1 attempt(s)
 
 Window geometry: 39 turns in the stride since the previous beat, 39 kept, 0 dropped by the character bound. 13161 runes in the window; 15329 runes in the assembled prompt against a 24000-rune budget.
 
@@ -3472,19 +3250,15 @@ user: fix the subjects extractor, but first, did we try or why not use strides f
 > improved beat continuity and subject extraction via stride-based context windows
 > - the work is about fixing the beat generation to avoid false claims of completion and ensuring continuity through shared context
 > - strides are introduced to incorporate a percentage of prior turns into the recent conversation window, enabling smoother transitions between beats
-> [2 entries dropped to fit the beat cap]
+> - the subject extraction logic is updated to better reflect continuity by using a stride-based window that includes a portion of the previous beat's context
+> - the new stride-based approach ensures that each beat references relevant prior work, improving coherence and reducing the risk of state invention
 
-Anchoring term each entry was kept on: `about`, `strides`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the subject extraction logic is updated to better reflect continuity by using a stride-based window that includes a portion of the previous beat's context
-- the new stride-based approach ensures that each beat references relevant prior work, improving coherence and reducing the risk of state invention
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
 
-## Beat 5 (window 29 of 31) · 1 attempt(s)
+## Beat 4 (window 29 of 31) · 1 attempt(s)
 
 Window geometry: 27 turns in the stride since the previous beat, 27 kept, 0 dropped by the character bound. 10060 runes in the window; 12231 runes in the assembled prompt against a 24000-rune budget.
 
@@ -3595,14 +3369,10 @@ user: Well, I am about to head out and will have to close the laptop and will re
 > the redesign of beat window geometry and input truncation boundaries
 > - the beat window geometry is redesigned to provide contiguous coverage with 25–30% stride overlap bounded by character count rather than fixed turn count
 > - the subjects extractor is identified as a core system improvement, not just a dashboard feature, due to its impact on subject continuity and change detection
-> [2 entries dropped to fit the beat cap]
+> - retention metrics are confirmed stable at 58.2% / 62.0% after analysis, with no net change and no new lost items, disproving truncation as a cause
+> - a character-bounded input cap rule is implemented and enforced across four non-compliant sites, with explicit requirements for visible dropping and forward progression
 
-Anchoring term each entry was kept on: `25`, `subjects`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- retention metrics are confirmed stable at 58.2% / 62.0% after analysis, with no net change and no new lost items, disproving truncation as a cause
-- a character-bounded input cap rule is implemented and enforced across four non-compliant sites, with explicit requirements for visible dropping and forward progression
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `25`, `(names nothing checkable)`, `58.2`, `(names nothing checkable)`.
 
 
 ---
@@ -3780,15 +3550,11 @@ user: I want to resume our auth-related work now. However, note that there have 
 > - OAuth workflow is extended to support Google and GitHub login with a one-click flow that respects existing signup_code gates
 > - OAuth identity linking is designed using a shared identity table with verified-email auto-linking to resolve existing user accounts
 > - The new-org UX is defined to require an org name during finish-setup, leveraging the existing DRY wizard framework for consistency
-> [1 entry dropped to fit the beat cap]
+> - A data model is proposed with three new tables: oauth_identity, pending_oauth_signup, and password_reset, all with defined constraints and indexes
 
-Anchoring term each entry was kept on: `OAuth`, `OAuth`, `UX`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `OAuth`, `OAuth`, `UX`, `oauth_identity`.
 
 Identifiers this beat names that occur nowhere in its evidence: `OAuth-first`. Recorded, not dropped.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- A data model is proposed with three new tables: oauth_identity, pending_oauth_signup, and password_reset, all with defined constraints and indexes
 
 
 ---
@@ -4014,7 +3780,7 @@ user: Where do I see the login with google and github buttons?
 > - the password reset backend and email templates were written with TTL and reset URL logic
 > - the login and signup pages were updated with OAuth buttons and forgot password links
 
-Anchoring term each entry was kept on: `OAuth`, `OAuth`, `TTL`, `OAuth`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `OAuth`, `OAuth`, `TTL`, `OAuth`.
 
 Identifiers this beat names that occur nowhere in its evidence: `start/callback`. Recorded, not dropped.
 
@@ -4210,14 +3976,10 @@ user: when I click it, it navigates to http://localhost:3000/login?next=%2Fforgo
 > OAuth integration and authentication flow implementation
 > - OAuth buttons render on login page after adding placeholder KELD_OAUTH_* values to .env and fixing docker-compose.yml to pass environment variables to the api container
 > - The OAuth flow is confirmed to work on localhost with buttons showing and functional routing, though clicking still fails without real credentials
-> [2 entries dropped to fit the beat cap]
+> - The production OAuth setup is verified to not require Caddyfile changes, as /api/auth/oauth/* is already routed under atlas.keld.co via existing Caddy configuration
+> - Production requires only KELD_APP_PUBLIC_URL=https://atlas.keld.co and KELD_OAUTH_* credentials in the VM's .env file, with rollout via make ship
 
-Anchoring term each entry was kept on: `OAuth`, `OAuth`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- The production OAuth setup is verified to not require Caddyfile changes, as /api/auth/oauth/* is already routed under atlas.keld.co via existing Caddy configuration
-- Production requires only KELD_APP_PUBLIC_URL=https://atlas.keld.co and KELD_OAUTH_* credentials in the VM's .env file, with rollout via make ship
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `OAuth`, `OAuth`, `OAuth`, `KELD_APP_PUBLIC_URL`.
 
 
 ---
@@ -4332,13 +4094,9 @@ user: When I try to trigger an email via any workflow on the app running on atla
 > - the email flow from forgot-password to reset-password was verified to work in dev but fails in production due to environment-specific configuration
 > - the production environment's Resend API key is confirmed to be correctly set in the VM's .env file but not being loaded by the container
 > - the production container image lacks the authlib dependency required to handle OAuth and password reset flows
-> [1 entry dropped to fit the beat cap]
+> - the need to run `make ship` to deploy the updated image with authlib and proper environment variables is identified as a prerequisite for email functionality
 
-Anchoring term each entry was kept on: `email`, `API`, `OAuth`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the need to run `make ship` to deploy the updated image with authlib and proper environment variables is identified as a prerequisite for email functionality
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `Resend`, `OAuth`, `(names nothing checkable)`.
 
 
 ---
@@ -4468,775 +4226,9 @@ user: commit to main
 > - the KELD_RESEND_API_KEY was missing from the prod VM .env file, causing the email sender to fallback to ConsoleEmailSender
 > - the prod VM .env file was updated with KELD_RESEND_API_KEY and KELD_RESEND_FROM values from the local environment
 > - the signal installer download links were failing due to a GitHub repo rename and httpx's default follow_redirects=False
-> [1 entry dropped to fit the beat cap]
+> - the signal_releases_repo config was updated to point to ncx-ai/keld-signal and the resolver was modified to follow redirects and guard against non-list responses
 
-Anchoring term each entry was kept on: `KELD_RESEND_API_KEY`, `VM`, `GitHub`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the signal_releases_repo config was updated to point to ncx-ai/keld-signal and the resolver was modified to follow redirects and guard against non-list responses
-
-
----
-
-# 16c69396-3607-4f3a-a1a0-2a2a4c4f4a1b.jsonl
-
-*real transcript (engineering) · 39 mined windows*
-
-Transcript: `/home/dg/keld/study-corpus-snapshot-2026-08-11T2130/projects/-home-dg-keld-keld-signal/16c69396-3607-4f3a-a1a0-2a2a4c4f4a1b.jsonl` · project `keld-signal` · walked to window 30
-
-Window coverage over the walked prefix: 559 turns spanned by the beat strides, 263 of them read by a window (47.0%), 296 read by none; 3 of 6 windows carry a hole marker; largest window 15978 runes.
-
----
-
-## Beat at window 4 — GENERATION FAILED after 5 attempt(s)
-
-```
-retry: gave up after 5 attempt(s): invalid beat: entry "The staleness defect in the digest system was identified and fixed by introducing prompt-level accounting rules that enforce open-item closure, correcting false positives in the `unresolved` field and restoring accurate signal delivery" is 235 runes, over the cap of 200
-```
-
-
----
-
-## Beat 1 (window 9 of 39) · 1 attempt(s)
-
-Window geometry: 90 turns in the stride since the previous beat, 55 kept, 35 dropped by the character bound (a hole marker sits where they were). 15978 runes in the window; 18151 runes in the assembled prompt against a 24000-rune budget.
-
-### Input 1 — measured record (counted on device — authoritative)
-
-```
-counts: turns=251 user_turns=10 tool_calls=196 corrections=1
-projects: keld-signal
-tool profile: Bash x189, Artifact x3, Write x2, AskUserQuestion x1, Skill x1
-recurring subjects: keld-signal, synopsis, python3, retention, windows, digest, digests, reversal, unresolved, fabricated, transcript, accounting
-```
-
-### Input 2 — conversation window (15978 runes — evidence)
-
-```
-[turns since the previous update omitted to fit the context — they are not covered by any later window either]
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Suite green. Running the stratified sweep with all gates now covering the synopsis:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study … (x2)
-assistant: All ten thresholds pass on the stratified corpus, and the T2 residual is a single *genuine* catch — `agentcfg.SetSidecarPort`, a plausible-looking Go identifier absent from the source, carried across four steps:
-
-[code block, 2 lines]
-
-Committing, then regenerating the artifact with this session in it:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study git add -A …
-assistant: This session mined 44 windows. Here's the synopsis it wrote about our own work — the one you can check from memory:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-assistant: This is the most useful result of the session, and it's a failure. **The synopsis is badly stale.** It describes `feat/multiturn-context` and "integrating tool use into the context window" — the topic from the *first* few windows, ~40 windows ago. The real current state is prompt-and-metric iteration on the digest. It even asserts the work is "now transitioning to a design phase" for something long since abandoned.
-
-Two causes, and one is my instruction:
-
-1. My refine rule says *"keep the subject and framing… Do not re-scope it to whatever the new part happens to be about."* That guards against drift onto the newest topic, but **forbids legitimate re-scoping when a long session genuinely changes subject** — which is exactly what happened here.
-2. The dump does one refinement across 44 windows; production would fire many more (`MaxTurns 15`).
-
-The trigger already detects this — `TriggerFocusShift` exists precisely for it — and that signal never reaches the prompt.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - … (x2)
-assistant: Better, and honest about the limit. It **did** re-scope — it now says *"The work has shifted from a pure context window design to a hybrid approach"* and describes the turn/tool-count routing features and the 52-of-464 coverage anomaly. But that's **mid**-session material, not the latest work. A 44-window session still ends with a synopsis lagging the current topic, because carry-forward plus the no-shrink and retain rules bias hard toward preservation.
-
-That's a real limitation, not something I'll keep tuning blind. Rebuilding the artifact with all four sessions and this finding stated plainly:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-tool: Artifact digest-examples.html
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study go test …
-assistant: Artifact updated at the same URL: **https://claude.ai/code/artifact/232bd28f-639a-4bf5-a3f5-b5b04d073c26**
-
-## The synopsis section
-
-`synopsis` now leads the report: subject, standing, direction, in three or four sentences readable on their own. It needed something the prompt never had — `SessionDigest` has always sampled a coarse whole-session view, and **it was built and then never passed to the digest prompt**. Written from the recent window alone, a month-end close would be summarised as "clearing the suspense account".
-
-That growth didn't fit: a worst-case refinement prompt is 5,245 chars of instructions plus 4,742 of carried report, and the ninth section grew the output too. So I took you up on pushing the ceiling — `ctx 6144`, measured at **3,008 MB**, 8 MB over. The alternative was cutting content the retention metric exists to protect.
-
-## Your question found a bigger problem than the artifact
-
-**The corpus was a monoculture and nothing said so.** Transcripts were walked in path order, first 14 taken — but keld-atlas holds 43 of 59, so *every* session I've measured came from one codebase while I reported it as a corpus. This session sat at **index 51 of 59** and was never sampled.…
-user: Dude, it's fine to use 8MB over. the limit of 3GB is just an eyeball range
-assistant: Understood — I'll stop treating 3,008 MB as something needing a defence.
-tool: Bash ls /home/dg/.claude/projects/-home-dg-keld-keld-signal/memory/ 2>/dev/null | …
-tool: Write ram-budget-is-approximate.md (x2)
-assistant: Noted and saved so it sticks.
-
-`ctx 6144` at 3,008 MB stands, and I'll stop trading content against the budget — that pressure is what drove the cap-shrinking experiments and the "session view yields first" priority scheme. With ±100 MB of slack those were solving a non-problem.
-
-One thing I won't do: re-run at `ctx 8192` to chase the synopsis lag. More context wouldn't fix it — the lag comes from carry-forward plus the no-shrink and retain-list rules biasing toward preservation, not from the window being clipped. Spending another 20-minute sweep there would be exactly the over-optimising you're telling me to drop.
-
-So the real next step for the synopsis is a **recency check** — does it reflect the latest turns, or a topic the session left behind? That's the threshold I don't have, and the one this session's own transcript proved I need. Otherwise the integration design is still queued behind it.
-user: lets look into it
-assistant: Right. Measurement first — a recency threshold, built to avoid the word-level over-detection that's bitten me five times now.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study grep -n …
-assistant: Two things there. The facts block has **no `recurring topics` or `extracted specifics` lines at all** — so the one deterministic recency anchor in the design is empty in practice. And the recent window's final turns are literally you asking for the synopsis feature, while the synopsis talks about turn/tool-count routing. The lag is real and large.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study sed -n …
-assistant: `Extract` computes counts only — `Topics`/`Entities` come from a separate call the harness never makes. So the "recurring topics / extracted specifics" part of the context pack has been **dead in every measurement I've run**, and there's no deterministic pull toward the present at all.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study sed -n …
-assistant: Now the metric and a deterministic recency anchor — the same pattern that fixed retention and closures:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study cat > … (x2)
-assistant: Both failures are tokenizer behaviour I should verify rather than guess at:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study sed -n …
-assistant: Found it — `wordsOf` treats **uppercase letters as separators** (it only keeps `a-z0-9`), so `DigestSchema` becomes `igest`+`chema` and `ElideCode` becomes `lide`+`ode`. It's only safe on already-lowercased input, which every existing caller does. My new code passed raw text. Let me find the case-preserving tokenizer `Identifiers` must use:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study sed -n … (x2)
-assistant: `RecentSubjects` passes. The remaining failure: `identifierPat` only matches dotted/hyphenated tokens or Capitalised words — it never yields lowercase words like `extracts`, and it excludes `/`, so `eval/mine` isn't matched either. A lag measure needs ordinary subject vocabulary too, so it needs its own tokenizer:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Detector works and the suite is green. Now measure the actual lag rate — with the anchor in place and, separately, without it, so I know whether the anchor does anything:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - … (x3)
-assistant: T11 lands at 7.1% of 42 (3 cases) — under threshold. But **T4 fell to 88.3%** (from 96.1%) and **T7 rose to 10.2%** (from 4.1%), and those two moving together is exactly what you'd expect from an anchor that re-weights the model toward the newest turns: it drops earlier facts and invents open items about the new subject.
-
-I introduced the anchor unconditionally, which was sloppy — the trigger already measures whether the subject changed. Gating it on that, which also gives me the no-anchor baseline for T11 since the sweep fires `TriggerVolume`:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Suite green. Now the one measurement I'm missing: T11 **without** the anchor, to quantify what the anchor actually buys. The sweep fires `TriggerVolume`, so it now exercises the un-anchored path:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study … (x2)
-assistant: Clean A/B now, and neither extreme passes everything:
-
-| | anchor off (routine) | anchor on (always) |
-|---|---:|---:|
-| T4 retention | **97.4%** | 88.3% |
-| T7 fabricated | **4.1%** | 10.2% |
-| T11 lag | 14.3% (6/42) | **7.1%** (3/42) |
-| T2 unverified | 3.2% | **1.7%** |
-
-The anchor halves lag but costs retention and doubles fabricated blockers. Gating on a measured shift should get both — but I can't claim that from reasoning alone, and the sweep has no focus data. Let me give it a deterministic stand-in for the production signal so the gated case is *measured*:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study cat >> … (x3)
-assistant: That result invalidates its own label, and I should say so: **the anchor fired on 42 of 42 refinements** — my `SubjectShifted` proxy calls every refresh a shift, because these windows sit 4 apart and their distinctive-term overlap is naturally thin. So "gated" was never measured; that run is anchor-always with *different wording*.
-
-Which is itself the finding. Comparing the two anchor-always runs, the only difference being the text:
-
-| | anchor text v1 | anchor text v2 (+"leave other sections alone") |
-|---|---:|---:|
-| T4 retention | 88.3% | **90.9%** |
-| T7 fabricated | 10.2% | **2.0%** |
-| T2 unverified | 1.7% | **0.7%** |
-| T11 lag | **7.1%** | 14.3% |
-
-Adding one clause protected the other sections and gave the recency gain straight back. **Recency and retention are in direct tension, and no configuration yet clears T11 without paying for it.**
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: We looked, and the answer is a measured trade-off rather than a fix.
-
-**Two things were wrong beneath the symptom.** First, the facts block was designed to carry `recurring topics` as a recency anchor — but those fields come from `WithEnrichment`, which needs a classification pass the digest path never makes. **They have been empty in every measurement I've taken**, so the prompt had no pull toward the present at all. Second, building the metric needed a third tokenizer: `wordsOf` keeps only `[a-z0-9]`, so uppercase letters are *separators* and it shreds `DigestSchema` into `igest`+`chema` — safe for its existing callers only because they all lowercase first — while `identifierPat` matches no ordinary lowercase word and excludes `/`.
-
-**T11 is now a real threshold**: does the synopsis reflect the session's present, or a subject it left behind? It's the one failure nothing else caught — a lagging synopsis has nothing fabricated (T7 passes) and contradicts nothing (T8 passes). It's just out of date, which is precisely what a reader can't detect.
-
-**The result, over 14 stratified sessions:**
-
-| | T4 retention | T7 fabricated | T2 unverified | T11 lag |
-|---|---:|---:|---:|---:|
-| anchor off | **97.4%** | 4.1% | 3.2% | 14.3% |
-| anchor, text v1 | 88.3% | 10.2% | 1.7% | **7.1%** |
-| anchor, text v2 | 90.9% | **2.0%** | **0.7%** | 14.3% |
-
-The anchor halves lag but costs retention and doubles fabricated blockers — the model re-weights toward the newest turns and sheds what came before.…
-user: In short, what problems outstanding do we have? And can you show examples of what this thing is doing now?
-assistant: Regenerating examples on the current code first, since the last dump predates the anchor and wording changes:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study … (x2)
-assistant: Both failure modes are now visible side by side, and one is a problem I hadn't measured. Updating the artifact with this current output:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-tool: Artifact digest-examples.html
-assistant: Artifact refreshed with current output: **https://claude.ai/code/artifact/232bd28f-639a-4bf5-a3f5-b5b04d073c26**
-
-## What it's doing now — two examples
-
-**This session, after 47 windows.** The synopsis still describes *"designing a lightweight metadata schema for tool use events"* — the topic of the opening windows. And `next` invents detail that was never discussed: *"fields for tool name, call ID, input, output, and timestamp."* That's a fabrication nothing currently measures, because the fabricated-blocker check only inspects `unresolved`.
-
-**Month-end close, the opposite failure.** It leads with *"The classification of a boiler repair at Larkin as a repair expense... has been finalized"* — treating the last small task as the subject, and demoting the actual work (an eight-step financial close) to background it *"grew out of"*.
-
-What works: `happened` on the finance session correctly reports the Larkin reclassification and the INV-2340 revenue cutoff with real figures, and `unresolved` correctly returns the sentinel because that session genuinely finished.
-
-## Outstanding problems, short
-
-**Blocking quality**
-1. **Synopsis subject is unreliable in both directions** — lags on long sessions, over-anchors on short ones.…
-user: What is your understanding of my goals with this? What do you think I am askign for?
-assistant: Here's my read, layered from the immediate to the actual.
-
-**What you're building.** Keld sells organizations visibility into AI-assisted work. Two consumers need it: a human one — the admin or PM who wants to know what a team is working on, how it's going, where it's heading — and a machine one, the Inference Exchange, which needs to know what *kind* of work a request is so it can route it to the right-sized model. That's why you kept pushing on "complexity and precision intelligence required" and on adaptive model recommendation.
-
-**Why this study exists.** The GLiNER2 pipeline answers a question nobody asked. It classifies isolated prompts against fixed taxonomies, but the real input is freeform multi-turn agentic conversation — so you reframed twice: first "an LLM would understand a transcript better than a bi-encoder," then the sharper one, "reconsider what dimensions we can *reliably* capture at all, because our classifications assume task-like prompts and that's not what we have." The digest came out of the same instinct: a status board of eight fields isn't what a manager reads.
-
-**The constraints are product constraints, not preferences.** On-device, laptop-sized RAM, privacy invariant intact, works for an accountant in Cowork as well as an engineer in Claude Code.…
-user: Ideally what we want is to understand what's happening in recent chat history, how it rolls up into the larger story over time, from specific actions tied to the larger coarser grain info, like what projects are being worked on and the higher level views on the work. That said, when it comes to using prior digests as context for generating the next one, we could instead generate concise bulleted or small paragraph paraphrases of the previous digests used as context for the next, to the effect of "work was focused on X, Y, Z and specifically they were doing A, B, C. or something of that nature. Again, over time, we want to understand how a PM or engineering lead would describe the work and the focus of the work
-```
-
-### Output
-
-> the daily-jar rewrite of seat_capex_split
-> - the daily-jar rewrite of seat_capex_split was rewritten around the daily-jar model after the explainer document landed
-> - seat_capex_split was rewritten to settle each closed day, and the collateral suites passed unchanged
-> - batched enrichment writes on the ingest path were raised, and the stream-and-consumer approach was picked out of three, gated on KELD_ENRICH_INGEST_MODE
-> [1 entry dropped to fit the beat cap]
-
-Anchoring term each entry was kept on: `model`, `each`, `enrichment`. The subject line carries no term occurring in the evidence.
-
-Identifiers this beat names that occur nowhere in its evidence: `seat_capex_split`, `KELD_ENRICH_INGEST_MODE`. Recorded, not dropped.
-
-⚠️ **This beat names terms from the prompt's own worked examples**, which belong to a held-out session and cannot have come from this window: `seat_capex_split`, `KELD_ENRICH_INGEST_MODE`. The anchoring guard does not catch it — the entry carrying it also carries an ordinary word that does occur in the window, and that is what it anchors on. It is visible at all only because the examples are held out of this corpus; against the contaminated set it would have read as a correct, anchored beat.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the demo seed and its signal clients were written, and four seeded members were left without a device
-
-
----
-
-## Beat 2 (window 14 of 39) · 1 attempt(s)
-
-Window geometry: 20 turns in the stride since the previous beat, 20 kept, 0 dropped by the character bound. 7645 runes in the window; 9822 runes in the assembled prompt against a 24000-rune budget.
-
-### Input 1 — measured record (counted on device — authoritative)
-
-```
-counts: turns=271 user_turns=15 tool_calls=202 corrections=2
-projects: keld-signal
-tool profile: Bash x192, Artifact x3, Write x3, Edit x2, AskUserQuestion x1, Skill x1
-recurring subjects: digest, compression, ladder, paraphrase, story, keld-signal, python3, synopsis, digests, retention, transcript, reversal
-```
-
-### Input 2 — conversation window (7645 runes — evidence)
-
-```
-assistant: That reframes the mechanism in a way that dissolves three of the problems I listed, so let me play it back precisely.
-
-**The shape you're describing is a hierarchy, not a flat report.** Specific actions in recent turns roll up into "what this session is about," which rolls up into "what's being worked on across sessions and projects." Each level is coarser and more durable than the one below. The thing a PM or eng lead says is *"the team's been on X, Y and Z; this week specifically A, B and C"* — coarse framing carrying a few concrete instances, not a status board.
-
-**The compression proposal fixes the tension I measured.** Right now the prior digest is embedded whole — 4,742 characters worst case — and the prompt tells the model it must not shrink. That's what forced the budget fight, and it's the direct cause of the recency/retention trade-off: I forbade recompression to protect facts, so the report can't move on. Your version makes compression an *explicit operation with its own instruction* rather than a failure to be suppressed.
-
-**The invariant that makes it safe: store full, feed compressed.** My one hard-won finding was that repeated re-summarization erodes the most valuable content — that's why insight merging happens in code and never goes back through the model.…
-user: Over the course of an interactive session
-assistant: Understood — one interactive session, no cross-session tier. That keeps `digeststore` session-keyed as built, and the "larger story" is the session-level report while "specific actions" are the recent turns. The rollup is over the *arc of the session*.
-
-Writing the spec.
-tool: Write 2026-08-10-session-story-rollup-design.md
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study git add -A …
-assistant: Spec written and committed: `docs/superpowers/specs/2026-08-10-session-story-rollup-design.md` (`0970391`).
-
-**The design, in short.** Two grains within the session — specific actions (recent window, in detail) and the session story (accumulating, coarsening as it grows). Between them a compression step: the refinement receives a **≤600-rune paraphrase** of the previous digest plus the deterministic retain-list, instead of 4,742 characters of embedded prose. That's your sentence exactly — *"work has been on X, Y, Z; specifically A, B, C"* — with the paraphrase supplying the framing and the retain-list supplying the instances.
-
-**The invariant that makes it safe: store full, feed compressed.** My one hard-won finding is that repeated re-summarization erodes the best content. That still holds, so the lossy path is the *prompt* only. The stored digest is never regenerated from a paraphrase. The spec calls this out as needing a test rather than a convention, because it's the one way this design could quietly destroy the record.
-
-**Three things it deletes.** The "must not become shorter" rule, which directly contradicts deliberate compression. `CarryForward` and the priority scheme deciding which sections yield budget.…
-user: But to understand the larger picture of the session, would we not want to consult the summarized/condensed digests at some sampling frequency across the session or at least across a much larger rolling window?
-assistant: Yes — and that's a real gap in what I wrote. A single paraphrase of the immediately-previous digest is a chain where each step sees only one step back, which is precisely the telephone risk I listed and then didn't actually mitigate. Consulting a *series* of condensed digests across the session both gives the trajectory and bounds the drift, because a late generation can see where the work started, not just where it was last round.
-
-`digeststore` already keeps every snapshot with its `seq`, so the sequence is there to read.
-tool: Edit 2026-08-10-session-story-rollup-design.md
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Spec updated (`ef4a335`) — you were right that one paraphrase isn't enough.
-
-**The story ladder.** Each refinement now receives a chronological sequence of stored paraphrases rather than just the last:
-
-- **the first, always** — where the work started, so the account can say what the current work grew out of; dropping it is how a session loses its own origin
-- **the most recent in full** (≤600 runes) — the immediate handover
-- **evenly spaced middles, clipped short** (≤140 runes each) — the trajectory, without paying full price per step
-- capped at **8**; beyond that the middles are resampled rather than appended
-
-Dense at the recent end, sparse toward the start — the same shape `SessionDigest` already uses for turns, for the same reason.
-
-**It's cheaper than what it replaces.** Worst case ~1,580 runes against the 4,742 the embedded digest costs, while covering the whole session instead of one step of it. That's the part I'd missed: sampling across the session isn't an added cost, it's what compression pays for.
-
-**And it's the drift bound I claimed but hadn't built.** With a ladder, framing is checkable against the session's *own* earlier framings, so drift is visible to the generation that would otherwise compound it.…
-user: We can also keep track somehow of a minimal set of metadata that we think spans the session and update it intelligently and appropriately when relevant data changes, like the activigty or focus shifts
-assistant: That's the missing third element, and it's the one that makes the ladder trustworthy. API Error: Response stalled mid-stream. The response above may be incomplete.
-user: try again
-assistant: Let me do that properly.
-
-Your third element is the one that makes the ladder trustworthy. I'd flagged that a chain of mutually consistent paraphrases can be *consistently wrong*, and that the only check was the transcript. A measured, session-spanning metadata record is a cheap standing proxy for exactly that check.
-tool: Edit 2026-08-10-session-story-rollup-design.md
-assistant: Ah, that explains the truncation — nothing to correct then, just picking up where the connection dropped.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Spec now has all three inputs (`0970391` → `ef4a335` → `9a4948a`).
-
-**The session record — a minimal measured spine.** Your point completes the design by splitting context according to *truth-status*, which turns out to be the property that matters:
-
-| input | origin | authority |
-|---|---|---|
-| session record | measured, accumulated | **authoritative** |
-| story ladder | model-paraphrased | indicative |
-| recent window | raw transcript | evidence |
-
-Contents, bounded so "minimal" stays true: `projects` (cap 5), `focus` + concentration from the existing EWMA, `activity` mix, `subjects` (cap 12, **verbatim-verified only**, so a term can't enter by being plausible), session-spanning `counts`, and `turning_points` — the seq and trigger reason of prior digests, so a focus shift is recoverable as a *fact* rather than inferred from prose.
-
-**Updated per field when its input changes, not per turn.** The deterministic fields (projects, counts, tools, turning points) recompute from the transcript for free. And the important consequence of your phrasing — *"when relevant data changes, like the activity or focus shifts"* — is that **the change detection and the regeneration trigger are the same signal.** `TriggerFocusShift` already fires on exactly this.…
-user: use turning points for sampling, then write the plan, but we should bound the max frequency of the expensive digest operation in the real world setting to something like once per hour or something
-```
-
-### Output
-
-> the session-story-rollup design with story ladder and session metadata
-> - the session-story-rollup design was written and updated to include a story ladder with chronological paraphrased digests
-> - a minimal session record was defined with metadata fields like projects, focus, activity, subjects, and turning points
-> - the frequency of the expensive digest operation was bounded to once per hour in the real-world setting
-> [1 entry dropped to fit the beat cap]
-
-Anchoring term each entry was kept on: `session-story-rollup`, `minimal`, `frequency`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the invariant of storing full digests and feeding compressed ones was validated as safe and implemented in the spec
-
-
----
-
-## Beat 3 (window 19 of 39) · 1 attempt(s)
-
-Window geometry: 222 turns in the stride since the previous beat, 49 kept, 173 dropped by the character bound (a hole marker sits where they were). 15705 runes in the window; 17888 runes in the assembled prompt against a 24000-rune budget.
-
-### Input 1 — measured record (counted on device — authoritative)
-
-```
-counts: turns=493 user_turns=20 tool_calls=366 corrections=3
-projects: keld-signal
-tool profile: Bash x270, Agent x33, SendMessage x17, TaskUpdate x17, TaskCreate x9, Write x5
-recurring subjects: keld-signal, runes, SendMessage, beats, implementer, python3, digest, synopsis, threshold, defect, digests, retain-list
-```
-
-### Input 2 — conversation window (15705 runes — evidence)
-
-```
-[turns since the previous update omitted to fit the context — they are not covered by any later window either]
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study WS=$(cat …
-tool: Agent
-assistant: **Zero panics** across 29 sessions / 1,087 steps / 2,174 prompts, verified by reverting the fix and reproducing the defect *through the committed probe*. Round 4 also retracted one of its own earlier claims and refused to bend a test that couldn't honestly fail.
-
-Final gate, then measurement:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study WS=$(cat …
-tool: Agent
-assistant: **GO**, conditional on two harness changes that belong to Task 8 rather than to this diff.
-
-The most important finding: **the realistic margin is +0, not +20** — reachable via `Subjects` at their 64-rune cap (real transcripts do produce long dotted tokens) and 40 open items on a first refinement. But zero is *correct by construction* — the exact reserve being met — and across 740 clipped steps under six simultaneous stresses there were still **0 panics**. Also: the probe's real floor coverage is **301 refine steps**, not "2,174 prompts"; the create path never clips on this corpus.
-
-Closing Task 7b and setting up for measurement:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study WS=$(cat …
-tool: TaskUpdate (x2)
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-tool: Agent
-assistant: **Task 7b closed — GO for measurement.** Task 8 is now running: wiring the sweep to records and beats, then the live sweep.
-
-[code block, 3 lines]
-
-The final gate verified all six claims by running code, and every revert reproduced its documented failure at the documented numbers. The invariant is now **provably exact** — the reviewer derived the reserve/charge chain analytically on both paths — rather than empirically lucky.
-
-**Three corrections worth stating plainly, because two contradict things I told you earlier:**
-
-**The real margin is +0, not +20.** Reachable via `Subjects` at their 64-rune cap and 40 open items on a first refinement. That sounds alarming and isn't: zero *is* the exact reserve being met, and under six simultaneous stresses across 740 clipped steps there were **0 panics**. There's structurally no worse realistic input while the accounting is complete.
-
-**Every window margin I've quoted you before this round was inflated by 97 runes** — the truncation notice was being counted as conversation. Real margins: refine +4, worst-case create +2, corpus +20.
-
-**And the probe's headline overstates its own coverage by ~7×.** "2,174 prompts" is honest but the create path *never clips* on this corpus, so only **301 refine steps** actually exercise the window floor.… The measurement is in, and it delivers a clear negative result on the design's central bet. Recording it and dispatching the final whole-branch review.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study WS=$(cat …
-tool: TaskUpdate
-tool: Agent
-assistant: All eight tasks are done. **The measurement came back, and the design's central bet failed.** Final whole-branch review is running.
-
-## The result
-
-Both arms were run **twice with identical figures** — temperature 0 is reproducible on this corpus. That retires "is it variance?" for the whole study, which has dogged several earlier numbers.
-
-| | anchor on | anchor off | want |
-|---|---:|---:|---:|
-| T1 usable | 100% of 56 | 100% of 56 | 100% |
-| **T4 retention** | **50.0% of 80** | **56.2% of 80** | **≥90%** |
-| T3 rubberstamped | 16.7% of 12 | 8.3% of 12 | ≤10% |
-| T12 beat-vs-record | 15.7% of 70 | 15.7% of 70 | ≤5% |
-| T2 / T7 / T8 / T9 / T10 / T13 | all pass | all pass | — |
-| leakage · recovered panics | 0 · **0** | 0 · **0** | 0 |
-
-**The plumbing works.** T1 at 100% with **zero recovered panics** means the four rounds of budget work held completely — no truncation, no dropped digests, no starved windows across the whole run.
-
-**The quality claim did not.** Retention halved, from 93–97% under the old embedded-prose scheme to 50–56% now. And my plan's explanation is **refuted**: neither retain-list cap ever bound (24 of 60 entries, 280 of 700 runes), and **161 of 240 specifics were explicitly named in the retain-list and dropped anyway**.… Final review: **NOT READY** — but not for code correctness. The budget work is sound and tightly pinned. It's blocked because **the code comments and three of four docs assert the opposite of what was measured**, and every fix is a comment, doc, or test-calibration edit. Nothing needs the sweep re-run.
-
-Two findings I want to name before the fix wave, because they're sharper than anything I caught:
-
-**T11's 0.0% is close to a tautology.** `SynopsisLag`'s docstring claims immunity to bare-word overlap — but `distinctiveToken`'s 7-char rule admits ordinary English. A textbook lagging synopsis returns `lag=false` on the words *"remains"* and *"whether"*. **Part 7 diagnosed `distinctiveTerms` for T12 and not for T11 — same function, same defect, and the small number in the reassuring direction is the one nobody audited.**
-
-**And my ablation is confounded.** `reason` feeds both the anchor *and* `NoteTurningPoint`, so the OFF arm has empty `TurningPoints` for its entire run while ON fires on ~41 of 42 steps. So "the anchor costs 6 points of retention" cannot be attributed to the anchor alone.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study WS=$(cat …
-assistant: A peer session ran an independent mutation audit and converged on the same four unpinned mechanisms my reviewer found, plus new ones. Replying, then folding it all into a single fix wave.
-tool: SendMessage
-tool: ListAgents
-tool: SendMessage (x2)
-assistant: Relayed. Now the single fix wave — blockers from the final review plus the peer's three.
-tool: Agent
-assistant: All eight tasks are implemented and measured. The final review says **NOT READY**, and it's right — but the reason matters: **not code correctness.** The budget work is sound and tightly pinned. The branch is blocked because the code comments and three of four docs assert the opposite of what was measured. Fix wave running; nothing needs the sweep re-run.
-
-**A peer session independently mutation-audited the test suite and converged on the same four unpinned mechanisms** my reviewer found. Two different methods reaching the same four moved them from "follow-up" to "blocker" in my judgement. It also found three I didn't have — including one that stings: `digest_consistency_test.go` claims to pin "all three punctuation shapes" for a fix *I personally ruled on*, but `,` and `)` are tokenizer separators, so it verifies exactly one.
-
-**The most important correction is to a number I reported to you as a success.** I told you T11 came back at 0.0% in both arms. That figure is close to a **tautology of the tokenizer**: `distinctiveToken`'s 7-character rule admits ordinary English, so a synopsis entirely about one subject scores hits on the words *"remains"* and *"whether"* against a completely unrelated window — and `SynopsisLag` only flags when hits are zero.… Fix wave complete — 9 commits, all 11 must-fixes and 7 follow-ups closed, and it corrected the review in several places with measurements rather than argument. Running the single scoped re-review the process prescribes, then finishing.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study WS=$(cat …
-tool: Agent
-assistant: **READY WITH FOLLOW-UPS.** Nothing blocks. The re-reviewer verified all six items by doing its own reverts — 10 of 10 mechanisms now fail when removed — and confirmed all three places where the fix wave *corrected* the review, which were the highest-risk claims in the package.
-
-Parking the four residuals with rulings, then finishing the branch.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study WS=$(cat …
-tool: Skill
-assistant: I'm using the finishing-a-development-branch skill to complete this work.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study echo "=== …
-assistant: Suite green — 38 packages, zero failures, on the exact tree to be integrated. Named-branch worktree, forked from `main` at `72c8502`, 100 commits ahead.
-
-**Branch state:** eight planned tasks plus one I added, all implemented, reviewed, and measured. Final whole-branch review and its scoped re-review both clean; four residuals parked with rulings (all labelling accuracy, none load-bearing, none needing a sweep re-run).
-
-The deliverable is a **negative result**, documented as one: the design removed the no-shrink rule on the theory that cheap beats plus a deterministic retain-list would substitute for embedding prior prose — and measured that they don't. Retention **94.9% → 50.0%** against a ≥90% threshold, with the retain-list explicitly naming 161 of the 240 lost specifics. The infrastructure around it works (T1 100%, zero recovered panics, zero leakage, budget holds on real transcripts).
-tool: AskUserQuestion
-tool: Bash MAIN_ROOT=$(git -C "/home/dg/keld/keld-signal/.git/.." rev-parse …
-assistant: Merge succeeded. Note: `git pull` failed on remote access, so this merged against **local** `main` — which was at `72c8502`, exactly the merge-base, so it's a clean fast-forward with nothing missed. Verifying the merged result:
-tool: Bash cd /home/dg/keld/keld-signal echo "=== HEAD after merge ==="; git log …
-assistant: Merged result green: 38 packages, both vet variants clean. `main` is now at `46a721b`.
-
-Now cleanup. The worktree sits under `.claude/worktrees/` — host-managed, not Superpowers-created — so the platform's exit tool owns it rather than `git worktree remove`:
-tool: ToolSearch select:ExitWorktree
-assistant: `ExitWorktree` only operates on worktrees *it* created this session — this one pre-existed as the session's working directory, so it would be a no-op, and the skill directs leaving host-managed workspaces in place. That means the branch is still checked out there:
-tool: Bash cd /home/dg/keld/keld-signal echo "=== is the branch fully merged into main? …
-assistant: Merged and verified. **`main` is at `46a721b`, suite green (38 packages), both vet variants clean.**
-
-Two deviations from the standard cleanup, both forced by the environment and both deliberate:
-
-**The branch is not deleted.** It's confirmed fully merged (`git branch --merged main` lists it), but the worktree at `.claude/worktrees/llm-classify-study` has it checked out — that's this session's own working directory. `git branch -d feat/llm-classify-study` is safe to run whenever you're done there.
-
-**The worktree stays.** It lives under `.claude/worktrees/`, so the host owns it, not Superpowers — and `ExitWorktree` only handles worktrees it created itself. I also left the SDD workspace in place rather than deleting it, because the study isn't finished: the retention failure means the cumulative retain-list is the next experiment, and that workspace holds every measurement, review package, and the parked follow-up list.
-
-## The four parked residuals
-
-None load-bearing; none needs a sweep re-run:
-
-1. **`digest_refine_test.go:211`** — a stale comment the fix wave itself created, asserting `Block()` "always writes its counts line unconditionally" when the same commit gated it. One line, and squarely in the defect class this branch documents.…
-user: so tell me, how well does the approach as implemented actually seem to work? what works well and what doesn't? I'm so confused
-assistant: Fair — I buried you in process. Here's the plain version.
-
-## The short answer
-
-**A single report is good. Keeping it good as the session grows is unsolved.** That's the whole finding.
-
-## What genuinely works
-
-**It runs on your laptop.** ~3 GB, CPU-viable, on-device, no raw text leaving the machine. That was the open question at the start and it's settled.
-
-**Every report comes out well-formed.** 56 of 56, zero truncation, zero dropped digests, zero instruction text leaking into output. The plumbing is solid.
-
-**The prose is genuinely readable and specific.** You saw it: the finance report captured the eight-step close as a *process*, named the Larkin reclassification, the INV-2340 revenue cutoff, real figures. The engineering one built up architecture across refinements — migration `0042`, the commit SHA, component names.
-
-**It doesn't invent blockers.** 2–4% fabricated open items. It doesn't fill `unresolved` with plausible-sounding nonsense, which was a real risk.
-
-**Beats work.** One-to-three-sentence "what is this about" statements every few turns, ~60–90 tokens each. All 70 generated were worth keeping — none were redundant restatements.
-
-**And the classification dimensions from earlier still hold**: `function_guess` and `domain` at 0.99–1.00 cross-system reproducibility.…
-user: well, I need to review the beats myself but you never show them to me. how am I supposed to tell you how sound it is? And yes, we obviously need to do SOMETHING to retain and keep updated a view of the session "zoomed out"
-assistant: You're right on both counts, and the first is a straight failure on my part — I've discussed beats at length and never once put one in front of you. Generating the actual series now.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study cat > … (x3)
-assistant: Now I can see them, and so can you. Let me quantify what's visible before giving my read:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: There it is, and it's worse than I'd have guessed:
-
-- **97% are cut off mid-thought** (46 of 47 end in an ellipsis)
-- **median sentence count: zero** — most beats don't contain one complete sentence
-- **length clusters at 187–199 against a 200 cap** — essentially every beat hits the wall
-- **46 of 47 open with the identical four words**, "The work is about"
-- **100% flagged `*SUBJECT CHANGED*`**
-
-## What that means
-
-**My error, and a basic one.** I asked for "one to three sentences" and set `BeatCap = 200` runes. 200 runes is about *one clause*. So the model writes a proper sentence, the cap guillotines it, and the median beat is a run-on fragment. The instruction and the constant contradict each other, and I never looked at the output to notice — I only counted them (70 asked, 70 kept) and declared the cadence sound.
-
-**The `ChangedSubject` flag is pure noise.** 47 of 47. And that flag is precisely what beat *selection* samples on for the report — so "prefer turning points" degenerates to "everything is a turning point", i.e. no selection at all. The turning-point mechanism I designed and you endorsed is, as built, inert.
-
-## What genuinely is sound
-
-**The trajectory is real.** Read those 20 in order and you get a fair account of this session: hunting a GLiNER2 alternative → moving-window context → RAM viability → structural complexity signals → digest design for non-technical readers → prompt refinement → metric defects → the synopsis-lag diagnosis → the rollup design → beats.…
-user: fix the cap and ChangedSubject, then regenerate. I mean, dude, we OBVIUOSLY don't want to truncate generated text mid-sentence, you fucking dolt. Also, why not just generate a beat on a fixed interval, like every 5 user turns or so? The bottom line is that you need to use best practices and established approaches used by other WORKING trusted applications to generate a few sentences in on ongoing basis to describe, with appropriate contextual awareness, what the current conversation is about etc. As if we asked the engineer who's using the claude session what they're working on, at a high level and daily standup level.
-```
-
-### Output
-
-> beats and session-level subject tracking
-> - the beat generation cap was fixed to prevent mid-sentence truncation and ensure complete, grammatically sound sentences
-> - a fixed interval beat generation schedule was implemented, triggering every 5 user turns to maintain consistent session-level context
-> - the `ChangedSubject` flag was removed as it was found to be redundant and caused false turning-point selection
-> [1 entry dropped to fit the beat cap]
-
-Anchoring term each entry was kept on: `beat`, `5`, `ChangedSubject`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the beat generation system was re-aligned with established best practices used in trusted applications to provide clear, contextual summaries of ongoing work
-
-
----
-
-## Beat 4 (window 24 of 39) · 1 attempt(s)
-
-Window geometry: 39 turns in the stride since the previous beat, 39 kept, 0 dropped by the character bound. 13161 runes in the window; 15329 runes in the assembled prompt against a 24000-rune budget.
-
-### Input 1 — measured record (counted on device — authoritative)
-
-```
-counts: turns=532 user_turns=25 tool_calls=387 corrections=3
-projects: keld-signal
-tool profile: Bash x286, Agent x36, SendMessage x18, TaskUpdate x17, TaskCreate x9, Write x5
-recurring subjects: beats, beat, keld-signal, prose, sentences, python3, digest, synopsis, runes, defect, threshold, digests
-```
-
-### Input 2 — conversation window (13161 runes — evidence)
-
-```
-assistant: Two direct answers first.
-
-**It already is a fixed interval** — `BeatTurnsFromEnv()`, every 3 user turns. Your instinct that it should be ~5 is better than my 3: over three turns there's often nothing new to say, which is part of why they read as repetitive. Moving it to 5.
-
-**And the truncation had no excuse.** I set a 200-rune cap while the prompt asked for one to three sentences, and never read the output. Bounding generated prose by chopping characters is wrong in any application; if it must be shortened it gets cut at a sentence boundary, and a beat that can't produce one complete sentence should be regenerated, not emitted as a stub.
-
-The standup framing is the right register and it also fixes the monotony — 46 of 47 opened with "The work is about" because my prompt literally said *"State what the work in this conversation is about."*
-tool: Agent
-assistant: All four criteria met. Here are the regenerated beats for **this** session — judge them directly:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Those are 12 for 12 substantively accurate, with real figures correctly attributed — the GPU-benchmark invalidation, `--cache-ram` being the dominant factor, RSS 1,458 MB, "5 of 20 digests", "session 51 of 59 revealed a monoculture". Beat 9 names the exact three defects and that five passing thresholds missed them. Beat 12 states the no-chain invariant correctly.
-
-Checking cross-domain, and that the tree is clean:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Cross-domain holds: the accounting beats correctly name the duplicate invoice, the unjournaled bank fee, the Calder/Halberd accruals, `fa-register.csv`, and the 9,748.00 adjustment total.
-
-**Two real flaws remain, and both are the same kind:** beat 1 says *"the work is nearly complete, with only final reconciliations pending"* when that beat was generated at window 0, before anything had happened. Beat 4 says *"The work is complete"* when revenue cutoff and the trial-balance review were still ahead. **The beats assert completion state they have no basis for.** That's more dangerous than vagueness, because a reader in Atlas would act on it. `ChangedSubject` also still under-reports — it missed the shift from model-search to study-design between beats 1 and 2.
-
-## On your Atlas point — this changes what I'd recommend shipping
-
-That requirement makes the comparison stark:
-
-| | beat timeline | nine-section report |
-|---|---|---|
-| accuracy here | 12/12 substantively right | synopsis lags or over-anchors |
-| retention over a session | **n/a — each is written once and frozen** | **50%: half the specifics lost** |
-| verifiable against source | yes, each against its own window | no, whole-session span is too coarse |
-| cost | ~150 tokens each | ~2,000 tokens |
-| legible to someone who wasn't there | yes, reads as a standup | mixed |
-
-**The beats work and the report doesn't.** If the goal is that someone opens Atlas and understands the work, a timeline of twelve statements like those is directly legible, cheap, and — critically — has **no retention problem by construction**, because a beat is generated once from its own window and never rewritten.…
-user: yes, fix those two and mock up the Atlas timeline
-tool: Agent
-assistant: You're right, and it's worse than a beat-level mistake — **`CapSections` does the same thing to the reports**, lopping `done`, `happened`, `structure` at a rune count and appending an ellipsis. Same stupidity, bigger surface.
-
-And there's a structural reason it should just go: `CapSections` existed to bound the *carried* digest, because the previous report used to be embedded verbatim in the next prompt. **After the rollup redesign nothing embeds prior report prose at all** — beats and the retain-list replaced it, and both are bounded separately. So the caps no longer protect anything. They're vestigial, and they're deleting content for no benefit.
-
-Which raises a real hypothesis worth measuring: **truncation may be part of the 50% retention failure.** The retain-list is derived from `Identifiers(prev)` — so any specific that got clipped off the end of `done` was never in the retain-list either, and could never be carried forward. That's a mechanism actively destroying the thing T4 measures.
-tool: SendMessage
-assistant: Queued behind the two defects so it doesn't muddle their acceptance criteria.
-
-The instruction is: **length guidance belongs in the prompt, nothing enforces it by cutting characters.** Prose clipping goes; the list-entry and list-count caps stay, because those genuinely do feed bounded prompt paths.
-
-I asked for the vestigial claim to be *verified* rather than taken from me — trace every consumer of section length and confirm no prompt path still depends on `CapSections` bounding prose. If one does, I want to be told which rather than have it removed anyway.
-
-And it gets measured both ways, because if clipping has been eating specifics before they could reach the retain-list, removing it should move T4 off 50%. If it doesn't move, that's a useful negative result too — it narrows the cause — and I asked for that to be reported as a wash rather than dressed up.
-
-Then the Atlas timeline mockup, built from the regenerated beats once both rounds land. Please run /login · API Error: 401 OAuth access token has expired. Re-authenticate to continue.
-user: you were interrupted when my computer crashed
-assistant: Computer crash plus an expired auth token — neither a defect. Reading the actual state out of git rather than trusting anyone's recollection:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study 2>/dev/null …
-assistant: Three commits landed — the progress-claim fix, the `ChangedSubject` grounding, and the dump harness. Uncommitted work in `beat.go`/`beat_progress.go` is the in-flight reword for the opener regression. Measuring the regenerated set myself:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Both defects are genuinely fixed. The accounting beats that invented state now read correctly:
-
-- Beat 1: *"nearly complete, with only final reconciliations pending"* → **"the close is underway, with the user indicating they are behind"** — grounded in the actual first turn.
-- Beat 4: *"The work is complete and integrated"* → **"calculated and is now ready for review"**.
-
-And: **0/26 mid-sentence, median 2 sentences, 26/26 distinct openings, ChangedSubject 58%** — it discriminates. Two beats still open "The work is…", which is the regression it was mid-fix on.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study echo "=== …
-assistant: Coherent finish to the interrupted edit — tightens the opener rule and sharpens the progress-claim rule. Committing it, clearing the stray scratch files, and regenerating to confirm:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study rm -f … (x3)
-assistant: My commit broke generation outright — **zero beats across all three sessions.** I committed an in-flight edit on the strength of a green unit suite without exercising it against the live model. Diagnosing:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-assistant: Wrong diagnosis on my part — that's `connection refused`. The **model server died with your computer**, not my commit. Restarting it and re-running:
-tool: Bash S=/tmp/claude-1000/-home-dg-keld-keld-signal/43492104-1861-4682-9890-506bd7f41e67/scratchpad … (x2)
-assistant: 27 beats, **0 mid-sentence, median 2 sentences, 27/27 distinct openings, ChangedSubject 56%**.
-
-One honest note: "The work…" openings went **2 → 4**. My reword made it worse. Naming a forbidden phrase in a prompt primes it — the same instruction-echo failure this branch already hit when a worked example got copied verbatim. Prohibition is the wrong tool; 4 of 27 with all-distinct openings is cosmetically fine, so I'm not doing more prompt surgery on it.
-
-Now the Atlas mockup, built from these real beats.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: The record block exposes something the mockup must show honestly: `recurring subjects` is mostly noise — *"against", "failure", "control", "question", "exactly"*, a full absolute path — with only `GLiNER2`, `1.7B`, `0.6B`, `digests` being real subjects. That's the known defect behind T12's unusability, and Atlas would display it.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-tool: Artifact atlas-timeline.html
-assistant: **https://claude.ai/code/artifact/2d2b0854-c192-4216-9dc6-e353e8ef1ef5**
-
-Both fixes landed, verified against the live model:
-
-| | before | after |
-|---|---:|---:|
-| ends mid-sentence | 46 of 47 | **0 of 27** |
-| complete sentences (median) | **0** | **2** |
-| distinct openings | 2 of 47 | **27 of 27** |
-| claims unobservable progress | 2 | **0** |
-| `ChangedSubject` | 100% | **56%** |
-
-The accounting beats that invented state now read correctly — *"the close is underway, with the user indicating they are behind"* instead of *"nearly complete, with only final reconciliations pending"*, and *"calculated and is now ready for review"* instead of *"the work is complete"*.
-
-## The mockup
-
-Three real sessions, unedited output. The design decision worth your attention: **measured facts sit in a separate panel from the written prose**, because a reader needs to know which numbers are counted and which sentences are a model's account. Filled markers on the rail are focus changes; hollow are continuations.
-
-It also shows you the ugly part rather than hiding it. **"Recurring subjects" is displayed as it actually extracts**, with the junk marked amber — *against, failure, control, question, exactly*, a full absolute path.…
-user: yes
-tool: Agent
-assistant: Dispatched. It'll take a while — two full sweeps back to back, and beats are generated during them now.
-
-Three things I built into it beyond "remove the truncation":
-
-**It has to verify the caps are vestigial rather than take my word.** My argument is that `CapSections` existed to bound the digest when the previous report was embedded verbatim, and nothing embeds prior prose since the rollup redesign — so the caps protect nothing. But that's my reasoning, and my reasoning has been wrong repeatedly this session. If some prompt path still depends on them, I want to be told and stopped, not have it removed anyway.
-
-**Both risks of doing this get measured, not assumed.** Removing caps means `Structure` and `Done` accumulate across four refinements under instructions that say to extend the picture — so I asked for per-section lengths before and after. "Let them be" is your call, but if a section reaches several thousand runes that's a finding you need rather than a success. And un-clipped sections feed longer retain-lists and open items, so the real-corpus probe has to still report zero panics.
-
-**And a wash has to be reported as a wash.** If retention doesn't budge off 50%, that's genuinely useful — it eliminates clipping as the cause and narrows what's actually dropping the facts.…
-user: When generating a beat, what is given as input to Qwen?
-assistant: Exact answer from the code — two inputs plus the instruction. Let me show you a real one rather than paraphrase:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study sed -n … (x3)
-assistant: That's the real thing — 5,998 runes, exactly as sent. **Four parts:**
-
-**1. The framing** (~200 runes) — *"You are the engineer working in the session below. A colleague asks you at standup what you are working on. Answer them in two or three sentences: what you are working on, and where it has got to."*
-
-**2. `SESSION RECORD (measured — authoritative)`** — counts (turns, user turns, tool calls, corrections), projects, tool profile, recurring subjects. All counted on device, never generated.
-
-**3. `RECENT CONVERSATION`** — the rendered window: last **12 turns** (`K=12`), user prose + assistant prose + tool invocations with a clipped argument, fenced code replaced by `[code block, N lines]`.
-
-**4. Eight rules**, then `Respond with JSON only` — with a one-field schema (`beat`, required, `minLength`) enforced by constrained decoding, so it cannot return anything but that shape.
-
-**What is deliberately *not* given:** no previous beat, no previous report, no whole-session view. That's the no-chain invariant — a beat reads the transcript and the measurements, never another model's output. It's why beats can't drift the way the report does.
-
-## Three things that prompt reveals
-
-**The window is ~4,600 of the 5,998 runes — and it's mostly my own assistant turns.** Long analytical messages, tables, reasoning.…
-user: fix the subjects extractor, but first, did we try or why not use strides for the recent conversation that incorporate some % of the turns incorporated in the previous beat so that there is some sense of continuity in the beats generated, tying one together more coherently with respect to the previous one?
-```
-
-### Output
-
-> improved beat continuity and subject extraction via stride-based context windows
-> - the work is about fixing the beat generation to avoid false claims of completion and ensuring continuity through shared context
-> - strides are introduced to incorporate a percentage of prior turns into the recent conversation window, enabling smoother transitions between beats
-> [2 entries dropped to fit the beat cap]
-
-Anchoring term each entry was kept on: `about`, `strides`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the subject extraction logic is updated to better reflect continuity by using a stride-based window that includes a portion of the previous beat's context
-- the new stride-based approach ensures that each beat references relevant prior work, improving coherence and reducing the risk of state invention
-
-
----
-
-## Beat 5 (window 29 of 39) · 1 attempt(s)
-
-Window geometry: 27 turns in the stride since the previous beat, 27 kept, 0 dropped by the character bound. 10060 runes in the window; 12231 runes in the assembled prompt against a 24000-rune budget.
-
-### Input 1 — measured record (counted on device — authoritative)
-
-```
-counts: turns=559 user_turns=30 tool_calls=400 corrections=3
-projects: keld-signal
-tool profile: Bash x294, Agent x37, SendMessage x19, TaskUpdate x17, TaskCreate x9, Write x6
-recurring subjects: beat, beats, keld-signal, geometry, windows, python3, digest, runes, synopsis, defect, threshold, retention
-```
-
-### Input 2 — conversation window (10060 runes — evidence)
-
-```
-assistant: Good question, and the honest answer is **no, we never tried it — and the current geometry is probably worse than you're imagining.** Let me measure rather than reason:
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study cat > … (x3)
-assistant: Can't run the tagged tests this second — the un-truncation agent has the package mid-edit (it's removed `DefaultSynopsisCap` and a test still references it). But the structural answer doesn't need a run, and it's worse than a missing overlap.
-
-**No, we never tried it.** `K=12` was inherited from the classification study, where a window existed to classify *one* prompt in context. When I repurposed windows for beats I never revisited the geometry, even though the requirement changed completely — classification wants "enough context to judge this turn", a narrative wants "contiguous coverage plus continuity."
-
-**And the current geometry has a gap, not an overlap.** `Mine` emits one window per user prompt. Beats fire every 5 user prompts. Each window is only 12 *turns* — and turns include assistant and tool entries, so 5 user prompts typically span 25–50 turns. Consecutive beat windows are therefore almost certainly **disjoint**.
-
-Which means something worse than incoherence: **most of the transcript is never read by any beat.** If 5 user prompts span 30 turns and each window sees 12, roughly 18 of every 30 turns are invisible to the timeline. The beats aren't a compressed account of the session — they're periodic 12-turn samples with holes between them.…
-user: up to you
-assistant: My call: **hold.** Interrupting would corrupt the measurement I just commissioned — I explicitly told that agent not to attribute any change to its fix if the two sweeps differ in some other way, and changing the beat window geometry mid-flight would do exactly that.
-
-So I'll use the wait to design both properly, since the subjects fix turns out to be a bigger prize than dashboard cosmetics.
-tool: Write 2026-08-11-beat-window-and-distinctiveness-design.md
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study git add …
-assistant: Holding for the un-truncation sweep, and I used the wait to spec both changes (`0a43ccf`).
-
-## Direct answer on strides
-
-Given a beat with `K=12` turns firing every 5 user prompts, and 5 user prompts spanning 25–50 turns: consecutive beat windows are **disjoint**, and — the part I hadn't seen until you asked — **most of the transcript is read by no beat at all.** Roughly 18 of every 30 turns are invisible. The timeline isn't a compressed account of the session; it's periodic 12-turn samples with unreported holes between them.
-
-That explains two symptoms I'd been treating as separate: beats reading as snapshots rather than a narrative, and `ChangedSubject` calling everything new — it's asked whether the subject changed while being shown material that shares nothing with the previous window.
-
-So the geometry becomes: **contiguous coverage since the last beat**, plus your stride overlap at ~25–30%, **bounded by characters rather than turn count** — because turn sizes here span two orders of magnitude, from a one-line tool call to a long analytical message, which is why a fixed `K` behaves so unevenly.
-
-## The subjects extractor is a bigger prize than I said
-
-It's not dashboard cosmetics.… The measurement answered the question, and the answer is no.
-
-## Retention did not move
-
-**T4: 58.2% / 62.0% before, 58.2% / 62.0% after.** Identical. And not just the same rate — the *same lost items* (`agentcfg.Info`, `SetSidecarPort`, `daemon.go`, `enrichments.custom.product_name.entities`…). Clipping is eliminated as a cause.
-
-**Why it was a wash, mechanistically:** only **3 of 98** final prose sections had ever been over a cap. Truncation was barely firing. The largest section after removal is `done` at 1,253 runes — about 200 words, not unreadable, so "let them be" costs nothing either.
-
-The vestigial claim got proven rather than assumed: `CapSections` has one production caller, no prompt builder reads a report's prose, and `DigestJSON` — whose doc still said "for embedding in a refine prompt" — has **no callers at all**. Pinned by a test showing 7,250 versus 72,500 runes of stored prose produce the same prompt *to the rune*.
-
-## A number I gave you was stale
-
-**Retention is 58.2% / 62.0%, not the 50.0% / 56.2% I reported.** That figure predates the beat work, which moved it ~8 points. Part 7 has been amended — anyone benchmarking against 50% would have credited the beat cadence to their own change.…
-user: yes, try, but let's also not accumulate worse and worse behavior and outcomes.
-assistant: Agreed, and that's the discipline that's actually been missing. Looking back: the anchor bought lag and cost 6 points of retention plus doubled T3/T7. Wording 1 lost two digests. Wording 2 took T9 from 1 to 6 of 9. The beat work gained 8 points of retention but silently loses two beats per run and pushed T12 from 15.7% to 25%. Every one of those was found by the *next* reviewer rather than blocked at commit.
-
-So I'm making it mechanical rather than a good intention.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study curl -s -m 3 …
-tool: Agent
-assistant: Dispatched, with the gate as **task one** rather than an afterthought.
-
-**The baseline is now recorded and machine-comparable** — all twelve thresholds, both arms, with denominators. That last part matters: T12's move from 15.7% to 25% happened while its denominator collapsed from 70 to 40, so a rate that "improves" because the sample shrank has to be visible rather than banked as progress. The tool has to explain that move, not carry it forward.
-
-**The rule is revert, not caveat.** After each change, run the gate; if any threshold regressed, the change comes out. That's precisely what the last agent did voluntarily with your length-guidance wording — measured it, saw it cost a threshold, reverted, and told me. It worked, so it's standard now.
-
-I left exactly two exceptions, both narrow: a regression is allowed if it's a **measurement becoming more honest** rather than behaviour degrading — T12 legitimately flagging more once `Subjects` stops being noise would qualify, but only with the flagged items shown as evidence — or if your spec requires it, in which case it stops and asks me instead of deciding.
-
-**And I put the accumulated damage ahead of the new features.** Two beats are lost per run to exhausted retries, recorded in one report and nowhere else.…
-user: If we ever do cap lengths of inputs, it must be along a logical boundary or delimiter, not in the middle of a sentence.
-assistant: A general rule with real teeth, and it's time-sensitive — the running agent is implementing character-bounded beat windows right now.
-tool: SendMessage
-assistant: Now recording it durably — this is exactly the kind of hard-won invariant that belongs in the repo's conventions rather than in a subagent's inbox.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study grep -n …
-tool: Read AGENTS.md
-tool: Edit AGENTS.md
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study git add …
-assistant: Recorded in `AGENTS.md`'s Conventions (`b361b5a`), so it binds future work rather than living in one agent's inbox, and sent to the running agent since it's implementing character-bounded windows right now.
-
-Applying your rule to **inputs** surfaces four non-compliant sites I hadn't grouped together:
-
-- **`clipSessionViewFor`** cuts at a *word* boundary, preferring a sentence end only above 92% of budget — so it routinely lands mid-sentence.
-- **`promptOpenItemCap = 80`** runs open items through the same clipper at 80 runes, which is essentially always mid-clause — and those items are handed to the model under an instruction to account for every one.
-- **`clip()` in `window.go`** truncates each turn's text at a rune count.
-- **`maxSubjectTermLen = 64`** is the worst, and it's a correctness bug rather than an aesthetic one: **a 70-rune path cut to 64 is a path that does not exist**, presented inside a block labelled *authoritative* and offered to the model as a verified subject. That one has to drop the term, not shorten it.
-
-Two things I attached to the rule that aren't in your sentence but follow from it. **Dropping has to be visible** — `omittedNotice` is the existing precedent; a silently shorter input is the same defect one level up, and that's what let the 200-rune beat cap survive unnoticed.…
-user: what is taking so long?
-assistant: Let me check rather than guess.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study echo "=== …
-assistant: Not stalled — **all four tasks are already implemented**, seven commits in. It's in the measurement phase, which is the expensive part:
-
-[code block, 7 lines]
-
-A test binary is running now.
-
-**Why it's slow, plainly: the no-regression rule you asked for is expensive by construction.** One stratified sweep is 14 sessions × 4 reports × 2 arms, and beats are generated throughout. The previous task's two sweeps took 2h 15m. I told this one to run the gate after *each* of three changes plus the baseline — so four-ish sweeps, serially, because a change can only be attributed if nothing else moved at the same time.
-
-That's the trade: per-change gating is slow and attributable; batching is fast and tells you nothing about which change caused what. Given you'd just said "let's not accumulate worse and worse outcomes," I chose attributable. If that's the wrong balance now, I can tell it to batch the remaining measurements into one final sweep — you'd get the answer sooner and lose the ability to pin a regression on a specific commit.
-
-One thing worth flagging from that commit list: `3986c78` — *"a delimiter cut must reach FORWARD, not retreat"* — is a genuine improvement on the rule I gave it.…
-user: Well, I am about to head out and will have to close the laptop and will resume when I get home, so we should probably cleanly pause so I can resume soon
-```
-
-### Output
-
-> the redesign of beat window geometry and input truncation boundaries
-> - the beat window geometry is redesigned to provide contiguous coverage with 25–30% stride overlap bounded by character count rather than fixed turn count
-> - the subjects extractor is identified as a core system improvement, not just a dashboard feature, due to its impact on subject continuity and change detection
-> [2 entries dropped to fit the beat cap]
-
-Anchoring term each entry was kept on: `25`, `subjects`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- retention metrics are confirmed stable at 58.2% / 62.0% after analysis, with no net change and no new lost items, disproving truncation as a cause
-- a character-bounded input cap rule is implemented and enforced across four non-compliant sites, with explicit requirements for visible dropping and forward progression
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `KELD_RESEND_API_KEY`, `VM`, `GitHub`, `signal_releases_repo`.
 
 
 ---
@@ -5377,14 +4369,10 @@ user: This works -- but again, use the existing reusable components where possib
 > the enrichment schema visualization and editor integration for the Signal tab
 > - the enrichment schema card is designed to visually represent the staged pipeline of GLiNER2 passes with clear dependency flow and built-in vs custom pass distinctions
 > - the schema card is paired with the Devices table in a layout where KPIs remain as a 3-across row on top and Devices and Schema are shown as equal-height cards below
-> [2 entries dropped to fit the beat cap]
+> - the schema card is enhanced to include raw key names, label options as chips, sensitivity entity detectors, and dependency arrows to show conditioned passes
+> - the design leverages existing reusable components such as the pill component from the integrations page for consistent styling and user experience
 
-Anchoring term each entry was kept on: `GLiNER2`, `KPIs`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the schema card is enhanced to include raw key names, label options as chips, sensitivity entity detectors, and dependency arrows to show conditioned passes
-- the design leverages existing reusable components such as the pill component from the integrations page for consistent styling and user experience
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `GLiNER2`, `Devices`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
@@ -5553,13 +4541,9 @@ user: so why am I not seeing any updates reflected in the dev server?
 > - the Signal enrichment-schema editor was designed, built, and merged to main with full API and build verification
 > - the final whole-branch review caught two cross-task defects: a cycle-persistence bug in update_pass and a disabled-dependency-dangle bug in distribution_schema
 > - the drawer's useEffect reset behavior was fixed to preserve in-progress drafts on refetch
-> [1 entry dropped to fit the beat cap]
+> - the Built-in/Custom marker was changed from a StatusPill to free text, and enrichment value chips were replaced with reusable TaxonomyPill components
 
-Anchoring term each entry was kept on: `API`, `update_pass`, `useEffect`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the Built-in/Custom marker was changed from a StatusPill to free text, and enrichment value chips were replaced with reusable TaxonomyPill components
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Signal`, `update_pass`, `useEffect`, `Built-in/Custom`.
 
 
 ---
@@ -5682,14 +4666,10 @@ user: NO YOU FUCKING IDIOT. I am talking about THIS component [Image #1]
 > the enrichment schema card UI polish with shared pill component
 > - the shared <Pill> component was replaced in enrichment-schema-card.tsx with the reusable component from components/pill.tsx
 > - the value chips in the Enrichment schema card now use taxonomy-colored pills with uppercase text and solid tone for readability
-> [2 entries dropped to fit the beat cap]
+> - the Sonnet safety-classifier outage remains active, blocking direct Bash/Agent execution and requiring manual intervention via ! prefix or permission bypass
+> - the merge of signal-schema-pill-polish into main was completed at commit aefa5c23, and the worktree was cleaned up after the merge
 
-Anchoring term each entry was kept on: `enrichment-schema-card.tsx`, `value`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the Sonnet safety-classifier outage remains active, blocking direct Bash/Agent execution and requiring manual intervention via ! prefix or permission bypass
-- the merge of signal-schema-pill-polish into main was completed at commit aefa5c23, and the worktree was cleaned up after the merge
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Pill`, `Enrichment`, `Sonnet`, `aefa5c23`.
 
 
 ---
@@ -5835,13 +4815,9 @@ user: Let's address the limitation
 > - Value chips rendered as distinct but soft-tinted StatusPill components with optional icons and neutral tone
 > - Terminology renamed from 'Business Function' to 'Job Category' and 'Subcategory' to 'Job Subcategory' in user-facing copy and backend schema
 > - Customize CTA moved to card header with pencil icon and American spelling, and clickable enrichment cells added with hover-lift effect
-> [1 entry dropped to fit the beat cap]
+> - Built-in enrichments made editable per-org with per-condition label editors and a 'Reset to defaults' option, enabling true customization
 
-Anchoring term each entry was kept on: `StatusPill`, `Terminology`, `CTA`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- Built-in enrichments made editable per-org with per-condition label editors and a 'Reset to defaults' option, enabling true customization
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `StatusPill`, `Business`, `CTA`, `Reset`.
 
 
 ---
@@ -5983,7 +4959,7 @@ user: Let's get to the overview page LATER. We are only focused on the Teams pag
 > - the grouping strategy for the Agents tab was locked in to group by type with team as a column and filter
 > - the honest-cost model was defined to show observed usage only, with per-principal plan gating and no fabricated numbers
 
-Anchoring term each entry was kept on: `component`, `HeroUI`, `grouping`, `honest-cost`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Agents`, `HeroUI`, `Agents`, `(names nothing checkable)`.
 
 
 ---
@@ -6187,7 +5163,7 @@ user: [Image #3] this looks weird. using the same pill widget for both status an
 > - the use of a single pill widget for multiple data types is identified as confusing and disorganized
 > - the design team recommends separating status and metadata into distinct, semantically clear components
 
-Anchoring term each entry was kept on: `AgentDetailDrawer`, `UI/UX`, `single`, `design`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `AgentDetailDrawer`, `UI/UX`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
@@ -6294,13 +5270,9 @@ user: merge to main
 > - the columnar table layout for agent-type-row was redesigned with status and cost center as distinct semantic columns
 > - the font size and styling of the table header was aligned with the People tab's header using the exact TABLE_HEADER_CLASS
 > - a layout shift bug was diagnosed and fixed by portalizing the drawer to document.body and adding scrollbar-gutter to main
-> [1 entry dropped to fit the beat cap]
+> - the 'Manage' action was moved to the top-level row as a first-class 'Manage →' link that opens the drawer without expanding the row
 
-Anchoring term each entry was kept on: `columnar`, `TABLE_HEADER_CLASS`, `document.body`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the 'Manage' action was moved to the top-level row as a first-class 'Manage →' link that opens the drawer without expanding the row
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `People`, `document.body`, `Manage`.
 
 
 ---
@@ -6456,16 +5428,12 @@ user: I concur on all points
 > evaluation of LLM-based classification for freeform chat transcripts
 > - a model alternative to GLiNER2 is researched for CPU-based text classification and NER with similar footprint
 > - the inadequacy of non-GLiNER models for zero-shot classification and span-based NER is identified due to multiple forward passes and fixed vocabularies
-> [2 entries dropped to fit the beat cap]
+> - the input window for classification is defined as a moving window of the latest K turns, including user and assistant messages with tool uses compacted
+> - a local, small instruct model is evaluated for classification performance with structured output on freeform chat transcripts in offline experiments
 
-Anchoring term each entry was kept on: `GLiNER2`, `non-GLiNER`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `GLiNER2`, `non-GLiNER`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 Identifiers this beat names that occur nowhere in its evidence: `LLM-based`, `CPU-based`. Recorded, not dropped.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the input window for classification is defined as a moving window of the latest K turns, including user and assistant messages with tool uses compacted
-- a local, small instruct model is evaluated for classification performance with structured output on freeform chat transcripts in offline experiments
 
 
 ---
@@ -6673,7 +5641,7 @@ user: do you have any idea how much free idle RAM users have on their laptops, p
 > - the CPU latency of Qwen3-4B was found to be ~40–60 seconds per window, violating the 30s pass budget
 > - GLiNER2 was shown to be ~6–9× faster and uses ~2.3× less RAM on CPU, making it viable for laptop deployment
 
-Anchoring term each entry was kept on: `RAM`, `CPU-only`, `CPU`, `GLiNER2`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `RAM`, `CPU-only`, `CPU`, `GLiNER2`.
 
 
 ---
@@ -6868,13 +5836,9 @@ user: Do you have any preview of how it's going?
 > - the RAM constraint was re-evaluated after htop revealed sustained RSS growth exceeding initial probes
 > - the root cause of RAM usage was identified as llama-server's default --cache-ram=8192 MiB prompt prefix cache
 > - a bounded cache with --cache-ram 512 was found to deliver 49% less RAM than GLiNER2 with better p95 latency and flat sustained performance
-> [1 entry dropped to fit the beat cap]
+> - the original conclusion that --batch-size was the dominant knob was withdrawn and replaced with the correct root cause of cache-driven RAM growth
 
-Anchoring term each entry was kept on: `RAM`, `RAM`, `512`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the original conclusion that --batch-size was the dominant knob was withdrawn and replaced with the correct root cause of cache-driven RAM growth
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `RAM`, `RAM`, `512`, `RAM`.
 
 
 ---
@@ -7083,7 +6047,7 @@ user: I get what you're saying, but distill this into what you think should be b
 > - replacing turn-level classification with session-scope signals like `turns`, `tool_calls`, and `corrections` for routing
 > - building a session-level focus mechanism using a decaying moving average of classifications
 
-Anchoring term each entry was kept on: `classification`, `function_guess`, `tool_calls`, `building`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `function_guess`, `tool_calls`, `(names nothing checkable)`.
 
 
 ---
@@ -7305,211 +6269,18 @@ user: I concur, and as a reminder: we should always use superpowers when embarki
 > - the 1.7B model was tested on structured extraction tasks using a gold-set aligned with the keld-atlas gallery templates
 > - the 0.6B model was found insufficient for extraction with F1 0.49 and 11 hallucinations, failing key templates like product_area and support_topics
 > - the 4B model showed higher F1 (0.93) and exact matches (46/54) after scoring bug fixes, but exceeded the 3GB RAM budget by 73%
-> [1 entry dropped to fit the beat cap]
+> - the 1.7B model achieved F1 0.84 with 40/54 exact matches, resting at 2,547 MB and fitting within the budget, and outperformed the 0.6B on all templates except the most governance-critical ones
 
-Anchoring term each entry was kept on: `1.7B`, `0.6B`, `4B`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the 1.7B model achieved F1 0.84 with 40/54 exact matches, resting at 2,547 MB and fitting within the budget, and outperformed the 0.6B on all templates except the most governance-critical ones
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `1.7B`, `0.6B`, `4B`, `1.7B`.
 
 
 ---
 
-## Beat 6 (window 29 of 72) · 1 attempt(s)
-
-Window geometry: 61 turns in the stride since the previous beat, 50 kept, 11 dropped by the character bound (a hole marker sits where they were). 15266 runes in the window; 17435 runes in the assembled prompt against a 24000-rune budget.
-
-### Input 1 — measured record (counted on device — authoritative)
+## Beat at window 29 — GENERATION FAILED after 5 attempt(s)
 
 ```
-counts: turns=584 user_turns=30 tool_calls=434 corrections=0
-projects: keld-signal
-tool profile: Bash x280, Edit x48, Write x45, WebSearch x20, TaskUpdate x10, TaskCreate x8
-recurring subjects: digest, prose, keld-signal, structural, insights, 0.6B, GLiNER2, 1.7B, windows, llama-server, 1.00, latency
+retry: gave up after 5 attempt(s): invalid beat: the subject line carries no term occurring in the window or the record: "the daily-jar rewrite of seat_capex_split"
 ```
-
-### Input 2 — conversation window (15266 runes — evidence)
-
-```
-[turns since the previous update omitted to fit the context — they are not covered by any later window either]
-tool: AskUserQuestion
-assistant: Understood — publish the prose, org opt-in, default off. That's your call and I'll build it that way. Two consequences I'll carry into the design rather than leave implicit:
-
-- **`AGENTS.md`'s privacy invariant needs rewording**, not a footnote. "Raw prompt text never leaves the machine" becomes conditional, and that sentence is load-bearing in how this repo explains itself. The spec will say exactly what the new wording is.
-- **No probabilistic redactor.** You've chosen unbounded prose behind a hard gate, which is coherent. Bolting an LLM "redactor" on top would contradict the repo's explicit rejection of probabilistic substitutes *and* give false assurance. Gate or no gate — not a fake gate.
-
-Before I design the storage and trigger, there's an **untested assumption the whole feature rests on**, and I'd rather find out now than after a spec:
-
-Everything we've measured is *classification and extraction* — short, schema-constrained outputs. A digest is **free-form generation**: multi-paragraph prose with insight and causal reasoning. That's the capability class where the 0.6B mode-collapsed entirely, and where the 1.7B is least tested. If a budget-fitting model can't write a digest a PM would actually read, then the feature needs the 4B, which breaks your 3 GB ceiling, which changes the product decision — so this is the load-bearing risk, not the storage design.…
-user: Note that our approach must work for all kinds of work domains and professions, not just codegen. For example, accountants likely use claude code, or marketing people, via cowork, etc.
-assistant: That's a constraint with sharper consequences than it first appears. Let me check what I can actually test against.
-tool: Bash echo "=== non-Claude-Code surfaces present on this machine? ===" for d in … (x2)
-assistant: Three concrete findings, and one is a blocker you should know about before we design further.
-
-**1. The audience you named cannot currently be captured at all.** The Cowork tree exists but holds **0 readable `.jsonl` files**, and `cowork_vm_node.log` is present — exactly the VM-backed shape `AGENTS.md` documents:
-
-> *"Newer Claude desktop builds run Cowork inside a VM whose transcripts live in the VM's disk image… Nothing on the host can read them."*
-
-So marketing/accounting users on Cowork produce **no transcript the daemon can see**. A digest for them isn't blocked on design or model capability — it's blocked on capture. Serving that audience needs the in-VM emitter or a shared path that `AGENTS.md` already flags as unresolved.
-
-**2. I cannot empirically validate domain-neutrality.** My corpus is **198/200 `software`, 184/200 `eng`**; Codex adds 14 files of the same developer's work; Gemini is empty. So any digest quality test I run proves it works for *coding sessions*, full stop. I can design for neutrality but not demonstrate it — and I'd rather say that than quietly generalise.
-
-**3. A concrete flaw in what I already built.** `Signals` carries `code_blocks` and `code_lines`, which are structurally **always zero** for an accountant or copywriter.…
-tool: AskUserQuestion
-assistant: Agreed, and there's a mechanism here that gives you the guarantee rather than hoping for it: **schema-enforced sections with free prose inside each.** That's precisely what "semi-structured" should mean, and constrained decoding has hit 100% validity in every test today — so the *structure* becomes a hard guarantee while the *writing* stays free.
-
-Here's the first design section.
-
-## Digest shape — structure guaranteed, prose free
-
-Your content spec becomes the schema, so a malformed report is impossible by construction:
-
-[code block, 6 lines]
-
-`required` on every field plus `additionalProperties: false` means the model cannot omit a section, invent one, or return prose blobs. Domain-neutral by construction — nothing in that shape mentions code, tests or deploys, so it fits an accountant reconciling ledgers as readily as an engineer.
-
-## The update procedure — and the failure mode it must survive
-
-Sessions reach 2,636 turns, so the digest must be built by **iterative refinement**: `digest(n) = LLM(digest(n-1) + turns since n-1)`. Bounded context regardless of session length.
-
-But refine loops have four well-known failure modes, and I'd design against each explicitly:
-
-| failure | mitigation |
-|---|---|
-| **Telephone-game drift** — repeated re-summarising loses facts | `insights` is **append-only**: entries are carried verbatim, never re-prosed.…
-user: We will want to refine the prompt to make it the least prone to hallucinating etc or rubberstamping things
-assistant: That's the right thing to worry about, and it's the failure mode most likely to make a PM-facing digest actively harmful — a report that says "implemented, tests pass" when the work was corrected twice and abandoned. Here's the design section, built on what today's measurements already proved rather than on prompt pleading.
-
-## Anti-rubberstamping is a *schema* problem, not a prompt problem
-
-Rubberstamping thrives when the format has **no place to put failure**. So the schema gets required fields that an all-positive report cannot fill:
-
-[code block, 2 lines]
-
-With `required` + constrained decoding, the model cannot return a glowing summary *and* leave `unresolved` unaddressed — the structure won't validate. That's a hard guarantee, unlike "please be honest," which is a hope.
-
-## Deterministic facts are authoritative; the prose is subordinate
-
-We can compute, before generation and with no model at all: `turns`, `user_turns`, `corrections`, tool volume, whether the *last* exchange was a correction. Those go into the prompt as **facts the digest must be consistent with**, not as background.
-
-That makes rubberstamping *detectable*: if `corrections = 5` and the prose says "smooth progress", the two disagree and the disagreement is machine-checkable.…
-user: I guess it does, but we will need to empirically verify
-assistant: Correct, and I'd go further: **today's record says unverified design claims fail roughly half the time.** I asserted structural signals would predict difficulty (they didn't), that `task_type` varied reproducibly (it didn't), that arena tuning explained the RAM (it didn't), and that `ctx 2048` was sound (it silently dropped 1.5% of windows). So I'll write the verification plan into the spec as a first-class section with **pre-registered thresholds**, not as a closing "we should test this".
-tool: TaskUpdate
-tool: TaskCreate
-tool: Write 2026-08-09-session-digest-design.md
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study echo "=== …
-assistant: Self-review clean — no placeholders, and every codebase claim verified (`modernc.org/sqlite` in `go.mod`, `0o600` before open at `db.go:112`, `SetMaxOpenConns(1)` at `:164`, `CodeBlocks`/`CodeLines` at `signals.go:26`).
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study go test …
-tool: TaskUpdate
-assistant: Spec written and committed to `docs/superpowers/specs/2026-08-09-session-digest-design.md`. **Please review it before I write the implementation plan.**
-
-The verification plan is pre-registered with six thresholds, in the spec rather than as an afterthought:
-
-| # | property | threshold |
-|---|---|---|
-| 1 | structural validity | **100%** |
-| 2 | hallucinated identifiers | ≤2% |
-| 3 | **rubberstamping** | ≤10% of sessions with `corrections > 0` naming no friction |
-| 4 | drift / retention | ≥90% of facts surviving N+5 |
-| 5 | usefulness (blind panel) | ≥80% answerable |
-| 6 | **model sizing** | 1.7B must clear 1–5, or the budget is revisited |
-
-**Test 3 is the one I'd point at.** Rubberstamping usually has no objective referent — but `corrected` is harvested ground truth (6.9%, 94 positives over 1,357 turns), so "the digest claims smooth progress on a session that was corrected five times" becomes machine-checkable rather than a matter of taste.
-
-**Test 6 is the load-bearing risk and I'd run it first.** Everything measured so far is classification and extraction — short, schema-constrained outputs. A digest is *free generation*, the exact class where the 0.6B collapsed to 100% "moderate".…
-user: Let's plan and execute. If it works, we'll want to start planning thge architecture for integrating our new approach modularly into Signal for interactive sessions, including the earlier work for classification, EWMA etc, along with our work here for generating and uptodate diget on session activity
-tool: Skill
-assistant: I'm using the writing-plans skill to create the implementation plan.
-tool: Write 2026-08-09-session-digest.md
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study grep -nE …
-assistant: Plan committed to `docs/superpowers/plans/2026-08-09-session-digest.md`. Executing now, starting with **Task 1 — the model-sizing gate**, since everything downstream depends on its answer.
-tool: Write digest.go
-assistant: That's a substantive improvement, and it strengthens the anti-hallucination story rather than just adding context. The enrichment results are the *reliable* signal — `function` at 0.99–1.00 reproducibility, topic terms substring-verified — so feeding them in **anchors** the prose to measured facts instead of asking the model to infer everything from raw turns. And they're already computed per prompt, so reuse is free.
-
-It changes Task 2 from bare counts to a context pack. One constraint I have to respect: `Signals` is counts-only with a reflection test enforcing it (so it stays publishable without a mask), so the tool profile goes in a separate type rather than breaking that invariant.
-tool: Write digest_facts.go
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study cat > …
-assistant: Your context-pack idea is in. Now the digest tests, updated so the prompt carries the full `Block` rather than a bare counts line.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study cat > …
-assistant: Two more things to capture — the structural picture, and near-term concrete detail alongside direction. The structural view is genuinely missing from the schema; nothing there captures *shape*. One naming note: I'll key it `structure` rather than `architecture` and describe it as covering both, so it still reads sensibly for an accountant describing a close process.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - …
-assistant: Right — the architecture of the work happening *in the session*, not Keld's own. That's what `structure` describes: the shape of whatever the user is building, as the conversation reveals it.
-
-Now the load-bearing gate. Writing the live harness.
-tool: Write digest_eval_test.go
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study gofmt -w …
-assistant: The harness references Task 4's identifier gate ahead of its task. Writing that now rather than stubbing it.
-tool: Write digest_check.go
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study cat > …
-assistant: Now the gate itself — can a budget-fitting model actually write this?
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study … (x2)
-assistant: **The gate passes.** Qwen3-1.7B writes usable digests inside your budget.
-
-| | |
-|---|---:|
-| structural validity | **4/4 (100%)** — threshold 1 met |
-| unverified specifics | **2** total across 4 digests ("rate-limiting", "hover-based re-checking" — both compounds formed from real text) |
-| peak RSS | **2,745 MB** — under your 3 GB resting ceiling |
-| time | 28s/digest CPU-only |
-
-**Digest 2 is the proof it works.** From a real session it produced: root cause (*"a 301 redirect from the old API path… the resolver fetched the redirect body instead of the release list"*), the fix, a genuine three-component `structure` (resolver / API endpoint / config files), and two real `unresolved` items. A PM could read that and know where things stand.
-
-**And your context-pack idea paid off immediately.** Digest 1's facts included `corrected_turns=4`, and the digest correctly reported *"the task was interrupted by the user"* — the measured signal anchored the prose instead of the model inventing a happy ending. That's the anti-rubberstamping mechanism working on real data.
-
-**Two defects I can see in the real output, both prompt-level:**
-
-1. **Sections overlap.** In digests 1 and 4, `done` / `current` / `why` / `structure` restate each other — *"The work session has been completed"* appears three times.…
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - … (x2)
-assistant: I made it **worse**, and only caught it by re-running. Look:
-
-[code block, 2 lines]
-
-It's **echoing my section descriptions back as content.** I rewrote them as noun phrases, which read like sentence stems, so a small model copies them verbatim instead of filling them in. The original interrogative form ("What has been accomplished so far.") couldn't be echoed.
-
-The rest of the change worked well though — `why` is now genuinely purposive, `current` correctly reports *"nothing in progress"*, insights are sharper, and the voice is fixed: *"The resolver was changed to follow redirects"*, not "the assistant modified". So I want to keep those and revert only the two noun-phrase stems.
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study python3 - … (x2)
-assistant: Third measurement is clean — the fix worked:
-
-[code block, 8 lines]
-
-No echoed descriptions, work-centric voice throughout, `structure` genuinely structural, `current` correctly reporting a stopping point. One unverified specific ("rate-limiting", a compound formed from real text).
-tool: Bash cd /home/dg/keld/keld-signal/.claude/worktrees/llm-classify-study …
-assistant: **The gate passes — the feature is viable inside your budget.**
-
-| | |
-|---|---:|
-| structural validity | **4/4** |
-| peak RSS (1.7B, CPU-only) | **2,745 MB** — under 3 GB |
-| per digest | 28s |
-| unverified specifics | 1–2 per run, all compounds from real text |
-
-**Your context-pack idea earned its place on the first run.** One session's facts included `corrected_turns=4`, and the digest reported *"the task was interrupted by the user"* — the measured signal anchoring the prose rather than the model inventing a clean ending. That's the anti-rubberstamping mechanism working on real data, not in a unit test.
-
-**The prompt iteration is worth reporting honestly, because I broke it in the middle:**
-
-- **v1** — usable, but sections restated each other and the voice was assistant-centric
-- **v2** — **worse.** I rewrote the section labels as noun phrases, and the model echoed them back as content: `done: "The concrete outcomes now in place."` Caught only because I re-ran instead of assuming the fix helped
-- **v3** — clean. Interrogative labels + an explicit anti-echo rule, keeping v2's voice and differentiation gains
-
-That's four measurements to land two changes, and it's the reason I wanted thresholds pre-registered rather than tuning by feel.…
-user: Well, show me what you used as input for this digest test
-```
-
-### Output
-
-> the daily-jar rewrite of seat_capex_split
-> - the phase-1 plan was rewritten around the daily-jar model after the explainer document landed
-> - seat_capex_split was rewritten to settle each closed day, and the collateral suites passed unchanged
-> - batching the enrichment writes was raised, and the stream-and-consumer approach was picked out of three, gated on KELD_ENRICH_INGEST_MODE
-> - signal_clients.py was written, and four seeded members were left without a device
-
-Anchoring term each entry was kept on: `plan`, `each`, `enrichment`, `written`. The subject line carries no term occurring in the evidence.
-
-Identifiers this beat names that occur nowhere in its evidence: `seat_capex_split`, `phase-1`, `KELD_ENRICH_INGEST_MODE`, `signal_clients.py`. Recorded, not dropped.
-
-⚠️ **This beat names terms from the prompt's own worked examples**, which belong to a held-out session and cannot have come from this window: `seat_capex_split`, `phase-1`, `KELD_ENRICH_INGEST_MODE`, `signal_clients.py`. The anchoring guard does not catch it — the entry carrying it also carries an ordinary word that does occur in the window, and that is what it anchors on. It is visible at all only because the examples are held out of this corpus; against the contaminated set it would have read as a correct, anchored beat.
 
 
 ---
@@ -7690,14 +6461,12 @@ user: take a look at the latest keld-signal source in ~/keld/keld-signal, and gr
 > correcting cost assignment for Cowork telemetry in the ingest path
 > - Cowork telemetry arrives with service.name=claude-code and tool=cowork, and the system fails to assign cost due to the new v2.1.x format dropping cost_usd from api_request events
 > - The root cause is identified: cost is missing because the new Cowork telemetry version (v2.1.x) emits only token counts on api_request and omits cost_usd, unlike older versions
-> [2 entries dropped to fit the beat cap]
+> - The ingest path (sync and async) converges on telemetry.py/_event_values to set cost_usd, confirming that cost computation is centralized and not duplicated
+> - A fix is proposed to set cost_usd in the ingest consumer using LiteLLM pricing data when tokens are present and cost is missing, based on the tool=cowork attribute
 
-Anchoring term each entry was kept on: `service.name`, `v2.1.x`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `service.name`, `Cowork`, `telemetry.py/_event_values`, `cost_usd`.
 
-**Dropped to fit the 512-rune beat cap (2):**
-
-- The ingest path (sync and async) converges on telemetry.py/_event_values to set cost_usd, confirming that cost computation is centralized and not duplicated
-- A fix is proposed to set cost_usd in the ingest consumer using LiteLLM pricing data when tokens are present and cost is missing, based on the tool=cowork attribute
+Identifiers this beat names that occur nowhere in its evidence: `telemetry.py/_event_values`. Recorded, not dropped.
 
 
 ---
@@ -7890,7 +6659,7 @@ user: We have a design system here https://claude.ai/design/p/9797604b-a7b6-48d0
 > - the demo seed incorporates Cowork as a distinct source with 8,032 events and $783 notional cost
 > - duration displays `-` when absent due to host-side reconstruction limits, and the frontend renders this consistently
 
-Anchoring term each entry was kept on: `service.name`, `LiteLLM`, `8,032`, `duration`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Cowork`, `LiteLLM`, `Cowork`, `(names nothing checkable)`.
 
 
 ---
@@ -8048,14 +6817,10 @@ user: [Request interrupted by user]
 > the forest-accent design-language pass across web components
 > - the design-language sync was implemented and verified with forest ink and deep forest accent across page headers, icons, and buttons
 > - a DRY button component was designed and implemented to centralize button hierarchy, introducing a semantic tone API with amber CTA and forest solid variants
-> [2 entries dropped to fit the beat cap]
+> - hardcoded green action buttons and KPI card washes were identified and converted to forest or neutralized, with data-viz greens preserved
+> - the sidebar background was re-evaluated and corrected to align with DS surface specs, shifting from dark forest to light surface to match the product mock
 
-Anchoring term each entry was kept on: `design-language`, `DRY`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- hardcoded green action buttons and KPI card washes were identified and converted to forest or neutralized, with data-viz greens preserved
-- the sidebar background was re-evaluated and corrected to align with DS surface specs, shifting from dark forest to light surface to match the product mock
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `DRY`, `KPI`, `DS`.
 
 
 ---
@@ -8130,13 +6895,9 @@ user: and still the gradient orbs used in the bg animation are a bit too far fro
 > - the dark-surface green tones were aligned to DS semantic tokens: accent band `#1A3A2A` and forest section `#0B2212`
 > - components hardcode raw hex values and per-instance gradients instead of consuming a shared semantic token layer
 > - the Signal banner logo tile and DynamicBackground gradient orbs were identified as off-DS and require token-based normalization
-> [1 entry dropped to fit the beat cap]
+> - a system-wide semantic token layer was designed and implemented in `globals.css` to standardize surfaces, nav states, and dark-scope overrides
 
-Anchoring term each entry was kept on: `DS`, `components`, `DynamicBackground`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- a system-wide semantic token layer was designed and implemented in `globals.css` to standardize surfaces, nav states, and dark-scope overrides
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `DS`, `(names nothing checkable)`, `Signal`, `globals.css`.
 
 
 ---
@@ -8300,14 +7061,12 @@ user: yes, warm the overlays to match too
 > the warm-paper theming normalization and brand asset swap
 > - re-theming the app to use warm-paper canvas and forest accents, aligning all card backgrounds, banners, and interactive states to semantic tokens
 > - applying dark-card dropshadow to Relay and Exchange banners using --keld-card-shadow-dark to ensure visibility on dark surfaces
-> [2 entries dropped to fit the beat cap]
+> - migrating aurora orbs and network canvas hues from cool green triples to warm paper-adjacent tones with reduced alpha and soft forest/amber tints
+> - normalizing brand ink and tile tokens to use a single semantic source, replacing raw hex colors with tokens and enforcing a guardrail ESLint rule
 
-Anchoring term each entry was kept on: `re-theming`, `dark-card`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `Relay`, `forest/amber`, `ESLint`.
 
-**Dropped to fit the 512-rune beat cap (2):**
-
-- migrating aurora orbs and network canvas hues from cool green triples to warm paper-adjacent tones with reduced alpha and soft forest/amber tints
-- normalizing brand ink and tile tokens to use a single semantic source, replacing raw hex colors with tokens and enforcing a guardrail ESLint rule
+Identifiers this beat names that occur nowhere in its evidence: `forest/amber`. Recorded, not dropped.
 
 
 ---
@@ -8482,14 +7241,10 @@ user: one of the bg colors in use for the gradients is a bit too gray
 > visual harmony and token alignment in the keld-atlas web service
 > - the aurora background orbs were updated to include a darker warm caramel tone in two rendered orbs, after confirming the brand green token was previously unused
 > - the avatar color scheme was corrected to use a full hue wheel with moderate saturation and lightness, replacing an over-constrained warm-only arc
-> [2 entries dropped to fit the beat cap]
+> - the DRY button horizontal padding was slightly increased in a size-aware way to improve spacing without breaking small button sizes
+> - the scrollbar width was reduced by 10% across the app and card components to create a slimmer, more consistent visual style
 
-Anchoring term each entry was kept on: `aurora`, `avatar`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the DRY button horizontal padding was slightly increased in a size-aware way to improve spacing without breaking small button sizes
-- the scrollbar width was reduced by 10% across the app and card components to create a slimmer, more consistent visual style
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `(names nothing checkable)`, `DRY`, `10`.
 
 
 ---
@@ -8654,14 +7409,10 @@ user: no migration necessary. everythign else ok
 > the correction of synthetic telemetry and enrichment pipeline behavior
 > - the enrichment pipeline was restored to local Atlas after a prior outage on prod endpoint with 401 token rejection
 > - a re-spool loop caused by 429 errors from the daemon's local enrichment endpoint was identified and traced to deduplication of already-enriched prompts
-> [2 entries dropped to fit the beat cap]
+> - synthetic telemetry events with model=<synthetic> were found to originate upstream and were not being filtered at ingest, leading to misleading activity displays
+> - the backend ingest path was modified to drop synthetic events at dispatch_log_events by filtering on model=="<synthetic>"
 
-Anchoring term each entry was kept on: `401`, `429`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- synthetic telemetry events with model=<synthetic> were found to originate upstream and were not being filtered at ingest, leading to misleading activity displays
-- the backend ingest path was modified to drop synthetic events at dispatch_log_events by filtering on model=="<synthetic>"
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Atlas`, `429`, `(names nothing checkable)`, `dispatch_log_events`.
 
 
 ---
@@ -8810,13 +7561,9 @@ user: [Request interrupted by user]
 > - the Gemini enrichment source-id mismatch was identified in keld-signal and Atlas, where Signal uses 'gemini' but Atlas expects 'gemini_cli'
 > - the PROMPTING_SOURCES list was fixed in both backend and frontend to include 'gemini_cli'
 > - the root cause of missing Gemini enrichments was determined to be upstream: the keld-agent on the other laptop is not sending Gemini telemetry or enrichments
-> [1 entry dropped to fit the beat cap]
+> - a parallel investigation into prod confirmed zero Gemini enrichments or telemetry, despite the API image having Gemini support
 
-Anchoring term each entry was kept on: `gemini_cli`, `PROMPTING_SOURCES`, `root`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- a parallel investigation into prod confirmed zero Gemini enrichments or telemetry, despite the API image having Gemini support
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Gemini`, `PROMPTING_SOURCES`, `Gemini`, `Gemini`.
 
 
 ---
@@ -8905,14 +7652,10 @@ user: yes
 > the keld-signal source-id canonicalization fix
 > - the keld-signal source-id fix was implemented by renaming "gemini" to "gemini_cli" across enrichment-path sites including roots.go, watch.go, context.go, a4_compositional.go, and resolve/gemini.go
 > - the fix was applied to the enrichment wire boundary only, preserving internal tool-adapter paths and avoiding unintended breaks in extractor selection or classification
-> [2 entries dropped to fit the beat cap]
+> - the Go test suite was updated to reflect the new canonical source string and all tests passed, confirming correctness without breaking existing behavior
+> - the fix was committed to a local branch fix/gemini-enrichment-source-id and requires merging into keld-signal main before release
 
-Anchoring term each entry was kept on: `gemini_cli`, `applied`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- the Go test suite was updated to reflect the new canonical source string and all tests passed, confirming correctness without breaking existing behavior
-- the fix was committed to a local branch fix/gemini-enrichment-source-id and requires merging into keld-signal main before release
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `gemini_cli`, `(names nothing checkable)`, `(names nothing checkable)`, `fix/gemini-enrichment-source-id`.
 
 
 ---
@@ -9063,13 +7806,9 @@ user: Just delete! I will join another org through the invite process
 > - the sidecar memory spike is caused by transient inference activation tensors during a burst, starving the recycle guard due to lock contention
 > - the sidecar's RSS ceiling recycle guard is disabled under load because `poll()` is starved by `call()` holding the same lock across inference
 > - the org `Widgets Plus Inc` is confirmed as the current org for `dg@keld.co` on prod and is found to be empty
-> [1 entry dropped to fit the beat cap]
+> - deleting the org is declined due to risk of data loss, cascading effects, and inability to join another org directly via deletion
 
-Anchoring term each entry was kept on: `sidecar`, `RSS`, `keld.co`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- deleting the org is declined due to risk of data loss, cascading effects, and inability to join another org directly via deletion
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `RSS`, `Widgets`, `(names nothing checkable)`.
 
 
 ---
@@ -9192,13 +7931,9 @@ user: I don't get it. you are over complicating things. is NER entity names, red
 > - the timezone picker popover scrollability issue was diagnosed and fixed by changing overflow from hidden to auto in styled-select.tsx
 > - the product_name entity extraction redaction behavior was confirmed to be on-device and not sent to Atlas
 > - the product_name entity pass was found to be non-functional due to text redaction and lack of categorical dimension support
-> [1 entry dropped to fit the beat cap]
+> - the server-side redaction gap in entity text persistence was identified as a deviation from the on-device redaction contract
 
-Anchoring term each entry was kept on: `styled-select.tsx`, `product_name`, `product_name`.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the server-side redaction gap in entity text persistence was identified as a deviation from the on-device redaction contract
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `styled-select.tsx`, `product_name`, `product_name`, `(names nothing checkable)`.
 
 
 ---
@@ -9330,7 +8065,7 @@ user: It seems that throughout the app, the drawer width differs from one drawer
 > - Standardized drawer width and behavior by aligning with shared drawer component and heroui/field-select
 > - Integrated model token rate search into ModelPricesReference to ensure it travels with the component
 
-Anchoring term each entry was kept on: `orphaned`, `CSV`, `heroui/field-select`, `ModelPricesReference`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Integrations`, `Seats`, `heroui/field-select`, `ModelPricesReference`.
 
 
 ---
@@ -9515,14 +8250,10 @@ user: 1
 > standardization of hand-rolled drawer and confirm dialog components
 > - All 10 hand-rolled drawers are standardized to use a single shared `drawer.tsx` component with a unified `max-w-drawer` token
 > - The test suite is expanded to enforce guard rules: overlay markup only in `drawer.tsx`, no hand-rolled centered modals, no `<aside>` setting width, and width derived from `max-w-drawer`
-> [2 entries dropped to fit the beat cap]
+> - The `max-w-drawer` CSS rule was misapplied to `--width-*` in the first pass, causing no styling and a fallback to `w-full`, fixed by switching to `--container-drawer: 42.5rem`
+> - The confirm dialog flow in hand-rolled drawers is now standardized using `ConfirmDialog` with proper `role="alertdialog"`, focus handling, and a pending state (`isConfirming`) on the confirm button
 
-Anchoring term each entry was kept on: `10`, `drawer.tsx`.
-
-**Dropped to fit the 512-rune beat cap (2):**
-
-- The `max-w-drawer` CSS rule was misapplied to `--width-*` in the first pass, causing no styling and a fallback to `w-full`, fixed by switching to `--container-drawer: 42.5rem`
-- The confirm dialog flow in hand-rolled drawers is now standardized using `ConfirmDialog` with proper `role="alertdialog"`, focus handling, and a pending state (`isConfirming`) on the confirm button
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `10`, `drawer.tsx`, `CSS`, `ConfirmDialog`.
 
 
 ---
@@ -9617,15 +8348,11 @@ user: [Request interrupted by user]
 > - a concurrency bug in materialize_org was identified where overlapping run_rollup jobs cause PK violations due to DELETE-then-INSERT without transactional serialization
 > - an advisory lock on (namespace, org) was added to materialize_org to prevent cross-transaction conflicts
 > - the root cause was confirmed to be transactional overlap, not data corruption or NULL/empty string handling in tool_events
-> [1 entry dropped to fit the beat cap]
+> - the fix was tested in a reproduction environment and verified to pass under overlapping run conditions
 
-Anchoring term each entry was kept on: `materialize_org`, `materialize_org`, `tool_events`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `materialize_org`, `materialize_org`, `NULL/empty`, `(names nothing checkable)`.
 
 Identifiers this beat names that occur nowhere in its evidence: `NULL/empty`. Recorded, not dropped.
-
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the fix was tested in a reproduction environment and verified to pass under overlapping run conditions
 
 
 ---
@@ -9704,7 +8431,7 @@ user: B
 > - Generating four mockup treatments for the gallery cards: dimmed, dashed, shelf-based, and 'missing info + notify' variants
 > - Selecting the shelf-based layout with a footnote explaining missing classifier blockers as the preferred design
 
-Anchoring term each entry was kept on: `UI`, `13`, `mockup`, `layout`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Classifications`, `13`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
@@ -9870,7 +8597,1154 @@ user: [Request interrupted by user for tool use]
 > - fixed rewind landing at scrollLeft: 4 due to scroll-snap and padding
 > - dropped scroll-smooth class to prevent animation on programmatic scroll
 
-Anchoring term each entry was kept on: `grayed`, `each`, `scrollLeft`, `dropped`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `(names nothing checkable)`, `scrollLeft`, `(names nothing checkable)`.
+
+
+---
+
+# 36821116-646f-47ee-919f-6283fdb9abf6.jsonl
+
+*real transcript (engineering) · 31 mined windows*
+
+Transcript: `/home/dg/keld/study-corpus-snapshot-2026-08-11T2130/projects/-home-dg-keld-keld-atlas/36821116-646f-47ee-919f-6283fdb9abf6.jsonl` · project `keld-atlas` · walked to window 30
+
+Window coverage over the walked prefix: 1059 turns spanned by the beat strides, 628 of them read by a window (59.3%), 431 read by none; 6 of 6 windows carry a hole marker; largest window 15916 runes.
+
+---
+
+## Beat 1 (window 4 of 31) · 1 attempt(s)
+
+Window geometry: 244 turns in the stride since the previous beat, 89 kept, 155 dropped by the character bound (a hole marker sits where they were). 15916 runes in the window; 18132 runes in the assembled prompt against a 24000-rune budget.
+
+### Input 1 — measured record (counted on device — authoritative)
+
+```
+counts: turns=244 user_turns=5 tool_calls=153 corrections=0
+projects: keld-atlas
+tool profile: Bash x67, Read x28, Edit x17, TaskUpdate x12, Write x11, TaskCreate x6
+recurring subjects: sidecar, home/dg/keld/keld-atlas, Dockerfile, GREEN, TaskUpdate, confidence, ClassifierLab, health, node_modules, classification, enrich-sidecar, requirements.txt
+```
+
+### Input 2 — conversation window (15916 runes — evidence)
+
+```
+[turns since the previous update omitted to fit the context — they are not covered by any later window either]
+tool: Bash cd …
+assistant: 14 passed (the remaining diagnostics are symlink "implicit any" noise, validated by the real build next). Task 5 done. Starting verification (Task 6).
+tool: TaskUpdate (x2)
+tool: Bash cd …
+assistant: All 704 web tests pass, no regressions. Now the real `pnpm build` — memory flags this as essential (catches CSR-bailout/prerender issues that vitest+tsc miss and that broke `make ship`):
+tool: Bash cd …
+assistant: Turbopack rejects the symlinked `node_modules` ("points out of the filesystem root"). vitest tolerates it but the build needs a real install. The pnpm store is already warm (main uses it), so a real install hardlinks quickly. Let me replace the symlink with a proper install.
+tool: Bash cd …
+assistant: Real install done in 3s. Now the build:
+tool: Bash cd …
+assistant: Real type error: the shared `Button` (HeroUI v3) doesn't accept `isLoading`. Let me check how loading state is done on Button elsewhere.
+tool: Bash cd …
+assistant: The convention is label-swap, not `isLoading`. Let me fix (the test's `/run/i` matcher still matches "Running…"):
+tool: Edit classifier-lab.tsx
+tool: Bash cd …
+assistant: Build succeeded. Let me confirm the two web tests still pass after the Button change, and run the full API enrichment suite for regressions (in parallel):
+tool: Bash cd … (x2)
+assistant: All green (14 web, 38 API). Now the last verification: the sidecar. First a fast integrity check that the vendored Python compiles cleanly, then I'll attempt the heavy image build in the background.
+tool: Bash cd /home/dg/keld/keld-atlas/.claude/worktrees/gliner2-preview-worker echo "=== …
+assistant: The vendored sidecar byte-compiles cleanly and the entrypoint shell parses. 
+
+On your request — yes. Since the dev compose stack mounts `main` (not worktrees), the way to actually preview/use this is to land it on `main`. The work is complete and verified (backend endpoint + service tests green, web panel tests green, full 704-test web suite + `next build` green). Let me finish the branch properly and integrate.
+tool: Skill
+assistant: I'm using the finishing-a-development-branch skill to complete this work. The user has explicitly chosen to integrate onto `main` (Option 1 — merge locally), which is required for the compose stack to serve it. Tests are green (704 web + `next build`, and all preview API/service tests). Base branch is `main`.
+
+Let me detect the environment and review what will be committed.
+tool: Bash cd /home/dg/keld/keld-atlas/.claude/worktrees/gliner2-preview-worker …
+assistant: Clean status — only intended files (node_modules/.next are gitignored). Let me check for stray `__pycache__`/`.pyc` before committing (my docker test runs mount `services/api`, which per project memory can leave root-owned `__pycache__`):
+tool: Bash cd /home/dg/keld/keld-atlas/.claude/worktrees/gliner2-preview-worker echo "=== …
+assistant: The `__pycache__` dirs (from my `py_compile`/pytest docker runs) are gitignored, so they won't be committed — but they're root-owned and per project memory can block worktree cleanup later. Let me remove them now via a root container, then commit.
+tool: Bash cd /home/dg/keld/keld-atlas/.claude/worktrees/gliner2-preview-worker docker …
+assistant: Everything staged cleanly. Let me verify the remaining files are staged and commit:
+tool: Bash cd /home/dg/keld/keld-atlas/.claude/worktrees/gliner2-preview-worker git …
+assistant: Committed. Now merge into `main` locally (Option 1). The main checkout is on `main`; let me merge and clean up the worktree.
+tool: Bash MAIN_ROOT=/home/dg/keld/keld-atlas cd "$MAIN_ROOT" echo "=== main branch state …
+assistant: Merged into `main` cleanly (no divergence — `main` was still at `06fa0a25`, so the merged tree is byte-identical to the branch I ran all suites on). Now let me clean up the worktree. It's under `.claude/worktrees/` (native-tool managed), so I use `ExitWorktree`.
+tool: ToolSearch select:ExitWorktree
+assistant: All work is committed and merged; the only remaining files in the worktree are disposable (`node_modules`, `.next`). Let me remove the worktree.
+tool: ExitWorktree
+assistant: The tool flags the branch commit, but that commit is **already merged into `main`** (`c8299ba8`). Let me verify it's safely in `main` before discarding:
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== is a6944e78 in main? ===" && git branch …
+assistant: The feature commit `a6944e78` is confirmed in `main` (28 feature files present on `main`). Discarding the worktree branch is safe — the work is preserved in `main`.
+tool: ExitWorktree
+assistant: Session is back on `main`. The worktree dir couldn't be auto-removed (likely the installed `node_modules`/build artifacts, possibly root-owned). Let me force-remove it and prune, then delete the branch.
+tool: Bash cd /home/dg/keld/keld-atlas WT=.claude/worktrees/gliner2-preview-worker git …
+assistant: Worktree removed, branch deleted, session back on `main` with the feature merged. Now let me get it running so you can preview. First, let me check how the dev stack mounts code (whether api hot-reloads from the checkout or needs a rebuild):
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== compose override files ===" && ls …
+assistant: Key finding: the dev override **bind-mounts** `./services/api` (and web) with `--reload`, so the running containers already see the merged code. But the api container still lacks the new `KELD_ENRICH_SIDECAR_URL` env (env is set at container creation). So I need to recreate `api` to enable the feature, and build the `enrich-sidecar` image (slow — bakes the model).
+
+(The diagnostics above are transient IDE noise from the worktree teardown; `next build` already proved types resolve.)
+
+Let me recreate `api` (fast) and kick off the sidecar build in the background.
+tool: Bash cd /home/dg/keld/keld-atlas export KELD_SECRET=$(grep -E '^KELD_SECRET=' .env …
+assistant: api has the env. Let me confirm the new route is live (expect 401/403 auth-gated, not 404) and kick off the sidecar image build in the background.
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== preview route registered? (expect …
+assistant: Routes are live (401 auth-gated, not 404) — the backend feature is wired correctly in the running stack. Now the slow part: building the `enrich-sidecar` image (installs torch + bakes gliner2-large). Kicking it off in the background:
+tool: Bash cd /home/dg/keld/keld-atlas export …
+assistant: The background build is running (it'll take a few minutes for torch + the gliner2-large bake). While it builds, let me capture a genuinely non-obvious gotcha from this session as a memory, and update the task list.
+tool: Write worktree-web-build-needs-real-install.md
+tool: Read MEMORY.md
+tool: Edit MEMORY.md
+assistant: Let me check the build's progress:
+tool: Read bgeg1hqbu.output
+assistant: The build is still in its early stages (base image + `pip install torch` — output is buffered). It's running in the background and I'll be notified when it finishes; I'll then start the container and verify `/health`.
+
+Here's where things stand:
+
+## Merged to `main` — feature is live in your dev stack
+
+The Classifier Lab is committed and merged to `main` (`c8299ba8`), worktree cleaned up. Because the dev override bind-mounts the source with hot-reload, the running stack already serves the merged code:
+
+- **Backend**: I recreated the `api` container so it picks up `KELD_ENRICH_SIDECAR_URL`. The new routes are live and auth-gated: `GET/POST /api/enrichment-schema/preview*` return `401` (not `404`).
+- **Web**: the `ClassifierLab` panel is in the classification editor drawer (`EditView`), hot-reloaded by the web dev server.
+
+**You can preview the panel now** at `localhost:3000` → open a classification for editing → the **Classifier Lab** section is at the bottom of the editor (single-label / multi-label / entity passes; structure/relation show a "not available" note). Until the sidecar container is up, **Run** will report "warming up / unreachable" — the panel renders because the feature flag is on, but inference needs the worker.… The build completed (exit 0). Let me check the output and bring the sidecar up.
+tool: Bash tail -25 …
+assistant: Image built successfully (12.4GB — torch + the gliner2-large/deberta-v3 weights baked in). Let me start the container and verify health + a real inference.
+tool: Bash cd /home/dg/keld/keld-atlas export …
+assistant: Sidecar is up: `ok:true`, model resolved, CPU cap = 2 threads (`max(2, floor(0.1·ncpu))`). `state:down` = worker spawns lazily on first request. Let me do the real inference smoke test (§9) — POST a classify + entity request directly to the sidecar (this spawns the worker + loads the model, ~first-call warmup):
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== POST /classify (first call spawns worker …
+assistant: Real inference works and the response shapes exactly match what the proxy/UI expect. Now the **full authed path through the Atlas API** (login as seeded admin → `POST /api/enrichment-schema/preview`), plus the `/metrics` CPU-cap check from §9:
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== /metrics cpu_threads (expect 2) ===" && …
+assistant: Full E2E confirmed: **login 200 → preview 200 → correct result** ("writing new content" @ 0.9999). The feature works end-to-end through the Atlas API with real inference.
+
+The `cpu_threads` metric read `None` (the vendored sidecar only populates that field via a `pre_run` hook that `main.py` doesn't wire — it passes threads per-request instead). The cap itself is enforced: the entrypoint computed `MAX_THREADS=2` with scaling disabled. Let me confirm the metric populates after an inference (and isn't a real gap):
+tool: Bash cd /home/dg/keld/keld-atlas docker exec keld-atlas-enrich-sidecar-1 sh -c …
+assistant: The env confirms keep-resident posture (`scale_disabled:1 idle_unload:0 evict_pct:0` — the empty `MAX_THREADS` is just because `docker exec` spawns a fresh shell that doesn't inherit the entrypoint's export; the uvicorn process has it). But `model_cost_mb=0` / `cpu_threads=None` is a tell: **`psutil` is missing** — the vendored `requirements.txt` omits it, and the sidecar's RSS/memory guards + metrics all depend on it. Let me confirm:
+tool: Bash docker exec keld-atlas-enrich-sidecar-1 python -c "import psutil; …
+assistant: `psutil` is present (7.2.2, transitively) — so the memory guards are live. My metrics JSON-path was just wrong (the vendored `build_metrics` nests fields). Let me dump the raw metrics to confirm the thread cap is reported and close out §9 verification:
+tool: Bash docker exec keld-atlas-api-1 sh -c 'curl -s …
+assistant: Everything checks out against plan §4/§9 (metrics were just nested under `worker`/`governor`):
+
+- **`governor.cpu_threads: 2`** — exactly `max(2, floor(0.1·ncpu))`, and **`disabled: true`** (no rate pacing) ✅
+- **`model_cost_mb: 2692`**, `worker_rss: 2695` — model resident (~2.7GB) ✅
+- **`ceiling_mb: 6788`** (model + 4096 margin), **`hard_limit: 8042`** (8192 budget − 150) — wide margins so the between-jobs recycle won't fire ✅
+- **`recycles: 0, kills.idle/pressure: 0`** — nothing evicted; keep-resident confirmed ✅
+- **`submitted: 3, completed: 3, failed: 0`** — all previews succeeded ✅
+tool: TaskUpdate
+assistant: The plan is fully executed, merged to `main`, and **running live** in your dev stack.
+
+## Done — Classifier Lab is usable now
+
+**Try it:** `localhost:3000` → open any classification for editing → the **Classifier Lab** panel is at the bottom of the editor. Type a prompt, hit **Run**. I confirmed a real round-trip through the running stack:
+- `"draft a quarterly sales email to prospects"` → **writing new content** (0.9999)
+- `"migrate the FastAPI service to Python 3.12"` → entity **language: Python 3.12**
+
+## What shipped (`main`, merge `c8299ba8`)
+
+| Piece | Detail |
+|---|---|
+| `services/enrich-sidecar/` | Vendored keld-signal sidecar (commit `2805022`), `gliner2==1.3.2` pinned, model baked into the 12.4GB image, kept resident |
+| Dockerfile / compose | Internal-network only (not host-exposed), CPU cap `max(2,⌊0.1·ncpu⌋)`, keep-resident env, `cpus/mem` backstops |
+| Config | `KELD_ENRICH_SIDECAR_URL` in `config.py` + `.env.example` + `docs/configuration.md`; unset ⇒ feature hidden/404 |
+| Backend | `enrich_preview.py` (pass→sidecar mapping) + `POST /api/enrichment-schema/preview` & `/preview/health` (admin-gated) |
+| Web | `ClassifierLab` panel + `use-enrichment-preview` hook; feature-detected via `/health`, hidden for structure/relation |
+
+## Verified
+
+- API: **19** preview tests (respx-mocked) + **16** schema-router (no regression)
+- Web: **4** ClassifierLab tests + full **704/704** suite + clean `next build`
+- Live stack: `/health ok:true`, CPU cap = 2, `disabled:true`, `recycles:0`, full authed E2E `200`
+
+## Two follow-ups (your call)
+
+1.…
+user: where do I access this in the app?
+assistant: Let me trace exactly where that editor drawer opens from in the running app.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== who renders …
+user: [Request interrupted by user]
+user: Never mind. I found it. In addition to the drawer, we want a button on the individual rows in the classification table (task type, sensitivity, etc.)
+assistant: Got it — a per-row "Test" affordance on the classification table, launching the lab for that specific pass. That's a new UI behavior with a real design choice (what the button opens), so let me brainstorm it before building.
+tool: Skill
+assistant: Let me explore the current classification table code to ground the design.
+tool: Read classifications-view.tsx
+assistant: `classifications-view` renders passes as **cards** (`PassCard`), not rows. The user said "table" with "rows" — let me check the catalog (v2) view and the `PassCard` to see which surface they mean.
+tool: Read classifications-catalog-view.tsx
+assistant: The **catalog (v2)** view is the table — each `PassRow` has columns `Name · Type · Values · Preview · [edit/lock]`, exactly the "task type, sensitivity" rows you mean. Let me confirm which route is actually wired (the sidebar points at `/admin/classifications`).
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== classifications/page.tsx …
+assistant: Important nuance: the sidebar's **Classifications** page (`/admin/classifications`) is the **card** view; the **table with rows** is `/admin/classifications-v2`, which isn't linked in the nav. So "rows in the table" points at v2. Before I build, two quick decisions:
+tool: AskUserQuestion
+assistant: Locked: **v2 catalog table rows** + a **focused Test drawer** (lab-only). Here's the design:
+
+## Design — per-row Test button (v2 catalog)
+
+**New component** `components/classifications/pass-test-drawer.tsx`
+- Uses the shared `Drawer` (icon `FlaskConical`, title `Test · <pass title>`), body renders the existing `<ClassifierLab>` — no editor. Reuses everything already built.
+- A small pure helper `passToPreviewInput(pass)` maps `EnrichmentPass → PassInput` (kind, title, labels, labels_by_cond, multi_label, cls_threshold) — the same shape the editor sends.
+
+**`PassRow`** (in `classifications-catalog-view.tsx`)
+- Gains an optional `onTest?: () => void`. When present, a flask icon-button sits in the actions column next to the existing edit-pencil / lock, with `stopPropagation` so it doesn't toggle the row's expand.
+- Shown only for **previewable kinds** (single/multi/entity) — structure/relation rows get no button (nothing to preview). Works for **locked built-ins** too (task_type, sensitivity…), which currently have no action affordance at all.
+
+**`ClassificationsCatalogView`**
+- Calls `useEnrichmentPreviewHealth()` once; passes `onTest` to rows **only when `enabled`** — so the button appears exactly when the sidecar feature is on (same flag as the drawer lab).…
+user: go ahead
+```
+
+### Output
+
+> the integration and live deployment of the ClassifierLab feature
+> - the ClassifierLab panel is merged to main and live in the dev stack with hot-reloaded code
+> - the sidecar image is built with gliner2-large baked in and the model is verified via real inference
+> - a per-row 'Test' button is designed for the v2 catalog table to launch the ClassifierLab for specific passes
+> - the feature is fully verified end-to-end through authed API flows and live metrics validation
+
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `ClassifierLab`, `gliner2-large`, `Test`, `API`.
+
+
+---
+
+## Beat 2 (window 9 of 31) · 3 attempt(s)
+
+Window geometry: 131 turns in the stride since the previous beat, 92 kept, 39 dropped by the character bound (a hole marker sits where they were). 14665 runes in the window; 16911 runes in the assembled prompt against a 24000-rune budget.
+
+### Input 1 — measured record (counted on device — authoritative)
+
+```
+counts: turns=375 user_turns=10 tool_calls=241 corrections=0
+projects: keld-atlas
+tool profile: Bash x98, Edit x47, Read x38, Write x19, TaskUpdate x18, TaskCreate x9
+recurring subjects: home/dg/keld/keld-atlas/services/web, catalog, home/dg/keld/keld-atlas, phrase, classifications-catalog-view.tsx, sidecar, TaskUpdate, classification, GREEN, ClassifierLab, confidence, entity
+```
+
+### Input 2 — conversation window (14665 runes — evidence)
+
+```
+[turns since the previous update omitted to fit the context — they are not covered by any later window either]
+user: The flask logo is ambiguous and should be a proper button with lebel
+assistant: That's a fair call — an icon-only flask is ambiguous. Let me make it a proper labeled button. First let me check the shared `Button` component's sizes/tones so I use the DS-blessed control rather than hand-rolling.
+tool: Read button.tsx
+assistant: The shared `Button` at `size="sm"` would be too tall for these dense `py-2.5` rows (and would make Test-bearing rows taller than others) — so I'll match the existing in-row raw-button pattern (the edit pencil is already a raw button here) but give it a border + **"Test"** label so it reads unmistakably as a button. I'll keep an `aria-label` with the pass name for accessibility. Let me widen the actions column and update the button:
+tool: Edit classifications-catalog-view.tsx (x2)
+assistant: Now verify the tests still pass (aria-label unchanged, so the role-name query still matches) and the build is clean:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: Green (14 tests) and build clean. Let me commit to `main`.
+tool: Bash cd /home/dg/keld/keld-atlas git add …
+assistant: Done — committed to `main` (`de5649ee`), live in the running stack.
+
+The row action is now a **bordered "Test" button** (flask icon + label) instead of the bare icon, sitting beside Edit/Lock in a widened actions column. The `aria-label` still carries the pass name for screen readers, and clicking it stops row-expand and opens the focused Test drawer as before.
+
+Reload `localhost:3000/admin/classifications-v2` to see it. Tests (14) and `next build` are green.
+
+One thing I kept a small flask glyph *inside* the labeled button for scannability — if you'd rather it be text-only "Test" with no icon, that's a one-line change; say the word.
+user: The drawer needs to state the name and description and possible values for the enrichment under test
+assistant: Good call — testing a classification is much clearer if the drawer shows what you're testing. Let me TDD: add a test that the drawer surfaces the description + possible values, then implement.
+tool: Edit pass-test-drawer.test.tsx (x2)
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: RED confirmed. Now implement — add a `PassSummary` (description + possible values) above the lab:
+tool: Write pass-test-drawer.tsx
+assistant: Now thread `parentTitle` from the catalog view (for conditioned passes) and verify:
+tool: Edit classifications-catalog-view.tsx (x2)
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: You're right — showing the raw truncated zero-shot phrase ("writing new ori…") is useless. Two problems: it displays the long matched *phrase* instead of the friendly value name, and the layout truncates to a tiny fixed width instead of using the drawer. Let me fix both. First let me re-read the current result rendering.
+tool: Read classifier-lab.tsx
+assistant: Now I understand all four points, and they converge:
+1. **Result doesn't correspond to a value** + indecipherable → it's showing the raw zero-shot *phrase* ("writing new original content…") instead of the friendly value name ("Text generation") that appears in the values list. Fix: map the returned string back to the value's display name so it matches a listed value.
+2. **Truncated/cramped** → drop the fixed `w-28 truncate`; use full width, wrap.
+3. **Un-box it / inline** → remove the bordered `LabSection`; render inline in the drawer. "Not everything needs to be boxed."
+
+Let me rewrite `ClassifierLab` (boxless, friendly names, full-width results) with a `labelDisplays` map:
+tool: Write classifier-lab.tsx
+assistant: Now build `labelDisplays` in `PassTestDrawer` (it has the pass + `valueDisplay`) and pass it to the lab:
+tool: Edit pass-test-drawer.tsx (x2)
+assistant: Now wire the editor's inline lab (EditView) to the same friendly-name mapping for built-in passes:
+tool: Edit enrichment-schema-drawer.tsx
+assistant: The drawer file changed on disk — let me re-read the EditView ClassifierLab block before editing it.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -n …
+tool: Read enrichment-schema-drawer.tsx (x2)
+tool: Edit enrichment-schema-drawer.tsx
+assistant: Now add a test that results show the friendly value name (not the raw phrase) when `labelDisplays` is provided, then run everything:
+tool: Edit classifier-lab.test.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: All 20 pass. Let me run the full suite + build, then commit to `main`.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== full vitest ===" && pnpm …
+assistant: 713 tests + build green. The dev server mounts the main checkout, so these edits are already hot-reloaded — you can reload the drawer now. Let me commit.
+tool: Bash cd /home/dg/keld/keld-atlas git add …
+assistant: Committed to `main` (`06256251`) — live via hot-reload, so reload the Test drawer to see it.
+
+**Direct answer to "why doesn't the result correspond to a value":** it did correspond — it was the `text_generation` value — but the lab was displaying GLiNER2's internal *zero-shot phrase* ("writing new original content…", the string the model matches against) instead of the value's **name**, and truncating it. So it looked foreign. Fixed.
+
+What changed in the drawer:
+
+1. **Results now show the value's name**, mapped back from the model's raw phrase via the pass's own display names — so the result reads as one of the values listed right above it (e.g. **Text generation**), not a mystery phrase. Same mapping the values list uses, so they always match.
+2. **Full width, no truncation** — the winning value, a confidence bar, the score, and a "Top match" badge, using the drawer's width and wrapping instead of a cramped fixed column.
+3. **Unboxed / inline** — the Classifier Lab is no longer wrapped in its own bordered card; it renders inline in the drawer. Nothing superfluous is boxed.
+4. **The drawer now states what's under test** — name (title), description, and the possible values — above the lab.…
+user: it shows "top match" but does this imply that there are second and third tier matches as well?
+assistant: Good catch — that's misleading. For **single-label** classification the sidecar returns exactly one result (the chosen label), so "Top match" wrongly implies runners-up that don't exist. The "Match" concept only makes sense for **multi-label**, where several labels can independently clear the threshold. Let me fix: drop the badge for single-label (it's simply *the* classification), and keep a "Match" badge only for multi-label.
+tool: Edit classifier-lab.tsx
+assistant: Two more tweaks. Let me confirm HeroUI exposes a `Textarea` and the `Send` (paper-airplane) icon before wiring them.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== heroui textarea export? …
+assistant: `Send` (paper airplane) exists. HeroUI's package is export-restricted — let me find its Textarea subpath / whether `Input` supports multiline.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== @heroui/react exports …
+assistant: `./textarea` subpath exists. Let me confirm the exported component name (Input is `Input`, so likely `Textarea`) via its type declaration.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== textarea export name ===" … (x2)
+assistant: The component is `TextArea`. Let me check its props (value/onChange/rows) and API shape.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== textarea index.d.ts ===" && …
+assistant: `TextArea` (from `@heroui/react/textarea`) takes native textarea props. Now I have everything. Let me apply all four remaining tweaks together: paper-airplane (`Send`) Run button, multiline `TextArea`, `"XX% Confidence"`, and a divider before results.
+tool: Edit classifier-lab.tsx (x2)
+assistant: Now the input section — multiline `TextArea`, `Send` Run button, and a divider before results:
+tool: Edit classifier-lab.tsx
+assistant: Note: I kept a visible **"Run"** label beside the `Send` glyph (unambiguous + shows the paper-airplane), with `aria-label="Run"`. Now update the tests — the single-label "Top match" assertion is gone, and add a multi-label "Match" test:
+tool: Edit classifier-lab.test.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: All 21 pass. Now `next build` to catch types (TextArea props, etc.):
+tool: Bash cd /home/dg/keld/keld-atlas/services/web
+pnpm build 2>&1 | tail -15
+assistant: Build clean. Given the visual concerns, let me verify this on the running app with a real screenshot rather than declare it done blind. Let me check what headless-browser tooling is available.
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== playwright/puppeteer installed? ===" && …
+assistant: There's a Playwright chromium cache + system chromium, and the web is up. Let me check if Playwright itself is resolvable so I can drive a real screenshot (login → open the Test drawer → screenshot).
+tool: Bash cd /home/dg/keld/keld-atlas node -e …
+assistant: Playwright is available in the npx cache with a cached chromium. Let me drive a real screenshot: log in, open the Task type Test drawer, run a prompt, and capture it.
+tool: Write shot.mjs
+tool: Bash node …
+tool: Edit shot.mjs
+tool: Bash node …
+tool: Read lab.png
+assistant: The screenshot confirms everything lands cleanly. Every point is addressed:
+
+- **Result corresponds to a value** — "Text generation" is exactly one of the POSSIBLE VALUES pills listed above (no longer the raw phrase).
+- **No misleading "Top match"** — single-label just shows the classification.
+- **"100% Confidence"** labeled, full-width bar.
+- **Multiline textarea** (with resize handle) + **paper-airplane Run button** and a "⌘↵ to run" hint.
+- **Divider** between input and results; **unboxed/inline**; name + description + possible values stated up top.
+
+Let me commit this batch.
+tool: Bash cd /home/dg/keld/keld-atlas git add …
+assistant: Done — committed to `main` (`52e7fb19`) and verified on the running app (the screenshot above is the live drawer).
+
+All of your feedback is in:
+
+| Ask | Result |
+|---|---|
+| "Top match" implies tiers? | Removed for single-label (one result, no runners-up); "Match" kept only for multi-label tags ≥ threshold |
+| Result didn't match a value | Now shows the value **name** ("Text generation"), which is one of the POSSIBLE VALUES listed above |
+| Multiline input | `TextArea` (resizable), ⌘/Ctrl+Enter to run |
+| Paper-airplane Run | `Send` glyph on the Run button |
+| "XX% Confidence" | Score reads **100% Confidence** |
+| Divider | Hairline between the input and the results |
+| Un-box it / inline | Lab renders inline; name + description + possible values stated at the top |
+
+Verified end-to-end: logged in, opened the **Task type** Test drawer, ran "Create a new blog entry on the site." → **Text generation · 100% Confidence**, corresponding to the listed value.
+
+It's live via hot-reload — reload `/admin/classifications-v2` and open a Test drawer. If any spacing/wording is still off to your eye, tell me and I'll adjust; I can re-screenshot to confirm before handing back.
+user: [Image #2] The sections are not clearly differentiated enough. I feel like the typesetting could be improved
+assistant: Good feedback — the zones read as one flat stack with faint labels. Let me strengthen the hierarchy: more readable section eyebrows, a headline-weight result, tighter caption-vs-description contrast, and more breathing room between the three zones. Let me re-read the current lab file first.
+tool: Read classifier-lab.tsx
+assistant: All clear. The results need to be the visual centerpiece (not a thin row), the plane goes right of "Run", and the zones need stronger typographic hierarchy. Let me rewrite the lab with an emphasized headline result, richer entity chips, and cleaner section eyebrows.
+tool: Write classifier-lab.tsx
+assistant: Now match the section eyebrow + spacing in `PassSummary` (the drawer's "about" zone) for consistent hierarchy:
+tool: Edit pass-test-drawer.tsx
+assistant: Let me give the drawer's zones a touch more separation, then verify with tests + build + a fresh screenshot.
+tool: Edit pass-test-drawer.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: Green. Let me screenshot both a classify (Task type) and the entity (Product Name) drawer to verify the new emphasis and typesetting against your examples.
+tool: Write shot.mjs
+tool: Bash node …
+tool: Read lab-classify.png
+assistant: Classify result is now a proper headline (large "Text generation", bold **100% CONFIDENCE**, thick bar) with the plane right of "Run". Let me check the entity drawer.
+tool: Read lab-entity.png
+assistant: Both drawers now read cleanly: three distinct zones (description → **ENTITY TYPES/POSSIBLE VALUES** → **Classifier Lab** → **RESULT/EXTRACTED**) separated by dividers with consistent readable eyebrows; the classify result is a bold headline ("Text generation" + large **100% CONFIDENCE** + thick bar); the entity result is a substantial green-tinted chip; and the plane sits right of "Run".
+
+Let me commit.
+tool: Bash cd /home/dg/keld/keld-atlas git add …
+assistant: Committed to `main` (`20e032b1`) and verified live (screenshots above are the running app).
+
+What changed, against each point:
+
+- **Sections not differentiated / typesetting** — three clear zones now, each with a consistent readable eyebrow (`POSSIBLE VALUES` / `ENTITY TYPES` → `Classifier Lab` → `RESULT` / `EXTRACTED`), separated by dividers with more breathing room.
+- **Results underemphasized / barebones** — single-label result is a headline: large value name + large **100% CONFIDENCE** + a thicker green bar. Entity spans are now substantial tinted chips grouped by type, instead of a thin inline row.
+- **Airplane right of the label** — `Run ✈`.
+
+Everything's on `main` and hot-reloaded — reload a Test drawer to see it. Full lab/drawer tests + `next build` pass.
+
+If you want the entity result to carry even more weight (e.g. a confidence bar per span like the classify view, rather than just the % on the chip), say so and I'll match them — otherwise I think the two views are now balanced.
+user: When I create a custom enrichment using a single classifier enrichment and create a single label, NSFW, it matches EVERYTHING to NSFW unless I create a second label for it to choose from. This is not optimal. Many times, a classification is intended to be binary. We just want to tag the prompt as this or that.
+```
+
+### Output
+
+> the Test drawer UI improvements for classification clarity and accuracy
+> - the Test drawer was updated to show the classification name, description, and possible values
+> - the result in the Classifier Lab was fixed to display the value name instead of the raw zero-shot phrase
+> - the 'Top match' badge was removed for single-label classification to avoid implying multiple tiers
+> - the drawer layout was enhanced with clearer section eyebrows, breathing room, and stronger typographic hierarchy
+
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Test`, `Classifier`, `Top`, `(names nothing checkable)`.
+
+
+---
+
+## Beat 3 (window 14 of 31) · 1 attempt(s)
+
+Window geometry: 224 turns in the stride since the previous beat, 98 kept, 126 dropped by the character bound (a hole marker sits where they were). 15614 runes in the window; 17863 runes in the assembled prompt against a 24000-rune budget.
+
+### Input 1 — measured record (counted on device — authoritative)
+
+```
+counts: turns=599 user_turns=15 tool_calls=407 corrections=0
+projects: keld-atlas
+tool profile: Bash x166, Edit x97, Read x65, TaskUpdate x26, Write x23, TaskCreate x14
+recurring subjects: multi-label, NSFW, home/dg/keld/keld-atlas, threshold, sidecar, home/dg/keld/keld-atlas/services/web, single-label, enrichment-schema-drawer.tsx, classification, TaskUpdate, proxy, classifiers
+```
+
+### Input 2 — conversation window (15614 runes — evidence)
+
+```
+[turns since the previous update omitted to fit the context — they are not covered by any later window either]
+user: [Image #3] this view is too boxy. We should be using a tabular format, and NOT contained in any box, just inline in the actual drawer content area. Also, the title is a misnomer. You should not include the built-ins, which should be non-editable
+assistant: This is the `EnrichmentSchemaDrawer` **ListView** ("Customize enrichments"). Let me find where it's opened in list mode and confirm scope before changing it.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== who renders …
+assistant: This drawer is shared by both classifications pages (its list mode is reached via "Back" from editing). I've got four asks now — let me split them:
+
+**A) The brainstorm (10 candidate baked-in classifiers → pick 3)** — a proposal to discuss, no code yet.
+**B) The ListView redesign** — tabular, unboxed, custom-only, retitle, "classifier" not "enrichment".
+
+Let me deliver the brainstorm first, then implement B. Let me re-read the ListView + title code to change it precisely.
+tool: Read enrichment-schema-drawer.tsx
+assistant: Let me see the title/footer copy and the KINDS blurbs for terminology:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -n "enrichment\|Enrichment" …
+assistant: Now let me implement the ListView redesign — I'll replace `passMeta`/`PassRowInfo`/`BuiltinRow`/`CustomRow` with a compact count helper + a tabular unboxed row, and rewrite `ListView` to be custom-only:
+tool: Edit enrichment-schema-drawer.tsx
+assistant: Now the ListView caller (drop `resetKeys`) and the titles/copy:
+tool: Read enrichment-schema-drawer.tsx (x2)
+tool: Edit enrichment-schema-drawer.tsx
+assistant: Now the titles, ConfirmDialog copy, and the unused `Lock` import:
+tool: Read enrichment-schema-drawer.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -n "New custom enrichment\|Add a …
+tool: Edit enrichment-schema-drawer.tsx (x4)
+assistant: Now update the drawer tests that referenced built-ins-in-the-list and the old "enrichment" copy:
+tool: Read enrichment-schema-drawer.test.tsx
+tool: Edit enrichment-schema-drawer.test.tsx (x3)
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: 24 tests pass. Let me build, then screenshot the redesigned list.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web
+pnpm build 2>&1 | tail -4
+assistant: Let me check whether `__draft_1` actually persisted to the DB (a real bug) or is just the unsaved working-copy key leaking into the list.
+tool: Bash cd /home/dg/keld/keld-atlas docker compose exec -T postgres psql -U keld -d …
+assistant: The DB is fine — keys are `nsfw` and `product_name`. The `__draft_1` is the **unsaved working-copy temp key** leaking into the list display (assigned when you add a pass, replaced by the server-derived key on Save). It shouldn't be shown. Let me hide temp draft keys in the row:
+tool: Edit enrichment-schema-drawer.tsx
+assistant: Two more: the **PREVIEW** pill is illegible (the shared `soft` tone uses near-white green text meant for dark banners), and you want a **Delete** button in the edit drawer. Let me fix the pill and find the edit footer.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== Preview pill ===" && grep …
+assistant: And two more flow issues: **Delete** in the edit drawer, and when opened via the pencil (direct edit), **"Back" shouldn't return to the full custom list** — it should just close. These change the edit footer's semantics based on how the drawer was entered. Let me read `commitEdit`, the open effect, and the footer to implement cleanly.
+tool: Read enrichment-schema-drawer.tsx
+assistant: This batch touches the drawer's edit flow meaningfully. Let me fix the pill (quick), then refactor the drawer so a pencil-opened editor saves-and-closes (no "Back to list") and gains a Delete button. First the pill:
+tool: Edit classifier-lab.tsx
+assistant: Now refactor `commitEdit` into a reusable `buildFields` + add direct persist/delete for the focused (page-opened) flow:
+tool: Edit enrichment-schema-drawer.tsx
+assistant: Now add a `focused` flag and rewire the footer (Cancel/Save + Delete for page-opened; Back/Done for the manager list). Let me read the current footer region.
+tool: Read enrichment-schema-drawer.tsx (x3)
+assistant: Let me add the `focused` flag + delete-confirm state, then rewire the footer. First the state:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -n "const \[saving\|const …
+tool: Read enrichment-schema-drawer.tsx
+tool: Edit enrichment-schema-drawer.tsx (x3)
+assistant: Now rewrite the pick + edit footer branches:
+tool: Edit enrichment-schema-drawer.tsx
+assistant: `Button` supports `tone="danger"`. Now update the drawer tests for the focused flow (a pencil-opened edit now Saves directly, no "Done→list→Save"), and add a delete test:
+tool: Edit enrichment-schema-drawer.test.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: 32 pass. Let me run the full suite + build.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== full vitest ===" && pnpm …
+assistant: 715 tests + build green. And noted — after this I'll bring **keld-signal** to parity. Let me commit the Atlas UI batch first, then screenshot to verify.
+tool: Bash cd /home/dg/keld/keld-atlas git add …
+assistant: Committed (`5ebdf0c1`). Note: the manager list is now only reachable when the drawer is opened *plain* — which no page does — so the primary path to verify is the **focused editor** (pencil → edit). Let me screenshot that (Delete + Cancel/Save footer + the legible Preview pill).
+tool: Write shot4.mjs
+tool: Bash node …
+tool: Read focused-edit.png
+assistant: The focused editor verifies clean: footer is **Delete · Cancel · Save** (no "Back"), the **PREVIEW** pill is now legible (dark green on light), and the lab is inline. All the UI fixes shipped in `5ebdf0c1`.
+
+Now — the brainstorm you asked for, first. Here are **10 candidate default classifiers** to seed new Atlas accounts. I deliberately avoided the built-ins already shipped (task type, sensitivity, domain, activity, work/personal, speech act, job category, subcategory), and kept every one feasible for GLiNER2 on a single prompt:
+
+| # | Name | Kind | Captures | Why an org wants it |
+|---|------|------|----------|---------------------|
+| 1 | **Output artifact** | multi-label | code · email · document · spreadsheet · SQL · slide deck · diagram · config | "What is AI actually producing?" — complements *task type* (the operation) with the deliverable |
+| 2 | **Tech stack** | entity | language · framework · cloud/tool | Which technologies AI assists with; surfaces adoption + shadow tools.…
+user: Let's do 1, 2, 7, and NSFW
+assistant: Locked: **Output artifact** (multi-label), **Tech stack** (entity), **Vendor / product mention** (entity), and **NSFW** (binary tag). I'll bake these as seeded custom classifiers for new accounts.
+
+Let me find where orgs are created (signup + seed) and how custom passes are inserted, so I wire the defaults in correctly.
+tool: Bash cd /home/dg/keld/keld-atlas/services/api echo "=== where Organization rows are …
+assistant: Multiple org-creation sites (signup, oauth, admin, dev seed). I'll add a `seed_default_classifiers(org)` helper and call it at each. Let me read the signup flow and the seed factory to wire it correctly.
+tool: Bash cd /home/dg/keld/keld-atlas/services/api echo "=== auth.py signup (org+user …
+assistant: Clean pattern — `_create_org_and_founding_admin` already calls `seed_capex`/`seed_function` on org creation. Let me check the other org-creation sites (oauth, admin) to know all call sites.
+tool: Bash cd /home/dg/keld/keld-atlas/services/api echo "=== oauth org creation ===" && …
+assistant: Both signup and OAuth funnel through `_create_org_and_founding_admin`, so that + admin-create + the dev seed are the call sites. `_labels` helper exists. Let me TDD the seed function — RED first:
+tool: Write test_default_classifiers.py
+tool: Bash cd /home/dg/keld/keld-atlas docker run --rm --network keld-atlas_default \ -e …
+assistant: RED confirmed. Now implement `DEFAULT_CLASSIFIERS` + `seed_default_classifiers` in `enrichment_schema.py`:
+tool: Read enrichment_schema.py
+tool: Edit enrichment_schema.py
+tool: Bash cd /home/dg/keld/keld-atlas docker run --rm --network keld-atlas_default \ -e …
+assistant: 4 passed. Now wire it into the org-creation paths (signup+oauth via `_create_org_and_founding_admin`, dev seed, admin create):
+tool: Bash cd /home/dg/keld/keld-atlas/services/api grep -n "from app.services.labels …
+tool: Edit auth.py (x4)
+assistant: Now the admin org-create path:
+tool: Edit orgs.py (x2)
+assistant: Let me verify org-creation paths still work (signup/oauth/admin) and the seeding is wired, running the relevant tests:
+tool: Bash cd /home/dg/keld/keld-atlas ls services/api/tests | grep -iE …
+assistant: 41 passed (default classifiers + signup + oauth + admin org creation), no regressions. New accounts now get the four defaults.
+
+Your existing dev orgs won't retroactively receive them (by design — "starting point for new accounts"). To let you see them live, let me seed the current orgs too (idempotent/additive — skips your existing `nsfw`):
+tool: Bash cd /home/dg/keld/keld-atlas/services/api grep -n … (x4)
+assistant: Both orgs now carry the four defaults. Let me commit the backend seeding, then move to keld-signal parity.
+tool: Bash cd /home/dg/keld/keld-atlas docker run --rm -v "$PWD/services/api:/a" …
+assistant: Atlas side committed (`7c244e3d`). Now **keld-signal parity**. This is a separate repo (Go daemon + the Python sidecar). Let me map the relevant code first — the sidecar `ClassifyIn` (direct mirror) and the Go daemon's classify request/result handling.
+tool: Bash cd ~/keld/keld-signal 2>/dev/null && echo "=== repo root ===" && ls && echo …
+assistant: keld-signal is Go + the Python sidecar. Let me mirror the sidecar `ClassifyIn` (direct), then map the Go enrichment code that builds classify requests. Let me explore the Go side.
+tool: Bash cd ~/keld/keld-signal echo "=== enrich dir ===" && ls internal/agent/enrich/ …
+assistant: keld-signal has its own Go enrichment pipeline with hardcoded passes (`labels.go`, `a6_tasktype.go`, etc.). Before changing anything, I need to understand its architecture precisely — especially whether it even runs org custom passes, and where it builds classify requests. Let me explore it thoroughly while I mirror the trivial sidecar change.
+tool: Agent
+assistant: While that maps the Go side, let me mirror the sidecar `ClassifyIn` widening (identical to the Atlas change) — I know exactly what this is.
+tool: Read main.py
+tool: Edit main.py
+assistant: Let me verify the keld-signal sidecar edit compiles:
+tool: Bash docker run --rm -v /home/dg/keld/keld-signal/sidecar:/s -w /s python:3.12-slim …
+assistant: Status update — a lot landed this turn:
+
+## Default classifiers (your pick: Output artifact, Tech stack, Vendor mentions, NSFW)
+- Baked in as **seeded custom classifiers for new accounts** — created on every org-creation path (signup, OAuth, admin console, dev seed), idempotent, keys guarded against built-in collisions. Committed (`7c244e3d`), 4 tests + the org-creation suites (41) green.
+- Also seeded them into your **existing dev orgs** so you can see them now — reload `/admin/classifications-v2`. (Your hand-made `nsfw`/`product_name` were left intact; `nsfw` matched the default key so it wasn't duplicated.)
+
+## keld-signal parity (in progress)
+- **Sidecar mirrored:** `ClassifyIn.tasks` widened to accept the per-task `{labels, multi_label, cls_threshold}` config (compiles). This keeps the sidecar contract identical to Atlas's `enrich-sidecar`.
+- **Go daemon side:** I'm mapping keld-signal's classify architecture before touching it (an Explore agent is running) — I need to confirm whether it runs org *custom* passes or only its hardcoded built-ins, and exactly where/how it builds classify requests (task name, multi-label, single-value handling). I'll apply the matching conventions (title-as-task-name, multi-label config, single-value hidden-negative) once I have the precise map, rather than guess in an unfamiliar Go codebase.… The exploration changes the picture significantly — worth stopping to report before I touch the Go daemon.
+
+## Key finding: keld-signal doesn't run custom classifiers at all
+
+Its Go daemon runs a **fixed, compiled-in pipeline** of built-in passes (`extractors.go`, `labels.go`). The only thing it fetches from Atlas via `/v1/enrichment-settings` is `include_entity_text` + `client_telemetry` — **not passes or schemas**. So the custom classifiers we've built (NSFW, the 4 defaults, Product Name) are **Atlas-only** today: they work in the Classifier Lab preview, but nothing executes them on-device.
+
+That means the changes from this session map onto Signal like this:
+
+| Change | keld-signal parity |
+|---|---|
+| Sidecar `ClassifyIn` widening | ✅ **Done** — mirrored (contract now matches; safe, no behavior change) |
+| multi-label config, title-as-task-name, single-value negative injection | ❌ **No counterpart** — Signal's built-ins are all multi-value single-label with slug task-names and vocab-baked negatives (e.g. `"none"`). Porting these conventions to its built-ins would change on-device scores and there are calibration/gold-fixture tests guarding that — I won't do it blindly. |
+
+So "true parity" (the NSFW tag et al. actually running **on-device**) isn't a code port — it's a **new capability**: Signal would have to fetch the org's passes from Atlas and execute them through its pipeline (adopting multi-label + the negative-injection + masking).…
+tool: AskUserQuestion
+assistant: Sidecar-contract parity it is. Let me commit that mirror in keld-signal.
+tool: Bash cd ~/keld/keld-signal echo "=== byte-compile check ===" && docker run --rm -v …
+assistant: Committed to keld-signal (`1f5f301`, local only — no push). Let me confirm the Atlas tree is clean.
+tool: Bash git status --short && echo "--- recent ---" && git log --oneline -6 | cat
+assistant: Everything's committed and the tree is clean (only the two pre-existing untracked files that were there at session start).
+
+## Wrap-up
+
+**Default classifiers** — your pick (Output artifact, Tech stack, Vendor mentions, NSFW) is baked in as seeded custom classifiers for every new account (signup / OAuth / admin / dev seed), idempotent and collision-guarded, and I seeded them into your existing dev orgs so they're visible now at `/admin/classifications-v2`.
+
+**keld-signal parity** — you chose sidecar-contract-only. The `ClassifyIn` widening is mirrored and committed there (`1f5f301`, local). The important finding stands: Signal runs a fixed built-in pipeline and doesn't execute org custom classifiers, so the multi-label / title-task-name / negative-injection work has no on-device counterpart — those are Atlas authoring/preview features. Running custom classifiers on-device is a separate future project (deferred).
+
+This whole arc landed on `main` across these commits:
+- `20e032b1` result emphasis + hierarchy
+- `ac4a5a0c` real multi-label (binary via threshold)
+- `2ef06984` title as classify task name (fixed the slug-noise scoring bug)
+- `33fb7d85` single-value auto-negative ("tag if applicable")
+- `5ebdf0c1` tabular custom-only list, focused editor, Delete, terminology, legible Preview
+- `7c244e3d` four seeded default classifiers
+
+All verified: full web suite + `next build`, the preview/API pytest, and live screenshots of each UX state.…
+user: commit all atlas work to main for this
+```
+
+### Output
+
+> the default classifier seeding and enrichment-schema-drawer UI redesign
+> - Default classifiers (Output artifact, Tech stack, Vendor / product mention, NSFW) baked in as seeded custom classifiers for new accounts on signup, OAuth, admin console, and dev seed paths
+> - The seeded classifiers are idempotent, collision-guarded, and already present in existing dev orgs for visibility via /admin/classifications-v2
+> - The enrichment-schema-drawer UI redesigned to be tabular, unboxed, custom-only, with retitle from 'enrichment' to 'classifier'
+> - The focused editor flow refactored to save directly on pencil-opened edit, with a Delete button and a footer showing Delete · Cancel · Save (no Back to list)
+
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Output`, `admin/classifications-v2`, `UI`, `Delete`.
+
+
+---
+
+## Beat 4 (window 19 of 31) · 1 attempt(s)
+
+Window geometry: 117 turns in the stride since the previous beat, 116 kept, 1 dropped by the character bound (a hole marker sits where they were). 15808 runes in the window; 18054 runes in the assembled prompt against a 24000-rune budget.
+
+### Input 1 — measured record (counted on device — authoritative)
+
+```
+counts: turns=716 user_turns=20 tool_calls=485 corrections=0
+projects: keld-atlas
+tool profile: Bash x198, Edit x126, Read x77, Write x28, TaskUpdate x26, TaskCreate x14
+recurring subjects: catalog, home/dg/keld/keld-atlas/services/web, home/dg/keld/keld-atlas, sidecar, predicate, multi-label, NSFW, threshold, single-label, enrichment-schema-drawer.tsx, classification, entity
+```
+
+### Input 2 — conversation window (15808 runes — evidence)
+
+```
+[turns since the previous update omitted to fit the context — they are not covered by any later window either]
+user: briefly summarize how we are pulling model pricing data from litellm in atlas
+tool: Bash cd /home/dg/keld/keld-atlas/services/api grep -rln …
+tool: Read model_pricing.py
+assistant: Now where it's consumed:
+tool: Bash cd /home/dg/keld/keld-atlas/services/api echo "=== worker cron trigger ===" && …
+assistant: ## How Atlas pulls LiteLLM model pricing
+
+**Source & schedule** — the arq worker runs a cron (`worker.py`, every `KELD_MODEL_PRICING_CRON_HOURS`, default 1h; gated by `KELD_MODEL_PRICING_ENABLED`) that calls `refresh_model_prices()`. The feed is LiteLLM's `model_prices_and_context_window.json` (`KELD_MODEL_PRICING_SOURCE_URL`), fetched with raw `httpx`.
+
+**Change-aware fetch** (`services/model_pricing.py`) — conditional `GET` with the stored `ETag` (`If-None-Match` → `304` short-circuits) plus a SHA‑256 of the body (identical hash → no-op). State lives in `PricingSourceState` (url, etag, content_sha, last_checked/changed, model_count), so a run only re-applies prices when the feed actually changed.
+
+**Parse & store** — `parse_litellm()` keeps only seatable providers (`anthropic`, `openai`/`text-completion-openai`), converts per-token → **per-million-tokens** (input / output / cache_read / cache_creation), skips `sample_spec`. Multi-row upsert into the global `model_price` table keyed by `(provider, model)`.
+
+## Where it's used
+
+Atlas is the authoritative pricing source; `services/notional_cost.py` loads `model_price` (cached) and prices token usage. That feeds:
+
+- **Ingest cost derivation** (`services/telemetry.py::_event_values`, `ingest_consumer.py`, `services/codex.py`) — recomputes `cost_usd` from tokens × price: **always** for Cowork (emitter cost ignored), and **backfill** when cost is absent + the model is priceable for other sources; stays 0 when the model isn't in the table.…
+user: use tghe v2 classifications page for the main page. replace the v1
+assistant: Straightforward swap — point `/admin/classifications` at the v2 catalog and remove v1. Let me first find all references so I don't leave dangling imports.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== ClassificationsView (v1) …
+assistant: Clean references: v1 (`ClassificationsView`, `PassCard`, `classification-samples`) is only used by v1 itself — all safe to delete. The `-v2` links are just `usePathname` mocks in two tests. Let me execute: point the main page at the catalog, delete v1 + the `-v2` route, and clean up orphans.
+tool: Write page.tsx
+tool: Read page.tsx
+tool: Write page.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web rm -rf …
+assistant: Let me check `lib/nav.ts` and the two test-file mocks that still reference the old route:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== lib/nav.ts matches ===" && …
+assistant: `lib/nav.ts` has breadcrumb/icon entries for the removed `-v2` route. Let me view and clean those, and confirm the main route has its entry:
+tool: Read nav.ts
+assistant: `/admin/classifications` already has its entries. Let me remove the two `-v2` lines and fix the test mocks:
+tool: Edit nav.ts (x2)
+assistant: Now the two test mocks (`usePathname` → the old route):
+tool: Bash cd /home/dg/keld/keld-atlas/services/web sed -i …
+assistant: Clean — no dangling references. Let me verify with the full web suite + build (the swap touched the page, nav, and deleted v1 files/tests).
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== vitest ===" && pnpm run …
+assistant: 711 tests + build green. Committing the swap:
+tool: Bash cd /home/dg/keld/keld-atlas git add -A services/web git status --short | grep …
+assistant: Done — `/admin/classifications` now serves the catalog (table) view; the `-v2` route and the v1 card view (plus `PassCard` and `classification-samples`) are gone, nav entries cleaned. Committed as `d1aa7c2a` (711 web tests + build green). The sidebar link is unchanged, so it just works.
+
+## On your seeding question
+
+**No** — the seed procedure only bakes in the **four agreed defaults**: `output_artifact`, `tech_stack`, `vendor_mention`, `nsfw`. It's a hardcoded `DEFAULT_CLASSIFIERS` list, not a snapshot of your local org.
+
+So specifically:
+- **NSFW** — yes, it's a default (and its key matched the one you'd made locally, so it wasn't duplicated).
+- **Product Name** (the `product_name` entity you created by hand) — **not** included. That was an ad-hoc pass in your dev org, not part of the defaults.
+
+If you'd like "Product Name" (or a different NSFW label/description) baked into the defaults for new accounts, say so and I'll add it to `DEFAULT_CLASSIFIERS` — otherwise new orgs get exactly those four.
+user: include NSFW and product name as well
+assistant: NSFW is already a default, so I'll add **Product Name** as well. Test-first — update the expected set (RED), then add the pass.
+tool: Edit test_default_classifiers.py (x2)
+tool: Bash cd /home/dg/keld/keld-atlas docker run --rm --network keld-atlas_default \ -e …
+assistant: Green. Let me apply the new default to the existing dev orgs (idempotent — the org that already has `product_name` is skipped):
+tool: Bash cd /home/dg/keld/keld-atlas docker compose exec -T api python -c " import …
+assistant: All five defaults present. Committing:
+tool: Bash cd /home/dg/keld/keld-atlas docker run --rm -v "$PWD/services/api:/a" …
+assistant: Done — committed `2fa547e8`.
+
+New accounts now seed **five** default classifiers:
+- **Output artifact** (multi-label)
+- **Tech stack** (entity)
+- **Vendor mentions** (entity)
+- **Product Name** (entity — type `project_name`) ← added
+- **NSFW** (binary tag) ← already a default
+
+I also applied them to your existing dev orgs (idempotent, so nothing duplicated), and confirmed all five keys are present. New-org creation paths (signup / OAuth / admin / seed) all pick these up; the default-classifier tests pass.
+user: It deployed correctly, but now we need to extend the make ship command to ensure that the sidecar is deployed as well. Let me run make gcloud-init first so we are authed
+assistant: Makes sense — `make ship` builds/pushes/deploys the stack, and the new `enrich-sidecar` needs to be part of that. Let me read the Makefile ship flow and the prod compose before extending anything.
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== Makefile targets ===" && grep -nE …
+tool: Read Makefile
+assistant: Now I understand the flow. Let me read the prod compose (which maps services → registry images) and the top-of-Makefile vars + the remote deploy script.
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== docker-compose.prod.yml ===" && cat …
+assistant: I have the full picture. Let me check `remote-deploy.sh` to confirm PULL/UP semantics before editing.
+tool: Bash cd /home/dg/keld/keld-atlas cat infra/deploy/remote-deploy.sh 2>/dev/null | …
+assistant: `remote-deploy.sh` is a clean `pull $PULL` → `up -d $UP`. Now let me extend the Makefile (push + deploy + targeted sidecar targets) and pin the sidecar image in the prod compose.
+tool: Edit Makefile (x5)
+assistant: Now pin the sidecar image in the prod compose:
+tool: Edit docker-compose.prod.yml
+assistant: Let me validate the merged prod compose and the Makefile flow (dry-run, nothing executes):
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== prod compose merges: enrich-sidecar …
+assistant: Validated: `enrich-sidecar` pins to the registry image (internal-only, no host ports, 8 GB cap, healthcheck), the api gets the sidecar URL, and `make ship` now builds/pushes `atlas-enrich-sidecar` and includes it in the deploy PULL/UP. Committing:
+tool: Bash cd /home/dg/keld/keld-atlas git add Makefile docker-compose.prod.yml git …
+assistant: Committed `c937ee63`. `make ship` now deploys the sidecar.
+
+## What changed
+- **`push`** now includes **`push-sidecar`** → builds + pushes `atlas-enrich-sidecar` (`:sha` + `:latest`).
+- **`deploy`** pulls and brings up `enrich-sidecar` (added to the `UP` list, so `--remove-orphans` won't kill it).
+- **`docker-compose.prod.yml`** pins `atlas-enrich-sidecar` — internal-only (no host ports, not on `web-proxy`), `restart: unless-stopped`; the 8 GB `mem_limit`, CPU cap, and healthcheck come from the base compose. The prod `api` already resolves `KELD_ENRICH_SIDECAR_URL=http://enrich-sidecar:8200`, so the feature turns on in prod.
+- Added **`make ship-sidecar`** / **`deploy-sidecar`** (`--no-deps`) for iterating on just the sidecar later.
+
+## Heads-up before you ship
+- **First push is heavy:** ~12 GB image (torch + baked `gliner2-large`) built via the isolated buildx builder and pushed to Artifact Registry. Subsequent ships are fast (the model layer caches; only app-code layers rebuild).
+- **VM footprint on `litellm-dev` (shared):** the container keeps the model resident (~2.7 GB RSS), is capped at `mem_limit 8g`, and the image is ~12 GB on disk. Worth a glance at free RAM/disk on the VM before/after.… Authed as `dg@keld.co`, project set. Extension's in place — let me kick off the full `make ship` (builds/pushes api + web + the ~12 GB sidecar, then deploys). Running it in the background so it doesn't block; I'll monitor.
+tool: Bash git diff --quiet && echo "tree clean (building HEAD $(git rev-parse --short … (x2)
+assistant: `make ship` is running in the background (long — the sidecar build + 12 GB push dominate). Let me peek once to confirm it's progressing (auth/builder OK), then I'll wait for completion.
+tool: Bash sleep 45; tail -20 … (x2)
+assistant: It's building and progressing normally (base image resolved, `pip install` underway — no auth/builder errors). The full run will take a while: `atlas-api` → `atlas-web` → the ~12 GB `atlas-enrich-sidecar` build+push, then the remote pull + `up` on the VM.
+
+I'll be notified when it finishes and will report the outcome (and verify the sidecar comes up healthy on the VM). Nothing more to do until then — I won't poll it in the meantime. That ran as a `make` command by accident (hence the error) — but I've got the request. Three parts: (A) make the classifier **details drawer globally openable** (e.g. click an enrichment pill on Activity → open it), (B) title it with the **classifier name** (drop "Test ·"), and (C) replace the values eyebrow with a **natural-language predicate** ("Classify the prompt as one or more of the following:").
+
+Let me look at the enrichment pills, the app shell layout, and the existing store pattern to see how to wire a global open.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== enrichment-pills.tsx (does …
+assistant: The pills map cleanly to pass keys (fn→function_guess, sub→subcategory, act→activity_type, sensitivity). I'll build a global store + a host mounted in the app shell, retitle the drawer, and add the predicate. Let me check the store pattern, `StatusPill`, and the rest of the pills.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== a zustand store (pattern) …
+assistant: `StatusPill` spreads HTML attrs (so it takes `onClick`), and the store pattern is plain `create`. I'll unify on a single global drawer (mounted in the shell), so the catalog row button and pills both just call `open(key)`. Let me build it.
+
+**1. Global store:**
+tool: Write classifier-drawer.ts
+assistant: **2. `useEnrichmentSchema` — fetch only when needed:**
+tool: Edit use-enrichment-schema.ts
+assistant: **3. Global host** + mount it in the shell:
+tool: Write classifier-drawer-host.tsx
+tool: Edit layout.tsx (x3)
+assistant: **4. Retitle the drawer + add the predicate.** Let me read the current `PassSummary` + title in `pass-test-drawer.tsx`:
+tool: Read pass-test-drawer.tsx
+tool: Edit pass-test-drawer.tsx
+assistant: Now retitle the drawer and drop the now-redundant "Values depend on…" line (the predicate covers it):
+tool: Edit pass-test-drawer.tsx (x2)
+assistant: Update the icon import (`FlaskConical` → `Tags`):
+tool: Read pass-test-drawer.tsx
+tool: Edit pass-test-drawer.tsx
+assistant: **5. Wire the catalog Test button and the Activity pills to the global store.** Let me update the catalog view (drop its local drawer, call `open`):
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -n …
+tool: Read classifications-catalog-view.tsx
+tool: Edit classifications-catalog-view.tsx (x2)
+assistant: Now swap the catalog's `PassTestDrawer` import for the store:
+tool: Edit classifications-catalog-view.tsx
+assistant: **6. Make the Activity enrichment pills clickable** to open the drawer. Let me update `enrichment-pills.tsx` (pills already map to pass keys):
+tool: Edit enrichment-pills.tsx
+assistant: Now add the `open` hook (before the early return) + an `interactive` helper, and apply it to the full-variant pills:
+tool: Read enrichment-pills.tsx
+assistant: Let me wire the hook + interactive props into the full-variant pills:
+tool: Edit enrichment-pills.tsx (x2)
+assistant: Now the accordion colorization request. Let me look at the `Accordion` component's tint behavior and how the catalog uses it, plus verify the catalog view has no leftover refs after removing its local drawer state.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== leftover refs in catalog …
+assistant: The `Accordion` has a `tintWhenOpen` prop — keeps the header tinted (`bg-keld-bg-mid`) while expanded. The catalog's sections don't set it. Let me find the `AccordionItem` usages there:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -n "AccordionItem\|<Accordion" …
+tool: Read classifications-catalog-view.tsx
+tool: Edit classifications-catalog-view.tsx (x2)
+assistant: Both accordion levels now keep their tint when expanded. Now let me run the affected tests to see what needs updating (the drawer moved to the global host; title/predicate changed; pills are now interactive):
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: Two failures: the drawer title assertion and the catalog test-button (drawer now lives in the global host). Let me look at both:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== pass-test-drawer.test title …
+assistant: Two fixes. First the drawer title assertion:
+tool: Edit pass-test-drawer.test.tsx
+assistant: Now the catalog test-button — mock the store and assert `open` is called (the drawer now lives in the global host):
+tool: Read classifications-catalog-test-button.test.tsx
+tool: Edit classifications-catalog-test-button.test.tsx (x2)
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: All green. Now the full suite + build (this touched the app shell, widely-used pills, and the catalog):
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== full vitest ===" && pnpm …
+assistant: 711 tests + build green. Let me screenshot to verify the visuals before committing — the catalog (expanded sections staying tinted) and the drawer opened via the global store (name title + predicate).
+tool: Write shot5.mjs
+tool: Bash node …
+tool: Read drawer-from-store.png
+assistant: The drawer works via the global store — titled **"Task type"** (Tags icon, no "Test ·"), with the predicate **"Classify the prompt as exactly one of the following:"** above the values. Now the catalog colorization:
+tool: Read catalog-expanded.png
+assistant: Everything verified: the **Custom** and **Built-in** section headers stay tinted while expanded (and the sub-accordions got the same `tintWhenOpen`), the drawer opens via the global store, is titled by the classifier name, and shows the natural-language predicate. Committing this batch:
+tool: Bash cd /home/dg/keld/keld-atlas git add -A services/web git status --short | grep …
+assistant: Committed `dcb88786`. Let me check on the background `make ship` (kicked off earlier) so I can report its status accurately.
+tool: Bash tail -15 …
+user: [Request interrupted by user]
+```
+
+### Output
+
+> the global enrichment drawer and sidecar deployment integration
+> - the sidecar is now deployed as part of the make ship command by pinning its image in docker-compose.prod.yml and extending the Makefile to include push-sidecar and deploy-sidecar targets
+> - the classifier details drawer is made globally openable via a shared zustand store, with the drawer titled by the classifier name and showing a natural-language predicate
+> - the enrichment pills in Activity and the catalog Test button are now interactive and call the global drawer open function
+> - the accordion sections in the catalog maintain header tint when expanded, and the drawer's title and predicate are verified to match the new schema
+
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `docker-compose.prod.yml`, `(names nothing checkable)`, `Activity`, `(names nothing checkable)`.
+
+
+---
+
+## Beat 5 (window 24 of 31) · 3 attempt(s)
+
+Window geometry: 89 turns in the stride since the previous beat, 87 kept, 2 dropped by the character bound (a hole marker sits where they were). 15159 runes in the window; 17392 runes in the assembled prompt against a 24000-rune budget.
+
+### Input 1 — measured record (counted on device — authoritative)
+
+```
+counts: turns=805 user_turns=25 tool_calls=536 corrections=0
+projects: keld-atlas
+tool profile: Bash x218, Edit x143, Read x85, Write x32, TaskUpdate x26, TaskCreate x14
+recurring subjects: deploy, home/dg/keld/keld-atlas/services/web, Cancel, sidecar, HEAD, home/dg/keld/keld-atlas, multi-label, NSFW, catalog, threshold, enrichment-schema-drawer.tsx, single-label
+```
+
+### Input 2 — conversation window (15159 runes — evidence)
+
+```
+[turns since the previous update omitted to fit the context — they are not covered by any later window either]
+user: We need an edit button in the header of the classification drawer, next to the X
+assistant: On it. The clean way to make "Edit" work from the details drawer anywhere is to render the editor from the same global host and add an `openEdit` to the store — so the details drawer's header button opens the editor for that classifier. Let me build it.
+
+**1. Extend the store** (view + edit):
+tool: Write classifier-drawer.ts
+assistant: **2. Add a `headerAction` slot to the shared `Drawer`/`DrawerHeader`:**
+tool: Edit drawer.tsx
+assistant: Now thread `headerAction` through `Drawer`:
+tool: Read drawer.tsx
+assistant: Noted — that's a separate deliverable (an artifact comparing two ways to show all classifications on the Activity table). Let me first finish the Edit-button work I'm mid-way through, then build that artifact.
+
+Threading `headerAction` through `Drawer`:
+tool: Edit drawer.tsx (x2)
+assistant: **3. `PassTestDrawer` — `onEdit` prop → header Edit button:**
+tool: Edit pass-test-drawer.tsx (x2)
+assistant: **4. Host — render both drawers + wire `onEdit` (custom only):**
+tool: Edit classifier-drawer-host.tsx
+assistant: **5. Update the two remaining `open`→`openView` callers** (catalog + pills):
+tool: Bash cd /home/dg/keld/keld-atlas/services/web sed -i 's/useClassifierDrawer((s) => …
+assistant: Callers renamed. The catalog keeps its own editor (edit pencil/New) — only the Test button uses the store — so `catalog-view.test` is unaffected. But `catalog-test-button.test`'s store mock returns `open`; the catalog now reads `openView`. Let me fix that mock:
+tool: Edit classifications-catalog-test-button.test.tsx
+assistant: Now add a test for the header Edit button in `pass-test-drawer.test.tsx`:
+tool: Read pass-test-drawer.test.tsx
+tool: Edit pass-test-drawer.test.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web head -3 …
+tool: Edit pass-test-drawer.test.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: 28 pass. Full suite + build:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== vitest ===" && pnpm run …
+assistant: 712 tests + build green. Noted the type-pill restyle for "when I can next." Let me commit the Edit-button feature, then verify it, then build the artifact you asked for.
+tool: Bash cd /home/dg/keld/keld-atlas git add -A services/web git status --short | grep …
+assistant: Committed `22bc3826`. Quick visual check of the Edit button in the header (custom classifier):
+tool: Write shot6.mjs
+tool: Bash node …
+tool: Read edit-header.png
+assistant: The **Edit** button is in the header next to the X (custom classifier "Product Name"); built-ins won't show it. That feature's done and committed.
+
+Now the artifact you asked for — two approaches for showing *all* classifications on an Activity row. Let me load the design guidance first.
+tool: Skill
+assistant: Design plan (grounded in the Keld app it mocks — a light, forest-green product with taxonomy-colored pills):
+
+- **Color:** soft green-grey ground `#F2F4F1`, white surfaces, forest accent `#2E5E4E`, amber `#B4791F` for extraction, and a muted categorical hue per facet family (task=indigo, domain=violet, job=green, stack=blue…). Neutrals biased green, not pure grey.
+- **Type:** system sans for UI + `ui-monospace` for the compact-table keys/values (data voice). No webfont (CSP).
+- **Layout:** one shared, realistic Activity row up top; below it the same prompt's *full* classification set rendered two ways side-by-side — **A) natural-language pills**, **B) compact key→value rows** — each with a short trade-off note.
+
+Let me write it.
+tool: Write activity-classifications.html
+assistant: Two more queued (Cancel-button outline in drawers, type-pill restyle) — noted; I'll take them next. First let me publish the artifact you asked for.
+tool: Artifact activity-classifications.html
+assistant: Artifact published: **https://claude.ai/code/artifact/e6aca44b-d1da-488d-8e18-e2f232a76926**
+
+It shows the same labelled prompt two ways — **A) natural-language pills** (grouped, colour-coded, skimmable — better for the expanded/drawer view) and **B) compact key→value ledger** (every classifier on a fixed line, exhaustive — better for a tight, comparable table). My lean: **A** for the row's expanded state, **B** if it needs to live inline in a dense table.
+
+Now the drawer **Cancel** button. Let me look at the shared Button + how the drawers use it, so I fix it DRY (one place).
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== drawer Cancel usages …
+assistant: There's the issue — Cancel buttons are inconsistent (`variant="ghost"` in some drawers, `variant="tertiary"` in others), and neither shows a clear outline on the drawer overlay. The DRY fix: make `tertiary` (the documented "dialog cancel" tone) a proper dim-outline style in the shared Button, and standardize drawer Cancels to it. First the Button:
+tool: Edit button.tsx
+assistant: Let me verify the border token I used exists (else fall back to a definitely-present one):
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -oE "keld-border[a-z-]*" …
+assistant: `keld-border-strong` doesn't exist — `keld-border-mid` does (a stronger dim border, ideal for a visible outline). Let me use it:
+tool: Edit button.tsx
+assistant: Now standardize the drawer Cancel buttons (the blending `ghost` ones) to `tertiary`:
+tool: Edit enrichment-schema-drawer.tsx (x4)
+assistant: Let me catch any other drawer Cancels I might've missed:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -rn …
+assistant: No remaining ghost Cancels. Let me verify the Cancel change (build + tests):
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== vitest ===" && pnpm run …
+assistant: 712 tests + build green. Committing the Cancel-button fix:
+tool: Bash cd /home/dg/keld/keld-atlas git add services/web/components/ui/button.tsx …
+assistant: Now the queued **type-pill restyle** — reuse the activity table's tool/model name styling for the catalog "Type" column. Let me find how tool/model are stylized in activity items.
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== activity components ===" && …
+assistant: Found it — `activity-lead.tsx`. The tool/model treatment is a rounded chip with a colored **`border-b-2`** bottom accent + tinted bg + secondary text. Let me read it exactly:
+tool: Read activity-lead.tsx
+assistant: The tool/model treatment is a `rounded border-b-2` chip: faint tint bg + a **colored bottom-border accent** + neutral secondary text. Let me apply that to the catalog `KindPill` (keeping each kind's hue as the accent):
+tool: Edit classifications-catalog-view.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: Green. Let me screenshot to confirm both the restyled Type pills and the outlined Cancel button:
+tool: Write shot7.mjs
+tool: Bash node …
+tool: Read cancel-outline.png
+assistant: The **Cancel** button now shows a clear dim outline (transparent fill + border) between Delete and Save — no longer invisible. Now the Type pills:
+tool: Read type-pills.png
+assistant: The Type pills now match the Activity tool/model chip treatment — faint tint + a colored bottom-border accent (Classify=green, Tag=indigo, Extract=amber), neutral text. Committing:
+tool: Bash cd /home/dg/keld/keld-atlas git add …
+assistant: All caught up on the queue. Summary of this turn's work (all on `main`, verified with 712 tests + `next build`):
+
+| # | Item | Commit |
+|---|------|--------|
+| Edit button in the drawer header (custom classifiers; opens the editor from anywhere) | `22bc3826` |
+| **Artifact** — two layouts for all classifications on an Activity row | [claude.ai/code/artifact/e6aca44b…](https://claude.ai/code/artifact/e6aca44b-d1da-488d-8e18-e2f232a76926) |
+| Drawer **Cancel** → visible dim outline (DRY: fixed on the `tertiary` tone, standardized all drawer Cancels onto it) | `9bb1dcd9` |
+| Catalog **Type** pills → reuse the Activity model/tool chip style | `0de4dfe9` |
+
+Verified visually (screenshots above): the Cancel button now reads as an outlined button between Delete/Save, and the Type column matches the model/tool chip treatment.
+
+On the **artifact** — it's a design comparison, so no code shipped for it yet. Once you pick a direction (my lean: **pills** for the row's expanded/drawer state, **compact ledger** if it must sit inline in the dense table), tell me and I'll wire the chosen layout into the actual Activity table with the same global-drawer click-through the pills already have.
+
+Anything from the artifact you want adjusted before I build the real thing?…
+user: make ship resulted in: >> pushed atlas-enrich-sidecar @ dcb88786
+gcloud compute scp --zone us-east1-b --project gen-lang-client-0207646408 --quiet --recurse docker-compose.yml docker-compose.prod.yml infra litellm-dev:~/keld-atlas/
+docker-compose.yml                                                                           100% 9217   207.0KB/s   00:00    
+docker-compose.prod.yml                                                                      100% 3583    45.0KB/s   00:00    
+build-push.sh                                                                                100%  820    22.0KB/s   00:00    
+ar-login.sh                                                                                  100%  887    11.6KB/s   00:00    
+remote-deploy.sh                                                                             100% 1229    36.8KB/s   00:00    
+gcloud compute ssh litellm-dev --zone us-east1-b --project gen-lang-client-0207646408 --quiet --command 'cd ~/keld-atlas && REGISTRY=us-east1-docker.pkg.dev/gen-lang-client-0207646408/keld-co IMAGE_TAG=9bb1dcd9 PULL="migrate api worker ingest-consumer web enrich-sidecar" UP="api web worker ingest-consumer enrich-sidecar --remove-orphans" bash infra/deploy/remote-deploy.sh'
+==> Docker login to us-east1-docker.pkg.dev via instance metadata
+Login Succeeded
+==> Pull (migrate api worker ingest-consumer web enrich-sidecar)
+
+WARNING!…
+assistant: Diagnosed it — and it's my fault: your `make ship` was long (the 12 GB sidecar), and **I committed more work (`22bc3826`/`9bb1dcd9`) in parallel, moving `HEAD`**. The Makefile's `IMAGE_TAG ?= $(shell git rev-parse --short HEAD)` is *recursively* expanded, so it re-runs `git rev-parse` on every use: `push` tagged the images `dcb88786` (HEAD then), but `deploy` later resolved `9bb1dcd9` (HEAD after my commits) → those tags don't exist → pull 404.
+
+Good news: the deploy failed on `pull`, before `up`, so **prod is untouched** (still running the prior release). The images exist at `dcb88786` and `:latest`.
+
+The fix is to snapshot the tag once so a long ship can't drift:
+tool: Read Makefile
+tool: Bash cd /home/dg/keld/keld-atlas grep -n "IMAGE_TAG ?=\|IMAGE_TAG ?=\|IMAGE_TAG :=" …
+tool: Read Makefile
+tool: Edit Makefile
+assistant: Let me verify the tag is now consistent across push and deploy (dry-run, nothing executes):
+tool: Bash cd /home/dg/keld/keld-atlas echo "HEAD=$(git rev-parse --short HEAD)" echo …
+assistant: Confirmed — `IMAGE_TAG` now resolves to a single value (`0de4dfe9`) for both push and deploy, and an explicit override still wins. Committing:
+tool: Bash cd /home/dg/keld/keld-atlas git add Makefile git commit -q -F - <<'EOF' …
+assistant: Fixed and committed (`f3c7ab8b`). The tag can no longer drift mid-ship.
+
+**Re-run `make ship`** — it'll now pin `f3c7ab8b` for the whole run and push + deploy consistently. The sidecar's layers are unchanged since `dcb88786`, so its push is a fast cache hit; api/web rebuild quickly from cache; then the deploy pulls and brings up `enrich-sidecar`. **I won't commit anything while it runs**, so nothing moves HEAD under it this time.
+
+(If you want the stack up *immediately* without waiting on another build, `make deploy IMAGE_TAG=dcb88786` would deploy the already-pushed images — but that build predates the edit-button, Cancel-outline, and Type-pill changes, so I'd just re-ship to get everything.)
+
+Sorry about the churn — that was my parallel commits colliding with your long-running ship; the Makefile pin plus me holding commits during the ship prevents a repeat.
+user: Now: time="2026-07-28T01:04:57Z" level=warning msg="WARNING: Some service image(s) must be built from source by running:\n    docker compose build web enrich-sidecar"
+failed to copy: failed to send write: write /var/lib/containerd/io.containerd.content.v1.content/ingest/35eae5195291572534d0cbca7212d5c19f38933bf92b3d92ba2ea97cd2b281ac/data: no space left on device
+failed to extract layer (application/vnd.oci.image.layer.v1.tar+gzip sha256:329e7dff39375f37e1ea1f9d24db1cf1370bd99bb3636acf6181d7a552de7aed) to overlayfs as "extract-40867250-Do96 sha256:a5b98e0433a281958cb4aa01c2ed6f8a1dc368601d57fbd2cb5639a7d11e0b19": write /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/5756/fs/app/components/section-divider.tsx: no space left on device
+make: *** [Makefile:141: deploy] Error 1
+assistant: That's the VM running out of disk while extracting the pulled layers — the 12 GB sidecar plus accumulated old image tags. Let me inspect the VM's disk (read-only) to see what's reclaimable.
+tool: Bash cd /home/dg/keld/keld-atlas gcloud compute ssh litellm-dev --zone us-east1-b …
+assistant: Dozens of stale `atlas-web`/`atlas-api` tags (~2.3 GB each) have piled up from past ships and never got cleaned — the 12 GB sidecar just tipped the disk over. Let me reclaim space by removing **Atlas's own old image tags** (keeping `:latest` and anything in use; `rmi` skips running images) plus build cache — scoped strictly to the Atlas repo, nothing from other stacks on the shared VM.
+tool: Bash cd /home/dg/keld/keld-atlas gcloud compute ssh litellm-dev --zone us-east1-b …
+assistant: Reclaimed ~58 GB — the VM went from **100 % full (49 MB free)** to **81 % (20 GB free)**. Breakdown: dozens of stale `atlas-web`/`atlas-api` per-SHA tags removed (135→26 images) plus 9.7 GB of build cache. The currently-running release (`2fa547e8`) and all `:latest` tags were protected (`rmi` skips in-use), and I touched **only** the Atlas repo — nothing from other stacks on the shared VM.
+
+**Re-run `make ship`** — 20 GB is enough headroom for the 12 GB sidecar + the small api/web deltas, and everything's pinned to `f3c7ab8b` now. I'll hold all commits while it runs.
+
+Two things worth knowing:
+- Prod is currently serving **`2fa547e8`** (the last fully-successful deploy) — so it's been up the whole time, just a few commits behind. Nothing is broken.
+- **This will recur** without a retention policy: every ship adds ~2.3 GB (web) + ~1.5 GB (api), and the sidecar is a permanent 12 GB. The clean fix is to make `remote-deploy.sh` prune old Atlas tags on each deploy (keep `:latest` + the last N SHAs + whatever's running) so the disk self-manages. Want me to add that? It'd take effect on the ship after next (it ships in the compose/infra bundle). Growing the VM disk is the alternative if you want to keep long rollback history.…
+user: yes, add the retention prune to remote-deploy.sh
+```
+
+### Output
+
+> the Edit button and Cancel button improvements in the classification drawer
+> - Extended the store to support an edit button in the classifier drawer header by adding `openEdit` and threading `headerAction` through the `Drawer` component
+> - Built and tested the Edit button in the header of the classification drawer, committing the feature with tag `22bc3826`
+> - Added a design artifact comparing two layouts for showing all classifications on an Activity row — natural-language pills vs. compact key→value ledger
+> - Fixed inconsistent Cancel buttons in drawers by standardizing them to a visible dim-outline style (`tertiary`) and updating the shared Button component
+
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `openEdit`, `Edit`, `Activity`, `Cancel`.
+
+
+---
+
+## Beat 6 (window 29 of 31) · 1 attempt(s)
+
+Window geometry: 254 turns in the stride since the previous beat, 146 kept, 108 dropped by the character bound (a hole marker sits where they were). 15772 runes in the window; 18020 runes in the assembled prompt against a 24000-rune budget.
+
+### Input 1 — measured record (counted on device — authoritative)
+
+```
+counts: turns=1059 user_turns=30 tool_calls=717 corrections=1
+projects: keld-atlas
+tool profile: Bash x306, Edit x181, Read x126, Write x44, TaskUpdate x26, TaskCreate x14
+recurring subjects: home/dg/keld/keld-atlas, home/dg/keld/keld-atlas/services/web, ledger, shadow, classifications, sidecar, multi-label, NSFW, catalog, classification, threshold, enrichment-schema-drawer.tsx
+```
+
+### Input 2 — conversation window (15772 runes — evidence)
+
+```
+[turns since the previous update omitted to fit the context — they are not covered by any later window either]
+tool: Bash cd /home/dg/keld/keld-atlas/services/api grep -rn … (x2)
+tool: Read turns.py
+assistant: This is now a coherent multi-part change. Let me look at the last two pieces — the `turn_events` backend shape and how children are stored client-side — so the child-header can render the turn's full classification consistently with the drawer:
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== turn_events (turns.py) ==="; sed -n … (x2)
+assistant: Now I have the full plan. Let me check the turns test and children store, then implement TDD.
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== api turns test names ==="; grep -rln … (x3)
+tool: Read turns.py (x3)
+assistant: I understand the setup now. Let me write the failing backend test first (TDD) for `turn_events` returning the turn's enrichment:
+tool: Bash cd /home/dg/keld/keld-atlas/services/api tail -5 tests/test_turns.py; echo … (x2)
+assistant: Now update the existing `turn_events` call sites in the test (they'll return a dict now):
+tool: Bash cd /home/dg/keld/keld-atlas/services/api grep -n "await turn_events" … (x3)
+assistant: Now implement `turn_events` returning the dict with enrichment. Let me update turns.py:
+tool: Read turns.py (x2)
+tool: Edit turns.py (x2)
+assistant: Now update the router endpoint:
+tool: Edit activity.py
+assistant: Those Pyright import errors are the host-Python-without-deps noise (expected). Let me run the backend turns test:
+tool: Bash cd /home/dg/keld/keld-atlas docker run --rm --network keld-atlas_default \ -e …
+assistant: Backend GREEN (37 passed). Now the frontend. Let me read the activity store and the turn-row fetch to plumb the turn enrichment through:
+tool: Read activity.ts
+tool: Edit activity.ts
+tool: Read activity.ts
+tool: Edit activity.ts (x2)
+assistant: Now update the turn-row fetch to pass enrichment, and render the child-header classification row. First the fetch:
+tool: Edit turn-row.tsx
+assistant: Now let me build the shared `ClassificationRow` (inline dot-pill cluster) and make `ClassificationLedger` single-column with dot pills. Let me refactor `classification-ledger.tsx`:
+tool: Write classification-ledger.tsx
+assistant: Now wire the child header in turn-row. Let me look at its imports and the `children` variable:
+tool: Read turn-row.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -n …
+assistant: Now add imports and render `ClassificationRow` in the child-content header. Add imports:
+tool: Edit turn-row.tsx (x2)
+tool: Read turn-row.tsx
+tool: Edit turn-row.tsx
+assistant: Diagnostics cleared. Now apply the `dot` variant to the classifications-page value pills. Let me view the exact usages:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -n … (x2)
+assistant: Now run the full web suite + build to catch any breakage:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== vitest ===" && pnpm run … (x2)
+assistant: Build + 718 tests green. Since I'm working directly on `main` (the dev stack mounts this checkout, hot-reload for web + uvicorn reload for api), let me screenshot-verify all three surfaces live:
+tool: Write shot-v2.mjs
+tool: Bash cd /home/dg/keld/keld-atlas node …
+tool: Read v2-activity-expanded.png
+assistant: Row 0 was an autonomous agent turn (no human prompt → no enrichment, correctly no classification row). The collapsed context badges (wash) are unchanged, good. Let me expand a human "Claude Code" turn which has an enrichment:
+tool: Write shot-v3.mjs
+assistant: Good timing — you want the activity child-header pills to carry the facet **name + value**, not just the value. Let me update `ClassificationRow` (the drawer ledger already shows name in its own column, so that stays):
+tool: Edit classification-ledger.tsx
+tool: Bash cd /home/dg/keld/keld-atlas node …
+tool: Read v3-child-header.png
+assistant: Child header looks right — dot pills with **bold name + value** (Task type Reasoning, Activity Generate, Job category Engineering, Work/personal Work, Sensitivity none), sitting in the header under the controls. Now the drawer (single column) and classifications page:
+tool: Read v3-drawer.png
+assistant: Drawer is now single-column with dot-variant value pills. Now the classifications page:
+tool: Read v2-classifications.png
+assistant: The `/classifications` shot 404'd (that was the earlier v2 run). Let me find the actual route the "Classifications" nav points to:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -rn …
+assistant: Route is `/admin/classifications`. Let me capture it:
+tool: Bash cd /home/dg/keld/keld-atlas cat > …
+tool: Read v3-classifications.png
+assistant: The classifications page now uses the dot variant (neutral chip + color dot) for value pills, Type pills keep their accent style, and both sections stay colorized while open. Status pills (Signal "reporting", activity context badges) remain the wash default. All three surfaces verified.
+
+I edited `classification-ledger.tsx` after the last build, so let me re-verify build + the ledger test before committing:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: All green. Committing:
+tool: Bash cd /home/dg/keld/keld-atlas git add services/api/app/services/turns.py … (x2)
+assistant: Committed as `fc791fac`. Here's what landed:
+
+**`StatusPill` variant** — new opt-in `variant` prop:
+- `wash` (default, unchanged) — the soft tinted fill kept for **status reporting**: Signal device "reporting", provider health, activity context badges.
+- `dot` — warm-neutral chip with the hue in a leading dot; applied to classification **value** pills.
+
+**Where the dot variant now shows** (all verified live):
+- **Classifications catalog** (`/admin/classifications`) — value pills in every nested table; Type pills (Extract/Classify/Tag) keep their accent style; sections stay colorized while open.
+- **Activity expanded turn** — the prompt's classifications now render in the **child-content header**, inline beside the Grouped/sort controls, as dot pills showing **name + value** (Task type Reasoning · Activity Generate · Job category Engineering · …). One row per turn, since all a turn's calls share one prompt → one enrichment.
+- **Detail drawer** — `ClassificationLedger` dropped to a **single column** (drawer is narrow) with dot pills.
+
+**Backend** — `turn_events` now resolves and returns the turn's enrichment alongside its entries (reusing `enrichment_for_event`), so the child header renders with no extra round-trip; plumbed through the activity children store.…
+user: let's rate limit the side car enrichment request rate to authenticated users and only once per 2 seconds. if a user tries to click faster than that, it shows a spinner on that click for the remaining time
+assistant: Let me look at the current preview flow — the backend route and the frontend Run handlers — before designing the rate limit.
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== backend preview route ===" grep -rn …
+tool: Read enrichment_schema.py
+assistant: The preview route is `POST /api/enrichment-schema/preview` (admin-gated, no per-user identity yet). Let me check the existing rate-limit precedent (AGENTS mentions a per-org ingest cap), the Redis client access, and the two frontend Run handlers so I reuse patterns:
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== existing rate-limit / redis client in …
+assistant: Both surfaces share `useEnrichmentPreview()` — so the client throttle belongs there (DRY). Let me read that hook, the auth deps, and how Redis is accessed:
+tool: Bash cd /home/dg/keld/keld-atlas echo "=== use-enrichment-preview.ts ==="; cat … (x2)
+assistant: `ClassifierLab` is the single run UI (used on Integrations and inside the pass-test drawer). Let me read it fully:
+tool: Read classifier-lab.tsx
+assistant: I have the full picture. Let me find how the API accesses Redis (for a shared, worker-safe limiter) and confirm the auth/user types:
+tool: Bash cd /home/dg/keld/keld-atlas/services/api echo "=== redis client factory / …
+tool: Read activity_bus.py
+tool: Bash cd /home/dg/keld/keld-atlas/services/api grep -rln …
+tool: Read test_enrich_preview_api.py
+assistant: Quick follow-up first — set the dot-variant value text to medium weight in `ClassificationRow`:
+tool: Edit classification-ledger.tsx
+assistant: And slightly reduce the pill drop shadow (`shadow-md` → `shadow-sm`) on the shared pill:
+tool: Edit status-icon.tsx
+tool: Bash cd /home/dg/keld/keld-atlas git add …
+assistant: Now the rate-limit feature. Let me check the `org_ctx` fixture (I'll need `require_admin` to yield a real user with an id for keying):
+tool: Bash cd /home/dg/keld/keld-atlas/services/api grep -rn "def …
+tool: Read conftest.py
+assistant: Now the rate-limit feature. First, update the `org_ctx` fixture so `require_admin` yields a real user (needed to key the limiter):
+tool: Edit conftest.py
+assistant: That blue-green band is the expanded-section tint on the Classifications page. Let me find exactly which token drives it before adjusting (so I don't over-reach into unrelated hover states):
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== tintWhenOpen in … (x2)
+assistant: The tint is `--keld-bg-mid` (#EAF1EC) — a shared theme token (hover/active/selection + nav-active + these expanded-section bands). It currently leans slightly teal (B 236 > R 234). Since you called it "the theme color," I'll green the token itself so every surface using it stays consistent:
+tool: Read globals.css
+tool: Edit globals.css
+assistant: Now the rate-limit service (Redis-backed, worker-safe):
+tool: Write rate_limit.py
+assistant: Now wire the route + add the failing test. First the test:
+tool: Edit test_enrich_preview_api.py
+assistant: Now wire the route:
+tool: Edit enrichment_schema.py (x2)
+tool: Bash cd /home/dg/keld/keld-atlas docker run --rm --network keld-atlas_default \ -e …
+assistant: The rate-limit test passed, but my module-level Redis singleton breaks across pytest's per-test event loops ("Event loop is closed"). Since this endpoint is low-QPS by design, I'll open/close a short-lived client per call — no stale-loop singleton:
+tool: Edit rate_limit.py
+tool: Bash cd /home/dg/keld/keld-atlas docker run --rm --network keld-atlas_default \ -e …
+assistant: All 13 API tests pass — backend rate limit done. Now the frontend cooldown. TDD — write the reusable hook's test first:
+tool: Write use-cooldown-run.test.ts (x2)
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: Hook GREEN. Now integrate into `ClassifierLab` — throttle Run and show a spinner during cooldown/pending:
+tool: Read classifier-lab.tsx
+tool: Edit classifier-lab.tsx (x3)
+assistant: Now the activity-table Card shadow. Let me find the activity table wrapper and the standard Card shadow:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== Card shadow ===" grep -n …
+tool: Read page.tsx
+tool: Bash cd /home/dg/keld/keld-atlas/services/web grep -rn …
+assistant: Line 149 — the activity feed table wrapper has `rounded-xl border ... bg-card-wash` but no shadow. Adding the standard Card shadow token:
+tool: Edit activity-feed.tsx
+assistant: Now verify the whole frontend — full vitest + build:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== vitest ===" && pnpm run … (x2)
+assistant: Rules-of-hooks violation — I placed `useCooldownRun` after the early returns. Move it above them:
+tool: Read classifier-lab.tsx
+tool: Edit classifier-lab.tsx
+assistant: Now the bg-mid — darker and more saturated (from the pale `#E7F1E6` toward a clearer forest tint):
+tool: Edit globals.css
+tool: Bash cd /home/dg/keld/keld-atlas/services/web pnpm exec vitest run …
+assistant: Fixed. Now full suite + build, then screenshot to verify the greener/darker band, activity table shadow, and the Run spinner:
+tool: Bash cd /home/dg/keld/keld-atlas/services/web echo "=== vitest ===" && pnpm run …
+assistant: All green (721 web + 13 API + build). Let me screenshot to verify the visuals — classifications band (darker/greener), activity table shadow, and the Run cooldown spinner:
+tool: Bash cd /home/dg/keld/keld-atlas cat > …
+tool: Read v4-classifications.png
+assistant: The section bands (Custom/Built-in) and nav-active states are now a clearly greener, more saturated tint. Now the activity table shadow:
+tool: Read v4-activity.png
+assistant: Caught the loading state. Let me re-capture the activity table populated so the shadow reads:
+tool: Bash cd /home/dg/keld/keld-atlas cat > …
+tool: Read v4-activity2.png
+assistant: Activity table now carries the standard Card drop shadow. Let me check the Run cooldown spinner capture:
+tool: Read v4-run-cooldown.png
+assistant: All four verified live:
+- **Rate-limit cooldown**: the fast second click on Run shows a **spinner** (visible in the drawer — "Run ⟳") while the 2s window finishes.
+- **bg-mid** bands are greener + more saturated.
+- **Activity table** now has the Card drop shadow.
+- (font-medium value + lighter pill shadow already committed.)
+
+Let me commit — rate-limit feature and the style tweaks as two logical commits:
+tool: Bash cd /home/dg/keld/keld-atlas
+git status --short (x2)
+assistant: The rate-limit commit landed (`5477f4bc`); my second command was malformed. Let me commit the style tweaks cleanly:
+tool: Bash cd /home/dg/keld/keld-atlas git add services/web/app/globals.css …
+assistant: Both committed, working tree clean (only the untracked `.vscode/` and pre-existing plan doc remain). 
+
+## Summary of this batch
+
+**Rate-limited the Classifier Lab sidecar preview** (`5477f4bc`):
+- **Server** — a small Redis-backed fixed-window limiter (`app/services/rate_limit.py`) caps `POST /enrichment-schema/preview` to **one request per authenticated user per 2s**, returning `429` + `Retry-After` (and `retry_after_ms`) when exceeded. It opens a short-lived client per call (no cross-loop singleton), which is fine since the endpoint is itself rate-limited.
+- **Client** — a reusable `useCooldownRun` hook throttles the Run button to the same 2s window: a click inside the window isn't dropped — it **waits out the remaining time behind a spinner**, then fires; repeat clicks collapse into the single scheduled run. Verified live (the fast second click showed "Run ⟳").
+- Tests: new API rate-limit case + 3 hook cases; the `org_ctx` fixture now yields a real admin user so the per-user key resolves under test.
+
+**Style tweaks** (`533b1cf0`, plus earlier `d5383ca4`):
+- Activity feed table now carries the standard `--keld-card-shadow`.
+- `--keld-bg-mid` (hover / active / nav-active / expanded-section tint) moved from the pale teal-leaning `#EAF1EC` → greener, slightly darker `#DAEBD7`.…
+user: use #d2cdb0
+tool: Edit globals.css (x2)
+assistant: Applied `--keld-bg-mid: #D2CDB0` (warm sage/khaki) — it's live via hot-reload. Let me screenshot both surfaces that use it (classifications bands + activity hover/nav-active) so you can see it in context:
+tool: Bash cd /home/dg/keld/keld-atlas node …
+tool: Read v3-classifications.png
+assistant: Done — `--keld-bg-mid` is now `#D2CDB0`, a warm sage/khaki. The Custom/Built-in section bands (and all hover / active / nav-active / selection surfaces) now read as a warm neutral band that sits with the paper-warm background rather than a green tint. Live via hot-reload and verified above; comment updated to match.
+
+I've left this one uncommitted since you've been tuning the value — say the word and I'll commit it (or fold it into the existing bg-mid commit).
+user: at this point, please revert both the color to its original before our meddling AND, on the classifications page itself, revert the style applied to the pills. use the old multicolored styled. dont delete the code, just change the prop
+```
+
+### Output
+
+> reversion of color and pill styling in the classifications page
+> - reverted the bg-mid color to its original pale teal value #EAF1EC
+> - reverted the dot-variant value pills on the classifications page to show multicolored styled pills as before
+> - maintained the code changes by only updating the prop values in the component to reflect the original styling
+> - verified the visual changes were live and consistent across the classifications page and activity feed surfaces
+
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `EAF1EC`, `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
@@ -9924,7 +9798,7 @@ user: So it doesn't reconcile. Keep digging.
 > - the outstanding cheques to Halberd Supply (890.00 and 412.55) and the deposit in transit (1,200.00) are documented
 > - the bank fee of 148.00 is noted as unjournaled and requires journaling entry
 
-Anchoring term each entry was kept on: `bank-mar.csv`, `1,650.55`, `890.00`, `148.00`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `March`, `1,650.55`, `Halberd`, `148.00`.
 
 
 ---
@@ -9973,7 +9847,7 @@ user: Better. What's the provision movement versus February?
 > - AR ageing was reviewed and seven accounts over 60 days were identified
 > - a blanket 50% provision was applied to Northwind due to over-90 days policy
 
-Anchoring term each entry was kept on: `duplicate`, `bank`, `AR`, `50`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `Calder`, `(names nothing checkable)`, `AR`, `50`.
 
 
 ---
@@ -10020,7 +9894,7 @@ user: Where are we on the checklist now?
 > - Larkin's quarterly service accrual was recalibrated to reflect a one-third March allocation
 > - a payroll journal was validated and a receivable of 1,840.00 was noted for a leaver's overpayment
 
-Anchoring term each entry was kept on: `90-day`, `PO`, `Larkin`, `1,840.00`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `March`, `PO`, `March`, `1,840.00`.
 
 
 ---
@@ -10069,7 +9943,7 @@ user: The Larkin one is a repair, not capital — it's a boiler fix, not a repla
 > - revenue cutoff testing conducted on revenue-mar.csv with one invoice (INV-2340) moved to April due to delivery date mismatch
 > - trial balance review identified three anomalies: Larkin Facilities repair invoice, nil professional fees for three months, and suspense account balance of 260.00 from February
 
-Anchoring term each entry was kept on: `fa-register.csv`, `revenue-mar.csv`, `260.00`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `March`, `revenue-mar.csv`, `Facilities`.
 
 
 ---
@@ -10121,7 +9995,7 @@ user: Which institutions?
 > - the proof point is established as the offline-first sync model
 > - paid acquisition is ruled out in favor of three organic channels: professional institution newsletters, two industry conferences, and regional practitioner forums
 
-Anchoring term each entry was kept on: `campaign`, `audience`, `proof`, `paid`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
@@ -10164,7 +10038,7 @@ user: That's decent. But cut the valley line, it sounds like an advert.
 > - a five-email sequence is drafted with no marketing language, focusing on fieldwork reality and user experience
 > - the second email in the sequence is revised to remove the valley line and improve authenticity
 
-Anchoring term each entry was kept on: `lost-week`, `sequence`, `second`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`.
 
 
 ---
@@ -10206,16 +10080,14 @@ user: How do we know if any of this worked? I don't want vanity numbers.
 > the consultancy-led narrative and individual trial path restructure
 > - the consultancy narrative is elevated to lead every channel and owns the email sequence
 > - the individual track is preserved as a self-serve trial path accessible via forums with a minimal landing page
-> - the landing page includes a one-line problem statement, a 15-second capture-to-sync demonstration, the offline claim stated once, and a trial button
-> [1 entry dropped to fit the beat cap]
+> - the landing page copy is drafted by the assistant and reviewed by the surveyor for factual accuracy
+> [1 entry dropped: it names something that occurs nowhere in this window or the record]
 
-Anchoring term each entry was kept on: `consultancy`, `individual`, `landing`.
+What each kept entry was checked on — every specific it names had to occur in this window or the record, and an entry naming none is unconstrained: `(names nothing checkable)`, `(names nothing checkable)`, `(names nothing checkable)`.
 
-Identifiers this beat names that occur nowhere in its evidence: `15-second`. Recorded, not dropped.
+**Dropped by the anchoring guard (1):** each of these names a specific — an identifier, a number, a proper noun — that occurs in neither this window nor the record. The specific is named after the entry, so the decision can be checked rather than trusted.
 
-**Dropped to fit the 512-rune beat cap (1):**
-
-- the landing page copy is drafted by the assistant and reviewed by the surveyor for factual accuracy
+- the landing page includes a one-line problem statement, a 15-second capture-to-sync demonstration, the offline claim stated once, and a trial button  — not in the evidence: `15-second`
 
 
 ---
@@ -10224,17 +10096,18 @@ Identifiers this beat names that occur nowhere in its evidence: `15-second`. Rec
 
 Counts of this run's own observations. Nothing here is scored or ranked; the quality question belongs to the blind review round.
 
-- sessions 14; beats asked 72, generated 69, failed 3, recovered panics 0
-- attempts per beat: min 1 / median 1 / max 5; distribution 1 x61, 2 x3, 3 x4, 5 x4; first attempt 61, more than one 8
-- entries per stored beat: min 2 / median 3 / max 4; stored beat runes: min 322 / median 456 / max 511
-- entries dropped by the anchoring guard: 0 of 206 offered, across 0 of 69 beats
-- entries dropped to fit the beat cap: 68 across 47 beats
-- beats whose SUBJECT carries no term occurring in the evidence: 3 of 69
-- entries anchored in the record and NOT in their own window (the seam signal): 0 of 206 kept
-- identifiers named that occur nowhere in the evidence: 16 across 10 of 69 beats
-- names taken from the prompt's OWN worked examples: 8 across 3 of 69 beats
-- turn coverage: 4125 of 5785 turns read by a window (71.3%), 1660 read by none; 27 of 72 windows hole-marked
-- assembled prompt runes: min 3721 / median 15038 / max 18188; over budget 0
+- sessions 14; beats asked 72, generated 68, failed 4, recovered panics 0
+- attempts per beat: min 1 / median 1 / max 5; distribution 1 x58, 2 x3, 3 x6, 5 x5; first attempt 58, more than one 10
+- entries per stored beat: min 3 / median 4 / max 4; stored beat runes: min 322 / median 578 / max 774
+- entries dropped by the anchoring guard (a specific occurring in neither the window nor the record): 2 of 270 offered, across 2 of 68 beats
+- kept entries naming NO specific, so unconstrained by the guard: 76 of 268 kept
+- entries dropped to fit the beat cap: 0 across 0 beats
+- beats re-requested for an unanchored SUBJECT: 2 beats, 10 attempts; still failing after the ladder: 2; stored beats whose subject carries no term from the evidence: 0 of 68
+- entries checked against the record and NOT their own window (the seam signal): 0 of 268 kept
+- identifiers named that occur nowhere in the evidence: 8 across 7 of 68 beats
+- names taken from the prompt's OWN worked examples: 0 across 0 of 68 beats
+- turn coverage: 4490 of 6285 turns read by a window (71.4%), 1795 read by none; 30 of 72 windows hole-marked
+- assembled prompt runes: min 3721 / median 15329 / max 18188; over budget 0
 
 ## The same figures, real transcripts and synthetic sessions apart
 
@@ -10242,30 +10115,32 @@ The two hand-authored non-engineering sessions are short, clean and invented; th
 
 **Real transcripts**
 
-- sessions 12; beats asked 65, generated 62, failed 3, recovered panics 0
-- attempts per beat: min 1 / median 1 / max 5; distribution 1 x54, 2 x3, 3 x4, 5 x4; first attempt 54, more than one 8
-- entries per stored beat: min 2 / median 3 / max 4; stored beat runes: min 324 / median 458 / max 511
-- entries dropped by the anchoring guard: 0 of 181 offered, across 0 of 62 beats
-- entries dropped to fit the beat cap: 67 across 46 beats
-- beats whose SUBJECT carries no term occurring in the evidence: 3 of 62
-- entries anchored in the record and NOT in their own window (the seam signal): 0 of 181 kept
-- identifiers named that occur nowhere in the evidence: 15 across 9 of 62 beats
-- names taken from the prompt's OWN worked examples: 8 across 3 of 62 beats
-- turn coverage: 4021 of 5681 turns read by a window (70.8%), 1660 read by none; 27 of 65 windows hole-marked
-- assembled prompt runes: min 5121 / median 15329 / max 18188; over budget 0
+- sessions 12; beats asked 65, generated 61, failed 4, recovered panics 0
+- attempts per beat: min 1 / median 1 / max 5; distribution 1 x51, 2 x3, 3 x6, 5 x5; first attempt 51, more than one 10
+- entries per stored beat: min 3 / median 4 / max 4; stored beat runes: min 324 / median 582 / max 774
+- entries dropped by the anchoring guard (a specific occurring in neither the window nor the record): 1 of 244 offered, across 1 of 61 beats
+- kept entries naming NO specific, so unconstrained by the guard: 65 of 243 kept
+- entries dropped to fit the beat cap: 0 across 0 beats
+- beats re-requested for an unanchored SUBJECT: 2 beats, 10 attempts; still failing after the ladder: 2; stored beats whose subject carries no term from the evidence: 0 of 61
+- entries checked against the record and NOT their own window (the seam signal): 0 of 243 kept
+- identifiers named that occur nowhere in the evidence: 8 across 7 of 61 beats
+- names taken from the prompt's OWN worked examples: 0 across 0 of 61 beats
+- turn coverage: 4386 of 6181 turns read by a window (71.0%), 1795 read by none; 30 of 65 windows hole-marked
+- assembled prompt runes: min 5121 / median 15999 / max 18188; over budget 0
 
 **Synthetic sessions**
 
 - sessions 2; beats asked 7, generated 7, failed 0, recovered panics 0
 - attempts per beat: min 1 / median 1 / max 1; distribution 1 x7; first attempt 7, more than one 0
 - entries per stored beat: min 3 / median 4 / max 4; stored beat runes: min 322 / median 410 / max 459
-- entries dropped by the anchoring guard: 0 of 25 offered, across 0 of 7 beats
-- entries dropped to fit the beat cap: 1 across 1 beats
-- beats whose SUBJECT carries no term occurring in the evidence: 0 of 7
-- entries anchored in the record and NOT in their own window (the seam signal): 0 of 25 kept
-- identifiers named that occur nowhere in the evidence: 1 across 1 of 7 beats
+- entries dropped by the anchoring guard (a specific occurring in neither the window nor the record): 1 of 26 offered, across 1 of 7 beats
+- kept entries naming NO specific, so unconstrained by the guard: 11 of 25 kept
+- entries dropped to fit the beat cap: 0 across 0 beats
+- beats re-requested for an unanchored SUBJECT: 0 beats, 0 attempts; still failing after the ladder: 0; stored beats whose subject carries no term from the evidence: 0 of 7
+- entries checked against the record and NOT their own window (the seam signal): 0 of 25 kept
+- identifiers named that occur nowhere in the evidence: 0 across 0 of 7 beats
 - names taken from the prompt's OWN worked examples: 0 across 0 of 7 beats
 - turn coverage: 104 of 104 turns read by a window (100.0%), 0 read by none; 0 of 7 windows hole-marked
 - assembled prompt runes: min 3721 / median 3813 / max 4261; over budget 0
 
-How to read the anchoring line: an entry is dropped when no term in it occurs verbatim in that beat's own window or in the measured record. It is a fact about a string's occurrence, not a judgement about the entry — see `beat_anchor.go` for what counts as a term. The subject line is measured the same way but never dropped, since dropping it would leave no beat.
+How to read the anchoring line: an entry is dropped when a SPECIFIC it names — an identifier-shaped token, a number or amount, or a proper noun capitalised somewhere other than the start of its sentence — occurs in neither that beat's own window nor the measured record. Every specific must hold, not one of them; an entry naming no specific is unconstrained and passes, since it cannot fabricate a specific it does not have. It is a fact about a string's occurrence, not a judgement about the entry — see `beat_anchor.go`. The SUBJECT line is measured by the wider rule (any term of four or more runes that is not a function word) and is not dropped but RE-REQUESTED at a wider temperature, because a subject carrying nothing from the evidence was, on the previous sweep, exactly and only the beats that copied the prompt's worked examples.
