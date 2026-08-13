@@ -19,10 +19,18 @@ import (
 // The beat is no longer prose (see BeatPrompt), so the sentence measurement no longer describes
 // what is stored. The NUMBER is kept anyway, and deliberately: it is the beat ladder's claim on
 // the digest prompt budget — MaxBeatSelection x BeatCap, a discretionary claimant that
-// fitDiscretionary (digest_refine.go) shrinks under pressure — and the report tier currently has
-// 4 runes of headroom. Changing the beat's shape must not spend that. So a bulleted beat is fit
-// to the SAME 512 runes the prose beat claimed, by dropping whole trailing entries with the drop
-// marked (fitBeatEvents), never by cutting an entry.
+// fitDiscretionary (digest_refine.go) shrinks under pressure. So a bulleted beat is fit to the
+// SAME 512 runes the prose beat claimed, by dropping whole trailing entries with the drop marked
+// (fitBeatEvents), never by cutting an entry.
+//
+// ⚠️ WHAT RAISING THIS COSTS IS NOT WHAT IT WAS THOUGHT TO COST. The report tier was recorded at
+// 4 runes of headroom (13,996 of 14,000) and the inference drawn from that — a larger beat pushes
+// the refine prompt over DefaultPromptCharBudget and panics the backstop — is wrong. Setting this
+// to 640 leaves the entire package green, because fitDiscretionary shrinks the beat SELECTION
+// until the prompt fits. The cost is quieter and lands on the reader: at the realistic worst-case
+// refine input, 4 of 12 beats reach the report at 512 and 2 at 774. Measured in
+// TestBeatCapTradesBeatsInTheReportRatherThanTrippingTheBackstop, and the trade this constant
+// actually makes is entries lost per beat against beats lost per report.
 const BeatCap = 512
 
 // BeatMinRunes is the floor below which the answer is degenerate rather than terse.
