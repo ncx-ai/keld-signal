@@ -7,15 +7,20 @@ import (
 	"unicode"
 )
 
-// MaxBeatSelection caps how many beats a report reads. At BeatCap runes each that is ~6,144
-// worst case — it was ~2,400 while BeatCap was 200, and BeatCap was raised to 512 because at 200
-// essentially every beat was cut mid-clause (see its doc) — against a fully-capped
+// MaxBeatSelection caps how many beats a report reads. At BeatCap runes each that is ~10,704
+// worst case — it was ~2,400 at BeatCap 200 and ~6,144 at 512 — against a fully-capped
 // CarryForward-equivalent JSON embed, measured at 6,339 runes (not the ~4,742 an average real
 // session showed — that figure was typical, not worst-case). Beats are also the one discretionary
 // claimant besides the whole-session view: fitDiscretionary (digest_refine.go) shrinks the
 // selection below MaxBeatSelection when the budget is under pressure, so this is the ceiling, not
-// a guarantee — and after the cap rise that shrinking is the ordinary case rather than the
-// exception, which is the price of a beat that reads as an answer.
+// a guarantee.
+//
+// ⚠️ AT THE CURRENT CAP THE SHRINKING IS THE ORDINARY CASE, AND THAT IS THE TRADE, TAKEN
+// DELIBERATELY. Measured at the realistic worst-case refine input, 2 of these 12 reach the
+// assembled prompt (4 did at BeatCap 512) — see
+// TestBeatCapTradesBeatsInTheReportRatherThanTrippingTheBackstop. The timeline a person reads
+// back is the primary product and the report is derived from it, so entries kept per beat is
+// bought at the price of beats read per report.
 const MaxBeatSelection = 12
 
 // AppendBeat stores a beat. Ordinals are contiguous over stored beats.
