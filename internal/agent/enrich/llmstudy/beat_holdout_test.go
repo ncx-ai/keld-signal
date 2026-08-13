@@ -3,7 +3,6 @@
 package llmstudy
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
@@ -51,18 +50,11 @@ func TestBeatExamplesAreHeldOut(t *testing.T) {
 	o := DefaultMineOpts()
 	beatTurns := BeatTurnsFromEnv()
 
-	var corpus []string
-	for _, f := range StratifiedTranscripts() {
-		if len(corpus) >= beatEvalSessions {
-			break
-		}
-		if beatHeldOutSessions[filepath.Base(f)] {
-			continue
-		}
-		if ws, err := Mine(f, o); err == nil && len(ws) >= 16 {
-			corpus = append(corpus, f)
-		}
-	}
+	// The sweep's own selection, run rather than re-implemented — including the fork/resume
+	// dedupe, which changes WHICH sessions are chosen: a duplicate dropped is another transcript
+	// pulled in behind it, and a session the sweep reads that this check never saw is exactly the
+	// contamination this test exists to refuse.
+	corpus := selectBeatCorpus(t, StratifiedTranscripts(), o, beatEvalSessions, beatEvalWindows)
 	corpus = append(corpus, "testdata/nontech/finance-close.jsonl",
 		"testdata/nontech/marketing-launch.jsonl")
 	if len(corpus) < 3 {

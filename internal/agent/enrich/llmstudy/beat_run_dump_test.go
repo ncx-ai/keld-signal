@@ -86,38 +86,9 @@ func TestBeatRunDump(t *testing.T) {
 		}
 		files = keep
 	}
-	// ⚠️ SESSION ID IS NOT IDENTITY. Two of the twelve real sessions in the previous sweep were
-	// the same conversation under two ids — byte-identical over all six of their beat windows and
-	// their measured records, a fork or resume that got a new id — so 12 sessions were 11
-	// conversations and two of the three generation failures were the same window counted twice.
-	// StratifiedTranscripts cannot see that (it selects on path and project), so the corpus is
-	// deduplicated here on the WINDOW CONTENT the sweep would actually show the model.
-	kept := 0
-	seenWindows := map[string]string{}
-	for _, f := range files {
-		if kept >= envInt("BEAT_RUN_SESSIONS", 12) {
-			break
-		}
-		// The sessions the prompt's worked examples were read from are held out, so no beat is
-		// scored on material the model was shown an answer for. See beatExamples.
-		if beatHeldOutSessions[filepath.Base(f)] {
-			t.Logf("held out of the corpus (a worked example was read from it): %s", filepath.Base(f))
-			continue
-		}
-		ws, err := Mine(f, o)
-		if err != nil || len(ws) < 16 {
-			continue
-		}
-		fp := windowFingerprint(ws)
-		if first, dup := seenWindows[fp]; dup {
-			t.Logf("deduplicated (same conversation as %s under a second id): %s",
-				first, filepath.Base(f))
-			continue
-		}
-		seenWindows[fp] = filepath.Base(f)
+	for _, f := range selectBeatCorpus(t, files, o, envInt("BEAT_RUN_SESSIONS", 12), lastWindow) {
 		sources = append(sources, source{path: f, label: filepath.Base(f),
 			kind: "real transcript (engineering)"})
-		kept++
 	}
 	for _, f := range []string{
 		"testdata/nontech/finance-close.jsonl",
@@ -265,14 +236,64 @@ func TestBeatRunDump(t *testing.T) {
 	t.Logf("wrote %s", out)
 }
 
+// selectBeatCorpus picks the real sessions the sweep runs over: mineable, not held out, and not a
+// repeat of a session already selected.
+//
+// ⚠️ SESSION ID IS NOT IDENTITY. Two of the twelve real sessions in the previous sweep were the
+// same conversation under two ids — a fork or resume, byte-identical over every beat window the
+// sweep read and over their measured records — so twelve sessions were eleven conversations, six
+// beats were the same work counted twice, and two of the three generation failures were one
+// window counted twice. StratifiedTranscripts cannot see that; it selects on path and project.
+//
+// It is ONE function because the hold-out check must run against the corpus the sweep actually
+// selects. Two copies of this rule would drift, and the failure would be silent in the direction
+// that matters: a session the sweep reads but the contamination check never saw.
+func selectBeatCorpus(t *testing.T, files []string, o MineOpts, limit, lastWindow int) []string {
+	var out []string
+	seen := map[string]string{}
+	for _, f := range files {
+		if len(out) >= limit {
+			break
+		}
+		// The sessions the prompt's worked examples were read from are held out, so no beat is
+		// scored on material the model was shown an answer for. See beatExamples.
+		if beatHeldOutSessions[filepath.Base(f)] {
+			t.Logf("held out of the corpus (a worked example was read from it): %s", filepath.Base(f))
+			continue
+		}
+		ws, err := Mine(f, o)
+		if err != nil || len(ws) < 16 {
+			continue
+		}
+		fp := windowFingerprint(ws, lastWindow)
+		if first, dup := seen[fp]; dup {
+			t.Logf("deduplicated (same conversation as %s under a second id): %s",
+				first, filepath.Base(f))
+			continue
+		}
+		seen[fp] = filepath.Base(f)
+		out = append(out, f)
+	}
+	return out
+}
+
 // windowFingerprint identifies a session by what it would SHOW THE MODEL rather than by its id or
-// its path: every mined window's turns, roles included, in order. A fork or a resume writes a new
-// transcript under a new id whose windows are byte-identical to the original's, and counting that
-// twice inflates every figure the sweep reports — beats asked, entries offered, and, in the
-// previous run, two of the three generation failures.
-func windowFingerprint(ws []Window) string {
+// its path: the turns of every window in the WALKED PREFIX, roles included, in order.
+//
+// The prefix, not the whole session, and that is the correction that made this work at all. A fork
+// or a resume shares its parent's history and then diverges, so the two transcripts have different
+// window COUNTS (31 and 39 in the pair that motivated this) while the material the sweep actually
+// reads — the walked prefix — is byte-identical. Hashing every mined window compares the halves
+// nobody looks at and reports two identical corpora as distinct, which is what a first cut of this
+// did. Counting such a pair twice inflates every figure the sweep reports: beats asked, entries
+// offered, and, in the previous run, two of its three generation failures.
+func windowFingerprint(ws []Window, lastWindow int) string {
+	last := lastWindow
+	if last > len(ws)-1 {
+		last = len(ws) - 1
+	}
 	h := sha256.New()
-	for _, w := range ws {
+	for _, w := range ws[:last+1] {
 		for _, tn := range w.Turns {
 			io.WriteString(h, string(tn.Role))
 			io.WriteString(h, "\x1f")
