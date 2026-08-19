@@ -184,6 +184,20 @@ func newDoctorCmd() *cobra.Command {
 					bins[0], bins[1:], bins[0]))
 			}
 
+			// RUNTIME health, not just config. Everything above this point checks that
+			// the install is DESCRIBED correctly; none of it can tell a user whether
+			// anything is actually being delivered. On a real machine doctor printed
+			// "No problems found." while the spool held five abandoned writes, the
+			// oldest a month old — an install that looked healthy and had enriched
+			// nothing for weeks. Reporting clean through that is the failure mode that
+			// makes this command untrustworthy exactly when it matters most.
+			if n := staleSpoolWrites(); n > 0 {
+				problems = append(problems, fmt.Sprintf(
+					"%d abandoned write(s) in the spool (%s) — enrichment work is stranded on "+
+						"disk and nothing retries it while the agent is down. Restart the agent "+
+						"to settle them: `keld signal restart`.", n, paths.SpoolDir()))
+			}
+
 			reauthRequired, _ := paths.ReauthRequired()
 
 			if len(problems) > 0 {
@@ -231,4 +245,19 @@ func renderLocalService(h localagent.HealthInfo) []string {
 		lines = append(lines, fmt.Sprintf("  %-11s rss %.0f MB (model %.0f)", "memory", h.RSSMB, h.ModelCostMB))
 	}
 	return lines
+}
+
+// staleSpoolWrites counts interrupted writes left by the pre-SQLite file spool
+// (spool/*.json.tmp). The daemon settles these on startup — completing the ones
+// that decode, discarding the ones that don't — so any still present mean the
+// agent has not come up since they were stranded. That makes the count a cheap,
+// offline proxy for "enrichment is not running", which is precisely what doctor
+// was unable to say. Best-effort: an unreadable spool directory reports zero
+// rather than inventing a problem.
+func staleSpoolWrites() int {
+	matches, err := filepath.Glob(filepath.Join(paths.SpoolDir(), "*.json.tmp"))
+	if err != nil {
+		return 0
+	}
+	return len(matches)
 }

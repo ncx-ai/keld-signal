@@ -51,6 +51,9 @@ import (
 // import fails is still left in place.
 func ImportLegacy() (int, error) {
 	dir := paths.SpoolDir()
+	// Settle the pre-SQLite writer's interrupted atomic writes BEFORE the scan, so
+	// anything recoverable is already a plain ".json" when the loop below runs.
+	completeInterruptedWrites(dir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -260,5 +263,51 @@ func quarantineLegacyFile(dir, path, name string) {
 		if err := os.Rename(path, filepath.Join(bad, name)); err == nil {
 			debuglog.Append("spool: quarantined undecodable legacy file %s", name)
 		}
+	}
+}
+
+// completeInterruptedWrites settles "<id>.json.tmp" files left by the pre-SQLite
+// spool, whose writer wrote a .tmp and then renamed it into place. A crash between
+// those two steps stranded the .tmp — and because ImportLegacy filters on a ".json"
+// suffix, nothing in the system ever looked at one again. They accumulated for the
+// life of the install: found in the field at five files, the oldest a month old,
+// three of them zero bytes.
+//
+// A .tmp that still decodes is a COMPLETE record whose rename never happened, so it
+// is renamed into place and imported like any other legacy file — discarding it
+// would silently drop queued work. One that does not decode is a torn or empty
+// write with nothing recoverable, and is removed.
+//
+// Safe to run unconditionally: the writer that produced these no longer exists, so
+// no live process is mid-write on one. Best-effort throughout — a file that cannot
+// be settled is left alone rather than failing startup over a stale temp file.
+func completeInterruptedWrites(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	settled, discarded := 0, 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json.tmp") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var p Pointer
+		if len(b) == 0 || json.Unmarshal(b, &p) != nil {
+			if os.Remove(path) == nil {
+				discarded++
+			}
+			continue
+		}
+		if os.Rename(path, strings.TrimSuffix(path, ".tmp")) == nil {
+			settled++
+		}
+	}
+	if settled > 0 || discarded > 0 {
+		debuglog.Append("spool: settled %d interrupted legacy writes, discarded %d unusable", settled, discarded)
 	}
 }
