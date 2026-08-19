@@ -117,10 +117,12 @@ fi
 
 agent_ok=1
 # Pair against the origin this installer was fetched from. KELD_API_URL is set by the
-# server that serves this script (see the Keld-served header) — pass it as --api-url so
-# login/setup target THIS host explicitly. Without the flag, keld reuses the API URL of any
-# previously stored token (device.go), so re-installing from a new origin over an existing
-# install would silently keep signing in against the old host.
+# copy-paste line Atlas generates — `curl -fsSL <base>/install.sh | KELD_API_URL=<base> sh`
+# (keld-atlas services/api/app/telemetry_snippets.py). NOT by a response header: /install.sh
+# is a redirect to raw.githubusercontent.com, so the serving deploy never touches this body.
+# Pass it as --api-url so login/setup target THIS host explicitly. Without the flag, keld
+# reuses the API URL of any previously stored token (device.go), so re-installing from a new
+# origin over an existing install would silently keep signing in against the old host.
 api_flag=""
 [ -n "${KELD_API_URL:-}" ] && api_flag="--api-url ${KELD_API_URL}"
 if [ -f "${DEST}/keld-agent" ]; then

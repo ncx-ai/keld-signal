@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
 func TestLoginJSONEmitsDeviceCodeThenAuthorized(t *testing.T) {
@@ -182,5 +184,44 @@ func TestLoginCodeExpiredExitsNonZero(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected non-zero exit / error for expired code")
+	}
+}
+
+// A pairing code carries the host that minted it: `keld login --code host/CODE`
+// must enroll against that host, not the built-in default and not a stored one.
+func TestLoginCodeUsesHostFromPairingCode(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	paths.SetAPIBaseOverride("")
+	defer paths.SetAPIBaseOverride("")
+
+	var gotPath, gotCode string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotCode = body["code"]
+		_, _ = w.Write([]byte(`{"access_token":"AT","principal":"p@keld.co","org":"Keld"}`))
+	}))
+	defer srv.Close()
+
+	cmd := newLoginCmd()
+	// srv.URL is http://127.0.0.1:PORT — already scheme-qualified, so used as-is.
+	cmd.SetArgs([]string{"--code", srv.URL + "/abcd-efgh"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if gotPath != "/v1/cli/enroll" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	// The bare, uppercased code reaches the server — not the whole pairing string.
+	if gotCode != "ABCD-EFGH" {
+		t.Fatalf("code = %q, want ABCD-EFGH", gotCode)
+	}
+	stored, err := auth.Load()
+	if err != nil || stored == nil {
+		t.Fatalf("Load: %v %v", stored, err)
+	}
+	if stored.APIURL != srv.URL {
+		t.Fatalf("stored APIURL = %q, want %q", stored.APIURL, srv.URL)
 	}
 }

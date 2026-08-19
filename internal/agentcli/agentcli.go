@@ -17,6 +17,7 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/daemon"
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
+	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/version"
@@ -108,6 +109,21 @@ type installConfig struct {
 // starts it immediately — so service install runs last. With a setup code the login+setup
 // run non-interactively regardless of TTY; without a code they run only in a real terminal.
 func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string, error), run stepRunner, installService func() error) error {
+	// A setup code may carry the host that minted it. Resolve it HERE rather than
+	// leaving it to `keld login`: cfg.apiURL is what puts --api-url on BOTH child
+	// commands, and `signal setup` has to target the same host as the login or it
+	// writes the previous endpoint into hook.json — a split-brain install where
+	// auth and telemetry point at different deploys and nothing reports an error.
+	if cfg.code != "" {
+		host, bare, err := auth.ParsePairingCode(cfg.code)
+		if err != nil {
+			return err
+		}
+		cfg.code = bare
+		if host != "" && cfg.apiURL == "" {
+			cfg.apiURL = host
+		}
+	}
 	login := []string{"login"}
 	setup := []string{"signal", "setup"}
 	if cfg.apiURL != "" {
