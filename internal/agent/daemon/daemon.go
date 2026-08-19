@@ -741,6 +741,10 @@ func Run(ctx context.Context) error {
 	// custom holds the org's live custom enrichment passes, rebuilt on each
 	// successful settings poll and read per-job by the Worker.
 	custom := newCustomHolder()
+	// onRemote runs on EVERY successful poll, so the reporter is what keeps a static reject
+	// from being restated on each one. Owned out here (not per-call) so it remembers across
+	// polls; pollSettings drives onRemote from a single goroutine, so no lock is needed.
+	rejects := &rejectReporter{}
 	onRemote := func(r *settings.Remote) {
 		re := r.ClientTelemetry.WithDefaults()
 		emitter.SetGate(gateFrom(re))
@@ -749,13 +753,9 @@ func Run(ctx context.Context) error {
 
 		// Rebuild + hot-swap the org's custom passes. Built-in/unsupported
 		// passes are rejected here (never as extractors); surface each as a
-		// client-telemetry warning without leaking prompt content.
-		w1, w2, rejected := enrich.BuildCustomExtractors(passesFromSchema(r.EnrichmentSchema))
-		custom.store(w1, w2)
-		for _, rj := range rejected {
-			emitter.Emit("enrich.custom.rejected", clientevents.SevWarn,
-				map[string]any{"key": rj.Key, "reason": rj.Reason})
-		}
+		// client-telemetry warning without leaking prompt content — once per
+		// distinct reject set, not once per poll (see rejectReporter).
+		syncCustomPasses(r.EnrichmentSchema, custom, rejects, emitter.Emit)
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
