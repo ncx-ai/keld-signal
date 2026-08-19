@@ -31,8 +31,26 @@ func newLoginCmd() *cobra.Command {
 
 			code, _ := cmd.Flags().GetString("code")
 			if code != "" {
+				// A setup code may carry the host that minted it ("atlas.keld.co/ABCD-EFGH"),
+				// which is how a re-install pairs with the deploy it came from instead of
+				// inheriting whatever host a previous install left in auth.json.
+				host, bare, perr := auth.ParsePairingCode(code)
+				if perr != nil {
+					if jsonOut {
+						emitEvent(errorEvent{Event: "error", Message: cleanErrorMessage(perr)})
+						return errs.ErrSilentExit
+					}
+					return perr
+				}
+				code = bare
+				// An explicit --api-url is the higher-precedence signal and already set the
+				// override above; the code's host only fills the gap when it didn't.
+				if host != "" && apiURL == "" {
+					paths.SetAPIBaseOverride(host)
+				}
 				if !jsonOut {
 					console.Print("")
+					console.Print(fmt.Sprintf("Pairing with %s", paths.APIBase()))
 					console.Print("Signing in…")
 				}
 				a, err := auth.LoginWithCode(api.NewClient(paths.APIBase(), ""), code)
