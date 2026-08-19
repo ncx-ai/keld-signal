@@ -109,15 +109,33 @@ jobs:
         shell: bash
         env:
           HF_HOME: ${{ github.workspace }}/hf-cache
+          # The SECOND bound on the same cold download, and the one that actually bit.
+          # worker_manager._spawn waits this long for the child's {"ready": True}, and the child
+          # does the ~1.8 GB fetch + model load BEFORE sending it — so the 120s default caps the
+          # DOWNLOAD, exactly as the curl `-m` below did until it was raised to 900. Raising only
+          # the curl cap moved the bound instead of removing it: v0.22.0's Windows leg then died
+          # at 120.0s on a cache miss, silently, because the timeout surfaces as queue.Empty ->
+          # WorkerUnavailable and logs nothing. Keep BOTH generous; capping either re-breaks it.
+          KELD_SIDECAR_SPAWN_TIMEOUT_S: "900"
         run: |
           BIN="dist/keld-agent-sidecar/keld-agent-sidecar"
           [ "${{ runner.os }}" = "Windows" ] && BIN="dist/keld-agent-sidecar/keld-agent-sidecar.exe"
+          # Why /metrics on failure: a spawn timeout produces NO output from either process, so
+          # the bare "/classify failed" told us nothing and cost a log archaeology session. The
+          # counters separate the cases this gate exists to tell apart — kills.crash for a spawn
+          # that never handshook (timeout or import/bundle breakage), kills.timeout for a job
+          # deadline, worker_state for where it got stuck.
+          dump_state() {
+            echo "--- sidecar /metrics ---"
+            curl -sf -m 30 http://127.0.0.1:8399/metrics || echo "(metrics unreachable)"
+            echo
+          }
           "$BIN" --port 8399 --host 127.0.0.1 &
           for i in $(seq 1 180); do
             if curl -sf http://127.0.0.1:8399/health | grep -q '"ok"'; then ok=1; break; fi
             sleep 2
           done
-          [ -n "${ok:-}" ] || { echo "sidecar did not become healthy"; exit 1; }
+          [ -n "${ok:-}" ] || { echo "sidecar did not become healthy"; dump_state; exit 1; }
           # Spawn acceptance gate: a real /classify spawns the inference worker
           # child, which must import the (obfuscated) modules from the frozen
           # bundle. /health alone never spawns a worker, so this is the ONLY CI
@@ -127,13 +145,14 @@ jobs:
           # download on a cache miss, so a tight cap bounds the DOWNLOAD rather than the
           # inference it exists to check. At -m 120 the equivalent Linux step was a coin
           # flip — 100s (pass) vs 116s (fail) on identical cold downloads — which is how
-          # v0.21.0 published without its Linux sidecar tarball.
+          # v0.21.0 published without its Linux sidecar tarball. KELD_SIDECAR_SPAWN_TIMEOUT_S
+          # in this step's env is the other half of that cap — see the note there.
           resp=$(curl -sf -m 900 -X POST http://127.0.0.1:8399/classify \
             -H 'Content-Type: application/json' \
             -d '{"text":"debug the login bug","tasks":{"task_type":["debug","other"]}}') \
-            || { echo "frozen worker /classify failed — spawn/import/bundle broke"; exit 1; }
+            || { echo "frozen worker /classify failed — spawn/import/bundle broke"; dump_state; exit 1; }
           echo "$resp" | grep -q '"task_type"' \
-            || { echo "frozen worker returned no result: $resp"; exit 1; }
+            || { echo "frozen worker returned no result: $resp"; dump_state; exit 1; }
           echo "frozen worker spawn + inference OK"
 
       - name: Stage keld/keld-agent binaries
