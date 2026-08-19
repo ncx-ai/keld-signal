@@ -100,3 +100,25 @@ First run downloads the model (~1.9 GB) into the HF cache; set
 Frozen per-OS with PyInstaller into a self-contained `keld-agent-sidecar`
 binary (bundles Python + torch + gliner2) shipped beside `keld-agent`. See the
 plan's Task 11.
+
+## Dependency pinning
+
+`requirements.txt` pins fastapi, uvicorn, gliner2 and transformers, because everything
+here is frozen into a shipped binary: an unpinned upgrade does not fail at review or at
+merge, it changes what PyInstaller bundles on whatever day a release is cut. The failure
+mode is a sidecar that starts, answers `/health`, and then fails every `/classify` — on a
+release runner, after the tag already exists.
+
+`gliner2[local]` declares `torch` and `transformers` with **no version bounds**, so
+pinning gliner2 alone constrains neither. transformers is therefore pinned directly; it
+transitively pins tokenizers.
+
+**torch is still unpinned, deliberately, and is the remaining gap.** `ci-freeze-linux.sh`
+installs it first from the PyTorch CPU index (`--index-url .../whl/cpu`) so the CUDA
+build is never pulled in, and that wheel carries a local version label; pinning the same
+version in `requirements.txt` would have the Linux job resolving against a different
+index than macOS and Windows for the same constraint. Closing it properly means either
+constraining torch inside `ci-freeze-linux.sh` alongside the index it already selects, or
+generating a per-platform lock file. Until then the frozen-worker smoke gate in
+`installers.yml` is what catches a bad float — it exercises a real `/classify`, which is
+exactly the call a torch/transformers mismatch breaks.
