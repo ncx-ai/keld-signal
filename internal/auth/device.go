@@ -112,15 +112,20 @@ func RequireAuthReport(noLogin bool, openBrowser bool, force bool, onStart func(
 	if err != nil {
 		return nil, err
 	}
-	// A stored token is only valid at the server it was minted on (its APIURL).
-	// Unless an explicit --api-url flag already set an override, target that server
-	// for every subsequent command — and for a plain re-login — instead of the
-	// built-in default. Without this, `keld signal setup` sends a local token to
-	// atlas.keld.co and gets 401 "invalid CLI token".
-	if existing != nil && existing.APIURL != "" && paths.APIBaseOverride() == "" {
-		paths.SetAPIBaseOverride(existing.APIURL)
-	}
 	if !(force && !noLogin) {
+		// A stored token is only valid at the server it was minted on (its APIURL).
+		// Unless an explicit --api-url flag already set an override, target that
+		// server for every subsequent command — otherwise `keld signal setup` sends
+		// a local token to atlas.keld.co and gets 401 "invalid CLI token".
+		//
+		// Deliberately NOT applied to a forced `keld login`: that is exactly when the
+		// user may be moving this machine to a different deploy. Pinning there made a
+		// re-install unable to ever leave the host it was already paired to — the
+		// installer re-authenticated against the old host and wrote it straight back,
+		// with every step appearing to succeed.
+		if existing != nil && existing.APIURL != "" && paths.APIBaseOverride() == "" {
+			paths.SetAPIBaseOverride(existing.APIURL)
+		}
 		if existing != nil {
 			return existing, nil
 		}
