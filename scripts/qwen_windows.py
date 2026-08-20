@@ -20,8 +20,10 @@ beat-run.json, which the sweep writes.
 """
 
 import argparse
+import glob
 import json
 import os
+import re
 import sys
 
 OMITTED = ("[turns since the previous update omitted to fit the context — "
@@ -29,6 +31,28 @@ OMITTED = ("[turns since the previous update omitted to fit the context — "
 
 WINDOW_CHARS = 16000     # BeatWindowChars
 PER_TURN_CHARS = 1200    # each turn is bounded before the window is
+
+
+# Slash-command echoes are not the engineer talking. Claude Code writes the invocation, its
+# stdout and its caveat into the transcript as `user` turns, so a window of nothing but /login
+# looks like five engineer messages and scored frustration 4 — the band "repeating themselves"
+# matched a repeated COMMAND. They are machine text in a user-shaped envelope; drop them.
+COMMAND_ECHO = re.compile(
+    r"^\s*<(command-name|command-message|command-args|local-command-stdout|"
+    r"local-command-stderr|local-command-caveat|command-contents)>", re.IGNORECASE)
+
+
+# Claude Code also injects SKILL FILE CONTENTS as user messages: a window of five "engineer
+# turns" turned out to be three real messages and two pasted skill documents. They are long,
+# imperative and nothing to do with how the engineer feels.
+SKILL_INJECTION = re.compile(
+    r"^\s*(Base directory for this skill:|<system-reminder>|<command-name>|"
+    r"The following skills? (was|were) invoked|Caveat: The messages below were generated)",
+    re.IGNORECASE)
+
+
+def is_command_echo(text):
+    return bool(COMMAND_ECHO.match(text) or SKILL_INJECTION.match(text))
 
 
 def clip(text, cap):
@@ -73,7 +97,7 @@ def read_turns(path):
                 continue
             content = (rec.get("message") or {}).get("content")
             if isinstance(content, str):
-                if content.strip():
+                if content.strip() and not (role == "user" and is_command_echo(content)):
                     turns.append((role, clip(content, PER_TURN_CHARS)))
                 continue
             if not isinstance(content, list):
@@ -84,7 +108,7 @@ def read_turns(path):
                 kind = block.get("type")
                 if kind == "text":
                     t = block.get("text", "").strip()
-                    if t:
+                    if t and not (role == "user" and is_command_echo(t)):
                         turns.append((role, clip(t, PER_TURN_CHARS)))
                 elif kind == "tool_use":
                     turns.append(("tool", tool_line(block)))
@@ -95,7 +119,24 @@ def rendered_len(role, text):
     return len(role) + 2 + len(text) + 1
 
 
-def windows(turns, every, cap):
+def tool_counts(turns):
+    """How much machinery ran, as counts rather than as lines of chatter.
+
+    Tool calls are evidence for how demanding a stretch of work is, and noise for how the
+    engineer feels: measured on one window whose engineer turns were byte-identical either way,
+    including 46 tool lines moved complexity 6 -> 7 and frustration 5 -> 7. The engineer had
+    expressed nothing extra; the model read repeated tool attempts as struggle. So the count is
+    kept and the lines are not.
+    """
+    counts = {}
+    for role, text in turns:
+        if role == "tool":
+            name = text.split()[0]
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def windows(turns, every, cap, strip_tools=True):
     """Disjoint, contiguous strides; each window keeps the newest whole turns that fit."""
     bounds, seen = [], 0
     for i, (role, _) in enumerate(turns):
@@ -107,36 +148,100 @@ def windows(turns, every, cap):
         bounds.append(len(turns))
 
     def fit(stride, budget):
-        kept, used = [], 0
-        for role, text in reversed(stride):
-            cost = rendered_len(role, text)
+        """Keep the newest whole turns that fit — but never at the cost of the engineer's own.
+
+        Plain newest-first eviction drops user prompts preferentially, because a stride opens
+        with the prompt and closes with the assistant and tool turns answering it. Measured on a
+        real session that left windows holding 5, 5, 2, 3, 0, 5, 5, 3, 5 user turns out of a
+        5-prompt stride — and the window with none still drew a confident judgement about how the
+        engineer felt, read off the assistant's half of the conversation. So user turns are
+        pinned first and the rest of the budget goes to the newest of everything else.
+        """
+        # Engineer turns come first, newest first — but they are still charged to the budget.
+        # Pinning them unconditionally put a real window 81 runes over its cap: a bound that
+        # yields to a preference is not a bound.
+        pinned, used = set(), 0
+        for i in range(len(stride) - 1, -1, -1):
+            if stride[i][0] != "user":
+                continue
+            cost = rendered_len(*stride[i])
             if used + cost > budget:
-                break
+                continue
             used += cost
-            kept.append((role, text))
-        kept.reverse()
-        return kept
+            pinned.add(i)
+        for i in range(len(stride) - 1, -1, -1):
+            if i in pinned:
+                continue
+            cost = rendered_len(*stride[i])
+            if used + cost > budget:
+                continue        # skip it, but keep looking — an older short turn may still fit
+            used += cost
+            pinned.add(i)
+        return [stride[i] for i in sorted(pinned)]
 
     out, start = [], 0
     for end in bounds:
-        stride = turns[start:end]
+        full_stride = turns[start:end]
+        # Boundaries are always computed over ALL turns, so a stride covers the same stretch of
+        # the session whether or not tool lines are shown. Only what the window CARRIES changes.
+        counts = tool_counts(full_stride)
+        overhead = len(tools_line(counts if strip_tools else {}))
+        stride = ([t for t in full_stride if t[0] != "tool"] if strip_tools else full_stride)
         # Two passes, because the hole marker is part of what the window costs. Fitting first and
         # prepending the marker afterwards is how a bounded window silently goes over its bound —
         # the same defect the Go side carried until it was measured putting real windows over
         # BeatWindowChars by up to 110 runes.
-        kept = fit(stride, cap)
+        kept = fit(stride, cap - overhead)
         holed = len(kept) < len(stride)
         if holed:
-            kept = fit(stride, cap - (len(OMITTED) + 1))
-        out.append({"turns": kept, "holed": holed,
+            kept = fit(stride, cap - overhead - (len(OMITTED) + 1))
+        out.append({"turns": kept, "holed": holed, "tools": counts if strip_tools else {},
                     "stride": len(stride), "start": start, "end": end})
         start = end
     return out
 
 
+def tools_line(counts):
+    if not counts:
+        return ""
+    top = sorted(counts.items(), key=lambda kv: -kv[1])
+    return "tools in this stretch: " + ", ".join(f"{k} x{v}" for k, v in top) + "\n"
+
+
 def render(win):
-    body = "".join(f"{r}: {t}\n" for r, t in win["turns"])
-    return (OMITTED + "\n" + body) if win["holed"] else body
+    """Header first, then turns. Every header the window carries is charged to the budget in
+    windows() — a line added to the render and not to the fit is how a bounded window silently
+    goes over, twice now: first the hole marker, then this tools line, 81 runes over its cap."""
+    head = (OMITTED + "\n" if win["holed"] else "") + tools_line(win.get("tools"))
+    return head + "".join(f"{r}: {t}\n" for r, t in win["turns"])
+
+
+def repo_from_project_dir(dirname):
+    """Turn Claude Code's `-home-dg-keld-keld-atlas` back into `keld-atlas`.
+
+    The encoding replaces every `/` with `-`, which is lossy: a hyphen in the result may be a
+    path separator or part of a directory's own name, and nothing in the string says which.
+    Guessing gets `keld` when the answer is `keld-atlas`. So the encoding is inverted against
+    the filesystem — walk the real directories, preferring the longest name that exists at each
+    step — which is what the Go side does for the same reason (RepoFromTranscriptPath).
+
+    Falls back to the raw name if nothing resolves: a wrong-looking project is better than a
+    confidently wrong one.
+    """
+    tokens = [t for t in dirname.split("-") if t]
+    if not tokens:
+        return dirname
+    path = "/"
+    i = 0
+    while i < len(tokens):
+        for take in range(len(tokens) - i, 0, -1):          # longest first
+            candidate = os.path.join(path, "-".join(tokens[i:i + take]))
+            if os.path.isdir(candidate):
+                path, i = candidate, i + take
+                break
+        else:
+            return dirname                                   # unresolvable — say so by not lying
+    return os.path.basename(path) or dirname
 
 
 def record(path, turns):
@@ -149,7 +254,7 @@ def record(path, turns):
             tools[t.split()[0]] = tools.get(t.split()[0], 0) + 1
     top = sorted(tools.items(), key=lambda kv: -kv[1])[:6]
     return (f"counts: turns={len(turns)} user_turns={users} tool_calls={sum(tools.values())}\n"
-            f"projects: {os.path.basename(os.path.dirname(path))}\n"
+            f"projects: {repo_from_project_dir(os.path.basename(os.path.dirname(path)))}\n"
             f"tool profile: {', '.join(f'{k} x{v}' for k, v in top)}\n")
 
 
@@ -162,16 +267,27 @@ def main():
     ap.add_argument("--every", type=int, default=5, help="user prompts per beat (default 5)")
     ap.add_argument("--cap", type=int, default=WINDOW_CHARS, help=f"window chars (default {WINDOW_CHARS})")
     ap.add_argument("--from-end", action="store_true", help="take the LAST n windows, not the first")
+    ap.add_argument("--with-tools", action="store_true",
+                    help="include tool calls in the windows; by default they are stripped and "
+                         "windows carry user and assistant prose only")
     args = ap.parse_args()
 
     turns = read_turns(args.transcript)
     if not turns:
         sys.exit(f"no prose or tool turns found in {args.transcript}")
 
-    wins = windows(turns, args.every, args.cap)
+    # The record still counts the WHOLE session, tool calls included: it is a measurement of what
+    # happened, not of what this window happens to show. Only the evidence is filtered.
+    wins = windows(turns, args.every, args.cap, strip_tools=not args.with_tools)
+    if not any(w["turns"] for w in wins):
+        sys.exit(f"{args.transcript} has no user or assistant prose turns")
     chosen = wins[-args.n:] if args.from_end else wins[:args.n]
 
     os.makedirs(args.outdir, exist_ok=True)
+    # A shorter run must not leave the previous run's windows lying beside its own: they read as
+    # part of the same set and silently mix two corpora, which has already cost one comparison.
+    for old in sorted(glob.glob(os.path.join(args.outdir, "window_*.txt"))):
+        os.remove(old)
     with open(os.path.join(args.outdir, "record.txt"), "w", encoding="utf-8") as fh:
         fh.write(record(args.transcript, turns))
 
@@ -183,8 +299,10 @@ def main():
         print(f"{name}  turns {win['start']}-{win['end']}  kept {len(win['turns'])} of "
               f"{win['stride']}  {len(text)} chars{'  [HOLED]' if win['holed'] else ''}")
 
+    dropped = sum(sum(w["tools"].values()) for w in wins)
+    note = "" if args.with_tools else f", {dropped} tool calls counted not shown"
     print(f"\n{len(chosen)} windows + record.txt in {args.outdir}/  "
-          f"(transcript has {len(turns)} turns, {len(wins)} windows total)")
+          f"(transcript has {len(turns)} turns{note}, {len(wins)} windows total)")
 
 
 if __name__ == "__main__":
