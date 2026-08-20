@@ -488,9 +488,15 @@ func TestRunSweepCancellationStopsPromptly(t *testing.T) {
 	time.Sleep(40 * time.Millisecond)
 
 	cancel()
+	// The property is "returns rather than blocking forever on a ticker" — the bug
+	// this guards is a hang, not a millisecond budget. The deadline is therefore
+	// generous. At 200ms it flaked on loaded CI runners: commit 8cc5046 both PASSED
+	// and FAILED on two runners of the same SHA, which blocks merges and costs
+	// releases for nothing. A real hang still fails here in seconds rather than
+	// waiting out the package timeout, so the diagnostic value is unchanged.
 	select {
 	case <-done:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("runSweep did not return promptly after ctx cancellation")
+	case <-time.After(10 * time.Second):
+		t.Fatal("runSweep did not return after ctx cancellation — blocked on a ticker?")
 	}
 }

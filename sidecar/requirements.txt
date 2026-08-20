@@ -1,3 +1,25 @@
+# Pinned because these are frozen into a shipped binary. An unpinned dependency here
+# does not fail at review time or at merge time — it changes what PyInstaller bundles on
+# whatever day the release is cut, so the first sign of a bad upgrade is a release whose
+# sidecar cannot load its model, on a runner nobody can attach a debugger to.
 fastapi==0.115.*
 uvicorn[standard]==0.32.*
-gliner2[local]
+
+# gliner2 declares `torch` and `transformers` with NO version bounds under its `local`
+# extra, so pinning gliner2 alone constrains neither. transformers is pinned separately
+# below for that reason; it also transitively pins tokenizers, which is why that is not
+# listed here as well.
+gliner2[local]==1.3.2
+
+# The model-loading half of the bundle, and the pair most likely to break it: a
+# transformers major that changes checkpoint handling turns the frozen sidecar into a
+# binary that starts, answers /health, and then fails every /classify. Pinned to the set
+# that built and passed the frozen-worker smoke gate in v0.24.0.
+transformers==5.15.1
+
+# torch is deliberately NOT pinned here. ci-freeze-linux.sh installs it first from the
+# PyTorch CPU index (`--index-url .../whl/cpu`) to avoid dragging in the CUDA build, and
+# that wheel carries a local version label. Pinning the same version in this file would
+# make the two installs interact in a way that differs per platform — the Linux job would
+# be resolving against a different index than macOS and Windows. Constraining torch
+# belongs with that script, not here; see the follow-up note in sidecar/README.md.
