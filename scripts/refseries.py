@@ -589,9 +589,11 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
     from tool-call inputs and per-line metadata. No message text goes in, and nothing after
     `end` is consulted, so a window can be characterised as it was seen at the time.
     """
-    R = refs[(refs.repo == entity) & (refs.bin > start) & (refs.bin <= end)]
-    L = lvls[(lvls.repo == entity) & (lvls.bin > start) & (lvls.bin <= end)]
-    prior = refs[(refs.repo == entity) & (refs.bin <= start)]
+    # [start, end): the bin AT the window start belongs to the window — bins are floored
+    # timestamps, so excluding it silently drops a whole bin of work.
+    R = refs[(refs.repo == entity) & (refs.bin >= start) & (refs.bin < end)]
+    L = lvls[(lvls.repo == entity) & (lvls.bin >= start) & (lvls.bin < end)]
+    prior = refs[(refs.repo == entity) & (refs.bin < start)]
     mid = start + (end - start) / 2
 
     out = {
@@ -599,7 +601,8 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
             "what": "ground-truth statistics in play across the transcript window below",
             "derived_from": "tool-call inputs and per-line metadata (cwd, gitBranch, model) — "
                             "never message text",
-            "causality": "every figure uses only observations at or before window.end",
+            "causality": "every figure uses only observations in [window.start, window.end) "
+                         "and history before it; nothing later is consulted",
             "how_to_read": {
                 "share": "this reference's share of its level's events in the window",
                 "lift": "share in the window divided by the same reference's share across the "
@@ -703,7 +706,7 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
             # to be missing from, and it is exactly the interesting case.
             src = None
             if base is not None and not base.empty:
-                b = base[(base.entity == entity) & (base.level == level) & (base.bin <= end)]
+                b = base[(base.entity == entity) & (base.level == level) & (base.bin < end)]
                 if not b.empty:
                     src = (b.sort_values("bin").groupby("ref").tail(1)
                            .set_index("ref").base_share_scope.dropna())
@@ -722,7 +725,7 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
         if block["levels"]:
             out["rungs"][rung.lower().replace(" & ", "_and_").replace(" ", "_")] = block
 
-    S = spk[(spk.repo == entity) & (spk.bin > start) & (spk.bin <= end)]
+    S = spk[(spk.repo == entity) & (spk.bin >= start) & (spk.bin < end)]
     B = spk[spk.repo == entity]
     if not S.empty:
         def vs(col, value):
