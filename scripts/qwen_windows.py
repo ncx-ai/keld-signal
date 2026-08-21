@@ -69,6 +69,23 @@ def clip(text, cap):
     return (cut[:i] if i > 0 else cut) + " …"
 
 
+EXT_LANG = {".go":"Go", ".py":"Python", ".ts":"TypeScript", ".tsx":"TypeScript",
+            ".js":"JavaScript", ".jsx":"JavaScript", ".rs":"Rust", ".java":"Java",
+            ".rb":"Ruby", ".sql":"SQL", ".sh":"Bash", ".css":"CSS", ".scss":"CSS",
+            ".md":"Markdown", ".yaml":"YAML", ".yml":"YAML", ".json":"JSON",
+            ".tf":"Terraform", ".c":"C", ".h":"C", ".cpp":"C++", ".swift":"Swift",
+            ".kt":"Kotlin", ".php":"PHP", ".cs":"C#"}
+
+FILES_TOTAL = 400             # per window: names, not contents
+
+
+def language_of(path):
+    return EXT_LANG.get(os.path.splitext(path)[1].lower())
+
+
+
+
+
 def tool_line(block):
     """Render a tool use the way the window does: name plus a hint of what it acted on."""
     name = block.get("name", "tool")
@@ -79,10 +96,32 @@ def tool_line(block):
     return name
 
 
+def session_facts(path):
+    """cwd and git branch as the transcript itself records them.
+
+    Cowork exports carry `cwd` and `gitBranch` on every user/assistant record — better than the
+    Claude Code case, where the repo has to be recovered from the project directory name. And
+    necessary: an exported session does not live in a project directory at all, so path
+    derivation yields "session-export-1787252995037" and attributes nothing.
+    """
+    cwd = branch = None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            cwd = cwd or rec.get("cwd")
+            branch = branch or rec.get("gitBranch")
+            if cwd and branch:
+                break
+    return cwd, branch
+
+
 def read_turns(path):
     """Yield (role, text) for prose and tool uses. Tool RESULTS are skipped: they are where the
     long pasted output lives, and the window is for prose and tool uses only."""
-    turns = []
+    turns, meta = [], []
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
@@ -98,7 +137,7 @@ def read_turns(path):
             content = (rec.get("message") or {}).get("content")
             if isinstance(content, str):
                 if content.strip() and not (role == "user" and is_command_echo(content)):
-                    turns.append((role, clip(content, PER_TURN_CHARS)))
+                    turns.append((role, clip(content, PER_TURN_CHARS))); meta.append({})
                 continue
             if not isinstance(content, list):
                 continue
@@ -109,10 +148,17 @@ def read_turns(path):
                 if kind == "text":
                     t = block.get("text", "").strip()
                     if t and not (role == "user" and is_command_echo(t)):
-                        turns.append((role, clip(t, PER_TURN_CHARS)))
+                        turns.append((role, clip(t, PER_TURN_CHARS))); meta.append({})
                 elif kind == "tool_use":
-                    turns.append(("tool", tool_line(block)))
-    return turns
+                    inp = block.get("input") or {}
+                    m = {}
+                    fp = inp.get("file_path")
+                    if isinstance(fp, str) and language_of(fp):
+                        m["lang"] = language_of(fp)
+                    if isinstance(fp, str):
+                        m["file"] = os.path.basename(fp)
+                    turns.append(("tool", tool_line(block))); meta.append(m)
+    return turns, meta
 
 
 def rendered_len(role, text):
@@ -136,7 +182,19 @@ def tool_counts(turns):
     return counts
 
 
-def windows(turns, every, cap, strip_tools=True):
+def stride_artifacts(metas):
+    """Languages counted, and a bounded code sample, for one stride."""
+    langs, files, used = {}, [], 0
+    for m in metas:
+        if m.get("lang"):
+            langs[m["lang"]] = langs.get(m["lang"], 0) + 1
+        f = m.get("file")
+        if f and f not in files and used + len(f) + 2 <= FILES_TOTAL:
+            files.append(f); used += len(f) + 2
+    return langs, files
+
+
+def windows(turns, every, cap, strip_tools=True, metas=None):
     """Disjoint, contiguous strides; each window keeps the newest whole turns that fit."""
     bounds, seen = [], 0
     for i, (role, _) in enumerate(turns):
@@ -185,7 +243,9 @@ def windows(turns, every, cap, strip_tools=True):
         # Boundaries are always computed over ALL turns, so a stride covers the same stretch of
         # the session whether or not tool lines are shown. Only what the window CARRIES changes.
         counts = tool_counts(full_stride)
-        overhead = len(tools_line(counts if strip_tools else {}))
+        langs, files = stride_artifacts((metas or [{}]*len(turns))[start:end])
+        overhead = len(tools_line(counts if strip_tools else {})
+                       + langs_line(langs) + files_line(files))
         stride = ([t for t in full_stride if t[0] != "tool"] if strip_tools else full_stride)
         # Two passes, because the hole marker is part of what the window costs. Fitting first and
         # prepending the marker afterwards is how a bounded window silently goes over its bound —
@@ -196,6 +256,7 @@ def windows(turns, every, cap, strip_tools=True):
         if holed:
             kept = fit(stride, cap - overhead - (len(OMITTED) + 1))
         out.append({"turns": kept, "holed": holed, "tools": counts if strip_tools else {},
+                    "langs": langs, "files": files,
                     "stride": len(stride), "start": start, "end": end})
         start = end
     return out
@@ -208,11 +269,30 @@ def tools_line(counts):
     return "tools in this stretch: " + ", ".join(f"{k} x{v}" for k, v in top) + "\n"
 
 
+def langs_line(langs):
+    if not langs:
+        return ""
+    top = sorted(langs.items(), key=lambda kv: -kv[1])
+    return "languages in this stretch: " + ", ".join(f"{k} x{v}" for k, v in top) + "\n"
+
+
+def files_line(files):
+    """The names of files touched — the compact form of the same evidence.
+
+    A tool-stripped window named no language at all across ten real engineering windows, because
+    language lives in file extensions rather than prose. But the CONTENTS are not needed for
+    that: kpi-card.tsx carries the language in its extension and the component in its name, at a
+    twentieth of the bytes of three lines of the file.
+    """
+    return ("files touched: " + ", ".join(files) + "\n") if files else ""
+
+
 def render(win):
     """Header first, then turns. Every header the window carries is charged to the budget in
     windows() — a line added to the render and not to the fit is how a bounded window silently
     goes over, twice now: first the hole marker, then this tools line, 81 runes over its cap."""
-    head = (OMITTED + "\n" if win["holed"] else "") + tools_line(win.get("tools"))
+    head = ((OMITTED + "\n" if win["holed"] else "") + tools_line(win.get("tools"))
+            + langs_line(win.get("langs")) + files_line(win.get("files")))
     return head + "".join(f"{r}: {t}\n" for r, t in win["turns"])
 
 
@@ -253,9 +333,15 @@ def record(path, turns):
         if r == "tool":
             tools[t.split()[0]] = tools.get(t.split()[0], 0) + 1
     top = sorted(tools.items(), key=lambda kv: -kv[1])[:6]
-    return (f"counts: turns={len(turns)} user_turns={users} tool_calls={sum(tools.values())}\n"
-            f"projects: {repo_from_project_dir(os.path.basename(os.path.dirname(path)))}\n"
-            f"tool profile: {', '.join(f'{k} x{v}' for k, v in top)}\n")
+    cwd, branch = session_facts(path)
+    project = (os.path.basename(cwd.rstrip("/")) if cwd
+               else repo_from_project_dir(os.path.basename(os.path.dirname(path))))
+    lines = [f"counts: turns={len(turns)} user_turns={users} tool_calls={sum(tools.values())}",
+             f"projects: {project}"]
+    if branch:
+        lines.append(f"branch: {branch}")
+    lines.append("tool profile: " + ", ".join(f"{k} x{v}" for k, v in top))
+    return "\n".join(lines) + "\n"
 
 
 def main():
@@ -272,13 +358,14 @@ def main():
                          "windows carry user and assistant prose only")
     args = ap.parse_args()
 
-    turns = read_turns(args.transcript)
+    turns, metas = read_turns(args.transcript)
     if not turns:
         sys.exit(f"no prose or tool turns found in {args.transcript}")
 
     # The record still counts the WHOLE session, tool calls included: it is a measurement of what
     # happened, not of what this window happens to show. Only the evidence is filtered.
-    wins = windows(turns, args.every, args.cap, strip_tools=not args.with_tools)
+    wins = windows(turns, args.every, args.cap,
+                   strip_tools=not args.with_tools, metas=metas)
     if not any(w["turns"] for w in wins):
         sys.exit(f"{args.transcript} has no user or assistant prose turns")
     chosen = wins[-args.n:] if args.from_end else wins[:args.n]
