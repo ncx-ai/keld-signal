@@ -44,6 +44,7 @@ from qwen_windows import EXT_LANG, clip, is_command_echo
 
 import numpy as np
 import pandas as pd
+import yaml
 
 OUTDIR = "/tmp/refseries"
 CLAUDE_ROOTS = [os.path.expanduser("~/.claude/projects")]
@@ -310,7 +311,7 @@ def _roll(df, keys, col, window, how):
     return pd.concat(out).reindex(df.index) if out else pd.Series(index=df.index, dtype=float)
 
 
-def build_frames(ev, bin_h, outdir):
+def build_frames(ev, bin_h, outdir, baseline_ev=None, scope_map=None):
     """Materialise the series themselves, with the rolling statistics as COLUMNS.
 
     Three time-indexed frames, so a point-in-time question is an INDEXING operation rather than a
@@ -329,6 +330,15 @@ def build_frames(ev, bin_h, outdir):
     EVERY statistic is CAUSAL — expanding or trailing-window only. A baseline computed over the
     whole corpus would let a row know its own future, and indexing a moment six weeks back would
     silently describe it using work that had not happened yet.
+
+    COMPOSITION AND BASELINE ARE DIFFERENT SCOPES, and that is the default. Composition — share,
+    breadth, entropy, turnover, the rolling windows — is the entity's own: for a session, what
+    this conversation is doing. The baseline that `lift` divides by comes from `baseline_ev`,
+    normally the whole history of the repositories the entity touches. Scoped to a session it has
+    to: at 74 minutes old a transcript's own history IS the window, so every lift collapsed to
+    x1.0 and the column carried no information, while the repository's history at the same moment
+    put the branch at x33.6 and the file at x64.3. "Unusual" is only meaningful against a
+    yardstick longer than the thing being measured.
     """
     ev = ev[ev.kind == "ref"].copy()
     freq = pd.Timedelta(hours=bin_h)
@@ -356,6 +366,52 @@ def build_frames(ev, bin_h, outdir):
 
     refs["share"] = refs.n / refs.lvl_n
     refs["base_share"] = refs.cum_n / refs.cum_lvl          # causal: history up to this bin
+    refs["base_scope"] = "entity"
+    if baseline_ev is not None and scope_map:
+        # PER ENTITY, against the repositories that entity actually touches. Pooling every repo
+        # into one baseline would judge keld-atlas's Go against keld-signal's Go-heavy history,
+        # and pooling nothing would judge a 74-minute session against itself.
+        b_all = baseline_ev[baseline_ev.kind == "ref"].copy()
+        b_all["bin"] = b_all.ts.dt.floor(freq)
+        for c in ("level", "ref", "repo"):
+            b_all[c] = b_all[c].astype(str)
+        parts, hits, miss, base_tables = [], 0, 0, []
+        for entity, sub in refs.groupby("repo", sort=False):
+            scope = scope_map.get(entity) or {entity}
+            b = b_all[b_all.repo.isin(scope)]
+            if b.empty:
+                parts.append(sub)
+                miss += len(sub)
+                continue
+            br = (b.groupby(["level", "ref", "bin"], as_index=False).n.sum()
+                  .sort_values("bin").reset_index(drop=True))
+            bl = (br.groupby(["level", "bin"], as_index=False).n.sum()
+                  .rename(columns={"n": "b_lvl"}).sort_values("bin").reset_index(drop=True))
+            br["b_cum"] = br.groupby(["level", "ref"]).n.cumsum()
+            bl["b_cum_lvl"] = bl.groupby("level").b_lvl.cumsum()
+            br = br.merge(bl[["level", "bin", "b_cum_lvl"]], on=["level", "bin"], how="left")
+            br["base_share_scope"] = br.b_cum / br.b_cum_lvl
+            # As-of: a bin takes the newest baseline at or before it, never a later one.
+            m = pd.merge_asof(sub.sort_values("bin"),
+                              br[["level", "ref", "bin", "base_share_scope"]].sort_values("bin"),
+                              on="bin", by=["level", "ref"], direction="backward")
+            hit = m.base_share_scope.notna()
+            m.loc[hit, "base_share"] = m.loc[hit, "base_share_scope"]
+            m.loc[hit, "base_scope"] = ",".join(sorted(scope))
+            base_tables.append(br.assign(entity=entity)[["entity", "level", "ref", "bin",
+                                                         "base_share_scope"]])
+            hits += int(hit.sum())
+            miss += int((~hit).sum())
+            parts.append(m.drop(columns=["base_share_scope"]))
+        refs = pd.concat(parts, ignore_index=True)
+        if base_tables:
+            bt = pd.concat(base_tables, ignore_index=True)
+            bp = os.path.join(outdir, "baseline.parquet")
+            bt.to_parquet(bp, index=False)
+            print(f"  baseline  {bt.shape} -> {bp}")
+        print(f"  baseline: {hits} rows against their entity's own scope, {miss} fell back to "
+              f"the entity's history (a reference the scope had not seen at that bin)")
+        refs = refs.sort_values(["repo", "level", "ref", "bin"]).reset_index(drop=True)
     for w in ROLL:
         refs[f"share_{w}"] = refs[f"n_{w}"] / refs[f"lvl_{w}"]
         refs[f"lift_{w}"] = refs[f"share_{w}"] / refs.base_share
@@ -484,6 +540,171 @@ def at_view(args):
                 print(f"  {c:22} now {r[c]:10.2f}   1h {r.get(c + '_1h', float('nan')):10.2f}"
                       f"   24h {r.get(c + '_24h', float('nan')):10.2f}"
                       f"   z {r.get(c + '_z', float('nan')):6.2f}")
+
+
+RUNG_BAND = {"IDENTITY": "half-life >4wk — effectively constant",
+             "TOOLING": "half-life >4wk for the mix, though its events are high-frequency",
+             "BRANCH & SUBSYSTEM": "half-life 200-380h — days to weeks",
+             "WORKING SET": "half-life 5-24h — hours"}
+
+
+def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=None):
+    """The ground-truth statistics in play ACROSS a window, as a plain dict.
+
+    This is the context an LLM is given when it is asked a question about that transcript window.
+    It answers what the work was on, how concentrated it was, what was unusual about it, what
+    normally present thing was missing, and how the two participants were behaving — in counts,
+    from tool-call inputs and per-line metadata. No message text goes in, and nothing after
+    `end` is consulted, so a window can be characterised as it was seen at the time.
+    """
+    R = refs[(refs.repo == entity) & (refs.bin > start) & (refs.bin <= end)]
+    L = lvls[(lvls.repo == entity) & (lvls.bin > start) & (lvls.bin <= end)]
+    prior = refs[(refs.repo == entity) & (refs.bin <= start)]
+    mid = start + (end - start) / 2
+
+    out = {
+        "meta": {
+            "what": "ground-truth statistics in play across the transcript window below",
+            "derived_from": "tool-call inputs and per-line metadata (cwd, gitBranch, model) — "
+                            "never message text",
+            "causality": "every figure uses only observations at or before window.end",
+            "how_to_read": {
+                "share": "this reference's share of its level's events in the window",
+                "lift": "share in the window divided by the same reference's share across the "
+                        "whole prior history of the repositories this entity touches; >1 means "
+                        "unusually prominent right now, ~1 means business as usual",
+                "trend": "second half of the window against the first half",
+                "turnover": "1 - cosine similarity between consecutive bins' share vectors; "
+                            "0 = same mix as the bin before, 1 = no overlap",
+                "entropy": "bits over the level's share vector; 0 = one reference, higher = "
+                           "more scattered",
+                "absent_but_usual": "references that normally take >=" + f"{usual:.0%}" +
+                                    " of this level and did not appear in this window at all",
+            },
+        },
+        "window": {
+            "entity": str(entity),
+            "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "duration_h": round((end - start).total_seconds() / 3600.0, 2),
+            "active_bins": int(R.bin.nunique()),
+            "reference_events": int(R.n.sum()),
+        },
+        "rungs": {},
+    }
+    if R.empty:
+        out["window"]["note"] = "no reference observations in this window"
+        return out
+
+    for rung, levels in LADDER_RUNGS:
+        block = {"band": RUNG_BAND.get(rung, ""), "levels": {}}
+        for level in levels:
+            W = R[R.level == level]
+            if W.empty:
+                continue
+            tot = W.n.sum()
+            agg = W.groupby("ref", as_index=False).n.sum()
+            agg["share"] = agg.n / tot
+            last = (W.sort_values("bin").groupby("ref").tail(1)
+                    .set_index("ref")[["base_share", "gap_h", "n_24h"]])
+            agg = agg.join(last, on="ref").sort_values("share", ascending=False)
+            first_half = W[W.bin <= mid].groupby("ref").n.sum()
+            second_half = W[W.bin > mid].groupby("ref").n.sum()
+            f_tot, s_tot = max(first_half.sum(), 1), max(second_half.sum(), 1)
+
+            def trend(ref):
+                d = second_half.get(ref, 0) / s_tot - first_half.get(ref, 0) / f_tot
+                return "rising" if d > 0.05 else "falling" if d < -0.05 else "flat"
+
+            p = agg.share.to_numpy()
+            Ls = L[L.level == level]
+            entry = {
+                "events": int(tot),
+                "distinct_references": int(len(agg)),
+                "entropy_bits": round(float(abs(-(p * np.log2(np.where(p > 0, p, 1))).sum())), 2),
+                "turnover": (round(float(Ls.turnover.mean()), 2)
+                             if not Ls.turnover.dropna().empty else None),
+                "top": [],
+            }
+            for r in agg.head(topk).itertuples():
+                item = {"ref": r.ref, "share": round(float(r.share), 3),
+                        "events": int(r.n), "trend": trend(r.ref)}
+                if r.base_share == r.base_share and r.base_share > 0:
+                    item["lift"] = round(float(r.share / r.base_share), 1)
+                if r.gap_h == r.gap_h:
+                    item["hours_since_previously_seen"] = round(float(r.gap_h), 1)
+                entry["top"].append(item)
+            if len(agg) > topk:
+                rest = agg.iloc[topk:]
+                # Dropping must be visible: the tail is named as a tail, with its own share.
+                entry["remainder"] = {"references": int(len(rest)),
+                                      "share": round(float(rest.share.sum()), 3)}
+            # From the baseline scope's own vocabulary as of the window start, not from the
+            # entity's prior rows: a reference this session never touched has no row of its own
+            # to be missing from, and it is exactly the interesting case.
+            src = None
+            if base is not None and not base.empty:
+                b = base[(base.entity == entity) & (base.level == level) & (base.bin <= end)]
+                if not b.empty:
+                    src = (b.sort_values("bin").groupby("ref").tail(1)
+                           .set_index("ref").base_share_scope.dropna())
+            elif not prior.empty:
+                pl = prior[prior.level == level]
+                if not pl.empty:
+                    src = (pl.sort_values("bin").groupby("ref").tail(1)
+                           .set_index("ref").base_share.dropna())
+            if src is not None:
+                gone = src[(src >= usual) & (~src.index.isin(set(agg.ref)))]
+                if len(gone):
+                    entry["absent_but_usual"] = [
+                        {"ref": k, "usual_share": round(float(v), 3)}
+                        for k, v in gone.sort_values(ascending=False).head(4).items()]
+            block["levels"][level] = entry
+        if block["levels"]:
+            out["rungs"][rung.lower().replace(" & ", "_and_").replace(" ", "_")] = block
+
+    S = spk[(spk.repo == entity) & (spk.bin > start) & (spk.bin <= end)]
+    B = spk[spk.repo == entity]
+    if not S.empty:
+        def vs(col, value):
+            med = B[col].replace(0, np.nan).median()
+            if pd.isna(med) or med == 0 or pd.isna(value):
+                return None
+            return round(float(value / (med * len(S))), 2)
+        msgs, chars = S.user_msgs.sum(), S.user_chars.sum()
+        out["tempo"] = {
+            "engineer_messages": int(msgs),
+            "engineer_chars_per_message": (round(float(chars / msgs)) if msgs else None),
+            "engineer_short_message_share": (round(float(S.user_short_share.mean()), 2)
+                                             if S.user_short_share.notna().any() else None),
+            "engineer_burst_share": (round(float(S.user_burst_share.mean()), 2)
+                                     if S.user_burst_share.notna().any() else None),
+            "assistant_messages": int(S.asst_msgs.sum()),
+            "assistant_output_tokens": int(S.tok_out.sum()),
+            "vs_own_median": {"engineer_messages": vs("user_msgs", msgs),
+                              "assistant_messages": vs("asst_msgs", S.asst_msgs.sum()),
+                              "output_tokens": vs("tok_out", S.tok_out.sum())},
+        }
+        out["tempo"]["reading"] = (
+            "few engineer messages against many assistant messages and high output means work "
+            "proceeding unattended; many short engineer messages in bursts means close steering")
+    return out
+
+
+def context(args):
+    refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
+    lvls = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
+    spk = pd.read_parquet(os.path.join(args.outdir, "speaker.parquet"))
+    entity = args.repo or refs.repo.value_counts().idxmax()
+    end = pd.Timestamp(args.to, tz="UTC") if args.to else (
+        pd.Timestamp(args.at, tz="UTC") if args.at else refs[refs.repo == entity].bin.max())
+    start = (pd.Timestamp(getattr(args, "from"), tz="UTC") if getattr(args, "from")
+             else end - pd.Timedelta(args.span))
+    bpath = os.path.join(args.outdir, "baseline.parquet")
+    base = pd.read_parquet(bpath) if os.path.exists(bpath) else None
+    doc = characterize(refs, lvls, spk, entity, start, end, args.topk, base=base)
+    print(yaml.safe_dump(doc, sort_keys=False, width=100, allow_unicode=True,
+                         default_flow_style=False))
 
 
 def bar(x, width=10):
@@ -945,6 +1166,7 @@ def series(args):
     ev = pd.read_parquet(os.path.join(args.outdir, "events.parquet"))
     if args.repo:
         ev = ev[ev.repo == args.repo]
+    ev = ev.assign(scope_repo=ev.repo)
     if args.entity == "session":
         # Every frame keys on one entity column. Scoping to a session substitutes it, so the
         # rolling windows and expanding baselines are that transcript's own, not the repo's.
@@ -1153,7 +1375,16 @@ def series(args):
         print(f"  {name:8} {df.shape} -> {p}")
 
     print("\nmaterialising the indexable frames (rolling statistics as columns):")
-    build_frames(ev, args.bin, args.outdir)
+    base_ev, scope_map = None, None
+    if args.baseline == "repo":
+        # Every entity is baselined against the repositories IT touches, across all sessions —
+        # not against its own history, which for a young session is the window itself.
+        base_ev = pd.read_parquet(os.path.join(args.outdir, "events.parquet"))
+        scope_map = {str(k): set(g.scope_repo.dropna().unique())
+                     for k, g in ev.groupby("repo", sort=False)}
+        for k, v in scope_map.items():
+            print(f"  baseline scope for {k}: {', '.join(sorted(v)) or '(none)'}")
+    build_frames(ev, args.bin, args.outdir, base_ev, scope_map)
     build_speaker_frame(mt, args.bin, args.outdir)
 
 
@@ -1348,9 +1579,21 @@ def main():
     s.add_argument("--entity", choices=["repo", "session"], default="repo",
                    help="what the frames are keyed on and baselined against")
     s.add_argument("--session", default=None, help="restrict to one transcript (8-char id)")
+    s.add_argument("--baseline", choices=["repo", "entity"], default="repo",
+                   help="what `lift` is measured against: the repositories the entity touches "
+                        "across all sessions (default), or the entity's own history")
     s.add_argument("--windows", type=int, nargs="+", default=[6, 24, 168])
     s.add_argument("--detail", action="store_true")
     s.set_defaults(fn=series)
+    c = sub.add_parser("context")
+    c.add_argument("--outdir", default=OUTDIR)
+    c.add_argument("--repo", default=None, help="entity: a repo, or a session id")
+    c.add_argument("--at", default=None, help="window END (alias of --to)")
+    c.add_argument("--to", default=None)
+    c.add_argument("--from", default=None)
+    c.add_argument("--span", default="1h", help="window length when --from is not given")
+    c.add_argument("--topk", type=int, default=5)
+    c.set_defaults(fn=context)
     y = sub.add_parser("synopsis")
     y.add_argument("--outdir", default=OUTDIR)
     y.add_argument("--repo", default=None)
