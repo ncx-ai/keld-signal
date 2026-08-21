@@ -70,8 +70,15 @@ TWO_WORD = {"git", "go", "npm", "pnpm", "yarn", "uv", "pip", "python3", "python"
             "docker", "kubectl", "cargo", "gh", "systemctl", "launchctl", "brew", "poetry"}
 PATH_INPUTS = ("file_path", "notebook_path", "path")
 
-LEVELS = ["repo", "branch", "component", "dir", "file", "lang", "tool", "verb", "agent",
-          "skill", "model", "mcp_server", "mcp_tool"]
+LEVELS = ["repo", "branch", "component", "dir", "file", "ext", "lang", "tool", "exe", "verb",
+          "service", "agent", "skill", "model", "mcp_server", "mcp_tool"]
+
+# What the work REACHES OUT TO. Evidence-based only: a host that actually appears in a tool input,
+# never a service inferred from a CLI's name. Ports are dropped because a test harness binds a
+# random one every run and the vocabulary would be all noise; the host is the service.
+URL_HOST = re.compile(r"\bhttps?://(?:[^@/\s]*@)?([A-Za-z0-9._\-]+)", re.I)
+SSH_HOST = re.compile(r"\b(?:ssh|scp|rsync)\s+(?:-\S+\s+)*(?:[\w.\-]+@)?"
+                      r"([A-Za-z0-9.\-]+\.[A-Za-z0-9.\-]+|localhost)\b", re.I)
 MCP_TOOL = re.compile(r"^mcp__(?P<server>[^_]+(?:_[^_]+)*?)__(?P<tool>.+)$")
 SAY = ["user", "user_echo", "asst", "asst_think"]
 TOK = ["out", "in_fresh", "in_cached"]
@@ -128,7 +135,7 @@ def bash_refs(command):
     # same file appeared twice — once as services/api/tests/x.py from a tool input and once as
     # tests/x.py from the command — splitting its share between two names. Segments are walked in
     # order and a `cd` sets the prefix for everything after it.
-    verbs, paths, prefix = [], [], ""
+    verbs, exes, paths, prefix = [], [], [], ""
     for seg in re.split(r"[|;&\n]+|&&|\|\|", command or ""):
         # QUOTE-AWARE. Splitting on whitespace tears a quoted path apart at its spaces, and the
         # fragment then looks like a relative path and gets resolved under the repo root: a
@@ -144,11 +151,15 @@ def bash_refs(command):
             toks.pop(0)
         if not toks:
             continue
-        head = os.path.basename(toks[0])
+        exe = os.path.basename(toks[0])
+        head = exe
         if head in TWO_WORD and len(toks) > 1 and not toks[1].startswith("-"):
             head = f"{head} {toks[1]}"
-        if (head and head not in SHELL_KEYWORD and not head[0].isdigit()
-                and re.fullmatch(r"[\w.\- ]{1,40}", head)):
+        ok = (exe and exe not in SHELL_KEYWORD and not exe[0].isdigit()
+              and re.fullmatch(r"[\w.\-]{1,40}", exe))
+        if ok:
+            exes.append(exe)
+        if ok and re.fullmatch(r"[\w.\- ]{1,40}", head):
             verbs.append(head)
         if head == "cd" and len(toks) > 1 and not toks[1].startswith("-"):
             target = toks[1].strip("'\"")
@@ -165,7 +176,16 @@ def bash_refs(command):
                 if prefix and not q.startswith("/"):
                     q = os.path.normpath(os.path.join(prefix, q))
                 paths.append(q)
-    return verbs, paths
+    return verbs, exes, paths
+
+
+def services_in(text):
+    """Hosts named in a command or a tool argument."""
+    if not text:
+        return []
+    out = [m.group(1).lower().split(":")[0] for m in URL_HOST.finditer(text)]
+    out += [m.group(1).lower() for m in SSH_HOST.finditer(text)]
+    return [h for h in out if h and not h.endswith(".") and h != "-"]
 
 
 def text_of(content):
@@ -282,6 +302,7 @@ def reconcile(pending, component_depth):
         b = tuple(b)
         if is_file:
             rows.append(b + ("ref", "file", rel, 1.0))
+            rows.append(b + ("ref", "ext", ext or "(no extension)", 1.0))
             if ext in EXT_LANG:
                 rows.append(b + ("ref", "lang", EXT_LANG[ext], 1.0))
         if d:
@@ -551,8 +572,9 @@ def at_view(args):
                       f"   z {r.get(c + '_z', float('nan')):6.2f}")
 
 
-PATH_LEVELS = ("component", "dir", "file", "lang")
-RUNG_BAND = {"IDENTITY": "half-life >4wk — effectively constant",
+PATH_LEVELS = ("component", "dir", "file", "ext", "lang")
+RUNG_BAND = {"SERVICES": "what the work reached out to, from hosts named in tool inputs",
+             "IDENTITY": "half-life >4wk — effectively constant",
              "TOOLING": "half-life >4wk for the mix, though its events are high-frequency",
              "BRANCH & SUBSYSTEM": "half-life 200-380h — days to weeks",
              "WORKING SET": "half-life 5-24h — hours"}
@@ -883,9 +905,8 @@ def window(args):
                                 # to break on, which is precisely the false-identifier case.
                                 arg = inp["file_path"]
                             elif name == "Bash":
-                                verbs, paths = bash_refs(inp.get("command"))
-                                arg = "; ".join(dict.fromkeys(verbs)[:4] if False
-                                                else list(dict.fromkeys(verbs))[:4])
+                                verbs, _exes, paths = bash_refs(inp.get("command"))
+                                arg = "; ".join(list(dict.fromkeys(verbs))[:4])
                                 if paths:
                                     arg += f" · {len(paths)} path{'s' if len(paths) > 1 else ''}"
                             else:
@@ -1057,19 +1078,31 @@ def extract(args):
                             add("ref", "tool", "mcp:" + m["tool"], 1)
                             add("ref", "mcp_server", m["server"], 1)
                             add("ref", "mcp_tool", m["tool"], 1)
+                            # The server id is a uuid; the tool name carries the recognisable
+                            # service ("notion-fetch" -> notion), which is what a reader needs.
+                            add("ref", "service", "mcp:" + m["tool"].split("-")[0].split("_")[0],
+                                1)
                         else:
                             add("ref", "tool", name, 1)
                         if name == "Agent" and inp.get("subagent_type"):
                             add("ref", "agent", inp["subagent_type"], 1)
                         if name == "Skill" and inp.get("skill"):
                             add("ref", "skill", inp["skill"], 1)
+                        for host in dict.fromkeys(
+                                services_in(" ".join(v for v in (inp.get("command"),
+                                                                 inp.get("url"),
+                                                                 inp.get("query"))
+                                                     if isinstance(v, str)))):
+                            add("ref", "service", host, 1)
                         for k in PATH_INPUTS:
                             if isinstance(inp.get(k), str):
                                 paths.append((inp[k], True))     # a tool's file_path IS a file
                         if name == "Bash":
-                            verbs, bp = bash_refs(inp.get("command"))
+                            verbs, exes, bp = bash_refs(inp.get("command"))
                             for v in verbs:
                                 add("ref", "verb", v, 1)
+                            for e in dict.fromkeys(exes):
+                                add("ref", "exe", e, 1)
                             paths += [(q, False) for q in bp]
                 for p, from_input in paths:
                     rel = rel_within(p, root_dir, o.get("cwd"))
@@ -1461,8 +1494,9 @@ def series(args):
 # both sit at >4wk but answer different questions — what the work IS against how it is DONE — so
 # they are separate rows in the synopsis and would be separate payloads in a prompt.
 LADDER_RUNGS = [
-    ("IDENTITY", ["repo", "model", "lang"]),
-    ("TOOLING", ["tool", "verb", "agent", "skill", "mcp_server", "mcp_tool"]),
+    ("IDENTITY", ["repo", "model", "lang", "ext"]),
+    ("TOOLING", ["tool", "exe", "verb", "agent", "skill", "mcp_server", "mcp_tool"]),
+    ("SERVICES", ["service"]),
     ("BRANCH & SUBSYSTEM", ["branch", "component"]),
     ("WORKING SET", ["dir", "file"]),
 ]
