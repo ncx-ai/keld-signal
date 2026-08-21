@@ -1012,6 +1012,18 @@ def executive(doc):
         it = top(level, i)
         return f"{100*it['share']:.0f}%" if it else None
 
+    def distinctive(level, min_share=0.05, min_events=3):
+        """The most UNUSUAL reference at a level, not the largest.
+
+        `read` took the action slot in 20 of 21 consecutive headlines: an agent reads far more than
+        it writes, so the largest share is a constant and a constant carries no information about
+        the hour. Ranking by lift surfaces the act that distinguishes this window — commit, test,
+        convert a document — with a floor on share and events so a single stray call cannot win."""
+        items = L.get(level, {}).get("top", [])
+        ok = [i for i in items
+              if i["share"] >= min_share and i["events"] >= min_events and i.get("lift")]
+        return max(ok, key=lambda i: i["lift"]) if ok else (items[0] if items else None)
+
     sents, facts = [], []
     start = pd.Timestamp(w["start"]).strftime("%d %b %H:%M")
     end = pd.Timestamp(w["end"]).strftime("%H:%M")
@@ -1054,6 +1066,9 @@ def executive(doc):
         if act:
             acts = [i["ref"] for i in L["action"]["top"][:3]]
             bit += ", mostly " + ", ".join(acts)
+            d = distinctive("action")
+            if d and d["ref"] not in acts[:1] and (d.get("lift") or 0) >= 3:
+                bit += f", and distinctively {d['ref']} ({d['lift']:g}x its usual share)"
         tc = top("toolchain")
         if tc:
             bit += f", using {', '.join(i['ref'] for i in L['toolchain']['top'][:2])} tooling"
@@ -1117,11 +1132,18 @@ def executive(doc):
             if it.get("lift") is not None and (it["lift"] >= 2 or it["lift"] <= 0.5):
                 f += f" (x{it['lift']:g} usual)"
             facts.append(f)
-    head = " · ".join(x for x in (
-        w.get("repo_of_cwd"), name("artifact"), name("action"), name("component"),
-        name("skill") if not name("artifact") else None,
-        name("branch")) if x)
-    return {"headline": head or "activity recorded",
+    # Fixed slots with an explicit placeholder, so headlines stay comparable across windows: a
+    # level silently dropping out used to shift every later slot leftwards and change the shape
+    # of the line.
+    da = distinctive("action")
+    slots = [w.get("repo_of_cwd"), name("artifact"),
+             (f"{da['ref']}" + (f" x{da['lift']:g}" if (da.get("lift") or 0) >= 3 else "")
+              if da else None),
+             name("component"), name("branch")]
+    head = " · ".join(x if x else "—" for x in slots)
+    return {"headline": head,
+            "headline_format": "repo · artifact · distinctive action (by lift) · subsystem · "
+                               "branch; — means that level saw nothing in this window",
             "summary": Para(" ".join(sents)),
             "key_facts": facts,
             "basis": "counts of tool-call references and per-line metadata only; no message "
