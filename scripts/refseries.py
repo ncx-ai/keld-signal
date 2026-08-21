@@ -46,6 +46,15 @@ import numpy as np
 import pandas as pd
 import yaml
 
+
+class Para(str):
+    """A string YAML should emit as a literal block, so prose stays readable."""
+
+
+yaml.add_representer(Para, lambda d, x: d.represent_scalar("tag:yaml.org,2002:str", str(x),
+                                                           style="|"),
+                     Dumper=yaml.SafeDumper)
+
 OUTDIR = "/tmp/refseries"
 CLAUDE_ROOTS = [os.path.expanduser("~/.claude/projects")]
 REPO_ROOT = os.path.expanduser("~/keld")
@@ -753,6 +762,221 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
     return out
 
 
+THIN = 8            # a level resting on fewer events than this is called out as thin
+
+
+def digest(doc):
+    """Compress a characterisation to the lines that carry it.
+
+    Derived from the full document rather than computed separately, so the two can never disagree
+    — the digest is a projection, not a second implementation. Roughly a tenth the size: what the
+    work was on, what is unusual about it, what is missing, and how the pair were working.
+    """
+    w = doc.get("window", {})
+    if not doc.get("rungs"):
+        return {"window": f"{w.get('entity')} {w.get('start')}..{w.get('end')} — "
+                          f"no reference observations"}
+
+    def pick(level_block, k=3):
+        parts = []
+        for it in level_block.get("top", [])[:k]:
+            bit = f"{it['ref']} {100*it['share']:.0f}%"
+            lift = it.get("lift")
+            if lift is not None and (lift >= 2 or lift <= 0.5):
+                bit += f" (x{lift:g}"
+                bit += f", {it['trend']})" if it["trend"] != "flat" else ")"
+            elif it["trend"] != "flat":
+                bit += f" ({it['trend']})"
+            if it.get("repo") and len(w.get("repos_whose_files_were_touched", [])) > 1:
+                bit += f" [{it['repo']}]"
+            parts.append(bit)
+        rem = level_block.get("remainder")
+        if rem:
+            parts.append(f"+{rem['references']} more = {100*rem['share']:.0f}%")
+        return " | ".join(parts)
+
+    levels = {lv: blk for r in doc["rungs"].values() for lv, blk in r["levels"].items()}
+    head = (f"{w['entity']} {w['start'][:16]}Z..{w['end'][11:16]}Z  "
+            f"{w['duration_h']}h  {w['reference_events']} refs  cwd={w.get('repo_of_cwd')}")
+    touched = w.get("repos_whose_files_were_touched") or []
+    if len(touched) > 1:
+        head += f"  files-in={'+'.join(touched)}"
+    out = {"window": head, "work": {}, "tooling": {}}
+
+    for key, level in (("branch", "branch"), ("subsystem", "component"), ("files", "file"),
+                       ("types", "ext")):
+        if level in levels:
+            out["work"][key] = pick(levels[level], 4 if level == "file" else 3)
+    for key, level in (("tools", "tool"), ("programs", "exe"), ("skills", "skill"),
+                       ("services", "service"), ("subagents", "agent")):
+        if level in levels:
+            out["tooling"][key] = pick(levels[level])
+    for k in ("work", "tooling"):
+        if not out[k]:
+            del out[k]
+
+    # The two negative signals, consolidated: what is unusually prominent, and what is missing.
+    notable = []
+    for lv, blk in levels.items():
+        for it in blk.get("top", []):
+            if (it.get("lift") or 0) >= 3:
+                notable.append((it["lift"], f"{lv} {it['ref']} x{it['lift']:g}"))
+    if notable:
+        out["unusually_prominent"] = [t for _, t in sorted(notable, reverse=True)[:6]]
+    gone = [(a["usual_share"], f"{lv} {a['ref']} (usually {100*a['usual_share']:.0f}%)")
+            for lv, blk in levels.items() for a in blk.get("absent_but_usual", [])]
+    if gone:
+        out["absent_but_usual"] = [t for _, t in sorted(gone, reverse=True)[:6]]
+    thin = [f"{lv} ({blk['events']})" for lv, blk in levels.items() if blk["events"] < THIN]
+    if thin:
+        out["thin_evidence"] = ("levels resting on very few events; treat their shares as "
+                                "indicative only: " + ", ".join(sorted(thin)))
+
+    t = doc.get("tempo")
+    if t:
+        vs = t.get("vs_own_median", {})
+        out["tempo"] = (
+            f"engineer {t['engineer_messages']} msgs"
+            + (f" (x{vs['engineer_messages']:g} own median)" if vs.get("engineer_messages") else "")
+            + (f", {t['engineer_chars_per_message']} chars each"
+               if t.get("engineer_chars_per_message") else "")
+            + (f", {100*t['engineer_short_message_share']:.0f}% short"
+               if t.get("engineer_short_message_share") else "")
+            + f"; assistant {t['assistant_messages']} msgs, "
+              f"{t['assistant_output_tokens']/1000:.0f}k output tokens")
+        ratio = (t["assistant_messages"] / t["engineer_messages"]
+                 if t["engineer_messages"] else None)
+        if ratio:
+            out["tempo"] += (f"  -> {'unattended execution' if ratio >= 15 else 'close steering'}"
+                             f" ({ratio:.0f} assistant turns per engineer turn)")
+    out["basis"] = ("counts of tool-call references in [start,end); shares are of the level; "
+                    "lift is against the prior history of " +
+                    "+".join(w.get("lift_baseline_scope", [])) + "; no message text")
+    return out
+
+
+def executive(doc):
+    """An executive summary: what happened in this window, in sentences.
+
+    Assembled deterministically from the same characterisation the full document reports — no
+    model, no adjectives that are not backed by a figure. Each clause is dropped when the number
+    behind it is missing, so the summary never asserts anything the data did not carry.
+    """
+    w = doc.get("window", {})
+    if not doc.get("rungs"):
+        return {"headline": "no recorded activity",
+                "summary": f"Transcript {w.get('entity')} has no reference observations between "
+                           f"{w.get('start')} and {w.get('end')}."}
+    L = {lv: blk for r in doc["rungs"].values() for lv, blk in r["levels"].items()}
+    t = doc.get("tempo") or {}
+
+    def top(level, i=0):
+        items = L.get(level, {}).get("top", [])
+        return items[i] if len(items) > i else None
+
+    def name(level, i=0):
+        it = top(level, i)
+        return it["ref"] if it else None
+
+    def pctf(level, i=0):
+        it = top(level, i)
+        return f"{100*it['share']:.0f}%" if it else None
+
+    sents, facts = [], []
+    start = pd.Timestamp(w["start"]).strftime("%d %b %H:%M")
+    end = pd.Timestamp(w["end"]).strftime("%H:%M")
+    where = f"in {w.get('repo_of_cwd')}" if w.get("repo_of_cwd") else ""
+    touched = w.get("repos_whose_files_were_touched") or []
+    cross = (f", though the files it touched span {' and '.join(touched)}"
+             if len(touched) > 1 else "")
+    sents.append(f"{start}–{end}Z, {w['duration_h']}h of transcript {w['entity']} {where}"
+                 f"{cross}, on {w['reference_events']} recorded references.")
+
+    br = L.get("branch", {})
+    if br.get("top"):
+        n = len([i for i in br["top"] if i["share"] >= 0.15])
+        lead = ", ".join(f"{i['ref']} ({100*i['share']:.0f}%)" for i in br["top"][:2])
+        sents.append(f"{'Two branches carried it' if n > 1 else 'One branch carried it'}: {lead}."
+                     if n else f"Branch activity was spread thinly, led by {lead}.")
+    comp, ext = top("component"), top("ext")
+    if comp:
+        bit = f"The work sat mainly in {comp['ref']} ({100*comp['share']:.0f}% of subsystem hits)"
+        c2 = top("component", 1)
+        if c2 and c2["share"] >= 0.15:
+            bit += f", then {c2['ref']} ({100*c2['share']:.0f}%)"
+        if ext:
+            bit += f", and the files were mostly {ext['ref']} ({100*ext['share']:.0f}%)"
+            e2 = top("ext", 1)
+            if e2 and e2["share"] >= 0.15:
+                bit += f" with {e2['ref']} at {100*e2['share']:.0f}%"
+        sents.append(bit + ".")
+    elif ext:
+        sents.append(f"Files touched were {ext['ref']} ({100*ext['share']:.0f}%).")
+
+    tl, ex = top("tool"), top("exe")
+    if tl or ex:
+        bits = []
+        if tl:
+            names = [i["ref"] for i in L["tool"]["top"][:3]]
+            bits.append("tools " + ", ".join(names))
+        if ex:
+            names = [i["ref"] for i in L["exe"]["top"][:3]]
+            bits.append(f"{L['exe']['distinct_references']} distinct programs, mostly "
+                        + ", ".join(names))
+        sents.append("Worked through " + "; ".join(bits) + ".")
+    sv = top("service")
+    if sv:
+        names = [i["ref"] for i in L["service"]["top"][:3]]
+        sents.append("Reached " + ", ".join(names) + ".")
+
+    sk = top("skill")
+    if sk:
+        bit = f"The dominant named activity was {sk['ref']} at {100*sk['share']:.0f}% of skill "
+        bit += "invocations"
+        if (sk.get("lift") or 0) >= 2:
+            bit += f", {sk['lift']:g}x its usual share"
+        sents.append(bit + ".")
+    absent = [a for lv in ("skill", "branch", "component", "ext")
+              for a in L.get(lv, {}).get("absent_but_usual", [])]
+    if absent:
+        absent = sorted(absent, key=lambda a: -a["usual_share"])[:3]
+        sents.append("Normally present and missing here: " +
+                     ", ".join(f"{a['ref']} (usually {100*a['usual_share']:.0f}%)"
+                               for a in absent) + ".")
+
+    if t.get("assistant_messages") is not None:
+        em, am = t.get("engineer_messages", 0), t["assistant_messages"]
+        ratio = am / em if em else None
+        mode = ("largely unattended" if ratio and ratio >= 15
+                else "closely steered" if ratio and ratio <= 5 else "mixed")
+        bit = (f"{em} engineer message{'s' if em != 1 else ''} against {am} assistant "
+               f"message{'s' if am != 1 else ''} and "
+               f"{t.get('assistant_output_tokens', 0)/1000:.0f}k output tokens")
+        if ratio:
+            bit += f" — {ratio:.0f} assistant turns per engineer turn, {mode}"
+        sents.append(bit + ".")
+
+    thin = [f"{lv} ({blk['events']} events)" for lv, blk in L.items() if blk["events"] < THIN]
+    if thin:
+        sents.append("Thin evidence, shares indicative only: " + ", ".join(sorted(thin)) + ".")
+
+    for level, label in (("branch", "branch"), ("component", "subsystem"), ("file", "top file"),
+                         ("ext", "file type"), ("skill", "skill"), ("service", "service")):
+        it = top(level)
+        if it:
+            f = f"{label}: {it['ref']} {100*it['share']:.0f}%"
+            if it.get("lift") is not None and (it["lift"] >= 2 or it["lift"] <= 0.5):
+                f += f" (x{it['lift']:g} usual)"
+            facts.append(f)
+    head = " · ".join(x for x in (name("component"), name("skill"),
+                                  (f"{name('branch')}" if L.get("branch") else None)) if x)
+    return {"headline": head or "activity recorded",
+            "summary": Para(" ".join(sents)),
+            "key_facts": facts,
+            "basis": "counts of tool-call references and per-line metadata only; no message "
+                     "text; window is [start, end) and no later data is used"}
+
+
 def context(args):
     refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
     lvls = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
@@ -765,7 +989,11 @@ def context(args):
     bpath = os.path.join(args.outdir, "baseline.parquet")
     base = pd.read_parquet(bpath) if os.path.exists(bpath) else None
     doc = characterize(refs, lvls, spk, entity, start, end, args.topk, base=base)
-    print(yaml.safe_dump(doc, sort_keys=False, width=100, allow_unicode=True,
+    if args.digest:
+        doc = executive(doc)
+    elif args.brief:
+        doc = digest(doc)
+    print(yaml.safe_dump(doc, sort_keys=False, width=110, allow_unicode=True,
                          default_flow_style=False))
 
 
@@ -1667,6 +1895,10 @@ def main():
     c.add_argument("--from", default=None)
     c.add_argument("--span", default="1h", help="window length when --from is not given")
     c.add_argument("--topk", type=int, default=5)
+    c.add_argument("--digest", action="store_true",
+                   help="executive summary: what happened, in sentences")
+    c.add_argument("--brief", action="store_true",
+                   help="compact structured view, one line per level")
     c.set_defaults(fn=context)
     y = sub.add_parser("synopsis")
     y.add_argument("--outdir", default=OUTDIR)
