@@ -879,6 +879,108 @@ RUNG_BAND = {"TOOLCHAIN": "the class of tooling used, from the programs invoked"
              "WORKING SET": "half-life 5-24h — hours"}
 
 
+def episodes(refs, entity, watch=("branch", "component"), debounce=2, max_gap_h=1.0,
+             max_span_h=6.0):
+    """Windows aligned to EPISODES of work rather than to the wall clock.
+
+    An hourly tiling splits work at an arbitrary mark. Measured on one transcript: a branch switch
+    at :45 gives the incoming branch 15 minutes of a 60-minute window, so the outgoing branch
+    outvotes it and the hourly summary names the WRONG branch for that hour — not a coarser truth,
+    an inverted one. A 15-minute stride finds 6 branches where hourly tiling finds 5, so an entire
+    branch was invisible. But emitting overlapping windows instead trades that for redundancy and
+    for windows that are no longer independent samples. So the stride is used to find the
+    BOUNDARIES, and the windows are cut there.
+
+    A boundary is one of three things, and each carries its reason:
+
+      a persistent change of state — the top reference of a watched level changes and STAYS
+        changed for `debounce` bins. Without the debounce this is groupby(top1), and a single-bin
+        excursion — a stray command against another branch — shatters an episode.
+      a long idle — `max_gap_h` between consecutive active bins. Someone stopped and came back.
+      the length cap — `max_span_h`, so an unbroken day on one branch is still divided.
+
+    A level with NO row in a bin is missing evidence, not a change: the carried state stands. The
+    episodes partition the active bins exactly — every bin in one, no bin in two.
+    """
+    d = refs[refs.repo == entity]
+    if d.empty:
+        return []
+    bins = sorted(pd.unique(d.bin))
+    # top reference per (level, bin), from the counts — the same rule the tables use.
+    top = {}
+    for lvl in watch:
+        sub = d[d.level == lvl]
+        if sub.empty:
+            continue
+        pick = sub.sort_values("n").groupby("bin").tail(1)
+        top[lvl] = dict(zip(pick.bin, pick.ref))
+    carried, states = {}, []
+    for b in bins:
+        for lvl in watch:
+            v = top.get(lvl, {}).get(b)
+            if v is not None:
+                carried[lvl] = v
+        states.append(tuple(carried.get(l) for l in watch))
+
+    events = d.groupby("bin").n.sum().to_dict()
+    out, start_i, pending, run, run_start = [], 0, None, 0, None
+    open_reason = ["start of the transcript"]
+
+    def close(end_i, why_next, next_start_i):
+        """Emit bins[start_i:end_i]; end is EXCLUSIVE. `why_next` opens the NEXT episode."""
+        seg = bins[start_i:end_i]
+        if not seg:
+            return next_start_i
+        out.append({"start": seg[0], "end": bins[end_i] if end_i < len(bins)
+                    else seg[-1] + (seg[-1] - seg[-2] if len(seg) > 1 else pd.Timedelta("15min")),
+                    "bins": len(seg), "events": float(sum(events.get(b, 0.0) for b in seg)),
+                    "state": {l: v for l, v in zip(watch, states[start_i]) if v is not None},
+                    "reason": open_reason[0]})
+        open_reason[0] = why_next
+        return next_start_i
+
+    def flush(i):
+        """Close an unconfirmed run that has reached a boundary anyway.
+
+        A change needs `debounce` bins to be believed MID-STREAM, where a one-bin excursion is a
+        stray command. But a run that is still pending when the work stops — an idle gap or the
+        length cap — is not an excursion, it is the end of the stretch, and absorbing it made an
+        episode carry a state its own last bin contradicted: 16:30–18:30 was labelled
+        feat/custom-pass-label-rules while its final bin was on main.
+        """
+        nonlocal start_i, pending, run, run_start
+        if pending is not None and run_start is not None and states[i - 1] == pending:
+            start_i = close(run_start, "state changed", run_start)
+            pending, run, run_start = None, 0, None
+
+    for i in range(1, len(bins)):
+        gap_h = (bins[i] - bins[i - 1]).total_seconds() / 3600.0
+        span_h = (bins[i] - bins[start_i]).total_seconds() / 3600.0
+        if gap_h > max_gap_h:
+            flush(i)
+            start_i = close(i, f"resumed after {gap_h:.1f}h idle", i)
+            pending, run, run_start = None, 0, None
+            continue
+        if states[i] != states[start_i]:
+            if states[i] == pending:
+                run += 1
+            else:
+                pending, run, run_start = states[i], 1, i
+            if run >= debounce:
+                start_i = close(run_start, "state changed", run_start)
+                pending, run, run_start = None, 0, None
+                continue
+        else:
+            pending, run, run_start = None, 0, None
+        if span_h >= max_span_h:
+            flush(i)
+            start_i = close(i, f"reached the {max_span_h:g}h cap", i)
+            pending, run, run_start = None, 0, None
+    flush(len(bins))
+    close(len(bins), "", len(bins))
+    return out
+
+
 def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=None):
     """The ground-truth statistics in play ACROSS a window, as a plain dict.
 
@@ -1092,7 +1194,8 @@ def digest(doc):
 
     levels = {lv: blk for r in doc["rungs"].values() for lv, blk in r["levels"].items()}
     head = (f"{w['entity']} {w['start'][:16]}Z..{w['end'][11:16]}Z  "
-            f"{w['duration_h']}h  {w['reference_events']} refs  cwd={w.get('repo_of_cwd')}")
+            f"{w['duration_h']}h  {w['reference_events']} refs  "
+            f"cwd={w.get('workspace_of_cwd')}")
     touched = w.get("workspaces_whose_files_were_touched") or []
     if len(touched) > 1:
         head += f"  files-in={'+'.join(touched)}"
@@ -1192,7 +1295,7 @@ def executive(doc):
     sents, facts = [], []
     start = pd.Timestamp(w["start"]).strftime("%d %b %H:%M")
     end = pd.Timestamp(w["end"]).strftime("%H:%M")
-    where = f"in {w.get('repo_of_cwd')}" if w.get("workspace_of_cwd") else ""
+    where = f"in {w.get('workspace_of_cwd')}" if w.get("workspace_of_cwd") else ""
     touched = w.get("workspaces_whose_files_were_touched") or []
     cross = (f", though the files it touched span {' and '.join(touched)}"
              if len(touched) > 1 else "")
@@ -1307,6 +1410,10 @@ def executive(doc):
              name("component"), name("branch")]
     head = " · ".join(x if x else "—" for x in slots)
     return {"headline": head,
+            "window": {"entity": w.get("entity"), "start": w.get("start"), "end": w.get("end"),
+                       "duration_h": w.get("duration_h"),
+                       "workspace": w.get("workspace_of_cwd"),
+                       "reference_events": w.get("reference_events")},
             "headline_format": "workspace · artifact · distinctive action (by lift) · subsystem · "
                                "branch; — means that level saw nothing in this window",
             "summary": Para(" ".join(sents)),
@@ -1637,7 +1744,12 @@ def extract(args):
                     ws_cache[cwd_raw] = resolve_workspace(
                         cwd_raw, projdir, marker_dirs, cd_targets, args.repo_root)
                 root_dir_resolved, repo, ws_src, ws_conf = ws_cache[cwd_raw]
-                root_key = root_dir_resolved or ""
+                # The reconciliation scope is a MACHINE, not a checkout. Keying it on the resolved
+                # repo root made every repository its own scope, which silently disabled the
+                # cross-repo reattribution that moves keld-signal's files out of a keld-atlas
+                # session. The transcript collection it came from is the machine boundary: this
+                # machine's ~/.claude/projects against a colleague's export.
+                root_key = root
                 root_dir = root_dir_resolved
                 base = (round(t, 1), session, repo, o.get("gitBranch") or None,
                         bool(o.get("isSidechain")))
