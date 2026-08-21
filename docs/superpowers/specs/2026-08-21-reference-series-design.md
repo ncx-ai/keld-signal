@@ -264,40 +264,62 @@ and a subsystem is exactly the kind of fact a context ladder wants on a slow run
 Four rungs, boundaries taken from the bands above, each roughly an order of magnitude apart:
 ~700h, ~250h, ~10h, ~1h.
 
-| rung | levels | measured band | refresh | payload |
-|---|---|---|---|---|
-| **IDENTITY** | `repo`, `lang`, `model`, `tool` | 116h – >4wk | once per session | top 3 with shares |
-| **BRANCH & SUBSYSTEM** | `branch`, `component` | 32 – 380h | on branch/component change, clock backstop at 0.5x half-life | top 4 with shares |
-| **WORKING SET** | `dir`, `file` | 4 – 24h | per window | top 5 with shares |
-| **TEMPO** | speaker channels | ~1h | per window | one line, relative to this person's own baseline |
+| rung | levels | measured band | what the rung answers |
+|---|---|---|---|
+| **IDENTITY** | `repo`, `lang`, `model`, `tool` | 116h – >4wk | what this machine's work is, always |
+| **BRANCH & SUBSYSTEM** | `branch`, `component` | 32 – 380h | where the work is situated |
+| **WORKING SET** | `dir`, `file` | 4 – 24h | what is open right now |
+| **TEMPO** | speaker channels | ~1h | how the person is working, not what on |
 
-**Every rung's lookback and staleness budget is read from `levels.parquet`, not written in the
-code.** That is the design, not an implementation detail: `component` is 380h in keld-atlas and
-32h in keld-signal, so any single hard-coded interval is wrong for one of them. A repo with a
-different rhythm self-tunes.
+The rung is named after its contents rather than after a concept, deliberately: a conceptual name
+here collided with reserved product terminology in Atlas, and naming a rung for what it holds
+cannot collide with anything.
 
-* **Lookback** = that level's own half-life, clamped to the series span. A rung summarises the
-  window over which its composition is still half-true.
-* **Staleness budget** = 0.5 x half-life. Inside it, the carried value is stated with its age
-  (`[as of 6h ago]`). Past it, the value is still carried but explicitly labelled
-  (`[CARRIED 40h — past 0.5x its 32h half-life, treat as aged]`). It is never silently kept and
-  never silently dropped: the same rule as `omittedNotice`, applied to context instead of text.
-* **Shares, not bare lists.** `scripts 57%, windows 28%` says what dominates; a list of names
-  does not.
-* **Identifiers are never truncated** (AGENTS.md). Whole terms are dropped and the count is
-  stated — `(+5 more not shown)` — because a path cut short is a false path.
-* **Every rung is a known fact** from `cwd`, `gitBranch` and tool inputs. Nothing on the ladder
-  is inferred, which is the handoff's ask-the-facts-first rule extended along the time axis: the
-  facts the pipeline already holds, held at the rate each one actually changes.
+### The half-life groups the rungs. It does NOT set the runtime thresholds.
 
-Why IDENTITY and BRANCH & SUBSYSTEM are separate rungs despite being only 2–3x apart: their
-refresh is different in kind, not just in period. Identity cannot change within a repo. The
-branch-and-subsystem rung changes on an **event** — the engineer switches branch or subsystem —
-with the clock only as a backstop.
+An earlier version of this design took each rung's lookback and staleness budget from the
+measured half-life — "refresh when older than 0.5 x 32h". That was the wrong use of the
+measurement, for three reasons:
 
-The rung is named after its contents rather than after a concept, deliberately: a conceptual
-name here collided with reserved product terminology in Atlas, and naming a rung for what it
-holds cannot collide with anything.
+* **A half-life is a summary of a distribution of change rates**, so using it as a per-decision
+  threshold applies a 34-day average to a specific moment. During a focused three-hour stretch on
+  one file the `file` level is *stable*; during a sweeping refactor it turns over every ten
+  minutes. One fitted number cannot express either.
+* **It is backward-looking by construction** — measured on history, applied to now.
+* **It would need refitting per repo forever.** `component` is 380h in keld-atlas and 32h in
+  keld-signal; any table of constants is a maintenance burden that the live series makes
+  unnecessary.
+
+So the half-life keeps exactly one job — deciding which levels sit on the same rung, a question
+about the population, answered once — and **nothing at runtime reads it**. What the ladder reads
+instead, per level, at the moment it is asked:
+
+* **An event clock, not a wall clock.** The window is *the last N observations of this level*,
+  however long that took. A fixed-hours window mis-serves both a burst and an idle stretch;
+  N observations is the same amount of evidence either way, and it needs no gap handling at all.
+  The window's *span* then becomes a signal in its own right: when the last 40 `file` observations
+  reach back 37 hours, the working set is barely alive, and the series says so without being
+  asked.
+* **Lift** — a reference's share in that window against its share across all history. 55% now
+  versus 3% usually is the current focus; 5% now versus 5% usually is background. This is the
+  relative level, read directly.
+* **Trend** — the recent half of the window against the older half, by event count. Rising,
+  steady, or falling, measured *inside* the window rather than against a baseline.
+* **Liveness** — wall-clock age of the last observation against the median gap between this
+  level's own recent observations. "Quiet for 5x its usual gap" is local and self-normalising;
+  "past 0.5x its 32h half-life" is not.
+* **Pace** — how long the last N observations took against how long they usually take. `0.01x its
+  usual pace` is a level that has almost stopped.
+
+The only knobs left are shape parameters — how many observations make a window (`--events`), what
+share is worth printing (`--min-share`), how many terms to show (`--topk`) — not per-level
+constants fitted to a corpus.
+
+Two reporting rules survive unchanged, because they are about honesty rather than thresholds:
+**identifiers are never truncated** (whole terms are dropped and the count stated, since a path
+cut short is a false path), and a reference that is *absent* from the window is named with the
+baseline it is being compared against — `main (all-history 75%)`, not `was 75%`, which would
+invent a transition that never happened.
 
 Rates and turnover stay OUT of the injected context. They are anomaly-detection signals about the
 series, not facts about the work.

@@ -59,8 +59,8 @@ def plausible_path(tok):
     """A slash and a dotted extension, and no segment that is only digits. Measured against the
     alternative: without this, the top `dir` references included `chars/msg` and `0/20`, and the
     top `file` references included `r.h` — all three quoted out of our own command text."""
-    return bool(PLAUSIBLE_PATH.match(tok)) and not any(
-        seg.isdigit() for seg in tok.split("/"))
+    return (bool(PLAUSIBLE_PATH.match(tok)) and ".." not in tok
+            and not any(seg.isdigit() for seg in tok.split("/")))
 ENVVAR = re.compile(r"^[A-Z_][A-Z0-9_]*=")
 SHELL_KEYWORD = {"if", "then", "fi", "else", "elif", "for", "do", "done", "while", "until",
                  "case", "esac", "in", "function", "return", "local", "declare", "read",
@@ -101,14 +101,21 @@ def repo_of(cwd, repo_roots):
     return os.path.basename(cwd.rstrip("/")) or None
 
 
-def rel_within(path, root):
-    """The path relative to the repo, or None if it points outside it — a file in ~/.claude is
-    not this repo's work."""
+def rel_within(path, root, cwd=None):
+    """The path relative to the repo, or None if it points outside it — a file in ~/.claude is not
+    this repo's work.
+
+    A RELATIVE path is resolved against the line's own cwd first. Without that,
+    `components/labels/x.tsx` typed from services/web is a different reference from
+    `services/web/components/labels/x.tsx`, and the same file splits its own share in two."""
     if not path or not root:
         return None
     p = WORKTREE.sub("", path)
     if not p.startswith("/"):
-        return p.lstrip("./") or None
+        if cwd:
+            p = os.path.normpath(os.path.join(WORKTREE.sub("", cwd), p))
+        else:
+            return p.lstrip("./") or None
     root = root.rstrip("/") + "/"
     return p[len(root):] if p.startswith(root) else None
 
@@ -272,7 +279,7 @@ def extract(args):
                                 add("ref", "verb", v, 1)
                             paths += [(q, False) for q in bp]
                 for p, from_input in paths:
-                    rel = rel_within(p, root_dir)
+                    rel = rel_within(p, root_dir, o.get("cwd"))
                     if not rel or rel.startswith("."):
                         continue
                     rel = rel.rstrip("/")
@@ -617,87 +624,158 @@ def series(args):
 
 # ---------------------------------------------------------------- the ladder
 #
-# Each rung carries the levels whose measured half-life puts them at the same natural frequency,
-# and every rung's LOOKBACK and STALENESS BUDGET are read out of levels.parquet rather than
-# written here. That is the whole point: the refresh interval is a measurement, and when a repo's
-# rhythm differs the ladder follows it without being re-tuned. keld-atlas holds a component for
-# ~330h and keld-signal for ~45h; one hard-coded interval would be wrong for one of them.
-RUNGS = [
-    ("IDENTITY   ", ["repo", "lang", "model", "tool"], 3),
-    ("BRANCH & SUBSYSTEM", ["branch", "component"], 4),
-    ("WORKING SET", ["dir", "file"], 5),
+# The ladder decides, at a point in time, what is at a HIGH LEVEL and what is background — read
+# off the series itself, not off a fitted constant.
+#
+# An earlier version set each rung's lookback and staleness budget from the corpus half-life
+# (0.5 x 32h, and so on). That was the wrong use of that measurement. A half-life is a summary of
+# a DISTRIBUTION of change rates, so using it as a per-decision threshold applies a 34-day
+# average to a specific moment: during a focused three-hour stretch on one file the file level is
+# stable, during a sweeping refactor it turns over every ten minutes, and one number cannot
+# express either. It is also backward-looking by construction — measured on history, applied to
+# now — and it would need refitting per repo forever.
+#
+# The half-life keeps exactly one job: deciding which levels belong on the same RUNG, which is a
+# question about the population and is answered once. Nothing below reads it at runtime.
+#
+# What is read instead, per level, per moment:
+#
+#   EVENT CLOCK   the window is "the last N observations of this level", however long that took.
+#                 A wall-clock window mis-serves both a burst and an idle stretch; N observations
+#                 is the same amount of evidence either way, and it needs no gap handling at all.
+#   LIFT          a reference's share in that window over its share across all history. 55% now
+#                 against 3% usually is the current focus; 5% now against 5% usually is
+#                 background. This is the "relative level" the rung exists to report.
+#   TREND         the recent half of the window against the older half, by event count — rising,
+#                 steady or falling, measured inside the window rather than against a baseline.
+#   LIVENESS      wall-clock age of the last observation against the MEDIAN GAP between this
+#                 level's own recent observations. "Quiet for 5x its usual gap" is a local,
+#                 self-normalising statement; "past 0.5x its 32h half-life" is not.
+#
+# The only knobs are shape parameters — how many observations make a window, what share is worth
+# showing — not per-level constants fitted to a corpus.
+LADDER_RUNGS = [
+    ("IDENTITY", ["repo", "lang", "model", "tool"]),
+    ("BRANCH & SUBSYSTEM", ["branch", "component"]),
+    ("WORKING SET", ["dir", "file"]),
 ]
-# Carry a rung until it has aged past this fraction of its own half-life, then say so out loud.
-STALE_FRACTION = 0.5
+QUIET_GAPS = 3.0        # age > this many typical gaps = the level has gone quiet
+NEW_LIFT = 2.5          # lift above this = elevated well beyond its own baseline
+
+
+def _tail_by_events(d, n_events):
+    """The last n_events observations, however long they took. Returns the slice in time order."""
+    r = d.iloc[::-1]
+    c = r.n.cumsum()
+    win = r[c <= n_events]
+    if win.empty:
+        win = r.head(1)
+    return win.iloc[::-1]
 
 
 def ladder(args):
-    lv = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
     bn = pd.read_parquet(os.path.join(args.outdir, "bins.parquet"))
     mt = pd.read_parquet(os.path.join(args.outdir, "metrics.parquet"))
-    repo = args.repo or lv.loc[lv.kind == "ref", "repo"].value_counts().idxmax()
-    lv, bn, mt = lv[lv.repo == repo], bn[bn.repo == repo], mt[mt.repo == repo]
-    span_h = (bn.bin_ts.max() - bn.bin_ts.min()).total_seconds() / 3600.0
+    repo = args.repo or bn.repo.value_counts().idxmax()
+    bn, mt = bn[bn.repo == repo].sort_values("bin_ts"), mt[mt.repo == repo]
     at = pd.Timestamp(args.at, tz="UTC") if args.at else bn.bin_ts.max()
+    bn = bn[bn.bin_ts <= at]
 
     print(f"CONTEXT LADDER — {repo} @ {at:%Y-%m-%d %H:%M}Z")
-    print(f"(lookback and staleness per rung are read from the measured half-life, not set here)")
-    for name, levels, topk in RUNGS:
-        print(f"\n{name}")
-        for level in levels:
-            row = lv[(lv.kind == "ref") & (lv.level == level)]
-            if row.empty:
-                continue
-            hl = float(row.half_life_h.iloc[0]) if pd.notna(row.half_life_h.iloc[0]) else span_h
-            look = max(1.0, min(hl, span_h))
-            d = bn[(bn.level == level) & (bn.bin_ts <= at) &
-                   (bn.bin_ts >= at - pd.Timedelta(hours=look))]
-            seen = mt[(mt.level == level) & (mt.bin_ts <= at) & mt["count"].fillna(0).gt(0)]
-            age = ((at - seen.bin_ts.max()).total_seconds() / 3600.0
-                   if not seen.empty else float("nan"))
-            if d.empty:
-                print(f"  {level:10} (nothing in the last {look:.0f}h)")
-                continue
-            tot = d.groupby("ref", observed=True).n.sum().sort_values(ascending=False)
-            head = tot.head(topk)
-            shown = ", ".join(f"{k} {100*v/tot.sum():.0f}%" for k, v in head.items())
-            # An identifier is never truncated — a path cut short is a FALSE path — so whole
-            # terms are dropped and the count of dropped terms is stated (AGENTS.md).
-            more = f"  (+{len(tot)-len(head)} more not shown)" if len(tot) > len(head) else ""
-            stale = ""
-            if not math.isnan(age) and age > STALE_FRACTION * hl:
-                stale = (f"   [CARRIED {age:.0f}h — past {STALE_FRACTION:g}x its {hl:.0f}h "
-                         f"half-life, treat as aged]")
-            elif not math.isnan(age) and age > 0:
-                stale = f"   [as of {age:.0f}h ago]"
-            print(f"  {level:10} {shown}{more}{stale}")
-            print(f"  {'':10} └ half-life {hl:.0f}h -> lookback {look:.0f}h, "
-                  f"refresh when older than {STALE_FRACTION*hl:.0f}h")
+    print(f"(every figure below is read off the series at this moment: share in the last "
+          f"{args.events} observations of each level, its lift against that level's own "
+          f"all-history share, and liveness against its own typical gap. No fitted constants.)")
 
-    look_h = args.tempo_hours
-    win = mt[(mt.level == "speaker") & (mt.bin_ts <= at) &
-             (mt.bin_ts >= at - pd.Timedelta(hours=look_h))]
-    base = mt[mt.level == "speaker"]
-    if not win.empty:
-        sums = win[["user_msgs", "user_chars", "asst_msgs", "asst_chars", "tok_out"]].sum()
-        # A per-bin median is the wrong yardstick for a multi-bin window, so the baseline is the
-        # same window length taken across the whole series.
-        nb = max(1, len(win))
-        def rel(col, value):
-            med = base[col].replace(0, np.nan).median()
+    for rung, levels in LADDER_RUNGS:
+        print(f"\n{rung}")
+        for level in levels:
+            d = bn[bn.level == level]
+            if d.empty:
+                print(f"  {level:10} —")
+                continue
+            win = _tail_by_events(d, args.events)
+            span_h = (at - win.bin_ts.min()).total_seconds() / 3600.0
+            now = win.groupby("ref", observed=True).n.sum()
+            base = d.groupby("ref", observed=True).n.sum()
+            share_now, share_base = now / now.sum(), base / base.sum()
+
+            # Rate relative to this level's own habit, on the event clock: how long the last N
+            # observations took, against how long they usually take.
+            hist = d.bin_ts.drop_duplicates()
+            gaps = hist.diff().dropna().dt.total_seconds() / 3600.0
+            typ_gap = float(gaps.tail(200).median()) if len(gaps) else float("nan")
+            samples = [(g.bin_ts.max() - g.bin_ts.min()).total_seconds() / 3600.0
+                       for g in [_tail_by_events(d.iloc[:i], args.events)
+                                 for i in range(len(d), 0, -max(1, len(d) // 12))]
+                       if len(g) > 1]
+            usual_span = float(np.median(samples)) if samples else float("nan")
+            rate = (usual_span / span_h
+                    if span_h > 0 and usual_span == usual_span else float("nan"))
+            age_h = (at - d.bin_ts.max()).total_seconds() / 3600.0
+            live = "live"
+            if typ_gap == typ_gap and typ_gap > 0 and age_h > QUIET_GAPS * typ_gap:
+                live = f"QUIET {age_h/typ_gap:.0f}x its usual {typ_gap*60:.0f}m gap"
+            elif age_h > 0:
+                live = f"last seen {age_h*60:.0f}m ago"
+            hdr = (f"{args.events} obs over "
+                   + (f"{span_h*60:.0f}m" if span_h < 1 else f"{span_h:.1f}h"))
+            if rate == rate:
+                hdr += (f" · {rate:.2f}x its usual pace" if rate < 0.1
+                        else f" · {rate:.1f}x its usual pace")
+            print(f"  {level:10} {hdr} · {live}")
+
+            # Split the window by event count to get a trend from inside it.
+            c = win.n.cumsum()
+            half = win.n.sum() / 2.0
+            older, recent = win[c <= half], win[c > half]
+            so = (older.groupby("ref", observed=True).n.sum() / max(older.n.sum(), 1)
+                  if not older.empty else None)
+            sr = (recent.groupby("ref", observed=True).n.sum() / max(recent.n.sum(), 1)
+                  if not recent.empty else None)
+
+            top = share_now[share_now >= args.min_share].sort_values(ascending=False)
+            parts = []
+            for ref, sh in top.head(args.topk).items():
+                lift = sh / share_base.get(ref, np.nan)
+                arrow = "→"
+                if so is not None and sr is not None:
+                    delta = sr.get(ref, 0.0) - so.get(ref, 0.0)
+                    arrow = "↑" if delta > 0.05 else "↓" if delta < -0.05 else "→"
+                tag = " NEW" if lift == lift and lift >= NEW_LIFT else ""
+                parts.append(f"{ref} {100*sh:.0f}% (x{lift:.1f} {arrow}{tag})")
+            hidden = len(top) - min(len(top), args.topk)
+            # An identifier is never truncated — a path cut short is a false path — so whole
+            # terms are dropped and the count of dropped terms is stated (AGENTS.md).
+            more = f"  (+{hidden} more above {100*args.min_share:.0f}%)" if hidden else ""
+            below = int((share_now < args.min_share).sum())
+            if below:
+                more += f"  (+{below} below {100*args.min_share:.0f}%)"
+            print(f"  {'':10} {', '.join(parts) if parts else '(nothing above threshold)'}{more}")
+
+            faded = share_base[(share_base >= args.min_share) &
+                               (~share_base.index.isin(share_now[share_now > 0].index))]
+            if len(faded):
+                print(f"  {'':10} absent from the window: " +
+                      ", ".join(f"{k} (all-history {100*v:.0f}%)"
+                                for k, v in faded.sort_values(ascending=False).head(3).items()))
+
+    base = mt[(mt.level == "speaker") & (mt.bin_ts <= at)]
+    recent = base[base.bin_ts >= at - pd.Timedelta(hours=args.tempo_hours)]
+    if not recent.empty:
+        def rel(col):
+            v, med = recent[col].sum(), base[col].replace(0, np.nan).median()
             if pd.isna(med) or med == 0:
-                return f"{value:.0f}"
-            return f"{value:.0f} ({value/(med*nb):.1f}x typical)"
-        cpm = sums.user_chars / sums.user_msgs if sums.user_msgs else float("nan")
-        short = win.user_short_share.mean()
-        burst = win.user_burst_share.mean()
-        print(f"\nTEMPO      (half-life ~1h — refresh every window; last {look_h:g}h)")
-        print(f"  engineer   {rel('user_msgs', sums.user_msgs)} messages, "
-              f"{cpm:.0f} chars each, "
-              f"{'?' if pd.isna(short) else f'{100*short:.0f}%'} short, "
-              f"{'?' if pd.isna(burst) else f'{100*burst:.0f}%'} in bursts")
-        print(f"  assistant  {rel('asst_msgs', sums.asst_msgs)} messages, "
-              f"{rel('tok_out', sums.tok_out)} output tokens")
+                return f"{v:.0f}"
+            return f"{v:.0f} (x{v / (med * len(recent)):.1f})"
+        msgs = recent.user_msgs.sum()
+        cpm = recent.user_chars.sum() / msgs if msgs else float("nan")
+        base_cpm = base.user_chars_per_msg.median()
+        size = (f", {cpm:.0f} chars each (x{cpm / base_cpm:.1f})"
+                if cpm == cpm and base_cpm and base_cpm == base_cpm else "")
+        print(f"\nTEMPO   last {args.tempo_hours:g}h, each figure against this person's own "
+              f"median")
+        print(f"  engineer   {rel('user_msgs')} messages{size}")
+        print(f"  assistant  {rel('asst_msgs')} messages, {rel('tok_out')} output tokens")
 
 
 def main():
@@ -723,6 +801,9 @@ def main():
     d.add_argument("--repo", default=None)
     d.add_argument("--at", default=None, help="ISO timestamp; default = last active bin")
     d.add_argument("--tempo-hours", type=float, default=1.0)
+    d.add_argument("--events", type=int, default=40, help="observations per level in the window")
+    d.add_argument("--min-share", type=float, default=0.05)
+    d.add_argument("--topk", type=int, default=5)
     d.set_defaults(fn=ladder)
     args = ap.parse_args()
     args.fn(args)
