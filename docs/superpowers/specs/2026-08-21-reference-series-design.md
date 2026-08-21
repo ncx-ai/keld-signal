@@ -30,7 +30,7 @@ was *worked on*, and which is where a stray `ls` would flood the vocabulary.
 | level | reference | source |
 |---|---|---|
 | `repo` | repository | per-line `cwd`, mapped under `--repo-root`; worktree paths folded back |
-| `branch` | git branch | per-line `gitBranch` — a branch is a workstream, and one session had six |
+| `branch` | git branch | per-line `gitBranch` — a branch is a unit of work that outlives a session, and one session had six |
 | `component` | subtree | path prefix within the repo, depth-capped (`services/web/components`) |
 | `dir` | directory | full dirname of a touched file |
 | `file` | file | `file_path` from Read/Edit/Write, paths parsed out of Bash commands |
@@ -101,7 +101,7 @@ Composition half-life at 1 h bins, slowest first:
 | tier | levels | half-life | reading |
 |---|---|---|---|
 | **A — session-constant** | `repo`, `tool`, `verb`, `agent`, `lang`*, `model`* | **> 4 weeks** | the *mix* never decorrelates even though the events are high-frequency. Tool turnover is 0.10. These cost nothing to carry and nothing to refresh. |
-| **B — day scale** | `branch` 31 h (atlas) / 92 h (signal), `lang` 61 h (signal), `skill` 34 h (signal) | **1–4 days** | a branch is a workstream: 58 of them over 34 days in atlas. This is the rung that matches how a person would describe what they were working on. |
+| **B — day scale** | `branch` 31 h (atlas) / 92 h (signal), `lang` 61 h (signal), `skill` 34 h (signal) | **1–4 days** | a branch is a unit of work that outlives a session: 58 of them over 34 days in atlas. This is the rung that matches how a person would describe what they were working on. |
 | **C — window scale** | `component` 2–4 h, `dir` 1–2 h, `file` < 1–1 h | **1–4 hours** | must be refreshed per window; carrying these forward is what goes stale first. |
 
 \* `lang` and `model` sit in tier A for atlas (TypeScript-dominated, one model) and drop to tier
@@ -267,7 +267,7 @@ Four rungs, boundaries taken from the bands above, each roughly an order of magn
 | rung | levels | measured band | refresh | payload |
 |---|---|---|---|---|
 | **IDENTITY** | `repo`, `lang`, `model`, `tool` | 116h – >4wk | once per session | top 3 with shares |
-| **WORKSTREAM** | `branch`, `component` | 32 – 380h | on branch/component change, clock backstop at 0.5x half-life | top 4 with shares |
+| **BRANCH & SUBSYSTEM** | `branch`, `component` | 32 – 380h | on branch/component change, clock backstop at 0.5x half-life | top 4 with shares |
 | **WORKING SET** | `dir`, `file` | 4 – 24h | per window | top 5 with shares |
 | **TEMPO** | speaker channels | ~1h | per window | one line, relative to this person's own baseline |
 
@@ -290,9 +290,14 @@ different rhythm self-tunes.
   is inferred, which is the handoff's ask-the-facts-first rule extended along the time axis: the
   facts the pipeline already holds, held at the rate each one actually changes.
 
-Why IDENTITY and WORKSTREAM are separate rungs despite being only 2–3x apart: their refresh is
-different in kind, not just in period. Identity cannot change within a repo. Workstream changes
-on an **event** — the engineer switches branch or subsystem — with the clock only as a backstop.
+Why IDENTITY and BRANCH & SUBSYSTEM are separate rungs despite being only 2–3x apart: their
+refresh is different in kind, not just in period. Identity cannot change within a repo. The
+branch-and-subsystem rung changes on an **event** — the engineer switches branch or subsystem —
+with the clock only as a backstop.
+
+The rung is named after its contents rather than after a concept, deliberately: a conceptual
+name here collided with reserved product terminology in Atlas, and naming a rung for what it
+holds cannot collide with anything.
 
 Rates and turnover stay OUT of the injected context. They are anomaly-detection signals about the
 series, not facts about the work.

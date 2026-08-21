@@ -624,7 +624,7 @@ def series(args):
 # ~330h and keld-signal for ~45h; one hard-coded interval would be wrong for one of them.
 RUNGS = [
     ("IDENTITY   ", ["repo", "lang", "model", "tool"], 3),
-    ("WORKSTREAM ", ["branch", "component"], 4),
+    ("BRANCH & SUBSYSTEM", ["branch", "component"], 4),
     ("WORKING SET", ["dir", "file"], 5),
 ]
 # Carry a rung until it has aged past this fraction of its own half-life, then say so out loud.
