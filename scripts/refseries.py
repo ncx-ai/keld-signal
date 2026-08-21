@@ -1422,6 +1422,53 @@ def executive(doc):
                      "text; window is [start, end) and no later data is used"}
 
 
+def contexts_cmd(args):
+    """A multi-document YAML for a whole entity, one document per window.
+
+    STRIDE AND SPAN ARE SEPARATE, and the stride should not divide the span. Aligned hourly
+    windows land on the same clock mark every time, so a transition sitting mid-window is smeared
+    with no clean window anywhere. A stride that does not divide the span PRECESSES, and the grid
+    keeps sliding relative to the work. Measured over one transcript's 8 branch transitions, with
+    the span held at 60 minutes:
+
+        stride 60m   median 22 min from the nearest window edge, worst case 60 min
+        stride 50m   median 12 min,                              worst case 20 min
+        stride 45m   median  ~0 min, smeared windows 25% -> 14%, clean coverage 73% -> 87%
+
+    Finer strides plateau at ~90% coverage rather than continuing to improve, so the benefit is
+    alignment, not resolution: below ~45 minutes you buy volume, not fidelity.
+    """
+    refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
+    lvls = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
+    spk = pd.read_parquet(os.path.join(args.outdir, "speaker.parquet"))
+    bpath = os.path.join(args.outdir, "baseline.parquet")
+    base = pd.read_parquet(bpath) if os.path.exists(bpath) else None
+    entity = args.repo or refs.repo.value_counts().idxmax()
+    b = refs[refs.repo == entity].bin
+    if b.empty:
+        sys.exit(f"no rows for {entity}")
+    span, stride = pd.Timedelta(args.span), pd.Timedelta(args.stride)
+    lo, hi = b.min().floor("h"), b.max().ceil("h")
+    docs, t = [], lo
+    while t < hi:
+        st, en = t, t + span
+        if ((b >= st) & (b < en)).any():
+            doc = characterize(refs, lvls, spk, entity, st, en, args.topk, base=base)
+            if args.digest:
+                doc = executive(doc)
+            elif args.brief:
+                doc = digest(doc)
+            docs.append(doc)
+        t += stride
+    out = "\n---\n".join(yaml.safe_dump(d, sort_keys=False, width=110, allow_unicode=True,
+                                         default_flow_style=False) for d in docs)
+    if args.out:
+        open(args.out, "w").write(out)
+        print(f"{len(docs)} windows (span {args.span}, stride {args.stride}) -> {args.out}")
+    else:
+        print(out)
+
+
 def episodes_cmd(args):
     refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
     entity = args.repo or refs.repo.value_counts().idxmax()
@@ -2430,6 +2477,18 @@ def main():
     c.add_argument("--brief", action="store_true",
                    help="compact structured view, one line per level")
     c.set_defaults(fn=context)
+    cs = sub.add_parser("contexts")
+    cs.add_argument("--outdir", default=OUTDIR)
+    cs.add_argument("--repo", default=None)
+    cs.add_argument("--span", default="60min")
+    cs.add_argument("--stride", default="50min",
+                    help="should NOT divide the span: a precessing grid keeps window edges from "
+                         "landing on the same clock mark every time")
+    cs.add_argument("--topk", type=int, default=5)
+    cs.add_argument("--digest", action="store_true")
+    cs.add_argument("--brief", action="store_true")
+    cs.add_argument("--out", default=None)
+    cs.set_defaults(fn=contexts_cmd)
     ep = sub.add_parser("episodes")
     ep.add_argument("--outdir", default=OUTDIR)
     ep.add_argument("--repo", default=None)
