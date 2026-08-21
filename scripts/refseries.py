@@ -79,7 +79,8 @@ TWO_WORD = {"git", "go", "npm", "pnpm", "yarn", "uv", "pip", "python3", "python"
             "docker", "kubectl", "cargo", "gh", "systemctl", "launchctl", "brew", "poetry"}
 PATH_INPUTS = ("file_path", "notebook_path", "path")
 
-LEVELS = ["repo", "branch", "component", "dir", "file", "artifact", "action", "toolchain", "ext",
+LEVELS = ["workspace", "workspace_evidence", "remote", "repo_mentioned", "vcs", "branch",
+          "component", "dir", "file", "artifact", "action", "toolchain", "ext",
           "lang", "tool", "exe", "verb", "service", "agent", "skill", "model", "mcp_server",
           "mcp_tool"]
 
@@ -232,17 +233,148 @@ LAG_BUCKETS_H = [0.0833, 0.25, 0.5, 1, 2, 4, 8, 16, 24, 48, 96, 168, 336, 720, 2
 
 # ------------------------------------------------------------------ extract
 
+# ---------------------------------------------------------------- workspace resolution
+#
+# Resolved FROM TRANSCRIPT DATA, with the filesystem as confirmation where it happens to be
+# reachable. The earlier version took the first path segment under a hand-supplied `--repo-root`
+# and called it a repository; nothing checked, and `/tmp` became a peer of keld-atlas. Scored
+# against filesystem truth over 47 verifiable local transcripts, the signals below get 47 right
+# and 0 wrong, 46 of them at high confidence.
+#
+# The launch directory does most of the work and was free all along: a transcript lives in
+# `<projects>/<cwd-at-launch with / replaced by ->/<session>.jsonl`. Every failure before it was
+# added was a session launched at the repository root that later cd'd into a subdirectory.
+REPO_MARKERS = (".gitignore", "CLAUDE.md", "AGENTS.md", ".keld.toml", "docker-compose.yml",
+                "LICENSE", "README.md", ".pre-commit-config.yaml")
+# A language manifest appears in every sub-package of a monorepo, so services/api/pyproject.toml
+# named the repository `api`. Repo-level markers sit at the top of a checkout by convention.
+PKG_MARKERS = ("go.mod", "go.sum", "package.json", "pyproject.toml", "Cargo.toml", "pom.xml",
+               "build.gradle", "Gemfile", "composer.json", "Makefile", "pnpm-lock.yaml",
+               "package-lock.json", "uv.lock", "poetry.lock")
+CD_TARGET = re.compile(r"""(?:\bcd|\bgit\s+-C|\bmake\s+-C)\s+(?:"([^"]+)"|'([^']+)'|(/[^\s;|&]+))""")
+# github.com/<org>/<repo>, excluding the site's own non-repository paths.
+NON_REPO_GH = {"login", "settings", "orgs", "apps", "features", "pricing", "marketplace",
+               "sponsors", "notifications", "codespaces", "security", "about", "blog", "topics",
+               "collections", "trending", "explore", "new", "join", "enterprise", "readme"}
+
+
+def launch_dir(projdir, cwd):
+    """The session's launch directory, from the transcript's own project-directory name.
+
+    The name is the launch cwd with every "/" replaced by "-", which is AMBIGUOUS to reverse
+    because a directory name may contain a dash: "-home-dg-keld-keld-atlas" is equally
+    /home/dg/keld/keld-atlas and /home/dg/keld/keld/atlas. So it is never decoded — each ancestor
+    of the observed cwd is re-encoded and compared, which is exact.
+    """
+    if not projdir or not cwd:
+        return None
+    d = WORKTREE.sub("", cwd).rstrip("/")
+    for _ in range(24):
+        if d.replace("/", "-") == projdir:
+            return d
+        nd = os.path.dirname(d)
+        if nd == d or not nd:
+            return None
+        d = nd
+    return None
+
+
+def contains(cand, cwd):
+    """Whether cand is the cwd or an ancestor of it. A candidate root must CONTAIN the cwd:
+    without this rule a marker deeper in the tree wins and names a sub-package as the repo."""
+    cand, cwd = (cand or "").rstrip("/"), (cwd or "").rstrip("/")
+    return bool(cand) and (cwd == cand or cwd.startswith(cand + "/"))
+
+
+def resolve_workspace(cwd, projdir, marker_dirs, cd_targets, repo_roots=()):
+    """(root, name, source, confidence) for the checkout a line ran in.
+
+    marker_dirs maps a directory to the marker tier seen there ("repo"/"pkg"); cd_targets is a
+    set of absolute directories the session moved to. Ranked strongest-first, and the reason is
+    returned rather than discarded, because a name asserted without its evidence is what this
+    function exists to stop.
+    """
+    bare = WORKTREE.sub("", cwd or "").rstrip("/")
+    tiers = [
+        ([d for d, t in marker_dirs.items() if t == "repo" and contains(d, bare)],
+         "repo-level marker", "high"),
+        ([launch_dir(projdir, bare)] if contains(launch_dir(projdir, bare), bare) else [],
+         "session launch directory", "high"),
+        ([d for d in cd_targets if contains(d, bare) and d != bare],
+         "a directory the session cd'd into", "medium"),
+        ([d for d, t in marker_dirs.items() if t == "pkg" and contains(d, bare)],
+         "package manifest", "medium"),
+    ]
+    for pool, why, conf in tiers:
+        pool = [d for d in pool if d]
+        if pool:
+            root = min(pool, key=lambda d: d.count("/"))   # shallowest = top of the checkout
+            return root, os.path.basename(root), why, conf
+    if bare and "/.claude/worktrees/" in (cwd or ""):
+        root = cwd.split("/.claude/worktrees/")[0]
+        return root, os.path.basename(root), "worktree path shape", "medium"
+    for r in repo_roots:                                   # a configured root, if one was given
+        if contains(r, bare):
+            seg = bare[len(r.rstrip("/")) + 1:].split("/")[0]
+            if seg:
+                return os.path.join(r, seg), seg, "configured --repo-root", "low"
+    if bare:
+        return bare, os.path.basename(bare) or bare, "the cwd as given, no other signal", "low"
+    return None, None, "no cwd recorded", "none"
+
+
 def repo_of(cwd, repo_roots):
-    """The repository, against any of the configured roots — a colleague's export carries macOS
-    paths (/Users/<name>/...), so the root is a list, not a constant."""
+    """The WORKSPACE a line ran in — a directory, which is not the same claim as a repository.
+
+    Earlier this walked the first path segment under a hand-supplied `--repo-root` and called the
+    result a repo. Nothing checked. That produced `tmp` as a peer of keld-atlas, from a session
+    whose cwd was under /tmp, and it named a colleague's workspace purely from a basename because
+    no configured root matched. The directory is all this function knows; whether it is version
+    controlled is answered separately by `vcs_of`, from evidence.
+
+    Resolution order:
+      1. the nearest ancestor containing .git — the real answer, when the path is on this machine;
+      2. the first segment under a configured root, for paths we cannot stat (another machine);
+      3. nothing. A cwd matching neither is `(unknown workspace)`, not a basename guess.
+    """
     if not cwd:
         return None
     cwd = WORKTREE.sub("", cwd)
+    root_dir = _git_root(cwd)
+    if root_dir:
+        return os.path.basename(root_dir)
     for r in repo_roots:
         root = r.rstrip("/") + "/"
         if cwd.startswith(root):
             return cwd[len(root):].split("/")[0] or os.path.basename(r)
-    return os.path.basename(cwd.rstrip("/")) or None
+    if os.path.isdir(cwd):
+        return os.path.basename(cwd.rstrip("/")) or cwd     # a plain directory, named as one
+    return "(unknown workspace)"
+
+
+def _git_root(path, limit=12):
+    """The nearest ancestor containing .git, or None. Only meaningful for a local path."""
+    probe = WORKTREE.sub("", path or "")
+    for _ in range(limit):
+        if not probe or probe == "/":
+            return None
+        if os.path.exists(os.path.join(probe, ".git")):
+            return probe
+        probe = os.path.dirname(probe)
+    return None
+
+
+def vcs_of(cwd, git_branch):
+    """Whether the workspace is under version control — the FILESYSTEM decides where it can.
+
+    `gitBranch` is not evidence about the cwd. Measured: the tool reports a branch for
+    `cwd=/tmp`, a directory with no .git in it or above it, and for `/home/dg/keld`, the parent of
+    two checkouts. It appears to carry the branch of wherever the session was launched, so treating
+    it as proof marked plain directories as repositories. It is used only when the path cannot be
+    stat'd at all — another machine's export — and is then labelled as reported, not confirmed."""
+    if cwd and os.path.isdir(WORKTREE.sub("", cwd)):
+        return "git" if _git_root(cwd) else "none"
+    return "git (reported, unverifiable)" if git_branch else "unknown"
 
 
 def rel_within(path, root, cwd=None):
@@ -313,6 +445,34 @@ def bash_refs(command):
                     q = os.path.normpath(os.path.join(prefix, q))
                 paths.append(q)
     return verbs, exes, paths
+
+
+# EVIDENCE IN MESSAGE TEXT. Read locally, like the daemon reads a prompt; the event store still
+# holds only identifiers and counts and no text at all. Deterministic patterns only — a regex that
+# either matches or does not, never a judgement about what a sentence means.
+# github.com/<org>/<repo>, git@github.com:<org>/<repo>, and the API form
+# api.github.com/repos/<org>/<repo> — whose extra segment previously parsed as org="repos",
+# repo="<org>", which both invented a repository and hid the real one.
+REMOTE_REPO = re.compile(r"\b(?:github|gitlab)\.com[/:](?:repos/)?([A-Za-z0-9._\-]+)/"
+                         r"([A-Za-z0-9._\-]+?)(?:\.git)?(?=[/\s)\]\"'>,]|$)", re.I)
+TICKET = re.compile(r"\b([A-Z][A-Z0-9]{1,7})-(\d{1,6})\b")
+# Uppercase-dash-digits is also how encodings, standards, hashes and model names are written, so
+# the shape alone is not a ticket. Measured against this corpus before being trusted.
+NOT_TICKET = {"UTF", "SHA", "MD", "RFC", "ISO", "HTTP", "HTTPS", "IPV", "AES", "RSA", "SOC",
+              "CVE", "GPT", "CLAUDE", "OPUS", "SONNET", "HAIKU", "PEP", "ANSI", "ASCII", "EC",
+              "P", "X", "AMD", "ARM", "USB", "TLS", "SSL", "SQL", "API", "URL", "UUID", "JSON",
+              "YAML", "HTML", "CSS", "CPU", "GPU", "RAM", "SSD", "OKR", "KPI", "Q", "H", "FY",
+              "V", "PY", "GO", "TS", "JS", "NODE", "NPM", "PR", "ID", "OAUTH", "JWT", "GB", "MB",
+              "KB", "MS", "US", "EU", "UK", "AM", "PM", "UTC", "GMT", "COVID", "MP", "H264"}
+
+
+def remote_repos_in(text):
+    return [f"{m.group(1)}/{m.group(2)}".lower() for m in REMOTE_REPO.finditer(text or "")]
+
+
+def tickets_in(text):
+    return [f"{m.group(1)}-{m.group(2)}" for m in TICKET.finditer(text or "")
+            if m.group(1) not in NOT_TICKET]
 
 
 def services_in(text):
@@ -773,17 +933,21 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
         return out
 
     # Stated as facts in the header, not left to be read out of a distribution further down.
-    cwd_repo = R[R.level == "repo"]
+    cwd_repo = R[R.level == "workspace"]
     if not cwd_repo.empty:
         sh = cwd_repo.groupby("ref").n.sum()
         sh = (sh / sh.sum()).sort_values(ascending=False)
-        out["window"]["repo_of_cwd"] = (str(sh.index[0]) if len(sh) == 1 else
-                                        [{"repo": str(k), "share": round(float(v), 3)}
-                                         for k, v in sh.items()])
+        out["window"]["workspace_of_cwd"] = (str(sh.index[0]) if len(sh) == 1 else
+                                             [{"workspace": str(k), "share": round(float(v), 3)}
+                                              for k, v in sh.items()])
+        vcs = R[R.level == "vcs"]
+        if not vcs.empty:
+            vs = vcs.groupby("ref").n.sum().sort_values(ascending=False)
+            out["window"]["version_control"] = str(vs.index[0])
     if "owner" in R.columns:
         touched = sorted(R[R.level.isin(PATH_LEVELS)].owner.dropna().unique())
         if touched:
-            out["window"]["repos_whose_files_were_touched"] = [str(t) for t in touched]
+            out["window"]["workspaces_whose_files_were_touched"] = [str(t) for t in touched]
     scopes = sorted({v for v in R.base_scope.dropna().unique() if v != "entity"})
     if scopes:
         out["window"]["lift_baseline_scope"] = sorted(
@@ -792,8 +956,9 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
         touched = set(R[R.level.isin(PATH_LEVELS)].owner.dropna().astype(str))
         if len(touched - {str(sh.index[0])}) > 0:
             out["window"]["note"] = (
-                "this window touched files in more than one checkout; repo_of_cwd is where the "
-                "session was running, repos_whose_files_were_touched is where the work landed")
+                "this window touched files in more than one workspace; workspace_of_cwd is where "
+                "the session was running, workspaces_whose_files_were_touched is where the work "
+                "landed")
 
     for rung, levels in LADDER_RUNGS:
         block = {"band": RUNG_BAND.get(rung, ""), "levels": {}}
@@ -917,7 +1082,7 @@ def digest(doc):
                 bit += f", {it['trend']})" if it["trend"] != "flat" else ")"
             elif it["trend"] != "flat":
                 bit += f" ({it['trend']})"
-            if it.get("repo") and len(w.get("repos_whose_files_were_touched", [])) > 1:
+            if it.get("repo") and len(w.get("workspaces_whose_files_were_touched", [])) > 1:
                 bit += f" [{it['repo']}]"
             parts.append(bit)
         rem = level_block.get("remainder")
@@ -928,7 +1093,7 @@ def digest(doc):
     levels = {lv: blk for r in doc["rungs"].values() for lv, blk in r["levels"].items()}
     head = (f"{w['entity']} {w['start'][:16]}Z..{w['end'][11:16]}Z  "
             f"{w['duration_h']}h  {w['reference_events']} refs  cwd={w.get('repo_of_cwd')}")
-    touched = w.get("repos_whose_files_were_touched") or []
+    touched = w.get("workspaces_whose_files_were_touched") or []
     if len(touched) > 1:
         head += f"  files-in={'+'.join(touched)}"
     out = {"window": head, "work": {}, "tooling": {}}
@@ -1027,8 +1192,8 @@ def executive(doc):
     sents, facts = [], []
     start = pd.Timestamp(w["start"]).strftime("%d %b %H:%M")
     end = pd.Timestamp(w["end"]).strftime("%H:%M")
-    where = f"in {w.get('repo_of_cwd')}" if w.get("repo_of_cwd") else ""
-    touched = w.get("repos_whose_files_were_touched") or []
+    where = f"in {w.get('repo_of_cwd')}" if w.get("workspace_of_cwd") else ""
+    touched = w.get("workspaces_whose_files_were_touched") or []
     cross = (f", though the files it touched span {' and '.join(touched)}"
              if len(touched) > 1 else "")
     sents.append(f"{start}–{end}Z, {w['duration_h']}h of transcript {w['entity']} {where}"
@@ -1121,7 +1286,7 @@ def executive(doc):
     if thin:
         sents.append("Thin evidence, shares indicative only: " + ", ".join(sorted(thin)) + ".")
 
-    facts.append(f"repo: {w.get('repo_of_cwd')}")
+    facts.append(f"workspace: {w.get('workspace_of_cwd')}")
     for level, label in (("artifact", "working on"), ("action", "doing"),
                          ("toolchain", "tooling"), ("branch", "branch"),
                          ("component", "subsystem"), ("file", "top file"), ("ext", "file type"),
@@ -1136,13 +1301,13 @@ def executive(doc):
     # level silently dropping out used to shift every later slot leftwards and change the shape
     # of the line.
     da = distinctive("action")
-    slots = [w.get("repo_of_cwd"), name("artifact"),
+    slots = [w.get("workspace_of_cwd"), name("artifact"),
              (f"{da['ref']}" + (f" x{da['lift']:g}" if (da.get("lift") or 0) >= 3 else "")
               if da else None),
              name("component"), name("branch")]
     head = " · ".join(x if x else "—" for x in slots)
     return {"headline": head,
-            "headline_format": "repo · artifact · distinctive action (by lift) · subsystem · "
+            "headline_format": "workspace · artifact · distinctive action (by lift) · subsystem · "
                                "branch; — means that level saw nothing in this window",
             "summary": Para(" ".join(sents)),
             "key_facts": facts,
@@ -1386,6 +1551,51 @@ def normalize(args):
           f"--repo-root ~/keld <export-root>")
 
 
+def scan_workspace(path):
+    """A pre-pass over one transcript for the signals resolution needs.
+
+    Separate from the main pass because they are only known once the whole transcript has been
+    read: a repo-level marker may be touched in the last minute and still identifies the root of
+    the first. Cheap — it reads tool inputs and command text, nothing else."""
+    marker_dirs, cd_targets, remotes = {}, set(), collections.Counter()
+    for line in open(path, errors="replace"):
+        if '"tool_use"' not in line:
+            continue
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue
+        content = (o.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                continue
+            inp = b.get("input") or {}
+            cands = [v for k, v in inp.items()
+                     if k in PATH_INPUTS and isinstance(v, str)]
+            cmd = inp.get("command") if isinstance(inp.get("command"), str) else ""
+            if cmd:
+                for m in CD_TARGET.finditer(cmd):
+                    t = m.group(1) or m.group(2) or m.group(3)
+                    if t and t.startswith("/"):
+                        cd_targets.add(WORKTREE.sub("", t.rstrip("/")))
+                _, _, bp = bash_refs(cmd)
+                cands += [q for q in bp if q.startswith("/")]
+            for m in REMOTE_REPO.finditer(cmd + " " + text_of(content)):
+                if m.group(1).lower() not in NON_REPO_GH:
+                    remotes[f"{m.group(1)}/{m.group(2)}".lower()] += 1
+            for q in cands:
+                if not q.startswith("/"):
+                    continue
+                base, d = os.path.basename(q), os.path.dirname(WORKTREE.sub("", q))
+                if base in REPO_MARKERS:
+                    marker_dirs[d] = "repo"
+                elif base in PKG_MARKERS:
+                    marker_dirs.setdefault(d, "pkg")
+    return marker_dirs, cd_targets, remotes
+
+
 def extract(args):
     rows, pending = [], []
     n_files = n_lines = n_dup = 0
@@ -1400,6 +1610,9 @@ def extract(args):
                 continue
             seen_hash.add(h)
             n_files += 1
+            projdir = os.path.basename(os.path.dirname(path))
+            marker_dirs, cd_targets, remotes = scan_workspace(path)
+            ws_cache = {}
             session = os.path.basename(path)[:8]
             seen_req = set()
             for line in open(path, errors="replace"):
@@ -1419,18 +1632,13 @@ def extract(args):
                 n_lines += 1
                 t = pd.Timestamp(ts).timestamp()
                 cwd_clean = WORKTREE.sub("", o.get("cwd") or "")
-                root_key = next((r for r in args.repo_root
-                                 if cwd_clean.startswith(r.rstrip("/") + "/")), "")
-                repo = repo_of(o.get("cwd"), args.repo_root)
-                root_dir = next((os.path.join(r, repo) for r in args.repo_root
-                                 if os.path.isdir(os.path.join(r, repo))), None) if repo else None
-                if root_dir is None and repo and o.get("cwd"):
-                    # A path we cannot stat (another machine's export). Take the repo segment of
-                    # the recorded cwd itself, so file paths still resolve relative to it.
-                    c = WORKTREE.sub("", o["cwd"])
-                    i = c.find("/" + repo + "/")
-                    root_dir = c[:i] + "/" + repo if i >= 0 else (
-                        c if c.endswith("/" + repo) else None)
+                cwd_raw = o.get("cwd") or ""
+                if cwd_raw not in ws_cache:
+                    ws_cache[cwd_raw] = resolve_workspace(
+                        cwd_raw, projdir, marker_dirs, cd_targets, args.repo_root)
+                root_dir_resolved, repo, ws_src, ws_conf = ws_cache[cwd_raw]
+                root_key = root_dir_resolved or ""
+                root_dir = root_dir_resolved
                 base = (round(t, 1), session, repo, o.get("gitBranch") or None,
                         bool(o.get("isSidechain")))
 
@@ -1438,7 +1646,20 @@ def extract(args):
                     rows.append(base + (kind, level, ref, float(n)))
 
                 if repo:
-                    add("ref", "repo", repo, 1)
+                    add("ref", "workspace", repo, 1)
+                    add("ref", "workspace_evidence", f"{ws_src} [{ws_conf}]", 1)
+                    add("ref", "vcs", vcs_of(o.get("cwd"), o.get("gitBranch")), 1)
+                    # A remote is IDENTITY only when it names this workspace. The modal remote
+                    # in a transcript is often a repository merely discussed: atlas sessions
+                    # mention ncx-ai/keld-signal constantly, and attributing it as keld-atlas's
+                    # own remote was the same error as reading a quoted example as a fact.
+                    for rr, _n in remotes.most_common():
+                        if rr.rsplit("/", 1)[-1] == repo:
+                            add("ref", "remote", rr, 1)
+                            break
+                    for rr, _n in remotes.most_common(3):
+                        if rr.rsplit("/", 1)[-1] != repo:
+                            add("ref", "repo_mentioned", rr, 1)
                 if base[3]:
                     add("ref", "branch", base[3], 1)
                 if o.get("attributionSkill"):
@@ -1911,7 +2132,7 @@ def series(args):
 # both sit at >4wk but answer different questions — what the work IS against how it is DONE — so
 # they are separate rows in the synopsis and would be separate payloads in a prompt.
 LADDER_RUNGS = [
-    ("IDENTITY", ["repo", "artifact", "action", "ext", "lang", "model"]),
+    ("IDENTITY", ["workspace", "remote", "vcs", "artifact", "action", "ext", "lang", "model"]),
     ("TOOLCHAIN", ["toolchain"]),
     ("TOOLING", ["tool", "exe", "verb", "agent", "skill", "mcp_server", "mcp_tool"]),
     ("SERVICES", ["service"]),
