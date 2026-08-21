@@ -79,8 +79,135 @@ TWO_WORD = {"git", "go", "npm", "pnpm", "yarn", "uv", "pip", "python3", "python"
             "docker", "kubectl", "cargo", "gh", "systemctl", "launchctl", "brew", "poetry"}
 PATH_INPUTS = ("file_path", "notebook_path", "path")
 
-LEVELS = ["repo", "branch", "component", "dir", "file", "ext", "lang", "tool", "exe", "verb",
-          "service", "agent", "skill", "model", "mcp_server", "mcp_tool"]
+LEVELS = ["repo", "branch", "component", "dir", "file", "artifact", "action", "toolchain", "ext",
+          "lang", "tool", "exe", "verb", "service", "agent", "skill", "model", "mcp_server",
+          "mcp_tool"]
+
+# WHAT IS PHYSICALLY BEING DONE, as distinct from what it is being done to. `tool` says Bash 55%,
+# which is an implementation detail; the physical act — reading, authoring, running, searching,
+# delivering — is what a reader needs to picture the work. Rolled up from both the tool names and
+# the programs invoked, because half the acts happen inside Bash.
+TOOL_ACTION = {"Read": "read", "NotebookRead": "read", "Grep": "search", "Glob": "search",
+               "Edit": "edit", "NotebookEdit": "edit", "Write": "create",
+               "Bash": None,                     # decided by the program it ran
+               "Agent": "delegate", "Task": "delegate", "TaskCreate": "delegate",
+               "TaskUpdate": "delegate", "SendMessage": "delegate",
+               "AskUserQuestion": "ask the person", "SendUserFile": "deliver a file",
+               "Artifact": "publish", "WebFetch": "fetch", "WebSearch": "search",
+               "ToolSearch": "search", "Skill": "apply a skill"}
+EXE_ACTION = {
+    "read": ("cat", "head", "tail", "less", "more", "bat", "wc", "file", "stat", "ls", "tree"),
+    "search": ("grep", "rg", "ag", "find", "fd", "locate", "jq", "yq"),
+    "transform": ("sed", "awk", "tr", "sort", "uniq", "cut", "paste", "xargs"),
+    "test": ("pytest", "vitest", "jest", "tox", "nose"),
+    "build": ("make", "tsc", "webpack", "vite", "cargo", "gradle", "mvn", "cmake"),
+    "install": ("pip", "pip3", "uv", "brew", "apt", "pacman", "poetry"),
+    "version control": ("git", "gh", "hub"),
+    "run a service": ("docker", "docker-compose", "kubectl", "systemctl", "launchctl",
+                      "uvicorn", "gunicorn", "node", "npm", "pnpm", "yarn"),
+    "query a database": ("psql", "sqlite3", "redis-cli", "mysql", "mongosh"),
+    "fetch": ("curl", "wget", "http", "httpie"),
+    "convert a document": ("soffice", "libreoffice", "pandoc", "pdftoppm", "pdftotext",
+                           "rsvg-convert", "magick", "convert", "unoconv", "qpdf"),
+    "manage files": ("cp", "mv", "rm", "mkdir", "touch", "chmod", "ln", "tar", "zip", "unzip"),
+    "run code": ("python", "python3", "go", "ruby", "perl", "bash", "sh", "zsh", "deno"),
+}
+EXE_TO_ACTION = {e: a for a, names in EXE_ACTION.items() for e in names}
+
+
+def action_for(tool=None, exe=None, verb=None):
+    """The physical act, from a tool name or a program. `git commit` is more specific than `git`."""
+    if tool and tool in TOOL_ACTION:
+        return TOOL_ACTION[tool]
+    if verb:
+        v = verb.lower()
+        if v.startswith("git commit") or v.startswith("git add"):
+            return "commit"
+        if v.startswith("git push") or v.startswith("git pull") or v.startswith("git fetch"):
+            return "sync with remote"
+        if v.startswith(("go test", "npm test", "pnpm test", "yarn test", "cargo test")):
+            return "test"
+        if v.startswith(("go build", "npm run build", "pnpm build", "cargo build")):
+            return "build"
+        if "install" in v:
+            return "install"
+    if exe:
+        return EXE_TO_ACTION.get(exe)
+    return None
+
+# WHAT KIND OF THING is being worked on. No single level answers it: a PowerPoint deck edited
+# through its unpacked parts reports `.xml` at 100%, which says nothing about presentations, while
+# the evidence is scattered across the skill (pptx), the directory (ppt/slides) and the programs
+# (soffice, pdftoppm). This rolls those up so the question "is this person working on
+# spreadsheets?" is answerable. Deterministic mappings, like EXT_LANG — never a guess.
+ARTIFACT_EXT = {
+    "spreadsheet": (".xlsx", ".xls", ".xlsm", ".csv", ".tsv", ".ods", ".numbers"),
+    "presentation": (".pptx", ".ppt", ".odp", ".key"),
+    "document": (".docx", ".doc", ".odt", ".rtf", ".pages"),
+    "pdf": (".pdf",),
+    "image": (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".heic", ".ico"),
+    "notebook": (".ipynb",),
+    "data": (".json", ".jsonl", ".parquet", ".db", ".sqlite", ".sql", ".ndjson", ".avro"),
+    "prose": (".md", ".mdx", ".rst", ".txt", ".adoc"),
+    "web": (".html", ".htm", ".css", ".scss", ".less"),
+    "config": (".yaml", ".yml", ".toml", ".ini", ".cfg", ".env", ".lock", ".properties"),
+    "markup": (".xml", ".xsd", ".xsl"),
+}
+# An unpacked office document is a directory shape, not an extension: this is what identifies the
+# deck when every touched file is a bare slide XML.
+ARTIFACT_DIR = {"presentation": ("ppt/slides", "ppt/", "/ppt"),
+                "spreadsheet": ("xl/worksheets", "xl/"),
+                "document": ("word/document", "word/")}
+# WHAT IS BEING WORKED ON and WHAT IS BEING USED TO DO IT are separate levels, because their
+# evidence arrives at wildly different rates. Bash invocations vastly outnumber file touches, so
+# folding them together made an hour of slide editing report "pdf 54%" — that was ten pdftoppm
+# calls rendering the deck for a visual check, not the thing being worked on.
+TOOLCHAIN_EXE = {
+    "presentation": ("soffice", "libreoffice", "unoconv"),
+    "spreadsheet": ("ssconvert", "gnumeric", "xlsx2csv", "csvkit", "csvlook", "in2csv"),
+    "document": ("pandoc",),
+    "pdf": ("pdftoppm", "pdftotext", "pdfinfo", "qpdf", "gs", "pdftk"),
+    "image": ("rsvg-convert", "magick", "convert", "inkscape", "ffmpeg", "optipng"),
+    "notebook": ("jupyter", "papermill"),
+    "database": ("psql", "sqlite3", "redis-cli", "mysql", "mongosh"),
+    "infrastructure": ("docker", "kubectl", "helm", "terraform", "gcloud", "aws"),
+}
+ARTIFACT_SKILL = {"pptx": "presentation", "xlsx": "spreadsheet", "docx": "document",
+                  "pdf": "pdf", "dataviz": "chart", "artifact": "web"}
+CODE_EXT = tuple(e for e in EXT_LANG if e not in (".md", ".json", ".yaml", ".yml"))
+
+
+def toolchain_for(exe):
+    """The class of tooling a program belongs to — what it is FOR, not what it acted on."""
+    return [kind for kind, names in TOOLCHAIN_EXE.items() if exe in names]
+
+
+def artifacts_for(ext=None, rel=None, skill=None):
+    """Artifact kinds implied by one piece of evidence. Several may apply; each is emitted.
+
+    Evidence comes only from paths, directory shapes and skills — never from an executable, whose
+    invocation rate has nothing to do with what the work is about."""
+    out = []
+    # A directory shape is MORE SPECIFIC than an extension and wins for the same path. An unpacked
+    # deck is a tree of bare slide XML: counting both made the hour read half `markup` and half
+    # `presentation`, and `markup` — a fact about the file format's internals rather than about
+    # the work — took the headline.
+    if rel:
+        low = rel.lower()
+        for kind, pats in ARTIFACT_DIR.items():
+            if any(pat in low for pat in pats):
+                out.append(kind)
+    if ext and not out:
+        for kind, exts in ARTIFACT_EXT.items():
+            if ext in exts:
+                out.append(kind)
+        if ext in CODE_EXT and not out:
+            out.append("code")
+    if skill:
+        for key, kind in ARTIFACT_SKILL.items():
+            if key in skill.lower():
+                out.append(kind)
+    return list(dict.fromkeys(out))
 
 # What the work REACHES OUT TO. Evidence-based only: a host that actually appears in a tool input,
 # never a service inferred from a CLI's name. Ports are dropped because a test harness binds a
@@ -314,6 +441,8 @@ def reconcile(pending, component_depth):
             rows.append(b + ("ref", "ext", ext or "(no extension)", 1.0))
             if ext in EXT_LANG:
                 rows.append(b + ("ref", "lang", EXT_LANG[ext], 1.0))
+            for kind in artifacts_for(ext=ext, rel=rel):
+                rows.append(b + ("ref", "artifact", kind, 1.0))
         if d:
             rows.append(b + ("ref", "dir", d, 1.0))
             rows.append(b + ("ref", "component",
@@ -582,7 +711,8 @@ def at_view(args):
 
 
 PATH_LEVELS = ("component", "dir", "file", "ext", "lang")
-RUNG_BAND = {"SERVICES": "what the work reached out to, from hosts named in tool inputs",
+RUNG_BAND = {"TOOLCHAIN": "the class of tooling used, from the programs invoked",
+             "SERVICES": "what the work reached out to, from hosts named in tool inputs",
              "IDENTITY": "half-life >4wk — effectively constant",
              "TOOLING": "half-life >4wk for the mix, though its events are high-frequency",
              "BRANCH & SUBSYSTEM": "half-life 200-380h — days to weeks",
@@ -913,6 +1043,22 @@ def executive(doc):
     elif ext:
         sents.append(f"Files touched were {ext['ref']} ({100*ext['share']:.0f}%).")
 
+    art, act = top("artifact"), top("action")
+    if art:
+        bit = f"The work was on {art['ref']}"
+        a2 = top("artifact", 1)
+        if a2 and a2["share"] >= 0.15:
+            bit += f" ({100*art['share']:.0f}%) and {a2['ref']} ({100*a2['share']:.0f}%)"
+        else:
+            bit += f" ({100*art['share']:.0f}% of artifact evidence)"
+        if act:
+            acts = [i["ref"] for i in L["action"]["top"][:3]]
+            bit += ", mostly " + ", ".join(acts)
+        tc = top("toolchain")
+        if tc:
+            bit += f", using {', '.join(i['ref'] for i in L['toolchain']['top'][:2])} tooling"
+        sents.append(bit + ".")
+
     tl, ex = top("tool"), top("exe")
     if tl or ex:
         bits = []
@@ -960,16 +1106,21 @@ def executive(doc):
     if thin:
         sents.append("Thin evidence, shares indicative only: " + ", ".join(sorted(thin)) + ".")
 
-    for level, label in (("branch", "branch"), ("component", "subsystem"), ("file", "top file"),
-                         ("ext", "file type"), ("skill", "skill"), ("service", "service")):
+    facts.append(f"repo: {w.get('repo_of_cwd')}")
+    for level, label in (("artifact", "working on"), ("action", "doing"),
+                         ("toolchain", "tooling"), ("branch", "branch"),
+                         ("component", "subsystem"), ("file", "top file"), ("ext", "file type"),
+                         ("skill", "skill"), ("service", "service")):
         it = top(level)
         if it:
             f = f"{label}: {it['ref']} {100*it['share']:.0f}%"
             if it.get("lift") is not None and (it["lift"] >= 2 or it["lift"] <= 0.5):
                 f += f" (x{it['lift']:g} usual)"
             facts.append(f)
-    head = " · ".join(x for x in (name("component"), name("skill"),
-                                  (f"{name('branch')}" if L.get("branch") else None)) if x)
+    head = " · ".join(x for x in (
+        w.get("repo_of_cwd"), name("artifact"), name("action"), name("component"),
+        name("skill") if not name("artifact") else None,
+        name("branch")) if x)
     return {"headline": head or "activity recorded",
             "summary": Para(" ".join(sents)),
             "key_facts": facts,
@@ -1270,6 +1421,8 @@ def extract(args):
                     add("ref", "branch", base[3], 1)
                 if o.get("attributionSkill"):
                     add("ref", "skill", o["attributionSkill"], 1)
+                    for kind in artifacts_for(skill=o["attributionSkill"]):
+                        add("ref", "artifact", kind, 1)
                 if o.get("attributionMcpServer"):
                     add("ref", "mcp_server", o["attributionMcpServer"], 1)
                 if o.get("attributionMcpTool"):
@@ -1304,6 +1457,9 @@ def extract(args):
                         if not (isinstance(b, dict) and b.get("type") == "tool_use"):
                             continue
                         name, inp = b.get("name"), b.get("input") or {}
+                        act = action_for(tool=name)
+                        if act:
+                            add("ref", "action", act, 1)
                         m = MCP_TOOL.match(name or "")
                         if m:
                             add("ref", "tool", "mcp:" + m["tool"], 1)
@@ -1319,6 +1475,8 @@ def extract(args):
                             add("ref", "agent", inp["subagent_type"], 1)
                         if name == "Skill" and inp.get("skill"):
                             add("ref", "skill", inp["skill"], 1)
+                            for kind in artifacts_for(skill=inp["skill"]):
+                                add("ref", "artifact", kind, 1)
                         for host in dict.fromkeys(
                                 services_in(" ".join(v for v in (inp.get("command"),
                                                                  inp.get("url"),
@@ -1334,6 +1492,12 @@ def extract(args):
                                 add("ref", "verb", v, 1)
                             for e in dict.fromkeys(exes):
                                 add("ref", "exe", e, 1)
+                                for kind in toolchain_for(e):
+                                    add("ref", "toolchain", kind, 1)
+                            for v in dict.fromkeys(verbs):
+                                act = action_for(exe=v.split()[0], verb=v)
+                                if act:
+                                    add("ref", "action", act, 1)
                             paths += [(q, False) for q in bp]
                 for p, from_input in paths:
                     rel = rel_within(p, root_dir, o.get("cwd"))
@@ -1725,7 +1889,8 @@ def series(args):
 # both sit at >4wk but answer different questions — what the work IS against how it is DONE — so
 # they are separate rows in the synopsis and would be separate payloads in a prompt.
 LADDER_RUNGS = [
-    ("IDENTITY", ["repo", "model", "lang", "ext"]),
+    ("IDENTITY", ["repo", "artifact", "action", "ext", "lang", "model"]),
+    ("TOOLCHAIN", ["toolchain"]),
     ("TOOLING", ["tool", "exe", "verb", "agent", "skill", "mcp_server", "mcp_tool"]),
     ("SERVICES", ["service"]),
     ("BRANCH & SUBSYSTEM", ["branch", "component"]),
