@@ -296,6 +296,20 @@ def reconcile(pending, component_depth):
 ROLL = ["1h", "6h", "24h", "168h"]
 
 
+def _roll(df, keys, col, window, how):
+    """A trailing time-window statistic, aligned back onto the caller's index.
+
+    Written out rather than expressed as groupby().apply(rolling(...)) because that returns a
+    Series with several groups and a DataFrame with exactly one, so scoping the frames to a
+    single transcript broke an assignment that worked fine across a whole repository."""
+    out = []
+    for _, g in df.groupby(keys, sort=False):
+        sr = getattr(g.set_index("bin")[col].rolling(window), how)()
+        sr.index = g.index
+        out.append(sr)
+    return pd.concat(out).reindex(df.index) if out else pd.Series(index=df.index, dtype=float)
+
+
 def build_frames(ev, bin_h, outdir):
     """Materialise the series themselves, with the rolling statistics as COLUMNS.
 
@@ -329,8 +343,7 @@ def build_frames(ev, bin_h, outdir):
 
     def roll_sum(df, keys, col, out):
         for w in ROLL:
-            df[f"{out}_{w}"] = df.groupby(keys, group_keys=False).apply(
-                lambda g: g.rolling(w, on="bin")[col].sum(), include_groups=False)
+            df[f"{out}_{w}"] = _roll(df, keys, col, w, "sum")
         return df
 
     lvls = roll_sum(lvls, ["repo", "level"], "lvl_n", "lvl")
@@ -362,10 +375,8 @@ def build_frames(ev, bin_h, outdir):
     sh = refs.groupby(["repo", "level", "bin"]).apply(shape, include_groups=False).reset_index()
     lvls = lvls.merge(sh, on=["repo", "level", "bin"], how="left")
     for w in ROLL:
-        lvls[f"mean_{w}"] = lvls.groupby(["repo", "level"], group_keys=False).apply(
-            lambda g: g.rolling(w, on="bin").lvl_n.mean(), include_groups=False)
-        lvls[f"med_{w}"] = lvls.groupby(["repo", "level"], group_keys=False).apply(
-            lambda g: g.rolling(w, on="bin").lvl_n.median(), include_groups=False)
+        lvls[f"mean_{w}"] = _roll(lvls, ["repo", "level"], "lvl_n", w, "mean")
+        lvls[f"med_{w}"] = _roll(lvls, ["repo", "level"], "lvl_n", w, "median")
     lvls["gap_h"] = (lvls.groupby(["repo", "level"]).bin.diff().dt.total_seconds() / 3600.0)
     lvls["typ_gap_h"] = (lvls.groupby(["repo", "level"], group_keys=False)
                          .gap_h.apply(lambda x: x.expanding(min_periods=3).median()))
@@ -401,8 +412,8 @@ def build_speaker_frame(metrics, bin_h, outdir):
     sp = (sp.drop(columns=[c for c in ("bin", "level") if c in sp.columns])
           .rename(columns={"bin_ts": "bin"}).sort_values(["repo", "bin"]))
     chans = [c for c in sp.columns
-             if c not in ("repo", "bin", "bin_ts", "level") and
-             pd.api.types.is_numeric_dtype(sp[c])]
+             if c not in ("repo", "bin", "bin_ts", "level")
+             and pd.api.types.is_numeric_dtype(sp[c]) and sp[c].notna().any()]
     sp = sp.reset_index(drop=True)
     # A count rolls up by SUM; a ratio does not. Summing `user_short_share` over four bins gave
     # 1.50 — a "share" above one — and summing `user_chars_per_msg` over a day gave 33,089
@@ -411,8 +422,7 @@ def build_speaker_frame(metrics, bin_h, outdir):
     for c in chans:
         how = "mean" if any(k in c for k in RATIO) else "sum"
         for w in ROLL:
-            sp[f"{c}_{w}"] = sp.groupby("repo", group_keys=False).apply(
-                lambda g: getattr(g.rolling(w, on="bin")[c], how)(), include_groups=False)
+            sp[f"{c}_{w}"] = _roll(sp, ["repo"], c, w, how)
         # Causal z-score: expanding mean and deviation, so a row never sees its own future.
         m = sp.groupby("repo", group_keys=False)[c].apply(
             lambda x: x.expanding(min_periods=8).mean())
@@ -935,6 +945,12 @@ def series(args):
     ev = pd.read_parquet(os.path.join(args.outdir, "events.parquet"))
     if args.repo:
         ev = ev[ev.repo == args.repo]
+    if args.entity == "session":
+        # Every frame keys on one entity column. Scoping to a session substitutes it, so the
+        # rolling windows and expanding baselines are that transcript's own, not the repo's.
+        ev = ev.assign(repo=ev.session.astype(str))
+    if args.session:
+        ev = ev[ev.session.astype(str) == args.session]
     if args.since:
         ev = ev[ev.ts >= pd.Timestamp(args.since, tz="UTC")]
     ev = ev.dropna(subset=["repo"])
@@ -1137,8 +1153,7 @@ def series(args):
         print(f"  {name:8} {df.shape} -> {p}")
 
     print("\nmaterialising the indexable frames (rolling statistics as columns):")
-    ev_all = pd.read_parquet(os.path.join(args.outdir, "events.parquet"))
-    build_frames(ev_all, args.bin, args.outdir)
+    build_frames(ev, args.bin, args.outdir)
     build_speaker_frame(mt, args.bin, args.outdir)
 
 
@@ -1330,6 +1345,9 @@ def main():
     s.add_argument("--bin", type=float, default=1.0, help="bin size in HOURS (default 1)")
     s.add_argument("--since", default=None, help="ISO date, e.g. 2026-07-01")
     s.add_argument("--min-rows", type=int, default=500)
+    s.add_argument("--entity", choices=["repo", "session"], default="repo",
+                   help="what the frames are keyed on and baselined against")
+    s.add_argument("--session", default=None, help="restrict to one transcript (8-char id)")
     s.add_argument("--windows", type=int, nargs="+", default=[6, 24, 168])
     s.add_argument("--detail", action="store_true")
     s.set_defaults(fn=series)
