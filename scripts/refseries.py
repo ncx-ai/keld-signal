@@ -52,6 +52,15 @@ REPO_ROOT = os.path.expanduser("~/keld")
 WORKTREE = re.compile(r"/\.claude/worktrees/[^/]+")
 PATH_TOKEN = re.compile(r"[\w.\-/]*/[\w.\-/]+|[\w.\-]+\.(?:" +
                         "|".join(e[1:] for e in EXT_LANG) + r")\b")
+PLAUSIBLE_PATH = re.compile(r"^(?:[\w.@+\-]+/)+[\w.@+\-]*[A-Za-z][\w.@+\-]*\.[A-Za-z0-9]{1,6}$")
+
+
+def plausible_path(tok):
+    """A slash and a dotted extension, and no segment that is only digits. Measured against the
+    alternative: without this, the top `dir` references included `chars/msg` and `0/20`, and the
+    top `file` references included `r.h` — all three quoted out of our own command text."""
+    return bool(PLAUSIBLE_PATH.match(tok)) and not any(
+        seg.isdigit() for seg in tok.split("/"))
 ENVVAR = re.compile(r"^[A-Z_][A-Z0-9_]*=")
 SHELL_KEYWORD = {"if", "then", "fi", "else", "elif", "for", "do", "done", "while", "until",
                  "case", "esac", "in", "function", "return", "local", "declare", "read",
@@ -68,8 +77,13 @@ TOK = ["out", "in_fresh", "in_cached"]
 
 SHORT_CHARS = 40        # "ok", "continue", "do it" — the low-information engineer turn
 BURST_S = 60            # a message within a minute of the last is the same breath
-VOCAB_CAP = 500         # per level, for the composition matrix; the tail folds into __other__
-LAG_BUCKETS_H = [1, 2, 4, 8, 16, 24, 48, 96, 168, 336, 720, 2160]
+VOCAB_CAP = 4000        # above the largest real vocabulary here (verb, 3365), so nothing folds.
+                        # When it does bite, __other__ is excluded from the similarity vector:
+                        # a fold bucket cannot turn over, so counting it as a reference makes a
+                        # fast level look slow. Measured: 25.4% of keld-atlas `file` mass landed
+                        # in __other__ at a cap of 500.
+REF_LAG_H = 1.0         # the fixed baseline the decay is measured FROM (see lag_curve)
+LAG_BUCKETS_H = [0.0833, 0.25, 0.5, 1, 2, 4, 8, 16, 24, 48, 96, 168, 336, 720, 2160]
 
 
 # ------------------------------------------------------------------ extract
@@ -118,8 +132,9 @@ def bash_refs(command):
         for t in toks[1:]:
             if t.startswith("-"):
                 continue
-            m = PATH_TOKEN.fullmatch(t.strip("'\"(),"))
-            if m:
+            tok = t.strip("'\"(),")
+            m = PATH_TOKEN.fullmatch(tok)
+            if m and plausible_path(m.group(0)):
                 paths.append(m.group(0))
     return verbs, paths
 
@@ -266,7 +281,8 @@ def extract(args):
                     # level look slower-moving than the directory level — a path token from a
                     # shell command is only a file if it carries a known extension, whereas a
                     # tool's own file_path always is one.
-                    is_file = from_input or ext in EXT_LANG
+                    is_file = (from_input or ext in EXT_LANG
+                               or "." in os.path.basename(rel))
                     d = os.path.dirname(rel) if is_file else rel
                     if is_file:
                         add("ref", "file", rel, 1)
@@ -337,17 +353,33 @@ def lag_curve(vectors, idx, bin_h, kind):
     lag = np.abs(idx[:, None] - idx[None, :]) * bin_h
     iu = np.triu_indices(len(idx), k=1)
     sim, lag = sim[iu], lag[iu]
-    curve, prev, hl = {}, (0.0, 1.0), None
+    curve = {}
     for lo, hi in zip([0] + LAG_BUCKETS_H[:-1], LAG_BUCKETS_H):
         sel = (lag > lo) & (lag <= hi)
         if sel.sum() >= 8:
             curve[hi] = (float(sim[sel].mean()), int(sel.sum()))
-    for h, (m, _) in sorted(curve.items()):
-        if m < 0.5 <= prev[1]:
-            x0, y0 = prev
-            hl = x0 + (h - x0) * (y0 - 0.5) / max(y0 - m, 1e-9)
-            break
-        prev = (h, m)
+    # Half-life is measured RELATIVE to a FIXED reference lag, not against an absolute 0.5 and
+    # not against the nearest lag available.
+    #
+    # Absolute 0.5 measures the bin's sample size as much as the work: a bin holding few events
+    # gives a noisy composition estimate and noise decorrelates instantly, so keld-atlas `verb`
+    # crossed 0.5 at >4wk, 168h and 1h for 1h, 15min and 5min bins. Dividing by the nearest lag
+    # fixes that but introduces its own artefact, because "nearest" is a DIFFERENT lag per bin
+    # size — a finer bin gets a higher baseline, hence a higher target, hence an apparently
+    # shorter half-life, and the runs stop being comparable. A fixed reference lag is the only
+    # baseline that means the same thing at every bin size.
+    ordered = [(h, v) for h, v in sorted(curve.items()) if h >= REF_LAG_H]
+    hl = None
+    if ordered:
+        base = ordered[0][1][0]
+        target = 0.5 * base
+        prev = (ordered[0][0], base)
+        for h, (m, _) in ordered[1:]:
+            if m < target <= prev[1]:
+                x0, y0 = prev
+                hl = x0 + (h - x0) * (y0 - target) / max(y0 - m, 1e-9)
+                break
+            prev = (h, m)
     return curve, hl, float(lag.max()) if len(lag) else None
 
 
@@ -425,6 +457,7 @@ def series(args):
                 wide["__other__"] = other
             m = wide.to_numpy()
             tot = m.sum(axis=1)
+            real_cols = [i for i, c in enumerate(wide.columns) if c != "__other__"]
             observed = tot > 0
             oi = np.flatnonzero(observed)
             top1 = [wide.columns[i] if observed[j] else None
@@ -436,7 +469,8 @@ def series(args):
             for a, b_ in zip(oi[:-1], oi[1:]):
                 den = np.linalg.norm(shares[a]) * np.linalg.norm(shares[b_])
                 turn[b_] = 1 - float(np.dot(shares[a], shares[b_]) / max(den, 1e-9))
-            curve, hl, max_lag = lag_curve(shares[oi], oi, args.bin, "composition")
+            curve, hl, max_lag = lag_curve(shares[oi][:, real_cols], oi, args.bin,
+                                           "composition")
             life = (d.groupby("ref", observed=True).t.agg(lambda s: (s.max()-s.min())/3600.0))
             med_life = float(life.median()) if len(life) else float("nan")
 
@@ -456,7 +490,8 @@ def series(args):
                                "breadth": float(brd[observed].mean()),
                                "entropy": float(ent[observed].mean()),
                                "turnover": float(np.nanmean(turn)),
-                               "half_life_h": hl, "max_lag_h": max_lag, "median_lifetime_h": med_life,
+                               "half_life_h": hl, "max_lag_h": max_lag, "support_bins": int(observed.sum()),
+                               "median_lifetime_h": med_life,
                                "curve": json.dumps({str(k): v[0] for k, v in curve.items()}),
                                "top": top})
             vshow = (f"{len(wide.columns)}/{vocab_total}" if vocab_total > VOCAB_CAP
@@ -465,7 +500,7 @@ def series(args):
                   f"{100*observed.sum()/n_bins:>4.0f}% {tot[observed].mean():>8.1f} "
                   f"{brd[observed].mean():>8.1f} {ent[observed].mean():>8.2f} "
                   f"{np.nanmean(turn):>9.2f} {fmt_hl(hl, args.bin, max_lag):>10} "
-                  f"{med_life:>9.0f}h  {top[:40]}")
+                  f"{int(observed.sum()):>5} {med_life:>9.0f}h  {top[:40]}")
 
         # ---------------- speaker channels: how much, how often, in what shape
         say = g[g.kind == "say"]
@@ -528,6 +563,7 @@ def series(args):
                                "per_active": float(np.nanmean(x[oi])) if len(oi) else np.nan,
                                "breadth": np.nan, "entropy": np.nan, "turnover": np.nan,
                                "half_life_h": hl, "max_lag_h": max_lag,
+                               "support_bins": int(len(oi)),
                                "median_lifetime_h": float(np.nanmedian(x[oi]))
                                if len(oi) else np.nan,
                                "curve": "", "top": unit})
@@ -579,6 +615,91 @@ def series(args):
         print(f"  {name:8} {df.shape} -> {p}")
 
 
+# ---------------------------------------------------------------- the ladder
+#
+# Each rung carries the levels whose measured half-life puts them at the same natural frequency,
+# and every rung's LOOKBACK and STALENESS BUDGET are read out of levels.parquet rather than
+# written here. That is the whole point: the refresh interval is a measurement, and when a repo's
+# rhythm differs the ladder follows it without being re-tuned. keld-atlas holds a component for
+# ~330h and keld-signal for ~45h; one hard-coded interval would be wrong for one of them.
+RUNGS = [
+    ("IDENTITY   ", ["repo", "lang", "model", "tool"], 3),
+    ("WORKSTREAM ", ["branch", "component"], 4),
+    ("WORKING SET", ["dir", "file"], 5),
+]
+# Carry a rung until it has aged past this fraction of its own half-life, then say so out loud.
+STALE_FRACTION = 0.5
+
+
+def ladder(args):
+    lv = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
+    bn = pd.read_parquet(os.path.join(args.outdir, "bins.parquet"))
+    mt = pd.read_parquet(os.path.join(args.outdir, "metrics.parquet"))
+    repo = args.repo or lv.loc[lv.kind == "ref", "repo"].value_counts().idxmax()
+    lv, bn, mt = lv[lv.repo == repo], bn[bn.repo == repo], mt[mt.repo == repo]
+    span_h = (bn.bin_ts.max() - bn.bin_ts.min()).total_seconds() / 3600.0
+    at = pd.Timestamp(args.at, tz="UTC") if args.at else bn.bin_ts.max()
+
+    print(f"CONTEXT LADDER — {repo} @ {at:%Y-%m-%d %H:%M}Z")
+    print(f"(lookback and staleness per rung are read from the measured half-life, not set here)")
+    for name, levels, topk in RUNGS:
+        print(f"\n{name}")
+        for level in levels:
+            row = lv[(lv.kind == "ref") & (lv.level == level)]
+            if row.empty:
+                continue
+            hl = float(row.half_life_h.iloc[0]) if pd.notna(row.half_life_h.iloc[0]) else span_h
+            look = max(1.0, min(hl, span_h))
+            d = bn[(bn.level == level) & (bn.bin_ts <= at) &
+                   (bn.bin_ts >= at - pd.Timedelta(hours=look))]
+            seen = mt[(mt.level == level) & (mt.bin_ts <= at) & mt["count"].fillna(0).gt(0)]
+            age = ((at - seen.bin_ts.max()).total_seconds() / 3600.0
+                   if not seen.empty else float("nan"))
+            if d.empty:
+                print(f"  {level:10} (nothing in the last {look:.0f}h)")
+                continue
+            tot = d.groupby("ref", observed=True).n.sum().sort_values(ascending=False)
+            head = tot.head(topk)
+            shown = ", ".join(f"{k} {100*v/tot.sum():.0f}%" for k, v in head.items())
+            # An identifier is never truncated — a path cut short is a FALSE path — so whole
+            # terms are dropped and the count of dropped terms is stated (AGENTS.md).
+            more = f"  (+{len(tot)-len(head)} more not shown)" if len(tot) > len(head) else ""
+            stale = ""
+            if not math.isnan(age) and age > STALE_FRACTION * hl:
+                stale = (f"   [CARRIED {age:.0f}h — past {STALE_FRACTION:g}x its {hl:.0f}h "
+                         f"half-life, treat as aged]")
+            elif not math.isnan(age) and age > 0:
+                stale = f"   [as of {age:.0f}h ago]"
+            print(f"  {level:10} {shown}{more}{stale}")
+            print(f"  {'':10} └ half-life {hl:.0f}h -> lookback {look:.0f}h, "
+                  f"refresh when older than {STALE_FRACTION*hl:.0f}h")
+
+    look_h = args.tempo_hours
+    win = mt[(mt.level == "speaker") & (mt.bin_ts <= at) &
+             (mt.bin_ts >= at - pd.Timedelta(hours=look_h))]
+    base = mt[mt.level == "speaker"]
+    if not win.empty:
+        sums = win[["user_msgs", "user_chars", "asst_msgs", "asst_chars", "tok_out"]].sum()
+        # A per-bin median is the wrong yardstick for a multi-bin window, so the baseline is the
+        # same window length taken across the whole series.
+        nb = max(1, len(win))
+        def rel(col, value):
+            med = base[col].replace(0, np.nan).median()
+            if pd.isna(med) or med == 0:
+                return f"{value:.0f}"
+            return f"{value:.0f} ({value/(med*nb):.1f}x typical)"
+        cpm = sums.user_chars / sums.user_msgs if sums.user_msgs else float("nan")
+        short = win.user_short_share.mean()
+        burst = win.user_burst_share.mean()
+        print(f"\nTEMPO      (half-life ~1h — refresh every window; last {look_h:g}h)")
+        print(f"  engineer   {rel('user_msgs', sums.user_msgs)} messages, "
+              f"{cpm:.0f} chars each, "
+              f"{'?' if pd.isna(short) else f'{100*short:.0f}%'} short, "
+              f"{'?' if pd.isna(burst) else f'{100*burst:.0f}%'} in bursts")
+        print(f"  assistant  {rel('asst_msgs', sums.asst_msgs)} messages, "
+              f"{rel('tok_out', sums.tok_out)} output tokens")
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -597,6 +718,12 @@ def main():
     s.add_argument("--windows", type=int, nargs="+", default=[6, 24, 168])
     s.add_argument("--detail", action="store_true")
     s.set_defaults(fn=series)
+    d = sub.add_parser("ladder")
+    d.add_argument("--outdir", default=OUTDIR)
+    d.add_argument("--repo", default=None)
+    d.add_argument("--at", default=None, help="ISO timestamp; default = last active bin")
+    d.add_argument("--tempo-hours", type=float, default=1.0)
+    d.set_defaults(fn=ladder)
     args = ap.parse_args()
     args.fn(args)
 

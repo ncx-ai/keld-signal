@@ -204,3 +204,98 @@ rather than being ranked.
 
 This corrected a number in the main corpus too: keld-signal's `agent` level read `>4wk` and is
 really `>74h`.
+
+---
+
+## Corrections to the numbers reported earlier
+
+Four defects were found while building the ladder on top of these series. Each changed
+published numbers, so the earlier table should be read as superseded.
+
+**1. The absolute-0.5 crossing was measuring the bin's sample size.** A bin holding few events
+gives a noisy composition estimate, and noise decorrelates immediately. keld-atlas `verb` crossed
+absolute 0.5 at **>4wk, 168h and 1h** for 1 h, 15 min and 5 min bins — three orders of magnitude
+from the same data. Half-life is now the decay measured from a **fixed 1 h reference lag**, which
+is the only baseline that means the same thing at every bin size (normalising by the *nearest*
+lag fails too: a finer bin gets a higher baseline, hence a shorter apparent half-life). At 15 min
+and 5 min bins the corrected estimates now agree closely.
+
+**2. A quarter of keld-atlas `file` mass was folded into one `__other__` column** at the old
+500-term cap. A single column holding 25% of the mass is a large stable component that flatters
+the half-life. The cap is now above the largest real vocabulary (3,365) and `__other__` is
+excluded from the similarity vector when it does bite — a fold bucket cannot turn over.
+
+**3. `>4wk` meant two different things** — "never decorrelated" and "the series is too short to
+tell". Now the ceiling is the longest lag the series actually contains, and a level with too few
+observed bins reports `n/a` and is listed apart rather than ranked.
+
+**4. Extraction was reading paths out of command prose.** `chars/msg` and `0/20` ranked among the
+top directories and `r.h` among the top files, all quoted from our own shell text; and
+`windows/window_01.txt` was classified as a *component*, because `.txt` is not in the language
+map so a dotted file was taken for a directory. A bash token now needs a slash, a dotted
+extension and no all-digit segment; a dotted basename is a file whatever its extension; tool
+`file_path` inputs remain authoritative and bypass the test, which is the real distinction — an
+input is a declaration, a command line is text that happens to contain slashes.
+
+### The corrected ladder, 15-minute bins, decay from a 1 h reference lag
+
+| level | keld-atlas | keld-signal | earlier (superseded) |
+|---|---|---|---|
+| `repo` | >4wk | >4wk | >4wk |
+| `tool` | >4wk | >4wk | >4wk |
+| `verb` | >4wk | 288h | >4wk / 11h |
+| `lang` | >4wk | 116h | >4wk / 61h |
+| `model` | 407h | >4wk | 391h |
+| `component` | **380h** | **32h** | 2h / 4h |
+| `branch` | **293h** | **201h** | 31h / 92h |
+| `dir` | 7h | 24h | 1h / 2h |
+| `file` | 4h | 8h | <1h |
+
+The qualitative revision matters more than the numbers: **`component` moves from the fastest of
+the path levels to among the slowest.** Which *file* is open changes hourly; which *subsystem* the
+work is in barely moves for weeks. Relative decay sees that and the absolute crossing did not —
+and a subsystem is exactly the kind of fact a context ladder wants on a slow rung.
+
+`skill` is deliberately excluded from the ladder: 16–30 observed bins and estimates ranging from
+10h to >4wk across repos and bin sizes. Thin support, unstable, not evidence.
+
+## The context ladder
+
+Four rungs, boundaries taken from the bands above, each roughly an order of magnitude apart:
+~700h, ~250h, ~10h, ~1h.
+
+| rung | levels | measured band | refresh | payload |
+|---|---|---|---|---|
+| **IDENTITY** | `repo`, `lang`, `model`, `tool` | 116h – >4wk | once per session | top 3 with shares |
+| **WORKSTREAM** | `branch`, `component` | 32 – 380h | on branch/component change, clock backstop at 0.5x half-life | top 4 with shares |
+| **WORKING SET** | `dir`, `file` | 4 – 24h | per window | top 5 with shares |
+| **TEMPO** | speaker channels | ~1h | per window | one line, relative to this person's own baseline |
+
+**Every rung's lookback and staleness budget is read from `levels.parquet`, not written in the
+code.** That is the design, not an implementation detail: `component` is 380h in keld-atlas and
+32h in keld-signal, so any single hard-coded interval is wrong for one of them. A repo with a
+different rhythm self-tunes.
+
+* **Lookback** = that level's own half-life, clamped to the series span. A rung summarises the
+  window over which its composition is still half-true.
+* **Staleness budget** = 0.5 x half-life. Inside it, the carried value is stated with its age
+  (`[as of 6h ago]`). Past it, the value is still carried but explicitly labelled
+  (`[CARRIED 40h — past 0.5x its 32h half-life, treat as aged]`). It is never silently kept and
+  never silently dropped: the same rule as `omittedNotice`, applied to context instead of text.
+* **Shares, not bare lists.** `scripts 57%, windows 28%` says what dominates; a list of names
+  does not.
+* **Identifiers are never truncated** (AGENTS.md). Whole terms are dropped and the count is
+  stated — `(+5 more not shown)` — because a path cut short is a false path.
+* **Every rung is a known fact** from `cwd`, `gitBranch` and tool inputs. Nothing on the ladder
+  is inferred, which is the handoff's ask-the-facts-first rule extended along the time axis: the
+  facts the pipeline already holds, held at the rate each one actually changes.
+
+Why IDENTITY and WORKSTREAM are separate rungs despite being only 2–3x apart: their refresh is
+different in kind, not just in period. Identity cannot change within a repo. Workstream changes
+on an **event** — the engineer switches branch or subsystem — with the clock only as a backstop.
+
+Rates and turnover stay OUT of the injected context. They are anomaly-detection signals about the
+series, not facts about the work.
+
+    scripts/refseries.py ladder --repo keld-signal            # render the block
+    scripts/refseries.py ladder --repo keld-atlas --at 2026-08-04T14:00
