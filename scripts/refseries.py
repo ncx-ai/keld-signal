@@ -40,7 +40,7 @@ Design: docs/superpowers/specs/2026-08-21-reference-series-design.md
 import argparse, collections, glob, hashlib, json, math, os, re, shlex, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qwen_windows import EXT_LANG, is_command_echo
+from qwen_windows import EXT_LANG, clip, is_command_echo
 
 import numpy as np
 import pandas as pd
@@ -291,6 +291,263 @@ def reconcile(pending, component_depth):
         print("  prose paths reconciled against declared ones: " +
               ", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
     return rows
+
+
+ROLL = ["1h", "6h", "24h", "168h"]
+
+
+def build_frames(ev, bin_h, outdir):
+    """Materialise the series themselves, with the rolling statistics as COLUMNS.
+
+    Three time-indexed frames, so a point-in-time question is an INDEXING operation rather than a
+    computation: take the last row at or before the moment you care about and read it.
+
+      refs.parquet     one row per (repo, level, ref, bin) actually observed, carrying that
+                       reference's count, its share of its level, rolling counts and shares over
+                       1h/6h/24h/168h, an EWMA, its causal baseline share, the lift of each
+                       window against that baseline, its rank within the level, and the gap since
+                       it was last seen.
+      levels.parquet   one row per (repo, level, bin): total count, breadth, entropy, turnover,
+                       rolling mean and median of the count, and pace against its own habit.
+      speaker.parquet  one row per (repo, bin): every speaker channel with rolling sums and a
+                       z-score against that person's own history.
+
+    EVERY statistic is CAUSAL — expanding or trailing-window only. A baseline computed over the
+    whole corpus would let a row know its own future, and indexing a moment six weeks back would
+    silently describe it using work that had not happened yet.
+    """
+    ev = ev[ev.kind == "ref"].copy()
+    freq = pd.Timedelta(hours=bin_h)
+    ev["bin"] = ev.ts.dt.floor(freq)
+    for c in ("repo", "level", "ref"):
+        ev[c] = ev[c].astype(str)
+
+    refs = (ev.groupby(["repo", "level", "ref", "bin"], as_index=False).n.sum()
+            .sort_values("bin").reset_index(drop=True))
+    lvls = (refs.groupby(["repo", "level", "bin"], as_index=False).n.sum()
+            .rename(columns={"n": "lvl_n"}).sort_values("bin").reset_index(drop=True))
+
+    def roll_sum(df, keys, col, out):
+        for w in ROLL:
+            df[f"{out}_{w}"] = df.groupby(keys, group_keys=False).apply(
+                lambda g: g.rolling(w, on="bin")[col].sum(), include_groups=False)
+        return df
+
+    lvls = roll_sum(lvls, ["repo", "level"], "lvl_n", "lvl")
+    lvls["cum_lvl"] = lvls.groupby(["repo", "level"]).lvl_n.cumsum()
+    refs = roll_sum(refs, ["repo", "level", "ref"], "n", "n")
+    refs["cum_n"] = refs.groupby(["repo", "level", "ref"]).n.cumsum()
+    refs = refs.merge(lvls[["repo", "level", "bin", "lvl_n", "cum_lvl"] +
+                          [f"lvl_{w}" for w in ROLL]], on=["repo", "level", "bin"], how="left")
+    refs = refs.sort_values(["repo", "level", "ref", "bin"]).reset_index(drop=True)
+
+    refs["share"] = refs.n / refs.lvl_n
+    refs["base_share"] = refs.cum_n / refs.cum_lvl          # causal: history up to this bin
+    for w in ROLL:
+        refs[f"share_{w}"] = refs[f"n_{w}"] / refs[f"lvl_{w}"]
+        refs[f"lift_{w}"] = refs[f"share_{w}"] / refs.base_share
+    refs["ewm_share"] = (refs.groupby(["repo", "level", "ref"], group_keys=False)
+                         .share.apply(lambda x: x.ewm(halflife=4, adjust=False).mean()))
+    refs["rank_1h"] = (refs.groupby(["repo", "level", "bin"]).share_1h
+                       .rank(ascending=False, method="min"))
+    refs["gap_h"] = (refs.groupby(["repo", "level", "ref"]).bin
+                     .diff().dt.total_seconds() / 3600.0)
+    refs["trend_6h"] = refs.share_1h - refs.share_6h        # rising if the last hour outruns 6h
+
+    # level-wide shape
+    def shape(g):
+        p = g.n / g.n.sum()
+        return pd.Series({"breadth": len(g),
+                          "entropy": float(abs(-(p * np.log2(p)).sum()))})
+    sh = refs.groupby(["repo", "level", "bin"]).apply(shape, include_groups=False).reset_index()
+    lvls = lvls.merge(sh, on=["repo", "level", "bin"], how="left")
+    for w in ROLL:
+        lvls[f"mean_{w}"] = lvls.groupby(["repo", "level"], group_keys=False).apply(
+            lambda g: g.rolling(w, on="bin").lvl_n.mean(), include_groups=False)
+        lvls[f"med_{w}"] = lvls.groupby(["repo", "level"], group_keys=False).apply(
+            lambda g: g.rolling(w, on="bin").lvl_n.median(), include_groups=False)
+    lvls["gap_h"] = (lvls.groupby(["repo", "level"]).bin.diff().dt.total_seconds() / 3600.0)
+    lvls["typ_gap_h"] = (lvls.groupby(["repo", "level"], group_keys=False)
+                         .gap_h.apply(lambda x: x.expanding(min_periods=3).median()))
+    lvls["pace"] = lvls.typ_gap_h / lvls.gap_h              # >1 = denser than its habit
+    # turnover against the previous observed bin, from the share vectors
+    piv = {}
+    for (repo, level), g in refs.groupby(["repo", "level"]):
+        w = g.pivot_table(index="bin", columns="ref", values="share", fill_value=0.0)
+        a = w.to_numpy()
+        nrm = np.linalg.norm(a, axis=1)
+        cos = np.full(len(a), np.nan)
+        if len(a) > 1:
+            dot = (a[1:] * a[:-1]).sum(axis=1)
+            den = np.maximum(nrm[1:] * nrm[:-1], 1e-12)
+            cos[1:] = 1 - dot / den
+        piv[(repo, level)] = pd.DataFrame({"repo": repo, "level": level, "bin": w.index,
+                                           "turnover": cos})
+    lvls = lvls.merge(pd.concat(piv.values(), ignore_index=True),
+                      on=["repo", "level", "bin"], how="left")
+
+    for name, df in (("refs", refs), ("levels", lvls)):
+        path = os.path.join(outdir, f"{name}.parquet")
+        df.to_parquet(path, index=False)
+        print(f"  {name:9} {df.shape} -> {path}")
+    return refs, lvls
+
+
+def build_speaker_frame(metrics, bin_h, outdir):
+    """The speaker channels, with rolling sums and a causal z-score per channel."""
+    sp = metrics[metrics.level == "speaker"].copy()
+    # `metrics` already carries an integer `bin` ordinal; the frames key on the TIMESTAMP, so the
+    # ordinal is dropped rather than shadowed.
+    sp = (sp.drop(columns=[c for c in ("bin", "level") if c in sp.columns])
+          .rename(columns={"bin_ts": "bin"}).sort_values(["repo", "bin"]))
+    chans = [c for c in sp.columns
+             if c not in ("repo", "bin", "bin_ts", "level") and
+             pd.api.types.is_numeric_dtype(sp[c])]
+    sp = sp.reset_index(drop=True)
+    # A count rolls up by SUM; a ratio does not. Summing `user_short_share` over four bins gave
+    # 1.50 — a "share" above one — and summing `user_chars_per_msg` over a day gave 33,089
+    # characters per message. Ratios and per-item averages roll up by MEAN.
+    RATIO = ("share", "per_msg", "gap", "leverage", "_med", "pace")
+    for c in chans:
+        how = "mean" if any(k in c for k in RATIO) else "sum"
+        for w in ROLL:
+            sp[f"{c}_{w}"] = sp.groupby("repo", group_keys=False).apply(
+                lambda g: getattr(g.rolling(w, on="bin")[c], how)(), include_groups=False)
+        # Causal z-score: expanding mean and deviation, so a row never sees its own future.
+        m = sp.groupby("repo", group_keys=False)[c].apply(
+            lambda x: x.expanding(min_periods=8).mean())
+        sd = sp.groupby("repo", group_keys=False)[c].apply(
+            lambda x: x.expanding(min_periods=8).std())
+        sp[f"{c}_z"] = (sp[c] - m) / sd.replace(0, np.nan)
+    path = os.path.join(outdir, "speaker.parquet")
+    sp.to_parquet(path, index=False)
+    print(f"  speaker   {sp.shape} -> {path}")
+    return sp
+
+
+def at_view(args):
+    """Index the frames at a moment and describe it. No statistics are computed here."""
+    refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
+    lvls = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
+    spk = pd.read_parquet(os.path.join(args.outdir, "speaker.parquet"))
+    repo = args.repo or refs.repo.value_counts().idxmax()
+    when = (pd.Timestamp(args.at, tz="UTC") if args.at
+            else refs[refs.repo == repo].bin.max())
+    refs = refs[(refs.repo == repo) & (refs.bin <= when)]
+    lvls = lvls[(lvls.repo == repo) & (lvls.bin <= when)]
+    spk = spk[(spk.repo == repo) & (spk.bin <= when)]
+    if refs.empty:
+        sys.exit(f"no rows for {repo} at or before {when}")
+
+    print(f"{repo} indexed at {when:%Y-%m-%d %H:%M}Z   "
+          f"(rolling stats are columns in refs/levels/speaker.parquet; "
+          f"every one is causal — trailing windows and expanding baselines only)")
+    print(f"\n{'level':10} {'last':>7} {'n/1h':>6} {'n/24h':>6} {'breadth':>8} {'entropy':>8} "
+          f"{'turnover':>9} {'pace':>6}   top references by share over the last {args.window}")
+    for level in LEVELS:
+        L = lvls[lvls.level == level]
+        if L.empty:
+            continue
+        row = L.iloc[-1]
+        age = (when - row.bin).total_seconds() / 3600.0
+        R = refs[(refs.level == level) & (refs.bin == row.bin)]
+        col, lift = f"share_{args.window}", f"lift_{args.window}"
+        top = R.sort_values(col, ascending=False).head(args.topk)
+        desc = ", ".join(
+            f"{r.ref} {100*getattr(r, col):.0f}% (x{getattr(r, lift):.1f}"
+            f"{' ↑' if r.trend_6h > 0.02 else ' ↓' if r.trend_6h < -0.02 else ''})"
+            for r in top.itertuples())
+        hidden = len(R) - len(top)
+        if hidden:
+            desc += f"  (+{hidden} more)"
+        print(f"{level:10} {age:6.1f}h {row.get('lvl_1h', float('nan')):6.0f} "
+              f"{row.get('lvl_24h', float('nan')):6.0f} {row.breadth:8.0f} "
+              f"{row.entropy:8.2f} {row.turnover:9.2f} "
+              f"{(row.pace if row.pace == row.pace else float('nan')):6.1f}   {desc}")
+
+    if not spk.empty:
+        r = spk.iloc[-1]
+        print(f"\nspeaker channels at the same index (z = against this person's own history)")
+        for c in ("user_msgs", "user_chars_per_msg", "user_short_share", "user_burst_share",
+                  "asst_msgs", "tok_out", "unsaid_share_approx"):
+            if c in spk.columns:
+                print(f"  {c:22} now {r[c]:10.2f}   1h {r.get(c + '_1h', float('nan')):10.2f}"
+                      f"   24h {r.get(c + '_24h', float('nan')):10.2f}"
+                      f"   z {r.get(c + '_z', float('nan')):6.2f}")
+
+
+def window(args):
+    """Print the transcript turns leading up to a moment, to check a ladder against reality.
+
+        refseries.py window --at 2026-07-28T15:20 --repo keld-atlas --turns 14
+
+    Re-rendered FROM THE TRANSCRIPT at display time, never from the event store: events.parquet
+    holds counts and identifiers and deliberately no text at all, which is the same rule
+    `spool.Pointer` follows — keep coordinates, resolve the text on the machine that owns it.
+    """
+    at = pd.Timestamp(args.at, tz="UTC")
+    turns = []
+    for root in args.roots:
+        for path in sorted(glob.glob(os.path.join(root, "*", "*.jsonl"))):
+            for line in open(path, errors="replace"):
+                if '"type":"user"' not in line and '"type":"assistant"' not in line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                ts = o.get("timestamp")
+                if not ts:
+                    continue
+                t = pd.Timestamp(ts)
+                if t > at or t < at - pd.Timedelta(hours=args.hours):
+                    continue
+                repo = repo_of(o.get("cwd"), args.repo_root)
+                if args.repo and repo != args.repo:
+                    continue
+                msg = o.get("message") or {}
+                content = msg.get("content")
+                said, calls, tools = text_of(content), [], 0
+                if isinstance(content, list):
+                    for b in content:
+                        if isinstance(b, dict) and b.get("type") == "tool_use":
+                            tools += 1
+                            inp = b.get("input") or {}
+                            name = b.get("name")
+                            if isinstance(inp.get("file_path"), str):
+                                # A path is an identifier: shown whole or not at all. `clip` cut
+                                # `cd /long/path/...` down to "cd …" because a path has no spaces
+                                # to break on, which is precisely the false-identifier case.
+                                arg = inp["file_path"]
+                            elif name == "Bash":
+                                verbs, paths = bash_refs(inp.get("command"))
+                                arg = "; ".join(dict.fromkeys(verbs)[:4] if False
+                                                else list(dict.fromkeys(verbs))[:4])
+                                if paths:
+                                    arg += f" · {len(paths)} path{'s' if len(paths) > 1 else ''}"
+                            else:
+                                arg = clip(str(inp.get("description") or inp.get("skill")
+                                               or inp.get("query") or ""), 90)
+                            calls.append(f"{name}({arg})")
+                role = "engineer" if o.get("type") == "user" else "assistant"
+                if role == "engineer" and said and is_command_echo(said):
+                    role = "echo"
+                if not said.strip() and not calls:
+                    continue
+                turns.append((t, role, clip(said.strip(), args.chars) if said.strip() else "",
+                              calls, os.path.basename(path)[:8]))
+    turns.sort(key=lambda r: r[0])
+    turns = turns[-args.turns:]
+    print(f"TRANSCRIPT — {args.repo or 'any repo'}, the {len(turns)} turns before "
+          f"{at:%Y-%m-%d %H:%M}Z (re-read from the transcript; the event store holds no text)")
+    for t, role, said, calls, sess in turns:
+        head = f"  {t:%H:%M:%S} {role:9}"
+        if said:
+            print(f"{head} {said}")
+            head = f"  {'':8} {'':9}"
+        for c in calls:
+            print(f"{head} -> {c}")
+    print()
 
 
 def normalize(args):
@@ -779,10 +1036,15 @@ def series(args):
     mt = pd.concat(metrics_out, ignore_index=True)
     bn = pd.concat(bins_out, ignore_index=True)
     lv = pd.DataFrame(levels_out)
-    for name, df in (("metrics", mt), ("bins", bn), ("levels", lv)):
+    for name, df in (("metrics", mt), ("bins", bn), ("summary", lv)):
         p = os.path.join(args.outdir, f"{name}.parquet")
         df.to_parquet(p, index=False)
         print(f"  {name:8} {df.shape} -> {p}")
+
+    print("\nmaterialising the indexable frames (rolling statistics as columns):")
+    ev_all = pd.read_parquet(os.path.join(args.outdir, "events.parquet"))
+    build_frames(ev_all, args.bin, args.outdir)
+    build_speaker_frame(mt, args.bin, args.outdir)
 
 
 # ---------------------------------------------------------------- the ladder
@@ -950,6 +1212,15 @@ def main():
     e.add_argument("--component-depth", type=int, default=3)
     e.add_argument("--outdir", default=OUTDIR)
     e.set_defaults(fn=extract)
+    w = sub.add_parser("window")
+    w.add_argument("--roots", nargs="+", default=CLAUDE_ROOTS)
+    w.add_argument("--repo-root", nargs="+", default=[REPO_ROOT])
+    w.add_argument("--repo", default=None)
+    w.add_argument("--at", required=True)
+    w.add_argument("--hours", type=float, default=2.0)
+    w.add_argument("--turns", type=int, default=14)
+    w.add_argument("--chars", type=int, default=260)
+    w.set_defaults(fn=window)
     n = sub.add_parser("normalize")
     n.add_argument("export", help="an exported session directory")
     n.add_argument("-o", "--outdir", default="/tmp/normalized-projects")
@@ -963,6 +1234,13 @@ def main():
     s.add_argument("--windows", type=int, nargs="+", default=[6, 24, 168])
     s.add_argument("--detail", action="store_true")
     s.set_defaults(fn=series)
+    a = sub.add_parser("at")
+    a.add_argument("--outdir", default=OUTDIR)
+    a.add_argument("--repo", default=None)
+    a.add_argument("--at", default=None, help="ISO timestamp; default = the last observed bin")
+    a.add_argument("--window", default="1h", choices=ROLL, help="which rolling column to read")
+    a.add_argument("--topk", type=int, default=5)
+    a.set_defaults(fn=at_view)
     d = sub.add_parser("ladder")
     d.add_argument("--outdir", default=OUTDIR)
     d.add_argument("--repo", default=None)
