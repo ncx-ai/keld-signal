@@ -476,6 +476,101 @@ def at_view(args):
                       f"   z {r.get(c + '_z', float('nan')):6.2f}")
 
 
+def bar(x, width=10):
+    """A share as a bar, so a distribution can be read down the column."""
+    if x != x:
+        return " " * width
+    full = int(round(min(max(x, 0.0), 1.0) * width))
+    return ("█" * full).ljust(width, "·")
+
+
+def synopsis(args):
+    """The distribution across and within rungs at one moment, as tables."""
+    refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
+    lvls = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
+    spk = pd.read_parquet(os.path.join(args.outdir, "speaker.parquet"))
+    repo = args.repo or refs.repo.value_counts().idxmax()
+    when = (pd.Timestamp(args.at, tz="UTC") if args.at else refs[refs.repo == repo].bin.max())
+    R, L = refs[(refs.repo == repo) & (refs.bin <= when)], lvls[(lvls.repo == repo) &
+                                                               (lvls.bin <= when)]
+    if R.empty:
+        sys.exit(f"no rows for {repo} at or before {when}")
+    W, LIFT = f"share_{args.window}", f"lift_{args.window}"
+    NW = f"n_{args.window}"
+
+    # One window, used by BOTH tables. Selecting references from the last BIN while showing
+    # rolling-window shares made the distribution incomplete — a reference touched 40 minutes ago
+    # was missing, and the shares summed to 25% instead of 100%.
+    span = pd.Timedelta(args.window)
+    win = R[R.bin > when - span]
+    rows, dist = [], []
+    for rung, levels in LADDER_RUNGS:
+        for level in levels:
+            Ls, Ws = L[L.level == level], win[win.level == level]
+            if Ls.empty or Ws.empty:
+                continue
+            last = Ls.iloc[-1]
+            tot = Ws.n.sum()
+            agg = (Ws.groupby("ref", as_index=False)
+                   .agg(n=("n", "sum"), bin=("bin", "max")))
+            agg["share"] = agg.n / tot
+            # lift, trend and gap are read from each reference's own latest row in the window —
+            # they are columns in refs.parquet, not recomputed here.
+            latest = (Ws.sort_values("bin").groupby("ref").tail(1)
+                      .set_index("ref")[["base_share", "trend_6h", "gap_h", "n_24h", "rank_1h"]])
+            agg = agg.join(latest, on="ref")
+            agg["lift"] = agg.share / agg.base_share
+            agg = agg.sort_values("share", ascending=False)
+            p = agg.share.to_numpy()
+            ent = float(abs(-(p * np.log2(np.where(p > 0, p, 1))).sum()))
+            rows.append((rung, level, tot, len(agg), ent, float(agg.share.iloc[0]),
+                         last.turnover, last.pace,
+                         (when - last.bin).total_seconds() / 3600.0))
+            for i, r in enumerate(agg.head(args.topk).itertuples()):
+                dist.append((rung if i == 0 else "", level if i == 0 else "",
+                             r.share, r.lift, r.trend_6h, int(r.rank_1h) if r.rank_1h == r.rank_1h
+                             else 0, r.n, r.n_24h, r.gap_h, r.ref))
+            if len(agg) > args.topk:
+                rest = agg.iloc[args.topk:]
+                dist.append(("", "", rest.share.sum(), np.nan, np.nan, 0, rest.n.sum(),
+                             rest.n_24h.sum(), np.nan,
+                             f"[{len(rest)} more references, not shown]"))
+
+    print(f"\n{'='*118}\n{repo}  @  {when:%Y-%m-%d %H:%M}Z   "
+          f"(all figures indexed from refs/levels/speaker.parquet; window = {args.window})")
+    print(f"\nRUNGS\n{'rung':20} {'level':11} {'events':>7} {'breadth':>8} "
+          f"{'entropy':>8} {'top1':>6} {'turnover':>9} {'pace':>6} {'last seen':>10}")
+    print("-" * 100)
+    prev = None
+    for rung, level, n, brd, ent, top1, turn, pace, age in rows:
+        print(f"{(rung if rung != prev else ''):20} {level:11} {n:7.0f} {brd:8d} {ent:8.2f} "
+              f"{100*top1:5.0f}% {turn:9.2f} "
+              f"{(f'{pace:.1f}x' if pace == pace else '—'):>6} {age:9.1f}h")
+        prev = rung
+    print(f"\nDISTRIBUTION WITHIN EACH RUNG\n{'rung':20} {'level':11} {'share':>6} "
+          f"{'':10} {'lift':>6} {'tr':>3} {'rk':>3} {'n/'+args.window:>7} {'n/24h':>7} "
+          f"{'gap':>6}  reference")
+    print("-" * 118)
+    for rung, level, sh, lift, tr, rk, n, n24, gap, ref in dist:
+        arrow = "" if tr != tr else ("↑" if tr > 0.02 else "↓" if tr < -0.02 else "→")
+        print(f"{rung:20} {level:11} {100*sh:5.0f}% {bar(sh)} "
+              f"{(f'x{lift:.1f}' if lift == lift else '—'):>6} {arrow:>3} "
+              f"{(str(rk) if rk else '—'):>3} {n:7.0f} {n24:7.0f} "
+              f"{(f'{gap:.1f}h' if gap == gap else '—'):>6}  {ref}")
+
+    S = spk[(spk.repo == repo) & (spk.bin <= when)]
+    if not S.empty:
+        r = S.iloc[-1]
+        print(f"\nTEMPO\n{'channel':22} {'now':>10} {'/'+args.window:>10} {'/24h':>10} "
+              f"{'z':>6}")
+        print("-" * 62)
+        for c in ("user_msgs", "user_chars_per_msg", "user_short_share", "user_burst_share",
+                  "asst_msgs", "tok_out", "unsaid_share_approx"):
+            if c in S.columns:
+                print(f"{c:22} {r[c]:10.2f} {r.get(c + '_' + args.window, np.nan):10.2f} "
+                      f"{r.get(c + '_24h', np.nan):10.2f} {r.get(c + '_z', np.nan):6.2f}")
+
+
 def window(args):
     """Print the transcript turns leading up to a moment, to check a ladder against reality.
 
@@ -1079,8 +1174,12 @@ def series(args):
 #
 # The only knobs are shape parameters — how many observations make a window, what share is worth
 # showing — not per-level constants fitted to a corpus.
+# Grouped by the measured band, which is the one job the half-life keeps. IDENTITY and TOOLING
+# both sit at >4wk but answer different questions — what the work IS against how it is DONE — so
+# they are separate rows in the synopsis and would be separate payloads in a prompt.
 LADDER_RUNGS = [
-    ("IDENTITY", ["repo", "lang", "model", "tool"]),
+    ("IDENTITY", ["repo", "model", "lang"]),
+    ("TOOLING", ["tool", "verb", "agent", "skill", "mcp_server", "mcp_tool"]),
     ("BRANCH & SUBSYSTEM", ["branch", "component"]),
     ("WORKING SET", ["dir", "file"]),
 ]
@@ -1234,6 +1333,13 @@ def main():
     s.add_argument("--windows", type=int, nargs="+", default=[6, 24, 168])
     s.add_argument("--detail", action="store_true")
     s.set_defaults(fn=series)
+    y = sub.add_parser("synopsis")
+    y.add_argument("--outdir", default=OUTDIR)
+    y.add_argument("--repo", default=None)
+    y.add_argument("--at", default=None)
+    y.add_argument("--window", default="1h", choices=ROLL)
+    y.add_argument("--topk", type=int, default=4)
+    y.set_defaults(fn=synopsis)
     a = sub.add_parser("at")
     a.add_argument("--outdir", default=OUTDIR)
     a.add_argument("--repo", default=None)
