@@ -37,7 +37,7 @@ speaking (qwen_windows.is_command_echo — a window of five /login echoes once s
 
 Design: docs/superpowers/specs/2026-08-21-reference-series-design.md
 """
-import argparse, glob, json, math, os, re, sys
+import argparse, glob, hashlib, json, math, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qwen_windows import EXT_LANG, is_command_echo
@@ -61,7 +61,8 @@ TWO_WORD = {"git", "go", "npm", "pnpm", "yarn", "uv", "pip", "python3", "python"
 PATH_INPUTS = ("file_path", "notebook_path", "path")
 
 LEVELS = ["repo", "branch", "component", "dir", "file", "lang", "tool", "verb", "agent",
-          "skill", "model"]
+          "skill", "model", "mcp_server", "mcp_tool"]
+MCP_TOOL = re.compile(r"^mcp__(?P<server>[^_]+(?:_[^_]+)*?)__(?P<tool>.+)$")
 SAY = ["user", "user_echo", "asst", "asst_think"]
 TOK = ["out", "in_fresh", "in_cached"]
 
@@ -73,13 +74,16 @@ LAG_BUCKETS_H = [1, 2, 4, 8, 16, 24, 48, 96, 168, 336, 720, 2160]
 
 # ------------------------------------------------------------------ extract
 
-def repo_of(cwd, repo_root):
+def repo_of(cwd, repo_roots):
+    """The repository, against any of the configured roots — a colleague's export carries macOS
+    paths (/Users/<name>/...), so the root is a list, not a constant."""
     if not cwd:
         return None
     cwd = WORKTREE.sub("", cwd)
-    root = repo_root.rstrip("/") + "/"
-    if cwd.startswith(root):
-        return cwd[len(root):].split("/")[0]
+    for r in repo_roots:
+        root = r.rstrip("/") + "/"
+        if cwd.startswith(root):
+            return cwd[len(root):].split("/")[0] or os.path.basename(r)
     return os.path.basename(cwd.rstrip("/")) or None
 
 
@@ -130,21 +134,34 @@ def text_of(content):
 
 
 def think_blocks(content):
-    """Thinking is present in the transcript as a block with a SIGNATURE and an empty `thinking`
-    string — the text is not persisted. So the volume of reasoning is unobservable here and its
-    incidence is; `asst_think_msgs` counts blocks, and the volume is recovered instead from
-    `usage.output_tokens`, which includes reasoning, minus what was actually said."""
+    """Thinking block sizes, which in practice means block COUNTS.
+
+    Measured across 43 sessions: all 9,148 blocks in the platform-written Claude Code transcripts
+    carry a SIGNATURE and an empty `thinking` string. The only corpus with real thinking text was
+    a MANUAL claude.ai session export (61 blocks, 100,665 chars) — and this system reads only
+    what the agent platforms write for themselves, never an export a person produced by hand. So
+    treat thinking volume as UNAVAILABLE: `asst_think_chars` is recorded when a store happens to
+    carry it, but nothing downstream may depend on it. `asst_think_msgs` (incidence) and the
+    `unsaid_tok_approx` upper bound are the designed-for signals."""
     if not isinstance(content, list):
-        return 0
-    return sum(1 for b in content
-               if isinstance(b, dict) and b.get("type") == "thinking")
+        return []
+    return [len(b.get("thinking") or "") for b in content
+            if isinstance(b, dict) and b.get("type") == "thinking"]
 
 
 def extract(args):
     rows = []
-    n_files = n_lines = 0
+    n_files = n_lines = n_dup = 0
+    seen_hash = set()
     for root in args.roots:
         for path in sorted(glob.glob(os.path.join(root, "*", "*.jsonl"))):
+            with open(path, "rb") as fh:
+                h = hashlib.sha256(fh.read()).hexdigest()
+            if h in seen_hash:
+                n_dup += 1
+                print(f"  duplicate, skipped: {path}")
+                continue
+            seen_hash.add(h)
             n_files += 1
             session = os.path.basename(path)[:8]
             seen_req = set()
@@ -165,7 +182,15 @@ def extract(args):
                 n_lines += 1
                 t = pd.Timestamp(ts).timestamp()
                 repo = repo_of(o.get("cwd"), args.repo_root)
-                root_dir = os.path.join(args.repo_root, repo) if repo else None
+                root_dir = next((os.path.join(r, repo) for r in args.repo_root
+                                 if os.path.isdir(os.path.join(r, repo))), None) if repo else None
+                if root_dir is None and repo and o.get("cwd"):
+                    # A path we cannot stat (another machine's export). Take the repo segment of
+                    # the recorded cwd itself, so file paths still resolve relative to it.
+                    c = WORKTREE.sub("", o["cwd"])
+                    i = c.find("/" + repo + "/")
+                    root_dir = c[:i] + "/" + repo if i >= 0 else (
+                        c if c.endswith("/" + repo) else None)
                 base = (round(t, 1), session, repo, o.get("gitBranch") or None,
                         bool(o.get("isSidechain")))
 
@@ -178,6 +203,10 @@ def extract(args):
                     add("ref", "branch", base[3], 1)
                 if o.get("attributionSkill"):
                     add("ref", "skill", o["attributionSkill"], 1)
+                if o.get("attributionMcpServer"):
+                    add("ref", "mcp_server", o["attributionMcpServer"], 1)
+                if o.get("attributionMcpTool"):
+                    add("ref", "mcp_tool", o["attributionMcpTool"], 1)
 
                 msg = o.get("message") or {}
                 content = msg.get("content")
@@ -192,8 +221,8 @@ def extract(args):
                     said = text_of(content)
                     if said.strip():
                         add("say", "asst", "", len(said))
-                    for _ in range(think_blocks(content)):
-                        add("say", "asst_think", "", 1)      # blocks; the text is redacted
+                    for nchars in think_blocks(content):
+                        add("say", "asst_think", "", nchars)   # 0 = not persisted by this store
                     u, rid = msg.get("usage"), o.get("requestId")
                     if u and rid and rid not in seen_req:
                         seen_req.add(rid)
@@ -208,7 +237,13 @@ def extract(args):
                         if not (isinstance(b, dict) and b.get("type") == "tool_use"):
                             continue
                         name, inp = b.get("name"), b.get("input") or {}
-                        add("ref", "tool", name, 1)
+                        m = MCP_TOOL.match(name or "")
+                        if m:
+                            add("ref", "tool", "mcp:" + m["tool"], 1)
+                            add("ref", "mcp_server", m["server"], 1)
+                            add("ref", "mcp_tool", m["tool"], 1)
+                        else:
+                            add("ref", "tool", name, 1)
                         if name == "Agent" and inp.get("subagent_type"):
                             add("ref", "agent", inp["subagent_type"], 1)
                         if name == "Skill" and inp.get("skill"):
@@ -249,16 +284,22 @@ def extract(args):
     os.makedirs(args.outdir, exist_ok=True)
     out = os.path.join(args.outdir, "events.parquet")
     ev.to_parquet(out, index=False)
-    print(f"{n_files} transcripts, {n_lines} lines, {len(ev)} observations -> {out}")
+    print(f"{n_files} transcripts ({n_dup} duplicates skipped), {n_lines} lines, "
+          f"{len(ev)} observations -> {out}")
     print(ev.groupby(["kind", "level"], observed=True)
             .agg(rows=("n", "size"), total=("n", "sum")).to_string())
 
 
 # ------------------------------------------------------------------ series helpers
 
-def fmt_hl(hl, bin_h=1.0):
+def fmt_hl(hl, bin_h=1.0, max_lag_h=None):
+    """A half-life that never crossed 0.5 is reported against the longest lag the series
+    CONTAINS, not against the bucket ceiling. A 7-hour session cannot evidence ">4wk" — no pair
+    of its bins is a day apart — and printing it did exactly what a silent cap does."""
     if hl is None:
-        return ">4wk"
+        if max_lag_h is None:
+            return "n/a"          # too few observed bins to estimate anything
+        return f">{max_lag_h:.0f}h" if max_lag_h < 336 else ">4wk"
     return f"<{bin_h:g}h" if hl < bin_h else f"{hl:.0f}h"
 
 
@@ -284,7 +325,7 @@ def lag_curve(vectors, idx, bin_h, kind):
     carried value raises is how long it stays true. `composition` uses cosine over the share
     vector; `scalar` uses Pearson correlation of a single channel."""
     if len(idx) < 6:
-        return {}, None
+        return {}, None, None
     if kind == "composition":
         v = vectors / np.where(np.linalg.norm(vectors, axis=1, keepdims=True) == 0, 1,
                                np.linalg.norm(vectors, axis=1, keepdims=True))
@@ -307,7 +348,7 @@ def lag_curve(vectors, idx, bin_h, kind):
             hl = x0 + (h - x0) * (y0 - 0.5) / max(y0 - m, 1e-9)
             break
         prev = (h, m)
-    return curve, hl
+    return curve, hl, float(lag.max()) if len(lag) else None
 
 
 def entropy_rows(m):
@@ -395,7 +436,7 @@ def series(args):
             for a, b_ in zip(oi[:-1], oi[1:]):
                 den = np.linalg.norm(shares[a]) * np.linalg.norm(shares[b_])
                 turn[b_] = 1 - float(np.dot(shares[a], shares[b_]) / max(den, 1e-9))
-            curve, hl = lag_curve(shares[oi], oi, args.bin, "composition")
+            curve, hl, max_lag = lag_curve(shares[oi], oi, args.bin, "composition")
             life = (d.groupby("ref", observed=True).t.agg(lambda s: (s.max()-s.min())/3600.0))
             med_life = float(life.median()) if len(life) else float("nan")
 
@@ -415,7 +456,7 @@ def series(args):
                                "breadth": float(brd[observed].mean()),
                                "entropy": float(ent[observed].mean()),
                                "turnover": float(np.nanmean(turn)),
-                               "half_life_h": hl, "median_lifetime_h": med_life,
+                               "half_life_h": hl, "max_lag_h": max_lag, "median_lifetime_h": med_life,
                                "curve": json.dumps({str(k): v[0] for k, v in curve.items()}),
                                "top": top})
             vshow = (f"{len(wide.columns)}/{vocab_total}" if vocab_total > VOCAB_CAP
@@ -423,7 +464,7 @@ def series(args):
             print(f"  {level:10} {tot.sum():>7.0f} {vshow:>9} "
                   f"{100*observed.sum()/n_bins:>4.0f}% {tot[observed].mean():>8.1f} "
                   f"{brd[observed].mean():>8.1f} {ent[observed].mean():>8.2f} "
-                  f"{np.nanmean(turn):>9.2f} {fmt_hl(hl, args.bin):>10} "
+                  f"{np.nanmean(turn):>9.2f} {fmt_hl(hl, args.bin, max_lag):>10} "
                   f"{med_life:>9.0f}h  {top[:40]}")
 
         # ---------------- speaker channels: how much, how often, in what shape
@@ -470,7 +511,7 @@ def series(args):
                           ("user_chars_per_msg", "chars/msg"), ("user_short_share", "share"),
                           ("user_burst_share", "share"), ("user_gap_med_s", "s"),
                           ("user_echo_msgs", "msgs"), ("asst_msgs", "msgs"),
-                          ("asst_chars", "chars"), ("asst_think_msgs", "blocks"),
+                          ("asst_chars", "chars"), ("asst_think_msgs", "blocks"), ("asst_think_chars", "chars"),
                           ("asst_chars_per_msg", "chars/msg"),
                           ("leverage_chars", "ratio"), ("tok_out", "tok"),
                           ("tok_in_fresh", "tok"), ("tok_in_cached", "tok"),
@@ -478,28 +519,35 @@ def series(args):
             x = sp[col].to_numpy(dtype=float)
             obs = ~np.isnan(x) & (x != 0) if "share" not in unit else ~np.isnan(x)
             oi = np.flatnonzero(obs)
-            _, hl = lag_curve(np.nan_to_num(x[oi])[:, None], oi, args.bin, "scalar")
+            _, hl, max_lag = lag_curve(np.nan_to_num(x[oi])[:, None], oi, args.bin,
+                                       "scalar")
             tot_s = np.nansum(x) if unit not in ("share", "ratio", "chars/msg", "s") else np.nan
             levels_out.append({"repo": repo, "kind": "speaker", "level": col,
                                "obs": float(len(oi)), "vocab": 0,
                                "active_pct": 100*len(oi)/n_bins,
                                "per_active": float(np.nanmean(x[oi])) if len(oi) else np.nan,
                                "breadth": np.nan, "entropy": np.nan, "turnover": np.nan,
-                               "half_life_h": hl,
+                               "half_life_h": hl, "max_lag_h": max_lag,
                                "median_lifetime_h": float(np.nanmedian(x[oi]))
                                if len(oi) else np.nan,
                                "curve": "", "top": unit})
             print(f"  {col:22} {(f'{tot_s:,.0f}' if not np.isnan(tot_s) else '—'):>12} "
                   f"{(np.nanmean(x[oi]) if len(oi) else np.nan):>12.2f} "
                   f"{(np.nanmedian(x[oi]) if len(oi) else np.nan):>10.2f} "
-                  f"{fmt_hl(hl, args.bin):>10}  {spark(np.nan_to_num(x))}")
+                  f"{fmt_hl(hl, args.bin, max_lag):>10}  {spark(np.nan_to_num(x))}")
 
         lv = pd.DataFrame([r for r in levels_out if r["repo"] == repo])
-        ref_order = (lv[lv.kind == "ref"].assign(h=lambda d: d.half_life_h.fillna(1e9))
+        ref_order = (lv[lv.kind == "ref"]
+                     .assign(h=lambda d: d.half_life_h.fillna(d.max_lag_h + 1e6))
                      .sort_values("h", ascending=False))
         print("\n  NATURAL FREQUENCY, slowest first (composition half-life):\n    " +
-              "  ->  ".join(f"{r.level}({fmt_hl(None if r.h >= 1e9 else r.h, args.bin)})"
-                            for r in ref_order.itertuples()))
+              "  ->  ".join(
+                  f"{r.level}({fmt_hl(None if not (r.h < 1e6) else r.h, args.bin, r.max_lag_h)})"
+                  for r in ref_order.itertuples() if r.h == r.h) +
+              ("   [no estimate: " + ", ".join(
+                  lv[(lv.kind == "ref") & lv.half_life_h.isna() & lv.max_lag_h.isna()].level)
+               + "]" if lv[(lv.kind == "ref") & lv.half_life_h.isna()
+                           & lv.max_lag_h.isna()].size else ""))
 
         if args.detail:
             for level in LEVELS:
@@ -536,7 +584,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("extract")
     e.add_argument("--roots", nargs="+", default=CLAUDE_ROOTS)
-    e.add_argument("--repo-root", default=REPO_ROOT)
+    e.add_argument("--repo-root", nargs="+", default=[REPO_ROOT])
     e.add_argument("--component-depth", type=int, default=3)
     e.add_argument("--outdir", default=OUTDIR)
     e.set_defaults(fn=extract)

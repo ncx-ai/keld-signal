@@ -153,3 +153,54 @@ tier A carried for the session, tier B refreshed daily or on a branch change, ti
 window. `state` and `state_age_h` are already in `metrics.parquet` for every level, which is the
 carry-forward mechanism itself — what remains is choosing each tier's payload and its staleness
 budget from the half-life beside it.
+
+---
+
+## Scope: platform-written transcripts only
+
+This system reads only what the agent platforms write for themselves — `~/.claude/projects`,
+`~/.codex/sessions`, `~/.gemini/tmp/*/chats`, and the Cowork session trees. **A manual export is
+not an input.** Nothing may be designed around a field that exists only because a person clicked
+export, because the daemon will never see one.
+
+That rule settles the thinking question. Across 43 sessions, all **9,148** thinking blocks in the
+platform-written Claude Code transcripts carry a signature and an **empty** `thinking` string.
+The only corpus with real thinking text (61 blocks, 100,665 chars) was a hand-made claude.ai
+session export. So **thinking volume is unavailable by design**: `asst_think_chars` is still
+recorded where a store happens to carry it, but nothing downstream may depend on it.
+`asst_think_msgs` (incidence) and the `unsaid_tok_approx` upper bound are the designed-for
+signals.
+
+### What the colleague's Cowork export was legitimately good for
+
+Run as a **schema test**, not as evidence. Its 754 lines use the same field names the extractor
+already reads — `type`, `timestamp`, `cwd`, `gitBranch`, `message.content`, `requestId`,
+`attributionSkill` — plus `attributionMcpServer` / `attributionMcpTool`, which the *platform*
+writes and a real Cowork transcript would therefore also carry. The extractor needed no
+per-platform special case, and the exercise produced three changes that are general:
+
+* **`mcp_server` and `mcp_tool` as reference levels.** A session that reaches Notion touches
+  that server as surely as it touches a repository, and MCP attribution is platform-written.
+* **Duplicate-file dedupe by content hash.** The export ships one session twice
+  (`transcript.jsonl` and `<uuid>.jsonl` are byte-identical); counted twice, every series
+  doubles. The guard is general — it protects against any duplicated transcript.
+* **Several repo roots.** Another machine's paths (`/Users/<name>/...`) resolve against a list of
+  roots, with a fallback that derives the root from the recorded `cwd` when the path cannot be
+  stat'd locally.
+
+Nothing about the *frequencies* in that session is usable: 271 lines over **7.1 hours**, one
+branch, 14 engineer messages. And per AGENTS.md, Cowork is VM-backed — its platform-written
+transcripts are unreadable from the host today, so this is a preview of material we currently
+cannot obtain at all.
+
+### A reporting defect that short session exposed
+
+`>4wk` was printed whenever the similarity curve never crossed 0.5 — including for a series whose
+longest lag was 7 hours, where no pair of bins is even a day apart. "Very stable" and "the span
+is too short to tell" were being reported as the same fact, which is what a silent cap does. Now
+the ceiling is the longest lag the series actually **contains** (`>7h`, `>5h`), and a level with
+too few observed bins to estimate anything at all reports **`n/a`** and is listed separately
+rather than being ranked.
+
+This corrected a number in the main corpus too: keld-signal's `agent` level read `>4wk` and is
+really `>74h`.
