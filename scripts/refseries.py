@@ -415,6 +415,15 @@ def build_frames(ev, bin_h, outdir, baseline_ev=None, scope_map=None):
     for w in ROLL:
         refs[f"share_{w}"] = refs[f"n_{w}"] / refs[f"lvl_{w}"]
         refs[f"lift_{w}"] = refs[f"share_{w}"] / refs.base_share
+    if "scope_repo" in ev.columns:
+        # Which checkout a reference belongs to. A path maps to exactly one repository, so the
+        # modal value is exact for the path levels; it is meaningless for `tool` or `verb`, which
+        # is why only the path levels surface it.
+        owner = (ev.dropna(subset=["scope_repo"])
+                 .groupby(["repo", "level", "ref"], observed=True).scope_repo
+                 .agg(lambda x: x.mode().iat[0] if len(x.mode()) else None)
+                 .rename("owner").reset_index())
+        refs = refs.merge(owner, on=["repo", "level", "ref"], how="left")
     refs["ewm_share"] = (refs.groupby(["repo", "level", "ref"], group_keys=False)
                          .share.apply(lambda x: x.ewm(halflife=4, adjust=False).mean()))
     refs["rank_1h"] = (refs.groupby(["repo", "level", "bin"]).share_1h
@@ -542,6 +551,7 @@ def at_view(args):
                       f"   z {r.get(c + '_z', float('nan')):6.2f}")
 
 
+PATH_LEVELS = ("component", "dir", "file", "lang")
 RUNG_BAND = {"IDENTITY": "half-life >4wk — effectively constant",
              "TOOLING": "half-life >4wk for the mix, though its events are high-frequency",
              "BRANCH & SUBSYSTEM": "half-life 200-380h — days to weeks",
@@ -584,6 +594,8 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
         },
         "window": {
             "entity": str(entity),
+            "entity_kind": ("transcript session" if len(str(entity)) <= 12
+                            and not str(entity).startswith("keld") else "repository"),
             "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "duration_h": round((end - start).total_seconds() / 3600.0, 2),
@@ -596,6 +608,29 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
         out["window"]["note"] = "no reference observations in this window"
         return out
 
+    # Stated as facts in the header, not left to be read out of a distribution further down.
+    cwd_repo = R[R.level == "repo"]
+    if not cwd_repo.empty:
+        sh = cwd_repo.groupby("ref").n.sum()
+        sh = (sh / sh.sum()).sort_values(ascending=False)
+        out["window"]["repo_of_cwd"] = (str(sh.index[0]) if len(sh) == 1 else
+                                        [{"repo": str(k), "share": round(float(v), 3)}
+                                         for k, v in sh.items()])
+    if "owner" in R.columns:
+        touched = sorted(R[R.level.isin(PATH_LEVELS)].owner.dropna().unique())
+        if touched:
+            out["window"]["repos_whose_files_were_touched"] = [str(t) for t in touched]
+    scopes = sorted({v for v in R.base_scope.dropna().unique() if v != "entity"})
+    if scopes:
+        out["window"]["lift_baseline_scope"] = sorted(
+            {r for v in scopes for r in str(v).split(",")})
+    if not cwd_repo.empty and "owner" in R.columns:
+        touched = set(R[R.level.isin(PATH_LEVELS)].owner.dropna().astype(str))
+        if len(touched - {str(sh.index[0])}) > 0:
+            out["window"]["note"] = (
+                "this window touched files in more than one checkout; repo_of_cwd is where the "
+                "session was running, repos_whose_files_were_touched is where the work landed")
+
     for rung, levels in LADDER_RUNGS:
         block = {"band": RUNG_BAND.get(rung, ""), "levels": {}}
         for level in levels:
@@ -605,8 +640,8 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
             tot = W.n.sum()
             agg = W.groupby("ref", as_index=False).n.sum()
             agg["share"] = agg.n / tot
-            last = (W.sort_values("bin").groupby("ref").tail(1)
-                    .set_index("ref")[["base_share", "gap_h", "n_24h"]])
+            cols = ["base_share", "gap_h", "n_24h"] + (["owner"] if "owner" in W.columns else [])
+            last = W.sort_values("bin").groupby("ref").tail(1).set_index("ref")[cols]
             agg = agg.join(last, on="ref").sort_values("share", ascending=False)
             first_half = W[W.bin <= mid].groupby("ref").n.sum()
             second_half = W[W.bin > mid].groupby("ref").n.sum()
@@ -629,6 +664,8 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
             for r in agg.head(topk).itertuples():
                 item = {"ref": r.ref, "share": round(float(r.share), 3),
                         "events": int(r.n), "trend": trend(r.ref)}
+                if level in PATH_LEVELS and getattr(r, "owner", None):
+                    item["repo"] = str(r.owner)
                 if r.base_share == r.base_share and r.base_share > 0:
                     item["lift"] = round(float(r.share / r.base_share), 1)
                 if r.gap_h == r.gap_h:
