@@ -1422,6 +1422,16 @@ def executive(doc):
                      "text; window is [start, end) and no later data is used"}
 
 
+def episodes_cmd(args):
+    refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
+    entity = args.repo or refs.repo.value_counts().idxmax()
+    for e in episodes(refs, entity, watch=tuple(args.watch), debounce=args.debounce,
+                      max_gap_h=args.max_gap_h, max_span_h=args.max_span_h):
+        print(f"{e['start']:%Y-%m-%dT%H:%M}\t{e['end']:%Y-%m-%dT%H:%M}\t{e['bins']}\t"
+              f"{e['events']:.0f}\t{e['reason']}\t"
+              + " ".join(f"{k}={v}" for k, v in e["state"].items()))
+
+
 def context(args):
     refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
     lvls = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
@@ -2420,6 +2430,14 @@ def main():
     c.add_argument("--brief", action="store_true",
                    help="compact structured view, one line per level")
     c.set_defaults(fn=context)
+    ep = sub.add_parser("episodes")
+    ep.add_argument("--outdir", default=OUTDIR)
+    ep.add_argument("--repo", default=None)
+    ep.add_argument("--watch", nargs="+", default=["branch", "component"])
+    ep.add_argument("--debounce", type=int, default=2)
+    ep.add_argument("--max-gap-h", type=float, default=1.0)
+    ep.add_argument("--max-span-h", type=float, default=6.0)
+    ep.set_defaults(fn=episodes_cmd)
     y = sub.add_parser("synopsis")
     y.add_argument("--outdir", default=OUTDIR)
     y.add_argument("--repo", default=None)
