@@ -215,11 +215,61 @@ def cmd_run(args):
     print(f"\n{len(rows)} calls -> {OUT}/{args.out}")
     print("worker:", json.dumps(m.get("worker", {})))
 
+# --- the deterministic frame rule (arm `rule`) ---------------------------------------------
+# Written before any accuracy number was computed. It reads only the frame levels the
+# pre-registration named — file, dir, skill, action — and maps them by what the repository's own
+# conventions mean, not by what scores well.
+#
+#   docs/superpowers/plans/**  or the writing-plans skill  -> plan   (sequencing work not yet done)
+#   docs/superpowers/specs/**                              -> plan   (a spec describes what to build)
+#   README / AGENTS / CLAUDE / docs/*.md outside those     -> explain (durable reference)
+#   anything else                                          -> record (the residual: writeups)
+#
+# `record` is the catch-all deliberately: it is the majority class, so the rule is not allowed to
+# win by having a cleverer default than the baseline it is measured against.
+def frame_facts(refs, lvls, spk, base, session, st, en):
+    doc = characterize(refs, lvls, spk, session, st, en, 8, base=base)
+    L = {lv: blk for r in doc.get("rungs", {}).values() for lv, blk in r["levels"].items()}
+    return {lv: [i["ref"] for i in L.get(lv, {}).get("top", [])] for lv in
+            ("file", "dir", "skill", "action", "component", "ext")}
+
+
+def rule_label(f):
+    paths = [p.lower() for p in f.get("file", []) + f.get("dir", [])]
+    skills = [s.lower() for s in f.get("skill", [])]
+    if any("writing-plans" in s for s in skills):
+        return "plan"
+    if any("superpowers/plans" in p or "superpowers/specs" in p for p in paths):
+        return "plan"
+    if any(os.path.basename(p) in ("readme.md", "agents.md", "claude.md") for p in paths):
+        return "explain"
+    if any(p.startswith("docs/") and p.endswith(".md") for p in paths):
+        return "explain"
+    return "record"
+
+
+def cmd_rule(args):
+    s = pd.read_csv(f"{OUT}/sample.csv", parse_dates=["start"])
+    refs = pd.read_parquet(f"{SESS_FRAMES}/refs.parquet")
+    lvls = pd.read_parquet(f"{SESS_FRAMES}/levels.parquet")
+    spk = pd.read_parquet(f"{SESS_FRAMES}/speaker.parquet")
+    base = pd.read_parquet(f"{SESS_FRAMES}/baseline.parquet")
+    rows = []
+    for r in s[s.arm_group == "gated"].itertuples():
+        st = pd.Timestamp(r.start, tz="UTC") if r.start.tzinfo is None else r.start
+        f = frame_facts(refs, lvls, spk, base, r.session, st, st + SPAN)
+        rows.append(dict(wid=r.wid, rule=rule_label(f),
+                         skill=";".join(f["skill"][:3]), file=";".join(f["file"][:3])))
+    d = pd.DataFrame(rows)
+    d.to_csv(f"{OUT}/rule.csv", index=False)
+    print(d.to_string(index=False))
+
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(required=True)
-    for name, fn in (("sample", cmd_sample), ("render", cmd_render), ("sheets", cmd_sheets)):
+    for name, fn in (("sample", cmd_sample), ("render", cmd_render), ("sheets", cmd_sheets),
+                     ("rule", cmd_rule)):
         sub.add_parser(name).set_defaults(fn=fn)
     r = sub.add_parser("run")
     r.add_argument("--port", type=int, required=True)
