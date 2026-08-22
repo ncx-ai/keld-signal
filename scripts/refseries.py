@@ -44,6 +44,8 @@ from qwen_windows import EXT_LANG, clip, is_command_echo
 
 import numpy as np
 import pandas as pd
+
+import terms
 import yaml
 
 
@@ -79,10 +81,36 @@ TWO_WORD = {"git", "go", "npm", "pnpm", "yarn", "uv", "pip", "python3", "python"
             "docker", "kubectl", "cargo", "gh", "systemctl", "launchctl", "brew", "poetry"}
 PATH_INPUTS = ("file_path", "notebook_path", "path")
 
+# The ONE level that reads message text. Every other level above comes from tool-call inputs, and
+# that is exactly why attribution stalls at ~37%: a customer, a supplier or an initiative is only
+# ever spoken. See scripts/terms.py for the three measured decisions behind how it reads.
+#
+# spaCy is loaded once, lazily, and only if it is installed — the frames must still build on a
+# machine without it, with the level simply absent rather than the run failing. KELD_TERMS=0
+# switches it off (it roughly doubles extract time on a large corpus).
+_NLP = ["unset"]
+
+
+def term_nlp():
+    if _NLP[0] == "unset":
+        _NLP[0] = None
+        if os.environ.get("KELD_TERMS", "1") != "0":
+            try:
+                import spacy
+                m = spacy.load("en_core_web_sm",
+                               exclude=["tagger", "parser", "lemmatizer", "attribute_ruler"])
+                m.max_length = 20_000_000
+                _NLP[0] = m
+            except Exception as e:          # not installed, or no model: degrade, never fail
+                print(f"  terms: spaCy unavailable ({e.__class__.__name__}), level disabled",
+                      file=sys.stderr)
+    return _NLP[0]
+
+
 LEVELS = ["workspace", "workspace_evidence", "remote", "repo_mentioned", "vcs", "branch",
           "component", "dir", "file", "artifact", "action", "toolchain", "ext",
           "lang", "tool", "exe", "verb", "service", "agent", "skill", "model", "mcp_server",
-          "mcp_tool"]
+          "mcp_tool", "term"]
 
 # WHAT IS PHYSICALLY BEING DONE, as distinct from what it is being done to. `tool` says Bash 55%,
 # which is an implementation detail; the physical act — reading, authoring, running, searching,
@@ -1251,7 +1279,9 @@ def digest(doc):
                              f" ({ratio:.0f} assistant turns per engineer turn)")
     out["basis"] = ("counts of tool-call references in [start,end); shares are of the level; "
                     "lift is against the prior history of " +
-                    "+".join(w.get("lift_baseline_scope", [])) + "; no message text")
+                    "+".join(w.get("lift_baseline_scope", [])) +
+                    "; every level is from tool-call inputs EXCEPT `term`, which counts named "
+                    "entities in message text")
     return out
 
 
@@ -1405,6 +1435,16 @@ def executive(doc):
     # Fixed slots with an explicit placeholder, so headlines stay comparable across windows: a
     # level silently dropping out used to shift every later slot leftwards and change the shape
     # of the line.
+    # Named terms are the only facts here that come from what was SAID rather than what was run,
+    # so they are labelled as such. Counts ride along for the same reason "2659 recorded tool
+    # references" does: an unlabelled number gets read as an identifier (measured — the model
+    # answered 2659 when asked which ticket, and labelling it moved correct declines 76% -> 100%).
+    tt = (L.get("term", {}).get("top") or [])[:5]
+    if tt:
+        named = ", ".join(f"{i['ref']} ({i['events']}x)" for i in tt)
+        sents.append(f"Named in conversation: {named}.")
+        facts.append("named terms (from message text, not tool inputs): " + named)
+
     da = distinctive("action")
     slots = [w.get("workspace_of_cwd"), name("artifact"),
              (f"{da['ref']}" + (f" x{da['lift']:g}" if (da.get("lift") or 0) >= 3 else "")
@@ -1420,8 +1460,9 @@ def executive(doc):
                                "branch; — means that level saw nothing in this window",
             "summary": Para(" ".join(sents)),
             "key_facts": facts,
-            "basis": "counts of tool-call references and per-line metadata only; no message "
-                     "text; window is [start, end) and no later data is used"}
+            "basis": "counts of tool-call references and per-line metadata, plus named terms "
+                     "counted in message text; window is [start, end) and no later data is "
+                     "used"}
 
 
 def contexts_cmd(args):
@@ -1786,6 +1827,28 @@ def scan_workspace(path):
     return marker_dirs, cd_targets, remotes
 
 
+def canonicalize_terms(rows):
+    """Fold a term's casings together, corpus-wide, keeping the spelling the corpus uses most.
+
+    terms.tally folds case within one call, and extract calls it per MESSAGE, so "Magenta" said in
+    one turn and "magenta" in the next survive as two refs — halving the prominence of the thing
+    the hour was about (measured: 24 mentions split 17/7). Folding has to happen once the whole
+    corpus is in hand, which is here.
+
+    Only `term` rows are touched; every other level's ref is a path, an identifier or a controlled
+    vocabulary where case is meaningful.
+    """
+    best = {}
+    for r in rows:
+        if r[6] != "term":
+            continue
+        best.setdefault(r[7].lower(), collections.Counter())[r[7]] += r[8]
+    canon = {k: c.most_common(1)[0][0] for k, c in best.items()}
+    return [(r[:7] + (canon[r[7].lower()],) + r[8:]) if r[6] == "term" and isinstance(r, tuple)
+            else ([*r[:7], canon[r[7].lower()], *r[8:]] if r[6] == "term" else r)
+            for r in rows]
+
+
 def extract(args):
     rows, pending = [], []
     n_files = n_lines = n_dup = 0
@@ -1873,12 +1936,17 @@ def extract(args):
                     if body.strip():
                         add("say", "user_echo" if is_command_echo(body) else "user", "",
                             len(body))
+                        if not is_command_echo(body):
+                            for t in terms.tally([body], term_nlp()):
+                                add("ref", "term", t["term"], t["n"])
                 else:
                     if msg.get("model"):
                         add("ref", "model", msg["model"], 1)
                     said = text_of(content)
                     if said.strip():
                         add("say", "asst", "", len(said))
+                        for t in terms.tally([said], term_nlp()):
+                            add("ref", "term", t["term"], t["n"])
                     for nchars in think_blocks(content):
                         add("say", "asst_think", "", nchars)   # 0 = not persisted by this store
                     u, rid = msg.get("usage"), o.get("requestId")
@@ -1947,6 +2015,8 @@ def extract(args):
                     pending.append((base, rel.rstrip("/"), from_input, root_key))
 
     rows += reconcile(pending, args.component_depth)
+
+    rows = canonicalize_terms(rows)
 
     ev = pd.DataFrame(rows, columns=["t", "session", "repo", "branch", "side", "kind", "level",
                                      "ref", "n"])
@@ -2331,6 +2401,7 @@ LADDER_RUNGS = [
     ("TOOLCHAIN", ["toolchain"]),
     ("TOOLING", ["tool", "exe", "verb", "agent", "skill", "mcp_server", "mcp_tool"]),
     ("SERVICES", ["service"]),
+    ("NAMED TERMS", ["term"]),
     ("BRANCH & SUBSYSTEM", ["branch", "component"]),
     ("WORKING SET", ["dir", "file"]),
 ]
