@@ -1439,7 +1439,19 @@ def executive(doc):
     # so they are labelled as such. Counts ride along for the same reason "2659 recorded tool
     # references" does: an unlabelled number gets read as an identifier (measured — the model
     # answered 2659 when asked which ticket, and labelling it moved correct declines 76% -> 100%).
-    tt = (L.get("term", {}).get("top") or [])[:5]
+    # Ranked by LIFT, not by count. Measured over 44 sessions: raw frequency puts API (913
+    # mentions, present in 89% of sessions) above UnityPredict (108 mentions, 9%), so the slot
+    # fills with vocabulary every session shares and carries no information about this one. This
+    # is the same correction `distinctive()` makes for actions, for the same reason.
+    #
+    # A floor of 3 events keeps a term seen once from winning on a meaningless lift. Terms below
+    # the floor fall back to count order behind those above it, so the slot is never empty just
+    # because nothing cleared the bar.
+    _terms = L.get("term", {}).get("top") or []
+    _lifted = sorted((i for i in _terms if i["events"] >= 3 and i.get("lift")),
+                     key=lambda i: -i["lift"])
+    _rest = [i for i in _terms if i not in _lifted]
+    tt = (_lifted + _rest)[:5]
     if tt:
         named = ", ".join(f"{i['ref']} ({i['events']}x)" for i in tt)
         sents.append(f"Named in conversation: {named}.")

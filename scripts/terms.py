@@ -41,10 +41,43 @@ SHAPES = (
 
 # Terms that are about the conversation rather than the work. Kept deliberately short: a long
 # stoplist is a way of hiding a bad extractor, and every entry here is one an admin cannot see.
+# Malformed rather than merely common: an escape artifact, or a measurement. These are not
+# frequency problems and a stoplist is the wrong tool — no corpus makes `\n` a name. Everything
+# that IS a real word but too common to attribute (API, CLI, JSON) is left to LIFT instead, which
+# refseries already computes for every level: a term that appears across the whole corpus has a
+# share equal to its baseline, and one distinctive to a session stands out. A hand-written
+# stoplist would be a second, worse, un-auditable copy of that.
+MALFORMED = (
+    re.compile(r"^\\[a-z]$"),                       # \n, \t as literal two-character text
+    re.compile(r"^[\d.]+(px|em|rem|pt|ms|s|kb|mb|gb)$", re.I),   # 427px, 100ms
+    re.compile(r"^(toolu|msg|req|run)_[A-Za-z0-9]{6,}$"),         # harness ids
+)
+
 NOISE = {
     "i", "you", "we", "it", "the", "a", "an", "ok", "okay", "yes", "no", "yeah",
     "todo", "done", "wip", "n/a", "tbd", "etc", "eg", "ie", "am", "pm", "utc",
 }
+
+
+# An ALL-CAPS token is either an acronym (ACME, OTEL, EGIS) or someone shouting (DUDE, FUCKING,
+# HORRIBLE). Lift cannot tell them apart — shouting is genuinely rare corpus-wide, so it ranks as
+# distinctive — and an admin-facing digest listing "named terms: DUDE, FUCKING" is not shippable.
+#
+# The discriminator is not frequency alone: Bedrock, Vertex and Magenta are common English words
+# used as product names, and a global-frequency filter drops them (zipf 3.0-3.3). What separates
+# them is CASING — those arrive title-cased from the NER pass, never from the all-caps pattern. So
+# the frequency test is applied to ALL-CAPS tokens only, where a common English word can only be
+# emphasis. Calibrated at zipf >= 4.0: drops DUDE 4.8, FUCKING 5.3, RED 5.3, ON 6.9, TOP 5.6,
+# MAX 4.7, NOT 6.7; keeps ACME 2.9, TEE 3.8, OTEL 1.4, EGIS 1.3, XML 3.3.
+SHOUT_ZIPF = 4.0
+try:
+    from wordfreq import zipf_frequency as _zipf
+except ImportError:                       # optional: without it, shouting is simply not filtered
+    _zipf = None
+
+
+def is_shouting(t):
+    return bool(_zipf and t.isupper() and len(t) > 1 and _zipf(t.lower(), "en") >= SHOUT_ZIPF)
 
 
 def normalize(s):
@@ -88,7 +121,8 @@ def candidates(text, nlp=None):
     for pat in SHAPES:
         for m in pat.finditer(text):
             out += split_list(normalize(m.group()))
-    return [t for t in out if len(t) > 1 and t.lower() not in NOISE and not t.isdigit()]
+    return [t for t in out if len(t) > 1 and t.lower() not in NOISE and not t.isdigit()
+            and not any(p.match(t) for p in MALFORMED) and not is_shouting(t)]
 
 
 def tally(messages, nlp=None):

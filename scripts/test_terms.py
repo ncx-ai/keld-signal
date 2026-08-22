@@ -55,6 +55,25 @@ def test_shapes_survive_without_spacy():
     assert {"ACME", "UnityPredict", "Together.ai"} <= got, got
 
 
+def test_malformed_tokens_are_rejected_but_common_words_are_not():
+    """`\\n` and `427px` are not names at any frequency, so they are dropped by SHAPE. `API` is a
+    real term that is merely ubiquitous — that is lift's job, not a stoplist's, so it survives
+    here and is ranked down later."""
+    got = {t["term"] for t in tally([r"427px \n toolu_01ABCDEF ACME API"], nlp=None)}
+    assert "ACME" in got and "API" in got, got
+    assert not {"427px", r"\n"} & got, got
+
+
+def test_shouting_is_dropped_but_acronyms_and_product_names_survive():
+    """ALL-CAPS emphasis ranked as "distinctive" under lift because it IS rare corpus-wide, and
+    put DUDE and FUCKING in an admin-facing digest. Casing is the discriminator: a common English
+    word in all caps is emphasis, while Bedrock/Vertex/Magenta arrive title-cased from NER and are
+    never touched by this test."""
+    got = {t["term"] for t in tally(["DUDE this is FUCKING RED but ACME and OTEL and TEE"], nlp=None)}
+    assert {"ACME", "OTEL", "TEE"} <= got, got
+    assert not {"DUDE", "FUCKING", "RED"} & got, got
+
+
 if __name__ == "__main__":
     fns = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     bad = 0

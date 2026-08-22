@@ -51,8 +51,19 @@ SKILL_INJECTION = re.compile(
     re.IGNORECASE)
 
 
+# A background task reporting completion is the harness talking to itself, and it arrives in a
+# `user` envelope like the echoes above. Measured: 15% of the user messages that survived the two
+# filters above are these. They cost twice over — the ids and output paths inside them
+# (`tool-use-id`, `home-dg-keld-keld-atlas`, `toolu_...`) surface as named terms, and every one
+# counts as an engineer turn, so the assistant-per-engineer ratio that the digest reports as
+# "closely steered" is computed against a denominator that is 15% machine text.
+TASK_NOTIFICATION = re.compile(
+    r"^\s*(<task-notification>|<local-command-caveat>|\[SYSTEM NOTIFICATION)", re.IGNORECASE)
+
+
 def is_command_echo(text):
-    return bool(COMMAND_ECHO.match(text) or SKILL_INJECTION.match(text))
+    return bool(COMMAND_ECHO.match(text) or SKILL_INJECTION.match(text)
+                or TASK_NOTIFICATION.match(text))
 
 
 def clip(text, cap):
