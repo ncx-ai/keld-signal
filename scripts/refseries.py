@@ -453,6 +453,61 @@ def strip_heredocs(command):
     return "\n".join(out)
 
 
+# Command names come from a real bash PARSER, not from splitting on operators. Measured over 4435
+# real Bash invocations from this corpus: the hand-rolled split yields 1761 distinct "programs",
+# bashlex yields 93. The 1668 difference is not obscure tooling — it is `import` (44), `def` (137),
+# `const` (78), `the` (41), `-e` (355): shell text and inline source read as commands. bashlex
+# parses 91.7% of real commands; the rest fall back to the split, which is why strip_heredocs
+# above still matters.
+#
+# Optional dependency: without bashlex the fallback is the previous behaviour, so frames still
+# build. The level is degraded, not absent.
+try:
+    import bashlex as _bashlex
+except ImportError:
+    _bashlex = None
+
+
+def parsed_command_names(command):
+    """Every command name in a shell string, via the AST. None if it cannot be parsed.
+
+    Descends into command substitutions — `$(git rev-parse HEAD)` is a real git invocation — which
+    a top-level walk misses.
+    """
+    if _bashlex is None:
+        return None
+    out, seen = [], set()
+
+    def walk(n):
+        # id-keyed, because the AST is reachable by more than one route: descending `parts` and
+        # then each part's own `parts` visits a command substitution twice, and
+        # `echo $(git rev-parse HEAD)` reported git twice for one invocation.
+        if id(n) in seen:
+            return
+        seen.add(id(n))
+        if getattr(n, "kind", None) == "command":
+            for part in n.parts:
+                if getattr(part, "kind", None) == "word":
+                    out.append(os.path.basename(part.word))
+                    break
+        for attr in ("parts", "list", "command"):
+            v = getattr(n, attr, None)
+            if v is None:
+                continue
+            for ch in (v if isinstance(v, list) else [v]):
+                walk(ch)
+        for part in getattr(n, "parts", []) or []:
+            for sub in getattr(part, "parts", []) or []:
+                walk(sub)
+
+    try:
+        for t in _bashlex.parse(command):
+            walk(t)
+    except Exception:
+        return None            # ParsingError, NotImplementedError, recursion — fall back
+    return out
+
+
 def bash_refs(command):
     """Verbs and path-looking tokens from a shell command. Split on the operators so a pipeline
     contributes every verb in it, not just the first."""
@@ -461,6 +516,7 @@ def bash_refs(command):
     # tests/x.py from the command — splitting its share between two names. Segments are walked in
     # order and a `cd` sets the prefix for everything after it.
     verbs, exes, paths, prefix = [], [], [], ""
+    ast_exes = parsed_command_names(command)
     for seg in re.split(r"[|;&\n]+|&&|\|\|", strip_heredocs(command) or ""):
         # QUOTE-AWARE. Splitting on whitespace tears a quoted path apart at its spaces, and the
         # fragment then looks like a relative path and gets resolved under the repo root: a
@@ -482,9 +538,11 @@ def bash_refs(command):
             head = f"{head} {toks[1]}"
         ok = (exe and exe not in SHELL_KEYWORD and not exe[0].isdigit()
               and re.fullmatch(r"[\w.\-]{1,40}", exe))
-        if ok:
+        # The parser is authoritative for WHAT WAS RUN when it succeeded; the split below still
+        # walks every segment because it is what resolves paths, and those are unaffected.
+        if ok and ast_exes is None:
             exes.append(exe)
-        if ok and re.fullmatch(r"[\w.\- ]{1,40}", head):
+        if ok and re.fullmatch(r"[\w.\- ]{1,40}", head) and (ast_exes is None or exe in ast_exes):
             verbs.append(head)
         if head == "cd" and len(toks) > 1 and not toks[1].startswith("-"):
             target = toks[1].strip("'\"")
@@ -501,6 +559,10 @@ def bash_refs(command):
                 if prefix and not q.startswith("/"):
                     q = os.path.normpath(os.path.join(prefix, q))
                 paths.append(q)
+    if ast_exes is not None:
+        exes = [e for e in ast_exes
+                if e and e not in SHELL_KEYWORD and not e[0].isdigit()
+                and re.fullmatch(r"[\w.\-]{1,40}", e)]
     return verbs, exes, paths
 
 
