@@ -112,3 +112,61 @@ The 2-thread vs 18-thread label-transfer check was dropped on instruction (18 th
 development convenience; production runs 2–4). Repeatability at a fixed thread count passed, so
 the run is internally consistent; whether the same labels come out at production thread counts is
 **unmeasured**.
+
+---
+
+# Addendum — GLiNER2 relation extraction
+
+Run after the classification probe, same day. The hope was specific: relations are **extractive**
+(head and tail must point at real spans), which is the mode that abstained by construction when
+classification could not. `Schema.relations()` / `extract_relations()` exist and work.
+
+Pre-registered before running: **dead** if relations come back on >= half the negative controls,
+or on a relation type that cannot exist in this corpus.
+
+## Two input projections
+
+The first run fed the `window_text` projection and was invalid — that is the 400-char-per-turn
+clip measured above as dropping 58% of mentions, and it left the supplier-comparison window (j05)
+with 487 characters. It returned 0 pairs there.
+
+The second used **per-term focused corpora**: for each prominent term, only the sentences naming
+it plus one either side. Relations are local, so this should be near-lossless, and it removes the
+token problem entirely — median **353** word tokens per corpus against a 768 budget, every corpus
+fitting whole, no truncation anywhere. Cost is ~5 small calls per window instead of one truncated
+call. A per-WINDOW variant was tried first and does not compress (ratio 0.52-1.00, median 0.87):
+with 12 terms and +-1 sentence nearly every sentence is retained. Per-term is what focuses.
+
+## Result on the good projection
+
+| test | corpora returning relations |
+|---|---|
+| A. real relations on john's windows (signal) | 20/40 = **50%** |
+| B. same relations on pure-coding windows (noise) | 28/60 = **47%** |
+| C. impossible relations on john's windows | 9/40 = **22%** |
+
+**Signal 50%, noise 47% — no discrimination.** For attribution that is the whole verdict.
+
+Test C is unambiguous. On john's own windows it returned `married_to: UnityPredict -> Keld`,
+`scored_goal_against: Magenta -> red`, `treated_with: Keld -> artificial orders`. Those relations
+cannot exist in a software transcript.
+
+Content on the signal side does not rescue it. The one relation known to be in the session —
+Magenta evaluated against Bedrock / Together.ai / Vertex — never appears. j06 returned
+`evaluated_against: Magenta -> ACME`, pairing the model with the customer. Also
+`customer_of: Atlas classification -> Python SDK` and
+`evaluated_against: market-order pricing -> Aug 19 sync`. Perhaps 2-4 of 21 pairs are defensible.
+
+## What this adds to the abstention picture
+
+Relations are NOT a constant classifier — they return empty 50-78% of the time, unlike the digest
+arm's 36-for-36. The extractive mode really does buy some silence. It just buys it at random with
+respect to the truth, which is worse than useless for a financial report: it produces a sparse
+output that LOOKS discriminating.
+
+## What survives
+
+The focused-snippet projection is the durable result. It was built to make relations affordable
+and it did — it is the general answer to "GLiNER2 needs 768 tokens and a window is 4000", and it
+applies to any future per-term GLiNER2 pass. The failure measured here is the model's, not the
+input's, and the input fix should not be discarded with it.
