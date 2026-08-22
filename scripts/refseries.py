@@ -1027,6 +1027,8 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
             "duration_h": round((end - start).total_seconds() / 3600.0, 2),
             "active_bins": int(R.bin.nunique()),
             "reference_events": int(R.n.sum()),
+            "units": "reference_events and every `events` field below count tool-call "
+                     "references, not identifiers of any kind",
         },
         "rungs": {},
     }
@@ -1411,9 +1413,9 @@ def executive(doc):
     head = " · ".join(x if x else "—" for x in slots)
     return {"headline": head,
             "window": {"entity": w.get("entity"), "start": w.get("start"), "end": w.get("end"),
-                       "duration_h": w.get("duration_h"),
+                       "duration": f"{w.get('duration_h')} hours",
                        "workspace": w.get("workspace_of_cwd"),
-                       "reference_events": w.get("reference_events")},
+                       "evidence": f"{w.get('reference_events')} recorded tool references"},
             "headline_format": "workspace · artifact · distinctive action (by lift) · subsystem · "
                                "branch; — means that level saw nothing in this window",
             "summary": Para(" ".join(sents)),
