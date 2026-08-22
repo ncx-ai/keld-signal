@@ -452,3 +452,47 @@ outcome rather than a request the model ignores, and gives a gate on whether a c
 ship at all: if a label cannot be expressed in terms of what the tools did, neither a rule nor a
 model can be validated against it, which is the position `customer_lifecycle_stage` was in when it
 answered confidently and wrongly in eight formulations.
+
+---
+
+## Binding label names to evidence cannot be inferred
+
+The admin supplies a question and optionally some names; that is the whole UX budget. So the
+binding from a name to the evidence that makes it true has to be inferred once, at save time. It
+cannot be, in either form tested:
+
+| stage | agrees with the hand rules that scored 9/9 |
+|---|---|
+| lexical match of the label's words against observed values | **3/5** |
+| the model choosing from this org's recorded values | **1/5** |
+
+The model **broke two bindings lexical matching had right** — `Reviewing or verifying` moved from
+`skill: requesting-code-review` to `exe: review-package`, and `Planning or writing docs` from
+`skill: writing-plans` to `action: edit` — and fixed neither lexical failure, keeping `exe: release`
+over `action: commit` for shipping and `action: build` over the catch-all for new work. What it
+chose reveals the method: `review-package` at 112 occurrences beat `requesting-code-review` at 98,
+which is lexical-and-frequency matching, not judgement. On this task the model adds nothing over a
+regex and subtracts two.
+
+The two lexical failures are each instructive. "Shipping or releasing" binds to an `exe` seen 7
+times in the entire corpus, while the thing that actually signals shipping — commits — shares no
+word with either "shipping" or "releasing". "Building something new" binds to `action: build`, which
+is running a build tool, i.e. verification: the admin's word and the recorded word are the same
+string meaning different things, the trap `_is_catch_all` exists for.
+
+### What survives
+
+Binding becomes a SELECTION, not an inference. The admin still supplies only a question and names,
+but the screen offers this org's own recorded values, frequency-sorted, with the match count
+against recent history beside each. The counts do the teaching: both auto-binding failures announce
+themselves as "2 of your last 40 hours" and "31 of 40 hours", and no vocabulary is needed to see
+that those are wrong for shipping and for new work. A label matching under 5% or over 60% of
+history should be flagged before save.
+
+### And the split that matters more than the UX
+
+Classifiers that resolve from FACTS — workspace, branch, language, artifact, action — need no
+binding at all and measured 100%. The ones that need binding are exactly the judgement dimensions
+where nothing validates: activity type, business function. The honest product split is to ship the
+fact-derived ones as authoritative and mark the judgement ones approximate with their coverage
+visible, rather than making the system depend on a binding step that measures 1–3 out of 5.
