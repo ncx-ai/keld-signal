@@ -486,10 +486,14 @@ def parsed_command_names(command):
             return
         seen.add(id(n))
         if getattr(n, "kind", None) == "command":
-            for part in n.parts:
-                if getattr(part, "kind", None) == "word":
-                    out.append(os.path.basename(part.word))
-                    break
+            words = [pt.word for pt in n.parts if getattr(pt, "kind", None) == "word"]
+            if words:
+                out.append(os.path.basename(words[0]))
+                # A wrapper is recorded AND the tool it runs: `docker run … pytest` is genuinely
+                # both a docker invocation and a pytest one, and an inventory needs the second.
+                inner = unwrap_command(words)
+                if inner and inner != os.path.basename(words[0]):
+                    out.append(inner)
         for attr in ("parts", "list", "command"):
             v = getattr(n, attr, None)
             if v is None:
@@ -506,6 +510,88 @@ def parsed_command_names(command):
     except Exception:
         return None            # ParsingError, NotImplementedError, recursion — fall back
     return out
+
+
+# An MCP server identifies itself only by a uuid — `attributionMcpServer` and the middle field of
+# `mcp__<uuid>__<tool>` are both `c78d9895-d0ef-43c2-b7c3-db6cfc34856e`. A uuid cannot appear in a
+# report, so the readable provider is recovered from the TOOL name, which by convention carries it
+# (`notion-fetch`, `notion-update-page` -> notion). The `service` level already did this; the
+# `mcp_server` level did not, and published the uuid.
+UUIDISH = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def mcp_provider(server, tool):
+    """Readable provider for an MCP server. Falls back to the id when it is already a name, and
+    to `mcp:<first 8>` when neither the id nor the tool yields one — visibly opaque rather than
+    silently wrong."""
+    if server and not UUIDISH.match(server):
+        return server
+    head = (tool or "").split("-")[0].split("_")[0].strip()
+    if head:
+        return head
+    return "mcp:" + (server or "unknown")[:8]
+
+
+# WRAPPERS. `docker run --rm keld-atlas-api:latest pytest -q` runs pytest, and a parser that
+# reports only the command head reports docker. Measured in this corpus: pytest appears 325 times
+# and registered as ZERO. The wrapper forms that actually occur, by frequency —
+#
+#   pnpm exec/dlx 1268 · timeout N 870 · docker compose run/exec 656 · docker run 544
+#   `--` separator 427 · python -m 350 · env VAR= 103 · xargs 80 · docker exec 62 · bash -c 12
+#
+# — so this is a bounded, enumerated table, not open-ended pattern guessing. Forms that are NOT
+# wrappers are deliberately absent: `go run pkg` and `make target` name a package and a target,
+# neither of which is a tool.
+ENV_ASSIGN = re.compile(r"^\w+=")
+
+# (head, subcommand) -> positional arguments to skip after flags before the inner command.
+# None as the subcommand means the wrapper takes the inner command directly.
+WRAPPERS = {
+    ("docker", "run"): 1,          # the image
+    ("docker", "exec"): 1,         # the container
+    ("docker-compose", "run"): 1,  # the service
+    ("docker-compose", "exec"): 1,
+    ("pnpm", "exec"): 0, ("pnpm", "dlx"): 0,
+    ("uv", "run"): 0, ("poetry", "run"): 0, ("pipenv", "run"): 0,
+    ("npx", None): 0, ("xargs", None): 0, ("sudo", None): 0, ("env", None): 0,
+    ("nohup", None): 0, ("nice", None): 0, ("stdbuf", None): 0, ("timeout", None): 1,
+}
+
+
+def unwrap_command(words):
+    """The inner tool a wrapper invocation actually runs, or None.
+
+    Walks wrappers repeatedly, because they nest: `timeout 300 docker compose exec api pytest`.
+    """
+    w = [str(x) for x in words]
+    for _ in range(4):                       # bounded: nesting deeper than this is not real
+        while w and ENV_ASSIGN.match(w[0]):
+            w = w[1:]
+        if not w:
+            return None
+        head, rest = os.path.basename(w[0]), w[1:]
+        if head in ("python", "python3") and len(rest) > 1 and rest[0] == "-m":
+            return rest[1].split(".")[0]     # `python -m pytest` -> pytest
+        if "--" in rest:                     # kubectl/compose style: inner command follows `--`
+            after = rest[rest.index("--") + 1:]
+            if after:
+                w = after
+                continue
+        if head == "docker" and len(rest) > 1 and rest[0] == "compose" and rest[1] in ("run", "exec"):
+            key, w = ("docker-compose", rest[1]), rest[2:]
+        elif rest and (head, rest[0]) in WRAPPERS:
+            key, w = (head, rest[0]), rest[1:]
+        elif (head, None) in WRAPPERS:
+            key, w = (head, None), rest
+        else:
+            return head if head not in ("", None) else None
+        skip = WRAPPERS[key]
+        while w and w[0].startswith("-"):    # flags; a flag's VALUE is indistinguishable here, so
+            w = w[1:]                        # an image with a leading dash would defeat this
+        w = w[skip:]
+        if not w:
+            return None
+    return os.path.basename(w[0]) if w else None
 
 
 def bash_refs(command):
@@ -2028,7 +2114,8 @@ def extract(args):
                     for kind in artifacts_for(skill=o["attributionSkill"]):
                         add("ref", "artifact", kind, 1)
                 if o.get("attributionMcpServer"):
-                    add("ref", "mcp_server", o["attributionMcpServer"], 1)
+                    add("ref", "mcp_server",
+                        mcp_provider(o["attributionMcpServer"], o.get("attributionMcpTool")), 1)
                 if o.get("attributionMcpTool"):
                     add("ref", "mcp_tool", o["attributionMcpTool"], 1)
 
@@ -2072,7 +2159,7 @@ def extract(args):
                         m = MCP_TOOL.match(name or "")
                         if m:
                             add("ref", "tool", "mcp:" + m["tool"], 1)
-                            add("ref", "mcp_server", m["server"], 1)
+                            add("ref", "mcp_server", mcp_provider(m["server"], m["tool"]), 1)
                             add("ref", "mcp_tool", m["tool"], 1)
                             # The server id is a uuid; the tool name carries the recognisable
                             # service ("notion-fetch" -> notion), which is what a reader needs.
