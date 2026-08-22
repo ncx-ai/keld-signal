@@ -1594,6 +1594,68 @@ def synopsis(args):
                       f"{r.get(c + '_24h', np.nan):10.2f} {r.get(c + '_z', np.nan):6.2f}")
 
 
+_TURNS = {}
+
+
+def load_turns(path):
+    """Parse one transcript's turns ONCE, in time order. Callers slice; nobody re-reads.
+
+    The previous shape re-opened and re-scanned the whole file for every window asked about, so
+    characterising N windows of one session cost N full passes over a file that runs to 86 MB.
+    Time-ordered so a slice is a bisect rather than a filter."""
+    if path in _TURNS:
+        return _TURNS[path]
+    turns = []
+    for line in open(path, errors="replace"):
+        if '"type":"user"' not in line and '"type":"assistant"' not in line:
+            continue
+        if '"tool_result"' in line and '"tool_use"' not in line:
+            continue
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue
+        ts = o.get("timestamp")
+        if not ts:
+            continue
+        content = (o.get("message") or {}).get("content")
+        said = text_of(content)
+        calls = []
+        if isinstance(content, list):
+            for b in content:
+                if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                    continue
+                name, inp = b.get("name"), b.get("input") or {}
+                if isinstance(inp.get("file_path"), str):
+                    arg = inp["file_path"]                 # an identifier: whole or not at all
+                elif name == "Bash":
+                    verbs, _exes, paths = bash_refs(inp.get("command"))
+                    arg = "; ".join(list(dict.fromkeys(verbs))[:4])
+                    if paths:
+                        arg += f" · {len(paths)} path{'s' if len(paths) > 1 else ''}"
+                else:
+                    arg = clip(str(inp.get("description") or inp.get("skill")
+                                   or inp.get("query") or ""), 90)
+                calls.append(f"{name}({arg})")
+        role = "engineer" if o.get("type") == "user" else "assistant"
+        if role == "engineer" and said and is_command_echo(said):
+            role = "echo"
+        if not said.strip() and not calls:
+            continue
+        turns.append((pd.Timestamp(ts), role, said.strip(), calls, o.get("cwd") or ""))
+    turns.sort(key=lambda r: r[0])
+    _TURNS[path] = turns
+    return turns
+
+
+def turns_between(path, start, end):
+    """The turns in [start, end) — a bisect over the parsed list, not another file read."""
+    import bisect
+    turns = load_turns(path)
+    keys = [t[0] for t in turns]
+    return turns[bisect.bisect_left(keys, start):bisect.bisect_left(keys, end)]
+
+
 def window(args):
     """Print the transcript turns leading up to a moment, to check a ladder against reality.
 
@@ -1604,55 +1666,19 @@ def window(args):
     `spool.Pointer` follows — keep coordinates, resolve the text on the machine that owns it.
     """
     at = pd.Timestamp(args.at, tz="UTC")
+    lo = at - pd.Timedelta(hours=args.hours)
     turns = []
     for root in args.roots:
         for path in sorted(glob.glob(os.path.join(root, "*", "*.jsonl"))):
-            for line in open(path, errors="replace"):
-                if '"type":"user"' not in line and '"type":"assistant"' not in line:
-                    continue
-                try:
-                    o = json.loads(line)
-                except Exception:
-                    continue
-                ts = o.get("timestamp")
-                if not ts:
-                    continue
-                t = pd.Timestamp(ts)
-                if t > at or t < at - pd.Timedelta(hours=args.hours):
-                    continue
-                repo = repo_of(o.get("cwd"), args.repo_root)
-                if args.repo and repo != args.repo:
-                    continue
-                msg = o.get("message") or {}
-                content = msg.get("content")
-                said, calls, tools = text_of(content), [], 0
-                if isinstance(content, list):
-                    for b in content:
-                        if isinstance(b, dict) and b.get("type") == "tool_use":
-                            tools += 1
-                            inp = b.get("input") or {}
-                            name = b.get("name")
-                            if isinstance(inp.get("file_path"), str):
-                                # A path is an identifier: shown whole or not at all. `clip` cut
-                                # `cd /long/path/...` down to "cd …" because a path has no spaces
-                                # to break on, which is precisely the false-identifier case.
-                                arg = inp["file_path"]
-                            elif name == "Bash":
-                                verbs, _exes, paths = bash_refs(inp.get("command"))
-                                arg = "; ".join(list(dict.fromkeys(verbs))[:4])
-                                if paths:
-                                    arg += f" · {len(paths)} path{'s' if len(paths) > 1 else ''}"
-                            else:
-                                arg = clip(str(inp.get("description") or inp.get("skill")
-                                               or inp.get("query") or ""), 90)
-                            calls.append(f"{name}({arg})")
-                role = "engineer" if o.get("type") == "user" else "assistant"
-                if role == "engineer" and said and is_command_echo(said):
-                    role = "echo"
-                if not said.strip() and not calls:
-                    continue
-                turns.append((t, role, clip(said.strip(), args.chars) if said.strip() else "",
-                              calls, os.path.basename(path)[:8]))
+            sess = os.path.basename(path)[:8]
+            projdir = os.path.basename(os.path.dirname(path))
+            for t, role, said, calls, cwd in turns_between(path, lo, at):
+                if args.repo:
+                    # The turn's own cwd decides its workspace, as it does everywhere else.
+                    ws = resolve_workspace(cwd, projdir, {}, set(), args.repo_root)[1]
+                    if ws != args.repo:
+                        continue
+                turns.append((t, role, clip(said, args.chars) if said else "", calls, sess))
     turns.sort(key=lambda r: r[0])
     turns = turns[-args.turns:]
     print(f"TRANSCRIPT — {args.repo or 'any repo'}, the {len(turns)} turns before "
