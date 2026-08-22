@@ -58,6 +58,23 @@ def test_heredoc_terminator_line_is_dropped():
     assert strip_heredocs("cat <<PY\nbody\nPY\nls") == "cat <<PY\nls"
 
 
+def test_containerised_test_run_reaches_the_real_tools():
+    """The exact shape every containerised test run takes in this corpus. pytest is three layers
+    deep: behind docker's flags, behind an --entrypoint override, and inside a quoted -c script.
+    Before this it recorded as `-e`, then as `-c`, and pytest read as zero across 325 mentions."""
+    cmd = ('docker run --rm --network keld-atlas_default '
+           '-e KELD_TEST_DATABASE_URL=postgresql+asyncpg://keld:keld@postgres:5432/keld_test '
+           '-v "$PWD/services/api:/app" -w /app --entrypoint sh keld-atlas-api '
+           '-c "pip install -e .[test] >/tmp/pip.log 2>&1; pytest tests/test_oauth.py -q"')
+    exes = bash_refs(cmd)[1]
+    assert {"docker", "pip", "pytest"} <= set(exes), exes
+    assert "-e" not in exes and "-c" not in exes, exes
+
+
+def test_compose_exec_reaches_the_tool():
+    assert "pytest" in bash_refs("docker compose exec -T api pytest tests/ -q")[1]
+
+
 if __name__ == "__main__":
     fns = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     bad = 0

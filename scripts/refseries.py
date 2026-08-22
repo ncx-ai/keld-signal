@@ -494,6 +494,14 @@ def parsed_command_names(command):
                 inner = unwrap_command(words)
                 if inner and inner != os.path.basename(words[0]):
                     out.append(inner)
+                # `sh -c "<script>"`: the script is a command string, not an argument. Parse it.
+                if inner in SHELLS or os.path.basename(words[0]) in SHELLS:
+                    for i, tok in enumerate(words[:-1]):
+                        if tok == "-c":
+                            nested = parsed_command_names(words[i + 1])
+                            if nested:
+                                out.extend(nested)
+                            break
         for attr in ("parts", "list", "command"):
             v = getattr(n, attr, None)
             if v is None:
@@ -544,6 +552,21 @@ def mcp_provider(server, tool):
 # neither of which is a tool.
 ENV_ASSIGN = re.compile(r"^\w+=")
 
+# Flags that consume the NEXT token. Without these, `docker run --network keld-atlas_default …`
+# reads the network name as the image and the following `-e` as the command — measured: the exe
+# level recorded `-e` for every containerised test run. Docker's CLI is documented, so this is a
+# closed list rather than a heuristic. `--flag=value` needs no entry.
+VALUE_FLAGS = {"-e", "--env", "-v", "--volume", "-w", "--workdir", "--network", "--name",
+               "--entrypoint", "-p", "--publish", "-u", "--user", "--platform", "--label", "-l",
+               "--mount", "--add-host", "--env-file", "--link", "-m", "--memory", "--cpus",
+               "--restart", "--index", "--profile", "-f", "--file"}
+
+# A shell invoked with -c carries its real work inside a quoted string, so the tools are one parse
+# deeper. Measured: every containerised pytest run in this corpus is
+# `docker run … --entrypoint sh IMAGE -c "pip install …; pytest …"`, which is why pytest read as
+# zero even after wrapper unwrapping.
+SHELLS = {"sh", "bash", "zsh", "dash", "ash"}
+
 # (head, subcommand) -> positional arguments to skip after flags before the inner command.
 # None as the subcommand means the wrapper takes the inner command directly.
 WRAPPERS = {
@@ -585,9 +608,18 @@ def unwrap_command(words):
             key, w = (head, None), rest
         else:
             return head if head not in ("", None) else None
+        # `--entrypoint sh IMAGE -c "…"` overrides the image's command, so the entrypoint IS the
+        # inner command — not a flag value to discard. Every containerised pytest run in this
+        # corpus takes this form.
+        if "--entrypoint" in w:
+            i = w.index("--entrypoint")
+            if i + 1 < len(w):
+                return os.path.basename(w[i + 1])
         skip = WRAPPERS[key]
-        while w and w[0].startswith("-"):    # flags; a flag's VALUE is indistinguishable here, so
-            w = w[1:]                        # an image with a leading dash would defeat this
+        while w and w[0].startswith("-"):
+            flag, w = w[0], w[1:]
+            if flag in VALUE_FLAGS and "=" not in flag and w:
+                w = w[1:]                    # the flag's value is not the image
         w = w[skip:]
         if not w:
             return None
