@@ -636,7 +636,13 @@ def bash_refs(command):
     # order and a `cd` sets the prefix for everything after it.
     verbs, exes, paths, prefix = [], [], [], ""
     ast_exes = parsed_command_names(command)
-    for seg in re.split(r"[|;&\n]+|&&|\|\|", strip_heredocs(command) or ""):
+    # PATHS are walked over the ORIGINAL text and COMMANDS are not. A path inside a heredoc is a
+    # file the embedded script really touches — dropping them emptied the artifact and subsystem
+    # slots for an hour of pptx editing, whose work happens in python heredocs over
+    # unpacked-user/ppt/slides/*.xml. A COMMAND inside a heredoc is just source code. Same text,
+    # opposite answers, so the two passes see different views of it.
+    _named_segments = set(re.split(r"[|;&\n]+|&&|\|\|", strip_heredocs(command) or ""))
+    for seg in re.split(r"[|;&\n]+|&&|\|\|", command or ""):
         # QUOTE-AWARE. Splitting on whitespace tears a quoted path apart at its spaces, and the
         # fragment then looks like a relative path and gets resolved under the repo root: a
         # colleague's `~/Library/Application Support/Claude/.../skills/pptx/scripts/office/
@@ -659,9 +665,10 @@ def bash_refs(command):
               and re.fullmatch(r"[\w.\-]{1,40}", exe))
         # The parser is authoritative for WHAT WAS RUN when it succeeded; the split below still
         # walks every segment because it is what resolves paths, and those are unaffected.
-        if ok and ast_exes is None:
+        if ok and ast_exes is None and seg in _named_segments:
             exes.append(exe)
-        if ok and re.fullmatch(r"[\w.\- ]{1,40}", head) and (ast_exes is None or exe in ast_exes):
+        if (ok and re.fullmatch(r"[\w.\- ]{1,40}", head)
+                and (exe in ast_exes if ast_exes is not None else seg in _named_segments)):
             verbs.append(head)
         if head == "cd" and len(toks) > 1 and not toks[1].startswith("-"):
             target = toks[1].strip("'\"")
