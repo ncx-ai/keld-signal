@@ -58,7 +58,8 @@ SKILL_INJECTION = re.compile(
 # counts as an engineer turn, so the assistant-per-engineer ratio that the digest reports as
 # "closely steered" is computed against a denominator that is 15% machine text.
 TASK_NOTIFICATION = re.compile(
-    r"^\s*(<task-notification>|<local-command-caveat>|\[SYSTEM NOTIFICATION)", re.IGNORECASE)
+    r"^\s*(<task-notification>|<local-command-caveat>|\[SYSTEM NOTIFICATION"
+    r"|This session is being continued from a previous conversation)", re.IGNORECASE)
 
 
 def is_command_echo(text):

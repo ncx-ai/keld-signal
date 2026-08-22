@@ -105,6 +105,20 @@ def split_list(term):
     return parts if len(parts) > 1 else [term]
 
 
+def in_path(text, start, end):
+    """Is this span a segment of a filesystem path rather than a name?
+
+    `/tmp/claude-1000/-home-dg-keld-keld-atlas/...` quoted in a message yielded a named term in 7
+    sessions. Both producers need this check, not just the shape patterns — spaCy tags the segment
+    as an entity too, which is how it survived a guard applied only to the regexes.
+
+    Leading `-` and `.` count as path context because the match can start mid-token: `\b` sits
+    between `-` and `h` in `-home-dg`, so the pattern happily captures the tail of a longer run. A
+    TRAILING dot does not disqualify — `keld-acme-routing-scenarios.pptx` is a document name.
+    """
+    return text[max(0, start - 1):start] in ("/", "\\", "-", ".") or text[end:end + 1] in ("/", "\\")
+
+
 def candidates(text, nlp=None):
     """Every candidate term in one message, as normalized surface strings.
 
@@ -117,9 +131,18 @@ def candidates(text, nlp=None):
         for e in nlp(text).ents:
             if e.label_ in DROP_TYPES:
                 continue
+            if in_path(text, e.start_char, e.end_char):
+                continue
             out += split_list(normalize(e.text))
     for pat in SHAPES:
         for m in pat.finditer(text):
+            # A hyphenated run inside an absolute path is a directory, not a name:
+            # `/tmp/claude-1000/-home-dg-keld-keld-atlas/...` yielded a term in 7 sessions.
+            # Skipping path segments is also what `clientevents/redact.go` does before anything
+            # leaves the machine — a term list that leaks a user's directory layout is the same
+            # defect one level up.
+            if in_path(text, m.start(), m.end()):
+                continue
             out += split_list(normalize(m.group()))
     return [t for t in out if len(t) > 1 and t.lower() not in NOISE and not t.isdigit()
             and not any(p.match(t) for p in MALFORMED) and not is_shouting(t)]

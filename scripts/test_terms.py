@@ -74,6 +74,17 @@ def test_shouting_is_dropped_but_acronyms_and_product_names_survive():
     assert not {"DUDE", "FUCKING", "RED"} & got, got
 
 
+def test_path_segments_are_not_terms():
+    """`/tmp/claude-1000/-home-dg-keld-keld-atlas/...` quoted in a message yielded a named term in
+    7 sessions. A directory is not a name, and emitting one also leaks the user's filesystem
+    layout -- the same thing clientevents/redact.go strips before anything is published."""
+    got = {t["term"] for t in tally(
+        ["saved to /tmp/claude-1000/-home-dg-keld-keld-atlas/x.log while editing "
+         "keld-acme-routing-scenarios"], nlp=None)}
+    assert "keld-acme-routing-scenarios" in got, got
+    assert not any("home-dg" in g for g in got), got
+
+
 if __name__ == "__main__":
     fns = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     bad = 0
