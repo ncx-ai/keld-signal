@@ -424,6 +424,35 @@ def rel_within(path, root, cwd=None):
     return p[len(root):] if p.startswith(root) else None
 
 
+# A heredoc body is DATA, not commands — but bash_refs splits segments on newlines, so every line
+# of one became a "command" and its first token an "executable". Measured over 44 sessions: EOF
+# (855), import (849), PY (738), the (387), def (276), const (261) all rank in the top 26 programs
+# invoked, and none is a program. Worse, the split also loses the real command AFTER the
+# terminator: `cat > x.py <<PY … PY; python3 x.py` yielded cat/import/def/const/PY and never
+# python3. Both halves corrupt `exe`, `verb`, and `toolchain`, which is derived from exe.
+#
+# `<<<` (herestring) is deliberately not matched: it has no body to skip.
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def strip_heredocs(command):
+    """Drop heredoc bodies, keeping the line that opens one and everything after its terminator."""
+    if "<<" not in (command or ""):
+        return command
+    lines, out, i = command.split("\n"), [], 0
+    while i < len(lines):
+        out.append(lines[i])
+        m = HEREDOC.search(lines[i])
+        i += 1
+        if not m:
+            continue
+        delim = m.group(2)
+        while i < len(lines) and lines[i].strip() != delim:
+            i += 1
+        i += 1                      # the terminator line is not a command either
+    return "\n".join(out)
+
+
 def bash_refs(command):
     """Verbs and path-looking tokens from a shell command. Split on the operators so a pipeline
     contributes every verb in it, not just the first."""
@@ -432,7 +461,7 @@ def bash_refs(command):
     # tests/x.py from the command — splitting its share between two names. Segments are walked in
     # order and a `cd` sets the prefix for everything after it.
     verbs, exes, paths, prefix = [], [], [], ""
-    for seg in re.split(r"[|;&\n]+|&&|\|\|", command or ""):
+    for seg in re.split(r"[|;&\n]+|&&|\|\|", strip_heredocs(command) or ""):
         # QUOTE-AWARE. Splitting on whitespace tears a quoted path apart at its spaces, and the
         # fragment then looks like a relative path and gets resolved under the repo root: a
         # colleague's `~/Library/Application Support/Claude/.../skills/pptx/scripts/office/
