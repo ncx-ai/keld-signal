@@ -326,3 +326,52 @@ series, not facts about the work.
 
     scripts/refseries.py ladder --repo keld-signal            # render the block
     scripts/refseries.py ladder --repo keld-atlas --at 2026-08-04T14:00
+
+---
+
+## Does the context block improve answers? (measured, both backends)
+
+Everything above measures internal consistency. This measures the purpose: given a window and a
+question about it, does the ground-truth block make the answer better? Blind, three arms, with the
+window's own turns present in every arm — the production case, where the daemon has both the text
+and the facts. `scripts/context_value.py`.
+
+| arm | GPU synthesis | CPU synthesis | lookup (both) | size | CPU prefill |
+|---|---|---|---|---|---|
+| text only | 60% | 67% | 25–40% | — | ~30 s |
+| **+digest** | **97%** | **93%** | 100% | ~1.2 KB | ~35 s |
+| +full | 57% | 47% | 100% | ~16 KB | ~99 s |
+
+**Synthesis lift over text-only: digest +36.7 (GPU) / +26.7 (CPU). Full −3.3 (GPU) / −20.0 (CPU).**
+
+Against the rule pre-registered before the run — the block needed ≥10 points on synthesis, and the
+full document needed to beat the digest by ≥5 to justify 13x the size — the digest passes on both
+backends and the full document fails on both, landing below having no context at all. The two
+backends agree on direction for every question, which the handoff's rule requires establishing per
+metric rather than assuming; they disagree only on how badly the full document loses.
+
+`lookup` is reported separately and excluded from the headline: branch 25–40% → 100% merely
+confirms the block supplies a fact the text does not carry, which is near-tautological.
+
+### Why the full document loses, on both backends
+
+The tempo question falls from 71–80% to 14–20%, and every error runs one way: "mostly working
+unattended" when the truth is "being steered turn by turn". The full document gives raw counts and
+`vs_own_median` ratios and leaves the division to the reader; the digest states the reading — "3
+assistant turns per engineer turn, closely steered" — and gets it right. **Both arms contain the
+same facts.** What the digest adds is the interpretation, which reverses the assumption the design
+was built on, where the summary was a lossy convenience over an authoritative document.
+
+It is also 3.3x the inference cost: 99 s of prefill against 35 s, so the arm that measures worse
+than no context consumes 60% of the compute.
+
+### What follows
+
+* **Ship the digest, delete the full documents.** ~350 KB per transcript that makes answers worse.
+* **A stated conclusion beats a stated number.** Wherever the block reports a figure a reader must
+  combine with another figure, it should report the combination as well.
+* **Most levels remain untested.** The digest exercises workspace, artifact, action, subsystem,
+  branch, skill and tempo. Nothing here exercises `verb`, `exe`, `mcp_server`, `repo_mentioned`,
+  `ext` beside `lang`, `turnover`, `entropy`, or any rolling column. They are not disproven; they
+  are unmeasured, which after this study should be treated the same way until one of them changes
+  an answer.
