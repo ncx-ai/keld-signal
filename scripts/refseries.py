@@ -1454,11 +1454,7 @@ def contexts_cmd(args):
         st, en = t, t + span
         if ((b >= st) & (b < en)).any():
             doc = characterize(refs, lvls, spk, entity, st, en, args.topk, base=base)
-            if args.digest:
-                doc = executive(doc)
-            elif args.brief:
-                doc = digest(doc)
-            docs.append(doc)
+            docs.append(digest(doc) if args.brief else executive(doc))
         t += stride
     out = "\n---\n".join(yaml.safe_dump(d, sort_keys=False, width=110, allow_unicode=True,
                                          default_flow_style=False) for d in docs)
@@ -1491,10 +1487,12 @@ def context(args):
     bpath = os.path.join(args.outdir, "baseline.parquet")
     base = pd.read_parquet(bpath) if os.path.exists(bpath) else None
     doc = characterize(refs, lvls, spk, entity, start, end, args.topk, base=base)
-    if args.digest:
-        doc = executive(doc)
-    elif args.brief:
-        doc = digest(doc)
+    # The digest is the deliverable. The full characterisation is the SOURCE it is computed from,
+    # and emitting it as context measured worse than emitting nothing: synthesis accuracy 47-57%
+    # against 67-60% for the window text alone, and 93-97% for the digest, on 13x the bytes and
+    # 3.3x the prefill. See the results table in
+    # docs/superpowers/specs/2026-08-21-reference-series-design.md.
+    doc = digest(doc) if args.brief else executive(doc)
     print(yaml.safe_dump(doc, sort_keys=False, width=110, allow_unicode=True,
                          default_flow_style=False))
 
@@ -2472,10 +2470,8 @@ def main():
     c.add_argument("--from", default=None)
     c.add_argument("--span", default="1h", help="window length when --from is not given")
     c.add_argument("--topk", type=int, default=5)
-    c.add_argument("--digest", action="store_true",
-                   help="executive summary: what happened, in sentences")
     c.add_argument("--brief", action="store_true",
-                   help="compact structured view, one line per level")
+                   help="compact structured view, one line per level, instead of the summary")
     c.set_defaults(fn=context)
     cs = sub.add_parser("contexts")
     cs.add_argument("--outdir", default=OUTDIR)
@@ -2485,8 +2481,8 @@ def main():
                     help="should NOT divide the span: a precessing grid keeps window edges from "
                          "landing on the same clock mark every time")
     cs.add_argument("--topk", type=int, default=5)
-    cs.add_argument("--digest", action="store_true")
-    cs.add_argument("--brief", action="store_true")
+    cs.add_argument("--brief", action="store_true",
+                    help="compact structured view instead of the summary")
     cs.add_argument("--out", default=None)
     cs.set_defaults(fn=contexts_cmd)
     ep = sub.add_parser("episodes")
