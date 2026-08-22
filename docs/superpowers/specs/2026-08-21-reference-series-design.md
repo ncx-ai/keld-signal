@@ -375,3 +375,37 @@ than no context consumes 60% of the compute.
   `ext` beside `lang`, `turnover`, `entropy`, or any rolling column. They are not disproven; they
   are unmeasured, which after this study should be treated the same way until one of them changes
   an answer.
+
+---
+
+## Enumerate dimensions, never values
+
+90 asks over 5 windows, with the digest present in every arm:
+
+| answer format | answerable correct | inapplicable declined |
+|---|---|---|
+| free text, decline available | **100%** | **100%** |
+| multiple choice | **100%** | **0%** |
+| multiple choice + "not recorded" | **100%** | 73% |
+
+Multiple choice buys nothing and costs everything. On answerable questions the format is
+irrelevant because the digest states the answer. On questions this corpus has no instance of,
+forced choice fabricates every time — `Northwind`, `Sprint 25`, `ENG-4521` — and those distractors
+are not invented: `ENG-4521`, `SUP-88` and `CS-1204` appear verbatim in these transcripts, quoted
+from the classifier gallery's own examples. The model picks an id that genuinely occurs in the
+corpus and has nothing to do with the work.
+
+Adding an abstain option only partly rescues it: 4 of 15 still chose `Sprint 25` over `not
+recorded`, which is the handoff's sprint finding reproduced exactly. Better context did not fix it,
+because the problem was never missing information — an enum member is a *legal* answer, and silence
+has to compete with something more specific and more satisfying than itself.
+
+So the rule: **enumerate dimensions, never values.** A dimension question ("which of these
+sixteen things is being asked about?") always has a right answer or a genuine `none`, and `none`
+competes against nothing specific — the router scores 89% with 3/3 on inapplicable. A value enum
+inverts that, so values come from the frame and an empty frame yields silence.
+
+Caveat on the earlier context-value experiment: it used multiple choice for scoring convenience, so
+its 93–97% is an ANSWERABLE-ONLY figure. It never posed an inapplicable question, and on this
+evidence a multiple-choice arm would have fabricated on all of them. The digest's measured lift
+stands; its abstention behaviour is established only by these runs.
