@@ -409,3 +409,46 @@ Caveat on the earlier context-value experiment: it used multiple choice for scor
 its 93–97% is an ANSWERABLE-ONLY figure. It never posed an inapplicable question, and on this
 evidence a multiple-choice arm would have fabricated on all of them. The digest's measured lift
 stands; its abstention behaviour is established only by these runs.
+
+---
+
+## A closed label set over a dimension every window has
+
+"Never enumerate values" was too broad. Two kinds of dimension behave oppositely, and an org's own
+label vocabulary already separates them — which is what `classifier_shape()` in this repo computes:
+
+* **referential** — points at an entity outside the work: ticket, customer, sprint, campaign.
+  Name-like labels. Absence is the COMMON case, so an enum makes silence compete with something
+  specific, and the model fabricates (measured: 0% declined, picking ENG-4521 and Sprint 25).
+* **extensive** — a property every window necessarily has: activity type, artifact kind, function.
+  Concept-like labels. "None" is rare, so an enum is the right shape and the risk is
+  misclassification rather than invention.
+
+For an extensive set of five activity types plus none, over 9 windows:
+
+| arm | correct |
+|---|---|
+| deterministic rule over the frame | 100% (9/9) |
+| majority-class baseline ("building something new") | 67% |
+| model, digest + conversation text | **33%** |
+| model, digest only | 44% |
+
+The rule's score is partly circular and is stated as such: the hand labels were read off the same
+evidence the rule reads, chiefly `skill`. It establishes that these labels are frame-DETERMINED,
+not that the rule is objectively right. What is not circular is the model's 33% — given strictly
+more information than the rule, it lands below a baseline that answers "building" every time. Its
+errors are unambiguous: a colleague's deck-building hours classified as reviewing, a code-review
+hour as debugging. And it chose "none of these" 0 times in 18.
+
+The discriminating evidence is not the action shares — read/edit/search dominate every window
+regardless of the work — it is `skill` and `action: commit`.
+
+### What this asks of an org's label set
+
+A label needs to name the evidence that makes it true — "reviewing = the review skill fired, or a
+PR command ran"; "shipping = commits present" — not just a description. That turns a custom
+classifier into a deterministic mapping an admin can inspect and correct, makes "none" a computed
+outcome rather than a request the model ignores, and gives a gate on whether a classifier should
+ship at all: if a label cannot be expressed in terms of what the tools did, neither a rule nor a
+model can be validated against it, which is the position `customer_lifecycle_stage` was in when it
+answered confidently and wrongly in eight formulations.
