@@ -197,10 +197,16 @@ func TestBuildCarriesSpeechActFields(t *testing.T) {
 }
 
 func TestBuildCarriesWorkstreamsAndNoWindowMetadata(t *testing.T) {
-	p := enrich.Profile{Workstreams: map[string]enrich.Labeled{
-		"project": {Value: "keld-signal", Confidence: 0.812, Producer: "workstreams-v6"},
-	}}
-	e := Build(queue.Job{Source: "claude_code"}, p, "dg@keld.co", false, 0, time.Unix(0, 0))
+	// A REALISTIC profile: the payload legitimately contains "session_id" and
+	// "sensitivity_spans", so a guard on the substrings "session"/"span" would
+	// only be testing that the fixture left them empty.
+	p := enrich.Profile{
+		Workstreams: map[string]enrich.Labeled{
+			"project": {Value: "keld-signal", Confidence: 0.812, Producer: "workstreams-v6"},
+		},
+		SensitivitySpans: []enrich.Entity{{Label: "api_key", Start: 4, End: 24, Confidence: 1, Masked: "[REDACTED:api_key]"}},
+	}
+	e := Build(queue.Job{Source: "claude_code", SessionID: "453451c2-ab12"}, p, "dg@keld.co", false, 0, time.Unix(0, 0))
 	if e.Workstreams["project"].Value != "keld-signal" {
 		t.Fatalf("dimension not copied onto the wire shape: %+v", e.Workstreams)
 	}
@@ -213,8 +219,10 @@ func TestBuildCarriesWorkstreamsAndNoWindowMetadata(t *testing.T) {
 		t.Errorf("dimension missing from payload: %s", s)
 	}
 	// The analysis's own window metadata and text-derived inventory must not be
-	// reachable from here: Profile has no field for them by construction.
-	for _, forbidden := range []string{"session", "window_start", "window_end", "inventory", "named_terms", "span", "offset", "prompt_text"} {
+	// reachable from here: Profile has no field for them by construction. These
+	// tokens appear nowhere in a legitimate payload, so the guard fails only if
+	// something actually starts forwarding them.
+	for _, forbidden := range []string{"window_start", "window_end", "inventory", "named_terms", "prompt_text"} {
 		if strings.Contains(s, forbidden) {
 			t.Errorf("payload leaked %q: %s", forbidden, s)
 		}

@@ -7,6 +7,26 @@ import "errors"
 // developed and measured against (see sidecar/app/analysis/workstreams.py).
 const WorkstreamSpanMinutes = 60
 
+// workstreamAnalyzableSources are the sources whose transcripts the window
+// analysis can actually read. It resolves a prompt by Claude-Code JSONL shape —
+// a line with "type":"user" and a matching "uuid" (see
+// sidecar/app/analysis/analyze.py:_prompt_time and transcript.py:iter_turns) —
+// which Cowork writes too, since it is Claude Code in a sandbox.
+//
+// Codex ("<sessionID>#<ordinal>") and Gemini ("<sessionId>########<ordinal>")
+// key their prompts differently over differently-shaped files, so the analysis
+// cannot find the prompt and answers 404. Left ungated, that failure would run
+// the pass, fail it, and downgrade EVERY Codex/Gemini job to
+// pipeline_status:"partial" in the default ml_backend mode — corrupting an
+// operational signal, one wasted sidecar round-trip at a time, for a facet that
+// could never have been produced. Extend this set only alongside a reader in
+// the analysis that resolves that source's prompt ids.
+var workstreamAnalyzableSources = map[string]bool{"claude_code": true, "cowork": true}
+
+// WorkstreamsEligible reports whether a source's transcripts can be read by the
+// window analysis (mirrors ContextEligible's shape).
+func WorkstreamsEligible(source string) bool { return workstreamAnalyzableSources[source] }
+
 // errAnalysisUnavailable marks the pass failed because the window analysis
 // could not be obtained at all — a different fact from "the analysis ran and
 // found no dominant value", which is a real answer and succeeds with no

@@ -61,7 +61,8 @@ func WithCoordinates(transcriptPath, promptID string) Option {
 // daemon wires sidecar.Client.AnalyzeLabeled). Without it the pass does not run
 // at all — rather than run and fail — so callers with no analysis backend
 // (eval harness, localagent, tests) keep their previous facet set and are not
-// downgraded to pipeline_status "partial" by a facet they never asked for.
+// downgraded to pipeline_status "partial" by a facet they never asked for. It
+// is likewise ignored for sources the analysis cannot read (WorkstreamsEligible).
 func WithWorkstreams(fn WorkstreamAnalyzer) Option {
 	return func(c *runCfg) { c.analyze = fn }
 }
@@ -168,7 +169,11 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	ctx := NewJobContext(text, source, meta, m)
 	ctx.TranscriptPath, ctx.PromptID = cfg.transcriptPath, cfg.promptID
 	exs := append(Wave1(), cfg.customW1...)
-	if cfg.analyze != nil {
+	// Registered only when an analysis backend exists AND the analysis can read
+	// this source's transcripts: an ineligible source would fail the pass on
+	// every job and downgrade the profile to "partial" for a facet that was
+	// never obtainable (see WorkstreamsEligible).
+	if cfg.analyze != nil && WorkstreamsEligible(source) {
 		exs = append(exs, WorkstreamsExtractor{Analyze: cfg.analyze})
 	}
 

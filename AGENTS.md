@@ -118,8 +118,12 @@ a time. Two waves, up to 8 facets per prompt:
   It takes COORDINATES (transcript path + prompt id), never text, and publishes
   as `workstreams` — a map of dimension → `Labeled` (`share` becomes the
   confidence). It declares `ModelFree`+`AlwaysRun`, and is registered only when
-  the daemon has an analysis backend (`enrich.WithWorkstreams`), so callers
-  without one (eval, localagent) are unchanged. A dimension the window could not
+  the daemon has an analysis backend (`enrich.WithWorkstreams`) **and** the
+  source is one the analysis can read — `claude_code`/`cowork` only
+  (`enrich.WorkstreamsEligible`): the analysis resolves a prompt by Claude-Code
+  JSONL shape, so Codex/Gemini prompt ids 404, and registering it there would
+  downgrade every one of their jobs to `"partial"` for a facet that was never
+  obtainable. Callers with no backend (eval, localagent) are unchanged. A dimension the window could not
   attribute is **absent**, never present-with-an-empty-value; a failed analysis
   fails the pass (`pipeline_status:"partial"`) rather than publishing an empty
   set. `/analyze`'s `inventory.named_terms` (proper nouns lifted from message

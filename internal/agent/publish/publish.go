@@ -29,32 +29,32 @@ type Correlation struct {
 
 // Enrichment is the POST /v1/enrichments wire shape (spec §11).
 type Enrichment struct {
-	Source            Source            `json:"source"`
-	Correlation       Correlation       `json:"correlation"`
-	Actor             string            `json:"actor,omitempty"`
-	TaskType          enrich.Labeled    `json:"task_type"`
-	TaskTypeAlt       []enrich.Labeled  `json:"task_type_alt,omitempty"`
-	Domain            enrich.Labeled    `json:"domain"`
-	Entities          []enrich.Entity   `json:"entities,omitempty"`
-	Sensitivity       enrich.Labeled    `json:"sensitivity"`
-	SensitivitySpans  []enrich.Entity   `json:"sensitivity_spans,omitempty"`
-	Activity          enrich.Labeled    `json:"activity_type"`
-	Personal          enrich.Labeled    `json:"personal"`
-	FunctionGuess     enrich.Labeled    `json:"function_guess"`
-	SpeechAct         enrich.Labeled    `json:"speech_act"`
-	SpeechActAlt      []enrich.Labeled  `json:"speech_act_alt,omitempty"`
-	Subcategory       enrich.Labeled    `json:"subcategory"`
-	SubcategoryAlt    []enrich.Labeled  `json:"subcategory_alt,omitempty"`
+	Source           Source           `json:"source"`
+	Correlation      Correlation      `json:"correlation"`
+	Actor            string           `json:"actor,omitempty"`
+	TaskType         enrich.Labeled   `json:"task_type"`
+	TaskTypeAlt      []enrich.Labeled `json:"task_type_alt,omitempty"`
+	Domain           enrich.Labeled   `json:"domain"`
+	Entities         []enrich.Entity  `json:"entities,omitempty"`
+	Sensitivity      enrich.Labeled   `json:"sensitivity"`
+	SensitivitySpans []enrich.Entity  `json:"sensitivity_spans,omitempty"`
+	Activity         enrich.Labeled   `json:"activity_type"`
+	Personal         enrich.Labeled   `json:"personal"`
+	FunctionGuess    enrich.Labeled   `json:"function_guess"`
+	SpeechAct        enrich.Labeled   `json:"speech_act"`
+	SpeechActAlt     []enrich.Labeled `json:"speech_act_alt,omitempty"`
+	Subcategory      enrich.Labeled   `json:"subcategory"`
+	SubcategoryAlt   []enrich.Labeled `json:"subcategory_alt,omitempty"`
 	// Workstreams are the deterministic window dimensions (project, branch,
 	// model, ...), counted from tool-call metadata by the sidecar's /analyze —
 	// no inference, and no text: the analysis is asked for a window by
 	// COORDINATES and only its matched dimension values reach here. Absent when
 	// the window attributed none.
-	Workstreams map[string]enrich.Labeled `json:"workstreams,omitempty"`
-	PipelineStatus    string            `json:"pipeline_status"`
-	ExtractorVersions map[string]string `json:"extractor_versions"`
-	SchemaVersion     int               `json:"schema_version"`
-	ModelVersion      string            `json:"model_version"`
+	Workstreams       map[string]enrich.Labeled `json:"workstreams,omitempty"`
+	PipelineStatus    string                    `json:"pipeline_status"`
+	ExtractorVersions map[string]string         `json:"extractor_versions"`
+	SchemaVersion     int                       `json:"schema_version"`
+	ModelVersion      string                    `json:"model_version"`
 	// Custom carries org-defined (custom) pass results, keyed by pass key. Atlas
 	// stores it verbatim (enrichment.custom / raw); built-ins stay in the typed
 	// fields above.

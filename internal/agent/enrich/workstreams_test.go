@@ -149,3 +149,44 @@ func coords(t *testing.T) *JobContext {
 	c.TranscriptPath, c.PromptID = "/tmp/t.jsonl", "p1"
 	return c
 }
+
+// The analysis resolves a prompt by Claude-Code JSONL shape (a line with
+// "type":"user" and a matching "uuid"). Codex ("<session>#<ordinal>") and
+// Gemini ("<session>########<ordinal>") prompt ids over their own file shapes
+// cannot resolve, so /analyze 404s — which would fail the pass and downgrade
+// EVERY Codex/Gemini job to "partial" in the DEFAULT ml_backend mode. The pass
+// must not be registered for those sources at all.
+func TestRunSkipsWorkstreamsForSourcesTheAnalysisCannotRead(t *testing.T) {
+	for _, source := range []string{"codex", "gemini_cli", "other"} {
+		called := false
+		p := Run("hello", source, Meta{}, nil,
+			WithPassTimeout(0),
+			WithCoordinates("/tmp/t.jsonl", "sess#3"),
+			WithWorkstreams(func(string, string, int) (map[string]Labeled, bool) {
+				called = true
+				return map[string]Labeled{"project": {Value: "acme", Confidence: 1}}, true
+			}))
+		if called {
+			t.Errorf("%s: the analysis cannot read this source's transcripts; it must not be called", source)
+		}
+		if p.Workstreams != nil {
+			t.Errorf("%s: unexpected workstreams %+v", source, p.Workstreams)
+		}
+		if _, ran := p.ExtractorVersions["workstreams"]; ran {
+			t.Errorf("%s: the pass must not be registered, so it cannot fail the profile", source)
+		}
+	}
+}
+
+func TestWorkstreamsEligibleSources(t *testing.T) {
+	for _, s := range []string{"claude_code", "cowork"} {
+		if !WorkstreamsEligible(s) {
+			t.Errorf("%s writes Claude-Code-shaped transcripts the analysis reads", s)
+		}
+	}
+	for _, s := range []string{"codex", "gemini_cli", "", "hook"} {
+		if WorkstreamsEligible(s) {
+			t.Errorf("%s is not analyzable today", s)
+		}
+	}
+}

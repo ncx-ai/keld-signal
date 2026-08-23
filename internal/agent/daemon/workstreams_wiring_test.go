@@ -58,3 +58,30 @@ func TestAnalyzerForRequiresTheCapability(t *testing.T) {
 		t.Error("the sidecar client must satisfy the window-analysis capability")
 	}
 }
+
+// A Codex job must not pay for a pass the analysis cannot serve: no sidecar
+// round-trip, no workstreams, and — critically, since ml_backend "auto" is what
+// nearly every user runs — no downgrade of the published pipeline_status.
+func TestProcessSkipsWorkstreamsForCodex(t *testing.T) {
+	t.Setenv("KELD_ENRICH_GATE_ENABLED", "false")
+	m := &analyzingModel{Model: enrichtest.NewFake()}
+	sender := &fakeSender{}
+	j := queue.Job{Source: "codex", Scheme: "prompt_id", ID: "WS-2",
+		TranscriptPath: "/tmp/t.jsonl", PromptID: "sess-1#3", Inline: "write a function that adds two numbers"}
+
+	if ok := process(context.Background(), j, m, sender, "actor@keld.co",
+		func() bool { return true }, nil, nil, nil); !ok {
+		t.Fatal("process did not publish")
+	}
+	sent := sender.all()[0]
+	if m.path != "" {
+		t.Errorf("analysis called for an unreadable source: path=%q", m.path)
+	}
+	if sent.Workstreams != nil {
+		t.Errorf("unexpected workstreams: %+v", sent.Workstreams)
+	}
+	if sent.PipelineStatus == "partial" {
+		t.Errorf("a pass that cannot serve this source must not downgrade it: status=%q versions=%v",
+			sent.PipelineStatus, sent.ExtractorVersions)
+	}
+}
