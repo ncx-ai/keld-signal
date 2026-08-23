@@ -753,7 +753,7 @@ def test_pii_response_carries_offsets_and_types_but_never_the_matched_text():
     m = _reload_main(None)
     _wire(m)
 
-    def fake_scan(text, nlp=None):
+    def fake_scan(text):
         start = text.index(_SYNTHETIC_SSN)
         return [{"type": "ssn", "start": start, "end": start + len(_SYNTHETIC_SSN),
                  "score": 0.85}]
@@ -768,52 +768,46 @@ def test_pii_response_carries_offsets_and_types_but_never_the_matched_text():
         assert word not in dumped, dumped
 
 
-def test_pii_never_resolves_spacy_on_the_event_loop():
-    """Same defect /analyze already carries a test for: resolving the nlp at the CALL SITE means
-    the multi-second, several-hundred-MB load runs on the event loop and blocks /health and
-    /metrics. It must be resolved inside the executor."""
+def test_pii_never_loads_a_spacy_model():
+    """/pii used to borrow the shared en_core_web_sm so presidio would not load a second one.
+    It now needs NO model: dropping SpacyRecognizer (measured ~1% precision on real prompts)
+    left only pattern recognizers, and app.pii builds its own blank tokenizer. So the
+    invariant flips — resolving _analysis_nlp() here would RE-CREATE the dependency, and the
+    whole point is that with KELD_TERMS=0 nothing in the /pii path loads the ~50 MB model that
+    sits permanently in this never-recycled parent and is subtracted from the inference
+    worker's hard limit."""
+    m = _reload_main(None)
+    _wire(m)
+    seen = []
+    real = m._analysis_nlp
+    m._analysis_nlp = lambda: seen.append(1)
+    m.pii_scan = lambda text: []
+    try:
+        _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
+    finally:
+        m._analysis_nlp = real
+    assert not seen, "/pii resolved the shared spaCy pipeline; it must not need one at all"
+
+
+def test_pii_scan_never_runs_on_the_event_loop():
+    """The model is gone but the work is not: presidio's first-call import is seconds long and
+    a large document is not free. It must stay on the executor, or /health and /metrics stall
+    behind it."""
     import threading
 
     m = _reload_main(None)
     _wire(m)
     seen = []
-    real = m._analysis_nlp
 
-    def recording():
+    def recording(text):
         seen.append(threading.get_ident())
-        return None     # not real(): the thread is the whole assertion, and a genuine
-                        # spacy.load() here would cost the test ~600 MB
-
-    m._analysis_nlp = recording
-    m.pii_scan = lambda text, nlp=None: []
-    try:
-        _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
-    finally:
-        m._analysis_nlp = real
-    assert seen, "the nlp was never resolved at all"
-    assert seen[0] != threading.get_ident(), (
-        "the spaCy load ran on the event-loop thread; it must run inside the executor")
-
-
-def test_pii_shares_the_analysis_spacy_pipeline():
-    """presidio needs an NLP engine for PERSON/LOCATION and for context scoring. Left to itself it
-    loads a SECOND en_core_web_sm into this same parent process. The parent already holds one for
-    the named-terms level and is never recycled, so the second copy is pure resident cost — and
-    the parent's size is subtracted from the inference worker's hard limit
-    (worker_manager.parent_reserve_mb), so it comes straight out of the model's budget."""
-    m = _reload_main(None)
-    _wire(m)
-    sentinel = object()
-    got = {}
-
-    def fake_scan(text, nlp=None):
-        got["nlp"] = nlp
         return []
 
-    m._ANALYSIS_NLP[0] = sentinel   # already "loaded", so nothing is loaded here
-    m.pii_scan = fake_scan
+    m.pii_scan = recording
     _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
-    assert got["nlp"] is sentinel, "/pii built its own spaCy instead of sharing the analysis one"
+    assert seen, "the scan never ran at all"
+    assert seen[0] != threading.get_ident(), (
+        "the pii scan ran on the event-loop thread; it must run inside the executor")
 
 
 def test_pii_failure_never_surfaces_or_logs_prompt_text():
@@ -824,7 +818,7 @@ def test_pii_failure_never_surfaces_or_logs_prompt_text():
     m = _reload_main(None)
     _wire(m)
 
-    def boom(text, nlp=None):
+    def boom(text):
         raise ValueError(f"presidio choked on {text!r}")
 
     m.pii_scan = boom
@@ -870,7 +864,7 @@ def test_pii_bounds_the_text_it_scans_and_says_so():
     _wire(m)
     seen = {}
 
-    def fake_scan(text, nlp=None):
+    def fake_scan(text):
         seen["len"] = len(text)
         return []
 
@@ -886,7 +880,7 @@ def test_pii_counters_are_separate_from_inference_load():
     m = _reload_main(None)
     _wire(m)
     m._state["counts"] = Counts()
-    m.pii_scan = lambda text, nlp=None: []
+    m.pii_scan = lambda text: []
     _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
     counts = m._state["counts"]
     assert counts.pii_served == 1 and counts.submitted == 0, vars(counts)

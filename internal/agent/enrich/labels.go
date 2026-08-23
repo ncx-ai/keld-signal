@@ -90,9 +90,9 @@ var DomainEntityLabels = map[string]string{
 
 // There is deliberately no SensitiveEntityLabels here. It was the description
 // vocabulary passed to GLiNER2's /entities for the sensitivity facet, and that
-// call is gone: personal data comes from presidio (sidecar/app/pii.py, which
-// covers all six mapped types) and credentials from gitleaks, neither of which
-// takes a label vocabulary from this package. A constant naming labels nobody
+// call is gone: personal data comes from presidio (sidecar/app/pii.py) and
+// credentials from gitleaks, neither of which takes a label vocabulary from
+// this package. A constant naming labels nobody
 // asks for implies a call that no longer happens. The published span labels are
 // still enumerated, as the Triggers of SensitivityFromEntity below.
 
@@ -109,6 +109,17 @@ type SensRule struct {
 // sensitive; a person name or SSN is. `proprietary` (in the Sensitivity vocab) is
 // deprecated: content-domain, no concrete token, no detector. First match wins;
 // order encodes severity (phi > pci > secrets > pii).
+//
+// NOT EVERY TRIGGER HAS A DETECTOR. `person` and `address` are listed and no
+// source produces them: they came from presidio's SpacyRecognizer, which on
+// 2,000 real prompts contributed 998 of 1,090 spans with ZERO confirmed names
+// and ZERO addresses (`JSON`, `Docker`, `YAGNI`, exported Go identifiers, a
+// bare emoji at 0.85) and drove a ~1% overall precision. The recognizer is gone
+// (sidecar/app/pii.py; measurement in ~/keld/refseries-context/pii-precision/).
+// The two names STAY here on purpose: the rollup is the published contract and
+// keeping them means a future detector — one that can actually do free-form
+// names — needs no SchemaVersion bump. Reading this list as a statement of
+// coverage would be wrong; it is a statement of severity.
 var SensitivityFromEntity = []SensRule{
 	{"phi", []string{"ssn"}},
 	{"pci", []string{"credit_card"}},

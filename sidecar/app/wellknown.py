@@ -61,6 +61,33 @@ _RESERVED_DOMAINS = (
     "example.com", "example.net", "example.org",
 )
 
+# Local parts that belong to a MACHINE, not a person.
+#
+# Measured on 2,000 real developer prompts: 66 of the 78 `email` spans -- 85% of
+# the entire type's volume, and the single largest false positive left after the
+# NER came out -- were one no-reply address, quoted out of a `Co-Authored-By:`
+# git trailer that every AI-assisted commit in the corpus carries. One more was
+# the `git@github.com` of an SSH remote URL, which is a login, not a mailbox.
+#
+# This is the same idea as the reserved-domain rule above, one field to the left:
+# an unattended sink is not personal data BY DEFINITION, whatever its structure
+# says. The alternative -- leaving it as an honest detection of a real address --
+# was rejected because publishing `sensitivity: pii` on a commit trailer tells an
+# org nothing true about a person and trains them to ignore the facet, which is
+# exactly the failure the whole measurement was about.
+#
+# Role accounts a HUMAN reads (`admin@`, `support@`, `info@`, `sales@`) are
+# deliberately ABSENT: they route to people, and the measurement counted one as a
+# true positive. The line drawn here is "no person is behind this address", not
+# "this address is uninteresting".
+_MACHINE_LOCAL_PARTS = {
+    "noreply", "no-reply", "no_reply", "noreply-dev",
+    "donotreply", "do-not-reply", "do_not_reply",
+    "mailer-daemon", "mailerdaemon", "postmaster",
+    "bounce", "bounces", "notifications", "notification",
+    "automated", "auto-reply", "autoreply", "git",
+}
+
 
 def is_well_known(value: str, kind: str) -> bool:
     """Report whether `value` is a published test/example value, and therefore
@@ -145,9 +172,24 @@ def _reserved_email(value: str) -> bool:
     at = value.rfind("@")
     if at < 0:
         return False
+    local = value[:at].strip().lower()
     domain = value[at + 1:].strip().strip(".").lower()
     if not domain:
         return False
+
+    # A Go module version path -- `northwind-logistics.co/toolkit@v1.23.4` -- parses
+    # as local-part-at-domain and presidio reports it at 1.0. Two structural tells,
+    # neither of which any real address has: a `/` in the local part, and a
+    # top-level label that does not begin with a letter (`4`, from `@v1.23.4`).
+    # `[0].isalpha()` rather than `.isalpha()` so IDN punycode (`xn--p1ai`) lives.
+    if "/" in local:
+        return True
+    tld = domain.rsplit(".", 1)[-1]
+    if not tld or not tld[0].isalpha():
+        return True
+
+    if local in _MACHINE_LOCAL_PARTS:
+        return True
     return any(domain == r or domain.endswith("." + r) for r in _RESERVED_DOMAINS)
 
 

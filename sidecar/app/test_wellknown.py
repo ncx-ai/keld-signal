@@ -84,6 +84,31 @@ def test_reserved_domains_are_gated():
         assert is_well_known(addr, "email"), addr
 
 
+def test_machine_local_parts_are_gated():
+    # 85% of the measured `email` volume was one no-reply address out of a
+    # Co-Authored-By git trailer. An unattended sink is not personal data.
+    for addr in ["noreply@northwind-logistics.co", "no-reply@northwind-logistics.co",
+                 "donotreply@Northwind-Logistics.CO", "mailer-daemon@northwind-logistics.co",
+                 "notifications@northwind-logistics.co", "git@github.com"]:
+        assert is_well_known(addr, "email"), addr
+
+
+def test_human_role_accounts_are_not_gated():
+    # The line is "no person is behind this address", not "this address is
+    # uninteresting". A staffed role account routes to a human.
+    for addr in ["admin@northwind-logistics.co", "support@northwind-logistics.co",
+                 "info@northwind-logistics.co", "sales@northwind-logistics.co"]:
+        assert not is_well_known(addr, "email"), addr
+
+
+def test_module_paths_and_version_domains_are_gated():
+    # `host.tld/pkg@v1.23.4` parses as local-part-at-domain and scored 1.0.
+    for v in ["northwind-logistics.co/toolkit@v1.23.4", "example-host.co/x/y@v0.1.2"]:
+        assert is_well_known(v, "email"), v
+    # ...but a punycode IDN top-level label is a real domain and must survive.
+    assert not is_well_known("dana@northwind.xn--p1ai", "email")
+
+
 def test_real_looking_email_is_not_gated():
     assert not is_well_known("dana.whitfield@northwind-logistics.co", "email")
     assert not is_well_known("ops@acme-internal.io", "email")

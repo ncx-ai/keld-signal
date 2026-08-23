@@ -561,16 +561,15 @@ def _pii_text(text: str):
 def _pii_blocking(text: str):
     """The whole of /pii's work, on an executor thread.
 
-    _analysis_nlp() is resolved HERE, not at the call site, for the reason spelled out in
-    _analyze_blocking: evaluating it as a run_in_executor ARGUMENT runs the multi-second spaCy load
-    on the event loop and blocks /health and /metrics.
-
-    Sharing that pipeline is the point of passing it at all — presidio would otherwise load a
-    second en_core_web_sm into this same never-recycled parent (see app.pii._nlp_engine). When
-    there is none to share (KELD_TERMS=0, or spaCy missing) None means "load your own", because
-    KELD_TERMS governs the named-terms level, not this facet.
+    NO SPACY MODEL. This used to hand pii_scan the shared _analysis_nlp() pipeline so presidio
+    would not load a second en_core_web_sm into this never-recycled parent. It no longer needs
+    one at all: dropping SpacyRecognizer left only pattern recognizers, and app.pii now builds
+    its own blank tokenizer (~5 MB, no weights). Measured identical spans and scores either way.
+    The point is that /pii no longer REQUIRES the ~50 MB model in the parent — whose RSS is
+    subtracted from the inference worker's hard limit — which is what changes under KELD_TERMS=0.
+    Still on the executor: presidio's first-call import is not event-loop work.
     """
-    return pii_scan(text, nlp=_analysis_nlp())
+    return pii_scan(text)
 
 
 @app.post("/pii")
@@ -584,8 +583,9 @@ async def detect_pii(body: PiiIn):
     spans; that is an older contract with its own reasoning, not a precedent this follows.)
 
     Deliberately does NOT go through _dispatch/the single-flight runner, and touches no
-    WorkerManager — same as /match and /analyze. This is presidio patterns plus a spaCy NER pass,
-    not inference, and it is the endpoint that has to answer when GLiNER2 is absent entirely:
+    WorkerManager — same as /match and /analyze. This is presidio PATTERNS ONLY (regex + Luhn +
+    libphonenumber; the NER came out when it measured ~1% precision on real prompts), not
+    inference, and it is the endpoint that has to answer when GLiNER2 is absent entirely:
     ml_backend:"deterministic" runs the sensitivity facet with no model at all. Pinned against the
     real lifespan in test_main.py. Run in the default executor so neither the spaCy load nor a
     large document stalls the event loop out from under /health and /metrics.

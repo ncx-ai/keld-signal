@@ -121,16 +121,36 @@ test asserts its output is identical with a Model present and with none.
    network, over the FULL prompt text. Always available; the only source that
    needs nothing at all.
 2. **The sidecar's `/pii`** (`enrich.PIIScanner` → `sidecar.Client.DetectPII` →
-   `app/pii.py`, presidio-analyzer). Five recognizers producing exactly the six
-   vocabulary types (`ssn`, `credit_card`, `email`, `phone`, `person`,
-   `address`). It needs **no GLiNER2** and never touches the inference
-   single-flight, so it is wired in `ml_backend:"deterministic"` too. It returns
-   **offsets only, never the matched value** — the Go side resolves and masks
-   from its own copy of the text.
+   `app/pii.py`, presidio-analyzer). **Four** pattern recognizers producing
+   **four** of the six vocabulary types: `ssn`, `credit_card`, `email`, `phone`.
+   It needs **no GLiNER2** — and, since the NER came out, **no spaCy model
+   either**: only a blank tokenizer, because every recognizer left is a regex
+   plus Luhn/libphonenumber. It never touches the inference single-flight, so it
+   is wired in `ml_backend:"deterministic"` too. It returns **offsets only,
+   never the matched value** — the Go side resolves and masks from its own copy
+   of the text.
+
+⚠️ **`person` and `address` are NOT DETECTED. The coverage is four types, not
+six.** They came from presidio's `SpacyRecognizer`, and on **2,000 real
+developer prompts** that recognizer produced **998 of 1,090 spans with zero
+confirmed names and zero addresses** — `JSON` ×132, `Docker`, `YAGNI` ×27,
+exported Go identifiers, hex colour literals, and a bare `❌` at **0.85**, the
+same score a real name gets. Overall precision was **~1%**, and **24% of prompts
+published `sensitivity: pii`**. No threshold separates a common noun from a name,
+so the recognizer was removed rather than tuned; the same measurement rerun
+against the current detector publishes `pii` on **0.45%** of prompts at 100%
+precision, and `pci`/`phi` never fire. Both dropped types mapped to `pii`, the
+LOWEST severity class, so nothing severe was lost — but free-form personal names
+in prose are now **undetectable**, and that is a real narrowing, not a tuning.
+`SensitivityFromEntity` still knows both names so a future detector needs no
+schema change. Full before/after:
+`~/keld/refseries-context/pii-precision/RESULTS.md` (reproduce with
+`scripts/pii_precision.py`).
 There is deliberately **no third, GLiNER2 source**. `/entities` over a
 `SensitiveEntityLabels` vocabulary used to be one, and it was redundant:
-presidio already produces all six mapped types (`person`/`address` come from its
-`SpacyRecognizer`, which is spaCy, not GLiNER2), so the NER added no type of its
+presidio produced every mapped type the GLiNER2 NER did (`person`/`address` then
+came from its `SpacyRecognizer`, which is spaCy, not GLiNER2 — both have since
+been dropped as measured noise, see above), so the NER added no type of its
 own while needing a corroboration rule to keep its confident, perfectly-shaped
 documentation constants off the wire. That rule, the label vocabulary, and the
 call are all gone. Re-admitting a model here is a deliberate decision with its
@@ -142,13 +162,23 @@ own evidence, not a rewiring.
 and ungated the facet reports `pci`/`phi` continuously and is worse than absent.
 The gate is applied **at source**, inside `scan()` before it answers, so nothing
 it suppresses can reach Go by another route — there is no second detector to
-route around it. With **no scan available the six personal-data types simply
-have no source**; only credentials remain, and the loss is declared (see
+route around it. Two rules there are **measured, not structural**: a no-reply /
+machine local-part denylist (66 of 78 `email` spans in the corpus were one
+`noreply@` address quoted out of a `Co-Authored-By` git trailer — an unattended
+sink is not personal data), and a rejection of Go-module-version paths
+(`host.tld/pkg@v1.23.4` parses as local-part-at-domain and scored 1.0). A
+companion **numeric-fragment gate** lives in `pii.py`, not here, because it needs
+the surrounding text: a match preceded by `[0-9.,:/-]` is the tail of a longer
+token, which is how 13 digits after a decimal point published **`pci` at 1.0**.
+It is asymmetric on purpose — the right-hand side rejects only a continuation
+(digit, or `.,-` then a digit), because "…4470, then email" is prose and the
+whitespace-token rule would have cost real detections. With **no scan available
+the four personal-data types simply have no source**; only credentials remain, and the loss is declared (see
 `facets_degraded` below) rather than papered over. Do not add a Go copy of the
 list, and do not add a second detector that would need one.
 
 **`facets_degraded` for sensitivity turns on the SCAN.** The scan is the sole
-source for all six vocabulary types, so a whole scan leaves nothing uncovered
+source for every personal-data type, so a whole scan leaves nothing uncovered
 and a Model's absence costs nothing.
 Scan absent / failed / **`truncated`** ⇒ degraded, unless the answer already
 reached the ceiling of the severity order (`phi`), which no missing evidence

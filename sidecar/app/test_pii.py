@@ -14,6 +14,15 @@ each other:
 Precision wins ties: a false `phi` is worse than a miss, because the facet is
 consumed as a signal about a real person.
 
+MEASURED, AND THE VOCABULARY NARROWED AS A RESULT. On 2,000 real developer
+prompts the detector published 1,090 spans of which at most 13 were genuine —
+precision ~1%, and 24% of prompts published `sensitivity: pii`. 998 of those
+spans were `person`/`address` from the spaCy NER (`JSON` x132, `Docker`,
+`YAGNI`, exported Go identifiers, a bare emoji at 0.85), with zero confirmed
+names and zero addresses. So `SpacyRecognizer` is gone and the two types are no
+longer detected AT ALL — the tests below pin their ABSENCE, which is the
+behaviour, not an omission. The remaining four types are pattern-matched.
+
 ALL FIXTURES ARE WHOLLY SYNTHETIC — constructed, never observed. Cards are
 Luhn-completed over arbitrary prefixes; the SSN is assembled from valid SSA
 ranges; names/companies are invented. This is a privacy-critical repo and a
@@ -56,14 +65,6 @@ def test_detects_phone():
     _one("Call the vendor at (415) 682-4470 tomorrow.", "phone")
 
 
-def test_detects_person():
-    _one("Dana Whitfield approved the change.", "person")
-
-
-def test_detects_address_as_location():
-    _one("The office is at 1847 Kingsbury Avenue, Portland.", "address")
-
-
 def test_span_offsets_are_exact():
     text = f"Charge the card {REAL_LOOKING_VISA} for the order."
     r = _one(text, "credit_card")
@@ -81,7 +82,7 @@ def test_only_vocabulary_types_are_returned():
     text = ("On 2026-08-23 Dana Whitfield emailed dana@northwind-logistics.co "
             "from 10.2.14.9 about https://internal.example.co/runbook using "
             "MAC 3c:22:fb:81:aa:04 and IBAN GB33BUKB20201555555555.")
-    allowed = {"ssn", "credit_card", "email", "phone", "person", "address"}
+    allowed = {"ssn", "credit_card", "email", "phone"}
     assert _types(text) <= allowed, _types(text)
 
 
@@ -164,17 +165,80 @@ def test_formatted_phones_survive_the_bare_run_rule():
         assert "phone" in _types(t), t
 
 
-def test_code_shape_gate_keeps_real_names():
-    # The code-shape gate must not swallow the names it sits next to. These
-    # score identically (0.85) to the identifiers it rejects, so shape is the
-    # only thing separating them — pin both directions.
-    from app.pii import _is_code_like
-    for ident in ["runStage", "digitsOnly(d string", "enrich.WithJobContext",
-                  "KELD_ENRICH_PASS_TIMEOUT", "app.pii", "scanText"]:
-        assert _is_code_like(ident), ident
-    for name in ["Dana Whitfield", "Portland", "1847 Kingsbury Avenue",
-                 "Dana W. Smith", "O'Brien", "Jean-Luc Bernard"]:
-        assert not _is_code_like(name), name
+def test_person_and_address_are_never_reported():
+    # The NER-derived types are GONE, not merely gated. Pin both halves of that:
+    # the ordinary developer text that used to produce them, and the real names
+    # and addresses it also no longer produces — because the honest statement of
+    # this change is that the coverage narrowed, not that the noise was tuned out.
+    noise = ["Serialize it to JSON before the Docker build.",
+             "Verdict: YAGNI. The Worker and Store stay as they are.",
+             "Getenv, Resync() and Drain() all need the PATH set.",
+             "❌ CANNOT ship — the UI is ~250MB over budget (#ADADAA)."]
+    names = ["Dana Whitfield approved the change.",
+             "The office is at 1847 Kingsbury Avenue, Portland.",
+             "Jean-Luc Bernard and O'Brien both signed off in Rotterdam."]
+    for t in noise + names:
+        got = _types(t)
+        assert "person" not in got and "address" not in got, (t, got)
+
+
+def test_the_spacy_recognizer_is_not_registered():
+    # Belt and braces on the test above: no threshold separates `JSON` from a
+    # name (a bare emoji scored 0.85), so the fix has to be the ABSENCE of the
+    # recognizer, not a stricter gate over its output. Assert the registry.
+    from app.pii import _ENTITY_MAP, _get_engine
+    assert "PERSON" not in _ENTITY_MAP and "LOCATION" not in _ENTITY_MAP
+    supported = set()
+    for rec in _get_engine().registry.recognizers:
+        supported.update(rec.supported_entities)
+    assert "PERSON" not in supported and "LOCATION" not in supported, supported
+
+
+def test_number_sliced_out_of_a_longer_token_is_not_reported():
+    # The worst measured finding: the 13 digits AFTER the decimal point of a
+    # 17-digit float, Luhn-passing by coincidence, published as `pci` at 1.0.
+    # The float below is synthetic and its fractional tail is Luhn-completed on
+    # purpose, so this fails without the fragment gate.
+    for t in ["Throughput settled at 1234.4539821746358 per second.",
+              "The ratio came out 0.9/4539821746358200 in the run.",
+              "Row 88-4539821746358200 was rejected by the loader."]:
+        assert "credit_card" not in _types(t), (t, _types(t))
+
+
+def test_file_line_ranges_and_ratios_are_not_phones():
+    # 11 of 11 measured `phone` hits. Both shapes are endemic to developer text.
+    for t in ["See server.go:118-140 for the retry loop.",
+              "`internal/agent/daemon/daemon.go:1620-1647` is the wiring.",
+              "Weights 0.5/0.3/0.7 gave the best score.",
+              "Split (0.25/0.5/0.7) across the three passes."]:
+        assert "phone" not in _types(t), (t, _types(t))
+
+
+def test_real_numbers_next_to_ordinary_punctuation_survive():
+    # The cost side of the fragment gate, pinned. A trailing comma or full stop
+    # is prose, not a longer token — rejecting on it (which the whitespace-token
+    # rule the measurement proposed would do) would cost real detections.
+    assert "phone" in _types("Reach them on 415-682-4470, then email.")
+    assert "phone" in _types("Dial +1 415 682 4470.")
+    assert "credit_card" in _types(f"The card is {REAL_LOOKING_VISA}.")
+    assert "credit_card" in _types(f"Charged {REAL_LOOKING_VISA}, twice.")
+    assert "credit_card" in _types(f'Field "card": "{REAL_LOOKING_VISA}" leaked.')
+
+
+def test_short_digit_runs_are_not_phones():
+    # NANP is ten digits; a bare 7-digit local number is not resolvable to a
+    # person, and every measured 7-digit hit was a line range.
+    for t in ["Lines 118-140 changed.", "Bumped 250-400 rows."]:
+        assert "phone" not in _types(t), (t, _types(t))
+
+
+def test_machine_email_addresses_are_not_reported():
+    # 66 of 78 measured `email` spans were one no-reply address quoted out of a
+    # Co-Authored-By git trailer.
+    for t in ["Co-Authored-By: Some Bot <noreply@northwind-logistics.co>",
+              "Remote is git@github.com:northwind/logistics.git",
+              "Pinned northwind-logistics.co/toolkit@v1.23.4 in go.mod."]:
+        assert "email" not in _types(t), (t, _types(t))
 
 
 def test_empty_input_is_safe():
