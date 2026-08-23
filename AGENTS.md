@@ -130,6 +130,23 @@ a time. Two waves, up to 8 facets per prompt:
   text — real person names have been observed) is deliberately unmodelled on
   `sidecar.AnalyzeResult`, so it is structurally unforwardable — and is **off
   by default** besides (`KELD_TERMS`, see below).
+- ⚠️ **`/analyze` is confined to `KELD_ANALYZE_ROOTS`.** The sidecar has **no
+  auth** — `serve.py` binds 127.0.0.1 and that is the whole of it — which was
+  adequate while every endpoint only processed text the caller already held.
+  `/analyze` is the first that opens an **arbitrary filesystem path as the
+  daemon's user** and returns content derived from it, so unconfined it is a
+  confused deputy: on a multi-user host any other local user can POST a path
+  under someone else's `~/.claude/projects` and read back their workspaces,
+  branches and named terms. The path is therefore checked against an allowlist
+  before the open — `os.path.realpath` on both sides, so neither `../` nor a
+  symlink escapes — and anything outside answers **403** (not 404: a rejected
+  path and an unresolvable one must stay distinguishable), counted as
+  `analyze_rejected` in `/metrics`. The daemon sets the variable at spawn from
+  `watch.AnalyzeRoots()` (`daemon/sidecarenv.go`), which is the **stable
+  ancestors** of each layout plus `KELD_WATCH_ROOTS`, not `DiscoverRoots()`'s
+  globbed leaves: session directories appear after the sidecar is spawned.
+  Empty means **deny everything**; absent means the sidecar's own per-user
+  defaults.
 - ⚠️ **`/analyze`'s `named_terms` level is OFF by default (`KELD_TERMS=0`).** It
   is the only analysis level that reads message *text*, and the only one that
   needs spaCy — a **model, in the FastAPI parent**, which is the one process

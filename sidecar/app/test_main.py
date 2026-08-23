@@ -490,6 +490,12 @@ def _fixture_transcript(said="look at the thing"):
     repo, so no real names, paths, or repos — see sidecar/app/analysis/testdata/ for the
     convention this mirrors. `said` is the EARLIER turn's text because the window is
     [start, end) — the target prompt is the window's exclusive upper bound, never inside it.
+
+    Also points KELD_ANALYZE_ROOTS at the directory it just created: /analyze is confined to the
+    configured transcript roots (see the block above test_analyze_accepts_a_path_inside_a_
+    configured_root), so a fixture under /tmp is otherwise a 403. Tests asserting the rejection
+    paths override the variable AFTER calling this.
+
     Uses mkdtemp (not a `with TemporaryDirectory()` block): the file
     must outlive this helper call, not just a `with` body. Shape matches
     sidecar/app/test_analysis_analyze.py's fixture, already proven to round-trip through
@@ -506,6 +512,7 @@ def _fixture_transcript(said="look at the thing"):
     with open(path, "w") as fh:
         for o in rows:
             fh.write(json.dumps(o, separators=(",", ":")) + "\n")
+    os.environ["KELD_ANALYZE_ROOTS"] = tmp
     return path
 
 
@@ -549,6 +556,91 @@ def test_analyze_unknown_prompt_is_404_not_an_empty_payload():
 # guarantees "holds no model and its own RSS stays flat regardless of uptime", and whose ~150 MB
 # footprint (KELD_SIDECAR_PARENT_RESERVE_MB) the worker's hard limit is derived from. Measured:
 # spacy.load() takes the parent to 619 MB, permanently, because the parent is never recycled.
+
+# --- /analyze is path-confined (KELD_ANALYZE_ROOTS) ----------------------------------------
+#
+# The sidecar has no auth: serve.py binds 127.0.0.1 and that is the whole of it. Every other
+# endpoint only ever processes text the CALLER supplied. /analyze is the first that opens an
+# arbitrary filesystem path AS THE DAEMON'S USER and returns content derived from it (workspace,
+# branch, named terms — confirmed to contain real person names). On a multi-user host that makes
+# it a confused deputy: any other local user can POST a path under another user's
+# ~/.claude/projects and read back their people, repos and branches.
+
+def _roots_env(*dirs):
+    os.environ["KELD_ANALYZE_ROOTS"] = os.pathsep.join(dirs)
+
+
+def test_analyze_accepts_a_path_inside_a_configured_root():
+    m = _reload_main(None)
+    _wire(m)
+    path = _fixture_transcript()
+    _roots_env(os.path.dirname(path))
+    body = _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+    assert "workstreams" in body
+
+
+def test_analyze_rejects_a_path_outside_every_root_with_403():
+    """403, not 404: a rejected path and a legitimate-but-unresolvable one are different facts,
+    and collapsing them would make an allowlist miss look like a bad prompt id."""
+    m = _reload_main(None)
+    _wire(m)
+    path = _fixture_transcript()
+    _roots_env(tempfile.mkdtemp(prefix="keld-analyze-elsewhere-"))
+    try:
+        _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+        assert False, "expected 403"
+    except HTTPException as e:
+        assert e.status_code == 403, e.status_code
+
+
+def test_analyze_rejects_a_traversal_that_escapes_the_root():
+    """A prefix test on the RAW string would admit this: `<root>/../elsewhere/x.jsonl` starts
+    with `<root>`."""
+    m = _reload_main(None)
+    _wire(m)
+    victim = _fixture_transcript()           # a REAL, readable transcript outside the root, so
+    root = tempfile.mkdtemp(prefix="keld-analyze-root-")   # the rejection can't be a stray ENOENT
+    _roots_env(root)
+    escaped = os.path.join(root, "..", os.path.basename(os.path.dirname(victim)),
+                           os.path.basename(victim))
+    assert os.path.exists(escaped), "the traversal must resolve to a file that really is readable"
+    try:
+        _asyncio.run(m.analyze(m.AnalyzeIn(path=escaped, prompt_id=_fixture_prompt_id())))
+        assert False, "expected 403"
+    except HTTPException as e:
+        assert e.status_code == 403, e.status_code
+
+
+def test_analyze_rejects_a_symlink_pointing_out_of_the_root():
+    """The link LIVES in an allowed root; its target does not. Confinement has to be decided on
+    the resolved path, or a single symlink hands back any transcript on the machine."""
+    m = _reload_main(None)
+    _wire(m)
+    real = _fixture_transcript()             # the transcript, in its own (disallowed) directory
+    root = tempfile.mkdtemp(prefix="keld-analyze-root-")
+    link = os.path.join(root, "decoy.jsonl")
+    os.symlink(real, link)
+    _roots_env(root)
+    try:
+        _asyncio.run(m.analyze(m.AnalyzeIn(path=link, prompt_id=_fixture_prompt_id())))
+        assert False, "expected 403"
+    except HTTPException as e:
+        assert e.status_code == 403, e.status_code
+
+
+def test_analyze_fails_closed_when_no_roots_are_configured():
+    """An empty allowlist denies everything. The alternative — an empty list meaning
+    "unrestricted" — turns a misconfiguration into the original vulnerability, silently."""
+    m = _reload_main(None)
+    _wire(m)
+    path = _fixture_transcript()
+    _roots_env("")  # after the fixture: it allowlists its own directory (see its docstring)
+    try:
+        _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+        assert False, "expected 403"
+    except HTTPException as e:
+        assert e.status_code == 403, e.status_code
+
 
 def test_named_terms_off_by_default_never_imports_spacy():
     """The guarantee is not "the load is cheap", it is "the load does not happen". Asserted by

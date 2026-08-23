@@ -19,6 +19,12 @@ class Counts:
     # runner/worker either (see app/main.py's analyze()), so it gets its own counter rather than
     # sharing submitted/completed — an analysis spike must not read as inference load.
     analyze_served: int = 0
+    # Paths /analyze refused because they resolve outside KELD_ANALYZE_ROOTS. Counted separately
+    # from failed/shed_503 because it is not load: on a single-user machine a non-zero value
+    # means the daemon and the sidecar disagree about where transcripts live, and on a shared
+    # one it means someone is probing. Both need to be visible, and neither is an inference
+    # problem.
+    analyze_rejected: int = 0
 
 
 def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,

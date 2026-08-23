@@ -1103,7 +1103,7 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 	sup := NewSupervisor(
 		func(p int) (*exec.Cmd, error) {
 			cmd := exec.CommandContext(ctx, binPath, fmt.Sprintf("--port=%d", p))
-			cmd.Env = sidecarEnv(os.Environ(), modelDir)
+			cmd.Env = sidecarEnv(os.Environ(), modelDir, watch.AnalyzeRoots())
 			return cmd, nil
 		},
 		scPort,

@@ -9,6 +9,7 @@ enforced daemon-side by the enrichment pipeline, never here.
 """
 import asyncio
 import os
+import sys
 import time
 from contextlib import asynccontextmanager
 
@@ -241,6 +242,68 @@ class AnalyzeIn(BaseModel):
     span_minutes: int = 60
 
 
+# /analyze path confinement (KELD_ANALYZE_ROOTS).
+#
+# The sidecar has NO auth: serve.py binds 127.0.0.1 and that is the whole of it. That was
+# adequate while every endpoint only processed text the caller had already supplied — the caller
+# learned nothing it did not already know. /analyze breaks that: it opens an arbitrary
+# filesystem path AS THE DAEMON'S USER and returns content derived from it (workspace, branch,
+# and the named terms, which have been observed to contain real person names). On a multi-user
+# host that is a confused deputy — any other local user can POST a path under another user's
+# ~/.claude/projects and read back their people, repos and branches.
+#
+# So the path is confined to an explicit allowlist of transcript roots. The daemon sets it at
+# spawn from the roots it actually watches (internal/agent/daemon/sidecarenv.go ->
+# watch.AnalyzeRoots); the defaults below only serve a hand-run sidecar.
+#
+# os.pathsep, not a comma: it is ";" on Windows and ":" elsewhere, which is the one separator
+# that cannot collide with a Windows drive letter. (KELD_WATCH_ROOTS on the Go side uses commas
+# because its entries are "source:dir" pairs, which have a different problem.)
+_ANALYZE_ROOTS_ENV = "KELD_ANALYZE_ROOTS"
+
+
+def _default_analyze_roots():
+    """The standard per-user transcript directories. Deliberately the stable ANCESTORS (e.g.
+    ~/.gemini/tmp, not ~/.gemini/tmp/*/chats): the leaf directories are created as sessions
+    start, so an allowlist of them, resolved once, would reject transcripts written after the
+    sidecar came up."""
+    home = os.path.expanduser("~")
+    codex_home = os.environ.get("CODEX_HOME") or os.path.join(home, ".codex")
+    roots = [os.path.join(home, ".claude", "projects"),
+             os.path.join(codex_home, "sessions"),
+             os.path.join(home, ".gemini", "tmp")]
+    if sys.platform == "darwin":
+        roots.append(os.path.join(home, "Library", "Application Support", "Claude",
+                                  "local-agent-mode-sessions"))
+    return roots
+
+
+def _analyze_roots():
+    """The resolved allowlist. Read per request rather than latched at import: it is a handful of
+    realpath() calls against one request that is already a whole-transcript parse, and latching
+    it would make the module's behaviour depend on import order in a way nothing here needs.
+
+    An explicitly EMPTY value yields an empty list, which denies everything. That direction is
+    deliberate: the alternative reading — empty means unrestricted — turns one misconfiguration
+    back into the unauthenticated-read vulnerability, silently."""
+    raw = os.environ.get(_ANALYZE_ROOTS_ENV)
+    entries = raw.split(os.pathsep) if raw is not None else _default_analyze_roots()
+    return [os.path.realpath(e) for e in entries if e.strip()]
+
+
+def _within_roots(path, roots):
+    """Whether `path` resolves inside one of `roots`.
+
+    realpath on BOTH sides, so neither `..` nor a symlink can escape: a prefix test on the raw
+    string would admit `<root>/../elsewhere/x.jsonl`, and a test on an unresolved path would
+    admit a link that merely LIVES in a root while pointing anywhere on the machine. The
+    `+ os.sep` guard keeps `/home/a/.claude/projects-of-someone-else` from matching the root
+    `/home/a/.claude/projects`.
+    """
+    real = os.path.realpath(path)
+    return any(real == r or real.startswith(r + os.sep) for r in roots)
+
+
 # Named-terms extraction (the `term` level) — OFF unless KELD_TERMS opts in.
 #
 # `term` is the one level analyze_window computes that isn't a deterministic tool-input scan: it
@@ -470,6 +533,12 @@ async def analyze(body: AnalyzeIn):
     _terms_enabled for the measurements (619 MB permanent parent growth; a 3.4 GB in-parent
     peak) and why no existing guard can see that spend.
     """
+    # Confinement BEFORE the open (see the block above _default_analyze_roots). 403, not 404:
+    # a rejected path and a legitimate-but-unresolvable one are different facts, and collapsing
+    # them would make an allowlist miss indistinguishable from a bad prompt id.
+    if not _within_roots(body.path, _analyze_roots()):
+        _count("analyze_rejected")
+        raise HTTPException(status_code=403, detail="path is outside the configured transcript roots")
     _count("analyze_served")
     loop = asyncio.get_running_loop()
     try:

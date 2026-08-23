@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -18,7 +19,7 @@ func envMap(env []string) map[string]string {
 }
 
 func TestSidecarEnvAppliesTenancyCaps(t *testing.T) {
-	m := envMap(sidecarEnv([]string{"PATH=/bin"}, "/models/gliner2"))
+	m := envMap(sidecarEnv([]string{"PATH=/bin"}, "/models/gliner2", nil))
 
 	if m["KELD_GLINER2_DIR"] != "/models/gliner2" {
 		t.Errorf("KELD_GLINER2_DIR = %q, want /models/gliner2", m["KELD_GLINER2_DIR"])
@@ -45,7 +46,7 @@ func TestSidecarEnvAppliesTenancyCaps(t *testing.T) {
 
 func TestSidecarEnvRespectsOperatorOverride(t *testing.T) {
 	base := []string{"OMP_NUM_THREADS=8", "MALLOC_ARENA_MAX=4"}
-	m := envMap(sidecarEnv(base, "/m"))
+	m := envMap(sidecarEnv(base, "/m", nil))
 
 	// Operator-set tunables must win over our defaults.
 	if m["OMP_NUM_THREADS"] != "8" {
@@ -57,5 +58,42 @@ func TestSidecarEnvRespectsOperatorOverride(t *testing.T) {
 	// Tunables the operator did NOT set still get our cap.
 	if m["MKL_NUM_THREADS"] != "2" {
 		t.Errorf("MKL_NUM_THREADS default lost: got %q", m["MKL_NUM_THREADS"])
+	}
+}
+
+// The sidecar's /analyze is the one endpoint that opens an arbitrary path as
+// this user and returns content derived from it, and the sidecar has no auth.
+// It therefore refuses anything outside KELD_ANALYZE_ROOTS — and only the
+// daemon knows which roots this machine actually uses (CODEX_HOME,
+// KELD_WATCH_ROOTS, the platform's Cowork layout).
+func TestSidecarEnvPassesTheAnalysisAllowlist(t *testing.T) {
+	roots := []string{"/home/u/.claude/projects", "/home/u/.gemini/tmp"}
+	m := envMap(sidecarEnv([]string{"PATH=/bin"}, "/m", roots))
+
+	want := strings.Join(roots, string(os.PathListSeparator))
+	if m["KELD_ANALYZE_ROOTS"] != want {
+		t.Errorf("KELD_ANALYZE_ROOTS = %q, want %q", m["KELD_ANALYZE_ROOTS"], want)
+	}
+}
+
+// Empty must still be SET, not omitted: the sidecar treats an absent variable
+// as "use the built-in defaults" and an empty one as "deny everything". A
+// daemon that found no roots means the latter, and dropping the assignment
+// would silently hand the sidecar a wider allowlist than the daemon computed.
+func TestSidecarEnvSetsAnEmptyAllowlistRatherThanOmittingIt(t *testing.T) {
+	env := sidecarEnv([]string{"PATH=/bin"}, "/m", nil)
+	if !hasEnvKey(env, "KELD_ANALYZE_ROOTS") {
+		t.Fatalf("KELD_ANALYZE_ROOTS omitted for an empty root set: %v", env)
+	}
+	if v := envMap(env)["KELD_ANALYZE_ROOTS"]; v != "" {
+		t.Errorf("KELD_ANALYZE_ROOTS = %q, want empty", v)
+	}
+}
+
+func TestSidecarEnvRespectsAnOperatorAnalysisAllowlist(t *testing.T) {
+	base := []string{"KELD_ANALYZE_ROOTS=/srv/transcripts"}
+	m := envMap(sidecarEnv(base, "/m", []string{"/home/u/.claude/projects"}))
+	if m["KELD_ANALYZE_ROOTS"] != "/srv/transcripts" {
+		t.Errorf("operator override lost: got %q", m["KELD_ANALYZE_ROOTS"])
 	}
 }
