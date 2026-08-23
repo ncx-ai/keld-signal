@@ -13,13 +13,12 @@ SHELL_KEYWORD = {"if", "then", "fi", "else", "elif", "for", "do", "done", "while
 TWO_WORD = {"git", "go", "npm", "pnpm", "yarn", "uv", "pip", "python3", "python", "make",
             "docker", "kubectl", "cargo", "gh", "systemctl", "launchctl", "brew", "poetry"}
 
-# HEREDOCS. `cat > x.py <<PY\nimport os\ndef main():\n    ...\nPY` had every line of the body read
-# as its own "command" — the shell text and inline source code of one became a "command" and its
-# first token an "executable". Measured over 44 sessions: EOF (855), import (849), PY (738), the
-# (387), def (276), const (261) all rank in the top 26 programs invoked, and none is a program.
-# Worse, the split also loses the real command AFTER the terminator: `cat > x.py <<PY … PY;
-# python3 x.py` yielded cat/import/def/const/PY and never python3. Both halves corrupt `exe`,
-# `verb`, and `toolchain`, which is derived from exe.
+# A heredoc body is DATA, not commands — but bash_refs splits segments on newlines, so every line
+# of one became a "command" and its first token an "executable". Measured over 44 sessions: EOF
+# (855), import (849), PY (738), the (387), def (276), const (261) all rank in the top 26 programs
+# invoked, and none is a program. Worse, the split also loses the real command AFTER the
+# terminator: `cat > x.py <<PY … PY; python3 x.py` yielded cat/import/def/const/PY and never
+# python3. Both halves corrupt `exe`, `verb`, and `toolchain`, which is derived from exe.
 #
 # `<<<` (herestring) is deliberately not matched: it has no body to skip.
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
