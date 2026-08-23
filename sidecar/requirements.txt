@@ -6,10 +6,15 @@
 # matters more than auto-drift here; scripts/check_dependency_staleness.py
 # (wired into CI, see .github/workflows/ci.yml) is the process that keeps an
 # exact pin from rotting silently the same way again.
+#
+# spacy/wordfreq/gliner2 carried the same risk (a `3.8.*`/`3.1.*` wildcard series, or no
+# constraint at all) until pinned exactly here — they feed the ML backend and the analysis
+# package's `term` level, so a silent resolver drift there is exactly as unreproducible as the
+# fastapi/uvicorn incident above.
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
-gliner2[local]
+gliner2[local]==1.3.2
 bashlex==0.18
-spacy==3.8.*
+spacy==3.8.15
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
-wordfreq==3.1.*
+wordfreq==3.1.1
