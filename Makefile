@@ -180,6 +180,10 @@ obfuscation-coverage-check: ## fast: assert every sidecar/app/**/*.py is actuall
 fixture-identity-check: ## fast: extract the committed synthetic fixture corpus and verify it matches its baseline fingerprint (CI-safe substitute for the frozen-corpus identity gate; see sidecar/app/analysis/testdata/build_fixture_corpus.py)
 	PYTHON="$(STUDY_PYTHON)" bash scripts/check-fixture-identity.sh
 
+.PHONY: dependency-staleness-check
+dependency-staleness-check: ## fast: warn (fail past a 1yr bar) when a sidecar/requirements.txt exact pin has sat unrevisited (no torch, one PyPI GET per pin, no pip install)
+	python3 scripts/check_dependency_staleness.py sidecar/requirements.txt
+
 .PHONY: crosscheck
 crosscheck:  ## verify all release targets build pure-Go (CGO_ENABLED=0)
 	@for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \

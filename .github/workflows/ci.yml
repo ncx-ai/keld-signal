@@ -81,3 +81,27 @@ jobs:
         run: pip install --quiet pandas pyarrow bashlex wordfreq pyyaml
       - name: fixture identity gate
         run: make fixture-identity-check STUDY_PYTHON=python
+
+  # fastapi==0.115.* and uvicorn[standard]==0.32.* sat 26 / 20 minor releases
+  # behind for over a year with nothing anywhere checking — a trailing-wildcard
+  # pin silently freezes once upstream abandons that series, and there was no
+  # signal until someone looked by hand. This job is that signal, every
+  # push/PR, for free: it reads sidecar/requirements.txt's exact `name==X.Y.Z`
+  # pins and asks PyPI how old each one is — one JSON GET per pin, no pip
+  # install, no torch. It does NOT fail on "a newer version exists" (true on
+  # nearly every run for a fast-moving package like fastapi, which is exactly
+  # the kind of check that gets disabled for crying wolf); it fails only once a
+  # pin's own release is materially old (default: >365 days) AND a newer
+  # release is actually available — see scripts/check_dependency_staleness.py
+  # for the full reasoning. gliner2/torch/transformers/numpy (the ML stack) and
+  # the spacy/wordfreq wildcard pins are out of scope for this check: bumping
+  # them needs enrich/eval revalidation, not just a version check.
+  dependency-staleness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: dependency staleness check (sidecar/requirements.txt)
+        run: make dependency-staleness-check

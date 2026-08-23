@@ -1,5 +1,13 @@
-fastapi==0.115.*
-uvicorn[standard]==0.32.*
+# Exact pins, not a trailing-wildcard series (e.g. the old `fastapi==0.115.*`):
+# a wildcard on the minor component only floats within a series upstream has
+# already abandoned, so it silently freezes forever once the series ends —
+# these two sat 26 (fastapi) and 20 (uvicorn) minor versions behind for over a
+# year with nothing failing. Reproducibility for a PyInstaller-frozen binary
+# matters more than auto-drift here; scripts/check_dependency_staleness.py
+# (wired into CI, see .github/workflows/ci.yml) is the process that keeps an
+# exact pin from rotting silently the same way again.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
 gliner2[local]
 bashlex==0.18
 spacy==3.8.*
