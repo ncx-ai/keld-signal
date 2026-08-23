@@ -38,6 +38,7 @@ import yaml
 
 from refseries import characterize, executive, text_of, is_command_echo
 from qwen_windows import clip
+from app.analysis.transcript import iter_turns  # noqa: E402 — sys.path set up by refseries import
 
 DEFAULT_MODEL = os.path.expanduser("~/.keld/models/gguf/granite-4.1-3b-Q4_K_M.gguf")
 TRANSCRIPT_ROOTS = [os.path.expanduser("~/.claude/projects"), "/tmp/john-projects"]
@@ -100,19 +101,8 @@ def window_text(path, start, end, cap=7000):
     envelope, and a window of them reads as the engineer talking when it is not.
     """
     out = []
-    for line in open(path, errors="replace"):
-        if '"type":"user"' not in line and '"type":"assistant"' not in line:
-            continue
-        if '"tool_result"' in line and '"tool_use"' not in line:
-            continue
-        try:
-            o = json.loads(line)
-        except Exception:
-            continue
-        ts = o.get("timestamp")
-        if not ts:
-            continue
-        t = pd.Timestamp(ts)
+    for o in iter_turns(path):
+        t = pd.Timestamp(o["timestamp"])
         if not (start <= t < end):
             continue
         said = text_of((o.get("message") or {}).get("content"))
