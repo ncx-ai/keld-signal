@@ -104,9 +104,18 @@ a time. Two waves, up to 8 facets per prompt:
   `translation`, `code_generation`, `information_extraction`, `classification`,
   `reasoning`, `question_answering`, `text_generation`, `rewriting`, `general`),
   `sensitivity` (+ masked entity spans; detects **concrete leaked data**, not
-  topic — unions the GLiNER2 NER with a deterministic gitleaks credential layer
-  and a placeholder gate, then rolls up to the highest-severity class: `ssn`⇒`phi`,
-  `credit_card`⇒`pci`, `api_key`/`secret`⇒`secrets`, other personal id⇒`pii`),
+  topic — unions the GLiNER2 NER with TWO deterministic layers, a gitleaks
+  credential layer (`creddetect`) and a regular-format PII layer (`piidetect`:
+  `ssn`, `credit_card`, `email` — Luhn + issuer validation, SSA range rules,
+  dashed SSNs only; phone is deliberately left to the NER), behind a placeholder
+  gate and a **well-known/test-value gate** (`piidetect.IsWellKnown`, applied to
+  the NER's entities too — `4111 1111 1111 1111`, `123-45-6789` and RFC 2606
+  domains saturate developer transcripts and would otherwise report `pci`/`phi`
+  continuously), then rolls up to the highest-severity class: `ssn`⇒`phi`,
+  `credit_card`⇒`pci`, `api_key`/`secret`⇒`secrets`, other personal id⇒`pii`.
+  Only `person`, `address` and `phone` now require the NER, so deterministic
+  mode reaches every class; `facets_degraded` names `sensitivity` only when the
+  model-free answer fell short of the top class),
   `domain` (+ entities), `activity_type`, `personal`, `function_guess`
   (12 business functions), `speech_act` (`command`/`question`/`statement`/
   `fragment`, classifies the prompt text only).
@@ -200,8 +209,9 @@ selects one of three modes:
   at its top).
 - **`"deterministic"`** — enrichment stays **on** and `Worker` runs with a
   `nil` `enrich.Model`. This is a *different* set of facets — the ones that
-  need no model at all, e.g. credential detection (`CredentialSpans`, pure Go,
-  no sidecar, no network) and the **workstream dimensions** the sidecar's
+  need no model at all, e.g. credential detection (`CredentialSpans`) and
+  regular-format PII detection (`PIISpans` — ssn/credit_card/email; both pure
+  Go, no sidecar, no network) and the **workstream dimensions** the sidecar's
   `/analyze` derives from transcript coordinates — not a fallback for the
   model's facets.
   **The analysis service still runs; only the model is never loaded.** The
@@ -539,6 +549,8 @@ internal/
     enrich/          the pipeline: extractors, passes, labels, mask, meta
       sidecar/           HTTP client to the GLiNER2 sidecar (the only Model)
       lenstat/           adaptive input truncation (mu+2sigma prompt-length stats)
+      creddetect/        deterministic credential detection (vendored gitleaks rules)
+      piidetect/         deterministic ssn/credit_card/email + well-known-value gate
       eval/              enrichment quality eval harness
     provision/       model provisioning (weights → ~/.keld/models)
     publish/         build + POST masked enrichments to Atlas

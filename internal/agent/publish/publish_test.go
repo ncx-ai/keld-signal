@@ -280,3 +280,40 @@ func TestBuildCarriesFacetsDegraded(t *testing.T) {
 		t.Fatalf("nothing was degraded; the key must be absent: %s", b)
 	}
 }
+
+// TestBuildNeverCarriesRawPII pins the privacy invariant across the NEW
+// deterministic PII layer: piidetect finds ssn/credit_card/email with no model
+// involved, and those spans must reach the wire masked, exactly like the NER's
+// and creddetect's. Fixtures are synthetic — a Luhn-valid card under a real IIN
+// with an invented body, a structurally valid SSN on no example list, and an
+// invented address at a domain that is not RFC-reserved (reserved ones are
+// excluded by design, so they could not prove anything here).
+func TestBuildNeverCarriesRawPII(t *testing.T) {
+	const (
+		card  = "4539871234567895"
+		ssn   = "321-54-9876"
+		email = "dana.rivers@northwind-logistics.co.uk"
+	)
+	text := "charge " + card + ", ssn " + ssn + ", receipt to " + email
+
+	p := enrich.Run(text, "claude_code", enrich.Meta{}, nil) // nil Model: deterministic mode
+	if p.Sensitivity.Value != "phi" {
+		t.Fatalf("premise: sensitivity = %+v, want phi", p.Sensitivity)
+	}
+	if len(p.SensitivitySpans) != 3 {
+		t.Fatalf("premise: spans = %+v, want three", p.SensitivitySpans)
+	}
+
+	b, err := json.Marshal(Build(queue.Job{Source: "claude_code"}, p, "who@x.test", false, len(text), time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{card, ssn, email, "dana.rivers", "4539 8712"} {
+		if bytes.Contains(b, []byte(raw)) {
+			t.Fatalf("published payload contains raw PII %q: %s", raw, b)
+		}
+	}
+	if !bytes.Contains(b, []byte(`"label":"ssn"`)) {
+		t.Fatalf("payload lost the masked ssn span: %s", b)
+	}
+}

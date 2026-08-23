@@ -7,8 +7,12 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 )
 
+// 321-54-9876 is a synthetic SSN: structurally valid (area/group/serial all in
+// issued ranges) but on no published example list, which matters because the
+// textbook 123-45-6789 this test used to carry is now excluded by piidetect's
+// well-known gate — as it must be, or every developer transcript reports phi.
 func TestSensitivityHardEvidenceOverrides(t *testing.T) {
-	ctx := enrich.NewJobContext("my ssn is 123-45-6789", "claude_code", enrich.Meta{}, enrichtest.NewFake())
+	ctx := enrich.NewJobContext("my ssn is 321-54-9876", "claude_code", enrich.Meta{}, enrichtest.NewFake())
 	out, err := enrich.SensitivityExtractor{}.Run(ctx)
 	if err != nil {
 		t.Fatal(err)

@@ -37,19 +37,22 @@ func TestSensitivityCatchesCredentialViaDetector(t *testing.T) {
 }
 
 // ssnModel returns an ssn entity from Extract so we can verify a credential does
-// NOT downgrade a higher-severity phi classification (precedence guard).
+// NOT downgrade a higher-severity phi classification (precedence guard). It
+// carries the synthetic fxSSN rather than the textbook 123-45-6789, which the
+// well-known gate now excludes from the NER path as well as the deterministic
+// one.
 type ssnModel struct{ emptyModel }
 
 func (ssnModel) Extract(text string, _ map[string]string, _ map[string][]string) ExtractResult {
-	i := strings.Index(text, "123-45-6789")
+	i := strings.Index(text, fxSSN)
 	if i < 0 {
 		return ExtractResult{}
 	}
-	return ExtractResult{Entities: []Entity{{Label: "ssn", Start: i, End: i + 11, Confidence: 1}}}
+	return ExtractResult{Entities: []Entity{{Label: "ssn", Start: i, End: i + len(fxSSN), Confidence: 1}}}
 }
 
 func TestCredentialDoesNotDowngradePHI(t *testing.T) {
-	ctx := NewJobContext("my ssn is 123-45-6789 and key ghp_16C7e42F292c6912E7710c838347Ae178B4a", "claude_code", Meta{}, ssnModel{})
+	ctx := NewJobContext("my ssn is "+fxSSN+" and key ghp_16C7e42F292c6912E7710c838347Ae178B4a", "claude_code", Meta{}, ssnModel{})
 	out, err := SensitivityExtractor{}.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
