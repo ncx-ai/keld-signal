@@ -26,3 +26,23 @@ wordfreq==3.1.1
 # on the transitive pull for a module we import by name is the exact trap numpy-via-pandas is
 # (AGENTS.md) — it works until an upstream drops it.
 regex==2026.6.28
+
+# PII detection for the sensitivity facet (app/pii.py): US_SSN, CREDIT_CARD (Luhn),
+# EMAIL_ADDRESS, PHONE_NUMBER (libphonenumber) + PERSON/LOCATION off the spaCy NER
+# already vendored above. Replaces a hand-rolled Go regex detector.
+#
+# PINNED ONE BEHIND LATEST, DELIBERATELY. presidio-analyzer 2.2.363 added a direct
+# `numpy>=1.19.0,<2.5.0` dependency, and this venv runs numpy 2.5.0 under
+# torch 2.12.1+cu130 — so 2.2.363/2.2.364 SILENTLY DOWNGRADE numpy to 2.4.6
+# underneath torch, which breaks at runtime rather than at install. 2.2.362 is the
+# last release with no numpy constraint; it installs additively (phonenumbers,
+# tldextract, requests-file) and leaves numpy and torch untouched.
+#
+# The cap is not a real incompatibility for us: upstream added it to unblock their
+# own CI (data-privacy-stack/presidio#2090), where numpy 2.5.0 broke spacy's
+# parser_model import under a torch+gliner+stanza+CUDA extras stack. That failure
+# does NOT reproduce here — spacy 3.8.15, parser_model and en_core_web_sm NER were
+# all verified working on numpy 2.5.0 in this venv. Revisit when upstream lifts the
+# cap (then move to the newest release); do NOT bump to 2.2.363+ while numpy is
+# 2.5.x without re-running the torch/GLiNER2 check.
+presidio-analyzer==2.2.362
