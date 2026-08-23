@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from app.analysis.analyze import PromptNotFound, analyze_window
 from app.analysis.match import DEFAULT_BUDGET_S as _MATCH_DEFAULT_BUDGET_S
 from app.analysis.match import compile_vocabulary, match_text
 from app.cpuscale import CpuScaler
@@ -234,6 +235,37 @@ class MatchIn(BaseModel):
     text: str
 
 
+class AnalyzeIn(BaseModel):
+    path: str
+    prompt_id: str
+    span_minutes: int = 60
+
+
+# Lazy, load-once spaCy for the `term` level (named entities in message TEXT — the one level
+# analyze_window can compute that isn't a deterministic tool-input scan). Same sentinel pattern as
+# scripts/refseries.py's term_nlp() (kept in parity rather than inventing a second one): a 3-state
+# ["unset"] -> None|model list, because `None` is itself a valid loaded-and-degraded outcome and
+# can't double as the "not tried yet" marker. KELD_TERMS=0 opts out even when spaCy is installed
+# (it materially adds cost); anything else missing/failing degrades the same way — the `term`
+# level is simply absent from the payload, never a request failure.
+_ANALYSIS_NLP = ["unset"]
+
+
+def _analysis_nlp():
+    if _ANALYSIS_NLP[0] == "unset":
+        _ANALYSIS_NLP[0] = None
+        if os.environ.get("KELD_TERMS", "1") != "0":
+            try:
+                import spacy
+                m = spacy.load("en_core_web_sm",
+                               exclude=["tagger", "parser", "lemmatizer", "attribute_ruler"])
+                m.max_length = 20_000_000
+                _ANALYSIS_NLP[0] = m
+            except Exception:  # not installed, or no model: degrade, never fail the request
+                pass
+    return _ANALYSIS_NLP[0]
+
+
 @app.get("/health")
 def health():
     # ok = "the service can serve on demand", NOT "a worker is already loaded".
@@ -354,3 +386,33 @@ async def match(body: MatchIn):
         return {}
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, match_text, body.text, compiled, _match_budget_s())
+
+
+@app.post("/analyze")
+async def analyze(body: AnalyzeIn):
+    """Turn `span_minutes` of one transcript ending at `prompt_id` into the workstream +
+    inventory payload (see app.analysis.analyze.analyze_window). Coordinates in — a path and a
+    prompt id — never text; the response itself carries no span/offset/text either (see
+    test_analyze_response_carries_no_prompt_text).
+
+    Deliberately does NOT go through _dispatch/the single-flight runner, for the same reason
+    /match does not (see the block comment above _match_budget_s): this is a transcript read
+    plus regex and (optionally) spaCy work, not inference, and it must answer while the runner
+    is occupied or no worker has ever been spawned. Run in the default executor so a large
+    transcript — or a slow spaCy pass over one — cannot stall the event loop out from under
+    /health and /metrics, exactly the reason /match is already run there.
+
+    DEVIATION FROM THE DESIGN SPEC, RECORDED DELIBERATELY:
+    docs/superpowers/specs/2026-08-22-sidecar-analysis-tier-design.md calls for analysis to run
+    in a third, long-lived worker process, because the FastAPI parent's flat RSS depends on
+    holding no model — and spaCy (_analysis_nlp above) is a model by that definition. This runs
+    it in the parent instead. That is a decision, not an oversight: the user deprioritised memory
+    sizing for this on 2026-08-22. Revisit before this endpoint sees production-scale traffic.
+    """
+    _count("analyze_served")
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(
+            None, analyze_window, body.path, body.prompt_id, body.span_minutes, _analysis_nlp())
+    except PromptNotFound:
+        raise HTTPException(status_code=404, detail="prompt not found in transcript")

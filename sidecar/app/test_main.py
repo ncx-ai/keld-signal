@@ -5,7 +5,9 @@ only; the GLiNER2 model lives in a worker child, never at import) so they run
 without torch. Runnable under pytest OR standalone: `python app/test_main.py`.
 """
 import importlib
+import json
 import os
+import tempfile
 
 
 def _reload_main(max_chars: str | None):
@@ -469,6 +471,83 @@ def test_vocabulary_survives_a_real_worker_recycle():
     assert m._state["vocabulary"] is vocab_ref
     got = _asyncio.run(m.match(m.MatchIn(text="the customer is ACME")))
     assert got["customer"]["value"] == "acme"
+
+
+# --- POST /analyze -------------------------------------------------------------------------
+#
+# Deliberately bypasses _dispatch/the single-flight runner, for the same reason /match does (see
+# the block comment above app.main._match_budget_s): a transcript read plus regex/spaCy work is
+# not an inference. This file has no fastapi TestClient anywhere (every endpoint above is called
+# directly, async ones via _asyncio.run, with state set up through _wire) — that convention is
+# followed here too rather than introducing a `_client()` helper the file doesn't otherwise use.
+
+def _fixture_prompt_id():
+    return "fixture-prompt-0001"
+
+
+def _fixture_transcript():
+    """A small, wholly-invented transcript in its own directory. This is a privacy-critical
+    repo, so no real names, paths, or repos — see sidecar/app/analysis/testdata/ for the
+    convention this mirrors. Uses mkdtemp (not a `with TemporaryDirectory()` block): the file
+    must outlive this helper call, not just a `with` body. Shape matches
+    sidecar/app/test_analysis_analyze.py's fixture, already proven to round-trip through
+    analyze_window."""
+    tmp = tempfile.mkdtemp(prefix="keld-analyze-test-")
+    path = os.path.join(tmp, "fixture001-0000.jsonl")
+    rows = [
+        {"type": "user", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/workspace/widget-app",
+         "message": {"content": [{"type": "text", "text": "look at the thing"}]}},
+        {"type": "user", "timestamp": "2026-08-01T10:05:00Z", "cwd": "/workspace/widget-app",
+         "uuid": _fixture_prompt_id(),
+         "message": {"content": [{"type": "text", "text": "now fix the bug"}]}},
+    ]
+    with open(path, "w") as fh:
+        for o in rows:
+            fh.write(json.dumps(o, separators=(",", ":")) + "\n")
+    return path
+
+
+def test_analyze_returns_a_payload_without_touching_the_runner():
+    """/analyze is a transcript read plus regex/spaCy work, not inference. It must answer with no
+    worker ever spawned — that is what distinguishes it from /classify. Checked directly against
+    the counts object (as test_classify_sheds_503_and_counts_when_queue_full does below) rather
+    than through a live m.metrics() call: _FakeWM here only stands in for the pieces the other
+    endpoints touch (state/call/ready/worker_rss_mb) and is missing several attributes the real
+    WorkerManager always has (peak_rss_mb, ceiling_mb(), hard_limit_mb()) that only /metrics'
+    own builder reads — reproducing the whole real WorkerManager surface in the fake just to take
+    this one reading would be scope creep this task doesn't need."""
+    from app.metrics import Counts
+
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+
+    body = _asyncio.run(m.analyze(
+        m.AnalyzeIn(path=_fixture_transcript(), prompt_id=_fixture_prompt_id())))
+    assert body["schema"] >= 1
+    assert "workstreams" in body and "inventory" in body
+    assert m._state["counts"].submitted == 0, "must not have gone through the runner"
+    assert m._state["counts"].analyze_served == 1
+
+
+def test_analyze_unknown_prompt_is_404_not_an_empty_payload():
+    m = _reload_main(None)
+    _wire(m)
+    try:
+        _asyncio.run(m.analyze(m.AnalyzeIn(path=_fixture_transcript(), prompt_id="nope")))
+        assert False, "expected 404"
+    except HTTPException as e:
+        assert e.status_code == 404
+
+
+def test_analyze_response_carries_no_prompt_text():
+    m = _reload_main(None)
+    _wire(m)
+    body = _asyncio.run(m.analyze(
+        m.AnalyzeIn(path=_fixture_transcript(), prompt_id=_fixture_prompt_id())))
+    dumped = json.dumps(body)
+    for k in ("text", "span", "offset"):
+        assert f'"{k}":' not in dumped, k
 
 
 if __name__ == "__main__":

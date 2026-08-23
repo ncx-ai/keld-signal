@@ -15,6 +15,10 @@ class Counts:
     # above — a /match spike must not read as inference load in /metrics.
     vocab_installs: int = 0
     match_served: int = 0
+    # Same reasoning as vocab_installs/match_served: POST /analyze never touches the
+    # runner/worker either (see app/main.py's analyze()), so it gets its own counter rather than
+    # sharing submitted/completed — an analysis spike must not read as inference load.
+    analyze_served: int = 0
 
 
 def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
