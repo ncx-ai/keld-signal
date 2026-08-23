@@ -13,6 +13,15 @@ def test_paths_read_the_full_command_and_commands_do_not():
     assert "unpacked-user/ppt/slides/slide2.xml" in paths, paths
 
 
+def test_heredoc_body_is_not_commands():
+    """EOF(855), PY(738), import(849), def(276), const(261) all ranked in the top 26 'programs
+    invoked' because every line of a heredoc body was read as a command."""
+    cmd = "cat > /tmp/x.py <<PY\nimport os\ndef main():\n    const = 1\nPY\npython3 /tmp/x.py"
+    exes = bash_refs(cmd)[1]
+    assert "python3" in exes, exes          # the command AFTER the terminator was being lost
+    assert not {"import", "def", "const", "PY"} & set(exes), exes
+
+
 def test_a_quoted_path_is_not_torn_at_its_spaces():
     """Splitting on whitespace made `.../Application Support/.../soffice.py` arrive as
     `Support/Claude/.../soffice.py`, resolve under the repo root, and take 60% of a working set —
