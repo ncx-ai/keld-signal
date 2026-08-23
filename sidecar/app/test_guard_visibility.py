@@ -125,16 +125,56 @@ def test_hard_limit_defaults_above_the_ceiling():
     assert m.hard_limit_mb() > m.ceiling_mb(), (m.hard_limit_mb(), m.ceiling_mb())
 
 
-def test_hard_limit_derives_from_the_total_budget():
-    # The requirement is a TOTAL budget ("never more than 4GB"), so the worker's
-    # hard limit must be budget - parent share. Regression: taking
-    # max(budget, ceiling + margin) let the ceiling override the budget and put
-    # the hard limit ABOVE 4GB, so the guard could not enforce the requirement.
-    m = _ready_manager(margin_mb=1024.0)     # ceiling = 3724, below the budget
+def test_hard_limit_derives_from_the_total_budget_when_the_budget_can_be_met():
+    # The requirement is a TOTAL budget ("never more than 4GB"), so whenever the
+    # budget CAN be met the worker's hard limit is budget - parent share, not
+    # something the ceiling inflates. Regression: an unconditional
+    # max(budget, ceiling + margin) let the ceiling override a budget that was
+    # perfectly satisfiable, and the guard stopped enforcing the requirement.
+    #
+    # "Can be met" is the whole condition, and it is about ceiling + hard margin
+    # + reserve, not the ceiling alone: this fixture's original model_cost of
+    # 2700 put ceiling+margin+reserve at 4386 against a 4096 budget, i.e. it was
+    # never a satisfiable configuration to begin with. See the companion test.
+    m = _ready_manager(margin_mb=1024.0)
+    m.model_cost_mb = 2000.0                 # a model that leaves room: ceiling = 3024
     m._budget_mb = 4096.0
     m._parent_reserve_mb = 150.0
+    assert m.budget_shortfall_mb() == 0.0, "fixture must be a satisfiable config"
     assert m.hard_limit_mb() == 3946.0, m.hard_limit_mb()
     assert m.hard_limit_mb() > m.ceiling_mb()
+
+
+def test_an_unmeetable_budget_keeps_the_margin_and_says_so():
+    # When ceiling + hard margin + parent reserve exceeds the budget there is no
+    # limit satisfying both. The margin wins — a hard limit under ceiling+margin
+    # turns every ordinary transient spike into a mid-job kill, which is a worse
+    # failure than overshooting a budget — and the overshoot is REPORTED rather
+    # than absorbed silently.
+    m = _ready_manager(margin_mb=1024.0)     # ceiling = 3724; +512 +150 = 4386
+    m._budget_mb = 4096.0
+    m._parent_reserve_mb = 150.0
+    assert m.hard_limit_mb() == m.ceiling_mb() + m._hard_margin
+    assert round(m.budget_shortfall_mb(), 1) == 290.0, m.budget_shortfall_mb()
+    m._warns.clear()
+    m.poll()
+    assert len(m._warns) == 1 and "CANNOT BE SATISFIED" in m._warns[0], m._warns
+
+
+def test_the_hard_limit_never_rises_as_the_parent_grows():
+    # Monotonicity of the composition, guarded here as well as in
+    # test_worker_manager because this is the file that owns "the guard must not
+    # relax when it matters most". The branch this replaces jumped +511 MB at
+    # parent == budget - ceiling.
+    prev = None
+    for parent in range(100, 2001, 7):
+        m = _ready_manager(margin_mb=1024.0, parent_rss_fn=lambda p=float(parent): p)
+        m._budget_mb, m._parent_reserve_mb = 4096.0, 150.0
+        m.observe_parent_rss()
+        hard = m.hard_limit_mb()
+        assert prev is None or hard <= prev + 1e-9, (
+            f"hard limit ROSE from {prev} to {hard} at parent {parent} MB")
+        prev = hard
 
 
 def test_hard_limit_stays_above_ceiling_on_a_large_model_host():

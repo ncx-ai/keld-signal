@@ -40,36 +40,49 @@ import (
 
 // Defaults. The ceiling is MEASURED, not estimated: each cap was swept against
 // the real gliner2-large worker (2 torch threads, MALLOC_ARENA_MAX=2, 3-call
-// bursts saturating the cap) and its peak RSS recorded, against a 4096 MB total
-// sidecar budget with ~105 MB for the FastAPI parent + resource tracker:
+// bursts saturating the cap) and its peak RSS recorded:
 //
-//	max_len   worker peak   total     latency/call
-//	    512       3043 MB   3148 MB       3.5 s
-//	    768       3215 MB   3319 MB       5.8 s
-//	   1024       3416 MB   3521 MB       8.6 s
-//	   1280       3666 MB   3771 MB      11.9 s
-//	   1536       3870 MB   3975 MB      15.9 s
-//	   1800       4305 MB   4410 MB      30.8 s   <- over budget; hard-killed
+//	max_len   worker peak   latency/call
+//	    512       3043 MB       3.5 s
+//	    768       3215 MB       5.8 s
+//	   1024       3416 MB       8.6 s
+//	   1280       3666 MB      11.9 s
+//	   1536       3870 MB      15.9 s
+//	   1800       4305 MB      30.8 s   <- hard-killed
 //
-// Those figures come from synthetic /classify calls. The LIVE pipeline is
-// heavier: it also issues /extract with entity labels, and prepends context
-// preambles, so real peaks run several hundred MB above the synthetic curve at
-// the same cap. Measured in the running daemon at a 1024 cap: peak 3872 MB
-// (total ~3977 MB) — inside the 4096 MB budget, but only ~120 MB of margin and
-// only ~74 MB below the worker hard limit, close enough that ordinary variance
-// would start tripping mid-job kills.
+// Only the worker-peak and latency columns are measured. This sweep originally
+// carried a "total" column adding a ~105 MB FastAPI parent; that column has been
+// removed rather than re-measured, because the parent is no longer a constant.
+// The sidecar is the client-side analysis service, and its named-terms level
+// (on by default) loads spaCy into the parent — measured high-water 619.6 MB,
+// ~515 MB more than the old column assumed. The worker peaks are unaffected:
+// the worker is a separate process. Only the sums moved.
+//
+// What actually kills a job is the WORKER HARD LIMIT, not the total. That limit
+// is max(budget - parent reserve, drift ceiling + hard margin); at the delivered
+// defaults with the measured spaCy parent it is held at the ceiling+margin floor,
+// 3921 MB (see sidecar/app/worker_manager.py, hard_limit_mb).
+//
+// The synthetic figures above understate the LIVE pipeline, which also issues
+// /extract with entity labels and prepends context preambles: real peaks run
+// several hundred MB above the synthetic curve at the same cap. Measured in the
+// running daemon at a 1024 cap: worker peak 3872 MB — only ~49 MB under the
+// 3921 MB hard limit, close enough that ordinary variance would start tripping
+// mid-job kills. Summed with the measured parent that is ~4492 MB, ~396 MB past
+// the 4096 MB KELD_SIDECAR_MEM_BUDGET_MB.
 //
 // So the default is 768, calibrated on the LIVE measurement rather than the
 // synthetic one. Verified in the running daemon on the heaviest real op
 // (/extract, 5 entity labels + 5 sensitivity labels, input far exceeding the
-// cap): peak 3238 MB, total ~3343 MB — 753 MB of margin under the 4096 MB budget,
-// at 9.2 s for that call. Cost is superlinear in BOTH memory and time, so raising
-// this is not a free "less truncation" win.
+// cap): worker peak 3238 MB at 9.2 s for that call — ~683 MB under the hard
+// limit, and ~3858 MB summed with the parent, inside the 4096 MB budget by
+// ~238 MB. Cost is superlinear in BOTH memory and time, so raising this is not
+// a free "less truncation" win.
 //
-// Note what this implies: a 4 GB total budget against a ~2.7 GB resident model
-// leaves ~1.2 GB of transient headroom, which buys roughly 768 word tokens in the
-// real pipeline. A materially larger window needs a larger budget or a smaller /
-// quantized model — not a bigger cap.
+// ⚠️ Do not raise KELD_ENRICH_TOKEN_CEILING on the strength of the synthetic
+// table: 1024 is already inside the hard limit's noise band and outside the
+// budget. A materially larger window needs a larger budget, a parent without
+// spaCy (KELD_TERMS=0), or a smaller / quantized model — not a bigger cap.
 //
 // Most prompts are far shorter than the cap, so mu+2sigma normally lands well
 // below it and neither the memory nor the latency worst case is reached.

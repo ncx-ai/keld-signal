@@ -436,6 +436,7 @@ def metrics():
         uptime_s=time.monotonic() - started, cpu_threads=_state.get("cpu_threads"),
         peak_rss_mb=wm.peak_rss_mb, ceiling_mb=wm.ceiling_mb(),
         hard_limit_mb=wm.hard_limit_mb(), parent_reserve_mb=wm.parent_reserve_mb(),
+        budget_shortfall_mb=wm.budget_shortfall_mb() if wm.ceiling_mb() is not None else None,
     )
 
 

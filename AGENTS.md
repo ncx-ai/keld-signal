@@ -135,10 +135,14 @@ a time. Two waves, up to 8 facets per prompt:
   null hypothesis, `0.5**n` first falls below 5% at n=5, so below it no share
   distinguishes the window from a coin flip. Measured on the 572-window
   reference sample: 347 of 2927 attributed dimension slots become unattributed,
-  330 of which were publishing at share 1.0 and 129 off a single observation. `/analyze`'s `inventory.named_terms` (proper nouns lifted from message
-  text — real person names have been observed) is deliberately unmodelled on
-  `sidecar.AnalyzeResult`, so it is structurally unforwardable — and is **off
-  by default** besides (`KELD_TERMS`, see below).
+  330 of which were publishing at share 1.0 and 129 off a single observation.
+  **Nothing from `/analyze` reaches Atlas except those dimensions.** In
+  particular `inventory.named_terms` (proper nouns lifted from message text —
+  real person names have been observed) is deliberately unmodelled on
+  `sidecar.AnalyzeResult`: the field is dropped at the wire boundary, so it is
+  structurally unforwardable no matter what the level is configured to do. That
+  is what makes it safe for the level to be **on by default** (see the
+  analysis-service bullet below).
 - ⚠️ **`/analyze` is confined to `KELD_ANALYZE_ROOTS`.** The sidecar has **no
   auth** — `serve.py` binds 127.0.0.1 and that is the whole of it — which was
   adequate while every endpoint only processed text the caller already held.
@@ -372,8 +376,36 @@ keeps it strictly conservative against the old behaviour: an early sample can
 never grant MORE headroom than before. The standing invariant is unchanged —
 the hard limit never sits below `ceiling + KELD_SIDECAR_RSS_HARD_MARGIN_MB`.
 
+**And the composition must be monotone too, which it was not.** A monotone
+reserve does not give a monotone limit for free. `hard_limit_mb()` returned
+`budget − reserve` whenever that came out above the ceiling and the
+`ceiling + hard_margin` floor only when it did not, putting a **step
+discontinuity** at `reserve == budget − ceiling`: measured at the delivered
+defaults (model_cost 2385, ceiling 3409, budget 4096), parent 686 gave 3410 and
+parent 688 gave **3921** — 2 MB of parent growth bought the worker 511 MB and
+abandoned the budget without bound. The guard relaxed exactly when memory
+pressure was highest, and spaCy's 619.6 MB sits one NER transient below that
+edge, with the high-water latch making the crossing permanent. It is now
+`max(budget − reserve, ceiling + hard_margin)`: monotone by construction, and
+the floor is **unconditional** rather than a property of one branch — which is
+also what fixes the invariant, since 3476.4 shipped against a required 3921.
+
+**The honest consequence: at the delivered defaults the budget cannot be met.**
+parent 619.6 + ceiling 3409 + margin 512 = **4540.6 MB** against a 4096 MB
+budget. No hard limit satisfies both. The margin wins — a limit under
+`ceiling + hard_margin` turns every ordinary transient spike into a mid-job
+kill, a worse failure than overshooting a budget — and the overshoot is
+**reported, not absorbed**: `budget_shortfall_mb()` surfaces in `/metrics`, and
+`poll()` logs one loud line per **worker generation** (not per poll — a
+once-a-second line is a flood operators filter out, which is the same as never
+warning) naming every term and the levers. Which term gives —
+`KELD_SIDECAR_MEM_BUDGET_MB`, `KELD_ENRICH_TOKEN_CEILING` /
+`KELD_SIDECAR_RSS_MARGIN_MB`, or `KELD_TERMS=0` — is an operator's decision the
+code must not make silently.
+
 `GET /metrics` exposes a `worker` block (`state`/`worker_rss_mb`/**`peak_rss_mb`**/
-`parent_rss_mb`/**`parent_reserve_mb`**/`model_cost_mb`/**`ceiling_mb`**/**`hard_limit_mb`**/`recycles`/
+`parent_rss_mb`/**`parent_reserve_mb`**/`model_cost_mb`/**`ceiling_mb`**/**`hard_limit_mb`**/
+**`budget_shortfall_mb`**/`recycles`/
 `kills` incl. `hard`) alongside governor EWMA/threads/queue/counts — the peak and
 the limits it is judged against, because an instantaneous sample is exactly what
 made the oscillation look healthy. Full mechanisms + load-test validation:

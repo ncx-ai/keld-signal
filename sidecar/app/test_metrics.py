@@ -54,6 +54,23 @@ def test_build_metrics_shape_and_values():
     assert m["uptime_s"] == 100.0
 
 
+def test_build_metrics_reports_the_budget_shortfall():
+    """An operator reading /metrics sees hard_limit_mb and parent_reserve_mb but has to sum
+    them and remember the budget to notice they overrun it. The overrun is the fact; report it.
+    None when there is no worker yet, 0.0 when the configuration fits."""
+    g = Governor(disabled=True)
+    kw = dict(worker_state="ready", worker_rss_mb=2743.1, parent_rss_mb=619.6,
+              model_cost_mb=2385.0, governor=g, runner=_FakeRunner(), counts=Counts(),
+              recycles=0, kills={"timeout": 0, "pressure": 0, "idle": 0, "crash": 0},
+              uptime_s=10.0, cpu_threads=2, clock=lambda: 1.0)
+    m = build_metrics(ceiling_mb=3409.0, hard_limit_mb=3921.0, parent_reserve_mb=619.6,
+                      budget_shortfall_mb=444.6, **kw)
+    assert m["worker"]["budget_shortfall_mb"] == 444.6, m["worker"]
+
+    m = build_metrics(**kw)
+    assert m["worker"]["budget_shortfall_mb"] is None, m["worker"]
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

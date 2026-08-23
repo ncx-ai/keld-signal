@@ -30,7 +30,8 @@ class Counts:
 def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
                   governor, runner, counts, recycles, kills, uptime_s,
                   cpu_threads=None, peak_rss_mb=None, ceiling_mb=None,
-                  hard_limit_mb=None, parent_reserve_mb=None, clock=time.monotonic):
+                  hard_limit_mb=None, parent_reserve_mb=None, budget_shortfall_mb=None,
+                  clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     return {
         "worker": {
@@ -51,6 +52,12 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
             # budget. Reported because the two diverging is the whole failure this replaced: a
             # constant asserting a parent size nothing measured.
             "parent_reserve_mb": round(parent_reserve_mb, 1) if parent_reserve_mb is not None else None,
+            # MB by which hard_limit_mb + parent_reserve_mb overrun the total budget. Reported
+            # because the two fields above do not say it on their own: with the named-terms
+            # level resident in the parent, honouring the ceiling+margin floor can put the sum
+            # past KELD_SIDECAR_MEM_BUDGET_MB, and an operator should not have to do the
+            # arithmetic to find out. 0.0 means the configuration fits; None means no worker yet.
+            "budget_shortfall_mb": round(budget_shortfall_mb, 1) if budget_shortfall_mb is not None else None,
             "recycles": recycles,
             "kills": dict(kills),
         },
