@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -980,5 +982,140 @@ func TestQueueCapFromEnv(t *testing.T) {
 	t.Setenv("KELD_QUEUE_CAP", "garbage")
 	if got := queueCap(); got != 1024 {
 		t.Fatalf("garbage should fall back to the default, got %d", got)
+	}
+}
+
+// TestSidecarServiceBuildsTheServiceWithoutProvisioning pins the split between
+// "spawn the analysis service" and "provision the GLiNER2 weights". The
+// sidecar is the client-side analysis service in general (/analyze, /match,
+// /vocabulary, ...); GLiNER2 is one capability it loads lazily, so building
+// the service plumbing must not depend on — or trigger — a model download.
+//
+// It never starts anything: the supervisor is returned unstarted and the spawn
+// closure is only invoked here to inspect the command that WOULD be run.
+func TestSidecarServiceBuildsTheServiceWithoutProvisioning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	binPath := filepath.Join(t.TempDir(), "fake-svc-bin")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KELD_SIDECAR_BIN", binPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
+	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
+
+	client, sup, healthFn, ok, err := sidecarService(ctx, emitter)
+	if !ok || err != nil {
+		t.Fatalf("sidecarService: ok=%v err=%v, want true/nil", ok, err)
+	}
+	if client == nil || sup == nil || healthFn == nil {
+		t.Fatalf("sidecarService must return client+supervisor+healthFn, got %v/%v/healthFn nil=%v", client, sup, healthFn == nil)
+	}
+	if sup.emitter != emitter {
+		t.Fatal("the supervisor must carry the emitter (mlBackend's sup.SetEmitter today)")
+	}
+	if sup.port <= 0 {
+		t.Fatalf("supervisor port = %d, want an allocated ephemeral port", sup.port)
+	}
+	// The client and the health probe must both address the port the
+	// supervisor will hand the spawned service. Stand a stub /health on that
+	// (just-released) port and prove the probe reaches it.
+	ln, lerr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", sup.port))
+	if lerr != nil {
+		t.Fatalf("re-binding the allocated sidecar port: %v", lerr)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Close()
+	if !healthFn() {
+		t.Fatal("healthFn must probe /health on the supervisor's port")
+	}
+	if !client.Healthy(ctx) {
+		t.Fatal("the returned client must address the supervisor's port")
+	}
+
+	// Nothing provisioned: the weights directory must not even exist.
+	modelDir := filepath.Join(home, "models", "gliner2-large-v1")
+	if _, serr := os.Stat(modelDir); !errors.Is(serr, fs.ErrNotExist) {
+		t.Fatalf("sidecarService must not provision the model, but %s exists (stat err %v)", modelDir, serr)
+	}
+
+	// Nothing spawned either: the supervisor is returned unstarted.
+	if pid := sup.Pid(); pid != 0 {
+		t.Fatalf("sidecarService must not start the supervisor, got pid %d", pid)
+	}
+
+	// The spawn closure still resolves the binary, the port flag and the
+	// sidecar env (incl. the weights location the service uses when it does
+	// load GLiNER2) exactly as mlBackend wires it today.
+	cmd, cerr := sup.spawn(sup.port)
+	if cerr != nil {
+		t.Fatalf("spawn closure: %v", cerr)
+	}
+	if cmd.Path != binPath {
+		t.Fatalf("spawn path = %q, want %q", cmd.Path, binPath)
+	}
+	wantArg := fmt.Sprintf("--port=%d", sup.port)
+	if len(cmd.Args) != 2 || cmd.Args[1] != wantArg {
+		t.Fatalf("spawn args = %v, want [%s %s]", cmd.Args, binPath, wantArg)
+	}
+	if cmd.Process != nil {
+		t.Fatal("building the spawn command must not start the process")
+	}
+	var gotModelDir string
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "KELD_GLINER2_DIR=") {
+			gotModelDir = strings.TrimPrefix(kv, "KELD_GLINER2_DIR=")
+		}
+	}
+	if gotModelDir != modelDir {
+		t.Fatalf("KELD_GLINER2_DIR = %q, want %q", gotModelDir, modelDir)
+	}
+
+	// Policy (the sidecar.unavailable event) belongs to the caller, so a
+	// successful build emits nothing of its own.
+	if evs := emitter.Drain(); len(evs) != 0 {
+		t.Fatalf("sidecarService must not emit client events, got %+v", evs)
+	}
+}
+
+// TestSidecarServiceNoBinaryLeavesThePolicyToTheCaller covers the "no service
+// this run" report. sidecarService must NOT emit sidecar.unavailable itself:
+// each caller (ML enrichment, and later deterministic mode) responds
+// differently to a missing binary.
+func TestSidecarServiceNoBinaryLeavesThePolicyToTheCaller(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("KELD_SIDECAR_BIN", filepath.Join(t.TempDir(), "absent"))
+	if p, found := sidecarBinPath(); found {
+		t.Skipf("host has a sidecar installed at %s; the no-binary path is not hermetic here", p)
+	}
+
+	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
+	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
+
+	client, sup, healthFn, ok, err := sidecarService(context.Background(), emitter)
+	if ok {
+		t.Fatal("no sidecar binary must report ok=false")
+	}
+	if err != nil {
+		t.Fatalf("a missing binary is not a failure with a cause; err must stay nil so the caller can tell it from a port-alloc failure, got %v", err)
+	}
+	if client != nil || sup != nil || healthFn != nil {
+		t.Fatalf("no service means no client/supervisor/healthFn, got %v/%v/healthFn nil=%v", client, sup, healthFn == nil)
+	}
+	if evs := emitter.Drain(); len(evs) != 0 {
+		t.Fatalf("sidecarService must leave sidecar.unavailable to its caller, got %+v", evs)
 	}
 }

@@ -1058,21 +1058,39 @@ type mlBackendOpts struct {
 	emitter  *clientevents.Emitter
 }
 
-// mlBackend returns the enrichment model and the worker readiness gate. It is
-// only called when ML enrichment is enabled (see wireEnrichment) — ml_backend
-// off is handled entirely by the caller and never reaches here.
+// gliner2ModelDir is the on-disk home of the GLiNER2 weights. It is named in
+// exactly two places — the spawned service's KELD_GLINER2_DIR (where the
+// service looks when it lazily loads that capability) and provisioning (where
+// the weights are fetched to) — so it lives here rather than being recomputed
+// by either caller.
+func gliner2ModelDir() string { return paths.ModelsDir("gliner2-large-v1") }
+
+// sidecarService builds the plumbing for the local analysis service: it
+// resolves the sidecar binary, reaps any orphan left by a prior daemon,
+// allocates the ephemeral loopback port (recording it in agent.json for
+// `keld-agent metrics`), and constructs the HTTP client, the health probe and
+// the (unstarted) Supervisor that will spawn it.
 //
-// It provisions the model, spawns and supervises the sidecar, and returns the
-// sidecar client with a gate that opens once the sidecar has reported healthy
-// at least once. There is no lower-fidelity fallback: when the sidecar binary
-// is missing, or its port cannot be allocated, this returns
-// sidecarUnavailable's permanently-closed gate (jobs queue/spool until the
-// daemon is restarted) rather than a synthetic/degraded model.
-func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model, func() bool) {
+// It deliberately stops short of both provisioning a model and starting the
+// supervisor. The sidecar is the analysis-and-enrichment service in general —
+// /analyze, /match, /vocabulary, /classify, /extract — and GLiNER2 is one
+// capability it loads lazily, not a precondition for serving. Callers that
+// need the model provisioned do that themselves (see mlBackend).
+//
+// ok is false when there is no service this run, and the reason is carried by
+// err so the caller can tell the two apart:
+//
+//	err == nil — no sidecar binary is installed.
+//	err != nil — the ephemeral port could not be allocated. Returned raw and
+//	             unwrapped, so a caller's clientevents.RedactError summary
+//	             (which includes the error's concrete type) is unchanged.
+//
+// It logs only mechanical detail and never emits a client event: what a
+// missing service *means* is policy, and each caller answers that differently.
+func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sidecar.Client, *Supervisor, func() bool, bool, error) {
 	binPath, hasBin := sidecarBinPath()
 	if !hasBin {
-		log.Printf("keld-agent: no sidecar binary found; enrichment jobs will queue/spool until one is installed")
-		return sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
+		return nil, nil, nil, false, nil
 	}
 
 	// Reap any orphaned sidecar from a prior daemon before spawning ours, so a
@@ -1082,8 +1100,7 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 	// Pick an ephemeral port for the sidecar.
 	scLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		log.Printf("keld-agent: sidecar port alloc failed: %v", err)
-		return sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
+		return nil, nil, nil, false, err
 	}
 	scPort := scLn.Addr().(*net.TCPAddr).Port
 	scLn.Close() // Release; sidecar will bind it.
@@ -1098,7 +1115,7 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 	scClient := sidecar.NewCtx(ctx, scBaseURL, 5*time.Second)
 	healthFn := func() bool { return scClient.Healthy(ctx) }
 
-	modelDir := paths.ModelsDir("gliner2-large-v1")
+	modelDir := gliner2ModelDir()
 
 	sup := NewSupervisor(
 		func(p int) (*exec.Cmd, error) {
@@ -1112,10 +1129,37 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 	)
 	sup.SetEmitter(emitter)
 
+	return scClient, sup, healthFn, true, nil
+}
+
+// mlBackend returns the enrichment model and the worker readiness gate. It is
+// only called when ML enrichment is enabled (see wireEnrichment) — ml_backend
+// off is handled entirely by the caller and never reaches here.
+//
+// It provisions the model, spawns and supervises the sidecar, and returns the
+// sidecar client with a gate that opens once the sidecar has reported healthy
+// at least once. There is no lower-fidelity fallback: when the sidecar binary
+// is missing, or its port cannot be allocated, this returns
+// sidecarUnavailable's permanently-closed gate (jobs queue/spool until the
+// daemon is restarted) rather than a synthetic/degraded model.
+func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model, func() bool) {
+	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
+	if !ok {
+		// The consequence of having no service is this caller's to state: an
+		// enrichment job queues/spools, which is not what a future non-ML
+		// caller of sidecarService would say.
+		if err != nil {
+			log.Printf("keld-agent: sidecar port alloc failed: %v", err)
+			return sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
+		}
+		log.Printf("keld-agent: no sidecar binary found; enrichment jobs will queue/spool until one is installed")
+		return sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
+	}
+
 	return mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   scClient,
-		modelDir: modelDir,
+		modelDir: gliner2ModelDir(),
 		modelSHA: provision.ModelSHA256,
 		fetcher:  sidecar.NewHFFetcher(provision.ModelRepo, provision.ModelRevision),
 		healthFn: healthFn,
