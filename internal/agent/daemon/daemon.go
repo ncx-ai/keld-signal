@@ -69,7 +69,7 @@ type Sender interface {
 // Worker drains the enrichment queue. The trailing variadic customHolder is an
 // optional, backward-compatible hook: the daemon passes the live custom-pass
 // holder (hot-swapped by the settings poll); existing callers/tests omit it.
-func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, warmup func(context.Context) error, emitter *clientevents.Emitter, ra *reauther, custom ...*customHolder) {
+func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, analyzer enrich.WorkstreamAnalyzer, pub Sender, actor string, includeEntityText func() bool, ready func() bool, warmup func(context.Context) error, emitter *clientevents.Emitter, ra *reauther, custom ...*customHolder) {
 	ledger := newRetryLedger()
 	var holder *customHolder
 	if len(custom) > 0 {
@@ -127,7 +127,7 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 			copts = []enrich.Option{enrich.WithCustomExtractors(w1, w2)}
 		}
 		finished := runWithTimeout(to, func() {
-			published = process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter, ra, lens, copts...)
+			published = process(jobCtx, j, jobModel, analyzer, pub, actor, includeEntityText, emitter, ra, lens, copts...)
 		})
 		cancel() // always: on timeout this reclaims the abandoned attempt; on success it just releases resources.
 
@@ -439,7 +439,7 @@ func isAuthError(err error) bool {
 // to mark the job's key deduped. A skip (unresolved text), a deadline-cancelled
 // attempt, a publish failure, or a panic all return false so the job stays
 // re-offerable (retry / watcher fallback).
-func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther, lens *lenstat.Tracker, customOpts ...enrich.Option) bool {
+func process(ctx context.Context, j queue.Job, m enrich.Model, analyzer enrich.WorkstreamAnalyzer, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther, lens *lenstat.Tracker, customOpts ...enrich.Option) bool {
 	je := newJobEmit(emitter, j)
 	defer func() {
 		if r := recover(); r != nil {
@@ -484,9 +484,11 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	}, customOpts...)
 	// Wire the deterministic workstream pass only when this run actually has a
 	// window-analysis backend; without one the pass stays unregistered rather
-	// than running and failing every job (see analyzerFor).
-	if a := analyzerFor(m); a != nil {
-		opts = append(opts, enrich.WithWorkstreams(a))
+	// than running and failing every job (see analyzerFor). The analyzer is
+	// threaded in rather than derived from m, because ml_backend
+	// "deterministic" has an analysis service and no Model at all.
+	if analyzer != nil {
+		opts = append(opts, enrich.WithWorkstreams(analyzer))
 	}
 	profile := enrich.Run(text, j.Source, meta, m, opts...)
 	// The job-level backstop only fires for a wedge outside the passes; if it
@@ -717,7 +719,7 @@ func Run(ctx context.Context) error {
 	// start at all. When enabled, mlBackend provisions+supervises the sidecar
 	// (never a deterministic fallback — see mlBackend's doc comment) and
 	// handler is the normal ingress.Handler bound to q.
-	handler, model, gate, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter)
+	handler, model, analyzer, gate, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter)
 
 	live := settings.NewLive(set)
 	pollInterval := 5 * time.Minute
@@ -771,7 +773,7 @@ func Run(ctx context.Context) error {
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
-		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, warmupFunc(model), emitter, ra, custom)
+		go Worker(ctx, q, model, analyzer, pub, actor, live.IncludeEntityText, gate, warmupFunc(model), emitter, ra, custom)
 	}
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
@@ -953,30 +955,32 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     bound to q when enabled, or ingress.DiscardHandler (202, never
 //     enqueues) when disabled, so the hook stops spooling pointers that would
 //     never be processed.
-//   - model: the enrichment Model, nil when ml_backend="deterministic" (no
-//     sidecar backend at all) or when enrichment is disabled entirely.
+//   - model: the enrichment Model, nil when ml_backend="deterministic" (that
+//     mode asks the service for no inference) or when enrichment is disabled
+//     entirely.
+//   - analyzer: the window-analysis function (the service's /analyze). Wired
+//     in BOTH "auto" and "deterministic", because analysis needs no model —
+//     it is derived from the service client, not from the Model, which is why
+//     it is returned separately rather than left to analyzerFor(model).
 //   - gate: the Worker readiness gate. nil ONLY when enrichment is disabled
-//     (Run must not start Worker in that case). "deterministic" still returns
-//     a non-nil, trivially-true gate — Worker calls it unconditionally on
-//     every job, and there is no sidecar in this mode to wait on.
+//     (Run must not start Worker in that case). "auto" gates on model warmth;
+//     "deterministic" gates on service health (see deterministicBackend).
 //   - enabled: whether Run should start the enrich Worker — true for both
 //     "auto" (or "") and "deterministic"; only "off" disables it.
-func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter) (handler http.Handler, model enrich.Model, gate func() bool, enabled bool) {
+func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter) (handler http.Handler, model enrich.Model, analyzer enrich.WorkstreamAnalyzer, gate func() bool, enabled bool) {
 	if !set.EnrichmentEnabled() {
 		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
-		return ingress.DiscardHandler(secret), nil, nil, false
+		return ingress.DiscardHandler(secret), nil, nil, nil, false
 	}
 	if !set.MLEnabled() {
-		// deterministic: the Worker still runs, but with no Model. The gate
-		// must NOT be nil: Worker's loop calls ready() unconditionally on
-		// every job (see Worker, and waitWarm), so a nil func would panic the
-		// Worker goroutine on the very first job. There is no sidecar to wait
-		// on here, so "ready" is trivially always true.
-		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the ML sidecar is not started", set.MLBackend)
-		return ingress.Handler(q, secret), nil, func() bool { return true }, true
+		// deterministic: the Worker still runs, and so does the analysis
+		// service — it is only the GLiNER2 model that is never asked for.
+		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the analysis service runs, the model is never loaded", set.MLBackend)
+		analyzer, gate := deterministicBackend(ctx, emitter)
+		return ingress.Handler(q, secret), nil, analyzer, gate, true
 	}
 	model, gate = mlBackend(ctx, emitter)
-	return ingress.Handler(q, secret), model, gate, true
+	return ingress.Handler(q, secret), model, analyzerFor(model), gate, true
 }
 
 // newRunID generates a per-run correlation id (16 random bytes, hex-encoded),
@@ -1132,6 +1136,43 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 	return scClient, sup, healthFn, true, nil
 }
 
+// deterministicBackend wires ml_backend "deterministic": the analysis service
+// runs, the GLiNER2 model is never loaded, and the Worker gates on the
+// service being up.
+//
+// The sidecar is the client-side analysis-and-enrichment service in general
+// (/analyze, /match, /vocabulary, /classify, /extract); GLiNER2 is one
+// capability it loads lazily on its first inference. Deterministic mode issues
+// no inference, so nothing ever triggers that load — but /analyze still needs
+// a process to answer it. Not starting the service is what made this mode a
+// trap: it produced no workstreams at all and published a single
+// credential-derived facet.
+//
+// The gate is SERVICE HEALTH, deliberately, and neither of the alternatives is
+// acceptable: model warmth never arrives here (the model never loads), so it
+// would hold every job forever; and a trivially-true gate would publish
+// workstream-less profiles for every job that landed before the service came
+// up, silently dropping their dimensions. Gating on health means a service
+// that never comes up wedges this mode — jobs queue/spool — which is the same
+// trade "auto" already makes rather than degrading.
+func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.WorkstreamAnalyzer, func() bool) {
+	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
+	if !ok {
+		// Same "no service this run" policy as mlBackend: never degrade, keep
+		// the gate shut, let jobs queue/spool until a restart finds a service.
+		if err != nil {
+			log.Printf("keld-agent: sidecar port alloc failed: %v", err)
+			return nil, sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
+		}
+		log.Printf("keld-agent: no sidecar binary found; deterministic-mode jobs will queue/spool until one is installed")
+		return nil, sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
+	}
+	go sup.Start(ctx)
+	// analyzerFor is the same capability probe "auto" uses — the analyzer is a
+	// property of the service client, not of the Model (there is none here).
+	return analyzerFor(scClient), healthFn
+}
+
 // mlBackend returns the enrichment model and the worker readiness gate. It is
 // only called when ML enrichment is enabled (see wireEnrichment) — ml_backend
 // off is handled entirely by the caller and never reaches here.
@@ -1151,10 +1192,10 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 		// caller of sidecarService would say.
 		if err != nil {
 			log.Printf("keld-agent: sidecar port alloc failed: %v", err)
-			return sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
+			return nil, sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
 		}
 		log.Printf("keld-agent: no sidecar binary found; enrichment jobs will queue/spool until one is installed")
-		return sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
+		return nil, sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
 	}
 
 	return mlBackendWithOpts(ctx, mlBackendOpts{
@@ -1168,17 +1209,19 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 	})
 }
 
-// sidecarUnavailable is mlBackend's shared "no sidecar this run" path: the
-// sidecar binary is missing, or its ephemeral port could not be allocated.
-// Enrichment never degrades to a lower-fidelity backend in this case either —
-// it emits sidecar.unavailable (SevWarn) with the given diagnostic fields and
-// returns a permanently-closed gate, so jobs simply queue/spool until the
-// daemon is restarted (matching the supervisor-give-up path in
-// mlBackendWithOpts). The returned Model is nil: the gate never opens, so
-// Worker never invokes it.
-func sidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) (enrich.Model, func() bool) {
-	emitter.Emit("sidecar.unavailable", clientevents.SevWarn, fields)
-	return nil, func() bool { return false }
+// sidecarUnavailable is the shared "no analysis service this run" path for
+// both backends: the sidecar binary is missing, or its ephemeral port could
+// not be allocated. Enrichment never degrades to a lower-fidelity backend in
+// this case — it emits sidecar.unavailable (SevWarn) with the given diagnostic
+// fields and returns a permanently-closed readiness gate, so jobs simply
+// queue/spool until the daemon is restarted (matching the supervisor-give-up
+// path in mlBackendWithOpts). The gate never opens, so whatever Model or
+// analyzer the caller pairs it with is never invoked.
+func sidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) func() bool {
+	if emitter != nil {
+		emitter.Emit("sidecar.unavailable", clientevents.SevWarn, fields)
+	}
+	return func() bool { return false }
 }
 
 // mlBackendWithOpts is the testable core of mlBackend. It accepts all

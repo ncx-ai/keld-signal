@@ -198,15 +198,30 @@ selects one of three modes:
   `~/.keld/models`. Why a bundled sidecar over in-process ONNX:
   `docs/keld-agent-p2-onnx-decision.md` (historical — see the superseded note
   at its top).
-- **`"deterministic"`** — enrichment stays **on**, but the sidecar is never
-  started and `Worker` runs with a `nil` `enrich.Model`. This is a *different*
-  set of facets — the ones that need no model at all, e.g. credential
-  detection (`CredentialSpans`, pure Go, no sidecar, no network) and, in
-  future, workstream dimensions derived from tool-call metadata — not a
-  fallback for the model's facets. It is **always on when selected, never
-  health-gated**: there is no sidecar in this mode to be ready or not, so
-  `wireEnrichment` wires a trivially-true readiness gate instead of one that
-  polls anything. `Settings.MLEnabled()` is false in this mode;
+- **`"deterministic"`** — enrichment stays **on** and `Worker` runs with a
+  `nil` `enrich.Model`. This is a *different* set of facets — the ones that
+  need no model at all, e.g. credential detection (`CredentialSpans`, pure Go,
+  no sidecar, no network) and the **workstream dimensions** the sidecar's
+  `/analyze` derives from transcript coordinates — not a fallback for the
+  model's facets.
+  **The analysis service still runs; only the model is never loaded.** The
+  sidecar is the client-side analysis-and-enrichment service in general
+  (`/analyze`, `/match`, `/vocabulary`, `/classify`, `/extract`) and GLiNER2 is
+  one capability it loads lazily on its first inference — so this mode starts
+  the service (`deterministicBackend` → `sidecarService` + `go sup.Start`) and
+  simply never issues an inference, which means the weights are never loaded
+  and never even provisioned. Not starting it was a trap: `analyzerFor` came
+  back nil, the workstreams pass never registered, and the mode published a
+  single credential-derived facet.
+  Its readiness gate therefore **polls service health** (`/health`), not model
+  warmth — the model never warms here, so a warmth gate would hold every job
+  forever, and a trivially-true gate would publish workstream-less profiles for
+  every job that landed before the service came up. A service that never comes
+  up **wedges** this mode (jobs queue/spool) rather than degrading: the same
+  trade `"auto"` makes, and the same rule as *Delivery reliability* below.
+  `wireEnrichment` returns the analyzer as its own value (derived from the
+  service client, not from the `Model`) and threads it to `process`.
+  `Settings.MLEnabled()` is false in this mode;
   `Settings.EnrichmentEnabled()` is true. The pipeline tolerates a nil `Model`:
   `enrich.runStage` skips any `Extractor` that needs a model and hasn't opted
   in via the `modelFreeExtractor` capability (mirroring `alwaysRunner`) —
@@ -224,7 +239,9 @@ enabled, it always runs on GLiNER2 — there is no fallback to swap to. A sideca
 that isn't ready yet (not yet provisioned, restarting, mid-recycle, or the
 supervisor couldn't bring it up at all) keeps the readiness gate **closed**:
 jobs simply queue/spool until the sidecar is ready, they are never processed by
-anything else.
+anything else. `ml_backend:"deterministic"` obeys the same rule against a
+different definition of ready — the service answering `/health`, since it asks
+for no inference.
 
 **Deadlines are PER PASS, not per job** (`KELD_ENRICH_PASS_TIMEOUT`, default
 30s). Per-pass is the only correct unit: a job issues 8-9 inferences, so a
@@ -532,8 +549,9 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   mandatory and there is no deterministic *substitute* for those facets — when
   it isn't ready, jobs queue/spool until it is (see Delivery reliability
   above). `ml_backend:"deterministic"` is not that substitute: it is a
-  different, always-on, never-health-gated facet set that needs no model at
-  all (see Model backends above).
+  different facet set that needs no model at all — it still runs the analysis
+  service and still gates on it being healthy, it just never asks it to load
+  the model (see Model backends above).
 - **Sidecar single-flight** (one inference at a time) is load protection, not an
   accident — don't fan out inference. RAM is bounded by recycling the inference
   worker child process, CPU by the governor + thread scaler (see

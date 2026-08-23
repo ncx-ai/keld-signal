@@ -109,7 +109,7 @@ func TestProcessThreadsCustomPassesIntoPublishedEnrichment(t *testing.T) {
 
 	sender := &fakeSender{}
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "CUS-1", Inline: "hello world"}
-	ok := process(context.Background(), j, enrichtest.NewFake(), sender, "actor@keld.co",
+	ok := process(context.Background(), j, enrichtest.NewFake(), nil, sender, "actor@keld.co",
 		func() bool { return true }, nil, nil, nil, copts...)
 	if !ok {
 		t.Fatalf("process did not publish")

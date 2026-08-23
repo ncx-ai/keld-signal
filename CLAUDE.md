@@ -23,15 +23,20 @@ source of truth:
   `sidecar/loadtest/README.md`.
 - **Don't fan out inference.** Single-flight in the sidecar is deliberate load
   protection; RAM is bounded by eviction, CPU by the governor + thread scaler.
-- **No health-gated fallback — but a third, always-on `ml_backend` mode is not
+- **No health-gated fallback — but a third, model-free `ml_backend` mode is not
   that.** `ml_backend:"auto"` (default) always runs on GLiNER2; a
   reloading/evicted/not-yet-provisioned sidecar is waited out (jobs
   queue/spool until it's ready), **never** silently swapped for a
   lower-fidelity substitute of the same facets — that substitution is what's
   forbidden. `ml_backend:"deterministic"` is a different thing: it runs a
-  different, smaller set of facets that need no model (e.g. credential
-  detection) and is **always** on when selected, never health-gated — there is
-  no sidecar in this mode to be healthy or not. `ml_backend:"off"` means
+  different, smaller set of facets that need no model (credential detection,
+  and the workstream dimensions `/analyze` derives from coordinates). It still
+  **starts the analysis service** — the sidecar serves `/analyze` and friends
+  without GLiNER2, which it only loads on a first inference this mode never
+  issues — and its readiness gate polls that service's `/health`. That is a
+  *readiness* gate, not the forbidden thing: nothing is ever swapped for a
+  lower-fidelity substitute; an unhealthy service just keeps jobs
+  queued/spooled. `ml_backend:"off"` means
   enrichment is **disabled entirely** (no enrichment worker, `/enrich`
   accepts-and-discards). Don't reintroduce a *substitute* for the model's
   facets; a *different* facet set that needs no model is fine and already

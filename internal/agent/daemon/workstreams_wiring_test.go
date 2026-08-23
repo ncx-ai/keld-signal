@@ -30,7 +30,7 @@ func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "WS-1",
 		TranscriptPath: "/tmp/t.jsonl", PromptID: "p1", Inline: "hello world"}
 
-	if ok := process(context.Background(), j, m, sender, "actor@keld.co",
+	if ok := process(context.Background(), j, m, analyzerFor(m), sender, "actor@keld.co",
 		func() bool { return true }, nil, nil, nil); !ok {
 		t.Fatal("process did not publish")
 	}
@@ -69,7 +69,7 @@ func TestProcessSkipsWorkstreamsForCodex(t *testing.T) {
 	j := queue.Job{Source: "codex", Scheme: "prompt_id", ID: "WS-2",
 		TranscriptPath: "/tmp/t.jsonl", PromptID: "sess-1#3", Inline: "write a function that adds two numbers"}
 
-	if ok := process(context.Background(), j, m, sender, "actor@keld.co",
+	if ok := process(context.Background(), j, m, analyzerFor(m), sender, "actor@keld.co",
 		func() bool { return true }, nil, nil, nil); !ok {
 		t.Fatal("process did not publish")
 	}

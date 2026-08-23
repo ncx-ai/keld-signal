@@ -11,12 +11,19 @@ type windowAnalyzer interface {
 	AnalyzeLabeled(path, promptID string, spanMinutes int) (map[string]enrich.Labeled, bool)
 }
 
-// analyzerFor returns m's window-analysis function, or nil when this run has
-// none — which is the honest state in two cases: enrichment is running with no
-// model backend at all (ml_backend "deterministic", where wireEnrichment never
-// starts a sidecar, so there is no /analyze to call either), or the Model is a
-// test/eval double. A nil result means the workstreams pass is not wired, so it
-// does not run and cannot fail the profile.
+// analyzerFor returns the window-analysis function of the service client it is
+// handed, or nil when that client cannot analyse — a test/eval double, or the
+// nil Model left behind when no analysis service could be started this run
+// (no sidecar binary, or its port could not be allocated). A nil result means
+// the workstreams pass is not wired, so it does not run and cannot fail the
+// profile.
+//
+// It is deliberately NOT "the Model's analyzer": ml_backend "deterministic"
+// runs the analysis service with no Model at all, and derives its analyzer
+// from the service client here just as "auto" derives it from the sidecar
+// Model. That is why wireEnrichment returns the analyzer as its own value and
+// threads it to process, rather than letting process rederive it from the
+// Model (which would be nil, and would silently drop every workstream).
 //
 // The sidecar client's per-job wrappers (withJobCtx, bindMaxLen) return
 // *sidecar.Client copies, so the capability survives them and the analysis
