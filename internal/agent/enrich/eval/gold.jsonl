@@ -1,8 +1,8 @@
 {"text": "Write a Python function that reverses a linked list.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "none"}
 {"text": "Summarize the attached quarterly earnings report in three bullets.", "task_type": "summarization", "speech_act": "command", "domain": "finance", "sensitivity": "none"}
 {"text": "Translate this paragraph from English to German.", "task_type": "translation", "speech_act": "command", "domain": "general", "sensitivity": "none"}
-{"text": "My SSN is 123-45-6789, can you fill out the medical intake form?", "task_type": "information_extraction", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
-{"text": "Here is my API key sk-live-9f8a7b6c, configure the deployment.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "My SSN is 532-84-1907, can you fill out the medical intake form?", "task_type": "information_extraction", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
+{"text": "Here is my API key AKIA3QN7VZP4XM2WLBTY, configure the deployment.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
 {"text": "Classify these support tickets as bug, feature, or question.", "task_type": "classification", "speech_act": "command", "domain": "software", "sensitivity": "none"}
 {"text": "Given these docs, answer: what is the refund policy?", "task_type": "question_answering", "speech_act": "question", "domain": "business", "sensitivity": "none"}
 {"text": "Prove that the square root of 2 is irrational.", "task_type": "reasoning", "speech_act": "command", "domain": "science", "sensitivity": "none"}
@@ -15,7 +15,7 @@
 {"text": "TL;DR this twenty-page product requirements document.", "task_type": "summarization", "speech_act": "command", "domain": "business", "sensitivity": "none"}
 {"text": "Extract all invoice numbers and amounts from this accounts-payable export.", "task_type": "information_extraction", "speech_act": "command", "domain": "finance", "sensitivity": "none"}
 {"text": "Pull the patient's diagnosis and current medications from this chart note.", "task_type": "information_extraction", "speech_act": "command", "domain": "medical", "sensitivity": "none"}
-{"text": "Extract the customer's home address and phone number from this order.", "task_type": "information_extraction", "speech_act": "command", "domain": "business", "sensitivity": "pii"}
+{"text": "Extract the customer's home address and phone number from this order.", "task_type": "information_extraction", "speech_act": "command", "domain": "business", "sensitivity": "none"}
 {"text": "Translate this user manual section into Japanese.", "task_type": "translation", "speech_act": "command", "domain": "software", "sensitivity": "none"}
 {"text": "Translate this poem into French, preserving the meter.", "task_type": "translation", "speech_act": "command", "domain": "creative", "sensitivity": "none"}
 {"text": "Translate this Spanish medical discharge summary into English.", "task_type": "translation", "speech_act": "command", "domain": "medical", "sensitivity": "none"}
@@ -24,7 +24,7 @@
 {"text": "Using the attached study, what does an elevated ALT level generally indicate?", "task_type": "question_answering", "speech_act": "question", "domain": "medical", "sensitivity": "none"}
 {"text": "Categorize each of these inbound emails as spam or not spam.", "task_type": "classification", "speech_act": "command", "domain": "software", "sensitivity": "none"}
 {"text": "Label each product review as positive, negative, or neutral.", "task_type": "classification", "speech_act": "command", "domain": "business", "sensitivity": "none"}
-{"text": "Is this transaction fraudulent? Card 4111 1111 1111 1111, $4,200 at 3am.", "task_type": "classification", "speech_act": "question", "domain": "finance", "sensitivity": "pci"}
+{"text": "Is this transaction fraudulent? Card 4532 7194 6280 3119, $4,200 at 3am.", "task_type": "classification", "speech_act": "question", "domain": "finance", "sensitivity": "pci"}
 {"text": "If one train leaves at 60 mph and another at 40 mph, when do they meet?", "task_type": "reasoning", "speech_act": "question", "domain": "education", "sensitivity": "none"}
 {"text": "Explain why this distributed locking scheme avoids deadlock.", "task_type": "reasoning", "speech_act": "command", "domain": "software", "sensitivity": "none"}
 {"text": "Work through the tax implications of this stock sale step by step.", "task_type": "reasoning", "speech_act": "command", "domain": "finance", "sensitivity": "none"}
@@ -34,16 +34,16 @@
 {"text": "What's the weather forecast for this weekend?", "task_type": "general", "speech_act": "question", "domain": "general", "sensitivity": "none"}
 {"text": "Tell me a joke about databases.", "task_type": "text_generation", "speech_act": "command", "domain": "creative", "sensitivity": "none"}
 {"text": "What time is it right now in Tokyo?", "task_type": "general", "speech_act": "question", "domain": "general", "sensitivity": "none"}
-{"text": "My email is jane.doe@gmail.com and phone 415-555-0198 — update my profile.", "task_type": "general", "speech_act": "command", "domain": "general", "sensitivity": "pii"}
-{"text": "Here's my home address: 742 Evergreen Terrace, Springfield. Ship it there.", "task_type": "general", "speech_act": "command", "domain": "general", "sensitivity": "pii"}
+{"text": "My email is jane.doe@northwind-logistics.co and phone 415-274-3068 — update my profile.", "task_type": "general", "speech_act": "command", "domain": "general", "sensitivity": "pii"}
+{"text": "Here's my home address: 742 Evergreen Terrace, Springfield. Ship it there.", "task_type": "general", "speech_act": "command", "domain": "general", "sensitivity": "none"}
 {"text": "Contact me at bob_smith@company.co or +1 (206) 555-0142 about the invoice.", "task_type": "general", "speech_act": "command", "domain": "business", "sensitivity": "pii"}
-{"text": "Use token ghp_ABC123DEF456GHI789JKL0mnop to push to the repository.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
-{"text": "The database password is Hunter2!Prod — connect and run the migration.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
-{"text": "My OpenAI key is sk-proj-9d8f7a6b5c4e3, wire up the client for me.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
-{"text": "Patient John Smith, DOB 03/12/1980, diagnosed with Type 2 diabetes — draft a care plan.", "task_type": "text_generation", "speech_act": "command", "domain": "medical", "sensitivity": "pii"}
-{"text": "Summarize this radiology report for patient MRN 4482910, note any follow-ups.", "task_type": "summarization", "speech_act": "command", "domain": "medical", "sensitivity": "pii"}
-{"text": "Charge my Visa 4111 1111 1111 1111, exp 08/27, CVV 123 for the subscription.", "task_type": "general", "speech_act": "command", "domain": "finance", "sensitivity": "pci"}
-{"text": "Store this card 5500 0000 0000 0004 on file for future billing.", "task_type": "general", "speech_act": "command", "domain": "finance", "sensitivity": "pci"}
+{"text": "Use token ghp_7Kd2Rm9Xq4Vb1Nt8Ls3Wz6Hy5Pj0Cg4Ae7Bx to push to the repository.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "The database password is set as DB_PASSWORD=hV3kQ9pRt7Wn2Zx4 — connect and run the migration.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "My OpenAI key is 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 — wire up the client for me.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "Patient John Smith, DOB 03/12/1980, diagnosed with Type 2 diabetes — draft a care plan.", "task_type": "text_generation", "speech_act": "command", "domain": "medical", "sensitivity": "none"}
+{"text": "Summarize this radiology report for patient MRN 4482910, note any follow-ups.", "task_type": "summarization", "speech_act": "command", "domain": "medical", "sensitivity": "none"}
+{"text": "Charge my Visa 4716 3902 8815 4471, exp 08/27, CVV 123 for the subscription.", "task_type": "general", "speech_act": "command", "domain": "finance", "sensitivity": "pci"}
+{"text": "Store this card 5412 7503 9146 2281 on file for future billing.", "task_type": "general", "speech_act": "command", "domain": "finance", "sensitivity": "pci"}
 {"text": "Here is our unreleased Q3 roadmap and internal revenue targets — summarize the risks.", "task_type": "summarization", "speech_act": "command", "domain": "business", "sensitivity": "none"}
 {"text": "Review and refactor our confidential ranking-algorithm source for edge cases.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "none"}
 {"text": "Summarize the merger terms in this internal, NDA-covered memo.", "task_type": "summarization", "speech_act": "command", "domain": "legal", "sensitivity": "none"}
@@ -140,9 +140,9 @@
 {"text": "I'm stuck on a plot twist for my mystery novel — give me 10 wild ideas for who the killer could be and why.", "task_type": "text_generation", "domain": "creative", "sensitivity": "none", "activity_type": "generate", "speech_act": "command"}
 {"text": "Summarize this clinic visit note into a brief SOAP note for the referring physician.", "task_type": "summarization", "domain": "medical", "sensitivity": "none", "activity_type": "transform", "speech_act": "command"}
 {"text": "Can you explain what atrial fibrillation is and why it increases stroke risk, in plain language for a patient?", "task_type": "question_answering", "domain": "medical", "sensitivity": "none", "activity_type": "converse", "speech_act": "question"}
-{"text": "Pull the medication list, allergies, and most recent A1C from this chart for patient John Alvarez, DOB 03/14/1958, MRN 00482913.", "task_type": "information_extraction", "domain": "medical", "sensitivity": "pii", "activity_type": "retrieve", "speech_act": "command"}
+{"text": "Pull the medication list, allergies, and most recent A1C from this chart for patient John Alvarez, DOB 03/14/1958, SSN 601-27-4483.", "task_type": "information_extraction", "domain": "medical", "sensitivity": "phi", "activity_type": "retrieve", "speech_act": "command"}
 {"text": "Based on the attached UpToDate excerpt on sepsis management, what's the recommended time window for starting antibiotics after recognition?", "task_type": "question_answering", "domain": "medical", "sensitivity": "none", "activity_type": "retrieve", "speech_act": "question"}
-{"text": "Translate this discharge summary for patient Maria Gonzalez (MRN 774213) into Spanish so her family can understand the follow-up instructions.", "task_type": "translation", "domain": "medical", "sensitivity": "pii", "activity_type": "transform", "speech_act": "command"}
+{"text": "Translate this discharge summary for patient Maria Gonzalez (MRN 774213) into Spanish so her family can understand the follow-up instructions.", "task_type": "translation", "domain": "medical", "sensitivity": "none", "activity_type": "transform", "speech_act": "command"}
 {"text": "What's a good weeknight dinner I can make with chicken thighs and whatever's in my pantry?", "task_type": "question_answering", "domain": "general", "sensitivity": "none", "activity_type": "converse", "speech_act": "question"}
 {"text": "I have three days in Lisbon next month with no real plan yet, what should I do?", "task_type": "reasoning", "domain": "general", "sensitivity": "none", "activity_type": "converse", "speech_act": "question"}
 {"text": "My back has been hurting after long flights lately, any tips to feel better?", "task_type": "question_answering", "domain": "general", "sensitivity": "none", "activity_type": "converse", "speech_act": "question"}
@@ -158,8 +158,8 @@
 {"text": "From this email thread, pull out all the deadlines and dollar amounts mentioned.", "task_type": "information_extraction", "domain": "business", "sensitivity": "none", "activity_type": "retrieve", "speech_act": "command"}
 {"text": "Is this customer support ticket urgent or not, and why?", "task_type": "classification", "domain": "business", "sensitivity": "none", "activity_type": "analyze", "speech_act": "question"}
 {"text": "My code keeps crashing every time I run it, what's going on?", "task_type": "reasoning", "domain": "software", "sensitivity": "none", "activity_type": "analyze", "speech_act": "question"}
-{"text": "Please update my account profile bio to say I've moved from sales into product marketing, and change my contact email to jane.doe@example.com.", "task_type": "general", "domain": "general", "sensitivity": "pii", "activity_type": "generate", "speech_act": "command"}
-{"text": "Can you help me set up an environment variable for my API key sk-test-51Hc8xampleKeyABCDEFG1234567890 in my Node.js app?", "task_type": "code_generation", "domain": "software", "sensitivity": "secrets", "activity_type": "generate", "speech_act": "question"}
-{"text": "Extract the name, SSN, and address from this scanned form: Name: John A. Miller, SSN: 123-45-6789, Address: 482 Oak Street, Springfield, IL 62704.", "task_type": "information_extraction", "domain": "general", "sensitivity": "phi", "activity_type": "retrieve", "speech_act": "command"}
-{"text": "I need to update my billing info, new card is 4111 1111 1111 1111, exp 09/28, cvv 123, can you draft the message to send to support?", "task_type": "text_generation", "domain": "finance", "sensitivity": "pci", "activity_type": "generate", "speech_act": "question"}
-{"text": "Translate this text message to Spanish for my landlord: \"Hi, this is Dana, my new number is 555-0177, please text me here from now on.\"", "task_type": "translation", "domain": "general", "sensitivity": "pii", "activity_type": "transform", "speech_act": "command"}
+{"text": "Please update my account profile bio to say I've moved from sales into product marketing, and change my contact email to jane.doe@northwind-logistics.co.", "task_type": "general", "domain": "general", "sensitivity": "pii", "activity_type": "generate", "speech_act": "command"}
+{"text": "Can you help me set up an environment variable for my API key sk_test_51QhVn8LpXr2Fd7Ka3MzYw9Tb in my Node.js app?", "task_type": "code_generation", "domain": "software", "sensitivity": "secrets", "activity_type": "generate", "speech_act": "question"}
+{"text": "Extract the name, SSN, and address from this scanned form: Name: John A. Miller, SSN: 418-63-2075, Address: 482 Oak Street, Springfield, IL 62704.", "task_type": "information_extraction", "domain": "general", "sensitivity": "phi", "activity_type": "retrieve", "speech_act": "command"}
+{"text": "I need to update my billing info, new card is 5241 6803 7729 1148, exp 09/28, cvv 123, can you draft the message to send to support?", "task_type": "text_generation", "domain": "finance", "sensitivity": "pci", "activity_type": "generate", "speech_act": "question"}
+{"text": "Translate this text message to Spanish for my landlord: \"Hi, this is Dana, my new number is 206-483-7712, please text me here from now on.\"", "task_type": "translation", "domain": "general", "sensitivity": "pii", "activity_type": "transform", "speech_act": "command"}

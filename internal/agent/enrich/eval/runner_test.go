@@ -27,12 +27,13 @@ func TestRunModelOnFakeBaseline(t *testing.T) {
 	}
 	m := Score(gold, pred, []string{"task_type", "domain", "sensitivity"})
 
-	// Diagnostic run over the expanded gold set. The two detectors catch the
-	// regex-detectable sensitive rows (SSN, API keys, credit cards, email/phone)
-	// but NOT the ones with no lexical signal (proprietary roadmaps,
-	// address-only PII, MRN-based PHI). So sensitive_recall is > 0 but < 1 here —
-	// this just confirms Score/RunModel compute something sane, not that the
-	// stand-ins meet any bar.
+	// Diagnostic run over the expanded gold set. Since the 2026-08-23 gold-set
+	// correction every sensitive row carries a pattern-detectable value (the
+	// rows that asserted the dropped person/address/MRN coverage were re-labelled
+	// none), so the fake reaches sensitive_recall 1.0 and the bound below is
+	// vacuous on the top end. It still confirms Score/RunModel compute something
+	// sane; the real gate is TestSensitivityMeetsGoldFloors (-tags pii), which
+	// scores the SHIPPED detectors rather than this stand-in.
 	got := m["sensitivity"]["sensitive_recall"]
 	if got <= 0.0 || got > 1.0 {
 		t.Fatalf("fake sensitive_recall = %v, want in (0,1]", got)
