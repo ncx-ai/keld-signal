@@ -958,6 +958,17 @@ the earlier spaCy freeze verification, so the check asserts it explicitly."
 
 ---
 
+## Deferred from the spec, deliberately
+
+The spec says **"vocabularies are data, not code"** — `EXT_LANG`, `TOOLCHAIN_EXE`, `WRAPPERS` in a
+versioned data file so an org can extend them without a release. Task 2 moves them as Python
+literals instead.
+
+That is a knowing deviation, not an oversight. Nothing consumes an org-supplied vocabulary yet;
+`match.py` will be the first, and it gets its vocabulary over the settings poll rather than from a
+bundled file. Building a loader now would be a schema invented ahead of its only caller, and it
+would have to be re-designed when that caller arrives. Revisit when a second consumer exists.
+
 ## Not in this plan
 
 - **`match.py`** — new code, not a migration. Spec'd in
