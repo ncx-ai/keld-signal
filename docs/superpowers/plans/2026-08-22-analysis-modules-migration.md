@@ -17,6 +17,12 @@
 - **Never truncate an identifier.** A path or symbol cut short is a false identifier — drop the whole term instead (AGENTS.md).
 - **Every task ends with a corpus-identity check**, not just unit tests. A refactor that moves the numbers is a bug.
 - **Bump nothing in `enrich.SchemaVersion`.** This migration changes no published vocabulary.
+- **Always extract from the FROZEN corpus** at `~/keld/refseries-context/frozen-corpus/{projects,john-projects}`.
+  `~/.claude/projects` is live and grows mid-run, which makes the identity gate report DIFFERS for
+  reasons unrelated to the code. Nothing enforces this — using the live roots silently reintroduces
+  the nondeterminism Task 1b removed.
+- **`check_identity.py` exit codes:** 0 identical, 1 differs, **2 the check could not run**. A 2 is
+  never a pass.
 
 ## File Structure
 
@@ -328,7 +334,7 @@ from app.analysis.vocab import EXT_LANG  # noqa: F401
 ~/.keld/study-venv/bin/python scripts/test_terms.py
 rm -rf /tmp/rs-t2 && mkdir -p /tmp/rs-t2
 ~/.keld/study-venv/bin/python scripts/refseries.py extract --outdir /tmp/rs-t2 \
-  --roots ~/.claude/projects /tmp/john-projects >/dev/null
+  --roots ~/keld/refseries-context/frozen-corpus/projects ~/keld/refseries-context/frozen-corpus/john-projects >/dev/null
 ~/.keld/study-venv/bin/python scripts/check_identity.py verify /tmp/identity-base.json /tmp/rs-t2
 ```
 
@@ -428,7 +434,7 @@ then:
 ~/.keld/study-venv/bin/python scripts/test_bashrefs.py
 rm -rf /tmp/rs-t3 && mkdir -p /tmp/rs-t3
 ~/.keld/study-venv/bin/python scripts/refseries.py extract --outdir /tmp/rs-t3 \
-  --roots ~/.claude/projects /tmp/john-projects >/dev/null
+  --roots ~/keld/refseries-context/frozen-corpus/projects ~/keld/refseries-context/frozen-corpus/john-projects >/dev/null
 ~/.keld/study-venv/bin/python scripts/check_identity.py verify /tmp/identity-base.json /tmp/rs-t3
 ```
 
@@ -508,7 +514,7 @@ re-exports `clip` and `is_command_echo`.
 ~/.keld/study-venv/bin/python scripts/test_terms.py
 rm -rf /tmp/rs-t4 && mkdir -p /tmp/rs-t4
 ~/.keld/study-venv/bin/python scripts/refseries.py extract --outdir /tmp/rs-t4 \
-  --roots ~/.claude/projects /tmp/john-projects >/dev/null
+  --roots ~/keld/refseries-context/frozen-corpus/projects ~/keld/refseries-context/frozen-corpus/john-projects >/dev/null
 ~/.keld/study-venv/bin/python scripts/check_identity.py verify /tmp/identity-base.json /tmp/rs-t4
 git add -A && git commit -m "analysis: move text filters and named-term extraction into the package
 
@@ -603,7 +609,7 @@ Expected: `3 passed`
 ~/.keld/study-venv/bin/python scripts/test_bashrefs.py
 rm -rf /tmp/rs-t5 && mkdir -p /tmp/rs-t5
 ~/.keld/study-venv/bin/python scripts/refseries.py extract --outdir /tmp/rs-t5 \
-  --roots ~/.claude/projects /tmp/john-projects >/dev/null
+  --roots ~/keld/refseries-context/frozen-corpus/projects ~/keld/refseries-context/frozen-corpus/john-projects >/dev/null
 ~/.keld/study-venv/bin/python scripts/check_identity.py verify /tmp/identity-base.json /tmp/rs-t5
 ```
 
@@ -727,7 +733,7 @@ must agree to the rounding used (`round(t, 1)`).
 ```bash
 rm -rf /tmp/rs-t6 && mkdir -p /tmp/rs-t6
 ~/.keld/study-venv/bin/python scripts/refseries.py extract --outdir /tmp/rs-t6 \
-  --roots ~/.claude/projects /tmp/john-projects >/dev/null
+  --roots ~/keld/refseries-context/frozen-corpus/projects ~/keld/refseries-context/frozen-corpus/john-projects >/dev/null
 ~/.keld/study-venv/bin/python scripts/check_identity.py verify /tmp/identity-base.json /tmp/rs-t6
 ```
 
