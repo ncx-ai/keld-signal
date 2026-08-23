@@ -25,7 +25,7 @@ There is no version of this where two copies stay honest.
 |---|---|---|
 | shell parsing | `strip_heredocs` `parsed_command_names` `unwrap_command` `bash_refs` | 6053 -> 620 distinct programs; heredoc, wrapper and `-c` handling all measured |
 | vocabularies | `action_for` `toolchain_for` `artifacts_for` `vcs_of` `mcp_provider` + their tables | closed sets; the artifact/toolchain split alone fixed `pdf 54%` |
-| paths & workspace | `resolve_workspace` `rel_within` `reconcile` `repo_of` `_git_root` `plausible_path` `scan_workspace` | branch/project resolution 56.3% -> 87.7% lives here |
+| paths & workspace | `resolve_workspace` `rel_within` `reconcile` `repo_of` `_git_root` `plausible_path` `scan_workspace` | cross-repo reattribution and quoted-path handling; `resolve_workspace` measured 47/47 on local transcripts |
 | turn reading | `text_of` `think_blocks` `load_turns` `turns_between` | |
 | named terms | `terms.py` entire | 7/8 recall; spaCy detects, never types |
 | event extraction | `_process_transcript` `canonicalize_terms` | the 19 levels |
@@ -118,6 +118,17 @@ Each step leaves both front ends working and the suites green.
 byte-identical to the previous build, the way the process-pool change was verified (185,299 rows,
 column-wise equal, same sorted content hash). A refactor that changes the numbers is a bug, and
 this codebase has produced roughly twenty plausible-wrong-numbers that no unit test caught.
+
+## Correction
+
+An earlier revision of this spec, and of the plan derived from it, attributed the **56.3% -> 87.7%**
+branch-resolution improvement to the Python `resolve_workspace`, and claimed it carries a guard
+refusing to resolve when the cwd no longer exists. **Both are wrong.** That measurement belongs to
+`0ad07e7`, `fix(daemon)` in `internal/agent/daemon/context.go` — production Go, `gitBranch` and
+`projectName`, unrelated to this package. The Python `resolve_workspace` contains no
+cwd-existence check; its own measurement is 47/47 on local transcripts. The error propagated into
+the Task 5 commit message (`021ae98`) before a reviewer traced it. Recorded rather than silently
+edited, because the same claim may have been repeated elsewhere.
 
 ## Open questions
 

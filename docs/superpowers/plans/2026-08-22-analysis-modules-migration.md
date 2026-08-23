@@ -527,8 +527,7 @@ text — which also inflated the assistant-per-engineer ratio in every digest."
 
 ### Task 5: `paths.py` — the riskiest extraction
 
-`resolve_workspace` carries the fix that took branch resolution from **56.3% to 87.7%**, and
-`reconcile` is cross-file. Unit tests are not sufficient here; the identity check is the gate.
+`reconcile` is cross-file, and `resolve_workspace` decides which checkout every line belongs to. Unit tests are not sufficient here; the identity check is the gate.
 
 **Files:**
 - Create: `sidecar/app/analysis/paths.py`
@@ -622,8 +621,8 @@ means `resolve_workspace` or `reconcile` changed behaviour — stop and diff, do
 git add sidecar/app/analysis/paths.py sidecar/app/test_analysis_paths.py scripts/refseries.py
 git commit -m "analysis: extract path and workspace resolution into app.analysis.paths
 
-The riskiest move: resolve_workspace carries the fix that took branch resolution
-from 56.3% to 87.7%, and reconcile is cross-file. bash_refs comes along now that
+The riskiest move: reconcile is cross-file and resolve_workspace decides every
+line's checkout. bash_refs comes along now that
 both its halves have a home. Corpus rebuild byte-identical."
 ```
 
