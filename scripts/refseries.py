@@ -1126,22 +1126,21 @@ def load_turns(path):
 
     The previous shape re-opened and re-scanned the whole file for every window asked about, so
     characterising N windows of one session cost N full passes over a file that runs to 86 MB.
-    Time-ordered so a slice is a bisect rather than a filter."""
+    Time-ordered so a slice is a bisect rather than a filter.
+
+    The line filter — the `"type":"user"`/`"tool_result"` substring pre-check, the JSON parse, the
+    `timestamp` presence check — is `transcript.iter_turns`, the same filter the extract path runs.
+    This function only adds what that shared filter deliberately leaves out: rendering
+    (`said`/`calls`/`role`) and the cache (`iter_turns` is a plain generator with no cache of its
+    own — see `transcript.turns_between`'s docstring for why a sidecar-imported package must not
+    accumulate per-path state on its own say-so; this CLI-only cache is exactly that exception,
+    made where a real caller — `window`, asking about many slices of one long-lived transcript —
+    needs it)."""
     if path in _TURNS:
         return _TURNS[path]
     turns = []
-    for line in open(path, errors="replace"):
-        if '"type":"user"' not in line and '"type":"assistant"' not in line:
-            continue
-        if '"tool_result"' in line and '"tool_use"' not in line:
-            continue
-        try:
-            o = json.loads(line)
-        except Exception:
-            continue
-        ts = o.get("timestamp")
-        if not ts:
-            continue
+    for o in iter_turns(path):
+        ts = o["timestamp"]
         content = (o.get("message") or {}).get("content")
         said = text_of(content)
         calls = []
@@ -1173,7 +1172,16 @@ def load_turns(path):
 
 
 def turns_between(path, start, end):
-    """The turns in [start, end) — a bisect over the parsed list, not another file read."""
+    """The turns in [start, end) — a bisect over the parsed list, not another file read.
+
+    Deliberately NOT a call to `transcript.turns_between`: that function re-reads and re-sorts the
+    whole file on every call, by design (it has no long-lived caller yet that would benefit — see
+    its docstring). `window` here is exactly that caller: it asks about many windows of the same
+    long-lived, possibly 86 MB transcript, and the point of `load_turns`'s cache is that the file
+    is parsed once regardless of how many windows are asked about. Delegating here would parse the
+    file once per call again, silently reintroducing the N-full-passes cost `load_turns` exists to
+    remove. `start`/`end` are also `pd.Timestamp`, not the ISO strings `transcript.turns_between`
+    takes, so the two aren't even call-compatible today."""
     import bisect
     turns = load_turns(path)
     keys = [t[0] for t in turns]
