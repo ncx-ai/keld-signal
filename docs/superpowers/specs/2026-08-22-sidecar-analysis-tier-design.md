@@ -114,9 +114,13 @@ denial-of-service risk under Python's `re`. Compile at poll time, run under a wa
 degrade the key rather than the job.
 
 **Memory.** A third process against a 4096 MB budget that already holds a ~2.7 GB model. spaCy's
-model is 15 MB on disk; resident cost with the runtime and a word-frequency table is **unmeasured**,
-and measuring it is a merge gate, not a follow-up. If it does not fit, the model budget moves before
-the analysis tier does.
+model is 15 MB on disk; resident cost with the runtime and a word-frequency table is **unmeasured**.
+
+Deliberately deprioritised (operator decision, 2026-08-22): this is not a gate on building the
+tier. Recorded because it is unmeasured rather than known-fine — the sidecar's whole resource
+design is built around one large model plus a recycled worker, so a third resident process is a
+change to that regime whenever someone next looks at it. If it turns out not to fit, the model
+budget moves before the analysis tier does.
 
 **Packaging.** spaCy freezes cleanly under PyInstaller — verified end to end, official
 `hook-spacy` plus `collect_all("en_core_web_sm")` for the model package, `load=0.15s` in the frozen
