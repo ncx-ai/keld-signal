@@ -213,12 +213,30 @@ selects one of three modes:
   and never even provisioned. Not starting it was a trap: `analyzerFor` came
   back nil, the workstreams pass never registered, and the mode published a
   single credential-derived facet.
-  Its readiness gate therefore **polls service health** (`/health`), not model
-  warmth — the model never warms here, so a warmth gate would hold every job
-  forever, and a trivially-true gate would publish workstream-less profiles for
-  every job that landed before the service came up. A service that never comes
-  up **wedges** this mode (jobs queue/spool) rather than degrading: the same
-  trade `"auto"` makes, and the same rule as *Delivery reliability* below.
+  When a service exists, its readiness gate **polls service health**
+  (`/health`), not model warmth — the model never warms here, so a warmth gate
+  would hold every job forever, and a trivially-true gate would publish
+  workstream-less profiles for every job that landed before the service
+  finished starting. Waiting there is right: the supervisor is bringing the
+  service up, so the work becomes doable shortly, and a service that is present
+  but never comes up **wedges** this mode (jobs queue/spool) rather than
+  degrading — the same trade `"auto"` makes.
+  **When there is no service at all, the gate is trivially true instead.**
+  `sidecarService` reports `ok == false` when no sidecar binary is installed
+  (`err == nil`) or the loopback port could not be allocated (`err != nil`);
+  neither resolves without a daemon restart, so `deterministicBackend` takes
+  `noAnalysisService` — one `sidecar.unavailable` event (the two causes stay
+  distinguishable via its `reason`/`error` field), an open gate, and a **nil**
+  analyzer. Enrichment then runs its remaining model-free facets (credential
+  detection) with the workstreams pass simply unregistered, publishing
+  `pipeline_status:"partial"`. Holding the gate here would wedge the mode
+  forever on what is the state of **every** machine before the sidecar tarball
+  is fetched. Dropping the facet entirely and reporting it dropped is not the
+  substitution never-degrade forbids — nothing lower-fidelity stands in for
+  window analysis.
+  *Known gap:* a service that **starts** and then permanently gives up
+  (supervisor restart cap exhausted) still wedges this mode; that third case is
+  not yet distinguished from "starting".
   `wireEnrichment` returns the analyzer as its own value (derived from the
   service client, not from the `Model`) and threads it to `process`.
   `Settings.MLEnabled()` is false in this mode;
@@ -241,7 +259,9 @@ supervisor couldn't bring it up at all) keeps the readiness gate **closed**:
 jobs simply queue/spool until the sidecar is ready, they are never processed by
 anything else. `ml_backend:"deterministic"` obeys the same rule against a
 different definition of ready — the service answering `/health`, since it asks
-for no inference.
+for no inference — but only when a service actually exists to become ready. With
+no sidecar installed at all it runs on without window analysis rather than wait
+for something that cannot arrive (see *Model backends* above).
 
 **Deadlines are PER PASS, not per job** (`KELD_ENRICH_PASS_TIMEOUT`, default
 30s). Per-pass is the only correct unit: a job issues 8-9 inferences, so a
@@ -550,8 +570,9 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   it isn't ready, jobs queue/spool until it is (see Delivery reliability
   above). `ml_backend:"deterministic"` is not that substitute: it is a
   different facet set that needs no model at all — it still runs the analysis
-  service and still gates on it being healthy, it just never asks it to load
-  the model (see Model backends above).
+  service and gates on it being healthy *when one is installed*, it just never
+  asks it to load the model; with no sidecar present it drops the window-analysis
+  facet and runs the rest rather than wedge (see Model backends above).
 - **Sidecar single-flight** (one inference at a time) is load protection, not an
   accident — don't fan out inference. RAM is bounded by recycling the inference
   worker child process, CPU by the governor + thread scaler (see

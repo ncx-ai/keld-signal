@@ -33,10 +33,15 @@ source of truth:
   and the workstream dimensions `/analyze` derives from coordinates). It still
   **starts the analysis service** — the sidecar serves `/analyze` and friends
   without GLiNER2, which it only loads on a first inference this mode never
-  issues — and its readiness gate polls that service's `/health`. That is a
-  *readiness* gate, not the forbidden thing: nothing is ever swapped for a
-  lower-fidelity substitute; an unhealthy service just keeps jobs
-  queued/spooled. `ml_backend:"off"` means
+  issues — and, **when a sidecar is installed**, its readiness gate polls that
+  service's `/health`. That is a *readiness* gate, not the forbidden thing:
+  nothing is ever swapped for a lower-fidelity substitute; a present-but-unhealthy
+  service just keeps jobs queued/spooled. When **no sidecar binary is installed**
+  (or its port cannot be allocated) that gate is trivially true and the analyzer
+  nil, because no service can arrive this daemon lifetime and waiting would wedge
+  the mode forever; enrichment runs its other model-free facets and the
+  workstreams pass never registers — a dropped facet reported as
+  `pipeline_status:"partial"`, not a substitute. `ml_backend:"off"` means
   enrichment is **disabled entirely** (no enrichment worker, `/enrich`
   accepts-and-discards). Don't reintroduce a *substitute* for the model's
   facets; a *different* facet set that needs no model is fine and already

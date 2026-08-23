@@ -656,14 +656,13 @@ func TestWireEnrichmentDeterministicModeRunsWithoutAModel(t *testing.T) {
 	}
 	// gate must NOT be nil: Worker calls ready() unconditionally on every job
 	// (see Worker's loop and waitWarm), so a nil func would panic the Worker
-	// goroutine on the first job ever pulled off the queue. With no service
-	// installed it is the permanently-closed one (jobs queue/spool) — never a
-	// trivially-true stub.
+	// goroutine on the first job ever pulled off the queue. Which gate it is
+	// depends on whether a service exists — see
+	// TestDeterministicModeWithNoSidecarBinaryDoesNotWedge (none installed:
+	// trivially true) and TestDeterministicGateIsClosedUntilTheServiceIsUp
+	// (present but not yet serving: closed).
 	if gate == nil {
 		t.Fatal("deterministic mode must wire a non-nil gate (Worker calls it unconditionally)")
-	}
-	if gate() {
-		t.Fatal("with no analysis service installed the gate must stay closed, not report ready")
 	}
 
 	body := `{"source":{"id":"claude_code","origin":"hook"},"correlation":{"scheme":"prompt_id","id":"X"},"pointer":{"transcript_path":"/t","prompt_id":"X"}}`
@@ -1496,5 +1495,88 @@ func TestDeterministicGateIsClosedUntilTheServiceIsUp(t *testing.T) {
 			t.Fatal("the gate never opened once the analysis service was serving /health")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestDeterministicModeWithNoSidecarBinaryDoesNotWedge pins the OTHER half of
+// the health gate: it exists for a service that is present but not yet ready
+// (starting, restarting, mid-recycle), where waiting is right because the work
+// becomes doable shortly. It must not be applied to a machine with NO SIDECAR
+// BINARY AT ALL — there is no daemon-lifetime path to a service there, so a
+// closed gate wedges deterministic mode forever: every job queues and spools
+// and nothing is ever published, on what is the state of every machine before
+// the sidecar tarball is fetched.
+//
+// With no binary, enrichment must instead run its other model-free facets
+// (credential detection) with the workstreams pass simply unregistered — the
+// ordinary pipeline_status "partial" path, not a lower-fidelity substitute for
+// a facet. So: a trivially-true gate and a nil analyzer.
+func TestDeterministicModeWithNoSidecarBinaryDoesNotWedge(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("KELD_SIDECAR_BIN", filepath.Join(t.TempDir(), "absent"))
+	if p, found := sidecarBinPath(); found {
+		t.Skipf("host has a sidecar installed at %s; the no-binary path is not hermetic here", p)
+	}
+
+	q := queue.New(10)
+	defer q.Close()
+	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
+	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
+	set := settings.Settings{MLBackend: "deterministic"}
+
+	_, model, analyzer, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter)
+
+	if !enabled {
+		t.Fatal("enrichment must stay enabled in deterministic mode")
+	}
+	if model != nil {
+		t.Fatalf("deterministic mode must not wire a model, got %v", model)
+	}
+	if analyzer != nil {
+		t.Fatal("with no service there is nothing to answer /analyze; the analyzer must be nil so the workstreams pass never registers")
+	}
+	if gate == nil {
+		t.Fatal("deterministic mode must wire a non-nil gate (Worker calls it unconditionally)")
+	}
+	for i := 0; i < 3; i++ {
+		if !gate() {
+			t.Fatal("with NO sidecar binary the gate must be trivially true: nothing will change without an install, so waiting only wedges the mode")
+		}
+	}
+
+	// The event still fires, and still says which of the two "no service this
+	// run" causes it was, so the absence is visible in Atlas exactly as it is
+	// for ml_backend=auto.
+	events := emitter.Drain()
+	if len(events) != 1 || events[0].Code != "sidecar.unavailable" || events[0].Severity != clientevents.SevWarn {
+		t.Fatalf("expected one sidecar.unavailable/warn event, got %+v", events)
+	}
+	if got := events[0].Fields["reason"]; got != "no_sidecar_binary" {
+		t.Fatalf("reason field = %v, want \"no_sidecar_binary\" (it must stay distinguishable from a port-alloc failure)", got)
+	}
+}
+
+// TestDeterministicPortAllocFailureDoesNotWedge covers the second "no service
+// this run" cause. A port-alloc failure is no more resolvable without a daemon
+// restart than a missing binary is, so it takes the same no-wedge path — but
+// it must stay distinguishable in what it reports. net.Listen on an ephemeral
+// loopback port effectively never fails, so the shared helper is exercised
+// directly rather than through sidecarService.
+func TestDeterministicPortAllocFailureDoesNotWedge(t *testing.T) {
+	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
+	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
+
+	gate := noAnalysisService(emitter, map[string]any{"error": clientevents.RedactError(errors.New("listen tcp: boom"))})
+	if gate == nil || !gate() {
+		t.Fatal("a port-alloc failure has no daemon-lifetime remedy either; the gate must not hold jobs forever")
+	}
+
+	events := emitter.Drain()
+	if len(events) != 1 || events[0].Code != "sidecar.unavailable" || events[0].Severity != clientevents.SevWarn {
+		t.Fatalf("expected one sidecar.unavailable/warn event, got %+v", events)
+	}
+	if _, ok := events[0].Fields["error"]; !ok {
+		t.Fatalf("the port-alloc cause must stay distinguishable via its error field, got %+v", events[0].Fields)
 	}
 }

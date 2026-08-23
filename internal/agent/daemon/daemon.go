@@ -964,7 +964,8 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     it is returned separately rather than left to analyzerFor(model).
 //   - gate: the Worker readiness gate. nil ONLY when enrichment is disabled
 //     (Run must not start Worker in that case). "auto" gates on model warmth;
-//     "deterministic" gates on service health (see deterministicBackend).
+//     "deterministic" gates on service health when a service exists, and is
+//     trivially true when none does (see deterministicBackend).
 //   - enabled: whether Run should start the enrich Worker — true for both
 //     "auto" (or "") and "deterministic"; only "off" disables it.
 func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter) (handler http.Handler, model enrich.Model, analyzer enrich.WorkstreamAnalyzer, gate func() bool, enabled bool) {
@@ -1148,29 +1149,64 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 // trap: it produced no workstreams at all and published a single
 // credential-derived facet.
 //
-// The gate is SERVICE HEALTH, deliberately, and neither of the alternatives is
-// acceptable: model warmth never arrives here (the model never loads), so it
-// would hold every job forever; and a trivially-true gate would publish
-// workstream-less profiles for every job that landed before the service came
-// up, silently dropping their dimensions. Gating on health means a service
-// that never comes up wedges this mode — jobs queue/spool — which is the same
-// trade "auto" already makes rather than degrading.
+// When a service EXISTS, the gate is SERVICE HEALTH, deliberately, and
+// neither alternative is acceptable: model warmth never arrives here (the
+// model never loads), so it would hold every job forever; and a trivially-true
+// gate would publish workstream-less profiles for every job that landed before
+// the service finished starting, silently dropping their dimensions. Waiting
+// is right there because the work becomes doable shortly — the supervisor is
+// bringing the service up.
+//
+// When there is NO service this run, that reasoning does not apply and the
+// gate must not be used: sidecarService reports !ok when no sidecar binary is
+// installed (err == nil) or when the loopback port could not be allocated
+// (err != nil), and neither resolves without a daemon restart. A closed gate
+// would then wedge the mode forever — every job queueing and spooling, nothing
+// ever published — on what is the state of every machine before the sidecar
+// tarball is fetched. So that case takes noAnalysisService: a trivially-true
+// gate and a nil analyzer, leaving enrichment to run its other model-free
+// facets (credential detection) with the workstreams pass unregistered.
+//
+// That is not the degradation AGENTS.md forbids. Nothing lower-fidelity stands
+// in for window analysis; the facet is dropped entirely and reported dropped
+// via the pipeline's ordinary pipeline_status "partial" path.
 func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.WorkstreamAnalyzer, func() bool) {
 	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
 	if !ok {
-		// Same "no service this run" policy as mlBackend: never degrade, keep
-		// the gate shut, let jobs queue/spool until a restart finds a service.
+		// No service this run and no path to one before a restart, so waiting
+		// is pointless: run without window analysis rather than wedge.
 		if err != nil {
-			log.Printf("keld-agent: sidecar port alloc failed: %v", err)
-			return nil, sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
+			log.Printf("keld-agent: sidecar port alloc failed: %v; enrichment will run WITHOUT window analysis (no service this run) until the daemon is restarted", err)
+			return nil, noAnalysisService(emitter, map[string]any{"error": clientevents.RedactError(err)})
 		}
-		log.Printf("keld-agent: no sidecar binary found; deterministic-mode jobs will queue/spool until one is installed")
-		return nil, sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
+		log.Printf("keld-agent: no sidecar binary installed; enrichment will run WITHOUT window analysis (credential detection only) until one is installed and the daemon restarts")
+		return nil, noAnalysisService(emitter, map[string]any{"reason": "no_sidecar_binary"})
 	}
 	go sup.Start(ctx)
 	// analyzerFor is the same capability probe "auto" uses — the analyzer is a
 	// property of the service client, not of the Model (there is none here).
 	return analyzerFor(scClient), healthFn
+}
+
+// noAnalysisService is deterministic mode's "no service this run, and no path
+// to one without a restart" path: no sidecar binary is installed, or its
+// loopback port could not be allocated. It reports the absence exactly as
+// mlBackend does — one sidecar.unavailable (SevWarn) carrying the caller's
+// diagnostic fields, which keep the two causes apart ("reason" vs "error") —
+// but returns a trivially-true gate rather than mlBackend's permanently-closed
+// one.
+//
+// The difference is what waiting would buy. A closed gate is right for a
+// service that is present but not yet ready, and for "auto", where every facet
+// the mode produces needs the model. Here it buys nothing: no service will
+// appear this daemon lifetime, so jobs would queue and spool forever. The
+// caller pairs this gate with a nil analyzer, so the workstreams pass never
+// registers and enrichment runs its remaining model-free facets, publishing
+// pipeline_status "partial". That is a dropped facet, reported dropped — not a
+// lower-fidelity substitute for one, which is what never-degrade forbids.
+func noAnalysisService(emitter *clientevents.Emitter, fields map[string]any) func() bool {
+	emitSidecarUnavailable(emitter, fields)
+	return func() bool { return true }
 }
 
 // mlBackend returns the enrichment model and the worker readiness gate. It is
@@ -1218,10 +1254,18 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 // path in mlBackendWithOpts). The gate never opens, so whatever Model or
 // analyzer the caller pairs it with is never invoked.
 func sidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) func() bool {
+	emitSidecarUnavailable(emitter, fields)
+	return func() bool { return false }
+}
+
+// emitSidecarUnavailable reports "no analysis service this run" to Atlas. It
+// is shared by both no-service paths (sidecarUnavailable and
+// noAnalysisService) because the observation is identical — only the readiness
+// policy the caller pairs with it differs.
+func emitSidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) {
 	if emitter != nil {
 		emitter.Emit("sidecar.unavailable", clientevents.SevWarn, fields)
 	}
-	return func() bool { return false }
 }
 
 // mlBackendWithOpts is the testable core of mlBackend. It accepts all
