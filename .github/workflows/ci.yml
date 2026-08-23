@@ -78,6 +78,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: install analysis deps (no torch, no spaCy model)
-        run: pip install --quiet pandas pyarrow bashlex wordfreq
+        run: pip install --quiet pandas pyarrow bashlex wordfreq pyyaml
       - name: fixture identity gate
         run: make fixture-identity-check STUDY_PYTHON=python

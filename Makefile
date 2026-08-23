@@ -6,8 +6,13 @@ DEST ?= $(HOME)/.local/bin
 SIDECAR_VENV ?= $(HOME)/.keld/sidecar-venv
 # sidecar needs Python 3.12 (host default 3.14 has no torch/gliner2 wheels)
 PYTHON ?= python3.12
-# scripts/refseries.py's study venv (pandas/pyarrow/bashlex/wordfreq) — separate from PYTHON
-# above, which is the ML sidecar's own 3.12 venv with none of those deps. See its own docstring.
+# scripts/refseries.py's study venv (pandas/pyarrow/bashlex/wordfreq/pyyaml) — separate from
+# PYTHON above, which is the ML sidecar's own 3.12 venv with none of those deps. See
+# scripts/check-fixture-identity.sh's own header for the full derived dependency list.
+# NOTE: pass an already-expanded path (STUDY_PYTHON=$(HOME)/.keld/study-venv/bin/python), not a
+# literal `~/...` — Make does not shell-expand `~` in its own VAR=value arguments the way a plain
+# shell `VAR=~/x cmd` does, so a literal tilde here is handed to the check as-is and fails to
+# resolve.
 STUDY_PYTHON ?= python3
 SINK_PORT ?= 8710
 
