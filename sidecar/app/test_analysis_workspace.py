@@ -1,10 +1,10 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.analysis.paths import rel_within
+from app.analysis.workspace import vcs_of
 
 
-def test_rel_within_rejects_a_path_outside_the_root():
-    assert rel_within("/etc/passwd", "/home/dg/repo", "/home/dg/repo") is None
+def test_vcs_of_reports_none_without_a_branch():
+    assert vcs_of("/tmp", None) == "none"
 
 
 if __name__ == "__main__":

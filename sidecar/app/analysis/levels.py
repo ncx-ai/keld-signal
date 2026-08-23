@@ -10,10 +10,11 @@ import re
 from datetime import datetime
 
 from app.analysis import terms
-from app.analysis.paths import (
-    PATH_INPUTS, WORKTREE, bash_refs, rel_within, resolve_workspace, scan_workspace, vcs_of)
+from app.analysis.paths import PATH_INPUTS, WORKTREE, rel_within
+from app.analysis.shell import bash_refs
 from app.analysis.text import is_command_echo, text_of, think_blocks
 from app.analysis.vocab import action_for, artifacts_for, mcp_provider, toolchain_for
+from app.analysis.workspace import resolve_workspace, scan_workspace, vcs_of
 
 LEVELS = ["workspace", "workspace_evidence", "remote", "repo_mentioned", "vcs", "branch",
           "component", "dir", "file", "artifact", "action", "toolchain", "ext",

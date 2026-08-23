@@ -44,7 +44,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
 from app.analysis.text import clip, is_command_echo, text_of  # noqa: E402
-from app.analysis.paths import resolve_workspace, reconcile, bash_refs  # noqa: E402
+from app.analysis.shell import bash_refs  # noqa: E402
+from app.analysis.workspace import resolve_workspace  # noqa: E402
+from app.analysis.reconcile import reconcile  # noqa: E402
 from app.analysis.transcript import iter_turns  # noqa: E402
 from app.analysis.levels import LEVELS, events_for_turns  # noqa: E402
 

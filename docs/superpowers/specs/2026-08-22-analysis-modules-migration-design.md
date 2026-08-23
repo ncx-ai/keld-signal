@@ -46,9 +46,16 @@ needs persisted per-machine history; the prose needs a consumer, and production 
 ## Layout
 
     sidecar/app/analysis/
-      transcript.py    the ONLY module that does I/O: open a transcript, yield turns, slice by coordinates
-      shell.py         heredocs, bashlex, wrapper unwrapping, command names
-      paths.py         path tokens, rel_within, workspace resolution, reconcile
+      transcript.py    the ONLY module that does I/O: open a transcript, yield turns, slice by
+                       coordinates — two projections (iter_turns, iter_tool_use_lines), one reader
+      shell.py         heredocs, bashlex, wrapper unwrapping, command names, and (bash_refs) the
+                       path-looking arguments pulled from the same token walk
+      paths.py         path tokens: what looks like a path (PATH_TOKEN, plausible_path), which
+                       tool-input keys are declared paths, and rel_within — single-path reasoning
+      workspace.py     which checkout a transcript line ran in: resolve_workspace, scan_workspace,
+                       vcs_of, repo_of — the corpus-facing pre-pass and the resolution it feeds
+      reconcile.py     corpus-wide reattribution: resolve a merely-mentioned path against every
+                       path DECLARED anywhere on the machine
       vocab.py         closed vocabularies: ext->lang, artifact, toolchain, action, mcp
       terms.py         named-term extraction
       levels.py        turns -> reference events (the 19 levels)
@@ -56,14 +63,34 @@ needs persisted per-machine history; the prose needs a consumer, and production 
       workstreams.py   rollup -> the allocation + inventory payload
       match.py         configured-vocabulary matching
 
+`paths.py` originally also carried workspace resolution (`resolve_workspace`, `scan_workspace`,
+`vcs_of`, `repo_of`), `reconcile`, and `bash_refs` — four jobs at wildly different scopes (a single
+path's shape vs. a whole machine's cross-file reattribution) in one 410-line file. Split along
+those seams once the package settled; see the follow-ups doc
+(`docs/superpowers/plans/2026-08-22-analysis-migration-followups.md`, items 5 and 7) for why.
+`bash_refs` stayed with `shell.py` rather than being cut in half by return type: it walks shell
+tokens once for quoting/heredoc/`cd`-prefix reasons that apply equally to the verbs and the paths
+it returns, and splitting it would mean parsing every command twice for a tidier module boundary.
+
 `scripts/refseries.py` keeps the frames, the views and the CLI, and imports the rest.
 
 ## Design rules
 
-**I/O lives in exactly one module.** `transcript.py` reads; everything else takes parsed turns and
-returns data. That is what makes the core testable without fixtures on disk, and it is the current
-file's main structural problem — `_process_transcript` opens a file, parses JSON, resolves paths,
-classifies artifacts and emits events in one 150-line body.
+**I/O lives in exactly one module.** `transcript.py` reads; everything else takes parsed turns or
+parsed objects and returns data. That is what makes the core testable without fixtures on disk, and
+it is the current file's main structural problem — `_process_transcript` opens a file, parses JSON,
+resolves paths, classifies artifacts and emits events in one 150-line body.
+
+`transcript.py` opens the file via two functions, not one, because two different callers need two
+different projections of it: `iter_turns` yields `user`/`assistant` speech turns (skipping
+`tool_result`), and `iter_tool_use_lines` yields any line mentioning a `tool_use` block — the
+pre-pass `workspace.scan_workspace` needs before resolution can run. Both still open the file; the
+rule is about *which module* opens files, not how many functions do it. This was not always true:
+`scan_workspace` originally opened the transcript itself, with its own line filter and its own
+`json.loads` loop, while it still lived in `paths.py` — a second reader the docstrings in
+`transcript.py` and `levels.py` had to hedge around ("the only module that opens a transcript **for
+the main extraction pass**"). Fixed by giving it `iter_tool_use_lines` as a sibling of `iter_turns`
+instead of a second file handle; see the follow-ups doc, item 5.
 
 **Vocabularies are data, not code.** `EXT_LANG`, `ARTIFACT_EXT`, `TOOLCHAIN_EXE`, `ARTIFACT_SKILL`,
 `WRAPPERS`, `VALUE_FLAGS` are ecosystem facts that change without a release — a new build tool, a

@@ -1,17 +1,30 @@
-"""Shell command parsing: what was actually invoked, not what a naive split reads off the text.
+"""Shell command parsing: what was actually invoked, not what a naive split reads off the text —
+and, from that same token walk, the path-looking arguments in it.
 
 Took the `exe` level from 6053 distinct "programs invoked" to 620 by eliminating heredoc bodies,
 shell keywords and inline source code being read as command names. Every case here is a defect
 measured on the real corpus.
+
+`bash_refs` (below) returns verbs, exes AND paths from one pass, deliberately not split across
+modules by return type. Quoting, heredoc-stripping and `cd`-prefix tracking are shell-parsing
+concerns that apply to both halves identically — a quoted path is torn by the same naive
+whitespace split that mangles a command, and a heredoc body is neither a real command nor a real
+path. Walking the tokens twice, once per return type, would buy a tidier module boundary at the
+cost of parsing every command twice; the walk is what shell parsing means here, not which fields
+the caller happens to want back.
 """
 import os
 import re
+import shlex
+
+from app.analysis.paths import PATH_TOKEN, plausible_path
 
 SHELL_KEYWORD = {"if", "then", "fi", "else", "elif", "for", "do", "done", "while", "until",
                  "case", "esac", "in", "function", "return", "local", "declare", "read",
                  "true", "false", "test", "[", "[[", "{", "}", "(", ")", ":"}
 TWO_WORD = {"git", "go", "npm", "pnpm", "yarn", "uv", "pip", "python3", "python", "make",
             "docker", "kubectl", "cargo", "gh", "systemctl", "launchctl", "brew", "poetry"}
+ENVVAR = re.compile(r"^[A-Z_][A-Z0-9_]*=")
 
 # A heredoc body is DATA, not commands — but bash_refs splits segments on newlines, so every line
 # of one became a "command" and its first token an "executable". Measured over 44 sessions: EOF
@@ -193,3 +206,68 @@ def unwrap_command(words):
         if not w:
             return None
     return os.path.basename(w[0]) if w else None
+
+
+def bash_refs(command):
+    """Verbs, exes and path-looking tokens from a shell command. Split on the operators so a
+    pipeline contributes every verb in it, not just the first."""
+    # `cd services/api && pytest tests/x.py` resolved `tests/x.py` against the repo root, so the
+    # same file appeared twice — once as services/api/tests/x.py from a tool input and once as
+    # tests/x.py from the command — splitting its share between two names. Segments are walked in
+    # order and a `cd` sets the prefix for everything after it.
+    verbs, exes, paths, prefix = [], [], [], ""
+    ast_exes = parsed_command_names(command)
+    # PATHS are walked over the ORIGINAL text and COMMANDS are not. A path inside a heredoc is a
+    # file the embedded script really touches — dropping them emptied the artifact and subsystem
+    # slots for an hour of pptx editing, whose work happens in python heredocs over
+    # unpacked-user/ppt/slides/*.xml. A COMMAND inside a heredoc is just source code. Same text,
+    # opposite answers, so the two passes see different views of it.
+    _named_segments = set(re.split(r"[|;&\n]+|&&|\|\|", strip_heredocs(command) or ""))
+    for seg in re.split(r"[|;&\n]+|&&|\|\|", command or ""):
+        # QUOTE-AWARE. Splitting on whitespace tears a quoted path apart at its spaces, and the
+        # fragment then looks like a relative path and gets resolved under the repo root: a
+        # colleague's `~/Library/Application Support/Claude/.../skills/pptx/scripts/office/
+        # soffice.py` arrived as `Support/Claude/.../soffice.py` and took 60% of his working set —
+        # the harness's own skill scripts presented as the work. Intact, the absolute path is
+        # correctly recognised as outside the repository and dropped.
+        try:
+            toks = [t for t in shlex.split(seg, comments=False, posix=True) if t]
+        except ValueError:
+            toks = [t for t in seg.strip().split() if t]
+        while toks and (ENVVAR.match(toks[0]) or toks[0] in ("sudo", "time", "command", "exec")):
+            toks.pop(0)
+        if not toks:
+            continue
+        exe = os.path.basename(toks[0])
+        head = exe
+        if head in TWO_WORD and len(toks) > 1 and not toks[1].startswith("-"):
+            head = f"{head} {toks[1]}"
+        ok = (exe and exe not in SHELL_KEYWORD and not exe[0].isdigit()
+              and re.fullmatch(r"[\w.\-]{1,40}", exe))
+        # The parser is authoritative for WHAT WAS RUN when it succeeded; the split below still
+        # walks every segment because it is what resolves paths, and those are unaffected.
+        if ok and ast_exes is None and seg in _named_segments:
+            exes.append(exe)
+        if (ok and re.fullmatch(r"[\w.\- ]{1,40}", head)
+                and (exe in ast_exes if ast_exes is not None else seg in _named_segments)):
+            verbs.append(head)
+        if head == "cd" and len(toks) > 1 and not toks[1].startswith("-"):
+            target = toks[1].strip("'\"")
+            prefix = ("" if target.startswith(("/", "~", "$")) else
+                      os.path.normpath(os.path.join(prefix, target)))
+            continue
+        for t in toks[1:]:
+            if t.startswith("-"):
+                continue
+            tok = t.strip("'\"(),")
+            m = PATH_TOKEN.fullmatch(tok)
+            if m and plausible_path(m.group(0)):
+                q = m.group(0)
+                if prefix and not q.startswith("/"):
+                    q = os.path.normpath(os.path.join(prefix, q))
+                paths.append(q)
+    if ast_exes is not None:
+        exes = [e for e in ast_exes
+                if e and e not in SHELL_KEYWORD and not e[0].isdigit()
+                and re.fullmatch(r"[\w.\-]{1,40}", e)]
+    return verbs, exes, paths

@@ -1,10 +1,15 @@
-"""Transcript I/O: the only module in this package that opens a transcript file for the main
-extraction pass.
+"""Transcript I/O: the only module in this package that opens a transcript file.
 
 `_process_transcript` used to open the file, decide — by a cheap substring check performed BEFORE
 any JSON decoding — whether a line was worth parsing at all, and only then hand it on to
 classification. This module keeps exactly that first half: everything that touches the raw JSONL
 line, nothing that decides what a turn MEANS. `levels.py` takes it from there.
+
+Two readers, not one, because they want genuinely different projections of the same file:
+`iter_turns` wants `user`/`assistant` speech turns and skips `tool_result`; `iter_tool_use_lines`
+wants any line mentioning a tool_use, `tool_result` included, because a `tool_use` block can be
+echoed back inside one. Forcing them through one function would mean one of the two callers
+filtering out lines the other just filtered in.
 """
 import bisect
 import json
@@ -33,6 +38,27 @@ def iter_turns(path):
             continue
         ts = o.get("timestamp")
         if not ts:
+            continue
+        yield o
+
+
+def iter_tool_use_lines(path):
+    """Parsed lines mentioning a `tool_use` block, in file order — the pre-pass workspace
+    resolution needs (marker files, `cd` targets, remotes named in text) before the main pass
+    decides which checkout a line ran in.
+
+    Filters on the same cheap substring check `iter_turns` uses, but for a different question:
+    every line naming `tool_use` (no `type`/`timestamp` restriction — a `tool_result` line can
+    echo a `tool_use` block back), not just `user`/`assistant` speech turns. This is a second,
+    genuinely different projection of the transcript, not a copy of `iter_turns` — one wants what
+    was SAID, the other wants what was RUN.
+    """
+    for line in open(path, errors="replace"):
+        if '"tool_use"' not in line:
+            continue
+        try:
+            o = json.loads(line)
+        except Exception:
             continue
         yield o
 

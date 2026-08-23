@@ -46,7 +46,7 @@ detail; comments on each turn say which level(s) it targets and why):
       distinct `service` refs), Read/Edit/Write/Grep (-> action read/edit/create/search)
     - file/dir/component/ext/lang/artifact across a .go edit, a .md write, and two prose-path
       .py files — one DECLARED via a tool's file_path (the heredoc's own target is never opened
-      by a tool) and one never declared at all, exercising both halves of paths.reconcile()
+      by a tool) and one never declared at all, exercising both halves of reconcile.reconcile()
     - a remote (this session's own repo) and a repo_mentioned (beacon-api — named, but not this
       session's own workspace)
     - term: an ALL-CAPS acronym that must SURVIVE (OTEL — zipf 1.4, calibrated in terms.py's own
@@ -74,11 +74,11 @@ WHAT THIS FIXTURE DOES NOT COVER — read this before trusting it further than i
     only shows up at volume.
   - DUPLICATE DETECTION. extract() dedups whole transcripts by content hash; this fixture has no
     duplicate transcript for it to catch.
-  - CROSS-SESSION RECONCILIATION AT SCALE. paths.reconcile() re-attributes a prose path against
+  - CROSS-SESSION RECONCILIATION AT SCALE. reconcile.reconcile() re-attributes a prose path against
     every declared path in the corpus, scoped per machine (`root`). The two sessions here run
     under two different fictional roots and so never share a reconciliation scope — the real
     corpus's cross-repo reattribution (pulling a keld-signal file out of a keld-atlas session,
-    the defect recorded in paths.py's own docstring) is exercised by the unit tests' targeted
+    the defect recorded in reconcile.py's own docstring) is exercised by the unit tests' targeted
     fixtures, not by this one.
   - LONG-TAIL MESSINESS. No malformed JSON lines, no truncated files, no naive (offset-less)
     timestamps, no wrapper nesting beyond one level, no non-ASCII text, no thinking block with
@@ -147,7 +147,7 @@ def build_session_a():
              "before the SettleFast.io integration review. Loop in RiskGuard's on-call if you "
              "hit anything gnarly with OTEL tracing."),
 
-        # workspace/workspace_evidence via a REPO-LEVEL MARKER (README.md is in paths.py's
+        # workspace/workspace_evidence via a REPO-LEVEL MARKER (README.md is in workspace.py's
         # REPO_MARKERS) rather than the session-launch-directory tier session B uses below —
         # deliberately a different resolution PATH through resolve_workspace, not just a
         # different repo.
@@ -162,7 +162,7 @@ def build_session_a():
             "cache_read_input_tokens": 0}),
 
         # remote (this session's own repo) + repo_mentioned (beacon-api, named but not this
-        # workspace) from plain message TEXT, picked up by paths.scan_workspace's REMOTE_REPO
+        # workspace) from plain message TEXT, picked up by workspace.scan_workspace's REMOTE_REPO
         # scan over the whole turn's content — not from a git command's OUTPUT, which this
         # fixture never carries (see transcript.iter_turns: tool_result lines are skipped
         # unparsed, by design; a remote must be evidenced in an INPUT or in what was said).
@@ -188,7 +188,7 @@ def build_session_a():
             # HEREDOC immediately followed by a real command. Without strip_heredocs, "import"/
             # "def" would be read as invoked programs (shell.py's measured defect); the file it
             # writes (scripts/reconcile_ledger.py) is never opened by a tool, so it stays an
-            # UNDECLARED prose path all the way through paths.reconcile() — the other half of
+            # UNDECLARED prose path all the way through reconcile.reconcile() — the other half of
             # the declared/undeclared split this fixture exercises.
             {"type": "tool_use", "id": "toolu_a004", "name": "Bash",
              "input": {"command": "cat <<'PYEOF' > scripts/reconcile_ledger.py\n"

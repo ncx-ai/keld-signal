@@ -2,9 +2,12 @@
 
 > **Status, 2026-08-23.** Items 1, 2, 3, 4, 6 and 8 are DONE (commits `80f6643`, `4fa554c`,
 > `8116a8d`, `6777f08`, `96f2e4a`, `abdd161`), as is the committed-fixture structural limit.
-> **Still open: items 5, 7 and 9** — `scan_workspace`'s file I/O, splitting `paths.py`, and the
-> third copy of the compact-JSON pre-filter in `context_value.py`. Items 5 and 7 overlap and are
-> best done together.
+> Items 5 and 7 are now DONE too, done together as their overlap predicted: `scan_workspace` reads
+> through `transcript.iter_tool_use_lines` instead of opening the file itself, and the former
+> `paths.py` split into `paths.py` (path tokens, `rel_within`), `workspace.py` (`resolve_workspace`,
+> `scan_workspace`, `vcs_of`, `repo_of`) and `reconcile.py` (`reconcile`); `bash_refs` moved to
+> `shell.py` rather than being cut in two. **Still open: item 9** — the third copy of the
+> compact-JSON pre-filter in `context_value.py`.
 
 The migration of `scripts/refseries.py` into `sidecar/app/analysis/` is complete and merged into
 the branch (14 commits, `cf0588a`..`94b0360`). Every task was gated on rebuilding a frozen corpus
