@@ -26,6 +26,10 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
+# EXT_LANG moved to app.analysis.vocab; re-exported so existing importers keep working.
+from app.analysis.vocab import EXT_LANG  # noqa: E402,F401
+
 OMITTED = ("[turns since the previous update omitted to fit the context — "
            "they are not covered by any later window either]")
 
@@ -80,13 +84,6 @@ def clip(text, cap):
     i = cut.rfind(" ")
     return (cut[:i] if i > 0 else cut) + " …"
 
-
-EXT_LANG = {".go":"Go", ".py":"Python", ".ts":"TypeScript", ".tsx":"TypeScript",
-            ".js":"JavaScript", ".jsx":"JavaScript", ".rs":"Rust", ".java":"Java",
-            ".rb":"Ruby", ".sql":"SQL", ".sh":"Bash", ".css":"CSS", ".scss":"CSS",
-            ".md":"Markdown", ".yaml":"YAML", ".yml":"YAML", ".json":"JSON",
-            ".tf":"Terraform", ".c":"C", ".h":"C", ".cpp":"C++", ".swift":"Swift",
-            ".kt":"Kotlin", ".php":"PHP", ".cs":"C#"}
 
 FILES_TOTAL = 400             # per window: names, not contents
 
