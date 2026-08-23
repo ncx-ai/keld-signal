@@ -80,6 +80,19 @@ func (SensitivityExtractor) AlwaysRun() bool { return true }
 // Run itself guards the model-dependent half.
 func (SensitivityExtractor) ModelFree() bool { return true }
 
+// Degraded: with no Model there is no NER half, so this pass sees ONLY what
+// creddetect can match — credential shapes. Everything the NER half covers
+// (ssn, credit_card, email, phone, person, ...) goes unlooked-for, and the
+// pass still emits a sensitivity value: "none" then means "no credential
+// pattern found", not "no sensitive data present". A confident negative from a
+// check that never ran is worse than an honest gap, so the reduced capability
+// is declared and published (Profile.FacetsDegraded / wire facets_degraded)
+// alongside the value it qualifies. It qualifies a POSITIVE result too: the
+// severity rollup picks the highest class among the entities found, and half
+// the entity sources are missing, so "secrets" may be understating a prompt
+// that also carried an SSN.
+func (SensitivityExtractor) Degraded(ctx *JobContext) bool { return ctx.Model == nil }
+
 func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	// Deterministic mode (ctx.Model == nil): no sidecar, so no NER pass — only
 	// the credential layer below runs. res stays the zero value, which is

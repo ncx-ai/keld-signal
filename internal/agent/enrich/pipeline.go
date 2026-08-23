@@ -87,6 +87,22 @@ type modelFreeExtractor interface {
 	ModelFree() bool
 }
 
+// degradedExtractor is an OPTIONAL Extractor capability (mirrors
+// modelFreeExtractor): a pass that CAN run with only part of its evidence
+// available reports, per job, whether this run was one of those. It is a
+// capability rather than a sensitivity special case because the situation is
+// general — any pass that unions two evidence sources (a model half and a
+// deterministic half, two backends, a transcript that resolved and one that
+// did not) can lose one of them and still produce a value.
+//
+// A degraded pass is NOT a failed pass (it produced a real result) and NOT a
+// skipped pass (it ran). It is named in Profile.FacetsDegraded so the value it
+// produced is read as "from the checks that ran", never as a complete answer.
+// Consulted only after a successful Run, with the same JobContext Run saw.
+type degradedExtractor interface {
+	Degraded(ctx *JobContext) bool
+}
+
 // passOutcome is what became of one pass. The SKIPPED case is distinct from
 // FAILED on purpose: "partial" must keep meaning "something that should have
 // worked did not". A pass that needs a Model under ml_backend "deterministic"
@@ -102,6 +118,10 @@ const (
 	passOK passOutcome = iota
 	passFailed
 	passSkipped
+	// passDegraded: the pass RAN and produced a committable result, but with
+	// part of its evidence unavailable (see degradedExtractor). It commits
+	// exactly like passOK — the difference is only that the loss is named.
+	passDegraded
 )
 
 // runStage executes one extractor with panic isolation. A nil ctx.Model is a
@@ -126,6 +146,9 @@ func runStage(ex Extractor, ctx *JobContext) (out map[string]any, res passOutcom
 	o, err := ex.Run(ctx)
 	if err != nil {
 		return nil, passFailed
+	}
+	if d, ok := ex.(degradedExtractor); ok && d.Degraded(ctx) {
+		return o, passDegraded
 	}
 	return o, passOK
 }
@@ -207,7 +230,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	}
 
 	anyFailed := false
-	var skipped []string
+	var skipped, degraded []string
 	commit := func(group []Extractor) {
 		type res struct {
 			name string
@@ -226,6 +249,9 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 			case passFailed:
 				anyFailed = true
 			default:
+				if r.res == passDegraded {
+					degraded = append(degraded, r.name)
+				}
 				ctx.Set(r.name, r.out)
 			}
 		}
@@ -249,6 +275,9 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 			case passFailed:
 				anyFailed = true
 			default:
+				if o == passDegraded {
+					degraded = append(degraded, ex.Name())
+				}
 				ctx.Set(ex.Name(), out)
 			}
 		}
@@ -287,6 +316,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		Workstreams:       workstreamsFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
 		FacetsSkipped:     skipped,
+		FacetsDegraded:    degraded,
 		ExtractorVersions: versions,
 		SchemaVersion:     SchemaVersion,
 		Custom:            custom,

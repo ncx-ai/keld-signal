@@ -58,7 +58,15 @@ type Enrichment struct {
 	// a deterministic profile is indistinguishable from an auto-mode one that
 	// happened to produce nothing for those facets. Absent when nothing was
 	// skipped, so the default mode's payload is byte-identical to before.
-	FacetsSkipped     []string          `json:"facets_skipped,omitempty"`
+	FacetsSkipped []string `json:"facets_skipped,omitempty"`
+	// FacetsDegraded names the passes that ran with part of their evidence
+	// unavailable (sensitivity under ml_backend "deterministic": credential
+	// layer yes, model NER no). It rides with the values it qualifies for the
+	// same reason facets_skipped rides with pipeline_status: without it,
+	// sensitivity:"none" from a pass that only looked for credentials is
+	// indistinguishable from "we looked for PII and found none". Absent when
+	// nothing was degraded.
+	FacetsDegraded    []string          `json:"facets_degraded,omitempty"`
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
 	ModelVersion      string            `json:"model_version"`
@@ -102,6 +110,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		Workstreams:       p.Workstreams,
 		PipelineStatus:    p.PipelineStatus,
 		FacetsSkipped:     p.FacetsSkipped,
+		FacetsDegraded:    p.FacetsDegraded,
 		ExtractorVersions: p.ExtractorVersions,
 		SchemaVersion:     p.SchemaVersion,
 		Custom:            p.Custom,

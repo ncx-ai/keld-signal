@@ -259,3 +259,24 @@ func TestBuildCarriesFacetsSkipped(t *testing.T) {
 		t.Fatalf("nothing was skipped; the key must be absent: %s", b)
 	}
 }
+
+// TestBuildCarriesFacetsDegraded: a pass that RAN but with half its evidence
+// unavailable (sensitivity in deterministic mode: credential layer yes, NER no)
+// is not skipped, so facets_skipped cannot carry it — and a sensitivity of
+// "none" from a half-blind pass is a confident negative nobody checked. The
+// qualification only helps if it reaches Atlas with the value it qualifies.
+func TestBuildCarriesFacetsDegraded(t *testing.T) {
+	p := enrich.Profile{PipelineStatus: "enriched", FacetsDegraded: []string{"sensitivity"}}
+	e := Build(queue.Job{}, p, "", false, 0, time.Now())
+	if len(e.FacetsDegraded) != 1 || e.FacetsDegraded[0] != "sensitivity" {
+		t.Fatalf("facets_degraded = %v, want the profile's", e.FacetsDegraded)
+	}
+
+	b, err := json.Marshal(Build(queue.Job{}, enrich.Profile{PipelineStatus: "enriched"}, "", false, 0, time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte("facets_degraded")) {
+		t.Fatalf("nothing was degraded; the key must be absent: %s", b)
+	}
+}

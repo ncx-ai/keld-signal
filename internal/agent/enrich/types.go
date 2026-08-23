@@ -128,7 +128,20 @@ type Profile struct {
 	// a complete one either, so the loss is NAMED rather than inferred from
 	// missing fields (the omittedNotice rule, one level up). Absent when
 	// nothing was skipped, so the default mode's wire shape is unchanged.
-	FacetsSkipped     []string                `json:"facets_skipped,omitempty"`
+	FacetsSkipped []string `json:"facets_skipped,omitempty"`
+	// FacetsDegraded names the passes that DID run and produced a value, but
+	// with part of their evidence unavailable — currently: sensitivity under
+	// ml_backend "deterministic", where the deterministic credential layer runs
+	// and the model's NER half does not. It is a sibling of FacetsSkipped, not a
+	// member of it, because the two ask a reader to do different things: a
+	// skipped facet has NO value (read nothing), a degraded one has a real value
+	// that must be read as "from the checks that ran". Folding them together
+	// would either invite dropping a genuine finding or make "skipped" mean
+	// "maybe there's a value" — and sensitivity:"none" from a half-blind pass is
+	// exactly the case where that distinction is load-bearing. Like
+	// FacetsSkipped, every name here is a key of ExtractorVersions, and the
+	// field is absent when nothing was degraded.
+	FacetsDegraded    []string                `json:"facets_degraded,omitempty"`
 	ExtractorVersions map[string]string       `json:"extractor_versions"`
 	SchemaVersion     int                     `json:"schema_version"`
 	Custom            map[string]CustomResult `json:"custom,omitempty"`

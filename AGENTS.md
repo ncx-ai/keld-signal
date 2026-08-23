@@ -265,6 +265,22 @@ selects one of three modes:
   `facets_skipped` (omitted when empty, so auto-mode payloads are unchanged) —
   always a subset of the `extractor_versions` keys, since a pass that was
   never registered at all (unwired workstreams, above) is absent from both.
+  **A HALF-run pass is neither.** `sensitivity` is `ModelFree`, so in this mode
+  it RUNS — but only its credential layer; the GLiNER2 NER half is skipped, so
+  an SSN with no credential pattern publishes `sensitivity:"none"`, a confident
+  negative from a check nobody performed. A pass therefore declares reduced
+  capability per job via the optional `degradedExtractor` capability
+  (`Degraded(ctx) bool`, consulted after a successful `Run`, mirroring
+  `modelFreeExtractor`); `runStage` reports `passDegraded`, the result commits
+  normally, and the pass is named in `Profile.FacetsDegraded` / wire
+  `facets_degraded` — a **sibling** of `facets_skipped`, not a member: a
+  skipped facet has no value, a degraded one has a real value to be read as
+  "from the checks that ran". Both lists are subsets of the
+  `extractor_versions` keys (pinned by a test), both are omitted when empty,
+  and neither moves `pipeline_status`. The sensitivity **vocabulary** is
+  unchanged — `"none"` plus the marker is the honest pair, and a new
+  `"unknown"` label would be a contract break for no extra information — so
+  `SchemaVersion` stays at 6.
 - **`"off"`** — enrichment is **disabled entirely**: no enrichment worker is
   started and `/enrich` accepts-and-discards (returns 202, never enqueues).
   Telemetry and client-events are unaffected.
