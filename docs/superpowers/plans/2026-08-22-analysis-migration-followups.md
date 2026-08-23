@@ -1,14 +1,31 @@
 # Analysis-package migration — what was left undone
 
-> **Status, 2026-08-23.** Items 1, 2, 3, 4, 6 and 8 are DONE (commits `80f6643`, `4fa554c`,
-> `8116a8d`, `6777f08`, `96f2e4a`, `abdd161`), as is the committed-fixture structural limit.
-> Items 5 and 7 are now DONE too (commit `2bc56b2`), done together as their overlap predicted:
-> `scan_workspace` reads
-> through `transcript.iter_tool_use_lines` instead of opening the file itself, and the former
-> `paths.py` split into `paths.py` (path tokens, `rel_within`), `workspace.py` (`resolve_workspace`,
-> `scan_workspace`, `vcs_of`, `repo_of`) and `reconcile.py` (`reconcile`); `bash_refs` moved to
-> `shell.py` rather than being cut in two. **Still open: item 9** — the third copy of the
-> compact-JSON pre-filter in `context_value.py`.
+> **Status, 2026-08-23. ALL ITEMS CLOSED.** Items 1-9, the committed-fixture structural limit and
+> the dependency-pin drift are done, across `80f6643`, `4fa554c`, `8116a8d`, `6777f08`, `96f2e4a`,
+> `abdd161`, `be6203c`, `2bc56b2`, `206cb59`, `7632c3c`.
+>
+> Items 5 and 7 went together as their overlap predicted: `scan_workspace` now reads through
+> `transcript.iter_tool_use_lines` instead of opening the file itself, and the 410-line `paths.py`
+> split into `paths.py` (48 lines — path tokens, `rel_within`), `workspace.py` (`resolve_workspace`,
+> `scan_workspace`, `vcs_of`, `repo_of`) and `reconcile.py`. `bash_refs` moved whole into
+> `shell.py` rather than being cut in two, because splitting it by return type would mean walking
+> the token stream twice. **I/O now genuinely lives in one module** — both `open()` calls in the
+> package are in `transcript.py`.
+>
+> Item 9 closed with `206cb59`: `context_value.window_text` delegates to `transcript.iter_turns`,
+> verified byte-identical across 90 transcript/window/cap combinations. The compact-JSON
+> assumption now lives in exactly one place.
+>
+> Pin hygiene closed with `be6203c` and `7632c3c`: `fastapi` 0.115.14 -> 0.141.1 and `uvicorn`
+> 0.32.1 -> 0.52.4 (26 and 20 minor versions of silent drift), wildcard series replaced with exact
+> pins throughout, `gliner2[local]` pinned for the first time, and a CI staleness check that dates
+> each pin against PyPI's upload timestamp — WARN at 180 days, FAIL only past 365 with a newer
+> release available — so an exact pin cannot rot unnoticed the way these did.
+>
+> What remains is not follow-up work but new work: the configured-vocabulary matcher
+> (`2026-08-22-configured-vocabulary-matching-design.md`) and phase 2 of the analysis tier
+> (`2026-08-22-sidecar-analysis-tier-design.md`). Nothing in `sidecar/app/` imports `app.analysis`
+> yet, so there is still one front end rather than two; that changes when `/analyze` lands.
 
 The migration of `scripts/refseries.py` into `sidecar/app/analysis/` is complete and merged into
 the branch (14 commits, `cf0588a`..`94b0360`). Every task was gated on rebuilding a frozen corpus
