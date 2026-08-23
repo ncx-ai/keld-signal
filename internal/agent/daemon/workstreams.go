@@ -11,27 +11,51 @@ type windowAnalyzer interface {
 	AnalyzeLabeled(path, promptID string, spanMinutes int) (map[string]enrich.Labeled, bool)
 }
 
-// analyzerFor returns the window-analysis function of the service client it is
-// handed, or nil when that client cannot analyse — a test/eval double, or the
-// nil Model left behind when no analysis service could be started this run
-// (no sidecar binary, or its port could not be allocated). A nil result means
-// the workstreams pass is not wired, so it does not run and cannot fail the
-// profile.
+// piiDetector is the same kind of optional capability for the sidecar's /pii:
+// presidio patterns plus a spaCy NER pass, no GLiNER2, off the inference
+// single-flight. The sensitivity facet detects with it.
+type piiDetector interface {
+	DetectPII(text string) (enrich.PIIResult, bool)
+}
+
+// serviceFacets are the enrichment capabilities that belong to the analysis
+// SERVICE rather than to the Model. Both are non-inference routes on the same
+// sidecar, both must work with GLiNER2 absent entirely, and both are therefore
+// wired in ml_backend "deterministic" as well as "auto" — where the Model is
+// nil and rederiving them from it would silently drop them.
 //
-// It is deliberately NOT "the Model's analyzer": ml_backend "deterministic"
-// runs the analysis service with no Model at all, and derives its analyzer
-// from the service client here just as "auto" derives it from the sidecar
-// Model. That is why wireEnrichment returns the analyzer as its own value and
-// threads it to process, rather than letting process rederive it from the
-// Model (which would be nil, and would silently drop every workstream).
+// They travel as one value so the next non-model route does not add another
+// parameter to Worker, process and wireEnrichment. A zero value is the honest
+// "this run has no analysis service": the workstreams pass then never
+// registers, and sensitivity reports itself degraded (see
+// enrich.WithPIIScanner).
+type serviceFacets struct {
+	Analyze enrich.WorkstreamAnalyzer
+	ScanPII enrich.PIIScanner
+}
+
+// facetsFor returns the service facets of the client it is handed, leaving any
+// the client cannot provide nil — a test/eval double, or the nil Model left
+// behind when no analysis service could be started this run (no sidecar binary,
+// or its port could not be allocated).
+//
+// It is deliberately NOT "the Model's facets": ml_backend "deterministic" runs
+// the analysis service with no Model at all, and derives these from the service
+// client here just as "auto" derives them from the sidecar Model. That is why
+// wireEnrichment returns them as their own value and threads them to process,
+// rather than letting process rederive them from the Model (which would be nil,
+// and would silently drop every workstream and every PII finding).
 //
 // The sidecar client's per-job wrappers (withJobCtx, bindMaxLen) return
-// *sidecar.Client copies, so the capability survives them and the analysis
-// request is bound to the job context like every other sidecar call.
-func analyzerFor(m enrich.Model) enrich.WorkstreamAnalyzer {
-	a, ok := m.(windowAnalyzer)
-	if !ok {
-		return nil
+// *sidecar.Client copies, so the capabilities survive them and the requests are
+// bound to the job context like every other sidecar call.
+func facetsFor(m enrich.Model) serviceFacets {
+	var f serviceFacets
+	if a, ok := m.(windowAnalyzer); ok {
+		f.Analyze = a.AnalyzeLabeled
 	}
-	return a.AnalyzeLabeled
+	if p, ok := m.(piiDetector); ok {
+		f.ScanPII = p.DetectPII
+	}
+	return f
 }

@@ -107,13 +107,15 @@ func TestSensitivityRollupElevatesFromDetectedEntities(t *testing.T) {
 		{"card to pci", "credit_card", fxCard, "pci"},
 		{"credential to secrets", "api_key", "ghp_16C7e42F292c6912E7710c838347Ae178B4a", "secrets"},
 		{"email to pii", "email", "dana.reeve@northwind-labs.co", "pii"},
-		// person has no deterministic detector, so this case can only pass if
-		// the NER DETECTION path is actually wired to the backend.
+		// person has no pattern for the scan to corroborate, so this case can
+		// only pass if the NER DETECTION path is actually wired to the backend.
 		{"person to pii", "person", "Marguerite Vandenberg", "pii"},
 	} {
 		m := nerOnlyModel{label: tc.label, needle: tc.value}
 		ctx := NewJobContext("context "+tc.value+" trailing", "claude_code", Meta{}, m)
-		out, err := SensitivityExtractor{}.Run(ctx)
+		// The pattern types are admitted only where the gated scan corroborates
+		// them; person/api_key carry no pattern and need none.
+		out, err := SensitivityExtractor{Scan: scanOf([2]string{tc.label, tc.value})}.Run(ctx)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}

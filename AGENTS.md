@@ -104,22 +104,47 @@ a time. Two waves, up to 8 facets per prompt:
   `translation`, `code_generation`, `information_extraction`, `classification`,
   `reasoning`, `question_answering`, `text_generation`, `rewriting`, `general`),
   `sensitivity` (+ masked entity spans; detects **concrete leaked data**, not
-  topic — unions the GLiNER2 NER with TWO deterministic layers, a gitleaks
-  credential layer (`creddetect`) and a regular-format PII layer (`piidetect`:
-  `ssn`, `credit_card`, `email` — Luhn + issuer validation, SSA range rules,
-  dashed SSNs only; phone is deliberately left to the NER), behind a placeholder
-  gate and a **well-known/test-value gate** (`piidetect.IsWellKnown`, applied to
-  the NER's entities too — `4111 1111 1111 1111`, `123-45-6789` and RFC 2606
-  domains saturate developer transcripts and would otherwise report `pci`/`phi`
-  continuously), then rolls up to the highest-severity class: `ssn`⇒`phi`,
-  `credit_card`⇒`pci`, `api_key`/`secret`⇒`secrets`, other personal id⇒`pii`.
-  Only `person`, `address` and `phone` now require the NER, so deterministic
-  mode reaches every class; `facets_degraded` names `sensitivity` only when the
-  model-free answer fell short of the top class),
+  topic — unions THREE independent evidence sources and rolls up to the
+  highest-severity class: `ssn`⇒`phi`, `credit_card`⇒`pci`,
+  `api_key`/`secret`⇒`secrets`, other personal id⇒`pii`. See
+  **The sensitivity facet's three sources** below),
   `domain` (+ entities), `activity_type`, `personal`, `function_guess`
   (12 business functions), `speech_act` (`command`/`question`/`statement`/
   `fragment`, classifies the prompt text only).
 - **Wave 2** (conditioned on Wave-1 `function_guess`): `subcategory`.
+
+**The sensitivity facet's three sources.** None of them classifies; the class is
+a rollup over which entity labels were DETECTED (`sensitivityFromEntities`).
+1. **`creddetect`** — vendored gitleaks credential rules. Pure Go, no model, no
+   network, over the FULL prompt text. Always available; the only source that
+   needs nothing at all.
+2. **The sidecar's `/pii`** (`enrich.PIIScanner` → `sidecar.Client.DetectPII` →
+   `app/pii.py`, presidio-analyzer). Five recognizers producing exactly the six
+   vocabulary types (`ssn`, `credit_card`, `email`, `phone`, `person`,
+   `address`). It needs **no GLiNER2** and never touches the inference
+   single-flight, so it is wired in `ml_backend:"deterministic"` too. It returns
+   **offsets only, never the matched value** — the Go side resolves and masks
+   from its own copy of the text.
+3. **The GLiNER2 NER** (`/entities`), when there is a model.
+
+⚠️ **The published-test-value gate lives in ONE place: `sidecar/app/wellknown.py`.**
+`4111 1111 1111 1111` passes Luhn, `123-45-6789` is the textbook SSN,
+`user@example.com` is RFC 2606 — developer transcripts are saturated with them,
+and ungated the facet reports `pci`/`phi` continuously and is worse than absent.
+A second copy in Go for the NER path is the duplicated-but-divergent failure, so
+the NER is gated by **corroboration** instead (`enrich.nerContributes`): its
+pattern-type findings (`ssn`/`credit_card`/`email`/`phone`) are published only
+where the scan — whose output IS gated — found something at the same offsets. A
+documentation constant is absent from the scan by construction. With **no scan
+available those types are DROPPED, not published ungated**; `person`/`address`
+carry no pattern, need no corroboration, and are subject only to a shape rule (a
+name has letters in it). Do not reintroduce a Go copy of the list.
+
+**`facets_degraded` for sensitivity turns on the SCAN, not on the model.** A
+whole scan covers every vocabulary type, so "no model" no longer costs a type.
+Scan absent / failed / **`truncated`** ⇒ degraded, unless the answer already
+reached the ceiling of the severity order (`phi`), which no missing evidence
+could raise.
 - **`workstreams`** (`enrich/workstreams.go`) is the one pass that runs **no
   inference**: it asks the sidecar's `/analyze` for the deterministic dimensions
   of the hour of work ending at this prompt (project, branch, model,
@@ -550,7 +575,6 @@ internal/
       sidecar/           HTTP client to the GLiNER2 sidecar (the only Model)
       lenstat/           adaptive input truncation (mu+2sigma prompt-length stats)
       creddetect/        deterministic credential detection (vendored gitleaks rules)
-      piidetect/         deterministic ssn/credit_card/email + well-known-value gate
       eval/              enrichment quality eval harness
     provision/       model provisioning (weights → ~/.keld/models)
     publish/         build + POST masked enrichments to Atlas

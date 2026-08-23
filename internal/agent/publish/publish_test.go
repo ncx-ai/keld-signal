@@ -281,9 +281,10 @@ func TestBuildCarriesFacetsDegraded(t *testing.T) {
 	}
 }
 
-// TestBuildNeverCarriesRawPII pins the privacy invariant across the NEW
-// deterministic PII layer: piidetect finds ssn/credit_card/email with no model
-// involved, and those spans must reach the wire masked, exactly like the NER's
+// TestBuildNeverCarriesRawPII pins the privacy invariant across the PII scan
+// layer: the sidecar finds ssn/credit_card/email with no model involved and
+// returns OFFSETS ONLY, so the Go side is the sole place the value is ever
+// resolved — and those spans must reach the wire masked, exactly like the NER's
 // and creddetect's. Fixtures are synthetic — a Luhn-valid card under a real IIN
 // with an invented body, a structurally valid SSN on no example list, and an
 // invented address at a domain that is not RFC-reserved (reserved ones are
@@ -296,7 +297,9 @@ func TestBuildNeverCarriesRawPII(t *testing.T) {
 	)
 	text := "charge " + card + ", ssn " + ssn + ", receipt to " + email
 
-	p := enrich.Run(text, "claude_code", enrich.Meta{}, nil) // nil Model: deterministic mode
+	// nil Model: deterministic mode, where the scan is the only PII source.
+	p := enrich.Run(text, "claude_code", enrich.Meta{}, nil,
+		enrich.WithPIIScanner(enrichtest.NewScan()))
 	if p.Sensitivity.Value != "phi" {
 		t.Fatalf("premise: sensitivity = %+v, want phi", p.Sensitivity)
 	}

@@ -8,7 +8,8 @@ import (
 )
 
 func TestRunProducesEnrichedProfile(t *testing.T) {
-	p := enrich.Run("write a go function; email jane@acme.com", "claude_code", enrich.Meta{}, enrichtest.NewFake())
+	p := enrich.Run("write a go function; email jane@acme.com", "claude_code", enrich.Meta{}, enrichtest.NewFake(),
+		enrich.WithPIIScanner(enrichtest.NewScan()))
 	if p.PipelineStatus != "enriched" {
 		t.Fatalf("status = %q, want enriched", p.PipelineStatus)
 	}

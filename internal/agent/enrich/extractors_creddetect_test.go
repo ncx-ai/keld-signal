@@ -39,8 +39,7 @@ func TestSensitivityCatchesCredentialViaDetector(t *testing.T) {
 // ssnModel returns an ssn entity from the DETECTION call so we can verify a credential does
 // NOT downgrade a higher-severity phi classification (precedence guard). It
 // carries the synthetic fxSSN rather than the textbook 123-45-6789, which the
-// well-known gate now excludes from the NER path as well as the deterministic
-// one.
+// gate excludes from every path.
 type ssnModel struct{ emptyModel }
 
 func (ssnModel) Entities(text string, _ map[string]string) []Entity {
@@ -52,8 +51,10 @@ func (ssnModel) Entities(text string, _ map[string]string) []Entity {
 }
 
 func TestCredentialDoesNotDowngradePHI(t *testing.T) {
+	// The scan corroborates the SSN: a pattern-type entity the gated backend
+	// did not also find is not publishable (see nerContributes).
 	ctx := NewJobContext("my ssn is "+fxSSN+" and key ghp_16C7e42F292c6912E7710c838347Ae178B4a", "claude_code", Meta{}, ssnModel{})
-	out, err := SensitivityExtractor{}.Run(ctx)
+	out, err := SensitivityExtractor{Scan: scanOf([2]string{"ssn", fxSSN})}.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

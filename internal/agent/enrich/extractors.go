@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/creddetect"
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich/piidetect"
 )
 
 // Extractor is one pipeline stage.
@@ -20,10 +19,12 @@ type Extractor interface {
 
 func versioned(name string) string { return fmt.Sprintf("%s-v%d", name, SchemaVersion) }
 
-// Wave1 returns the independent first-wave extractors.
-func Wave1() []Extractor {
+// Wave1 returns the independent first-wave extractors. scan is the personal-data
+// backend threaded into SensitivityExtractor; nil means this run has none (see
+// WithPIIScanner).
+func Wave1(scan PIIScanner) []Extractor {
 	return []Extractor{
-		TaskTypeExtractor{}, SensitivityExtractor{}, DomainEntitiesExtractor{},
+		TaskTypeExtractor{}, SensitivityExtractor{Scan: scan}, DomainEntitiesExtractor{},
 		passExtractor{Pass{Name: "activity_type", Labels: Activities}},
 		passExtractor{Pass{Name: "personal", Labels: Personal}},
 		funcGuessExtractor{}, SpeechActExtractor{},
@@ -69,42 +70,88 @@ func (e TaskTypeExtractor) Run(ctx *JobContext) (map[string]any, error) {
 
 // --- sensitivity ---
 
-type SensitivityExtractor struct{}
+// SensitivityExtractor computes the sensitivity class from CONCRETE LEAKED
+// DATA found by three independent evidence sources, none of which classifies:
+//
+//  1. creddetect — gitleaks credential patterns, pure Go, no model, no network,
+//     over the FULL prompt text. Always available.
+//  2. Scan — the sidecar's presidio layer (/pii). Needs no GLiNER2 and never
+//     touches the inference single-flight, so it answers under ml_backend
+//     "deterministic" too. It is the home of the published-value gate.
+//  3. ctx.Model — GLiNER2's NER, when there is a model at all.
+//
+// The class is a rollup over which entity labels were found, never a label the
+// model was asked to pick (see Run).
+type SensitivityExtractor struct {
+	// Scan is the personal-data backend. nil means this run has none — the
+	// eval harness, localagent, or a daemon whose service could not start —
+	// in which case the pass still runs on its credential layer and reports
+	// itself degraded rather than publishing a clean-looking negative.
+	Scan PIIScanner
+}
 
 func (SensitivityExtractor) Name() string    { return "sensitivity" }
 func (SensitivityExtractor) Version() string { return versioned("sensitivity") }
 func (SensitivityExtractor) AlwaysRun() bool { return true }
 
-// ModelFree: sensitivity has a real deterministic layer (CredentialSpans —
-// pure Go, no model) merged alongside the model's NER, so the pipeline must
-// still invoke Run when ctx.Model is nil rather than skip the pass wholesale.
-// Run itself guards the model-dependent half.
+// ModelFree: sensitivity has real deterministic layers (CredentialSpans and the
+// PII scan — neither needs GLiNER2) so the pipeline must still invoke Run when
+// ctx.Model is nil rather than skip the pass wholesale. Run itself guards the
+// model-dependent half.
 func (SensitivityExtractor) ModelFree() bool { return true }
 
-// Degraded: with no Model there is no NER half. That used to blind this pass to
-// every entity type except credentials; piidetect now covers ssn, credit_card
-// and email deterministically, so what the missing half still owns is person,
-// address and phone — and all three roll up to "pii", the LOWEST class.
+// sensitivityEvidence records what actually ran, so Degraded can judge the
+// answer without re-running anything. It rides in the pass output under
+// evidenceKey; Profile reads only the named facet keys, so it never reaches the
+// wire.
+type sensitivityEvidence struct {
+	// scanWhole: the PII scan was performed AND read the whole input.
+	scanWhole bool
+	// class is the published sensitivity value.
+	class string
+}
+
+const evidenceKey = "sensitivity_evidence"
+
+// Degraded names the pass in facets_degraded when its answer may be
+// understated — the marker that stops a reader taking sensitivity:"none" for
+// "we looked and there is nothing here".
 //
-// So "no model" no longer implies "the answer may be understated". The marker
-// is therefore narrowed to the case where it is actually true: a deterministic
-// result that did NOT reach the top of the severity order. A prompt whose SSN
-// was found without a model publishes phi, which is the ceiling — nothing the
-// NER could have added would change it, and qualifying that answer would be
-// crying wolf. Anything below the ceiling stays qualified, because the
-// deterministic layer is deliberately stricter than the NER within the types it
-// does cover (dashed SSNs only, Luhn+issuer-valid cards), so a "pci" or a
-// "none" here can still be understating a prompt the NER would have read
-// differently.
-func (SensitivityExtractor) Degraded(ctx *JobContext) bool {
-	if ctx.Model != nil {
+// It turns entirely on the PII scan, and NOT on the presence of a Model. That
+// is a change of ground from the previous rule, and the reason is that the
+// evidence sources changed shape: the scan covers every entity type in the
+// vocabulary (ssn, credit_card, email, phone, person, address), so a whole scan
+// leaves no type without a source and "no model" no longer costs a type. The
+// converse is what now bites: with the scan absent, failed, or truncated, the
+// NER cannot cover for it — its pattern-type findings are dropped rather than
+// published ungated (see nerContributes) — so five of the six types have no
+// source at all and only credentials remain.
+//
+// The one exemption is the ceiling. An answer that already reached the top of
+// the severity order (phi) cannot be raised by evidence that did not run, and a
+// marker that fires on answers it could not change stops being read on the ones
+// it could.
+func (SensitivityExtractor) Degraded(_ *JobContext, out map[string]any) bool {
+	ev, ok := out[evidenceKey].(sensitivityEvidence)
+	if !ok {
+		return true // no evidence record: assume the worst rather than the best
+	}
+	if ev.scanWhole {
 		return false
 	}
-	_, found := DeterministicSensitiveEntities(ctx.Text)
-	return sensitivityFromEntities(found) != SensitivityFromEntity[0].Sensitivity
+	return ev.class != SensitivityFromEntity[0].Sensitivity
 }
 
 func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
+	// The PII scan first: its output is the corroboration the NER's
+	// pattern-type findings are judged against below, and it is the only
+	// evidence source that carries the published-value gate.
+	var scan PIIResult
+	scanned := false
+	if e.Scan != nil {
+		scan, scanned = e.Scan(ctx.Text)
+	}
+
 	// NER is used for DETECTION only, never for CLASSIFICATION. This pass asks
 	// the model where the sensitive tokens ARE; the class is then computed from
 	// which labels were found (sensitivityFromEntities). It deliberately does
@@ -118,51 +165,51 @@ func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	// the cheaper route, and one that has structurally nowhere to put a
 	// classification even if someone wanted one back.
 	//
-	// Deterministic mode (ctx.Model == nil): no sidecar, so no NER pass — only
-	// the deterministic layers below run. nerEntities stays nil, which is
-	// exactly the "found nothing via the model" case the rest of this function
-	// already handles.
+	// Deterministic mode (ctx.Model == nil): no GLiNER2, so no NER pass — only
+	// the two model-free layers run. nerEntities stays nil, which is exactly
+	// the "found nothing via the model" case the rest of this function already
+	// handles.
 	var nerEntities []Entity
 	if ctx.Model != nil {
 		nerEntities = ctx.Model.Entities(ctx.Text, SensitiveEntityLabels)
 	}
 
-	found := map[string]bool{}
-	spans := make([]Entity, 0, len(nerEntities))
+	// The scan's spans lead the union: they are the gated authority on the
+	// pattern types, so where the NER found the same value it is the scan's
+	// span that publishes (appendDistinctSpan drops the overlap).
+	spans, found := scanSpans(ctx.Text, scan)
+
 	for _, ent := range nerEntities {
-		ent.Text = entityText(ctx.Text, ent)
-		if creddetect.IsPlaceholder(ent.Text) {
+		v := entityText(ctx.Text, ent)
+		if v == "" {
+			continue // unresolvable offsets: every precision gate below would pass it blind
+		}
+		if creddetect.IsPlaceholder(v) {
 			continue // precision-gate: placeholder/redacted value, not a real secret
 		}
-		// Same gate, other half: the NER reports published test/example values
-		// (4111 1111 1111 1111, 123-45-6789, user@example.com) as flawlessly
-		// shaped entities, and a developer transcript is full of them. Gating
-		// only the deterministic layer would leave the default (auto) mode
-		// reporting pci/phi on documentation constants.
-		if piidetect.IsWellKnown(ent.Label, ent.Text) {
-			continue
+		if !nerContributes(ent, v, scan.Spans, scanned) {
+			continue // ungated pattern match, or a "name" with no letters in it
 		}
 		found[ent.Label] = true
-		spans = append(spans, Entity{
+		spans = appendDistinctSpan(spans, Entity{
 			Label:      ent.Label,
 			Start:      ent.Start,
 			End:        ent.End,
 			Confidence: ent.Confidence,
-			Masked:     Mask(ent.Label, ent.Text), // Text intentionally dropped
+			Masked:     Mask(ent.Label, v), // Text intentionally dropped
 		})
 	}
 
-	// Deterministic layers (creddetect + piidetect): union their spans and
-	// register the entity labels they found, so sensitivityFromEntities rolls up
-	// through the existing rule table — elevating to "secrets"/"pci"/"phi"
-	// without ever overriding a higher-severity class already present. These run
-	// whether or not a Model exists; with one, they union with the NER, and a
-	// span either layer already covers is not published twice.
-	detSpans, detFound := DeterministicSensitiveEntities(ctx.Text)
-	for _, s := range detSpans {
+	// The credential layer: pure Go, no model, no network, over the FULL text
+	// (unaffected by any backend's token window). Its labels register in the
+	// same "found" set, so sensitivityFromEntities rolls them up through the
+	// existing rule table — elevating to "secrets" without ever overriding a
+	// higher-severity class already present.
+	credSpans, credFound := CredentialSpans(ctx.Text)
+	for _, s := range credSpans {
 		spans = appendDistinctSpan(spans, s)
 	}
-	for label := range detFound {
+	for label := range credFound {
 		found[label] = true
 	}
 
@@ -176,9 +223,9 @@ func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	// detector fired"). The old 0.0 was the classifier's abstention score;
 	// left in place it would tell a consumer "we are not sure it is none",
 	// which is exactly the reading this change removes. Residual RECALL
-	// uncertainty — the detectors can miss — is carried by Degraded(), which
-	// is the field that means "this answer may be understated", not by a
-	// deflated confidence on a deterministic conclusion.
+	// uncertainty — a detector that did not run at all — is carried by
+	// Degraded(), which is the field that means "this answer may be
+	// understated", not by a deflated confidence on a deterministic conclusion.
 	value, conf := "none", 1.0
 	if hard := sensitivityFromEntities(found); hard != "" {
 		value = hard
@@ -191,7 +238,8 @@ func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 
 	return map[string]any{
 		"sensitivity":       Labeled{Value: value, Confidence: conf, Producer: e.Version()},
-		"sensitivity_spans": spans,
+		"sensitivity_spans": sortSpans(spans),
+		evidenceKey:         sensitivityEvidence{scanWhole: scanned && !scan.Truncated, class: value},
 	}, nil
 }
 

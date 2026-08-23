@@ -25,6 +25,7 @@ type runCfg struct {
 	customW1       []Extractor
 	customW2       []Extractor
 	analyze        WorkstreamAnalyzer
+	piiScan        PIIScanner
 	transcriptPath string
 	promptID       string
 }
@@ -67,6 +68,20 @@ func WithWorkstreams(fn WorkstreamAnalyzer) Option {
 	return func(c *runCfg) { c.analyze = fn }
 }
 
+// WithPIIScanner wires the personal-data backend the sensitivity facet detects
+// with (the daemon wires sidecar.Client.DetectPII — presidio behind /pii, no
+// GLiNER2, off the inference single-flight, so it is wired in ml_backend
+// "deterministic" too).
+//
+// Unlike WithWorkstreams, its absence does NOT unregister a pass: sensitivity
+// still runs on its credential layer. What absence changes is honesty — the
+// pass reports itself in facets_degraded, because ssn/credit_card/email/phone/
+// person/address then have no source at all and sensitivity:"none" would
+// otherwise read as "we looked" (see SensitivityExtractor.Degraded).
+func WithPIIScanner(fn PIIScanner) Option {
+	return func(c *runCfg) { c.piiScan = fn }
+}
+
 // passTimeoutFromEnv resolves the default per-pass deadline.
 func passTimeoutFromEnv() time.Duration {
 	if v := os.Getenv("KELD_ENRICH_PASS_TIMEOUT"); v != "" {
@@ -98,9 +113,15 @@ type modelFreeExtractor interface {
 // A degraded pass is NOT a failed pass (it produced a real result) and NOT a
 // skipped pass (it ran). It is named in Profile.FacetsDegraded so the value it
 // produced is read as "from the checks that ran", never as a complete answer.
-// Consulted only after a successful Run, with the same JobContext Run saw.
+//
+// Consulted only after a successful Run, with the same JobContext Run saw AND
+// the output Run returned. The output is passed because "was this run
+// degraded?" is a fact about what happened DURING the run — which backends
+// answered — and a pass whose evidence sources are network calls cannot
+// recompute that from ctx without making them again. Extractors must stay
+// read-only w.r.t. ctx, so the run's own output is the only honest channel.
 type degradedExtractor interface {
-	Degraded(ctx *JobContext) bool
+	Degraded(ctx *JobContext, out map[string]any) bool
 }
 
 // passOutcome is what became of one pass. The SKIPPED case is distinct from
@@ -147,7 +168,7 @@ func runStage(ex Extractor, ctx *JobContext) (out map[string]any, res passOutcom
 	if err != nil {
 		return nil, passFailed
 	}
-	if d, ok := ex.(degradedExtractor); ok && d.Degraded(ctx) {
+	if d, ok := ex.(degradedExtractor); ok && d.Degraded(ctx, o) {
 		return o, passDegraded
 	}
 	return o, passOK
@@ -208,7 +229,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	}
 	ctx := NewJobContext(text, source, meta, m)
 	ctx.TranscriptPath, ctx.PromptID = cfg.transcriptPath, cfg.promptID
-	exs := append(Wave1(), cfg.customW1...)
+	exs := append(Wave1(cfg.piiScan), cfg.customW1...)
 	// Registered only when an analysis backend exists AND the analysis can read
 	// this source's transcripts: an ineligible source would fail the pass on
 	// every job and downgrade the profile to "partial" for a facet that was

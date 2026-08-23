@@ -30,7 +30,7 @@ func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "WS-1",
 		TranscriptPath: "/tmp/t.jsonl", PromptID: "p1", Inline: "hello world"}
 
-	if ok := process(context.Background(), j, m, analyzerFor(m), sender, "actor@keld.co",
+	if ok := process(context.Background(), j, m, facetsFor(m), sender, "actor@keld.co",
 		func() bool { return true }, nil, nil, nil); !ok {
 		t.Fatal("process did not publish")
 	}
@@ -46,16 +46,20 @@ func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
 	}
 }
 
-func TestAnalyzerForRequiresTheCapability(t *testing.T) {
-	if analyzerFor(nil) != nil {
-		t.Error("deterministic mode has no Model and no sidecar: no analyzer")
+func TestFacetsForRequiresTheCapability(t *testing.T) {
+	if f := facetsFor(nil); f.Analyze != nil || f.ScanPII != nil {
+		t.Error("deterministic mode with no sidecar has no Model and no service: no facets")
 	}
-	if analyzerFor(enrichtest.NewFake()) != nil {
-		t.Error("a Model without the analysis capability must yield no analyzer")
+	if f := facetsFor(enrichtest.NewFake()); f.Analyze != nil || f.ScanPII != nil {
+		t.Error("a Model without the service capabilities must yield none of them")
 	}
 	// The real client is the production wiring; assert it qualifies (no call made).
-	if analyzerFor(sidecar.New("http://127.0.0.1:0", time.Second)) == nil {
+	f := facetsFor(sidecar.New("http://127.0.0.1:0", time.Second))
+	if f.Analyze == nil {
 		t.Error("the sidecar client must satisfy the window-analysis capability")
+	}
+	if f.ScanPII == nil {
+		t.Error("the sidecar client must satisfy the PII-scan capability")
 	}
 }
 
@@ -69,7 +73,7 @@ func TestProcessSkipsWorkstreamsForCodex(t *testing.T) {
 	j := queue.Job{Source: "codex", Scheme: "prompt_id", ID: "WS-2",
 		TranscriptPath: "/tmp/t.jsonl", PromptID: "sess-1#3", Inline: "write a function that adds two numbers"}
 
-	if ok := process(context.Background(), j, m, analyzerFor(m), sender, "actor@keld.co",
+	if ok := process(context.Background(), j, m, facetsFor(m), sender, "actor@keld.co",
 		func() bool { return true }, nil, nil, nil); !ok {
 		t.Fatal("process did not publish")
 	}

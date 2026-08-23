@@ -378,3 +378,55 @@ func (c *Client) WorkerReady(ctx context.Context) bool {
 	}
 	return json.NewDecoder(resp.Body).Decode(&m) == nil && m.Worker.State == "ready"
 }
+
+// piiReq is the /pii request. It carries no max_len: the token cap bounds
+// GLiNER2's activation memory, and this route never touches GLiNER2. The
+// sidecar applies its own char clip + spaCy document guard and REPORTS the drop
+// (see piiResp.Truncated), which is the bound that matters here.
+type piiReq struct {
+	Text string `json:"text"`
+}
+
+// piiSpanWire is one span as /pii reports it: WHERE the leaked value is and
+// what kind it is, never what it is. The caller holds the text and slices its
+// own copy — returning the value would put raw PII in an HTTP body and in every
+// log line that body later reaches.
+type piiSpanWire struct {
+	Type  string  `json:"type"`
+	Start int     `json:"start"`
+	End   int     `json:"end"`
+	Score float64 `json:"score"`
+}
+
+type piiResp struct {
+	Spans     []piiSpanWire `json:"spans"`
+	Truncated bool          `json:"truncated"`
+}
+
+// DetectPII runs the sidecar's presidio layer over text (POST /pii) and returns
+// the detected spans plus whether the scan read the whole input.
+//
+// It needs no GLiNER2 and does not go through the inference single-flight, so
+// it answers with the model absent entirely — which is the point: the
+// sensitivity facet must work under ml_backend "deterministic".
+//
+// ok=false means the scan could not be performed at all. It is deliberately
+// distinct from a successful empty result: the caller publishes
+// sensitivity:"none" off an empty scan, so reporting an unreachable service as
+// "found nothing" would manufacture a confident negative out of a check that
+// never ran. The caller marks the facet degraded on false (see
+// enrich.SensitivityExtractor.Degraded).
+func (c *Client) DetectPII(text string) (enrich.PIIResult, bool) {
+	var r piiResp
+	if !c.post("/pii", piiReq{text}, &r) {
+		return enrich.PIIResult{}, false
+	}
+	spans := make([]enrich.Entity, 0, len(r.Spans))
+	for _, s := range r.Spans {
+		// Label/Start/End/Confidence only: Text and Masked stay empty because
+		// the wire carries no value, and the pipeline resolves + masks it from
+		// its own copy of the text.
+		spans = append(spans, enrich.Entity{Label: s.Type, Start: s.Start, End: s.End, Confidence: s.Score})
+	}
+	return enrich.PIIResult{Spans: spans, Truncated: r.Truncated}, true
+}

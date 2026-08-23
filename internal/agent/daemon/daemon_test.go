@@ -75,7 +75,7 @@ func sampleInlineJob(id string) queue.Job {
 func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrichtest.NewFake(), nil, fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil, nil, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
@@ -118,7 +118,7 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 func TestWorkerAlwaysReadyGatePublishesImmediately(t *testing.T) {
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, enrichtest.NewFake(), nil, fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil, nil, nil)
+	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "test@keld.co", func() bool { return false }, func() bool { return true }, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "ML-OFF-1",
@@ -156,7 +156,7 @@ func TestWorkerGateExitsOnQueueClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		Worker(context.Background(), q, enrichtest.NewFake(), nil, fs, "test@keld.co", func() bool { return false }, neverReady, nil, nil, nil)
+		Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "test@keld.co", func() bool { return false }, neverReady, nil, nil, nil)
 		close(done)
 	}()
 
@@ -259,7 +259,7 @@ func TestWorkerWithSidecarStubPublishes(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, client, nil, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
+	go Worker(context.Background(), q, client, serviceFacets{}, fs, "sidecar-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "SC-1",
@@ -357,7 +357,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, router, nil, fs, "provision-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
+	go Worker(context.Background(), q, router, serviceFacets{}, fs, "provision-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "PROV-1",
@@ -414,7 +414,7 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, model, nil, fs, "fail-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
+	go Worker(context.Background(), q, model, serviceFacets{}, fs, "fail-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "FAIL-1",
@@ -484,7 +484,7 @@ func TestWorkerTimesOutAndRespools(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, nil, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil, nil)
+	go Worker(context.Background(), q, bm, serviceFacets{}, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil, nil)
 
 	q.Offer(queue.Job{Source: "claude_code", Scheme: "trace", ID: "SLOW-1", Inline: "write code"})
 
@@ -520,7 +520,7 @@ func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, bm, nil, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil, nil)
+	go Worker(context.Background(), q, bm, serviceFacets{}, fs, "t@keld.co", func() bool { return true }, func() bool { return true }, nil, nil, nil)
 
 	// Deliver once, then mirror the daemon's sweep: drain each re-spooled pointer
 	// and re-deliver it. With max=2, attempt 1 re-spools and attempt 2 exhausts
@@ -712,7 +712,7 @@ func TestSidecarUnavailableClosedGateNeverPublishes(t *testing.T) {
 	// opens.
 	q := queue.New(10)
 	fs := &fakeSender{}
-	go Worker(context.Background(), q, model, nil, fs, "unavailable-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
+	go Worker(context.Background(), q, model, serviceFacets{}, fs, "unavailable-test@keld.co", func() bool { return false }, gate, nil, nil, nil)
 
 	q.Offer(queue.Job{
 		Source: "claude_code", Scheme: "trace", ID: "UNAVAIL-1",
@@ -784,8 +784,8 @@ func TestProcessPublish401TriggersReauthRefreshExactlyOnce(t *testing.T) {
 	sender := &authFailSender{}
 	j := queue.Job{Source: "claude_code", Scheme: "trace", ID: "AUTH-1", Inline: "write code"}
 
-	process(context.Background(), j, enrichtest.NewFake(), nil, sender, "actor@keld.co", func() bool { return false }, nil, ra, nil)
-	process(context.Background(), j, enrichtest.NewFake(), nil, sender, "actor@keld.co", func() bool { return false }, nil, ra, nil)
+	process(context.Background(), j, enrichtest.NewFake(), serviceFacets{}, sender, "actor@keld.co", func() bool { return false }, nil, ra, nil)
+	process(context.Background(), j, enrichtest.NewFake(), serviceFacets{}, sender, "actor@keld.co", func() bool { return false }, nil, ra, nil)
 
 	if got := onboardCalls(); got != 1 {
 		t.Fatalf("onboard called %d times, want exactly 1 (cooldown-guarded single-flight)", got)
@@ -804,7 +804,7 @@ func TestProcessPublish401TriggersReauthRefreshExactlyOnce(t *testing.T) {
 // unaffected by this change.
 func TestProcessPublish401WithNilReautherIsSafe(t *testing.T) {
 	j := queue.Job{Source: "claude_code", Scheme: "trace", ID: "AUTH-NIL-1", Inline: "write code"}
-	process(context.Background(), j, enrichtest.NewFake(), nil, &authFailSender{}, "actor@keld.co", func() bool { return false }, nil, nil, nil)
+	process(context.Background(), j, enrichtest.NewFake(), serviceFacets{}, &authFailSender{}, "actor@keld.co", func() bool { return false }, nil, nil, nil)
 }
 
 // TestProcessNonAuthPublishErrorDoesNotTriggerRefresh proves a non-401/403
@@ -817,7 +817,7 @@ func TestProcessNonAuthPublishErrorDoesNotTriggerRefresh(t *testing.T) {
 	ra, onboardCalls := newTestReauther(t, tok, "new-ingest-token")
 
 	j := queue.Job{Source: "claude_code", Scheme: "trace", ID: "AUTH-500", Inline: "write code"}
-	process(context.Background(), j, enrichtest.NewFake(), nil, failingSender{}, "actor@keld.co", func() bool { return false }, nil, ra, nil)
+	process(context.Background(), j, enrichtest.NewFake(), serviceFacets{}, failingSender{}, "actor@keld.co", func() bool { return false }, nil, ra, nil)
 
 	if got := onboardCalls(); got != 0 {
 		t.Fatalf("onboard called %d times, want 0 for a non-auth publish error", got)
@@ -878,7 +878,7 @@ func TestWorkerWaitsForWarmThenPublishes(t *testing.T) {
 	q := queue.New(4)
 	fs := &fakeSender{}
 	q.Offer(sampleInlineJob("warm-wait-1")) // helper used by existing tests
-	go Worker(context.Background(), q, enrichtest.NewFake(), nil, fs, "t@keld.co",
+	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "t@keld.co",
 		func() bool { return false }, warm.Load, nil, nil, nil)
 
 	time.Sleep(50 * time.Millisecond) // job pulled, waiting for warm
@@ -902,7 +902,7 @@ func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
 	q := queue.New(4)
 	fs := &fakeSender{}
 	q.Offer(sampleInlineJob("never-warm-1"))
-	go Worker(context.Background(), q, enrichtest.NewFake(), nil, fs, "t@keld.co",
+	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "t@keld.co",
 		func() bool { return false }, func() bool { return false }, nil, nil, nil)
 
 	// Give it time to defer: the job is deferred exactly once (re-spooled to
@@ -935,7 +935,7 @@ func TestWorkerWarmupLoadsThenPublishes(t *testing.T) {
 	q := queue.New(4)
 	fs := &fakeSender{}
 	q.Offer(sampleInlineJob("warmup-1"))
-	go Worker(context.Background(), q, enrichtest.NewFake(), nil, fs, "t@keld.co",
+	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "t@keld.co",
 		func() bool { return false }, warm.Load, warmup, nil, nil)
 
 	waitFor(t, time.Second, func() bool { return fs.count() == 1 })
@@ -957,7 +957,7 @@ func TestWorkerWarmupTimesOutDefersNeverQuarantines(t *testing.T) {
 	q := queue.New(4)
 	fs := &fakeSender{}
 	q.Offer(sampleInlineJob("warmup-fail-1"))
-	go Worker(context.Background(), q, enrichtest.NewFake(), nil, fs, "t@keld.co",
+	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "t@keld.co",
 		func() bool { return false }, func() bool { return false }, warmup, nil, nil)
 
 	time.Sleep(150 * time.Millisecond)
@@ -982,7 +982,7 @@ func TestWorkerSkipsWarmupWhenReady(t *testing.T) {
 	q := queue.New(4)
 	fs := &fakeSender{}
 	q.Offer(sampleInlineJob("already-warm-1"))
-	go Worker(context.Background(), q, enrichtest.NewFake(), nil, fs, "t@keld.co",
+	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "t@keld.co",
 		func() bool { return false }, func() bool { return true }, warmup, nil, nil)
 
 	waitFor(t, time.Second, func() bool { return fs.count() == 1 })
@@ -1334,7 +1334,7 @@ func TestWorkerWarmupIsBoundedPerJobNotAHotLoop(t *testing.T) {
 	for i := 0; i < jobs; i++ {
 		q.Offer(sampleInlineJob(fmt.Sprintf("unprovisioned-%d", i)))
 	}
-	go Worker(context.Background(), q, enrichtest.NewFake(), nil, fs, "t@keld.co",
+	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "t@keld.co",
 		func() bool { return false }, func() bool { return false }, warmup, nil, nil)
 
 	waitFor(t, 5*time.Second, func() bool { return calls.Load() == jobs })
@@ -1401,7 +1401,7 @@ func fakeAnalysisService(t *testing.T) (markerPath string, awaitPort func() int)
 // (/analyze, /match, /vocabulary), and GLiNER2 is one capability it loads lazily.
 // So deterministic mode starts the service and wires its window analyzer — it
 // just never asks for the model. Before this, wireEnrichment returned early
-// without a service, analyzerFor(nil) was nil, the workstreams pass never
+// without a service, facetsFor(nil) was empty, the workstreams pass never
 // registered, and the mode published a single credential-derived facet.
 func TestDeterministicModeStartsTheServiceAndWiresTheAnalyzer(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
@@ -1417,7 +1417,7 @@ func TestDeterministicModeStartsTheServiceAndWiresTheAnalyzer(t *testing.T) {
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "deterministic"}
 
-	handler, model, analyzer, gate, enabled := wireEnrichment(ctx, set, "s3cret", q, emitter)
+	handler, model, svc, gate, enabled := wireEnrichment(ctx, set, "s3cret", q, emitter)
 
 	if !enabled {
 		t.Fatal("enrichment must stay enabled in deterministic mode")
@@ -1425,8 +1425,11 @@ func TestDeterministicModeStartsTheServiceAndWiresTheAnalyzer(t *testing.T) {
 	if model != nil {
 		t.Fatalf("deterministic mode must not wire a model, got %v", model)
 	}
-	if analyzer == nil {
+	if svc.Analyze == nil {
 		t.Fatal("deterministic mode must wire the window analyzer — /analyze needs no model")
+	}
+	if svc.ScanPII == nil {
+		t.Fatal("deterministic mode must wire the PII scan — /pii needs no model either, and it is the only source the sensitivity facet has here")
 	}
 	if gate == nil {
 		t.Fatal("deterministic mode must wire a non-nil gate (Worker calls it unconditionally)")
@@ -1525,7 +1528,7 @@ func TestDeterministicModeWithNoSidecarBinaryDoesNotWedge(t *testing.T) {
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "deterministic"}
 
-	_, model, analyzer, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter)
+	_, model, svc, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter)
 
 	if !enabled {
 		t.Fatal("enrichment must stay enabled in deterministic mode")
@@ -1533,8 +1536,11 @@ func TestDeterministicModeWithNoSidecarBinaryDoesNotWedge(t *testing.T) {
 	if model != nil {
 		t.Fatalf("deterministic mode must not wire a model, got %v", model)
 	}
-	if analyzer != nil {
+	if svc.Analyze != nil {
 		t.Fatal("with no service there is nothing to answer /analyze; the analyzer must be nil so the workstreams pass never registers")
+	}
+	if svc.ScanPII != nil {
+		t.Fatal("with no service there is nothing to answer /pii; the scanner must be nil so sensitivity reports itself degraded rather than clean")
 	}
 	if gate == nil {
 		t.Fatal("deterministic mode must wire a non-nil gate (Worker calls it unconditionally)")
@@ -1652,17 +1658,17 @@ func TestDeterministicGateIsCachedNotOneHTTPCallPerRead(t *testing.T) {
 	}
 }
 
-// TestMLBackendWiresTheWindowAnalyzer pins that "auto" — the mode nearly every
-// user runs — still produces a non-nil window analyzer. Nothing else did: the
-// only auto-mode wiring test discards the analyzer and runs with the sidecar
-// deliberately absent (where nil is correct), so a refactor could return nil
-// for auto, every claude_code user silently loses their workstream dimensions,
-// and the suite stays green.
+// TestMLBackendWiresTheServiceFacets pins that "auto" — the mode nearly every
+// user runs — still produces the non-inference service facets. Nothing else
+// did: the only auto-mode wiring test discards them and runs with the sidecar
+// deliberately absent (where empty is correct), so a refactor could return
+// nothing for auto, every claude_code user silently loses their workstream
+// dimensions and their PII detection, and the suite stays green.
 //
 // wireEnrichment's auto branch is a straight pass-through of what mlBackend
 // returns, so pinning it here keeps the test hermetic: no real sidecar is
 // spawned and no weights are fetched.
-func TestMLBackendWiresTheWindowAnalyzer(t *testing.T) {
+func TestMLBackendWiresTheServiceFacets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1674,7 +1680,7 @@ func TestMLBackendWiresTheWindowAnalyzer(t *testing.T) {
 		100*time.Millisecond,
 	)
 
-	model, analyzer, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	model, svc, gate := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   sidecar.New("http://127.0.0.1:1", 50*time.Millisecond),
 		modelDir: filepath.Join(t.TempDir(), "gliner2"),
@@ -1688,7 +1694,10 @@ func TestMLBackendWiresTheWindowAnalyzer(t *testing.T) {
 	if gate == nil {
 		t.Fatal("auto mode must wire a readiness gate")
 	}
-	if analyzer == nil {
+	if svc.Analyze == nil {
 		t.Fatal("auto mode must wire the window analyzer: the sidecar serves /analyze, so every claude_code job should get its workstream dimensions")
+	}
+	if svc.ScanPII == nil {
+		t.Fatal("auto mode must wire the PII scan: the sidecar serves /pii, and without it the sensitivity facet loses every entity type but credentials")
 	}
 }

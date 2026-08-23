@@ -7,17 +7,15 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 )
 
-// nerOnlyPrompt carries concrete PII that ONLY the NER can find: a person name.
-// piidetect covers ssn/credit_card/email deterministically, so a prompt built
-// on any of those would no longer demonstrate a half-blind pass — person and
-// address are what the missing half still owns. It is content-ful so the gate
-// never fires.
-const nerOnlyPrompt = `Please update the customer record for Dana Rivers, ` +
+// quietPrompt carries a person name and no pattern of any kind, so a run with
+// no PII backend finds nothing at all through any layer. It is content-ful so
+// the content gate never fires.
+const quietPrompt = `Please update the customer record for Dana Rivers, ` +
 	`the account holder, in the billing export.`
 
 // ssnPrompt carries a synthetic SSN — structurally valid, on no published
-// example list (the textbook 123-45-6789 is excluded by piidetect's well-known
-// gate, deliberately, so documentation constants never report phi).
+// example list (the textbook 123-45-6789 is excluded by the well-known gate,
+// deliberately, so documentation constants never report phi).
 const ssnPrompt = `Please update the customer record, ` +
 	`social security number 321-54-9876, in the billing export.`
 
@@ -26,23 +24,23 @@ const ssnPrompt = `Please update the customer record, ` +
 // a special case wired into sensitivity.
 type degradablePass struct{ degraded bool }
 
-func (degradablePass) Name() string                       { return "half_blind" }
-func (degradablePass) Version() string                    { return "half_blind-v1" }
-func (degradablePass) ModelFree() bool                    { return true }
-func (p degradablePass) Degraded(*enrich.JobContext) bool { return p.degraded }
+func (degradablePass) Name() string                                       { return "half_blind" }
+func (degradablePass) Version() string                                    { return "half_blind-v1" }
+func (degradablePass) ModelFree() bool                                    { return true }
+func (p degradablePass) Degraded(*enrich.JobContext, map[string]any) bool { return p.degraded }
 func (degradablePass) Run(*enrich.JobContext) (map[string]any, error) {
 	return map[string]any{"half_blind": enrich.Labeled{Value: "x"}}, nil
 }
 
-// TestDeterministicSensitivityDeclaresItIsHalfBlind is the regression. In
-// deterministic mode sensitivity RUNS (its model-free layers cover credentials
-// and the regular PII formats) but its NER half does not, so a prompt whose
-// only sensitive content is a person name publishes sensitivity:"none" — a
-// confident negative from a check that never happened. Because the pass ran, it
-// is (correctly) absent from facets_skipped, which before this change left the
-// loss invisible on the wire.
-func TestDeterministicSensitivityDeclaresItIsHalfBlind(t *testing.T) {
-	p := enrich.Run(nerOnlyPrompt, "claude_code", enrich.Meta{}, nil)
+// TestSensitivityWithoutAPIIBackendDeclaresItself is the regression. With no
+// personal-data backend wired, sensitivity still RUNS — its credential layer
+// needs nothing — but five of the six entity types have no source at all, so a
+// prompt whose only sensitive content is a person name publishes
+// sensitivity:"none": a confident negative from a check that never happened.
+// Because the pass ran, it is (correctly) absent from facets_skipped, which
+// would otherwise leave the loss invisible on the wire.
+func TestSensitivityWithoutAPIIBackendDeclaresItself(t *testing.T) {
+	p := enrich.Run(quietPrompt, "claude_code", enrich.Meta{}, nil)
 
 	if p.Sensitivity.Value != "none" {
 		t.Fatalf("sensitivity = %+v; this test's premise is a nothing-found result", p.Sensitivity)
@@ -63,7 +61,8 @@ func TestDeterministicSensitivityDeclaresItIsHalfBlind(t *testing.T) {
 // the way modelFreeExtractor lets one declare it needs no Model. A pass that
 // declares nothing, or declares false, is not named.
 func TestDegradedIsAGeneralCapability(t *testing.T) {
-	p := enrich.Run(nerOnlyPrompt, "claude_code", enrich.Meta{}, enrichtest.NewFake(),
+	p := enrich.Run(quietPrompt, "claude_code", enrich.Meta{}, enrichtest.NewFake(),
+		enrich.WithPIIScanner(enrichtest.NewScan()),
 		enrich.WithCustomExtractors([]enrich.Extractor{degradablePass{degraded: true}}, nil))
 	if p.PipelineStatus != "enriched" {
 		// "gated" would mean the custom pass never ran and the assertion below
@@ -74,17 +73,19 @@ func TestDegradedIsAGeneralCapability(t *testing.T) {
 		t.Fatalf("facets_degraded = %v, want half_blind", p.FacetsDegraded)
 	}
 
-	q := enrich.Run(nerOnlyPrompt, "claude_code", enrich.Meta{}, enrichtest.NewFake(),
+	q := enrich.Run(quietPrompt, "claude_code", enrich.Meta{}, enrichtest.NewFake(),
+		enrich.WithPIIScanner(enrichtest.NewScan()),
 		enrich.WithCustomExtractors([]enrich.Extractor{degradablePass{degraded: false}}, nil))
 	if len(q.FacetsDegraded) != 0 {
 		t.Fatalf("facets_degraded = %v, want none: the pass declared full capability", q.FacetsDegraded)
 	}
 }
 
-// TestAutoModeReportsNoDegradedFacets: with a real Model every pass runs whole,
-// so the default mode's wire shape is unchanged.
+// TestAutoModeReportsNoDegradedFacets: with a real Model AND a reachable PII
+// backend every pass runs whole, so the default mode's wire shape is unchanged.
 func TestAutoModeReportsNoDegradedFacets(t *testing.T) {
-	p := enrich.Run(ssnPrompt, "claude_code", enrich.Meta{}, enrichtest.NewFake())
+	p := enrich.Run(ssnPrompt, "claude_code", enrich.Meta{}, enrichtest.NewFake(),
+		enrich.WithPIIScanner(enrichtest.NewScan()))
 	if p.PipelineStatus != "enriched" {
 		t.Fatalf("status = %q, want enriched: a gated run would prove nothing", p.PipelineStatus)
 	}
@@ -107,10 +108,11 @@ func TestFacetListsAreSubsetsOfExtractorVersions(t *testing.T) {
 		name string
 		p    enrich.Profile
 	}{
-		{"deterministic", enrich.Run(nerOnlyPrompt, "claude_code", enrich.Meta{}, nil)},
-		{"deterministic+custom", enrich.Run(nerOnlyPrompt, "claude_code", enrich.Meta{}, nil,
+		{"deterministic", enrich.Run(quietPrompt, "claude_code", enrich.Meta{}, nil)},
+		{"deterministic+custom", enrich.Run(quietPrompt, "claude_code", enrich.Meta{}, nil,
 			enrich.WithCustomExtractors([]enrich.Extractor{degradablePass{degraded: true}}, nil))},
-		{"auto", enrich.Run(ssnPrompt, "claude_code", enrich.Meta{}, enrichtest.NewFake())},
+		{"auto", enrich.Run(ssnPrompt, "claude_code", enrich.Meta{}, enrichtest.NewFake(),
+			enrich.WithPIIScanner(enrichtest.NewScan()))},
 	} {
 		if len(tc.p.FacetsSkipped) == 0 && len(tc.p.FacetsDegraded) == 0 && tc.name != "auto" {
 			t.Fatalf("%s: neither list populated; the case proves nothing", tc.name)
@@ -145,24 +147,43 @@ func keysOf(m map[string]string) []string {
 	return out
 }
 
-// TestDeterministicPHIIsNotQualified is the other half of the marker's honesty.
-// Before piidetect, "no model" meant the pass could not reach phi or pci at all,
-// so every deterministic-mode answer was qualified. Now the SSN is found without
-// a model, and the answer is at the CEILING of the severity order: the entity
-// types the missing NER half still owns (person, address, phone) all roll up to
-// "pii", so nothing it could have added would change this result. Naming the
-// facet degraded here would be crying wolf, and a marker that fires on a correct
-// answer stops being read on the ones where it matters.
-func TestDeterministicPHIIsNotQualified(t *testing.T) {
-	p := enrich.Run(ssnPrompt, "claude_code", enrich.Meta{}, nil)
+// TestCeilingResultIsNotQualifiedEndToEnd is the other half of the marker's
+// honesty. A scan that could not read the whole prompt is a real loss — but
+// this one still found the SSN, and phi is the CEILING of the severity order:
+// nothing in the unscanned tail could raise it. Naming the facet degraded here
+// would be crying wolf, and a marker that fires on a correct answer stops being
+// read on the ones where it matters.
+func TestCeilingResultIsNotQualifiedEndToEnd(t *testing.T) {
+	p := enrich.Run(ssnPrompt, "claude_code", enrich.Meta{}, nil,
+		enrich.WithPIIScanner(enrichtest.NewTruncatedScan()))
 
 	if p.Sensitivity.Value != "phi" {
 		t.Fatalf("sensitivity = %+v, want phi: the SSN must be found with no model present", p.Sensitivity)
 	}
 	if contains(p.FacetsDegraded, "sensitivity") {
-		t.Fatalf("facets_degraded = %v: phi is the top class, nothing the NER adds could raise it", p.FacetsDegraded)
+		t.Fatalf("facets_degraded = %v: phi is the top class, nothing the unscanned tail holds could raise it", p.FacetsDegraded)
 	}
 	if len(p.SensitivitySpans) != 1 || p.SensitivitySpans[0].Label != "ssn" {
 		t.Fatalf("sensitivity_spans = %+v, want one ssn span", p.SensitivitySpans)
+	}
+}
+
+// ...and the same truncated scan that did NOT reach the ceiling stays
+// qualified: the tail it never read is exactly where a higher class could be.
+func TestTruncatedScanBelowTheCeilingIsQualified(t *testing.T) {
+	p := enrich.Run(quietPrompt, "claude_code", enrich.Meta{}, nil,
+		enrich.WithPIIScanner(enrichtest.NewTruncatedScan()))
+	if !contains(p.FacetsDegraded, "sensitivity") {
+		t.Fatalf("facets_degraded = %v, want sensitivity: part of the prompt was never scanned", p.FacetsDegraded)
+	}
+}
+
+// A whole scan needs no model to be complete: it covers every entity type in
+// the vocabulary, so deterministic mode publishes an unqualified answer.
+func TestWholeScanWithNoModelIsNotQualified(t *testing.T) {
+	p := enrich.Run(quietPrompt, "claude_code", enrich.Meta{}, nil,
+		enrich.WithPIIScanner(enrichtest.NewScan()))
+	if contains(p.FacetsDegraded, "sensitivity") {
+		t.Fatalf("facets_degraded = %v: the scan ran whole, nothing is missing", p.FacetsDegraded)
 	}
 }
