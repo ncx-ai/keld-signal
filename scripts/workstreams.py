@@ -61,6 +61,7 @@ def main():
         rows.append({"session": sess, "window_start": t.isoformat(),
                      "window_end": (t + SPAN).isoformat(),
                      "evidence": int(w[w.kind == "ref"].n.sum()),
+                     "schema": doc["schema"],
                      "workstreams": doc["workstreams"], "inventory": doc["inventory"]})
 
     with open(a.out, "w") as fh:

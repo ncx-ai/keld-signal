@@ -38,23 +38,20 @@ speaking (qwen_windows.is_command_echo — a window of five /login echoes once s
 Design: docs/superpowers/specs/2026-08-21-reference-series-design.md
 """
 import argparse
-import concurrent.futures, collections, glob, hashlib, json, math, os, re, sys
+import concurrent.futures, collections, glob, hashlib, json, math, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qwen_windows import EXT_LANG
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
 # mcp_provider has no call site left in this file (its uses moved to app.analysis.levels with
 # the rest of _process_transcript) but is kept in this import list as a re-export:
 # scripts/test_bashrefs.py imports it from `refseries`, not from `app.analysis.vocab` directly.
-from app.analysis.vocab import (  # noqa: E402
-    EXT_LANG, CODE_EXT, ARTIFACT_EXT, ARTIFACT_DIR, ARTIFACT_SKILL, TOOLCHAIN_EXE,
-    TOOL_ACTION, EXE_ACTION, EXE_TO_ACTION, mcp_provider)
-from app.analysis.shell import (  # noqa: E402
-    SHELL_KEYWORD, TWO_WORD, strip_heredocs, parsed_command_names, unwrap_command)
-from app.analysis.text import clip, is_command_echo, text_of, think_blocks  # noqa: E402
-from app.analysis.paths import (  # noqa: E402
-    REMOTE_REPO, resolve_workspace, rel_within, scan_workspace, reconcile, bash_refs)
+from app.analysis.vocab import mcp_provider  # noqa: E402
+# strip_heredocs/unwrap_command have no call site left in this file either, but stay for the same
+# reason: scripts/test_bashrefs.py imports both from `refseries`, not from `app.analysis.shell`.
+from app.analysis.shell import strip_heredocs, unwrap_command  # noqa: E402
+from app.analysis.text import clip, is_command_echo, text_of  # noqa: E402
+from app.analysis.paths import resolve_workspace, reconcile, bash_refs  # noqa: E402
 from app.analysis.transcript import iter_turns  # noqa: E402
 from app.analysis.levels import LEVELS, events_for_turns  # noqa: E402
 
@@ -120,32 +117,6 @@ LAG_BUCKETS_H = [0.0833, 0.25, 0.5, 1, 2, 4, 8, 16, 24, 48, 96, 168, 336, 720, 2
 
 
 # ------------------------------------------------------------------ extract
-
-
-# EVIDENCE IN MESSAGE TEXT. Read locally, like the daemon reads a prompt; the event store still
-# holds only identifiers and counts and no text at all. Deterministic patterns only — a regex that
-# either matches or does not, never a judgement about what a sentence means.
-# REMOTE_REPO (github.com/<org>/<repo>, git@github.com:<org>/<repo>, the api.github.com/repos/...
-# form) now lives in app.analysis.paths, since scan_workspace needs it too; imported back here for
-# remote_repos_in below.
-TICKET = re.compile(r"\b([A-Z][A-Z0-9]{1,7})-(\d{1,6})\b")
-# Uppercase-dash-digits is also how encodings, standards, hashes and model names are written, so
-# the shape alone is not a ticket. Measured against this corpus before being trusted.
-NOT_TICKET = {"UTF", "SHA", "MD", "RFC", "ISO", "HTTP", "HTTPS", "IPV", "AES", "RSA", "SOC",
-              "CVE", "GPT", "CLAUDE", "OPUS", "SONNET", "HAIKU", "PEP", "ANSI", "ASCII", "EC",
-              "P", "X", "AMD", "ARM", "USB", "TLS", "SSL", "SQL", "API", "URL", "UUID", "JSON",
-              "YAML", "HTML", "CSS", "CPU", "GPU", "RAM", "SSD", "OKR", "KPI", "Q", "H", "FY",
-              "V", "PY", "GO", "TS", "JS", "NODE", "NPM", "PR", "ID", "OAUTH", "JWT", "GB", "MB",
-              "KB", "MS", "US", "EU", "UK", "AM", "PM", "UTC", "GMT", "COVID", "MP", "H264"}
-
-
-def remote_repos_in(text):
-    return [f"{m.group(1)}/{m.group(2)}".lower() for m in REMOTE_REPO.finditer(text or "")]
-
-
-def tickets_in(text):
-    return [f"{m.group(1)}-{m.group(2)}" for m in TICKET.finditer(text or "")
-            if m.group(1) not in NOT_TICKET]
 
 
 ROLL = ["1h", "6h", "24h", "168h"]

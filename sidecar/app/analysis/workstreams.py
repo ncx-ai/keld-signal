@@ -5,6 +5,7 @@ any of it was production code — which workstreams earn a place, and how large 
 unattributed row is. Nothing here infers: every value is a deterministic reference level, and a
 window with no dominant value is reported as unattributed rather than given a plausible one.
 """
+from app.analysis import SCHEMA
 from app.analysis.window import dominant
 
 # ALLOCATION workstreams: spend divides among them, so one value must own the window. The floor is
@@ -56,4 +57,4 @@ def payload(rl):
         # windows differ in "programs"' published set (never its counts) against the pre-Task-7
         # pandas payload for exactly this reason — see task-7-report.md, Step 5.
         inv[name] = [{"value": str(k), "n": int(v)} for k, v in vals[:12]]
-    return {"workstreams": ws, "inventory": inv}
+    return {"schema": SCHEMA, "workstreams": ws, "inventory": inv}

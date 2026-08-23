@@ -1,5 +1,6 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app.analysis import SCHEMA
 from app.analysis.window import rollup, dominant
 from app.analysis.workstreams import payload
 
@@ -24,6 +25,12 @@ def test_a_tie_is_unattributed_rather_than_an_arbitrary_pick():
 
 def test_an_absent_level_produces_no_key_rather_than_an_empty_one():
     assert payload(rollup(R))["workstreams"]["workflow"] is None
+
+
+def test_payload_carries_its_schema_version():
+    """These values land in financial reports; a silent shape change is the reproducibility
+    failure the earlier handoff called out, so the payload is versioned from the first release."""
+    assert payload(rollup(R))["schema"] == SCHEMA == 1
 
 
 def test_loopback_is_not_an_external_system():
