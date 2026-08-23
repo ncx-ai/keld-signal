@@ -593,8 +593,17 @@ git commit -m "sidecar client: Analyze() over window coordinates"
 - Modify: `internal/agent/publish/publish.go` + `publish_test.go`
 
 **Interfaces:**
-- Consumes: `sidecar.Client.Analyze(path, promptID, spanMinutes) (AnalyzeResult, bool)`
-- Produces: `Profile.Workstreams map[string]Labeled` with json tag `workstreams,omitempty`, populated by a Wave-0 extractor that needs no `Model`.
+- Consumes: `sidecar.Client.Analyze(path, promptID, spanMinutes) (AnalyzeResult, bool)`, whose
+  `Workstreams` field is `map[string]sidecar.WorkstreamValue` — **not** `map[string]Labeled`.
+- Produces: `Profile.Workstreams map[string]Labeled` with json tag `workstreams,omitempty`,
+  populated by a Wave-0 extractor that needs no `Model`.
+
+**The conversion is this task's job and must be explicit** — `sidecar.WorkstreamValue{Value,
+Confidence, Count}` becomes `enrich.Labeled{Value, Confidence, Producer}`. `Count` has no home on
+`Labeled` and is dropped; `Producer` is set to `"workstreams-v1"` so a published dimension is
+attributable, matching how every other pass stamps its producer. If you decide `Count` should
+survive, say where it goes rather than silently discarding it — the count is the evidence behind
+the value and a reviewer will ask.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -633,11 +642,75 @@ Expected: FAIL — undefined
 
 - [ ] **Step 3: Implement the extractor and the Profile field**
 
-Register it so it runs when `ctx.Model == nil` as well as when a model is present — it is a Wave-0 pass and must not be gated on the sidecar's readiness for inference.
+```go
+// Profile, in types.go — add beside the other facets:
+Workstreams map[string]Labeled `json:"workstreams,omitempty"`
+```
+
+```go
+// workstreams.go
+package enrich
+
+// WorkstreamsExtractor publishes the deterministic dimensions a cost report buckets by. It is a
+// WAVE 0 pass: it needs no Model, so it must run when the sidecar has no worker and when
+// ml_backend is "deterministic". Gating it on inference readiness would defeat the point.
+type WorkstreamsExtractor struct {
+	// Analyze is injected so the pass is testable without a sidecar. Production wires it to
+	// sidecar.Client.Analyze, converting WorkstreamValue -> Labeled.
+	Analyze func(path, promptID string, spanMinutes int) (map[string]Labeled, bool)
+}
+
+func (WorkstreamsExtractor) Name() string    { return "workstreams" }
+func (WorkstreamsExtractor) Version() string { return versioned("workstreams") }
+
+func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
+	ws, ok := e.Analyze(ctx.TranscriptPath, ctx.PromptID, 60)
+	if !ok || len(ws) == 0 {
+		// Absent and empty are different facts: a failed analysis must not publish
+		// "no dimensions applied", which a report would read as a real answer.
+		return nil, errAnalysisUnavailable
+	}
+	return map[string]any{"workstreams": ws}, nil
+}
+```
+
+`JobContext` may not carry `TranscriptPath`/`PromptID` today — check `types.go`. If it does not, add
+them where the pipeline builds the context from `queue.Job` (which has both), rather than
+threading a second argument through `Run`.
 
 - [ ] **Step 4: Carry it on the wire**
 
-Add `Workstreams` to `publish.Enrichment` with `omitempty`, populated from the Profile. Add a publish test asserting the marshalled payload contains the dimension **and contains no prompt text, span or offset**.
+```go
+// publish.Enrichment — add beside Entities:
+Workstreams map[string]enrich.Labeled `json:"workstreams,omitempty"`
+```
+
+```go
+// in Build(), beside the existing field copies:
+Workstreams: p.Workstreams,
+```
+
+```go
+// publish_test.go
+func TestBuildCarriesWorkstreamsAndNoPromptText(t *testing.T) {
+	p := enrich.Profile{Workstreams: map[string]enrich.Labeled{
+		"project": {Value: "acme", Confidence: 1.0, Producer: "workstreams-v1"},
+	}}
+	b, err := json.Marshal(Build(queue.Job{}, p, "actor", false, 0, time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"project"`) || !strings.Contains(s, `"acme"`) {
+		t.Errorf("dimension missing from payload: %s", s)
+	}
+	for _, forbidden := range []string{`"span"`, `"offset"`, `"prompt_text"`} {
+		if strings.Contains(s, forbidden) {
+			t.Errorf("payload leaked %s: %s", forbidden, s)
+		}
+	}
+}
+```
 
 - [ ] **Step 5: Run everything**
 
