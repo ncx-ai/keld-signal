@@ -96,18 +96,10 @@ func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	// Deterministic credential layer (creddetect): union its spans and register an
 	// api_key entity, so sensitivityFromEntities elevates to "secrets" via the
 	// existing rule table WITHOUT overriding a higher-severity class (e.g. phi).
-	for _, c := range creddetect.Detect(ctx.Text) {
-		if creddetect.IsPlaceholder(ctx.Text[c.Start:c.End]) {
-			continue // defense-in-depth: a placeholder that matched a regex is still a placeholder
-		}
-		found["api_key"] = true
-		spans = append(spans, Entity{
-			Label:      "api_key",
-			Start:      c.Start,
-			End:        c.End,
-			Confidence: 1.0,
-			Masked:     Mask("api_key", ctx.Text[c.Start:c.End]),
-		})
+	credSpans, credFound := CredentialSpans(ctx.Text)
+	spans = append(spans, credSpans...)
+	for label := range credFound {
+		found[label] = true
 	}
 
 	value, conf := "none", 0.0
