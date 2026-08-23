@@ -105,18 +105,31 @@ func (SensitivityExtractor) Degraded(ctx *JobContext) bool {
 }
 
 func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
+	// NER is used for DETECTION only, never for CLASSIFICATION. This pass asks
+	// the model where the sensitive tokens ARE; the class is then computed from
+	// which labels were found (sensitivityFromEntities). It deliberately does
+	// NOT ask the model to pick a sensitivity label: a pre-registered study on
+	// this branch measured that classifier at 37.8% against a 67.8% majority
+	// baseline, degenerate at 91% one class and confidently wrong on clear
+	// misses — and its worst output was the CONFIDENT NEGATIVE, a published
+	// "nothing sensitive here" sourced from a component known to be unreliable.
+	//
+	// Hence /entities (pure detection) rather than /extract with a task map:
+	// the cheaper route, and one that has structurally nowhere to put a
+	// classification even if someone wanted one back.
+	//
 	// Deterministic mode (ctx.Model == nil): no sidecar, so no NER pass — only
-	// the credential layer below runs. res stays the zero value, which is
-	// exactly the "found nothing via the model" case the rest of this
-	// function already handles.
-	var res ExtractResult
+	// the deterministic layers below run. nerEntities stays nil, which is
+	// exactly the "found nothing via the model" case the rest of this function
+	// already handles.
+	var nerEntities []Entity
 	if ctx.Model != nil {
-		res = ctx.Model.Extract(ctx.Text, SensitiveEntityLabels, map[string][]string{"sensitivity": Sensitivity})
+		nerEntities = ctx.Model.Entities(ctx.Text, SensitiveEntityLabels)
 	}
 
 	found := map[string]bool{}
-	spans := make([]Entity, 0, len(res.Entities))
-	for _, ent := range res.Entities {
+	spans := make([]Entity, 0, len(nerEntities))
+	for _, ent := range nerEntities {
 		ent.Text = entityText(ctx.Text, ent)
 		if creddetect.IsPlaceholder(ent.Text) {
 			continue // precision-gate: placeholder/redacted value, not a real secret
@@ -153,14 +166,25 @@ func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
 		found[label] = true
 	}
 
-	value, conf := "none", 0.0
-	if ranked := res.Results["sensitivity"]; len(ranked) > 0 {
-		value, conf = ranked[0].Label, ranked[0].Confidence
-	}
+	// The value is now sourced SOLELY from the rollup over detected entity
+	// labels, defaulting to "none" when no detector fired.
+	//
+	// Confidence is 1.0 for every outcome, "none" included, because the value
+	// is no longer a probabilistic guess — it is a deterministic function of
+	// which detectors fired, and "none" is a report about the detector set
+	// ("nothing fired"), the same kind of statement as "phi" ("the ssn
+	// detector fired"). The old 0.0 was the classifier's abstention score;
+	// left in place it would tell a consumer "we are not sure it is none",
+	// which is exactly the reading this change removes. Residual RECALL
+	// uncertainty — the detectors can miss — is carried by Degraded(), which
+	// is the field that means "this answer may be understated", not by a
+	// deflated confidence on a deterministic conclusion.
+	value, conf := "none", 1.0
 	if hard := sensitivityFromEntities(found); hard != "" {
-		value, conf = hard, 1.0 // hard span evidence beats the weak classifier
+		value = hard
 	}
-	// Defensive: a Model backend could return an empty top label; never emit "".
+	// Defensive: sensitivityFromEntities returns a rule's class verbatim; a
+	// malformed rule table must never let "" reach the wire.
 	if value == "" {
 		value = "none"
 	}

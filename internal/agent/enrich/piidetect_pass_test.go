@@ -91,7 +91,7 @@ func TestPublishedExampleValuesNeverFire(t *testing.T) {
 // entities — which is what GLiNER2 does, since they are perfectly shaped.
 type exampleValueModel struct{ emptyModel }
 
-func (exampleValueModel) Extract(text string, _ map[string]string, _ map[string][]string) ExtractResult {
+func (exampleValueModel) Entities(text string, _ map[string]string) []Entity {
 	var ents []Entity
 	for label, needle := range map[string]string{
 		"ssn":         "123-45-6789",
@@ -102,19 +102,19 @@ func (exampleValueModel) Extract(text string, _ map[string]string, _ map[string]
 			ents = append(ents, Entity{Label: label, Text: needle, Start: i, End: i + len(needle), Confidence: 1})
 		}
 	}
-	return ExtractResult{Entities: ents}
+	return ents
 }
 
 // nerSSNModel reports the SAME span the deterministic layer finds, so the union
 // must not publish it twice.
 type nerSSNModel struct{ emptyModel }
 
-func (nerSSNModel) Extract(text string, _ map[string]string, _ map[string][]string) ExtractResult {
+func (nerSSNModel) Entities(text string, _ map[string]string) []Entity {
 	i := strings.Index(text, fxSSN)
 	if i < 0 {
-		return ExtractResult{}
+		return nil
 	}
-	return ExtractResult{Entities: []Entity{{Label: "ssn", Text: fxSSN, Start: i, End: i + len(fxSSN), Confidence: 0.9}}}
+	return []Entity{{Label: "ssn", Text: fxSSN, Start: i, End: i + len(fxSSN), Confidence: 0.9}}
 }
 
 func TestNERAndDeterministicSpansDoNotDuplicate(t *testing.T) {

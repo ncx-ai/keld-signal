@@ -36,19 +36,19 @@ func TestSensitivityCatchesCredentialViaDetector(t *testing.T) {
 	}
 }
 
-// ssnModel returns an ssn entity from Extract so we can verify a credential does
+// ssnModel returns an ssn entity from the DETECTION call so we can verify a credential does
 // NOT downgrade a higher-severity phi classification (precedence guard). It
 // carries the synthetic fxSSN rather than the textbook 123-45-6789, which the
 // well-known gate now excludes from the NER path as well as the deterministic
 // one.
 type ssnModel struct{ emptyModel }
 
-func (ssnModel) Extract(text string, _ map[string]string, _ map[string][]string) ExtractResult {
+func (ssnModel) Entities(text string, _ map[string]string) []Entity {
 	i := strings.Index(text, fxSSN)
 	if i < 0 {
-		return ExtractResult{}
+		return nil
 	}
-	return ExtractResult{Entities: []Entity{{Label: "ssn", Start: i, End: i + len(fxSSN), Confidence: 1}}}
+	return []Entity{{Label: "ssn", Start: i, End: i + len(fxSSN), Confidence: 1}}
 }
 
 func TestCredentialDoesNotDowngradePHI(t *testing.T) {

@@ -6,8 +6,8 @@ import "testing"
 // placeholder-valued sensitive span is gated out of the secrets classification).
 type phModel struct{ emptyModel }
 
-func (phModel) Extract(text string, _ map[string]string, tasks map[string][]string) ExtractResult {
-	return ExtractResult{Entities: []Entity{{Label: "api_key", Text: text, Start: 0, End: len(text), Confidence: 1}}}
+func (phModel) Entities(text string, _ map[string]string) []Entity {
+	return []Entity{{Label: "api_key", Text: text, Start: 0, End: len(text), Confidence: 1}}
 }
 
 func TestPlaceholderSpanDoesNotTriggerSecrets(t *testing.T) {

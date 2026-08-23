@@ -64,7 +64,19 @@ var SpeechActDefs = []LabelDef{
 	{"fragment", "a short follow-up or acknowledgement"},
 }
 
-// Sensitivity is the canonical sensitivity-level vocabulary.
+// Sensitivity is the canonical sensitivity-level vocabulary: the closed set of
+// values the sensitivity facet may PUBLISH.
+//
+// It is NOT a classification task list, and must not be passed to the model as
+// one. Nothing asks the model to pick from it: the facet detects entities and
+// SensitivityFromEntity computes the class from which labels were found (see
+// SensitivityExtractor.Run). This list is the output contract — what a consumer
+// may receive — not an input to inference.
+//
+// Consequence worth stating: "proprietary" is now structurally unemittable, as
+// it has no detector and never had one. It stays in the vocabulary because the
+// vocabulary is a published contract gated by SchemaVersion; removing a value
+// is the contract change, leaving an unreachable one is not.
 var Sensitivity = []string{"none", "pii", "secrets", "phi", "pci", "proprietary"}
 
 // DomainEntityLabels: label -> natural-language description (non-sensitive).
