@@ -127,9 +127,11 @@ func TestRunIsolatesPanicAsPartial(t *testing.T) {
 // source ("claude_code" among them) under the default-on A4 compositional
 // override, where it's set structurally with no model call at all — gated
 // either way, so the tests below (which only assert gated tasks are NOT hit)
-// are unaffected. sensitivity (governance, AlwaysRun) and domain_entities
-// (gated) both call Model.Extract; no built-in pass calls Model.Entities (only
-// custom extractors do), so entityHits stays 0 in these tests by design.
+// are unaffected. domain_entities (gated) calls Model.Extract. sensitivity
+// (governance, AlwaysRun) calls the model NOT AT ALL — its evidence is the
+// gitleaks layer and the PII scan — so it is asserted from its output instead.
+// No built-in pass calls Model.Entities any more, so entityHits stays 0 by
+// design; the field is kept as the tripwire for one coming back.
 type countingModel struct {
 	speechAct    string   // label returned for the "speech_act" task
 	classifyHits []string // task names passed to Classify
@@ -200,9 +202,12 @@ func TestGateSkipsSemanticPassesOnPrefilteredTurn(t *testing.T) {
 			t.Errorf("gated pass %q must not hit the model", gated)
 		}
 	}
-	// governance + gate signal BOTH ran (asserted independently, not as an OR)
-	if m.entityHits == 0 && m.extractHits == 0 {
-		t.Error("sensitivity (governance) must always run")
+	// governance + gate signal BOTH ran (asserted independently, not as an OR).
+	// sensitivity is proved from its OUTPUT, not from a model call: the facet
+	// consults no model at all, so a hit counter can no longer witness it. A
+	// pass that was skipped commits nothing, so a Producer is the evidence.
+	if p.Sensitivity.Producer == "" {
+		t.Errorf("sensitivity (governance) must always run; got %+v", p.Sensitivity)
 	}
 	if !hit(m.classifyHits, "speech_act") {
 		t.Error("speech_act (gate signal) must always run")

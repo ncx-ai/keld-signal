@@ -12,7 +12,7 @@ func TestVocabNonEmpty(t *testing.T) {
 	if len(TaskTypes) == 0 || len(Domains) == 0 || len(Sensitivity) == 0 {
 		t.Fatal("vocab lists must be non-empty")
 	}
-	if len(SensitiveEntityLabels) == 0 || len(DomainEntityLabels) == 0 {
+	if len(DomainEntityLabels) == 0 {
 		t.Fatal("entity label maps must be non-empty")
 	}
 	if len(SensitivityFromEntity) == 0 {

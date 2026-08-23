@@ -148,35 +148,18 @@ func TestSpansAreMaskedNotRaw(t *testing.T) {
 	}
 }
 
-// --- the well-known gate, on the NER path -----------------------------------
+// --- the well-known gate, which now lives in exactly one place ---------------
 
-// exampleValueModel is a NER that dutifully reports the documentation values as
-// entities — which is what GLiNER2 does, since they are perfectly shaped.
-type exampleValueModel struct{ emptyModel }
-
-func (exampleValueModel) Entities(text string, _ map[string]string) []Entity {
-	var ents []Entity
-	for _, kv := range [][2]string{
-		{"ssn", "123-45-6789"},
-		{"credit_card", "4111 1111 1111 1111"},
-		{"email", "user@example.com"},
-	} {
-		if i := strings.Index(text, kv[1]); i >= 0 {
-			ents = append(ents, Entity{Label: kv[0], Text: kv[1], Start: i, End: i + len(kv[1]), Confidence: 1})
-		}
-	}
-	return ents
-}
-
-// The trap this facet cannot ship without. A developer transcript is saturated
-// with published values, and the NER reports every one of them as a flawless
-// entity. The gate now lives in ONE place — the sidecar's scan, which drops
-// them — so the NER's pattern-type findings must be corroborated there before
-// they can be published. An empty scan means every one of these is suppressed.
-func TestPublishedExampleValuesNeverFireViaTheNER(t *testing.T) {
+// The trap this facet cannot ship without: a developer transcript is saturated
+// with published example values, and every one of them is a FLAWLESS entity in
+// shape — 4111 1111 1111 1111 passes Luhn, 123-45-6789 satisfies the SSA
+// structure. The gate against them is app/wellknown.py, applied inside the scan
+// before it answers, so the scan simply reports nothing for this text. There is
+// no second detector left that could route around it.
+func TestPublishedExampleValuesNeverFire(t *testing.T) {
 	text := "test with 4111 1111 1111 1111, ssn 123-45-6789, mail user@example.com"
 	// The real /pii returns nothing here: app/wellknown.py suppresses all three.
-	got, spans := sensitivityOf(t, text, exampleValueModel{}, scanOf())
+	got, spans := sensitivityOf(t, text, nil, scanOf())
 	if got != "none" {
 		t.Fatalf("sensitivity = %q, want none: every value here is a published example", got)
 	}
@@ -185,37 +168,27 @@ func TestPublishedExampleValuesNeverFireViaTheNER(t *testing.T) {
 	}
 }
 
-// With the scan unreachable there is no gate at all, so an uncorroborated
-// pattern-type entity must be dropped rather than published ungated — the
-// documentation-constant flood is exactly what the gate exists to stop.
-func TestPatternTypesAreDroppedWhenTheScanIsUnavailable(t *testing.T) {
-	text := "test with 4111 1111 1111 1111, ssn 123-45-6789, mail user@example.com"
-	got, spans := sensitivityOf(t, text, exampleValueModel{}, downScan)
+// The gate is at SOURCE, so with the scan unreachable there is no ungated
+// second path that could publish these instead — there is simply no detection
+// of the pattern types at all, and the loss is declared rather than papered
+// over (see Degraded).
+func TestPatternTypesHaveNoSourceWhenTheScanIsUnavailable(t *testing.T) {
+	text := "test with " + fxCard + ", ssn " + fxSSN + ", mail " + fxEmail
+	got, spans := sensitivityOf(t, text, nil, downScan)
 	if got != "none" || len(spans) != 0 {
-		t.Fatalf("sensitivity = %q spans = %+v; an ungated NER pattern match must not be published", got, spans)
+		t.Fatalf("sensitivity = %q spans = %+v; with no scan there is no pattern-type detector", got, spans)
+	}
+	if !degradedOf(t, text, nil, downScan) {
+		t.Fatal("a nothing-found answer from a scan that never ran must be marked degraded")
 	}
 }
 
-// nerPersonModel reports the type the scan's own NER is weakest at and which
-// no pattern can gate: a person name.
-type nerPersonModel struct {
-	emptyModel
-	needle string
-}
-
-func (m nerPersonModel) Entities(text string, _ map[string]string) []Entity {
-	i := strings.Index(text, m.needle)
-	if i < 0 {
-		return nil
-	}
-	return []Entity{{Label: "person", Text: m.needle, Start: i, End: i + len(m.needle), Confidence: 0.9}}
-}
-
-// person/address are the NER's own contribution: they carry no pattern for the
-// scan to corroborate, and the published-value lists never covered them.
-func TestNERPersonNeedsNoCorroboration(t *testing.T) {
-	m := nerPersonModel{needle: "Marguerite Vandenberg"}
-	got, spans := sensitivityOf(t, "ask Marguerite Vandenberg to review", m, scanOf())
+// person and address carry no pattern to validate. They come from presidio's
+// spaCy recognizer (PERSON / LOCATION), which is not GLiNER2, and they publish
+// on the scan's word alone.
+func TestScannerPersonRollsUpToPII(t *testing.T) {
+	needle := "Marguerite Vandenberg"
+	got, spans := sensitivityOf(t, "ask "+needle+" to review", nil, scanOf([2]string{"person", needle}))
 	if got != "pii" {
 		t.Fatalf("sensitivity = %q, want pii", got)
 	}
@@ -224,36 +197,30 @@ func TestNERPersonNeedsNoCorroboration(t *testing.T) {
 	}
 }
 
-// ...but a "person" with no letters in it is a mislabelled numeric constant,
-// which is how the textbook SSN used to reach the wire as pii. A name has
-// letters; an order id does not.
-func TestNERPersonWithoutLettersIsDropped(t *testing.T) {
-	m := nerPersonModel{needle: "123-45-6789"}
-	got, spans := sensitivityOf(t, "order 123-45-6789 shipped", m, scanOf())
-	if got != "none" || len(spans) != 0 {
-		t.Fatalf("sensitivity = %q spans = %+v; a digits-only person is not a name", got, spans)
+func TestScannerAddressRollsUpToPII(t *testing.T) {
+	needle := "14 Kingsway Terrace"
+	got, spans := sensitivityOf(t, "ship to "+needle+" today", nil, scanOf([2]string{"address", needle}))
+	if got != "pii" {
+		t.Fatalf("sensitivity = %q, want pii", got)
+	}
+	if len(spans) != 1 || spans[0].Label != "address" {
+		t.Fatalf("spans = %+v, want one address span", spans)
 	}
 }
 
-// nerSSNModel reports the SAME span the scan finds, so the union must not
-// publish it twice.
-type nerSSNModel struct{ emptyModel }
-
-func (nerSSNModel) Entities(text string, _ map[string]string) []Entity {
-	i := strings.Index(text, fxSSN)
-	if i < 0 {
-		return nil
-	}
-	return []Entity{{Label: "ssn", Text: fxSSN, Start: i, End: i + len(fxSSN), Confidence: 0.9}}
-}
-
-func TestNERAndScanSpansDoNotDuplicate(t *testing.T) {
-	got, spans := sensitivityOf(t, "ssn "+fxSSN+" on file", nerSSNModel{}, scanOf([2]string{"ssn", fxSSN}))
+// One value routinely matches two recognizers — a dashed nine-digit run is both
+// a US_SSN and, to libphonenumber, a phone — so the scan itself reports two
+// spans over the same offsets. Both labels register (the rollup takes the
+// higher severity) but only one span may publish, or one leaked value is
+// reported as two.
+func TestOverlappingScanSpansPublishOnce(t *testing.T) {
+	got, spans := sensitivityOf(t, "ssn "+fxSSN+" on file", nil,
+		scanOf([2]string{"ssn", fxSSN}, [2]string{"phone", fxSSN}))
 	if got != "phi" {
-		t.Fatalf("sensitivity = %q, want phi", got)
+		t.Fatalf("sensitivity = %q, want phi (ssn outranks phone)", got)
 	}
-	if len(spans) != 1 {
-		t.Fatalf("spans = %+v, want a single ssn span (the NER and the scan found the same one)", spans)
+	if len(spans) != 1 || spans[0].Label != "ssn" {
+		t.Fatalf("spans = %+v, want a single ssn span: one value, one span", spans)
 	}
 }
 

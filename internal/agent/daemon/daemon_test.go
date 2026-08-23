@@ -77,9 +77,14 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	fs := &fakeSender{}
 	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "dg@keld.co", func() bool { return false }, func() bool { return true }, nil, nil, nil)
 
+	// A real gitleaks-shaped GitHub PAT. The previous `sk-live-...` fixture was
+	// detected only by the fake Model's NER, and sensitivity no longer consults
+	// a model at all — so it would now publish "none" and the leak assertion
+	// below would run over an empty span list. This token is found by the
+	// pure-Go credential layer, which is what actually ships.
 	q.Offer(queue.Job{
 		Source: "claude_desktop", Scheme: "trace", ID: "T1",
-		Inline: "write a function; my key is sk-live-ABCDEF0123456789",
+		Inline: "write a function; my key is ghp_16C7e42F292c6912E7710c838347Ae178B4a",
 	})
 
 	deadline := time.After(2 * time.Second)
@@ -105,8 +110,11 @@ func TestWorkerEnrichesInlineAndNeverLeaksRaw(t *testing.T) {
 	if e.Sensitivity.Value != "secrets" {
 		t.Fatalf("expected secrets, got %+v", e.Sensitivity)
 	}
+	if len(e.SensitivitySpans) == 0 {
+		t.Fatal("premise: expected a masked credential span, or the leak check below is vacuous")
+	}
 	for _, s := range e.SensitivitySpans {
-		if strings.Contains(s.Masked, "ABCDEF0123456789") || s.Text != "" {
+		if strings.Contains(s.Masked, "16C7e42F292c6912E7710c838347Ae178B4a") || s.Text != "" {
 			t.Fatalf("raw secret leaked in span: %+v", s)
 		}
 	}

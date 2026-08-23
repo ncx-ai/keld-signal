@@ -3,6 +3,7 @@ package eval
 import (
 	"testing"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 )
 
@@ -17,18 +18,21 @@ func TestRunModelOnFakeBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pred := RunModel(enrichtest.NewFake(), gold)
+	// The PII scan must be wired explicitly: sensitivity takes no evidence from
+	// the Model at all, so without it this row would score credentials only and
+	// the recall assertion below would be measuring the wrong thing.
+	pred := RunModel(enrichtest.NewFake(), gold, enrich.WithPIIScanner(enrichtest.NewScan()))
 	if len(pred) != len(gold) {
 		t.Fatalf("pred len = %d, want %d", len(pred), len(gold))
 	}
 	m := Score(gold, pred, []string{"task_type", "domain", "sensitivity"})
 
-	// Diagnostic run over the expanded gold set using the fake. The fake
-	// catches the regex-detectable sensitive rows (SSN, API keys, credit cards,
-	// email/phone) but NOT the ones with no lexical signal (proprietary roadmaps,
+	// Diagnostic run over the expanded gold set. The two detectors catch the
+	// regex-detectable sensitive rows (SSN, API keys, credit cards, email/phone)
+	// but NOT the ones with no lexical signal (proprietary roadmaps,
 	// address-only PII, MRN-based PHI). So sensitive_recall is > 0 but < 1 here —
 	// this just confirms Score/RunModel compute something sane, not that the
-	// fake meets any bar.
+	// stand-ins meet any bar.
 	got := m["sensitivity"]["sensitive_recall"]
 	if got <= 0.0 || got > 1.0 {
 		t.Fatalf("fake sensitive_recall = %v, want in (0,1]", got)

@@ -88,17 +88,13 @@ var DomainEntityLabels = map[string]string{
 	"product":   "Named products, tools, or services",
 }
 
-// SensitiveEntityLabels: label -> natural-language description (sensitive).
-var SensitiveEntityLabels = map[string]string{
-	"email":       "Email addresses",
-	"phone":       "Phone numbers",
-	"ssn":         "Social security or national identity numbers",
-	"credit_card": "Credit card or payment card numbers",
-	"api_key":     "API keys, access tokens, or secret keys",
-	"secret":      "Passwords, credentials, or private keys",
-	"person":      "Personal names of individuals",
-	"address":     "Physical postal addresses",
-}
+// There is deliberately no SensitiveEntityLabels here. It was the description
+// vocabulary passed to GLiNER2's /entities for the sensitivity facet, and that
+// call is gone: personal data comes from presidio (sidecar/app/pii.py, which
+// covers all six mapped types) and credentials from gitleaks, neither of which
+// takes a label vocabulary from this package. A constant naming labels nobody
+// asks for implies a call that no longer happens. The published span labels are
+// still enumerated, as the Triggers of SensitivityFromEntity below.
 
 // SensRule maps a set of entity labels to a sensitivity class.
 type SensRule struct {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/eval"
 	"github.com/ncx-ai/keld-signal/internal/localagent"
 	"github.com/spf13/cobra"
@@ -26,6 +27,12 @@ func newEvalCmd() *cobra.Command {
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "keld-agent eval: "+note)
 
+			// The sensitivity facet reads NO evidence from the Model — it is
+			// the gitleaks credential layer plus the sidecar's presidio /pii
+			// scan — so the scanner has to be wired explicitly or every
+			// sensitivity number below is credentials-only and silently wrong.
+			opts := piiOpts(model)
+
 			rows, err := eval.LoadGold()
 			if err != nil {
 				return err
@@ -40,9 +47,9 @@ func newEvalCmd() *cobra.Command {
 
 			var pred []eval.Pred
 			if withContext {
-				pred = eval.RunModelWithContext(model, rows)
+				pred = eval.RunModelWithContext(model, rows, opts...)
 			} else {
-				pred = eval.RunModel(model, rows)
+				pred = eval.RunModel(model, rows, opts...)
 			}
 
 			fields := []string{"task_type", "domain", "sensitivity", "activity_type", "function_guess", "speech_act", "subcategory"}
@@ -65,7 +72,7 @@ func newEvalCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				credPred := eval.RunModelWithContext(model, credRows)
+				credPred := eval.RunModelWithContext(model, credRows, opts...)
 				fmt.Fprintf(out, "  %-15s secret_recall=%.3f  secret_fpr=%.3f\n", "creds",
 					eval.SecretRecall(credRows, credPred), eval.SecretFPR(credRows, credPred))
 			}
@@ -90,8 +97,8 @@ func newEvalCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				aug := eval.RunModelWithContext(model, ag) // agentic Meta in the preamble
-				bare := eval.RunModel(model, ag)           // no context
+				aug := eval.RunModelWithContext(model, ag, opts...) // agentic Meta in the preamble
+				bare := eval.RunModel(model, ag, opts...)           // no context
 				fmt.Fprintf(out, "\n== agentic corpus (rows=%d) ==\n", len(ag))
 				for _, f := range []string{"task_type", "domain"} {
 					am := eval.Score(ag, aug, []string{f})[f]["accuracy"]
@@ -109,4 +116,20 @@ func newEvalCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&withCalibration, "calibration", false, "Print per-facet accuracy stratified by GLiNER2 confidence (reliability bins + ECE).")
 	cmd.Flags().BoolVar(&withAgentic, "agentic", false, "Score the agentic-framework corpus: task_type/domain accuracy by shape and augmented-vs-bare.")
 	return cmd
+}
+
+// piiOpts wires the personal-data scanner into the eval run when the resolved
+// backend also serves /pii (the sidecar client does). It is a capability probe
+// rather than a concrete type so a future backend that serves one and not the
+// other still works; no scanner means sensitivity scores on credentials alone,
+// which is a real answer for a deterministic run and a wrong one for a live
+// sidecar, so the caller is told which it got.
+func piiOpts(model enrich.Model) []enrich.Option {
+	sc, ok := model.(interface {
+		DetectPII(string) (enrich.PIIResult, bool)
+	})
+	if !ok {
+		return nil
+	}
+	return []enrich.Option{enrich.WithPIIScanner(sc.DetectPII)}
 }

@@ -266,10 +266,14 @@ func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]f
 
 // RunModel scores a backend by running the enrichment pipeline over each gold
 // row and extracting the classified fields.
-func RunModel(m enrich.Model, gold []GoldRow) []Pred {
+// opts are passed through to enrich.Run. The sensitivity facet takes NO
+// evidence from the Model — it reads the gitleaks credential layer and the
+// PII scan (enrich.WithPIIScanner) — so a caller that scores sensitivity and
+// wires no scanner is measuring credentials alone, not the facet.
+func RunModel(m enrich.Model, gold []GoldRow, opts ...enrich.Option) []Pred {
 	pred := make([]Pred, 0, len(gold))
 	for _, g := range gold {
-		p := enrich.Run(g.Text, "eval", enrich.Meta{}, m)
+		p := enrich.Run(g.Text, "eval", enrich.Meta{}, m, opts...)
 		pred = append(pred, Pred{
 			TaskType:      p.TaskType.Value,
 			Domain:        p.Domain.Value,
@@ -287,11 +291,11 @@ func RunModel(m enrich.Model, gold []GoldRow) []Pred {
 // RunModelWithContext is RunModel but feeds each gold row's session context
 // (recent prompts, branch, project) into the classifier via GoldRow.Meta, so
 // augmented classification can be scored against the no-context baseline.
-func RunModelWithContext(m enrich.Model, gold []GoldRow) []Pred {
+func RunModelWithContext(m enrich.Model, gold []GoldRow, opts ...enrich.Option) []Pred {
 	pred := make([]Pred, 0, len(gold))
 	for _, g := range gold {
 		src := g.srcOr()
-		p := enrich.Run(g.Text, src, g.Meta(src), m)
+		p := enrich.Run(g.Text, src, g.Meta(src), m, opts...)
 		pred = append(pred, Pred{
 			TaskType: p.TaskType.Value, Domain: p.Domain.Value, Sensitivity: p.Sensitivity.Value,
 			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, SpeechAct: p.SpeechAct.Value, Subcategory: p.Subcategory.Value,

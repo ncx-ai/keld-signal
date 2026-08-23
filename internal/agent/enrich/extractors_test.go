@@ -12,7 +12,7 @@ import (
 // textbook 123-45-6789 this test used to carry is excluded by the well-known
 // gate — as it must be, or every developer transcript reports phi.
 func TestSensitivityHardEvidenceOverrides(t *testing.T) {
-	ctx := enrich.NewJobContext("my ssn is 321-54-9876", "claude_code", enrich.Meta{}, enrichtest.NewFake())
+	ctx := enrich.NewJobContext("my ssn is 321-54-9876", "claude_code", enrich.Meta{}, nil)
 	out, err := enrich.SensitivityExtractor{Scan: enrichtest.NewScan()}.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -23,9 +23,14 @@ func TestSensitivityHardEvidenceOverrides(t *testing.T) {
 	}
 }
 
+// The credential layer's span is masked too — a different code path from the
+// scan's (CredentialSpans, not scanSpans), so it gets its own assertion. The
+// token is a real gitleaks-shaped GitHub PAT: `sk-live-...`, which this test
+// used to carry, is detected by nothing but the (now removed) NER, so it would
+// pass this test vacuously with zero spans.
 func TestSensitivitySpansAreMaskedNotRaw(t *testing.T) {
-	ctx := enrich.NewJobContext("key sk-live-ABCDEF0123456789 here", "claude_code", enrich.Meta{}, enrichtest.NewFake())
-	out, err := enrich.SensitivityExtractor{Scan: enrichtest.NewScan()}.Run(ctx)
+	ctx := enrich.NewJobContext("key ghp_16C7e42F292c6912E7710c838347Ae178B4a here", "claude_code", enrich.Meta{}, nil)
+	out, err := enrich.SensitivityExtractor{}.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

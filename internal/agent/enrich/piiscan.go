@@ -2,8 +2,6 @@ package enrich
 
 import (
 	"sort"
-	"strings"
-	"unicode"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/creddetect"
 )
@@ -113,68 +111,10 @@ func spanText(text string, e Entity) string {
 	return text[e.Start:e.End]
 }
 
-// patternTypes are the entity types produced by a PATTERN — a regular format a
-// deterministic recognizer can validate. They are exactly the types the
-// published-value gate has ever been able to judge, and exactly the types
-// GLiNER2 reports most confidently and most wrongly: 4111 1111 1111 1111 and
-// 123-45-6789 come back as flawless entities because they are flawless in
-// shape. See nerContributes.
-var patternTypes = map[string]bool{
-	"ssn": true, "credit_card": true, "email": true, "phone": true,
-}
-
-// nerContributes decides whether one GLiNER2 entity may be published, given the
-// spans the PII scan returned for the SAME text.
-//
-// This is where the well-known gate now lives for the NER path, and it is a
-// corroboration rule rather than a second copy of the published-value list.
-// Rationale, because the alternative looks simpler than it is: the list is a
-// precision gate that only ever fires on the pattern types, and the sidecar
-// already holds it (app/wellknown.py, extended there against measured presidio
-// behaviour). Keeping a Go copy for the NER path is the "duplicated but
-// divergent" failure — two lists, two languages, one of them silently stale.
-// So the NER's pattern-type findings are admitted only where the scan, whose
-// output IS gated, found something at the same offsets. A documentation
-// constant is absent from the scan by construction, so it cannot be
-// corroborated, and the gate holds without a second list.
-//
-// Two consequences worth stating:
-//   - A corroborated pattern span necessarily overlaps the scan's own span, so
-//     appendDistinctSpan deduplicates it and the scan's version is what
-//     publishes. The NER's real contribution is therefore person/address —
-//     the types with no pattern to validate, which the list never gated either.
-//   - With no scan available there is nothing to corroborate against, so
-//     pattern types are DROPPED, not published ungated. Ungated is the state
-//     that makes the facet noise (every engineer's transcript reporting
-//     pci/phi), and the loss is reported: see Degraded.
-//
-// person/address are admitted uncorroborated, subject to the one shape rule the
-// list encoded for them: it re-checked any nine-plus-digit value against the
-// SSN and card sets whatever label it arrived under, because an NER reads
-// 123-45-6789 as a name about as often as an SSN. A name has letters in it; a
-// mislabelled order id does not.
-func nerContributes(e Entity, value string, scan []Entity, scanned bool) bool {
-	if patternTypes[e.Label] {
-		return scanned && overlapsAny(e, scan)
-	}
-	return hasLetter(value)
-}
-
-func overlapsAny(e Entity, spans []Entity) bool {
-	for _, s := range spans {
-		if e.Start < s.End && s.Start < e.End {
-			return true
-		}
-	}
-	return false
-}
-
-func hasLetter(s string) bool {
-	return strings.IndexFunc(s, unicode.IsLetter) >= 0
-}
-
-// appendDistinctSpan drops a span that overlaps one already collected. The NER
-// and the scan cover the same entity types, so the same SSN is routinely found
+// appendDistinctSpan drops a span that overlaps one already collected. One
+// value routinely matches two recognizers — a dashed nine-digit run is both a
+// US_SSN and, to libphonenumber, a phone — and the credential layer scans the
+// same text independently of the PII scan, so the same value is routinely found
 // twice; publishing it twice would misrepresent one leaked value as two.
 func appendDistinctSpan(spans []Entity, s Entity) []Entity {
 	for _, x := range spans {

@@ -104,17 +104,19 @@ a time. Two waves, up to 8 facets per prompt:
   `translation`, `code_generation`, `information_extraction`, `classification`,
   `reasoning`, `question_answering`, `text_generation`, `rewriting`, `general`),
   `sensitivity` (+ masked entity spans; detects **concrete leaked data**, not
-  topic — unions THREE independent evidence sources and rolls up to the
-  highest-severity class: `ssn`⇒`phi`, `credit_card`⇒`pci`,
+  topic — unions TWO independent evidence sources, **neither of them GLiNER2**,
+  and rolls up to the highest-severity class: `ssn`⇒`phi`, `credit_card`⇒`pci`,
   `api_key`/`secret`⇒`secrets`, other personal id⇒`pii`. See
-  **The sensitivity facet's three sources** below),
+  **The sensitivity facet's two sources** below),
   `domain` (+ entities), `activity_type`, `personal`, `function_guess`
   (12 business functions), `speech_act` (`command`/`question`/`statement`/
   `fragment`, classifies the prompt text only).
 - **Wave 2** (conditioned on Wave-1 `function_guess`): `subcategory`.
 
-**The sensitivity facet's three sources.** None of them classifies; the class is
+**The sensitivity facet's two sources.** Neither classifies; the class is
 a rollup over which entity labels were DETECTED (`sensitivityFromEntities`).
+**Neither is GLiNER2** — this facet does not touch `ctx.Model` at all, and a
+test asserts its output is identical with a Model present and with none.
 1. **`creddetect`** — vendored gitleaks credential rules. Pure Go, no model, no
    network, over the FULL prompt text. Always available; the only source that
    needs nothing at all.
@@ -125,23 +127,29 @@ a rollup over which entity labels were DETECTED (`sensitivityFromEntities`).
    single-flight, so it is wired in `ml_backend:"deterministic"` too. It returns
    **offsets only, never the matched value** — the Go side resolves and masks
    from its own copy of the text.
-3. **The GLiNER2 NER** (`/entities`), when there is a model.
+There is deliberately **no third, GLiNER2 source**. `/entities` over a
+`SensitiveEntityLabels` vocabulary used to be one, and it was redundant:
+presidio already produces all six mapped types (`person`/`address` come from its
+`SpacyRecognizer`, which is spaCy, not GLiNER2), so the NER added no type of its
+own while needing a corroboration rule to keep its confident, perfectly-shaped
+documentation constants off the wire. That rule, the label vocabulary, and the
+call are all gone. Re-admitting a model here is a deliberate decision with its
+own evidence, not a rewiring.
 
 ⚠️ **The published-test-value gate lives in ONE place: `sidecar/app/wellknown.py`.**
 `4111 1111 1111 1111` passes Luhn, `123-45-6789` is the textbook SSN,
 `user@example.com` is RFC 2606 — developer transcripts are saturated with them,
 and ungated the facet reports `pci`/`phi` continuously and is worse than absent.
-A second copy in Go for the NER path is the duplicated-but-divergent failure, so
-the NER is gated by **corroboration** instead (`enrich.nerContributes`): its
-pattern-type findings (`ssn`/`credit_card`/`email`/`phone`) are published only
-where the scan — whose output IS gated — found something at the same offsets. A
-documentation constant is absent from the scan by construction. With **no scan
-available those types are DROPPED, not published ungated**; `person`/`address`
-carry no pattern, need no corroboration, and are subject only to a shape rule (a
-name has letters in it). Do not reintroduce a Go copy of the list.
+The gate is applied **at source**, inside `scan()` before it answers, so nothing
+it suppresses can reach Go by another route — there is no second detector to
+route around it. With **no scan available the six personal-data types simply
+have no source**; only credentials remain, and the loss is declared (see
+`facets_degraded` below) rather than papered over. Do not add a Go copy of the
+list, and do not add a second detector that would need one.
 
-**`facets_degraded` for sensitivity turns on the SCAN, not on the model.** A
-whole scan covers every vocabulary type, so "no model" no longer costs a type.
+**`facets_degraded` for sensitivity turns on the SCAN.** The scan is the sole
+source for all six vocabulary types, so a whole scan leaves nothing uncovered
+and a Model's absence costs nothing.
 Scan absent / failed / **`truncated`** ⇒ degraded, unless the answer already
 reached the ceiling of the severity order (`phi`), which no missing evidence
 could raise.
@@ -300,10 +308,12 @@ selects one of three modes:
   `facets_skipped` (omitted when empty, so auto-mode payloads are unchanged) —
   always a subset of the `extractor_versions` keys, since a pass that was
   never registered at all (unwired workstreams, above) is absent from both.
-  **A HALF-run pass is neither.** `sensitivity` is `ModelFree`, so in this mode
-  it RUNS — but only its credential layer; the GLiNER2 NER half is skipped, so
-  an SSN with no credential pattern publishes `sensitivity:"none"`, a confident
-  negative from a check nobody performed. A pass therefore declares reduced
+  **A HALF-run pass is neither.** `sensitivity` is `ModelFree`, so it RUNS in
+  this mode — and, since it consults no model at all, it runs WHOLE whenever the
+  PII scan is available. What still half-runs it is a missing/failed/truncated
+  **scan**: only the credential layer is left, so an SSN with no credential
+  pattern publishes `sensitivity:"none"`, a confident negative from a check
+  nobody performed. A pass therefore declares reduced
   capability per job via the optional `degradedExtractor` capability
   (`Degraded(ctx) bool`, consulted after a successful `Run`, mirroring
   `modelFreeExtractor`); `runStage` reports `passDegraded`, the result commits

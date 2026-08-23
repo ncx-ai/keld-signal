@@ -1,14 +1,13 @@
 package enrich
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-// NER is used for DETECTION only, never for CLASSIFICATION. These tests pin
-// that for the sensitivity facet: the published value is a deterministic
-// rollup of which detectors fired, and the model's own opinion about a
-// sensitivity LABEL must have no path to the output — nor even be asked for.
+// The sensitivity facet DETECTS; it does not ask anything to classify. These
+// tests pin that: the published value is a deterministic rollup of which
+// detectors fired, and a model's own opinion about a sensitivity LABEL has no
+// path to the output — nor is one ever asked for. Since the facet no longer
+// consults GLiNER2 at all (see extractors_sensitivity_modelfree_test.go), the
+// model here is present only to be ignored.
 
 // classifyingModel is the backend this change exists to neutralise: it finds no
 // entities but answers the sensitivity classification task confidently and
@@ -41,8 +40,10 @@ func TestSensitivityClassificationCannotReachOutput(t *testing.T) {
 }
 
 // recordingModel captures every request the sensitivity pass makes of the
-// backend, so re-adding a classification task fails this test rather than
-// silently restoring the arm.
+// backend. The pass must make NONE: its two evidence sources (the gitleaks
+// credential layer and the presidio scan behind /pii) are both model-free, so
+// re-wiring GLiNER2 into this facet — as a classifier OR as a detector — fails
+// this test rather than silently restoring the arm.
 type recordingModel struct {
 	emptyModel
 	classifyTasks []string
@@ -69,53 +70,47 @@ func (m *recordingModel) Extract(_ string, _ map[string]string, tasks map[string
 	return ExtractResult{}
 }
 
-func TestSensitivityRequestsNoClassificationTask(t *testing.T) {
+func TestSensitivityTouchesTheModelNotAtAll(t *testing.T) {
 	m := &recordingModel{}
 	ctx := NewJobContext("mail me at a@b.io", "claude_code", Meta{}, m)
-	if _, err := (SensitivityExtractor{}).Run(ctx); err != nil {
+	if _, err := (SensitivityExtractor{Scan: scanOf([2]string{"email", "a@b.io"})}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if len(m.classifyTasks) != 0 || len(m.extractTasks) != 0 {
-		t.Fatalf("sensitivity asked the model to classify %v / %v; it must perform entity DETECTION only",
+		t.Fatalf("sensitivity asked the model to classify %v / %v; it must ask the model nothing",
 			m.classifyTasks, m.extractTasks)
 	}
-	if m.entityCalls != 1 {
-		t.Fatalf("entity calls = %d, want exactly 1 (the pure /entities detection path)", m.entityCalls)
+	if m.entityCalls != 0 {
+		t.Fatalf("entity calls = %d, want 0: detection is presidio's and gitleaks', not GLiNER2's", m.entityCalls)
 	}
 }
 
-// nerOnlyModel is a detector: it reports spans and holds no opinion about the
-// class. The rollup must derive the class from the span labels alone.
-type nerOnlyModel struct {
-	emptyModel
-	label, needle string
-}
-
-func (m nerOnlyModel) Entities(text string, _ map[string]string) []Entity {
-	i := strings.Index(text, m.needle)
-	if i < 0 {
-		return nil
-	}
-	return []Entity{{Label: m.label, Text: m.needle, Start: i, End: i + len(m.needle), Confidence: 0.9}}
-}
-
+// The rollup derives the class from the span labels alone, over the two
+// detectors that remain. Every row is driven by the PII scan except the
+// credential, which is the pure-Go gitleaks layer and needs no backend at all —
+// so a row that passes only because some other layer happened to cover it
+// would show up as the wrong span label.
 func TestSensitivityRollupElevatesFromDetectedEntities(t *testing.T) {
+	const ghToken = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"
 	for _, tc := range []struct {
 		name, label, value, want string
+		scanned                  bool
 	}{
-		{"ssn to phi", "ssn", fxSSN, "phi"},
-		{"card to pci", "credit_card", fxCard, "pci"},
-		{"credential to secrets", "api_key", "ghp_16C7e42F292c6912E7710c838347Ae178B4a", "secrets"},
-		{"email to pii", "email", "dana.reeve@northwind-labs.co", "pii"},
-		// person has no pattern for the scan to corroborate, so this case can
-		// only pass if the NER DETECTION path is actually wired to the backend.
-		{"person to pii", "person", "Marguerite Vandenberg", "pii"},
+		{name: "ssn to phi", label: "ssn", value: fxSSN, want: "phi", scanned: true},
+		{name: "card to pci", label: "credit_card", value: fxCard, want: "pci", scanned: true},
+		{name: "email to pii", label: "email", value: fxEmail, want: "pii", scanned: true},
+		{name: "person to pii", label: "person", value: "Marguerite Vandenberg", want: "pii", scanned: true},
+		{name: "address to pii", label: "address", value: "14 Kingsway Terrace", want: "pii", scanned: true},
+		// The credential layer is not the scan's: it is gitleaks, Go-side, over
+		// the full text, and it fires with no scanner wired at all.
+		{name: "credential to secrets", label: "api_key", value: ghToken, want: "secrets"},
 	} {
-		m := nerOnlyModel{label: tc.label, needle: tc.value}
-		ctx := NewJobContext("context "+tc.value+" trailing", "claude_code", Meta{}, m)
-		// The pattern types are admitted only where the gated scan corroborates
-		// them; person/api_key carry no pattern and need none.
-		out, err := SensitivityExtractor{Scan: scanOf([2]string{tc.label, tc.value})}.Run(ctx)
+		var scan PIIScanner
+		if tc.scanned {
+			scan = scanOf([2]string{tc.label, tc.value})
+		}
+		ctx := NewJobContext("context "+tc.value+" trailing", "claude_code", Meta{}, nil)
+		out, err := SensitivityExtractor{Scan: scan}.Run(ctx)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -126,8 +121,9 @@ func TestSensitivityRollupElevatesFromDetectedEntities(t *testing.T) {
 		if lab.Confidence != 1.0 {
 			t.Errorf("%s: confidence = %v, want 1.0", tc.name, lab.Confidence)
 		}
-		if len(out["sensitivity_spans"].([]Entity)) == 0 {
-			t.Errorf("%s: expected the detected span to be published", tc.name)
+		spans := out["sensitivity_spans"].([]Entity)
+		if len(spans) != 1 || spans[0].Label != tc.label {
+			t.Errorf("%s: spans = %+v, want one %s span", tc.name, spans, tc.label)
 		}
 	}
 }

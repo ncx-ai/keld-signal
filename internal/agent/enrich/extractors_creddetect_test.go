@@ -1,9 +1,6 @@
 package enrich
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 // A stub model that finds NO entities and abstains on sensitivity, so the result
 // is driven purely by the deterministic credential detector.
@@ -16,7 +13,8 @@ func (emptyModel) Extract(string, map[string]string, map[string][]string) Extrac
 }
 
 func TestSensitivityCatchesCredentialViaDetector(t *testing.T) {
-	// GLiNER (stub) finds nothing; the deterministic layer must still flag secrets.
+	// No PII scan is wired and the model (a stub) is irrelevant to this facet;
+	// the pure-Go credential layer must still flag secrets on its own.
 	ctx := NewJobContext("here's the token ghp_16C7e42F292c6912E7710c838347Ae178B4a", "claude_code", Meta{}, emptyModel{})
 	out, err := SensitivityExtractor{}.Run(ctx)
 	if err != nil {
@@ -36,29 +34,28 @@ func TestSensitivityCatchesCredentialViaDetector(t *testing.T) {
 	}
 }
 
-// ssnModel returns an ssn entity from the DETECTION call so we can verify a credential does
-// NOT downgrade a higher-severity phi classification (precedence guard). It
-// carries the synthetic fxSSN rather than the textbook 123-45-6789, which the
-// gate excludes from every path.
-type ssnModel struct{ emptyModel }
-
-func (ssnModel) Entities(text string, _ map[string]string) []Entity {
-	i := strings.Index(text, fxSSN)
-	if i < 0 {
-		return nil
-	}
-	return []Entity{{Label: "ssn", Start: i, End: i + len(fxSSN), Confidence: 1}}
-}
-
+// The precedence guard: the credential layer ELEVATES to secrets, it never
+// overrides a higher class already present. Both detectors fire here — the scan
+// reports the SSN (the synthetic fxSSN, not the textbook 123-45-6789, which the
+// well-known gate excludes from every path) and gitleaks reports the token —
+// and the rollup must land on phi.
 func TestCredentialDoesNotDowngradePHI(t *testing.T) {
-	// The scan corroborates the SSN: a pattern-type entity the gated backend
-	// did not also find is not publishable (see nerContributes).
-	ctx := NewJobContext("my ssn is "+fxSSN+" and key ghp_16C7e42F292c6912E7710c838347Ae178B4a", "claude_code", Meta{}, ssnModel{})
+	text := "my ssn is " + fxSSN + " and key ghp_16C7e42F292c6912E7710c838347Ae178B4a"
+	ctx := NewJobContext(text, "claude_code", Meta{}, nil)
 	out, err := SensitivityExtractor{Scan: scanOf([2]string{"ssn", fxSSN})}.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := out["sensitivity"].(Labeled).Value; got != "phi" {
 		t.Fatalf("sensitivity = %q, want phi (ssn present; a credential must not downgrade it)", got)
+	}
+	// Premise: both layers really did fire, or the assertion above is vacuous.
+	spans := out["sensitivity_spans"].([]Entity)
+	labels := map[string]bool{}
+	for _, sp := range spans {
+		labels[sp.Label] = true
+	}
+	if !labels["ssn"] || !labels["api_key"] {
+		t.Fatalf("spans = %+v, want both an ssn (scan) and an api_key (gitleaks) span", spans)
 	}
 }

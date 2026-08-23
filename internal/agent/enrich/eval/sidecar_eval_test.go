@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 )
 
@@ -45,7 +46,11 @@ func TestSidecarMeetsGoldThresholds(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := []string{"task_type", "domain", "sensitivity"}
-	side := Score(gold, RunModel(sc, gold), fields)
+	// sensitivity draws on the sidecar's presidio /pii route, not on GLiNER2;
+	// without the scanner wired the recall gate below would score the
+	// credential layer alone and fail for the wrong reason.
+	pii := enrich.WithPIIScanner(sc.DetectPII)
+	side := Score(gold, RunModel(sc, gold, pii), fields)
 
 	t.Logf("gold rows: %d", len(gold))
 	t.Logf("sidecar: %+v", side)
@@ -74,8 +79,8 @@ func TestSidecarMeetsGoldThresholds(t *testing.T) {
 	// eval previously never took — GoldRow.Meta was built but never wired
 	// into a model run.
 	facets := []string{"function_guess", "subcategory"}
-	fBase := Score(gold, RunModel(sc, gold), facets)
-	fAug := Score(gold, RunModelWithContext(sc, gold), facets)
+	fBase := Score(gold, RunModel(sc, gold, pii), facets)
+	fAug := Score(gold, RunModelWithContext(sc, gold, pii), facets)
 	t.Logf("facets baseline:  %+v", fBase)
 	t.Logf("facets augmented: %+v", fAug)
 	for _, f := range facets {
