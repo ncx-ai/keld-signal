@@ -1119,3 +1119,222 @@ func TestSidecarServiceNoBinaryLeavesThePolicyToTheCaller(t *testing.T) {
 		t.Fatalf("sidecarService must leave sidecar.unavailable to its caller, got %+v", evs)
 	}
 }
+
+// blockingFetcher is a provision.Fetcher that never completes on its own: it
+// signals that a fetch started and then parks until released (or the context
+// ends). It stands in for the field's ~1.9 GB first-run download.
+type blockingFetcher struct {
+	started chan<- struct{}
+	release <-chan struct{}
+}
+
+func (f blockingFetcher) Fetch(ctx context.Context, _ string) error {
+	select {
+	case f.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+	}
+	return errors.New("provisioning did not complete")
+}
+
+// notWarmService is a sidecar stub that IS up (answers /health) but whose
+// GLiNER2 capability is not loaded (/metrics reports worker.state "down") —
+// exactly the shape of a freshly-spawned service on an unprovisioned machine.
+func notWarmService(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"worker":{"state":"down"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestMLBackendStartsTheServiceWhileProvisioningRuns pins the ordering the
+// analysis service depends on: the sidecar is the client-side
+// analysis-and-enrichment service in general (/analyze, /match, /vocabulary,
+// /classify, /extract) and GLiNER2 is one capability it loads lazily — so the
+// service must be spawned alongside provisioning, not behind it. Gating the
+// spawn on the weights meant a machine that had never provisioned had no
+// service at all, and therefore no /analyze.
+//
+// The safety half is asserted in the same test: while the model is absent the
+// warm gate stays SHUT, so no job ever starts its inference deadline against a
+// cold model.
+func TestMLBackendStartsTheServiceWhileProvisioningRuns(t *testing.T) {
+	svc := notWarmService(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := sidecar.New(svc.URL, 2*time.Second)
+	healthFn := func() bool { return client.Healthy(ctx) }
+
+	spawned := make(chan struct{}, 1)
+	sup := NewSupervisor(func(int) (*exec.Cmd, error) {
+		select {
+		case spawned <- struct{}{}:
+		default:
+		}
+		return exec.CommandContext(ctx, "sleep", "30"), nil
+	}, 0, healthFn, 5*time.Second)
+
+	fetching := make(chan struct{}, 1)
+	release := make(chan struct{})
+	defer close(release)
+
+	_, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+		sup:      sup,
+		client:   client,
+		modelDir: filepath.Join(t.TempDir(), "gliner2"),
+		modelSHA: "sha-that-never-arrives",
+		fetcher:  blockingFetcher{started: fetching, release: release},
+		healthFn: healthFn,
+	})
+
+	select {
+	case <-fetching:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provisioning never started")
+	}
+	select {
+	case <-spawned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the analysis service must start while the model provisions, not after it")
+	}
+
+	// ...and stays shut for as long as the weights are absent: WorkerReady
+	// polls /metrics (it never spawns a worker), and only worker.state
+	// "ready" opens the gate.
+	for i := 0; i < 4; i++ {
+		if gate() {
+			t.Fatal("the warm gate must stay shut until the GLiNER2 worker reports ready")
+		}
+		time.Sleep(warmPollInterval / 2)
+	}
+}
+
+// TestMLBackendProvisionFailureStillStartsTheService covers the same ordering
+// on the failure path, and pins the reporting contract that outlives it: a
+// failed provision still emits exactly one model.load_failed (SevError, with a
+// redacted error field), and the gate still never opens.
+func TestMLBackendProvisionFailureStillStartsTheService(t *testing.T) {
+	svc := notWarmService(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := sidecar.New(svc.URL, 2*time.Second)
+	healthFn := func() bool { return client.Healthy(ctx) }
+
+	spawned := make(chan struct{}, 1)
+	sup := NewSupervisor(func(int) (*exec.Cmd, error) {
+		select {
+		case spawned <- struct{}{}:
+		default:
+		}
+		return exec.CommandContext(ctx, "sleep", "30"), nil
+	}, 0, healthFn, 5*time.Second)
+
+	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
+	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
+
+	_, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+		sup:      sup,
+		client:   client,
+		modelDir: filepath.Join(t.TempDir(), "gliner2"),
+		modelSHA: "some-sha",
+		fetcher:  fakeFetcherErr{},
+		healthFn: healthFn,
+		emitter:  emitter,
+	})
+
+	select {
+	case <-spawned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a failed provision must not take the analysis service down with it")
+	}
+
+	// The provisioning goroutine reports once and stops; give it room to
+	// (wrongly) repeat before counting.
+	time.Sleep(200 * time.Millisecond)
+	var loadFailed []clientevents.Event
+	for _, e := range emitter.Drain() {
+		if e.Code == "model.load_failed" {
+			loadFailed = append(loadFailed, e)
+		}
+	}
+	if len(loadFailed) != 1 {
+		t.Fatalf("model.load_failed emitted %d times, want exactly 1", len(loadFailed))
+	}
+	if loadFailed[0].Severity != clientevents.SevError {
+		t.Fatalf("model.load_failed severity = %v, want %v", loadFailed[0].Severity, clientevents.SevError)
+	}
+	if _, ok := loadFailed[0].Fields["error"]; !ok {
+		t.Fatalf("model.load_failed must carry a redacted error field, got %+v", loadFailed[0].Fields)
+	}
+	if gate() {
+		t.Fatal("the warm gate must stay shut when the model could not be provisioned")
+	}
+}
+
+// TestWorkerWarmupIsBoundedPerJobNotAHotLoop is the retry-behaviour assertion
+// that makes starting the service against an unprovisioned model dir safe.
+// With the service up but the weights absent, every job's warmup fails — so
+// the question is whether that becomes a spin. It does not: warmup is invoked
+// exactly ONCE per job, under a context bounded by KELD_ENRICH_WARM_WAIT, and
+// the job is then deferred (re-spooled) rather than retried in place.
+func TestWorkerWarmupIsBoundedPerJobNotAHotLoop(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+	t.Setenv("KELD_ENRICH_WARM_WAIT", "50ms")
+
+	var calls atomic.Int32
+	var bounded atomic.Int32
+	warmup := func(wctx context.Context) error {
+		calls.Add(1)
+		if dl, ok := wctx.Deadline(); ok && time.Until(dl) <= warmWait() {
+			bounded.Add(1)
+		}
+		<-wctx.Done() // never warms: hold until the bound expires, like a failing load
+		return wctx.Err()
+	}
+
+	const jobs = 3
+	q := queue.New(8)
+	fs := &fakeSender{}
+	for i := 0; i < jobs; i++ {
+		q.Offer(sampleInlineJob(fmt.Sprintf("unprovisioned-%d", i)))
+	}
+	go Worker(context.Background(), q, enrichtest.NewFake(), fs, "t@keld.co",
+		func() bool { return false }, func() bool { return false }, warmup, nil, nil)
+
+	waitFor(t, 5*time.Second, func() bool { return calls.Load() == jobs })
+	// Nothing re-drives the queue here, so the count must now be stable: a
+	// spin (or an in-place retry) would push it past one call per job.
+	time.Sleep(300 * time.Millisecond)
+	q.Close()
+
+	if n := calls.Load(); n != jobs {
+		t.Fatalf("warmup called %d times for %d jobs — warmup must be one bounded attempt per job, not a retry loop", n, jobs)
+	}
+	if n := bounded.Load(); n != jobs {
+		t.Fatalf("%d of %d warmup contexts carried a deadline within warmWait; every one must be bounded", n, jobs)
+	}
+	if fs.count() != 0 {
+		t.Fatalf("nothing may publish against a model that never warmed; got %d", fs.count())
+	}
+	if n := quarantineCount(t, home); n != 0 {
+		t.Fatalf("an unprovisioned model must never quarantine a job; found %d", n)
+	}
+	if n := spoolCount(t, home); n != jobs {
+		t.Fatalf("spooled %d deferred jobs, want %d — every deferred job must be preserved", n, jobs)
+	}
+}

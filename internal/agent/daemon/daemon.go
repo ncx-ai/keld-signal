@@ -1136,9 +1136,10 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 // only called when ML enrichment is enabled (see wireEnrichment) — ml_backend
 // off is handled entirely by the caller and never reaches here.
 //
-// It provisions the model, spawns and supervises the sidecar, and returns the
-// sidecar client with a gate that opens once the sidecar has reported healthy
-// at least once. There is no lower-fidelity fallback: when the sidecar binary
+// It spawns and supervises the sidecar, provisions the model alongside it
+// (the service serves its non-model routes while the weights download), and
+// returns the sidecar client with a gate that opens once the model is
+// resident. There is no lower-fidelity fallback: when the sidecar binary
 // is missing, or its port cannot be allocated, this returns
 // sidecarUnavailable's permanently-closed gate (jobs queue/spool until the
 // daemon is restarted) rather than a synthetic/degraded model.
@@ -1186,9 +1187,26 @@ func sidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) (e
 func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, func() bool) {
 	var provisionFailed atomic.Bool
 
-	// Provision the model BEFORE spawning the sidecar; on success start the
-	// supervisor; on failure leave the gate closed (see below) rather than
-	// starting a sidecar against an unprovisioned model dir.
+	// Start the service NOW, alongside provisioning rather than behind it. The
+	// sidecar is the client-side analysis-and-enrichment service in general —
+	// /analyze, /match, /vocabulary, /classify, /extract — and GLiNER2 is one
+	// capability it loads lazily on its first inference, not a precondition
+	// for serving. Gating the spawn on a ~1.9 GB download meant a machine that
+	// had not yet provisioned had no service at all, so nothing could answer
+	// /analyze either.
+	//
+	// Spawning against an unprovisioned model dir is safe because nothing
+	// attempts inference until the model is resident: the gate below polls
+	// /metrics (WorkerReady never spawns a worker) and opens only on
+	// worker.state=="ready", and Worker's warmup — the one call that would
+	// trigger a load — is bounded by warmWait per job, after which the job is
+	// deferred and re-spooled. With the weights absent that warmup fails, the
+	// gate stays shut, and jobs queue/spool: the same outcome as not spawning
+	// at all, minus the loss of every non-model route.
+	go opts.sup.Start(ctx)
+
+	// Provisioning runs concurrently. On failure the gate simply stays closed
+	// (see below); provisionFailed records it for logging.
 	go func() {
 		if err := provision.EnsureModel(ctx, opts.modelDir, opts.modelSHA, opts.fetcher); err != nil {
 			log.Printf("keld-agent: model provisioning failed: %v", err)
@@ -1196,9 +1214,7 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 				opts.emitter.Emit("model.load_failed", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
 			}
 			provisionFailed.Store(true)
-			return
 		}
-		go opts.sup.Start(ctx)
 	}()
 
 	// Enrichment never degrades to a lower-fidelity backend: the worker waits
