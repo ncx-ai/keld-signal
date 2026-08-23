@@ -238,3 +238,24 @@ func TestBuildOmitsAbsentWorkstreams(t *testing.T) {
 		t.Fatalf("no dimensions must mean an absent key, not an empty object: %s", b)
 	}
 }
+
+// TestBuildCarriesFacetsSkipped: facets_skipped is the companion that keeps
+// pipeline_status honest, so it has to reach Atlas with it. Without it, a
+// deterministic-mode profile stops saying "partial" and says nothing at all
+// about the seven facets it does not carry — a silently thinner payload, which
+// is the same defect one level up (AGENTS.md: dropping must be VISIBLE).
+func TestBuildCarriesFacetsSkipped(t *testing.T) {
+	p := enrich.Profile{PipelineStatus: "enriched", FacetsSkipped: []string{"task_type", "domain_entities"}}
+	e := Build(queue.Job{}, p, "", false, 0, time.Now())
+	if len(e.FacetsSkipped) != 2 || e.FacetsSkipped[0] != "task_type" || e.FacetsSkipped[1] != "domain_entities" {
+		t.Fatalf("facets_skipped = %v, want the profile's", e.FacetsSkipped)
+	}
+
+	b, err := json.Marshal(Build(queue.Job{}, enrich.Profile{PipelineStatus: "enriched"}, "", false, 0, time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte("facets_skipped")) {
+		t.Fatalf("nothing was skipped; the key must be absent: %s", b)
+	}
+}

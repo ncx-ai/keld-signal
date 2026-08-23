@@ -50,11 +50,18 @@ type Enrichment struct {
 	// no inference, and no text: the analysis is asked for a window by
 	// COORDINATES and only its matched dimension values reach here. Absent when
 	// the window attributed none.
-	Workstreams       map[string]enrich.Labeled `json:"workstreams,omitempty"`
-	PipelineStatus    string                    `json:"pipeline_status"`
-	ExtractorVersions map[string]string         `json:"extractor_versions"`
-	SchemaVersion     int                       `json:"schema_version"`
-	ModelVersion      string                    `json:"model_version"`
+	Workstreams    map[string]enrich.Labeled `json:"workstreams,omitempty"`
+	PipelineStatus string                    `json:"pipeline_status"`
+	// FacetsSkipped names the passes this run structurally does not have (a
+	// model-dependent pass under ml_backend "deterministic"). It rides with
+	// pipeline_status because it is what makes that field readable: without it,
+	// a deterministic profile is indistinguishable from an auto-mode one that
+	// happened to produce nothing for those facets. Absent when nothing was
+	// skipped, so the default mode's payload is byte-identical to before.
+	FacetsSkipped     []string          `json:"facets_skipped,omitempty"`
+	ExtractorVersions map[string]string `json:"extractor_versions"`
+	SchemaVersion     int               `json:"schema_version"`
+	ModelVersion      string            `json:"model_version"`
 	// Custom carries org-defined (custom) pass results, keyed by pass key. Atlas
 	// stores it verbatim (enrichment.custom / raw); built-ins stay in the typed
 	// fields above.
@@ -94,6 +101,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		SubcategoryAlt:    p.SubcategoryAlt,
 		Workstreams:       p.Workstreams,
 		PipelineStatus:    p.PipelineStatus,
+		FacetsSkipped:     p.FacetsSkipped,
 		ExtractorVersions: p.ExtractorVersions,
 		SchemaVersion:     p.SchemaVersion,
 		Custom:            p.Custom,

@@ -87,37 +87,54 @@ type modelFreeExtractor interface {
 	ModelFree() bool
 }
 
-// runStage executes one extractor with panic isolation; ok=false on
-// panic/error. A nil ctx.Model is a deliberate, permanent state (deterministic
-// mode has no sidecar, not a transient outage), so passes that need a Model
-// and don't declare themselves modelFreeExtractor are skipped BEFORE calling
-// Run — cleanly reported as failed rather than relying on the recover below to
-// catch the resulting nil-interface-method panic. Passes that do declare
-// ModelFree (e.g. sensitivity's deterministic credential layer) still run, and
-// must guard their own ctx.Model use internally.
-func runStage(ex Extractor, ctx *JobContext) (out map[string]any, ok bool) {
+// passOutcome is what became of one pass. The SKIPPED case is distinct from
+// FAILED on purpose: "partial" must keep meaning "something that should have
+// worked did not". A pass that needs a Model under ml_backend "deterministic"
+// is not a degraded pass, it is a pass this mode structurally does not have —
+// the same distinction WithWorkstreams already draws one level up, where an
+// unwired analysis backend means the pass does not run at all rather than runs
+// and fails. Conflating the two made every deterministic-mode job report
+// "partial", which left an operator unable to tell a healthy deterministic
+// profile from a badly degraded auto-mode one.
+type passOutcome int
+
+const (
+	passOK passOutcome = iota
+	passFailed
+	passSkipped
+)
+
+// runStage executes one extractor with panic isolation. A nil ctx.Model is a
+// deliberate, permanent state (deterministic mode has no model, not a transient
+// outage), so passes that need a Model and don't declare themselves
+// modelFreeExtractor are skipped BEFORE calling Run — reported as passSkipped
+// rather than relying on the recover below to catch the resulting
+// nil-interface-method panic. Passes that do declare ModelFree (e.g.
+// sensitivity's deterministic credential layer) still run, and must guard their
+// own ctx.Model use internally; if such a pass errors, that IS a failure.
+func runStage(ex Extractor, ctx *JobContext) (out map[string]any, res passOutcome) {
 	defer func() {
 		if r := recover(); r != nil {
-			out, ok = nil, false
+			out, res = nil, passFailed
 		}
 	}()
 	if ctx.Model == nil {
 		if mf, isModelFree := ex.(modelFreeExtractor); !isModelFree || !mf.ModelFree() {
-			return nil, false
+			return nil, passSkipped
 		}
 	}
 	o, err := ex.Run(ctx)
 	if err != nil {
-		return nil, false
+		return nil, passFailed
 	}
-	return o, true
+	return o, passOK
 }
 
 // runStageBounded runs one extractor under its own deadline. On expiry the pass
 // is reported failed and abandoned: the stage's context is cancelled so a
 // ContextModel aborts its in-flight inference (reclaiming the sidecar's
 // single-flight slot) rather than leaving an orphan attempt running.
-func runStageBounded(ex Extractor, jc *JobContext, cfg runCfg) (map[string]any, bool) {
+func runStageBounded(ex Extractor, jc *JobContext, cfg runCfg) (map[string]any, passOutcome) {
 	if cfg.passTimeout <= 0 {
 		return runStage(ex, jc)
 	}
@@ -135,18 +152,18 @@ func runStageBounded(ex Extractor, jc *JobContext, cfg runCfg) (map[string]any, 
 
 	type outcome struct {
 		out map[string]any
-		ok  bool
+		res passOutcome
 	}
 	done := make(chan outcome, 1) // buffered: an abandoned pass must not block on send
 	go func() {
-		o, ok := runStage(ex, stage)
-		done <- outcome{o, ok}
+		o, res := runStage(ex, stage)
+		done <- outcome{o, res}
 	}()
 	select {
 	case r := <-done:
-		return r.out, r.ok
+		return r.out, r.res
 	case <-sctx.Done():
-		return nil, false
+		return nil, passFailed // a deadline is a failure, not a structural absence
 	}
 }
 
@@ -190,23 +207,27 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	}
 
 	anyFailed := false
+	var skipped []string
 	commit := func(group []Extractor) {
 		type res struct {
 			name string
 			out  map[string]any
-			ok   bool
+			res  passOutcome
 		}
 		results := make([]res, len(group))
 		for i, ex := range group {
-			out, ok := runStageBounded(ex, ctx, cfg)
-			results[i] = res{ex.Name(), out, ok}
+			out, o := runStageBounded(ex, ctx, cfg)
+			results[i] = res{ex.Name(), out, o}
 		}
 		for _, r := range results {
-			if !r.ok {
+			switch r.res {
+			case passSkipped:
+				skipped = append(skipped, r.name)
+			case passFailed:
 				anyFailed = true
-				continue
+			default:
+				ctx.Set(r.name, r.out)
 			}
-			ctx.Set(r.name, r.out)
 		}
 	}
 
@@ -222,10 +243,13 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	if !gateOff {
 		commit(gated)
 		for _, ex := range wave2 {
-			if out, ok := runStageBounded(ex, ctx, cfg); ok {
-				ctx.Set(ex.Name(), out)
-			} else {
+			switch out, o := runStageBounded(ex, ctx, cfg); o {
+			case passSkipped:
+				skipped = append(skipped, ex.Name())
+			case passFailed:
 				anyFailed = true
+			default:
+				ctx.Set(ex.Name(), out)
 			}
 		}
 		ran = append(append(ran, gated...), wave2...)
@@ -262,6 +286,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		SubcategoryAlt:    altsNamed(ctx.Get("subcategory"), "subcategory_alt"),
 		Workstreams:       workstreamsFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
+		FacetsSkipped:     skipped,
 		ExtractorVersions: versions,
 		SchemaVersion:     SchemaVersion,
 		Custom:            custom,

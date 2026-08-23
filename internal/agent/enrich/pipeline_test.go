@@ -71,15 +71,22 @@ func (panicModel) Extract(string, map[string]string, map[string][]string) enrich
 // TestRunToleratesNilModelAndStillDetectsCredentials pins deterministic-mode
 // behavior: the daemon's wireEnrichment hands the pipeline a genuinely nil
 // Model (settings.MLBackend == "deterministic"). Every model-dependent pass
-// must fail cleanly (no panic escaping Run) rather than crash the enrichment
-// worker, while SensitivityExtractor's deterministic credential layer (pure
-// Go, no model — see CredentialSpans) must still run and produce a real
-// signal, since that is the entire point of a deterministic mode.
+// must be skipped cleanly (no panic escaping Run) rather than crash the
+// enrichment worker, while SensitivityExtractor's deterministic credential
+// layer (pure Go, no model — see CredentialSpans) must still run and produce a
+// real signal, since that is the entire point of a deterministic mode.
+//
+// The status is "enriched", not "partial": a skipped model pass is a pass this
+// mode does not have, not a pass that failed. The thinner facet set is stated
+// in FacetsSkipped instead — see facets_skipped_test.go.
 func TestRunToleratesNilModelAndStillDetectsCredentials(t *testing.T) {
 	p := enrich.Run(`export GITHUB_TOKEN="ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"`, "claude_code", enrich.Meta{}, nil)
 
-	if p.PipelineStatus != "partial" {
-		t.Fatalf("status = %q, want partial (no model to run the other passes)", p.PipelineStatus)
+	if p.PipelineStatus != "enriched" {
+		t.Fatalf("status = %q, want enriched (nothing failed; the model passes are absent by design)", p.PipelineStatus)
+	}
+	if len(p.FacetsSkipped) == 0 {
+		t.Fatal("a thinner profile must name what it dropped: FacetsSkipped is empty")
 	}
 	if p.Sensitivity.Value != "secrets" {
 		t.Fatalf("sensitivity = %+v, want secrets from the deterministic credential layer", p.Sensitivity)

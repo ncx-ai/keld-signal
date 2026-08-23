@@ -40,8 +40,11 @@ source of truth:
   (or its port cannot be allocated) that gate is trivially true and the analyzer
   nil, because no service can arrive this daemon lifetime and waiting would wedge
   the mode forever; enrichment runs its other model-free facets and the
-  workstreams pass never registers — a dropped facet reported as
-  `pipeline_status:"partial"`, not a substitute. `ml_backend:"off"` means
+  workstreams pass never registers — a dropped facet, not a substitute.
+  **A pass skipped for want of a model is not a failure:** deterministic runs
+  report `pipeline_status:"enriched"` and name what they dropped in
+  `facets_skipped`; `"partial"` still means something that should have worked
+  did not. `ml_backend:"off"` means
   enrichment is **disabled entirely** (no enrichment worker, `/enrich`
   accepts-and-discards). Don't reintroduce a *substitute* for the model's
   facets; a *different* facet set that needs no model is fine and already

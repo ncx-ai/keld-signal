@@ -101,29 +101,38 @@ type HealthFunc func() bool
 
 // Profile is the full enrichment result for one prompt.
 type Profile struct {
-	TaskType          Labeled           `json:"task_type"`
-	TaskTypeAlt       []Labeled         `json:"task_type_alt,omitempty"`
-	Domain            Labeled           `json:"domain"`
-	Entities          []Entity          `json:"entities,omitempty"`
-	Sensitivity       Labeled           `json:"sensitivity"`
-	SensitivitySpans  []Entity          `json:"sensitivity_spans,omitempty"`
-	Activity          Labeled           `json:"activity_type"`
-	Personal          Labeled           `json:"personal"`
-	FunctionGuess     Labeled           `json:"function_guess"`
-	SpeechAct         Labeled           `json:"speech_act"`
-	SpeechActAlt      []Labeled         `json:"speech_act_alt,omitempty"`
-	Subcategory       Labeled           `json:"subcategory"`
-	SubcategoryAlt    []Labeled         `json:"subcategory_alt,omitempty"`
+	TaskType         Labeled   `json:"task_type"`
+	TaskTypeAlt      []Labeled `json:"task_type_alt,omitempty"`
+	Domain           Labeled   `json:"domain"`
+	Entities         []Entity  `json:"entities,omitempty"`
+	Sensitivity      Labeled   `json:"sensitivity"`
+	SensitivitySpans []Entity  `json:"sensitivity_spans,omitempty"`
+	Activity         Labeled   `json:"activity_type"`
+	Personal         Labeled   `json:"personal"`
+	FunctionGuess    Labeled   `json:"function_guess"`
+	SpeechAct        Labeled   `json:"speech_act"`
+	SpeechActAlt     []Labeled `json:"speech_act_alt,omitempty"`
+	Subcategory      Labeled   `json:"subcategory"`
+	SubcategoryAlt   []Labeled `json:"subcategory_alt,omitempty"`
 	// Workstreams are the deterministic window dimensions (project, branch,
 	// model, ...) counted from tool-call metadata rather than classified — see
 	// WorkstreamsExtractor. Keyed by dimension; a dimension the window could not
 	// attribute is ABSENT rather than present-and-empty.
-	Workstreams       map[string]Labeled `json:"workstreams,omitempty"`
-	PipelineStatus    string            `json:"pipeline_status"`
-	ExtractorVersions map[string]string `json:"extractor_versions"`
-	SchemaVersion     int               `json:"schema_version"`
+	Workstreams    map[string]Labeled `json:"workstreams,omitempty"`
+	PipelineStatus string             `json:"pipeline_status"`
+	// FacetsSkipped names the passes that did not run because THIS RUN has no
+	// such pass — currently: a model-dependent pass under ml_backend
+	// "deterministic", where ctx.Model is nil by design. It is the companion
+	// that keeps PipelineStatus honest: a skip is not a failure, so it does not
+	// downgrade the status to "partial", but a thinner profile must not read as
+	// a complete one either, so the loss is NAMED rather than inferred from
+	// missing fields (the omittedNotice rule, one level up). Absent when
+	// nothing was skipped, so the default mode's wire shape is unchanged.
+	FacetsSkipped     []string                `json:"facets_skipped,omitempty"`
+	ExtractorVersions map[string]string       `json:"extractor_versions"`
+	SchemaVersion     int                     `json:"schema_version"`
 	Custom            map[string]CustomResult `json:"custom,omitempty"`
-	EnrichedAt        time.Time         `json:"-"`
+	EnrichedAt        time.Time               `json:"-"`
 }
 
 // CustomResult is one org-defined (custom) pass's output, shaped by kind. It

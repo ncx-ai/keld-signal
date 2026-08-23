@@ -233,8 +233,9 @@ selects one of three modes:
   `noAnalysisService` — one `sidecar.unavailable` event (the two causes stay
   distinguishable via its `reason`/`error` field), an open gate, and a **nil**
   analyzer. Enrichment then runs its remaining model-free facets (credential
-  detection) with the workstreams pass simply unregistered, publishing
-  `pipeline_status:"partial"`. Holding the gate here would wedge the mode
+  detection) with the workstreams pass simply unregistered — absent from
+  `extractor_versions` rather than present-and-failed, and so not a downgrade
+  (see `pipeline_status` below). Holding the gate here would wedge the mode
   forever on what is the state of **every** machine before the sidecar tarball
   is fetched. Dropping the facet entirely and reporting it dropped is not the
   substitution never-degrade forbids — nothing lower-fidelity stands in for
@@ -250,9 +251,20 @@ selects one of three modes:
   in via the `modelFreeExtractor` capability (mirroring `alwaysRunner`) —
   `SensitivityExtractor` is the one built-in that implements it, since its
   credential layer runs regardless of the model and its NER half is simply
-  skipped when `ctx.Model == nil`. A skipped model-dependent pass fails
-  cleanly (contributes to `pipeline_status:"partial"`, same idiom as a
-  timed-out pass) rather than panicking through a nil interface call.
+  skipped when `ctx.Model == nil` — a clean skip, decided before `Run`, rather
+  than a nil-interface panic.
+  **A skip is NOT a failure.** `runStage` returns a tri-state
+  (`passOK`/`passFailed`/`passSkipped`): a pass that needs a Model where there
+  structurally is none does not set `anyFailed`, so a deterministic run whose
+  every executed pass succeeded publishes `pipeline_status:"enriched"`.
+  `"partial"` keeps its one meaning — something that should have worked did
+  not (panic, error, pass deadline) — including for a model-free pass that
+  errors in this mode. This is `WithWorkstreams`' idiom one level down: don't
+  downgrade a profile for a facet the run never had. The thinner facet set
+  stays **visible** in the new `Profile.FacetsSkipped` / wire
+  `facets_skipped` (omitted when empty, so auto-mode payloads are unchanged) —
+  always a subset of the `extractor_versions` keys, since a pass that was
+  never registered at all (unwired workstreams, above) is absent from both.
 - **`"off"`** — enrichment is **disabled entirely**: no enrichment worker is
   started and `/enrich` accepts-and-discards (returns 202, never enqueues).
   Telemetry and client-events are unaffected.
