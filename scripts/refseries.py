@@ -44,17 +44,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qwen_windows import EXT_LANG
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
+# mcp_provider has no call site left in this file (its uses moved to app.analysis.levels with
+# the rest of _process_transcript) but is kept in this import list as a re-export:
+# scripts/test_bashrefs.py imports it from `refseries`, not from `app.analysis.vocab` directly.
 from app.analysis.vocab import (  # noqa: E402
     EXT_LANG, CODE_EXT, ARTIFACT_EXT, ARTIFACT_DIR, ARTIFACT_SKILL, TOOLCHAIN_EXE,
-    TOOL_ACTION, EXE_ACTION, EXE_TO_ACTION,
-    action_for, toolchain_for, artifacts_for, vcs_of, mcp_provider)
+    TOOL_ACTION, EXE_ACTION, EXE_TO_ACTION, mcp_provider)
 from app.analysis.shell import (  # noqa: E402
     SHELL_KEYWORD, TWO_WORD, strip_heredocs, parsed_command_names, unwrap_command)
 from app.analysis.text import clip, is_command_echo, text_of, think_blocks  # noqa: E402
-from app.analysis import terms  # noqa: E402
 from app.analysis.paths import (  # noqa: E402
-    WORKTREE, PATH_INPUTS, REMOTE_REPO,
-    resolve_workspace, rel_within, scan_workspace, reconcile, bash_refs)
+    REMOTE_REPO, resolve_workspace, rel_within, scan_workspace, reconcile, bash_refs)
+from app.analysis.transcript import iter_turns  # noqa: E402
+from app.analysis.levels import LEVELS, events_for_turns  # noqa: E402
 
 import numpy as np
 import pandas as pd
@@ -101,18 +103,8 @@ def term_nlp():
     return _NLP[0]
 
 
-LEVELS = ["workspace", "workspace_evidence", "remote", "repo_mentioned", "vcs", "branch",
-          "component", "dir", "file", "artifact", "action", "toolchain", "ext",
-          "lang", "tool", "exe", "verb", "service", "agent", "skill", "model", "mcp_server",
-          "mcp_tool", "term"]
-
-# What the work REACHES OUT TO. Evidence-based only: a host that actually appears in a tool input,
-# never a service inferred from a CLI's name. Ports are dropped because a test harness binds a
-# random one every run and the vocabulary would be all noise; the host is the service.
-URL_HOST = re.compile(r"\bhttps?://(?:[^@/\s]*@)?([A-Za-z0-9._\-]+)", re.I)
-SSH_HOST = re.compile(r"\b(?:ssh|scp|rsync)\s+(?:-\S+\s+)*(?:[\w.\-]+@)?"
-                      r"([A-Za-z0-9.\-]+\.[A-Za-z0-9.\-]+|localhost)\b", re.I)
-MCP_TOOL = re.compile(r"^mcp__(?P<server>[^_]+(?:_[^_]+)*?)__(?P<tool>.+)$")
+# LEVELS, MCP_TOOL, URL_HOST/SSH_HOST/services_in moved to app.analysis.levels — the
+# classification vocabulary and helpers for events_for_turns, imported above.
 SAY = ["user", "user_echo", "asst", "asst_think"]
 TOK = ["out", "in_fresh", "in_cached"]
 
@@ -154,15 +146,6 @@ def remote_repos_in(text):
 def tickets_in(text):
     return [f"{m.group(1)}-{m.group(2)}" for m in TICKET.finditer(text or "")
             if m.group(1) not in NOT_TICKET]
-
-
-def services_in(text):
-    """Hosts named in a command or a tool argument."""
-    if not text:
-        return []
-    out = [m.group(1).lower().split(":")[0] for m in URL_HOST.finditer(text)]
-    out += [m.group(1).lower() for m in SSH_HOST.finditer(text)]
-    return [h for h in out if h and not h.endswith(".") and h != "-"]
 
 
 ROLL = ["1h", "6h", "24h", "168h"]
@@ -1349,162 +1332,17 @@ def _process_transcript(job):
     `reconcile`, `canonicalize_terms`) stay in the parent, where they need the whole corpus anyway.
 
     The hash is computed here rather than in the parent so the file is read once, in the worker.
+
+    Thin by design: `transcript.iter_turns` owns the file I/O and the per-line filtering (the
+    `tool_result` skip that keeps this a seconds-long parse), `levels.events_for_turns` owns the
+    classification. This function is left with the one step that only makes sense in the worker
+    (the hash, so the file is read for it exactly here) and wiring the two together.
     """
     path, root, repo_root = job
     with open(path, "rb") as fh:
         h = hashlib.sha256(fh.read()).hexdigest()
-    rows, pending, n_lines = [], [], 0
-    projdir = os.path.basename(os.path.dirname(path))
-    marker_dirs, cd_targets, remotes = scan_workspace(path)
-    ws_cache = {}
-    session = os.path.basename(path)[:8]
-    seen_req = set()
-    for line in open(path, errors="replace"):
-        if '"type":"user"' not in line and '"type":"assistant"' not in line:
-            continue
-        # A tool_result carries no speech and no reference; it is also where the huge
-        # lines are. Skipping it is what keeps this a seconds-long parse.
-        if '"tool_result"' in line and '"tool_use"' not in line:
-            continue
-        try:
-            o = json.loads(line)
-        except Exception:
-            continue
-        ts = o.get("timestamp")
-        if not ts:
-            continue
-        n_lines += 1
-        t = pd.Timestamp(ts).timestamp()
-        cwd_clean = WORKTREE.sub("", o.get("cwd") or "")
-        cwd_raw = o.get("cwd") or ""
-        if cwd_raw not in ws_cache:
-            ws_cache[cwd_raw] = resolve_workspace(
-                cwd_raw, projdir, marker_dirs, cd_targets, repo_root)
-        root_dir_resolved, repo, ws_src, ws_conf = ws_cache[cwd_raw]
-        # The reconciliation scope is a MACHINE, not a checkout. Keying it on the resolved
-        # repo root made every repository its own scope, which silently disabled the
-        # cross-repo reattribution that moves keld-signal's files out of a keld-atlas
-        # session. The transcript collection it came from is the machine boundary: this
-        # machine's ~/.claude/projects against a colleague's export.
-        root_key = root
-        root_dir = root_dir_resolved
-        base = (round(t, 1), session, repo, o.get("gitBranch") or None,
-                bool(o.get("isSidechain")))
-
-        def add(kind, level, ref, n):
-            rows.append(base + (kind, level, ref, float(n)))
-
-        if repo:
-            add("ref", "workspace", repo, 1)
-            add("ref", "workspace_evidence", f"{ws_src} [{ws_conf}]", 1)
-            add("ref", "vcs", vcs_of(o.get("cwd"), o.get("gitBranch")), 1)
-            # A remote is IDENTITY only when it names this workspace. The modal remote
-            # in a transcript is often a repository merely discussed: atlas sessions
-            # mention ncx-ai/keld-signal constantly, and attributing it as keld-atlas's
-            # own remote was the same error as reading a quoted example as a fact.
-            for rr, _n in remotes.most_common():
-                if rr.rsplit("/", 1)[-1] == repo:
-                    add("ref", "remote", rr, 1)
-                    break
-            for rr, _n in remotes.most_common(3):
-                if rr.rsplit("/", 1)[-1] != repo:
-                    add("ref", "repo_mentioned", rr, 1)
-        if base[3]:
-            add("ref", "branch", base[3], 1)
-        if o.get("attributionSkill"):
-            add("ref", "skill", o["attributionSkill"], 1)
-            for kind in artifacts_for(skill=o["attributionSkill"]):
-                add("ref", "artifact", kind, 1)
-        if o.get("attributionMcpServer"):
-            add("ref", "mcp_server",
-                mcp_provider(o["attributionMcpServer"], o.get("attributionMcpTool")), 1)
-        if o.get("attributionMcpTool"):
-            add("ref", "mcp_tool", o["attributionMcpTool"], 1)
-
-        msg = o.get("message") or {}
-        content = msg.get("content")
-        if o.get("type") == "user":
-            body = text_of(content)
-            if body.strip():
-                add("say", "user_echo" if is_command_echo(body) else "user", "",
-                    len(body))
-                if not is_command_echo(body):
-                    for t in terms.tally([body], term_nlp()):
-                        add("ref", "term", t["term"], t["n"])
-        else:
-            if msg.get("model"):
-                add("ref", "model", msg["model"], 1)
-            said = text_of(content)
-            if said.strip():
-                add("say", "asst", "", len(said))
-                for t in terms.tally([said], term_nlp()):
-                    add("ref", "term", t["term"], t["n"])
-            for nchars in think_blocks(content):
-                add("say", "asst_think", "", nchars)   # 0 = not persisted by this store
-            u, rid = msg.get("usage"), o.get("requestId")
-            if u and rid and rid not in seen_req:
-                seen_req.add(rid)
-                add("tok", "out", "", u.get("output_tokens", 0))
-                add("tok", "in_fresh", "", (u.get("input_tokens", 0) +
-                                            u.get("cache_creation_input_tokens", 0)))
-                add("tok", "in_cached", "", u.get("cache_read_input_tokens", 0))
-
-        paths = []
-        if isinstance(content, list):
-            for b in content:
-                if not (isinstance(b, dict) and b.get("type") == "tool_use"):
-                    continue
-                name, inp = b.get("name"), b.get("input") or {}
-                act = action_for(tool=name)
-                if act:
-                    add("ref", "action", act, 1)
-                m = MCP_TOOL.match(name or "")
-                if m:
-                    add("ref", "tool", "mcp:" + m["tool"], 1)
-                    add("ref", "mcp_server", mcp_provider(m["server"], m["tool"]), 1)
-                    add("ref", "mcp_tool", m["tool"], 1)
-                    # The server id is a uuid; the tool name carries the recognisable
-                    # service ("notion-fetch" -> notion), which is what a reader needs.
-                    add("ref", "service", "mcp:" + m["tool"].split("-")[0].split("_")[0],
-                        1)
-                else:
-                    add("ref", "tool", name, 1)
-                if name == "Agent" and inp.get("subagent_type"):
-                    add("ref", "agent", inp["subagent_type"], 1)
-                if name == "Skill" and inp.get("skill"):
-                    add("ref", "skill", inp["skill"], 1)
-                    for kind in artifacts_for(skill=inp["skill"]):
-                        add("ref", "artifact", kind, 1)
-                for host in dict.fromkeys(
-                        services_in(" ".join(v for v in (inp.get("command"),
-                                                         inp.get("url"),
-                                                         inp.get("query"))
-                                             if isinstance(v, str)))):
-                    add("ref", "service", host, 1)
-                for k in PATH_INPUTS:
-                    if isinstance(inp.get(k), str):
-                        paths.append((inp[k], True))     # a tool's file_path IS a file
-                if name == "Bash":
-                    verbs, exes, bp = bash_refs(inp.get("command"))
-                    for v in verbs:
-                        add("ref", "verb", v, 1)
-                    for e in dict.fromkeys(exes):
-                        add("ref", "exe", e, 1)
-                        for kind in toolchain_for(e):
-                            add("ref", "toolchain", kind, 1)
-                    for v in dict.fromkeys(verbs):
-                        act = action_for(exe=v.split()[0], verb=v)
-                        if act:
-                            add("ref", "action", act, 1)
-                    paths += [(q, False) for q in bp]
-        for p, from_input in paths:
-            rel = rel_within(p, root_dir, o.get("cwd"))
-            if not rel or rel.startswith("."):
-                continue
-            # Classification is DEFERRED to a second pass. A path quoted in a command has
-            # no authoritative base — the shell's real cwd is not in the transcript — so
-            # it can only be resolved against the paths that tools DECLARED.
-            pending.append((base, rel.rstrip("/"), from_input, root_key))
+    turns = list(iter_turns(path))
+    rows, pending, n_lines = events_for_turns(turns, path, root, repo_root, term_nlp())
     return h, path, rows, pending, n_lines
 
 
