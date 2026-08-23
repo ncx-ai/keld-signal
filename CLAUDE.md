@@ -23,12 +23,19 @@ source of truth:
   `sidecar/loadtest/README.md`.
 - **Don't fan out inference.** Single-flight in the sidecar is deliberate load
   protection; RAM is bounded by eviction, CPU by the governor + thread scaler.
-- **ML is mandatory — there is no deterministic backend.** Enrichment always
-  runs on GLiNER2; a reloading/evicted/not-yet-provisioned sidecar is waited
-  out (jobs queue/spool until it's ready), never degraded to a fallback model.
-  `ml_backend:"off"` means enrichment is **disabled entirely** (no enrichment
-  worker, `/enrich` accepts-and-discards) — not "use a lower-fidelity backend."
-  Bound per-job work with a cancellable deadline + re-spool cap (see AGENTS.md
+- **No health-gated fallback — but a third, always-on `ml_backend` mode is not
+  that.** `ml_backend:"auto"` (default) always runs on GLiNER2; a
+  reloading/evicted/not-yet-provisioned sidecar is waited out (jobs
+  queue/spool until it's ready), **never** silently swapped for a
+  lower-fidelity substitute of the same facets — that substitution is what's
+  forbidden. `ml_backend:"deterministic"` is a different thing: it runs a
+  different, smaller set of facets that need no model (e.g. credential
+  detection) and is **always** on when selected, never health-gated — there is
+  no sidecar in this mode to be healthy or not. `ml_backend:"off"` means
+  enrichment is **disabled entirely** (no enrichment worker, `/enrich`
+  accepts-and-discards). Don't reintroduce a *substitute* for the model's
+  facets; a *different* facet set that needs no model is fine and already
+  exists. Bound per-job work with a cancellable deadline + re-spool cap (see AGENTS.md
   → Delivery reliability); don't reintroduce a deterministic fallback or a
   health-gated substitute.
 - **Use the superpowers workflow** (brainstorm → plan → TDD → systematic

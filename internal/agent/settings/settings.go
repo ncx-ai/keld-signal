@@ -19,14 +19,25 @@ type Settings struct {
 	IncludeEntityText bool `json:"include_entity_text"`
 	// MLBackend selects whether ML enrichment runs: "auto" (enrichment runs on
 	// the GLiNER2 sidecar; jobs queue/spool until it is ready — never a
-	// deterministic fallback) or "off" (enrichment is disabled entirely; the
-	// /enrich ingress accepts-and-discards). Default auto. Local, startup-only
-	// — not part of the remote settings doc and never re-read at runtime.
+	// deterministic fallback), "deterministic" (the sidecar is never used; only
+	// the passes that need no model run — e.g. credential detection, and in
+	// future the workstream-dimension pass), or "off" (enrichment is disabled
+	// entirely; the /enrich ingress accepts-and-discards). Default auto. Local,
+	// startup-only — not part of the remote settings doc and never re-read at
+	// runtime.
 	MLBackend string `json:"ml_backend"`
 }
 
 // MLEnabled reports whether the ML sidecar backend may be used.
-func (s Settings) MLEnabled() bool { return s.MLBackend != "off" }
+func (s Settings) MLEnabled() bool { return s.MLBackend != "off" && s.MLBackend != "deterministic" }
+
+// EnrichmentEnabled reports whether the enrichment worker runs at all.
+// "deterministic" runs the passes that need no model — credential detection,
+// and in future workstream dimensions from tool inputs — and is NOT the
+// fallback AGENTS.md forbids: it always produces a different, smaller set of
+// facets, never a lower-fidelity substitute for the model's, and it is never
+// health-gated (unlike the sidecar, it has no readiness to wait on).
+func (s Settings) EnrichmentEnabled() bool { return s.MLBackend != "off" }
 
 // Load reads ~/.keld/agent-config.json. Missing/unreadable/invalid -> defaults.
 func Load() Settings {

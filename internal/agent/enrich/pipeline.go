@@ -56,13 +56,35 @@ func passTimeoutFromEnv() time.Duration {
 	return DefaultPassTimeout
 }
 
-// runStage executes one extractor with panic isolation; ok=false on panic/error.
+// modelFreeExtractor is an OPTIONAL Extractor capability (mirrors
+// alwaysRunner): a pass that has its own internal nil-Model branch and must
+// still be invoked when ctx.Model is nil (deterministic mode — see
+// settings.Settings.MLEnabled). Absence ⇒ the pass needs a Model and is
+// skipped rather than run, so it fails cleanly instead of nil-panicking
+// through ctx.Model.
+type modelFreeExtractor interface {
+	ModelFree() bool
+}
+
+// runStage executes one extractor with panic isolation; ok=false on
+// panic/error. A nil ctx.Model is a deliberate, permanent state (deterministic
+// mode has no sidecar, not a transient outage), so passes that need a Model
+// and don't declare themselves modelFreeExtractor are skipped BEFORE calling
+// Run — cleanly reported as failed rather than relying on the recover below to
+// catch the resulting nil-interface-method panic. Passes that do declare
+// ModelFree (e.g. sensitivity's deterministic credential layer) still run, and
+// must guard their own ctx.Model use internally.
 func runStage(ex Extractor, ctx *JobContext) (out map[string]any, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			out, ok = nil, false
 		}
 	}()
+	if ctx.Model == nil {
+		if mf, isModelFree := ex.(modelFreeExtractor); !isModelFree || !mf.ModelFree() {
+			return nil, false
+		}
+	}
 	o, err := ex.Run(ctx)
 	if err != nil {
 		return nil, false

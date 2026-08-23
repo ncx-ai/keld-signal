@@ -68,6 +68,36 @@ func (panicModel) Extract(string, map[string]string, map[string][]string) enrich
 	panic("boom")
 }
 
+// TestRunToleratesNilModelAndStillDetectsCredentials pins deterministic-mode
+// behavior: the daemon's wireEnrichment hands the pipeline a genuinely nil
+// Model (settings.MLBackend == "deterministic"). Every model-dependent pass
+// must fail cleanly (no panic escaping Run) rather than crash the enrichment
+// worker, while SensitivityExtractor's deterministic credential layer (pure
+// Go, no model — see CredentialSpans) must still run and produce a real
+// signal, since that is the entire point of a deterministic mode.
+func TestRunToleratesNilModelAndStillDetectsCredentials(t *testing.T) {
+	p := enrich.Run(`export GITHUB_TOKEN="ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"`, "claude_code", enrich.Meta{}, nil)
+
+	if p.PipelineStatus != "partial" {
+		t.Fatalf("status = %q, want partial (no model to run the other passes)", p.PipelineStatus)
+	}
+	if p.Sensitivity.Value != "secrets" {
+		t.Fatalf("sensitivity = %+v, want secrets from the deterministic credential layer", p.Sensitivity)
+	}
+	if len(p.SensitivitySpans) == 0 {
+		t.Fatal("expected a masked credential span even with a nil Model")
+	}
+	for _, s := range p.SensitivitySpans {
+		if s.Text != "" {
+			t.Errorf("raw text must never survive: %q", s.Text)
+		}
+	}
+	// task_type has no model-free path: with a nil Model it must abstain, not panic.
+	if p.TaskType.Value != "" || p.TaskType.Confidence != 0 {
+		t.Fatalf("task_type needs a model and must abstain, got %+v", p.TaskType)
+	}
+}
+
 func TestRunIsolatesPanicAsPartial(t *testing.T) {
 	// task_type uses Classify (works via embedded Model); sensitivity+domain use
 	// Extract (panics). Pipeline must survive and mark partial.

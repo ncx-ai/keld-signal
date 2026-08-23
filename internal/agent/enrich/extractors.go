@@ -74,8 +74,21 @@ func (SensitivityExtractor) Name() string    { return "sensitivity" }
 func (SensitivityExtractor) Version() string { return versioned("sensitivity") }
 func (SensitivityExtractor) AlwaysRun() bool { return true }
 
+// ModelFree: sensitivity has a real deterministic layer (CredentialSpans —
+// pure Go, no model) merged alongside the model's NER, so the pipeline must
+// still invoke Run when ctx.Model is nil rather than skip the pass wholesale.
+// Run itself guards the model-dependent half.
+func (SensitivityExtractor) ModelFree() bool { return true }
+
 func (e SensitivityExtractor) Run(ctx *JobContext) (map[string]any, error) {
-	res := ctx.Model.Extract(ctx.Text, SensitiveEntityLabels, map[string][]string{"sensitivity": Sensitivity})
+	// Deterministic mode (ctx.Model == nil): no sidecar, so no NER pass — only
+	// the credential layer below runs. res stays the zero value, which is
+	// exactly the "found nothing via the model" case the rest of this
+	// function already handles.
+	var res ExtractResult
+	if ctx.Model != nil {
+		res = ctx.Model.Extract(ctx.Text, SensitiveEntityLabels, map[string][]string{"sensitivity": Sensitivity})
+	}
 
 	found := map[string]bool{}
 	spans := make([]Entity, 0, len(res.Entities))

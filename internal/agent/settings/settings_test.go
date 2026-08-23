@@ -44,3 +44,24 @@ func TestMLEnabledDefaultsAuto(t *testing.T) {
 		t.Fatal("off should be disabled")
 	}
 }
+
+func TestDeterministicModeEnablesEnrichmentWithoutTheModel(t *testing.T) {
+	cases := []struct {
+		backend            string
+		wantML, wantEnrich bool
+	}{
+		{"", true, true},
+		{"auto", true, true},
+		{"deterministic", false, true},
+		{"off", false, false},
+	}
+	for _, c := range cases {
+		s := Settings{MLBackend: c.backend}
+		if got := s.MLEnabled(); got != c.wantML {
+			t.Errorf("%q: MLEnabled=%v want %v", c.backend, got, c.wantML)
+		}
+		if got := s.EnrichmentEnabled(); got != c.wantEnrich {
+			t.Errorf("%q: EnrichmentEnabled=%v want %v", c.backend, got, c.wantEnrich)
+		}
+	}
+}

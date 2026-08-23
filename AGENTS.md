@@ -121,16 +121,38 @@ a time. Two waves, up to 8 facets per prompt:
   framework metadata helps `domain` but hurts `task_type`, so only `domain`
   augments with it — `task_type` and the others drop it.
 
-**Model backends.** Enrichment is **ML-only — there is no deterministic
-backend.**
-- `sidecar/` — HTTP client to the GLiNER2 sidecar (`/classify`, `/extract`,
-  `/entities`); the sole `Model` implementation. Model provisioning
-  (`provision/`) fetches weights (`hf.go`) into `~/.keld/models`. Why a bundled
-  sidecar over in-process ONNX: `docs/keld-agent-p2-onnx-decision.md`
-  (historical — see the superseded note at its top).
-- If the local `ml_backend` setting is `"off"`, enrichment is **disabled
-  entirely**: no enrichment worker is started and `/enrich` accepts-and-discards
-  (returns 202, never enqueues). Telemetry and client-events are unaffected.
+**Model backends.** `ml_backend` (local, startup-only, `settings.Settings`)
+selects one of three modes:
+- **`"auto"`/`""` (default)** — Enrichment is **ML-only** for its full facet
+  set: there is no deterministic *substitute* for the model's own facets. A
+  reloading/evicted/not-yet-provisioned sidecar is waited out, never silently
+  swapped for a lower-fidelity stand-in of the same facets — that swap is the
+  thing this project forbids. `sidecar/` — HTTP client to the GLiNER2 sidecar
+  (`/classify`, `/extract`, `/entities`); the sole `Model` implementation.
+  Model provisioning (`provision/`) fetches weights (`hf.go`) into
+  `~/.keld/models`. Why a bundled sidecar over in-process ONNX:
+  `docs/keld-agent-p2-onnx-decision.md` (historical — see the superseded note
+  at its top).
+- **`"deterministic"`** — enrichment stays **on**, but the sidecar is never
+  started and `Worker` runs with a `nil` `enrich.Model`. This is a *different*
+  set of facets — the ones that need no model at all, e.g. credential
+  detection (`CredentialSpans`, pure Go, no sidecar, no network) and, in
+  future, workstream dimensions derived from tool-call metadata — not a
+  fallback for the model's facets. It is **always on when selected, never
+  health-gated**: there is no sidecar in this mode to be ready or not, so
+  `wireEnrichment` wires a trivially-true readiness gate instead of one that
+  polls anything. `Settings.MLEnabled()` is false in this mode;
+  `Settings.EnrichmentEnabled()` is true. The pipeline tolerates a nil `Model`:
+  `enrich.runStage` skips any `Extractor` that needs a model and hasn't opted
+  in via the `modelFreeExtractor` capability (mirroring `alwaysRunner`) —
+  `SensitivityExtractor` is the one built-in that implements it, since its
+  credential layer runs regardless of the model and its NER half is simply
+  skipped when `ctx.Model == nil`. A skipped model-dependent pass fails
+  cleanly (contributes to `pipeline_status:"partial"`, same idiom as a
+  timed-out pass) rather than panicking through a nil interface call.
+- **`"off"`** — enrichment is **disabled entirely**: no enrichment worker is
+  started and `/enrich` accepts-and-discards (returns 202, never enqueues).
+  Telemetry and client-events are unaffected.
 
 **Delivery reliability (never degrade, never wedge).** When enrichment is
 enabled, it always runs on GLiNER2 — there is no fallback to swap to. A sidecar
@@ -395,9 +417,13 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **Config via env (`KELD_*`)**, resolved through `internal/config` /
   `internal/paths`; credentials/tokens/hook/manifest under `~/.keld` with
   user-only permissions.
-- **CLI = single static Go binary**, no runtime deps. Enrichment is **ML-only**:
-  the GLiNER2 sidecar is mandatory and there is no deterministic backend — when
-  it isn't ready, jobs queue/spool until it is (see Delivery reliability above).
+- **CLI = single static Go binary**, no runtime deps. `ml_backend:"auto"`
+  (default) enrichment is **ML-only** for its facet set: the GLiNER2 sidecar is
+  mandatory and there is no deterministic *substitute* for those facets — when
+  it isn't ready, jobs queue/spool until it is (see Delivery reliability
+  above). `ml_backend:"deterministic"` is not that substitute: it is a
+  different, always-on, never-health-gated facet set that needs no model at
+  all (see Model backends above).
 - **Sidecar single-flight** (one inference at a time) is load protection, not an
   accident — don't fan out inference. RAM is bounded by recycling the inference
   worker child process, CPU by the governor + thread scaler (see

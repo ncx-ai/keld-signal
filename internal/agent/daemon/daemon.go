@@ -941,13 +941,27 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     bound to q when enabled, or ingress.DiscardHandler (202, never
 //     enqueues) when disabled, so the hook stops spooling pointers that would
 //     never be processed.
-//   - model, gate: the enrichment Model + Worker readiness gate when enabled
-//     (nil, nil otherwise — Run must not start Worker in that case).
-//   - enabled: whether Run should start the enrich Worker.
+//   - model: the enrichment Model, nil when ml_backend="deterministic" (no
+//     sidecar backend at all) or when enrichment is disabled entirely.
+//   - gate: the Worker readiness gate. nil ONLY when enrichment is disabled
+//     (Run must not start Worker in that case). "deterministic" still returns
+//     a non-nil, trivially-true gate — Worker calls it unconditionally on
+//     every job, and there is no sidecar in this mode to wait on.
+//   - enabled: whether Run should start the enrich Worker — true for both
+//     "auto" (or "") and "deterministic"; only "off" disables it.
 func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter) (handler http.Handler, model enrich.Model, gate func() bool, enabled bool) {
-	if !set.MLEnabled() {
+	if !set.EnrichmentEnabled() {
 		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
 		return ingress.DiscardHandler(secret), nil, nil, false
+	}
+	if !set.MLEnabled() {
+		// deterministic: the Worker still runs, but with no Model. The gate
+		// must NOT be nil: Worker's loop calls ready() unconditionally on
+		// every job (see Worker, and waitWarm), so a nil func would panic the
+		// Worker goroutine on the very first job. There is no sidecar to wait
+		// on here, so "ready" is trivially always true.
+		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the ML sidecar is not started", set.MLBackend)
+		return ingress.Handler(q, secret), nil, func() bool { return true }, true
 	}
 	model, gate = mlBackend(ctx, emitter)
 	return ingress.Handler(q, secret), model, gate, true

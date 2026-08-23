@@ -617,6 +617,46 @@ func TestWireEnrichmentEnabledStartsRealHandler(t *testing.T) {
 	}
 }
 
+// TestWireEnrichmentDeterministicModeRunsWithoutAModel pins the third
+// ml_backend mode: enrichment stays ON (real ingress.Handler, a Worker gets
+// started) but the sidecar is never touched — model and gate come back nil,
+// unlike "auto" (real model/gate) and "off" (enrichment disabled entirely).
+func TestWireEnrichmentDeterministicModeRunsWithoutAModel(t *testing.T) {
+	q := queue.New(10)
+	set := settings.Settings{MLBackend: "deterministic"}
+	handler, model, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil)
+
+	if !enabled {
+		t.Fatal("enrichment must stay enabled in deterministic mode")
+	}
+	if model != nil {
+		t.Fatalf("deterministic mode must not wire a model, got %v", model)
+	}
+	// gate must NOT be nil: Worker calls ready() unconditionally on every job
+	// (see Worker's loop and waitWarm), so a nil func would panic the Worker
+	// goroutine on the first job ever pulled off the queue. There is no
+	// sidecar to wait on in this mode, so "ready" is trivially always true.
+	if gate == nil {
+		t.Fatal("deterministic mode must wire a non-nil gate (Worker calls it unconditionally)")
+	}
+	if !gate() {
+		t.Fatal("deterministic mode's gate must always report ready — there is no sidecar to wait on")
+	}
+
+	body := `{"source":{"id":"claude_code","origin":"hook"},"correlation":{"scheme":"prompt_id","id":"X"},"pointer":{"transcript_path":"/t","prompt_id":"X"}}`
+	req := httptest.NewRequest(http.MethodPost, "/enrich", strings.NewReader(body))
+	req.Header.Set("x-keld-agent-secret", "s3cret")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202", rr.Code)
+	}
+	q.Close()
+	if _, ok := q.Next(); !ok {
+		t.Fatal("deterministic mode must enqueue the job via the real handler, not discard it")
+	}
+}
+
 // TestSidecarUnavailableClosedGateNeverPublishes covers mlBackend's shared
 // "no sidecar this run" path (missing binary, or port-alloc failure): it must
 // return a permanently-closed gate and a model that is never invoked — never
