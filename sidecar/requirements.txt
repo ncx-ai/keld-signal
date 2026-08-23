@@ -18,3 +18,11 @@ bashlex==0.18
 spacy==3.8.15
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 wordfreq==3.1.1
+
+# Was already present transitively (transformers>=... and wordfreq both require it), but
+# app/analysis/match.py now `import regex` directly for its timeout= support on finditer/search —
+# a real interrupt point stdlib re lacks. Pinning it explicitly here is what turns "arrives
+# because something else happens to need it" into a declared dependency of this codebase; relying
+# on the transitive pull for a module we import by name is the exact trap numpy-via-pandas is
+# (AGENTS.md) — it works until an upstream drops it.
+regex==2026.6.28

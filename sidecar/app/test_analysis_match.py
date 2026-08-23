@@ -146,26 +146,45 @@ def test_label_with_neither_match_nor_regex_is_rejected():
     assert vocab == {}
 
 
-def test_catastrophic_backtracking_pattern_hits_the_budget_and_degrades_to_absent():
-    """An alternation-based pattern has no nested quantifier, so it slips past the static check
-    (documented in match.py) and must be caught by the runtime budget instead.
-
-    Sized empirically on this machine: `(a|a)*c` against 22 'a's (no trailing 'c', so it fails
-    only after exhausting every split) takes ~0.2s — comfortably over a 50ms budget, and
-    comfortably under a test timeout. 26 'a's took 2.8s and 32 did not return within two minutes
-    at 100% CPU, which is the whole reason this test picks a SMALL, calibrated input rather than
-    a 'realistic' large one: proving the mechanism must not itself hang the test suite.
-    """
-    vocab, rejects = compile_vocabulary({"x": [{"id": "evil", "regex": "(a|a)*c"}]})
+def test_a_previously_pathological_pattern_now_returns_within_budget():
+    """`(a|aa)*b` is the alternation-based shape with no nested quantifier — it has no `[+*]`
+    inside its group, so it slips past the static `_looks_catastrophic` filter, and it is exactly
+    the shape that hangs stdlib `re` (measured separately: the related `(a|a)*c` against 32 'a's
+    ran past two minutes at 100% CPU under `re` with no way to interrupt it short of killing the
+    process). Under this module's raw-pattern engine (`regex`, not `re`) the same shape returns
+    near-instantly — this is the practical fix the M1 review's finding produced, not just a
+    changed docstring. Input kept small so a REGRESSION back to `re`-like behaviour would fail
+    this test fast rather than wedging the suite."""
+    import time
+    vocab, rejects = compile_vocabulary({"x": [{"id": "evil", "regex": "(a|aa)*b"}]})
     assert rejects == []  # confirms it truly bypassed the static filter
+    text = "a" * 40  # never followed by 'b': forces exhaustive backtracking under a naive engine
+    t0 = time.perf_counter()
+    got = match_text(text, vocab, budget_s=0.5)
+    elapsed = time.perf_counter() - t0
+    assert "x" not in got, got
+    assert elapsed < 2.0, elapsed  # generous margin; typically sub-millisecond
+    assert vocab["x"][0]["poisoned"] is False  # never even approached the budget
+
+
+def test_a_pattern_that_exceeds_the_wall_clock_budget_is_disabled():
+    """Exercises the actual `regex.TimeoutError` -> poison -> absent path deterministically,
+    without depending on machine-specific backtracking timing (which the previous version of
+    this test did, and which a faster CPU or a `regex`-module upgrade could silently make flaky).
+    A trivial, entirely non-pathological pattern against a large text and a near-zero budget is
+    enough to force `regex`'s real timeout to fire — proving the WIRING (catch -> poison ->
+    degrade to absent) works, independent of whatever timing any particular pattern happens to
+    have on this machine."""
+    vocab, rejects = compile_vocabulary({"x": [{"id": "slow", "regex": "a"}]})
+    assert rejects == []
     entry = vocab["x"][0]
-    text = "a" * 22 + "!"  # never followed by 'c', forces the full pathological backtrack
-    got = match_text(text, vocab, budget_s=0.05)
+    text = "b" * 5_000_000 + "a"
+    got = match_text(text, vocab, budget_s=1e-9)
     assert "x" not in got, got
     assert entry["poisoned"] is True
-    # And the trip wire holds: a second call does not pay the cost again (returns immediately,
-    # still absent) rather than re-attempting the pattern it already proved dangerous.
-    got2 = match_text(text, vocab, budget_s=0.05)
+    # The trip wire holds: a second call skips the pattern entirely rather than re-attempting
+    # (and re-paying for) a pattern already proven to blow its budget.
+    got2 = match_text(text, vocab, budget_s=1e-9)
     assert "x" not in got2, got2
 
 
