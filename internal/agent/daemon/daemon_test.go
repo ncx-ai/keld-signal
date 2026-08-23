@@ -346,7 +346,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 	sentinelSHA := sha256Hex(modelContent)
 
 	// Use the mlBackend test seam.
-	router, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	router, _, gate := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   client,
 		modelDir: modelDir,
@@ -403,7 +403,7 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 
 	modelDir := filepath.Join(t.TempDir(), "gliner2")
 
-	model, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	model, _, gate := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   unhealthyClient,
 		modelDir: modelDir,
@@ -1211,7 +1211,7 @@ func TestMLBackendStartsTheServiceWhileProvisioningRuns(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 
-	_, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	_, _, gate := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   client,
 		modelDir: filepath.Join(t.TempDir(), "gliner2"),
@@ -1267,7 +1267,7 @@ func TestMLBackendProvisionFailureStillStartsTheService(t *testing.T) {
 	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 
-	_, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	_, _, gate := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   client,
 		modelDir: filepath.Join(t.TempDir(), "gliner2"),
@@ -1578,5 +1578,117 @@ func TestDeterministicPortAllocFailureDoesNotWedge(t *testing.T) {
 	}
 	if _, ok := events[0].Fields["error"]; !ok {
 		t.Fatalf("the port-alloc cause must stay distinguishable via its error field, got %+v", events[0].Fields)
+	}
+}
+
+// TestDeterministicGateIsCachedNotOneHTTPCallPerRead pins the COST of the
+// deterministic readiness gate, not just its boolean value. Worker calls
+// ready() at the top of every job and waitWarm re-calls it roughly every 20ms
+// for up to warmWait, so a gate that performs a live loopback GET per call is
+// a real defect: a crashed-but-installed service costs thousands of connects
+// per deferred job, and a service that ACCEPTS TCP but never answers costs the
+// client's full timeout on EVERY call — adding that timeout to every healthy
+// job once the service degrades.
+//
+// "auto" has never had this problem: its gate is a cached atomic refreshed by
+// warmGate. Deterministic mode must use the same mechanism. A test that only
+// asserts gate() == true passes with the defect still in place, so this one
+// counts requests against a stub /health across many reads.
+func TestDeterministicGateIsCachedNotOneHTTPCallPerRead(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	_, awaitPort := fakeAnalysisService(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := queue.New(10)
+	defer q.Close()
+	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
+	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
+	set := settings.Settings{MLBackend: "deterministic"}
+
+	_, _, _, gate, _ := wireEnrichment(ctx, set, "s3cret", q, emitter)
+	if gate == nil {
+		t.Fatal("deterministic mode must wire a non-nil gate")
+	}
+
+	var health atomic.Int64
+	port := awaitPort()
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("binding the service port %d: %v", port, err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		health.Add(1)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Close()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for !gate() {
+		if time.Now().After(deadline) {
+			t.Fatal("the gate never opened once the analysis service was serving /health")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// The tight loop below runs in well under one poll interval, so a cached
+	// gate can only be overtaken by at most a poll or two from the background
+	// refresher (and the supervisor's own liveness poll). A gate that probes
+	// per call would record ~1000.
+	const reads = 1000
+	before := health.Load()
+	for i := 0; i < reads; i++ {
+		gate()
+	}
+	if got := health.Load() - before; got > 4 {
+		t.Fatalf("%d gate reads issued %d /health requests — the gate must read a cached atomic, not probe the service per call", reads, got)
+	}
+}
+
+// TestMLBackendWiresTheWindowAnalyzer pins that "auto" — the mode nearly every
+// user runs — still produces a non-nil window analyzer. Nothing else did: the
+// only auto-mode wiring test discards the analyzer and runs with the sidecar
+// deliberately absent (where nil is correct), so a refactor could return nil
+// for auto, every claude_code user silently loses their workstream dimensions,
+// and the suite stays green.
+//
+// wireEnrichment's auto branch is a straight pass-through of what mlBackend
+// returns, so pinning it here keeps the test hermetic: no real sidecar is
+// spawned and no weights are fetched.
+func TestMLBackendWiresTheWindowAnalyzer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	healthFn := func() bool { return false }
+	sup := NewSupervisor(
+		func(int) (*exec.Cmd, error) { return exec.Command("sleep", "1"), nil },
+		0,
+		healthFn,
+		100*time.Millisecond,
+	)
+
+	model, analyzer, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+		sup:      sup,
+		client:   sidecar.New("http://127.0.0.1:1", 50*time.Millisecond),
+		modelDir: filepath.Join(t.TempDir(), "gliner2"),
+		modelSHA: "some-sha",
+		fetcher:  fakeFetcherErr{},
+		healthFn: healthFn,
+	})
+	if model == nil {
+		t.Fatal("auto mode must wire the sidecar client as the Model")
+	}
+	if gate == nil {
+		t.Fatal("auto mode must wire a readiness gate")
+	}
+	if analyzer == nil {
+		t.Fatal("auto mode must wire the window analyzer: the sidecar serves /analyze, so every claude_code job should get its workstream dimensions")
 	}
 }

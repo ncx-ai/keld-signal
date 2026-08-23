@@ -980,8 +980,8 @@ func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q
 		analyzer, gate := deterministicBackend(ctx, emitter)
 		return ingress.Handler(q, secret), nil, analyzer, gate, true
 	}
-	model, gate = mlBackend(ctx, emitter)
-	return ingress.Handler(q, secret), model, analyzerFor(model), gate, true
+	model, analyzer, gate = mlBackend(ctx, emitter)
+	return ingress.Handler(q, secret), model, analyzer, gate, true
 }
 
 // newRunID generates a per-run correlation id (16 random bytes, hex-encoded),
@@ -1171,7 +1171,7 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 // in for window analysis; the facet is dropped entirely and reported dropped
 // via the pipeline's ordinary pipeline_status "partial" path.
 func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.WorkstreamAnalyzer, func() bool) {
-	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
+	scClient, sup, _, ok, err := sidecarService(ctx, emitter)
 	if !ok {
 		// No service this run and no path to one before a restart, so waiting
 		// is pointless: run without window analysis rather than wedge.
@@ -1185,7 +1185,11 @@ func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter) (e
 	go sup.Start(ctx)
 	// analyzerFor is the same capability probe "auto" uses — the analyzer is a
 	// property of the service client, not of the Model (there is none here).
-	return analyzerFor(scClient), healthFn
+	// The gate is health, but polled and CACHED (serviceHealthGate), the same
+	// mechanism "auto" uses for warmth: Worker reads it per job and waitWarm
+	// re-reads it every ~20ms, so sidecarService's raw healthFn — a live
+	// loopback GET per call — is the wrong shape for a gate.
+	return analyzerFor(scClient), serviceHealthGate(ctx, scClient)
 }
 
 // noAnalysisService is deterministic mode's "no service this run, and no path
@@ -1220,7 +1224,12 @@ func noAnalysisService(emitter *clientevents.Emitter, fields map[string]any) fun
 // is missing, or its port cannot be allocated, this returns
 // sidecarUnavailable's permanently-closed gate (jobs queue/spool until the
 // daemon is restarted) rather than a synthetic/degraded model.
-func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model, func() bool) {
+//
+// The window analyzer is returned alongside the Model — symmetric with
+// deterministicBackend — because it belongs to the SERVICE, not the model:
+// both modes derive it the same way, and returning it here means
+// wireEnrichment only passes it through instead of rederiving it.
+func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model, enrich.WorkstreamAnalyzer, func() bool) {
 	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
 	if !ok {
 		// The consequence of having no service is this caller's to state: an
@@ -1228,10 +1237,10 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 		// caller of sidecarService would say.
 		if err != nil {
 			log.Printf("keld-agent: sidecar port alloc failed: %v", err)
-			return nil, sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
+			return nil, nil, sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
 		}
 		log.Printf("keld-agent: no sidecar binary found; enrichment jobs will queue/spool until one is installed")
-		return nil, sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
+		return nil, nil, sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
 	}
 
 	return mlBackendWithOpts(ctx, mlBackendOpts{
@@ -1271,7 +1280,7 @@ func emitSidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any
 // mlBackendWithOpts is the testable core of mlBackend. It accepts all
 // dependencies explicitly so tests can inject stubs without touching the
 // real filesystem or spawning real processes.
-func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, func() bool) {
+func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, enrich.WorkstreamAnalyzer, func() bool) {
 	var provisionFailed atomic.Bool
 
 	// Start the service NOW, alongside provisioning rather than behind it. The
@@ -1321,7 +1330,10 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 	// the gate stays closed — same durable queue/spool behaviour as before.
 	wg := newWarmGate()
 	go wg.run(ctx, opts.client.WorkerReady, warmPollInterval)
-	return opts.client, wg.Warm
+	// analyzerFor(opts.client), not analyzerFor-of-the-Model at the call site:
+	// window analysis is a property of the service client and must survive any
+	// later change to what "the Model" is.
+	return opts.client, analyzerFor(opts.client), wg.Warm
 }
 
 // enrichEndpoint derives the enrichments URL from the configured ingest endpoint

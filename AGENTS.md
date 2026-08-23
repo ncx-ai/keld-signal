@@ -217,7 +217,12 @@ selects one of three modes:
   (`/health`), not model warmth — the model never warms here, so a warmth gate
   would hold every job forever, and a trivially-true gate would publish
   workstream-less profiles for every job that landed before the service
-  finished starting. Waiting there is right: the supervisor is bringing the
+  finished starting. It polls in the **background** and the gate reads a cached
+  atomic (`serviceHealthGate`, the same `warmGate` mechanism `"auto"` uses for
+  warmth) — `Worker` calls the gate per job and `waitWarm` re-calls it every
+  ~20ms, so a gate that probed `/health` inline would cost thousands of
+  loopback connects per deferred job, and a full client timeout on *every* call
+  against a service that accepts TCP but never answers. Waiting there is right: the supervisor is bringing the
   service up, so the work becomes doable shortly, and a service that is present
   but never comes up **wedges** this mode (jobs queue/spool) rather than
   degrading — the same trade `"auto"` makes.
