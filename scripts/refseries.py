@@ -43,13 +43,6 @@ import concurrent.futures, collections, glob, hashlib, json, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
-# mcp_provider has no call site left in this file (its uses moved to app.analysis.levels with
-# the rest of _process_transcript) but is kept in this import list as a re-export:
-# scripts/test_bashrefs.py imports it from `refseries`, not from `app.analysis.vocab` directly.
-from app.analysis.vocab import mcp_provider  # noqa: E402
-# strip_heredocs/unwrap_command have no call site left in this file either, but stay for the same
-# reason: scripts/test_bashrefs.py imports both from `refseries`, not from `app.analysis.shell`.
-from app.analysis.shell import strip_heredocs, unwrap_command  # noqa: E402
 from app.analysis.text import clip, is_command_echo, text_of  # noqa: E402
 from app.analysis.paths import resolve_workspace, reconcile, bash_refs  # noqa: E402
 from app.analysis.transcript import iter_turns  # noqa: E402
