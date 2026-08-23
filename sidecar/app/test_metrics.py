@@ -14,6 +14,10 @@ class _FakeRunner:
 def test_counts_defaults_zero():
     c = Counts()
     assert (c.submitted, c.completed, c.shed_503, c.failed) == (0, 0, 0, 0)
+    # vocab_installs/match_served (POST /vocabulary, POST /match) are separate
+    # from the inference counters above — asserted independently so a /match
+    # spike is never mistaken for inference load in /metrics.
+    assert (c.vocab_installs, c.match_served) == (0, 0)
 
 
 def test_build_metrics_reports_worker_state():

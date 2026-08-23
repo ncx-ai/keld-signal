@@ -386,6 +386,91 @@ def test_match_endpoint_passes_the_divided_budget_into_match_text():
     assert expected < DEFAULT_BUDGET_S
 
 
+def test_vocabulary_survives_a_real_worker_recycle():
+    """The design spec's stated reason the vocabulary lives in the FastAPI PARENT,
+    not on the WorkerManager or in the spawned child, is that a worker recycle
+    (kill the child, respawn fresh) must never silently empty it — a recycle only
+    reclaims the CHILD process's heap; app.main._state is the parent's own dict
+    and is never touched by WorkerManager.kill/spawn/poll (grep confirms neither
+    worker_manager.py nor runner.py references `_state` at all). That is true by
+    construction today; this test exercises it rather than assuming it holds
+    forever.
+
+    Drives an ACTUAL recycle through WorkerManager.poll() — the same
+    ceiling-exceeded path app/test_worker_manager.py's
+    test_poll_rss_ceiling_recycles_when_idle exercises (fake spawn/rss/ram, so no
+    real process or model is needed, but the SAME WorkerManager class and the
+    SAME kill/spawn/poll code) — then confirms /match still answers correctly
+    from the SAME vocabulary object afterwards.
+
+    What this would catch: moving vocabulary storage onto the WorkerManager
+    instance or into the spawned child (so a fresh worker generation no longer
+    has it), or wiring the recycle/kill path to clear or replace
+    app.main._state instead of only tearing down the worker process. Confirmed
+    by mutation: temporarily making WorkerManager._kill() pop
+    app.main._state["vocabulary"] on a "recycles" kill turns this test from
+    PASS to FAIL (and back to PASS once reverted) — see the M2 verification
+    notes, not re-run here since it requires editing worker_manager.py itself.
+    It would NOT catch a bug where /match reads the right dict but the wrong
+    key; that is covered separately by test_match_endpoint_present_and_absent.
+    """
+    from app.worker_manager import WorkerManager
+
+    m = _reload_main(None)
+    m._state.clear()
+    m.install_vocabulary(m.VocabularyIn(vocabulary={
+        "customer": [{"id": "acme", "match": ["ACME"]}]}))
+    vocab_ref = m._state["vocabulary"]  # identity checked below, not just value
+
+    class _FakeProc:
+        def __init__(self):
+            self.pid = 4242
+            self._alive = True
+
+        def is_alive(self):
+            return self._alive
+
+        def kill(self):
+            self._alive = False
+
+        def join(self, timeout=None):
+            pass
+
+    class _FakeQueue:
+        def __init__(self, items=None):
+            self.items = list(items or [])
+
+        def put(self, x):
+            pass
+
+        def get(self, timeout=None):
+            if not self.items:
+                import queue
+                raise queue.Empty()
+            return self.items.pop(0)
+
+    def spawn_fn():
+        return _FakeProc(), _FakeQueue(), _FakeQueue([{"ready": True}])
+
+    # margin_mb=1000 -> ceiling = model_cost_mb(2700, from rss_fn below) + 1000 = 3700
+    wm = WorkerManager(spawn_fn=spawn_fn, rss_fn=lambda pid: 2700.0,
+                        ram_fn=lambda: (50.0, 9000.0), clock=lambda: 100.0,
+                        job_deadline_s=5.0, live_poll_s=1.0, spawn_timeout_s=5.0,
+                        idle_timeout_s=600.0, evict_pct=5.0, margin_mb=1000.0)
+    wm._spawn()
+    assert wm.state == "ready" and wm.counts["recycles"] == 0
+
+    wm._hard_limit_mb = 9000.0        # isolate: exercise the drift-ceiling recycle
+    wm._rss_fn = lambda pid: 4000.0   # path, not the separate hard-limit kill path
+    wm.poll()
+    assert wm.state == "down" and wm.counts["recycles"] == 1  # a REAL recycle happened
+
+    # The property under test: the parent's vocabulary is the SAME object, untouched.
+    assert m._state["vocabulary"] is vocab_ref
+    got = _asyncio.run(m.match(m.MatchIn(text="the customer is ACME")))
+    assert got["customer"]["value"] == "acme"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
