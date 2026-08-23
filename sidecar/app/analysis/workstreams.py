@@ -24,8 +24,19 @@ ALLOCATION = [
 
 # INVENTORY dimensions: multi-valued by nature — "what was used", not "what owns this". No
 # dominance requirement, because asking which single tool owns an hour is the wrong question.
+#
+# `named_terms` (level "term") belongs here, not in ALLOCATION, for a measured reason: assessed
+# as an allocation dimension it had 97% coverage but only 19% dominance across 4256 distinct
+# values — no window has one term that owns it, so it cannot bucket spend the way the other seven
+# do. But it is the ONLY level in this whole package that reads message TEXT rather than tool-call
+# inputs (see app/analysis/terms.py) — a customer, a supplier, a model under evaluation is only
+# ever spoken, never a tool argument, so every other level is structurally blind to it. Dropping
+# it because it doesn't fit ALLOCATION's shape would silently discard the one signal the rest of
+# this package cannot see, and would also make analyze_window's spaCy pass — the most expensive
+# part of the call — pure waste.
 INVENTORY = [("harness_tools", "tool"), ("programs", "exe"),
-             ("external_systems", "service"), ("integrations", "mcp_tool")]
+             ("external_systems", "service"), ("integrations", "mcp_tool"),
+             ("named_terms", "term")]
 
 # Loopback is not an external system. It is 85% of the raw service level and would otherwise be
 # the top "system this org depends on".
@@ -33,7 +44,18 @@ LOOPBACK = {"127.0.0.1", "localhost", "0.0.0.0", "::1", "enrich-sidecar"}
 
 
 def payload(rl):
-    """rollup -> {"workstreams": {...}, "inventory": {...}}."""
+    """rollup -> {"workstreams": {...}, "inventory": {...}}.
+
+    PRIVACY NOTE for `inventory.named_terms`: unlike every other value in this payload, a named
+    term is drawn from message TEXT (see terms.py), not from tool-call inputs, and can legitimately
+    be a person's name — confirmed on a real window ("Federico", "Daniel"). That is acceptable for
+    what this payload is today: /analyze is sidecar -> daemon on one machine, and nothing here
+    publishes. It is NOT acceptable to forward as-is to anything that syncs off-device — the
+    masking rule for what crosses to Atlas is matched vocabulary IDs only, never raw named terms.
+    Whoever wires publication next must filter this field through the org's configured vocabulary
+    matcher (or drop it) before it leaves the device, the same way every other masked span already
+    is upstream of publish (see AGENTS.md's privacy invariant).
+    """
     ws = {}
     for name, level, floor in ALLOCATION:
         v, share, tot = dominant(rl, level, floor)

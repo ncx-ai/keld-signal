@@ -44,6 +44,76 @@ def test_unknown_prompt_id_raises_rather_than_returning_an_empty_window():
         raise AssertionError("expected PromptNotFound")
 
 
+class _FakeSpan:
+    """Minimal stand-in for a spaCy entity span: terms.candidates only ever reads
+    .text/.label_/.start_char/.end_char (see app/analysis/terms.py)."""
+
+    def __init__(self, text, label, start, end):
+        self.text = text
+        self.label_ = label
+        self.start_char = start
+        self.end_char = end
+
+
+class _FakeDoc:
+    def __init__(self, ents):
+        self.ents = ents
+
+
+class _FakeNlp:
+    """Minimal stand-in for a loaded spaCy pipeline: `nlp(text) -> object with .ents`. A person's
+    name (a single capitalized word) is the case the SHAPES regexes in terms.py cannot reach at
+    all — they need NER — so a real test of `named_terms` needs *some* nlp, real or fake. A fake
+    is used rather than the real `en_core_web_sm` so this test does not depend on whether spaCy
+    happens to be installed on the machine running the suite (app.main._analysis_nlp degrades to
+    None when it isn't, and analyze_window must degrade the same way)."""
+    NAMES = ("Federico", "Daniel")
+
+    def __call__(self, text):
+        ents = []
+        for name in self.NAMES:
+            i = text.find(name)
+            if i >= 0:
+                ents.append(_FakeSpan(name, "PERSON", i, i + len(name)))
+        return _FakeDoc(ents)
+
+
+def test_named_terms_are_populated_from_message_text():
+    """`term` (published as inventory.named_terms) is the ONLY level in this whole package that
+    reads message TEXT rather than tool-call inputs (see terms.py's module docstring) — a
+    person's name is only ever spoken, never a tool argument, so every other level is
+    structurally blind to it. Regression: workstreams.INVENTORY originally omitted it, so
+    analyze_window ran spaCy over every message (the expensive part of the call) and then threw
+    the result away."""
+    with tempfile.TemporaryDirectory() as tmp:
+        # Both mentions must land BEFORE the target prompt: the window is [start, end) and end
+        # is the prompt's own timestamp (see test_window_ends_at_the_prompt_and_looks_back), so
+        # the prompt's own text is excluded from what it summarizes.
+        p = _write(tmp, [
+            _turn("2026-08-01T10:00:00Z", text="Federico asked about the rollout timeline"),
+            _turn("2026-08-01T10:03:00Z", text="let's loop in Daniel too"),
+            _turn("2026-08-01T10:05:00Z", "target", "sounds good"),
+        ])
+        out = analyze_window(p, "target", span_minutes=60, nlp=_FakeNlp())
+        terms = {t["value"] for t in out["inventory"]["named_terms"]}
+        assert {"Federico", "Daniel"} <= terms, terms
+
+
+def test_named_terms_carry_only_value_and_count():
+    """No span, no offset, no surrounding message text — the same wire-shape discipline
+    test_match_endpoint_wire_shape_carries_no_span_offset_or_text already holds /match to."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _write(tmp, [
+            _turn("2026-08-01T10:00:00Z", text="Federico is on point here"),
+            _turn("2026-08-01T10:05:00Z", "target", "thanks"),
+        ])
+        out = analyze_window(p, "target", span_minutes=60, nlp=_FakeNlp())
+        entries = out["inventory"]["named_terms"]
+        assert entries, "expected at least one named term"
+        for e in entries:
+            assert set(e.keys()) == {"value", "n"}, e
+
+
 def test_payload_carries_the_schema_and_no_prompt_text():
     with tempfile.TemporaryDirectory() as tmp:
         p = _write(tmp, [_turn("2026-08-01T10:00:00Z", "t", "secret customer name here")])
