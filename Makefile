@@ -164,6 +164,10 @@ freeze-check: ## run the PLAIN freeze + worker-spawn acceptance gate locally (Li
 obfuscate-check: ## run the OBFUSCATED freeze + worker-spawn acceptance gate locally (Linux)
 	KELD_OBFUSCATE=1 bash scripts/freeze-check-local.sh
 
+.PHONY: obfuscation-coverage-check
+obfuscation-coverage-check: ## fast: assert every sidecar/app/**/*.py is actually obfuscated (no torch/model/freeze needed; CI-safe)
+	bash scripts/check-obfuscation-coverage.sh
+
 .PHONY: crosscheck
 crosscheck:  ## verify all release targets build pure-Go (CGO_ENABLED=0)
 	@for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \

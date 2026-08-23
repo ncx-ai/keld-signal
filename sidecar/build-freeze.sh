@@ -28,8 +28,23 @@ if [ "${1:-}" = "--check" ]; then
   echo "build-freeze gate ok (KELD_OBFUSCATE=$OBF)"; exit 0
 fi
 
-"$PY" -m pip install --upgrade pip pyinstaller
-"$PY" -m pip install -r sidecar/requirements.txt
+# --obf-only: run just the obfuscation transform (minify -> pyarmor) and stop —
+# no requirements install, no PyInstaller freeze. Those two are the heavy part
+# (torch + the ~1.9GB model + minutes of bundling) and need a provisioned
+# sidecar venv; the transform itself needs only python-minifier/pyarmor, so a
+# plain CI runner can use this to assert obfuscation *coverage* (every
+# sidecar/app/**/*.py actually got transformed) without paying for a full
+# freeze. See scripts/check-obfuscation-coverage.sh.
+OBF_ONLY=0
+if [ "${1:-}" = "--obf-only" ]; then
+  [ "$OBF" = "1" ] || { echo "ERROR: --obf-only only makes sense with KELD_OBFUSCATE=1" >&2; exit 1; }
+  OBF_ONLY=1
+fi
+
+if [ "$OBF_ONLY" != "1" ]; then
+  "$PY" -m pip install --upgrade pip pyinstaller
+  "$PY" -m pip install -r sidecar/requirements.txt
+fi
 
 SPEC="sidecar/keld-agent-sidecar.spec"
 if [ "$OBF" = "1" ]; then
@@ -43,14 +58,26 @@ if [ "$OBF" = "1" ]; then
   MIN_ARGS=(--no-remove-annotations --no-remove-variable-annotations \
             --no-remove-return-annotations --no-remove-argument-annotations)
   "$PY" -m python_minifier "${MIN_ARGS[@]}" -o build/obf/serve.py sidecar/serve.py
-  for f in sidecar/app/*.py; do
-    "$PY" -m python_minifier "${MIN_ARGS[@]}" -o "build/obf/app/$(basename "$f")" "$f"
-  done
+  # Recurse: app/ has subpackages (e.g. app/analysis/) whose .py files must be
+  # obfuscated too — a plain `app/*.py` glob here previously missed them
+  # entirely, so an entire subpackage shipped as plain source (the .spec's
+  # hiddenimports walk is already recursive; this loop wasn't). test_*.py is
+  # processed same as before (harmless — the .spec never hidden-imports it,
+  # so it never reaches the frozen bundle regardless).
+  while IFS= read -r -d '' f; do
+    rel="${f#sidecar/app/}"
+    mkdir -p "build/obf/app/$(dirname "$rel")"
+    "$PY" -m python_minifier "${MIN_ARGS[@]}" -o "build/obf/app/$rel" "$f"
+  done < <(find sidecar/app -name '*.py' -print0)
   # 2) PyArmor free-tier bytecode encryption over the renamed tree. pyarmor has
   #    no `python -m` entry, so use the console script beside $PY (venv case),
   #    falling back to PATH (CI, where pip put `pyarmor` on PATH).
   PYARMOR="$(dirname "$PY")/pyarmor"; [ -x "$PYARMOR" ] || PYARMOR="pyarmor"
   "$PYARMOR" gen -O build/obf_pyarmor -r build/obf/app build/obf/serve.py
+  if [ "$OBF_ONLY" = "1" ]; then
+    echo "obf-only: obfuscated tree at build/obf_pyarmor (skipping PyInstaller freeze)"
+    exit 0
+  fi
   # 3) freeze from a COPY so the working tree is never clobbered (matters for
   #    local runs; CI checkouts are disposable but this is correct either way).
   #    Overlay the obfuscated app/ + serve.py + pyarmor_runtime onto the copy and

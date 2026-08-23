@@ -40,3 +40,25 @@ jobs:
           go-version-file: go.mod
       - name: cross-platform pure-Go build gate
         run: make crosscheck
+
+  # `make freeze-check` / `make obfuscate-check` are NOT run here: they need a
+  # provisioned sidecar venv (torch/gliner2, ~5GB) plus the ~1.9GB GLiNER2 model
+  # and take minutes (PyInstaller bundling torch, then a real model load) — that
+  # cost is already paid once per release in installers.yml, not per push/PR.
+  # This job instead runs the cheap half every push/PR: it needs only
+  # python-minifier + pyarmor (no torch, no model, no PyInstaller freeze) and
+  # asserts *coverage* — every sidecar/app/**/*.py actually comes out
+  # obfuscated — which is what a non-recursive glob in build-freeze.sh silently
+  # broke for a whole subpackage (sidecar/app/analysis/) without either make
+  # target catching it, since both only check that the frozen binary runs.
+  obfuscation-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install obfuscation tools (no torch)
+        run: pip install --quiet python-minifier pyarmor
+      - name: obfuscation coverage gate
+        run: make obfuscation-coverage-check
