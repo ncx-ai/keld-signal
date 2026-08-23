@@ -1,6 +1,6 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.analysis.paths import bash_refs, rel_within
+from app.analysis.paths import bash_refs, rel_within, vcs_of
 
 
 def test_paths_read_the_full_command_and_commands_do_not():
@@ -54,6 +54,10 @@ def test_containerised_test_run_reaches_the_real_tools():
 
 def test_compose_exec_reaches_the_tool():
     assert "pytest" in bash_refs("docker compose exec -T api pytest tests/ -q")[1]
+
+
+def test_vcs_of_reports_none_without_a_branch():
+    assert vcs_of("/tmp", None) == "none"
 
 
 if __name__ == "__main__":

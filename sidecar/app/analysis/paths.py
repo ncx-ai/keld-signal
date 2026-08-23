@@ -166,6 +166,19 @@ def _git_root(path, limit=12):
     return None
 
 
+def vcs_of(cwd, git_branch):
+    """Whether the workspace is under version control — the FILESYSTEM decides where it can.
+
+    `gitBranch` is not evidence about the cwd. Measured: the tool reports a branch for
+    `cwd=/tmp`, a directory with no .git in it or above it, and for `/home/dg/keld`, the parent of
+    two checkouts. It appears to carry the branch of wherever the session was launched, so treating
+    it as proof marked plain directories as repositories. It is used only when the path cannot be
+    stat'd at all — another machine's export — and is then labelled as reported, not confirmed."""
+    if cwd and os.path.isdir(WORKTREE.sub("", cwd)):
+        return "git" if _git_root(cwd) else "none"
+    return "git (reported, unverifiable)" if git_branch else "unknown"
+
+
 def rel_within(path, root, cwd=None):
     """The path relative to the repo, or None if it points outside it — a file in ~/.claude is not
     this repo's work.
@@ -313,6 +326,11 @@ def reconcile(pending, component_depth):
     So: if exactly ONE declared path anywhere ends with the prose path, adopt that path AND its
     repo. Uniqueness is required — two candidates mean the reference is genuinely ambiguous and
     inventing a winner would be worse than leaving it alone.
+
+    Returns `(rows, stats)`: a library headed for a long-running FastAPI sidecar must not write to
+    stdout, so the reconciliation counts that used to be printed here are handed back for the
+    caller to display — `scripts/refseries.py` prints them for a human running the study; a future
+    sidecar caller can log or drop them.
     """
     # Keyed by (root, repo). Reconciliation must never cross machines: a colleague's export
     # carries /Users/<name> paths, and matching those against this machine's checkouts would
@@ -335,10 +353,6 @@ def reconcile(pending, component_depth):
             parts = full.split("/")
             for i in range(len(parts)):              # including the whole path
                 by_dir["/".join(parts[i:])].add((root, repo, full))
-
-    for probe in [q for q in os.environ.get("REFSERIES_PROBE", "").split(",") if q]:
-        print(f"  probe {probe!r}: as-file {sorted(by_suffix.get(probe, []))[:6]} | "
-              f"as-dir {sorted(by_dir.get(probe, []))[:6]}")
 
     rows, stats = [], collections.Counter()
     for base, rel, from_input, root in pending:
@@ -393,7 +407,4 @@ def reconcile(pending, component_depth):
             rows.append(b + ("ref", "dir", d, 1.0))
             rows.append(b + ("ref", "component",
                              "/".join(d.split("/")[:component_depth]), 1.0))
-    if stats:
-        print("  prose paths reconciled against declared ones: " +
-              ", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
-    return rows
+    return rows, stats

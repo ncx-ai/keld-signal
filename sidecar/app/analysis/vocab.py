@@ -3,7 +3,6 @@
 Deterministic mappings, never a guess. Each table's comments record the measurement that shaped
 it; do not condense them.
 """
-import os
 import re
 
 EXT_LANG = {".go":"Go", ".py":"Python", ".ts":"TypeScript", ".tsx":"TypeScript",
@@ -138,24 +137,6 @@ def artifacts_for(ext=None, rel=None, skill=None):
             if key in skill.lower():
                 out.append(kind)
     return list(dict.fromkeys(out))
-
-
-def vcs_of(cwd, git_branch):
-    """Whether the workspace is under version control — the FILESYSTEM decides where it can.
-
-    `gitBranch` is not evidence about the cwd. Measured: the tool reports a branch for
-    `cwd=/tmp`, a directory with no .git in it or above it, and for `/home/dg/keld`, the parent of
-    two checkouts. It appears to carry the branch of wherever the session was launched, so treating
-    it as proof marked plain directories as repositories. It is used only when the path cannot be
-    stat'd at all — another machine's export — and is then labelled as reported, not confirmed."""
-    # Imported here, not at module top: app.analysis.paths imports EXT_LANG/artifacts_for from
-    # this module, so a top-level import the other way would be a circular import. Both modules
-    # are fully loaded by the time any caller actually invokes vcs_of, so the deferred import
-    # resolves cleanly — this is the only place WORKTREE/_git_root are needed in this module.
-    from app.analysis.paths import WORKTREE, _git_root
-    if cwd and os.path.isdir(WORKTREE.sub("", cwd)):
-        return "git" if _git_root(cwd) else "none"
-    return "git (reported, unverifiable)" if git_branch else "unknown"
 
 
 # An MCP server identifies itself only by a uuid — `attributionMcpServer` and the middle field of

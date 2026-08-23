@@ -1350,7 +1350,11 @@ def extract(args):
         rows += r
         pending += pnd
 
-    rows += reconcile(pending, args.component_depth)
+    recon_rows, recon_stats = reconcile(pending, args.component_depth)
+    rows += recon_rows
+    if recon_stats:
+        print("  prose paths reconciled against declared ones: " +
+              ", ".join(f"{k}={v}" for k, v in sorted(recon_stats.items())))
 
     rows = canonicalize_terms(rows)
 

@@ -1,7 +1,7 @@
 """Closed-vocabulary lookups. Every case is a distinction that was measured to matter."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.analysis.vocab import (action_for, toolchain_for, artifacts_for, vcs_of, mcp_provider,
+from app.analysis.vocab import (action_for, toolchain_for, artifacts_for, mcp_provider,
                                 EXT_LANG, CODE_EXT)
 
 
@@ -41,10 +41,6 @@ def test_code_ext_excludes_prose_and_config():
     for e in (".md", ".json", ".yaml", ".yml"):
         assert e not in CODE_EXT
     assert ".go" in CODE_EXT and ".go" in EXT_LANG
-
-
-def test_vcs_of_reports_none_without_a_branch():
-    assert vcs_of("/tmp", None) == "none"
 
 
 if __name__ == "__main__":
