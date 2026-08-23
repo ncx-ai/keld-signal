@@ -44,5 +44,16 @@ def payload(rl):
         vals = rl.get(level) or []
         if name == "external_systems":
             vals = [(k, v) for k, v in vals if k not in LOOPBACK]
+        # Fixed top-12, cut by POSITION, not by value: a tie straddling the boundary (item 12
+        # and item 13 sharing the same count) is resolved by rollup()'s tie-break order alone,
+        # so which one survives the cut is arbitrary — real for every level, but the one that
+        # actually surfaces it is "programs" (exe): the largest inventory dimension by a wide
+        # margin (~180 distinct values per window vs. tens for the others), so it is the one
+        # with the most opportunities to have something sitting exactly on the boundary. Two
+        # runs over different corpora (or a pandas run vs. this one) can disagree on which
+        # value occupies slot 12 while agreeing on every count — that is not a bug in either
+        # run, just an unrepresented tie at the cut. Confirmed on the frozen corpus: 114/572
+        # windows differ in "programs"' published set (never its counts) against the pre-Task-7
+        # pandas payload for exactly this reason — see task-7-report.md, Step 5.
         inv[name] = [{"value": str(k), "n": int(v)} for k, v in vals[:12]]
     return {"workstreams": ws, "inventory": inv}
