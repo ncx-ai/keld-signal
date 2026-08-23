@@ -57,6 +57,13 @@ from is git-ignored scratch and has been deleted.
    And the `en_core_web_sm` pin added in `94b0360` has never been exercised by a real freeze — the
    next release cut is the first thing that will.
 
+9. **A third copy of the compact-JSON pre-filter lives in `scripts/context_value.py:window_text`.**
+   Found while reviewing item 2's fix. The same three guards — the two substring checks, the JSON
+   parse, the timestamp presence test — re-typed a third time. Item 2 removed the copy in
+   `refseries.load_turns`; this one remains, so the assumption still does not live in exactly one
+   place. `context_value.py` has unrelated uncommitted work in progress, so this was deliberately
+   left alone rather than entangled with it.
+
 ## Structural limits worth writing down
 
 **The identity gate is not reproducible off this machine.** All eight IDENTICAL results are anchored
