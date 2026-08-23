@@ -6,23 +6,6 @@ it; do not condense them.
 import os
 import re
 
-# Private to this module, duplicated from refseries.py rather than imported: WORKTREE and
-# _git_root are used throughout refseries.py well beyond vcs_of, so they stay defined there too.
-# This copy exists only so vcs_of is self-contained here.
-WORKTREE = re.compile(r"/\.claude/worktrees/[^/]+")
-
-
-def _git_root(path, limit=12):
-    """The nearest ancestor containing .git, or None. Only meaningful for a local path."""
-    probe = WORKTREE.sub("", path or "")
-    for _ in range(limit):
-        if not probe or probe == "/":
-            return None
-        if os.path.exists(os.path.join(probe, ".git")):
-            return probe
-        probe = os.path.dirname(probe)
-    return None
-
 EXT_LANG = {".go":"Go", ".py":"Python", ".ts":"TypeScript", ".tsx":"TypeScript",
             ".js":"JavaScript", ".jsx":"JavaScript", ".rs":"Rust", ".java":"Java",
             ".rb":"Ruby", ".sql":"SQL", ".sh":"Bash", ".css":"CSS", ".scss":"CSS",
@@ -165,6 +148,11 @@ def vcs_of(cwd, git_branch):
     two checkouts. It appears to carry the branch of wherever the session was launched, so treating
     it as proof marked plain directories as repositories. It is used only when the path cannot be
     stat'd at all — another machine's export — and is then labelled as reported, not confirmed."""
+    # Imported here, not at module top: app.analysis.paths imports EXT_LANG/artifacts_for from
+    # this module, so a top-level import the other way would be a circular import. Both modules
+    # are fully loaded by the time any caller actually invokes vcs_of, so the deferred import
+    # resolves cleanly — this is the only place WORKTREE/_git_root are needed in this module.
+    from app.analysis.paths import WORKTREE, _git_root
     if cwd and os.path.isdir(WORKTREE.sub("", cwd)):
         return "git" if _git_root(cwd) else "none"
     return "git (reported, unverifiable)" if git_branch else "unknown"
