@@ -2,7 +2,8 @@
 
 > **Status, 2026-08-23.** Items 1, 2, 3, 4, 6 and 8 are DONE (commits `80f6643`, `4fa554c`,
 > `8116a8d`, `6777f08`, `96f2e4a`, `abdd161`), as is the committed-fixture structural limit.
-> Items 5 and 7 are now DONE too, done together as their overlap predicted: `scan_workspace` reads
+> Items 5 and 7 are now DONE too (commit `2bc56b2`), done together as their overlap predicted:
+> `scan_workspace` reads
 > through `transcript.iter_tool_use_lines` instead of opening the file itself, and the former
 > `paths.py` split into `paths.py` (path tokens, `rel_within`), `workspace.py` (`resolve_workspace`,
 > `scan_workspace`, `vcs_of`, `repo_of`) and `reconcile.py` (`reconcile`); `bash_refs` moved to
