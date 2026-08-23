@@ -20,10 +20,13 @@ const DefaultPassTimeout = 30 * time.Second
 type Option func(*runCfg)
 
 type runCfg struct {
-	passTimeout time.Duration
-	parent      context.Context
-	customW1    []Extractor
-	customW2    []Extractor
+	passTimeout    time.Duration
+	parent         context.Context
+	customW1       []Extractor
+	customW2       []Extractor
+	analyze        WorkstreamAnalyzer
+	transcriptPath string
+	promptID       string
 }
 
 // WithPassTimeout sets the per-pass deadline. <= 0 disables it (no deadline).
@@ -44,6 +47,23 @@ func WithJobContext(ctx context.Context) Option {
 // collected into Profile.Custom, never into the built-in fields.
 func WithCustomExtractors(wave1, wave2 []Extractor) Option {
 	return func(c *runCfg) { c.customW1, c.customW2 = wave1, wave2 }
+}
+
+// WithCoordinates threads the job's COORDINATES (transcript path + prompt id,
+// never text) into the JobContext, for passes that characterise the window
+// around a prompt rather than the prompt's own text. Callers without a
+// transcript (eval harness, inline text) omit it.
+func WithCoordinates(transcriptPath, promptID string) Option {
+	return func(c *runCfg) { c.transcriptPath, c.promptID = transcriptPath, promptID }
+}
+
+// WithWorkstreams enables the deterministic workstream pass, backed by fn (the
+// daemon wires sidecar.Client.AnalyzeLabeled). Without it the pass does not run
+// at all — rather than run and fail — so callers with no analysis backend
+// (eval harness, localagent, tests) keep their previous facet set and are not
+// downgraded to pipeline_status "partial" by a facet they never asked for.
+func WithWorkstreams(fn WorkstreamAnalyzer) Option {
+	return func(c *runCfg) { c.analyze = fn }
 }
 
 // passTimeoutFromEnv resolves the default per-pass deadline.
@@ -146,7 +166,11 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		o(&cfg)
 	}
 	ctx := NewJobContext(text, source, meta, m)
+	ctx.TranscriptPath, ctx.PromptID = cfg.transcriptPath, cfg.promptID
 	exs := append(Wave1(), cfg.customW1...)
+	if cfg.analyze != nil {
+		exs = append(exs, WorkstreamsExtractor{Analyze: cfg.analyze})
+	}
 
 	// Partition Wave1 into always-run (governance + gate signal) and gated
 	// (semantic). Wave1 passes are mutually independent, so committing them in
@@ -231,6 +255,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		SpeechActAlt:      altsNamed(ctx.Get("speech_act"), "speech_act_alt"),
 		Subcategory:       labeledFrom(ctx.Get("subcategory"), "subcategory", "subcategory"),
 		SubcategoryAlt:    altsNamed(ctx.Get("subcategory"), "subcategory_alt"),
+		Workstreams:       workstreamsFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
 		ExtractorVersions: versions,
 		SchemaVersion:     SchemaVersion,
@@ -287,6 +312,18 @@ func labeledFrom(out map[string]any, key, producer string) Labeled {
 		}
 	}
 	return Labeled{Value: "", Confidence: 0, Producer: producer}
+}
+
+// workstreamsFrom reads the committed workstream pass output. An empty set
+// (the analysis ran and found no dominant value anywhere) yields nil, so the
+// facet is omitted from the wire rather than published as an empty object.
+func workstreamsFrom(out map[string]any) map[string]Labeled {
+	if out != nil {
+		if ws, ok := out["workstreams"].(map[string]Labeled); ok && len(ws) > 0 {
+			return ws
+		}
+	}
+	return nil
 }
 
 func altsFrom(out map[string]any) []Labeled {

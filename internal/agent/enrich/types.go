@@ -114,6 +114,11 @@ type Profile struct {
 	SpeechActAlt      []Labeled         `json:"speech_act_alt,omitempty"`
 	Subcategory       Labeled           `json:"subcategory"`
 	SubcategoryAlt    []Labeled         `json:"subcategory_alt,omitempty"`
+	// Workstreams are the deterministic window dimensions (project, branch,
+	// model, ...) counted from tool-call metadata rather than classified — see
+	// WorkstreamsExtractor. Keyed by dimension; a dimension the window could not
+	// attribute is ABSENT rather than present-and-empty.
+	Workstreams       map[string]Labeled `json:"workstreams,omitempty"`
 	PipelineStatus    string            `json:"pipeline_status"`
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
@@ -141,6 +146,15 @@ type JobContext struct {
 	Meta   Meta
 	Model  Model
 
+	// TranscriptPath and PromptID are the job's COORDINATES (never text): the
+	// transcript file and the prompt within it. Model-free passes that
+	// characterise the surrounding window rather than this prompt's text (see
+	// WorkstreamsExtractor) need them; the daemon threads them from queue.Job
+	// via WithCoordinates. They are empty for callers with no transcript
+	// (inline text, the eval harness), which such a pass must tolerate.
+	TranscriptPath string
+	PromptID       string
+
 	// res is shared by pointer with any per-stage context derived via
 	// withModel, so a stage sees the same committed outputs.
 	res *jobResults
@@ -164,7 +178,8 @@ func NewJobContext(text, source string, meta Meta, m Model) *JobContext {
 // withModel returns a shallow copy bound to a different backend, sharing this
 // context's committed results. Used to give one pass a deadline-bound model.
 func (c *JobContext) withModel(m Model) *JobContext {
-	return &JobContext{Text: c.Text, Source: c.Source, Meta: c.Meta, Model: m, res: c.res}
+	return &JobContext{Text: c.Text, Source: c.Source, Meta: c.Meta, Model: m,
+		TranscriptPath: c.TranscriptPath, PromptID: c.PromptID, res: c.res}
 }
 
 // Set commits a stage's output. Called by the pipeline between stages.

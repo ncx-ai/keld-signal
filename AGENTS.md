@@ -111,6 +111,20 @@ a time. Two waves, up to 8 facets per prompt:
   (12 business functions), `speech_act` (`command`/`question`/`statement`/
   `fragment`, classifies the prompt text only).
 - **Wave 2** (conditioned on Wave-1 `function_guess`): `subcategory`.
+- **`workstreams`** (`enrich/workstreams.go`) is the one pass that runs **no
+  inference**: it asks the sidecar's `/analyze` for the deterministic dimensions
+  of the hour of work ending at this prompt (project, branch, model,
+  output_type, language, workflow, tooling), counted from tool-call metadata.
+  It takes COORDINATES (transcript path + prompt id), never text, and publishes
+  as `workstreams` — a map of dimension → `Labeled` (`share` becomes the
+  confidence). It declares `ModelFree`+`AlwaysRun`, and is registered only when
+  the daemon has an analysis backend (`enrich.WithWorkstreams`), so callers
+  without one (eval, localagent) are unchanged. A dimension the window could not
+  attribute is **absent**, never present-with-an-empty-value; a failed analysis
+  fails the pass (`pipeline_status:"partial"`) rather than publishing an empty
+  set. `/analyze`'s `inventory.named_terms` (proper nouns lifted from message
+  text — real person names have been observed) is deliberately unmodelled on
+  `sidecar.AnalyzeResult`, so it is structurally unforwardable.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").

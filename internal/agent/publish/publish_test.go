@@ -195,3 +195,38 @@ func TestBuildCarriesSpeechActFields(t *testing.T) {
 		t.Fatalf("JSON missing speech_act_alt key: %s", b)
 	}
 }
+
+func TestBuildCarriesWorkstreamsAndNoWindowMetadata(t *testing.T) {
+	p := enrich.Profile{Workstreams: map[string]enrich.Labeled{
+		"project": {Value: "keld-signal", Confidence: 0.812, Producer: "workstreams-v6"},
+	}}
+	e := Build(queue.Job{Source: "claude_code"}, p, "dg@keld.co", false, 0, time.Unix(0, 0))
+	if e.Workstreams["project"].Value != "keld-signal" {
+		t.Fatalf("dimension not copied onto the wire shape: %+v", e.Workstreams)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"workstreams":{"project":{"value":"keld-signal","confidence":0.812,"producer":"workstreams-v6"}}`) {
+		t.Errorf("dimension missing from payload: %s", s)
+	}
+	// The analysis's own window metadata and text-derived inventory must not be
+	// reachable from here: Profile has no field for them by construction.
+	for _, forbidden := range []string{"session", "window_start", "window_end", "inventory", "named_terms", "span", "offset", "prompt_text"} {
+		if strings.Contains(s, forbidden) {
+			t.Errorf("payload leaked %q: %s", forbidden, s)
+		}
+	}
+}
+
+func TestBuildOmitsAbsentWorkstreams(t *testing.T) {
+	b, err := json.Marshal(Build(queue.Job{Source: "claude_code"}, enrich.Profile{}, "dg@keld.co", false, 0, time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "workstreams") {
+		t.Fatalf("no dimensions must mean an absent key, not an empty object: %s", b)
+	}
+}

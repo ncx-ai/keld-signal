@@ -476,7 +476,19 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	// A pass that exceeds its deadline costs only its own facet: the profile
 	// comes back "partial" and is still published, so a slow pass never
 	// discards the work the other passes already completed.
-	profile := enrich.Run(text, j.Source, meta, m, append([]enrich.Option{enrich.WithJobContext(ctx)}, customOpts...)...)
+	opts := append([]enrich.Option{
+		enrich.WithJobContext(ctx),
+		// Coordinates (never text) for the model-free passes that characterise
+		// the window around this prompt rather than its text.
+		enrich.WithCoordinates(j.TranscriptPath, j.PromptID),
+	}, customOpts...)
+	// Wire the deterministic workstream pass only when this run actually has a
+	// window-analysis backend; without one the pass stays unregistered rather
+	// than running and failing every job (see analyzerFor).
+	if a := analyzerFor(m); a != nil {
+		opts = append(opts, enrich.WithWorkstreams(a))
+	}
+	profile := enrich.Run(text, j.Source, meta, m, opts...)
 	// The job-level backstop only fires for a wedge outside the passes; if it
 	// did, the profile is untrustworthy — don't publish it. The worker re-spools
 	// (bounded) so it retries on a healthy sidecar.

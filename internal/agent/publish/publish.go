@@ -45,6 +45,12 @@ type Enrichment struct {
 	SpeechActAlt      []enrich.Labeled  `json:"speech_act_alt,omitempty"`
 	Subcategory       enrich.Labeled    `json:"subcategory"`
 	SubcategoryAlt    []enrich.Labeled  `json:"subcategory_alt,omitempty"`
+	// Workstreams are the deterministic window dimensions (project, branch,
+	// model, ...), counted from tool-call metadata by the sidecar's /analyze —
+	// no inference, and no text: the analysis is asked for a window by
+	// COORDINATES and only its matched dimension values reach here. Absent when
+	// the window attributed none.
+	Workstreams map[string]enrich.Labeled `json:"workstreams,omitempty"`
 	PipelineStatus    string            `json:"pipeline_status"`
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
@@ -86,6 +92,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		SpeechActAlt:      p.SpeechActAlt,
 		Subcategory:       p.Subcategory,
 		SubcategoryAlt:    p.SubcategoryAlt,
+		Workstreams:       p.Workstreams,
 		PipelineStatus:    p.PipelineStatus,
 		ExtractorVersions: p.ExtractorVersions,
 		SchemaVersion:     p.SchemaVersion,
