@@ -261,6 +261,60 @@ func (c *Client) Classify(text string, tasks map[string][]string) map[string][]e
 	return r.Results
 }
 
+type analyzeReq struct {
+	Path        string `json:"path"`
+	PromptID    string `json:"prompt_id"`
+	SpanMinutes int    `json:"span_minutes"`
+}
+
+// Workstream is one deterministic dimension the sidecar's /analyze computed
+// for the window (e.g. "project", "tooling"). A nil *Workstream (JSON null)
+// means the window had no dominant value for that dimension — a different
+// fact than an empty Workstream{}, which is why the map holds pointers.
+type Workstream struct {
+	Value      string  `json:"value"`
+	Share      float64 `json:"share"`
+	Evidence   int     `json:"evidence"`
+	Provenance string  `json:"provenance"`
+}
+
+// AnalyzeResult is the Go-side view of the sidecar's /analyze response.
+//
+// It deliberately omits the response's "inventory" (harness_tools,
+// named_terms): named_terms is drawn from the raw transcript and can carry
+// person names (e.g. "Federico", "Daniel" have both appeared in real
+// windows). The rule on this branch is that analysis output stays on this
+// machine and only matched vocabulary IDs — the Workstreams below — ever
+// reach Atlas. Not giving AnalyzeResult a field for inventory means a later
+// publish path (Profile.Workstreams -> Atlas) has structurally nowhere to
+// forward it, rather than merely being told not to by a comment.
+//
+// Session/WindowStart/WindowEnd are kept: they're metadata about the window
+// (a session hash, timestamps), not content, and are useful for local
+// logging/debugging.
+type AnalyzeResult struct {
+	Schema      int                    `json:"schema"`
+	Evidence    int                    `json:"evidence"`
+	Session     string                 `json:"session"`
+	WindowStart string                 `json:"window_start"`
+	WindowEnd   string                 `json:"window_end"`
+	Workstreams map[string]*Workstream `json:"workstreams"`
+}
+
+// Analyze asks the sidecar to characterise the window ending at promptID
+// (deterministic workstream dimensions — no ML model). It sends COORDINATES,
+// never prompt text — the same rule spool.Pointer follows for the enrichment
+// hook. ok=false on any failure, including a 404 (prompt id not found in the
+// transcript): that is a different fact than "resolved, zero dimensions" and
+// must not be reported as an empty success.
+func (c *Client) Analyze(path, promptID string, spanMinutes int) (AnalyzeResult, bool) {
+	var r AnalyzeResult
+	if !c.post("/analyze", analyzeReq{path, promptID, spanMinutes}, &r) {
+		return AnalyzeResult{}, false
+	}
+	return r, true
+}
+
 // Warmup triggers and awaits the sidecar's on-demand model load by issuing a
 // trivial /classify bound to ctx. The sidecar loads the model only when it
 // receives an inference request, so this is the request that starts the load;
