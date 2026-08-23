@@ -127,7 +127,12 @@ def candidates(text, nlp=None):
     union is what covers each other's blind spots, and neither is trusted for a type.
     """
     out = []
-    if nlp is not None:
+    # The length test is spaCy's OWN guard, applied before the call rather than after: over
+    # `max_length` spaCy raises ValueError, which from here would escape tally() ->
+    # events_for_turns() -> analyze_window() and turn one oversized pasted message into a 500.
+    # Skipping the NER pass degrades exactly the way `nlp=None` already does — the regex shapes
+    # below still run — which is this module's established failure mode, not a new one.
+    if nlp is not None and len(text) <= getattr(nlp, "max_length", 1_000_000):
         for e in nlp(text).ents:
             if e.label_ in DROP_TYPES:
                 continue

@@ -485,10 +485,12 @@ def _fixture_prompt_id():
     return "fixture-prompt-0001"
 
 
-def _fixture_transcript():
+def _fixture_transcript(said="look at the thing"):
     """A small, wholly-invented transcript in its own directory. This is a privacy-critical
     repo, so no real names, paths, or repos — see sidecar/app/analysis/testdata/ for the
-    convention this mirrors. Uses mkdtemp (not a `with TemporaryDirectory()` block): the file
+    convention this mirrors. `said` is the EARLIER turn's text because the window is
+    [start, end) — the target prompt is the window's exclusive upper bound, never inside it.
+    Uses mkdtemp (not a `with TemporaryDirectory()` block): the file
     must outlive this helper call, not just a `with` body. Shape matches
     sidecar/app/test_analysis_analyze.py's fixture, already proven to round-trip through
     analyze_window."""
@@ -496,7 +498,7 @@ def _fixture_transcript():
     path = os.path.join(tmp, "fixture001-0000.jsonl")
     rows = [
         {"type": "user", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/workspace/widget-app",
-         "message": {"content": [{"type": "text", "text": "look at the thing"}]}},
+         "message": {"content": [{"type": "text", "text": said}]}},
         {"type": "user", "timestamp": "2026-08-01T10:05:00Z", "cwd": "/workspace/widget-app",
          "uuid": _fixture_prompt_id(),
          "message": {"content": [{"type": "text", "text": "now fix the bug"}]}},
@@ -538,6 +540,118 @@ def test_analyze_unknown_prompt_is_404_not_an_empty_payload():
         assert False, "expected 404"
     except HTTPException as e:
         assert e.status_code == 404
+
+
+# --- named-terms extraction is OFF by default (KELD_TERMS) --------------------------------
+#
+# The `term` level is the only one that reads message TEXT, and the only one that needs spaCy.
+# spaCy is a MODEL, and it would live in the long-lived FastAPI parent — the process AGENTS.md
+# guarantees "holds no model and its own RSS stays flat regardless of uptime", and whose ~150 MB
+# footprint (KELD_SIDECAR_PARENT_RESERVE_MB) the worker's hard limit is derived from. Measured:
+# spacy.load() takes the parent to 619 MB, permanently, because the parent is never recycled.
+
+def test_named_terms_off_by_default_never_imports_spacy():
+    """The guarantee is not "the load is cheap", it is "the load does not happen". Asserted by
+    poisoning the import itself: _analysis_nlp() swallows every Exception by design (a missing
+    model must degrade, not fail the request), so an assert raised inside the guard would be
+    silently caught. The recorded list is what survives that."""
+    import builtins
+
+    os.environ.pop("KELD_TERMS", None)
+    m = _reload_main(None)
+
+    attempted = []
+    real_import = builtins.__import__
+
+    def guard(name, *a, **kw):
+        if name == "spacy" or name.startswith("spacy."):
+            attempted.append(name)
+            raise ImportError("spaCy must not be imported when KELD_TERMS is off")
+        return real_import(name, *a, **kw)
+
+    builtins.__import__ = guard
+    try:
+        got = m._analysis_nlp()
+    finally:
+        builtins.__import__ = real_import
+
+    assert attempted == [], f"spaCy was imported with KELD_TERMS off: {attempted}"
+    assert got is None, "the term level must be absent, not a loaded model"
+
+
+def test_named_terms_are_empty_in_the_payload_when_terms_are_off():
+    """Off means the dimension is not reported, not merely that spaCy is skipped: the regex half
+    of terms.candidates() needs no model and still runs inside analyze_window, so returning its
+    output would make KELD_TERMS read as a performance knob rather than the switch deciding
+    whether named terms exist in the payload at all."""
+    os.environ.pop("KELD_TERMS", None)
+    m = _reload_main(None)
+    _wire(m)
+    # Message text carrying two shapes the regex half matches with no model at all: CamelCase
+    # and an ALL-CAPS acronym. Without them the assertion would pass vacuously.
+    path = _fixture_transcript(said="check the UnityPredict rollout for ACME")
+    body = _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+    assert body["inventory"]["named_terms"] == [], body["inventory"]["named_terms"]
+
+
+def test_terms_on_still_computes_the_level_and_reaches_for_spacy():
+    """The switch must turn the level back ON, not merely be a permanent kill. Asserted without
+    paying for a real spacy.load() (~600 MB, ~2 s): the import is poisoned, so _analysis_nlp()
+    takes its established degrade-to-None path and the regex half of terms.candidates() supplies
+    the terms — which proves both that the import was ATTEMPTED and that the `term` level is
+    computed and reported when KELD_TERMS is on."""
+    import builtins
+
+    os.environ["KELD_TERMS"] = "1"
+    try:
+        m = _reload_main(None)
+        _wire(m)
+        attempted = []
+        real_import = builtins.__import__
+
+        def guard(name, *a, **kw):
+            if name == "spacy" or name.startswith("spacy."):
+                attempted.append(name)
+                raise ImportError("no spacy in this test")
+            return real_import(name, *a, **kw)
+
+        builtins.__import__ = guard
+        try:
+            path = _fixture_transcript(said="check the UnityPredict rollout for ACME")
+            body = _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+        finally:
+            builtins.__import__ = real_import
+    finally:
+        os.environ.pop("KELD_TERMS", None)
+    assert attempted == ["spacy"], "KELD_TERMS=1 must still reach for the model"
+    assert [t["value"] for t in body["inventory"]["named_terms"]] == ["ACME", "UnityPredict"]
+
+
+def test_analyze_never_resolves_the_nlp_on_the_event_loop():
+    """_analysis_nlp() used to be evaluated as an ARGUMENT to run_in_executor, so the whole
+    multi-second, several-hundred-MB spaCy load ran on the event loop — blocking /health and
+    /metrics, the exact thing this endpoint's executor hop exists to prevent (see its
+    docstring). It must be resolved inside the executor instead."""
+    import threading
+
+    m = _reload_main(None)
+    _wire(m)
+    seen = []
+    real = m._analysis_nlp
+
+    def recording():
+        seen.append(threading.get_ident())
+        return real()
+
+    m._analysis_nlp = recording
+    try:
+        _asyncio.run(m.analyze(
+            m.AnalyzeIn(path=_fixture_transcript(), prompt_id=_fixture_prompt_id())))
+    finally:
+        m._analysis_nlp = real
+    assert seen, "the nlp was never resolved at all"
+    assert seen[0] != threading.get_ident(), (
+        "the spaCy load ran on the event-loop thread; it must run inside the executor")
 
 
 def test_analyze_response_carries_no_prompt_text():

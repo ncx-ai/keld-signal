@@ -241,29 +241,85 @@ class AnalyzeIn(BaseModel):
     span_minutes: int = 60
 
 
-# Lazy, load-once spaCy for the `term` level (named entities in message TEXT — the one level
-# analyze_window can compute that isn't a deterministic tool-input scan). Same sentinel pattern as
-# scripts/refseries.py's term_nlp() (kept in parity rather than inventing a second one): a 3-state
-# ["unset"] -> None|model list, because `None` is itself a valid loaded-and-degraded outcome and
-# can't double as the "not tried yet" marker. KELD_TERMS=0 opts out even when spaCy is installed
-# (it materially adds cost); anything else missing/failing degrades the same way — the `term`
-# level is simply absent from the payload, never a request failure.
+# Named-terms extraction (the `term` level) — OFF unless KELD_TERMS opts in.
+#
+# `term` is the one level analyze_window computes that isn't a deterministic tool-input scan: it
+# reads message TEXT, and it needs spaCy. spaCy is a MODEL, and it would be resident in the
+# long-lived FastAPI PARENT — the process this sidecar's whole memory story rests on holding no
+# model ("the service holds no model and its own RSS stays flat regardless of uptime", AGENTS.md).
+# Measured on this branch: spacy.load() takes the parent from ~70 MB to 619 MB in 2.27 s, and it
+# never comes back, because the parent is never recycled. worker_manager.py derives the worker's
+# hard limit from the 4096 MB TOTAL budget minus a hard-coded 150 MB parent reserve
+# (KELD_SIDECAR_PARENT_RESERVE_MB), so 619 MB of parent puts the real total at ~4565 MB and every
+# byte of the overrun is invisible to the guard that is supposed to catch it.
+#
+# Defaulting it off costs nothing downstream TODAY: `named_terms` is deliberately not modelled by
+# the Go client (internal/agent/enrich/sidecar/client.go, AnalyzeResult) and is forwarded
+# nowhere. The real fix is the third, long-lived analysis worker process specified in
+# docs/superpowers/specs/2026-08-22-sidecar-analysis-tier-design.md, which gives this load a
+# process with its own budget and its own recycle. This is the interim guard, not that fix.
+_TERMS_TRUE = {"1", "true", "yes", "on"}
+
+
+def _terms_enabled():
+    """Whether the `term` level is computed at all. Read per call rather than latched at import
+    so a test can toggle it without reloading the module (unlike _MAX_CHARS, nothing caches a
+    derived value from it — _ANALYSIS_NLP caches the MODEL, and that is reset by reload)."""
+    return os.environ.get("KELD_TERMS", "0").strip().lower() in _TERMS_TRUE
+
+
+# spaCy's per-document guard, restored. It was set to 20_000_000, which disables it outright: one
+# 880k-character window measured 14.7 s and a 3.4 GB peak IN THE PARENT, where no ceiling, no
+# pressure check and no recycle can reach it. spaCy's own rule of thumb is ~1 GB of transient
+# memory per 100k characters for the full pipeline; the NER-only pipeline loaded below is cheaper
+# than that, so 100k characters is a conservative per-MESSAGE bound — still far above any real
+# chat turn, and 200x below what it replaces. Over-long messages are skipped by terms.candidates()
+# (regex shapes still apply) rather than raising spaCy's ValueError out through the endpoint.
+_TERMS_MAX_LEN = int(os.environ.get("KELD_TERMS_MAX_LEN", "100000"))
+
+# Lazy, load-once. Same sentinel pattern as scripts/refseries.py's term_nlp() (kept in parity
+# rather than inventing a second one): a 3-state ["unset"] -> None|model list, because `None` is
+# itself a valid loaded-and-degraded outcome and can't double as the "not tried yet" marker.
+# Anything missing/failing degrades the same way KELD_TERMS=0 does — the `term` level is simply
+# absent from the payload, never a request failure.
 _ANALYSIS_NLP = ["unset"]
 
 
 def _analysis_nlp():
+    """The spaCy pipeline, or None. NEVER call this from the event loop: the load is seconds long
+    and hundreds of MB. /analyze resolves it inside its executor (see _analyze_blocking)."""
     if _ANALYSIS_NLP[0] == "unset":
         _ANALYSIS_NLP[0] = None
-        if os.environ.get("KELD_TERMS", "1") != "0":
+        if _terms_enabled():
             try:
                 import spacy
                 m = spacy.load("en_core_web_sm",
                                exclude=["tagger", "parser", "lemmatizer", "attribute_ruler"])
-                m.max_length = 20_000_000
+                m.max_length = _TERMS_MAX_LEN
                 _ANALYSIS_NLP[0] = m
             except Exception:  # not installed, or no model: degrade, never fail the request
                 pass
     return _ANALYSIS_NLP[0]
+
+
+def _analyze_blocking(path, prompt_id, span_minutes):
+    """The whole of /analyze's work, on an executor thread.
+
+    _analysis_nlp() is resolved HERE and not at the call site. It used to be evaluated as an
+    ARGUMENT to run_in_executor, which means it ran on the EVENT LOOP: the multi-second spaCy
+    load blocked /health and /metrics, precisely the failure the executor hop exists to prevent
+    (see analyze()'s docstring).
+    """
+    out = analyze_window(path, prompt_id, span_minutes, _analysis_nlp())
+    if not _terms_enabled():
+        # Off means the dimension is not reported, not merely that spaCy is skipped. The regex
+        # half of terms.candidates() needs no model and still runs inside analyze_window, so
+        # returning its output would make KELD_TERMS read as a performance knob rather than the
+        # switch deciding whether named terms exist in this payload at all.
+        inv = out.get("inventory")
+        if isinstance(inv, dict) and "named_terms" in inv:
+            inv["named_terms"] = []
+    return out
 
 
 @app.get("/health")
@@ -406,13 +462,18 @@ async def analyze(body: AnalyzeIn):
     docs/superpowers/specs/2026-08-22-sidecar-analysis-tier-design.md calls for analysis to run
     in a third, long-lived worker process, because the FastAPI parent's flat RSS depends on
     holding no model — and spaCy (_analysis_nlp above) is a model by that definition. This runs
-    it in the parent instead. That is a decision, not an oversight: the user deprioritised memory
-    sizing for this on 2026-08-22. Revisit before this endpoint sees production-scale traffic.
+    it in the parent instead.
+
+    Until that third process exists, the deviation is BOUNDED rather than merely noted:
+    KELD_TERMS defaults OFF, so the default configuration loads no spaCy and this endpoint is
+    the transcript read plus regex work it claims to be. See the block comment above
+    _terms_enabled for the measurements (619 MB permanent parent growth; a 3.4 GB in-parent
+    peak) and why no existing guard can see that spend.
     """
     _count("analyze_served")
     loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(
-            None, analyze_window, body.path, body.prompt_id, body.span_minutes, _analysis_nlp())
+            None, _analyze_blocking, body.path, body.prompt_id, body.span_minutes)
     except PromptNotFound:
         raise HTTPException(status_code=404, detail="prompt not found in transcript")

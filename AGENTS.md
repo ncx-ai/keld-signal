@@ -128,7 +128,22 @@ a time. Two waves, up to 8 facets per prompt:
   fails the pass (`pipeline_status:"partial"`) rather than publishing an empty
   set. `/analyze`'s `inventory.named_terms` (proper nouns lifted from message
   text — real person names have been observed) is deliberately unmodelled on
-  `sidecar.AnalyzeResult`, so it is structurally unforwardable.
+  `sidecar.AnalyzeResult`, so it is structurally unforwardable — and is **off
+  by default** besides (`KELD_TERMS`, see below).
+- ⚠️ **`/analyze`'s `named_terms` level is OFF by default (`KELD_TERMS=0`).** It
+  is the only analysis level that reads message *text*, and the only one that
+  needs spaCy — a **model, in the FastAPI parent**, which is the one process
+  that must hold none (see Resource safety: the worker's hard limit is derived
+  from the 4096 MB total budget minus a hard-coded 150 MB parent reserve).
+  Measured: `spacy.load()` grows the parent to **619 MB permanently** (the
+  parent is never recycled), and one 880k-char window peaked at **3.4 GB / 14.7 s**
+  inside it — invisible to every ceiling, pressure check and recycle the sidecar
+  has. `KELD_TERMS=1` restores it (bounded per message by `KELD_TERMS_MAX_LEN`,
+  default 100k chars, instead of the 20,000,000 that disabled spaCy's own
+  guard). The real fix is the third, long-lived analysis worker process in
+  `docs/superpowers/specs/2026-08-22-sidecar-analysis-tier-design.md`; this is
+  the interim bound, and nothing downstream loses anything today because
+  `named_terms` is forwarded nowhere.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").
