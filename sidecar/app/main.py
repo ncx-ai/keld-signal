@@ -15,6 +15,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from app.analysis.match import DEFAULT_BUDGET_S as _MATCH_DEFAULT_BUDGET_S
+from app.analysis.match import compile_vocabulary, match_text
 from app.cpuscale import CpuScaler
 from app.governor import Governor
 from app.metrics import Counts, build_metrics
@@ -41,6 +43,50 @@ def _clip(text: str) -> str:
     if _MAX_CHARS > 0 and len(text) > _MAX_CHARS:
         return text[:_MAX_CHARS]
     return text
+
+
+# Configured-vocabulary matching (POST /vocabulary, POST /match). See
+# docs/superpowers/specs/2026-08-22-configured-vocabulary-matching-design.md and
+# app/analysis/match.py (the matcher itself — pure, no I/O, already 19-test
+# reviewed). These two endpoints deliberately bypass _dispatch/the single-flight
+# runner entirely: matching is a regex scan over text the caller already holds,
+# not an inference, so it must answer even while the runner is fully occupied
+# and even when no worker has ever been spawned (asserted in test_main.py).
+#
+# BUDGET DECISION. match_text() takes one `budget_s` applied independently to
+# EVERY raw-regex label (match.py's own docstring flags this: N pathological
+# labels can cost up to N x budget_s). That is a real per-request cost surface
+# once an org's vocabulary has more than a couple of `regex` labels, since this
+# runs synchronously against org-authored, untrusted patterns — unlike the
+# `match` (literal) path, which is re.escape'd and has no backtracking surface
+# at all.
+#
+# Chosen: cap the TOTAL raw-regex time for one /match call, not the per-label
+# ceiling. Implemented without touching match.py (finished, reviewed, pure) by
+# using the fact that match_text already exposes a single `budget_s` applied
+# uniformly to every entry: divide the total cap by the number of raw-regex
+# labels actually installed (counted once, at /vocabulary time, not per
+# /match call), so worst case raw_count * budget_s == the total cap no matter
+# how many raw labels an org configures. A floor stops the per-label share
+# from collapsing toward 0 on a very large vocabulary, so an ordinary pattern
+# still gets a workable window — the trade-off being that a vocabulary with
+# enough raw-regex labels for the floor to dominate no longer holds the total
+# cap exactly. That is the same shape of trade-off match.py's own static
+# nested-quantifier filter already makes (a cheap, approximate defence over an
+# exact one that costs more to compute). The recommended `match` (literal)
+# path is unaffected by any of this: it has no timeout and needs none.
+_MATCH_TOTAL_BUDGET_S = float(os.environ.get("KELD_SIDECAR_MATCH_BUDGET_S", "0.5"))
+_MATCH_BUDGET_FLOOR_S = float(os.environ.get("KELD_SIDECAR_MATCH_BUDGET_FLOOR_S", "0.01"))
+
+
+def _match_budget_s() -> float:
+    """Per-label raw-regex budget for the CURRENTLY installed vocabulary, sized so
+    that (raw-regex label count) x (this budget) never exceeds
+    _MATCH_TOTAL_BUDGET_S — see the block comment above for why."""
+    raw_count = _state.get("vocab_raw_count", 0)
+    if raw_count <= 0:
+        return _MATCH_DEFAULT_BUDGET_S
+    return max(_MATCH_BUDGET_FLOOR_S, _MATCH_TOTAL_BUDGET_S / raw_count)
 
 
 _QUEUE_MAX = int(os.environ.get("KELD_SIDECAR_QUEUE_MAX", "64"))
@@ -175,6 +221,19 @@ class ExtractIn(BaseModel):
     max_len: int | None = None
 
 
+# Wire shape matches compile_vocabulary's `raw` parameter exactly (see
+# app/analysis/match.py): {key: [{"id", "match"?, "regex"?}, ...]}. Labels are
+# kept as plain dicts (not a nested BaseModel) so the wire contract stays in
+# lockstep with the one thing that actually reads them, compile_vocabulary,
+# instead of two schemas that can drift.
+class VocabularyIn(BaseModel):
+    vocabulary: dict[str, list[dict]] = {}
+
+
+class MatchIn(BaseModel):
+    text: str
+
+
 @app.get("/health")
 def health():
     # ok = "the service can serve on demand", NOT "a worker is already loaded".
@@ -250,3 +309,48 @@ async def extract(body: ExtractIn):
     req = {"op": "extract", "text": _clip(body.text), "labels": body.labels,
            "tasks": body.tasks, "threads": _threads_for_load(), "max_len": body.max_len}
     return await _dispatch(req)
+
+
+@app.post("/vocabulary")
+def install_vocabulary(body: VocabularyIn):
+    """Compile and install an org's configured vocabulary into THIS (parent)
+    process. The parent survives inference-worker recycles and deliberately
+    holds no model, so a recycle can never silently empty the vocabulary — a
+    daemon restart is the only thing that does, and the daemon re-pushes on
+    every settings-poll change (see the design spec).
+
+    Returns the rejects rather than logging them: the caller (the daemon's
+    settings poll) needs to report a bad label once per distinct reject set,
+    not once per poll — logging here turned one bad org config into ~288
+    client events per machine per day before.
+    """
+    compiled, rejects = compile_vocabulary(body.vocabulary)
+    raw_count = sum(1 for entries in compiled.values() for e in entries if e["raw"] is not None)
+    _state["vocabulary"] = compiled
+    _state["vocab_raw_count"] = raw_count
+    _count("vocab_installs")
+    return {"rejects": rejects}
+
+
+@app.post("/match")
+async def match(body: MatchIn):
+    """Match text against the currently-installed vocabulary. Deliberately does
+    NOT go through _dispatch/the single-flight runner (see the block comment
+    above _match_budget_s): this is a regex scan over text the caller already
+    holds, not an inference, and it must answer even while the runner is fully
+    occupied or no worker has ever been spawned. Run in the default executor
+    (NOT the runner's dedicated single-worker executor) purely so a
+    pathological-but-bounded raw pattern can't stall the event loop out from
+    under /health and /metrics while it burns its (capped) budget.
+
+    No span, no offset, no source text is ever in the return value — match_text
+    itself only ever returns id/count/confidence/alternates (see its docstring
+    and test_analysis_match.py's wire-shape test); this endpoint adds nothing
+    that could reintroduce one.
+    """
+    compiled = _state.get("vocabulary") or {}
+    _count("match_served")
+    if not compiled or not body.text:
+        return {}
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, match_text, body.text, compiled, _match_budget_s())

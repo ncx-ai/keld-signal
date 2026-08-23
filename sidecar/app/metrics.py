@@ -10,6 +10,11 @@ class Counts:
     completed: int = 0
     shed_503: int = 0
     failed: int = 0
+    # Configured-vocabulary matching (POST /vocabulary, POST /match) never touches
+    # the runner/worker, so it has its own counters rather than sharing the ones
+    # above — a /match spike must not read as inference load in /metrics.
+    vocab_installs: int = 0
+    match_served: int = 0
 
 
 def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,

@@ -219,6 +219,173 @@ def test_classify_sheds_503_and_counts_when_queue_full():
     assert m._state["counts"].shed_503 == 1
 
 
+# --- POST /vocabulary, POST /match --------------------------------------------------------
+#
+# These bypass _dispatch/the single-flight runner entirely (see the block comment above
+# app.main._match_budget_s). Every test below either proves that independence directly, or
+# exercises the total-raw-regex-time budget decision made at wiring time (match.py itself
+# already has 19 tests for the matcher's own behaviour; these are endpoint-level).
+
+def test_vocabulary_endpoint_installs_and_returns_rejects():
+    m = _reload_main(None)
+    m._state.clear()
+    body = m.VocabularyIn(vocabulary={
+        "customer": [{"id": "acme", "match": ["ACME"]},
+                     {"id": "broken", "regex": "("}],
+    })
+    out = m.install_vocabulary(body)
+    assert out == {"rejects": [{"key": "customer", "id": "broken", "reason": "bad_regex"}]}
+    assert "acme" in [e["id"] for e in m._state["vocabulary"]["customer"]]
+
+
+def test_vocabulary_endpoint_counts_raw_labels_for_budget_division():
+    m = _reload_main(None)
+    m._state.clear()
+    body = m.VocabularyIn(vocabulary={
+        "customer": [{"id": "acme", "match": ["ACME"]},       # literal: not counted
+                     {"id": "north", "regex": "Northwind"}],   # raw: counted
+        "team": [{"id": "eng", "regex": "Engineering"}],       # raw: counted
+    })
+    m.install_vocabulary(body)
+    assert m._state["vocab_raw_count"] == 2
+
+
+def test_match_endpoint_present_and_absent():
+    m = _reload_main(None)
+    m._state.clear()
+    m.install_vocabulary(m.VocabularyIn(vocabulary={
+        "customer": [{"id": "acme", "match": ["ACME"]}]}))
+
+    async def run():
+        hit = await m.match(m.MatchIn(text="the customer is ACME today"))
+        assert hit["customer"]["value"] == "acme"
+        miss = await m.match(m.MatchIn(text="no company named here"))
+        assert "customer" not in miss
+    _asyncio.run(run())
+
+
+def test_match_endpoint_with_no_vocabulary_installed_returns_empty():
+    m = _reload_main(None)
+    m._state.clear()  # no /vocabulary call at all — not even the key present
+    got = _asyncio.run(m.match(m.MatchIn(text="ACME is the customer")))
+    assert got == {}
+
+
+def test_match_endpoint_wire_shape_carries_no_span_offset_or_text():
+    m = _reload_main(None)
+    m._state.clear()
+    m.install_vocabulary(m.VocabularyIn(vocabulary={
+        "customer": [{"id": "acme", "match": ["ACME"]}]}))
+    secret = "Customer is ACME, per the confidential RFP."
+    got = _asyncio.run(m.match(m.MatchIn(text=secret)))
+    entry = got["customer"]
+    assert set(entry.keys()) == {"value", "confidence", "count", "alternates"}
+    blob = repr(got)
+    assert "span" not in blob and "offset" not in blob
+    assert secret not in blob and "RFP" not in blob
+
+
+def test_match_endpoint_answers_while_runner_busy_and_with_no_worker_wired():
+    """The property that distinguishes /match from every other endpoint: it must not go
+    through _dispatch -> runner.submit at all. Proven two ways in one test — the
+    single-flight runner is fully occupied (queue_max=1, one blocking job inflight) AND
+    there is no `wm` in _state at all — yet /match still answers well inside a short
+    timeout, because it never awaits either of them."""
+    m = _reload_main(None)
+    runner = _wire(m, queue_max=1)
+    del m._state["wm"]  # /match must have no dependency on a worker being present at all
+    m.install_vocabulary(m.VocabularyIn(vocabulary={
+        "customer": [{"id": "acme", "match": ["ACME"]}]}))
+
+    async def run():
+        runner.start()
+        try:
+            import threading
+            release = threading.Event()
+
+            def block(_):
+                release.wait(2.0)
+                return {"entities": {}}
+
+            # Occupy the runner's single in-flight slot so anything routed through it
+            # would have to wait behind this call.
+            t1 = _asyncio.create_task(runner.submit(block, 0))
+            await _asyncio.sleep(0.05)
+
+            got = await _asyncio.wait_for(
+                m.match(m.MatchIn(text="the customer is ACME")), timeout=1.0)
+            assert got["customer"]["value"] == "acme"
+
+            release.set()
+            await t1
+        finally:
+            release.set()
+            await runner.stop()
+    _asyncio.run(run())
+
+
+def test_match_budget_uses_module_default_with_no_raw_labels():
+    m = _reload_main(None)
+    m._state.clear()
+    m._state["vocab_raw_count"] = 0
+    from app.analysis.match import DEFAULT_BUDGET_S
+    assert m._match_budget_s() == DEFAULT_BUDGET_S
+
+
+def test_match_budget_divides_total_cap_across_raw_labels():
+    m = _reload_main(None)
+    m._state.clear()
+    m._state["vocab_raw_count"] = 5
+    assert abs(m._match_budget_s() - m._MATCH_TOTAL_BUDGET_S / 5) < 1e-9
+
+
+def test_match_budget_floor_stops_collapse_on_a_large_vocabulary():
+    """Without a floor, a vocabulary with enough raw-regex labels would drive the
+    per-label share toward 0 and starve even an ordinary pattern of any real time to
+    run. The floor accepts the total cap no longer holding exactly in that regime,
+    the same trade-off match.py's own static nested-quantifier filter already makes."""
+    m = _reload_main(None)
+    m._state.clear()
+    m._state["vocab_raw_count"] = 10_000
+    assert m._match_budget_s() == m._MATCH_BUDGET_FLOOR_S
+
+
+def test_match_endpoint_passes_the_divided_budget_into_match_text():
+    """End-to-end proof of the wiring, not just the pure math above: install a
+    vocabulary with several raw-regex labels and confirm /match actually invokes
+    match_text with the DIVIDED per-label budget — not match.py's own
+    DEFAULT_BUDGET_S — so N raw-regex labels are bounded to N x (total/N) ==
+    total, rather than N x DEFAULT_BUDGET_S (the blow-up a per-label ceiling
+    alone would allow). Captures the real argument match_text was called with,
+    rather than inferring it from timing, so it can't be timing-flaky."""
+    m = _reload_main(None)
+    m._state.clear()
+    n = 8
+    vocab_raw = {f"key{i}": [{"id": f"slow{i}", "regex": "a"}] for i in range(n)}
+    m.install_vocabulary(m.VocabularyIn(vocabulary=vocab_raw))
+    assert m._state["vocab_raw_count"] == n
+
+    seen = {}
+
+    def spy(text, compiled, budget_s):
+        seen["budget_s"] = budget_s
+        return {}
+
+    real_match_text = m.match_text
+    m.match_text = spy
+    try:
+        _asyncio.run(m.match(m.MatchIn(text="anything")))
+    finally:
+        m.match_text = real_match_text
+
+    expected = max(m._MATCH_BUDGET_FLOOR_S, m._MATCH_TOTAL_BUDGET_S / n)
+    assert seen["budget_s"] == expected
+    # Sanity: strictly less than the undivided per-label default, i.e. this really
+    # is a smaller-than-default budget, not accidentally the old constant.
+    from app.analysis.match import DEFAULT_BUDGET_S
+    assert expected < DEFAULT_BUDGET_S
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
