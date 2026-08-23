@@ -12,6 +12,12 @@ from app.analysis.window import dominant
 # what makes "unattributed" honest — below it there is no dominant value and we say so rather than
 # picking the largest of several near-equals. 0.5 is deliberate: a bucket holding under half the
 # evidence is not what the hour was about.
+#
+# The share floor is only half of it. `dominant` also requires window.MIN_EVIDENCE observations,
+# because a share is a ratio and a ratio over one observation is 1.0 by construction — see that
+# constant for the derivation and the measured cost. The per-dimension number below is the SHARE
+# floor only; the evidence floor is uniform, since it is a property of the arithmetic rather than
+# of any one dimension.
 ALLOCATION = [
     ("project",     "workspace", 0.50),
     ("branch",      "branch",    0.50),

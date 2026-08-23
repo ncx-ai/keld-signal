@@ -126,7 +126,16 @@ a time. Two waves, up to 8 facets per prompt:
   obtainable. Callers with no backend (eval, localagent) are unchanged. A dimension the window could not
   attribute is **absent**, never present-with-an-empty-value; a failed analysis
   fails the pass (`pipeline_status:"partial"`) rather than publishing an empty
-  set. `/analyze`'s `inventory.named_terms` (proper nouns lifted from message
+  set. Attribution needs **two** things, not one: the winning value's share is
+  ≥ 0.50 **and** the window holds ≥ `window.MIN_EVIDENCE` (5) observations at
+  that level. The second exists because a share is a ratio — one tool call
+  gives share 1.0 by construction — and `evidence` is dropped on the way to the
+  published enrichment, so nothing downstream can tell one observation from
+  five hundred. Five is derived, not chosen: under the 0.50 floor read as a
+  null hypothesis, `0.5**n` first falls below 5% at n=5, so below it no share
+  distinguishes the window from a coin flip. Measured on the 572-window
+  reference sample: 347 of 2927 attributed dimension slots become unattributed,
+  330 of which were publishing at share 1.0 and 129 off a single observation. `/analyze`'s `inventory.named_terms` (proper nouns lifted from message
   text — real person names have been observed) is deliberately unmodelled on
   `sidecar.AnalyzeResult`, so it is structurally unforwardable — and is **off
   by default** besides (`KELD_TERMS`, see below).
