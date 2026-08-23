@@ -55,6 +55,7 @@ import asyncio as _asyncio
 from app.cpuscale import CpuScaler
 from app.governor import Governor
 from app.runner import InferenceRunner, QueueFull
+from app.metrics import Counts
 from app.worker import handle
 from fastapi import HTTPException
 
@@ -699,6 +700,196 @@ def test_analyze_response_carries_no_prompt_text():
     dumped = json.dumps(body)
     for k in ("text", "span", "offset"):
         assert f'"{k}":' not in dumped, k
+
+
+# --------------------------------------------------------------------- /pii
+#
+# POST /pii is the sensitivity facet's detector. Like /analyze and /match it must answer with
+# GLiNER2 never loaded — that is the whole reason it exists as its own endpoint rather than a
+# worker op: `sensitivity` has to work under ml_backend:"deterministic" and whenever the model is
+# absent. Unlike /analyze (coordinates in), it takes TEXT, the same as /classify — loopback,
+# on-device. What it must never do is hand any of that text BACK: the response carries offsets and
+# types only, and the caller (which already holds the text) slices its own copy.
+#
+# WHOLLY SYNTHETIC, as everywhere in this repo: area 456 / group 72 / serial 8391 is a
+# structurally valid SSA assignment that belongs to nobody. Same value test_pii.py uses.
+_SYNTHETIC_SSN = "456-72-8391"
+_SSN_PROMPT = f"Employee SSN {_SYNTHETIC_SSN} was in the payload."
+
+
+def test_the_service_answers_pii_with_gliner2_never_loaded():
+    """The load-bearing property, for /pii this time. Driven through the REAL lifespan and the
+    REAL WorkerManager — a _FakeWM proves nothing about spawning — and with the REAL presidio
+    scan, because a stub would also pass with the defect present.
+
+    This one test pays a genuine spaCy + presidio load (~2 s, ~1 GB). That is the cost of
+    asserting the real path; every other test here stubs the scan."""
+    from app.worker_manager import DOWN, WorkerManager
+
+    m = _reload_main(None)
+
+    async def run():
+        async with m.lifespan(m.app):
+            assert isinstance(m._state["wm"], WorkerManager), (
+                "this must run against the real manager, or it proves nothing about spawning")
+            assert m.health()["ok"] is True, "the service must serve before any model exists"
+            assert m._state["wm"].state == DOWN
+            body = await m.detect_pii(m.PiiIn(text=_SSN_PROMPT))
+            assert m._state["wm"].state == DOWN, "/pii spawned a GLiNER2 worker"
+            assert m._state["counts"].submitted == 0, "/pii went through the inference runner"
+            return body
+
+    body = _asyncio.run(run())
+    hits = [s for s in body["spans"] if s["type"] == "ssn"]
+    assert hits, body
+    assert _SSN_PROMPT[hits[0]["start"]:hits[0]["end"]] == _SYNTHETIC_SSN, hits
+
+
+def test_pii_response_carries_offsets_and_types_but_never_the_matched_text():
+    """The privacy line for this endpoint. Returning the matched substring would put raw PII into
+    an HTTP body and within reach of any future log line, for no gain: the caller has the text and
+    the offsets index it. (/entities does return raw spans — an older contract with its own
+    reasoning, not a precedent to copy.)"""
+    m = _reload_main(None)
+    _wire(m)
+
+    def fake_scan(text, nlp=None):
+        start = text.index(_SYNTHETIC_SSN)
+        return [{"type": "ssn", "start": start, "end": start + len(_SYNTHETIC_SSN),
+                 "score": 0.85}]
+
+    m.pii_scan = fake_scan
+    body = _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
+    for span in body["spans"]:
+        assert set(span) == {"type", "start", "end", "score"}, span
+    dumped = json.dumps(body)
+    assert _SYNTHETIC_SSN not in dumped, dumped
+    for word in ("Employee", "payload"):
+        assert word not in dumped, dumped
+
+
+def test_pii_never_resolves_spacy_on_the_event_loop():
+    """Same defect /analyze already carries a test for: resolving the nlp at the CALL SITE means
+    the multi-second, several-hundred-MB load runs on the event loop and blocks /health and
+    /metrics. It must be resolved inside the executor."""
+    import threading
+
+    m = _reload_main(None)
+    _wire(m)
+    seen = []
+    real = m._analysis_nlp
+
+    def recording():
+        seen.append(threading.get_ident())
+        return None     # not real(): the thread is the whole assertion, and a genuine
+                        # spacy.load() here would cost the test ~600 MB
+
+    m._analysis_nlp = recording
+    m.pii_scan = lambda text, nlp=None: []
+    try:
+        _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
+    finally:
+        m._analysis_nlp = real
+    assert seen, "the nlp was never resolved at all"
+    assert seen[0] != threading.get_ident(), (
+        "the spaCy load ran on the event-loop thread; it must run inside the executor")
+
+
+def test_pii_shares_the_analysis_spacy_pipeline():
+    """presidio needs an NLP engine for PERSON/LOCATION and for context scoring. Left to itself it
+    loads a SECOND en_core_web_sm into this same parent process. The parent already holds one for
+    the named-terms level and is never recycled, so the second copy is pure resident cost — and
+    the parent's size is subtracted from the inference worker's hard limit
+    (worker_manager.parent_reserve_mb), so it comes straight out of the model's budget."""
+    m = _reload_main(None)
+    _wire(m)
+    sentinel = object()
+    got = {}
+
+    def fake_scan(text, nlp=None):
+        got["nlp"] = nlp
+        return []
+
+    m._ANALYSIS_NLP[0] = sentinel   # already "loaded", so nothing is loaded here
+    m.pii_scan = fake_scan
+    _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
+    assert got["nlp"] is sentinel, "/pii built its own spaCy instead of sharing the analysis one"
+
+
+def test_pii_failure_never_surfaces_or_logs_prompt_text():
+    """A presidio exception can carry the analysed string. Neither the response detail nor any log
+    line may repeat it — an error path is exactly where raw prompt text escapes."""
+    import logging
+
+    m = _reload_main(None)
+    _wire(m)
+
+    def boom(text, nlp=None):
+        raise ValueError(f"presidio choked on {text!r}")
+
+    m.pii_scan = boom
+    records = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    root = logging.getLogger()
+    handler = _Capture()
+    root.addHandler(handler)
+    previous = root.level
+    root.setLevel(logging.DEBUG)
+    raised = None
+    try:
+        try:
+            _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
+        except HTTPException as exc:
+            raised = exc
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(previous)
+
+    assert raised is not None, "a failed scan must not be reported as an empty clean result"
+    assert raised.__suppress_context__, (
+        "the original exception is still chained; any traceback render would reprint its message, "
+        "and that message can quote the analysed text")
+    assert _SYNTHETIC_SSN not in str(raised.detail), raised.detail
+    assert "Employee" not in str(raised.detail), raised.detail
+    assert records, "a failure that is never logged is invisible to an operator"
+    for record in records:
+        message = record.getMessage()
+        assert _SYNTHETIC_SSN not in message, message
+        assert "Employee" not in message, message
+
+
+def test_pii_bounds_the_text_it_scans_and_says_so():
+    """The char clip bounds spaCy's per-document cost the same way it bounds tokenizer cost for
+    the inference endpoints. Dropping a tail must be VISIBLE, though: unscanned text is undetected
+    PII, and the caller has to be able to report the facet as partial rather than clean."""
+    m = _reload_main("64")
+    _wire(m)
+    seen = {}
+
+    def fake_scan(text, nlp=None):
+        seen["len"] = len(text)
+        return []
+
+    m.pii_scan = fake_scan
+    short = _asyncio.run(m.detect_pii(m.PiiIn(text="short prompt")))
+    assert short["truncated"] is False, short
+    body = _asyncio.run(m.detect_pii(m.PiiIn(text="x" * 500)))
+    assert seen["len"] == 64, seen
+    assert body["truncated"] is True, body
+
+
+def test_pii_counters_are_separate_from_inference_load():
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+    m.pii_scan = lambda text, nlp=None: []
+    _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
+    counts = m._state["counts"]
+    assert counts.pii_served == 1 and counts.submitted == 0, vars(counts)
 
 
 if __name__ == "__main__":

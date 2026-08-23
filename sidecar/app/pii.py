@@ -84,6 +84,7 @@ SCORE_THRESHOLD = 0.35
 _SPACY_MODEL = "en_core_web_sm"
 
 _engine = None
+_engine_nlp = None      # the preloaded pipeline _engine was built over, if any
 _engine_lock = threading.Lock()
 
 # --- code-shape gate for the NER-derived types -----------------------------
@@ -135,18 +136,49 @@ def _is_code_like(value: str) -> bool:
     return False
 
 
-def _build_engine():
+def _nlp_engine(nlp):
+    """presidio's NLP engine, over a CALLER-SUPPLIED spaCy pipeline when there is one.
+
+    Left to itself presidio loads its own en_core_web_sm. In the sidecar that is a SECOND copy in
+    the same long-lived FastAPI parent, which already holds one for the named-terms analysis level
+    (app/main.py -> _analysis_nlp) and is never recycled — so the duplicate is permanent resident
+    cost, and the parent's size is subtracted from the inference worker's hard limit
+    (worker_manager.parent_reserve_mb). Measured here: the duplicate pipeline is ~50-65 MB.
+
+    ONE CONSEQUENCE, MEASURED. The shared pipeline is loaded NER-only (no tagger/attribute_ruler/
+    lemmatizer), so `token.lemma_` is empty and presidio's LemmaContextAwareEnhancer finds no
+    context words: a dashed SSN next to the word "SSN" scores 0.5 (the bare pattern score) instead
+    of 0.85. That is above SCORE_THRESHOLD either way, so nothing changes about what is DETECTED —
+    and context enhancement only ever RAISES scores, so losing it can only make this stricter,
+    which is the direction this module already errs in. It does mean the 0.05 "very weak" SSN
+    patterns can never be boosted over the threshold at all.
+    """
+    from presidio_analyzer.nlp_engine import NlpEngineProvider, SpacyNlpEngine
+
+    if nlp is None:
+        return NlpEngineProvider(nlp_configuration={
+            "nlp_engine_name": "spacy",
+            "models": [{"lang_code": "en", "model_name": _SPACY_MODEL}],
+        }).create_engine()
+
+    class _PreloadedSpacyNlpEngine(SpacyNlpEngine):
+        # is_loaded() is `self.nlp is not None`, so AnalyzerEngine will not call load() and no
+        # second spacy.load() happens. `models` is metadata only once nlp is populated.
+        def __init__(self):
+            super().__init__(models=[{"lang_code": "en", "model_name": _SPACY_MODEL}])
+            self.nlp = {"en": nlp}
+
+    return _PreloadedSpacyNlpEngine()
+
+
+def _build_engine(nlp=None):
     from presidio_analyzer import AnalyzerEngine, RecognizerRegistry
-    from presidio_analyzer.nlp_engine import NlpEngineProvider
     from presidio_analyzer.predefined_recognizers import (
         CreditCardRecognizer, EmailRecognizer, PhoneRecognizer,
         SpacyRecognizer, UsSsnRecognizer,
     )
 
-    nlp_engine = NlpEngineProvider(nlp_configuration={
-        "nlp_engine_name": "spacy",
-        "models": [{"lang_code": "en", "model_name": _SPACY_MODEL}],
-    }).create_engine()
+    nlp_engine = _nlp_engine(nlp)
 
     registry = RecognizerRegistry()
     for rec in (
@@ -167,26 +199,39 @@ def _build_engine():
     )
 
 
-def _get_engine():
-    global _engine
-    if _engine is None:
+def _get_engine(nlp=None):
+    """The analyzer, built once. Rebuilt if a DIFFERENT preloaded pipeline arrives — in the
+    sidecar there is exactly one for the process's lifetime, so this is a guard against a caller
+    silently getting an engine wired to a stale model, not a hot path."""
+    global _engine, _engine_nlp
+    stale = nlp is not None and nlp is not _engine_nlp
+    if _engine is None or stale:
         with _engine_lock:
-            if _engine is None:
-                _engine = _build_engine()
+            if _engine is None or (nlp is not None and nlp is not _engine_nlp):
+                _engine = _build_engine(nlp)
+                _engine_nlp = nlp
     return _engine
 
 
-def scan(text: str) -> list[dict]:
+def scan(text: str, nlp=None) -> list[dict]:
     """Find leaked personal data in `text`.
 
     Returns spans sorted by position, each `{"type","start","end","score"}` with
     `type` drawn only from the six-name vocabulary. Published test/example
     values are filtered out. Never raises on empty or non-string input.
-    """
+
+    NEVER returns the matched substring: the caller holds the text and the offsets index it, and
+    a matched value in a return value is one log line away from being a leak.
+
+    `nlp` is an already-loaded spaCy pipeline to reuse instead of loading a second one; see
+    _nlp_engine. None means load our own.
+
+    The first call builds the analyzer, which loads a spaCy model — seconds, hundreds of MB.
+    NEVER call this from an event loop."""
     if not text or not isinstance(text, str) or not text.strip():
         return []
 
-    results = _get_engine().analyze(
+    results = _get_engine(nlp).analyze(
         text=text,
         language="en",
         entities=_PRESIDIO_ENTITIES,

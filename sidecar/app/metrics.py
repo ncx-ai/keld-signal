@@ -25,6 +25,12 @@ class Counts:
     # one it means someone is probing. Both need to be visible, and neither is an inference
     # problem.
     analyze_rejected: int = 0
+    # POST /pii (presidio + spaCy, no worker, no runner) — its own counters for the same reason
+    # analyze_served has its own: a PII spike is not inference load. pii_failed counts scans that
+    # raised, which is how an operator sees "the detector is not working" — the response itself
+    # carries only a class-free 503, because a presidio error message can quote the analysed text.
+    pii_served: int = 0
+    pii_failed: int = 0
 
 
 def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,

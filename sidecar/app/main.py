@@ -8,6 +8,7 @@ heap via process exit. It returns RAW spans (surface text + offsets); masking is
 enforced daemon-side by the enrichment pipeline, never here.
 """
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -22,10 +23,15 @@ from app.analysis.match import compile_vocabulary, match_text
 from app.cpuscale import CpuScaler
 from app.governor import Governor
 from app.metrics import Counts, build_metrics
+# Imported as a bare name so the module import stays cheap: app.pii pulls in presidio only inside
+# its engine builder, never at import.
+from app.pii import scan as pii_scan
 from app.runner import InferenceRunner, QueueFull
 from app.worker_manager import (
     WorkerManager, WorkerTimeout, WorkerUnavailable, WorkerError, HELD,
 )
+
+log = logging.getLogger(__name__)
 
 # Character pre-clip. This bounds TOKENIZER cost on a pathological paste; it is
 # NOT the memory bound — that is max_len, in tokens, which is what activation
@@ -233,6 +239,10 @@ class VocabularyIn(BaseModel):
 
 
 class MatchIn(BaseModel):
+    text: str
+
+
+class PiiIn(BaseModel):
     text: str
 
 
@@ -527,6 +537,77 @@ async def match(body: MatchIn):
         return {}
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, match_text, body.text, compiled, _match_budget_s())
+
+
+def _pii_text(text: str):
+    """The text /pii will actually scan, and whether anything was dropped to get it.
+
+    Two bounds, both already justified elsewhere in this file: the char clip (tokenizer/parser cost
+    on a pathological paste) and spaCy's own per-document guard (_TERMS_MAX_LEN — the shared
+    pipeline is loaded with exactly that max_length, and handing it more raises).
+
+    Head truncation, and the drop is REPORTED rather than swallowed: offsets into the head stay
+    valid for the caller's copy of the text, but an unscanned tail is undetected PII, and the
+    caller has to be able to call the facet partial rather than clean. (AGENTS.md's
+    never-cut-mid-sentence rule does not govern this — like max_len, the constraint here is
+    memory, not legibility.)
+    """
+    clipped = _clip(text)
+    if len(clipped) > _TERMS_MAX_LEN:
+        clipped = clipped[:_TERMS_MAX_LEN]
+    return clipped, len(clipped) < len(text)
+
+
+def _pii_blocking(text: str):
+    """The whole of /pii's work, on an executor thread.
+
+    _analysis_nlp() is resolved HERE, not at the call site, for the reason spelled out in
+    _analyze_blocking: evaluating it as a run_in_executor ARGUMENT runs the multi-second spaCy load
+    on the event loop and blocks /health and /metrics.
+
+    Sharing that pipeline is the point of passing it at all — presidio would otherwise load a
+    second en_core_web_sm into this same never-recycled parent (see app.pii._nlp_engine). When
+    there is none to share (KELD_TERMS=0, or spaCy missing) None means "load your own", because
+    KELD_TERMS governs the named-terms level, not this facet.
+    """
+    return pii_scan(text, nlp=_analysis_nlp())
+
+
+@app.post("/pii")
+async def detect_pii(body: PiiIn):
+    """Find leaked personal data in `text` and return WHERE it is, never WHAT it is.
+
+    Takes text, like /classify, /extract and /entities — loopback, on-device, and the daemon read
+    that text locally to begin with. Returns offsets + types + scores and nothing else: the caller
+    already holds the text and slices its own copy, so putting the matched value in this body would
+    add raw PII to an HTTP response, and to whatever logs it later. (/entities does return raw
+    spans; that is an older contract with its own reasoning, not a precedent this follows.)
+
+    Deliberately does NOT go through _dispatch/the single-flight runner, and touches no
+    WorkerManager — same as /match and /analyze. This is presidio patterns plus a spaCy NER pass,
+    not inference, and it is the endpoint that has to answer when GLiNER2 is absent entirely:
+    ml_backend:"deterministic" runs the sensitivity facet with no model at all. Pinned against the
+    real lifespan in test_main.py. Run in the default executor so neither the spaCy load nor a
+    large document stalls the event loop out from under /health and /metrics.
+    """
+    text, truncated = _pii_text(body.text)
+    _count("pii_served")
+    if not text.strip():
+        return {"spans": [], "truncated": truncated}
+    loop = asyncio.get_running_loop()
+    try:
+        spans = await loop.run_in_executor(None, _pii_blocking, text)
+    except Exception as exc:
+        # The exception is NOT propagated or formatted: a presidio/spaCy error message can quote
+        # the analysed string, and an error path is exactly where prompt text escapes. Class name
+        # only — enough to tell "no model installed" from "bad input" in an operator's logs.
+        _count("pii_failed")
+        log.warning("pii scan failed: %s", type(exc).__name__)
+        # `from None` is load-bearing, not style: without it the original exception stays chained
+        # as __context__ and ANY later traceback render ("During handling of the above
+        # exception...") reprints its message — the analysed text with it.
+        raise HTTPException(status_code=503, detail="pii scan unavailable") from None
+    return {"spans": spans, "truncated": truncated}
 
 
 @app.post("/analyze")
