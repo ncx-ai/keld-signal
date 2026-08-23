@@ -41,7 +41,7 @@ import argparse
 import concurrent.futures, collections, glob, hashlib, json, math, os, re, shlex, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qwen_windows import EXT_LANG, clip, is_command_echo
+from qwen_windows import EXT_LANG
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
 from app.analysis.vocab import (  # noqa: E402
@@ -50,11 +50,12 @@ from app.analysis.vocab import (  # noqa: E402
     action_for, toolchain_for, artifacts_for, vcs_of, mcp_provider)
 from app.analysis.shell import (  # noqa: E402
     SHELL_KEYWORD, TWO_WORD, strip_heredocs, parsed_command_names, unwrap_command)
+from app.analysis.text import clip, is_command_echo, text_of, think_blocks  # noqa: E402
+from app.analysis import terms  # noqa: E402
 
 import numpy as np
 import pandas as pd
 
-import terms
 import yaml
 
 
@@ -87,7 +88,8 @@ PATH_INPUTS = ("file_path", "notebook_path", "path")
 
 # The ONE level that reads message text. Every other level above comes from tool-call inputs, and
 # that is exactly why attribution stalls at ~37%: a customer, a supplier or an initiative is only
-# ever spoken. See scripts/terms.py for the three measured decisions behind how it reads.
+# ever spoken. See sidecar/app/analysis/terms.py for the three measured decisions behind how it
+# reads.
 #
 # spaCy is loaded once, lazily, and only if it is installed — the frames must still build on a
 # machine without it, with the level simply absent rather than the run failing. KELD_TERMS=0
@@ -389,31 +391,6 @@ def services_in(text):
     out = [m.group(1).lower().split(":")[0] for m in URL_HOST.finditer(text)]
     out += [m.group(1).lower() for m in SSH_HOST.finditer(text)]
     return [h for h in out if h and not h.endswith(".") and h != "-"]
-
-
-def text_of(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "\n".join(b.get("text", "") for b in content
-                         if isinstance(b, dict) and b.get("type") == "text")
-    return ""
-
-
-def think_blocks(content):
-    """Thinking block sizes, which in practice means block COUNTS.
-
-    Measured across 43 sessions: all 9,148 blocks in the platform-written Claude Code transcripts
-    carry a SIGNATURE and an empty `thinking` string. The only corpus with real thinking text was
-    a MANUAL claude.ai session export (61 blocks, 100,665 chars) — and this system reads only
-    what the agent platforms write for themselves, never an export a person produced by hand. So
-    treat thinking volume as UNAVAILABLE: `asst_think_chars` is recorded when a store happens to
-    carry it, but nothing downstream may depend on it. `asst_think_msgs` (incidence) and the
-    `unsaid_tok_approx` upper bound are the designed-for signals."""
-    if not isinstance(content, list):
-        return []
-    return [len(b.get("thinking") or "") for b in content
-            if isinstance(b, dict) and b.get("type") == "thinking"]
 
 
 def reconcile(pending, component_depth):

@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""Tests for the named-term level. Each asserts a defect that was measured, not imagined.
-
-terms.py moved to sidecar/app/analysis/terms.py (shared with the sidecar); this suite is
-repointed at the package rather than left behind with a re-export, since scripts/terms.py no
-longer exists to re-export from."""
+"""Tests for the named-term level. Each asserts a defect that was measured, not imagined."""
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.analysis.terms import tally, split_list, normalize
 
 

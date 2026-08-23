@@ -2,3 +2,5 @@ fastapi==0.115.*
 uvicorn[standard]==0.32.*
 gliner2[local]
 bashlex==0.18
+spacy==3.8.*
+wordfreq==3.1.*
