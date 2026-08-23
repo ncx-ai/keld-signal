@@ -6,6 +6,9 @@ DEST ?= $(HOME)/.local/bin
 SIDECAR_VENV ?= $(HOME)/.keld/sidecar-venv
 # sidecar needs Python 3.12 (host default 3.14 has no torch/gliner2 wheels)
 PYTHON ?= python3.12
+# scripts/refseries.py's study venv (pandas/pyarrow/bashlex/wordfreq) — separate from PYTHON
+# above, which is the ML sidecar's own 3.12 venv with none of those deps. See its own docstring.
+STUDY_PYTHON ?= python3
 SINK_PORT ?= 8710
 
 .DEFAULT_GOAL := help
@@ -27,7 +30,7 @@ help:
 	@echo "  make scaleway-down      delete it (YES=1 skips confirm; still bills the 24h minimum)"
 	@echo "  make scaleway-status    show the current Mac + connection details"
 	@echo ""
-	@echo "Vars: DEST=$(DEST)  SIDECAR_VENV=$(SIDECAR_VENV)  PYTHON=$(PYTHON)  SINK_PORT=$(SINK_PORT)"
+	@echo "Vars: DEST=$(DEST)  SIDECAR_VENV=$(SIDECAR_VENV)  PYTHON=$(PYTHON)  STUDY_PYTHON=$(STUDY_PYTHON)  SINK_PORT=$(SINK_PORT)"
 	@echo "      VERSION=<X.Y.Z> (release, optional)  YES=1 (release/scaleway-down, skip confirm)"
 	@echo "      SCALEWAY_ZONE=$(SCALEWAY_ZONE)  SCALEWAY_UP_TIMEOUT=$(SCALEWAY_UP_TIMEOUT) (seconds)"
 
@@ -167,6 +170,10 @@ obfuscate-check: ## run the OBFUSCATED freeze + worker-spawn acceptance gate loc
 .PHONY: obfuscation-coverage-check
 obfuscation-coverage-check: ## fast: assert every sidecar/app/**/*.py is actually obfuscated (no torch/model/freeze needed; CI-safe)
 	bash scripts/check-obfuscation-coverage.sh
+
+.PHONY: fixture-identity-check
+fixture-identity-check: ## fast: extract the committed synthetic fixture corpus and verify it matches its baseline fingerprint (CI-safe substitute for the frozen-corpus identity gate; see sidecar/app/analysis/testdata/build_fixture_corpus.py)
+	PYTHON="$(STUDY_PYTHON)" bash scripts/check-fixture-identity.sh
 
 .PHONY: crosscheck
 crosscheck:  ## verify all release targets build pure-Go (CGO_ENABLED=0)

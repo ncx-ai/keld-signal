@@ -62,3 +62,22 @@ jobs:
         run: pip install --quiet python-minifier pyarmor
       - name: obfuscation coverage gate
         run: make obfuscation-coverage-check
+
+  # The real app.analysis identity gate (scripts/check_identity.py against the frozen corpus
+  # at ~/keld/refseries-context/frozen-corpus/) can't run here: 736MB of real AI-coding-session
+  # transcripts on one laptop, outside the repo, unshareable by the project's own privacy
+  # invariant. This is the floor everyone else gets instead — a small, wholly-synthetic fixture
+  # corpus (sidecar/app/analysis/testdata/) committed alongside its own baseline fingerprint.
+  # No torch, no spaCy model (KELD_TERMS=0 — see the fixture's own docstring for why): only
+  # pandas/pyarrow/bashlex/wordfreq, so this stays cheap enough to run every push/PR.
+  fixture-identity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install analysis deps (no torch, no spaCy model)
+        run: pip install --quiet pandas pyarrow bashlex wordfreq
+      - name: fixture identity gate
+        run: make fixture-identity-check STUDY_PYTHON=python
