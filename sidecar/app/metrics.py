@@ -30,7 +30,7 @@ class Counts:
 def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
                   governor, runner, counts, recycles, kills, uptime_s,
                   cpu_threads=None, peak_rss_mb=None, ceiling_mb=None,
-                  hard_limit_mb=None, clock=time.monotonic):
+                  hard_limit_mb=None, parent_reserve_mb=None, clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     return {
         "worker": {
@@ -46,6 +46,11 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
             "model_cost_mb": round(model_cost_mb, 1) if model_cost_mb else None,
             "ceiling_mb": round(ceiling_mb, 1) if ceiling_mb is not None else None,
             "hard_limit_mb": round(hard_limit_mb, 1) if hard_limit_mb is not None else None,
+            # What the worker's limit was actually derived from. parent_rss_mb above is the
+            # instantaneous reading; this is the high-water figure subtracted from the total
+            # budget. Reported because the two diverging is the whole failure this replaced: a
+            # constant asserting a parent size nothing measured.
+            "parent_reserve_mb": round(parent_reserve_mb, 1) if parent_reserve_mb is not None else None,
             "recycles": recycles,
             "kills": dict(kills),
         },

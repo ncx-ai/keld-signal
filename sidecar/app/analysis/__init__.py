@@ -15,4 +15,6 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #   1 -> 2: dominance requires window.MIN_EVIDENCE observations as well as the 0.50 share floor.
 #           On the 572-window reference sample, 347 dimension slots move to unattributed — 330 of
 #           them previously published at share=1.0, 129 off a single observation.
+#           /analyze also gains `named_terms_status`, which says whether the `term` level ran —
+#           an empty `named_terms` is no longer self-describing (see app/main.py).
 SCHEMA = 2

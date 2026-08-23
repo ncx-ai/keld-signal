@@ -43,6 +43,17 @@ def _default_rss(pid):
         return 0.0
 
 
+def _default_parent_rss():
+    """This process's own RSS. Separate from _default_rss (which takes a pid) so the parent's
+    cost is a first-class, injectable dependency rather than something read incidentally by the
+    /metrics builder — hard_limit_mb() is derived from it, so it has to be measurable here."""
+    import psutil
+    try:
+        return psutil.Process().memory_info().rss / (1024.0 * 1024.0)
+    except Exception:
+        return 0.0
+
+
 def _default_ram():
     import psutil
     vm = psutil.virtual_memory()
@@ -51,13 +62,14 @@ def _default_ram():
 
 class WorkerManager:
     def __init__(self, *, spawn_fn=_default_spawn, rss_fn=_default_rss,
-                 ram_fn=_default_ram, clock=None,
+                 ram_fn=_default_ram, parent_rss_fn=_default_parent_rss, clock=None,
                  job_deadline_s=None, live_poll_s=None, spawn_timeout_s=None, idle_timeout_s=None,
                  evict_pct=None, margin_mb=None):
         import time
         self._spawn_fn = spawn_fn
         self._rss_fn = rss_fn
         self._ram_fn = ram_fn
+        self._parent_rss_fn = parent_rss_fn
         self._clock = clock or time.monotonic
         self._deadline = float(os.environ.get("KELD_SIDECAR_JOB_DEADLINE_S", "60")) if job_deadline_s is None else job_deadline_s
         # Poll for the response in short slices so a worker that dies mid-job is
@@ -78,7 +90,15 @@ class WorkerManager:
         # the multiprocessing resource tracker cost. Set KELD_SIDECAR_RSS_HARD_MB
         # for an absolute worker limit instead.
         self._budget_mb = float(os.environ.get("KELD_SIDECAR_MEM_BUDGET_MB", "4096"))
+        # The parent's share of the budget. This is a FLOOR, not the figure itself — see
+        # parent_reserve_mb(). It was a bare constant, which was true only while the parent held
+        # nothing but FastAPI; this is the client-side analysis and enrichment service, not a
+        # GLiNER2 wrapper, and the `term` level's spaCy pipeline lives in the parent at ~619 MB.
+        # A constant that describes one configuration of a service that has several is a number
+        # that goes stale silently, in the direction that under-protects.
         self._parent_reserve_mb = float(os.environ.get("KELD_SIDECAR_PARENT_RESERVE_MB", "150"))
+        # High-water measured parent RSS. See observe_parent_rss for why high-water and not live.
+        self._parent_peak_mb = 0.0
         # Floor the hard limit at ceiling + this, so on a host where the model
         # alone is large (ceiling above the budget) the limit stays above the
         # ceiling instead of turning every transient spike into a mid-job kill.
@@ -161,6 +181,49 @@ class WorkerManager:
         if self.state != READY:
             self._spawn()
 
+    def observe_parent_rss(self):
+        """Sample the parent's RSS into a monotone high-water mark. Lock-free, like observe_rss:
+        reading RSS mutates nothing.
+
+        HIGH-WATER, NOT LIVE, and that is the whole design decision. A hard limit that tracked a
+        live parent sample would move in both directions: the parent dips (glibc hands arenas
+        back), the worker's limit rises, and a worker that was over-limit is under it again with
+        nothing about the risk having changed. Non-monotone guards are exactly the failure this
+        module already had once — the RSS guard sampled between jobs, measured the trough, and
+        reported a healthy machine while real RSS ran at ~1.7x the ceiling.
+
+        High-water is also the TRUTHFUL summary here, not merely the safe one: the parent is
+        never recycled, so a model loaded into it is resident for the rest of the run. Its cost
+        is monotone in fact, and the peak is the only sample that describes the run rather than
+        the instant. A guard that can only tighten cannot oscillate.
+        """
+        try:
+            rss = self._parent_rss_fn()
+        except Exception:
+            return self._parent_peak_mb
+        if rss and rss > self._parent_peak_mb:
+            self._parent_peak_mb = rss
+        return self._parent_peak_mb
+
+    def parent_reserve_mb(self):
+        """What to subtract from the total budget for the parent: the configured constant, or
+        the measured high-water if the parent has actually grown past it.
+
+        max(), not the measurement alone, so this is strictly conservative against the previous
+        behaviour: an early sample taken before anything is loaded can never hand the worker MORE
+        headroom than the constant did. The constant becomes a floor and a startup default; the
+        measurement is what keeps it from going stale.
+
+        NOTE what this makes visible rather than causes. Measured on this host with the `term`
+        level enabled: parent 619.6 MB, so the worker's limit falls from 3946 to 3476 MB against
+        a drift ceiling of 3409 — 67 MB of slack, not the 537 MB the constant implied. That
+        tightness is the real state of a 4096 MB budget holding both spaCy and GLiNER2; the old
+        number simply hid it. If it proves too tight the levers are the budget itself
+        (KELD_SIDECAR_MEM_BUDGET_MB), the ceiling's margin (KELD_SIDECAR_RSS_MARGIN_MB), or
+        KELD_TERMS=0 — not a parent constant that asserts a size nothing measured.
+        """
+        return max(self._parent_reserve_mb, self._parent_peak_mb)
+
     def ceiling_mb(self):
         if self.model_cost_mb is None:
             return None
@@ -175,7 +238,7 @@ class WorkerManager:
         every ordinary transient spike a mid-job kill."""
         if self._hard_limit_mb is not None:
             return self._hard_limit_mb
-        from_budget = self._budget_mb - self._parent_reserve_mb
+        from_budget = self._budget_mb - self.parent_reserve_mb()
         ceiling = self.ceiling_mb()
         if ceiling is None or from_budget > ceiling:
             return from_budget      # normal case: the budget is the binding limit
@@ -223,6 +286,7 @@ class WorkerManager:
 
         The lock is acquired non-blocking: waiting for it would stall the poll
         loop for a whole inference and pin every sample to a job boundary."""
+        self.observe_parent_rss()   # before hard_limit_mb(), which is derived from it
         rss = self.observe_rss()
         hard = self.hard_limit_mb()
         if (hard is not None and self.state == READY and rss > hard):

@@ -156,20 +156,22 @@ a time. Two waves, up to 8 facets per prompt:
   globbed leaves: session directories appear after the sidecar is spawned.
   Empty means **deny everything**; absent means the sidecar's own per-user
   defaults.
-- ⚠️ **`/analyze`'s `named_terms` level is OFF by default (`KELD_TERMS=0`).** It
-  is the only analysis level that reads message *text*, and the only one that
-  needs spaCy — a **model, in the FastAPI parent**, which is the one process
-  that must hold none (see Resource safety: the worker's hard limit is derived
-  from the 4096 MB total budget minus a hard-coded 150 MB parent reserve).
-  Measured: `spacy.load()` grows the parent to **619 MB permanently** (the
-  parent is never recycled), and one 880k-char window peaked at **3.4 GB / 14.7 s**
-  inside it — invisible to every ceiling, pressure check and recycle the sidecar
-  has. `KELD_TERMS=1` restores it (bounded per message by `KELD_TERMS_MAX_LEN`,
-  default 100k chars, instead of the 20,000,000 that disabled spaCy's own
-  guard). The real fix is the third, long-lived analysis worker process in
-  `docs/superpowers/specs/2026-08-22-sidecar-analysis-tier-design.md`; this is
-  the interim bound, and nothing downstream loses anything today because
-  `named_terms` is forwarded nowhere.
+- **This is the client-side analysis and enrichment service, not a GLiNER2
+  wrapper.** GLiNER2 was the first use case, not a precondition: the service
+  starts and serves with no model loaded, and `/analyze` answers with the
+  inference worker still `down` (pinned in `test_main.py` against the real
+  `lifespan`). `/analyze`'s `named_terms` level is **on** by default
+  (`KELD_TERMS=0` switches it off) and loads spaCy — ~619 MB, into the FastAPI
+  parent, permanently, since the parent is never recycled. That coexists with
+  GLiNER2 fine (~60 + ~619 + ~2740 MB against a 4096 MB budget); what did not
+  was the **accounting** — see the parent-reserve bullet under Resource safety.
+  The response carries `named_terms_status` (`ok` / `skipped:disabled` /
+  `degraded:spacy_unavailable`), because an empty `named_terms` is otherwise
+  not self-describing: a window that held no terms and a level that never ran
+  look identical. `KELD_TERMS_MAX_LEN` (default 100k chars/message) restores
+  spaCy's own per-document guard, which had been set to 20,000,000 — i.e.
+  disabled; over-length messages are skipped by the NER pass, never cut, and
+  the regex shapes still read them in full.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").
@@ -353,8 +355,25 @@ guard now has two tiers:
   stays a backstop. Note it bounds *sustained* use: with a 1s poll a fast
   allocation can overshoot briefly before the kill lands.
 
+**The parent's share of the budget is MEASURED, not assumed.** `hard_limit_mb()`
+is `total budget − what the parent costs`, and "what the parent costs" was the
+constant `KELD_SIDECAR_PARENT_RESERVE_MB` (150) — true only while the parent
+held nothing but FastAPI. Once the `term` level's spaCy pipeline is resident
+the parent is ~680 MB, so the worker's hard limit was computed ~470 MB too
+generous: under-protection, arrived at silently, in the one direction that
+matters. `WorkerManager.parent_reserve_mb()` now returns
+`max(constant, high-water measured parent RSS)`, sampled lock-free by `poll()`.
+**High-water, not live**: a limit tracking a live sample moves in both
+directions, so a parent dip would relax the worker's limit with nothing about
+the risk having changed — the same non-monotone failure the RSS guard already
+had by sampling the trough. The parent is never recycled, so its cost is
+monotone in fact and the peak is the honest summary. `max()` with the constant
+keeps it strictly conservative against the old behaviour: an early sample can
+never grant MORE headroom than before. The standing invariant is unchanged —
+the hard limit never sits below `ceiling + KELD_SIDECAR_RSS_HARD_MARGIN_MB`.
+
 `GET /metrics` exposes a `worker` block (`state`/`worker_rss_mb`/**`peak_rss_mb`**/
-`parent_rss_mb`/`model_cost_mb`/**`ceiling_mb`**/**`hard_limit_mb`**/`recycles`/
+`parent_rss_mb`/**`parent_reserve_mb`**/`model_cost_mb`/**`ceiling_mb`**/**`hard_limit_mb`**/`recycles`/
 `kills` incl. `hard`) alongside governor EWMA/threads/queue/counts — the peak and
 the limits it is judged against, because an instantaneous sample is exactly what
 made the oscillation look healthy. Full mechanisms + load-test validation:

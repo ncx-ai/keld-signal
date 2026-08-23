@@ -165,6 +165,75 @@ def test_poll_no_recycle_below_ceiling():
     assert m.state == READY and m.counts["recycles"] == 0
 
 
+# --- the parent's share of the budget is MEASURED, not assumed ------------------------------
+#
+# hard_limit_mb() = total budget - what the parent costs. The parent's cost was a constant
+# (KELD_SIDECAR_PARENT_RESERVE_MB, 150), which was true only while the parent held nothing but
+# FastAPI. This service is the client-side analysis and enrichment service, not a GLiNER2
+# wrapper: spaCy for the `term` level lives in the parent and costs ~619 MB, so the constant
+# went stale by ~470 MB and the guard under-protected by exactly that much — silently, because
+# nothing measured the number it was asserting.
+
+def test_the_parent_reserve_starts_at_the_configured_constant():
+    """The measured figure only ever RAISES the reserve. Before anything is sampled the
+    behaviour must be identical to the constant-only design."""
+    m = make(parent_rss_fn=lambda: 0.0)
+    m._budget_mb, m._parent_reserve_mb = 4096.0, 150.0
+    assert m.parent_reserve_mb() == 150.0
+    assert m.hard_limit_mb() == 3946.0
+
+
+def test_a_larger_measured_parent_tightens_the_worker_limit():
+    """~619 MB of spaCy plus a ~60 MB base parent: the worker's share of a 4096 MB budget is
+    ~3417 MB, not the 3946 MB the constant claimed."""
+    parent = {"mb": 60.0}
+    m = make(parent_rss_fn=lambda: parent["mb"])
+    m._budget_mb, m._parent_reserve_mb = 4096.0, 150.0
+    m.observe_parent_rss()
+    assert m.hard_limit_mb() == 3946.0, "a parent below the constant must not LOOSEN the limit"
+
+    parent["mb"] = 679.0                       # spaCy has loaded
+    m.observe_parent_rss()
+    assert m.parent_reserve_mb() == 679.0
+    assert m.hard_limit_mb() == 4096.0 - 679.0
+
+
+def test_the_reserve_is_a_high_water_mark_and_never_falls():
+    """A limit that moved with a live sample would oscillate: the parent dips, the limit rises,
+    and a worker that was over-limit is under it again with nothing having changed about the
+    risk. The parent is never recycled, so its cost is monotone in practice — taking the
+    high-water makes the guard monotone too, and a guard that only tightens cannot oscillate.
+    This is the same failure the RSS guard already had once, by sampling the trough."""
+    parent = {"mb": 700.0}
+    m = make(parent_rss_fn=lambda: parent["mb"])
+    m._budget_mb, m._parent_reserve_mb = 4096.0, 150.0
+    m.observe_parent_rss()
+    parent["mb"] = 200.0                       # a dip: glibc returned some arenas
+    m.observe_parent_rss()
+    assert m.parent_reserve_mb() == 700.0
+
+
+def test_a_measured_parent_never_pushes_the_hard_limit_below_the_ceiling():
+    """AGENTS.md's standing invariant: the hard limit must never sit below
+    ceiling + KELD_SIDECAR_RSS_HARD_MARGIN_MB, or an ordinary transient spike becomes a mid-job
+    kill. Tightening the reserve must not be able to breach it."""
+    m = make(parent_rss_fn=lambda: 1500.0)     # an absurd parent, to force the collision
+    m._budget_mb, m._parent_reserve_mb, m._hard_margin = 4096.0, 150.0, 512.0
+    m.model_cost_mb = 2400.0                   # ceiling = 3424
+    m.observe_parent_rss()
+    assert m.hard_limit_mb() == m.ceiling_mb() + 512.0
+
+
+def test_polling_samples_the_parent():
+    """The reserve is only honest if something keeps measuring it; poll() is the one loop that
+    already runs off the event loop every second."""
+    m = make(parent_rss_fn=lambda: 800.0)
+    m._budget_mb, m._parent_reserve_mb = 4096.0, 150.0
+    m._hard_limit_mb = 9000.0                  # isolate: no kill, just the sampling
+    m.poll()
+    assert m.parent_reserve_mb() == 800.0
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

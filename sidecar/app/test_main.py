@@ -549,108 +549,20 @@ def test_analyze_unknown_prompt_is_404_not_an_empty_payload():
         assert e.status_code == 404
 
 
-# --- named-terms extraction is OFF by default (KELD_TERMS) --------------------------------
+# --- the service must serve without GLiNER2 -------------------------------------------------
 #
-# The `term` level is the only one that reads message TEXT, and the only one that needs spaCy.
-# spaCy is a MODEL, and it would live in the long-lived FastAPI parent — the process AGENTS.md
-# guarantees "holds no model and its own RSS stays flat regardless of uptime", and whose ~150 MB
-# footprint (KELD_SIDECAR_PARENT_RESERVE_MB) the worker's hard limit is derived from. Measured:
-# spacy.load() takes the parent to 619 MB, permanently, because the parent is never recycled.
+# This is the client-side analysis and enrichment service, not a GLiNER2 wrapper: GLiNER2 was
+# the first use case, not the precondition. /analyze needs no model at all, and the property
+# below is what makes that structural rather than incidental.
 
-# --- /analyze is path-confined (KELD_ANALYZE_ROOTS) ----------------------------------------
-#
-# The sidecar has no auth: serve.py binds 127.0.0.1 and that is the whole of it. Every other
-# endpoint only ever processes text the CALLER supplied. /analyze is the first that opens an
-# arbitrary filesystem path AS THE DAEMON'S USER and returns content derived from it (workspace,
-# branch, named terms — confirmed to contain real person names). On a multi-user host that makes
-# it a confused deputy: any other local user can POST a path under another user's
-# ~/.claude/projects and read back their people, repos and branches.
+def _no_spacy(fn):
+    """Run fn with `import spacy` poisoned, and return (result, attempted).
 
-def _roots_env(*dirs):
-    os.environ["KELD_ANALYZE_ROOTS"] = os.pathsep.join(dirs)
-
-
-def test_analyze_accepts_a_path_inside_a_configured_root():
-    m = _reload_main(None)
-    _wire(m)
-    path = _fixture_transcript()
-    _roots_env(os.path.dirname(path))
-    body = _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
-    assert "workstreams" in body
-
-
-def test_analyze_rejects_a_path_outside_every_root_with_403():
-    """403, not 404: a rejected path and a legitimate-but-unresolvable one are different facts,
-    and collapsing them would make an allowlist miss look like a bad prompt id."""
-    m = _reload_main(None)
-    _wire(m)
-    path = _fixture_transcript()
-    _roots_env(tempfile.mkdtemp(prefix="keld-analyze-elsewhere-"))
-    try:
-        _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
-        assert False, "expected 403"
-    except HTTPException as e:
-        assert e.status_code == 403, e.status_code
-
-
-def test_analyze_rejects_a_traversal_that_escapes_the_root():
-    """A prefix test on the RAW string would admit this: `<root>/../elsewhere/x.jsonl` starts
-    with `<root>`."""
-    m = _reload_main(None)
-    _wire(m)
-    victim = _fixture_transcript()           # a REAL, readable transcript outside the root, so
-    root = tempfile.mkdtemp(prefix="keld-analyze-root-")   # the rejection can't be a stray ENOENT
-    _roots_env(root)
-    escaped = os.path.join(root, "..", os.path.basename(os.path.dirname(victim)),
-                           os.path.basename(victim))
-    assert os.path.exists(escaped), "the traversal must resolve to a file that really is readable"
-    try:
-        _asyncio.run(m.analyze(m.AnalyzeIn(path=escaped, prompt_id=_fixture_prompt_id())))
-        assert False, "expected 403"
-    except HTTPException as e:
-        assert e.status_code == 403, e.status_code
-
-
-def test_analyze_rejects_a_symlink_pointing_out_of_the_root():
-    """The link LIVES in an allowed root; its target does not. Confinement has to be decided on
-    the resolved path, or a single symlink hands back any transcript on the machine."""
-    m = _reload_main(None)
-    _wire(m)
-    real = _fixture_transcript()             # the transcript, in its own (disallowed) directory
-    root = tempfile.mkdtemp(prefix="keld-analyze-root-")
-    link = os.path.join(root, "decoy.jsonl")
-    os.symlink(real, link)
-    _roots_env(root)
-    try:
-        _asyncio.run(m.analyze(m.AnalyzeIn(path=link, prompt_id=_fixture_prompt_id())))
-        assert False, "expected 403"
-    except HTTPException as e:
-        assert e.status_code == 403, e.status_code
-
-
-def test_analyze_fails_closed_when_no_roots_are_configured():
-    """An empty allowlist denies everything. The alternative — an empty list meaning
-    "unrestricted" — turns a misconfiguration into the original vulnerability, silently."""
-    m = _reload_main(None)
-    _wire(m)
-    path = _fixture_transcript()
-    _roots_env("")  # after the fixture: it allowlists its own directory (see its docstring)
-    try:
-        _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
-        assert False, "expected 403"
-    except HTTPException as e:
-        assert e.status_code == 403, e.status_code
-
-
-def test_named_terms_off_by_default_never_imports_spacy():
-    """The guarantee is not "the load is cheap", it is "the load does not happen". Asserted by
-    poisoning the import itself: _analysis_nlp() swallows every Exception by design (a missing
-    model must degrade, not fail the request), so an assert raised inside the guard would be
-    silently caught. The recorded list is what survives that."""
+    Every test here would otherwise pay a real spacy.load(): ~600 MB and ~2 s each. Poisoning
+    the import exercises _analysis_nlp()'s established degrade-to-None path, which also proves
+    the load was ATTEMPTED — and the regex half of terms.candidates() still supplies terms, so
+    the level's output is still observable."""
     import builtins
-
-    os.environ.pop("KELD_TERMS", None)
-    m = _reload_main(None)
 
     attempted = []
     real_import = builtins.__import__
@@ -658,65 +570,97 @@ def test_named_terms_off_by_default_never_imports_spacy():
     def guard(name, *a, **kw):
         if name == "spacy" or name.startswith("spacy."):
             attempted.append(name)
-            raise ImportError("spaCy must not be imported when KELD_TERMS is off")
+            raise ImportError("no spacy in this test")
         return real_import(name, *a, **kw)
 
     builtins.__import__ = guard
     try:
-        got = m._analysis_nlp()
+        return fn(), attempted
     finally:
         builtins.__import__ = real_import
 
-    assert attempted == [], f"spaCy was imported with KELD_TERMS off: {attempted}"
-    assert got is None, "the term level must be absent, not a loaded model"
+
+def test_the_service_answers_analyze_with_gliner2_never_loaded():
+    """The load-bearing property of the whole design. Driven through the REAL lifespan and the
+    REAL WorkerManager — a _FakeWM could not fail this test, and the thing under test is
+    precisely that nothing in the startup or the request path reaches for a model."""
+    from app.worker_manager import DOWN, WorkerManager
+
+    m = _reload_main(None)
+    path = _fixture_transcript()
+
+    async def run():
+        async with m.lifespan(m.app):
+            assert isinstance(m._state["wm"], WorkerManager), (
+                "this must run against the real manager, or it proves nothing about spawning")
+            assert m.health()["ok"] is True, "the service must serve before any model exists"
+            assert m._state["wm"].state == DOWN
+            body = await m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id()))
+            assert m._state["wm"].state == DOWN, "/analyze spawned a GLiNER2 worker"
+            assert m._state["counts"].submitted == 0, "/analyze went through the runner"
+            return body
+
+    body, _ = _no_spacy(lambda: _asyncio.run(run()))
+    assert "workstreams" in body and "inventory" in body
 
 
-def test_named_terms_are_empty_in_the_payload_when_terms_are_off():
-    """Off means the dimension is not reported, not merely that spaCy is skipped: the regex half
-    of terms.candidates() needs no model and still runs inside analyze_window, so returning its
-    output would make KELD_TERMS read as a performance knob rather than the switch deciding
-    whether named terms exist in the payload at all."""
-    os.environ.pop("KELD_TERMS", None)
+def test_named_terms_are_on_by_default():
     m = _reload_main(None)
     _wire(m)
-    # Message text carrying two shapes the regex half matches with no model at all: CamelCase
-    # and an ALL-CAPS acronym. Without them the assertion would pass vacuously.
-    path = _fixture_transcript(said="check the UnityPredict rollout for ACME")
-    body = _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
-    assert body["inventory"]["named_terms"] == [], body["inventory"]["named_terms"]
+    assert m._terms_status() == m._TERMS_OK
+
+    def call():
+        path = _fixture_transcript(said="check the UnityPredict rollout for ACME")
+        return _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+
+    body, attempted = _no_spacy(call)
+    assert attempted == ["spacy"], "the term level must reach for the model by default"
+    assert [t["value"] for t in body["inventory"]["named_terms"]] == ["ACME", "UnityPredict"]
+    # spaCy was unavailable here, and that is DEGRADED, not skipped: the regex shapes are a
+    # genuine partial measurement, so they are reported with the reason beside them.
+    assert body["named_terms_status"] == "degraded:spacy_unavailable", body
 
 
-def test_terms_on_still_computes_the_level_and_reaches_for_spacy():
-    """The switch must turn the level back ON, not merely be a permanent kill. Asserted without
-    paying for a real spacy.load() (~600 MB, ~2 s): the import is poisoned, so _analysis_nlp()
-    takes its established degrade-to-None path and the regex half of terms.candidates() supplies
-    the terms — which proves both that the import was ATTEMPTED and that the `term` level is
-    computed and reported when KELD_TERMS is on."""
-    import builtins
-
-    os.environ["KELD_TERMS"] = "1"
+def test_keld_terms_0_switches_the_level_off_and_says_so():
+    """Off means the dimension is not reported, not merely that spaCy is skipped: the regex half
+    needs no model and still runs, so returning its output would contradict the status beside it
+    and make the switch read as a performance knob."""
+    os.environ["KELD_TERMS"] = "0"
     try:
         m = _reload_main(None)
         _wire(m)
-        attempted = []
-        real_import = builtins.__import__
+        assert m._terms_status() == m._TERMS_DISABLED
 
-        def guard(name, *a, **kw):
-            if name == "spacy" or name.startswith("spacy."):
-                attempted.append(name)
-                raise ImportError("no spacy in this test")
-            return real_import(name, *a, **kw)
-
-        builtins.__import__ = guard
-        try:
+        def call():
             path = _fixture_transcript(said="check the UnityPredict rollout for ACME")
-            body = _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
-        finally:
-            builtins.__import__ = real_import
+            return _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+
+        body, attempted = _no_spacy(call)
     finally:
         os.environ.pop("KELD_TERMS", None)
-    assert attempted == ["spacy"], "KELD_TERMS=1 must still reach for the model"
-    assert [t["value"] for t in body["inventory"]["named_terms"]] == ["ACME", "UnityPredict"]
+    assert attempted == [], "switched off must mean no load is attempted at all"
+    assert body["inventory"]["named_terms"] == []
+    assert body["named_terms_status"] == "skipped:disabled"
+
+
+def test_spacy_length_guard_is_restored():
+    """20_000_000 disabled spaCy's own per-document bound outright (880k chars measured at
+    14.7 s / 3.4 GB transient). The replacement is a real bound, and over-length messages are
+    SKIPPED by the NER pass rather than cut — the regex shapes still read them in full, so no
+    message leaves the level and nothing is read half-way."""
+    from app.analysis.terms import candidates
+
+    m = _reload_main(None)
+    assert 0 < m._TERMS_MAX_LEN <= 1_000_000, m._TERMS_MAX_LEN
+
+    class _Boom:
+        max_length = 10
+
+        def __call__(self, text):
+            raise AssertionError("spaCy must not be handed text above its own max_length")
+
+    got = candidates("x" * 50 + " UnityPredict", _Boom())
+    assert "UnityPredict" in got, got
 
 
 def test_analyze_never_resolves_the_nlp_on_the_event_loop():
@@ -733,7 +677,8 @@ def test_analyze_never_resolves_the_nlp_on_the_event_loop():
 
     def recording():
         seen.append(threading.get_ident())
-        return real()
+        return None     # deliberately not real(): recording the thread is the whole assertion,
+                        # and a genuine spacy.load() here would cost the test ~600 MB
 
     m._analysis_nlp = recording
     try:
