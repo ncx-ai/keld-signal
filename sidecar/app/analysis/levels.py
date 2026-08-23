@@ -40,8 +40,21 @@ def services_in(text):
 
 def _epoch(ts: str) -> float:
     """The one pandas call in the extraction path, replaced. `fromisoformat` handles the trailing
-    Z from Python 3.11 on; the sidecar venv is 3.12."""
-    return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    Z from Python 3.11 on; the sidecar venv is 3.12.
+
+    CONTRACT: `ts` must carry an explicit timezone marker (`Z` or a `+HH:MM`/`-HH:MM` offset).
+    A naive timestamp is REJECTED rather than guessed at: `datetime.timestamp()` interprets a
+    naive value as the machine's LOCAL time, while the `pd.Timestamp(...).timestamp()` call this
+    replaced interpreted it as UTC — the same input would silently parse to a different `t` on
+    machines in different timezones, which is exactly what the frozen-corpus identity gate exists
+    to make impossible. Every timestamp in the frozen corpus carries an explicit `Z` (measured:
+    70,417/70,417), so this never fires on real data; it exists to make a producer that ever
+    starts omitting the offset a loud failure instead of a silent, machine-dependent one.
+    """
+    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        raise ValueError(f"timestamp has no timezone marker (need trailing Z or +HH:MM): {ts!r}")
+    return dt.timestamp()
 
 
 def events_for_turns(turns, path, root, repo_root, nlp=None):

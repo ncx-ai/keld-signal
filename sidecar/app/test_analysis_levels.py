@@ -1,7 +1,7 @@
 import sys, os, json, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.analysis.transcript import iter_turns
-from app.analysis.levels import events_for_turns
+from app.analysis.levels import events_for_turns, _epoch
 
 
 def _write(tmp, lines):
@@ -38,6 +38,24 @@ def test_events_carry_the_expected_row_shape():
         assert n == 1
         assert all(len(r) == 9 for r in rows), rows[:2]
         assert any(r[6] == "model" and r[7] == "claude-opus-5" for r in rows), rows
+
+
+def test_a_naive_timestamp_is_rejected_rather_than_silently_localised():
+    """`datetime.timestamp()` treats a naive value as LOCAL machine time; the `pd.Timestamp(...)`
+    call it replaced treated it as UTC. Guessing would make the same transcript parse to a
+    different `t` depending on which machine ran the extraction — precisely what the
+    frozen-corpus identity gate exists to make impossible. Raise instead."""
+    try:
+        _epoch("2026-08-01T00:00:00")
+        assert False, "expected ValueError on a timestamp with no timezone marker"
+    except ValueError as e:
+        assert "timezone" in str(e)
+
+
+def test_z_and_explicit_offset_parse_identically():
+    """The `Z` shorthand and an explicit `+00:00` offset name the same instant and must agree
+    exactly — the whole point of requiring one of the two."""
+    assert _epoch("2026-08-01T00:00:00Z") == _epoch("2026-08-01T00:00:00+00:00")
 
 
 if __name__ == "__main__":
