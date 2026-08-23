@@ -10,7 +10,8 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 _here = SPECPATH
 
 datas, binaries, hiddenimports = [], [], []
-for pkg in ("torch", "gliner2", "transformers", "tokenizers", "safetensors", "huggingface_hub"):
+for pkg in ("torch", "gliner2", "transformers", "tokenizers", "safetensors",
+            "huggingface_hub", "spacy", "en_core_web_sm", "wordfreq", "bashlex"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -24,10 +25,14 @@ hiddenimports += collect_submodules("uvicorn")
 if os.environ.get("KELD_OBFUSCATE") == "1":
     import glob
     hiddenimports.append("app")
-    for f in glob.glob(os.path.join(_here, "app", "*.py")):
-        mod = os.path.splitext(os.path.basename(f))[0]
-        if mod != "__init__" and not mod.startswith("test_"):
-            hiddenimports.append("app." + mod)
+    for f in glob.glob(os.path.join(_here, "app", "**", "*.py"), recursive=True):
+        rel = os.path.relpath(f, _here)
+        mod = os.path.splitext(rel)[0].replace(os.sep, ".")
+        base = os.path.basename(f)
+        if base == "__init__.py":
+            mod = mod.rsplit(".", 1)[0]
+        if not base.startswith("test_"):
+            hiddenimports.append(mod)
     for rt in glob.glob(os.path.join(_here, "pyarmor_runtime_*")):
         hiddenimports.append(os.path.basename(rt))
 
