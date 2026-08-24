@@ -2,6 +2,7 @@ package agentcli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -57,9 +58,8 @@ func newEvalCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "context=%v confound=%v rows=%d\n", withContext, withConfound, len(rows))
 			for _, f := range fields {
-				fmt.Fprintf(out, "  %-15s accuracy=%.3f\n", f, m[f]["accuracy"])
+				fmt.Fprint(out, facetLine(f, m[f]))
 			}
-			fmt.Fprintf(out, "  %-15s sensitive_recall=%.3f\n", "sensitivity", m["sensitivity"]["sensitive_recall"])
 			if withConfound {
 				lk := eval.LeakageRate(rows, pred)
 				fmt.Fprintf(out, "  leakage(function_guess)=%.3f  leakage(task_type)=%.3f  false_eng=%.3f\n",
@@ -116,6 +116,33 @@ func newEvalCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&withCalibration, "calibration", false, "Print per-facet accuracy stratified by GLiNER2 confidence (reliability bins + ECE).")
 	cmd.Flags().BoolVar(&withAgentic, "agentic", false, "Score the agentic-framework corpus: task_type/domain accuracy by shape and augmented-vs-bare.")
 	return cmd
+}
+
+// facetLine renders one eval.Score entry as a human table row.
+//
+// It must never print a number eval.Score did not compute. Score omits
+// "accuracy" (and "sensitive_recall") when the matching denominator is zero,
+// precisely so an unscoreable facet cannot read as a perfect one; a formatter
+// that read the map blindly would turn that omission into `accuracy=0.000`,
+// which reads as a collapse rather than as "nothing was measured". Both are
+// wrong. The denominator rides on every line so the reader can size the claim.
+func facetLine(f string, e map[string]float64) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "  %-15s ", f)
+	if acc, ok := e["accuracy"]; ok {
+		fmt.Fprintf(&b, "accuracy=%.3f n=%.0f", acc, e["considered"])
+	} else {
+		fmt.Fprintf(&b, "unscored (0 labelled gold rows)")
+	}
+	if sc, ok := e["sensitive_considered"]; ok {
+		if r, ok := e["sensitive_recall"]; ok {
+			fmt.Fprintf(&b, "  sensitive_recall=%.3f n=%.0f", r, sc)
+		} else {
+			fmt.Fprintf(&b, "  sensitive_recall unscored (0 sensitive gold rows)")
+		}
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // piiOpts wires the personal-data scanner into the eval run when the resolved

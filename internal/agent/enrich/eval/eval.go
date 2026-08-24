@@ -46,8 +46,8 @@ type GoldRow struct {
 	Subcategory   string   `json:"subcategory"`
 	// Personal is the work-vs-personal facet's gold label. NO gold row carries
 	// one today (the field exists so the facet is scoreable the day labels are
-	// written); until then Score excludes every row from its denominator and the
-	// facet's accuracy is vacuous, which is the honest report — not a pass.
+	// written); until then Score reports the facet with considered==0 and NO
+	// accuracy at all, so it reads as unscoreable rather than perfect.
 	Personal string `json:"personal"`
 
 	// Agentic-corpus fields (agentic.jsonl): shape ∈ {clean, raw}; the rest are
@@ -243,14 +243,42 @@ func fieldOf(x any, f string) string {
 }
 
 // Score computes per-field accuracy and, for "sensitivity", sensitive_recall
-// (recall over rows whose gold sensitivity != "none"; 1.0 when there are none).
+// (recall over rows whose gold sensitivity != "none").
 //
 // A blank gold value for a field is treated as "no label" and excluded from
 // that field's accuracy denominator — this lets optional facets (e.g.
 // activity_type, subcategory) coexist with older gold rows that predate them,
-// without those rows counting as misses. If a field has no labeled rows at
-// all, its accuracy is reported as 1.0 (vacuous), mirroring the
-// sensitive_recall convention below.
+// without those rows counting as misses.
+//
+// EVERY METRIC RIDES WITH ITS DENOMINATOR, AND A METRIC WITH AN EMPTY
+// DENOMINATOR IS OMITTED, NOT INVENTED. Each entry always carries
+// "considered" (accuracy's denominator) and, for sensitivity,
+// "sensitive_considered" (recall's); "accuracy" / "sensitive_recall" are
+// present only when the matching denominator is non-zero.
+//
+// Score used to report accuracy 1.0 for a field with NO labelled rows, and
+// sensitive_recall 1.0 for a gold set with no sensitive rows — a vacuous truth
+// published as a measurement. Every caller in this repo reads these maps
+// directly and compares against a floor, so a facet whose labels were missing
+// or misnamed passed every floor forever and a floor check would sleep through
+// it. Found for real: gold.jsonl carries no `personal` label at all (0 of 165
+// rows), and scoring that facet returned a silent perfect.
+//
+// Omitting the key is what makes the failure direction SAFE: a Go map read of
+// an absent key yields 0.0, which fails any lower-bound floor, so an
+// unscoreable facet now reads as a failure rather than a pass. A caller that
+// wants to tell "unscoreable" from "scored badly" reads the denominator — that
+// is what it is for.
+//
+// The sibling helpers in this file (SecretRecall, SecretFPR, LeakageRate,
+// FalseEngRate, S1DownstreamBaseline) return a bare float64 and answer 0 on an
+// empty denominator. For the recall-shaped ones 0 fails a lower-bound gate, so
+// they are already fail-safe; for the RATE-shaped ones (SecretFPR,
+// LeakageRate, FalseEngRate — all checked as upper bounds) 0 is the same
+// vacuous pass in a different costume. They are left alone here because their
+// single-float signature has no room for a denominator; the fixtures they read
+// are embedded and non-empty, and TestCredDetectCorpusRecall pins the decoy
+// count. Changing their shape is its own decision.
 func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]float64 {
 	metrics := map[string]map[string]float64{}
 	n := len(gold)
@@ -269,11 +297,10 @@ func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]f
 				correct++
 			}
 		}
-		acc := 1.0
+		entry := map[string]float64{"considered": float64(considered)}
 		if considered > 0 {
-			acc = float64(correct) / float64(considered)
+			entry["accuracy"] = float64(correct) / float64(considered)
 		}
-		entry := map[string]float64{"accuracy": acc}
 		if f == "sensitivity" {
 			sens, hit := 0, 0
 			for i := 0; i < n; i++ {
@@ -286,10 +313,9 @@ func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]f
 					}
 				}
 			}
+			entry["sensitive_considered"] = float64(sens)
 			if sens > 0 {
 				entry["sensitive_recall"] = float64(hit) / float64(sens)
-			} else {
-				entry["sensitive_recall"] = 1.0
 			}
 		}
 		metrics[f] = entry

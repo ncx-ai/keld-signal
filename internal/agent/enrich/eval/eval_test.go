@@ -25,12 +25,15 @@ func TestScoreSensitiveRecall(t *testing.T) {
 	}
 }
 
-func TestScoreSensitiveRecallAllNoneIsOne(t *testing.T) {
+// TestScoreSensitiveRecallAllNoneIsUnscored replaces an assertion that this
+// case reported sensitive_recall 1.0. It never measured a recall: there was no
+// sensitive row to recall. See TestScoreZeroSensitiveRowsReportsNoRecall.
+func TestScoreSensitiveRecallAllNoneIsUnscored(t *testing.T) {
 	gold := []GoldRow{{Sensitivity: "none"}}
 	pred := []Pred{{Sensitivity: "none"}}
 	m := Score(gold, pred, []string{"sensitivity"})
-	if m["sensitivity"]["sensitive_recall"] != 1.0 {
-		t.Fatalf("sensitive_recall = %v, want 1.0", m["sensitivity"]["sensitive_recall"])
+	if _, ok := m["sensitivity"]["sensitive_recall"]; ok {
+		t.Fatalf("sensitive_recall = %v, want absent", m["sensitivity"]["sensitive_recall"])
 	}
 }
 
@@ -171,5 +174,84 @@ func TestLeakageAndFalseEng(t *testing.T) {
 	}
 	if fe := FalseEngRate(gold, pred); fe != 1.0 {
 		t.Fatalf("false_eng = %v, want 1.0", fe)
+	}
+}
+
+// --- "nothing was scored" must not read as "everything was right" ---
+//
+// The defect these pin: Score used to report accuracy 1.0 for a field with no
+// labelled gold rows, so a facet whose labels are missing or misnamed passed
+// every floor forever. Found for real on `personal` — 0 of 165 gold rows carry
+// one (see TestScorePersonalIsUnscoredOnTheRealGoldSet below).
+
+func TestScoreUnlabelledFacetReportsNoAccuracy(t *testing.T) {
+	// No row carries a `personal` gold label; the facet is unscoreable.
+	gold := []GoldRow{{TaskType: "code_generation"}, {TaskType: "summarization"}}
+	pred := []Pred{{Personal: "work"}, {Personal: "work"}}
+	m := Score(gold, pred, []string{"personal"})
+	if _, ok := m["personal"]["accuracy"]; ok {
+		t.Fatalf("accuracy reported for an unlabelled facet: %v", m["personal"])
+	}
+	// The failure direction has to be safe: the idiomatic caller reads the map
+	// directly and compares against a floor, so the zero value must FAIL.
+	const floor = 0.50
+	if got := m["personal"]["accuracy"]; got >= floor {
+		t.Fatalf("unlabelled facet read %.3f, passes floor %.3f", got, floor)
+	}
+	if got := m["personal"]["considered"]; got != 0 {
+		t.Fatalf("considered = %v, want 0", got)
+	}
+}
+
+func TestScoreReportsTheDenominator(t *testing.T) {
+	// Two of three rows are labelled; the blank one is excluded from both terms.
+	gold := []GoldRow{{TaskType: "code_generation"}, {TaskType: "summarization"}, {}}
+	pred := []Pred{{TaskType: "code_generation"}, {TaskType: "code_generation"}, {TaskType: "reasoning"}}
+	m := Score(gold, pred, []string{"task_type"})
+	if got := m["task_type"]["considered"]; got != 2 {
+		t.Fatalf("considered = %v, want 2", got)
+	}
+	if got := m["task_type"]["accuracy"]; got != 0.5 {
+		t.Fatalf("accuracy = %v, want 0.5", got)
+	}
+}
+
+func TestScoreZeroSensitiveRowsReportsNoRecall(t *testing.T) {
+	// Every row is labelled "none": sensitivity accuracy is scoreable, but
+	// sensitive_recall has an empty denominator and must not read as perfect —
+	// minSensitiveRecall is the safety-critical floor in the repo.
+	gold := []GoldRow{{Sensitivity: "none"}, {Sensitivity: "none"}}
+	pred := []Pred{{Sensitivity: "none"}, {Sensitivity: "none"}}
+	m := Score(gold, pred, []string{"sensitivity"})
+	if _, ok := m["sensitivity"]["sensitive_recall"]; ok {
+		t.Fatalf("sensitive_recall reported with no sensitive rows: %v", m["sensitivity"])
+	}
+	if got := m["sensitivity"]["sensitive_recall"]; got >= minSensitiveRecall {
+		t.Fatalf("empty-denominator recall read %.3f, passes floor %.3f", got, minSensitiveRecall)
+	}
+	if got := m["sensitivity"]["sensitive_considered"]; got != 0 {
+		t.Fatalf("sensitive_considered = %v, want 0", got)
+	}
+	// accuracy is still scoreable here — the two denominators are independent.
+	if got := m["sensitivity"]["accuracy"]; got != 1.0 {
+		t.Fatalf("accuracy = %v, want 1.0", got)
+	}
+}
+
+func TestScorePersonalIsUnscoredOnTheRealGoldSet(t *testing.T) {
+	// The concrete instance of the bug: gold.jsonl carries no `personal` label,
+	// so scoring the facet through this harness must report an empty denominator
+	// rather than a silent 1.000. Delete this test the day labels are written —
+	// and only then.
+	gold, err := LoadGold()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := Score(gold, make([]Pred, len(gold)), []string{"personal"})
+	if got := m["personal"]["considered"]; got != 0 {
+		t.Fatalf("gold.jsonl now carries %v personal labels; re-point this test at the facet's real score", got)
+	}
+	if _, ok := m["personal"]["accuracy"]; ok {
+		t.Fatal("personal accuracy reported despite zero labelled rows")
 	}
 }
