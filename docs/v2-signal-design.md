@@ -50,8 +50,10 @@ the telemetry's is orphaned, and silently.
                       and is not required for it to run.
 
 The sidecar distinction matters and is easy to get wrong: it used to be thought of as "the GLiNER2
-sidecar". It is not. In v2 the model is loaded by nothing, and the service does its whole job
-without it.
+sidecar". It is not — it serves the store, `/analyze`, `/pii` and `/ingest` with no model at all.
+But **the model is still used**: seven classification facets call it (see §6d). What v2 changed is
+that the *service* no longer depends on it, and the two facets that matter most for privacy —
+sensitivity and workstreams — no longer touch it.
 
 ---
 
@@ -199,6 +201,20 @@ signal at all.
 Half the candidate dynamics were then **dropped on their distributions**: `project` was identically
 zero across all 2,180 comparable windows (a transcript is scoped to one project directory), and
 `model` reported a change **0 times in 2,702 windows**.
+
+### 6d. Classification facets — model-backed, and unmeasured since
+
+Seven facets classify the prompt text against a closed vocabulary using GLiNER2 in the sidecar:
+
+    task_type · domain · activity_type · personal · function_guess · speech_act · subcategory
+
+These are the reason `ml_backend:"auto"` still provisions a ~1.8 GB model. They are also the part of
+the system with the weakest evidence behind it — see §9. Classifiers score against readable label
+DESCRIPTIONS, not bare ids, because the bi-encoder keys on token overlap; the label wording is
+load-bearing.
+
+In `ml_backend:"deterministic"` these seven do not run at all, and the profile publishes the
+model-free facets with the others named in `facets_skipped`.
 
 ---
 
