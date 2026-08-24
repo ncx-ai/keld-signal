@@ -5,19 +5,29 @@ Took the `exe` level from 6053 distinct "programs invoked" to 620 by eliminating
 shell keywords and inline source code being read as command names. Every case here is a defect
 measured on the real corpus.
 
-`bash_refs` (below) returns verbs, exes AND paths from one pass, deliberately not split across
-modules by return type. Quoting, heredoc-stripping and `cd`-prefix tracking are shell-parsing
+`bash_refs` (below) returns verbs, exes, paths AND actions from one pass, deliberately not split
+across modules by return type. Quoting, heredoc-stripping and `cd`-prefix tracking are shell-parsing
 concerns that apply to both halves identically — a quoted path is torn by the same naive
 whitespace split that mangles a command, and a heredoc body is neither a real command nor a real
 path. Walking the tokens twice, once per return type, would buy a tidier module boundary at the
 cost of parsing every command twice; the walk is what shell parsing means here, not which fields
 the caller happens to want back.
+
+ACTIONS join that list for the same reason, and because they cannot be recovered downstream. The
+`action` level used to be derived by `levels.py` from the returned `verbs`, and a verb is a
+segment's two-word HEAD: it carries neither the tool a wrapper runs nor the flags. So
+`docker compose exec api pytest` reported `run a service` while `exe` — from this module's own
+`unwrap_command` — already knew it was pytest, and `sed -i` was indistinguishable from
+`sed -n '1,20p'`. Measured on the frozen corpus: 1284 commands whose programs say `test` and
+whose verbs did not, 210 more for `build`, and 980 heredoc file-writes recorded as reads. Only
+this walk has the argv, so only this walk can ask the vocabulary the right question.
 """
 import os
 import re
 import shlex
 
 from app.analysis.paths import PATH_TOKEN, plausible_path
+from app.analysis.vocab import action_for
 
 SHELL_KEYWORD = {"if", "then", "fi", "else", "elif", "for", "do", "done", "while", "until",
                  "case", "esac", "in", "function", "return", "local", "declare", "read",
@@ -209,13 +219,20 @@ def unwrap_command(words):
 
 
 def bash_refs(command):
-    """Verbs, exes and path-looking tokens from a shell command. Split on the operators so a
-    pipeline contributes every verb in it, not just the first."""
+    """Verbs, exes, path-looking tokens and ACTIONS from a shell command. Split on the operators
+    so a pipeline contributes every verb in it, not just the first.
+
+    The actions are emitted at the same cadence the `verb` level accrues at — one per DISTINCT
+    command head — plus one for each inner tool that only the parser found (`pytest` behind
+    `docker compose exec`, `vitest` behind `pnpm exec`), which had no verb to be counted under
+    and so was previously absent from `action` entirely.
+    """
     # `cd services/api && pytest tests/x.py` resolved `tests/x.py` against the repo root, so the
     # same file appeared twice — once as services/api/tests/x.py from a tool input and once as
     # tests/x.py from the command — splitting its share between two names. Segments are walked in
     # order and a `cd` sets the prefix for everything after it.
     verbs, exes, paths, prefix = [], [], [], ""
+    invocations = []            # (head, exe, argv) per real command segment, in order
     ast_exes = parsed_command_names(command)
     # PATHS are walked over the ORIGINAL text and COMMANDS are not. A path inside a heredoc is a
     # file the embedded script really touches — dropping them emptied the artifact and subsystem
@@ -251,6 +268,21 @@ def bash_refs(command):
         if (ok and re.fullmatch(r"[\w.\- ]{1,40}", head)
                 and (exe in ast_exes if ast_exes is not None else seg in _named_segments)):
             verbs.append(head)
+            # The SAME guard decides the act: a verb and an act are two readings of one segment,
+            # so a heredoc-body line that is not a real command must contribute neither.
+            invocations.append((head, exe, toks[1:]))
+            # A wrapper's inner tool gets ITS OWN argv, sliced from this segment. Needed because
+            # the flags belong to the inner tool, not the wrapper: `find … | xargs sed -i 's/a/b/'`
+            # is an in-place edit, and answering from the program name alone reads it as a `read`.
+            # The synthetic head keys the dedup without colliding with a real verb.
+            inner = unwrap_command(toks)
+            if inner and inner != exe:
+                inner_argv = []
+                for i, t in enumerate(toks):
+                    if os.path.basename(t) == inner:
+                        inner_argv = toks[i + 1:]
+                        break
+                invocations.append((f"{head} {inner}", inner, inner_argv))
         if head == "cd" and len(toks) > 1 and not toks[1].startswith("-"):
             target = toks[1].strip("'\"")
             prefix = ("" if target.startswith(("/", "~", "$")) else
@@ -270,4 +302,23 @@ def bash_refs(command):
         exes = [e for e in ast_exes
                 if e and e not in SHELL_KEYWORD and not e[0].isdigit()
                 and re.fullmatch(r"[\w.\-]{1,40}", e)]
-    return verbs, exes, paths
+    acts, seen_heads = [], set()
+    for head, exe, argv in invocations:
+        if head in seen_heads:
+            continue
+        seen_heads.add(head)
+        act = action_for(exe=exe, verb=head, args=argv)
+        if act:
+            acts.append(act)
+    # Tools the PARSER found that the split walk could not reach at all — the ones inside a
+    # quoted `sh -c "…"` script and inside a command substitution. Every containerised pytest run
+    # in this corpus is one of these. No argv is available for them (they were never tokens of a
+    # segment), so they answer from the program alone.
+    seg_exes = {exe for _h, exe, _a in invocations}
+    for e in dict.fromkeys(exes):
+        if e in seg_exes:
+            continue
+        act = action_for(exe=e)
+        if act:
+            acts.append(act)
+    return verbs, exes, paths, acts

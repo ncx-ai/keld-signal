@@ -1154,7 +1154,7 @@ def load_turns(path):
                 if isinstance(inp.get("file_path"), str):
                     arg = inp["file_path"]                 # an identifier: whole or not at all
                 elif name == "Bash":
-                    verbs, _exes, paths = bash_refs(inp.get("command"))
+                    verbs, _exes, paths, _acts = bash_refs(inp.get("command"))
                     arg = "; ".join(list(dict.fromkeys(verbs))[:4])
                     if paths:
                         arg += f" · {len(paths)} path{'s' if len(paths) > 1 else ''}"

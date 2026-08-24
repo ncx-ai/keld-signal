@@ -27,27 +27,134 @@ TOOL_ACTION = {"Read": "read", "NotebookRead": "read", "Grep": "search", "Glob":
 EXE_ACTION = {
     "read": ("cat", "head", "tail", "less", "more", "bat", "wc", "file", "stat", "ls", "tree"),
     "search": ("grep", "rg", "ag", "find", "fd", "locate", "jq", "yq"),
-    "transform": ("sed", "awk", "tr", "sort", "uniq", "cut", "paste", "xargs"),
+    # WRITE-CONDITIONAL, and the only table here that is. See STREAM_FILTER below: these programs
+    # are `transform` only in their in-place FORM and `read` otherwise. The key stays `transform`
+    # because that is still what they emit when they do write, and every consumer's action
+    # vocabulary is keyed on this table (`activity.py` and `observable.py` each assert it).
+    "transform": ("sed", "awk", "tr", "sort", "uniq", "cut", "paste"),
     "test": ("pytest", "vitest", "jest", "tox", "nose"),
     "build": ("make", "tsc", "webpack", "vite", "cargo", "gradle", "mvn", "cmake"),
     "install": ("pip", "pip3", "uv", "brew", "apt", "pacman", "poetry"),
     "version control": ("git", "gh", "hub"),
     "run a service": ("docker", "docker-compose", "kubectl", "systemctl", "launchctl",
-                      "uvicorn", "gunicorn", "node", "npm", "pnpm", "yarn"),
+                      "uvicorn", "gunicorn"),
     "query a database": ("psql", "sqlite3", "redis-cli", "mysql", "mongosh"),
     "fetch": ("curl", "wget", "http", "httpie"),
     "convert a document": ("soffice", "libreoffice", "pandoc", "pdftoppm", "pdftotext",
                            "rsvg-convert", "magick", "convert", "unoconv", "qpdf"),
     "manage files": ("cp", "mv", "rm", "mkdir", "touch", "chmod", "ln", "tar", "zip", "unzip"),
-    "run code": ("python", "python3", "go", "ruby", "perl", "bash", "sh", "zsh", "deno"),
+    # `node` moved here from `run a service`. Measured over all 551 `node` invocations in the
+    # frozen corpus: every one runs a script or `-e` (`node $SCR/shot.mjs http://localhost/…`,
+    # `node "const …"`) and none starts a daemon. It is an interpreter, like `python`.
+    "run code": ("python", "python3", "go", "ruby", "perl", "bash", "sh", "zsh", "deno", "node"),
 }
 EXE_TO_ACTION = {e: a for a, names in EXE_ACTION.items() for e in names}
 
+# TASK RUNNERS ARE NOT SERVICES, and this was the single most expensive entry in the table above.
+# `npm`/`pnpm`/`yarn` sat in `run a service`, so `pnpm exec vitest`, `pnpm run test` and
+# `pnpm build` all reported "run a service" and the test/build signal vanished. Measured on the
+# frozen corpus: 12 of the 13 verification false negatives carried `run a service`, the clearest
+# being `c2019c5e#t0211` (`read 67, edit 26, run a service 22`) whose own prose reports "1335
+# passed, 0 failed" — no verification recorded at all.
+#
+# What these programs actually do here, over 1851 pnpm + 4 npm invocations:
+#     exec vitest 790 · build 506 · exec tsc 300 · run test 196 · exec eslint 35 · install 13
+#     dev 2 · init/i/ls/--version 5
+# So a bare task-runner head is not itself a physical act: the act is the script it runs. They are
+# deliberately absent from EXE_ACTION (a bare `pnpm` contributes nothing) and resolved two ways —
+# `pnpm exec vitest` through `shell.unwrap_command`, which already recovers the inner tool for the
+# `exe` level, and `pnpm run test` / `pnpm build` / `pnpm dev` through the verb branch below.
+TASK_RUNNER = ("npm", "pnpm", "yarn")
+# The forms that DO start something. Thin (2 occurrences) but it is the true case, and dropping
+# these programs from `run a service` must not lose it — that would be this defect's mirror image.
+RUNNER_SERVICE = ("dev", "start", "serve", "preview")
 
-def action_for(tool=None, exe=None, verb=None):
-    """The physical act, from a tool name or a program. `git commit` is more specific than `git`."""
+# STREAM FILTERS. These were unconditionally `transform`, a claim that content was WRITTEN — and
+# in an agentic coding corpus they live in read pipelines: `grep x | sed -n '1,20p'` inspects and
+# writes nothing. Measured consequence: `transform` appeared in ALL 23 of the authoring probe's
+# false positives, 19 of them with no `create`/`edit`/`publish` anywhere, and one window scored
+# `read 2, transform 2` — four acts total — on a prompt that said "Do NOT edit anything".
+#
+# Measured shape of all 4616 invocations of these programs in the frozen corpus:
+#     sed 3443 (in-place 215) · cut 343 · sort 322 · awk 225 · tr 90 · uniq 68 · paste 9
+#     4135 of the 4616 are pure read pipelines: no in-place flag and no output redirect at all.
+# So the default is `read`. A blanket remap would lose a true signal, because `sed -i` genuinely
+# does modify a file — hence IN_PLACE below, keyed per program: `-i` means in-place for `sed` and
+# (with `inplace`) for `awk`, but `sort -i` is ignore-nonprintable and `uniq -i` is ignore-case,
+# so a program-blind `-i` rule would invent writes. On this corpus only `sed -i` (215) and
+# `awk -i inplace` (0) can fire; `sort -o` (0) is listed because it is the documented form.
+#
+# `xargs` was in this tuple and is now in none: it is a WRAPPER (`shell.WRAPPERS` already knows
+# it), so `xargs grep -l …` searches and `xargs sed -i …` transforms. Measured: 116 invocations,
+# 72 of them `xargs grep`.
+STREAM_FILTER = frozenset(EXE_ACTION["transform"])
+IN_PLACE = {"sed": ("-i", "--in-place"), "awk": ("-i",), "sort": ("-o", "--output")}
+
+# A HEREDOC REDIRECTED INTO A PATH IS A WRITE, and it was invisible. `shell.strip_heredocs`
+# discards the heredoc BODY on purpose (its lines were being read as programs: EOF 855, import
+# 849, PY 738 all ranked in the top 26 "programs invoked"), but the fact of the write went with
+# it: `agent-a2#t0460` says "let me write a standalone Go probe", writes it by heredoc, and the
+# `action` level recorded only `manage files`/`run code`. Three more windows have the same shape.
+#
+# The evidence survives on the OPENING line, which strip_heredocs keeps — `cat > probe.go <<GO`
+# carries both the redirect and the `<<`. Measured in the frozen corpus: 537 `>` and 443 `>>`
+# heredoc redirections (975 of the 980 headed by `cat`), against 1943 heredocs with no redirect.
+#
+# Restricted to the heredoc case on purpose. A bare `>` is capturing another program's output
+# (1899 in the corpus, mostly scratch: `sort -u > /tmp/tscerr.txt`), which is a different act; a
+# heredoc redirect is literal content authored inline — the shell's Write. `>` creates the file,
+# `>>` appends to one that exists, matching Write vs Edit exactly. `>/dev/null` writes nothing
+# durable and `2>&1` is a descriptor dup, so neither counts.
+REDIRECT = re.compile(r"^(\d?)(>{1,2})(.*)$")
+DISCARDED = ("/dev/null", "/dev/stdout", "/dev/stderr")
+
+
+def _heredoc_write(argv):
+    """`create`/`edit` if this invocation redirects a heredoc into a path, else None."""
+    if not any(a.startswith("<<") and not a.startswith("<<<") for a in argv):
+        return None
+    for i, a in enumerate(argv):
+        m = REDIRECT.match(a)
+        if not m or m.group(1) not in ("", "1"):
+            continue                      # `2>` / `2>&1` is stderr, not the file being written
+        target = m.group(3) or (argv[i + 1] if i + 1 < len(argv) else "")
+        if not target or target.startswith("&") or target in DISCARDED:
+            continue
+        return "create" if m.group(2) == ">" else "edit"
+    return None
+
+
+def _writes_in_place(exe, argv):
+    """Whether a stream filter was invoked in its documented in-place form."""
+    flags = IN_PLACE.get(exe) or ()
+    for a in argv:
+        if a in flags or (a.startswith("-i") and "-i" in flags and not a.startswith("--")):
+            return exe != "awk" or "inplace" in argv      # GNU awk needs `-i inplace`
+    return False
+
+
+def action_for(tool=None, exe=None, verb=None, args=()):
+    """The physical act, from a tool name or a program. `git commit` is more specific than `git`.
+
+    `args` is the invocation's argument tokens when the caller has them (`shell.bash_refs` does).
+    They are what distinguishes a stream filter that WRITES from one that only inspects, a
+    heredoc that lands in a file from one that feeds an interpreter, and `pnpm run test` from the
+    two-word head `pnpm run` that a verb alone reduces to — three defects that were all invisible
+    to an exe-and-verb-only signature.
+    """
     if tool and TOOL_ACTION.get(tool) is not None:
         return TOOL_ACTION[tool]
+    argv = [str(a) for a in (args or ())]
+    act = _heredoc_write(argv)
+    if act:
+        return act
+    # `pnpm run test` IS `pnpm test`: `run` is npm-family syntax, not part of the act. All 196
+    # `run` invocations in the corpus are `run test`, and every one read as `run a service`.
+    if exe in TASK_RUNNER and argv:
+        sub = argv[1] if (argv[0] == "run" and len(argv) > 1) else argv[0]
+        if sub in RUNNER_SERVICE:
+            return "run a service"
+        verb = f"{exe} {sub}"
     if verb:
         v = verb.lower()
         if v.startswith("git commit") or v.startswith("git add"):
@@ -56,10 +163,13 @@ def action_for(tool=None, exe=None, verb=None):
             return "sync with remote"
         if v.startswith(("go test", "npm test", "pnpm test", "yarn test", "cargo test")):
             return "test"
-        if v.startswith(("go build", "npm run build", "pnpm build", "cargo build")):
+        if v.startswith(("go build", "npm run build", "pnpm build", "cargo build",
+                         "npm build", "yarn build")):
             return "build"
         if "install" in v:
             return "install"
+    if exe in STREAM_FILTER:
+        return "transform" if _writes_in_place(exe, argv) else "read"
     if exe:
         return EXE_TO_ACTION.get(exe)
     return None

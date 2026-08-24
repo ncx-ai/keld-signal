@@ -2,7 +2,8 @@
 """Tests for shell command extraction. Every case is a defect measured on the real corpus."""
 import sys, os, shlex
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.analysis.shell import strip_heredocs, unwrap_command, parsed_command_names, bash_refs
+from app.analysis.shell import (strip_heredocs, unwrap_command, parsed_command_names,
+                                bash_refs)
 
 
 def test_paths_read_the_full_command_and_commands_do_not():
@@ -10,7 +11,7 @@ def test_paths_read_the_full_command_and_commands_do_not():
     is source code. Stripping heredocs for both emptied the artifact and subsystem slots for an
     hour of pptx editing."""
     cmd = ("python3 - <<PY\nimport os\nPY\nls unpacked-user/ppt/slides/slide2.xml")
-    verbs, exes, paths = bash_refs(cmd)
+    verbs, exes, paths, _acts = bash_refs(cmd)
     assert exes == ["python3", "ls"], exes
     assert "unpacked-user/ppt/slides/slide2.xml" in paths, paths
 
@@ -28,7 +29,7 @@ def test_a_quoted_path_is_not_torn_at_its_spaces():
     """Splitting on whitespace made `.../Application Support/.../soffice.py` arrive as
     `Support/Claude/.../soffice.py`, resolve under the repo root, and take 60% of a working set —
     the harness's own skill scripts presented as the work."""
-    _, _, paths = bash_refs('python3 "/home/x/Application Support/Claude/skills/s.py"')
+    paths = bash_refs('python3 "/home/x/Application Support/Claude/skills/s.py"')[2]
     assert not any(p.startswith("Support/") for p in paths), paths
 
 
@@ -72,6 +73,76 @@ def test_non_wrappers_are_left_alone():
     """`go run pkg` and `make target` name a package and a target, not tools."""
     assert unwrap_command(shlex.split("go run ./cmd/x")) == "go"
     assert unwrap_command(shlex.split("make build")) == "make"
+
+
+# --- the ACTION pass. `action` was derived from `verbs` alone, and a verb is the two-word head
+# of a segment: it never carries the tool a wrapper runs, and it never carries the flags. Both
+# gaps were measured as wrong facet answers on the frozen corpus — see
+# `.superpowers/sdd/2026-08-24-alpha-findings/action-for-report.md`.
+
+
+def test_the_action_pass_sees_the_tool_a_wrapper_runs():
+    """`exe` already recorded the inner tool (that is what `unwrap_command` is for) but `action`
+    did not, because it read `verbs`. Measured: 1284 commands whose programs say `test` and whose
+    verbs did not, and 210 more for `build`."""
+    acts = bash_refs("docker compose exec -T api pytest tests/ -q")[3]
+    assert "test" in acts, acts
+    acts = bash_refs("pnpm exec vitest run app/signup 2>&1 | tail -12")[3]
+    assert "test" in acts and "run a service" not in acts, acts
+    acts = bash_refs("cd services/web && pnpm exec tsc --noEmit 2>&1 | tail -80")[3]
+    assert "build" in acts, acts
+
+
+def test_a_containerised_pytest_three_layers_down_still_records_a_test():
+    """The corpus's actual containerised-test shape. `c2019c5e#t0211` reported "1335 passed,
+    0 failed" in its own prose and recorded no verification at all."""
+    cmd = ('timeout 90 docker run --rm --entrypoint sh keld-atlas-api:latest '
+           '-c "python -m pytest -q 2>&1 | head -2"')
+    assert "test" in bash_refs(cmd)[3], bash_refs(cmd)[3]
+
+
+def test_a_read_pipeline_records_no_write():
+    """`grep x | sed -n '1,20p' | sort | uniq -c` inspects. It used to emit `transform` twice."""
+    acts = bash_refs("grep -rn foo . | sed -n '1,20p' | sort | uniq -c")[3]
+    assert "transform" not in acts, acts
+    assert "search" in acts and "read" in acts, acts
+
+
+def test_an_in_place_edit_in_a_pipeline_still_records_a_transform():
+    acts = bash_refs("find . -name '*.py' | xargs sed -i 's/a/b/g'")[3]
+    assert "transform" in acts, acts
+
+
+def test_a_heredoc_write_is_visible_and_its_body_is_not():
+    """`agent-a2#t0460` wrote a Go probe by heredoc and the `action` level recorded nothing.
+    The body must still contribute no act — that is what `strip_heredocs` is for."""
+    cmd = "cat > /tmp/x.py <<PY\nimport os\ndef main():\n    const = 1\nPY\npython3 /tmp/x.py"
+    verbs, exes, paths, acts = bash_refs(cmd)
+    assert "create" in acts, acts
+    assert "run code" in acts, acts
+    assert not {"import", "def", "const", "PY"} & set(exes), exes
+
+
+def test_a_heredoc_body_that_is_itself_a_shell_script_contributes_no_act():
+    """The sharper form of the body test: a shell script WRITTEN by heredoc has body lines that
+    really are command names (`rm -rf build`, `make all`), and they are not commands this session
+    ran. This is the same defect that put EOF/import/def in the top 26 "programs invoked", one
+    level up — the act, not the name."""
+    cmd = "cat > run.sh <<'SH'\nrm -rf build\nmake all\nSH\necho done"
+    acts = bash_refs(cmd)[3]
+    assert acts == ["create"], acts
+    assert "manage files" not in acts and "build" not in acts, acts
+
+
+def test_an_appending_heredoc_is_an_edit_not_a_create():
+    assert "edit" in bash_refs("cat >> app/globals.css <<CSS\n.x{}\nCSS")[3]
+
+
+def test_the_action_pass_survives_an_unparseable_command():
+    """bashlex fails on 8.3% of real commands. The action pass must degrade to the split walk,
+    not raise and not vanish."""
+    assert parsed_command_names("if [ ; then") is None
+    assert bash_refs("if [ ; then\ncat x.py\nfi")[3] is not None
 
 
 def test_heredoc_terminator_line_is_dropped():

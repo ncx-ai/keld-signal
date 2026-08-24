@@ -226,7 +226,7 @@ def scan_tool_use(objs, into=None):
                     t = m.group(1) or m.group(2) or m.group(3)
                     if t and t.startswith("/"):
                         cd_targets.add(WORKTREE.sub("", t.rstrip("/")))
-                _, _, bp = bash_refs(cmd)
+                bp = bash_refs(cmd)[2]
                 cands += [q for q in bp if q.startswith("/")]
             for m in REMOTE_REPO.finditer(cmd + " " + text_of(content)):
                 if m.group(1).lower() not in NON_REPO_GH:

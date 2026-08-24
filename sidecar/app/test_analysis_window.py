@@ -89,7 +89,7 @@ def test_an_absent_level_produces_no_key_rather_than_an_empty_one():
 def test_payload_carries_its_schema_version():
     """These values land in financial reports; a silent shape change is the reproducibility
     failure the earlier handoff called out, so the payload is versioned from the first release."""
-    assert payload(rollup(R))["schema"] == SCHEMA == 4
+    assert payload(rollup(R))["schema"] == SCHEMA == 5
 
 
 # --- the floor generalised to an arbitrary slice length ---------------------------------------

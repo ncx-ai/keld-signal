@@ -38,7 +38,19 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           `sidecar/workstreams.go` documents it as local window metadata that never reaches
 #           the published enrichment), so this breaks no consumer -- but the value a caller CAN
 #           see changed shape, and that is exactly what this number is for.
-SCHEMA = 4
+#   4 -> 5: the `action` level answers DIFFERENTLY (app/analysis/vocab.py `action_for`). Three
+#           measured vocabulary defects, each corrupting published output rather than only the
+#           study that found them: task runners were `run a service` so `pnpm exec vitest` and
+#           `docker compose run … pytest` recorded no test; stream filters (sed/awk/sort/uniq/
+#           cut/tr/paste) were unconditionally `transform`, claiming a write inside read
+#           pipelines; and a file written by shell heredoc was invisible. On the frozen corpus'
+#           1,022 windows, 755 change their action tally: `transform` 4345 -> 191, `run a
+#           service` 3541 -> 1556, `test` 1991 -> 3772, `create` +572, `edit` +523, `read` +3201.
+#           No OTHER level moves (the fixture identity gate localises the diff to `ref/action`
+#           alone) — but this number bumps because `_payload`'s `evidence` total counts every
+#           level, so the same window now publishes a different figure.
+#           Measurements: `.superpowers/sdd/2026-08-24-alpha-findings/action-for-report.md`.
+SCHEMA = 5
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

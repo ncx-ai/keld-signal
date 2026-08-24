@@ -236,17 +236,19 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     if isinstance(inp.get(k), str):
                         paths.append((inp[k], True))     # a tool's file_path IS a file
                 if name == "Bash":
-                    verbs, exes, bp = bash_refs(inp.get("command"))
+                    verbs, exes, bp, acts = bash_refs(inp.get("command"))
                     for v in verbs:
                         add("ref", "verb", v, 1)
                     for e in dict.fromkeys(exes):
                         add("ref", "exe", e, 1)
                         for kind in toolchain_for(e):
                             add("ref", "toolchain", kind, 1)
-                    for v in dict.fromkeys(verbs):
-                        act = action_for(exe=v.split()[0], verb=v)
-                        if act:
-                            add("ref", "action", act, 1)
+                    # The acts come from `bash_refs`, not from a second pass over `verbs`: a
+                    # verb is a segment's two-word HEAD, so deriving the act from it here saw
+                    # neither the tool a wrapper runs nor the flags. `pnpm exec vitest` read as
+                    # `run a service` and `sed -i` as `sed`. Only the shell walk has the argv.
+                    for act in acts:
+                        add("ref", "action", act, 1)
                     paths += [(q, False) for q in bp]
         for p, from_input in paths:
             rel = rel_within(p, root_dir, o.get("cwd"))
