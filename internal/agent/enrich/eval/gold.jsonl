@@ -2,7 +2,7 @@
 {"text": "Summarize the attached quarterly earnings report in three bullets.", "task_type": "summarization", "speech_act": "command", "domain": "finance", "sensitivity": "none"}
 {"text": "Translate this paragraph from English to German.", "task_type": "translation", "speech_act": "command", "domain": "general", "sensitivity": "none"}
 {"text": "My SSN is 532-84-1907, can you fill out the medical intake form?", "task_type": "information_extraction", "speech_act": "command", "domain": "medical", "sensitivity": "phi"}
-{"text": "Here is my API key AKIA3QN7VZP4XM2WLBTY, configure the deployment.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "Here is my API key {{AWS_ACCESS_KEY_ID}}, configure the deployment.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
 {"text": "Classify these support tickets as bug, feature, or question.", "task_type": "classification", "speech_act": "command", "domain": "software", "sensitivity": "none"}
 {"text": "Given these docs, answer: what is the refund policy?", "task_type": "question_answering", "speech_act": "question", "domain": "business", "sensitivity": "none"}
 {"text": "Prove that the square root of 2 is irrational.", "task_type": "reasoning", "speech_act": "command", "domain": "science", "sensitivity": "none"}
@@ -37,9 +37,9 @@
 {"text": "My email is jane.doe@northwind-logistics.co and phone 415-274-3068 — update my profile.", "task_type": "general", "speech_act": "command", "domain": "general", "sensitivity": "pii"}
 {"text": "Here's my home address: 742 Evergreen Terrace, Springfield. Ship it there.", "task_type": "general", "speech_act": "command", "domain": "general", "sensitivity": "none"}
 {"text": "Contact me at bob_smith@company.co or +1 (206) 555-0142 about the invoice.", "task_type": "general", "speech_act": "command", "domain": "business", "sensitivity": "pii"}
-{"text": "Use token ghp_7Kd2Rm9Xq4Vb1Nt8Ls3Wz6Hy5Pj0Cg4Ae7Bx to push to the repository.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "Use token {{GITHUB_PAT}} to push to the repository.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
 {"text": "The database password is set as DB_PASSWORD=hV3kQ9pRt7Wn2Zx4 — connect and run the migration.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
-{"text": "My OpenAI key is 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 — wire up the client for me.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
+{"text": "My OpenAI key is {{OPENAI_API_KEY}} — wire up the client for me.", "task_type": "code_generation", "speech_act": "command", "domain": "software", "sensitivity": "secrets"}
 {"text": "Patient John Smith, DOB 03/12/1980, diagnosed with Type 2 diabetes — draft a care plan.", "task_type": "text_generation", "speech_act": "command", "domain": "medical", "sensitivity": "none"}
 {"text": "Summarize this radiology report for patient MRN 4482910, note any follow-ups.", "task_type": "summarization", "speech_act": "command", "domain": "medical", "sensitivity": "none"}
 {"text": "Charge my Visa 4716 3902 8815 4471, exp 08/27, CVV 123 for the subscription.", "task_type": "general", "speech_act": "command", "domain": "finance", "sensitivity": "pci"}
@@ -159,7 +159,7 @@
 {"text": "Is this customer support ticket urgent or not, and why?", "task_type": "classification", "domain": "business", "sensitivity": "none", "activity_type": "analyze", "speech_act": "question"}
 {"text": "My code keeps crashing every time I run it, what's going on?", "task_type": "reasoning", "domain": "software", "sensitivity": "none", "activity_type": "analyze", "speech_act": "question"}
 {"text": "Please update my account profile bio to say I've moved from sales into product marketing, and change my contact email to jane.doe@northwind-logistics.co.", "task_type": "general", "domain": "general", "sensitivity": "pii", "activity_type": "generate", "speech_act": "command"}
-{"text": "Can you help me set up an environment variable for my API key sk_test_51QhVn8LpXr2Fd7Ka3MzYw9Tb in my Node.js app?", "task_type": "code_generation", "domain": "software", "sensitivity": "secrets", "activity_type": "generate", "speech_act": "question"}
+{"text": "Can you help me set up an environment variable for my API key {{STRIPE_TEST_KEY}} in my Node.js app?", "task_type": "code_generation", "domain": "software", "sensitivity": "secrets", "activity_type": "generate", "speech_act": "question"}
 {"text": "Extract the name, SSN, and address from this scanned form: Name: John A. Miller, SSN: 418-63-2075, Address: 482 Oak Street, Springfield, IL 62704.", "task_type": "information_extraction", "domain": "general", "sensitivity": "phi", "activity_type": "retrieve", "speech_act": "command"}
 {"text": "I need to update my billing info, new card is 5241 6803 7729 1148, exp 09/28, cvv 123, can you draft the message to send to support?", "task_type": "text_generation", "domain": "finance", "sensitivity": "pci", "activity_type": "generate", "speech_act": "question"}
 {"text": "Translate this text message to Spanish for my landlord: \"Hi, this is Dana, my new number is 206-483-7712, please text me here from now on.\"", "task_type": "translation", "domain": "general", "sensitivity": "pii", "activity_type": "transform", "speech_act": "command"}

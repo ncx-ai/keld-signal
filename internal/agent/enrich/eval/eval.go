@@ -128,7 +128,19 @@ func parseRows(s string) ([]GoldRow, error) {
 }
 
 // LoadGold parses the embedded gold set.
-func LoadGold() ([]GoldRow, error) { return parseRows(goldJSONL) }
+//
+// Like LoadCreds, it expands any {{SHAPE}} placeholder into a freshly generated
+// synthetic credential (credsgen.go). Four of the gold set's sensitive rows are
+// provider tokens, and a committed provider literal is a blocked push whichever
+// fixture it sits in -- one of these four was surviving only behind a GitHub
+// push-protection allowlist entry.
+func LoadGold() ([]GoldRow, error) {
+	rows, err := parseRows(goldJSONL)
+	if err != nil {
+		return nil, err
+	}
+	return expandCredRows(rows, GoldSeed)
+}
 
 // LoadConfound parses the embedded confound eval set (classes c1/c2/c3).
 func LoadConfound() ([]GoldRow, error) { return parseRows(confoundJSONL) }

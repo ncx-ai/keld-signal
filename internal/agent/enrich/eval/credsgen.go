@@ -1,8 +1,9 @@
 package eval
 
-// Synthetic credential generation for creds.jsonl.
+// Synthetic credential generation for the eval fixtures (creds.jsonl and the
+// four provider-token rows of gold.jsonl).
 //
-// The fixture must NOT contain provider-shaped credential literals. Not because
+// A fixture must NOT contain provider-shaped credential literals. Not because
 // its values were ever real -- every one is fabricated -- but because a
 // fabricated value that is realistic enough for gitleaks to fire on is, by
 // construction, realistic enough for GitHub's push protection to fire on too.
@@ -31,7 +32,8 @@ package eval
 // precedent (scripts/pii_precision.py seeds random.Random(20260823)): a failing
 // row must be reproducible, and the seed is named in every error this file
 // returns. Draws are sequential in file order, so two occurrences of one shape
-// still get two different values.
+// still get two different values, and each fixture has its own seed (CredsSeed,
+// GoldSeed) so no synthetic token appears in two corpora.
 
 import (
 	"encoding/base64"
@@ -44,6 +46,12 @@ import (
 // CredsSeed seeds the creds.jsonl value generator. Any failure reported by
 // expansion names it, so a bad row is reproducible from the message alone.
 const CredsSeed = 20260823
+
+// GoldSeed seeds the same generator for gold.jsonl's four converted rows.
+// Distinct from CredsSeed, not shared: draws are sequential in file order, so a
+// shared seed would emit the identical synthetic token in both corpora -- which
+// reads like a copied secret. Same date-shaped precedent, one day on.
+const GoldSeed = 20260824
 
 // newCredsRand returns the deterministic source used for fixture expansion.
 // math/rand (not crypto/rand) on purpose: these are fixtures, and
@@ -155,9 +163,15 @@ var credShapes = []credShape{{
 		return string(b)
 	},
 }, {
+	// The probe covers the whole gh?_ family, not just ghp_: a probe narrower
+	// than the provider's prefix set is a hole, and the detector is not a
+	// reliable backstop for it (measured: a `rk_test_` literal followed by a
+	// COMMA fires no rule at all, because the vendored stripe rule requires a
+	// quote/space/semicolon after the token).
 	Name: "GITHUB_PAT", Rule: "github-pat", SelfIdentifying: true,
-	Pattern: `ghp_[0-9a-zA-Z]{36}`,
-	Gen:     func(r *rand.Rand) string { return "ghp_" + draw(r, alnum62, 36) },
+	Pattern:      `ghp_[0-9a-zA-Z]{36}`,
+	ProbePattern: `gh[pousr]_[0-9a-zA-Z]{36}`,
+	Gen:          func(r *rand.Rand) string { return "ghp_" + draw(r, alnum62, 36) },
 }, {
 	Name: "GITHUB_OAUTH_TOKEN", Rule: "github-oauth", SelfIdentifying: true,
 	Pattern: `gho_[0-9a-zA-Z]{36}`,
@@ -174,6 +188,19 @@ var credShapes = []credShape{{
 	Name: "STRIPE_SECRET_KEY", Rule: "stripe-access-token", SelfIdentifying: true,
 	Pattern: `sk_live_[a-zA-Z0-9]{24}`,
 	Gen:     func(r *rand.Rand) string { return "sk_live_" + draw(r, alnum62, 24) },
+}, {
+	// A Stripe TEST key. Distinct from the live shape because the row that needs
+	// it is about wiring a test key into a dev environment variable -- and
+	// because the live shape's probe cannot see it: `sk_test_` was the one
+	// provider literal in gold.jsonl that the committed-bytes probe missed
+	// entirely, which is why it is the one GitHub push protection is still
+	// carrying an allowlist entry for.
+	// Probes the whole (sk|rk)_(test|live|prod)_ family, so the two Stripe
+	// shapes below need no probe of their own.
+	Name: "STRIPE_TEST_KEY", Rule: "stripe-access-token", SelfIdentifying: true,
+	Pattern:      `sk_test_[a-zA-Z0-9]{24}`,
+	ProbePattern: `\b(?:sk|rk)_(?:test|live|prod)_[a-zA-Z0-9]{10,99}`,
+	Gen:          func(r *rand.Rand) string { return "sk_test_" + draw(r, alnum62, 24) },
 }, {
 	Name: "STRIPE_RESTRICTED_KEY", Rule: "stripe-access-token", SelfIdentifying: true,
 	Pattern: `rk_live_[a-zA-Z0-9]{24}`,
@@ -220,8 +247,11 @@ var credShapes = []credShape{{
 }, {
 	// The rule ends the token at a word boundary, so the final character must be
 	// a word character: drawn from alnum62 rather than the '-'-bearing charset.
+	// Probes sk-svcacct-/sk-admin- as well as sk-proj-, the prefix set the
+	// vendored rule accepts.
 	Name: "OPENAI_PROJECT_KEY", Rule: "openai-api-key", SelfIdentifying: true,
-	Pattern: `sk-proj-[A-Za-z0-9_-]{58}T3BlbkFJ[A-Za-z0-9_-]{57}[A-Za-z0-9]`,
+	Pattern:      `sk-proj-[A-Za-z0-9_-]{58}T3BlbkFJ[A-Za-z0-9_-]{57}[A-Za-z0-9]`,
+	ProbePattern: `sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{50,}`,
 	Gen: func(r *rand.Rand) string {
 		return "sk-proj-" + draw(r, base64URL, 58) + "T3BlbkFJ" + draw(r, base64URL, 57) + draw(r, alnum62, 1)
 	},
@@ -313,14 +343,15 @@ func expandCredText(s string, r *rand.Rand) (string, error) {
 
 // expandCredRows expands the placeholders of every row in file order, so the
 // draw sequence -- and therefore every generated value -- is a function of the
-// seed alone.
+// seed alone. Shared by LoadCreds and LoadGold: both fixtures name shapes with
+// the same syntax and draw from the same table, differing only in seed.
 func expandCredRows(rows []GoldRow, seed int64) ([]GoldRow, error) {
 	r := newCredsRand(seed)
 	out := make([]GoldRow, len(rows))
 	for i, row := range rows {
 		text, err := expandCredText(row.Text, r)
 		if err != nil {
-			return nil, fmt.Errorf("creds.jsonl row %d: %w", i+1, err)
+			return nil, fmt.Errorf("fixture row %d (seed %d): %w", i+1, seed, err)
 		}
 		row.Text = text
 		out[i] = row

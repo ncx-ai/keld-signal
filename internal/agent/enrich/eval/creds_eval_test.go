@@ -139,19 +139,36 @@ var publishedCredentialValues = []string{
 // rather than the well-known gate. It checks the "cred" rows only: the "decoy"
 // rows are SUPPOSED to carry placeholder and published shapes, since suppressing
 // those is what they assert.
+//
+// gold.jsonl's "secrets" rows are held to the same bar, and for the same reason
+// one level up: that fixture's sensitive rows once carried published values
+// throughout (4111 1111 1111 1111, 123-45-6789), which is how its recall came
+// to read 0.143 when the truth was 1.000. Only the sensitive rows -- gold's
+// non-sensitive prose is allowed to mention anything.
 func TestCredsFixtureHasNoPublishedValues(t *testing.T) {
-	rows, err := LoadCreds()
+	creds, err := LoadCreds()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, r := range rows {
-		if r.Class != "cred" {
-			continue
-		}
+	gold, err := LoadGold()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(fixture string, i int, text string) {
 		for _, bad := range publishedCredentialValues {
-			if strings.Contains(r.Text, bad) {
-				t.Errorf("row %d carries published value %q: %q", i+1, bad, r.Text)
+			if strings.Contains(text, bad) {
+				t.Errorf("%s row %d carries published value %q: %q", fixture, i+1, bad, text)
 			}
+		}
+	}
+	for i, r := range creds {
+		if r.Class == "cred" {
+			check("creds.jsonl", i, r.Text)
+		}
+	}
+	for i, r := range gold {
+		if r.Sensitivity != "" && r.Sensitivity != "none" {
+			check("gold.jsonl", i, r.Text)
 		}
 	}
 }
