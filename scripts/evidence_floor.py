@@ -46,11 +46,14 @@ The anchor of every slice is a real prompt's own timestamp and the slice looks B
 `/analyze` would report.
 
 CORPUS. `~/keld/refseries-context/frozen-corpus`, restricted to transcripts whose 8-character
-filename prefix is UNIQUE. That is not a convenience: `ingest.session_of` keys the store on
-`basename[:8]`, and the corpus's 445 `agent-*.jsonl` subagent transcripts collide onto 16 such
-keys, so ingesting them into one store would merge unrelated sessions' evidence and inflate every
-count measured here. The 55 surviving transcripts are 542 of the corpus's 731 MB (74%) and are the
-ones whose session id `/analyze` can actually address.
+filename prefix is UNIQUE. That restriction is now HISTORICAL and is kept only so the numbers
+below stay the numbers that were measured. It was necessary because `ingest.session_of` keyed the
+store on `basename[:8]`, and the corpus's 445 `agent-*.jsonl` subagent transcripts collide onto 16
+such keys, so ingesting them into one store merged unrelated sessions' evidence and inflated every
+count. That was a BUG in the store, fixed in schema v5 (`session_of` is now a digest of the
+absolute path; see `sidecar/app/test_session_key.py`), so a re-run of this study may safely widen
+the corpus to all 500 transcripts. The 55 surviving transcripts are 542 of the corpus's 731 MB
+(74%).
 
 PRIVACY. Reads real transcripts; writes only counts, and the durable output lives outside the
 repo. No prompt text, no ref values, no session ids leave this process — the rendered tables are

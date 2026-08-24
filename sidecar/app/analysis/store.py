@@ -30,6 +30,7 @@ so retention (task 5) should treat `term` as the sensitive level.
 """
 import collections
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -37,6 +38,8 @@ import threading
 import time
 
 from app.analysis import window, workstreams
+
+log = logging.getLogger("keld.sidecar.store")
 
 # 5 minutes. Fine enough for dynamics and, measured over 39 transcripts spanning 28.1 days of
 # real work, free: 154 rollup rows/day at ~60 B/row. A 60-minute digest is 12 bins.
@@ -70,7 +73,38 @@ PRECOMPUTED_LEVELS = tuple(dict.fromkeys(
 #         `enforce_retention`). Additive, and an existing store starts with an empty ledger,
 #         which reads as "nothing has ever been pruned" -- the correct initial state, and the
 #         one that keeps `/analyze` answering every window it could answer before.
-SCHEMA_VERSION = 4
+# 4 -> 5: `session` changed MEANING. It was `os.path.basename(path)[:8]`, which is not unique --
+#         Claude Code writes subagent transcripts as `agent-<hash>.jsonl`, so 500 transcripts of
+#         the frozen corpus collapse onto 71 keys and 445 sit in a colliding group. It is now a
+#         digest of the transcript's absolute path (`ingest.session_of`). This is the FIRST
+#         migration that is not additive, and it cannot be: the rows a v<=4 store holds were
+#         MERGED by the UNIQUE/PRIMARY KEY constraints across unrelated transcripts, and merged
+#         rows cannot be unmerged -- there is no column that says which file a row came from.
+#         So the data is DISCARDED and re-ingested (`_migrate`), which is exact, because the
+#         transcripts are still on disk and ingest is resumable from offset 0.
+SCHEMA_VERSION = 5
+
+# The first version whose stored `session` values are unique per transcript. A store below this
+# holds merged rows and its data is discarded on open; see the 4 -> 5 note above.
+UNIQUE_SESSION_VERSION = 5
+
+# The tables whose rows are keyed on `session`, or which assert something about them. All of them
+# go together, and each for its own reason:
+#   event/bin/prompt  -- keyed on `session`, so their rows are the merged ones.
+#   ingest            -- byte-offset checkpoints. Keeping them would leave the store believing
+#                        it had read every transcript in full over an EMPTY series: `is_current`
+#                        would return True and `/analyze` would answer every window from nothing,
+#                        which is the plausible-wrong-number failure this store exists to avoid.
+#   parse_state       -- the cross-batch state those checkpoints resume from; meaningless without
+#                        them, and `_state_is_usable` would otherwise resume a tail parse onto a
+#                        series that is gone.
+#   retention         -- the SERVING FLOOR is a promise that events at or before it were pruned.
+#                        After a discard nothing was pruned, and a floor left behind would make
+#                        `/analyze` refuse (410, permanent) windows the re-ingest can serve.
+# `bin_level` is NOT in the list: it is the registry of which levels are precomputed, holds no
+# session, and dropping it would make `_register_levels` backfill from an empty `event` table and
+# quietly leave every level unregistered.
+_SESSION_KEYED_TABLES = ("event", "bin", "prompt", "ingest", "parse_state", "retention")
 
 # --- Retention -------------------------------------------------------------------------------
 #
@@ -239,9 +273,12 @@ CREATE TABLE IF NOT EXISTS parse_state (
 --
 -- What this holds is ids and timestamps: a `uuid` a caller must already possess to ask a
 -- question, and the instant it happened. No message text, which is the same rule the `event`
--- table follows. `session` (the 8-char filename prefix) keys it for consistency with
--- `clear_session`, so a reparse cannot leave a stale index behind -- see `ingest.py` on that
--- convention's one known sharp edge.
+-- table follows. `session` is `ingest.session_of` -- a digest of the transcript's ABSOLUTE PATH,
+-- the same key `event` and `bin` carry -- so `clear_session` reaches this table too and a reparse
+-- cannot leave a stale index behind. It is NOT the transcript's filename prefix, which is what
+-- this said until v5: that prefix is not unique (`agent-<hash>.jsonl`), and under it a prompt id
+-- from one transcript resolved against another's series with nothing raised. See
+-- `ingest.session_of` for the measurement.
 CREATE TABLE IF NOT EXISTS prompt (
   session   TEXT NOT NULL,
   prompt_id TEXT NOT NULL,
@@ -366,9 +403,42 @@ class Store:
         self._stats_cache = None
         conn = self._conn()
         with self._conns_lock:
+            # The version is read BEFORE the schema is applied. `CREATE TABLE IF NOT EXISTS` is
+            # silent about whether it created anything, so afterwards there is no way left to
+            # tell a fresh file from one written by an older layout.
+            was = conn.execute("PRAGMA user_version").fetchone()[0]
             conn.executescript(_SCHEMA)
+            self.migrated_from = self._migrate(conn, was)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._register_levels()
+
+    @staticmethod
+    def _migrate(conn, was):
+        """Discard the data a store below `UNIQUE_SESSION_VERSION` holds. Returns the version it
+        was at, or None if there was nothing to do.
+
+        `was == 0` is a file this code has never opened -- a fresh one, or the empty 0600 file
+        `__init__` just created -- so there is nothing to discard and nothing to report. A
+        version at or above the current one is left alone: a newer sidecar may have written it,
+        and downgrading is not this function's business.
+
+        DROPPING MUST BE VISIBLE (AGENTS.md). A store that quietly emptied itself on a restart
+        is indistinguishable from a machine that has done no work, so the row counts are counted
+        before the delete and logged at WARNING -- the same rule `omittedNotice` states for text.
+        """
+        if not 0 < was < UNIQUE_SESSION_VERSION:
+            return None
+        counts = {}
+        for t in _SESSION_KEYED_TABLES:
+            counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            conn.execute(f"DELETE FROM {t}")
+        log.warning(
+            "reference store schema v%d -> v%d: the session key was not unique per transcript, "
+            "so stored rows are merged across unrelated transcripts and cannot be unmerged. "
+            "Discarded %s. Transcripts are re-ingested from offset 0 on the next ingest.",
+            was, SCHEMA_VERSION,
+            ", ".join(f"{n} {t} row(s)" for t, n in counts.items() if n))
+        return was
 
     # --- connections ---------------------------------------------------------------------
 

@@ -28,7 +28,17 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           stating the conclusion the raw numbers left to the reader, which is the same window
 #           answered differently, not merely reshaped. Measurements:
 #           ~/keld/refseries-context/dynamics/DYNAMICS-VALUE.md.
-SCHEMA = 3
+#   3 -> 4: `session` changed MEANING. It was the transcript's filename, first 8 characters,
+#           which is not unique -- Claude Code writes subagent transcripts as
+#           `agent-<hash>.jsonl`, so 500 transcripts of the frozen corpus publish 71 distinct
+#           values and two responses about two different transcripts carried the SAME `session`.
+#           It is now `ingest.session_of`: a digest of the transcript's absolute path, unique per
+#           transcript, and the key the answer's own rows are stored under. Nothing in the Go
+#           client reads the field (`sidecar.AnalyzeResult` decodes it and
+#           `sidecar/workstreams.go` documents it as local window metadata that never reaches
+#           the published enrichment), so this breaks no consumer -- but the value a caller CAN
+#           see changed shape, and that is exactly what this number is for.
+SCHEMA = 4
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

@@ -120,8 +120,9 @@ Tables: `~/keld/refseries-context/dynamics/DYNAMICS-VALUE.md`.
 
 ## BOTH SCHEMAS ARE BUMPED, AND THE SECOND ONE IS NOW OWED
 
-`app.analysis.SCHEMA` is **3**: this module's published vocabulary changed (three dimension keys
-removed, `emerged`/`decayed` removed, `reading` added with a closed 7-value set).
+`app.analysis.SCHEMA` went to **3** for this module: its published vocabulary changed (three
+dimension keys removed, `emerged`/`decayed` removed, `reading` added with a closed 7-value set).
+It is **4** now, for an unrelated change to the payload's `session` field -- see that constant.
 
 `enrich.SchemaVersion` is **8**. It was deliberately left at 7 while this block reached nothing —
 `sidecar.AnalyzeResult` had no field for it, so `json.Decode` dropped it Go-side — and the debt
@@ -181,7 +182,7 @@ SLICE_MINUTES = 15
 MATERIAL = 1.0 / MIN_EVIDENCE
 
 # The STATED CONCLUSION's vocabulary — the field this module exists to publish, and a closed set
-# because it is a contract (see `app.analysis.SCHEMA`, bumped to 3 for it). Precedence is the
+# because it is a contract (see `app.analysis.SCHEMA`, which went to 3 for it). Precedence is the
 # reader's own priority and is enforced in `reading`: WHICH value owns the work outranks how
 # concentrated it is, which outranks what came and went underneath it.
 READINGS = ("switched",    # the dominant value changed

@@ -73,13 +73,37 @@ def quantize(t):
     return round(t, TIME_DECIMALS)
 
 
-def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None):
+def display_session(path):
+    """The row LABEL each event carries: the transcript's filename, first 8 characters.
+
+    A LABEL, not a key, and the distinction is the whole of a measured bug. This value is NOT
+    unique — Claude Code names a subagent transcript `agent-<hash>.jsonl`, so on the frozen
+    corpus 500 transcripts collapse onto 71 of these and 445 sit in a colliding group (worst:
+    `agent-a6`, 37 files). Anything that KEYS on a transcript must use `ingest.session_of`, which
+    is derived from the path and is unique; a caller grouping the frame by transcript passes its
+    own id through `events_for_turns(..., session=...)`.
+
+    It stays the filename prefix, deliberately, because it is what the committed
+    fixture-identity gate fingerprints (`scripts/check-fixture-identity.sh`), and that gate is
+    checked out at a different absolute path on every machine. A path-derived label here would
+    make `IDENTICAL` unreachable for anyone but the author — the same class of machine-dependent
+    answer `_epoch` above rejects a naive timestamp to prevent.
+    """
+    return os.path.basename(path)[:8]
+
+
+def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, session=None):
     """One transcript's turns -> its rows and pending paths.
 
     `turns` is the output of `transcript.iter_turns(path)` — already filtered to `user`/
     `assistant` lines with a timestamp. `path` is still needed here for `scan_workspace` (a
-    separate pre-pass over the same file that resolution depends on) and for the session id
-    derived from the filename; nothing in this function opens it directly.
+    separate pre-pass over the same file that resolution depends on) and for the row label
+    `session` defaults to; nothing in this function opens it directly.
+
+    `session` overrides that label. A caller that GROUPS the returned rows by transcript must
+    pass one: the default is `display_session(path)`, which is not unique (see its docstring),
+    and a caller keying on it silently merges unrelated transcripts into one pseudo-session —
+    measured at 550 windows against a true 1,022 in the study that found it.
 
     `evidence` is the `(marker_dirs, cd_targets, remotes)` triple `scan_workspace` would return,
     supplied by a caller that already has it. Incremental ingest (`analysis/ingest.py`) does: it
@@ -92,7 +116,7 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None):
     marker_dirs, cd_targets, remotes = (evidence if evidence is not None
                                         else scan_workspace(path))
     ws_cache = {}
-    session = os.path.basename(path)[:8]
+    session = display_session(path) if session is None else session
     seen_req = set()
     for o in turns:
         ts = o.get("timestamp")

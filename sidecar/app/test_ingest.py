@@ -62,8 +62,20 @@ def _laid_out(tmp, projdir, fname, lines):
     return p
 
 
-def _dump(store):
+def _dump(store, path):
     """Every stored event and bin, ordered — the whole observable content of the store.
+
+    `path` is the transcript the store holds. Its key is replaced by `"<session>"`, because the
+    store keys on a digest of the transcript's ABSOLUTE path (`ingest.session_of`) and the
+    comparisons below build the reference store from a copy of the same transcript at a DIFFERENT
+    path — so the raw key differs by construction and would swamp every real difference. That
+    loses nothing the column ever carried: each of these stores holds exactly one transcript, so
+    the value was a constant on both sides.
+
+    "Exactly one" is ASSERTED, not assumed, and the assertion is the reason the substitution is
+    safe. Silently rewriting whatever session a row happens to carry would normalise away the one
+    class of defect this column can show — rows landing under a key that is not this
+    transcript's — so a foreign key is a failure here rather than a value that gets renamed.
 
     Compared as a whole rather than through `rollup_window`, because a rollup would hide a
     difference that cancels out across bins, and the point of these tests is that nothing
@@ -76,12 +88,18 @@ def _dump(store):
     shows up here as a doubled `n` rather than being hidden.
     """
     c = store._conn()
-    ev = list(c.execute("SELECT session, ts, level, ref, SUM(n) FROM event "
-                        "GROUP BY session, ts, level, ref "
-                        "ORDER BY session, ts, level, ref"))
-    bn = list(c.execute("SELECT session, bin_ts, level, ref, n FROM bin "
-                        "ORDER BY session, bin_ts, level, ref"))
-    return ev, bn
+    key = session_of(path)
+    for table in ("event", "bin"):
+        seen = {r[0] for r in c.execute(f"SELECT DISTINCT session FROM {table}")}
+        assert seen <= {key}, (
+            f"{table} holds session(s) that are not {os.path.basename(path)}'s: {seen - {key}}")
+    canon = lambda r: ("<session>",) + tuple(r[1:])
+    ev = [canon(r) for r in c.execute("SELECT session, ts, level, ref, SUM(n) FROM event "
+                                      "GROUP BY session, ts, level, ref "
+                                      "ORDER BY session, ts, level, ref")]
+    bn = [canon(r) for r in c.execute("SELECT session, bin_ts, level, ref, n FROM bin "
+                                      "ORDER BY session, bin_ts, level, ref")]
+    return sorted(ev), sorted(bn)
 
 
 def _full_parse_rollup(path, nlp=None):
@@ -215,7 +233,7 @@ def _assert_chunked_equals_whole(objs_or_lines, projdir="-workspace-kexample-dem
     with tempfile.TemporaryDirectory() as tmp:
         cs, cpath, results = _ingest_in_chunks(tmp, projdir, fname, lines, cuts)
         ws, wpath, _r = _ingest_whole(tmp, projdir, fname, lines)
-        got, want = _dump(cs), _dump(ws)
+        got, want = _dump(cs, cpath), _dump(ws, wpath)
         assert got == want, (
             f"chunked ingest ({len(cuts)} chunks) differs from a single pass\n"
             f"  only in chunked: {sorted(set(got[0]) - set(want[0]))[:8]}\n"
@@ -400,7 +418,7 @@ def test_a_file_that_shrank_below_its_offset_triggers_a_full_reparse():
         ref = open_store(os.path.join(tmp, "ref.db"))
         p2 = _laid_out(os.path.join(tmp, "r"), projdir, fname, lines[:2])
         ingest_file(ref, p2)
-        assert _dump(st) == _dump(ref), "a reparse must replace, not merge"
+        assert _dump(st, p) == _dump(ref, p2), "a reparse must replace, not merge"
         st.close(); ref.close()
 
 
@@ -520,8 +538,9 @@ def test_a_checkpoint_without_carried_state_reparses_rather_than_tail_parsing_bl
         r = ingest_file(st, p)
         assert r.reparsed is True, r
         ref = open_store(os.path.join(tmp, "ref.db"))
-        ingest_file(ref, _laid_out(os.path.join(tmp, "r"), PROJ, FNAME, lines))
-        assert _dump(st) == _dump(ref)
+        rp = _laid_out(os.path.join(tmp, "r"), PROJ, FNAME, lines)
+        ingest_file(ref, rp)
+        assert _dump(st, p) == _dump(ref, rp)
         st.close(); ref.close()
 
 
@@ -553,7 +572,7 @@ def test_ingest_state_survives_reopening_the_store():
         p2 = _laid_out(os.path.join(tmp, "r"), "-workspace-kexample-demo",
                        "0badc0de-0000.jsonl", lines)
         ingest_file(ref, p2)
-        assert _dump(st) == _dump(ref)
+        assert _dump(st, p) == _dump(ref, p2)
         st.close(); ref.close()
 
 

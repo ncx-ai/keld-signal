@@ -41,8 +41,11 @@ from app.analysis.store import BIN_SECONDS, open_store
 # irregular and sub-second, so no window edge derived from them lands on one either.
 BASE_ISO = "2026-08-12T13:07:41.317Z"
 BASE = datetime.fromisoformat(BASE_ISO.replace("Z", "+00:00"))
-SESSION = "b7e41c90"
-FILENAME = SESSION + "-3d5a-4f11-9c02-6ab1e7c40000.jsonl"
+# A FILENAME prefix, not a store key. `ingest.session_of` keys the store on a digest of the
+# transcript's absolute path (see its docstring on the collision that forced that), so a
+# hardcoded id here would resolve nothing -- these tests derive the key from the path.
+FILE_PREFIX = "b7e41c90"
+FILENAME = FILE_PREFIX + "-3d5a-4f11-9c02-6ab1e7c40000.jsonl"
 PROJDIR = "-workspace-fixture-analyze-aurora-ledger"
 CWD = "/workspace/fixture-analyze/aurora-ledger"
 BRANCH = "feat/settlement-retries"
@@ -491,7 +494,7 @@ def test_a_window_below_the_serving_floor_is_refused_not_served_narrower():
         assert served["evidence"] > 0
 
         # A floor after the window's start: its evidence is, by declaration, gone.
-        start, _end = _bounds(st.prompt_time(SESSION, "TARGET"), 60)
+        start, _end = _bounds(st.prompt_time(session_of(path), "TARGET"), 60)
         st.note_pruned("event", start.timestamp() + 1.0, 1)
 
         try:
@@ -508,7 +511,7 @@ def test_a_window_above_the_serving_floor_still_serves_exactly():
         ingest_file(st, path, nlp)
         want = analyze_window(path, "TARGET", 60, nlp, store=st, refresh=False)
 
-        start, _end = _bounds(st.prompt_time(SESSION, "TARGET"), 60)
+        start, _end = _bounds(st.prompt_time(session_of(path), "TARGET"), 60)
         st.note_pruned("event", start.timestamp() - 60.0, 1)      # entirely below the window
 
         assert analyze_window(path, "TARGET", 60, nlp, store=st, refresh=False) == want
@@ -530,7 +533,7 @@ def test_expiry_wins_over_being_behind_when_both_are_true():
         st, nlp = _store(tmp), _FakeNlp()
         path = _write(tmp)
         ingest_file(st, path, nlp)
-        start, _end = _bounds(st.prompt_time(SESSION, "TARGET"), 60)
+        start, _end = _bounds(st.prompt_time(session_of(path), "TARGET"), 60)
         st.note_pruned("event", start.timestamp() + 1.0, 1)
         # Now make the store stale as well.
         state = st.ingest_state(path)

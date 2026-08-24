@@ -755,8 +755,9 @@ def test_a_window_that_changes_repeatedly_is_still_sized_by_detection_not_by_a_r
 # --- against a real store --------------------------------------------------------------------
 
 BASE = datetime(2026, 8, 20, 9, 3, 17, 400000, tzinfo=timezone.utc)
-SESSION = "d19a4c72"
-FILENAME = SESSION + "-8b02-4c31-a7de-5f1290ab0000.jsonl"
+# A FILENAME prefix, not a store key -- see the same note in test_analyze_store.py.
+FILE_PREFIX = "d19a4c72"
+FILENAME = FILE_PREFIX + "-8b02-4c31-a7de-5f1290ab0000.jsonl"
 PROJDIR = "-workspace-fixture-dynamics-aurora-ledger"
 ALPHA = "/workspace/fixture-dynamics/aurora-ledger"
 BETA = "/workspace/fixture-dynamics/beacon-api"
@@ -878,8 +879,8 @@ def test_both_sides_are_read_from_the_same_source_and_the_block_says_which():
             return real(session, start, end, exclude_slots)
 
         st.window_rows = spy
-        end = datetime.fromisoformat(st.prompt_time(SESSION, "TARGET").replace("Z", "+00:00"))
-        block = dynamics(st, SESSION, end - timedelta(minutes=15), end,
+        end = datetime.fromisoformat(st.prompt_time(session_of(path), "TARGET").replace("Z", "+00:00"))
+        block = dynamics(st, session_of(path), end - timedelta(minutes=15), end,
                          end - timedelta(minutes=60))
         assert len(seen) == 2, seen
         assert seen[0] == seen[1], seen
@@ -930,8 +931,9 @@ def test_the_series_helper_yields_time_ordered_steps_across_the_window():
     with tempfile.TemporaryDirectory() as tmp:
         path, st = _write(tmp, _flipping()), _store(tmp)
         ingest_file(st, path, None)
-        end = datetime.fromisoformat(st.prompt_time(SESSION, "TARGET").replace("Z", "+00:00"))
-        steps = list(series(st, SESSION, end - timedelta(minutes=60), end, "workspace"))
+        end = datetime.fromisoformat(st.prompt_time(session_of(path), "TARGET").replace("Z", "+00:00"))
+        steps = list(series(st, session_of(path), end - timedelta(minutes=60), end,
+                            "workspace"))
         assert len(steps) == 60 * 60 // BIN_SECONDS, len(steps)
         assert [t for t, _ in steps] == sorted(t for t, _ in steps)
         tops = [max(dict(items), key=lambda k: dict(items)[k]) for _t, items in steps if items]

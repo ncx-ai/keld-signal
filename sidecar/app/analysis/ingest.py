@@ -154,9 +154,46 @@ class IngestResult:
                 == (other.new_lines, other.watermark_ts, other.reparsed))
 
 
+# Hex characters of the path digest that make up a session key. 16 hex = 64 bits: over the
+# ~600 transcripts a machine accumulates the chance of any collision is ~1e-14, and the key is
+# 16 bytes in the three tables that carry it (measured 3,882 event rows/day, so 8 bytes more per
+# row than the old prefix costs ~11 MB/year against a 1024 MB cap). The alternative shapes were
+# weighed and rejected: the PATH ITSELF is ~100 bytes repeated in every `event`, `bin` and
+# `prompt` row (the latter two are WITHOUT ROWID, so the key IS the row), and a SURROGATE integer
+# allocated in `ingest` would make `session_of` stateful — every caller here, in `analyze.py` and
+# in `dynamics.py` holds only a path, and an id that has to be allocated before it can be used
+# turns a pure function into an ordering dependency for the sake of 8 bytes.
+SESSION_KEY_HEX = 16
+
+
 def session_of(path):
-    """The session id, the same way `levels.events_for_turns` and `analyze_window` derive it."""
-    return os.path.basename(path)[:8]
+    """THE store key for one transcript: a digest of its absolute path.
+
+    MEASURED BUG (`app/test_session_key.py`). This was `os.path.basename(path)[:8]`, and every
+    key in the store is built on it — `event`'s UNIQUE, `bin`'s and `prompt`'s PRIMARY KEYs, and
+    `clear_session`'s three DELETEs. Claude Code names a subagent transcript `agent-<hash>.jsonl`,
+    so on the frozen corpus 500 transcripts collapse onto 71 keys and 445 of them sit in a
+    colliding group (`agent-a6` alone: 37 files). Every consequence was silent: up to 37
+    unrelated sessions summed into shared `bin` rows so a window was characterised from merged
+    evidence, the UNIQUE/PK constraints merged rows that were genuinely distinct, a prompt id
+    resolved against a transcript it is not in, and one file's reparse wiped every file sharing
+    its prefix. `claude_code` is ingest-eligible in production (`enrich.WorkstreamsEligible`),
+    so this reached shipped code; the study that found it built a frame of 550 windows where the
+    truth was 1,022, and nothing raised.
+
+    The ABSOLUTE path is the unique thing — `ingest` is already keyed on it — so the key is a
+    function of it and of nothing else. `abspath` is applied here rather than assumed of the
+    caller: `/analyze` is handed an absolute path and a test or a CLI a relative one, and two
+    keys for one transcript would split its series in half. It is deliberately NOT reversible to
+    a filename; `ingest.path` is the join back to a human-readable name.
+
+    This is NOT the value the event rows carry as a label — see `levels.display_session`, which
+    stays the filename prefix because it is machine-independent and the fixture-identity gate
+    fingerprints it. A key and a display string are two requirements, and conflating them is
+    how this bug happened.
+    """
+    ap = os.path.abspath(path).encode("utf-8", "surrogateescape")
+    return hashlib.sha256(ap).hexdigest()[:SESSION_KEY_HEX]
 
 
 def _scope(path):
