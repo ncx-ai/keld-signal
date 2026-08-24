@@ -86,11 +86,13 @@ import time
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
-from app.analysis.dynamics import (EwmaSizer, FixedSizer, Sizer, Slicing,  # noqa: E402
-                                   series)
+from app.analysis.dynamics import (DEFAULT_SIZER, EwmaSizer, FixedSizer,  # noqa: E402
+                                   MATERIAL, READINGS, Sizer, Slicing, _absent_mass,
+                                   _status, compare, dynamics, series)
+from app.analysis.levels import quantize                                  # noqa: E402
 from app.analysis.store import BIN_SECONDS, open_store                    # noqa: E402
 from app.analysis.window import MIN_EVIDENCE, attribution                 # noqa: E402
-from app.analysis.workstreams import ALLOCATION                           # noqa: E402
+from app.analysis.workstreams import ALLOCATION, INVENTORY                 # noqa: E402
 
 # --- PRE-REGISTERED, fixed before any score was looked at ---------------------------------
 OUT = os.path.expanduser("~/keld/refseries-context/dynamics")
@@ -695,13 +697,405 @@ def do_guards(_a):
                                                    for k, v in still.items()))
 
 
+# --- TASK 4: does each dynamic CARRY INFORMATION over the corpus? -----------------------------
+
+# A metric is UNINFORMATIVE if almost every window reports the same value for it. Stated as a
+# number before looking at one: `band` is the largest share of a dimension's `compared` readings
+# that fall inside any single 0.05-wide bucket, and a metric at or above UNINFORMATIVE_BAND is
+# disqualified regardless of how principled its definition is — a reader who could have guessed
+# the value without reading it learned nothing. 0.05 is the resolution the payload rounds to a
+# reader's eye (`round(x, 3)` is finer than anyone acts on) and 0.90 is the same "distinguishable
+# from a constant" idea `MIN_EVIDENCE` applies to a share.
+UNINFORMATIVE_BAND = 0.90
+# The second disqualifier, and it is independent: a field that is `None` on most windows is a
+# field a consumer must branch on more often than it can use. A dimension `compared` on fewer
+# than this share of windows cannot carry a routine published metric.
+MIN_COMPARED_RATE = 0.10
+BAND_W = 0.05
+# The MIRROR of the constancy failure, and the one the 0.05-band test cannot see. Read as the
+# yes/no a reader actually acts on ("did anything new appear?"), a turnover whose non-zero rate is
+# ~1.0 is as constant as one whose value never moves: the answer is always yes. A dimension
+# outside [1 - ALWAYS_RATE, ALWAYS_RATE] on that reading is disqualified.
+ALWAYS_RATE = 0.90
+# `MATERIAL` and the `reading` vocabulary were PROPOSED here and are now SHIPPED
+# (`app.analysis.dynamics`), so they are imported rather than kept as a second copy: a divergence
+# between the measurement and the implementation is the failure this whole script exists to
+# prevent. The threshold is derived, not chosen — see MATERIAL's comment in that module.
+
+# The inventory levels, measured with the IDENTICAL arithmetic as allocation (`dynamics._status`
+# and `dynamics._absent_mass`, imported rather than reimplemented) so the comparison that decides
+# whether they ship is between populations, not between two spellings of turnover. They have no
+# share floor — that is what makes them inventory — so only turnover/decay/status are defined for
+# them; there is no dominant value, hence no concentration shift and no `changed`.
+INV_DIMENSIONS = tuple(INVENTORY)
+
+
+def _top_absent(items, other, _total):
+    """The values in `items` absent from `other`, ranked by the mass they carry.
+
+    PRODUCTION DROPPED THIS (`dynamics._absent_mass` returns the mass alone now) precisely because
+    of what it measured — the top entering value is either `slice.value` itself or a value below
+    the 0.50 dominance floor. It lives here so that finding stays re-derivable rather than becoming
+    a number in a document with no code behind it. Tie-break is alphabetical, matching
+    `window.rollup`'s order, as the dropped implementation did.
+    """
+    new = [(ref, n) for ref, n in items if ref not in other]
+    return sorted(new, key=lambda kv: (-kv[1], kv[0]))
+
+
+def _q(xs, p):
+    if not xs:
+        return None
+    ys = sorted(xs)
+    i = min(len(ys) - 1, max(0, int(round(p * (len(ys) - 1)))))
+    return round(ys[i], 3)
+
+
+def _band(xs, lo, w=BAND_W):
+    """The largest share of `xs` inside any single `w`-wide bucket, and that bucket's left edge."""
+    if not xs:
+        return 0.0, None
+    c = collections.Counter(int((x - lo) // w) for x in xs)
+    k, n = max(c.items(), key=lambda kv: (kv[1], -kv[0]))
+    return round(n / len(xs), 4), round(lo + k * w, 3)
+
+
+def _summary(xs, lo):
+    band, at = _band(xs, lo)
+    return {"n": len(xs), "mean": round(statistics.fmean(xs), 3) if xs else None,
+            "sd": round(statistics.pstdev(xs), 3) if len(xs) > 1 else 0.0,
+            "min": _q(xs, 0.0), "p10": _q(xs, 0.10), "p25": _q(xs, 0.25), "med": _q(xs, 0.50),
+            "p75": _q(xs, 0.75), "p90": _q(xs, 0.90), "max": _q(xs, 1.0),
+            "zero": round(sum(1 for x in xs if abs(x) < 1e-9) / len(xs), 4) if xs else None,
+            "band": band, "band_at": at,
+            "distinct_2dp": len({round(x, 2) for x in xs})}
+
+
+def _pearson(xs, ys):
+    if len(xs) < 2:
+        return None
+    mx, my = statistics.fmean(xs), statistics.fmean(ys)
+    num = sum((a - mx) * (b - my) for a, b in zip(xs, ys))
+    dx = sum((a - mx) ** 2 for a in xs) ** 0.5
+    dy = sum((b - my) ** 2 for b in ys) ** 0.5
+    return round(num / (dx * dy), 3) if dx and dy else None
+
+
+def do_dist(_a):
+    """The distribution of every dynamic over EVERY window /analyze could answer.
+
+    POPULATION — deliberately wider than `run`'s. `run` scored only the 25 sessions carrying
+    ground truth, because a detector cannot be scored where nothing changes. This asks a
+    different question — what does a READER receive — so it walks all 51 sessions and every
+    non-empty bin as an anchor (2,702 windows), sized by the SHIPPED `DEFAULT_SIZER` with the
+    SHIPPED serving floor, i.e. exactly `main.py`'s call. A field's information content has to be
+    measured on the windows it is actually emitted on, including the quiet ones, or the answer is
+    conditioned on the very churn the field is supposed to reveal.
+    """
+    t0 = time.time()
+    st = open_store(DB)
+    cs = CachingStore(st)
+    floor = st.serving_floor()
+    sessions = [s for (s,) in st._conn().execute("SELECT DISTINCT session FROM bin "
+                                                 "ORDER BY session")]
+    names = [n for n, _l, _f in ALLOCATION]
+    inv = [n for n, _l in INV_DIMENSIONS]
+    level_of = {n: l for n, l, _f in ALLOCATION}
+    level_of.update({n: l for n, l in INV_DIMENSIONS})
+    acc = {n: {"status": collections.Counter(), "changed": collections.Counter(),
+               "reading": collections.Counter(), "turnover": [], "decay": [], "shift": [],
+               "em_n": [], "dc_n": [], "pair": [],
+               # TURNOVER SPLIT BY WHETHER THE WORK REALLY CHANGED. This is the discriminator
+               # for the inventory question: a dimension measuring a CHANGE OF WORK must read
+               # higher inside a window that contains a ground-truth transition than inside one
+               # that does not. A dimension measuring tool-surface BREADTH reads the same either
+               # way, because a wide surface is sampled incompletely in every window.
+               "to_trans": [], "to_flat": [],
+               # TURNOVER vs THE SIZE OF THE SURFACE, and this one needs no ground truth at all
+               # — which matters, because the only ground truth this corpus has is `branch`
+               # transitions and a dimension orthogonal to branch would be under-credited by the
+               # lift split above. If turnover is BREADTH, it is the chance that a value in the
+               # slice simply was not sampled in the baseline, which grows with the number of
+               # distinct values on the level; if it is CHANGE, it does not care how wide the
+               # surface is. So: Pearson r against the baseline's distinct-value count.
+               "surface": [],
+               # DO THE `emerged`/`decayed` TOP-LISTS CARRY A FACT THE REST OF THE BLOCK DOES
+               # NOT? Two numbers decide it: how often the list is non-empty at all, and — when
+               # it is — whether the top entering value clears the 0.50 dominance floor. A value
+               # below that floor is one this package's own `window.dominant` refuses to name as
+               # what the window was about, so highlighting it under `emerged` would re-introduce
+               # exactly what the floor exists to prevent, one field over.
+               "em_top": [], "em_is_dominant": [],
+               "named": collections.defaultdict(list)}
+           for n in names + inv}
+    sizer_detail = {"fires": [], "fallback": 0, "slice_minutes": [], "windows": 0}
+    per_session = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
+    for k, s in enumerate(sessions, 1):
+        anchors = [float(t + BIN_SECONDS) for t in active_bins(cs, s)]
+        # Ground truth for the lift split, from the SAME function `run` scored against.
+        gt = ground_truth(cs, s)
+        trans = sorted(t.instant for v in gt.values() for t in v[1])
+        for end in anchors:
+            has_t = any(end - SPAN_MINUTES * 60.0 <= i < end for i in trans)
+            end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
+            # `dynamics_for` inlined by ONE line — the plan is taken out so the same two rollups
+            # can also be read at the inventory levels, which `compare` does not iterate. Same
+            # sizer, same floor, same `dynamics()` call: this is `main.py`'s path with the two
+            # intermediate rollups kept, not a reimplementation of it.
+            pl = DEFAULT_SIZER.plan(cs, s, end_dt, SPAN_MINUTES, floor)
+            blk = dynamics(cs, s, pl.slice_start, pl.slice_end, pl.baseline_start,
+                           sizer=pl.sizer, detail=pl.detail)
+            s_lo, s_hi = quantize(pl.slice_start.timestamp()), quantize(pl.slice_end.timestamp())
+            b_lo = quantize(pl.baseline_start.timestamp())
+            slice_rl = cs.rollup_window(s, s_lo, s_hi)
+            baseline_rl = cs.rollup_window(s, b_lo, s_lo)
+            # The published block reports only the SURVIVING dimensions. The measurement has to
+            # cover the dropped ones too or the drop stops being re-derivable, so the full
+            # allocation set goes through the same shipped `compare`, explicitly.
+            dims = compare(slice_rl, baseline_rl, dimensions=tuple(ALLOCATION))
+            d = blk["sizer_detail"]
+            sizer_detail["windows"] += 1
+            sizer_detail["fires"].append(d.get("fires", 0))
+            sizer_detail["fallback"] += bool(d.get("fallback"))
+            sizer_detail["slice_minutes"].append(blk["slice_minutes"])
+            for n in names:
+                v = dims[n]
+                a = acc[n]
+                a["status"][v["status"]] += 1
+                a["changed"][str(v["changed"])] += 1
+                per_session[s][n][v["status"]] += 1
+                if v["status"] != "compared":
+                    continue
+                a["turnover"].append(v["turnover"])
+                a["decay"].append(v["decay"])
+                a["pair"].append((v["turnover"], v["decay"]))
+                (a["to_trans"] if has_t else a["to_flat"]).append(v["turnover"])
+                a["surface"].append((float(len(baseline_rl.get(level_of[n]) or [])),
+                                     v["turnover"]))
+                lv = level_of[n]
+                em = _top_absent(slice_rl.get(lv) or [],
+                                 dict(baseline_rl.get(lv) or []), None)
+                dc = _top_absent(baseline_rl.get(lv) or [],
+                                 dict(slice_rl.get(lv) or []), None)
+                a["em_n"].append(len(em))
+                a["dc_n"].append(len(dc))
+                if em:
+                    s_tot_a = sum(x for _r, x in slice_rl.get(lv) or [])
+                    a["em_top"].append(em[0][1] / s_tot_a if s_tot_a else 0.0)
+                    a["em_is_dominant"].append(em[0][0] == v["slice"]["value"])
+                a["reading"][str(v["reading"])] += 1
+                if v["concentration_shift"] is not None:
+                    a["shift"].append(v["concentration_shift"])
+                # NAMED IDENTIFIERS, not just a table: the actual (session, window) behind every
+                # extreme and every non-zero reading, so a claim in the report can be re-derived
+                # by hand. Roughly twenty defects in this study surfaced as plausible wrong
+                # numbers and none was caught by reading an aggregate.
+                a["named"]["turnover"].append((v["turnover"], s, end))
+                if v["concentration_shift"] is not None:
+                    a["named"]["shift"].append((v["concentration_shift"], s, end))
+                if v["changed"]:
+                    a["named"]["changed"].append((1.0, s, end))
+            # The inventory dimensions, same arithmetic, no floor.
+            for n, level in INV_DIMENSIONS:
+                a = acc[n]
+                s_items = slice_rl.get(level) or []
+                b_items = baseline_rl.get(level) or []
+                s_tot = sum(x for _r, x in s_items)
+                b_tot = sum(x for _r, x in b_items)
+                status = _status(s_tot, b_tot, MIN_EVIDENCE)
+                a["status"][status] += 1
+                per_session[s][n][status] += 1
+                if status != "compared":
+                    continue
+                to = _absent_mass(s_items, dict(b_items), s_tot)
+                de = _absent_mass(b_items, dict(s_items), b_tot)
+                a["turnover"].append(to)
+                a["decay"].append(de)
+                a["pair"].append((to, de))
+                (a["to_trans"] if has_t else a["to_flat"]).append(to)
+                a["surface"].append((float(len(b_items)), to))
+                a["em_n"].append(len(_top_absent(s_items, dict(b_items), s_tot)))
+                a["dc_n"].append(len(_top_absent(b_items, dict(s_items), b_tot)))
+                a["named"]["turnover"].append((to, s, end))
+        cs.reset()
+        print(f"  [{k}/{len(sessions)}] {s} {len(anchors)} windows ({time.time()-t0:.0f}s)",
+              flush=True)
+
+    rows = []
+    for n in names + inv:
+        a = acc[n]
+        tot = sum(a["status"].values())
+        cmp_n = a["status"]["compared"]
+        row = {"dimension": n, "kind": "allocation" if n in names else "inventory",
+               "windows": tot, "compared": cmp_n,
+               "compared_rate": round(cmp_n / tot, 4) if tot else 0.0,
+               "status": dict(a["status"]), "changed": dict(a["changed"]),
+               "turnover": _summary(a["turnover"], 0.0),
+               "decay": _summary(a["decay"], 0.0),
+               "concentration_shift": _summary(a["shift"], -1.0),
+               "emerged_n_med": _q([float(x) for x in a["em_n"]], 0.5),
+               "decayed_n_med": _q([float(x) for x in a["dc_n"]], 0.5),
+               "reading": dict(a["reading"]),
+               "emerged_nonempty": round(len(a["em_top"]) / a["status"]["compared"], 4)
+                                   if a["status"]["compared"] else None,
+               "emerged_top_below_floor": round(
+                   sum(1 for x in a["em_top"] if x < 0.5) / len(a["em_top"]), 4)
+                   if a["em_top"] else None,
+               "emerged_top_is_slice_dominant": round(
+                   sum(a["em_is_dominant"]) / len(a["em_is_dominant"]), 4)
+                   if a["em_is_dominant"] else None,
+               "surface_r": _pearson([x for x, _y in a["surface"]],
+                                     [y for _x, y in a["surface"]]),
+               "surface_med": _q([x for x, _y in a["surface"]], 0.5),
+               "turnover_decay_r": _pearson([x for x, _y in a["pair"]],
+                                            [y for _x, y in a["pair"]]),
+               "both_zero": round(sum(1 for x, y in a["pair"]
+                                      if x < 1e-9 and y < 1e-9) / len(a["pair"]), 4)
+                            if a["pair"] else None,
+               "one_zero": round(sum(1 for x, y in a["pair"]
+                                     if (x < 1e-9) != (y < 1e-9)) / len(a["pair"]), 4)
+                           if a["pair"] else None,
+               "lift": {"n_trans": len(a["to_trans"]), "n_flat": len(a["to_flat"]),
+                        "mean_trans": round(statistics.fmean(a["to_trans"]), 3)
+                                      if a["to_trans"] else None,
+                        "mean_flat": round(statistics.fmean(a["to_flat"]), 3)
+                                     if a["to_flat"] else None,
+                        "nonzero_trans": round(sum(1 for x in a["to_trans"] if x > 1e-9)
+                                               / len(a["to_trans"]), 4) if a["to_trans"] else None,
+                        "nonzero_flat": round(sum(1 for x in a["to_flat"] if x > 1e-9)
+                                              / len(a["to_flat"]), 4) if a["to_flat"] else None}}
+        for metric in ("turnover", "decay", "concentration_shift"):
+            key = "shift" if metric == "concentration_shift" else metric
+            xs = a["named"].get(key, [])
+            row[metric]["extremes"] = [
+                {"value": v, "session": ss, "window_end":
+                 datetime.fromtimestamp(e, tz=timezone.utc).isoformat()}
+                for v, ss, e in (sorted(xs)[:1] + sorted(xs)[-2:] if xs else [])]
+        rows.append(row)
+    out = {"sessions": len(sessions), "windows": sizer_detail["windows"],
+           "span_minutes": SPAN_MINUTES, "sizer": DEFAULT_SIZER.name,
+           "serving_floor": floor, "uninformative_band": UNINFORMATIVE_BAND,
+           "min_compared_rate": MIN_COMPARED_RATE, "band_w": BAND_W,
+           "always_rate": ALWAYS_RATE, "material": MATERIAL,
+           "fallback_rate": round(sizer_detail["fallback"] / sizer_detail["windows"], 4),
+           "slice_minutes_med": _q(sizer_detail["slice_minutes"], 0.5),
+           "elapsed_s": round(time.time() - t0, 1), "rows": rows,
+           "per_session": {s: {n: dict(c) for n, c in v.items()} for s, v in per_session.items()}}
+    with open(os.path.join(OUT, "dynamics-dist.json"), "w") as f:
+        json.dump(out, f, indent=2)
+    render_dist(out)
+    return out
+
+
+def render_dist(out):
+    print(f"\n## n = {out['sessions']} sessions, {out['windows']} windows, sizer "
+          f"{out['sizer']} (fallback on {out['fallback_rate']:.1%}, median slice "
+          f"{out['slice_minutes_med']}m), floor {out['serving_floor']}\n")
+    print(f"{'dimension':16}{'kind':11}{'compared':>9}" + "".join(
+        f"{s:>10}" for s in ("absent", "thin")))
+    for r in out["rows"]:
+        st = r["status"]
+        ab = sum(v for k, v in st.items() if k.endswith("absent"))
+        th = sum(v for k, v in st.items() if k.endswith("thin"))
+        print(f"{r['dimension']:16}{r['kind']:11}{r['compared_rate']:9.1%}"
+              f"{ab/r['windows']:10.1%}{th/r['windows']:10.1%}")
+    for metric, lo in (("turnover", 0.0), ("decay", 0.0), ("concentration_shift", -1.0)):
+        print(f"\n## {metric}  (over `compared` windows only)\n")
+        print(f"{'dimension':16}{'n':>6}{'mean':>7}{'sd':>7}{'p10':>7}{'med':>7}{'p90':>7}"
+              f"{'zero':>8}{'band':>8}{'@':>7}{'d2dp':>6}  verdict")
+        for r in out["rows"]:
+            m = r[metric]
+            if not m["n"]:
+                print(f"{r['dimension']:16}{0:>6}   -- never reported")
+                continue
+            nz = 1.0 - m["zero"] if metric != "concentration_shift" else None
+            bad = []
+            if m["band"] >= out["uninformative_band"]:
+                bad.append(f"CONSTANT ({m['band']:.0%} in one {out['band_w']} band)")
+            if nz is not None and nz >= out["always_rate"]:
+                bad.append(f"ALWAYS-YES (non-zero on {nz:.0%})")
+            if r["compared_rate"] < out["min_compared_rate"]:
+                bad.append(f"RARE (compared {r['compared_rate']:.1%})")
+            print(f"{r['dimension']:16}{m['n']:6d}{m['mean']:7.3f}{m['sd']:7.3f}"
+                  f"{m['p10']:7.3f}{m['med']:7.3f}{m['p90']:7.3f}{m['zero']:8.1%}"
+                  f"{m['band']:8.1%}{m['band_at']:7.2f}{m['distinct_2dp']:6d}  "
+                  + ("; ".join(bad) if bad else "informative"))
+    print("\n## changed (allocation only)\n")
+    print(f"{'dimension':16}{'True':>9}{'False':>9}{'None':>9}")
+    for r in out["rows"]:
+        if r["kind"] != "allocation":
+            continue
+        c, tot = r["changed"], r["windows"]
+        print(f"{r['dimension']:16}{c.get('True', 0)/tot:9.1%}{c.get('False', 0)/tot:9.1%}"
+              f"{c.get('None', 0)/tot:9.1%}")
+    print("\n## TURNOVER LIFT: does it read higher where the work really changed?\n")
+    print("A CHANGE-OF-WORK metric lifts inside a window holding a ground-truth transition.\n"
+          "A BREADTH metric reads the same either way — the surface is sampled incompletely\n"
+          "in every window, transition or not. This is the inventory question, measured.\n")
+    print(f"{'dimension':16}{'kind':11}{'n_tr':>6}{'n_flat':>7}{'mean|tr':>9}{'mean|flat':>10}"
+          f"{'lift':>8}{'nz|tr':>8}{'nz|flat':>9}")
+    for r in out["rows"]:
+        L = r["lift"]
+        if L["mean_trans"] is None or L["mean_flat"] is None:
+            continue
+        print(f"{r['dimension']:16}{r['kind']:11}{L['n_trans']:6d}{L['n_flat']:7d}"
+              f"{L['mean_trans']:9.3f}{L['mean_flat']:10.3f}"
+              f"{L['mean_trans']-L['mean_flat']:+8.3f}{L['nonzero_trans']:8.1%}"
+              f"{L['nonzero_flat']:9.1%}")
+    print("\n## BREADTH TEST (no ground truth needed): does turnover track SURFACE SIZE?\n")
+    print("If turnover is the chance a slice value went unsampled in the baseline, it rises with\n"
+          "the number of distinct values on the level. A change-of-work metric does not.\n")
+    print(f"{'dimension':16}{'kind':11}{'med distinct':>13}{'pearson r':>11}")
+    for r in out["rows"]:
+        if r["surface_r"] is None:
+            continue
+        print(f"{r['dimension']:16}{r['kind']:11}{r['surface_med']:13.1f}{r['surface_r']:11.3f}")
+    print("\n## is `decay` a second fact, or a restatement of `turnover`?\n")
+    print(f"{'dimension':16}{'pearson r':>10}{'both zero':>11}{'exactly one zero':>18}")
+    for r in out["rows"]:
+        if r["turnover_decay_r"] is None:
+            continue
+        print(f"{r['dimension']:16}{r['turnover_decay_r']:10.3f}{r['both_zero']:11.1%}"
+              f"{r['one_zero']:18.1%}")
+    print(f"\n## the PROPOSED stated `reading` (material move = 1/MIN_EVIDENCE = "
+          f"{out['material']:.2f})\n")
+    order = READINGS
+    print(f"{'dimension':16}" + "".join(f"{k[:9]:>11}" for k in order))
+    for r in out["rows"]:
+        if r["kind"] != "allocation":
+            continue
+        tot = sum(v for k, v in r["reading"].items() if k != "None") or 1
+        print(f"{r['dimension']:16}" + "".join(
+            f"{r['reading'].get(k, 0)/tot:11.1%}" for k in order))
+    print("\n## do the `emerged` / `decayed` TOP-LISTS carry a fact the block lacks?\n")
+    print(f"{'dimension':16}{'non-empty':>11}{'em_n med':>10}{'dc_n med':>10}"
+          f"{'top < 0.50 floor':>18}{'top == dominant':>17}")
+    for r in out["rows"]:
+        if r["kind"] != "allocation" or not r["compared"]:
+            continue
+        bf = r["emerged_top_below_floor"]
+        dm = r["emerged_top_is_slice_dominant"]
+        print(f"{r['dimension']:16}{r['emerged_nonempty']:11.1%}"
+              f"{str(r['emerged_n_med']):>10}{str(r['decayed_n_med']):>10}"
+              f"{(f'{bf:.1%}' if bf is not None else '--'):>18}"
+              f"{(f'{dm:.1%}' if dm is not None else '--'):>17}")
+    print("\n## the windows behind the extremes (re-derivable by hand)\n")
+    for r in out["rows"]:
+        for metric in ("turnover", "concentration_shift"):
+            for e in r[metric].get("extremes", []):
+                print(f"{r['dimension']:16}{metric:20}{e['value']:+7.3f}  {e['session']}  "
+                      f"{e['window_end']}")
+
+
 def do_render(a):
     render(json.load(open(os.path.join(OUT, "sizer-eval.json"))))
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=("calibrate", "truth", "run", "control", "guards", "render"))
+    ap.add_argument("cmd", choices=("calibrate", "truth", "run", "control", "guards",
+                                    "dist", "render"))
     args = ap.parse_args()
     {"calibrate": do_calibrate, "truth": do_truth, "run": do_run,
-     "control": do_control, "guards": do_guards, "render": do_render}[args.cmd](args)
+     "control": do_control, "guards": do_guards, "dist": do_dist,
+     "render": do_render}[args.cmd](args)

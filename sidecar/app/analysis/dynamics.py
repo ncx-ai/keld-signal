@@ -31,6 +31,7 @@ was computed on:
   decay               = (baseline evidence in values absent from the slice) / (baseline total)
   concentration_shift = (slice dominant's share of the slice) - (that value's share of the
                         baseline)
+  reading             = the three above and `changed`, STATED as a conclusion (see `reading`)
 
 All three are dimensionless and invariant to volume: multiply either side's counts by any
 constant and the numbers do not move (pinned by
@@ -102,13 +103,33 @@ The consequence, and it must not surprise anyone: for reconcile-derived dimensio
 (`language`), the shares in this block are NOT the shares in the digest beside it. `source` and
 `reconcile_scope` are in the output so the two are never quietly compared.
 
-## SCHEMA is not bumped
+## CHEAP IS NOT THE SAME AS WORTH PUBLISHING
 
-`app.analysis.SCHEMA` is bumped when the same window would produce a DIFFERENT ANSWER. Every
-digest field is untouched — the block is additive, opt-in (`analyze_window(sizer=...)`), and
-nothing publishes it: the Go client's `AnalyzeResult` has no field for it, so it decodes and
-discards. Task 4 of the plan decides which of these dynamics earn a place on the wire, and that
-is the change that would be contract-affecting.
+The store made a second window affordable. That is not an argument for emitting one — this
+project has the measurement to prove it. A 16 KB window characterisation scored **-3.3 / -20.0**
+on synthesis accuracy, worse than emitting nothing, while a digest carrying the SAME facts scored
+**+36.7**, because the digest stated a conclusion and the document printed `engineer_messages: 5`
+/ `assistant_messages: 84` and left the division to the reader.
+
+So every dynamic here was measured over the corpus against a bar written down first — a metric is
+disqualified if 90% of its readings fall inside one 0.05-wide band, or if it is `compared` on
+under 10% of windows — and three of the seven allocation dimensions did not survive (see
+`DROPPED_DIMENSIONS`), nor did the entering/leaving value lists (see `_absent_mass`). What
+replaced them is `reading`: the conclusion, stated, computed from the numbers already here.
+Tables: `~/keld/refseries-context/dynamics/DYNAMICS-VALUE.md`.
+
+## SCHEMA is bumped; `enrich.SchemaVersion` is deliberately NOT
+
+`app.analysis.SCHEMA` is **3**: this module's published vocabulary changed (three dimension keys
+removed, `emerged`/`decayed` removed, `reading` added with a closed 7-value set).
+
+`enrich.SchemaVersion` stays **7**. That constant gates the vocabulary published to ATLAS, and
+this block does not reach Atlas: `sidecar.AnalyzeResult` has no field for it and `AnalyzeLabeled`
+forwards none of it (pinned Go-side by `TestAnalyzeIgnoresTheDynamicsBlock`). Bumping it would
+tell every Atlas consumer that the sensitivity-span / task_type / function vocabularies changed
+when they did not — a false positive in a contract signal is worse than a missing one, because
+the next real bump becomes unreadable. The moment any dynamics field is given a home in
+`AnalyzeResult`, that changes and the bump is owed.
 """
 import collections
 import math
@@ -142,11 +163,25 @@ from app.analysis.window import MIN_EVIDENCE, attribution
 # without saying which population the number was measured on.
 SLICE_MINUTES = 15
 
-# How many entering/leaving values are listed. The COUNT is reported separately (`n`), so the cut
-# is visible rather than silent — this package's "dropping must be visible" rule. The headline
-# `turnover`/`decay` are computed over ALL of them, never over the listed subset, so the cap
-# cannot bias the number.
-TOP_N = 5
+# What counts as a MATERIAL move, and it is DERIVED rather than chosen: `1 / MIN_EVIDENCE`. At
+# the evidence floor a share is measured over 5 observations, so 0.2 is the finest share
+# difference one observation can produce — a smaller shift is not distinguishable from which side
+# of the boundary a single tool call landed on. That is MIN_EVIDENCE's own argument about a ratio
+# over one observation, applied to a DIFFERENCE of two ratios. It is the threshold `reading` reads
+# `turnover`/`decay`/`concentration_shift` against.
+MATERIAL = 1.0 / MIN_EVIDENCE
+
+# The STATED CONCLUSION's vocabulary — the field this module exists to publish, and a closed set
+# because it is a contract (see `app.analysis.SCHEMA`, bumped to 3 for it). Precedence is the
+# reader's own priority and is enforced in `reading`: WHICH value owns the work outranks how
+# concentrated it is, which outranks what came and went underneath it.
+READINGS = ("switched",    # the dominant value changed
+            "narrowing",   # same value on top, holding MORE of the window
+            "broadening",  # same value on top, holding LESS
+            "churning",    # values came AND went under an unmoved, equally-concentrated dominant
+            "widening",    # only came
+            "shedding",    # only went
+            "steady")      # none of the above moved by a material amount
 
 # The outcome of the COMPARISON, as distinct from the outcome of either side's attribution
 # (`window.REASONS`). A metric is reported under `compared` and under nothing else; see the
@@ -154,13 +189,54 @@ TOP_N = 5
 STATUSES = ("compared", "both_absent", "slice_absent", "baseline_absent",
             "slice_thin", "baseline_thin")
 
+# The three allocation dimensions whose dynamics MEASURED CONSTANT and are therefore not
+# reported. Measured over 51 sessions and 2,702 windows — every window /analyze could answer, the
+# quiet ones included, sized by this module's own DEFAULT_SIZER; full tables in
+# `~/keld/refseries-context/dynamics/DYNAMICS-VALUE.md`, reproduce with
+# `scripts/sizer_eval.py dist`. The bar was written down first: a metric is disqualified if 90%
+# of its readings fall inside one 0.05-wide band (CONSTANT), or if it is `compared` on under 10%
+# of windows (RARE).
+#
+#   * `project`  — turnover, decay and concentration_shift are IDENTICALLY 0.000 on all 2,180
+#                  compared windows: one distinct value at 2dp, 100% in one band, `changed` never
+#                  True, the reading `steady` 100.0%. Constant BY CONSTRUCTION, not by accident of
+#                  corpus: a transcript is scoped to one project directory, so `workspace` cannot
+#                  vary inside the unit of analysis — the same fact `DETECT_LEVEL` is pinned on,
+#                  and Task 3 measured ZERO workspace transitions across 51 sessions. Both sides
+#                  of every comparison hold the single same value, so turnover is 0 and the shift
+#                  is 1.0 - 1.0.
+#   * `model`    — turnover exactly zero on 98.5% of 2,126 windows, 99.4% in one band, 12 distinct
+#                  values at 2dp; lift against ground truth +0.000 (0.001 inside a transition
+#                  window, 0.001 outside); `changed` True 0 times in 2,702 windows; reading
+#                  `steady` 99.5%. Model switching is real; it does not happen on the
+#                  15-minute-slice / 45-minute-baseline scale this block reads, and a different
+#                  scale is a different measurement this one does not license.
+#   * `tooling`  — `compared` on 3.9% (106 of 2,702) against the 10% bar, 83.7% absent; `changed`
+#                  never True; and where it IS comparable it points the WRONG WAY — mean turnover
+#                  0.010 inside a transition window against 0.070 outside (lift -0.060).
+#
+# The digest still reports all three as allocation workstreams (`workstreams.payload`); only
+# their DYNAMICS are dropped. Do not restore one without re-running `dist` — "it seems useful"
+# is what the 16 KB characterisation was built on, and it scored below emitting nothing.
+DROPPED_DIMENSIONS = ("project", "model", "tooling")
+
 # The names dynamics reports under, DERIVED from the published payload rather than restated, so
 # the two vocabularies cannot drift. Allocation dimensions only: spend divides among them and one
-# value owns a window, which is what makes "the dominant value changed" a sentence at all. The
-# INVENTORY dimensions are multi-valued by nature ("what was used"), so turnover over them would
-# measure tool-surface breadth rather than a change of work — Task 4 decides whether that earns a
-# place.
-_DIMENSIONS = tuple((name, level, floor) for name, level, floor in workstreams.ALLOCATION)
+# value owns a window, which is what makes "the dominant value changed" a sentence at all.
+#
+# The INVENTORY dimensions stay out, and Task 4 CONFIRMED that by distribution rather than by the
+# argument Task 2 made (that turnover over a multi-valued level measures tool-surface breadth
+# rather than a change of work). Measured with this module's own `_absent_mass`/`_status`:
+# `integrations` is `compared` on 0 of 2,702 windows; `external_systems` on 1.3%, inverted (0.0%
+# non-zero inside a transition window against 21.7% outside); `named_terms` non-zero on 98.3% of
+# windows, so there is no window in which it says no; `programs` non-zero on 78.1% of windows
+# where NOTHING changed, off a median 16 distinct baseline values against `branch`'s 1;
+# `harness_tools` — the closest call, failing no pre-registered bar — non-zero on 34.4% of
+# no-transition windows against `branch`'s 1.8%, at a lift 7x smaller. Breadth shows up ACROSS
+# dimensions, not within one: the widest surfaces are exactly the highest non-transition firing
+# rates.
+DYNAMIC_DIMENSIONS = tuple((name, level, floor) for name, level, floor in workstreams.ALLOCATION
+                           if name not in DROPPED_DIMENSIONS)
 
 
 def _side(rl, level, floor, min_evidence):
@@ -189,25 +265,86 @@ def _status(slice_total, baseline_total, min_evidence):
     return "compared"
 
 
-def _entering(items, other, total, top_n):
-    """The values in `items` absent from `other`, as `(mass_share, {"n", "top"})`.
+def _absent_mass(items, other, total):
+    """The share of `total` carried by the values in `items` that are absent from `other`.
 
-    `mass_share` is the SUM over all of them, divided by `total` — the side's own evidence — and
-    that division is the whole of the normalisation argument in the module docstring. `top` is
-    ordered by the mass each value carries (ties alphabetical, matching `window.rollup`'s
-    tie-break so the two cannot disagree), because the value that took most of the slice is the
-    one a reader needs first.
+    The division by `total` — the side's OWN evidence — is the whole of the normalisation argument
+    in the module docstring.
+
+    It used to also return the entering values themselves (`{"n", "top"}`, capped at a `TOP_N`),
+    and Task 4 dropped that. `n` was a restatement: it is zero exactly when this mass is zero, by
+    construction, since the mass IS the emerged set's. That left the `top` list as the only
+    candidate fact, and measured over 2,702 windows it is one of two things — on `branch` and
+    `workflow` the top entering value IS `slice.value` (75.3% / 85.4%), the field the reader
+    already has; on `output_type` and `language` it is below the 0.50 dominance floor (80.7% /
+    76.5%), a value `window.dominant` explicitly refuses to name as what the window was about.
+    Highlighting it under `emerged` re-introduced, one field over, exactly what that floor exists
+    to prevent. Median `n` was 0 on every surviving dimension but `workflow`.
     """
-    new = [(ref, n) for ref, n in items if ref not in other]
-    mass = sum(n for _ref, n in new) / total if total else 0.0
-    ranked = sorted(new, key=lambda kv: (-kv[1], kv[0]))
-    return round(mass, 3), {"n": len(new),
-                            "top": [{"value": ref, "share": round(n / total, 3)}
-                                    for ref, n in ranked[:top_n]]}
+    if not total:
+        return 0.0
+    return round(sum(n for ref, n in items if ref not in other) / total, 3)
 
 
-def compare(slice_rl, baseline_rl, min_evidence=MIN_EVIDENCE, top_n=TOP_N):
+def reading(v):
+    """One dimension's dict -> the STATED CONCLUSION, or None outside `compared`.
+
+    THE MEASURED LESSON OF THIS WHOLE BRANCH, applied to its own output. A 16 KB window
+    characterisation scored -3.3 / -20.0 on synthesis accuracy — worse than emitting nothing —
+    while a digest carrying the SAME facts scored +36.7, because the digest stated a conclusion
+    ("3 assistant turns per engineer turn, closely steered") and the document printed
+    `engineer_messages: 5` / `assistant_messages: 84` and left the division to the reader.
+    `concentration_shift: -0.31` is the same defect: it survives the distribution test (branch
+    band 75.4%, language 16.5%, 119-139 distinct values, so it is emphatically not a constant) and
+    fails the digest test — a signed fraction whose meaning a reader has to work out. And a bare
+    number invites a WRONG reading, measured separately on this branch: asked "which ticket?", a
+    model answered `2659`, the window's own `reference_events` count; labelling it "2659 recorded
+    tool references" moved correct declines from 76% to 100%.
+
+    So the numbers stay — in a JSON payload the key IS the label — and the conclusion ships beside
+    them. Computed ENTIRELY from fields the dimension already carries (`changed`, `turnover`,
+    `decay`, `concentration_shift`): no new inference, no second query, nothing this module did
+    not already publish. That is the constraint on proposing a derived form at all.
+
+    PRECEDENCE, and it is the reader's own priority rather than an implementation order: which
+    value owns the work outranks how concentrated it is, which outranks what came and went
+    underneath it. `switched` therefore wins over a simultaneous large shift, because "the branch
+    changed" is the sentence, and the shift is how it changed.
+
+    The reading is held to the SAME bar as the numbers: measured over 2,702 windows it is `steady`
+    on 77.7% of compared `branch` windows, 70.7% of `output_type`, 49.9% of `language` and 30.8%
+    of `workflow` — all under the 90% constancy bar — while the three dropped dimensions would
+    have shipped a field saying `steady` 79-100% of the time.
+    """
+    if v["status"] != "compared":
+        return None
+    if v["changed"]:
+        return "switched"
+    sh = v["concentration_shift"]
+    if sh is not None and sh >= MATERIAL:
+        return "narrowing"
+    if sh is not None and sh <= -MATERIAL:
+        return "broadening"
+    to, de = v["turnover"], v["decay"]
+    if to >= MATERIAL and de >= MATERIAL:
+        return "churning"
+    if to >= MATERIAL:
+        return "widening"
+    if de >= MATERIAL:
+        return "shedding"
+    return "steady"
+
+
+def compare(slice_rl, baseline_rl, min_evidence=MIN_EVIDENCE, dimensions=DYNAMIC_DIMENSIONS):
     """Two rollups -> the per-dimension dynamics. Pure: no store, no I/O, no clock.
+
+    `dimensions` defaults to what is PUBLISHED and exists so the measurement that decided that
+    set stays reproducible against this exact arithmetic: `scripts/sizer_eval.py dist` passes the
+    full `workstreams.ALLOCATION` (and reads the inventory levels through `_absent_mass`/`_status`
+    directly) to re-derive the distributions behind `DROPPED_DIMENSIONS`. It is NOT a switch
+    /analyze may flip — `dynamics()` does not take it and does not forward one, so the published
+    vocabulary cannot be widened by a caller. A drop justified by a number nobody can recompute
+    is a drop justified by a document.
 
     `slice_rl` and `baseline_rl` are `window.rollup` outputs over DISJOINT intervals (see the
     module docstring on why they must not overlap). The two must have been computed the same way
@@ -215,7 +352,7 @@ def compare(slice_rl, baseline_rl, min_evidence=MIN_EVIDENCE, top_n=TOP_N):
     what guarantees that, and it is the only caller in production.
     """
     out = {}
-    for name, level, floor in _DIMENSIONS:
+    for name, level, floor in dimensions:
         s_items = slice_rl.get(level) or []
         b_items = baseline_rl.get(level) or []
         s_total = sum(n for _ref, n in s_items)
@@ -225,8 +362,6 @@ def compare(slice_rl, baseline_rl, min_evidence=MIN_EVIDENCE, top_n=TOP_N):
         status = _status(s_total, b_total, min_evidence)
 
         turnover = decay = shift = None
-        emerged = {"n": 0, "top": []}
-        decayed = {"n": 0, "top": []}
         # `changed` is a THREE-state answer, and the third state is the point. False for
         # `both_absent`, because a level that never fired did not change — the failure mode the
         # evidence-floor work measured and this module exists not to reproduce. None wherever the
@@ -237,8 +372,8 @@ def compare(slice_rl, baseline_rl, min_evidence=MIN_EVIDENCE, top_n=TOP_N):
         if status == "compared":
             s_by = dict(s_items)
             b_by = dict(b_items)
-            turnover, emerged = _entering(s_items, b_by, s_total, top_n)
-            decay, decayed = _entering(b_items, s_by, b_total, top_n)
+            turnover = _absent_mass(s_items, b_by, s_total)
+            decay = _absent_mass(b_items, s_by, b_total)
             if s_side["reason"] == "attributed":
                 # The slice's dominant, measured on BOTH sides. A value the baseline never held
                 # has baseline share 0, so a wholly new dominant shifts by its own whole share —
@@ -249,8 +384,10 @@ def compare(slice_rl, baseline_rl, min_evidence=MIN_EVIDENCE, top_n=TOP_N):
 
         out[name] = {"status": status, "turnover": turnover, "decay": decay,
                      "concentration_shift": shift, "changed": changed,
-                     "slice": s_side, "baseline": b_side,
-                     "emerged": emerged, "decayed": decayed}
+                     "slice": s_side, "baseline": b_side}
+        # The claim goes in LAST, because it is a function of the fields above it and of nothing
+        # else — which is the property `reading`'s own contract rests on.
+        out[name]["reading"] = reading(out[name])
     return out
 
 
@@ -556,7 +693,7 @@ DEFAULT_SIZER = EwmaSizer()
 # --- the block -------------------------------------------------------------------------------
 
 def dynamics(store, session, slice_start, slice_end, baseline_start,
-             sizer=None, detail=None, min_evidence=MIN_EVIDENCE, top_n=TOP_N):
+             sizer=None, detail=None, min_evidence=MIN_EVIDENCE):
     """The dynamics block for `[slice_start, slice_end)` read against `[baseline_start,
     slice_start)`.
 
@@ -586,15 +723,15 @@ def dynamics(store, session, slice_start, slice_end, baseline_start,
         # makes a future violation visible instead of silent.
         "source": "bin+event",
         "reconcile_scope": "file",
-        "dimensions": compare(slice_rl, baseline_rl, min_evidence, top_n),
+        "dimensions": compare(slice_rl, baseline_rl, min_evidence),
     }
 
 
 def dynamics_for(store, session, end, span_minutes, sizer=None, floor=None,
-                 min_evidence=MIN_EVIDENCE, top_n=TOP_N):
+                 min_evidence=MIN_EVIDENCE):
     """`sizer.plan(...)` then `dynamics(...)`. The one call `analyze.py` makes, so the seam is
     exercised in production rather than only in tests."""
     sz = sizer if sizer is not None else DEFAULT_SIZER
     p = sz.plan(store, session, end, span_minutes, floor)
     return dynamics(store, session, p.slice_start, p.slice_end, p.baseline_start,
-                    sizer=p.sizer, detail=p.detail, min_evidence=min_evidence, top_n=top_n)
+                    sizer=p.sizer, detail=p.detail, min_evidence=min_evidence)

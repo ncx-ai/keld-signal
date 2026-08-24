@@ -528,10 +528,15 @@ def _fixture_transcript(said="look at the thing"):
     tmp = tempfile.mkdtemp(prefix="keld-analyze-test-")
     path = os.path.join(tmp, "fixture001-0000.jsonl")
     rows = [
+        # `gitBranch` is here for the dynamics assertions below: Task 4 dropped the `project`
+        # dimension from the block (its dynamics measured identically 0.000 over 2,702 corpus
+        # windows, because a transcript is scoped to one project directory), so `branch` is the
+        # allocation level a `baseline_absent` on this fixture is demonstrated on.
         {"type": "user", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/workspace/widget-app",
+         "gitBranch": "trunk",
          "message": {"content": [{"type": "text", "text": said}]}},
         {"type": "user", "timestamp": "2026-08-01T10:05:00Z", "cwd": "/workspace/widget-app",
-         "uuid": _fixture_prompt_id(),
+         "gitBranch": "trunk", "uuid": _fixture_prompt_id(),
          "message": {"content": [{"type": "text", "text": "now fix the bug"}]}},
     ]
     with open(path, "w") as fh:
@@ -578,7 +583,7 @@ def test_analyze_reports_how_the_window_is_changing_not_only_what_it_holds():
     unguarded turnover would report as 1.0: total churn, on a session that never changed
     anything. Naming the status instead is the whole of what `window.attribution` was shipped
     for."""
-    from app.analysis import workstreams
+    from app.analysis import dynamics
 
     m = _reload_main(None)
     _wire(m)
@@ -596,10 +601,20 @@ def test_analyze_reports_how_the_window_is_changing_not_only_what_it_holds():
     assert d["baseline_start"] == body["window_start"], (
         "the baseline reached outside the window /analyze already validated")
     assert d["source"] == "bin+event" and d["reconcile_scope"] == "file", d
-    assert set(d["dimensions"]) == {n for n, _lv, _f in workstreams.ALLOCATION}, d["dimensions"]
-    proj = d["dimensions"]["project"]
-    assert proj["status"] == "baseline_absent", proj
-    assert proj["turnover"] is None and proj["changed"] is None, proj
+    # Task 4 decided this vocabulary by measurement: `project`, `model` and `tooling` are dropped
+    # (constant or RARE over 2,702 corpus windows), `emerged`/`decayed` are dropped, and `reading`
+    # — the stated conclusion — is added. See app/analysis/dynamics.py DROPPED_DIMENSIONS.
+    assert set(d["dimensions"]) == {n for n, _lv, _f in dynamics.DYNAMIC_DIMENSIONS}, (
+        d["dimensions"])
+    assert set(d["dimensions"]).isdisjoint(dynamics.DROPPED_DIMENSIONS), d["dimensions"]
+    br = d["dimensions"]["branch"]
+    assert br["status"] == "baseline_absent", br
+    assert br["turnover"] is None and br["changed"] is None, br
+    # No metric outside `compared`, and no CLAIM either: a stated `steady` on a window with no
+    # baseline would be the same defect one field later.
+    assert br["reading"] is None, br
+    for dim in d["dimensions"].values():
+        assert "emerged" not in dim and "decayed" not in dim, dim
 
 
 def test_analyze_unknown_prompt_is_404_not_an_empty_payload():

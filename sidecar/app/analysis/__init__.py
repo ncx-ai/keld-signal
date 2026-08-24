@@ -17,7 +17,18 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           them previously published at share=1.0, 129 off a single observation.
 #           /analyze also gains `named_terms_status`, which says whether the `term` level ran —
 #           an empty `named_terms` is no longer self-describing (see app/main.py).
-SCHEMA = 2
+#   2 -> 3: the DYNAMICS block's published vocabulary is decided (app/analysis/dynamics.py). Three
+#           dimension keys removed because their dynamics measured CONSTANT over 51 sessions and
+#           2,702 windows — `project` identically 0.000 on all 2,180 compared windows (a
+#           transcript is scoped to one project dir, so `workspace` cannot vary inside the unit of
+#           analysis), `model` 99.4% inside one 0.05 band with `changed` never once True, `tooling`
+#           `compared` on 3.9% with a NEGATIVE lift. `emerged`/`decayed` removed: `n` restated
+#           turnover and the `top` value was either `slice.value` itself (75-85%) or a value below
+#           the 0.50 dominance floor (76-81%). `reading` ADDED — a closed 7-value vocabulary
+#           stating the conclusion the raw numbers left to the reader, which is the same window
+#           answered differently, not merely reshaped. Measurements:
+#           ~/keld/refseries-context/dynamics/DYNAMICS-VALUE.md.
+SCHEMA = 3
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

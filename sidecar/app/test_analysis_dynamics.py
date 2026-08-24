@@ -32,8 +32,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.analysis import workstreams
 from app.analysis.analyze import analyze_window, analyze_window_by_parse
-from app.analysis.dynamics import (DEFAULT_SIZER, SLICE_MINUTES, STATUSES, EwmaSizer,
-                                   FixedSizer, Sizer, Slicing, compare, dynamics, series)
+from app.analysis import dynamics as dynamics_module
+from app.analysis.dynamics import (DEFAULT_SIZER, DYNAMIC_DIMENSIONS, MATERIAL, READINGS,
+                                   SLICE_MINUTES, STATUSES, EwmaSizer, FixedSizer, Sizer,
+                                   Slicing, compare, dynamics, reading, series)
 from app.analysis.ingest import RECONCILE_SLOT, ingest_file, session_of
 from app.analysis.store import BIN_SECONDS, open_store
 from app.analysis.window import MIN_EVIDENCE, rollup
@@ -56,27 +58,26 @@ def test_a_flipped_dominant_value_reports_high_turnover():
     """The whole point. The baseline worked in `alpha`, the slice works in `beta` — every
     observation in the slice is in a value the baseline never held, so turnover is 1.0 and the
     dimension says so out loud rather than leaving a reader to diff two `value` fields."""
-    got = compare(_rl("workspace", beta=40), _rl("workspace", alpha=60))["project"]
+    got = compare(_rl("branch", beta=40), _rl("branch", alpha=60))["branch"]
     assert got["status"] == "compared", got
     assert got["turnover"] == 1.0, got
     assert got["decay"] == 1.0, got
     assert got["changed"] is True, got
     assert got["slice"]["value"] == "beta" and got["baseline"]["value"] == "alpha", got
-    assert [e["value"] for e in got["emerged"]["top"]] == ["beta"], got
-    assert [d["value"] for d in got["decayed"]["top"]] == ["alpha"], got
+    assert got["reading"] == "switched", got
 
 
 def test_a_stationary_series_reports_no_change():
     """The twin. Same composition on both sides -> every metric ~zero, `changed` False. Without
     this, a turnover that returned 1.0 unconditionally would pass the test above."""
-    got = compare(_rl("workspace", alpha=45, beta=15), _rl("workspace", alpha=90, beta=30))
-    p = got["project"]
+    got = compare(_rl("branch", alpha=45, beta=15), _rl("branch", alpha=90, beta=30))
+    p = got["branch"]
     assert p["status"] == "compared", p
     assert p["turnover"] == 0.0, p
     assert p["decay"] == 0.0, p
     assert p["concentration_shift"] == 0.0, p
     assert p["changed"] is False, p
-    assert p["emerged"]["n"] == 0 and p["decayed"]["n"] == 0, p
+    assert p["reading"] == "steady", p
 
 
 def test_turnover_does_not_scale_with_evidence_volume():
@@ -91,27 +92,28 @@ def test_turnover_does_not_scale_with_evidence_volume():
     enough — a metric hardwired to 0.0 passes the first and a metric that divides by the wrong
     total passes neither, but a metric normalised by the BASELINE total passes the first and
     fails the second."""
-    base = _rl("workspace", alpha=600, beta=400)
+    base = _rl("branch", alpha=600, beta=400)
     for scale in (1, 10, 1000):
-        same = compare(_rl("workspace", alpha=6 * scale, beta=4 * scale), base)["project"]
+        same = compare(_rl("branch", alpha=6 * scale, beta=4 * scale), base)["branch"]
         assert same["turnover"] == 0.0, (scale, same)
         assert same["concentration_shift"] == 0.0, (scale, same)
-        moved = compare(_rl("workspace", alpha=4 * scale, beta=3 * scale, gamma=3 * scale),
-                        base)["project"]
+        moved = compare(_rl("branch", alpha=4 * scale, beta=3 * scale, gamma=3 * scale),
+                        base)["branch"]
         assert moved["turnover"] == 0.3, (scale, moved)
 
 
-def test_turnover_is_exactly_the_emerged_mass():
-    """The invariant that keeps the headline number and the listed values from drifting: the
-    turnover IS the summed share of the values that entered, so a reader can check one against
-    the other. `n` is the DISTINCT count, not the length of `top`, so the cap on `top` is
-    visible rather than silent (this package's "dropping must be visible" rule)."""
-    slice_rl = _rl("workspace", alpha=50, b1=10, b2=10, b3=10, b4=8, b5=6, b6=4, b7=2)
-    got = compare(slice_rl, _rl("workspace", alpha=100))["project"]
-    assert got["emerged"]["n"] == 7, got
-    assert len(got["emerged"]["top"]) < 7, "the cap is not being exercised by this fixture"
+def test_turnover_is_the_mass_of_EVERY_entering_value_not_a_top_few():
+    """The headline was always computed over ALL entering values and never over the listed subset,
+    so that the `TOP_N` cap on `emerged.top` could not bias it. Task 4 dropped the list; this
+    keeps the property that made it safe, which is now the only thing left to get wrong.
+
+    Seven distinct values enter, more than the old cap of five, and they carry exactly half the
+    slice between them. A turnover summed over a truncated set would read 0.38, not 0.50."""
+    slice_rl = _rl("branch", alpha=50, b1=10, b2=10, b3=10, b4=8, b5=6, b6=4, b7=2)
+    got = compare(slice_rl, _rl("branch", alpha=100))["branch"]
     assert got["turnover"] == round(50 / 100, 3), got
-    assert got["turnover"] > sum(e["share"] for e in got["emerged"]["top"]) - 1e-9
+    top_five_only = (10 + 10 + 10 + 8 + 6) / 100
+    assert got["turnover"] > top_five_only, (got["turnover"], top_five_only)
 
 
 # --- the inherited finding: `absent` is not change -------------------------------------------
@@ -124,7 +126,7 @@ def test_a_level_absent_from_both_sides_reports_no_change_not_total_change():
     The metric is None — not 1.0, and not 0.0 either: a level that never fired has no share to
     report. `changed` is the field that answers the reader's question, and for this case it is
     definitively False."""
-    got = compare(_rl("workspace", alpha=40), _rl("workspace", alpha=90))["tooling"]
+    got = compare(_rl("branch", alpha=40), _rl("branch", alpha=90))["workflow"]
     assert got["status"] == "both_absent", got
     assert got["turnover"] is None, got
     assert got["decay"] is None, got
@@ -139,8 +141,8 @@ def test_an_absent_slice_is_not_reported_as_a_context_switch():
     measurement: there is no slice sample to compare. Reported as its own status instead, and
     `changed` is unknown rather than True, because a quiet slice and an abandoned dimension look
     identical from here."""
-    got = compare(_rl("workspace", alpha=40), rollup([_n("workspace", "alpha", 90),
-                                                      _n("toolchain", "go", 90)]))["tooling"]
+    got = compare(_rl("branch", alpha=40), rollup([_n("branch", "alpha", 90),
+                                                      _n("skill", "brainstorming", 90)]))["workflow"]
     assert got["status"] == "slice_absent", got
     assert got["decay"] is None, got
     assert got["turnover"] is None, got
@@ -151,8 +153,8 @@ def test_an_absent_baseline_is_not_reported_as_total_turnover():
     """The mirror, and the one that would have inflated every fresh dimension to 1.0: with no
     baseline evidence, EVERY slice value is "absent from the baseline" and turnover is 1.0 by
     construction. There is nothing to be a baseline, so there is no comparison."""
-    got = compare(rollup([_n("workspace", "alpha", 40), _n("toolchain", "go", 40)]),
-                  _rl("workspace", alpha=90))["tooling"]
+    got = compare(rollup([_n("branch", "alpha", 40), _n("skill", "brainstorming", 40)]),
+                  _rl("branch", alpha=90))["workflow"]
     assert got["status"] == "baseline_absent", got
     assert got["turnover"] is None, got
     assert got["changed"] is None, got
@@ -163,25 +165,25 @@ def test_a_side_below_the_evidence_floor_is_thin_not_absent_and_not_compared():
     observation is 0.0 or 1.0 by construction for exactly the reason a SHARE over one
     observation is 1.0 by construction. So the floor that governs attribution governs the
     dynamic too — the same constant, not a second one invented here."""
-    thin_slice = compare(_rl("workspace", alpha=MIN_EVIDENCE - 1),
-                         _rl("workspace", alpha=90))["project"]
+    thin_slice = compare(_rl("branch", alpha=MIN_EVIDENCE - 1),
+                         _rl("branch", alpha=90))["branch"]
     assert thin_slice["status"] == "slice_thin", thin_slice
     assert thin_slice["turnover"] is None and thin_slice["changed"] is None, thin_slice
-    thin_base = compare(_rl("workspace", alpha=90),
-                        _rl("workspace", alpha=MIN_EVIDENCE - 1))["project"]
+    thin_base = compare(_rl("branch", alpha=90),
+                        _rl("branch", alpha=MIN_EVIDENCE - 1))["branch"]
     assert thin_base["status"] == "baseline_thin", thin_base
     assert thin_base["turnover"] is None, thin_base
     # And exactly AT the floor it compares, so the bound is inclusive on both sides.
-    ok = compare(_rl("workspace", beta=MIN_EVIDENCE), _rl("workspace", alpha=MIN_EVIDENCE))
-    assert ok["project"]["status"] == "compared", ok["project"]
-    assert ok["project"]["turnover"] == 1.0, ok["project"]
+    ok = compare(_rl("branch", beta=MIN_EVIDENCE), _rl("branch", alpha=MIN_EVIDENCE))
+    assert ok["branch"]["status"] == "compared", ok["branch"]
+    assert ok["branch"]["turnover"] == 1.0, ok["branch"]
 
 
 def test_absence_outranks_thinness_the_same_way_attribution_orders_them():
     """One observation on one side and none on the other is not a thin comparison, it is an
     absent one — the precedence `window.attribution` already fixed, mirrored here so the two
     cannot disagree about which fact is being reported."""
-    got = compare(rollup([]), _rl("workspace", alpha=1))["project"]
+    got = compare(rollup([]), _rl("branch", alpha=1))["branch"]
     assert got["status"] == "slice_absent", got
 
 
@@ -195,11 +197,11 @@ def test_a_dynamic_carries_the_evidence_that_backs_it():
     every reported metric arrives with the evidence count and the attribution reason for BOTH
     sides, so a downstream reader can apply its own bar — and that no metric is ever reported
     with those missing."""
-    marginal = _rl("workspace", alpha=3, beta=2)          # n=5, top share 0.6
-    got = compare(marginal, _rl("workspace", alpha=60, beta=40))["project"]
+    marginal = _rl("branch", alpha=3, beta=2)          # n=5, top share 0.6
+    got = compare(marginal, _rl("branch", alpha=60, beta=40))["branch"]
     assert got["slice"]["evidence"] == 5 and got["slice"]["reason"] == "attributed", got
     assert got["baseline"]["evidence"] == 100, got
-    for dim in compare(marginal, _rl("workspace", alpha=60)).values():
+    for dim in compare(marginal, _rl("branch", alpha=60)).values():
         assert set(dim["slice"]) == set(dim["baseline"]) == {"value", "share", "evidence",
                                                             "reason"}, dim
         if dim["status"] == "compared":
@@ -219,8 +221,8 @@ def test_concentration_shift_tracks_the_slice_dominant_not_the_baseline_dominant
     followed is the SLICE's dominant, measured in both windows. Discriminating on purpose: here
     the two sides have different dominants and the two readings have opposite signs, so a
     version that tracked the baseline's dominant would report -0.4 instead of +0.4."""
-    got = compare(_rl("workspace", beta=80, alpha=20),
-                  _rl("workspace", alpha=60, beta=40))["project"]
+    got = compare(_rl("branch", beta=80, alpha=20),
+                  _rl("branch", alpha=60, beta=40))["branch"]
     assert got["concentration_shift"] == 0.4, got
     assert got["changed"] is True, got
 
@@ -229,7 +231,7 @@ def test_a_slice_with_no_dominant_value_leaves_the_shift_unreported():
     """A tie or a genuinely mixed slice has no value to follow, so the shift is withheld rather
     than computed off an arbitrary pick — the same rule `dominant` follows. Turnover survives,
     because it needs evidence and not a winner."""
-    got = compare(_rl("workspace", alpha=30, beta=30), _rl("workspace", alpha=90))["project"]
+    got = compare(_rl("branch", alpha=30, beta=30), _rl("branch", alpha=90))["branch"]
     assert got["slice"]["reason"] == "tie", got
     assert got["concentration_shift"] is None, got
     assert got["changed"] is None, got
@@ -246,9 +248,9 @@ def test_a_baseline_with_no_dominant_value_cannot_be_switched_away_from():
     merely divided. Both shapes of an unattributed baseline are asserted, a tie and a genuinely
     mixed one, because they are separate branches of `window.attribution`. `concentration_shift`
     IS reported: it needs a value to follow and a baseline TOTAL, not a baseline winner."""
-    for baseline in (_rl("workspace", alpha=45, beta=45),
-                     _rl("workspace", alpha=40, beta=35, gamma=30)):
-        got = compare(_rl("workspace", alpha=90), baseline)["project"]
+    for baseline in (_rl("branch", alpha=45, beta=45),
+                     _rl("branch", alpha=40, beta=35, gamma=30)):
+        got = compare(_rl("branch", alpha=90), baseline)["branch"]
         assert got["baseline"]["value"] is None, got
         assert got["baseline"]["reason"] in ("tie", "no_majority"), got
         assert got["slice"]["value"] == "alpha", got
@@ -259,7 +261,7 @@ def test_a_baseline_with_no_dominant_value_cannot_be_switched_away_from():
 def test_a_wholly_new_dominant_shifts_by_its_own_whole_share():
     """A value the baseline never held has baseline share 0, so the shift is the slice share
     itself. Reported, not skipped: "this is entirely new" is the actionable reading."""
-    got = compare(_rl("workspace", beta=70, alpha=30), _rl("workspace", alpha=90))["project"]
+    got = compare(_rl("branch", beta=70, alpha=30), _rl("branch", alpha=90))["branch"]
     assert got["baseline"]["value"] == "alpha", got
     assert got["concentration_shift"] == 0.7, got
 
@@ -269,41 +271,243 @@ def test_a_wholly_new_dominant_shifts_by_its_own_whole_share():
 def test_decay_is_not_turnover():
     """A slice can gain without losing and lose without gaining, so neither number implies the
     other. Both directions asserted, or a single metric copied into both fields would pass."""
-    gained = compare(_rl("workspace", alpha=70, gamma=30), _rl("workspace", alpha=90))["project"]
+    gained = compare(_rl("branch", alpha=70, gamma=30), _rl("branch", alpha=90))["branch"]
     assert gained["turnover"] == 0.3 and gained["decay"] == 0.0, gained
-    dropped = compare(_rl("workspace", alpha=70), _rl("workspace", alpha=70, beta=30))["project"]
+    dropped = compare(_rl("branch", alpha=70), _rl("branch", alpha=70, beta=30))["branch"]
     assert dropped["turnover"] == 0.0 and dropped["decay"] == 0.3, dropped
-
-
-def test_emerged_and_decayed_are_ordered_by_the_mass_they_carry():
-    """Not by name and not by encounter order: the value that took the most of the slice is the
-    one a reader needs first."""
-    got = compare(_rl("workspace", zeta=30, alpha=10, mu=60), _rl("workspace", keep=90))
-    assert [e["value"] for e in got["project"]["emerged"]["top"]][:3] == ["mu", "zeta", "alpha"]
 
 
 # --- the shape of the block ------------------------------------------------------------------
 
-def test_every_allocation_dimension_is_reported_under_its_published_name():
-    """Dynamics speaks the payload's vocabulary (`project`, not `workspace`), derived from
-    `workstreams.ALLOCATION` rather than restated, so the two cannot drift apart."""
-    got = compare(_rl("workspace", alpha=40), _rl("workspace", alpha=90))
-    assert set(got) == set(DIMS), (sorted(got), sorted(DIMS))
+def test_every_reported_dimension_is_named_the_way_the_payload_names_it():
+    """Dynamics speaks the payload's vocabulary (`output_type`, not `artifact`), DERIVED from
+    `workstreams.ALLOCATION` rather than restated, so the two cannot drift apart — and the drop
+    is a filter over that list, not a second hand-written list beside it."""
+    got = compare(_rl("branch", alpha=40), _rl("branch", alpha=90))
+    assert set(got) == {n for n, _l, _f in DYNAMIC_DIMENSIONS}, sorted(got)
+    assert set(got) < set(DIMS), "the dropped dimensions are no longer in ALLOCATION either"
+    # DISCRIMINATING: at least one reported name must differ from the store level behind it, or a
+    # version that keyed the block on `level` instead of `name` would pass — `branch` alone would
+    # not catch it, because there the two happen to coincide.
+    assert {n for n in got if DIMS[n] != n} == {"output_type", "language", "workflow"}, sorted(got)
 
 
 def test_every_status_is_one_of_the_named_ones():
-    cases = [(_rl("workspace", a=40), _rl("workspace", a=90)),
+    cases = [(_rl("branch", a=40), _rl("branch", a=90)),
              (rollup([]), rollup([])),
-             (rollup([]), _rl("workspace", a=90)),
-             (_rl("workspace", a=1), _rl("workspace", a=90)),
-             (_rl("workspace", a=40), _rl("workspace", a=1)),
-             (_rl("workspace", a=40), rollup([]))]
+             (rollup([]), _rl("branch", a=90)),
+             (_rl("branch", a=1), _rl("branch", a=90)),
+             (_rl("branch", a=40), _rl("branch", a=1)),
+             (_rl("branch", a=40), rollup([]))]
     seen = set()
     for s, b in cases:
         for dim in compare(s, b).values():
             assert dim["status"] in STATUSES, dim
             seen.add(dim["status"])
     assert seen == set(STATUSES), sorted(set(STATUSES) - seen)
+
+
+# --- TASK 4: which dynamics earn a place, measured over the corpus ---------------------------
+#
+# The premise is NOT "the store made it cheap". A 16 KB window characterisation scored -3.3 /
+# -20.0 on synthesis accuracy — worse than emitting nothing — while a digest carrying the SAME
+# facts scored +36.7, because the digest stated a conclusion and the document printed
+# `engineer_messages: 5` / `assistant_messages: 84` and left the division to the reader. So a
+# field earns its place by carrying information a reader can act on, and it must arrive as a
+# claim rather than as a number to divide.
+#
+# Measurements: ~/keld/refseries-context/dynamics/DYNAMICS-VALUE.md (51 sessions, 2,702 windows,
+# the shipped sizer and the shipped serving floor). Reproduce: `scripts/sizer_eval.py dist`.
+
+def test_the_dimensions_that_measured_CONSTANT_are_not_reported_at_all():
+    """Three of the seven allocation dimensions carry no information and are dropped.
+
+      * `project` — turnover, decay and concentration_shift are IDENTICALLY 0.000 on all 2,180
+        compared windows: one distinct value at 2dp, 100% inside one 0.05 band, `changed` never
+        True. Constant BY CONSTRUCTION, not by accident of corpus: a Claude Code transcript is
+        scoped to one project directory, so `workspace` cannot vary inside the unit of analysis
+        and Task 3 measured ZERO workspace transitions across 51 sessions. Both sides of every
+        comparison hold the same single value.
+      * `model` — turnover exactly zero on 98.5% of 2,126 windows, 99.4% inside one band, lift
+        against ground truth +0.000 (0.001 inside a transition window, 0.001 outside), `changed`
+        True 0 times in 2,702 windows.
+      * `tooling` — `compared` on 3.9% (106 of 2,702) against a 10% bar, and where it IS
+        comparable it points the wrong way: mean turnover 0.010 INSIDE a transition window
+        against 0.070 outside.
+
+    The digest still reports all three as allocation workstreams. Only their DYNAMICS are gone.
+    Discriminating both ways: the survivors must still be there, or dropping everything passes.
+    """
+    got = compare(_rl("branch", alpha=40), _rl("branch", alpha=90))
+    assert set(got) == {"branch", "output_type", "language", "workflow"}, sorted(got)
+    for dropped in ("project", "model", "tooling"):
+        assert dropped not in got, dropped
+        assert dropped in DIMS, (dropped, "no longer an allocation dimension at all")
+
+
+def test_the_entering_and_leaving_lists_are_gone_because_they_were_a_duplicate():
+    """`emerged`/`decayed` dropped. `n` was a restatement — it is zero exactly when turnover is
+    zero, by construction, since turnover IS the mass of the emerged set — so the only candidate
+    fact was the `top` list, and measured over the corpus it is one of two things:
+
+      * on `branch` and `workflow` the top entering value IS `slice.value` (75.3% / 85.4%) — the
+        field the reader already has;
+      * on `output_type` and `language` it is BELOW the 0.50 dominance floor (80.7% / 76.5%) — a
+        value `window.dominant` explicitly refuses to name as what the window was about.
+        Highlighting it under `emerged` re-introduces, one field over, exactly what that floor
+        exists to prevent.
+
+    Median `n` is 0 on every surviving dimension except `workflow`. `TOP_N` went with them.
+    """
+    got = compare(_rl("branch", beta=40), _rl("branch", alpha=60))["branch"]
+    assert "emerged" not in got and "decayed" not in got, sorted(got)
+    assert not hasattr(dynamics_module, "TOP_N"), "TOP_N outlived the lists it capped"
+    # ... and the headline numbers, which were computed over ALL entering values and never over
+    # the listed subset, are unaffected by the removal.
+    assert got["turnover"] == 1.0 and got["decay"] == 1.0, got
+
+
+def test_a_material_move_is_one_observation_at_the_evidence_floor():
+    """DERIVED, not chosen. At `MIN_EVIDENCE` a share is measured over 5 observations, so 0.2 is
+    the finest share difference one observation can produce; a smaller shift is not
+    distinguishable from which side of the boundary a single tool call landed on. That is
+    `MIN_EVIDENCE`'s own argument about a ratio over one observation, applied to a DIFFERENCE of
+    two ratios.
+
+    Pinned at the ASSIGNMENT and not only at the value — Task 1 found a mutation that survived by
+    retyping a derived constant as its literal, which passes an equality assertion vacuously."""
+    assert MATERIAL == 1.0 / MIN_EVIDENCE
+    src = inspect.getsource(dynamics_module)
+    assert "MATERIAL = 1.0 / MIN_EVIDENCE" in src, "MATERIAL is no longer derived from the floor"
+
+
+def test_the_reading_states_the_conclusion_the_numbers_leave_to_the_reader():
+    """THE MEASURED LESSON, applied. `concentration_shift: -0.31` survives the distribution test
+    (branch band 75.4%, language 16.5%, 119-139 distinct values) and fails the DIGEST test: it is
+    the 16 KB document's other problem — a signed fraction the reader must interpret. Separately
+    on this branch, asked "which ticket?", a model answered `2659`, the window's own
+    `reference_events` count; labelling it "2659 recorded tool references" moved correct declines
+    from 76% to 100%. A bare number invites a wrong reading.
+
+    So the number stays, with its key as its label, and the CONCLUSION ships beside it. Every
+    reading is exercised here, because a vocabulary with an unreachable member is a vocabulary
+    that lies about what it can say."""
+    def r(slice_rl, baseline_rl):
+        return compare(slice_rl, baseline_rl)["branch"]["reading"]
+
+    # the dominant value changed — outranks everything else, because WHICH value owns the work is
+    # the reader's first question
+    assert r(_rl("branch", beta=80, alpha=20), _rl("branch", alpha=60, beta=40)) == "switched"
+    # same value on top, holding MORE of the window
+    assert r(_rl("branch", alpha=90, beta=10), _rl("branch", alpha=60, beta=40)) == "narrowing"
+    # same value on top, holding LESS
+    assert r(_rl("branch", alpha=55, beta=45), _rl("branch", alpha=90, beta=10)) == "broadening"
+    # values came AND went underneath an unmoved, equally-concentrated dominant
+    assert r(_rl("branch", alpha=60, gamma=40), _rl("branch", alpha=60, beta=40)) == "churning"
+    # ONLY CAME. These two fixtures are tight rather than arbitrary, and the arithmetic says why:
+    # if the slice gains a value carrying >= MATERIAL and the baseline has nothing to lose, the
+    # dominant's own share must fall by >= MATERIAL, which reads `broadening` instead. So
+    # `widening` needs the baseline to shed a little (0.15, under the bar) while the slice gains
+    # more (0.25, over it) — turnover 0.25, decay 0.15, shift -0.10.
+    assert r(_rl("branch", alpha=75, gamma=25), _rl("branch", alpha=85, beta=15)) == "widening"
+    # only went — the exact mirror, shift +0.10
+    assert r(_rl("branch", alpha=85, beta=15), _rl("branch", alpha=75, gamma=25)) == "shedding"
+    # and the twin every other assertion here needs: nothing moved
+    assert r(_rl("branch", alpha=60, beta=40), _rl("branch", alpha=60, beta=40)) == "steady"
+    assert set(READINGS) == {"switched", "narrowing", "broadening", "churning", "widening",
+                             "shedding", "steady"}
+
+
+def test_the_reading_is_computed_from_what_the_block_already_carries():
+    """The constraint on proposing a stated form: it must be DERIVED from fields already present,
+    not a new inference and not a second query. Asserted by handing `reading` nothing but those
+    four fields plus the status and getting the block's own answer back — so a version that
+    reached for the store, the rollups or a value outside the dict would fail."""
+    got = compare(_rl("branch", beta=80, alpha=20), _rl("branch", alpha=60, beta=40))["branch"]
+    bare = {k: got[k] for k in ("status", "changed", "turnover", "decay",
+                                "concentration_shift")}
+    assert reading(bare) == got["reading"] == "switched", (bare, got)
+    assert set(inspect.signature(reading).parameters) == {"v"}, (
+        "reading grew an argument, so it is no longer computed from the block alone")
+
+
+def test_no_reading_is_stated_where_no_metric_is_reported():
+    """`reading` is a claim, so it obeys the same rule every metric obeys: it exists under
+    `compared` and nowhere else. A `steady` on a level that never fired would be the exact defect
+    `STATUSES` was introduced to prevent, one field later."""
+    for s, b in ((rollup([]), rollup([])),
+                 (rollup([]), _rl("branch", a=90)),
+                 (_rl("branch", a=40), rollup([])),
+                 (_rl("branch", a=1), _rl("branch", a=90)),
+                 (_rl("branch", a=40), _rl("branch", a=1))):
+        for name, dim in compare(s, b).items():
+            if dim["status"] == "compared":
+                assert dim["reading"] in READINGS, (name, dim)
+            else:
+                assert dim["reading"] is None, (name, dim)
+
+
+def test_the_reading_is_not_itself_a_constant():
+    """The stated form is held to the SAME bar as the numbers it summarises: measured over 2,702
+    windows it is `steady` on 77.7% of compared `branch` windows, 70.7% of `output_type`, 49.9%
+    of `language` and 30.8% of `workflow` — all under the 90% constancy bar — while the three
+    DROPPED dimensions would have shipped a field saying `steady` 79-100% of the time
+    (`project` 100.0%, `model` 99.5%, `tooling` 79.2%). Pinned here as a property rather than a
+    number: across a small spread of fixtures the surviving dimension must produce more than one
+    reading."""
+    seen = {compare(s, b)["branch"]["reading"]
+            for s, b in ((_rl("branch", alpha=60, beta=40), _rl("branch", alpha=60, beta=40)),
+                         (_rl("branch", beta=80, alpha=20), _rl("branch", alpha=60, beta=40)),
+                         (_rl("branch", alpha=90, beta=10), _rl("branch", alpha=60, beta=40)),
+                         (_rl("branch", alpha=55, beta=45), _rl("branch", alpha=90, beta=10)))}
+    assert len(seen) == 4, seen
+
+
+def test_the_measurement_that_justified_the_drop_can_still_be_recomputed():
+    """A drop justified by a number nobody can recompute is a drop justified by a document. So
+    `compare` takes the dimension set as an argument — defaulting to what is PUBLISHED — and
+    `scripts/sizer_eval.py dist` passes the full `workstreams.ALLOCATION` through this exact
+    arithmetic to re-derive the distributions behind `DROPPED_DIMENSIONS`. Re-running it after the
+    drop shipped reproduced the pre-implementation tables bit-for-bit.
+
+    DISCRIMINATING, and this is the half that matters: the argument must not be a switch /analyze
+    can flip. `dynamics()` — the only production entry point — does not accept one and does not
+    forward one, so the published vocabulary cannot be widened by a caller."""
+    wide = compare(_rl("branch", alpha=40), _rl("branch", alpha=90),
+                   dimensions=tuple(workstreams.ALLOCATION))
+    assert set(wide) == set(DIMS), sorted(wide)
+    assert wide["project"]["status"] == "both_absent", wide["project"]
+    assert "dimensions" not in inspect.signature(dynamics).parameters, (
+        "dynamics() can be asked to publish a dimension the measurement dropped")
+    assert "dimensions" not in inspect.signature(dynamics_module.dynamics_for).parameters
+
+
+def test_inventory_dimensions_stay_out_and_the_reason_is_now_measured():
+    """Task 2 excluded them on the ARGUMENT that turnover over them measures tool-surface breadth
+    rather than change of work. Task 4 CONFIRMED it with the distribution, using the identical
+    arithmetic (`_absent_mass`, `_status`), and the numbers are what makes it a finding:
+
+      * `integrations` — `compared` on 0 of 2,702 windows. 100% absent, corpus-wide.
+      * `external_systems` — compared 1.3%; turnover non-zero on 0.0% of transition windows
+        against 21.7% of the rest, i.e. inverted.
+      * `named_terms` — turnover non-zero on 98.3% of compared windows (99.2% inside a transition
+        window, 98.0% outside). There is no window in which it says no. This disqualifier needs
+        no ground truth at all.
+      * `programs` — non-zero on 80.2% overall and 78.1% where nothing changed; median 16
+        distinct baseline values against `branch`'s 1, at a median turnover of 0.107 (~1.7 of 16
+        programs being new).
+      * `harness_tools` — the closest call, failing no pre-registered disqualifier (lift +0.047,
+        positive). Excluded on the same reading one notch weaker: non-zero on 34.4% of windows
+        holding no transition at all, against `branch`'s 1.8%, and a lift 7x smaller.
+
+    Against `branch`, which is what a change-of-work metric looks like: mean turnover 0.346
+    inside a transition window against 0.003 outside, non-zero 42.7% vs 1.8%."""
+    both = rollup([_n("branch", "main", 40), _n("tool", "Read", 30), _n("exe", "go", 30),
+                   _n("term", "Aurora", 20), _n("service", "s3", 10),
+                   _n("mcp_tool", "m", 10)])
+    got = compare(both, both)
+    for name, _level in workstreams.INVENTORY:
+        assert name not in got, name
 
 
 # --- the sizing seam -------------------------------------------------------------------------
@@ -619,17 +823,24 @@ def _served(tmp, turns, sizer=None):
     return path, st, out
 
 
-def test_a_real_transcript_whose_workspace_flips_reports_high_turnover():
+def test_a_real_transcript_whose_dominant_value_flips_reports_high_turnover():
     """End to end, through the store, on a transcript rather than a hand-built rollup: the last
-    15 minutes are a different project from the 45 before them."""
+    15 minutes are on a different branch from the 45 before them.
+
+    It reads BRANCH and not workspace, and that is Task 4's drop showing through: `project`
+    dynamics were identically 0.000 on all 2,180 compared windows of the corpus because a
+    transcript is scoped to one project directory, so the dimension is no longer reported at all.
+    The invariant this test exists for is unchanged — a flipped dominant reports high turnover —
+    and it is now asserted on a level that can actually flip in production."""
     with tempfile.TemporaryDirectory() as tmp:
-        _path, st, out = _served(tmp, _flipping())
-        p = out["dynamics"]["dimensions"]["project"]
+        _path, st, out = _served(tmp, _branch_flipping(flip_at_minute=45))
+        p = out["dynamics"]["dimensions"]["branch"]
         assert p["status"] == "compared", p
         assert p["turnover"] == 1.0, p
         assert p["changed"] is True, p
-        assert (p["slice"]["value"], p["baseline"]["value"]) == ("beacon-api",
-                                                                "aurora-ledger"), p
+        assert p["reading"] == "switched", p
+        assert (p["slice"]["value"], p["baseline"]["value"]) == ("feature/ledger-split",
+                                                                "main"), p
         assert p["slice"]["evidence"] >= MIN_EVIDENCE, p
         st.close()
 
@@ -638,13 +849,14 @@ def test_a_real_stationary_transcript_reports_no_change():
     """The twin, on the same fixture generator with the flip removed — so the difference between
     the two results is the flip and nothing else."""
     with tempfile.TemporaryDirectory() as tmp:
-        _path, st, out = _served(tmp, _stationary())
-        p = out["dynamics"]["dimensions"]["project"]
+        _path, st, out = _served(tmp, _branch_flipping(flip_at_minute=99))
+        p = out["dynamics"]["dimensions"]["branch"]
         assert p["status"] == "compared", p
         assert p["turnover"] == 0.0, p
         assert p["decay"] == 0.0, p
         assert p["concentration_shift"] == 0.0, p
         assert p["changed"] is False, p
+        assert p["reading"] == "steady", p
         st.close()
 
 
@@ -690,7 +902,7 @@ def test_the_seam_can_decide_the_slice_boundary_from_the_series():
 
         def plan(self, store, session, end, span_minutes, floor=None):
             start = end - timedelta(minutes=span_minutes)
-            steps = list(series(store, session, start, end, "workspace"))
+            steps = list(series(store, session, start, end, "branch"))
             last = dict(steps[-1][1] or []) if steps else {}
             top = max(last, key=lambda k: (last[k], k)) if last else None
             cut = end
@@ -702,12 +914,13 @@ def test_the_seam_can_decide_the_slice_boundary_from_the_series():
             return Slicing(cut, end, start, self.name, {"steps": len(steps)})
 
     with tempfile.TemporaryDirectory() as tmp:
-        _path, st, out = _served(tmp, _flipping(flip_at_minute=30), sizer=_FirstChange())
+        _path, st, out = _served(tmp, _branch_flipping(flip_at_minute=30),
+                                 sizer=_FirstChange())
         block = out["dynamics"]
         assert block["sizer"] == "first_change", block
         assert 28.0 <= block["slice_minutes"] <= 31.0, block
         assert block["sizer_detail"]["steps"] > 1, block
-        assert block["dimensions"]["project"]["turnover"] == 1.0, block["dimensions"]["project"]
+        assert block["dimensions"]["branch"]["turnover"] == 1.0, block["dimensions"]["branch"]
         st.close()
 
 
