@@ -135,7 +135,17 @@ func LoadConfound() ([]GoldRow, error) { return parseRows(confoundJSONL) }
 
 // LoadCreds parses the embedded credential-detection corpus (class "cred" =
 // contains a real credential; class "decoy" = high-entropy/placeholder non-secret).
-func LoadCreds() ([]GoldRow, error) { return parseRows(credsJSONL) }
+//
+// The cred rows carry {{SHAPE}} placeholders rather than credential literals;
+// they are expanded here into freshly generated, realistically shaped synthetic
+// values from a fixed seed. See credsgen.go for why the shapes are not committed.
+func LoadCreds() ([]GoldRow, error) {
+	rows, err := parseRows(credsJSONL)
+	if err != nil {
+		return nil, err
+	}
+	return expandCredRows(rows, CredsSeed)
+}
 
 // LoadAgentic parses the embedded agentic-framework corpus (rows carry a Shape
 // ∈ {clean, raw} and agentic Meta fields).

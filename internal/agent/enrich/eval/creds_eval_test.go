@@ -65,6 +65,13 @@ func TestLoadCredsParses(t *testing.T) {
 //     Only a nearby keyword separates them from a checksum, which is exactly
 //     generic-api-key's mechanism. See the "Deliberately NOT added" block in
 //     creddetect/structural.go.
+//
+// The 24 cred rows' values are GENERATED at load time from CredsSeed rather
+// than committed (see credsgen.go): a fixture realistic enough for gitleaks is
+// realistic enough for GitHub's push protection, which rejected this branch over
+// five of them. The shapes -- and therefore this 20 -- are unchanged by that
+// move; TestCredRowsFireTheRuleTheirShapeTargets pins which rule each row fires
+// and which four rows stay deliberate misses.
 const credDetectBaseline = 20
 
 // TestCredDetectCorpusRecall pins the pure-Go credential detector against the
@@ -94,10 +101,11 @@ func TestCredDetectCorpusRecall(t *testing.T) {
 			t.Errorf("FALSE POSITIVE row %d: %+v in %q", i+1, spans, r.Text)
 		}
 	}
-	t.Logf("creddetect: cred rows %d/%d detected (recall %.3f); decoy rows %d/%d flagged (fpr %.3f)",
-		credHits, creds, float64(credHits)/float64(creds), decoyHits, decoys, float64(decoyHits)/float64(decoys))
+	t.Logf("creddetect (creds.jsonl seed %d): cred rows %d/%d detected (recall %.3f); decoy rows %d/%d flagged (fpr %.3f)",
+		CredsSeed, credHits, creds, float64(credHits)/float64(creds), decoyHits, decoys, float64(decoyHits)/float64(decoys))
 	if credHits < credDetectBaseline {
-		t.Errorf("credential recall regressed: %d/%d detected, baseline is %d", credHits, creds, credDetectBaseline)
+		t.Errorf("credential recall regressed: %d/%d detected, baseline is %d (creds.jsonl values are generated from seed %d)",
+			credHits, creds, credDetectBaseline, CredsSeed)
 	}
 }
 
