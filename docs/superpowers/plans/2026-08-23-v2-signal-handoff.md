@@ -68,9 +68,41 @@ A 47 MB file costs 1.82s for its whole 41-chunk lifetime versus 0.76s for one pa
   constant at much higher complexity. Not settled for *drift detection* on a metric stream, but it
   sets the bar: fixed stays default until something beats it under a pre-registered rule.
 
+## Done since this was written (2026-08-24)
+
+**The reference store is complete** (tasks 1-5) and `/analyze` serves from it: 90.5 MB transcript
+**0.788s -> 0.0023s**, equivalence proven on 90 real prompts across 30 transcripts, 0 differing.
+The watcher signals advancement so ingest is off the request path. Retention is a 400-day horizon
+plus a monotonic serving floor and `410 analyze_expired` — because task 3 established that
+`/analyze` forgoes `bin` entirely, so pruning events does not narrow a window, it breaks it.
+
+**Dynamics ship, and were chosen by measurement.** `/analyze` reports how the work is CHANGING:
+turnover, decay, concentration shift, plus a stated `reading` from a closed 7-value vocabulary.
+Carried through to `publish.Enrichment.dynamics`; `SchemaVersion` 7 -> 8.
+
+  - **The evidence floor is about sample size, not minutes.** `MIN_EVIDENCE` stays 5 — the
+    derivation asks whether unanimity over n observations beats a coin, which has no duration term.
+    A duration-scaled floor would make an attribution's significance a function of slice length
+    while `value`/`share` look identical. And short slices are NOT unattributable: `project` is 87%
+    attributed at 5 minutes.
+  - **A fixed slice was never a detector.** `ewma(0.3/0.02@0.2)` beats `FixedSizer(15)` by **+74.6
+    precision / +27.0 recall**. The shuffled-truth control is what proves it: EWMA collapses
+    86.4 -> 24.1 when transitions are relocated at random, while every fixed sizer barely moves
+    (11.9 -> 10.9) and ADWIN scores BETTER on shuffled truth than real.
+  - **`river` does not ship.** ADWIN and KSWIN lose outright; PageHinkley clears the bar but is
+    dominated on both metrics by an EWMA needing no dependency. Its defaults
+    (`clock=32`, `threshold=50`) structurally cannot fire inside a 60-observation budget.
+  - **Half the metrics were dropped on their distributions.** `project` is identically 0.000 on all
+    2,180 compared windows (a transcript is scoped to one project dir); `model` reports `changed`
+    True 0 times in 2,702 windows; `tooling`'s lift is negative; `emerged`/`decayed` restated
+    turnover. Inventory dimensions confirmed excluded.
+  - **Rule 3 of my own pre-registration was wrong per-session.** Windows overlap twelvefold, so a
+    perfect detector fires on 83.3% of one session — the 50% ceiling is unreachable by any working
+    detector at that granularity. Only the corpus-wide reading (27.0%) was ever valid.
+
 ## What is open, in the order to take it
 
-1. **Store tasks 3-5.** `/analyze` reads the store (where the per-prompt cost actually disappears),
+1. ~~**Store tasks 3-5.**~~ DONE. `/analyze` reads the store (where the per-prompt cost actually disappears),
    the watcher signals advancement, retention. **Task 5 must handle Task 1's carried concern:**
    pruning raw events would silently strip the partial *edges* from old windows, because interiors
    come from `bin` but edges come from `event`. Snap visibly or refuse.
@@ -118,3 +150,18 @@ GLiNER2 — the parent is ~1.1 GB against a 4 GB budget); credential recall at 2
   here.
 - **`SchemaVersion` bumps on a published-vocabulary change.** The "branch is unpublished so no
   consumer holds a baseline" argument is retired at v2.
+
+## Found 2026-08-24 while waiting on a task — not yet acted on
+
+**Codex capture is completely dead on real data, and always has been.** 14 session files, 26
+`user_message` lines, **0 captured**. `watch/codex.go` builds the prompt id as
+`<sessionID>#<ordinal>` and guards `if ln.Type != "event_msg" || ln.Ordinal == nil -> drop`, but real
+Codex `user_message` lines carry only `['timestamp','type','payload']` — no `ordinal`. Newest file on
+disk is 2026-07-22, so this is the current format. `codex_test.go` passes because its fixture
+hand-writes `"ordinal":5`, a field the product does not emit: the same failure class as the three
+fixture defects fixed on 2026-08-23.
+So Codex produces no enrichment at all, not merely no workstreams. Gemini counts its ordinal rather
+than reading a field so it may survive, but there are no Gemini transcripts here to check.
+Fixing it means deriving the id by counting `user_message` lines, and the id must keep matching what
+Codex's own OTEL emits or enrichment and telemetry will not join. **Scope question for v2: is Codex
+in or out.**
