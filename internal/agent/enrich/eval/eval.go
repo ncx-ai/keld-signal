@@ -42,8 +42,16 @@ type GoldRow struct {
 	Sensitivity   string   `json:"sensitivity"`
 	Activity      string   `json:"activity_type"`
 	FunctionGuess string   `json:"function_guess"`
-	SpeechAct     string   `json:"speech_act"`
-	Subcategory   string   `json:"subcategory"`
+	// SpeechAct is RETAINED gold data for a facet that no longer ships. The
+	// pass was dropped at schema v9 for scoring below a constant, but the
+	// labels cost nothing to keep and they are the only evidence a
+	// re-introduction could be judged against — the study named the label
+	// WORDING as the suspect, and a re-bakeoff needs a corpus to bake off
+	// against. Nothing predicts the facet, so nothing scores it: there is no
+	// `speech_act` case in fieldOf and no Pred field, which is what stops the
+	// harness reporting a number for a facet with no producer.
+	SpeechAct   string `json:"speech_act"`
+	Subcategory string `json:"subcategory"`
 	// Personal is the work-vs-personal facet's gold label. NO gold row carries
 	// one today (the field exists so the facet is scoreable the day labels are
 	// written); until then Score reports the facet with considered==0 and NO
@@ -94,7 +102,6 @@ type Pred struct {
 	Sensitivity   string
 	Activity      string
 	FunctionGuess string
-	SpeechAct     string
 	Subcategory   string
 	Personal      string
 	Conf          map[string]float64 // facet name -> top-label confidence (for calibration)
@@ -109,7 +116,6 @@ func predConf(p enrich.Profile) map[string]float64 {
 		"sensitivity":    p.Sensitivity.Confidence,
 		"activity_type":  p.Activity.Confidence,
 		"function_guess": p.FunctionGuess.Confidence,
-		"speech_act":     p.SpeechAct.Confidence,
 		"subcategory":    p.Subcategory.Confidence,
 		"personal":       p.Personal.Confidence,
 	}
@@ -212,8 +218,6 @@ func fieldOf(x any, f string) string {
 			return v.Activity
 		case "function_guess":
 			return v.FunctionGuess
-		case "speech_act":
-			return v.SpeechAct
 		case "subcategory":
 			return v.Subcategory
 		case "personal":
@@ -231,8 +235,6 @@ func fieldOf(x any, f string) string {
 			return v.Activity
 		case "function_guess":
 			return v.FunctionGuess
-		case "speech_act":
-			return v.SpeechAct
 		case "subcategory":
 			return v.Subcategory
 		case "personal":
@@ -339,7 +341,6 @@ func RunModel(m enrich.Model, gold []GoldRow, opts ...enrich.Option) []Pred {
 			Sensitivity:   p.Sensitivity.Value,
 			Activity:      p.Activity.Value,
 			FunctionGuess: p.FunctionGuess.Value,
-			SpeechAct:     p.SpeechAct.Value,
 			Subcategory:   p.Subcategory.Value,
 			Personal:      p.Personal.Value,
 			Conf:          predConf(p),
@@ -358,7 +359,7 @@ func RunModelWithContext(m enrich.Model, gold []GoldRow, opts ...enrich.Option) 
 		p := enrich.Run(g.Text, src, g.Meta(src), m, opts...)
 		pred = append(pred, Pred{
 			TaskType: p.TaskType.Value, Domain: p.Domain.Value, Sensitivity: p.Sensitivity.Value,
-			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, SpeechAct: p.SpeechAct.Value, Subcategory: p.Subcategory.Value,
+			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, Subcategory: p.Subcategory.Value,
 			Personal: p.Personal.Value,
 			Conf:     predConf(p),
 		})
@@ -495,30 +496,6 @@ func SecretFPR(gold []GoldRow, pred []Pred) float64 {
 		return 0
 	}
 	return float64(wrong) / float64(tot)
-}
-
-// SpeechActPerMood returns, per gold speech_act id, [correct, total] over rows
-// carrying a gold speech_act. Surfaces which moods (typically fragment/statement)
-// the facet handles worst.
-func SpeechActPerMood(gold []GoldRow, pred []Pred) map[string][2]int {
-	n := len(gold)
-	if len(pred) < n {
-		n = len(pred)
-	}
-	out := map[string][2]int{}
-	for i := 0; i < n; i++ {
-		g := gold[i].SpeechAct
-		if g == "" {
-			continue
-		}
-		c := out[g]
-		c[1]++
-		if pred[i].SpeechAct == g {
-			c[0]++
-		}
-		out[g] = c
-	}
-	return out
 }
 
 // Bin is one confidence band's reliability stats.

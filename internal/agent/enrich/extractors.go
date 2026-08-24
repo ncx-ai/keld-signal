@@ -23,7 +23,7 @@ func Wave1(scan PIIScanner) []Extractor {
 		TaskTypeExtractor{}, SensitivityExtractor{Scan: scan}, DomainEntitiesExtractor{},
 		passExtractor{Pass{Name: "activity_type", Labels: Activities}},
 		passExtractor{Pass{Name: "personal", Labels: Personal}},
-		funcGuessExtractor{}, SpeechActExtractor{},
+		funcGuessExtractor{},
 	}
 }
 

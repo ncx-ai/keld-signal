@@ -38,13 +38,18 @@ func (m *demandCounter) Entities(string, map[string]string) []Entity {
 // on: that in v2 "the model is loaded by nothing", so the ~1.9 GB download is
 // dead weight on every install.
 //
-// It is not true of this pipeline. Wave 1's task_type, domain, activity_type,
-// personal and function_guess and Wave 2's subcategory all classify through
-// ctx.Model, and sensitivity's NER half extracts through it. On a plain coding
-// prompt with default settings that is SIX inferences per prompt (measured
-// here, not estimated) — so in ml_backend "auto" the weights are genuinely
+// It is not true of this pipeline. Wave 1's task_type, activity_type and
+// personal and Wave 2's subcategory classify through ctx.Model, and
+// domain_entities extracts through it. On a plain coding prompt with default
+// settings that is FIVE inferences per prompt (measured here, not estimated:
+// classify=4 extract=1) — so in ml_backend "auto" the weights are genuinely
 // required, and on-demand provisioning defers the download to the first prompt
 // rather than eliminating it.
+//
+// The count was SIX until schema v9 dropped speech_act. function_guess is not
+// among them on THIS input: the A4 compositional override sets it structurally
+// for a coding-tool source, with no model call. sensitivity is not among them
+// either — it consults no model at all (gitleaks + presidio /pii).
 //
 // If this count ever reaches zero — the model-backed facets removed in favour
 // of deterministic ones — then "auto" no longer implies a download at all,

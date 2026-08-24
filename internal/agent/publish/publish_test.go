@@ -160,42 +160,6 @@ func TestBuildCarriesJobCategoryFields(t *testing.T) {
 	}
 }
 
-func TestBuildCarriesSpeechActFields(t *testing.T) {
-	// Verify that SpeechAct and SpeechActAlt are properly mapped through to
-	// the wire payload and serialized with the correct JSON keys.
-	p := enrich.Profile{
-		SpeechAct: enrich.Labeled{Value: "question", Confidence: 0.9},
-		SpeechActAlt: []enrich.Labeled{
-			{Value: "command", Confidence: 0.5},
-			{Value: "statement", Confidence: 0.3},
-		},
-	}
-	e := Build(queue.Job{Source: "claude_code"}, p, "a@b.test", false, 0, time.Now())
-
-	if e.SpeechAct != p.SpeechAct {
-		t.Errorf("SpeechAct = %+v, want %+v", e.SpeechAct, p.SpeechAct)
-	}
-	if len(e.SpeechActAlt) != 2 || e.SpeechActAlt[0] != p.SpeechActAlt[0] {
-		t.Errorf("SpeechActAlt = %+v, want %+v", e.SpeechActAlt, p.SpeechActAlt)
-	}
-
-	// Verify JSON serialization includes speech_act field with correct value.
-	b, err := json.Marshal(e)
-	if err != nil {
-		t.Fatal(err)
-	}
-	jsonStr := string(b)
-	if !strings.Contains(jsonStr, `"speech_act"`) {
-		t.Fatalf("JSON missing speech_act key: %s", b)
-	}
-	if !strings.Contains(jsonStr, `"question"`) {
-		t.Fatalf("JSON missing speech_act value 'question': %s", b)
-	}
-	if !strings.Contains(jsonStr, `"speech_act_alt"`) {
-		t.Fatalf("JSON missing speech_act_alt key: %s", b)
-	}
-}
-
 func TestBuildCarriesWorkstreamsAndNoWindowMetadata(t *testing.T) {
 	// A REALISTIC profile: the payload legitimately contains "session_id" and
 	// "sensitivity_spans", so a guard on the substrings "session"/"span" would
@@ -401,5 +365,19 @@ func TestBuildNeverCarriesRawPII(t *testing.T) {
 	}
 	if !bytes.Contains(b, []byte(`"label":"ssn"`)) {
 		t.Fatalf("payload lost the masked ssn span: %s", b)
+	}
+}
+
+// TestBuildPublishesNoSpeechAct pins the v9 removal at the WIRE. speech_act was
+// a published field; dropping it is a published-vocabulary change (schema v8 →
+// v9) and the only surface that matters to a consumer is the JSON.
+func TestBuildPublishesNoSpeechAct(t *testing.T) {
+	e := Build(queue.Job{Source: "claude_code"}, enrich.Profile{SchemaVersion: enrich.SchemaVersion}, "a@b.test", false, 0, time.Now())
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "speech_act") {
+		t.Fatalf("published enrichment still carries speech_act: %s", b)
 	}
 }

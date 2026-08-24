@@ -53,7 +53,7 @@ func newEvalCmd() *cobra.Command {
 				pred = eval.RunModel(model, rows, opts...)
 			}
 
-			fields := []string{"task_type", "domain", "sensitivity", "activity_type", "function_guess", "speech_act", "subcategory"}
+			fields := []string{"task_type", "domain", "sensitivity", "activity_type", "function_guess", "subcategory"}
 			m := eval.Score(rows, pred, fields)
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "context=%v confound=%v rows=%d\n", withContext, withConfound, len(rows))
@@ -65,7 +65,6 @@ func newEvalCmd() *cobra.Command {
 				fmt.Fprintf(out, "  leakage(function_guess)=%.3f  leakage(task_type)=%.3f  false_eng=%.3f\n",
 					lk["function_guess"], lk["task_type"], eval.FalseEngRate(rows, pred))
 				fmt.Fprintf(out, "  s1_downstream_baseline=%.3f\n", eval.S1DownstreamBaseline(rows, pred))
-				fmt.Fprintf(out, "  speech_act per-mood=%v\n", eval.SpeechActPerMood(rows, pred))
 			}
 			if withCreds {
 				credRows, err := eval.LoadCreds()
@@ -77,7 +76,7 @@ func newEvalCmd() *cobra.Command {
 					eval.SecretRecall(credRows, credPred), eval.SecretFPR(credRows, credPred))
 			}
 			if withCalibration {
-				classifier := []string{"task_type", "domain", "activity_type", "speech_act", "subcategory"}
+				classifier := []string{"task_type", "domain", "activity_type", "subcategory"}
 				ruleInfluenced := []string{"sensitivity", "function_guess"}
 				printCal := func(title string, facets []string) {
 					fmt.Fprintf(out, "\n== calibration: %s ==\n", title)

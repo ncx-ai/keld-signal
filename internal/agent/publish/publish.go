@@ -41,8 +41,6 @@ type Enrichment struct {
 	Activity         enrich.Labeled   `json:"activity_type"`
 	Personal         enrich.Labeled   `json:"personal"`
 	FunctionGuess    enrich.Labeled   `json:"function_guess"`
-	SpeechAct        enrich.Labeled   `json:"speech_act"`
-	SpeechActAlt     []enrich.Labeled `json:"speech_act_alt,omitempty"`
 	Subcategory      enrich.Labeled   `json:"subcategory"`
 	SubcategoryAlt   []enrich.Labeled `json:"subcategory_alt,omitempty"`
 	// Workstreams are the deterministic window dimensions (project, branch,
@@ -110,8 +108,6 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		Activity:          p.Activity,
 		Personal:          p.Personal,
 		FunctionGuess:     p.FunctionGuess,
-		SpeechAct:         p.SpeechAct,
-		SpeechActAlt:      p.SpeechActAlt,
 		Subcategory:       p.Subcategory,
 		SubcategoryAlt:    p.SubcategoryAlt,
 		Workstreams:       p.Workstreams,

@@ -69,8 +69,11 @@ func TestRunFailsOnlyTheTimedOutPass(t *testing.T) {
 	if p.TaskType.Value != "" {
 		t.Errorf("task_type = %q, want empty (its pass timed out)", p.TaskType.Value)
 	}
-	if p.SpeechAct.Value == "" {
-		t.Error("speech_act empty: other passes must still run after one times out")
+	// activity_type is the witness that the wave survived. It used to be
+	// speech_act, which was dropped at schema v9; any other pass serves, the
+	// assertion is about the wave and not about that facet.
+	if p.Activity.Value == "" {
+		t.Error("activity_type empty: other passes must still run after one times out")
 	}
 	// Only the blocked pass may burn the deadline; the rest answer instantly.
 	if elapsed > 2*time.Second {
@@ -94,8 +97,8 @@ func TestPassTimeoutIsPerPassNotPerJob(t *testing.T) {
 	if p.Personal.Value != "" {
 		t.Errorf("personal = %q, want empty (blocked)", p.Personal.Value)
 	}
-	if p.SpeechAct.Value == "" || p.Activity.Value == "" {
-		t.Errorf("other passes must survive: speech_act=%q activity=%q",
-			p.SpeechAct.Value, p.Activity.Value)
+	if p.TaskType.Value == "" || p.Activity.Value == "" {
+		t.Errorf("other passes must survive: task_type=%q activity=%q",
+			p.TaskType.Value, p.Activity.Value)
 	}
 }

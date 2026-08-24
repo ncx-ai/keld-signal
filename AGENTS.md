@@ -111,7 +111,7 @@ telemetry via their native OTEL (config completed in the tool adapters), not hos
 **Enrichment pipeline (`internal/agent/enrich/`).** A staged registry of
 extractors ("sweeps") run over a swappable `Model` backend, producing a `Profile`.
 Single-flight (never fans out) so the shared model issues at most one inference at
-a time. Two waves, up to 8 facets per prompt:
+a time. Two waves, up to 7 facets per prompt:
 - **Wave 1** (independent, committed as a batch): `task_type` (the routing key for
   the Keld Inference Exchange — a 10-entry routing taxonomy: `summarization`,
   `translation`, `code_generation`, `information_extraction`, `classification`,
@@ -122,9 +122,31 @@ a time. Two waves, up to 8 facets per prompt:
   `api_key`/`secret`⇒`secrets`, other personal id⇒`pii`. See
   **The sensitivity facet's two sources** below),
   `domain` (+ entities), `activity_type`, `personal`, `function_guess`
-  (12 business functions), `speech_act` (`command`/`question`/`statement`/
-  `fragment`, classifies the prompt text only).
+  (12 business functions).
 - **Wave 2** (conditioned on Wave-1 `function_guess`): `subcategory`.
+
+**`speech_act` was DROPPED at schema v9, and the gate is now model-free.** It
+was an eighth facet (`command`/`question`/`statement`/`fragment`) and it also
+supplied the enrichment gate's model half. A pre-registered study measured it
+live over 2,015 inferences
+(`docs/superpowers/specs/2026-08-24-facet-value-results.md`): accuracy **0.695
+against a 0.713 majority baseline** — worth less than always answering
+`command`. It predicted `statement` 22 times and was right **zero** times, at up
+to full confidence. The other measured facets are fine (`task_type` 0.733 vs
+0.143, `domain` 0.683 vs 0.261, `activity_type` 0.670 vs 0.243), so this is a
+targeted removal, not a retreat from model-backed classification. Consequences,
+each deliberate: `Profile.SpeechAct`/`SpeechActAlt` and
+`Enrichment.speech_act`/`speech_act_alt` are gone from the published payload (a
+published-vocabulary change, hence the v8→v9 bump; producer strings move `-v8`
+→ `-v9`); `SpeechActDefs` is deleted; the gate keeps only its model-free
+approval lexicon (`prefilterContentFree`), whose own validation measured it at
+recall 100% on-corpus with the `fragment` branch a strict subset of it, so
+0/24-dangerous survives; `sensitivity` is now the ONLY always-run pass. This
+saves ~12% of enrichment CPU (one inference of eight) and **none** of the 1.8 GB
+model — the remaining facets still need it. The **gold labels are kept** in
+`eval/gold.jsonl`, unscored, as the evidence for judging a re-introduced
+classifier: the study named the label *wording* as the suspect, so a
+`SpeechActDefs` re-bakeoff is the live alternative to permanent removal.
 
 **The sensitivity facet's two sources.** Neither classifies; the class is
 a rollup over which entity labels were DETECTED (`sensitivityFromEntities`).
@@ -1159,9 +1181,11 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
     streaming a SHA-256 over ~1.9 GB, so re-asking it per job would re-hash the
     weights on every prompt.
   - **`ml_backend:"auto"` is unchanged in meaning and still needs the model.**
-    The default pipeline issues **6 inferences per prompt** (5 classify + 1
-    extract — `task_type`, `domain`, `activity_type`, `personal`,
-    `function_guess`, `subcategory`, `speech_act`), pinned by
+    The default pipeline issues **5 inferences per prompt** (4 classify + 1
+    extract — `task_type`, `activity_type`, `personal`, `subcategory`, and
+    `domain`'s extract; `function_guess` is structural on a coding-tool source
+    and `sensitivity` consults no model — was 6 before schema v9 dropped
+    `speech_act`), pinned by
     `enrich.TestBuiltInPipelineStillDemandsAModel`. On-demand provisioning
     therefore *defers* the download to the first prompt; it does not remove it.
     Claims that "in v2 nothing loads the model" do not hold for the Go

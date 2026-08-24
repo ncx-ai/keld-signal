@@ -278,12 +278,16 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		}
 	}
 
-	// Always-run first, so speech_act is committed before the gate decision.
+	// Always-run first: governance (sensitivity) commits before the gate decides.
 	commit(always)
 
-	// Gate: only when enabled AND the turn is content-free (no-model pre-filter
-	// OR speech_act==fragment). Governance/gate passes above already ran.
-	gateOff := gateEnabled() && (prefilterContentFree(text) || speechActFragment(ctx))
+	// Gate: only when enabled AND the turn is content-free. The decision is now
+	// MODEL-FREE — the approval lexicon is the whole of it. The second branch
+	// used to be speech_act=="fragment"; that facet was dropped at schema v9 for
+	// scoring below a constant, and its own validation measured the pre-filter at
+	// recall 100% on-corpus with the fragment branch adding 0 gate-offs the
+	// lexicon did not already catch (see the removal note in gate.go).
+	gateOff := gateEnabled() && prefilterContentFree(text)
 
 	ran := append([]Extractor{}, always...)
 	wave2 := append(Wave2(), cfg.customW2...)
@@ -330,8 +334,6 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		Activity:          labeledFrom(ctx.Get("activity_type"), "activity_type", "activity_type"),
 		Personal:          labeledFrom(ctx.Get("personal"), "personal", "personal"),
 		FunctionGuess:     labeledFrom(ctx.Get("function_guess"), "function_guess", "function_guess"),
-		SpeechAct:         labeledFrom(ctx.Get("speech_act"), "speech_act", "speech_act"),
-		SpeechActAlt:      altsNamed(ctx.Get("speech_act"), "speech_act_alt"),
 		Subcategory:       labeledFrom(ctx.Get("subcategory"), "subcategory", "subcategory"),
 		SubcategoryAlt:    altsNamed(ctx.Get("subcategory"), "subcategory_alt"),
 		Workstreams:       workstreamsFrom(ctx.Get("workstreams")),

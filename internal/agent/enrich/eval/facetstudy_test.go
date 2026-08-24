@@ -33,11 +33,14 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 )
 
-// studyFacets are the seven facets that call ctx.Model. sensitivity is excluded
-// on purpose: SensitivityExtractor is ModelFree, so it is not what the model is
-// provisioned for.
+// studyFacets are the facets that call ctx.Model. sensitivity is excluded on
+// purpose: SensitivityExtractor is ModelFree, so it is not what the model is
+// provisioned for. `speech_act` was one of the seven this study measured and is
+// no longer here: the study's own verdict was DROP and the pass was removed at
+// schema v9, so there is nothing left to score. Its gold labels remain in
+// gold.jsonl for a re-measured replacement.
 var studyFacets = []string{
-	"task_type", "domain", "activity_type", "speech_act",
+	"task_type", "domain", "activity_type",
 	"function_guess", "subcategory", "personal",
 }
 

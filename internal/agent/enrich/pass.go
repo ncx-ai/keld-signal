@@ -45,7 +45,7 @@ func classifyLabeled(ctx *JobContext, name string, labels []LabelDef, text strin
 // classifyPass classifies over Meta.PreambleCoding()+ctx.Text (so repo/tool inform
 // the guess). It uses the CODING-only preamble — agentic metadata is subject-noise
 // that hurts task_type/activity-shape facets (measured). Facets needing raw text
-// only (e.g. speech_act) call classifyLabeled; domain augments separately.
+// only call classifyLabeled; domain augments separately.
 func classifyPass(ctx *JobContext, name string, labels []LabelDef) (Labeled, []Labeled) {
 	return classifyLabeled(ctx, name, labels, ctx.Meta.PreambleCoding()+ctx.Text)
 }

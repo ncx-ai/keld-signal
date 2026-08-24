@@ -42,7 +42,7 @@ func TestDeterministicModeIsEnrichedNotPartial(t *testing.T) {
 	}
 	got := append([]string(nil), p.FacetsSkipped...)
 	sort.Strings(got)
-	want := []string{"activity_type", "domain_entities", "function_guess", "personal", "speech_act", "subcategory", "task_type"}
+	want := []string{"activity_type", "domain_entities", "function_guess", "personal", "subcategory", "task_type"}
 	if len(got) != len(want) {
 		t.Fatalf("facets_skipped = %v, want %v", got, want)
 	}

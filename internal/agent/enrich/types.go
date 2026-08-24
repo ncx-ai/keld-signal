@@ -110,8 +110,6 @@ type Profile struct {
 	Activity         Labeled   `json:"activity_type"`
 	Personal         Labeled   `json:"personal"`
 	FunctionGuess    Labeled   `json:"function_guess"`
-	SpeechAct        Labeled   `json:"speech_act"`
-	SpeechActAlt     []Labeled `json:"speech_act_alt,omitempty"`
 	Subcategory      Labeled   `json:"subcategory"`
 	SubcategoryAlt   []Labeled `json:"subcategory_alt,omitempty"`
 	// Workstreams are the deterministic window dimensions (project, branch,

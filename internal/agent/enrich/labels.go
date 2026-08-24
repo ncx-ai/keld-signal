@@ -28,7 +28,21 @@ package enrich
 // arriving on the wire is a contract change for every consumer regardless of how
 // long the producer has been computing it, which is exactly this constant's
 // trigger. Producer strings move from `-v7` to `-v8`.
-const SchemaVersion = 8
+//
+// v9 REMOVES the speech_act facet from the published payload:
+// Profile.SpeechAct/SpeechActAlt and Enrichment.speech_act/speech_act_alt are
+// gone, and so is the SpeechActDefs vocabulary that fed them. Dropping a
+// published field is a published-vocabulary change in exactly the same way
+// adding one is, so it takes a bump: a consumer that reads `speech_act` must
+// know the version at which it stops arriving. Measured cause, over 2,015 live
+// inferences (docs/superpowers/specs/2026-08-24-facet-value-results.md):
+// accuracy 0.695 against a 0.713 majority baseline — the facet was worth LESS
+// than always answering `command`, predicted `statement` 22 times and was right
+// zero of those times at up to full confidence, and scored command recall 0.650
+// on imperatives. Targeted: task_type (0.733 vs 0.143), domain (0.683 vs 0.261)
+// and activity_type (0.670 vs 0.243) all clear their baselines by >40 points and
+// are untouched. Producer strings move from `-v8` to `-v9`.
+const SchemaVersion = 9
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in
@@ -117,19 +131,15 @@ var DomainDefs = []LabelDef{
 	{"general", "a trivial everyday request (weather, time, jokes, personal chat)"},
 }
 
-// SpeechActDefs — the speech_act facet (what KIND of utterance the current
-// prompt is), classified against ctx.Text only. Ids are stable (Atlas contract);
-// the readable Text is bakeoff-selected (short, positive, discriminative — no
-// negation). Notably command="a task to carry out" (NOT "a command/instruction"):
-// many imperative prompts ("Summarize this", "Translate…") read to the bi-encoder
-// as *describing a task*, so the task framing recovers command recall (35→44/65,
-// overall 0.624→0.731). See docs/superpowers/specs/2026-07-17-speech-act-facet-design.md.
-var SpeechActDefs = []LabelDef{
-	{"command", "a task to carry out"},
-	{"question", "a question asking for information"},
-	{"statement", "a statement describing a situation"},
-	{"fragment", "a short follow-up or acknowledgement"},
-}
+// There is deliberately no SpeechActDefs here. It was the speech_act facet's
+// vocabulary, dropped with the facet at schema v9 — see the v9 note above. Its
+// wording was already bakeoff-tuned once (0.624→0.731), and the study named
+// that wording as the suspect rather than the idea: `command`="a task to carry
+// out" and `statement`="a statement describing a situation" are precisely the
+// two entries the fatal confusion ran between. So a re-bakeoff is a legitimate
+// way to bring the facet back, and the gold labels are kept in gold.jsonl as
+// the evidence to judge one against. What is NOT legitimate is restoring these
+// four strings unchanged: that is the version that measured below a constant.
 
 // Sensitivity is the canonical sensitivity-level vocabulary: the closed set of
 // values the sensitivity facet may PUBLISH.
