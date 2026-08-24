@@ -65,6 +65,31 @@ class Counts:
     # retention working as designed; a CLIMBING value means digests are being asked for below the
     # floor, which is a configuration problem, not a load one.
     analyze_expired: int = 0
+    # POST /tick — the daemon characterising the slices of a session that no prompt's look-back
+    # will ever reach (app/analysis/tick.py). Its own counters, like every other non-inference
+    # route here, and the pairing is what makes them readable:
+    #
+    #   tick_served      ticks answered. A machine with an idle agent still ticks, so this
+    #                    climbing on its own means nothing is wrong.
+    #   tick_windows     windows PUBLISHED. The number that says the coverage hole is being
+    #                    filled; flat while tick_served climbs means every slice was already
+    #                    covered by a prompt, which on a chatty machine is correct.
+    #   tick_empty       windows planned and then dropped for holding no evidence — the "idle
+    #                    ticks emit nothing" rule doing its job. Expected to dominate on a quiet
+    #                    machine, and its whole purpose is that those rows never reach Atlas.
+    #   tick_expired     windows whose evidence was PRUNED before the tick reached them. Unlike
+    #                    analyze_expired this one is not a caller asking for too old a window —
+    #                    it means the tick fell further behind than the retention horizon, so a
+    #                    climbing value is lost characterisation, not a configuration mistake.
+    #   tick_behind      ticks that stopped early because the store had not caught up. Reads
+    #                    exactly like analyze_not_ingested: transient, self-healing, and only
+    #                    interesting if it climbs while ingest_served is flat.
+    tick_served: int = 0
+    tick_rejected: int = 0
+    tick_windows: int = 0
+    tick_empty: int = 0
+    tick_expired: int = 0
+    tick_behind: int = 0
 
 
 def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,

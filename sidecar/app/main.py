@@ -19,11 +19,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, analyze_window
+from app.analysis.tick import DEFAULT_MAX_WINDOWS, tick as tick_windows_for
 from app.analysis.dynamics import DEFAULT_SIZER
-from app.analysis.ingest import ingest_file
+from app.analysis.ingest import ingest_file, session_of
 from app.analysis.match import DEFAULT_BUDGET_S as _MATCH_DEFAULT_BUDGET_S
 from app.analysis.match import compile_vocabulary, match_text
 from app.analysis.store import open_store
+from app.analysis.transcript import _order_key
 from app.cpuscale import CpuScaler
 from app.governor import Governor
 from app.metrics import Counts, build_metrics
@@ -262,6 +264,37 @@ class AnalyzeIn(BaseModel):
     path: str
     prompt_id: str
     span_minutes: int = 60
+
+
+class TickIn(BaseModel):
+    """One tick over one transcript. Coordinates and instants only — never text, never a span,
+    never an offset (see test_tick_response_carries_no_prompt_text).
+
+    `prompt_ids` are the HUMAN prompts enrichment has already characterised, and WHICH ids they
+    are comes from the daemon rather than from the store on purpose: the store's `prompt` index
+    holds every user- AND assistant-shaped turn (`ingest.py` indexes everything `turns_in`
+    yields, so an assistant uuid still resolves), which for john's transcript is ~260 rows
+    against 14 human prompts. Planning against all of them computes a covered set that swallows
+    the session and the tick emits nothing, ever
+    (test_the_store_prompt_index_would_hide_every_gap). Only the daemon knows which ids
+    enrichment actually fired on — it applies `internal/agent/watch/filter.go`'s human-prompt
+    filter — so the daemon names them and the store times them. An id the store cannot resolve
+    is DROPPED rather than defaulted: a prompt whose instant is unknown cannot define a covered
+    interval, and inventing one would either hide a gap or manufacture one.
+
+    `cursor_ts` is where the last tick for this transcript stopped; null starts the cursor at the
+    frontier, so a transcript seen for the first time is characterised forward and never
+    back-filled — the same default `KELD_WATCH_BACKFILL` sets for capture.
+
+    `now` is the daemon's clock, injected rather than read here, because it is what the frontier
+    is computed from and a test that cannot move it cannot exercise the settle rule at all.
+    """
+    path: str
+    prompt_ids: list[str] = []
+    cursor_ts: float | None = None
+    now: float | None = None
+    span_minutes: float = 60.0
+    max_windows: int = DEFAULT_MAX_WINDOWS
 
 
 class IngestIn(BaseModel):
@@ -511,6 +544,85 @@ def _ingest_blocking(path):
     if st is None:
         raise StoreBehind("the reference-series store could not be opened")
     return ingest_file(st, path, nlp)
+
+
+def _tick_blocking(path, prompt_ids, cursor_ts, now, span_minutes, max_windows):
+    """The whole of /tick's work, on an executor thread.
+
+    `_analysis_nlp()` is resolved here for the same reason `_analyze_blocking` resolves it here
+    (a multi-second load must never run on the event loop), and `DEFAULT_SIZER` is passed for the
+    same reason /analyze passes it: a tick-emitted window is not a lesser window, and its
+    dynamics block comes from the same EWMA change-point sizer production already measured.
+    """
+    nlp = _analysis_nlp() if _terms_status() == _TERMS_OK else None
+    st = _store()
+    if st is None:
+        raise StoreBehind("the reference-series store could not be opened")
+    # Coordinates in, instants out: the daemon names the human prompts and the store times them
+    # (see TickIn.prompt_ids). An unresolvable id is dropped, never defaulted.
+    session = session_of(path)
+    prompt_ts = []
+    for pid in prompt_ids:
+        iso = st.prompt_time(session, pid)
+        if iso is not None:
+            prompt_ts.append(_order_key(iso).timestamp())
+    return tick_windows_for(st, path, cursor_ts=cursor_ts, prompt_ts=prompt_ts, now=now,
+                            span_minutes=span_minutes, nlp=nlp, sizer=DEFAULT_SIZER,
+                            max_windows=max_windows)
+
+
+@app.post("/tick")
+async def tick(body: TickIn):
+    """Characterise the slices of one transcript that NO prompt's look-back will ever reach.
+
+    Enrichment fires per prompt and every window looks back an hour, so the work a prompt CAUSES
+    falls outside that prompt's own window; when the next prompt is more than an hour later,
+    nothing characterises it. Measured over the frozen corpus (scripts/tick_coverage.py), that is
+    43.6% of john's reference events and 44.5% of the Claude Code corpus's turns. See
+    app/analysis/coverage.py for the planner and the guarantee that a tick-emitted window can
+    never overlap a prompt's, and app/analysis/tick.py for what happens to a window the store
+    cannot answer.
+
+    Answers with NO refusal status of its own, and that is the design rather than an omission.
+    Per-window, a 503-shaped failure stops the cursor and is reported as `behind`, and a
+    410-shaped one drops the window and is reported in `expired` — because a tick asks for
+    several windows at once and one unanswerable window must not discard the answerable ones
+    beside it. Both are detected through `analyze_window`'s own `StoreBehind`/`WindowExpired`,
+    the same guards /analyze maps to those statuses; the tick does not re-derive either.
+
+    Like /analyze and /ingest it bypasses _dispatch/the single-flight runner: this is a series
+    query, not inference, and it must answer while the runner is occupied or no worker has ever
+    been spawned.
+    """
+    # Confinement BEFORE anything else, the SAME allowlist /analyze and /ingest use — the
+    # sidecar has no auth, and a tick reads a transcript's series as the daemon's user.
+    if not _within_roots(body.path, _analyze_roots()):
+        _count("tick_rejected")
+        raise HTTPException(status_code=403, detail="path is outside the configured transcript roots")
+    _count("tick_served")
+    now = body.now if body.now is not None else time.time()
+    loop = asyncio.get_running_loop()
+    try:
+        out = await loop.run_in_executor(
+            None, _tick_blocking, body.path, body.prompt_ids, body.cursor_ts, now,
+            body.span_minutes, body.max_windows)
+    except FileNotFoundError:
+        # The transcript is GONE. Permanent, like /ingest's 404 for the same case.
+        raise HTTPException(status_code=404, detail="transcript not found") from None
+    except StoreBehind:
+        # The store could not be OPENED at all — no cursor to report and nothing to characterise.
+        # A window that is merely behind is reported in the body, not here (see the docstring).
+        _count("tick_behind")
+        raise HTTPException(status_code=503, detail="the reference-series store is unavailable") from None
+    for _ in range(len(out["windows"])):
+        _count("tick_windows")
+    for _ in range(out["empty"]):
+        _count("tick_empty")
+    for _ in range(out["expired"]):
+        _count("tick_expired")
+    if out["behind"]:
+        _count("tick_behind")
+    return out
 
 
 @app.post("/ingest")

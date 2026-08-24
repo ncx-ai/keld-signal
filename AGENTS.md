@@ -752,6 +752,61 @@ A job that trips the backstop re-spools, **bounded** by
 `spool.Quarantine`'d to `spool/bad/` rather than retried forever. Atlas dedups on
 `dedup_key`, so a late double-publish from a recovering attempt is harmless.
 
+**Tick-driven window characterisation (`daemon/tick.go`, sidecar
+`analysis/coverage.py` + `analysis/tick.py`, `POST /tick`) — OFF by default
+(`KELD_TICK`).** Enrichment fires **per prompt** and every window looks **back**
+60 minutes, so the work a prompt *causes* falls outside that prompt's own
+window; when the next prompt is more than an hour later, nothing characterises
+it. Measured (`scripts/tick_coverage.py`, frozen corpus): **56.4%** of john's
+reference events and **55.0%** of the 496-transcript Claude Code corpus's turns
+lie inside some prompt's look-back — a third to a half of all work is invisible
+to enrichment, and it is worse the more autonomous the agent. A tick
+characterises the gaps: **99.7% / 99.5%** after.
+
+- **The frontier is the whole no-double-publish guarantee.** Never emit above
+  `min(watermark, now - span)`. Time `t` below that can only be covered by a
+  prompt in `(t, t+span]`, all of which have already arrived, so the covered set
+  there is FINAL and an emitted window can never later overlap a prompt's. Not a
+  margin — exact, and replayed against randomised incremental prompt streams.
+  The price is latency only: a window facet lands up to `span + interval` after
+  the work. **Nothing safety-relevant waits for a tick** — `sensitivity` and
+  every text facet keep their per-prompt trigger, and this path never reads
+  prompt text at all.
+- **A timer, not the ingest signal.** A gap becomes emittable a whole span after
+  the work, by which time the machine is usually quiet and no ingest signal is
+  coming. Measured, the share of recovered work emitted only after the
+  transcript's last turn: **5.8%** (john) / **79.5%** (Claude Code corpus) — an
+  ingest-driven tick would drop it, in exactly the burst-then-silence shape the
+  tick exists for. **Idle emits nothing** structurally instead: a silent
+  interval's windows hold no evidence and are dropped sidecar-side.
+- **The interval is latency, not coverage.** 99.5% at 5/10/20/60 minutes alike.
+  Default 10m (`KELD_TICK_INTERVAL`).
+- **The covered set comes from the DAEMON, not the store.** The store's `prompt`
+  index holds every user- *and* assistant-shaped turn (~260 rows for john's 14
+  human prompts); planning against it swallows the session and emits nothing.
+  The daemon names the prompt ids (it owns `watch/filter.go`'s human-prompt
+  filter) and the store times them; state in `~/.keld/state/tick.json`
+  (per-transcript monotonic cursor + bounded prompt memory, forward-only on
+  first sight).
+- **Watermark and retention are honoured through `analyze_window`'s own
+  `StoreBehind`/`WindowExpired`, never re-derived.** Behind ⇒ the cursor stops
+  and the tick retries. Expired ⇒ the window is dropped, counted, and the cursor
+  **advances** — stopping on a permanent refusal would wedge a daemon that had
+  been down longer than the retention horizon.
+- ⚠️ **The client half ships INERT, and that is why it is off by default.** A
+  tick row publishes under `corr_scheme:"window"` with a deterministic
+  `<session>@<window_end>` id, in its own wire type (`publish.WindowEnrichment`)
+  carrying no text facets at all. It could **not** ride a prompt's correlation:
+  Atlas keys enrichments `UNIQUE(org_id, source_id, corr_scheme, corr_id)` and
+  inserts `ON CONFLICT DO UPDATE` over every column, so the design spec's
+  recommended option (a) would **overwrite** the anchor prompt's enrichment
+  rather than dedup against it. Under its own scheme it cannot collide — but
+  every Atlas consumer joins `Enrichment.corr_id == ToolEvent.prompt_id`, so a
+  window row is accepted and stored (including in `enrichments.raw`) and
+  **joins to nothing** until Atlas learns a time+identity join. Switching
+  `KELD_TICK` on logs that and emits a `window.tick_enabled` client-event
+  saying so. Flipping the default is a one-line change the day Atlas catches up.
+
 **Adaptive input truncation (`enrich/lenstat`).** GLiNER2's transient activation
 memory scales with sequence length, and gliner2's own `max_len` defaults to
 `None` — *no truncation* — so one long prompt could allocate a multi-GB spike.

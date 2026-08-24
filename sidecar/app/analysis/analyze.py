@@ -126,9 +126,22 @@ class StoreBehind(Exception):
 
 
 def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refresh=True,
-                   sizer=None):
+                   sizer=None, end_ts=None):
     """The `span_minutes` of work ending at `prompt_id` -> the workstream + inventory payload,
     served from the reference series.
+
+    `end_ts` anchors the window at an INSTANT instead of at a prompt, and is what the tick uses
+    (`app/analysis/tick.py`): work that no prompt's look-back reaches has no prompt id to end at.
+    It is a second way to say WHERE the window ends and deliberately not a second way to compute
+    what is in it — everything after the anchor is the one code path, and
+    `test_analyze_window_anchored_by_time_agrees_with_the_same_window_by_prompt` pins the two
+    against each other on the same instant. Both refusals apply unchanged: an anchored window is
+    checked against the retention floor and the watermark exactly as a prompt's is, which is the
+    whole reason the tick goes through this function rather than reaching into the store.
+
+    `span_minutes` may be fractional. A gap closed by the next prompt's look-back is not a whole
+    number of minutes, and rounding it up would reach back into the region that prompt already
+    characterises — the one arithmetic that could make a tick double-count.
 
     `refresh` (the default) ingests whatever the transcript has grown by before answering. That
     is an INGEST, not a parse-and-discard fallback: it pays the parse cost once and leaves the
@@ -156,7 +169,8 @@ def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refre
     series cannot answer the window exactly. See the module docstring on why those are different.
     """
     st = store if store is not None else open_store()
-    rl, start, end, effort = _rollup_from_store(st, path, prompt_id, span_minutes, nlp, refresh)
+    rl, start, end, effort = _rollup_from_store(st, path, prompt_id, span_minutes, nlp, refresh,
+                                                end_ts=end_ts)
     out = _payload(rl, path, start, end, effort)
     if sizer is not None:
         out["dynamics"] = dynamics_for(st, session_of(path), end, span_minutes,
@@ -246,7 +260,8 @@ def _bounds(end_iso, span_minutes):
     return end - timedelta(minutes=span_minutes), end
 
 
-def _rollup_from_store(store, path, prompt_id, span_minutes=60, nlp=None, refresh=True):
+def _rollup_from_store(store, path, prompt_id, span_minutes=60, nlp=None, refresh=True,
+                       end_ts=None):
     """`(rollup, start, end, effort)` for the window, out of the series. No transcript is
     opened."""
     current = is_current(store, path, nlp)
@@ -255,7 +270,9 @@ def _rollup_from_store(store, path, prompt_id, span_minutes=60, nlp=None, refres
         current = is_current(store, path, nlp)
 
     session = session_of(path)
-    end_iso = store.prompt_time(session, prompt_id)
+    # An anchored window skips prompt resolution and NOTHING ELSE: the retention floor, the
+    # currency check and the watermark guard below all still run, on the same window bounds.
+    end_iso = end_ts if end_ts is not None else store.prompt_time(session, prompt_id)
     if end_iso is None:
         # Absent from a store that has read the whole file is a fact about the transcript;
         # absent from one that has not is a fact about the store. Collapsing them would either

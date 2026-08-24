@@ -455,6 +455,11 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, svc serviceFacets
 	if !ok {
 		return false // could not resolve prompt text; skip silently
 	}
+	// This prompt's own hour is characterised by THIS job, so the tick must not
+	// characterise it again — spend inside an overlap would be counted twice.
+	// Recorded after the resolve so an unresolvable prompt leaves its hour to the
+	// tick; a no-op unless window characterisation is switched on (see tick.go).
+	noteTickPrompt(j)
 	// Size this job's input truncation from the machine's own prompt-length
 	// distribution: record this prompt's length (a count, never its text) and
 	// bind the resulting cap for the job's inferences. Without a cap, gliner2
@@ -793,6 +798,11 @@ func Run(ctx context.Context) error {
 		// warmup comes from wireEnrichment, not from warmupFunc(model): it is
 		// the composition of on-demand provisioning with the model load, and
 		// only the backend that owns the weights can build it.
+		// The tick characterises the work no prompt's look-back reaches — measured,
+		// 43-45 points of it. OFF by default because such a row joins to nothing at
+		// Atlas yet; see tick.go's envTick for the whole of that reasoning. Started
+		// BEFORE the worker so the observer is in place for the first job.
+		setTickObserver(startTicker(ctx, svc.Tick, pub, actor, emitter))
 		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 

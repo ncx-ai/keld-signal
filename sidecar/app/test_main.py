@@ -4,6 +4,7 @@ the worker (WorkerManager.call). These import app.main (light — fastapi/pydant
 only; the GLiNER2 model lives in a worker child, never at import) so they run
 without torch. Runnable under pytest OR standalone: `python app/test_main.py`.
 """
+import datetime as _dt
 import importlib
 import json
 import os
@@ -886,6 +887,155 @@ def test_analyze_response_carries_no_prompt_text():
     dumped = json.dumps(body)
     for k in ("text", "span", "offset"):
         assert f'"{k}":' not in dumped, k
+
+
+# --- POST /tick ----------------------------------------------------------------------------
+#
+# The tick characterises the slices of a session that NO prompt's look-back will ever reach.
+# Measured over the frozen corpus (scripts/tick_coverage.py), that is 43.6 points of john's
+# reference events and 44.5 of the Claude Code corpus's turns — a third to a half of all work,
+# invisible to enrichment, and worse the more autonomous the agent. The planner and its
+# no-double-publish guarantee are proven in app/test_analysis_coverage.py and the service in
+# app/test_analysis_tick.py; what is asserted HERE is the endpoint: the same root confinement
+# /analyze has, the same off-the-runner property, the same no-text-in-the-response rule, and the
+# counters an operator reads it by.
+
+_TICK_PROMPT_1 = "2026-08-01T10:00:00Z"
+_TICK_PROMPT_2 = "2026-08-01T11:54:37Z"
+
+
+def _gap_transcript():
+    """A prompt, twenty minutes of autonomous work right after it, then nearly two hours of
+    silence, then the next prompt. The work is in NO prompt's look-back: the first precedes it
+    and the second's hour reaches back only to 10:54:37. Wholly invented, like every fixture in
+    this file."""
+    tmp = tempfile.mkdtemp(prefix="keld-tick-test-")
+    path = os.path.join(tmp, "fixture002-0000.jsonl")
+    rows = [{"type": "user", "timestamp": _TICK_PROMPT_1, "cwd": "/workspace/widget-app",
+             "gitBranch": "trunk", "uuid": "tick-prompt-0001",
+             "message": {"content": [{"type": "text", "text": "build the thing"}]}}]
+    for i in range(40):
+        ts = f"2026-08-01T10:{i // 2:02d}:{(i % 2) * 30 + 15:02d}Z"
+        rows.append(
+            {"type": "assistant", "timestamp": ts, "cwd": "/workspace/widget-app",
+             "gitBranch": "trunk", "uuid": f"tick-work-{i:03d}", "requestId": f"req-{i:03d}",
+             "message": {"role": "assistant", "model": "acme-llm-7b-preview",
+                         "content": [{"type": "tool_use", "id": f"toolu_{i:03d}", "name": "Read",
+                                      "input": {"file_path": "/workspace/widget-app/api/q.go"}}],
+                         "usage": {"input_tokens": 100, "output_tokens": 20,
+                                   "cache_creation_input_tokens": 0,
+                                   "cache_read_input_tokens": 0}}})
+    rows.append({"type": "user", "timestamp": _TICK_PROMPT_2, "cwd": "/workspace/widget-app",
+                 "gitBranch": "trunk", "uuid": "tick-prompt-0002",
+                 "message": {"content": [{"type": "text", "text": "now ship it"}]}})
+    with open(path, "w") as fh:
+        for o in rows:
+            fh.write(json.dumps(o, separators=(",", ":")) + "\n")
+    os.environ["KELD_ANALYZE_ROOTS"] = tmp
+    os.environ["KELD_HOME"] = os.path.join(tmp, "keld-home")
+    return path
+
+
+def _epoch(iso):
+    return _dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+
+
+def _tick_in(m, path, **kw):
+    kw.setdefault("prompt_ids", ["tick-prompt-0001", "tick-prompt-0002"])
+    kw.setdefault("cursor_ts", _epoch(_TICK_PROMPT_1) - 3600)
+    kw.setdefault("now", _epoch(_TICK_PROMPT_2) + 2 * 3600)
+    return m.TickIn(path=path, **kw)
+
+
+def test_tick_characterises_the_window_no_prompt_reaches_without_touching_the_runner():
+    """THE POINT OF THE ENDPOINT. The twenty minutes of autonomous work fall outside every
+    prompt's hour, so before this they were characterised by nothing at all."""
+    from app.metrics import Counts
+
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+    path = _gap_transcript()
+    _asyncio.run(m.ingest(m.IngestIn(path=path)))
+    body = _asyncio.run(m.tick(_tick_in(m, path)))
+
+    assert len(body["windows"]) == 1, body
+    w = body["windows"][0]
+    assert _epoch(w["window_start"]) == _epoch(_TICK_PROMPT_1), w["window_start"]
+    assert _epoch(w["window_end"]) == _epoch(_TICK_PROMPT_2) - 3600, w["window_end"]
+    assert w["evidence"] > 0 and "workstreams" in w and "inventory" in w, w
+    counts = m._state["counts"]
+    assert counts.tick_served == 1 and counts.tick_windows == 1, vars(counts)
+    assert counts.submitted == 0, "must not have gone through the runner"
+
+
+def test_a_tick_window_cannot_overlap_the_prompt_window_beside_it():
+    """The no-double-publish rule, on the endpoint: spend inside an overlap would be counted
+    once by the prompt's enrichment and again by the tick's."""
+    m = _reload_main(None)
+    _wire(m)
+    path = _gap_transcript()
+    _asyncio.run(m.ingest(m.IngestIn(path=path)))
+    body = _asyncio.run(m.tick(_tick_in(m, path)))
+    for w in body["windows"]:
+        assert _epoch(w["window_end"]) <= _epoch(_TICK_PROMPT_2) - 3600, w
+
+
+def test_a_tick_publishes_nothing_for_silence_or_for_ground_it_already_covered():
+    """"Idle ticks emit nothing", both halves. A window over silence plans just as cleanly as one
+    over work and must be DROPPED for holding no evidence; and a second tick over ground the
+    first already covered must plan nothing at all. Without the first, a quiet laptop publishes
+    empty characterisations forever; without the second, a busy one republishes the same window
+    every tick."""
+    from app.metrics import Counts
+
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+    path = _gap_transcript()
+    _asyncio.run(m.ingest(m.IngestIn(path=path)))
+
+    # Six hours of cursor with nothing in the first four: those windows are planned and dropped.
+    first = _asyncio.run(m.tick(_tick_in(m, path, cursor_ts=_epoch(_TICK_PROMPT_1) - 6 * 3600,
+                                         max_windows=32)))
+    assert first["empty"] >= 3, first["empty"]
+    assert all(w["evidence"] > 0 for w in first["windows"]), first["windows"]
+
+    # And again from where it stopped: nothing left below the frontier.
+    again = _asyncio.run(m.tick(_tick_in(m, path, cursor_ts=first["cursor"], max_windows=32)))
+    assert again["windows"] == [] and again["planned"] == 0, again
+    assert again["cursor"] == first["cursor"], (again["cursor"], first["cursor"])
+
+
+def test_tick_rejects_a_path_outside_the_configured_roots():
+    """Same confinement as /analyze and /ingest, and 403 rather than 404 for the same reason:
+    a rejected path and a legitimate-but-unresolvable one are different facts."""
+    from app.metrics import Counts
+
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+    path = _gap_transcript()
+    os.environ["KELD_ANALYZE_ROOTS"] = os.path.join(os.path.dirname(path), "elsewhere")
+    try:
+        _asyncio.run(m.tick(_tick_in(m, path)))
+        assert False, "expected 403"
+    except HTTPException as e:
+        assert e.status_code == 403, e.status_code
+    assert m._state["counts"].tick_rejected == 1
+    assert m._state["counts"].tick_served == 0
+
+
+def test_tick_response_carries_no_prompt_text():
+    m = _reload_main(None)
+    _wire(m)
+    path = _gap_transcript()
+    _asyncio.run(m.ingest(m.IngestIn(path=path)))
+    dumped = json.dumps(_asyncio.run(m.tick(_tick_in(m, path))))
+    for k in ("text", "span", "offset"):
+        assert f'"{k}":' not in dumped, k
+    for phrase in ("build the thing", "now ship it"):
+        assert phrase not in dumped, phrase
 
 
 # --- POST /ingest --------------------------------------------------------------------------

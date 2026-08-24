@@ -3,8 +3,8 @@ package enrich
 import "testing"
 
 func TestSchemaVersion(t *testing.T) {
-	if SchemaVersion != 11 {
-		t.Fatalf("SchemaVersion = %d, want 11", SchemaVersion)
+	if SchemaVersion != 12 {
+		t.Fatalf("SchemaVersion = %d, want 12", SchemaVersion)
 	}
 }
 

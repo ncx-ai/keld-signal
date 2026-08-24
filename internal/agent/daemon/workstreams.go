@@ -1,6 +1,10 @@
 package daemon
 
-import "github.com/ncx-ai/keld-signal/internal/agent/enrich"
+import (
+	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+)
 
 // windowAnalyzer is the OPTIONAL capability a backend advertises when it can
 // characterise the window of work around a prompt (the sidecar's /analyze:
@@ -22,6 +26,15 @@ type windowAnalyzer interface {
 // own default.
 type piiDetector interface {
 	DetectPIIIn(text string, regions []string) (enrich.PIIResult, bool)
+}
+
+// windowTickerCap is the capability behind the tick (the sidecar's /tick): "which
+// slices of this transcript has no prompt's look-back reached, and what were
+// they". Same shape as the two above — a service route, no inference, works with
+// GLiNER2 absent — so it is resolved the same way and travels in serviceFacets.
+type windowTickerCap interface {
+	TickCharacterised(path, source, sessionID string, promptIDs []string, cursor *float64,
+		now time.Time, spanMinutes float64, maxWindows int) ([]enrich.WindowCharacterisation, float64, bool)
 }
 
 // transcriptIngester is the capability behind the watcher's ingest signal (the
@@ -55,6 +68,11 @@ type serviceFacets struct {
 	// answer cheap. It travels here because it is the same service, resolved from
 	// the same client, in both ml_backend modes that have one.
 	SignalIngest func(path string) bool
+	// Tick is not consumed by a job either — it is driven by the daemon's own
+	// timer (see tick.go), which is what lets it characterise a burst of
+	// autonomous work AFTER the machine has gone quiet. Nil when the service
+	// cannot provide it, which switches the ticker off rather than degrading it.
+	Tick windowTicker
 }
 
 // facetsFor returns the service facets of the client it is handed, leaving any
@@ -92,6 +110,9 @@ func facetsFor(m enrich.Model, regions func() []string) serviceFacets {
 	}
 	if in, ok := m.(transcriptIngester); ok {
 		f.SignalIngest = in.SignalIngest
+	}
+	if t, ok := m.(windowTickerCap); ok {
+		f.Tick = t
 	}
 	return f
 }

@@ -81,7 +81,7 @@ package enrich
 // wrong question, exactly as it is for a named term. The sidecar's SCHEMA moves 6
 // -> 7 for the same addition. Nothing existing changes meaning: every field of v10
 // publishes identically. Producer strings move from `-v10` to `-v11`.
-const SchemaVersion = 11
+const SchemaVersion = 12
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in
