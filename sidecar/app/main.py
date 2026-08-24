@@ -479,8 +479,10 @@ def _analyze_blocking(path, prompt_id, span_minutes):
     # recent slice read against its own longer baseline, so the response says how the work is
     # CHANGING and not only what it contains. Opt-in in `analyze_window` because the parse-path
     # equivalence oracle cannot compute it -- see that function's docstring -- so production is
-    # the one caller that passes a sizer. `DEFAULT_SIZER` is the fixed slice; Task 3 of the plan
-    # replaces it only if an adaptive method beats it under a pre-registered rule.
+    # the one caller that passes a sizer. `DEFAULT_SIZER` is now the EWMA change-point sizer:
+    # Task 3's pre-registered comparison measured it at +74.6 precision / +27.0 recall points over
+    # the fixed 15-minute slice with no new dependency, and the fixed slice survives as its
+    # no-detection fallback (see `dynamics.EWMA_FAST` for the table and the control).
     out = analyze_window(path, prompt_id, span_minutes, nlp, store=st, sizer=DEFAULT_SIZER)
 
     if status == _TERMS_DISABLED:

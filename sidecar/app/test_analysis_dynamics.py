@@ -32,8 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.analysis import workstreams
 from app.analysis.analyze import analyze_window, analyze_window_by_parse
-from app.analysis.dynamics import (SLICE_MINUTES, STATUSES, FixedSizer, Sizer, Slicing,
-                                   compare, dynamics, series)
+from app.analysis.dynamics import (DEFAULT_SIZER, SLICE_MINUTES, STATUSES, EwmaSizer,
+                                   FixedSizer, Sizer, Slicing, compare, dynamics, series)
 from app.analysis.ingest import RECONCILE_SLOT, ingest_file, session_of
 from app.analysis.store import BIN_SECONDS, open_store
 from app.analysis.window import MIN_EVIDENCE, rollup
@@ -308,10 +308,11 @@ def test_every_status_is_one_of_the_named_ones():
 
 # --- the sizing seam -------------------------------------------------------------------------
 #
-# Task 3 implements rival sizers (ADWIN, EWMA fast/slow, PageHinkley, KSWIN) behind this and
-# chooses by measurement, so the INTERFACE is the deliverable, not FixedSizer. The tests below
-# pin the two things that make it pluggable: the signature admits a sizer that decides the
-# boundary from the series, and a sizer that actually does so needs nothing else changed.
+# Task 3 implemented rival sizers (ADWIN, EWMA fast/slow, PageHinkley, KSWIN) behind this and
+# chose by measurement, so the INTERFACE is the deliverable, not FixedSizer. The tests below pin
+# the two things that make it pluggable: the signature admits a sizer that decides the boundary
+# from the series, and a sizer that actually does so needs nothing else changed. `EwmaSizer` (the
+# section after this one) is the sizer that did, so these are no longer hypothetical.
 
 def test_the_sizer_signature_admits_an_adaptive_implementation():
     """`plan` is handed the store and the session, so a sizer can READ the series it is sizing;
@@ -361,6 +362,192 @@ def test_the_sizer_clamps_to_the_retention_floor_and_says_so():
                                  "clamped") is not True
 
 
+# --- the sizer that WON the measurement ------------------------------------------------------
+#
+# Task 3 (`6e5f404`) scored `EwmaSizer(0.3, 0.02, 0.2)` against `FixedSizer` at six slice lengths
+# and against ADWIN/PageHinkley/KSWIN over the frozen corpus, under a rule pre-registered before
+# anything ran: +74.6 precision points and +27.0 recall points over the shipped `fixed(15m)`, and
+# it needs no dependency. `~/keld/refseries-context/dynamics/SIZER-RESULTS.md` is the report.
+#
+# What the tests below pin is the set of properties that win was MADE of, because each of them is
+# a way to keep the class and lose the result:
+#
+#   * a flat stream must be SILENT (that is the calibration criterion the rivals were set by, and
+#     a sizer that fires on stationary work is the fixed sizer with extra steps);
+#   * a level shift is ONE change point, not one per bucket for as long as it persists;
+#   * the observation is a SHARE, so a busy bucket is not a change — the same normalisation
+#     argument `compare` makes, and the trap `test_turnover_does_not_scale_with_evidence_volume`
+#     exists for one level down;
+#   * an empty bucket is NOT an observation of zero change;
+#   * no detection reduces to `FixedSizer` EXACTLY, since that is the only path `SLICE_MINUTES`
+#     still serves.
+
+
+class _Bucketed:
+    """A store stand-in that serves `series` a scripted per-bucket rollup and nothing else.
+
+    The EWMA reads its stream through the shipped `series` helper, so the unit tests can hand it
+    a series directly instead of building a transcript for every encoding property. The real
+    store is exercised further down — both, because a fake that drifts from the real query shape
+    is exactly how an encoding bug survives.
+    """
+
+    def __init__(self, buckets, level="branch", start=0.0, step=60.0):
+        self.buckets, self.level, self.start, self.step = buckets, level, start, step
+
+    def rollup_window(self, _session, start, _end, exclude_slots=()):
+        i = int(round((start - self.start) / self.step))
+        items = self.buckets[i] if 0 <= i < len(self.buckets) else []
+        return {self.level: list(items)} if items else {}
+
+
+def _flip_store(end, flip_bucket, span=60, main="main", feat="feature/ledger-split"):
+    lo = (end - timedelta(minutes=span)).timestamp()
+    n = int(span)
+    return _Bucketed([[(main, 3.0)]] * flip_bucket + [[(feat, 3.0)]] * (n - flip_bucket),
+                     start=lo)
+
+
+END = datetime(2026, 8, 20, 14, 30, tzinfo=timezone.utc)
+
+
+def test_the_default_sizer_is_the_one_that_won_the_measurement():
+    """The deliverable of this task: the winner is what /analyze uses. `main.py` passes
+    `DEFAULT_SIZER`, so this is the assertion that the measured sizer is the shipped one."""
+    assert isinstance(DEFAULT_SIZER, EwmaSizer), DEFAULT_SIZER
+    assert (DEFAULT_SIZER.fast, DEFAULT_SIZER.slow, DEFAULT_SIZER.threshold) == (0.3, 0.02, 0.2)
+    assert DEFAULT_SIZER.name == "ewma", DEFAULT_SIZER.name
+
+
+def test_the_fixed_constant_stays_at_the_length_measured_for_the_fallback_population():
+    """15, not the 10 the standalone sweep preferred. Once a detector wins, the constant runs
+    ONLY on windows where nothing was detected — stationary work, where localisation is
+    irrelevant by definition and attribution rate is the only thing left to optimise (Task 1's
+    table: `project` 94.9% at 15 vs 92.8% at 10, `language` 68.0% vs 63.0%). Changing it to 10
+    would be importing a number measured on the wrong population."""
+    assert SLICE_MINUTES == 15
+
+
+def test_a_flat_stream_is_silent_and_a_level_shift_is_exactly_one_change_point():
+    """The two together. Silence on a flat stream is the calibration criterion every rival was
+    set by; ONE fire on a persistent shift is the rising-edge rule — without it a shift that
+    lasts 20 buckets is 20 change points and the fire rate reports the parameterisation."""
+    ew = EwmaSizer()
+    assert ew.fire_indices([0.0] * 20 + [1.0] * 40) == [20]
+    for label, xs in (("flat-0", [0.0] * 60), ("flat-high", [0.9] * 60),
+                      ("flat-noisy", [0.0, 0.0, 0.0, 0.1, 0.2] * 12)):
+        assert ew.fire_indices(xs) == [], (label, ew.fire_indices(xs))
+
+
+def test_two_separated_shifts_are_two_change_points_and_the_last_one_sizes_the_slice():
+    """Rising-edge is not "fire once per window": the stream returning to its old value and
+    leaving again is two changes, and the boundary is the LATEST — the slice is "what the work
+    looks like NOW", so an earlier change point is baseline, not slice."""
+    ew = EwmaSizer()
+    idx = ew.fire_indices([0.0] * 10 + [1.0] * 10 + [0.0] * 20 + [1.0] * 20)
+    assert len(idx) == 2, idx
+    assert idx[0] == 10 and idx[1] > 30, idx
+
+
+def test_the_observation_is_a_share_so_a_busy_bucket_is_not_a_change():
+    """The volume trap, one level down from `test_turnover_does_not_scale_with_evidence_volume`.
+    An unnormalised novelty (the COUNT of evidence outside the running mode) would make a busy
+    bucket read as a change; multiplying every count by a constant must move nothing."""
+    thin = [[("main", 1.0)]] * 20 + [[("feat", 1.0)]] * 40
+    fat = [[(ref, n * 17.0) for ref, n in b] for b in thin]
+    ew = EwmaSizer()
+    a = [x for _t, x in ew.observations(_Bucketed(thin), "s", 0.0, 3600.0)]
+    b = [x for _t, x in ew.observations(_Bucketed(fat), "s", 0.0, 3600.0)]
+    assert a == b, (a, b)
+    assert ew.fire_indices(a) == [20], ew.fire_indices(a)
+
+
+def test_an_empty_bucket_is_not_an_observation_and_the_first_is_never_novel():
+    """A bucket with no evidence is not a bucket with no change — feeding it as 0.0 would let a
+    quiet stretch pull the fast mean back down and mask the change that follows it. And the
+    first observation is 0.0 by definition: there is nothing yet for it to be novel against."""
+    ew = EwmaSizer()
+    obs = ew.observations(_Bucketed([[("main", 3.0)], [], [], [("main", 3.0)],
+                                     [("feat", 3.0)]]), "s", 0.0, 300.0)
+    assert [t for t, _x in obs] == [0.0, 180.0, 240.0], obs
+    assert obs[0][1] == 0.0, obs
+    assert obs[-1][1] == 1.0, obs
+
+
+def test_no_detection_reduces_to_the_fixed_sizer_exactly():
+    """The fallback is not "something like fixed": it is the same boundaries, because that is
+    what makes `SLICE_MINUTES` still a measured constant rather than a decoration. `fallback` in
+    the detail is what tells a reader which of the two answered."""
+    p = EwmaSizer().plan(_Bucketed([]), "s", END, 60)
+    f = FixedSizer().plan(None, "s", END, 60)
+    assert (p.slice_start, p.slice_end, p.baseline_start) == (f.slice_start, f.slice_end,
+                                                              f.baseline_start), (p, f)
+    assert p.detail["fallback"] is True, p.detail
+    assert p.detail["detected_at"] is None, p.detail
+    assert p.sizer == "ewma", p
+
+
+def test_the_slice_starts_at_the_detected_change_point():
+    p = EwmaSizer().plan(_flip_store(END, 40), "s", END, 60)
+    assert p.detail["detected_at"] == (END - timedelta(minutes=20)).timestamp(), p.detail
+    assert p.slice_start == END - timedelta(minutes=20), p
+    assert p.detail.get("fallback") is not True and p.detail["fires"] == 1, p.detail
+    assert p.detail["observations"] == 60, p.detail
+    assert p.detail["level"] == "branch", p.detail
+    assert p.detail.get("slice_clamped") is False, p.detail
+
+
+def test_a_detected_boundary_is_held_inside_the_budget_at_both_ends_and_says_so():
+    """The seam's own rule, which an adaptive sizer can violate in a way `FixedSizer` cannot: a
+    change point early in the span would leave a baseline shorter than the slice it judges (a
+    peer, not a baseline), and one in the final seconds would leave a slice narrower than the
+    5-minute bin the series is served from. Both are CLAMPED and the clamp is REPORTED."""
+    early = EwmaSizer().plan(_flip_store(END, 5), "s", END, 60)
+    assert early.slice_start == END - timedelta(minutes=30), early
+    assert (early.slice_start - early.baseline_start) >= (early.slice_end - early.slice_start)
+    assert early.detail["slice_clamped"] is True, early.detail
+    assert early.detail["detected_at"] == (END - timedelta(minutes=55)).timestamp(), early.detail
+    late = EwmaSizer().plan(_flip_store(END, 58), "s", END, 60)
+    assert late.slice_start == END - timedelta(minutes=BIN_SECONDS // 60), late
+    assert late.detail["slice_clamped"] is True, late.detail
+    assert early.baseline_start == END - timedelta(minutes=60), early
+
+
+def test_the_adaptive_sizer_clamps_to_the_retention_floor_and_says_so_the_same_way():
+    """Same key, same meaning as `FixedSizer` — `sizer_detail` is one field in the payload and a
+    reader cannot be asked to know which sizer names the retention clamp what."""
+    floor = (END - timedelta(minutes=40)).timestamp()
+    p = EwmaSizer().plan(_flip_store(END, 40), "s", END, 60, floor=floor)
+    assert p.baseline_start.timestamp() == floor, p
+    assert p.detail.get("clamped") is True, p.detail
+    far = EwmaSizer().plan(_flip_store(END, 40), "s", END, 60,
+                           floor=(END - timedelta(days=1)).timestamp())
+    assert far.detail.get("clamped") is not True, far.detail
+
+
+def test_a_window_that_changes_repeatedly_is_still_sized_by_detection_not_by_a_rate_cap():
+    """THE OPEN CONCERN, decided by measurement and pinned here so the decision is not quietly
+    reversed. Rule 3's ceiling holds corpus-wide (27.0% of windows) but per session the EWMA
+    exceeds 50% in 9 of 25 — up to 83%. Measured (`sizer_eval.py guards`), those nine sessions
+    have an OPPORTUNITY rate (share of their windows that actually contain a transition inside
+    the 60-minute budget) of 37.5%-83.3%, and the fire rate exceeds it by at most 8.3 points in
+    eight of the nine; they pool 81.1% precision against fixed's 11.9%. Every guard that lowers
+    the rate costs the win: an in-window fire cap of 1 gives back 10.3 recall points and STILL
+    leaves 6 of the 9 above the ceiling, and a refractory period cannot change the rate at all
+    (the first rising edge of a window is never the one it suppresses — measured identical to
+    four decimal places). So a churny window is sized by its last detection, and the number of
+    fires is REPORTED rather than acted on."""
+    churny = _Bucketed(([[("main", 3.0)]] * 6 + [[("feature/ledger-split", 3.0)]] * 6) * 5,
+                       start=(END - timedelta(minutes=60)).timestamp())
+    p = EwmaSizer().plan(churny, "s", END, 60)
+    assert p.detail["fires"] >= 4, p.detail
+    assert p.detail.get("fallback") is not True, p.detail
+    assert p.detail["detected_at"] is not None, p.detail
+    # ... and it is the LAST edge that sized the slice, held at the one-bin floor.
+    assert p.detail["detected_at"] == (END - timedelta(minutes=5)).timestamp(), p.detail
+    assert p.slice_start == END - timedelta(minutes=BIN_SECONDS // 60), p
+
+
 # --- against a real store --------------------------------------------------------------------
 
 BASE = datetime(2026, 8, 20, 9, 3, 17, 400000, tzinfo=timezone.utc)
@@ -375,15 +562,15 @@ def _ts(off):
     return (BASE + timedelta(seconds=off)).isoformat().replace("+00:00", "Z")
 
 
-def _turn(off, uuid, cwd, kind="a", tools=()):
+def _turn(off, uuid, cwd, kind="a", tools=(), branch="main"):
     if kind == "u":
         return {"type": "user", "uuid": uuid, "timestamp": _ts(off), "cwd": cwd,
-                "gitBranch": "main", "message": {"role": "user", "content": "next step"}}
+                "gitBranch": branch, "message": {"role": "user", "content": "next step"}}
     content = [{"type": "text", "text": "working"}] + [
         {"type": "tool_use", "id": f"toolu_{uuid}_{i}", "name": "Read",
          "input": {"file_path": p}} for i, p in enumerate(tools)]
     return {"type": "assistant", "uuid": uuid, "timestamp": _ts(off), "cwd": cwd,
-            "gitBranch": "main", "requestId": "req-" + uuid,
+            "gitBranch": branch, "requestId": "req-" + uuid,
             "message": {"role": "assistant", "model": "acme-llm-7b-preview",
                         "content": content,
                         "usage": {"input_tokens": 100, "output_tokens": 20,
@@ -536,6 +723,58 @@ def test_the_series_helper_yields_time_ordered_steps_across_the_window():
         assert [t for t, _ in steps] == sorted(t for t, _ in steps)
         tops = [max(dict(items), key=lambda k: dict(items)[k]) for _t, items in steps if items]
         assert tops[0] == "aurora-ledger" and tops[-1] == "beacon-api", tops
+        st.close()
+
+
+def _branch_flipping(flip_at_minute=40, total_minutes=60):
+    """The same 60-minute shape as `_flipping`, but the BRANCH is what changes and the workspace
+    does not. That is the level the winning sizer reads, and it is not an arbitrary choice: over
+    the whole frozen corpus `workspace` has ZERO transitions (a Claude Code transcript is scoped
+    to one project directory, so it structurally cannot change inside a session) against 111
+    branch transitions — so branch is the only allocation level the experiment could measure a
+    detector on, and the only one it did."""
+    turns, i = [], 0
+    for minute in range(total_minutes):
+        br = "main" if minute < flip_at_minute else "feature/ledger-split"
+        for sub in (7.0, 23.0, 41.0):
+            i += 1
+            turns.append(_turn(minute * 60 + sub, f"t{i:03d}", ALPHA, branch=br,
+                               tools=[ALPHA + "/services/api/queue.go"]))
+    turns.append(_turn(total_minutes * 60, "TARGET", ALPHA, kind="u",
+                       branch="feature/ledger-split"))
+    return turns
+
+
+def test_a_real_transcript_whose_branch_flips_is_sized_at_the_flip_not_at_the_constant():
+    """END TO END on the shipped default, through the store, on a transcript. DISCRIMINATING: the
+    flip is at minute 40, so the detected slice is 20 minutes and `FixedSizer`'s constant would
+    give 15 — a /analyze that ignored the detection would fail this."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _path, st, out = _served(tmp, _branch_flipping(flip_at_minute=40), sizer=DEFAULT_SIZER)
+        block = out["dynamics"]
+        assert block["sizer"] == "ewma", block
+        assert block["slice_minutes"] == 20.0, block
+        assert block["sizer_detail"].get("fallback") is not True, block["sizer_detail"]
+        b = block["dimensions"]["branch"]
+        assert b["status"] == "compared", b
+        assert b["changed"] is True, b
+        assert (b["slice"]["value"], b["baseline"]["value"]) == ("feature/ledger-split",
+                                                                "main"), b
+        assert b["turnover"] == 1.0, b
+        st.close()
+
+
+def test_a_real_stationary_transcript_falls_back_to_the_fixed_slice_and_reports_no_change():
+    """The twin, on the same generator with the flip removed, so the difference between the two
+    results is the flip and nothing else: no detection, the fixed 15-minute slice, no change."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _path, st, out = _served(tmp, _branch_flipping(flip_at_minute=99), sizer=DEFAULT_SIZER)
+        block = out["dynamics"]
+        assert block["sizer"] == "ewma", block
+        assert block["sizer_detail"]["fallback"] is True, block["sizer_detail"]
+        assert block["slice_minutes"] == float(SLICE_MINUTES), block
+        b = block["dimensions"]["branch"]
+        assert (b["turnover"], b["decay"], b["changed"]) == (0.0, 0.0, False), b
         st.close()
 
 

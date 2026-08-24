@@ -119,11 +119,15 @@ from app.analysis.levels import quantize
 from app.analysis.store import BIN_SECONDS
 from app.analysis.window import MIN_EVIDENCE, attribution
 
-# How much of the digest's window the recent slice takes, in minutes.
+# How much of the digest's window the recent slice takes, in minutes, when NOTHING WAS DETECTED.
 #
-# CHOSEN, and explicitly provisional: Task 3 of the plan re-decides this by measurement against
-# rival adaptive sizers (ADWIN, EWMA fast/slow, PageHinkley, KSWIN), which is why it sits behind
-# `Sizer` rather than being inlined. Two things argue for 15 today:
+# Task 3 re-decided this by measurement and the answer is two-part, because the constant's job
+# changed underneath it. As a standalone sizer the whole 5-30 minute sweep is at chance (9.4%-13.4%
+# precision, every point indistinguishable from the shuffle control) and the best of a bad set is
+# 10 minutes, not 15. But `EwmaSizer` is now the default, so this constant runs ONLY on windows
+# where no change point was found — stationary work, where localisation accuracy is irrelevant by
+# definition and the only question left is whether the slice is long enough to ATTRIBUTE. That is
+# a different population and a different metric, and on it 15 wins:
 #
 #   * ATTRIBUTION RATE. Measured over 20,000 windows of the frozen corpus (see MIN_EVIDENCE's
 #     table), a slice attributes `project` 87.0% of the time at 5 minutes and 94.9% at 15; the
@@ -133,6 +137,9 @@ from app.analysis.window import MIN_EVIDENCE, attribution
 #   * THE BASELINE/SLICE RATIO. At a 60-minute span, 15 leaves a 45-minute baseline: 3x the
 #     slice. A baseline the same length as its slice is a peer rather than a baseline, which is
 #     why `FixedSizer` caps the slice at half the span whatever it was configured with.
+#
+# So: 10 minutes if a constant must stand alone, 15 behind a detector. Do not "correct" it to 10
+# without saying which population the number was measured on.
 SLICE_MINUTES = 15
 
 # How many entering/leaving values are listed. The COUNT is reported separately (`n`), so the cut
@@ -293,8 +300,9 @@ changing per sizer."""
 
 class Sizer:
     """Chooses the slice/baseline boundaries. THE SEAM, and the deliverable that outlives
-    `FixedSizer`: Task 3 of the plan implements rival adaptive sizers behind it and picks between
-    them by measurement, so this signature has to admit one without anything around it moving.
+    `FixedSizer`: Task 3 implemented rival adaptive sizers behind it and picked between them by
+    measurement, and `EwmaSizer` — the winner — plugged in with nothing around it reshaped, which
+    is the claim this signature was built to make good on.
 
     Hence every argument. `store` + `session` are what let a sizer READ the series it is sizing
     (see `series` above) — a plain `(end, span)` signature would make every adaptive method a
@@ -315,12 +323,17 @@ class Sizer:
 
 
 class FixedSizer(Sizer):
-    """A constant slice, and the default until an adaptive method beats it under Task 3's
-    pre-registered rule. Ignores `store`/`session` entirely, which is the degenerate case of the
-    seam rather than evidence the seam is over-built: this project has already measured
-    change-point boundaries reaching only PARITY with a fixed constant at much higher complexity,
-    so a fixed sizer winning is a live outcome and the interface has to be worth having either
-    way.
+    """A constant slice. It WAS the default; Task 3's pre-registered comparison beat it by +74.6
+    precision points (see `EWMA_FAST`), so it is now what `EwmaSizer` falls back to on a window
+    where no change point was detected — which is most windows, since the winner fires on 27.0%
+    of them. That is not a demotion to dead code: it is the sizing for stationary work, where
+    Task 1's attribution table governs rather than localisation, and it is still the whole of what
+    `/analyze` reports on 73% of windows.
+
+    Ignores `store`/`session` entirely, which is the degenerate case of the seam rather than
+    evidence the seam is over-built: this project had already measured change-point boundaries
+    reaching only PARITY with a fixed constant at much higher complexity, so a fixed sizer winning
+    was a live outcome and the interface had to be worth having either way.
 
     The slice is capped at HALF the span: a baseline no longer than the slice it judges is a
     peer, not a baseline, and the cap keeps a configured `slice_minutes` from silently swallowing
@@ -353,7 +366,191 @@ class FixedSizer(Sizer):
         return Slicing(slice_start, end, baseline_start, self.name, detail)
 
 
-DEFAULT_SIZER = FixedSizer()
+# --- the sizer that won the measurement ------------------------------------------------------
+
+# Two decay rates on one stream, and the separation between them that counts as a change point.
+#
+# MEASURED, not chosen. Task 3 of the plan scored every candidate over the frozen corpus against
+# a rule written down before anything ran (`SIZER-PREREGISTRATION.md`), with ground truth taken
+# deterministically from the store — a transition is where the dominant allocation value flips
+# between two ATTRIBUTED bins — and a hit is a detection within one bin (5 min) of one. Over 25
+# qualifying sessions, 111 transitions and 1,966 windows (`SIZER-RESULTS.md`):
+#
+#     ewma(0.3/0.02@0.2)   precision 86.4%  recall 54.8%  fires on 27.0% of windows  med 2.0 min
+#     ewma(0.5/0.05@0.3)             85.3%           54.2%          27.1%
+#     page_hinkley (river)           55.5%           34.3%          26.3%
+#     kswin        (river)           24.2%            6.3%          11.1%
+#     adwin        (river)           17.6%            2.3%           5.5%
+#     FixedSizer(15)                 11.8%           27.8%         100.0%   (not a detector)
+#
+# So: +74.6 precision points and +27.0 recall points over the shipped constant, and river is
+# DOMINATED ON BOTH METRICS by an idiom already in this repo (the sidecar's CPU-EWMA rate
+# governor). `river` therefore does not ship — see `sidecar/requirements.txt`, unchanged.
+#
+# The control is why these numbers are trusted rather than merely large. Relocating every
+# transition to a random non-empty bin of the SAME session collapses this EWMA from 86.4% to
+# 24.1% precision, while every fixed sizer barely moves (11.9% -> 10.9%): a constant offset was
+# never a detector, which is the sharpest statement of the result. ADWIN scores BETTER on
+# shuffled truth than on real (17.6% -> 20.4%), i.e. it carries no signal at this stream length.
+#
+# Do not retune these three numbers without re-running `scripts/sizer_eval.py` — the pair is a
+# calibration, not two independent knobs, and the rate at which a fast/slow gap re-closes is what
+# makes a persistent shift ONE change point instead of a burst.
+EWMA_FAST = 0.3
+EWMA_SLOW = 0.02
+EWMA_THRESHOLD = 0.2
+
+# The observation bucket, deliberately FINER than the 5-minute bin: 60 observations inside the
+# span budget instead of 12. `series` reads a sub-bin step exactly from `event` rows rather than
+# interpolating, so this costs resolution nowhere. (It is also what made the river comparison
+# fair: at the bin width, KSWIN's reference window of 20 exceeds the observation count and the
+# detector could not have fired at all, which would have measured the bin rather than KSWIN.)
+DETECT_STEP_S = 60
+
+# The level the detection is read from, and the honest limitation of this whole result. Over the
+# frozen corpus `workspace` has ZERO transitions in 51 sessions — a Claude Code transcript is
+# scoped to one project directory, so the level structurally cannot change inside a session —
+# against 111 `branch` transitions. Branch is therefore the only allocation level a detector
+# could be measured on here, and what was measured is branch-change detection. Widening this to
+# several levels is a defensible next step and is UNMEASURED; it does not get made by accident.
+DETECT_LEVEL = "branch"
+
+
+class EwmaSizer(Sizer):
+    """The slice starts at the last change point detected inside the budget; failing that, at the
+    fixed constant. THE DEFAULT — see `EWMA_FAST` above for the measurement that chose it.
+
+    Mechanism, in the order it runs:
+
+    1. ENCODE the categorical series as one number per bucket. `novelty = 1 - (bucket evidence in
+       the running mode value) / (bucket total)`: 0.0 while the window keeps doing what it was
+       doing, ->1.0 for as long as a newly-arrived value outweighs it. It is a SHARE, so it is
+       invariant to how busy the bucket was — the same normalisation argument `compare` makes,
+       and for the same reason: an unnormalised count would make a busy bucket a change.
+    2. TWO MEANS over that stream, fast and slow, and a change point where the fast one pulls
+       away from the slow one by `EWMA_THRESHOLD`. RISING EDGE only: a level shift is one change
+       point, not one per bucket for as long as it persists.
+    3. CUT at the LAST such edge — the slice is what the work looks like NOW, so an earlier change
+       point belongs to the baseline — clamped into the budget, with the clamp reported.
+
+    On the per-session firing rate, which is the one thing the measurement left open: the
+    pre-registered ceiling (no sizer may fire on more than half of all windows) holds corpus-wide
+    at 27.0%, but per session this sizer exceeds it in 9 of 25, up to 83%. That was investigated
+    rather than accepted on taste (`sizer_eval.py guards`), and the finding is that the rate is
+    the WORK, not the parameterisation:
+
+      * Those nine sessions have an OPPORTUNITY rate — the share of their windows that actually
+        contain a transition inside the 60-minute budget — of 37.5% to 83.3%, and the fire rate
+        exceeds it by at most 8.3 points in eight of the nine. Windows overlap twelvefold (one
+        anchor per 5-minute bin, a 60-minute span), so a single transition is visible in up to 12
+        consecutive windows and a churny session's opportunity rate is arithmetically FORCED
+        above 50%: on `c2019c5e` (19 transitions in 78 bins) a perfect detector fires on 83.3% of
+        windows. Read per session, the ceiling is unreachable by any detector that works.
+      * The over-ceiling sessions pool 81.1% precision (against fixed's 11.9%), the
+        under-ceiling ones 90.9%. High firing is not where this sizer is wrong.
+      * Every guard that lowers the rate costs the win and does not even deliver the ceiling. An
+        in-window cap of one fire gives back 10.3 recall points and still leaves 6 of the 9 above
+        50%. A refractory period cannot change the rate AT ALL — the first rising edge of a
+        window is never the one it suppresses — and measured over the corpus it is bit-identical
+        to no guard (86.4% / 54.8% at refractory 3, 5 and 10 buckets alike).
+
+    So no rate guard is applied, and `detail["fires"]` reports the count instead, so a churny
+    window is visible as churny to whatever reads it. The one session that genuinely over-fires
+    (`0ac739ad`: 62.5% against a 37.5% opportunity rate, 48% precision) is a real cost and is
+    named rather than smoothed away.
+    """
+
+    name = "ewma"
+    level = DETECT_LEVEL
+    step = DETECT_STEP_S
+
+    def __init__(self, fast=EWMA_FAST, slow=EWMA_SLOW, threshold=EWMA_THRESHOLD,
+                 fallback_minutes=SLICE_MINUTES, name=None):
+        self.fast, self.slow, self.threshold = fast, slow, threshold
+        self.fallback_minutes = float(fallback_minutes)
+        if name:
+            self.name = name
+
+    def observations(self, store, session, start, end):
+        """`[(bucket_start_epoch, novelty)]` over `[start, end)`. Step 1 above.
+
+        An EMPTY bucket yields no observation at all — a bucket with no evidence is not a bucket
+        with no change, and feeding it as 0.0 would let a quiet stretch pull the fast mean back
+        down and mask the change that follows it. The first observation is 0.0 by definition:
+        there is nothing yet for it to be novel against.
+        """
+        seen, out = collections.Counter(), []
+        for t, items in series(store, session, start, end, self.level, step=self.step):
+            total = sum(n for _ref, n in items)
+            if not total:
+                continue
+            if seen:
+                # The running mode, tie-broken alphabetically to match `window.rollup`'s order so
+                # the two cannot disagree about which value is on top.
+                ref = min(seen.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+                out.append((t, 1.0 - dict(items).get(ref, 0) / total))
+            else:
+                out.append((t, 0.0))
+            for r, n in items:
+                seen[r] += n
+        return out
+
+    def fire_indices(self, xs):
+        """The indices of the RISING EDGES of `(fast - slow) > threshold`. Step 2 above.
+
+        Both means are SEEDED with the first observation rather than with zero: seeded at zero,
+        every stream would open with an artificial gap and the sizer would fire on its own first
+        bucket — which on a 60-observation budget is most of a window.
+        """
+        f = s = None
+        was, out = False, []
+        for i, x in enumerate(xs):
+            f = x if f is None else self.fast * x + (1 - self.fast) * f
+            s = x if s is None else self.slow * x + (1 - self.slow) * s
+            now = (f - s) > self.threshold
+            if now and not was:
+                out.append(i)
+            was = now
+        return out
+
+    def plan(self, store, session, end, span_minutes, floor=None):
+        end = _dt(end)
+        span = float(span_minutes)
+        obs = self.observations(store, session, end - timedelta(minutes=span), end)
+        idx = self.fire_indices([x for _t, x in obs])
+        detected = obs[idx[-1]][0] if idx else None
+        # `detected_at` is epoch seconds — the unit the series is keyed on and the unit the eval
+        # scores against — and it is reported even when the clamp below moves the boundary, so a
+        # reader can tell a detection that was held inside the budget from one that was not.
+        detail = {"detected_at": detected, "observations": len(obs), "fires": len(idx),
+                  "level": self.level}
+        if detected is None:
+            sl = min(self.fallback_minutes, span / 2.0)
+            detail["fallback"] = True
+        else:
+            raw = (end.timestamp() - detected) / 60.0
+            # Both ends of the budget, and the reasons differ. Above half the span, the baseline
+            # would be no longer than the slice it judges — a peer, not a baseline, `FixedSizer`'s
+            # own rule. Below one bin, the slice is narrower than the interval the series is
+            # served from. `slice_clamped` is a DIFFERENT fact from `clamped` (retention), which
+            # is why it is a different key: `sizer_detail` is one field in the payload and a
+            # reader cannot be asked to know which sizer names what.
+            sl = max(float(BIN_SECONDS) / 60.0, min(raw, span / 2.0))
+            detail["slice_clamped"] = sl != raw
+        slice_start = end - timedelta(minutes=sl)
+        baseline_start = end - timedelta(minutes=span)
+        if floor is not None:
+            fl = _dt(floor)
+            if fl > baseline_start:
+                baseline_start = fl
+                detail["clamped"] = True
+            if baseline_start > slice_start:
+                slice_start = baseline_start
+        detail["slice_minutes"] = (slice_start - end).total_seconds() / -60.0
+        return Slicing(slice_start, end, baseline_start, self.name, detail)
+
+
+DEFAULT_SIZER = EwmaSizer()
 
 
 # --- the block -------------------------------------------------------------------------------

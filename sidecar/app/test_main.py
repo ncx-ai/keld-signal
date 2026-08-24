@@ -585,7 +585,12 @@ def test_analyze_reports_how_the_window_is_changing_not_only_what_it_holds():
     body = _asyncio.run(m.analyze(
         m.AnalyzeIn(path=_fixture_transcript(), prompt_id=_fixture_prompt_id())))
     d = body["dynamics"]
-    assert d["sizer"] == "fixed", d
+    # The shipped sizer is the EWMA (Task 3's measured winner). On THIS fixture -- two turns five
+    # minutes apart -- it has almost no stream to read and correctly does not fire, so the block
+    # arrives on the fixed 15-minute fallback: the sizer NAME says which sizer answered and
+    # `fallback` says which of its two paths did, which is the whole point of reporting both.
+    assert d["sizer"] == "ewma", d
+    assert d["sizer_detail"]["fallback"] is True, d["sizer_detail"]
     assert (d["slice_minutes"], d["baseline_minutes"]) == (15.0, 45.0), d
     assert d["slice_end"] == body["window_end"], d
     assert d["baseline_start"] == body["window_start"], (

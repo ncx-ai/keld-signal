@@ -86,7 +86,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
-from app.analysis.dynamics import Sizer, Slicing, FixedSizer, series      # noqa: E402
+from app.analysis.dynamics import (EwmaSizer, FixedSizer, Sizer, Slicing,  # noqa: E402
+                                   series)
 from app.analysis.store import BIN_SECONDS, open_store                    # noqa: E402
 from app.analysis.window import MIN_EVIDENCE, attribution                 # noqa: E402
 from app.analysis.workstreams import ALLOCATION                           # noqa: E402
@@ -231,26 +232,13 @@ class DetectorSizer(Sizer):
         return Slicing(slice_start, end_dt, baseline_start, self.name, detail)
 
 
-class EwmaSizer(DetectorSizer):
-    """Two decay rates on one stream: a change point where the fast mean pulls away from the slow
-    one by `threshold`. In-repo precedent — the sidecar's rate governor is a CPU-EWMA — and it
-    needs no dependency at all, which is the point: if this matches river, river cannot ship."""
-
-    def __init__(self, fast=0.5, slow=0.05, threshold=0.3, name=None):
-        self.fast, self.slow, self.threshold = fast, slow, threshold
-        self.name = name or f"ewma({fast}/{slow}@{threshold})"
-
-    def fire_indices(self, xs):
-        f = s = None
-        was, out = False, []
-        for i, x in enumerate(xs):
-            f = x if f is None else self.fast * x + (1 - self.fast) * f
-            s = x if s is None else self.slow * x + (1 - self.slow) * s
-            now = (f - s) > self.threshold
-            if now and not was:          # RISING EDGE only: a level shift is one change point,
-                out.append(i)            # not one per bucket for as long as it persists
-            was = now
-        return out
+# `EwmaSizer` is IMPORTED from app.analysis.dynamics, not defined here. It was defined here when
+# it was a rival; it won, so it moved into the package and this script now scores the shipped
+# class itself. That is deliberate: re-running `run` re-derives the committed table from the code
+# that is actually in production, so a port that changed the behaviour would show up as a changed
+# number rather than as nothing. Its `plan` differs from `DetectorSizer`'s only in naming the
+# slice-length clamp `slice_clamped` (the retention clamp keeps `clamped`, matching FixedSizer);
+# scoring reads `detected_at`, which is unchanged.
 
 
 class RiverSizer(DetectorSizer):
@@ -289,7 +277,8 @@ class NamedFixed(FixedSizer):
 
 def sizers():
     out = [NamedFixed(m) for m in FIXED_SWEEP]
-    out += [EwmaSizer(0.5, 0.05, 0.3), EwmaSizer(0.3, 0.02, 0.2)]
+    out += [EwmaSizer(0.5, 0.05, 0.3, name="ewma(0.5/0.05@0.3)"),
+            EwmaSizer(0.3, 0.02, 0.2, name="ewma(0.3/0.02@0.2)")]
     out += river_sizers()
     return out
 
@@ -559,13 +548,160 @@ def do_control(_a):
             print(f"{label:10} {sz.name:26}{p:8.1%}{rc:8.1%}{c['fires']/c['windows']:8.1%}")
 
 
+# --- rule 3 PER SESSION: the one open concern from SIZER-RESULTS.md ---------------------------
+
+class RefractoryEwma(EwmaSizer):
+    """The winner with a minimum spacing between accepted rising edges.
+
+    Included to be MEASURED, not because it can work: the fire RATE is the share of windows in
+    which the sizer fired at all, and the first rising edge of a window is never the one a
+    refractory period suppresses. So this can only move WHICH instant is reported (earlier),
+    never whether the window fired. The table proves that rather than asserting it."""
+
+    def __init__(self, buckets, fast=0.3, slow=0.02, threshold=0.2):
+        super().__init__(fast, slow, threshold)
+        self.buckets = buckets
+        self.name = f"ewma+refract({buckets})"
+
+    def fire_indices(self, xs):
+        out = []
+        for i in super().fire_indices(xs):
+            if not out or i - out[-1] >= self.buckets:
+                out.append(i)
+        return out
+
+
+class FireCappedEwma(EwmaSizer):
+    """The only rate guard a `Sizer` can actually implement: it is confined to the span budget,
+    so it cannot know the SESSION's fire rate — only its own window's. A window whose stream
+    holds more than `max_fires` rising edges is called too churny to localise and the sizer
+    reduces to the fixed fallback."""
+
+    def __init__(self, max_fires, fast=0.3, slow=0.02, threshold=0.2):
+        super().__init__(fast, slow, threshold)
+        self.max_fires = max_fires
+        self.name = f"ewma+cap({max_fires})"
+
+    def fire_indices(self, xs):
+        idx = super().fire_indices(xs)
+        return [] if len(idx) > self.max_fires else idx
+
+
+def do_guards(_a):
+    """Is a 50%-of-windows ceiling something a sizer can honour PER SESSION, and does any guard
+    that enforces it keep the win?
+
+    Two measurements, both over the same corpus and the same scoring as `run`:
+
+    1. THE OPPORTUNITY RATE. The share of a session's windows that actually CONTAIN a transition
+       inside the span budget. It is the ceiling on any detector's fire rate that is not a false
+       positive — windows overlap twelvefold (60-minute span, one anchor per 5-minute bin), so a
+       single transition is visible in up to 12 consecutive windows and a churny session's
+       opportunity rate is arithmetically forced above 50%. `excess` = fire rate - opportunity
+       rate is therefore the honest reading of "fires more often than the work changes".
+    2. THE GUARDS, scored end to end against the unguarded winner.
+    """
+    st = open_store(DB)
+    cs = CachingStore(st)
+    sessions = [s for (s,) in st._conn().execute("SELECT DISTINCT session FROM bin "
+                                                 "ORDER BY session")]
+    sample = []
+    for s in sessions:
+        gt = ground_truth(cs, s)
+        cs.reset()
+        tr = sorted([t for v in gt.values() for t in v[1]], key=lambda t: t.instant)
+        if max(v[0] for v in gt.values()) < MIN_ATTRIBUTED or len(tr) < MIN_TRANSITIONS:
+            continue
+        sample.append((s, tr))
+
+    win = EwmaSizer(0.3, 0.02, 0.2, name="ewma(0.3/0.02@0.2)")
+    szs = [win, NamedFixed(15)] + [RefractoryEwma(b) for b in (3, 5, 10)] \
+        + [FireCappedEwma(k) for k in (1, 2, 3)]
+    agg = {s.name: collections.Counter() for s in szs}
+    per = {}
+    for s, tr in sample:
+        anchors = [float(b + BIN_SECONDS) for b in active_bins(cs, s)]
+        for sz in szs:
+            r = score(sz, cs, s, anchors, tr)
+            for k in ("hit", "fp", "miss", "fires", "windows", "windows_disc"):
+                agg[sz.name][k] += r[k]
+            if sz is win:
+                per[s] = r
+        cs.reset()
+
+    def rate(a, b):
+        return a / b if b else 0.0
+
+    print(f"## 1. fire rate vs OPPORTUNITY rate, per session, {win.name}\n")
+    print(f"{'session':10}{'wins':>7}{'oppty':>8}{'fire':>8}{'excess':>9}{'prec':>8}"
+          f"{'recall':>8}")
+    rows = sorted(per.items(), key=lambda kv: -rate(kv[1]['fires'], kv[1]['windows']))
+    over, over_excess = 0, 0
+    for s, r in rows:
+        f = rate(r["fires"], r["windows"])
+        o = rate(r["windows_disc"], r["windows"])
+        p = rate(r["hit"], r["hit"] + r["fp"])
+        rc = rate(r["hit"], r["hit"] + r["miss"])
+        over += f > 0.5
+        over_excess += (f - o) > 0.0
+        print(f"{s:10}{r['windows']:7d}{o:8.1%}{f:8.1%}{f-o:+9.1%}{p:8.1%}{rc:8.1%}")
+    print(f"\nsessions over the 50% fire ceiling: {over}/{len(rows)};  "
+          f"sessions firing MORE OFTEN THAN THE WORK CHANGES (excess > 0): "
+          f"{over_excess}/{len(rows)}")
+    hi = [r for _s, r in rows if rate(r["fires"], r["windows"]) > 0.5]
+    lo = [r for _s, r in rows if rate(r["fires"], r["windows"]) <= 0.5]
+    for label, grp in (("over-ceiling", hi), ("under-ceiling", lo)):
+        h = sum(r["hit"] for r in grp)
+        print(f"   {label:14} n={len(grp):2d}  pooled precision "
+              f"{rate(h, h + sum(r['fp'] for r in grp)):6.1%}  recall "
+              f"{rate(h, h + sum(r['miss'] for r in grp)):6.1%}")
+
+    print(f"\n## 2. guards, scored over the same {len(sample)} sessions\n")
+    print(f"{'sizer':22}{'fire':>8}{'HIT':>6}{'FP':>5}{'MISS':>6}{'prec':>8}{'recall':>8}"
+          f"{'d-prec':>9}{'d-recall':>10}")
+    base = None
+    for sz in szs:
+        c = agg[sz.name]
+        p = rate(c["hit"], c["hit"] + c["fp"])
+        rc = rate(c["hit"], c["hit"] + c["miss"])
+        if base is None:
+            base = (p, rc)
+        print(f"{sz.name:22}{rate(c['fires'], c['windows']):8.1%}{c['hit']:6d}{c['fp']:5d}"
+              f"{c['miss']:6d}{p:8.1%}{rc:8.1%}{(p-base[0])*100:+9.1f}"
+              f"{(rc-base[1])*100:+10.1f}")
+    print("\nd- columns are against the unguarded winner (row 1). A guard is worth having only "
+          "if it\nbuys a lower fire rate without giving back the margin the winner was chosen "
+          "for.")
+
+    # 3. Does any guard bring the OVER-CEILING sessions under the ceiling? That, not the corpus
+    #    aggregate, is the thing rule 3 was read per-session to require.
+    hi_s = [s for s, r in rows if rate(r["fires"], r["windows"]) > 0.5]
+    print(f"\n## 3. per-session fire rate on the {len(hi_s)} over-ceiling sessions\n")
+    cand = [win] + [g for g in szs if isinstance(g, FireCappedEwma)]
+    print(f"{'session':10}{'oppty':>8}" + "".join(f"{g.name:>16}" for g in cand))
+    still = collections.Counter()
+    for s in hi_s:
+        tr = dict(sample)[s]
+        anchors = [float(b + BIN_SECONDS) for b in active_bins(cs, s)]
+        cells = []
+        for g in cand:
+            r = score(g, cs, s, anchors, tr)
+            f = rate(r["fires"], r["windows"])
+            still[g.name] += f > 0.5
+            cells.append(f"{f:>15.1%} ")
+        cs.reset()
+        print(f"{s:10}{rate(per[s]['windows_disc'], per[s]['windows']):8.1%}" + "".join(cells))
+    print("\nstill over the ceiling: " + ", ".join(f"{k} {v}/{len(hi_s)}"
+                                                   for k, v in still.items()))
+
+
 def do_render(a):
     render(json.load(open(os.path.join(OUT, "sizer-eval.json"))))
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=("calibrate", "truth", "run", "control", "render"))
+    ap.add_argument("cmd", choices=("calibrate", "truth", "run", "control", "guards", "render"))
     args = ap.parse_args()
     {"calibrate": do_calibrate, "truth": do_truth, "run": do_run,
-     "control": do_control, "render": do_render}[args.cmd](args)
+     "control": do_control, "guards": do_guards, "render": do_render}[args.cmd](args)
