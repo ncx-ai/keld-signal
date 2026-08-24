@@ -58,6 +58,7 @@ from datetime import datetime, timedelta
 
 from app.analysis import COMPONENT_DEPTH, SCHEMA
 from app.analysis import window, workstreams
+from app.analysis.dynamics import dynamics_for
 from app.analysis.ingest import (RECONCILE_SLOT, ingest_file, is_current, pending_in,
                                  session_of)
 from app.analysis.levels import events_for_turns, quantize
@@ -101,7 +102,8 @@ class StoreBehind(Exception):
     """
 
 
-def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refresh=True):
+def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refresh=True,
+                   sizer=None):
     """The `span_minutes` of work ending at `prompt_id` -> the workstream + inventory payload,
     served from the reference series.
 
@@ -113,12 +115,30 @@ def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refre
     (one `os.stat`); it is the self-heal for a signal that was never delivered, and the reason
     a never-ingested transcript answers at all.
 
+    `sizer` (a `dynamics.Sizer`) adds the DYNAMICS block: the same window's recent slice read
+    against its own longer baseline. OPT-IN, and that is a contract statement rather than a knob.
+    `analyze_window_by_parse` below is the equivalence oracle — the suite asserts the two agree
+    field for field — and it structurally cannot compute dynamics, because affording a second
+    window is exactly what the store bought and the parse path did not have. Making the block
+    opt-in is what keeps that equality expressible; defaulting it on would have meant either
+    weakening the oracle comparison to "equal except for these keys" or asserting nothing about
+    the digest at all.
+
+    The sizer is confined to `[end - span_minutes, end)` — the window this function has already
+    validated against the watermark and the retention serving floor — so no sizer, adaptive or
+    otherwise, can open a retention surface `/analyze` has not already checked. The floor is
+    handed to it for the one case it must handle itself: a baseline reaching below it.
+
     Raises `PromptNotFound` if the prompt is not in the transcript, and `StoreBehind` if the
     series cannot answer the window exactly. See the module docstring on why those are different.
     """
     st = store if store is not None else open_store()
     rl, start, end = _rollup_from_store(st, path, prompt_id, span_minutes, nlp, refresh)
-    return _payload(rl, path, start, end)
+    out = _payload(rl, path, start, end)
+    if sizer is not None:
+        out["dynamics"] = dynamics_for(st, session_of(path), end, span_minutes,
+                                       sizer=sizer, floor=st.serving_floor())
+    return out
 
 
 def analyze_window_by_parse(path, prompt_id, span_minutes=60, nlp=None):

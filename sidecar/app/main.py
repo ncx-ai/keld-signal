@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, analyze_window
+from app.analysis.dynamics import DEFAULT_SIZER
 from app.analysis.ingest import ingest_file
 from app.analysis.match import DEFAULT_BUDGET_S as _MATCH_DEFAULT_BUDGET_S
 from app.analysis.match import compile_vocabulary, match_text
@@ -474,7 +475,13 @@ def _analyze_blocking(path, prompt_id, span_minutes):
     st = _store()
     if st is None:
         raise StoreBehind("the reference-series store could not be opened")
-    out = analyze_window(path, prompt_id, span_minutes, nlp, store=st)
+    # `sizer` is what turns the DYNAMICS block on (app/analysis/dynamics.py): the same window's
+    # recent slice read against its own longer baseline, so the response says how the work is
+    # CHANGING and not only what it contains. Opt-in in `analyze_window` because the parse-path
+    # equivalence oracle cannot compute it -- see that function's docstring -- so production is
+    # the one caller that passes a sizer. `DEFAULT_SIZER` is the fixed slice; Task 3 of the plan
+    # replaces it only if an adaptive method beats it under a pre-registered rule.
+    out = analyze_window(path, prompt_id, span_minutes, nlp, store=st, sizer=DEFAULT_SIZER)
 
     if status == _TERMS_DISABLED:
         # Switched off means not reported. The regex half of terms.candidates() needs no model

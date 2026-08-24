@@ -565,6 +565,38 @@ def test_analyze_returns_a_payload_without_touching_the_runner():
     assert m._state["counts"].analyze_served == 1
 
 
+def test_analyze_reports_how_the_window_is_changing_not_only_what_it_holds():
+    """The DYNAMICS block on the endpoint. /analyze answers what a window contains; on its own
+    that is a state, and a state cannot say whether the hour just turned over or has looked like
+    this all day. The block is the recent slice read against its own longer baseline
+    (app/analysis/dynamics.py); its metrics are unit-tested in app/test_analysis_dynamics.py, so
+    what is pinned HERE is that the endpoint actually carries it, named and self-describing.
+
+    The `baseline_absent` assertion is the load-bearing one. This fixture is two turns five
+    minutes apart, so a 15-minute slice holds the work and the 45-minute baseline holds nothing —
+    and with no baseline evidence, EVERY slice value is "absent from the baseline", which an
+    unguarded turnover would report as 1.0: total churn, on a session that never changed
+    anything. Naming the status instead is the whole of what `window.attribution` was shipped
+    for."""
+    from app.analysis import workstreams
+
+    m = _reload_main(None)
+    _wire(m)
+    body = _asyncio.run(m.analyze(
+        m.AnalyzeIn(path=_fixture_transcript(), prompt_id=_fixture_prompt_id())))
+    d = body["dynamics"]
+    assert d["sizer"] == "fixed", d
+    assert (d["slice_minutes"], d["baseline_minutes"]) == (15.0, 45.0), d
+    assert d["slice_end"] == body["window_end"], d
+    assert d["baseline_start"] == body["window_start"], (
+        "the baseline reached outside the window /analyze already validated")
+    assert d["source"] == "bin+event" and d["reconcile_scope"] == "file", d
+    assert set(d["dimensions"]) == {n for n, _lv, _f in workstreams.ALLOCATION}, d["dimensions"]
+    proj = d["dimensions"]["project"]
+    assert proj["status"] == "baseline_absent", proj
+    assert proj["turnover"] is None and proj["changed"] is None, proj
+
+
 def test_analyze_unknown_prompt_is_404_not_an_empty_payload():
     m = _reload_main(None)
     _wire(m)
