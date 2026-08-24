@@ -71,6 +71,51 @@ def test_build_metrics_reports_the_budget_shortfall():
     assert m["worker"]["budget_shortfall_mb"] is None, m["worker"]
 
 
+
+def test_build_metrics_reports_the_reference_series_store():
+    """Retention has to be visible in /metrics or pruning is silent, which is the one thing this
+    repo's standing rule forbids. Size, per-table row counts, the oldest retained event, the
+    serving floor (the only thing that explains a 410) and what pruning has actually done."""
+    stats = {"path": "/tmp/refseries.db", "file_mb": 174.0, "live_mb": 91.2, "max_mb": 1024.0,
+             "over_budget_mb": 0.0,
+             "rows": {"event": 1552800, "bin": 61600, "prompt": 4100,
+                      "parse_state": 39, "ingest": 39},
+             "oldest_event_ts": "2025-07-19T04:13:20+00:00",
+             "serving_floor_ts": "2025-05-25T00:00:00+00:00",
+             "pruned": {"event": {"rows": 12, "runs": 3,
+                                  "pruned_before_ts": "2025-05-24T00:00:00+00:00"},
+                        "term": {"rows": 4, "runs": 3,
+                                 "pruned_before_ts": "2025-05-25T00:00:00+00:00"},
+                        "size": {"rows": 0, "runs": 0, "pruned_before_ts": None}}}
+    m = build_metrics(
+        worker_state="ready", worker_rss_mb=None, parent_rss_mb=None, model_cost_mb=None,
+        governor=Governor(disabled=True), runner=_FakeRunner(), counts=Counts(),
+        recycles=0, kills={"timeout": 0, "pressure": 0, "idle": 0, "crash": 0},
+        uptime_s=1.0, store_stats=stats, clock=lambda: 1.0)
+    assert m["store"] == stats
+    assert m["store"]["rows"]["bin"] == 61600
+    assert m["store"]["serving_floor_ts"] == "2025-05-25T00:00:00+00:00"
+
+
+def test_build_metrics_store_block_is_none_when_the_store_is_not_open():
+    """/metrics must answer even when the store could not be opened -- that path already
+    reports 503 on /analyze and must not take /metrics down with it."""
+    m = build_metrics(
+        worker_state="down", worker_rss_mb=None, parent_rss_mb=None, model_cost_mb=None,
+        governor=None, runner=None, counts=Counts(),
+        recycles=0, kills={"timeout": 0, "pressure": 0, "idle": 0, "crash": 0},
+        uptime_s=1.0, clock=lambda: 1.0)
+    assert m["store"] is None
+
+
+def test_counts_has_the_expired_window_counter():
+    """A 410 is neither load nor a defect: it is retention doing its job, and it must not be
+    read as analyze_not_ingested (which means "ingest is falling behind" -- a different operator
+    action entirely)."""
+    c = Counts()
+    assert c.analyze_expired == 0
+    assert c.analyze_not_ingested == 0
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

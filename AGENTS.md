@@ -272,6 +272,40 @@ could raise.
   not a herd of whole-file ingests. Why it matters: a first whole-file ingest
   measured **5.1s on a 90 MB transcript**, and inside an `/analyze` request that
   lands on an enrichment job's per-pass deadline.
+- **Retention is bounded by TIME, and a pruned window REFUSES (410) rather than
+  answering narrower.** The store's raw `event` rows expire at
+  `KELD_REFSERIES_RETAIN_DAYS` (400) and the one text-derived level, `term`, at
+  `KELD_REFSERIES_TERM_RETAIN_DAYS` (90); `KELD_REFSERIES_MAX_MB` (1024) is a size
+  **backstop**, not the operating policy — measured, 1,552,800 rows (400 days at
+  3,882/day) is 174 MB, so the cap is ~6-9 years and the horizon is what bites.
+  ⚠️ **Pruning raw events does not degrade a window's edges — it breaks the digest
+  outright.** `/analyze` serves every window with
+  `exclude_slots=(RECONCILE_SLOT,)` (reconcile must be re-scoped per window), and
+  `Store.window_rows` answers an excluded-slot query **entirely from `event`** —
+  a `bin` row has no slot dimension to filter on — so for the digest path `bin`
+  is not a degraded fallback for a pruned event, it is not read at all. Measured
+  on the test fixture: prune the events, keep every bin, and the window returns
+  **200** with `evidence` 179 → 36, `project`/`branch`/`model` silently `null`,
+  and a confident 0.833 share off a fifth of the data, with `is_current()` still
+  True so nothing objects. So the store keeps a monotonic **serving floor** and a
+  window starting below it is refused: `WindowExpired` → **410** (`analyze_expired`),
+  which the Go client treats as a genuine error rather than retrying — correct,
+  since retrying can never restore a pruned row — so the workstreams facet
+  publishes `partial`. Not 503 (the one status `post()` retries through; it would
+  spin forever) and not 404 ("prompt not in this transcript", which would hide a
+  horizon set shorter than the windows being asked for). `term` is the **only**
+  level whose **bins** are pruned too: it is an INVENTORY level, so it is
+  precomputed into `bin`, and under "rollups are never pruned" no event policy
+  would bound the lifetime of a person's name at all. Never pruned: every other
+  level's bins, and `prompt`/`parse_state`/`ingest` — the prompt index is what
+  keeps 410 distinguishable from 404, and `parse_state` is what makes a tail parse
+  equal a full parse. Pruning is **chunked** (5,000 rows, measured 14 ms, one short
+  transaction each) so it cannot lock out the watcher-driven `/ingest`, rides
+  `ingest_file` (both writers) with an hourly gate that being over-cap overrides,
+  and is reported in `/metrics` under `store` — size (`live_mb` **and** `file_mb`,
+  because SQLite does not shrink the file on DELETE, so a cap read off the file
+  size would prune the whole series to no effect), per-table row counts, oldest
+  retained event, `serving_floor_ts` and what each policy removed.
 - ⚠️ **`/analyze` and `/ingest` are confined to `KELD_ANALYZE_ROOTS`.** The sidecar has **no
   auth** — `serve.py` binds 127.0.0.1 and that is the whole of it — which was
   adequate while every endpoint only processed text the caller already held.

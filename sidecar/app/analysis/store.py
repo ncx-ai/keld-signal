@@ -66,7 +66,111 @@ PRECOMPUTED_LEVELS = tuple(dict.fromkeys(
 #         parse state written by an older layout as a reason to reparse, which is what
 #         populates it. Nothing reads it before then, because `analyze.py` refuses to serve a
 #         store whose checkpoint is not current.
-SCHEMA_VERSION = 3
+# 3 -> 4: `retention`, the pruning ledger and the SERVING FLOOR (see that table's comment and
+#         `enforce_retention`). Additive, and an existing store starts with an empty ledger,
+#         which reads as "nothing has ever been pruned" -- the correct initial state, and the
+#         one that keeps `/analyze` answering every window it could answer before.
+SCHEMA_VERSION = 4
+
+# --- Retention -------------------------------------------------------------------------------
+#
+# The plan for this store said: "raw events kept indefinitely; a size backstop
+# (KELD_REFSERIES_MAX_MB, default 1024) prunes oldest raw events only. Rollups are never
+# pruned." The second half of that sentence was doing load-bearing work it cannot do, and the
+# measurement is in `app/test_retention.py`:
+#
+#   `/analyze` serves EVERY window with `exclude_slots=(RECONCILE_SLOT,)`, because reconcile has
+#   to be re-scoped per window. `window_rows` answers an excluded-slot query entirely from
+#   `event` -- a `bin` row has no slot dimension to filter on -- so for the digest path `bin` is
+#   not a degraded fallback for a pruned event. It is not consulted at all. Prune the events of
+#   a real fixture window, keep every bin, and `analyze_window` returns 200 with `evidence`
+#   179 -> 36, `project`/`branch`/`model` silently null, and a confident 0.833 share computed
+#   from a fifth of the data. `is_current()` stays True, so nothing refuses.
+#
+# So pruning raw events does not strip an edge. It produces a plausible wrong number. Retention
+# is therefore two mechanisms, and it needs both:
+#
+#   1. A TIME horizon (`retain_days`), so that in normal operation the pruned range is
+#      unreachable rather than merely unlikely to be asked about. At the measured rate --
+#      3,882 rows/day, and 1,552,800 rows measured at 174 MB -- 400 days of events is ~174 MB
+#      against a 1024 MB cap, so the backstop is a safety valve and the horizon is the policy.
+#   2. A SERVING FLOOR that `/analyze` REFUSES against, because the size backstop can still cut
+#      into a window the horizon would have kept. A silently narrower window is exactly the
+#      failure this repo's "dropping must be visible" rule exists to prevent, so a window whose
+#      evidence was pruned is refused (410, permanent) rather than answered from what is left.
+#
+# `term` is the exception that proves the rule. It is the one level derived from message TEXT
+# rather than tool-call inputs, and it is an INVENTORY level, which means it is precomputed into
+# `bin`. Under "rollups are never pruned", NO event-level policy bounds its lifetime at all: a
+# person's name would sit in `bin` forever regardless of what happened to the events, and an
+# event-only prune would be privacy theatre for the only text-derived data on disk. The plan's
+# "never pruned" rests on a COST premise -- rollups are three orders of magnitude cheaper -- and
+# cost is not why a name should expire, so the cost argument does not answer the question. `term`
+# is therefore the one level whose BINS are pruned too, on its own shorter horizon. Every other
+# level's bins are still never pruned.
+TERM_LEVEL = "term"
+
+# The task's specified backstop. Not the operating policy: see above.
+DEFAULT_MAX_MB = 1024.0
+# Longer than any window `/analyze` will be asked for by orders of magnitude (digests are
+# computed for prompts seconds old), and it is what a newly-registered level backfills its bins
+# from (`_register_levels`), which is the reason to keep events at all once their bins exist.
+DEFAULT_RETAIN_DAYS = 400.0
+# The sensitive level expires first. 90 days bounds how long a name lives on disk while leaving
+# every digest anyone actually asks for inside the horizon.
+DEFAULT_TERM_RETAIN_DAYS = 90.0
+
+# Rows per DELETE. MEASURED at 14 ms for 5,000 rows, which is the point: task 4 made `/ingest`
+# a SECOND writer, and one unbounded DELETE would hold the write lock for its whole duration
+# until a concurrent watcher-driven ingest exhausted `busy_timeout=5000` and failed. Chunked,
+# each chunk is its own short transaction and the lock is released between them, so a concurrent
+# ingest interleaves instead of erroring.
+PRUNE_CHUNK = 5000
+# One call's ceiling, so retention riding the ingest path can never make one ingest unbounded.
+# 400 * 5,000 = 2,000,000 rows, more than a year of events, and what is left waits for the next
+# ingest.
+PRUNE_MAX_CHUNKS = 400
+# Retention rides `ingest_file`, which runs on every watcher poll. Re-scanning for expired rows
+# at that rate is pure cost on a store that grows 0.11 GB/year, so the time horizon is checked
+# hourly. Being over the SIZE cap overrides the gate -- that is the one case where waiting an
+# hour is the wrong answer.
+PRUNE_MIN_INTERVAL_S = 3600.0
+
+_PRUNE_SCOPES = ("event", "term", "size")
+
+
+class RetentionPolicy(collections.namedtuple(
+        "RetentionPolicy", "max_mb retain_days term_retain_days")):
+    """The three numbers retention is driven by. A value object so a caller (and every test)
+    can state a policy explicitly instead of mutating the environment."""
+    __slots__ = ()
+
+
+def _env_float(env, key, default):
+    """A malformed value falls back rather than raising. Retention runs off the back of ingest,
+    and a typo in an env var must not take ingest down with it."""
+    try:
+        v = env.get(key)
+        return default if v in (None, "") else float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def retention_policy(env=None):
+    env = os.environ if env is None else env
+    return RetentionPolicy(
+        max_mb=_env_float(env, "KELD_REFSERIES_MAX_MB", DEFAULT_MAX_MB),
+        retain_days=_env_float(env, "KELD_REFSERIES_RETAIN_DAYS", DEFAULT_RETAIN_DAYS),
+        term_retain_days=_env_float(env, "KELD_REFSERIES_TERM_RETAIN_DAYS",
+                                    DEFAULT_TERM_RETAIN_DAYS))
+
+
+def _iso(t):
+    """An epoch as an instant a person can read in /metrics, or None."""
+    if t is None:
+        return None
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(float(t), timezone.utc).isoformat()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ingest (
@@ -144,6 +248,26 @@ CREATE TABLE IF NOT EXISTS prompt (
   ts        TEXT NOT NULL,
   PRIMARY KEY (session, prompt_id)
 ) WITHOUT ROWID;
+
+-- The pruning ledger, and the SERVING FLOOR derived from it. `pruned_before` is a promise about
+-- what the store no longer contains: no `event` row at or before it survives for that scope.
+--
+-- It is in the DATABASE and not in a process's memory for the same reason `parse_state` is: the
+-- sidecar restarts as a matter of routine, and a floor that was forgotten on restart would let
+-- `/analyze` resume serving windows whose evidence is gone -- silently, and looking exactly like
+-- a quiet hour. It is MONOTONIC (see `note_pruned`), because a floor that retreated would
+-- re-open one of those windows.
+--
+-- One row per scope, plus the bookkeeping row 'run' (pruned_before NULL) that carries the gate
+-- in PRUNE_MIN_INTERVAL_S. rows_pruned/runs exist to be reported: /metrics must show what
+-- pruning has done, or dropping is silent.
+CREATE TABLE IF NOT EXISTS retention (
+  scope         TEXT PRIMARY KEY,
+  pruned_before REAL,
+  rows_pruned   INTEGER NOT NULL DEFAULT 0,
+  runs          INTEGER NOT NULL DEFAULT 0,
+  last_run      REAL
+);
 """
 
 
@@ -238,6 +362,7 @@ class Store:
         self._conns = []
         self._conns_lock = threading.Lock()
         self._depth = 0
+        self._stats_cache = None
         conn = self._conn()
         with self._conns_lock:
             conn.executescript(_SCHEMA)
@@ -527,6 +652,262 @@ class Store:
         """
         st = self.ingest_state(path)
         return None if st is None else st["watermark_ts"]
+
+    # --- retention -------------------------------------------------------------------------
+
+    def live_mb(self):
+        """The store's size in MB, counting only pages that hold data.
+
+        NOT `os.path.getsize`, and the difference is the whole reason a size backstop needs
+        care. MEASURED: inserting 400,000 events took the file to 41.5 MB; deleting half of them
+        left the file at 41.5 MB and the live pages at 21.1 MB. SQLite does not return freed
+        pages to the filesystem without a VACUUM -- it puts them on a freelist and reuses them.
+        So a cap enforced on the file size would delete every row the store had and STILL be
+        over the cap: it would prune the whole series to no effect whatever.
+
+        (page_count - freelist_count) * page_size is what a VACUUM would leave behind, and it is
+        the number that actually stops growing when rows go, which is what a size backstop is
+        for. `store_stats` reports both, so the reclaimable difference is visible rather than
+        looking like a cap that is not working.
+        """
+        c = self._conn()
+        pages = c.execute("PRAGMA page_count").fetchone()[0]
+        free = c.execute("PRAGMA freelist_count").fetchone()[0]
+        size = c.execute("PRAGMA page_size").fetchone()[0]
+        return max(0, pages - free) * size / (1024.0 * 1024.0)
+
+    def file_mb(self):
+        """What an operator sees on disk: the database plus its WAL and shm sidecars."""
+        total = 0
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                total += os.path.getsize(self.path + suffix)
+            except OSError:
+                pass
+        return total / (1024.0 * 1024.0)
+
+    def note_pruned(self, scope, pruned_before, rows, now=None):
+        """Record that `rows` rows at or before `pruned_before` are gone from `scope`.
+
+        MONOTONIC: the floor only ever advances. A retreat would re-open a window whose evidence
+        no longer exists, and the only thing worse than refusing an answerable window is
+        answering an unanswerable one. That also makes the one hazardous interleaving safe: a
+        REPARSE re-writes a whole file's events, including some below the floor, and the floor
+        does not follow them back down. `/analyze` then refuses a window it could in fact have
+        answered -- conservative, visible in /metrics, and corrected by the next prune. The other
+        direction would have been a silent wrong answer.
+        """
+        pruned_before = None if pruned_before is None else float(pruned_before)
+        with self.transaction():
+            self._conn().execute("""
+                INSERT INTO retention(scope, pruned_before, rows_pruned, runs, last_run)
+                VALUES (?,?,?,0,?)
+                ON CONFLICT(scope) DO UPDATE SET
+                  pruned_before = MAX(COALESCE(retention.pruned_before, -1e18),
+                                      COALESCE(excluded.pruned_before, -1e18)),
+                  rows_pruned = retention.rows_pruned + excluded.rows_pruned,
+                  last_run = excluded.last_run""",
+                (scope, pruned_before, int(rows), time.time() if now is None else float(now)))
+        self._invalidate_stats()
+
+    def retention_state(self):
+        """The ledger, per scope: what was pruned, how much, how often."""
+        out = {sc: {"pruned_before": None, "rows_pruned": 0, "runs": 0, "last_run": None}
+               for sc in _PRUNE_SCOPES}
+        for sc, before, rows, runs, last in self._conn().execute(
+                "SELECT scope, pruned_before, rows_pruned, runs, last_run FROM retention"):
+            out[sc] = {"pruned_before": before, "rows_pruned": rows, "runs": runs,
+                       "last_run": last}
+        return out
+
+    def serving_floor(self):
+        """The earliest instant a window may start at and still be answerable, or None if
+        nothing has ever been pruned.
+
+        ONE floor across every scope, deliberately, and it is the most restrictive of them. A
+        per-scope floor would describe a window that is answerable for eleven levels but not for
+        `term` -- and the published payload has no way to say that (its contract is fixed, and
+        `named_terms` would simply come out empty), so it would be reported as an absence of
+        names rather than as a refusal. That is the silent narrowing this whole mechanism exists
+        to prevent, so the sensitive level's shorter horizon shortens the SERVING horizon with
+        it. What the longer event retention still buys is the bin backfill for a newly-added
+        level (`_register_levels`), and the dynamics keep full history regardless, because
+        non-`term` bins are never pruned.
+        """
+        row = self._conn().execute("SELECT MAX(pruned_before) FROM retention").fetchone()
+        return None if row is None else row[0]
+
+    def _prune_chunks(self, sql, params, chunk, budget):
+        """Delete matching `event` rows in bounded chunks, newest-deleted timestamp first.
+
+        Returns `(rows_deleted, newest_ts_deleted, chunks_used)`. Each chunk is its OWN short
+        transaction: the write lock is taken and released per chunk, so a concurrent
+        watcher-driven `/ingest` queues briefly on `busy_timeout` instead of failing against a
+        lock held for the length of an unbounded DELETE.
+        """
+        deleted, newest, used = 0, None, 0
+        c = self._conn()
+        while used < budget:
+            with self.transaction():
+                rows = c.execute(
+                    f"SELECT rowid, ts FROM event WHERE {sql} ORDER BY ts LIMIT ?",
+                    params + (chunk,)).fetchall()
+                if not rows:
+                    break
+                c.executemany("DELETE FROM event WHERE rowid = ?", [(r[0],) for r in rows])
+            deleted += len(rows)
+            used += 1
+            hi = max(r[1] for r in rows)
+            newest = hi if newest is None else max(newest, hi)
+            if len(rows) < chunk:
+                break
+        return deleted, newest, used
+
+    def enforce_retention(self, now=None, policy=None, chunk=PRUNE_CHUNK,
+                          max_chunks=PRUNE_MAX_CHUNKS, force=False):
+        """Apply the retention policy. The one entry point; `ingest.ingest_file` calls it.
+
+        Three passes, in order, each advancing the floor by what it actually removed:
+
+        1. **The time horizon** -- events older than `retain_days`.
+        2. **`term`** -- its events AND its bins older than `term_retain_days`. The only level
+           whose bins go, for the reason argued at the top of this module.
+        3. **The size backstop** -- oldest events first until `live_mb()` fits `max_mb`, or
+           until there are no events left to prune. It never touches a bin, a `prompt` row,
+           `parse_state` or the `ingest` checkpoint: a bin is a thousandth of the cost and is
+           all the dynamics have left, and the other three are what task 2 proved ingest
+           equivalence on and what makes "expired" distinguishable from "not in this
+           transcript". If pruning every event still does not fit, it stops and reports
+           `over_budget_mb` rather than spinning or reaching for something it must not delete.
+
+        Returns a dict; `ran` is False when the hourly gate declined (see PRUNE_MIN_INTERVAL_S).
+        """
+        pol = policy or retention_policy()
+        now = time.time() if now is None else float(now)
+        over = self.live_mb() > pol.max_mb
+        state = self.retention_state()
+        last = max((s["last_run"] or 0.0) for s in state.values()) if state else 0.0
+        if not (force or over or now - last >= PRUNE_MIN_INTERVAL_S):
+            return {"ran": False, "event_pruned": 0, "term_pruned": 0, "term_bins_pruned": 0,
+                    "size_pruned": 0, "truncated": False, "live_mb": self.live_mb(),
+                    "file_mb": self.file_mb(), "over_budget_mb": 0.0,
+                    "floor": self.serving_floor()}
+
+        budget = max(1, int(max_chunks))
+        out = {"ran": True, "event_pruned": 0, "term_pruned": 0, "term_bins_pruned": 0,
+               "size_pruned": 0, "truncated": False}
+
+        # 1. The time horizon.
+        cut = now - pol.retain_days * 86400.0
+        n, newest, used = self._prune_chunks("ts < ?", (cut,), chunk, budget)
+        budget -= used
+        out["event_pruned"] = n
+        if n:
+            self.note_pruned("event", newest, n, now)
+
+        # 2. `term`: events and bins. The bins go in one statement -- there are ~154 rollup rows
+        #    a day in total, so no chunking is warranted, and leaving them would mean the
+        #    text-derived level outlived its own horizon in the only table that never expires.
+        tcut = now - pol.term_retain_days * 86400.0
+        n, newest, used = self._prune_chunks("level = ? AND ts < ?", (TERM_LEVEL, tcut),
+                                             chunk, max(0, budget))
+        budget -= used
+        out["term_pruned"] = n
+        with self.transaction():
+            cur = self._conn().execute("DELETE FROM bin WHERE level = ? AND bin_ts < ?",
+                                       (TERM_LEVEL, _floor_bin(tcut)))
+            out["term_bins_pruned"] = cur.rowcount or 0
+        if n or out["term_bins_pruned"]:
+            self.note_pruned("term", newest if n else tcut, n, now)
+
+        # 3. The size backstop.
+        while self.live_mb() > pol.max_mb and budget > 0:
+            n, newest, used = self._prune_chunks("1=1", (), chunk, 1)
+            budget -= max(used, 1)
+            if not n:
+                break                          # nothing prunable left; report the shortfall
+            out["size_pruned"] += n
+            self.note_pruned("size", newest, n, now)
+
+        with self.transaction():
+            self._conn().execute("""
+                INSERT INTO retention(scope, pruned_before, rows_pruned, runs, last_run)
+                VALUES ('run', NULL, 0, 1, ?)
+                ON CONFLICT(scope) DO UPDATE SET
+                  runs = retention.runs + 1, last_run = excluded.last_run""", (now,))
+            for sc in _PRUNE_SCOPES:
+                # INSERT..ON CONFLICT, not UPDATE: a scope that has never pruned anything has no
+                # row yet, and an UPDATE would leave its `runs` at 0 forever -- reporting "never
+                # ran" for a policy that has run every hour and correctly found nothing. The
+                # inserted row carries `pruned_before` NULL, which `serving_floor`'s MAX ignores,
+                # so bookkeeping a scope does not invent a floor for it.
+                self._conn().execute("""
+                    INSERT INTO retention(scope, pruned_before, rows_pruned, runs, last_run)
+                    VALUES (?, NULL, 0, 1, ?)
+                    ON CONFLICT(scope) DO UPDATE SET
+                      runs = retention.runs + 1, last_run = excluded.last_run""", (sc, now))
+        self._invalidate_stats()
+
+        live = self.live_mb()
+        out.update(truncated=budget <= 0, live_mb=live, file_mb=self.file_mb(),
+                   over_budget_mb=round(max(0.0, live - pol.max_mb), 3),
+                   floor=self.serving_floor())
+        return out
+
+    # --- what /metrics reports -------------------------------------------------------------
+
+    def _invalidate_stats(self):
+        self._stats_cache = None
+
+    def store_stats(self, ttl=15.0, now=None, policy=None):
+        """The `store` block in /metrics: size, per-table row counts, the oldest retained event,
+        the serving floor, and what pruning has done. NEVER raises -- /metrics has to answer
+        while anything else is broken.
+
+        CACHED, because /metrics is polled and these are not all free. MEASURED at 400 days of
+        retention (1,552,800 rows): `COUNT(*)` is 7 ms but `MIN(ts)` is 35 ms, because the index
+        is `(session, ts)` and a bare MIN over it is a full scan. The numbers move slowly, so a
+        short TTL costs nothing -- and a prune drops the cache outright (`_invalidate_stats`),
+        since reporting pre-prune counts beside a freshly advanced floor would be the same
+        silent-narrowing failure one level up.
+        """
+        now = time.time() if now is None else float(now)
+        cached = getattr(self, "_stats_cache", None)
+        if cached is not None and ttl > 0 and now - cached[0] < ttl:
+            return cached[1]
+        try:
+            out = self._collect_stats(policy)
+        except Exception as exc:                 # noqa: BLE001 - /metrics must still answer
+            # Class name only. A sqlite error message can quote the statement it failed on.
+            return {"error": type(exc).__name__}
+        self._stats_cache = (now, out)
+        return out
+
+    def _collect_stats(self, policy=None):
+        pol = policy or retention_policy()
+        c = self._conn()
+        rows = {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                for t in ("event", "bin", "prompt", "parse_state", "ingest")}
+        oldest = c.execute("SELECT MIN(ts) FROM event").fetchone()[0]
+        st = self.retention_state()
+        live = self.live_mb()
+        return {
+            "path": self.path,
+            "file_mb": round(self.file_mb(), 3),
+            "live_mb": round(live, 3),
+            "max_mb": pol.max_mb,
+            "over_budget_mb": round(max(0.0, live - pol.max_mb), 3),
+            "retain_days": pol.retain_days,
+            "term_retain_days": pol.term_retain_days,
+            "rows": rows,
+            "oldest_event_ts": _iso(oldest),
+            # The only thing that explains a 410. An operator seeing expired windows with no
+            # floor reported would have nothing to look at.
+            "serving_floor_ts": _iso(self.serving_floor()),
+            "pruned": {sc: {"rows": st[sc]["rows_pruned"], "runs": st[sc]["runs"],
+                            "pruned_before_ts": _iso(st[sc]["pruned_before"])}
+                       for sc in _PRUNE_SCOPES},
+        }
 
     # --- the window query ------------------------------------------------------------------
 

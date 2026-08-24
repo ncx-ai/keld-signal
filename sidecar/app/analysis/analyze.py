@@ -31,6 +31,11 @@ answer, `/analyze` fails visibly and the caller retries.
 - **The prompt id is not in the transcript** (`PromptNotFound`). Permanent. Distinguishable from
   the above only because the store knows whether it has read everything the file holds; a
   prompt absent from a store that is NOT caught up is the first case, not this one.
+- **The window's evidence was pruned** (`WindowExpired`). Permanent, and a THIRD case rather
+  than either of the above: the prompt is in the transcript and the store is caught up, but the
+  events the window is made of are gone. `main.py` maps it to 410, which the Go client treats as
+  a genuine error rather than retrying — correct, since retrying can never help. See
+  `store.py`'s retention section for why a refusal is the only honest answer here.
 
 ## The window edge is quantized, and has to be
 
@@ -65,6 +70,25 @@ class PromptNotFound(Exception):
     """The prompt id is not in this transcript. Distinct from an empty window: one is a
     resolution failure, the other is a fact about the work. PERMANENT — a caller must not
     retry it."""
+
+
+class WindowExpired(Exception):
+    """The window starts before the reference series' retention floor: its evidence was pruned.
+    PERMANENT — a caller must not retry, because a pruned row is never coming back.
+
+    Raised rather than answering from whatever survived, and that is not a nicety. `/analyze`
+    serves every window with `exclude_slots=(RECONCILE_SLOT,)`, and `Store.window_rows` answers
+    an excluded-slot query entirely from `event` — a `bin` row has no slot dimension to filter on
+    — so for the digest path a pruned event has no rollup standing behind it. Measured on the
+    test fixture: prune the events, keep every bin, and the window comes back with `evidence`
+    179 -> 36, `project`/`branch`/`model` silently `null`, and a confident 0.833 share computed
+    from a fifth of the data, with `is_current()` still True so nothing objects. That is a
+    plausible wrong number, which is worse than no number.
+
+    Distinct from `StoreBehind` for the reason its own docstring gives in reverse: that one is
+    transient and the Go client waits and retries through the 503 it maps to, which is right for
+    a window one append from answerable and catastrophic for one that can never be answered.
+    """
 
 
 class StoreBehind(Exception):
@@ -137,9 +161,16 @@ def _rollup_from_store(store, path, prompt_id, span_minutes=60, nlp=None, refres
         if current:
             raise PromptNotFound(prompt_id)
         raise StoreBehind(path)
+    start, end = _bounds(end_iso, span_minutes)
+    # Retention's floor, checked BEFORE staleness. A window can be both stale and expired, and
+    # reporting the transient failure would make the caller retry forever on something
+    # permanent, so the permanent one wins. See `WindowExpired` on why a pruned window is
+    # refused rather than answered from what survived.
+    floor = store.serving_floor()
+    if floor is not None and quantize(start.timestamp()) < floor:
+        raise WindowExpired(path)
     if not current:
         raise StoreBehind(path)
-    start, end = _bounds(end_iso, span_minutes)
     # The spec's rule, stated in its own terms: never serve past the watermark. `is_current`
     # above is the stronger condition and is what fires in practice (see its docstring on why
     # whole-file evidence makes currency the real precondition); this is the narrower guard it

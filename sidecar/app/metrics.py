@@ -56,13 +56,22 @@ class Counts:
     # carries only a class-free 503, because a presidio error message can quote the analysed text.
     pii_served: int = 0
     pii_failed: int = 0
+    # Windows /analyze refused with 410 because their evidence was PRUNED (see
+    # app/analysis/store.py's retention section). Its own counter, and deliberately not folded
+    # into analyze_not_ingested: that one means "ingest is falling behind, it will catch up" and
+    # the caller retries through it, whereas this one is permanent and the operator action is
+    # different — either the retention horizon is shorter than the windows being asked for, or
+    # the size backstop fired. A non-zero value with a `serving_floor_ts` in the store block is
+    # retention working as designed; a CLIMBING value means digests are being asked for below the
+    # floor, which is a configuration problem, not a load one.
+    analyze_expired: int = 0
 
 
 def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
                   governor, runner, counts, recycles, kills, uptime_s,
                   cpu_threads=None, peak_rss_mb=None, ceiling_mb=None,
                   hard_limit_mb=None, parent_reserve_mb=None, budget_shortfall_mb=None,
-                  clock=time.monotonic):
+                  store_stats=None, clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     return {
         "worker": {
@@ -104,5 +113,16 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
             "inflight": runner.inflight if runner else 0,
         },
         "counts": dict(vars(counts)),
+        # The reference-series store (app/analysis/store.py). None when it could not be opened —
+        # /metrics must answer while /analyze is reporting 503 for the same reason.
+        #
+        # Retention has to be visible HERE or pruning is silent, which is the one thing this
+        # repo's standing rule forbids. Three of these fields exist specifically for that:
+        # `serving_floor_ts` is the only thing that explains a 410 (`counts.analyze_expired`);
+        # `pruned` says what each policy has actually removed rather than what it is configured
+        # to remove; and `file_mb` sits beside `live_mb` because SQLite does not shrink the file
+        # on DELETE, so a cap enforced on the file size would look like a cap that is not
+        # working (measured: 41.5 MB file, 21.1 MB live, after deleting half of 400,000 events).
+        "store": store_stats,
         "uptime_s": round(uptime_s, 1),
     }

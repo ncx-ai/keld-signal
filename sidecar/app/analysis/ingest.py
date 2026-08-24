@@ -67,6 +67,7 @@ the sensitive level), and `remotes` is recovered partly from prose, which is why
 `repo_mentioned` already are too.
 """
 import collections
+import logging
 import hashlib
 import os
 import threading
@@ -79,6 +80,8 @@ from app.analysis.reconcile import reconcile
 # what it is for, and a third timestamp parser in this package is a third thing to drift.
 from app.analysis.transcript import _order_key, tool_use_in, turns_in
 from app.analysis.workspace import new_evidence, resolve_workspace, scan_tool_use
+
+log = logging.getLogger("keld.sidecar.ingest")
 
 # The `source_line` slot the reconcile-derived rows occupy. Line ordinals are 1-based, so 0 can
 # never collide with a batch of turns. Reconcile output is not a batch at all — it is a single
@@ -356,9 +359,23 @@ def ingest_file(store, path, nlp=None):
     the daemon's watcher signal (task 4) and an `/analyze` that found the store behind — and
     while SQLite would serialise the writes, both would parse the same bytes and one would
     discard the work. The lock makes the second wait and then find nothing to do.
+
+    Retention rides this call, AFTER the ingest and OUTSIDE the path lock. This is where it
+    belongs because both writers reach the store through here — the watcher's `/ingest` and
+    `/analyze`'s on-demand refresh — so nothing else has to schedule it and the service needs no
+    background thread it does not already have. It is gated to run at most hourly unless the
+    store is over its size cap (see `Store.enforce_retention`), bounded per call, and chunked so
+    it cannot lock out the other writer. It is also NON-FATAL: an ingest that succeeded must not
+    be reported as a failure because housekeeping afterwards did not, and `/ingest` maps an
+    exception to 503, which would make the daemon re-signal a file that was ingested perfectly.
     """
     with _path_lock(path):
-        return _ingest_locked(store, path, nlp)
+        result = _ingest_locked(store, path, nlp)
+    try:
+        store.enforce_retention()
+    except Exception as exc:                     # noqa: BLE001 - see above; never fail an ingest
+        log.warning("retention pass failed: %s", type(exc).__name__)
+    return result
 
 
 _LOCKS_MUTEX = threading.Lock()

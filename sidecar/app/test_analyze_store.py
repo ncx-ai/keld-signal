@@ -31,8 +31,9 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.analysis import window, workstreams
-from app.analysis.analyze import (PromptNotFound, StoreBehind, analyze_window,
-                                  analyze_window_by_parse, _rollup_by_parse, _rollup_from_store)
+from app.analysis.analyze import (PromptNotFound, StoreBehind, WindowExpired, _bounds,
+                                  analyze_window, analyze_window_by_parse, _rollup_by_parse,
+                                  _rollup_from_store)
 from app.analysis.ingest import RECONCILE_SLOT, ingest_file, is_current, session_of, terms_mode
 from app.analysis.store import BIN_SECONDS, open_store
 
@@ -471,6 +472,97 @@ def _payload_diff(want, got):
             else:
                 out.append((k, want.get(k), got.get(k)))
     return out
+
+
+
+# --- retention: a window whose evidence was pruned ------------------------------------------
+
+def test_a_window_below_the_serving_floor_is_refused_not_served_narrower():
+    """THE RETENTION CONTRACT. Pruned events are not a degraded edge — `/analyze` serves every
+    window with `exclude_slots=(RECONCILE_SLOT,)`, and `Store.window_rows` answers an
+    excluded-slot query entirely from `event`, so a pruned window loses its evidence outright.
+    Measured on this fixture: evidence 179 -> 36 with every bin intact, `project`/`branch`/
+    `model` silently null, and `is_current` still True so nothing refuses. That is the plausible
+    wrong number this project keeps paying for, so the floor makes it a refusal."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        served = analyze_window(path, "TARGET", 60, nlp, store=st, refresh=False)
+        assert served["evidence"] > 0
+
+        # A floor after the window's start: its evidence is, by declaration, gone.
+        start, _end = _bounds(st.prompt_time(SESSION, "TARGET"), 60)
+        st.note_pruned("event", start.timestamp() + 1.0, 1)
+
+        try:
+            analyze_window(path, "TARGET", 60, nlp, store=st, refresh=False)
+        except WindowExpired:
+            return
+        raise AssertionError("a window below the serving floor was served")
+
+
+def test_a_window_above_the_serving_floor_still_serves_exactly():
+    """The floor must not become a blanket refusal — every live digest is above it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        want = analyze_window(path, "TARGET", 60, nlp, store=st, refresh=False)
+
+        start, _end = _bounds(st.prompt_time(SESSION, "TARGET"), 60)
+        st.note_pruned("event", start.timestamp() - 60.0, 1)      # entirely below the window
+
+        assert analyze_window(path, "TARGET", 60, nlp, store=st, refresh=False) == want
+
+
+def test_expiry_is_permanent_and_distinct_from_being_behind():
+    """`StoreBehind` means "ask again" and the Go client retries through it. A pruned window is
+    never coming back, so it must NOT be the same exception: retrying it would spin forever on
+    something permanent."""
+    assert not issubclass(WindowExpired, StoreBehind)
+    assert not issubclass(StoreBehind, WindowExpired)
+    assert not issubclass(WindowExpired, PromptNotFound)
+
+
+def test_expiry_wins_over_being_behind_when_both_are_true():
+    """A stale store AND a pruned window. Reporting the transient one would make the caller
+    retry a window that can never be answered."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, nlp = _store(tmp), _FakeNlp()
+        path = _write(tmp)
+        ingest_file(st, path, nlp)
+        start, _end = _bounds(st.prompt_time(SESSION, "TARGET"), 60)
+        st.note_pruned("event", start.timestamp() + 1.0, 1)
+        # Now make the store stale as well.
+        state = st.ingest_state(path)
+        st.record_ingest(path, state["offset"] - 1, state["size"], state["head_sha"],
+                         state["mtime"], state["watermark_ts"])
+        assert not is_current(st, path, nlp)
+        try:
+            analyze_window(path, "TARGET", 60, nlp, store=st, refresh=False)
+        except WindowExpired:
+            return
+        except StoreBehind:
+            raise AssertionError("reported the transient failure for a permanently pruned window")
+        raise AssertionError("served a window that was both stale and expired")
+
+
+def test_ingest_enforces_retention_so_nothing_else_has_to_schedule_it():
+    """There is no background thread in this service and retention must not add one. Both
+    writers — the watcher's /ingest and /analyze's on-demand refresh — go through `ingest_file`,
+    so that is where it rides."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        calls = []
+        real = st.enforce_retention
+
+        def spy(**kw):
+            calls.append(kw)
+            return real(**kw)
+
+        st.enforce_retention = spy
+        ingest_file(st, path, nlp)
+        assert calls, "ingest_file did not enforce retention"
+        st.close()
 
 
 if __name__ == "__main__":

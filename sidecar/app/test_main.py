@@ -8,6 +8,7 @@ import importlib
 import json
 import os
 import tempfile
+import time as _time
 
 
 def _reload_main(max_chars: str | None):
@@ -93,7 +94,12 @@ class _FakeWM:
         self.state = state
         self.model_cost_mb = None
         self.counts = {"recycles": 0, "kills_timeout": 0, "kills_pressure": 0,
-                       "kills_idle": 0, "crashes": 0}
+                       "kills_idle": 0, "kills_hard": 0, "crashes": 0}
+        # The rest of the surface build_metrics() reads. Previously omitted, which meant no test
+        # could call m.metrics() at all (see test_analyze_returns_a_payload_without_touching_the
+        # _runner's note); the retention task has to assert on the REAL endpoint's store block,
+        # so the fake now covers what /metrics reads rather than routing around it.
+        self.peak_rss_mb = None
 
     def call(self, req):
         return handle(req, self._model)
@@ -103,6 +109,18 @@ class _FakeWM:
 
     def worker_rss_mb(self):
         return 0.0
+
+    def ceiling_mb(self):
+        return None
+
+    def hard_limit_mb(self):
+        return None
+
+    def parent_reserve_mb(self):
+        return None
+
+    def budget_shortfall_mb(self):
+        return None
 
 
 def _wire(main, queue_max=8, wm=None, runner=None):
@@ -586,6 +604,68 @@ def test_a_window_the_store_cannot_answer_yet_is_503_not_404():
         assert e.status_code == 503, e.status_code
     assert m._state["counts"].analyze_not_ingested == 1
     assert m._state["counts"].submitted == 0, "the refusal went through the runner"
+
+
+def test_a_window_whose_evidence_was_pruned_is_410_not_503():
+    """Retention's refusal, on the wire. It must NOT be the 503 above: 503 is the one status the
+    Go client waits and retries through, and a pruned window is never coming back — retrying it
+    would spin forever. 410 Gone falls into the client's `default: return false, false` ("genuine
+    error — do not spin forever"), so the workstreams facet publishes as `partial`, which is the
+    honest outcome for a window whose evidence no longer exists.
+
+    Produced by the real mechanism: the store is ingested, then a prune is recorded that covers
+    the window's own start.
+    """
+    from app.metrics import Counts
+
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+    path, pid = _fixture_transcript(), _fixture_prompt_id()
+    # Ingest, then declare everything up to now pruned.
+    _asyncio.run(m.ingest(m.IngestIn(path=path)))
+    st = m._store()
+    st.note_pruned("event", _time.time() + 1.0, 1)
+    try:
+        _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=pid)))
+        assert False, "expected 410"
+    except HTTPException as e:
+        assert e.status_code == 410, e.status_code
+    assert m._state["counts"].analyze_expired == 1
+    assert m._state["counts"].analyze_not_ingested == 0, "an expiry was counted as a lag"
+    assert m._state["counts"].submitted == 0, "the refusal went through the runner"
+
+
+def test_metrics_reports_the_reference_series_store():
+    """The store block on the real endpoint, not just the builder."""
+    m = _reload_main(None)
+    _wire(m)
+    _asyncio.run(m.ingest(m.IngestIn(path=_fixture_transcript())))
+    out = m.metrics()
+    s = out["store"]
+    assert s is not None and "error" not in s, s
+    assert s["rows"]["event"] > 0 and s["rows"]["bin"] > 0
+    assert s["max_mb"] > 0 and s["live_mb"] > 0
+    assert s["oldest_event_ts"] is not None
+    assert s["serving_floor_ts"] is None
+    assert s["pruned"]["event"]["rows"] == 0
+
+
+def test_metrics_answers_even_when_the_store_cannot_be_opened():
+    """/health and /metrics must survive everything. An unopenable store already reports 503 on
+    /analyze; it must not take the observability endpoint down too."""
+    m = _reload_main(None)
+    _wire(m)
+    path = _fixture_transcript()
+    old = os.environ.get("KELD_HOME")
+    os.environ["KELD_HOME"] = path            # a FILE where a directory must be
+    try:
+        assert m.metrics()["store"] is None
+    finally:
+        if old is None:
+            os.environ.pop("KELD_HOME", None)
+        else:
+            os.environ["KELD_HOME"] = old
 
 
 def test_an_unopenable_store_is_503_and_never_falls_back_to_a_parse():

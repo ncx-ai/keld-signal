@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from app.analysis.analyze import PromptNotFound, StoreBehind, analyze_window
+from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, analyze_window
 from app.analysis.ingest import ingest_file
 from app.analysis.match import DEFAULT_BUDGET_S as _MATCH_DEFAULT_BUDGET_S
 from app.analysis.match import compile_vocabulary, match_text
@@ -437,6 +437,23 @@ def _store():
         return _STORE[0]
 
 
+def _store_stats():
+    """The reference-series store's block for /metrics, or None if it could not be opened.
+
+    Never raises, and never opens the store as a side effect of a metrics poll: `_store()` is
+    already lazy and cached, and `store_stats` is itself TTL-cached because at 400 days of
+    retention a bare `MIN(ts)` is a 35 ms full scan (see its docstring) and this endpoint is
+    polled.
+    """
+    st = _store()
+    if st is None:
+        return None
+    try:
+        return st.store_stats()
+    except Exception as exc:                     # noqa: BLE001 - /metrics must always answer
+        return {"error": type(exc).__name__}
+
+
 def _analyze_blocking(path, prompt_id, span_minutes):
     """The whole of /analyze's work, on an executor thread.
 
@@ -578,6 +595,7 @@ def metrics():
         peak_rss_mb=wm.peak_rss_mb, ceiling_mb=wm.ceiling_mb(),
         hard_limit_mb=wm.hard_limit_mb(), parent_reserve_mb=wm.parent_reserve_mb(),
         budget_shortfall_mb=wm.budget_shortfall_mb() if wm.ceiling_mb() is not None else None,
+        store_stats=_store_stats(),
     )
 
 
@@ -797,3 +815,19 @@ async def analyze(body: AnalyzeIn):
         # applies to a sidecar that is not ready: queue, never degrade.
         _count("analyze_not_ingested")
         raise HTTPException(status_code=503, detail="window not yet ingested")
+    except WindowExpired:
+        # 410 Gone, and NOT the 503 above. The window's evidence was pruned (see
+        # app/analysis/store.py's retention section), so it is permanently unanswerable and
+        # retrying can never help — whereas 503 is the one status the Go client's post() waits
+        # and retries through, which would spin forever here. 410 falls into that client's
+        # `default: return false, false` ("genuine error — do not spin forever"), so the
+        # workstreams facet fails and the profile publishes as `partial`. That is the honest
+        # outcome for a facet whose inputs no longer exist, and it is the same idiom this
+        # pipeline already uses for a pass that could not complete.
+        #
+        # Not 404 either: 404 means "this prompt is not in this transcript", and conflating
+        # "never existed" with "expired" would hide a retention horizon set shorter than the
+        # windows being requested. `counts.analyze_expired` plus the store block's
+        # `serving_floor_ts` are what make that diagnosable.
+        _count("analyze_expired")
+        raise HTTPException(status_code=410, detail="window evidence has been pruned")
