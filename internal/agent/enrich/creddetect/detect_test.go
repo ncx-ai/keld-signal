@@ -56,3 +56,56 @@ func TestDetectSecretGroupNarrowsSpan(t *testing.T) {
 			got.Start, got.End, text[got.Start:got.End], wantStart, wantEnd, secret)
 	}
 }
+
+// TestDetectSkipsProseFalsePositives pins the precision defect that made a
+// contract-summary prompt report as a leaked credential.
+//
+// generic-api-key matches "<keyword><words><delimiter><token>", and the
+// vendored rule omits secretGroup -- so the 3.5-bit entropy floor was measured
+// over the WHOLE match ("key obligations, termination ", 3.788 bits) instead of
+// over the captured value ("termination", 2.914 bits). Ordinary prose that
+// happens to contain "key"/"token"/"secret" followed by a comma or colon
+// therefore cleared a floor meant to reject exactly that.
+//
+// secrets is the highest-severity sensitivity class, so this is noise precisely
+// where noise is most expensive.
+func TestDetectSkipsProseFalsePositives(t *testing.T) {
+	for _, c := range []string{
+		// gold.jsonl row 110, the measured false positive.
+		"Condense this 40-page SaaS master service agreement into a 1-page summary of key obligations, termination rights, and liability caps for the CFO",
+		// Same shape, other trigger keywords.
+		"Summarise the access controls, remediation timelines and audit findings",
+		"List the api surface: authentication, pagination and rate limiting",
+		"Explain the token economics, distribution schedule and vesting cliffs",
+	} {
+		if s := Detect(c); len(s) != 0 {
+			t.Errorf("prose %q wrongly matched %+v (matched text %q)", c, s, c[s[0].Start:s[0].End])
+		}
+	}
+}
+
+// TestDetectGenericAPIKeyStillFires is the recall half of the same fix: a real
+// "<label><delimiter><high-entropy value>" leak must still be detected, and the
+// span must now cover only the captured secret, not the label and delimiter.
+func TestDetectGenericAPIKeyStillFires(t *testing.T) {
+	cases := []struct{ text, secret string }{
+		{"The database password is set as DB_PASSWORD=hV3kQ9pRt7Wn2Zx4 — connect and run the migration.", "hV3kQ9pRt7Wn2Zx4"},
+		{"api_key: 8Xq2Lm5Rv9Tz3Bn7Wd4Kj6Hf1Gs0Pc", "8Xq2Lm5Rv9Tz3Bn7Wd4Kj6Hf1Gs0Pc"},
+	}
+	for _, c := range cases {
+		var got *Span
+		for _, s := range Detect(c.text) {
+			if s.RuleID == "generic-api-key" {
+				sp := s
+				got = &sp
+			}
+		}
+		if got == nil {
+			t.Errorf("expected a generic-api-key span in %q", c.text)
+			continue
+		}
+		if g := c.text[got.Start:got.End]; g != c.secret {
+			t.Errorf("span text = %q, want %q (secretGroup should narrow to the captured value)", g, c.secret)
+		}
+	}
+}
