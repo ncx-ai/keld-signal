@@ -588,7 +588,8 @@ selects one of three modes:
   thing this project forbids. `sidecar/` — HTTP client to the GLiNER2 sidecar
   (`/classify`, `/extract`, `/entities`); the sole `Model` implementation.
   Model provisioning (`provision/`) fetches weights (`hf.go`) into
-  `~/.keld/models`. Why a bundled sidecar over in-process ONNX:
+  `~/.keld/models` **on demand** — see the provisioning gotcha below. Why a
+  bundled sidecar over in-process ONNX:
   `docs/keld-agent-p2-onnx-decision.md` (historical — see the superseded note
   at its top).
 - **`"deterministic"`** — enrichment stays **on** and `Worker` runs with a
@@ -1127,9 +1128,42 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.
-- **Model provisioning** downloads ~1.9 GB on first ML enrichment; until then
-  the sidecar isn't ready, so enrichment jobs queue/spool rather than run on a
-  fallback backend (there is none).
+- **Model provisioning is ON DEMAND, never at startup.** The ~1.9 GB fetch is
+  triggered by `Worker`'s **warmup** — the one call that actually loads the
+  model — via `daemon/model_on_demand.go`, not by a goroutine kicked off in
+  `mlBackendWithOpts`. It used to be the latter, which charged the download to
+  every machine running the default mode whether or not it ever enriched a
+  prompt. Consequences worth knowing:
+  - The download is **not awaited inside the warm budget.** `warmWait`
+    (default 120s) is sized for a model *load*; awaiting a multi-gigabyte
+    download inside it would cancel the fetch on expiry, and since
+    `EnsureModel` stages into a temp dir it removes on failure, every job would
+    restart from zero. So `ensure` runs the fetch on the **daemon's** context,
+    waits only as long as the caller's ctx allows, and reports "not ready yet"
+    otherwise. Jobs defer + re-spool (no retry budget consumed) and the next
+    one finds the download further along. Never a lower-fidelity substitute.
+  - Success **latches**; a failure does not. `EnsureModel` verifies by
+    streaming a SHA-256 over ~1.9 GB, so re-asking it per job would re-hash the
+    weights on every prompt.
+  - **`ml_backend:"auto"` is unchanged in meaning and still needs the model.**
+    The default pipeline issues **6 inferences per prompt** (5 classify + 1
+    extract — `task_type`, `domain`, `activity_type`, `personal`,
+    `function_guess`, `subcategory`, `speech_act`), pinned by
+    `enrich.TestBuiltInPipelineStillDemandsAModel`. On-demand provisioning
+    therefore *defers* the download to the first prompt; it does not remove it.
+    Claims that "in v2 nothing loads the model" do not hold for the Go
+    pipeline — measure before acting on them.
+  - `"deterministic"` and `"off"` get **no warmup at all**, so they can no
+    longer fetch weights they never use.
+- **`hf.go` filters the siblings manifest** (`nonModelFile`): docs, git
+  metadata and images are skipped — `fastino/gliner2-large-v1` ships
+  `README.md`, `.gitattributes` and `image/GitHub.png` (4.4 MB), all of which
+  used to be installed next to the weights. It is a **denylist by shape, not an
+  allowlist**: gliner2 opens `config.json`, `encoder_config/config.json`,
+  `model.safetensors` (`pytorch_model.bin` fallback) and hands the whole dir to
+  `AutoTokenizer`, so a missed tokenizer/config file is a runtime load failure
+  no unit test catches. `.txt` is deliberately **not** denied — `vocab.txt` and
+  `merges.txt` are real tokenizer files.
 
 ## Design docs
 

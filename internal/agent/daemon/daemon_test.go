@@ -354,7 +354,7 @@ func TestMLBackendProvisionSuccessPublishesViaSidecar(t *testing.T) {
 	sentinelSHA := sha256Hex(modelContent)
 
 	// Use the mlBackend test seam.
-	router, _, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	router, _, gate, _ := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   client,
 		modelDir: modelDir,
@@ -411,7 +411,7 @@ func TestMLBackendProvisionFailureDoesNotDegradeToDeterministic(t *testing.T) {
 
 	modelDir := filepath.Join(t.TempDir(), "gliner2")
 
-	model, _, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	model, _, gate, _ := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   unhealthyClient,
 		modelDir: modelDir,
@@ -567,7 +567,11 @@ func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 func TestWireEnrichmentDisabledWhenMLOff(t *testing.T) {
 	q := queue.New(10)
 	set := settings.Settings{MLBackend: "off"}
-	handler, model, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil, nil)
+	handler, model, _, gate, warmup, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil, nil)
+
+	if warmup != nil {
+		t.Fatal("disabled enrichment must not hand back a warmup: nothing to load, nothing to provision")
+	}
 
 	if enabled {
 		t.Fatal("enrichment must be disabled when ml_backend=off")
@@ -614,7 +618,7 @@ func TestWireEnrichmentEnabledStartsRealHandler(t *testing.T) {
 	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "auto"}
-	handler, _, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter, nil)
+	handler, _, _, gate, _, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter, nil)
 
 	if !enabled {
 		t.Fatal("enrichment must be enabled by default (ml_backend=auto)")
@@ -654,7 +658,13 @@ func TestWireEnrichmentDeterministicModeRunsWithoutAModel(t *testing.T) {
 	}
 	q := queue.New(10)
 	set := settings.Settings{MLBackend: "deterministic"}
-	handler, model, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil, nil)
+	handler, model, _, gate, warmup, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil, nil)
+
+	// No model to load means no warmup — and since provisioning now hangs off
+	// warmup, deterministic mode cannot download the 1.9 GB it never uses.
+	if warmup != nil {
+		t.Fatal("deterministic mode must not hand back a warmup: it would provision a model this mode never asks for")
+	}
 
 	if !enabled {
 		t.Fatal("enrichment must stay enabled in deterministic mode")
@@ -1186,18 +1196,24 @@ func notWarmService(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// TestMLBackendStartsTheServiceWhileProvisioningRuns pins the ordering the
-// analysis service depends on: the sidecar is the client-side
-// analysis-and-enrichment service in general (/analyze, /match, /vocabulary,
-// /classify, /extract) and GLiNER2 is one capability it loads lazily — so the
-// service must be spawned alongside provisioning, not behind it. Gating the
-// spawn on the weights meant a machine that had never provisioned had no
+// TestMLBackendStartsTheServiceWithoutFetchingTheModel pins two orderings at
+// once.
+//
+// The first is the one the analysis service depends on: the sidecar is the
+// client-side analysis-and-enrichment service in general (/analyze, /match,
+// /vocabulary, /classify, /extract) and GLiNER2 is one capability it loads
+// lazily — so the service must be spawned without waiting on the weights.
+// Gating the spawn on them meant a machine that had never provisioned had no
 // service at all, and therefore no /analyze.
 //
-// The safety half is asserted in the same test: while the model is absent the
+// The second is the fix this test was rewritten for: starting the service no
+// longer starts a DOWNLOAD either. Provisioning belongs to an attempted
+// inference, so nothing is fetched until a warmup asks for it — and then it is.
+//
+// The safety half is asserted throughout: while the weights are absent the
 // warm gate stays SHUT, so no job ever starts its inference deadline against a
 // cold model.
-func TestMLBackendStartsTheServiceWhileProvisioningRuns(t *testing.T) {
+func TestMLBackendStartsTheServiceWithoutFetchingTheModel(t *testing.T) {
 	svc := notWarmService(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1219,7 +1235,7 @@ func TestMLBackendStartsTheServiceWhileProvisioningRuns(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 
-	_, _, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	_, _, gate, warmup := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   client,
 		modelDir: filepath.Join(t.TempDir(), "gliner2"),
@@ -1229,19 +1245,33 @@ func TestMLBackendStartsTheServiceWhileProvisioningRuns(t *testing.T) {
 	})
 
 	select {
-	case <-fetching:
-	case <-time.After(2 * time.Second):
-		t.Fatal("provisioning never started")
-	}
-	select {
 	case <-spawned:
 	case <-time.After(2 * time.Second):
-		t.Fatal("the analysis service must start while the model provisions, not after it")
+		t.Fatal("the analysis service must start without the model, not after it")
+	}
+	// Give a (wrongly) eager provisioning goroutine every chance to run.
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-fetching:
+		t.Fatal("starting the service must not start the ~1.9 GB download; nothing had attempted an inference")
+	default:
 	}
 
-	// ...and stays shut for as long as the weights are absent: WorkerReady
-	// polls /metrics (it never spawns a worker), and only worker.state
-	// "ready" opens the gate.
+	// An attempted inference IS the demand signal, and it does start it.
+	go func() {
+		wctx, wcancel := context.WithTimeout(ctx, time.Second)
+		defer wcancel()
+		_ = warmup(wctx)
+	}()
+	select {
+	case <-fetching:
+	case <-time.After(2 * time.Second):
+		t.Fatal("an attempted inference must provision the model")
+	}
+
+	// ...and the gate stays shut for as long as the weights are absent:
+	// WorkerReady polls /metrics (it never spawns a worker), and only
+	// worker.state "ready" opens the gate.
 	for i := 0; i < 4; i++ {
 		if gate() {
 			t.Fatal("the warm gate must stay shut until the GLiNER2 worker reports ready")
@@ -1250,11 +1280,12 @@ func TestMLBackendStartsTheServiceWhileProvisioningRuns(t *testing.T) {
 	}
 }
 
-// TestMLBackendProvisionFailureStillStartsTheService covers the same ordering
-// on the failure path, and pins the reporting contract that outlives it: a
-// failed provision still emits exactly one model.load_failed (SevError, with a
-// redacted error field), and the gate still never opens.
-func TestMLBackendProvisionFailureStillStartsTheService(t *testing.T) {
+// TestMLBackendProvisionFailureStillLeavesTheServiceUp covers the failure path
+// of the same ordering: a provision that fails — now triggered by a warmup,
+// not by startup — must not take the analysis service with it, and the gate
+// must still never open. (The report-exactly-once contract lives with the
+// on-demand provisioner: see TestWarmupReportsAProvisionFailureOnceAndStillFails.)
+func TestMLBackendProvisionFailureStillLeavesTheServiceUp(t *testing.T) {
 	svc := notWarmService(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1272,42 +1303,28 @@ func TestMLBackendProvisionFailureStillStartsTheService(t *testing.T) {
 		return exec.CommandContext(ctx, "sleep", "30"), nil
 	}, 0, healthFn, 5*time.Second)
 
-	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
-	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
-
-	_, _, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	_, _, gate, warmup := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   client,
 		modelDir: filepath.Join(t.TempDir(), "gliner2"),
 		modelSHA: "some-sha",
 		fetcher:  fakeFetcherErr{},
 		healthFn: healthFn,
-		emitter:  emitter,
 	})
 
 	select {
 	case <-spawned:
 	case <-time.After(2 * time.Second):
-		t.Fatal("a failed provision must not take the analysis service down with it")
+		t.Fatal("the analysis service must be up before any inference is attempted")
 	}
 
-	// The provisioning goroutine reports once and stops; give it room to
-	// (wrongly) repeat before counting.
-	time.Sleep(200 * time.Millisecond)
-	var loadFailed []clientevents.Event
-	for _, e := range emitter.Drain() {
-		if e.Code == "model.load_failed" {
-			loadFailed = append(loadFailed, e)
-		}
+	wctx, wcancel := context.WithTimeout(ctx, 2*time.Second)
+	defer wcancel()
+	if err := warmup(wctx); err == nil {
+		t.Fatal("a failed provision must fail the warmup, so the job defers")
 	}
-	if len(loadFailed) != 1 {
-		t.Fatalf("model.load_failed emitted %d times, want exactly 1", len(loadFailed))
-	}
-	if loadFailed[0].Severity != clientevents.SevError {
-		t.Fatalf("model.load_failed severity = %v, want %v", loadFailed[0].Severity, clientevents.SevError)
-	}
-	if _, ok := loadFailed[0].Fields["error"]; !ok {
-		t.Fatalf("model.load_failed must carry a redacted error field, got %+v", loadFailed[0].Fields)
+	if !healthFn() {
+		t.Fatal("a failed provision must not take the analysis service down with it")
 	}
 	if gate() {
 		t.Fatal("the warm gate must stay shut when the model could not be provisioned")
@@ -1425,7 +1442,7 @@ func TestDeterministicModeStartsTheServiceAndWiresTheAnalyzer(t *testing.T) {
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "deterministic"}
 
-	handler, model, svc, gate, enabled := wireEnrichment(ctx, set, "s3cret", q, emitter, nil)
+	handler, model, svc, gate, _, enabled := wireEnrichment(ctx, set, "s3cret", q, emitter, nil)
 
 	if !enabled {
 		t.Fatal("enrichment must stay enabled in deterministic mode")
@@ -1472,7 +1489,7 @@ func TestDeterministicGateIsClosedUntilTheServiceIsUp(t *testing.T) {
 	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 
-	_, _, _, gate, _ := wireEnrichment(ctx, set, "s3cret", q, emitter, nil)
+	_, _, _, gate, _, _ := wireEnrichment(ctx, set, "s3cret", q, emitter, nil)
 	if gate == nil {
 		t.Fatal("deterministic mode must wire a non-nil gate")
 	}
@@ -1536,7 +1553,7 @@ func TestDeterministicModeWithNoSidecarBinaryDoesNotWedge(t *testing.T) {
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "deterministic"}
 
-	_, model, svc, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter, nil)
+	_, model, svc, gate, _, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter, nil)
 
 	if !enabled {
 		t.Fatal("enrichment must stay enabled in deterministic mode")
@@ -1622,7 +1639,7 @@ func TestDeterministicGateIsCachedNotOneHTTPCallPerRead(t *testing.T) {
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "deterministic"}
 
-	_, _, _, gate, _ := wireEnrichment(ctx, set, "s3cret", q, emitter, nil)
+	_, _, _, gate, _, _ := wireEnrichment(ctx, set, "s3cret", q, emitter, nil)
 	if gate == nil {
 		t.Fatal("deterministic mode must wire a non-nil gate")
 	}
@@ -1688,7 +1705,7 @@ func TestMLBackendWiresTheServiceFacets(t *testing.T) {
 		100*time.Millisecond,
 	)
 
-	model, svc, gate := mlBackendWithOpts(ctx, mlBackendOpts{
+	model, svc, gate, _ := mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   sidecar.New("http://127.0.0.1:1", 50*time.Millisecond),
 		modelDir: filepath.Join(t.TempDir(), "gliner2"),

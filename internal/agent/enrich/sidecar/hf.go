@@ -91,13 +91,58 @@ func (f *HFFetcher) Fetch(ctx context.Context, destDir string) error {
 		return fmt.Errorf("hf: revision %s: %w", f.rev, err)
 	}
 
-	// 2. Download each file.
+	// 2. Download each file a loader could open, skipping the repo's docs and
+	// media (see nonModelFile).
 	for _, s := range rev.Siblings {
+		// Path safety is judged BEFORE the content filter, so a hostile
+		// manifest entry is REPORTED rather than quietly skipped because it
+		// happens to end in .md. fetchFile re-checks; that is deliberate
+		// defence in depth, not a redundancy to remove.
+		if !filepath.IsLocal(s.Rfilename) {
+			return fmt.Errorf("refusing unsafe model file path %q", s.Rfilename)
+		}
+		if nonModelFile(s.Rfilename) {
+			continue
+		}
 		if err := f.fetchFile(ctx, destDir, s.Rfilename); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// nonModelFile reports whether a manifest entry is repository furniture --
+// documentation, git metadata or media -- rather than something a loader
+// opens. fastino/gliner2-large-v1 ships README.md, .gitattributes and
+// image/GitHub.png (4.4 MB), all of which "download every sibling" installed
+// into the model dir next to the weights.
+//
+// It is deliberately a DENYLIST BY SHAPE, not an allowlist of known model
+// files. What gliner2 opens is: config.json and encoder_config/config.json
+// (from_pretrained), model.safetensors with a pytorch_model.bin fallback, and
+// then the whole directory handed to AutoTokenizer, which reads
+// tokenizer.json, tokenizer_config.json, special_tokens_map.json,
+// added_tokens.json and the sentencepiece spm.model. An allowlist would have
+// to anticipate all of that plus whatever a future revision adds, and a
+// missing config or tokenizer file is a runtime load failure that no unit test
+// here can catch -- so anything whose shape is not provably furniture is kept.
+// Extension-less files (LICENSE, CITATION) are therefore kept too: they cost
+// kilobytes and the cost of being wrong is a broken model dir.
+//
+// ".txt" is NOT denied, and that is the load-bearing example: vocab.txt and
+// merges.txt are real tokenizer files for WordPiece/BPE models. The obvious
+// "skip the docs" extension list would have deleted a tokenizer.
+func nonModelFile(rfilename string) bool {
+	switch strings.ToLower(filepath.Base(rfilename)) {
+	case ".gitattributes", ".gitignore", ".ds_store":
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(rfilename)) {
+	case ".md",
+		".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico":
+		return true
+	}
+	return false
 }
 
 // fetchFile downloads a single rfilename from the resolve endpoint into

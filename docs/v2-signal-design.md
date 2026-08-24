@@ -206,8 +206,14 @@ zero across all 2,180 comparable windows (a transcript is scoped to one project 
 
 `ml_backend`, local and startup-only:
 
-    "auto" (default)   everything above, and the GLiNER2 model MAY load lazily if a
-                       model-backed facet is requested. In v2 nothing requests one.
+    "auto" (default)   everything above, and the GLiNER2 model loads lazily when a
+                       model-backed facet is requested. CORRECTION (measured): the
+                       Go pipeline still requests one -- 6 inferences per prompt
+                       (task_type, domain, activity_type, personal, function_guess,
+                       subcategory, speech_act). See
+                       enrich.TestBuiltInPipelineStillDemandsAModel, which fails the
+                       day that reaches zero. The weights are fetched ON DEMAND, by
+                       the first attempted inference, never at daemon start.
     "deterministic"    enrichment runs; the model is never asked for, so never loads.
                        The service still starts -- it is needed for analysis and PII.
     "off"              no enrichment at all; the intake endpoint accepts and discards.
@@ -245,8 +251,11 @@ flattering a half-life, `pdf 54%` for a slide deck built from ten `pdftoppm` cal
 
 ## 9. Deliberately not done
 
-- **GLiNER2 is used by nothing.** It was measured unfit as a classifier of activity and unnecessary
-  for detection. The plumbing remains and loads lazily; nothing asks.
+- **GLiNER2 is unused by the WORKSTREAM and SENSITIVITY facets** — measured unfit as a classifier of
+  activity and unnecessary for detection. It is **not** unused by the pipeline: the semantic facets
+  (§ the "auto" note above) still issue 6 inferences per prompt, so `auto` genuinely needs the
+  weights. What changed is *when* they arrive: provisioning is triggered by the first attempted
+  inference rather than by daemon start, so a machine that never enriches never downloads them.
 - **Person and address detection**, per §6b.
 - **Enrichment cadence is per prompt.** A tick-based cadence (characterise every N minutes and
   attach to all activity in the slice) is specified but deferred — the store removed its efficiency

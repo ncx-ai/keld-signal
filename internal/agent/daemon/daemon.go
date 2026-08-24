@@ -733,7 +733,7 @@ func Run(ctx context.Context) error {
 	// facets on the startup value.
 	live := settings.NewLive(set)
 
-	handler, model, svc, gate, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions)
+	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions)
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -785,7 +785,10 @@ func Run(ctx context.Context) error {
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
-		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmupFunc(model), emitter, ra, custom)
+		// warmup comes from wireEnrichment, not from warmupFunc(model): it is
+		// the composition of on-demand provisioning with the model load, and
+		// only the backend that owns the weights can build it.
+		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
@@ -994,20 +997,22 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     trivially true when none does (see deterministicBackend).
 //   - enabled: whether Run should start the enrich Worker — true for both
 //     "auto" (or "") and "deterministic"; only "off" disables it.
-func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, enabled bool) {
+func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
 	if !set.EnrichmentEnabled() {
 		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
-		return ingress.DiscardHandler(secret), nil, serviceFacets{}, nil, false
+		return ingress.DiscardHandler(secret), nil, serviceFacets{}, nil, nil, false
 	}
 	if !set.MLEnabled() {
 		// deterministic: the Worker still runs, and so does the analysis
-		// service — it is only the GLiNER2 model that is never asked for.
+		// service — it is only the GLiNER2 model that is never asked for. No
+		// model to load means no warmup and, since provisioning now hangs off
+		// warmup, no download either.
 		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the analysis service runs, the model is never loaded", set.MLBackend)
 		svc, gate := deterministicBackend(ctx, emitter, regions)
-		return ingress.Handler(q, secret), nil, svc, gate, true
+		return ingress.Handler(q, secret), nil, svc, gate, nil, true
 	}
-	model, svc, gate = mlBackend(ctx, emitter, regions)
-	return ingress.Handler(q, secret), model, svc, gate, true
+	model, svc, gate, warmup = mlBackend(ctx, emitter, regions)
+	return ingress.Handler(q, secret), model, svc, gate, warmup, true
 }
 
 // newRunID generates a per-run correlation id (16 random bytes, hex-encoded),
@@ -1247,10 +1252,11 @@ func noAnalysisService(emitter *clientevents.Emitter, fields map[string]any) fun
 // only called when ML enrichment is enabled (see wireEnrichment) — ml_backend
 // off is handled entirely by the caller and never reaches here.
 //
-// It spawns and supervises the sidecar, provisions the model alongside it
-// (the service serves its non-model routes while the weights download), and
-// returns the sidecar client with a gate that opens once the model is
-// resident. There is no lower-fidelity fallback: when the sidecar binary
+// It spawns and supervises the sidecar and returns the sidecar client, a gate
+// that opens once the model is resident, and the warmup that PROVISIONS the
+// weights on demand and then loads them. Provisioning is no longer started
+// here: the download is owed to an attempted inference (see
+// modelProvisioner), and Worker's warmup call is that signal. There is no lower-fidelity fallback: when the sidecar binary
 // is missing, or its port cannot be allocated, this returns
 // sidecarUnavailable's permanently-closed gate (jobs queue/spool until the
 // daemon is restarted) rather than a synthetic/degraded model.
@@ -1259,18 +1265,23 @@ func noAnalysisService(emitter *clientevents.Emitter, fields map[string]any) fun
 // deterministicBackend — because they belong to the SERVICE, not the model:
 // both modes derive them the same way, and returning them here means
 // wireEnrichment only passes them through instead of rederiving them.
-func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (enrich.Model, serviceFacets, func() bool) {
+func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
 	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
 	if !ok {
 		// The consequence of having no service is this caller's to state: an
 		// enrichment job queues/spools, which is not what a future non-ML
 		// caller of sidecarService would say.
+		//
+		// No service also means no warmup: there is nothing to load and
+		// nothing to provision FOR. The permanently-closed gate holds every
+		// job, so a warmup would never be consulted anyway — returning nil
+		// keeps "we never fetch weights we cannot use" true by construction.
 		if err != nil {
 			log.Printf("keld-agent: sidecar port alloc failed: %v", err)
-			return nil, serviceFacets{}, sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
+			return nil, serviceFacets{}, sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)}), nil
 		}
 		log.Printf("keld-agent: no sidecar binary found; enrichment jobs will queue/spool until one is installed")
-		return nil, serviceFacets{}, sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
+		return nil, serviceFacets{}, sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"}), nil
 	}
 
 	return mlBackendWithOpts(ctx, mlBackendOpts{
@@ -1311,9 +1322,7 @@ func emitSidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any
 // mlBackendWithOpts is the testable core of mlBackend. It accepts all
 // dependencies explicitly so tests can inject stubs without touching the
 // real filesystem or spawning real processes.
-func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, serviceFacets, func() bool) {
-	var provisionFailed atomic.Bool
-
+func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
 	// Start the service NOW, alongside provisioning rather than behind it. The
 	// sidecar is the client-side analysis-and-enrichment service in general —
 	// /analyze, /match, /vocabulary, /classify, /extract — and GLiNER2 is one
@@ -1332,17 +1341,19 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, s
 	// at all, minus the loss of every non-model route.
 	go opts.sup.Start(ctx)
 
-	// Provisioning runs concurrently. On failure the gate simply stays closed
-	// (see below); provisionFailed records it for logging.
-	go func() {
-		if err := provision.EnsureModel(ctx, opts.modelDir, opts.modelSHA, opts.fetcher); err != nil {
-			log.Printf("keld-agent: model provisioning failed: %v", err)
-			if opts.emitter != nil {
-				opts.emitter.Emit("model.load_failed", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
-			}
-			provisionFailed.Store(true)
-		}
-	}()
+	// Provisioning is NOT started here. The weights are needed by exactly one
+	// thing — an inference — so they are fetched by the warmup below, which
+	// Worker calls when a job finds the readiness gate shut. Kicking the
+	// ~1.9 GB download off at startup instead charged it to every machine
+	// running the default mode, including ones that never enriched a prompt.
+	// See modelProvisioner.
+	prov := &modelProvisioner{
+		dir:     opts.modelDir,
+		sha:     opts.modelSHA,
+		fetcher: opts.fetcher,
+		emitter: opts.emitter,
+		bg:      ctx,
+	}
 
 	// Enrichment never degrades to a lower-fidelity backend: the worker waits
 	// until the sidecar has loaded at least once, then the client itself
@@ -1364,7 +1375,8 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, s
 	// facetsFor(opts.client), not facetsFor-of-the-Model at the call site: the
 	// non-inference routes are properties of the service client and must
 	// survive any later change to what "the Model" is.
-	return opts.client, facetsFor(opts.client, opts.regions), wg.Warm
+	return opts.client, facetsFor(opts.client, opts.regions), wg.Warm,
+		provisioningWarmup(prov, warmupFunc(opts.client))
 }
 
 // enrichEndpoint derives the enrichments URL from the configured ingest endpoint
