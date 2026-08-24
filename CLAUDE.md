@@ -44,10 +44,12 @@ source of truth:
   **A pass skipped for want of a model is not a failure:** deterministic runs
   report `pipeline_status:"enriched"` and name what they dropped in
   `facets_skipped`; `"partial"` still means something that should have worked
-  did not. **A pass that ran on half its evidence says so:** `sensitivity` runs
-  model-free but loses its NER half, so it declares `Degraded` and is named in
-  the sibling `facets_degraded` — never let a check that did not run publish a
-  confident negative. `ml_backend:"off"` means
+  did not. **A pass that ran on half its evidence says so:** `sensitivity` has
+  no NER half any more (presidio + gitleaks, neither of them GLiNER2), so it
+  runs WHOLE in this mode; what degrades it is a missing/failed/truncated
+  **PII scan**, which leaves only the credential layer. It then declares
+  `Degraded` and is named in the sibling `facets_degraded` — never let a check
+  that did not run publish a confident negative. `ml_backend:"off"` means
   enrichment is **disabled entirely** (no enrichment worker, `/enrich`
   accepts-and-discards). Don't reintroduce a *substitute* for the model's
   facets; a *different* facet set that needs no model is fine and already

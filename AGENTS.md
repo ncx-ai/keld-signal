@@ -22,7 +22,7 @@ flowchart LR
     CLI["keld CLI"]
     Hook["keld hook"]
     Agent["keld-agent daemon"]
-    Sidecar["GLiNER2 sidecar<br/>(ML-mandatory, no fallback)"]
+    Sidecar["analysis + enrichment sidecar<br/>(/analyze always; GLiNER2 lazily,<br/>no fallback for its facets)"]
   end
   Atlas["Keld Atlas"]
   CLI -->|configures| Tools
@@ -303,8 +303,12 @@ could raise.
   transaction each) so it cannot lock out the watcher-driven `/ingest`, rides
   `ingest_file` (both writers) with an hourly gate that being over-cap overrides,
   and is reported in `/metrics` under `store` — size (`live_mb` **and** `file_mb`,
-  because SQLite does not shrink the file on DELETE, so a cap read off the file
-  size would prune the whole series to no effect), per-table row counts, oldest
+  because **SQLite does not shrink the file on DELETE**: measured, 400,000 events
+  took the file to 41.5 MB, and deleting half of them left the file at 41.5 MB
+  while live pages halved to 21.1 MB. A cap read off the file size would delete
+  every row the store had and *still* be over cap — it would prune the whole
+  series to no effect — so it is enforced on `page_count - freelist_count`
+  (`Store.live_mb`) and `/metrics` reports both), per-table row counts, oldest
   retained event, `serving_floor_ts` and what each policy removed.
 - ⚠️ **`/analyze` and `/ingest` are confined to `KELD_ANALYZE_ROOTS`.** The sidecar has **no
   auth** — `serve.py` binds 127.0.0.1 and that is the whole of it — which was
@@ -343,12 +347,237 @@ could raise.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").
-- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **6**
+- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **8**
   — bump it and re-run the eval when changing any vocab). Classify calls are
   prefixed with a context preamble (`Meta.PreambleCoding()`; `domain` uses the
   fuller `Meta.Preamble()`). **Facet-selective agentic augmentation:** agentic
   framework metadata helps `domain` but hurts `task_type`, so only `domain`
   augments with it — `task_type` and the others drop it.
+
+**The reference-series store (`analysis/store.py`, `analysis/ingest.py`).**
+`/analyze` used to re-parse the whole transcript on every request: median **0.79s
+on a 90 MB file**, and since a 60-minute window holds a **mean of 3.8 user prompts
+(max 20, over 370 windows)** that is the same hour parsed **~4x**, up to 20x in a
+burst. It now answers from a persistent series at `~/.keld/state/refseries.db`
+(native SQLite, created `0600`, path resolved through `KELD_HOME`; never pickled
+pandas — the package is deliberately pandas-free): **2.3ms on the same file, 340x.**
+Nothing else persisted before this, so no dynamics were computable at all. Equality
+with a parse is **asserted, not assumed**: `analyze_window_by_parse` is retained as
+the ORACLE and never as a fallback, and **0 of 90 real prompts across 30 transcripts
+differ from it**.
+- **A window is a query over 5-minute bins (`BIN_SECONDS = 300`) and the two edges
+  are read EXACTLY.** A 60-minute window ending at a prompt's own instant
+  essentially never lands on a bin boundary, so both edge bins are almost always
+  partial; snapping outward over-counts, snapping inward drops, and either turns
+  every digest into an approximation. `window_rows` partitions instead — the
+  fully-covered interior from `bin` (11 of 13 queries for a typical hour), the two
+  edges from `event` — and a window shorter than one bin has no interior and is
+  answered from events alone. The ordering rule is **not** reimplemented in SQL:
+  SQLite computes the per-`(level, ref)` sums and `window.rollup` merges and applies
+  its own alphabetical tie-break, so `rollup_window` returns exactly what
+  `window.rollup` returns over the same rows and `workstreams.payload` consumes it
+  unchanged.
+- **`bin` is sparse by design, and its absence must never read as "no evidence".**
+  Two things make that unmisreadable rather than merely documented: a **`bin_level`
+  registry that `bin.level` REFERENCES** (with `foreign_keys=ON`, so the table
+  physically cannot hold an unregistered level — asserted with a direct INSERT), and
+  `rollup_window` routing unbinned levels to `event`, so the sparseness never reaches
+  a caller. `PRECOMPUTED_LEVELS` is **derived** from `workstreams.ALLOCATION` +
+  `INVENTORY` (12 levels) rather than typed, against the 19 `events_for_turns` emits;
+  registering a new level backfills its bins from the retained events, with no
+  transcript re-read.
+- **Row timestamps are quantized to the series' own 0.1s resolution**
+  (`levels.quantize`), so a window edge finer than that is not representable and is
+  evaluated at that resolution. Measured against the old exact-timestamp turn
+  selection: **6 of 90 real prompts move one turn across an edge, changing an
+  evidence count by 1; 0 change any published VALUE.**
+- WAL + `busy_timeout=5000` + `synchronous=NORMAL`; one writer, readers on executor
+  threads — WAL is what lets a digest be served *during* an ingest. `NORMAL` is safe
+  **only** because events, re-rolled bins and the byte-offset checkpoint commit in
+  **ONE transaction**: a dropped trailing commit loses the offset too, so the next
+  ingest re-reads the same tail. A half-applied batch is the state nothing downstream
+  would notice, which is why `transaction()` exists. Non-ref rows are dropped on the
+  way in — a `say` row carries `len(body)`, a measure of message text, and a `tok`
+  row carries token counts; neither is a reference event.
+
+⚠️ **A tail parse is only equal to a full parse because it was MADE equal.**
+`ingest_file` parses just the bytes a transcript grew by, resuming from the `ingest`
+table's byte offset (rotation/truncation caught by a `HEAD_BYTES = 4096` head
+fingerprint that includes the byte *count*, since a growing file changes how much
+there is to hash). The non-obvious part is that this is **not** automatically equal
+to parsing the whole file, and if it isn't, the series is silently and permanently
+wrong — nothing downstream re-derives these rows. **Measured first:** naive
+per-chunk ingest of real transcripts differed from a single pass by up to **4,179
+`repo_mentioned` rows** and **1,276 `workspace_evidence` rows** on single files.
+Both retroactive sources are real, and they are handled by two different means
+because the costs differ:
+- **`reconcile` is RECOMPUTED WHOLE each batch.** It resolves prose paths against
+  every DECLARED path, so a tail declaration reattributes a head mention and no
+  incremental form is correct. `pending` is persisted in `parse_state`, the tail is
+  appended, and the result REPLACES the previous one — exact by construction, no
+  detection needed. Affordable because `pending` is tiny: **104-859 entries for
+  2-47 MB transcripts, and reconciling the whole of one costs 0-3ms.** This is why
+  `Store.replace_events` exists and DELETEs its slot first: `upsert_events` can only
+  add or raise a count, but a recomputed set must be able to **RETRACT** a row, or a
+  reattributed file stays counted under both names — reconcile's own split-share
+  defect reintroduced by the storage layer.
+- **Workspace evidence ACCUMULATES, and a change in the DERIVED ANSWER forces a
+  reparse.** `scan_workspace` is a whole-file pre-pass: a `CLAUDE.md` read at 17:00
+  re-resolves the 09:00 turns from "cwd as given" to "repo-level marker", and with it
+  the `root_dir` every path is relative to. Accumulation is exactly equal to one pass
+  but cannot be retroactive, so the distinct cwds seen so far (1-8 per transcript) are
+  carried and their resolution + remote selection recomputed after each batch. Keying
+  on the **answer** rather than the raw evidence means a new `cd` target that resolves
+  to the same workspace costs nothing. Reparse over re-derivation is deliberate:
+  re-deriving means a second, partial copy of `events_for_turns`.
+
+**Equivalence at corpus scale: 284 real transcripts (0-47 MB), each ingested in 40
+successive chunks against one whole-file ingest — 0 files differed, 0 rows
+differed.** Retroactive reparses hit **0.7% of appends (53/7,571)**. The 47 MB file
+costs **1.82s for its entire 41-chunk lifetime against 0.76s for one full parse**
+(~44ms per ingest, against the 0.8-1.0s per PROMPT the parse path used to spend),
+and chunk count barely moves the total — which is the O(tail) claim holding. Two
+further silent-wrongness traps are pinned rather than hoped for: the **watermark**
+must not retreat (taking the batch's last turn regresses on the 9-in-9,937 real
+turns whose timestamp precedes the previous line), and `ingest.terms_mode`
+fingerprints the terms pipeline's **identity** into the parse state — `term` is the
+one level never re-derived, so a store ingested under `KELD_TERMS=0` would otherwise
+report no `named_terms` forever. A changed fingerprint reparses.
+
+**The dynamics block (`analysis/dynamics.py`) — what MOVED in the window.** The same
+`/analyze` call that characterises the window also answers what changed inside it:
+`WorkstreamAnalyzer` returns one `WindowAnalysis`, so the dynamics cost **no second
+round-trip and no inference at all** (two `rollup_window` calls, ~2ms each) and they
+publish under `ml_backend:"deterministic"` too. The span is cut into a recent
+**slice** and an abutting **baseline**, and each dimension is compared across the
+cut. What crosses to Atlas is the derived half only:
+- `status` — the comparison's own outcome, from a closed six-value set (`compared`,
+  `both_absent`, `slice_absent`, `baseline_absent`, `slice_thin`, `baseline_thin`).
+  **Always stated**, so a missing metric is readable rather than merely absent:
+  `tooling` is *absent* on 50.3% of 60-minute windows, and a reader who cannot tell
+  absence from stability reads near-constant churn off a dimension that has no data
+  at all. **Metrics are reported only under `compared`.**
+- `turnover` / `decay` — the share of slice evidence in values absent from the
+  baseline, and its mirror. **Two different facts**: a slice can take on a new value
+  without dropping an old one. Both are shares, so they are invariant to how busy the
+  window was.
+- `concentration_shift` — the slice dominant's share of the slice minus that same
+  value's share of the baseline: is the thing that owns the window holding more of it
+  than it used to. Withheld when the slice has no dominant value, rather than computed
+  against an arbitrary pick.
+- `changed` — did the dominant value change? **Three-state**: `false` for
+  `both_absent` (a level that never fired did not change), and **nil** wherever the
+  comparison cannot support a yes or a no. A plain `bool`/`float64` would render all
+  of that as `false`/`0.0`, i.e. "we checked, nothing moved" — the single misreading
+  the evidence-floor work exists to prevent.
+- `reading` — the conclusion, **stated**, from a closed 7-value vocabulary in
+  precedence order: `switched` / `narrowing` / `broadening` / `churning` / `widening`
+  / `shedding` / `steady`. Computed entirely from the four fields above: no new
+  inference, no second query. Unstated (empty) outside `compared`, never defaulted to
+  `steady`.
+
+⚠️ **Stating the conclusion IS the feature — emitting the numbers alone measured
+worse than emitting nothing.** Three arms scored on the same windows: a 16 KB
+characterisation of raw window numbers came in at **-3.3/-20.0 on synthesis
+accuracy**, worse than emitting nothing, against **+36.7** for a digest of the same
+facts. The digest was not number-free; it *labelled* each number and stated the
+conclusion, and all 14 full-document failures were the one question where the reader
+got `engineer_messages: 5` / `assistant_messages: 84` and had to divide. A bare
+number also invites a **wrong** reading: asked "which ticket?", a model answered
+**2659** — the window's own `reference_events` count — and labelling it moved correct
+declines from **76% to 100%**. So the numbers ship **keyed** (in JSON the key IS the
+label) beside the stated reading; the unlabelled remainder, which is what made the
+losing arm 16 KB, does not — no per-side value/share/evidence/reason, no timestamps,
+no sizer detail.
+
+**That same cut is the privacy mechanism.** Every dynamics field that could hold a
+reference level's own string lives in the per-side `slice`/`baseline` objects, and
+`term` — the one level read from message text — has held real person names. So no
+field that crosses the wire can hold a level value at all: the subtree's only strings
+are `status` and `reading`, asserted exhaustively by a reflect walk at the decode
+boundary and by a marshal-level wire test. Both vocabularies are mirrored Go-side as
+`enrich.DynamicStatuses`/`DynamicReadings` and pinned against `dynamics.py` by
+reading that file, because the Go side **DROPS** an unrecognised value — the sidecar
+is frozen and shipped separately, so version skew is real, and a drift would silently
+stop publishing a dimension instead of failing.
+
+**`MIN_EVIDENCE` (5) is about SAMPLE SIZE, not minutes — and `MATERIAL =
+1/MIN_EVIDENCE = 0.2` is derived from it.** Duration appears nowhere in the
+derivation: it asks whether unanimity could have come from a coin, which depends only
+on how many times the coin was flipped (`0.5**n` first falls below 5% at n=5, and
+`min_evidence_for(floor, alpha)` deliberately takes **no duration argument**, so a
+duration-scaled floor cannot be written by accident). A duration-scaled floor is not a
+generalisation of that argument but a worse one: it would make the significance of a
+published attribution a function of slice length while `value` and `share` look
+identical either way, and `evidence` is **dropped before publish**, so no reader could
+tell a 3%-confident claim from a 50%-confident one. Measured over 20,000 windows
+(4,000 seeded anchors x 5 slice lengths, 55 transcripts / 542 MB): median `workspace`
+evidence falls **130 → 20** from 60 to 5 minutes — a sixth, as the plan predicted —
+but a sixth of 130 is still four times the floor. Buying back the 424 of 3,902
+`project` slots the floor costs at 5 minutes gains 13.5 pooled points and takes
+P(false attribution) from **0.031 to 0.50**. `MATERIAL` follows the same argument one
+level down: at the floor a share is measured over 5 observations, so 0.2 is the finest
+difference one observation can produce.
+
+**The slice is sized by an EWMA change detector, and that beat a constant by
+measurement.** `DEFAULT_SIZER = EwmaSizer()` (fast 0.3, slow 0.02, threshold 0.2)
+encodes the `branch` series as a per-bucket novelty share and cuts at the LAST rising
+edge of `fast - slow`, on a **60-second** observation step — deliberately finer than
+the 5-minute bin, giving 60 observations inside the span budget instead of 12. Over 25
+sessions / 111 transitions / 1,966 windows: **86.4% precision / 54.8% recall against
+`FixedSizer(15)`'s 11.8% / 27.8% — +74.6 and +27.0 points**, firing on 27.0% of
+windows, median detection **2.0 min** from the nearest real transition against fixed's
+10.0.
+- **The shuffled-truth control is why that is believed.** Relocate every transition to
+  a random non-empty bin of the same session and the EWMA collapses **86.4% → 24.1%**,
+  while every fixed sizer **barely moves (11.9% → 10.9%)** — because a constant offset
+  carries no information about the work and **was never a detector**. The fixed sweep
+  is flat at chance across 5-30 min.
+- ⚠️ **`river` was measured and REJECTED; do not add it hopefully.** Its best detector
+  (PageHinkley, 55.5% / 34.3%) clears the pre-registered rules but is **dominated on
+  both metrics** by an idiom already in this repo (the sidecar's own CPU-EWMA rate
+  governor); ADWIN and KSWIN lose outright, and ADWIN scores *better* on shuffled
+  truth than on real truth. Their defaults are silent inside a **60-observation
+  budget** and their detection lag (6-9 buckets) exceeds the 5-minute hit tolerance,
+  so those two structurally cannot hit. `sidecar/requirements.txt` is untouched.
+- `FixedSizer` stays as the **no-detection fallback**, which is 73% of windows, and
+  `SLICE_MINUTES` stays **15**. 10 minutes was the measured optimum for a constant
+  standing ALONE; behind a detector the constant only ever runs on stationary work,
+  where localisation is irrelevant by definition and attribution rate is the metric
+  instead (`language` 68.0% vs 63.0% at 15 vs 10). Both numbers are measured on their
+  own population. Detection reads **`branch` only**, because that is what could be
+  measured — `workspace` has **ZERO** transitions in 51 sessions, a transcript being
+  scoped to one project dir. Widening the level is unmeasured.
+
+**Half the dimensions were dropped on their own distributions.** Cheap was not an
+argument for emitting one, so every dynamic was measured over EVERY window `/analyze`
+could answer — **51 sessions, 2,702 windows**, the quiet ones included, sized by the
+shipped `DEFAULT_SIZER` — against a bar written down FIRST: disqualified if 90% of
+readings fall inside one 0.05-wide band (CONSTANT), if `compared` on under 10% of
+windows (RARE), or if the yes/no a reader acts on is yes on ≥90% of windows
+(ALWAYS-YES). `DROPPED_DIMENSIONS = ("project", "model", "tooling")`:
+- `project` — turnover, decay and shift **identically 0.000 on all 2,180 compared
+  windows**, `changed` never True, reading `steady` 100.0%. Constant **BY
+  CONSTRUCTION**: a transcript is scoped to one project directory, the same fact
+  `DETECT_LEVEL` is pinned on.
+- `model` — turnover exactly zero on 98.5% of 2,126 windows, lift against ground truth
+  **+0.000**, and `changed` **True 0 times in 2,702 windows**.
+- `tooling` — `compared` on **3.9%** (106 of 2,702), and where it IS comparable it
+  points the **WRONG WAY**: mean turnover 0.010 inside a transition window against
+  0.070 outside.
+
+KEPT: `branch` — mean turnover **0.346 INSIDE** a transition window against **0.003
+outside**, which is what a change-of-work metric looks like — plus `output_type`,
+`language` and `workflow`; the last is 2.6 points above the RARE bar and that is
+stated at the constant rather than smoothed. Inventory levels are excluded
+structurally and the exclusion was confirmed by distribution rather than by argument
+(`integrations` `compared` on **0** of 2,702 windows; `named_terms` non-zero on
+**98.3%** — no window in which it says no, a disqualifier needing no ground truth).
+`DYNAMIC_DIMENSIONS` is derived from `workstreams.ALLOCATION` minus the dropped set,
+and `dynamics()` neither takes nor forwards a `dimensions=` argument, so **the
+published vocabulary cannot be widened by a caller** — the parameter exists only to
+reproduce that measurement. The dropped three are still reported as allocation
+workstreams by the digest; only their *dynamics* are gone.
 
 **Model backends.** `ml_backend` (local, startup-only, `settings.Settings`)
 selects one of three modes:
@@ -447,7 +676,8 @@ selects one of three modes:
   and neither moves `pipeline_status`. The sensitivity **vocabulary** is
   unchanged — `"none"` plus the marker is the honest pair, and a new
   `"unknown"` label would be a contract break for no extra information — so
-  `SchemaVersion` stays at 6.
+  that work bumped nothing. (`SchemaVersion` is now **8**; the dynamics block
+  below took it 7 → 8 when it began publishing.)
 - **`"off"`** — enrichment is **disabled entirely**: no enrichment worker is
   started and `/enrich` accepts-and-discards (returns 202, never enqueues).
   Telemetry and client-events are unaffected.
@@ -718,12 +948,28 @@ internal/
 sidecar/
   serve.py           entrypoint the daemon spawns (uvicorn on 127.0.0.1)
   app/
-    main.py          FastAPI app: /classify /extract /entities /health /metrics;
-                     lifespan wires governor + scaler + runner + worker poll loop
+    main.py          FastAPI app: /analyze /ingest /pii /match /vocabulary
+                     /classify /extract /entities /health /metrics; lifespan
+                     wires governor + scaler + runner + worker poll loop
     governor.py      CPU-EWMA rate pacing         runner.py       single-flight runner
     cpuscale.py      host-load → torch threads    worker.py       inference child (holds model)
     metrics.py       /metrics payload             worker_manager.py  spawn/recycle/dispatch
     adapter.py       normalize model output
+    pii.py           presidio recognizers, region tiers, numeric-fragment gate
+    wellknown.py     published-test-value gate (the ONE place; see Conventions)
+    analysis/        the analysis service — no model, off the inference lock
+      store.py         SQLite reference series (~/.keld/state/refseries.db):
+                       events, 5-minute bins, bin_level registry, retention
+      ingest.py        incremental tail parse from a byte offset (== a full parse)
+      analyze.py       window digest; analyze_window_by_parse is the ORACLE
+      dynamics.py      what MOVED in the window + the EWMA slice sizer
+      window.py        rollup / attribution / dominant; MIN_EVIDENCE
+      levels.py        level vocabulary + 0.1s timestamp quantization
+      workstreams.py   ALLOCATION + INVENTORY payload (the published shape)
+      transcript.py    JSONL line seams (turns_in / tool_use_in)
+      workspace.py     whole-file workspace + remote resolution
+      reconcile.py     prose paths against declared paths (re-scoped per window)
+      match.py vocab.py shell.py terms.py text.py paths.py   supporting passes
   loadtest/          smoke + soak load-test harness (see its README)
   keld-agent-sidecar.spec / build-freeze.sh   PyInstaller packaging
 docs/                enrichment-settings.md, ONNX decision, superpowers/{specs,plans}
