@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/creddetect"
@@ -38,7 +39,15 @@ func TestLoadCredsParses(t *testing.T) {
 // misses), and the sensitivity facet covers some of them via presidio /pii.
 // Lowering this number means a precision change bought its precision with
 // recall, which is a blocker.
-const credDetectBaseline = 10
+//
+// Re-derived 2026-08-23 from the corrected fixture (10 -> 17). The old 10 was
+// measured against creds.jsonl when it was built from published documentation
+// values -- see publishedCredentialValues below -- so it understated the
+// detector by seven rows. Reference point for the same corrected fixture: the
+// REAL gitleaks v8.30.1 engine (all 222 rules, allowlists, stopwords,
+// secretGroup) also scores 17/24, missing exactly the same seven rows, and
+// also flags none of the 18 decoys.
+const credDetectBaseline = 17
 
 // TestCredDetectCorpusRecall pins the pure-Go credential detector against the
 // whole creds.jsonl corpus, with NO model and NO sidecar: at least
@@ -71,5 +80,52 @@ func TestCredDetectCorpusRecall(t *testing.T) {
 		credHits, creds, float64(credHits)/float64(creds), decoyHits, decoys, float64(decoyHits)/float64(decoys))
 	if credHits < credDetectBaseline {
 		t.Errorf("credential recall regressed: %d/%d detected, baseline is %d", credHits, creds, credDetectBaseline)
+	}
+}
+
+// publishedCredentialValues are secret values that appear in vendor
+// documentation, standards, comics, or well-known test suites. A fixture built
+// from them does not measure the detector: gitleaks' own allowlists and
+// stopwords exist precisely to suppress them (EXAMPLE is a gitleaks stopword),
+// and suppressing them is the same behaviour that took real-corpus PII
+// precision from ~1% to 10/10. Measured 2026-08-23: creds.jsonl was built
+// almost entirely from this list, so "credential recall 10/24" was largely a
+// statement about the fixture, not about creddetect.
+//
+// This is the credential analogue of the gold.jsonl correction at 28f38d9.
+var publishedCredentialValues = []string{
+	"AKIAIOSFODNN7EXAMPLE",                     // canonical AWS docs access key id
+	"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", // canonical AWS docs secret access key
+	"16C7e42F292c6912E7710c838347Ae178B4a",     // GitHub docs example token body (ghp_/gho_/ghs_)
+	"4eC39HqLyjWDarjtT1zdp7dc",                 // Stripe docs example key body
+	"AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI",  // widely republished Google API key example
+	"Tr0ub4dor&3",                      // XKCD 936
+	"CorrectHorseBattery9!",            // XKCD 936 derivative
+	"9b1deb4d3b7d4bad9bdd2b0d7b3dcb6f", // ubiquitous example UUID body
+	"MIIEpAIBAAKCAQEA3Tz2mr7",          // published RSA test-key body
+	"eyJzdWIiOiIxIn0",                  // jwt.io example payload
+	"0123456789abcdef",                 // sequential filler
+	"1234567890abcdef",                 // sequential filler
+	"EXAMPLE",                          // gitleaks' own stopword
+}
+
+// TestCredsFixtureHasNoPublishedValues keeps creds.jsonl measuring the detector
+// rather than the well-known gate. It checks the "cred" rows only: the "decoy"
+// rows are SUPPOSED to carry placeholder and published shapes, since suppressing
+// those is what they assert.
+func TestCredsFixtureHasNoPublishedValues(t *testing.T) {
+	rows, err := LoadCreds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range rows {
+		if r.Class != "cred" {
+			continue
+		}
+		for _, bad := range publishedCredentialValues {
+			if strings.Contains(r.Text, bad) {
+				t.Errorf("row %d carries published value %q: %q", i+1, bad, r.Text)
+			}
+		}
 	}
 }
