@@ -51,6 +51,9 @@ from collections import Counter, defaultdict
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
 from app.analysis.transcript import iter_turns          # noqa: E402
 from app.analysis.text import text_of, is_command_echo  # noqa: E402
+from app.pii import REGION_RECOGNIZERS                  # noqa: E402
+
+ALL_REGIONS = sorted(REGION_RECOGNIZERS)
 
 # --- PRE-REGISTERED, fixed before any result was looked at -------------------------------
 SAMPLE_N = 2000     # prompts. One occurrence = 0.5 per 1,000, so the "a few per thousand"
@@ -238,6 +241,32 @@ def context_words(text, start, end, window=60):
     return sorted({w for w in CONTEXT_WORDS if w in lo or w in hi})
 
 
+# The published rollup, mirrored from internal/agent/enrich/labels.go ->
+# SensitivityFromEntity. First match wins and the order encodes severity. This has
+# to be kept in step with the Go list by hand; the alternative (asking the daemon)
+# would mean running one, and this script deliberately talks only to /pii.
+# Credentials come from the Go-side gitleaks layer and are out of scope here, so
+# `secrets` cannot appear.
+SENSITIVITY_ROLLUP = [
+    ("phi", {"ssn", "uk_nhs", "au_medicare", "medical_license"}),
+    ("pci", {"credit_card", "iban", "crypto_wallet", "aba_routing"}),
+    ("secrets", {"api_key", "secret"}),
+    ("pii", {"email", "phone", "person", "address", "us_npi",
+             "es_nif", "es_nie", "it_fiscal_code", "it_vat_code",
+             "pl_pesel", "fi_personal_identity_code",
+             "kr_rrn", "kr_driver_license", "kr_brn", "kr_frn",
+             "in_aadhaar", "in_gstin", "au_tfn", "au_abn", "au_acn",
+             "ng_nin", "th_tnin", "sg_uen"}),
+]
+
+
+def sensitivity_of(types):
+    for cls, triggers in SENSITIVITY_ROLLUP:
+        if types & triggers:
+            return cls
+    return "none"
+
+
 def luhn(d):
     if not d or not d.isdigit():
         return False
@@ -269,9 +298,15 @@ def enclosing_token_shape(text, start, end):
     return shape(text[lo:hi], cap=52), (lo != start or hi != end)
 
 
-def scan(port, text, timeout=120):
+def scan(port, text, regions=None, timeout=120):
+    """POST /pii. `regions` is the country-tier selection (None = the sidecar's own
+    default, `us`); it rides the request, so one running sidecar can be measured
+    under several region sets without a restart."""
+    body = {"text": text}
+    if regions is not None:
+        body["regions"] = regions
     req = urllib.request.Request(f"http://127.0.0.1:{port}/pii",
-                                 json.dumps({"text": text}).encode(),
+                                 json.dumps(body).encode(),
                                  {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
@@ -282,7 +317,7 @@ def metrics(port):
         return json.load(resp)
 
 
-def run(port, out_dir):
+def run(port, out_dir, regions=None):
     os.makedirs(out_dir, exist_ok=True)
     files = transcripts()
     print(f"corpus: {len(files)} transcripts under {CORPUS}", flush=True)
@@ -315,6 +350,7 @@ def run(port, out_dir):
     per_type_prompts = Counter()
     rollup = Counter()
     scanned = truncated = failed = 0
+    latency_ms = []
     chars = 0
     t0 = time.time()
 
@@ -327,7 +363,9 @@ def run(port, out_dir):
             if not text.strip():
                 continue
             try:
-                res = scan(port, text)
+                t_scan = time.time()
+                res = scan(port, text, regions)
+                latency_ms.append((time.time() - t_scan) * 1000)
             except Exception as e:
                 failed += 1
                 print(f"  scan failed {tid}#{ordinal}: {type(e).__name__} {str(e)[:60]}",
@@ -359,22 +397,26 @@ def run(port, out_dir):
             # internal/agent/enrich/labels.go -> SensitivityFromEntity, first match wins,
             # order encodes severity (phi > pci > secrets > pii). Credentials come from the
             # Go-side gitleaks layer and are out of scope here, so `secrets` cannot appear.
-            if "ssn" in seen_types:
-                rollup["phi"] += 1
-            elif "credit_card" in seen_types:
-                rollup["pci"] += 1
-            elif seen_types:
-                rollup["pii"] += 1
-            else:
-                rollup["none"] += 1
+            rollup[sensitivity_of(seen_types)] += 1
             if scanned % 250 == 0:
                 el = time.time() - t0
                 print(f"  scanned {scanned}/{n} ({el:.0f}s, {el/scanned*1000:.0f}ms/prompt)",
                       flush=True)
 
     after = metrics(port)
+    lat = sorted(latency_ms)
+    def pct(p):
+        return round(lat[min(len(lat) - 1, int(p * len(lat)))], 2) if lat else 0.0
     stats = {
         "sample_n": SAMPLE_N, "seed": SEED, "corpus": CORPUS,
+        # Which recognizer tiers this run measured. None = the sidecar default.
+        "regions": regions,
+        # END-TO-END per-prompt cost of /pii at these regions: HTTP + presidio.
+        # Task 1's rule is that an enabled recognizer whose output is discarded is
+        # pure cost, so the cost has to be a number, not an assumption.
+        "latency_ms_mean": round(sum(lat) / len(lat), 2) if lat else 0.0,
+        "latency_ms_p50": pct(0.50), "latency_ms_p95": pct(0.95),
+        "latency_ms_p99": pct(0.99), "latency_ms_max": round(lat[-1], 2) if lat else 0.0,
         "transcripts": len(files), "frame_prompts": len(frame),
         "scanned": scanned, "scan_failures": failed, "truncated": truncated,
         "mean_prompt_chars": round(chars / scanned, 1) if scanned else 0,
@@ -454,10 +496,16 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int)
     ap.add_argument("--out", default=os.path.expanduser("~/keld/refseries-context/pii-precision"))
     ap.add_argument("--render", action="store_true", help="re-render findings.jsonl only")
+    ap.add_argument("--regions", default=None,
+                    help="comma-separated PII region tiers (e.g. 'us' or 'all'); "
+                         "omit to let the sidecar apply its own default")
     a = ap.parse_args()
+    regions = None
+    if a.regions is not None:
+        regions = ALL_REGIONS if a.regions == "all" else [r.strip() for r in a.regions.split(",") if r.strip()]
     if a.render:
         render(a.out)
     elif a.port:
-        run(a.port, a.out)
+        run(a.port, a.out, regions)
     else:
         ap.error("--port is required unless --render")

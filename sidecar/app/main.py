@@ -244,6 +244,14 @@ class MatchIn(BaseModel):
 
 class PiiIn(BaseModel):
     text: str
+    # Which country tiers of checksum recognizers to run on top of the universal
+    # ones (see app.pii.REGION_RECOGNIZERS). PER-REQUEST rather than a sidecar
+    # startup flag, because the daemon resolves it from org settings it polls on
+    # a live interval — an org changing its regions must take effect on the next
+    # prompt, not the next sidecar restart. Absent (None) means "no opinion" and
+    # app.pii falls back to KELD_PII_REGIONS / `us`; an explicit [] means the
+    # universal tier only, which is a different answer.
+    regions: list[str] | None = None
 
 
 class AnalyzeIn(BaseModel):
@@ -558,7 +566,7 @@ def _pii_text(text: str):
     return clipped, len(clipped) < len(text)
 
 
-def _pii_blocking(text: str):
+def _pii_blocking(text: str, regions):
     """The whole of /pii's work, on an executor thread.
 
     NO SPACY MODEL. This used to hand pii_scan the shared _analysis_nlp() pipeline so presidio
@@ -569,7 +577,7 @@ def _pii_blocking(text: str):
     subtracted from the inference worker's hard limit — which is what changes under KELD_TERMS=0.
     Still on the executor: presidio's first-call import is not event-loop work.
     """
-    return pii_scan(text)
+    return pii_scan(text, regions)
 
 
 @app.post("/pii")
@@ -596,7 +604,7 @@ async def detect_pii(body: PiiIn):
         return {"spans": [], "truncated": truncated}
     loop = asyncio.get_running_loop()
     try:
-        spans = await loop.run_in_executor(None, _pii_blocking, text)
+        spans = await loop.run_in_executor(None, _pii_blocking, text, body.regions)
     except Exception as exc:
         # The exception is NOT propagated or formatted: a presidio/spaCy error message can quote
         # the analysed string, and an error path is exactly where prompt text escapes. Class name

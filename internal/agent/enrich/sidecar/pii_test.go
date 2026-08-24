@@ -80,3 +80,53 @@ func TestDetectPIIRetriesThrough503(t *testing.T) {
 		t.Fatalf("calls = %d, want 2 (one 503, one success)", calls)
 	}
 }
+
+// The region tier rides EACH REQUEST rather than the sidecar's startup env, so
+// an org changing `pii_regions` takes effect on the next prompt. Three states
+// have to survive the wire and they are three different answers:
+//
+//	nil        -> JSON null   -> the sidecar applies its own default (`us`)
+//	[]         -> key present, empty -> the universal tier ONLY
+//	["uk","au"] -> those tiers on top of the universal ones
+func TestDetectPIIInSendsTheRegionTier(t *testing.T) {
+	var bodies []map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		raw, _ := io.ReadAll(r.Body)
+		json.Unmarshal(raw, &b)
+		bodies = append(bodies, b)
+		w.Write([]byte(`{"spans":[],"truncated":false}`))
+	}))
+	defer s.Close()
+
+	c := New(s.URL, 5*time.Second)
+	if _, ok := c.DetectPIIIn("text", []string{"uk", "au"}); !ok {
+		t.Fatal("DetectPIIIn failed on a 200")
+	}
+	if _, ok := c.DetectPIIIn("text", []string{}); !ok {
+		t.Fatal("DetectPIIIn failed on a 200")
+	}
+	if _, ok := c.DetectPII("text"); !ok {
+		t.Fatal("DetectPII failed on a 200")
+	}
+	if len(bodies) != 3 {
+		t.Fatalf("got %d requests, want 3", len(bodies))
+	}
+	if got, _ := bodies[0]["regions"].([]any); len(got) != 2 || got[0] != "uk" || got[1] != "au" {
+		t.Fatalf("regions = %v, want [uk au]", bodies[0]["regions"])
+	}
+	got, present := bodies[1]["regions"]
+	if !present {
+		t.Fatal("an EMPTY region list must be sent as [], not omitted: omitting it means 'no opinion' and the sidecar re-applies its default")
+	}
+	if arr, _ := got.([]any); len(arr) != 0 {
+		t.Fatalf("regions = %v, want []", got)
+	}
+	// null, not []: PiiIn.regions is `list[str] | None`, so an explicit null is
+	// the same "no opinion" an absent key would be, and it must NOT be [] or the
+	// unregioned callers (the eval harness, keld-agent eval) would silently lose
+	// the us tier.
+	if v, present := bodies[2]["regions"]; !present || v != nil {
+		t.Fatalf("DetectPII must send regions:null, got %v (present=%v)", v, present)
+	}
+}

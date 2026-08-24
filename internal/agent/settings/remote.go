@@ -6,4 +6,12 @@ type Remote struct {
 	IncludeEntityText *bool             `json:"include_entity_text"`
 	ClientTelemetry   *ClientTelemetry  `json:"client_telemetry"`
 	EnrichmentSchema  *EnrichmentSchema `json:"enrichment_schema"`
+	// PIIRegions is the org's country-tier selection for PII detection (see
+	// Settings.PIIRegions). A pointer so an absent key leaves the local value
+	// alone, while an explicit [] means "universal tier only" — the two are
+	// different answers and JSON can only tell them apart this way.
+	//
+	// Atlas does not serve this key yet. The client seam exists now so adopting
+	// it later is a server change alone, rather than a second client migration.
+	PIIRegions *[]string `json:"pii_regions"`
 }

@@ -727,9 +727,13 @@ func Run(ctx context.Context) error {
 	// start at all. When enabled, mlBackend provisions+supervises the sidecar
 	// (never a deterministic fallback — see mlBackend's doc comment) and
 	// handler is the normal ingress.Handler bound to q.
-	handler, model, svc, gate, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter)
-
+	// live is built BEFORE wireEnrichment so the PII region tier the enrichment
+	// facets resolve is the LIVE one — local base now, org override from the
+	// first successful settings poll onwards. Binding it after would freeze the
+	// facets on the startup value.
 	live := settings.NewLive(set)
+
+	handler, model, svc, gate, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions)
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -977,7 +981,7 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     trivially true when none does (see deterministicBackend).
 //   - enabled: whether Run should start the enrich Worker — true for both
 //     "auto" (or "") and "deterministic"; only "off" disables it.
-func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, enabled bool) {
+func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, enabled bool) {
 	if !set.EnrichmentEnabled() {
 		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
 		return ingress.DiscardHandler(secret), nil, serviceFacets{}, nil, false
@@ -986,10 +990,10 @@ func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q
 		// deterministic: the Worker still runs, and so does the analysis
 		// service — it is only the GLiNER2 model that is never asked for.
 		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the analysis service runs, the model is never loaded", set.MLBackend)
-		svc, gate := deterministicBackend(ctx, emitter)
+		svc, gate := deterministicBackend(ctx, emitter, regions)
 		return ingress.Handler(q, secret), nil, svc, gate, true
 	}
-	model, svc, gate = mlBackend(ctx, emitter)
+	model, svc, gate = mlBackend(ctx, emitter, regions)
 	return ingress.Handler(q, secret), model, svc, gate, true
 }
 
@@ -1070,6 +1074,9 @@ type mlBackendOpts struct {
 	fetcher  provision.Fetcher
 	healthFn func() bool
 	emitter  *clientevents.Emitter
+	// regions resolves the org's PII country tiers at CALL time (see
+	// facetsFor). nil means "no opinion" — the sidecar's own default.
+	regions func() []string
 }
 
 // gliner2ModelDir is the on-disk home of the GLiNER2 weights. It is named in
@@ -1179,7 +1186,7 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 // That is not the degradation AGENTS.md forbids. Nothing lower-fidelity stands
 // in for window analysis; the facet is dropped entirely and reported dropped
 // via the pipeline's ordinary pipeline_status "partial" path.
-func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter) (serviceFacets, func() bool) {
+func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (serviceFacets, func() bool) {
 	scClient, sup, _, ok, err := sidecarService(ctx, emitter)
 	if !ok {
 		// No service this run and no path to one before a restart, so waiting
@@ -1198,7 +1205,7 @@ func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter) (s
 	// mechanism "auto" uses for warmth: Worker reads it per job and waitWarm
 	// re-reads it every ~20ms, so sidecarService's raw healthFn — a live
 	// loopback GET per call — is the wrong shape for a gate.
-	return facetsFor(scClient), serviceHealthGate(ctx, scClient)
+	return facetsFor(scClient, regions), serviceHealthGate(ctx, scClient)
 }
 
 // noAnalysisService is deterministic mode's "no service this run, and no path
@@ -1239,7 +1246,7 @@ func noAnalysisService(emitter *clientevents.Emitter, fields map[string]any) fun
 // deterministicBackend — because they belong to the SERVICE, not the model:
 // both modes derive them the same way, and returning them here means
 // wireEnrichment only passes them through instead of rederiving them.
-func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model, serviceFacets, func() bool) {
+func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (enrich.Model, serviceFacets, func() bool) {
 	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
 	if !ok {
 		// The consequence of having no service is this caller's to state: an
@@ -1261,6 +1268,7 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 		fetcher:  sidecar.NewHFFetcher(provision.ModelRepo, provision.ModelRevision),
 		healthFn: healthFn,
 		emitter:  emitter,
+		regions:  regions,
 	})
 }
 
@@ -1343,7 +1351,7 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, s
 	// facetsFor(opts.client), not facetsFor-of-the-Model at the call site: the
 	// non-inference routes are properties of the service client and must
 	// survive any later change to what "the Model" is.
-	return opts.client, facetsFor(opts.client), wg.Warm
+	return opts.client, facetsFor(opts.client, opts.regions), wg.Warm
 }
 
 // enrichEndpoint derives the enrichments URL from the configured ingest endpoint

@@ -385,6 +385,12 @@ func (c *Client) WorkerReady(ctx context.Context) bool {
 // (see piiResp.Truncated), which is the bound that matters here.
 type piiReq struct {
 	Text string `json:"text"`
+	// Regions is the country-tier selection (see settings.Settings.PIIRegions).
+	// `omitempty` is DELIBERATELY ABSENT: a nil slice must marshal as `null`
+	// (key present, no opinion → the sidecar applies its own default) and an
+	// EMPTY slice as `[]` (key present, universal tier only). omitempty erases
+	// both into "key absent" and collapses two different answers into one.
+	Regions []string `json:"regions"`
 }
 
 // piiSpanWire is one span as /pii reports it: WHERE the leaked value is and
@@ -417,8 +423,26 @@ type piiResp struct {
 // never ran. The caller marks the facet degraded on false (see
 // enrich.SensitivityExtractor.Degraded).
 func (c *Client) DetectPII(text string) (enrich.PIIResult, bool) {
+	return c.DetectPIIIn(text, nil)
+}
+
+// DetectPIIIn is DetectPII with an explicit region tier — which country-specific
+// checksum recognizers run on top of the universal ones (card, email, phone,
+// IBAN, crypto wallet). See settings.Settings.PIIRegions for why this is scoped
+// at all, and sidecar/app/pii.py REGION_RECOGNIZERS for the codes.
+//
+// It rides the REQUEST rather than the sidecar's environment because the value
+// comes from org settings the daemon polls on a live interval: a startup flag
+// would mean an org's change waits for a sidecar restart. The sidecar caches one
+// analyzer per distinct region set, so varying it is cheap.
+//
+// nil regions means "no opinion" and lets the sidecar apply its own default
+// (KELD_PII_REGIONS, else `us`). An EMPTY, non-nil slice means the universal
+// tier only. Unknown codes are ignored by the sidecar, not rejected here — the
+// list of servable regions lives in one place.
+func (c *Client) DetectPIIIn(text string, regions []string) (enrich.PIIResult, bool) {
 	var r piiResp
-	if !c.post("/pii", piiReq{text}, &r) {
+	if !c.post("/pii", piiReq{Text: text, Regions: regions}, &r) {
 		return enrich.PIIResult{}, false
 	}
 	spans := make([]enrich.Entity, 0, len(r.Spans))

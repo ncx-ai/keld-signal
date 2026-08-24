@@ -51,18 +51,54 @@ letter-free `person`.)
 
 WHICH RECOGNIZERS ARE ENABLED, AND WHY
 --------------------------------------
-presidio ships 86 predefined recognizers, but only 23 entities register for
-`en`, and an enabled recognizer whose output is then discarded is pure cost --
-every one runs a regex or a context lookup over every prompt. So the registry is
-built explicitly with the four recognizers that produce the four mapped types,
-and nothing else:
+presidio ships 63 predefined recognizer classes here, and an enabled recognizer
+whose output is discarded is pure cost -- every one runs a regex over every
+prompt. So the registry is built EXPLICITLY, and in three tiers (see
+UNIVERSAL_RECOGNIZERS / REGION_RECOGNIZERS below):
 
-    CreditCardRecognizer  CREDIT_CARD    (Luhn-validated -> 1.0, else dropped)
-    EmailRecognizer       EMAIL_ADDRESS
-    PhoneRecognizer       PHONE_NUMBER   (libphonenumber)
-    UsSsnRecognizer       US_SSN
+    universal  CreditCard, Email, Phone, Iban, Crypto
+    "us"       UsSsn, AbaRouting, UsNpi, MedicalLicense      <- the default
+    opt-in     uk es it pl fi kr in au ng th sg
 
-Deliberately NOT enabled, in four groups:
+Everything past the original four is CHECKSUM- OR ALGORITHM-VALIDATED: presidio
+sets MAX_SCORE (1.0) only when the recognizer's own validate_result() returned
+True, and MIN_SCORE (dropped) when it returned False. A recognizer whose
+validation is merely structural is NOT here -- UsItin, UsPassport, UsLicense,
+UsMbi, UsBank, UkNino, UkPassport, UkPostcode, InPan, InPassport, InVoter, SgFin,
+It{DriverLicense,IdentityCard,Passport}, KrPassport, NgVehicleRegistration all
+lack a check digit and would report on shape alone.
+
+WHY REGION-SCOPED RATHER THAN ALL-ON. Almost every national-id recognizer is a
+bare digit run plus ONE check digit, so its false-positive floor against
+arbitrary numbers is 1-in-10 or 1-in-11 -- a checksum makes a false positive
+unlikely, not impossible. Worse, the shapes COLLIDE: a valid US_NPI is ten digits
+starting 1 or 2, which is exactly UK_NHS's shape, and UK_NHS rolls up to `phi`.
+Enabling `uk` inside a US-only org therefore manufactures the most severe class
+out of provider ids. Verified collisions are pinned in test_pii_regions.py
+(AU_MEDICARE also validates as UK_NHS; SG_UEN also validates as ES_NIF; US_NPI
+also validates as KR_BRN). Scoping to where an org actually operates is what
+keeps those cross-firings out of the published signal.
+
+`Iban` and `Crypto` are universal deliberately: they carry their own checksums
+(mod-97, base58check/bech32) and are not bounded by where an org operates -- an
+IBAN in a US prompt is still a leaked bank account.
+
+MEASURED. Over 2,000 real developer prompts with EVERY region enabled, the whole
+candidate set produced three spans, all three readings of one digit run in a URL
+path, and all three killed by the fragment gate below -- see
+~/keld/refseries-context/pii-precision/RESULTS.md. Cost is ~1 ms/prompt for the
+full set.
+
+Several recognizers, all opt-in, are BUSINESS registration numbers rather than
+personal data: IT_VAT_CODE, KR_BRN, IN_GSTIN, AU_ABN, AU_ACN, SG_UEN. They are
+included because every one of those registers also issues to sole traders, i.e.
+to a natural person, but they are the weakest members of their tiers and an org
+that only wants person-level signal should leave those regions off. ABA_ROUTING
+is the same caveat one class up: a routing number identifies a BANK BRANCH from a
+published directory, not an account -- it is kept because it is a reliable marker
+that banking data is present in the prompt, not because it is itself leaked.
+
+Still deliberately NOT enabled:
 
 1. The spaCy NER entirely (PERSON, LOCATION, ORGANIZATION, NRP, AGE, ID,
    DATE_TIME). PERSON/LOCATION for the measured reason above; the rest were
@@ -74,18 +110,17 @@ Deliberately NOT enabled, in four groups:
    IpRecognizer (matches version strings like 1.2.3.4 as readily as addresses),
    MacAddressRecognizer.
 
-3. Genuinely sensitive but with NO HOME in the current closed vocabulary:
-   IBAN_CODE and US_BANK_NUMBER (bank accounts -- `pci` is card-specific, not a
-   generic financial class), MEDICAL_LICENSE and UK_NHS (health identifiers --
-   the `phi` row is keyed on `ssn` alone), US_ITIN / US_PASSPORT /
-   US_DRIVER_LICENSE (government ids), CRYPTO (wallet address). Mapping any of
-   these onto `ssn` to reach `phi` would overstate what was found, and a false
-   `phi` is worse than a miss. Covering them properly needs new vocabulary
-   entries and a SchemaVersion bump -- a deliberate contract change, not a
-   silent side effect of adopting a library. Recorded as a known gap.
+3. Vehicle registrations (UkVehicleRegistration, InVehicleRegistration) are
+   validated, but their patterns are ordinary alphanumeric tokens and a plate is
+   a step removed from a person.
 
-4. Country-specific national IDs for other locales: only `en` is analysed, so
-   they never register.
+4. Recognizers the region list ASKED FOR AND PRESIDIO DOES NOT HAVE, so those
+   regions are absent entirely rather than silently empty: there is no German
+   recognizer of any kind (no DeIdCard / DeSocialSecurity / DeTaxId / DeVatId /
+   DeHealthInsurance / DePassport), no Swedish (SePersonnummer,
+   SeOrganisationsnummer), no South African (ZaIdNumber), no Turkish
+   (TrNationalId) and no UK driving licence. Verified by introspection against
+   presidio-analyzer 2.2.362.
 
 NO NLP MODEL IS LOADED. Every remaining recognizer is a pattern (regex + Luhn /
 libphonenumber), so presidio's NlpEngine is needed only to tokenize -- a blank
@@ -103,37 +138,134 @@ parent, and subtracted from the inference worker's hard limit via
 worker_manager.parent_reserve_mb) -- which matters with KELD_TERMS=0, where
 nothing else loads it.
 
-The SCORE THRESHOLD is load-bearing. UsSsnRecognizer carries four "very weak"
-patterns at score 0.05 that match any bare nine-digit run; at 0.35 those are
-dropped while a context-boosted SSN (0.5 dashed) and a phone (0.4) survive.
-Measured, not guessed.
+The SCORE THRESHOLD is load-bearing FOR THE UNVALIDATED TYPES ONLY.
+UsSsnRecognizer carries four "very weak" patterns at score 0.05 that match any
+bare nine-digit run; at 0.35 those are dropped while a context-boosted SSN (0.5
+dashed) and a phone (0.4) survive. Measured, not guessed. It buys the validated
+recognizers NOTHING -- a passing checksum is promoted straight to 1.0 whatever
+the pattern scored, which is why AbaRouting's 0.05 pattern is not protected by
+it and the gates below have to be.
 
-Everything that survives the threshold is then put through two gates: the
+Everything that survives the threshold is then put through the gates: the
 published-value gate (app.wellknown), because presidio reports
 4111 1111 1111 1111 at 1.0 and user@example.com at 1.0 -- both correct as
-structure, both documentation -- and the numeric-fragment gate below.
+structure, both documentation -- the numeric-fragment gate, and (for the
+region-scoped types) the token-delimitation gate below.
 """
 from __future__ import annotations
 
+import os
 import threading
 
 from app.wellknown import is_well_known
 
-# presidio entity -> the vocabulary name the Go side already consumes.
+# --- the recognizer tiers ----------------------------------------------------
+#
+# Each entry is (presidio recognizer class name, language override or None).
+# The override exists because presidio ships several of these bound to their own
+# locale (`es`, `it`, `ko`, `pl`, `fi`, `th`) and this service only ever analyses
+# `en`, so without it the recognizer registers for a language nobody asks for and
+# the tier is silently dead. The regex and the check algorithm are language
+# independent; only the (unused, lemma-gated) context words are not.
+
+# Not bounded by where an org operates. A card, a mailbox, a phone number, an
+# IBAN and a crypto wallet are the same leak in any jurisdiction.
+UNIVERSAL_RECOGNIZERS = (
+    ("CreditCardRecognizer", None),
+    ("EmailRecognizer", None),
+    ("PhoneRecognizer", None),
+    ("IbanRecognizer", None),
+    ("CryptoRecognizer", None),
+)
+
+# region code -> recognizers that region turns on. "us" is the default; see
+# DEFAULT_REGIONS and the module docstring for why this is scoped rather than
+# all-on.
+REGION_RECOGNIZERS = {
+    "us": (("UsSsnRecognizer", None), ("AbaRoutingRecognizer", None),
+           ("UsNpiRecognizer", None), ("MedicalLicenseRecognizer", None)),
+    "uk": (("NhsRecognizer", None),),
+    "es": (("EsNifRecognizer", "en"), ("EsNieRecognizer", "en")),
+    "it": (("ItFiscalCodeRecognizer", "en"), ("ItVatCodeRecognizer", "en")),
+    "pl": (("PlPeselRecognizer", "en"),),
+    "fi": (("FiPersonalIdentityCodeRecognizer", "en"),),
+    "kr": (("KrRrnRecognizer", "en"), ("KrDriverLicenseRecognizer", "en"),
+           ("KrBrnRecognizer", "en"), ("KrFrnRecognizer", "en")),
+    "in": (("InAadhaarRecognizer", None), ("InGstinRecognizer", None)),
+    "au": (("AuTfnRecognizer", None), ("AuAbnRecognizer", None),
+           ("AuAcnRecognizer", None), ("AuMedicareRecognizer", None)),
+    "ng": (("NgNinRecognizer", None),),
+    "th": (("ThTninRecognizer", "en"),),
+    "sg": (("SgUenRecognizer", None),),
+}
+
+# The regions in force when the caller names none. `us` because that is where the
+# product ships first; an org elsewhere sets KELD_PII_REGIONS (or, once Atlas
+# serves it, the `pii_regions` org setting -- see internal/agent/settings).
+DEFAULT_REGIONS = ("us",)
+
+REGIONS_ENV = "KELD_PII_REGIONS"
+
+# presidio entity -> the vocabulary name the Go side consumes (see
+# internal/agent/enrich/labels.go -> SensitivityFromEntity). The naming rule is
+# "presidio's entity name, lowercased", with two exceptions where that name is
+# not English anyone writes: IBAN_CODE -> iban, and CRYPTO -> crypto_wallet
+# (bare `crypto` names a field of study, not the datum). The four original
+# entries predate the rule and keep their shorter legacy names, which are a
+# published contract.
 _ENTITY_MAP = {
     "US_SSN": "ssn",
     "CREDIT_CARD": "credit_card",
     "EMAIL_ADDRESS": "email",
     "PHONE_NUMBER": "phone",
+    # universal
+    "IBAN_CODE": "iban",
+    "CRYPTO": "crypto_wallet",
+    # us
+    "ABA_ROUTING_NUMBER": "aba_routing",
+    "US_NPI": "us_npi",
+    "MEDICAL_LICENSE": "medical_license",
+    # uk
+    "UK_NHS": "uk_nhs",
+    # es
+    "ES_NIF": "es_nif",
+    "ES_NIE": "es_nie",
+    # it
+    "IT_FISCAL_CODE": "it_fiscal_code",
+    "IT_VAT_CODE": "it_vat_code",
+    # pl / fi
+    "PL_PESEL": "pl_pesel",
+    "FI_PERSONAL_IDENTITY_CODE": "fi_personal_identity_code",
+    # kr
+    "KR_RRN": "kr_rrn",
+    "KR_DRIVER_LICENSE": "kr_driver_license",
+    "KR_BRN": "kr_brn",
+    "KR_FRN": "kr_frn",
+    # in
+    "IN_AADHAAR": "in_aadhaar",
+    "IN_GSTIN": "in_gstin",
+    # au
+    "AU_TFN": "au_tfn",
+    "AU_ABN": "au_abn",
+    "AU_ACN": "au_acn",
+    "AU_MEDICARE": "au_medicare",
+    # ng / th / sg
+    "NG_NIN": "ng_nin",
+    "TH_TNIN": "th_tnin",
+    "SG_UEN": "sg_uen",
 }
 
-_PRESIDIO_ENTITIES = list(_ENTITY_MAP)
+# The labels the original four recognizers produce. Everything else is
+# region-scoped and gets the extra token-delimitation gate (see scan()); the
+# original four are excluded from it only so their MEASURED behaviour is not
+# perturbed by this widening.
+_LEGACY_TYPES = frozenset(("ssn", "credit_card", "email", "phone"))
 
 # Below this, US_SSN's 0.05 "very weak" patterns turn every nine-digit order id
 # into a phi report. See the module docstring.
 SCORE_THRESHOLD = 0.35
 
-_engine = None
+_engines: dict = {}
 _engine_lock = threading.Lock()
 
 # --- numeric-fragment gate for the pattern-matched types --------------------
@@ -171,8 +303,54 @@ _FRAGMENT_RIGHT_SEP = frozenset(".,-")
 # eight.
 _MIN_PHONE_DIGITS = 10
 
-# The types the fragment gate applies to. See scan().
-_NUMERIC_TYPES = frozenset(("ssn", "credit_card", "phone"))
+# The types the fragment gate applies to: everything numeric. `email` is the one
+# exclusion and it is deliberate -- `mailto:dana@x.co` is a real address and the
+# LEFT rule would reject it on the colon. See scan().
+#
+# The region-scoped national ids are all in scope. That is not a precaution: the
+# ONLY spans the full candidate set produced over 2,000 real prompts were three
+# readings (AU_ABN, IT_VAT_CODE, PL_PESEL) of one digit run sitting after a `/`
+# in a URL path, and the LEFT rule is exactly what removes them.
+_NON_NUMERIC_TYPES = frozenset(("email",))
+
+
+def _is_glued_to_a_longer_token(text: str, start: int, end: int) -> bool:
+    """Does this span sit INSIDE a longer alphanumeric token?
+
+    Most presidio patterns are `\\b`-anchored, for which this is always false and
+    the check costs nothing. Several of the region-scoped ones are NOT:
+    MedicalLicenseRecognizer's DEA pattern, ItFiscalCodeRecognizer and
+    CryptoRecognizer carry no word boundary at all, so they match happily in the
+    middle of an identifier. AGENTS.md's rule applies directly -- an identifier
+    cut short is a FALSE identifier -- and a licence number spliced out of a
+    symbol name is not a licence number.
+
+    Applied only to the region-scoped types (see _LEGACY_TYPES), so the measured
+    behaviour of the original four is untouched by this widening.
+    """
+    if start > 0 and (text[start - 1].isalnum() or text[start - 1] == "_"):
+        return True
+    if end < len(text) and (text[end].isalnum() or text[end] == "_"):
+        return True
+    return False
+
+
+def _trim_span(text: str, start: int, end: int) -> tuple[int, int]:
+    """Pull whitespace out of the span's edges.
+
+    Not cosmetic. ItVatCodeRecognizer's pattern is `\\b([0-9][ _]?){11}\\b`, whose
+    optional separator is allowed to be the LAST character, so it reports
+    `"18415253675 "` -- trailing space included. Two things break on that: the
+    published mask carries a stray character, and the delimitation gate below
+    reads the wrong neighbour and rejects a real detection. Offsets are the whole
+    contract of this module, so they are made exact here, once, before any gate
+    or any mask sees them.
+    """
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    return start, end
 
 
 def _is_number_fragment(text: str, start: int, end: int) -> bool:
@@ -246,47 +424,101 @@ def _nlp_engine():
     return _BlankSpacyNlpEngine()
 
 
-def _build_engine():
+def default_regions() -> tuple[str, ...]:
+    """The regions in force when a caller names none.
+
+    `KELD_PII_REGIONS` (comma-separated, e.g. "us,uk") is the operator lever and
+    the sidecar-side half of the setting; the daemon sends `regions` explicitly
+    on every /pii request once an org value is in play, so this is the fallback
+    for a bare sidecar (scripts/pii_precision.py, a manual curl). Empty or unset
+    means DEFAULT_REGIONS. Unknown codes are dropped by _normalize_regions, not
+    treated as an error -- an org setting is free text and a typo must not take
+    the facet down.
+    """
+    raw = os.environ.get(REGIONS_ENV, "")
+    parsed = _normalize_regions(raw.split(","))
+    return parsed if parsed else DEFAULT_REGIONS
+
+
+def _normalize_regions(regions) -> tuple[str, ...]:
+    """Lowercase, trim, drop unknown/empty, dedupe, and SORT.
+
+    Sorted because the tuple is the engine cache key: ["us","uk"] and ["uk","us"]
+    must not build two analyzers.
+    """
+    if not regions:
+        return ()
+    seen = []
+    for r in regions:
+        if not isinstance(r, str):
+            continue
+        code = r.strip().lower()
+        if code in REGION_RECOGNIZERS and code not in seen:
+            seen.append(code)
+    return tuple(sorted(seen))
+
+
+def _build_engine(regions: tuple[str, ...]):
     from presidio_analyzer import AnalyzerEngine, RecognizerRegistry
-    from presidio_analyzer.predefined_recognizers import (
-        CreditCardRecognizer, EmailRecognizer, PhoneRecognizer, UsSsnRecognizer,
-    )
+    from presidio_analyzer import predefined_recognizers as pr
+
+    specs = list(UNIVERSAL_RECOGNIZERS)
+    for code in regions:
+        specs.extend(REGION_RECOGNIZERS[code])
 
     registry = RecognizerRegistry()
-    for rec in (
-        CreditCardRecognizer(),
-        EmailRecognizer(),
-        PhoneRecognizer(),
-        UsSsnRecognizer(),
-    ):
+    entities = []
+    for class_name, lang in specs:
+        cls = getattr(pr, class_name)
+        # The language override is what makes a locale-bound recognizer visible
+        # to an `en` analysis at all; see UNIVERSAL_RECOGNIZERS' comment.
+        rec = cls(supported_language=lang) if lang else cls()
         registry.add_recognizer(rec)
+        entities.extend(rec.supported_entities)
 
-    return AnalyzerEngine(
+    engine = AnalyzerEngine(
         nlp_engine=_nlp_engine(),
         registry=registry,
         supported_languages=["en"],
     )
+    return engine, entities
 
 
-def _get_engine():
-    """The analyzer, built once. There is no per-caller variation left to invalidate it: the
-    registry is fixed and the pipeline is a blank tokenizer this module owns."""
-    global _engine
-    if _engine is None:
+def _get_engine(regions: tuple[str, ...]):
+    """The analyzer for one region set, built once per set and cached.
+
+    Keyed on the normalized region tuple because that is the only per-caller
+    variation there is: the pipeline is a blank tokenizer this module owns and
+    the universal tier never changes. The cache is unbounded ON PURPOSE and is
+    still bounded in fact -- _normalize_regions only admits codes from
+    REGION_RECOGNIZERS, so an adversarial caller cannot grow it past the number
+    of subsets an org would ever configure, and in practice one process sees one
+    or two.
+    """
+    engine = _engines.get(regions)
+    if engine is None:
         with _engine_lock:
-            if _engine is None:
-                _engine = _build_engine()
-    return _engine
+            engine = _engines.get(regions)
+            if engine is None:
+                engine = _build_engine(regions)
+                _engines[regions] = engine
+    return engine
 
 
-def scan(text: str, nlp=None) -> list[dict]:
+def scan(text: str, regions=None, nlp=None) -> list[dict]:
     """Find leaked personal data in `text`.
 
     Returns spans sorted by position, each `{"type","start","end","score"}` with
-    `type` drawn only from the four detected names (`ssn`, `credit_card`,
-    `email`, `phone`). Published test/example values are filtered out, as are
-    numeric fragments of longer tokens. Never raises on empty or non-string
-    input.
+    `type` drawn only from _ENTITY_MAP's values -- the universal tier plus
+    whichever regions are in force. Published test/example values are filtered
+    out, as are numeric fragments and slices of longer tokens. Never raises on
+    empty or non-string input.
+
+    `regions` selects the region-scoped recognizers (see REGION_RECOGNIZERS).
+    None means default_regions(); an EMPTY list means the universal tier only,
+    and is distinct from None on purpose -- "this org wants nothing
+    country-specific" is a real answer, not an absent one. Unknown codes are
+    ignored.
 
     NEVER returns the matched substring: the caller holds the text and the offsets index it, and
     a matched value in a return value is one log line away from being a leak.
@@ -301,10 +533,13 @@ def scan(text: str, nlp=None) -> list[dict]:
     if not text or not isinstance(text, str) or not text.strip():
         return []
 
-    results = _get_engine().analyze(
+    codes = default_regions() if regions is None else _normalize_regions(regions)
+    engine, entities = _get_engine(codes)
+
+    results = engine.analyze(
         text=text,
         language="en",
-        entities=_PRESIDIO_ENTITIES,
+        entities=entities,
         score_threshold=SCORE_THRESHOLD,
     )
 
@@ -313,21 +548,26 @@ def scan(text: str, nlp=None) -> list[dict]:
         kind = _ENTITY_MAP.get(r.entity_type)
         if kind is None:  # defensive: registry is restricted, but never leak a
             continue      # presidio-native name into the published vocabulary
-        value = text[r.start:r.end]
+        start, end = _trim_span(text, int(r.start), int(r.end))
+        if start >= end:
+            continue
+        value = text[start:end]
         if is_well_known(value, kind):
             continue
-        # Numeric types only. `email` is deliberately EXCLUDED: `mailto:dana@x.co`
-        # is a real address and the left rule would reject it on the colon. The
-        # email-shaped false positives have their own, structural gates in
-        # app.wellknown.
-        if kind in _NUMERIC_TYPES and _is_number_fragment(text, r.start, r.end):
+        # `email` is deliberately EXCLUDED from the fragment gate:
+        # `mailto:dana@x.co` is a real address and the left rule would reject it
+        # on the colon. The email-shaped false positives have their own,
+        # structural gates in app.wellknown.
+        if kind not in _NON_NUMERIC_TYPES and _is_number_fragment(text, start, end):
+            continue
+        if kind not in _LEGACY_TYPES and _is_glued_to_a_longer_token(text, start, end):
             continue
         if kind == "phone" and (_is_bare_digit_run(value) or _too_few_digits_for_phone(value)):
             continue
         out.append({
             "type": kind,
-            "start": int(r.start),
-            "end": int(r.end),
+            "start": start,
+            "end": end,
             "score": float(r.score),
         })
 

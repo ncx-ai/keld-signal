@@ -2,6 +2,9 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -9,6 +12,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
 // analyzingModel is a Model that also answers window analysis, like the real
@@ -30,7 +34,7 @@ func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
 	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "WS-1",
 		TranscriptPath: "/tmp/t.jsonl", PromptID: "p1", Inline: "hello world"}
 
-	if ok := process(context.Background(), j, m, facetsFor(m), sender, "actor@keld.co",
+	if ok := process(context.Background(), j, m, facetsFor(m, nil), sender, "actor@keld.co",
 		func() bool { return true }, nil, nil, nil); !ok {
 		t.Fatal("process did not publish")
 	}
@@ -47,14 +51,14 @@ func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
 }
 
 func TestFacetsForRequiresTheCapability(t *testing.T) {
-	if f := facetsFor(nil); f.Analyze != nil || f.ScanPII != nil {
+	if f := facetsFor(nil, nil); f.Analyze != nil || f.ScanPII != nil {
 		t.Error("deterministic mode with no sidecar has no Model and no service: no facets")
 	}
-	if f := facetsFor(enrichtest.NewFake()); f.Analyze != nil || f.ScanPII != nil {
+	if f := facetsFor(enrichtest.NewFake(), nil); f.Analyze != nil || f.ScanPII != nil {
 		t.Error("a Model without the service capabilities must yield none of them")
 	}
 	// The real client is the production wiring; assert it qualifies (no call made).
-	f := facetsFor(sidecar.New("http://127.0.0.1:0", time.Second))
+	f := facetsFor(sidecar.New("http://127.0.0.1:0", time.Second), nil)
 	if f.Analyze == nil {
 		t.Error("the sidecar client must satisfy the window-analysis capability")
 	}
@@ -73,7 +77,7 @@ func TestProcessSkipsWorkstreamsForCodex(t *testing.T) {
 	j := queue.Job{Source: "codex", Scheme: "prompt_id", ID: "WS-2",
 		TranscriptPath: "/tmp/t.jsonl", PromptID: "sess-1#3", Inline: "write a function that adds two numbers"}
 
-	if ok := process(context.Background(), j, m, facetsFor(m), sender, "actor@keld.co",
+	if ok := process(context.Background(), j, m, facetsFor(m, nil), sender, "actor@keld.co",
 		func() bool { return true }, nil, nil, nil); !ok {
 		t.Fatal("process did not publish")
 	}
@@ -87,5 +91,60 @@ func TestProcessSkipsWorkstreamsForCodex(t *testing.T) {
 	if sent.PipelineStatus == "partial" {
 		t.Errorf("a pass that cannot serve this source must not downgrade it: status=%q versions=%v",
 			sent.PipelineStatus, sent.ExtractorVersions)
+	}
+}
+
+// The org's region tier has to reach the sidecar on EVERY scan, resolved at call
+// time rather than captured at wiring time. That is the whole point of the
+// local-then-remote shaping: wireEnrichment runs once at startup, the settings
+// poll lands minutes later, and a facet bound to the startup value would ignore
+// the org until the daemon restarted.
+func TestFacetsForResolvesPIIRegionsPerCall(t *testing.T) {
+	var got [][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Regions []string `json:"regions"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		got = append(got, body.Regions)
+		w.Write([]byte(`{"spans":[],"truncated":false}`))
+	}))
+	defer srv.Close()
+
+	live := settings.NewLive(settings.Settings{PIIRegions: []string{"us"}})
+	f := facetsFor(sidecar.New(srv.URL, 5*time.Second), live.PIIRegions)
+	if f.ScanPII == nil {
+		t.Fatal("the sidecar client must satisfy the PII-scan capability")
+	}
+	f.ScanPII("text")
+	live.Apply(&settings.Remote{PIIRegions: &[]string{"uk", "au"}})
+	f.ScanPII("text")
+
+	if len(got) != 2 {
+		t.Fatalf("got %d scans, want 2", len(got))
+	}
+	if len(got[0]) != 1 || got[0][0] != "us" {
+		t.Fatalf("first scan regions = %v, want [us]", got[0])
+	}
+	if len(got[1]) != 2 || got[1][0] != "uk" {
+		t.Fatalf("second scan regions = %v, want [uk au] — the org's change never reached /pii", got[1])
+	}
+}
+
+// A nil provider is the test/eval wiring, and it must send no opinion at all so
+// the sidecar applies its own default rather than being pinned to the universal
+// tier.
+func TestFacetsForWithNoRegionProviderSendsNoOpinion(t *testing.T) {
+	var raw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&raw)
+		w.Write([]byte(`{"spans":[],"truncated":false}`))
+	}))
+	defer srv.Close()
+
+	f := facetsFor(sidecar.New(srv.URL, 5*time.Second), nil)
+	f.ScanPII("text")
+	if v, ok := raw["regions"]; !ok || v != nil {
+		t.Fatalf("regions = %v (present=%v), want null", v, ok)
 	}
 }

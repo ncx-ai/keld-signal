@@ -7,6 +7,7 @@ package settings
 import (
 	"encoding/json"
 	"os"
+	"strings"
 
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
@@ -35,6 +36,71 @@ type Settings struct {
 	// Local, startup-only — not part of the remote settings doc and never
 	// re-read at runtime.
 	MLBackend string `json:"ml_backend"`
+
+	// PIIRegions selects which COUNTRY TIERS of checksum-validated PII
+	// recognizers the sidecar runs, on top of the universal ones (card, email,
+	// phone, IBAN, crypto wallet). See sidecar/app/pii.py's REGION_RECOGNIZERS
+	// for the codes; nil means the default, `us`.
+	//
+	// Region-scoped rather than all-on because almost every national-id
+	// recognizer is a bare digit run plus ONE check digit, so its shapes collide
+	// with other countries' — a valid US NPI is ten digits starting 1 or 2,
+	// which is exactly the UK NHS number shape, and uk_nhs rolls up to `phi`.
+	// Running a country an org has no business in manufactures the most severe
+	// class out of ordinary identifiers.
+	//
+	// Unlike MLBackend this is NOT startup-only: it is shaped local-then-remote
+	// like IncludeEntityText (Remote.PIIRegions -> Live.PIIRegions), and rides
+	// each /pii request, so an org changing it takes effect on the next prompt
+	// rather than the next restart. Local precedence is
+	// KELD_PII_REGIONS > agent-config.json > `us`, and remote wins over all
+	// three when the key is present.
+	PIIRegions []string `json:"pii_regions"`
+}
+
+// PIIRegionsEnv overrides the config file's pii_regions. Comma-separated
+// ("us,uk"); the literal "none" means the universal tier only, which an empty
+// string cannot express because an empty string is "unset".
+const PIIRegionsEnv = "KELD_PII_REGIONS"
+
+// DefaultPIIRegions is what a daemon runs when nothing says otherwise.
+var DefaultPIIRegions = []string{"us"}
+
+// Regions returns the effective local region list: KELD_PII_REGIONS if set,
+// else the config file's value, else DefaultPIIRegions. Always normalized.
+//
+// A non-nil empty result is meaningful and is preserved: "universal tier only".
+func (s Settings) Regions() []string {
+	if raw, ok := os.LookupEnv(PIIRegionsEnv); ok && strings.TrimSpace(raw) != "" {
+		return NormalizeRegions(strings.Split(raw, ","))
+	}
+	if s.PIIRegions == nil {
+		return append([]string(nil), DefaultPIIRegions...)
+	}
+	return NormalizeRegions(s.PIIRegions)
+}
+
+// NormalizeRegions lowercases, trims, drops empties and dedupes, preserving
+// order. The sentinel "none" (from KELD_PII_REGIONS, which cannot express an
+// empty list otherwise) yields an empty slice.
+//
+// It deliberately does NOT validate the codes against a list of known regions.
+// The sidecar owns that list (sidecar/app/pii.py REGION_RECOGNIZERS) and ignores
+// what it does not recognise; a second copy here would be one more thing to keep
+// in step, and would turn a forward-compatible org setting into a client-side
+// rejection.
+func NormalizeRegions(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, r := range in {
+		code := strings.ToLower(strings.TrimSpace(r))
+		if code == "" || code == "none" || seen[code] {
+			continue
+		}
+		seen[code] = true
+		out = append(out, code)
+	}
+	return out
 }
 
 // MLEnabled reports whether the GLiNER2 model may be used. Note this is about

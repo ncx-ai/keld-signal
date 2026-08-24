@@ -18,8 +18,14 @@ SSN; user@example.com is reserved by RFC 2606. Ungated, every engineer's
 transcript reports pci/phi continuously and the facet becomes noise — strictly
 worse than not having it at all.
 
+Widened alongside the region-scoped recognizers (app.pii): IBAN and crypto
+wallet addresses arrived as universal types and brought their own documentation
+constants with them, and the digit-run fallback that serves every national/tax
+identifier now looks at six digits rather than nine, because SG_UEN carries eight
+and AU_ACN nine.
+
 Everything listed below is a documentation constant. None is an account, a
-person, or an address.
+person, an address, or a wallet anyone holds a key to.
 """
 from __future__ import annotations
 
@@ -61,6 +67,36 @@ _RESERVED_DOMAINS = (
     "example.com", "example.net", "example.org",
 )
 
+# Published example IBANs. Every one of these is a documentation constant from a
+# public standards page, a bank's own "how to read your IBAN" explainer or a
+# payment library's fixtures -- and every one passes the mod-97 check, because
+# that is the point of an example. Stored digits-and-letters only, uppercased,
+# so spacing and case do not matter.
+_KNOWN_EXAMPLE_IBANS = {
+    "GB82WEST12345698765432", "GB33BUKB20201555555555", "GB29NWBK60161331926819",
+    "DE89370400440532013000", "DE75512108001245126199",
+    "FR1420041010050500013M02606", "FR7630006000011234567890189",
+    "ES9121000418450200051332", "IT60X0542811101000000123456",
+    "NL91ABNA0417164300", "BE68539007547034", "BE71096123456769",
+    "CH9300762011623852957", "AT611904300234573201", "PT50000201231234567890154",
+    "SE4550000000058398257466", "NO9386011117947", "DK5000400440116243",
+    "PL61109010140000071219812874", "IE29AIBK93115212345678",
+    "FI2112345600000785", "GR9608100010000001234567890",
+}
+
+# Published example crypto addresses. The genesis-block coinbase address is the
+# single most-quoted string in Bitcoin documentation; the others are the standard
+# BIP/test vectors. All are real, checksum-valid addresses -- which is exactly why
+# the checksum cannot tell them from a leaked wallet.
+_KNOWN_EXAMPLE_WALLETS = {
+    "1A1ZP1EP5QGEFI2DMPTFTL5SLMV7DIVFNA",       # genesis block coinbase
+    "1BOATSLRHTKNNGKDXEEOBOSWSJZLLKJCH",        # vanity address in every tutorial
+    "1BVBMSEYSTWETQTFN5AU4M4GFG7XJANVN2",       # Bitfinex cold wallet, quoted everywhere
+    "BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4",   # BIP-173 test vector
+    "BC1QAR0SRRR7XFKVY5L643LYDNW9RE59GTZZWF5MDQ",   # BIP-173 test vector
+    "3J98T1WPEZ73CNMQVIECRNYIWRNQRHWNLY",       # BIP-16 example P2SH
+}
+
 # Local parts that belong to a MACHINE, not a person.
 #
 # Measured on 2,000 real developer prompts: 66 of the 78 `email` spans -- 85% of
@@ -99,7 +135,9 @@ def is_well_known(value: str, kind: str) -> bool:
     being one because it arrived under a different label. So any value carrying
     nine or more digits is re-checked against the SSN and card sets whatever the
     label says, while values with no digits — names, addresses — are never gated
-    at all.
+    at all. The region-scoped identifiers have no branch of their own: they fall
+    through to the digit-run rules, which is the whole of what a published
+    example national id ever is.
 
     It is a gate, not a classifier: when in doubt it returns False and the value
     is reported.
@@ -116,12 +154,46 @@ def is_well_known(value: str, kind: str) -> bool:
         return _reserved_email(value)
     if kind == "phone":
         return _known_phone(value)
+    if kind == "iban":
+        return _known_iban(value)
+    if kind == "crypto_wallet":
+        return _known_wallet(value)
 
-    # Unlabelled / person / address: only the digit-bearing constants apply.
+    # Everything else -- the region-scoped national/tax/licence identifiers,
+    # plus the unlabelled/person/address fallthrough -- is judged on its digits
+    # alone. There is no per-country list of published example ids to hold, and
+    # there does not need to be: the shapes that get published as examples are
+    # filler runs (000-00-0000, 111111111111) and consecutive runs (123456789012),
+    # and _is_filler catches both at any length.
     d = _digits(value)
-    if len(d) < 9:  # below SSN length: too short to be one of these constants
+    if len(d) >= _MIN_CONSTANT_DIGITS and _is_filler(d):
+        return True
+    if len(d) < 9:  # below SSN length: too short to be one of the sets below
         return False
     return _known_ssn(d) or _known_card(d)
+
+
+# Shortest digit run worth testing against the filler shapes. Six because
+# SG_UEN carries eight digits and AU_ACN nine, while a house number ("1847
+# Kingsbury Avenue") and a year must stay untouched.
+_MIN_CONSTANT_DIGITS = 6
+
+
+def _known_iban(value: str) -> bool:
+    """Is this a published example IBAN rather than an account?"""
+    v = "".join(c for c in value if c.isalnum()).upper()
+    if not v:
+        return False
+    if v in _KNOWN_EXAMPLE_IBANS:
+        return True
+    # The BBAN is what identifies the account; a filler one is fabricated even
+    # though the mod-97 check digits over it are real.
+    return _is_filler(_digits(v[4:]))
+
+
+def _known_wallet(value: str) -> bool:
+    """Is this one of the addresses every Bitcoin tutorial quotes?"""
+    return value.strip().upper() in _KNOWN_EXAMPLE_WALLETS
 
 
 def _known_card(d: str) -> bool:

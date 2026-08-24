@@ -567,7 +567,7 @@ func TestWorkerQuarantinesAfterMaxAttempts(t *testing.T) {
 func TestWireEnrichmentDisabledWhenMLOff(t *testing.T) {
 	q := queue.New(10)
 	set := settings.Settings{MLBackend: "off"}
-	handler, model, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil)
+	handler, model, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil, nil)
 
 	if enabled {
 		t.Fatal("enrichment must be disabled when ml_backend=off")
@@ -614,7 +614,7 @@ func TestWireEnrichmentEnabledStartsRealHandler(t *testing.T) {
 	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "auto"}
-	handler, _, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter)
+	handler, _, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter, nil)
 
 	if !enabled {
 		t.Fatal("enrichment must be enabled by default (ml_backend=auto)")
@@ -654,7 +654,7 @@ func TestWireEnrichmentDeterministicModeRunsWithoutAModel(t *testing.T) {
 	}
 	q := queue.New(10)
 	set := settings.Settings{MLBackend: "deterministic"}
-	handler, model, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil)
+	handler, model, _, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, nil, nil)
 
 	if !enabled {
 		t.Fatal("enrichment must stay enabled in deterministic mode")
@@ -1425,7 +1425,7 @@ func TestDeterministicModeStartsTheServiceAndWiresTheAnalyzer(t *testing.T) {
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "deterministic"}
 
-	handler, model, svc, gate, enabled := wireEnrichment(ctx, set, "s3cret", q, emitter)
+	handler, model, svc, gate, enabled := wireEnrichment(ctx, set, "s3cret", q, emitter, nil)
 
 	if !enabled {
 		t.Fatal("enrichment must stay enabled in deterministic mode")
@@ -1472,7 +1472,7 @@ func TestDeterministicGateIsClosedUntilTheServiceIsUp(t *testing.T) {
 	emitter := clientevents.NewEmitter(clientevents.Corr{}, 16)
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 
-	_, _, _, gate, _ := wireEnrichment(ctx, set, "s3cret", q, emitter)
+	_, _, _, gate, _ := wireEnrichment(ctx, set, "s3cret", q, emitter, nil)
 	if gate == nil {
 		t.Fatal("deterministic mode must wire a non-nil gate")
 	}
@@ -1536,7 +1536,7 @@ func TestDeterministicModeWithNoSidecarBinaryDoesNotWedge(t *testing.T) {
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "deterministic"}
 
-	_, model, svc, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter)
+	_, model, svc, gate, enabled := wireEnrichment(context.Background(), set, "s3cret", q, emitter, nil)
 
 	if !enabled {
 		t.Fatal("enrichment must stay enabled in deterministic mode")
@@ -1622,7 +1622,7 @@ func TestDeterministicGateIsCachedNotOneHTTPCallPerRead(t *testing.T) {
 	emitter.SetGate(clientevents.Gate{Enabled: true, MinSeverity: clientevents.SevInfo, SampleRate: 1})
 	set := settings.Settings{MLBackend: "deterministic"}
 
-	_, _, _, gate, _ := wireEnrichment(ctx, set, "s3cret", q, emitter)
+	_, _, _, gate, _ := wireEnrichment(ctx, set, "s3cret", q, emitter, nil)
 	if gate == nil {
 		t.Fatal("deterministic mode must wire a non-nil gate")
 	}

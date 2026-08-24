@@ -12,8 +12,13 @@ package enrich
 // speech_act facet (a genuine contract change: a new Profile field, not just a
 // derivation change) — and v6, which redesigned the task_type vocabulary into
 // routing-aligned job categories (dropped agentic_tool_use, added
-// text_generation + rewriting, renamed to HF conventions, other→general).
-const SchemaVersion = 6
+// text_generation + rewriting, renamed to HF conventions, other→general) — and
+// v7, which GROWS the published sensitivity-span vocabulary: the region-scoped
+// checksum recognizers (sidecar/app/pii.py) add 25 new values to
+// sensitivity_spans[].label. The Sensitivity class list itself is unchanged;
+// what changed is the set of entity names a consumer may receive, which is the
+// published contract this constant gates.
+const SchemaVersion = 7
 
 // TaskTypes is the canonical task_type vocabulary — routing keys for Keld
 // Inference Exchange order books (real-world async inference job categories).
@@ -120,11 +125,51 @@ type SensRule struct {
 // keeping them means a future detector — one that can actually do free-form
 // names — needs no SchemaVersion bump. Reading this list as a statement of
 // coverage would be wrong; it is a statement of severity.
+// WHERE THE v7 NAMES CAME FROM AND WHY EACH SITS WHERE IT DOES. The detector is
+// region-scoped (sidecar/app/pii.py; `us` by default, KELD_PII_REGIONS /
+// settings.Settings.PIIRegions to widen), and every added name is
+// checksum- or algorithm-validated — presidio promotes a match to 1.0 only when
+// the identifier's own published check algorithm accepts it.
+//
+//	phi — a PATIENT's identifier, or a prescriber credential that exists only
+//	  inside healthcare. uk_nhs and au_medicare are patient numbers outright.
+//	  medical_license is the US DEA registration: not patient data, but a
+//	  controlled-substance credential that never appears outside a health
+//	  context and whose leak is a health-sector harm. Nothing else is here,
+//	  because a false phi is the worst thing this facet can publish.
+//
+//	pci — the payment/banking instruments. credit_card and iban address an
+//	  account directly; crypto_wallet is an account you can send value to.
+//	  aba_routing is the weakest member and knowingly so: a routing number
+//	  identifies a BANK BRANCH out of a published directory, not an account.
+//	  It is kept because it is a reliable marker that banking data is in the
+//	  prompt, and pci is where a financial marker belongs, but it is not itself
+//	  leaked personal data.
+//
+//	pii — everything else: national, tax, licence and entity-registration
+//	  numbers. us_npi is HERE AND NOT IN phi on purpose: an NPI is a public CMS
+//	  provider-registry number, so routing it to the most severe class would
+//	  overstate a lookup as a leak. it_vat_code, kr_brn, in_gstin, au_abn,
+//	  au_acn and sg_uen are BUSINESS registration numbers; they are included
+//	  because each of those registers also issues to sole traders — i.e. to a
+//	  natural person — but they are the weakest members of their (opt-in)
+//	  regions and an org wanting person-level signal only should leave those
+//	  regions off.
 var SensitivityFromEntity = []SensRule{
-	{"phi", []string{"ssn"}},
-	{"pci", []string{"credit_card"}},
+	{"phi", []string{"ssn", "uk_nhs", "au_medicare", "medical_license"}},
+	{"pci", []string{"credit_card", "iban", "crypto_wallet", "aba_routing"}},
 	{"secrets", []string{"api_key", "secret"}},
-	{"pii", []string{"email", "phone", "person", "address"}},
+	{"pii", []string{
+		"email", "phone", "person", "address",
+		"us_npi",
+		"es_nif", "es_nie",
+		"it_fiscal_code", "it_vat_code",
+		"pl_pesel", "fi_personal_identity_code",
+		"kr_rrn", "kr_driver_license", "kr_brn", "kr_frn",
+		"in_aadhaar", "in_gstin",
+		"au_tfn", "au_abn", "au_acn",
+		"ng_nin", "th_tnin", "sg_uen",
+	}},
 }
 
 // Activities — the activity_type facet (what cognitive operation).

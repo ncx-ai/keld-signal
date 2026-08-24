@@ -12,10 +12,16 @@ type windowAnalyzer interface {
 }
 
 // piiDetector is the same kind of optional capability for the sidecar's /pii:
-// presidio patterns plus a spaCy NER pass, no GLiNER2, off the inference
-// single-flight. The sensitivity facet detects with it.
+// presidio patterns, no GLiNER2, off the inference single-flight. The
+// sensitivity facet detects with it.
+//
+// Declared with the REGION-TAKING form. Which country tiers of checksum
+// recognizers run is org policy (settings.Settings.PIIRegions), and it rides
+// each request rather than the sidecar's startup environment, so a capability
+// that could not carry it would silently pin every deployment to the sidecar's
+// own default.
 type piiDetector interface {
-	DetectPII(text string) (enrich.PIIResult, bool)
+	DetectPIIIn(text string, regions []string) (enrich.PIIResult, bool)
 }
 
 // serviceFacets are the enrichment capabilities that belong to the analysis
@@ -49,13 +55,23 @@ type serviceFacets struct {
 // The sidecar client's per-job wrappers (withJobCtx, bindMaxLen) return
 // *sidecar.Client copies, so the capabilities survive them and the requests are
 // bound to the job context like every other sidecar call.
-func facetsFor(m enrich.Model) serviceFacets {
+// `regions` is resolved PER CALL, not captured once. wireEnrichment runs at
+// startup and the first settings poll lands after it, so binding the region list
+// at wiring time would ignore the org until the daemon restarted — the one thing
+// the local-then-remote shaping exists to avoid. A nil provider (tests, the eval
+// harness) sends no opinion and lets the sidecar apply its own default.
+func facetsFor(m enrich.Model, regions func() []string) serviceFacets {
 	var f serviceFacets
 	if a, ok := m.(windowAnalyzer); ok {
 		f.Analyze = a.AnalyzeLabeled
 	}
 	if p, ok := m.(piiDetector); ok {
-		f.ScanPII = p.DetectPII
+		f.ScanPII = func(text string) (enrich.PIIResult, bool) {
+			if regions == nil {
+				return p.DetectPIIIn(text, nil)
+			}
+			return p.DetectPIIIn(text, regions())
+		}
 	}
 	return f
 }

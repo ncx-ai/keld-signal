@@ -120,15 +120,50 @@ test asserts its output is identical with a Model present and with none.
 1. **`creddetect`** — vendored gitleaks credential rules. Pure Go, no model, no
    network, over the FULL prompt text. Always available; the only source that
    needs nothing at all.
-2. **The sidecar's `/pii`** (`enrich.PIIScanner` → `sidecar.Client.DetectPII` →
-   `app/pii.py`, presidio-analyzer). **Four** pattern recognizers producing
-   **four** of the six vocabulary types: `ssn`, `credit_card`, `email`, `phone`.
-   It needs **no GLiNER2** — and, since the NER came out, **no spaCy model
-   either**: only a blank tokenizer, because every recognizer left is a regex
-   plus Luhn/libphonenumber. It never touches the inference single-flight, so it
-   is wired in `ml_backend:"deterministic"` too. It returns **offsets only,
-   never the matched value** — the Go side resolves and masks from its own copy
-   of the text.
+2. **The sidecar's `/pii`** (`enrich.PIIScanner` → `sidecar.Client.DetectPIIIn`
+   → `app/pii.py`, presidio-analyzer). **Region-scoped pattern recognizers**,
+   every one of them checksum- or algorithm-validated: a universal tier
+   (`credit_card`, `email`, `phone`, `iban`, `crypto_wallet`) plus one country
+   tier per configured region — `us` by default (`ssn`, `aba_routing`, `us_npi`,
+   `medical_license`), with `uk es it pl fi kr in au ng th sg` opt-in. It needs
+   **no GLiNER2** — and, since the NER came out, **no spaCy model either**: only
+   a blank tokenizer, because every recognizer left is a regex plus a check
+   algorithm. It never touches the inference single-flight, so it is wired in
+   `ml_backend:"deterministic"` too. It returns **offsets only, never the
+   matched value** — the Go side resolves and masks from its own copy of the
+   text.
+
+   ⚠️ **Region-scoped is a PRECISION decision, not a cost one** (the full set
+   measured **+0.5 ms/prompt**, which is nothing). Almost every national-id
+   recognizer is a bare digit run plus ONE check digit, so its false-positive
+   floor against arbitrary numbers is 1-in-10 or 1-in-11 — a checksum makes a
+   false positive unlikely, not impossible — and the shapes **collide across
+   countries**. A valid `us_npi` is ten digits starting 1 or 2, which is exactly
+   the `uk_nhs` shape, and `uk_nhs` rolls up to `phi`: enabling `uk` inside a
+   US-only org manufactures the most severe class out of provider ids. Verified
+   collisions are pinned in `sidecar/app/test_pii_regions.py`. Configure with
+   `KELD_PII_REGIONS` (comma-separated, `none` = universal only) or
+   `pii_regions` in `~/.keld/agent-config.json`; an Atlas org value
+   (`Remote.PIIRegions`) overrides both and takes effect on the **next prompt**,
+   because the region list rides each `/pii` request rather than the sidecar's
+   startup environment. **Atlas does not serve the key yet** — the client seam
+   exists so adopting it is a server change alone.
+
+   ⚠️ **`phi` is deliberately narrow, and two assignments were argued rather
+   than assumed.** `us_npi` maps to `pii`, NOT `phi`: an NPI is a public CMS
+   provider-registry number, so routing it to the most severe class would
+   overstate a lookup as a leak. `aba_routing` maps to `pci` while identifying a
+   **bank branch from a published directory**, not an account — kept as a
+   reliable marker that banking data is present, not as leaked data itself.
+   `it_vat_code`, `kr_brn`, `in_gstin`, `au_abn`, `au_acn` and `sg_uen` are
+   **business registration numbers**, included only because each of those
+   registers also issues to sole traders; they are the weakest members of their
+   (opt-in) regions. See `SensitivityFromEntity`'s comment in `labels.go`.
+
+   ⚠️ **Ten recognizers the design asked for DO NOT EXIST in
+   presidio-analyzer 2.2.362**, so those regions are absent entirely rather than
+   silently empty: there is **no German recognizer of any kind**, no Swedish, no
+   South African, no Turkish, and no UK driving licence.
 
 ⚠️ **`person` and `address` are NOT DETECTED. The coverage is four types, not
 six.** They came from presidio's `SpacyRecognizer`, and on **2,000 real
@@ -145,7 +180,10 @@ in prose are now **undetectable**, and that is a real narrowing, not a tuning.
 `SensitivityFromEntity` still knows both names so a future detector needs no
 schema change. Full before/after:
 `~/keld/refseries-context/pii-precision/RESULTS.md` (reproduce with
-`scripts/pii_precision.py`).
+`scripts/pii_precision.py --port N --regions us|all`). The same 2,000-prompt run
+against the **widened** detector with **every region enabled** produced **zero**
+spans of any new type — the only raw presidio output was three readings of one
+digit run inside a URL path, all removed by the fragment gate.
 There is deliberately **no third, GLiNER2 source**. `/entities` over a
 `SensitiveEntityLabels` vocabulary used to be one, and it was redundant:
 presidio produced every mapped type the GLiNER2 NER did (`person`/`address` then
@@ -687,7 +725,9 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   worker child process, CPU by the governor + thread scaler (see
   `sidecar/loadtest/README.md`).
 - **Schema versioning:** changing any enrichment vocabulary is contract-affecting
-  — bump `enrich.SchemaVersion` and re-run the eval (`enrich/eval/`).
+  — bump `enrich.SchemaVersion` and re-run the eval (`enrich/eval/`). The
+  `sensitivity_spans[].label` set counts: v7 added the 25 region-scoped entity
+  names, which moved every producer string from `-v6` to `-v7`.
 - **Dependency-pull retries:** outbound "fetch a required dependency" calls use
   `internal/retry` (`retry.Do` + the canonical `IsTransient` classifier; policy
   env-tunable via `KELD_RETRY_*`). Transient = net faults + HTTP 408/429/5xx;

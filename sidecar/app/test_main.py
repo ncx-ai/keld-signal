@@ -753,7 +753,7 @@ def test_pii_response_carries_offsets_and_types_but_never_the_matched_text():
     m = _reload_main(None)
     _wire(m)
 
-    def fake_scan(text):
+    def fake_scan(text, regions=None):
         start = text.index(_SYNTHETIC_SSN)
         return [{"type": "ssn", "start": start, "end": start + len(_SYNTHETIC_SSN),
                  "score": 0.85}]
@@ -766,6 +766,30 @@ def test_pii_response_carries_offsets_and_types_but_never_the_matched_text():
     assert _SYNTHETIC_SSN not in dumped, dumped
     for word in ("Employee", "payload"):
         assert word not in dumped, dumped
+
+
+def test_pii_regions_ride_the_request_and_default_when_absent():
+    """The region set is a per-REQUEST field, not a sidecar-startup one.
+
+    That is the whole shaping decision: the daemon polls Atlas for org settings on a
+    live interval, so an org changing `pii_regions` must take effect on the next prompt
+    rather than on the next sidecar restart. An absent field means "caller has no
+    opinion" and app.pii falls back to its own default (KELD_PII_REGIONS, else `us`) —
+    which is distinct from an explicit empty list, meaning "universal tier only".
+    """
+    m = _reload_main(None)
+    _wire(m)
+    seen = []
+
+    def recording(text, regions=None):
+        seen.append(regions)
+        return []
+
+    m.pii_scan = recording
+    _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT, regions=["uk", "in"])))
+    _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
+    _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT, regions=[])))
+    assert seen == [["uk", "in"], None, []], seen
 
 
 def test_pii_never_loads_a_spacy_model():
@@ -781,7 +805,7 @@ def test_pii_never_loads_a_spacy_model():
     seen = []
     real = m._analysis_nlp
     m._analysis_nlp = lambda: seen.append(1)
-    m.pii_scan = lambda text: []
+    m.pii_scan = lambda text, regions=None: []
     try:
         _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
     finally:
@@ -799,7 +823,7 @@ def test_pii_scan_never_runs_on_the_event_loop():
     _wire(m)
     seen = []
 
-    def recording(text):
+    def recording(text, regions=None):
         seen.append(threading.get_ident())
         return []
 
@@ -818,7 +842,7 @@ def test_pii_failure_never_surfaces_or_logs_prompt_text():
     m = _reload_main(None)
     _wire(m)
 
-    def boom(text):
+    def boom(text, regions=None):
         raise ValueError(f"presidio choked on {text!r}")
 
     m.pii_scan = boom
@@ -864,7 +888,7 @@ def test_pii_bounds_the_text_it_scans_and_says_so():
     _wire(m)
     seen = {}
 
-    def fake_scan(text):
+    def fake_scan(text, regions=None):
         seen["len"] = len(text)
         return []
 
@@ -880,7 +904,7 @@ def test_pii_counters_are_separate_from_inference_load():
     m = _reload_main(None)
     _wire(m)
     m._state["counts"] = Counts()
-    m.pii_scan = lambda text: []
+    m.pii_scan = lambda text, regions=None: []
     _asyncio.run(m.detect_pii(m.PiiIn(text=_SSN_PROMPT)))
     counts = m._state["counts"]
     assert counts.pii_served == 1 and counts.submitted == 0, vars(counts)

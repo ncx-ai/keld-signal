@@ -6,7 +6,8 @@ within one poll interval — no redeploy, no per-machine config. This is the "or
 control plane" the local `~/.keld/agent-config.json` was always meant to grow
 into.
 
-Today it governs one setting, `include_entity_text`. The mechanism is
+Today it governs one setting end-to-end, `include_entity_text`, with a second
+(`pii_regions`) wired client-side and awaiting an Atlas column. The mechanism is
 deliberately generic: new keys ride the same document, endpoint, and client with
 no protocol change.
 
@@ -144,6 +145,22 @@ for an org, the API returns defaults — a row is created lazily on the first ad
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
 | `include_entity_text` | bool | `false` | Include domain-entity **surface text** in enrichments sent to Atlas. Sensitive spans are always masked regardless of this setting. |
+| `pii_regions` | string[] | `["us"]` | Which **country tiers** of checksum-validated PII recognizers the sidecar runs, on top of the always-on universal ones (card, email, phone, IBAN, crypto wallet). Codes: `us uk es it pl fi kr in au ng th sg`. An explicit `[]` means the universal tier only — a different answer from omitting the key. **Client-side only so far: Atlas does not serve this key yet**, and the daemon reads it from `KELD_PII_REGIONS` or local `agent-config.json` until it does. |
+
+**Why `pii_regions` is scoped rather than all-on.** Almost every national-id
+recognizer is a bare digit run plus one check digit, so its false-positive floor
+against arbitrary numbers is roughly 1-in-10, and the shapes collide between
+countries: a valid US NPI is ten digits starting 1 or 2, which is exactly the UK
+NHS number shape — and an NHS number publishes `phi`, the most severe class.
+Running a country the org has no business in manufactures severe findings out of
+ordinary identifiers. Cost is not the reason: the full set measured **+0.5 ms
+per prompt**.
+
+**Precedence** is the standard remote-wins rule, with one local wrinkle:
+`KELD_PII_REGIONS` (env) outranks `agent-config.json`, and the org value
+outranks both. The list rides each `/pii` request rather than the sidecar's
+startup environment, so an org change takes effect on the **next prompt** with
+no restart.
 
 **Adding a key** is a small, additive change with no protocol churn: add the
 column + a migration and the response field on the Atlas side; add the field to

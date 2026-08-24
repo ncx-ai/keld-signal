@@ -145,6 +145,47 @@ def test_names_and_places_are_never_gated():
     assert not is_well_known("1847 Kingsbury Avenue", "address")
 
 
+def test_published_example_ibans_are_not_leaked_accounts():
+    # The widening to region-scoped recognizers made IBAN a universal type, and
+    # the documentation constants came with it: every standards page, every
+    # payment-library README and half the fixtures in this repo's dependencies
+    # carry the same handful of mod-97-valid example IBANs. Ungated they publish
+    # `pci`.
+    for iban in ["GB82WEST12345698765432", "GB33BUKB20201555555555",
+                 "DE89370400440532013000", "FR1420041010050500013M02606",
+                 "NL91ABNA0417164300", "BE68539007547034",
+                 "CH9300762011623852957", "ES9121000418450200051332"]:
+        assert is_well_known(iban, "iban"), iban
+    # Spacing and case are presentational, not part of the account.
+    assert is_well_known("gb82 west 1234 5698 7654 32", "iban")
+
+
+def test_a_constructed_iban_is_still_reported():
+    # Synthetic, checksum-completed over an arbitrary body -- see
+    # app/test_pii_regions.py for how the fixtures were generated.
+    assert not is_well_known("GB94NWBK10426301779493", "iban")
+
+
+def test_the_famous_bitcoin_addresses_are_not_leaked_wallets():
+    # The genesis-block coinbase address is the single most-quoted string in
+    # every Bitcoin tutorial ever written.
+    assert is_well_known("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "crypto_wallet")
+    assert not is_well_known("1FhJSoC1nS6aerwNE211eMiFQ4jqGqsShE", "crypto_wallet")
+
+
+def test_filler_digit_runs_are_gated_for_the_new_types_too():
+    # The fallback branch used to require nine digits before it looked at all,
+    # which is longer than several of the new identifiers. A filler run is a
+    # documentation constant at any length worth reporting.
+    assert is_well_known("000000000000", "in_aadhaar")
+    assert is_well_known("00000000A", "sg_uen")
+    assert is_well_known("123456789012", "in_aadhaar")   # strictly consecutive
+    assert not is_well_known("539349438350", "in_aadhaar")
+    # Below six digits nothing is gated: too short to be one of these constants,
+    # and the address/person cases must stay untouched.
+    assert not is_well_known("1847 Kingsbury Avenue", "address")
+
+
 def test_empty_and_short_values_do_not_crash():
     assert not is_well_known("", "ssn")
     assert not is_well_known("", "credit_card")

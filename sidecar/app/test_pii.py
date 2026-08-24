@@ -79,11 +79,21 @@ def test_result_shape():
 
 
 def test_only_vocabulary_types_are_returned():
+    # Dates, IPs, URLs and MAC addresses stay unreported: none is leaked PERSONAL
+    # data and each fires on ordinary developer text constantly.
+    #
+    # The IBAN here is GB33BUKB20201555555555, the Wikipedia example — and it is
+    # in this list for a DIFFERENT reason than the rest. IBAN_CODE became a
+    # universal type when the checksum recognizers were widened, so this value is
+    # now detected and then dropped by the published-value gate
+    # (app.wellknown._KNOWN_EXAMPLE_IBANS), not by the registry. A constructed
+    # IBAN in the same sentence WOULD be reported; see app/test_pii_regions.py.
     text = ("On 2026-08-23 Dana Whitfield emailed dana@northwind-logistics.co "
             "from 10.2.14.9 about https://internal.example.co/runbook using "
             "MAC 3c:22:fb:81:aa:04 and IBAN GB33BUKB20201555555555.")
-    allowed = {"ssn", "credit_card", "email", "phone"}
+    allowed = {"ssn", "credit_card", "email", "phone", "iban", "crypto_wallet"}
     assert _types(text) <= allowed, _types(text)
+    assert "iban" not in _types(text), "the Wikipedia example IBAN must stay gated"
 
 
 # ---------------------------------------------------------------- negatives
@@ -186,11 +196,15 @@ def test_the_spacy_recognizer_is_not_registered():
     # Belt and braces on the test above: no threshold separates `JSON` from a
     # name (a bare emoji scored 0.85), so the fix has to be the ABSENCE of the
     # recognizer, not a stricter gate over its output. Assert the registry.
-    from app.pii import _ENTITY_MAP, _get_engine
+    from app.pii import REGION_RECOGNIZERS, _ENTITY_MAP, _get_engine, _normalize_regions
     assert "PERSON" not in _ENTITY_MAP and "LOCATION" not in _ENTITY_MAP
+    # Every region set, not just the default: the widening added twelve more
+    # registries and the NER must be absent from all of them.
     supported = set()
-    for rec in _get_engine().registry.recognizers:
-        supported.update(rec.supported_entities)
+    for regions in ((), _normalize_regions(list(REGION_RECOGNIZERS))):
+        engine, _ = _get_engine(regions)
+        for rec in engine.registry.recognizers:
+            supported.update(rec.supported_entities)
     assert "PERSON" not in supported and "LOCATION" not in supported, supported
 
 
