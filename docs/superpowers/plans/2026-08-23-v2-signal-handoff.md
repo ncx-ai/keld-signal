@@ -151,17 +151,27 @@ GLiNER2 — the parent is ~1.1 GB against a 4 GB budget); credential recall at 2
 - **`SchemaVersion` bumps on a published-vocabulary change.** The "branch is unpublished so no
   consumer holds a baseline" argument is retired at v2.
 
-## Found 2026-08-24 while waiting on a task — not yet acted on
+## Found 2026-08-24 — Codex gets telemetry but NO enrichment. Investigated, not fixed.
 
-**Codex capture is completely dead on real data, and always has been.** 14 session files, 26
-`user_message` lines, **0 captured**. `watch/codex.go` builds the prompt id as
-`<sessionID>#<ordinal>` and guards `if ln.Type != "event_msg" || ln.Ordinal == nil -> drop`, but real
-Codex `user_message` lines carry only `['timestamp','type','payload']` — no `ordinal`. Newest file on
-disk is 2026-07-22, so this is the current format. `codex_test.go` passes because its fixture
-hand-writes `"ordinal":5`, a field the product does not emit: the same failure class as the three
+**Both enrichment capture paths are dead for Codex.** Telemetry is fine — Codex's own `[otel]`
+block posts to `/v1/logs` + `/v1/metrics` and Atlas has seeded Codex events. It is the ENRICHMENT
+lane (the prompt pointer, and therefore every facet) that produces nothing.
+
+*Watcher path (the hook-free one).* `watch/codex.go` builds the id as `<sessionID>#<ordinal>` and
+guards `if ln.Type != "event_msg" || ln.Ordinal == nil -> drop`. Measured over every Codex session on
+this machine: **14 files, 26 `user_message` lines, 0 carrying an `ordinal`, so 0 captured.** Newest
+file is 2026-07-22, so this is the current format. `codex_test.go` passes because its fixture
+hand-writes `"ordinal":5` — a field the product does not emit. Same failure class as the three
 fixture defects fixed on 2026-08-23.
-So Codex produces no enrichment at all, not merely no workstreams. Gemini counts its ordinal rather
-than reading a field so it may survive, but there are no Gemini transcripts here to check.
-Fixing it means deriving the id by counting `user_message` lines, and the id must keep matching what
-Codex's own OTEL emits or enrichment and telemetry will not join. **Scope question for v2: is Codex
-in or out.**
+
+*Hook path.* `CodexHookEvents = ["SessionStart", "PreToolUse"]` — **neither is a prompt submission**,
+and `hook.Run` reads `prompt_id` from the payload and is documented as a silent no-op without one.
+
+**Why it was not fixed here.** The shape of the fix is clear — derive the ordinal by counting
+`user_message` lines, which is exactly what `gemini.go` already does. But Gemini's doc states the
+binding constraint explicitly: the PromptID **must equal the id the tool reports in its OTEL
+telemetry, because Atlas joins `enrichment.corr_id == tool_event.prompt_id`**. Codex's doc claims
+only a "stable, globally-unique" id and states no such constraint, and nothing in this repo records
+what Codex emits as a prompt id. So a counted ordinal would restore capture and might still leave
+every Codex enrichment orphaned at the join. **That needs one real Codex OTEL sample to settle, and
+it is a v2 scope question: is Codex in or out.**
