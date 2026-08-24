@@ -1,6 +1,38 @@
-"""`activity_type` from the reference levels — MEASURED AND REFUTED. Do not wire this up.
+"""`activity_type` from the reference levels — MEASURED AND REFUTED TWICE. Do not wire this up.
 
-## RESULTS (2026-08-24). It loses to a constant by 32 points.
+## RE-MEASURED ON THE CORRECTED VOCABULARY (attempt four, 2026-08-24). STILL BELOW A CONSTANT.
+
+`4ad9add` proved the `action` level all three prior refutations were scored on was substantially
+wrong — `transform` 4345 -> 191 (96% of records), `test` 1991 -> 3772, +1,095 create/edit from
+heredoc writes. So the refutation below rested partly on an artefact, and the input provably
+changed. This mapping was therefore re-scored, BODY BYTE-UNCHANGED, on 150 NEW hand labels with
+zero overlap against either prior sample. Pre-registration:
+`~/keld/refseries-context/facets/ACTIVITY-RERUN-PREREGISTRATION.md`; results:
+`ACTIVITY-RERUN-RESULTS.md`; harness `scripts/activity_rerun.py`.
+
+    coverage                0.827   (124 of 150; thin 24, unmapped 2)
+    accuracy on answered    0.323   (was 0.218)
+    majority baseline       0.492   (the constant `generate`)
+    LIFT                   -0.169   (was -0.321)
+
+**The fix bought 15 points and the verdict did not move.** Rule 1 fails by 17, rule 4 fails
+(`review` precision 0.000 on support 29; `retrieve` 0.250), rule 5 fails hardest at
+r = -0.766 vs log window volume.
+
+**The decisive finding: the diagnosis below was right, and the artefact was not the cause.** All
+32 `transform` predictions are now driven by `edit >= 5` ALONE — the corrected `transform` act
+never exceeds 2 occurrences in any sampled window, so it is no longer the reason for anything.
+`edit -> transform` is the whole defect, and it is the act-vs-intent mismatch, which no
+vocabulary fix touches. Precision on `transform` is 0.031 (1 of 32); the one hit is a genuine
+copy-rewrite task carrying `edit 8`, indistinguishable from the 31 misses.
+
+`review` is structurally unreachable rather than mislabelled, and now measured: across 47
+`review` windows, mean `test`+`build` is **1.2** and only **3** reach the floor of 5, while mean
+`read`+`search` is **19.9**. 18 abstain as `thin`, 23 become `retrieve`.
+
+**Per the pre-registration's rule 6, the question is CLOSED. Do not attempt a fifth.**
+
+## RESULTS (attempt one, 2026-08-24). It loses to a constant by 32 points.
 
 Measured on 100 hand-labelled windows from the frozen corpus, labelled from window TEXT ONLY
 (prompts + assistant prose, every tool_use block dropped) so the truth is independent of the level
