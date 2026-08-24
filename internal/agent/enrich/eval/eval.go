@@ -44,6 +44,11 @@ type GoldRow struct {
 	FunctionGuess string   `json:"function_guess"`
 	SpeechAct     string   `json:"speech_act"`
 	Subcategory   string   `json:"subcategory"`
+	// Personal is the work-vs-personal facet's gold label. NO gold row carries
+	// one today (the field exists so the facet is scoreable the day labels are
+	// written); until then Score excludes every row from its denominator and the
+	// facet's accuracy is vacuous, which is the honest report — not a pass.
+	Personal string `json:"personal"`
 
 	// Agentic-corpus fields (agentic.jsonl): shape ∈ {clean, raw}; the rest are
 	// the agentic Meta augmentation.
@@ -91,6 +96,7 @@ type Pred struct {
 	FunctionGuess string
 	SpeechAct     string
 	Subcategory   string
+	Personal      string
 	Conf          map[string]float64 // facet name -> top-label confidence (for calibration)
 }
 
@@ -105,6 +111,7 @@ func predConf(p enrich.Profile) map[string]float64 {
 		"function_guess": p.FunctionGuess.Confidence,
 		"speech_act":     p.SpeechAct.Confidence,
 		"subcategory":    p.Subcategory.Confidence,
+		"personal":       p.Personal.Confidence,
 	}
 }
 
@@ -209,6 +216,8 @@ func fieldOf(x any, f string) string {
 			return v.SpeechAct
 		case "subcategory":
 			return v.Subcategory
+		case "personal":
+			return v.Personal
 		}
 	case Pred:
 		switch f {
@@ -226,6 +235,8 @@ func fieldOf(x any, f string) string {
 			return v.SpeechAct
 		case "subcategory":
 			return v.Subcategory
+		case "personal":
+			return v.Personal
 		}
 	}
 	return ""
@@ -304,6 +315,7 @@ func RunModel(m enrich.Model, gold []GoldRow, opts ...enrich.Option) []Pred {
 			FunctionGuess: p.FunctionGuess.Value,
 			SpeechAct:     p.SpeechAct.Value,
 			Subcategory:   p.Subcategory.Value,
+			Personal:      p.Personal.Value,
 			Conf:          predConf(p),
 		})
 	}
@@ -321,7 +333,8 @@ func RunModelWithContext(m enrich.Model, gold []GoldRow, opts ...enrich.Option) 
 		pred = append(pred, Pred{
 			TaskType: p.TaskType.Value, Domain: p.Domain.Value, Sensitivity: p.Sensitivity.Value,
 			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, SpeechAct: p.SpeechAct.Value, Subcategory: p.Subcategory.Value,
-			Conf: predConf(p),
+			Personal: p.Personal.Value,
+			Conf:     predConf(p),
 		})
 	}
 	return pred
