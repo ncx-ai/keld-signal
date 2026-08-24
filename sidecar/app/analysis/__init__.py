@@ -50,7 +50,16 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           alone) — but this number bumps because `_payload`'s `evidence` total counts every
 #           level, so the same window now publishes a different figure.
 #           Measurements: `.superpowers/sdd/2026-08-24-alpha-findings/action-for-report.md`.
-SCHEMA = 5
+#   5 -> 6: the `effort` BLOCK is added -- the two transcript signals that survived measurement
+#           out of six candidates (`.superpowers/sdd/2026-08-24-transcript-signal/`). The
+#           diff magnitude (`magnitude.authored`: `authored_bytes`/`authoring_turns`, held at a
+#           FIXED edit count per-window byte totals span 22x-87x p10->p90) and the turn tempo
+#           (`latency.tempo`: `fast_share`/`gaps`/`tempo`, r = +0.012 against log window volume,
+#           the cleanest independence of any candidate across five studies). Four candidates were
+#           REFUTED and are deliberately absent: token weight, tool-output volume, error
+#           thrashing, error rate. A window that answered with seven fewer keys is a window
+#           answered differently, which is exactly this number's trigger.
+SCHEMA = 6
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

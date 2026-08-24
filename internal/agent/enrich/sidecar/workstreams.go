@@ -74,7 +74,11 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.
 		}
 		out[dim] = enrich.Labeled{Value: w.Value, Confidence: w.Share}
 	}
-	return enrich.WindowAnalysis{Workstreams: out, Dynamics: convertDynamics(res.Dynamics)}, true
+	return enrich.WindowAnalysis{
+		Workstreams: out,
+		Dynamics:    convertDynamics(res.Dynamics),
+		Effort:      convertEffort(res.Effort),
+	}, true
 }
 
 // convertDynamics is the vocabulary gate described above. It returns nil rather
@@ -102,4 +106,37 @@ func convertDynamics(b DynamicsBlock) map[string]enrich.Dynamic {
 		}
 	}
 	return out
+}
+
+// convertEffort is the same vocabulary gate convertDynamics is, applied to the
+// effort block. Three closed published sets (enrich.Tempos, enrich.TempoStatuses,
+// enrich.AuthoredStatuses) are checked; a value this binary does not recognise is
+// version skew from a separately-shipped sidecar, and forwarding it would publish
+// a label no Atlas consumer's vocabulary contains.
+//
+// The WHOLE block is dropped rather than half of it, and rather than being
+// repaired: a share with an unreadable status is not interpretable, and silently
+// substituting a status we did recognise would invent the one thing this block
+// exists to state. An unreadable block is not a failed analysis either — the
+// digest and dynamics beside it still publish.
+//
+// Nil in, nil out: a sidecar too old to compute the block must not produce a
+// zeroed Effort, whose every count reads 0 and whose every status reads "".
+func convertEffort(b *EffortBlock) *enrich.Effort {
+	if b == nil {
+		return nil
+	}
+	if !enrich.KnownTempo(b.Tempo) || !enrich.KnownTempoStatus(b.TempoStatus) ||
+		!enrich.KnownAuthoredStatus(b.AuthoredStatus) {
+		return nil
+	}
+	return &enrich.Effort{
+		AuthoredBytes:  b.AuthoredBytes,
+		AuthoringTurns: b.AuthoringTurns,
+		AuthoredStatus: b.AuthoredStatus,
+		FastShare:      b.FastShare,
+		Gaps:           b.Gaps,
+		Tempo:          b.Tempo,
+		TempoStatus:    b.TempoStatus,
+	}
 }

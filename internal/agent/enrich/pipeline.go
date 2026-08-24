@@ -338,6 +338,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		SubcategoryAlt:    altsNamed(ctx.Get("subcategory"), "subcategory_alt"),
 		Workstreams:       workstreamsFrom(ctx.Get("workstreams")),
 		Dynamics:          dynamicsFrom(ctx.Get("workstreams")),
+		Effort:            effortFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
 		FacetsSkipped:     skipped,
 		FacetsDegraded:    degraded,
@@ -417,6 +418,18 @@ func dynamicsFrom(out map[string]any) map[string]Dynamic {
 	if out != nil {
 		if d, ok := out["dynamics"].(map[string]Dynamic); ok && len(d) > 0 {
 			return d
+		}
+	}
+	return nil
+}
+
+// effortFrom reads the effort half of the same committed pass output. A nil
+// block contributes nothing rather than a zeroed struct: every count would read 0
+// and every status "", which is a real-looking answer nobody measured.
+func effortFrom(out map[string]any) *Effort {
+	if out != nil {
+		if e, ok := out["effort"].(*Effort); ok {
+			return e
 		}
 	}
 	return nil

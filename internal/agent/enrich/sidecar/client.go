@@ -306,6 +306,7 @@ type AnalyzeResult struct {
 	WindowEnd   string                 `json:"window_end"`
 	Workstreams map[string]*Workstream `json:"workstreams"`
 	Dynamics    DynamicsBlock          `json:"dynamics"`
+	Effort      *EffortBlock           `json:"effort"`
 }
 
 // DynamicsBlock is /analyze's dynamics object, and it models ONE of its keys.
@@ -326,6 +327,32 @@ type DynamicsBlock struct {
 // Dynamic is one dimension's comparison as it arrives on the wire. Pointer
 // metrics because null is a fact here and not an absence — see enrich.Dynamic,
 // which this converts to unchanged.
+// EffortBlock is /analyze's `effort` object: the two transcript signals that
+// survived measurement (see enrich.Effort for the verdicts and the four refuted
+// candidates). A POINTER on AnalyzeResult, because a sidecar too old to compute
+// the block sends nothing and a zeroed struct would state every count as 0 and
+// every status as "" — a real-looking answer nobody measured.
+//
+// AuthoredBytes and FastShare are pointers for the same reason they are on
+// enrich.Effort: `null` means there was nothing to measure, and rendering that as
+// 0 is precisely the defect the study found by naming extremes (a one-turn window
+// has zero gaps, and `fast_share 0.0` is what a genuinely slow window reports).
+//
+// The fields below are the WHOLE block as far as this binary is concerned. The
+// sidecar's own payload may grow — a byte length is safe, but the strings those
+// lengths measure are file contents — so, exactly as with inventory and the
+// dynamics per-side objects, what is not modelled here is structurally
+// unforwardable rather than merely discouraged.
+type EffortBlock struct {
+	AuthoredBytes  *int64   `json:"authored_bytes"`
+	AuthoringTurns int      `json:"authoring_turns"`
+	AuthoredStatus string   `json:"authored_status"`
+	FastShare      *float64 `json:"fast_share"`
+	Gaps           int      `json:"gaps"`
+	Tempo          string   `json:"tempo"`
+	TempoStatus    string   `json:"tempo_status"`
+}
+
 type Dynamic struct {
 	Status             string   `json:"status"`
 	Reading            string   `json:"reading"`

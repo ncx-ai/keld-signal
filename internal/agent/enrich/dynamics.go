@@ -77,4 +77,10 @@ type Dynamic struct {
 type WindowAnalysis struct {
 	Workstreams map[string]Labeled
 	Dynamics    map[string]Dynamic
+	// Effort is the same window's two surviving transcript signals — how much was
+	// authored and how fast the turns came (see Effort). Third half of the same
+	// call, and nil for a sidecar too old to compute the block: a zeroed Effort
+	// would state every count as 0 and every status as "", which reads as a real
+	// answer nobody measured.
+	Effort *Effort
 }

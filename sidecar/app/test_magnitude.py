@@ -511,6 +511,78 @@ def test_store_schema_version_is_six_and_additive():
         st.close()
 
 
+# --- the window rollup: a magnitude is a TOTAL, and its gate is a COUNT ----------------------
+
+def test_authored_sums_the_windows_edit_turns_and_counts_them():
+    """The published pair. The sum alone cannot separate one 22 KB authoring from fifty 400 B
+    fixes, and the study's whole finding was that windows indistinguishable under `edit >= 5`
+    differ by two orders of magnitude in bytes — so both numbers ship, never one."""
+    a = magnitude.authored([16.0, 22187.0, 400.0], recorded=True)
+    assert a.nbytes == 22603
+    assert a.turns == 3
+    assert a.status == "attributed"
+
+
+def test_the_gate_is_the_COUNT_of_edit_turns_never_the_byte_SUM():
+    """The token-weight artefact, named. `MIN_EVIDENCE` is a COUNT threshold; a byte sum in the
+    thousands clears a floor of 5 unconditionally, which DELETES the floor -- exactly the shape
+    that produced apparent +187/+123 attributions collapsing to ~0 once the gate was
+    count-derived. So no significance floor is applied to the sum at all: a sum is a total, not
+    an estimate from a sample, and there is no coin for it to have come from. One 22 KB edit is
+    exactly 22 KB of authoring and is reported as such."""
+    one = magnitude.authored([22187.0], recorded=True)
+    assert one.status == "attributed", "a single edit is a real total, not a thin sample"
+    assert (one.nbytes, one.turns) == (22187, 1)
+    # And the count is what a reader gates on, which is only possible because it is published.
+    assert one.turns < window.MIN_EVIDENCE
+
+
+def test_no_magnitude_recorded_at_all_is_absent_not_zero_bytes():
+    """A window whose turns carry no magnitude of ANY kind cannot be said to have authored zero:
+    a v5 store upgraded in place holds no magnitudes until its next ingest (see
+    `store.SCHEMA_VERSION`'s 5 -> 6 note), and a window of nothing but user turns has none
+    either. `0` there would be a plausible wrong number; `absent` is the honest one."""
+    a = magnitude.authored([], recorded=False)
+    assert a.nbytes is None
+    assert a.turns == 0
+    assert a.status == "absent"
+
+
+def test_a_recorded_window_with_no_edits_really_did_author_zero():
+    """The other half, and the reason `recorded` exists. Turns whose cost WAS recorded and none
+    of which edited anything genuinely authored 0 bytes -- unlike `fast_share`, a sum of no terms
+    is unambiguous, so this is a number rather than an abstention."""
+    a = magnitude.authored([], recorded=True)
+    assert (a.nbytes, a.turns, a.status) == (0, 0, "attributed")
+
+
+def test_a_zero_valued_edit_turn_is_not_counted_as_an_edit_turn():
+    """`_aggregate_mag` never stores a zero (a zero magnitude is the ABSENCE of one), so the
+    parse path must drop them too or the two paths would disagree on `turns` while agreeing on
+    every byte."""
+    a = magnitude.authored([0.0, 113.0, 0], recorded=True)
+    assert (a.nbytes, a.turns) == (113, 1)
+
+
+def test_authored_bytes_is_an_int_and_the_statuses_are_closed():
+    a = magnitude.authored([113.5], recorded=True)
+    assert isinstance(a.nbytes, int), "a byte count is an integer, not a float"
+    assert set(magnitude.AUTHORED_STATUSES) <= set(window.REASONS)
+    assert magnitude.AUTHORED_STATUSES == ("attributed", "absent")
+    for vals, rec in (([], False), ([], True), ([1.0], True), ([0.0], False)):
+        assert magnitude.authored(vals, recorded=rec).status in magnitude.AUTHORED_STATUSES
+
+
+def test_authored_reports_no_reading_because_no_cut_point_was_measured():
+    """Deliberate asymmetry with `latency.tempo`, which DOES state a conclusion. The tempo
+    reading flips at a floor already in the package (0.50); a byte sum has no such floor -- the
+    study reports a p10->p90 spread of 22x-87x and no cut point anywhere in it. Inventing
+    `small`/`large` thresholds would be the fabricated vocabulary this package keeps paying for,
+    so the block ships the labelled numbers and states nothing it did not measure."""
+    assert not hasattr(magnitude, "AUTHORED_READINGS")
+    assert set(magnitude.authored([1.0], recorded=True)._fields) == {"nbytes", "turns", "status"}
+
+
 # --- privacy ---------------------------------------------------------------------------------
 
 def test_edit_payload_bytes_never_reach_any_serialised_struct():
@@ -586,6 +658,93 @@ def test_the_only_string_reader_is_the_length_function():
     assert "magnitude.edit_bytes" in calls, calls
 
 
+# --- mutation audit for the window rollup ----------------------------------------------------
+
+def mutations():
+    """One wrong `authored` per behaviour above; assert the suite fails. Every work unit on this
+    branch found a test passing vacuously, so the gate is that each rule BITES."""
+    fns = [f for n, f in sorted(globals().items()) if n.startswith("test_")]
+
+    def run():
+        for f in fns:
+            f()
+
+    orig = magnitude.authored
+    orig_statuses = magnitude.AUTHORED_STATUSES
+
+    def restore():
+        magnitude.authored = orig
+        magnitude.AUTHORED_STATUSES = orig_statuses
+
+    def min_evidence_on_the_sum(values, recorded=False):
+        """M1 -- THE artefact: the count floor compared against the byte sum, which a sum in the
+        thousands clears unconditionally. Vacuous where it matters and wrong where it bites."""
+        a = orig(values, recorded)
+        if a.nbytes is not None and a.nbytes < window.MIN_EVIDENCE:
+            return magnitude.Authored(None, a.turns, "absent")
+        return a
+
+    def min_evidence_on_the_count(values, recorded=False):
+        """M2 -- the floor moved to the turn count: a genuine 22 KB single-turn authoring is
+        discarded as a thin sample."""
+        a = orig(values, recorded)
+        if a.turns < window.MIN_EVIDENCE:
+            return magnitude.Authored(None, a.turns, "absent")
+        return a
+
+    def unrecorded_as_zero(values, recorded=False):
+        """M3 -- the abstention collapsed into a truthful-looking 0."""
+        a = orig(values, recorded)
+        return magnitude.Authored(0, 0, "attributed") if a.nbytes is None else a
+
+    def recorded_zero_as_absent(values, recorded=False):
+        """M4 -- the mirror: a real zero turned into "we did not look"."""
+        a = orig(values, recorded)
+        if a.nbytes == 0:
+            return magnitude.Authored(None, 0, "absent")
+        return a
+
+    def count_zeros(values, recorded=False):
+        """M5 -- zero-valued turns counted as edit turns, so `turns` disagrees with the store."""
+        vals = [float(v) for v in values]
+        if not vals and not recorded:
+            return magnitude.Authored(None, 0, "absent")
+        return magnitude.Authored(int(sum(vals)), len(vals), "attributed")
+
+    def sum_only(values, recorded=False):
+        """M6 -- the count dropped, leaving the bare number the study says is misread."""
+        a = orig(values, recorded)
+        return magnitude.Authored(a.nbytes, 0, a.status)
+
+    cases = [
+        ("M1 MIN_EVIDENCE applied to the byte sum", min_evidence_on_the_sum),
+        ("M2 MIN_EVIDENCE applied to the turn count", min_evidence_on_the_count),
+        ("M3 no record published as zero bytes", unrecorded_as_zero),
+        ("M4 a real zero published as absent", recorded_zero_as_absent),
+        ("M5 zero-valued turns counted", count_zeros),
+        ("M6 the turn count dropped", sum_only),
+    ]
+    caught = 0
+    for name, fn in cases:
+        magnitude.authored = fn
+        try:
+            run(); print(f"MISSED  {name}")
+        except Exception:
+            caught += 1; print(f"CAUGHT  {name}")
+        finally:
+            restore()
+    magnitude.AUTHORED_STATUSES = ("attributed", "empty")
+    try:
+        run(); print("MISSED  M7 the status vocabulary leaves window.REASONS")
+    except Exception:
+        caught += 1; print("CAUGHT  M7 the status vocabulary leaves window.REASONS")
+    finally:
+        restore()
+    total = len(cases) + 1
+    print(f"\nmutation audit: {caught} of {total} caught")
+    return caught == total
+
+
 if __name__ == "__main__":
     fns = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     bad = 0
@@ -594,5 +753,7 @@ if __name__ == "__main__":
             f(); print(f"PASS {n}")
         except AssertionError as e:
             bad += 1; print(f"FAIL {n}: {e}")
-    print(f"\n{len(fns)-bad}/{len(fns)} passed")
-    sys.exit(1 if bad else 0)
+    print(f"\n{len(fns)-bad}/{len(fns)} passed\n")
+    ok = mutations()
+    print("MUTATION AUDIT " + ("OK" if ok else "INCOMPLETE"))
+    sys.exit(1 if bad or not ok else 0)

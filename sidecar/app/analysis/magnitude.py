@@ -70,6 +70,8 @@ useless predictor is already on the record.
 guessing it would be a fabricated magnitude.
 """
 
+import collections
+
 # Price ratios, in units of the model's own base input-token price. Uniform across the current
 # Claude family — see the module docstring for why that is what makes this table safe to hold.
 CACHE_WRITE_5M = 1.25
@@ -189,3 +191,66 @@ def edit_bytes(name, inp):
     old_key, new_key = keys
     old = _nbytes(inp.get(old_key)) if old_key else 0
     return max(old, _nbytes(inp.get(new_key)))
+
+
+# --- the WINDOW rollup of the diff magnitude -------------------------------------------------
+#
+# `edit_bytes` above is per turn; a window wants the total and, inseparably, the COUNT it was
+# spread over. Both publish, because the study's finding is precisely that the count cannot
+# substitute for the sum and the sum cannot be read without the count: held at a FIXED edit
+# count, per-window byte totals span 22x-87x p10->p90, so windows indistinguishable under
+# `edit >= 5` differ by two orders of magnitude in bytes authored.
+#
+# WHAT GATES IT. A count, never the sum -- and that direction is the whole of the token-weight
+# study's lesson. `window.MIN_EVIDENCE` is a COUNT threshold derived from a question about a
+# RATIO ("could this unanimity have come from a coin"); compared against a byte sum it is
+# vacuous, because a sum in the thousands clears a floor of 5 unconditionally. That is not a
+# harmless no-op: it deletes the floor while leaving it visible in the code, which is exactly
+# how the token-weight study got apparent +187/+123 attributions that collapsed to ~0 once the
+# gate was count-derived.
+#
+# So no significance floor is applied here AT ALL, and that is the considered answer rather than
+# an omission. A sum is a total, not an estimate from a sample: one 22 KB `Write` really did
+# author 22 KB, and abstaining on it because 1 < 5 would discard a fact in the name of a test
+# that does not apply to it. What the count buys instead is READABILITY -- it is published
+# beside the sum so that one 22 KB authoring is never confused with fifty 400 B fixes -- and the
+# one thing it does gate is the difference between `attributed` and `absent`.
+#
+# `recorded` is that gate: did ANY turn in the window have a magnitude recorded, of any kind?
+#   recorded  -- the window's turns were costed, and no `edit_bytes` among them means the work
+#                genuinely edited nothing. A sum of no terms is unambiguous, so this publishes
+#                0, not an abstention. (Contrast `latency.tempo`, where 0/0 is NOT 0.0.)
+#   not       -- nothing was costed, so there is nothing to sum. Either the window holds no
+#                assistant turn at all, or the series predates magnitudes entirely: a v5 store
+#                upgraded in place has none until its next ingest (see `store.SCHEMA_VERSION`'s
+#                5 -> 6 note). Publishing `0` for that would state that nothing was authored on
+#                the strength of never having looked.
+#
+# There is deliberately no READING here, unlike `latency.tempo`. A tempo reading flips at a
+# floor the package already holds (0.50, `window.dominant`'s); a byte sum has no measured cut
+# point anywhere -- the study reports the spread and no boundary inside it -- so `small`/`large`
+# would be a fabricated vocabulary. The block publishes labelled numbers and states nothing it
+# did not measure.
+AUTHORED_STATUSES = ("attributed", "absent")
+
+Authored = collections.namedtuple("Authored", "nbytes turns status")
+
+
+def authored(values, recorded=False):
+    """A window's per-turn `edit_bytes` values -> `Authored(nbytes, turns, status)`.
+
+    `values` is one number per edit-bearing TURN (the store's `turn_magnitudes` already groups
+    that way; the parse path must group by timestamp to match). Zeros are dropped rather than
+    counted: `_aggregate_mag` never stores a zero, so keeping them here would make the two paths
+    disagree on `turns` while agreeing on every byte.
+
+    `recorded` says whether the window carries a magnitude of ANY kind -- see the block comment
+    above for why that, and not the byte sum, decides between a truthful 0 and an abstention.
+
+    Returns an `int` byte count. That is the same privacy contract `edit_bytes` states: a length
+    is the only thing this module can hand back, and there is no variant that returns the text.
+    """
+    vals = [float(v) for v in values if v]
+    if not vals and not recorded:
+        return Authored(None, 0, AUTHORED_STATUSES[1])
+    return Authored(int(sum(vals)), len(vals), AUTHORED_STATUSES[0])

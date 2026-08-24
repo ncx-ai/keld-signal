@@ -42,7 +42,21 @@ package enrich
 // on imperatives. Targeted: task_type (0.733 vs 0.143), domain (0.683 vs 0.261)
 // and activity_type (0.670 vs 0.243) all clear their baselines by >40 points and
 // are untouched. Producer strings move from `-v8` to `-v9`.
-const SchemaVersion = 9
+//
+// v10 ADDS the effort facet to the published payload: Profile.Effort /
+// Enrichment.effort, carrying the two transcript signals that survived
+// measurement out of six candidates — the diff magnitude
+// (authored_bytes/authoring_turns) and the turn tempo
+// (fast_share/gaps/tempo/tempo_status), plus authored_status. See enrich.Effort
+// for the verdicts, the four refuted candidates that deliberately do NOT appear,
+// and the measured basis for each threshold and gate; measurements in
+// .superpowers/sdd/2026-08-24-transcript-signal/. It also adds three closed
+// vocabularies a consumer must know: Tempos, TempoStatuses, AuthoredStatuses.
+// Adding a published field is a published-vocabulary change in exactly the same
+// way v9's removal of speech_act was, so it takes a bump. Nothing existing
+// changes meaning: every field of v9 publishes identically. Producer strings move
+// from `-v9` to `-v10`.
+const SchemaVersion = 10
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in
@@ -95,6 +109,66 @@ func KnownDynamicStatus(s string) bool { return dynamicStatusSet[s] }
 // passes: no conclusion is stated outside status `compared`, and that silence is
 // the honest answer rather than a missing one.
 func KnownDynamicReading(s string) bool { return s == "" || dynamicReadingSet[s] }
+
+// Tempos is the closed set of values the effort facet may publish as its STATED
+// CONCLUSION about a window's turn tempo, mirroring `TEMPOS` in
+// sidecar/app/analysis/latency.py (pinned against that source by
+// TestEffortVocabulariesMatchTheSidecar — a drift here silently stops publishing
+// the block rather than failing).
+//
+// Two values, because the reading is computed from a floor already in the
+// package (0.50, the same majority floor window.dominant applies) and no
+// measurement supplies a second cut point. Deliberately NOT "interactive":
+// `interactivity` is a different, refuted measure (+0.497 against log volume — a
+// restated turn count), and reusing its name would make this read as that.
+var Tempos = []string{"steered", "autonomous"}
+
+// TempoStatuses is the closed set of values the effort facet may publish for WHY
+// there is no tempo reading, mirroring `STATUSES` in latency.py. It reuses
+// window.REASONS' own words rather than inventing a parallel vocabulary:
+//
+//	absent   no inter-turn gap whatsoever. No number, not a small one — this is
+//	         the one-turn window whose 0.0 was indistinguishable from a genuinely
+//	         slow window until the study named the extremes.
+//	thin     some gaps, fewer than the count floor. The SHARE is still published
+//	         and the READING withheld, which is window.attribution's idiom: hiding
+//	         the measurement would make a thin window look like an empty one.
+//
+// `tie` and `no_majority` are absent because a binary split cannot reach them:
+// the two sides sum to 1, so one is always at or above the floor.
+var TempoStatuses = []string{"attributed", "thin", "absent"}
+
+// AuthoredStatuses is the closed set of values the effort facet may publish for
+// its diff magnitude, mirroring `AUTHORED_STATUSES` in
+// sidecar/app/analysis/magnitude.py.
+//
+// Two values, not three, and the missing one is load-bearing: there is no `thin`
+// here. A magnitude is a TOTAL rather than an estimate from a sample, so it has
+// no significance floor to fall under — one 22 KB edit really did author 22 KB.
+// `absent` means no magnitude was recorded for the window at all, which is a
+// different fact from a recorded zero and the reason this field exists.
+var AuthoredStatuses = []string{"attributed", "absent"}
+
+var (
+	tempoSet          = setOf(Tempos)
+	tempoStatusSet    = setOf(TempoStatuses)
+	authoredStatusSet = setOf(AuthoredStatuses)
+)
+
+// KnownTempo reports whether a tempo reading is publishable. The empty string
+// passes: no conclusion is stated outside status `attributed`, and that silence
+// is the honest answer rather than a missing one (same rule as
+// KnownDynamicReading).
+func KnownTempo(s string) bool { return s == "" || tempoSet[s] }
+
+// KnownTempoStatus reports whether a tempo status is in the published
+// vocabulary. An empty status is NOT: a block whose outcome cannot be named is
+// not interpretable and is dropped rather than published.
+func KnownTempoStatus(s string) bool { return tempoStatusSet[s] }
+
+// KnownAuthoredStatus reports whether an authored status is publishable. Empty
+// is not, for the same reason as above.
+func KnownAuthoredStatus(s string) bool { return authoredStatusSet[s] }
 
 // TaskTypes is the canonical task_type vocabulary — routing keys for Keld
 // Inference Exchange order books (real-world async inference job categories).

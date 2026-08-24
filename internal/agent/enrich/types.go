@@ -122,8 +122,14 @@ type Profile struct {
 	// from the same /analyze call Workstreams does and is likewise model-free, so
 	// it is published in ml_backend "deterministic" too. Absent when the analysis
 	// computed no comparison.
-	Dynamics       map[string]Dynamic `json:"dynamics,omitempty"`
-	PipelineStatus string             `json:"pipeline_status"`
+	Dynamics map[string]Dynamic `json:"dynamics,omitempty"`
+	// Effort is what the same window COST in work: the bytes its edits authored
+	// and how fast its turns came (see Effort). Third half of the same /analyze
+	// call Workstreams and Dynamics come from, model-free like both, so it is
+	// published in ml_backend "deterministic" too. Absent when the analysis
+	// produced no block.
+	Effort         *Effort `json:"effort,omitempty"`
+	PipelineStatus string  `json:"pipeline_status"`
 	// FacetsSkipped names the passes that did not run because THIS RUN has no
 	// such pass — currently: a model-dependent pass under ml_backend
 	// "deterministic", where ctx.Model is nil by design. It is the companion

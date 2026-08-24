@@ -107,5 +107,10 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	if len(an.Dynamics) > 0 {
 		res["dynamics"] = an.Dynamics
 	}
+	// The effort half, same call, same no-Producer reasoning. Nil rather than a
+	// zeroed struct when the sidecar sent no block: see effortFrom.
+	if an.Effort != nil {
+		res["effort"] = an.Effort
+	}
 	return res, nil
 }

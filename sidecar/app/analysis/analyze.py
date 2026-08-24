@@ -37,6 +37,28 @@ answer, `/analyze` fails visibly and the caller retries.
   a genuine error rather than retrying — correct, since retrying can never help. See
   `store.py`'s retention section for why a refusal is the only honest answer here.
 
+## The effort block: two signals that are not references
+
+`workstreams`/`inventory` answer "what was this window about", and every value in them is a
+reference level. The `effort` block answers a different question — how much was AUTHORED and how
+fast the turns came — and neither answer is a reference, which is why it is a separate block
+rather than two more dimensions. Both come from material the reference levels structurally cannot
+express, both were measured against the size test that refuted four sibling candidates, and both
+are computed by modules that hold nothing but numbers: `app/analysis/magnitude.py` (`authored`)
+and `app/analysis/latency.py` (`tempo`).
+
+It is computed on BOTH paths — the store and the parse oracle — from one definition each, so the
+field-for-field equivalence the suite asserts covers it too. That is why the tempo clock is "the
+distinct timestamps of the window's reference events" (`Store.turn_times`) rather than a turn
+table that only one of the two paths could have: see that method for the measurement showing the
+two sets coincide on real transcripts.
+
+Four refuted signals are deliberately NOT here — token weight (0.89% of dominant values flip),
+tool-output volume (+0.552 against log volume, a restated tool-call count), error thrashing (4.8%
+prevalence, below the 0.20 floor) and error rate (a window statistic, not a facet). The token
+weight is nonetheless still COMPUTED and stored (`magnitude.TOKENS`) because the weighted rollup
+uses it; what it is not is published.
+
 ## The window edge is quantized, and has to be
 
 Row timestamps are stored at the series' own resolution — `levels.quantize`, 0.1s, which
@@ -53,11 +75,12 @@ where the published set is a fixed top-12 cut by POSITION, so a ±1 count reorde
 straddling the cut — the unrepresented-tie effect `workstreams.payload` already documents. No
 allocation dimension changed value in the sample.
 """
+import collections
 import os
 from datetime import datetime, timedelta
 
 from app.analysis import COMPONENT_DEPTH, SCHEMA
-from app.analysis import window, workstreams
+from app.analysis import latency, magnitude, window, workstreams
 from app.analysis.dynamics import dynamics_for
 from app.analysis.ingest import (RECONCILE_SLOT, ingest_file, is_current, pending_in,
                                  session_of)
@@ -133,8 +156,8 @@ def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refre
     series cannot answer the window exactly. See the module docstring on why those are different.
     """
     st = store if store is not None else open_store()
-    rl, start, end = _rollup_from_store(st, path, prompt_id, span_minutes, nlp, refresh)
-    out = _payload(rl, path, start, end)
+    rl, start, end, effort = _rollup_from_store(st, path, prompt_id, span_minutes, nlp, refresh)
+    out = _payload(rl, path, start, end, effort)
     if sizer is not None:
         out["dynamics"] = dynamics_for(st, session_of(path), end, span_minutes,
                                        sizer=sizer, floor=st.serving_floor())
@@ -144,11 +167,11 @@ def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refre
 def analyze_window_by_parse(path, prompt_id, span_minutes=60, nlp=None):
     """The same answer, computed by parsing the transcript. THE EQUIVALENCE ORACLE — see the
     module docstring. Not called by any endpoint, and must not become a fallback."""
-    rl, start, end = _rollup_by_parse(path, prompt_id, span_minutes, nlp)
-    return _payload(rl, path, start, end)
+    rl, start, end, effort = _rollup_by_parse(path, prompt_id, span_minutes, nlp)
+    return _payload(rl, path, start, end, effort)
 
 
-def _payload(rl, path, start, end):
+def _payload(rl, path, start, end, effort):
     out = workstreams.payload(rl)
     out.update(
         schema=SCHEMA,
@@ -156,8 +179,66 @@ def _payload(rl, path, start, end):
         window_start=start.isoformat(),
         window_end=end.isoformat(),
         evidence=int(sum(n for items in rl.values() for _, n in items)),
+        effort=effort,
     )
     return out
+
+
+def _effort(auth, tmp):
+    """`(Authored, Tempo)` -> the published `effort` block.
+
+    Numbers and closed-vocabulary labels only; see the module docstring. Every key is named for
+    what it is, and each number ships with the count or status that makes it readable — the
+    measured lesson being that a stated conclusion beat a stated number +36.7 to -3.3, and that a
+    bare number invites a wrong reading (a model once answered `2659` to "which ticket?" because
+    that was the window's event count).
+
+    `authored_bytes` is `None` when nothing was costed and `fast_share` is `None` when there was
+    no gap to measure. Neither is rendered as 0: `magnitude.authored` and `latency.tempo` each
+    document why, and the difference between them is the point — a sum of no terms IS zero once
+    we know we looked, while 0/0 never is.
+
+    `tempo` states the conclusion; `authored` deliberately states none, because no measurement
+    supplies a cut point on a byte sum (see `magnitude.authored`). Asymmetric on purpose.
+    """
+    return {
+        "authored_bytes": auth.nbytes,
+        "authoring_turns": auth.turns,
+        "authored_status": auth.status,
+        "fast_share": None if tmp.fast_share is None else round(tmp.fast_share, 3),
+        "gaps": tmp.n_gaps,
+        "tempo": tmp.reading,
+        "tempo_status": tmp.status,
+    }
+
+
+def _effort_from_rows(rows):
+    """The effort block from `events_for_turns` output — the ORACLE's half.
+
+    Grouped by timestamp, not by row: the store sums a turn's several edit events into one
+    `turn_magnitude` row (`_aggregate_mag`) and `turn_magnitudes` then groups by `ts`, so a
+    per-row count here would disagree with the store on `authoring_turns` while agreeing on every
+    byte. Zeros are dropped for the same reason — a zero magnitude is never stored.
+    """
+    per_ts = collections.defaultdict(float)
+    recorded = False
+    for r in rows:
+        if r[5] != "mag":
+            continue
+        recorded = recorded or bool(r[8])
+        if r[6] == magnitude.EDIT_BYTES:
+            per_ts[r[0]] += float(r[8])
+    return _effort(magnitude.authored(per_ts.values(), recorded=recorded),
+                   latency.tempo([r[0] for r in rows if r[5] == "ref"]))
+
+
+def _effort_from_store(store, session, lo, hi):
+    """The same block, out of the series. Three indexed queries, no transcript opened."""
+    return _effort(
+        magnitude.authored(
+            (v for _ts, v in store.turn_magnitudes(session, lo, hi, kind=magnitude.EDIT_BYTES)),
+            recorded=store.has_magnitudes(session, lo, hi)),
+        latency.tempo(store.turn_times(session, lo, hi, exclude_slots=(RECONCILE_SLOT,))))
 
 
 def _bounds(end_iso, span_minutes):
@@ -166,7 +247,8 @@ def _bounds(end_iso, span_minutes):
 
 
 def _rollup_from_store(store, path, prompt_id, span_minutes=60, nlp=None, refresh=True):
-    """`(rollup, start, end)` for the window, out of the series. No transcript is opened."""
+    """`(rollup, start, end, effort)` for the window, out of the series. No transcript is
+    opened."""
     current = is_current(store, path, nlp)
     if refresh and not current:
         ingest_file(store, path, nlp)                 # FileNotFoundError if it is gone
@@ -209,7 +291,8 @@ def _rollup_from_store(store, path, prompt_id, span_minutes=60, nlp=None, refres
     # the precomputed bins (see `Store.rollup_window`), which for one hour costs nothing.
     rows = store.window_rows(session, lo, hi, exclude_slots=(RECONCILE_SLOT,))
     recon_rows, _stats = reconcile(pending_in(store, path, lo, hi), COMPONENT_DEPTH)
-    return window.rollup(rows + recon_rows), start, end
+    return (window.rollup(rows + recon_rows), start, end,
+            _effort_from_store(store, session, lo, hi))
 
 
 def _prompt_time(path, prompt_id):
@@ -222,7 +305,7 @@ def _prompt_time(path, prompt_id):
 
 
 def _rollup_by_parse(path, prompt_id, span_minutes=60, nlp=None):
-    """`(rollup, start, end)` for the window, by parsing. See `analyze_window_by_parse`.
+    """`(rollup, start, end, effort)` for the window, by parsing. See `analyze_window_by_parse`.
 
     Turn selection is quantized to match the series' resolution (see the module docstring), so
     that this and `_rollup_from_store` are comparable at all: the store cannot distinguish two
@@ -248,4 +331,7 @@ def _rollup_by_parse(path, prompt_id, span_minutes=60, nlp=None):
     # `component` rows are ONLY ever produced by reconcile() (see its module docstring), so
     # skipping this step would leave the "language" workstream permanently unattributed.
     recon_rows, _stats = reconcile(pending, COMPONENT_DEPTH)
-    return window.rollup(rows + recon_rows), start, end
+    # `rows`, not `rows + recon_rows`: a reconcile row copies its turn's timestamp, and the store
+    # path excludes that slot (see `Store.turn_times`), so including it here would break the very
+    # equality this oracle exists to check.
+    return window.rollup(rows + recon_rows), start, end, _effort_from_rows(rows)

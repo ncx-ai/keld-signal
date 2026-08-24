@@ -34,11 +34,33 @@ import (
 //
 // "slice" and "baseline" are listed as whole quoted keys, which is why
 // `"slice_start"` does not satisfy `"slice"`.
+//
+// EXTENDED AGAIN for the effort block. Two of six measured transcript signals
+// survived and publish (authored_bytes/authoring_turns, fast_share/gaps/tempo);
+// the other four are on this list, and so are the raw payload keys the diff
+// magnitude is derived from:
+//
+//   - old_string / new_string / content / new_source are FILE CONTENTS. The one
+//     function permitted to read them returns an int (sidecar/app/analysis/
+//     magnitude.py's edit_bytes), so what crosses into Go is a length — but the
+//     rule this list enforces is that no wire field can hold the string even if
+//     that ever changed.
+//   - token_weight / tokens / request_tokens were REFUTED (0.89% of dominant
+//     values flip) and are still computed and stored on-device for the weighted
+//     rollup, which makes "not published" the only thing keeping them off the
+//     wire. Likewise out_bytes / out_lines (output volume, +0.552 against log
+//     volume — a restated tool-call count), error_rate / n_errors / n_thrash /
+//     max_err_run (a window statistic and a 4.8%-prevalence alert).
+//
+// A field added for any of them fails HERE rather than in a review.
 var forbiddenWireKeys = []string{
 	"inventory", "named_terms", "window_start", "window_end",
 	"slice", "baseline", "slice_start", "slice_end", "baseline_start",
 	"slice_minutes", "baseline_minutes", "sizer", "sizer_detail",
 	"reconcile_scope", "emerged", "decayed", "provenance", "reason",
+	"old_string", "new_string", "new_source", "content", "edit_preview",
+	"token_weight", "tokens", "request_tokens",
+	"out_bytes", "out_lines", "error_rate", "n_errors", "n_thrash", "max_err_run",
 }
 
 func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
@@ -54,7 +76,11 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 	// Guard the guard: if the filler silently stopped populating things, every
 	// assertion below would pass vacuously.
 	for _, present := range []string{`"workstreams"`, `"sensitivity_spans"`, `"custom"`, `"task_type"`,
-		`"dynamics"`, `"reading"`, `"turnover"`} {
+		`"dynamics"`, `"reading"`, `"turnover"`,
+		// The effort block and both of its halves, so the absence checks below
+		// cannot pass merely because the filler stopped reaching it.
+		`"effort"`, `"authored_bytes"`, `"authoring_turns"`, `"authored_status"`,
+		`"fast_share"`, `"gaps"`, `"tempo"`, `"tempo_status"`} {
 		if !strings.Contains(got, present) {
 			t.Fatalf("filler did not populate %s; the absence checks below would be vacuous:\n%s",
 				present, got)

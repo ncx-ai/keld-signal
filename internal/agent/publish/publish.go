@@ -55,8 +55,17 @@ type Enrichment struct {
 	// the workstreams beside it, no reference-level VALUE at all: only the
 	// closed status/reading vocabularies and the shares they were computed from
 	// (see enrich.Dynamic). Absent when the analysis compared nothing.
-	Dynamics       map[string]enrich.Dynamic `json:"dynamics,omitempty"`
-	PipelineStatus string                    `json:"pipeline_status"`
+	Dynamics map[string]enrich.Dynamic `json:"dynamics,omitempty"`
+	// Effort is what the window COST in work: the bytes its edits authored and
+	// how fast its turns came (see enrich.Effort for the six-candidate
+	// measurement that left exactly these two, and for the four refuted signals
+	// that deliberately do not appear). Same /analyze call as the two blocks
+	// above, same no-inference path, and no text: the diff magnitude arrives as
+	// a byte LENGTH — the one function permitted to read `old_string`/
+	// `new_string`/`content` returns an int — and the tempo is derived from
+	// timestamps alone. Absent when the analysis produced no block.
+	Effort         *enrich.Effort `json:"effort,omitempty"`
+	PipelineStatus string         `json:"pipeline_status"`
 	// FacetsSkipped names the passes this run structurally does not have (a
 	// model-dependent pass under ml_backend "deterministic"). It rides with
 	// pipeline_status because it is what makes that field readable: without it,
@@ -112,6 +121,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		SubcategoryAlt:    p.SubcategoryAlt,
 		Workstreams:       p.Workstreams,
 		Dynamics:          p.Dynamics,
+		Effort:            p.Effort,
 		PipelineStatus:    p.PipelineStatus,
 		FacetsSkipped:     p.FacetsSkipped,
 		FacetsDegraded:    p.FacetsDegraded,

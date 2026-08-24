@@ -381,3 +381,51 @@ func TestBuildPublishesNoSpeechAct(t *testing.T) {
 		t.Fatalf("published enrichment still carries speech_act: %s", b)
 	}
 }
+
+// Build carries the effort block through to the wire. Named separately from the
+// dynamics/workstreams cases because it is a POINTER: a nil-vs-zeroed mistake
+// here publishes `authored_bytes` absent and every count 0, which reads as "the
+// window authored nothing" rather than "nobody looked".
+func TestBuildCarriesTheEffortBlock(t *testing.T) {
+	bytesAuthored, share := int64(6520), 0.542
+	p := enrich.Profile{
+		Effort: &enrich.Effort{
+			AuthoredBytes: &bytesAuthored, AuthoringTurns: 3, AuthoredStatus: "attributed",
+			FastShare: &share, Gaps: 41, Tempo: "steered", TempoStatus: "attributed",
+		},
+	}
+	e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+	if e.Effort == nil {
+		t.Fatal("effort dropped by Build")
+	}
+	if e.Effort.AuthoredBytes == nil || *e.Effort.AuthoredBytes != 6520 ||
+		e.Effort.AuthoringTurns != 3 {
+		t.Errorf("diff magnitude mangled: %+v", e.Effort)
+	}
+	if e.Effort.Tempo != "steered" || e.Effort.FastShare == nil || *e.Effort.FastShare != 0.542 {
+		t.Errorf("tempo mangled: %+v", e.Effort)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"effort"`, `"authored_bytes":6520`, `"authoring_turns":3`,
+		`"fast_share":0.542`, `"gaps":41`, `"tempo":"steered"`, `"tempo_status":"attributed"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("wire missing %s: %s", want, b)
+		}
+	}
+}
+
+// A profile with no effort block publishes no key at all — never an object whose
+// counts are 0 and whose statuses are "".
+func TestBuildOmitsAnAbsentEffortBlock(t *testing.T) {
+	e := Build(queue.Job{ID: "j1"}, enrich.Profile{}, "actor", false, 0, time.Now())
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), `"effort"`) {
+		t.Errorf("an absent effort block was published: %s", b)
+	}
+}

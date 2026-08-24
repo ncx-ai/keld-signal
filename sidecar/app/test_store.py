@@ -279,6 +279,77 @@ def test_say_and_tok_rows_are_not_stored():
         raw.close()
 
 
+def test_turn_times_are_the_distinct_reference_event_instants_ascending():
+    """The clock `latency.tempo` is computed from. DISTINCT, because many rows share one turn's
+    timestamp, and ascending because a gap is a difference between consecutive instants."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        st.upsert_events(SESSION, _corpus(), source_line=1)
+        got = st.turn_times(SESSION, T0 - 1, T0 + 3600)
+        assert got == sorted(set(got)), "not distinct-and-ascending"
+        want = sorted({r[0] for r in _corpus()
+                       if r[5] == "ref" and T0 - 1 <= r[0] < T0 + 3600})
+        assert got == want, (len(got), len(want))
+        assert len(got) > 50, "vacuous: the corpus must span many turns"
+        st.close()
+
+
+def test_turn_times_is_half_open_and_scoped_to_one_session():
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        rows = [_row(0, "tool", "Bash"), _row(10, "tool", "Read"), _row(20, "tool", "Edit"),
+                _row(10, "tool", "Grep", session=OTHER)]
+        st.upsert_events(SESSION, [r for r in rows if r[1] == SESSION], source_line=1)
+        st.upsert_events(OTHER, [r for r in rows if r[1] == OTHER], source_line=1)
+        # [T0, T0+20): the first two instants, never the third.
+        assert st.turn_times(SESSION, T0, T0 + 20) == [round(T0, 1), round(T0 + 10, 1)]
+        assert st.turn_times(OTHER, T0, T0 + 20) == [round(T0 + 10, 1)]
+        assert st.turn_times(SESSION, T0 + 20, T0) == []
+        st.close()
+
+
+def test_turn_times_can_exclude_a_slot_the_way_window_rows_does():
+    """`/analyze` excludes the reconcile slot and re-scopes reconciliation to the window. A
+    reconcile row copies its turn's timestamp, so leaving the slot in would contribute instants
+    from a batch the caller was told to ignore -- and the parse path could not reproduce them."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        st.upsert_events(SESSION, [_row(0, "tool", "Bash")], source_line=1)
+        st.upsert_events(SESSION, [_row(30, "file", "a.py")], source_line=999)
+        assert st.turn_times(SESSION, T0 - 1, T0 + 60) == [round(T0, 1), round(T0 + 30, 1)]
+        assert st.turn_times(SESSION, T0 - 1, T0 + 60, exclude_slots=(999,)) == [round(T0, 1)]
+        st.close()
+
+
+def test_a_magnitude_only_turn_is_not_a_turn_time():
+    """A magnitude is not a reference. Joining `turn_magnitude` in would make the tempo clock
+    depend on which magnitudes happen to be ingested, and the parse path -- which has only its
+    own rows -- could not reproduce it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        mag = (round(T0 + 40, 1), SESSION, None, None, False, "mag", "edit_bytes", "", 113.0)
+        st.upsert_events(SESSION, [_row(0, "tool", "Bash"), mag], source_line=1)
+        assert st.turn_times(SESSION, T0 - 1, T0 + 60) == [round(T0, 1)]
+        st.close()
+
+
+def test_has_magnitudes_separates_no_record_from_no_edits():
+    """The gate between a truthful `authored 0` and an honest abstention. A v5 store upgraded in
+    place holds no magnitudes until its next ingest, and 0 bytes there would be a claim made on
+    the strength of never having looked."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        st.upsert_events(SESSION, [_row(0, "tool", "Bash")], source_line=1)
+        assert st.has_magnitudes(SESSION, T0 - 1, T0 + 60) is False
+        mag = (round(T0 + 5, 1), SESSION, None, None, False, "mag", "tokens", "", 900.0)
+        st.upsert_events(SESSION, [mag], source_line=2)
+        assert st.has_magnitudes(SESSION, T0 - 1, T0 + 60) is True
+        # Half-open and window-scoped, like every other query here.
+        assert st.has_magnitudes(SESSION, T0 - 1, T0 + 5) is False
+        assert st.has_magnitudes(OTHER, T0 - 1, T0 + 60) is False
+        st.close()
+
+
 def test_the_database_is_owner_only():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "state", "refseries.db")

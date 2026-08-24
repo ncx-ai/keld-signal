@@ -30,8 +30,9 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.analysis import window, workstreams
+from app.analysis import latency, magnitude, window, workstreams
 from app.analysis.analyze import (PromptNotFound, StoreBehind, WindowExpired, _bounds,
+                                  _effort_from_rows, _effort_from_store,
                                   analyze_window, analyze_window_by_parse, _rollup_by_parse,
                                   _rollup_from_store)
 from app.analysis.ingest import RECONCILE_SLOT, ingest_file, is_current, session_of, terms_mode
@@ -85,6 +86,23 @@ def _tool(name, inp, i=0):
     return {"type": "tool_use", "id": f"toolu_{name}_{i}", "name": name, "input": inp}
 
 
+# Edit payloads for the diff-magnitude half of the `effort` block. Deliberately of three very
+# different extents, because the study's finding is that windows indistinguishable by edit COUNT
+# differ by two orders of magnitude in bytes: a 20-byte replacement, a 4000-byte deletion (whose
+# new side is nearly empty -- the case `len(new_string)` alone would score as a no-op) and a
+# 2500-byte authored file. Filler text with no path, host or capitalised word in it, so it adds
+# `mag/edit_bytes` rows and touches no reference level (`magnitude.edit_bytes` is the only thing
+# in levels.py permitted to see these keys).
+_FIX_OLD, _FIX_NEW = "x" * 16, "y" * 20              # max = 20
+_DEL_OLD, _DEL_NEW = "z" * 4000, "w" * 12            # max = 4000
+_AUTHORED = "q" * 2500                               # max = 2500
+_SECOND_OLD, _SECOND_NEW = "v" * 30, "u" * 90        # max = 90, on the SAME turn as the deletion
+# The window's total and the number of TURNS it is spread over -- four edit events across three
+# turns, which is the pair the store and the parse path have to agree on.
+EDIT_BYTES_IN_WINDOW = 20 + 4000 + 90 + 2500
+EDIT_TURNS_IN_WINDOW = 3
+
+
 def _read(p, i=0):
     return _tool("Read", {"file_path": p}, i)
 
@@ -109,7 +127,8 @@ TURNS = [
     # --- inside the target window -----------------------------------------------------------
     (1121.8, "u", "p04", "Perch reported the same drop after the Rivermark migration."),
     (1263.5, "a", "a05", "Editing the queue.",
-     [_tool("Edit", {"file_path": CWD + "/services/api/queue.go"}),
+     [_tool("Edit", {"file_path": CWD + "/services/api/queue.go",
+                     "old_string": _FIX_OLD, "new_string": _FIX_NEW}),
       _bash("go build ./services/api/...")]),
     (1487.2, "a", "a06", "Fetching the runbook.",
      [_tool("mcp__notion__notion-fetch", {"url": "https://notion.example.internal/runbook"})]),
@@ -120,13 +139,21 @@ TURNS = [
      [_bash("curl -s https://ledger.example.internal/health")]),
     (2333.1, "u", "p06", "Try the retry budget at ten."),
     (2560.4, "a", "a09", "Editing again.",
-     [_tool("Edit", {"file_path": CWD + "/services/api/queue.go"}, 1),
+     [_tool("Edit", {"file_path": CWD + "/services/api/queue.go",
+                     "old_string": _DEL_OLD, "new_string": _DEL_NEW}, 1),
+      # A SECOND edit on the SAME turn. The store sums a turn's edit events into
+      # one `turn_magnitude` row, so a parse path counting ROWS rather than
+      # grouping by timestamp would report 4 authoring turns where the store
+      # reports 3 -- agreeing on every byte and disagreeing on the count.
+      _tool("Edit", {"file_path": CWD + "/services/api/settings.go",
+                     "old_string": _SECOND_OLD, "new_string": _SECOND_NEW}, 2),
       _bash("go test ./services/api/... -run Budget")]),
     (2790.8, "a", "a10", "Using the review skill.",
      [_tool("Skill", {"skill": "superpowers:test-driven-development"})]),
     (3011.2, "u", "p07", "Rivermark asked for the migration notes too."),
     (3245.6, "a", "a11", "Writing the notes.",
-     [_tool("Write", {"file_path": CWD + "/docs/settlement-retries.md"}),
+     [_tool("Write", {"file_path": CWD + "/docs/settlement-retries.md",
+                      "content": _AUTHORED}),
       _bash("git diff --stat")]),
     (3466.0, "a", "a12", "Re-reading the handler by its short name.",
      [_bash("wc -l " + PROSE_LATE)]),
@@ -198,8 +225,9 @@ def test_the_store_answers_the_target_window_exactly_as_a_parse_does():
         path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
         ingest_file(st, path, nlp)
 
-        want_rl, w_start, w_end = _rollup_by_parse(path, "TARGET", 60, nlp)
-        got_rl, g_start, g_end = _rollup_from_store(st, path, "TARGET", 60, nlp)
+        want_rl, w_start, w_end, w_eff = _rollup_by_parse(path, "TARGET", 60, nlp)
+        got_rl, g_start, g_end, g_eff = _rollup_from_store(st, path, "TARGET", 60, nlp)
+        assert g_eff == w_eff, (w_eff, g_eff)
         assert (g_start, g_end) == (w_start, w_end), (g_start, g_end, w_start, w_end)
         assert got_rl == want_rl, _rl_diff(want_rl, got_rl)
 
@@ -213,6 +241,184 @@ def test_the_store_answers_the_target_window_exactly_as_a_parse_does():
         attributed = [k for k, v in want["workstreams"].items() if v]
         assert len(attributed) >= 4, want["workstreams"]
         assert all(want["inventory"][k] for k in ("harness_tools", "programs", "named_terms"))
+        st.close()
+
+
+def test_the_effort_block_is_the_two_surviving_transcript_signals_and_nothing_else():
+    """The published shape. Six discarded signals were measured; two passed. The four refuted
+    ones -- token weight, tool-output volume, error thrashing, error rate -- must not appear,
+    and the token weight in particular is still COMPUTED and stored for the weighted rollup, so
+    "not published" is the only thing keeping it out."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        eff = analyze_window(path, "TARGET", 60, nlp, store=st)["effort"]
+        assert set(eff) == {"authored_bytes", "authoring_turns", "authored_status",
+                            "fast_share", "gaps", "tempo", "tempo_status"}, sorted(eff)
+        for refuted in ("tokens", "token_weight", "request_tokens", "out_bytes", "error_rate",
+                        "n_errors", "max_err_run", "n_thrash", "slow_share"):
+            assert refuted not in eff, f"{refuted} was REFUTED and must not publish"
+        st.close()
+
+
+def test_the_effort_block_carries_the_measured_diff_magnitude_and_its_turn_count():
+    """Both numbers, because neither is readable alone: the sum separates a typo fix from
+    authoring, and the count is what stops one 4 KB deletion reading as sustained work."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        eff = analyze_window(path, "TARGET", 60, nlp, store=st)["effort"]
+        assert eff["authored_bytes"] == EDIT_BYTES_IN_WINDOW, eff
+        assert eff["authoring_turns"] == EDIT_TURNS_IN_WINDOW, eff
+        assert eff["authored_status"] == "attributed"
+        # Three edit turns is UNDER window.MIN_EVIDENCE, and the total is still reported: a sum
+        # is a total, not an estimate from a sample. This is the assertion that would fail if
+        # anyone gated a magnitude on a count floor.
+        assert eff["authoring_turns"] < window.MIN_EVIDENCE
+        st.close()
+
+
+def test_the_effort_block_carries_the_tempo_and_the_share_it_was_computed_from():
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        eff = analyze_window(path, "TARGET", 60, nlp, store=st)["effort"]
+        # The fixture's turns are minutes apart, so every gap is slow -- a real 0.0, earned over
+        # enough gaps to state it.
+        assert eff["gaps"] >= window.MIN_EVIDENCE, eff
+        assert eff["fast_share"] == 0.0
+        assert eff["tempo"] == "autonomous"
+        assert eff["tempo_status"] == "attributed"
+        st.close()
+
+
+def test_the_effort_block_is_identical_from_the_store_and_from_a_parse():
+    """Named separately from the field-for-field payload comparison so that a divergence in this
+    block reports as this block rather than as a payload diff -- and so the two paths' DIFFERENT
+    inputs (three indexed queries vs. its own rows) are pinned to one answer."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        for pid in _prompt_ids():
+            want = analyze_window_by_parse(path, pid, 60, nlp)["effort"]
+            got = analyze_window(path, pid, 60, nlp, store=st)["effort"]
+            assert got == want, (pid, want, got)
+        # Not vacuous: at least one window must carry real bytes AND a real tempo, or the
+        # equality above is an agreement about nothing.
+        eff = analyze_window(path, "TARGET", 60, nlp, store=st)["effort"]
+        assert eff["authored_bytes"] > 1000 and eff["gaps"] > 5, eff
+        st.close()
+
+
+def test_the_oracles_tempo_clock_counts_REFERENCE_rows_only():
+    """The two paths must define "a turn" identically or they will disagree on a window neither
+    fixture happens to contain. The store's clock is the `event` table (`Store.turn_times`) and
+    `turn_magnitude` is deliberately NOT joined into it, so the oracle must not count a `mag` row
+    either: an assistant line carrying `usage` but emitting no reference would otherwise be a turn
+    on one path and not on the other."""
+    ref = lambda t: (t, "s", "repo", None, False, "ref", "tool", "Bash", 1.0)      # noqa: E731
+    mag = lambda t, v: (t, "s", None, None, False, "mag", "edit_bytes", "", v)     # noqa: E731
+    rows = [ref(0.0), ref(1.0), ref(2.0), ref(3.0), ref(4.0), ref(5.0), mag(9999.0, 113.0)]
+    eff = _effort_from_rows(rows)
+    assert eff["gaps"] == 5, eff          # five gaps between six turns -- NOT six
+    assert eff["authored_bytes"] == 113 and eff["authoring_turns"] == 1, eff
+
+
+def test_the_store_path_excludes_the_reconcile_slot_from_the_tempo_clock():
+    """`/analyze` recomputes reconciliation at the window's own scope and excludes the stored
+    slot from the rollup; the tempo clock is excluded with it, for the same reason and so the two
+    paths cannot disagree.
+
+    In practice a reconcile row adds no instant -- it COPIES its turn's timestamp, and a pending
+    path is only ever produced inside `levels.py`'s tool_use loop, which emits a `ref/tool` row on
+    that same turn. But "in practice" is not a mechanism: a stored reconcile row at an instant of
+    its own would be a turn the parse path never saw, and this is the assertion that says so."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        t0 = 1755950400.0
+        rows = [(t0 + i, "s", "repo", None, False, "ref", "tool", "Bash", 1.0)
+                for i in range(6)]
+        st.upsert_events("s", rows, source_line=1)
+        st.upsert_events("s", [(t0 + 9999, "s", "repo", None, False, "ref", "file", "a.py", 1.0)],
+                         source_line=RECONCILE_SLOT)
+        eff = _effort_from_store(st, "s", t0 - 1, t0 + 20000)
+        assert eff["gaps"] == 5, eff
+        st.close()
+
+
+def test_a_window_holding_one_turn_reports_no_fast_share_rather_than_zero():
+    """THE defect, end to end. A one-turn window has no gap; `0.0` there is the same value a
+    genuinely slow window publishes, and the study found it only by naming extremes."""
+    turns = [(0.0, "u", "ONLY", "Just the one prompt.")]
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp, turns), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        eff = analyze_window(path, "ONLY", 60, nlp, store=st)["effort"]
+        assert eff["gaps"] == 0
+        assert eff["fast_share"] is None, eff
+        assert eff["tempo"] is None
+        assert eff["tempo_status"] == "absent"
+        assert analyze_window_by_parse(path, "ONLY", 60, nlp)["effort"] == eff
+        st.close()
+
+
+def test_a_window_with_no_costed_turn_abstains_on_bytes_rather_than_claiming_zero():
+    """`authored_status` exists for this. A window of user turns only carries no magnitude of any
+    kind -- which is also the state of a v5 store upgraded in place -- and `0 bytes authored`
+    there is a claim made on the strength of never having looked."""
+    turns = [(0.0, "u", "p1", "First."), (120.0, "u", "p2", "Second."),
+             (240.0, "u", "LAST", "Third.")]
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp, turns), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        eff = analyze_window(path, "LAST", 60, nlp, store=st)["effort"]
+        assert eff["authored_bytes"] is None, eff
+        assert eff["authoring_turns"] == 0
+        assert eff["authored_status"] == "absent"
+        # The tempo half is unaffected: one gap is a measurement, just a thin one. ONE, not
+        # two: the window is half-open and ends AT the prompt, so `LAST` is not inside its own
+        # window -- three turns, two of them in scope.
+        assert eff["gaps"] == 1 and eff["fast_share"] == 0.0
+        assert eff["tempo_status"] == "thin" and eff["tempo"] is None
+        assert analyze_window_by_parse(path, "LAST", 60, nlp)["effort"] == eff
+        st.close()
+
+
+def test_a_costed_window_that_edited_nothing_reports_zero_bytes_not_absent():
+    """The mirror of the test above, and the reason `authored_status` is not just `bytes is
+    None`: turns whose cost WAS recorded and which edited nothing genuinely authored zero."""
+    turns = [(0.0, "u", "p1", "Read the handler."),
+             (30.0, "a", "a1", "Reading.", [_read(DECLARED_EARLY)]),
+             (90.0, "a", "a2", "Read.", [_bash("git status --short")]),
+             (150.0, "u", "LAST", "Thanks.")]
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp, turns), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        eff = analyze_window(path, "LAST", 60, nlp, store=st)["effort"]
+        assert eff["authored_bytes"] == 0, eff
+        assert eff["authored_status"] == "attributed"
+        assert analyze_window_by_parse(path, "LAST", 60, nlp)["effort"] == eff
+        st.close()
+
+
+def test_the_effort_payload_carries_no_transcript_string_at_all():
+    """The privacy shape, at the payload boundary. Every value in the block is a number, a
+    closed-vocabulary label from `latency`/`magnitude`, or None -- so there is no slot a byte of
+    `old_string`/`new_string`/`content` could occupy even if something upstream tried."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        eff = analyze_window(path, "TARGET", 60, nlp, store=st)["effort"]
+        allowed = set(latency.TEMPOS) | set(latency.STATUSES) | set(magnitude.AUTHORED_STATUSES)
+        for k, v in eff.items():
+            assert v is None or isinstance(v, (int, float)) or v in allowed, (k, v)
+        blob = json.dumps(eff)
+        for planted in (_FIX_OLD, _FIX_NEW, _DEL_OLD, _DEL_NEW, _AUTHORED,
+                        _SECOND_OLD, _SECOND_NEW):
+            assert planted not in blob, "an edit payload reached the effort block"
+        # And the payloads really were in the input, or the assertion above proves nothing.
+        src = open(path).read()
+        assert _AUTHORED in src and _DEL_OLD in src
         st.close()
 
 
@@ -234,7 +440,7 @@ def test_both_edges_of_the_target_window_fall_inside_a_bin():
     fixture cannot drift into alignment and quietly stop exercising the edges."""
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(tmp)
-        _, start, end = _rollup_by_parse(path, "TARGET", 60, None)
+        _, start, end, _eff = _rollup_by_parse(path, "TARGET", 60, None)
         for name, t in (("start", start.timestamp()), ("end", end.timestamp())):
             assert t % BIN_SECONDS != 0, f"{name} landed on a bin boundary: {t}"
         # And turns must exist on BOTH sides of BOTH edges, or an edge is not being tested.
@@ -252,7 +458,7 @@ def test_reconcile_is_rescoped_to_the_window_and_not_served_whole_file():
     with tempfile.TemporaryDirectory() as tmp:
         path, st = _write(tmp), _store(tmp)
         ingest_file(st, path, None)
-        got, start, end = _rollup_from_store(st, path, "TARGET", 60, None)
+        got, start, end, _eff = _rollup_from_store(st, path, "TARGET", 60, None)
         # The stored, whole-file-scoped answer for the same window, i.e. what a plain
         # rollup_window would serve.
         whole = st.rollup_window(session_of(path), round(start.timestamp(), 1),

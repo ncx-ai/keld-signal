@@ -775,6 +775,14 @@ async def analyze(body: AnalyzeIn):
     prompt id — never text; the response itself carries no span/offset/text either (see
     test_analyze_response_carries_no_prompt_text).
 
+    The response also carries the `effort` block: the two transcript signals that survived
+    measurement out of six candidates — the diff magnitude (`authored_bytes`/`authoring_turns`)
+    and the turn tempo (`fast_share`/`gaps`/`tempo`/`tempo_status`). Numbers and closed-vocabulary
+    labels only; the byte sum is a LENGTH (`app/analysis/magnitude.py`'s `edit_bytes` returns an
+    int and is the only thing permitted to read an edit payload) and the tempo is derived from
+    timestamps alone. See `app/analysis/analyze.py`'s "effort block" section for the verdicts and
+    for the four refuted candidates that deliberately do not appear.
+
     Deliberately does NOT go through _dispatch/the single-flight runner, for the same reason
     /match does not (see the block comment above _match_budget_s): this is a transcript read
     plus regex and (optionally) spaCy work, not inference, and it must answer while the runner

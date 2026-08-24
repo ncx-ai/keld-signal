@@ -1290,6 +1290,59 @@ class Store:
             (session, str(kind), start, end, session, start, end) + slots)
         return _pseudo_rows(session, [cur])
 
+    def turn_times(self, session, start, end, exclude_slots=()):
+        """The distinct instants at which this window's REFERENCE events were recorded,
+        ascending. The clock the tempo signal is computed from (`app/analysis/latency.py`).
+
+        There is no `turn` table, and this is why one was not added. A turn is only ever visible
+        to the series through the rows it produced, so "the window's turns" and "the distinct
+        timestamps of the window's reference events" are the same set in every case that matters
+        -- MEASURED, not assumed: over 40 real transcripts of the frozen corpus, all 5,307
+        distinct turn instants that `transcript.turns_in` yields also appear as a reference-event
+        timestamp (100.00%), and the resulting `fast_share` differs by 0.0000 on every one of the
+        36 transcripts long enough to have a share at all. A turn that emitted no reference row
+        would be invisible here; the measured frequency of that is zero, and the failure
+        direction is a LOWER gap count, which the eligibility floor already handles.
+
+        A magnitude row is deliberately NOT a turn time. `turn_magnitude` holds one row per
+        costed turn, so joining it in would add instants for turns that produced no reference at
+        all and make this set depend on which magnitudes happen to be ingested -- and the parse
+        path, which has only its own rows, could not reproduce it. One definition, both paths.
+
+        `exclude_slots` is `window_rows`' parameter and means the same thing: `/analyze` excludes
+        the reconcile slot because it re-scopes reconciliation to the window, and a reconcile row
+        copies its turn's timestamp, so including that slot would contribute instants for turns
+        whose only reference rows live in a batch this query was told to ignore.
+        """
+        start, end = _epoch(start), _epoch(end)
+        if not end > start:
+            return []
+        slots = tuple(int(s) for s in exclude_slots)
+        q = "SELECT DISTINCT ts FROM event WHERE session = ? AND ts >= ? AND ts < ?"
+        args = (session, start, end)
+        if slots:
+            q += f" AND source_line NOT IN ({','.join('?' * len(slots))})"
+            args = args + slots
+        return [ts for (ts,) in self._conn().execute(q + " ORDER BY ts", args)]
+
+    def has_magnitudes(self, session, start, end):
+        """Does this window carry a magnitude of ANY kind?
+
+        The gate between a truthful "authored 0 bytes" and an honest "no record" -- see
+        `magnitude.authored`. It is a separate question from `turn_magnitudes(kind=EDIT_BYTES)`
+        being empty, because a v5 store upgraded in place holds NO magnitudes until its next
+        ingest (see this module's 5 -> 6 schema note), and reporting 0 bytes authored on the
+        strength of never having looked is precisely the plausible wrong number this series keeps
+        paying for.
+        """
+        start, end = _epoch(start), _epoch(end)
+        if not end > start:
+            return False
+        return self._conn().execute("""
+            SELECT 1 FROM turn_magnitude
+            WHERE session = ? AND ts >= ? AND ts < ? LIMIT 1""",
+            (session, start, end)).fetchone() is not None
+
     def turn_magnitudes(self, session, start, end, kind=magnitude.REQUEST_TOKENS):
         """Every turn's magnitude in `[start, end)` as `[(ts, value), ...]`, ascending.
 
