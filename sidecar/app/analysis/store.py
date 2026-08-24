@@ -29,6 +29,7 @@ of the payload. Persisting it does not change the rule, but it does lengthen how
 so retention (task 5) should treat `term` as the sensitive level.
 """
 import collections
+import json
 import math
 import os
 import sqlite3
@@ -56,7 +57,11 @@ BIN_SECONDS = 300
 PRECOMPUTED_LEVELS = tuple(dict.fromkeys(
     [lv for _, lv, _ in workstreams.ALLOCATION] + [lv for _, lv in workstreams.INVENTORY]))
 
-SCHEMA_VERSION = 1
+# 1 -> 2: `parse_state`, the cross-batch parse state incremental ingest carries between
+#         batches (see that table's comment). Additive — every v1 table is unchanged, and
+#         `CREATE TABLE IF NOT EXISTS` upgrades an existing file in place, so there is no
+#         migration step. A v1 store simply has an empty `parse_state` and reparses once.
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ingest (
@@ -98,6 +103,20 @@ CREATE TABLE IF NOT EXISTS bin (
   n       REAL NOT NULL,
   PRIMARY KEY (session, bin_ts, level, ref)
 ) WITHOUT ROWID;
+
+-- The cross-batch parse state incremental ingest carries from one batch to the next: the
+-- workspace evidence accumulated so far, the reconcile `pending` list, and the derived answers
+-- whose change forces a reparse. It lives HERE, in the database, rather than in the ingesting
+-- process's memory, for two reasons: the sidecar is restarted as a matter of routine, and it
+-- must commit in the SAME transaction as the byte offset it belongs to — a checkpoint that
+-- advanced past state that was never saved is exactly the half-applied batch `transaction()`
+-- exists to prevent. Opaque JSON rather than columns because it is `ingest.py`'s private
+-- shape and nothing queries into it; see `ingest.py` for what it holds and why none of it is
+-- text (it is tool-call paths and repository names, the same class already stored as refs).
+CREATE TABLE IF NOT EXISTS parse_state (
+  path  TEXT PRIMARY KEY,
+  state TEXT NOT NULL
+);
 """
 
 
@@ -312,33 +331,107 @@ class Store:
         several batches (a bin is far longer than the interval between transcript appends) and
         because a replayed batch must be absorbed rather than added.
         """
+        agg = self._aggregate(rows, source_line)
+        if not agg:
+            return 0
+        touched = {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
+        with self.transaction():
+            self._insert(session, agg)
+            self._reroll(session, touched)
+        return len(agg)
+
+    @staticmethod
+    def _aggregate(rows, source_line):
+        """`(line, ts, level, ref) -> n` over the `ref` rows only. See `upsert_events`."""
         agg = collections.defaultdict(float)
         for r in rows:
             if r[5] != "ref":
                 continue
             line = int(r[9]) if len(r) > 9 else int(source_line)
             agg[(line, float(r[0]), r[6], str(r[7]))] += float(r[8])
-        if not agg:
-            return 0
-        touched = {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
+        return agg
+
+    def _insert(self, session, agg):
+        self._conn().executemany("""
+            INSERT INTO event(session, ts, level, ref, n, source_line)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(session, source_line, ts, level, ref) DO UPDATE SET n = excluded.n
+            """, [(session, ts, lv, ref, n, line) for (line, ts, lv, ref), n in agg.items()])
+
+    def _reroll(self, session, bins):
+        """Recompute each named bin from `event`. Never incremented: a bin is far longer than
+        the interval between transcript appends, so one bin is touched by many batches, and a
+        replayed or revised batch must be absorbed rather than added."""
+        c = self._conn()
+        for b in sorted(bins):
+            c.execute("DELETE FROM bin WHERE session = ? AND bin_ts = ?", (session, b))
+            c.execute("""
+                INSERT INTO bin(session, bin_ts, level, ref, n)
+                SELECT ?, ?, level, ref, SUM(n) FROM event
+                WHERE session = ? AND ts >= ? AND ts < ?
+                  AND level IN (SELECT level FROM bin_level)
+                GROUP BY level, ref""",
+                (session, b, session, float(b), float(b + BIN_SECONDS)))
+
+    def replace_events(self, session, source_line, rows):
+        """Make `(session, source_line)` hold exactly `rows` — inserting, revising AND DELETING.
+
+        `upsert_events` can only ever add or raise a count, which is right for a batch of turns
+        that will never be re-derived. It is wrong for a derived set that is RECOMPUTED from
+        accumulated state, where the correct new answer may be that a row no longer exists at
+        all. `reconcile` is exactly that: a declaration arriving in the tail can move an earlier
+        prose path to a different repository, retracting the row it previously produced (see
+        `reconcile`'s "split share" and "cross-repo" defects). Upserting the new row without
+        deleting the old would leave the file counted under both names — the very defect
+        reconcile exists to fix, reintroduced by the storage layer.
+
+        So `source_line` is used here as a SLOT, not a batch marker: everything previously
+        written to it is removed first, and the bins both the old and the new rows touch are
+        re-rolled.
+        """
+        agg = self._aggregate(rows, source_line)
+        c = self._conn()
+        with self.transaction():
+            old = c.execute("SELECT ts FROM event WHERE session = ? AND source_line = ?",
+                            (session, int(source_line))).fetchall()
+            touched = {_floor_bin(t[0]) for t in old}
+            touched |= {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
+            c.execute("DELETE FROM event WHERE session = ? AND source_line = ?",
+                      (session, int(source_line)))
+            if agg:
+                self._insert(session, agg)
+            self._reroll(session, touched)
+        return len(agg)
+
+    def clear_session(self, session):
+        """Drop every event and bin for one session.
+
+        A reparse re-reads lines that are already stored under DIFFERENT batch ordinals, so
+        without this the same turn is counted once per parse and every window inflates. It is
+        the reason a reparse is a distinct outcome in `IngestResult` rather than just a longer
+        ingest.
+        """
         with self.transaction():
             c = self._conn()
-            c.executemany("""
-                INSERT INTO event(session, ts, level, ref, n, source_line)
-                VALUES (?,?,?,?,?,?)
-                ON CONFLICT(session, source_line, ts, level, ref) DO UPDATE SET n = excluded.n
-                """, [(session, ts, lv, ref, n, line)
-                      for (line, ts, lv, ref), n in agg.items()])
-            for b in sorted(touched):
-                c.execute("DELETE FROM bin WHERE session = ? AND bin_ts = ?", (session, b))
-                c.execute("""
-                    INSERT INTO bin(session, bin_ts, level, ref, n)
-                    SELECT ?, ?, level, ref, SUM(n) FROM event
-                    WHERE session = ? AND ts >= ? AND ts < ?
-                      AND level IN (SELECT level FROM bin_level)
-                    GROUP BY level, ref""",
-                    (session, b, session, float(b), float(b + BIN_SECONDS)))
-        return len(agg)
+            c.execute("DELETE FROM event WHERE session = ?", (session,))
+            c.execute("DELETE FROM bin WHERE session = ?", (session,))
+
+    # --- cross-batch parse state -----------------------------------------------------------
+
+    def parse_state(self, path):
+        """The ingesting parser's carried state for this transcript, or None. See the
+        `parse_state` table comment; the shape is `ingest.py`'s alone."""
+        row = self._conn().execute("SELECT state FROM parse_state WHERE path = ?",
+                                   (path,)).fetchone()
+        return None if row is None else json.loads(row[0])
+
+    def set_parse_state(self, path, state):
+        """Belongs in the SAME `transaction()` as the events and the offset it corresponds to."""
+        with self.transaction():
+            self._conn().execute("""
+                INSERT INTO parse_state(path, state) VALUES (?,?)
+                ON CONFLICT(path) DO UPDATE SET state = excluded.state""",
+                (path, json.dumps(state, separators=(",", ":"), sort_keys=True)))
 
     def record_ingest(self, path, offset, size, head_sha=None, mtime=None, watermark_ts=None):
         """Advance a transcript's checkpoint. Belongs in the SAME `transaction()` as the events

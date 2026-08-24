@@ -170,6 +170,11 @@ def vcs_of(cwd, git_branch):
     return "git (reported, unverifiable)" if git_branch else "unknown"
 
 
+def new_evidence():
+    """An empty `(marker_dirs, cd_targets, remotes)` triple."""
+    return {}, set(), collections.Counter()
+
+
 def scan_workspace(path):
     """A pre-pass over one transcript for the signals resolution needs.
 
@@ -181,8 +186,31 @@ def scan_workspace(path):
     different projection of the same transcript (every tool_use-bearing line, not just
     user/assistant turns), not a duplicate of `iter_turns` — see that function's docstring.
     """
-    marker_dirs, cd_targets, remotes = {}, set(), collections.Counter()
-    for o in transcript.iter_tool_use_lines(path):
+    return scan_tool_use(transcript.iter_tool_use_lines(path))
+
+
+def scan_tool_use(objs, into=None):
+    """The body of `scan_workspace`, over already-parsed lines and into existing evidence.
+
+    Split out for INCREMENTAL ingest (`analysis/ingest.py`), which parses only the bytes a
+    transcript grew by and must not re-read the file from the start to rebuild this triple —
+    measured, `scan_workspace` is 0.37s of the ~1s `/analyze` spends on a 66 MB transcript, and
+    leaving it whole-file would keep an O(file) cost in a path whose entire purpose is O(tail).
+
+    Accumulating batch-by-batch into `into` is EXACTLY equal to one pass over the concatenation,
+    provided the batches arrive in file order, because that is literally what it then is: the
+    same loop over the same lines in the same sequence. The three accumulators are each
+    order-insensitive anyway — a set union, a Counter sum, and a dict whose "repo" tier is an
+    unconditional write while "pkg" is a `setdefault`, so the result is "repo" if that tier was
+    ever seen and "pkg" otherwise, regardless of which came first.
+
+    What incremental accumulation does NOT reproduce is the RETROACTIVITY of a whole-file scan:
+    evidence seen late still identifies the root of an early line (see `scan_workspace`
+    above). That is not this function's problem to solve — `ingest.py` detects it and
+    reparses — but it is the reason a caller cannot simply accumulate and stop thinking.
+    """
+    marker_dirs, cd_targets, remotes = into if into is not None else new_evidence()
+    for o in objs:
         content = (o.get("message") or {}).get("content")
         if not isinstance(content, list):
             continue

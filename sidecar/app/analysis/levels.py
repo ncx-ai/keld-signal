@@ -58,17 +58,24 @@ def _epoch(ts: str) -> float:
     return dt.timestamp()
 
 
-def events_for_turns(turns, path, root, repo_root, nlp=None):
+def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None):
     """One transcript's turns -> its rows and pending paths.
 
     `turns` is the output of `transcript.iter_turns(path)` — already filtered to `user`/
     `assistant` lines with a timestamp. `path` is still needed here for `scan_workspace` (a
     separate pre-pass over the same file that resolution depends on) and for the session id
     derived from the filename; nothing in this function opens it directly.
+
+    `evidence` is the `(marker_dirs, cd_targets, remotes)` triple `scan_workspace` would return,
+    supplied by a caller that already has it. Incremental ingest (`analysis/ingest.py`) does: it
+    accumulates the triple batch-by-batch from the bytes the transcript grew by, and re-reading
+    the whole file here to rebuild it would put the O(file) cost straight back into the one path
+    built to avoid it. Default `None` keeps every existing caller on the whole-file pre-pass.
     """
     rows, pending, n_lines = [], [], 0
     projdir = os.path.basename(os.path.dirname(path))
-    marker_dirs, cd_targets, remotes = scan_workspace(path)
+    marker_dirs, cd_targets, remotes = (evidence if evidence is not None
+                                        else scan_workspace(path))
     ws_cache = {}
     session = os.path.basename(path)[:8]
     seen_req = set()

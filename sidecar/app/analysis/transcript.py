@@ -17,7 +17,18 @@ from datetime import datetime
 
 
 def iter_turns(path):
-    """Parsed `user`/`assistant` lines from one transcript, in file order.
+    """Parsed `user`/`assistant` lines from one transcript, in file order."""
+    return turns_in(open(path, errors="replace"))
+
+
+def turns_in(lines):
+    """`iter_turns` over an arbitrary sequence of raw lines rather than a whole file.
+
+    Incremental ingest (`analysis/ingest.py`) holds only the bytes a transcript grew by, and must
+    apply EXACTLY this filter to them — a second copy of these four rules would be a second place
+    for them to drift, and a tail filtered differently from the head is precisely the silent
+    inequality that design has to rule out. This module stays the only one that opens a
+    transcript; `iter_turns` is the file-shaped door and this is the line-shaped one.
 
     Every other line type (`tool_result` chief among them) is skipped by a substring check on the
     raw line, before `json.loads` ever runs. A `tool_result` carries no speech and no reference;
@@ -25,7 +36,7 @@ def iter_turns(path):
     parse rather than a minutes-long one. Lines that fail to parse as JSON, or that parse but carry
     no `timestamp`, are skipped the same way — there is nothing a caller could do with either.
     """
-    for line in open(path, errors="replace"):
+    for line in lines:
         if '"type":"user"' not in line and '"type":"assistant"' not in line:
             continue
         # A tool_result carries no speech and no reference; it is also where the huge
@@ -53,7 +64,13 @@ def iter_tool_use_lines(path):
     genuinely different projection of the transcript, not a copy of `iter_turns` — one wants what
     was SAID, the other wants what was RUN.
     """
-    for line in open(path, errors="replace"):
+    return tool_use_in(open(path, errors="replace"))
+
+
+def tool_use_in(lines):
+    """`iter_tool_use_lines` over raw lines rather than a whole file — the same seam, and for
+    the same reason, as `turns_in` above."""
+    for line in lines:
         if '"tool_use"' not in line:
             continue
         try:
