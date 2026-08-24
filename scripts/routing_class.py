@@ -88,7 +88,7 @@ import json
 import math
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -136,21 +136,33 @@ def _epoch(ts):
 # --------------------------------------------------------------------------- frame
 
 def _one(job):
-    """One transcript -> (sha, path, kept rows, pending paths, first/last turn epoch, n user
-    turns per turn-time). Parsed ONCE and sliced later (the pattern established in f63d524).
+    """One transcript -> (sha, path, kept rows, pending paths, first/last turn epoch, user-turn
+    times). Parsed ONCE and sliced later (the pattern established in f63d524).
 
     `term` rows are dropped here: they are regex-extracted from message TEXT, which this study
     excludes by construction. spaCy is disabled (`nlp=None`) for the same reason and because
     nothing downstream reads terms.
+
+    THE SESSION FIELD IS OVERWRITTEN WITH A UNIQUE FILE ID, and that is load-bearing. Windows are
+    keyed on (transcript, start), and a reconciled row's only handle back to its transcript is
+    `base[1]`, which `levels.events_for_turns` sets to `os.path.basename(path)[:8]`. In this
+    corpus that prefix is NOT unique: subagent transcripts are named `agent-<hash>.jsonl`, so
+    `agent-a6`, `agent-ad`, `agent-ac` … collide, and 445 of 500 files share a prefix with another
+    file. Keeping the prefix silently merged those files' events into one pseudo-transcript
+    (measured: the frame came out at 550 windows against a true 1,022, a 46% loss) — exactly the
+    plausible-wrong-number failure this study keeps hitting. The id is per-file and only used as a
+    grouping key; `reconcile` keys its declared-path index on (root, repo), never on session, so
+    cross-transcript reattribution is unaffected.
     """
-    path, root = job
+    path, root, fid = job
     with open(path, "rb") as fh:
         sha = hashlib.sha256(fh.read()).hexdigest()
     turns = [o for o in iter_turns(path) if o.get("timestamp")]
     if not turns:
         return sha, path, [], [], None, None, []
     rows, pending, _n = events_for_turns(turns, path, root, (), None)
-    keep = [r for r in rows if r[5] == "ref" and r[6] != "term"]
+    keep = [r[:1] + (fid,) + r[2:] for r in rows if r[5] == "ref" and r[6] != "term"]
+    pending = [((b[0], fid) + b[2:], rel, fi, rk) for b, rel, fi, rk in pending]
     users = [_epoch(o["timestamp"]).timestamp() for o in turns if o.get("type") == "user"]
     t0, tN = _epoch(turns[0]["timestamp"]), _epoch(turns[-1]["timestamp"])
     return sha, path, keep, pending, t0, tN, users
@@ -197,16 +209,15 @@ def frame(roots, out):
                    for f in glob.glob(os.path.join(r, "**", "*.jsonl"), recursive=True))
     if not files:
         sys.exit("no transcripts under " + ", ".join(roots))
-    jobs = [(p, os.path.dirname(os.path.dirname(p))) for p in files]
+    jobs = [(p, os.path.dirname(os.path.dirname(p)), f"t{i:04d}") for i, p in enumerate(files)]
     workers = max(1, min(int((os.cpu_count() or 4) * 0.8), len(jobs)))
     print(f"parsing {len(jobs)} transcripts on {workers} worker(s)")
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(_one, jobs))
 
-    rows, pending, spans, users = [], [], {}, {}
+    rows, pending, spans, users, names = [], [], {}, {}, {}
     seen, n_dup, n_empty = set(), 0, 0
-    sess_paths = collections.defaultdict(set)
-    for sha, path, r, pnd, t0, tN, us in results:
+    for (sha, path, r, pnd, t0, tN, us), (_p, _r, fid) in zip(results, jobs):
         if sha in seen:
             n_dup += 1
             continue
@@ -214,19 +225,14 @@ def frame(roots, out):
         if t0 is None:
             n_empty += 1
             continue
-        sess = os.path.basename(path)[:8]
-        sess_paths[sess].add(path)
         rows += r
         pending += pnd
-        spans[sess] = (t0, tN)
-        users[sess] = us
-    # The window key is (session, start) and `session` is a filename prefix, so a collision would
-    # silently merge two transcripts' events. Excluded and counted rather than assumed away.
-    collided = {s for s, ps in sess_paths.items() if len(ps) > 1}
+        spans[fid] = (t0, tN)
+        users[fid] = us
+        names[fid] = os.path.basename(path)[:8]
     recon, stats = reconcile(pending, COMPONENT_DEPTH)
     rows += recon
-    print(f"transcripts={len(seen) - n_dup - n_empty} duplicates={n_dup} empty={n_empty} "
-          f"session_collisions={len(collided)} rows={len(rows)}")
+    print(f"transcripts={len(spans)} duplicates={n_dup} empty={n_empty} rows={len(rows)}")
     if stats:
         print("  reconciled: " + ", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
 
@@ -237,8 +243,6 @@ def frame(roots, out):
     n_win = 0
     with open(out, "w") as fh:
         for sess, (t0, tN) in sorted(spans.items()):
-            if sess in collided:
-                continue
             srows = sorted(by_sess.get(sess, []), key=lambda r: r[0])
             times = [r[0] for r in srows]
             uts = sorted(users.get(sess, []))
@@ -255,19 +259,27 @@ def frame(roots, out):
                     continue
                 counts = collections.defaultdict(collections.Counter)
                 distinct = collections.defaultdict(set)
-                total = 0
+                total = n_side = 0
                 for r in sl:
                     counts[r[6]][r[7]] += r[8]
                     distinct[r[6]].add(r[7])
                     total += r[8]
+                    n_side += 1 if r[4] else 0
                 counts["_total"] = total
                 repo = (counts["workspace"].most_common(1) or [(None, 0)])[0][0]
                 rec = features_of(counts,
                                   {k: len(distinct[k]) for k in ("file", "dir", "exe")}, nu)
                 rec["wid"] = f"{sess}-{a:.0f}"
-                rec["label"] = f"{sess}-{datetime.utcfromtimestamp(a):%Y%m%dT%H%M}"
+                rec["label"] = (f"{names[sess]}-"
+                                f"{datetime.fromtimestamp(a, UTC):%Y%m%dT%H%M}")
                 rec["session"] = sess
                 rec["repo"] = repo
+                # NOT features and never fitted. Two facts already recorded on every transcript
+                # line, carried along so the derived partition can be checked against what the
+                # store ALREADY knows — the failure the 2026-08-22 handoff named ("digest-only
+                # answers reconstruct `component` and `branch`, columns we already compute").
+                rec["sidechain_share"] = round(n_side / len(sl), 4)
+                rec["agent_file"] = names[sess].startswith("agent-")
                 n_win += 1
                 fh.write(json.dumps(rec) + "\n")
     print(f"windows={n_win} -> {out}")
@@ -543,6 +555,78 @@ def cluster(frame_path, out, drop_lang=False):
               f"sil={row['silhouette']:.3f} stab={stab:.3f} "
               f"axes={qual} rules={int(row['rule1_mass'])}{int(row['rule2_stability'])}"
               f"{int(row['rule3_separation'])}")
+
+    # ---------------------------------------------------------------- post-hoc diagnostics
+    # ADDED AFTER THE SWEEP RAN, and they change no threshold and no rule — every pass/fail above
+    # is computed from the constants committed in 5331f01. They exist because the sweep produced a
+    # statistically clean result (stability 0.96+, mass and separation both passing) whose profiles
+    # looked like two things the store already records, and rule 4 cannot be scored honestly
+    # without knowing whether that is true.
+    #
+    #   null        the same sweep on a matrix whose columns are independently permuted. Marginals
+    #               preserved, joint structure destroyed. If stability clears 0.70 here too, then
+    #               rule 2's floor is measuring k-means' determinism rather than real structure.
+    #   reduction   the partition refit on 2 columns only (log volume + the verify flag) and
+    #               matched against the full 49-column partition. Rule 3 forbids a size bucket;
+    #               this measures how much of the partition survives when everything except size
+    #               and verification is thrown away.
+    #   recovers    purity of the partition against two booleans the transcript ALREADY carries:
+    #               `isSidechain` and verification-present. Against the base rate, so a cluster
+    #               that merely reflects the majority class does not score as a discovery.
+    res["diagnostics"] = {"null": [], "reduction": [], "recovers": []}
+    rngp = np.random.default_rng(SEED + 991)
+    Xp = X.copy()
+    for j in range(Xp.shape[1]):
+        Xp[:, j] = Xp[rngp.permutation(len(Xp)), j]
+    sp = scaler(Xp, groups)
+    Zp = apply_scaler(Xp, sp)
+    vol_j = cols.index("volume:events")
+    ver_j = cols.index("verify:present")
+    X2 = X[:, [vol_j, ver_j]]
+    g2 = ["volume", "verify"]
+    Z2 = apply_scaler(X2, scaler(X2, g2))
+    side = np.array([r["sidechain_share"] > 0.5 for r in recs])
+    ver = np.array([r["verification"] for r in recs])
+    for row in res["sweep"]:
+        k = row["k"]
+        _, labp, _ = fit(Zp, k)
+        sizesp = sorted(collections.Counter(labp.tolist()).values(), reverse=True)
+        ag = []
+        for tr, te in ((A, B), (B, A)):
+            s_tr = scaler(Xp[tr], groups)
+            c_tr, _, _ = fit(apply_scaler(Xp[tr], s_tr), k)
+            la = assign(apply_scaler(Xp[te], s_tr), c_tr)
+            _, lb, _ = fit(apply_scaler(Xp[te], scaler(Xp[te], groups)), k)
+            ag.append(agreement(la, lb, k)[0])
+        res["diagnostics"]["null"].append({
+            "k": k, "largest_share": round(sizesp[0] / len(recs), 3),
+            "silhouette": round(silhouette(Zp, labp), 3),
+            "stability": round(float(np.mean(ag)), 3)})
+
+        cent, lab_full, _ = fit(Z, k)
+        _, lab2, _ = fit(Z2, k)
+        a2, r2 = agreement(lab2, lab_full, k)
+        res["diagnostics"]["reduction"].append({
+            "k": k, "agreement_volume_verify_vs_full": round(a2, 3), "ari": round(r2, 3)})
+
+        def purity(b):
+            hit = sum(max((b[lab_full == c]).sum(), (~b[lab_full == c]).sum())
+                      for c in range(k) if (lab_full == c).any())
+            base = max(b.sum(), (~b).sum()) / len(b)
+            return round(hit / len(b), 3), round(base, 3)
+        ps, bs = purity(side)
+        pv, bv = purity(ver)
+        res["diagnostics"]["recovers"].append({
+            "k": k, "sidechain_purity": ps, "sidechain_base_rate": bs,
+            "verification_purity": pv, "verification_base_rate": bv,
+            "cluster_sidechain_rates": [round(float(side[lab_full == c].mean()), 3)
+                                        for c in range(k) if (lab_full == c).any()],
+            "cluster_verify_rates": [round(float(ver[lab_full == c].mean()), 3)
+                                     for c in range(k) if (lab_full == c).any()]})
+        print(f"k={k:2d} NULL sil={res['diagnostics']['null'][-1]['silhouette']} "
+              f"stab={res['diagnostics']['null'][-1]['stability']} | "
+              f"vol+verify reproduces full partition {a2:.3f} | "
+              f"sidechain purity {ps} (base {bs}) verify purity {pv} (base {bv})")
 
     # Robustness only, never the headline: does a different algorithm find the same shape?
     L = linkage(Z, method="ward")
