@@ -56,16 +56,16 @@ log = logging.getLogger("keld.sidecar.store")
 BIN_SECONDS = 300
 
 # The levels binned eagerly, DERIVED from the payload that consumes them rather than restated:
-# the 7 ALLOCATION levels and the 5 INVENTORY levels, 12 in all. `events_for_turns` emits 19.
-# The other 7 — and any dimension invented later — are not binned and do not need to be: the raw
+# the 7 ALLOCATION levels and the 6 INVENTORY levels, 13 in all. `events_for_turns` emits 19.
+# The other 6 — and any dimension invented later — are not binned and do not need to be: the raw
 # events are retained, so adding a rollup is a backfill query over `event` (see
 # `_register_levels`), never a transcript re-read.
 #
-# Deriving this from `workstreams` is the point. Hardcoding the twelve would let the payload and
+# Deriving this from `workstreams` is the point. Hardcoding the thirteen would let the payload and
 # the precomputed set drift apart silently, and the failure that produces — a level the payload
 # asks for that no bin holds — is an undercount, not an error.
 PRECOMPUTED_LEVELS = tuple(dict.fromkeys(
-    [lv for _, lv, _ in workstreams.ALLOCATION] + [lv for _, lv in workstreams.INVENTORY]))
+    [lv for _, lv, _ in workstreams.ALLOCATION] + [lv for _, lv, _ in workstreams.INVENTORY]))
 
 # 1 -> 2: `parse_state`, the cross-batch parse state incremental ingest carries between
 #         batches (see that table's comment). Additive — every v1 table is unchanged, and

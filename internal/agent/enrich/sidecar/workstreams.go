@@ -37,10 +37,12 @@ import "github.com/ncx-ai/keld-signal/internal/agent/enrich"
 //   - Session / WindowStart / WindowEnd stay local: window metadata, useful for
 //     debugging on-device, with no business on the published payload.
 //
-//   - The response's inventory block (harness_tools, named_terms, ...) is not
-//     modelled by AnalyzeResult at all, so there is structurally nothing here
-//     to forward. named_terms is drawn from message TEXT and has been observed
-//     to contain real person names; keep it unrepresentable.
+//   - The response's inventory block contributes exactly ONE of its six keys:
+//     `physical_acts`, converted by convertActs below. The other five are not
+//     modelled by AnalyzeResult at all (see InventoryBlock), so there is
+//     structurally nothing here to forward — named_terms above all is drawn from
+//     message TEXT and has been observed to contain real person names; keep it
+//     unrepresentable.
 //
 //   - The DYNAMICS block converts field-for-field (see convertDynamics) for the
 //     six derived fields and drops everything else structurally — AnalyzeResult
@@ -75,10 +77,48 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.
 		out[dim] = enrich.Labeled{Value: w.Value, Confidence: w.Share}
 	}
 	return enrich.WindowAnalysis{
-		Workstreams: out,
-		Dynamics:    convertDynamics(res.Dynamics),
-		Effort:      convertEffort(res.Effort),
+		Workstreams:  out,
+		PhysicalActs: convertActs(res.Inventory.PhysicalActs),
+		Dynamics:     convertDynamics(res.Dynamics),
+		Effort:       convertEffort(res.Effort),
 	}, true
+}
+
+// convertActs is the same VOCABULARY GATE convertDynamics and convertEffort are,
+// applied per ENTRY rather than to the block. `enrich.Acts` is a closed published
+// set (22 values) gated by enrich.SchemaVersion, and the sidecar that computes it
+// is frozen and shipped separately from keld-agent — an older or newer one can sit
+// in ~/.local/bin indefinitely — so a value this binary does not recognise is
+// version skew, and forwarding it would publish a label no Atlas consumer's
+// vocabulary contains.
+//
+// PER-ENTRY, and that is the one place the rule differs from its two siblings. A
+// dynamics reading or an effort block is a single joined statement, uninterpretable
+// in half, so the whole of it drops. An inventory is a list of independent items —
+// "what was done" — so one unreadable item costs exactly one item, and dropping the
+// list instead would discard every act this binary does understand because of one
+// it does not. Nothing publishes a total against which the surviving counts could
+// look inconsistent, so there is no partial-sum to be wrong.
+//
+// NO TRUNCATION. The sidecar publishes this level whole on purpose: its vocabulary
+// is closed, so the payload is bounded at 22 entries by construction, and a top-N
+// cut would only reintroduce the arbitrary-tie-at-the-boundary effect the open
+// levels have to live with (see workstreams.INVENTORY's cap column). Do not add
+// one here either.
+//
+// Nil rather than an empty slice when nothing survives — including when the whole
+// block is absent, which is what a sidecar too old to compute it sends: the pass
+// then publishes no key at all instead of an empty list, which would read as "we
+// looked and the hour did nothing".
+func convertActs(items []InventoryItem) []enrich.Act {
+	var out []enrich.Act
+	for _, it := range items {
+		if !enrich.KnownAct(it.Value) {
+			continue
+		}
+		out = append(out, enrich.Act{Value: it.Value, N: it.N})
+	}
+	return out
 }
 
 // convertDynamics is the vocabulary gate described above. It returns nil rather

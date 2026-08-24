@@ -128,8 +128,20 @@ type Profile struct {
 	// call Workstreams and Dynamics come from, model-free like both, so it is
 	// published in ml_backend "deterministic" too. Absent when the analysis
 	// produced no block.
-	Effort         *Effort `json:"effort,omitempty"`
-	PipelineStatus string  `json:"pipeline_status"`
+	Effort *Effort `json:"effort,omitempty"`
+	// PhysicalActs is what the same window physically DID: an inventory of acts
+	// against the closed Acts vocabulary, with counts (see Act). Fourth half of
+	// the same /analyze call, model-free like the other three, so it is published
+	// in ml_backend "deterministic" too.
+	//
+	// A LIST, not a single value, and that is the measured finding rather than a
+	// convenience: assessed as an eighth entry in Workstreams the level reaches
+	// coverage 0.185 against a 0.70 bar, not for lack of evidence (97.8% of
+	// windows, median 34 observations) but because an hour reads AND edits AND
+	// tests — top-act share p50 0.403 over p50 7 distinct acts. See Acts.
+	// Absent, never an empty list, when the analysis produced none.
+	PhysicalActs   []Act  `json:"physical_acts,omitempty"`
+	PipelineStatus string `json:"pipeline_status"`
 	// FacetsSkipped names the passes that did not run because THIS RUN has no
 	// such pass — currently: a model-dependent pass under ml_backend
 	// "deterministic", where ctx.Model is nil by design. It is the companion

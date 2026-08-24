@@ -56,7 +56,32 @@ package enrich
 // way v9's removal of speech_act was, so it takes a bump. Nothing existing
 // changes meaning: every field of v9 publishes identically. Producer strings move
 // from `-v9` to `-v10`.
-const SchemaVersion = 10
+//
+// v11 ADDS the physical-acts inventory to the published payload:
+// Profile.PhysicalActs / Enrichment.physical_acts, a list of {value, n} entries
+// over the closed 22-value Acts vocabulary (added here, and a consumer must know
+// it). It is the FIRST inventory dimension of the window analysis to publish, and
+// the only one that may: the `action` level is written from a tool NAME and from a
+// shell command's argv, each through a closed lookup table, so no fragment of a
+// transcript can occupy it — whereas `named_terms` is read from message text and
+// stays on-device (see enrich.Act, and publish's
+// TestEnrichmentWireShapeCannotCarryAnalysisInternals, which still forbids
+// `inventory` and `named_terms`).
+//
+// A LIST rather than an eighth workstream, and that is the measured part. Over
+// 1,022 windows (~/keld/refseries-context/act-artifact/RESULTS.md, commit
+// 6cf15eb) the level fails as an ALLOCATION dimension at coverage 0.185 against a
+// pre-registered 0.70 bar — but by the opposite route to every other refutation in
+// that series. It is not thin: it fires in 97.8% of windows at a median 34
+// observations, more than `output_type` (10) or `language` (9), both of which ship
+// as workstreams. Of the 81.5% unattributed, only 2.2 points is `absent` and 55.5
+// is `no_majority`; the top act holds p50 0.403 and no floor recovers it (0.612
+// even at 0.30). The cause is physical — an hour reads AND searches AND edits AND
+// runs, p50 7 distinct acts per window — so asking which single act owns it is the
+// wrong question, exactly as it is for a named term. The sidecar's SCHEMA moves 6
+// -> 7 for the same addition. Nothing existing changes meaning: every field of v10
+// publishes identically. Producer strings move from `-v10` to `-v11`.
+const SchemaVersion = 11
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in
@@ -149,11 +174,54 @@ var TempoStatuses = []string{"attributed", "thin", "absent"}
 // different fact from a recorded zero and the reason this field exists.
 var AuthoredStatuses = []string{"attributed", "absent"}
 
+// Acts is the closed set of values the PHYSICAL ACTS inventory may publish,
+// mirroring `ACTIONS` in sidecar/app/analysis/vocab.py (pinned against that
+// source, IN ORDER, by TestActVocabularyMatchesTheSidecar).
+//
+// It answers what the window's hour physically DID — read, edit, run code — as
+// against what it was done to, which is what every other level names. Do not read
+// it as `activity_type`: that facet is a six-value ML classification of the
+// prompt, this is a deterministic count of tool calls against a 22-value table,
+// and they share nothing but a rough English synonym.
+//
+// WHY AN INVENTORY AND NOT AN EIGHTH WORKSTREAM. Measured over 1,022 windows
+// (~/keld/refseries-context/act-artifact/RESULTS.md): as an allocation dimension
+// it reaches coverage 0.185 against a pre-registered 0.70 bar. Not for want of
+// evidence — the level fires in 97.8% of windows at a median 34 observations,
+// more than `output_type` (10) or `language` (9), both of which ship as
+// workstreams — but because an hour of agentic work is PLURAL: top-act share p50
+// 0.403, p50 7 distinct acts per window, and coverage still only 0.612 at a 0.30
+// floor. Asking which single act owns an hour is the wrong question, in exactly
+// the way asking which single named term owns one is, and the sidecar's
+// `INVENTORY` is where that answer already lives.
+//
+// UNLIKE the other three vocabularies here, an unrecognised value drops just that
+// ENTRY rather than the whole block (sidecar.convertActs). An inventory is a list
+// of independent items — "what was done" — so one unreadable item costs one item;
+// a dynamics reading or an effort block, by contrast, is a single joined
+// statement that is uninterpretable in half.
+var Acts = []string{
+	"apply a skill", "ask the person", "build", "commit", "convert a document",
+	"create", "delegate", "deliver a file", "edit", "fetch", "install",
+	"manage files", "publish", "query a database", "read", "run a service",
+	"run code", "search", "sync with remote", "test", "transform",
+	"version control",
+}
+
 var (
 	tempoSet          = setOf(Tempos)
 	tempoStatusSet    = setOf(TempoStatuses)
 	authoredStatusSet = setOf(AuthoredStatuses)
+	actSet            = setOf(Acts)
 )
+
+// KnownAct reports whether an act is in the published vocabulary. The empty
+// string is NOT — and this is the one place the rule differs from KnownTempo /
+// KnownDynamicReading, deliberately. Those gate a stated CONCLUSION, whose
+// absence is a real and honest answer. This gates the value of an inventory
+// ENTRY, and an entry that names nothing is not an abstention: it is a count
+// attached to no act, which reads downstream as a real answer.
+func KnownAct(s string) bool { return actSet[s] }
 
 // KnownTempo reports whether a tempo reading is publishable. The empty string
 // passes: no conclusion is stated outside status `attributed`, and that silence

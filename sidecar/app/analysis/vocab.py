@@ -174,6 +174,28 @@ def action_for(tool=None, exe=None, verb=None, args=()):
         return EXE_TO_ACTION.get(exe)
     return None
 
+
+# THE PUBLISHED VOCABULARY of the `action` level, enumerated. Every return path in `action_for`
+# above is a literal or a lookup into TOOL_ACTION / EXE_TO_ACTION, so the level is CLOSED — it
+# can emit these 22 values and nothing else, however long the window or however odd the shell
+# command. That is not a detail: `workstreams.INVENTORY` publishes this level with NO top-N cut
+# (see the cap column there), which is only defensible because the payload it can produce is
+# bounded by this tuple, and `enrich.Acts` mirrors it Go-side as the gate that keeps a
+# separately-shipped sidecar from publishing a label no consumer's vocabulary contains.
+#
+# Enumerated rather than derived, because the derivation is a three-way union across two tables
+# and a chain of `verb.startswith` branches — unreadable as a contract, and silently widened by
+# any edit to either table. test_analysis_vocab.py asserts this tuple equals that union, so a new
+# act is a deliberate line here rather than an accident.
+#
+# SORTED, and the order is load-bearing: enrich.Acts is pinned against this literal by position
+# (TestActVocabularyMatchesTheSidecar).
+ACTIONS = ("apply a skill", "ask the person", "build", "commit", "convert a document",
+           "create", "delegate", "deliver a file", "edit", "fetch", "install",
+           "manage files", "publish", "query a database", "read", "run a service",
+           "run code", "search", "sync with remote", "test", "transform",
+           "version control")
+
 # WHAT KIND OF THING is being worked on. No single level answers it: a PowerPoint deck edited
 # through its unpacked parts reports `.xml` at 100%, which says nothing about presentations, while
 # the evidence is scattered across the skill (pptx), the directory (ppt/slides) and the programs

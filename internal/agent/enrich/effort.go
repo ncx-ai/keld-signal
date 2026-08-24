@@ -1,5 +1,31 @@
 package enrich
 
+// Act is one entry of a window's PHYSICAL ACTS inventory: an act from the closed
+// Acts vocabulary and how many times the window did it.
+//
+// It is a COUNT, not a share, and that follows from being an inventory rather
+// than an allocation: there is no denominator to divide by, because the acts do
+// not partition the hour — an hour that reads and edits and tests is all three at
+// once, which is precisely why this is not an eighth workstream (see Acts).
+//
+// PRIVACY, structurally, and the reason this ships while `named_terms` does not.
+// Value is gated against Acts at the decode boundary (sidecar.convertActs), and
+// on the producing side the `action` level is written in exactly two places
+// (sidecar/app/analysis/levels.py, both inside the `tool_use` branch) — from a
+// tool NAME and from a shell command's argv — each through `vocab.action_for`,
+// whose every return path is a literal or a closed-table lookup. So there is no
+// field here a transcript string could occupy and no path by which one could
+// arrive, which is the mechanism rather than a comment asking for one.
+// publish.TestEnrichmentWireShapeCannotCarryAnalysisInternals fails if a later
+// change adds a field that could.
+type Act struct {
+	// Value is a member of Acts. Never empty: an entry that names no act is a
+	// count attached to nothing (see KnownAct).
+	Value string `json:"value"`
+	// N is how many times the window did it. Always stated.
+	N int `json:"n"`
+}
+
 // Effort is a window's EFFORT signals: how much was authored in it, and how fast
 // its turns came. The digest beside it (Profile.Workstreams) says what the window
 // was about and Profile.Dynamics says how that is changing; this says what the

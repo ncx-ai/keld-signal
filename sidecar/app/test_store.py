@@ -4,7 +4,7 @@
 
 The contract these tests exist for is ONE property: `Store.rollup_window` must return exactly
 what `window.rollup` returns over the same rows. Everything downstream — `workstreams.payload`,
-the seven allocation dimensions, the five inventory lists, the published enrichment — consumes
+the seven allocation dimensions, the six inventory lists, the published enrichment — consumes
 that shape and nothing else. So the assertions compare against `window.rollup` directly rather
 than against hand-written counts: a hand-written expectation would test this file's arithmetic,
 whereas the comparison tests the thing that actually has to hold.
@@ -207,16 +207,35 @@ def test_start_and_end_accept_datetimes_and_iso_strings():
 # --- sparse bins: absence must never read as "no evidence" -----------------------------------
 
 def test_a_level_that_is_not_precomputed_is_still_answered_in_full():
-    """`bin` holds only the 12 default levels; `events_for_turns` emits 19. If rollup_window
+    """`bin` holds only the 13 default levels; `events_for_turns` emits 19. If rollup_window
     served bins alone, `verb` would come back empty and a reader would take that for "nothing
     happened". The raw events are retained precisely so the answer stays complete."""
     with tempfile.TemporaryDirectory() as tmp:
         st, rows = _loaded(tmp)
         start, end = T0 + 71.3, T0 + 3671.3
         got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
-        for level in ("verb", "action", "file"):
+        for level in ("verb", "file"):
             assert level not in PRECOMPUTED_LEVELS, level
+            assert want[level], f"premise: {level} must carry evidence or this asserts nothing"
             assert got[level] == want[level], (level, got.get(level), want[level])
+        st.close()
+
+
+def test_the_bin_path_and_the_event_path_agree_on_a_newly_precomputed_level():
+    """`action` was the third exemplar above until it joined PRECOMPUTED_LEVELS (it is published
+    as `inventory.physical_acts`). Moving a level into the precomputed set changes WHICH of the
+    two paths answers for it, and must not change the ANSWER — the one property this whole file
+    exists for. Asserted on `action` specifically because it is the level that just moved."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, rows = _loaded(tmp)
+        start, end = T0 + 71.3, T0 + 3671.3
+        got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
+        assert "action" in PRECOMPUTED_LEVELS, (
+            "`action` is published as inventory.physical_acts, so workstreams.INVENTORY must "
+            "put it in the precomputed set: an unbinned published level under-counts the "
+            "interior of every historical window")
+        assert want["action"], "premise: the fixture must exercise the action level"
+        assert got["action"] == want["action"], (got.get("action"), want["action"])
         st.close()
 
 

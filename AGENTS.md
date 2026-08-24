@@ -382,7 +382,7 @@ could raise.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").
-- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **8**
+- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **11**
   — bump it and re-run the eval when changing any vocab). Classify calls are
   prefixed with a context preamble (`Meta.PreambleCoding()`; `domain` uses the
   fuller `Meta.Preamble()`). **Facet-selective agentic augmentation:** agentic

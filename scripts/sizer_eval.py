@@ -799,9 +799,9 @@ def do_dist(_a):
     sessions = [s for (s,) in st._conn().execute("SELECT DISTINCT session FROM bin "
                                                  "ORDER BY session")]
     names = [n for n, _l, _f in ALLOCATION]
-    inv = [n for n, _l in INV_DIMENSIONS]
+    inv = [n for n, _l, _c in INV_DIMENSIONS]
     level_of = {n: l for n, l, _f in ALLOCATION}
-    level_of.update({n: l for n, l in INV_DIMENSIONS})
+    level_of.update({n: l for n, l, _c in INV_DIMENSIONS})
     acc = {n: {"status": collections.Counter(), "changed": collections.Counter(),
                "reading": collections.Counter(), "turnover": [], "decay": [], "shift": [],
                "em_n": [], "dc_n": [], "pair": [],
@@ -896,7 +896,7 @@ def do_dist(_a):
                 if v["changed"]:
                     a["named"]["changed"].append((1.0, s, end))
             # The inventory dimensions, same arithmetic, no floor.
-            for n, level in INV_DIMENSIONS:
+            for n, level, _cap in INV_DIMENSIONS:
                 a = acc[n]
                 s_items = slice_rl.get(level) or []
                 b_items = baseline_rl.get(level) or []

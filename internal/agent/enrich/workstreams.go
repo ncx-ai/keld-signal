@@ -43,15 +43,18 @@ var errAnalysisUnavailable = errors.New("workstreams: window analysis unavailabl
 // for any dimension.
 //
 // It returns a WindowAnalysis rather than the dimension map alone because ONE
-// /analyze call answers two questions — what the window contains and how it is
-// changing — and asking twice would double the cost of the facet for a block the
-// first call already computed.
+// /analyze call answers four questions — what the window contains, how that is
+// changing, what it cost in work, and what it physically did — and asking again
+// would multiply the cost of the facet for blocks the first call already
+// computed.
 type WorkstreamAnalyzer func(path, promptID string, spanMinutes int) (WindowAnalysis, bool)
 
 // WorkstreamsExtractor publishes the deterministic dimensions a cost report
 // buckets by (project, branch, model, output_type, language, workflow,
-// tooling). It runs no inference: the values are counted from tool-call
-// metadata in the transcript window, so the pass declares itself ModelFree and
+// tooling), plus the same window's dynamics, effort and PHYSICAL-ACTS INVENTORY
+// — four answers from one /analyze call. It runs no inference: the values are
+// counted from tool-call metadata in the transcript window, so the pass declares
+// itself ModelFree and
 // must still run when ctx.Model is nil (ml_backend "deterministic", or a
 // sidecar that has no model resident). Gating it on inference readiness would
 // defeat the point of having a model-free facet.
@@ -111,6 +114,12 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	// zeroed struct when the sidecar sent no block: see effortFrom.
 	if an.Effort != nil {
 		res["effort"] = an.Effort
+	}
+	// The physical-acts inventory, same call, same no-Producer reasoning. An empty
+	// list publishes NO key: an inventory of nothing is not an answer, it is the
+	// absence of one, and the two must not look alike downstream.
+	if len(an.PhysicalActs) > 0 {
+		res["physical_acts"] = an.PhysicalActs
 	}
 	return res, nil
 }

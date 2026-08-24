@@ -135,7 +135,11 @@ func pyTuple(t *testing.T, src, name string) []string {
 		t.Fatalf("no `%s = (...)` assignment in the sidecar module", name)
 	}
 	var out []string
-	for _, q := range regexp.MustCompile(`"([a-z_]+)"`).FindAllStringSubmatch(m[1], -1) {
+	// A SPACE is admitted in the value class because one of the pinned
+	// vocabularies is phrases rather than identifiers: vocab.ACTIONS holds
+	// "run a service", "version control", "ask the person". The other three hold
+	// bare identifiers, so widening the class cannot change what they parse to.
+	for _, q := range regexp.MustCompile(`"([a-z_ ]+)"`).FindAllStringSubmatch(m[1], -1) {
 		out = append(out, q[1])
 	}
 	return out

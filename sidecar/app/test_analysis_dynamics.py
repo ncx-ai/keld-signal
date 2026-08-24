@@ -506,7 +506,7 @@ def test_inventory_dimensions_stay_out_and_the_reason_is_now_measured():
                    _n("term", "Aurora", 20), _n("service", "s3", 10),
                    _n("mcp_tool", "m", 10)])
     got = compare(both, both)
-    for name, _level in workstreams.INVENTORY:
+    for name, _level, _cap in workstreams.INVENTORY:
         assert name not in got, name
 
 

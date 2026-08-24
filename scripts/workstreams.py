@@ -75,7 +75,7 @@ def main():
         top = ", ".join(f"{k} {v}" for k, v in buckets[name].most_common(4))
         print(f"{name:14} {ok/tot:11.0%} {1-ok/tot:13.0%}   {top}")
     print(f"\n{'inventory':18} windows with any   distinct values")
-    for name, level in INVENTORY:
+    for name, _level, _cap in INVENTORY:
         n = sum(1 for r in rows if r["inventory"][name])
         d = len({x["value"] for r in rows for x in r["inventory"][name]})
         print(f"  {name:18} {n/len(rows):13.0%}   {d}")

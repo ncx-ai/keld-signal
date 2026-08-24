@@ -280,14 +280,17 @@ type Workstream struct {
 
 // AnalyzeResult is the Go-side view of the sidecar's /analyze response.
 //
-// It deliberately omits the response's "inventory" (harness_tools,
-// named_terms): named_terms is drawn from the raw transcript and can carry
-// person names (e.g. "Federico", "Daniel" have both appeared in real
-// windows). The rule on this branch is that analysis output stays on this
-// machine and only matched vocabulary IDs — the Workstreams below — ever
-// reach Atlas. Not giving AnalyzeResult a field for inventory means a later
-// publish path (Profile.Workstreams -> Atlas) has structurally nowhere to
-// forward it, rather than merely being told not to by a comment.
+// It models the response's "inventory" the same SELECTIVE way it models
+// "dynamics": one field for the one key that publishes. `physical_acts` (the
+// `action` level) has one; harness_tools, programs, external_systems,
+// integrations and above all named_terms do not, and so cannot be decoded at
+// all. named_terms is drawn from the raw transcript and can carry person names
+// (e.g. "Federico", "Daniel" have both appeared in real windows). The rule on
+// this branch is that only matched vocabulary IDs ever reach Atlas — the
+// Workstreams below, and now the closed 22-value act vocabulary, which is
+// gated again in convertActs. Not giving InventoryBlock a field for the rest
+// means a later publish path has structurally nowhere to forward it, rather
+// than merely being told not to by a comment.
 //
 // Session/WindowStart/WindowEnd are kept: they're metadata about the window
 // (a session hash, timestamps), not content, and are useful for local
@@ -305,8 +308,33 @@ type AnalyzeResult struct {
 	WindowStart string                 `json:"window_start"`
 	WindowEnd   string                 `json:"window_end"`
 	Workstreams map[string]*Workstream `json:"workstreams"`
+	Inventory   InventoryBlock         `json:"inventory"`
 	Dynamics    DynamicsBlock          `json:"dynamics"`
 	Effort      *EffortBlock           `json:"effort"`
+}
+
+// InventoryBlock is /analyze's inventory object, and it models ONE of its six
+// keys. The other five — harness_tools, programs, external_systems, integrations
+// and named_terms — are on-device only, and `named_terms` is the reason the
+// distinction is enforced by the struct rather than by a comment: it is the one
+// level drawn from message TEXT, and real person names have been observed in it.
+// A struct with one field is deliberate, exactly as DynamicsBlock's is: it keeps
+// the rest structurally unreachable instead of decoded-then-dropped.
+//
+// A slice, not a pointer: an inventory dimension's absence and its emptiness are
+// the same fact ("nothing was recorded"), unlike an effort block, where a zeroed
+// struct would state measurements nobody took. convertActs still returns nil
+// rather than an empty slice, so the published payload omits the key.
+type InventoryBlock struct {
+	PhysicalActs []InventoryItem `json:"physical_acts"`
+}
+
+// InventoryItem is one entry of an inventory dimension as it arrives on the wire:
+// a value and its count, and nothing else — no span, no offset, no surrounding
+// message (the wire-shape discipline the sidecar's own payload test holds it to).
+type InventoryItem struct {
+	Value string `json:"value"`
+	N     int    `json:"n"`
 }
 
 // DynamicsBlock is /analyze's dynamics object, and it models ONE of its keys.

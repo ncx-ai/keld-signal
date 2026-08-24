@@ -40,9 +40,48 @@ ALLOCATION = [
 # it because it doesn't fit ALLOCATION's shape would silently discard the one signal the rest of
 # this package cannot see, and would also make analyze_window's spaCy pass — the most expensive
 # part of the call — pure waste.
-INVENTORY = [("harness_tools", "tool"), ("programs", "exe"),
-             ("external_systems", "service"), ("integrations", "mcp_tool"),
-             ("named_terms", "term")]
+#
+# `physical_acts` (level "action") belongs here for the SAME measured reason, applied to a level
+# that had simply never been assessed: it was extracted, stored and fed to dynamics, and
+# published nowhere. Over 1,022 windows
+# (~/keld/refseries-context/act-artifact/RESULTS.md, commit 6cf15eb) it FAILED as an
+# ALLOCATION dimension at coverage 0.185 against a pre-registered 0.70 bar — but by the opposite
+# route to every other failure in that series. It is not thin: the level fires in 97.8% of
+# windows at a median of 34 observations, MORE evidence than `output_type` (10) or `language` (9),
+# both of which ship. Of the 81.5% unattributed, only 2.2 points is `absent`; 55.5 is
+# `no_majority`. The top act's share is p50 0.403 and no floor recovers it (0.612 even at 0.30,
+# still under the bar). Distinct acts per window: p50 7, p90 12, max 16.
+#
+# The reason is physical: an hour of agentic work READS and SEARCHES and EDITS and RUNS. Asking
+# which single act owns it is the wrong question in the exact way asking which single term owns
+# it is — `named_terms`' profile is 97% coverage / 19% dominance and this one's is 97.8% / 18.5%.
+# So it publishes as an inventory of what was done. That is the field a reader groups on to ask
+# "did this hour read PDFs, edit spreadsheets, run code" — a question no other level answers,
+# because every one of them names the OBJECT of the work rather than the act (see vocab.py's
+# TOOL_ACTION: `tool` says Bash 55%, which is an implementation detail).
+#
+# The NAME is not the level's. `action` is what the rollup calls it, and every published
+# inventory key is a readable renaming (`harness_tools` for `tool`, `programs` for `exe`). It is
+# `physical_acts` rather than `actions` because the payload already carries an unrelated,
+# ML-classified `activity_type` facet through the same publish path (enrich.Activities) — two
+# near-homonyms with different vocabularies in one payload is a reader's error waiting to happen
+# — and because "physical" is the distinction the vocabulary is BUILT on, not decoration: the act
+# as against the thing it was done to.
+#
+# THE THIRD COLUMN IS THE TOP-N CUT, and `physical_acts` deliberately has none.
+#
+# A cut exists because an inventory of an OPEN vocabulary is unbounded: `programs` carries ~180
+# distinct values per window and `named_terms` 4,256 across the corpus, so the payload needs a
+# ceiling, and the price is that its boundary is arbitrary (see the note in `payload`). The
+# `action` level cannot need one: `vocab.ACTIONS` is CLOSED at 22 values by construction — every
+# return path in `action_for` is a literal or a table lookup — so the whole level is a bounded 22
+# entries at absolute worst, smaller than the 12 every other dimension is cut to on a busy
+# window. Inheriting the cap would therefore buy nothing and cost something real: windows carry
+# p90 12 / max 16 distinct acts, so a 12-cut would silently drop acts from roughly the top decile
+# of windows, chosen by rollup()'s tie-break order. `None` means publish the level whole.
+INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
+             ("external_systems", "service", 12), ("integrations", "mcp_tool", 12),
+             ("named_terms", "term", 12), ("physical_acts", "action", None)]
 
 # Loopback is not an external system. It is 85% of the raw service level and would otherwise be
 # the top "system this org depends on".
@@ -61,6 +100,15 @@ def payload(rl):
     Whoever wires publication next must filter this field through the org's configured vocabulary
     matcher (or drop it) before it leaves the device, the same way every other masked span already
     is upstream of publish (see AGENTS.md's privacy invariant).
+
+    `inventory.physical_acts` is the CONTRAST, and the reason that note names `named_terms`
+    specifically rather than the block. It publishes to Atlas as of enrich.SchemaVersion 11, and
+    the privacy question was answered in code rather than assumed: the `action` level is written
+    in exactly two places (app/analysis/levels.py, both inside the `tool_use` branch) — from a
+    tool NAME, and from a shell command's argv — and both go through `vocab.action_for`, whose
+    every return path is a literal or a lookup into a closed table. So no fragment of a
+    transcript can occupy the level, and `vocab.ACTIONS` enumerates the 22 values that can, with
+    `enrich.Acts` gating them again on the Go side against a separately-shipped sidecar.
     """
     ws = {}
     for name, level, floor in ALLOCATION:
@@ -69,11 +117,13 @@ def payload(rl):
             "value": v, "share": round(share, 3), "evidence": tot,
             "provenance": "known:tool_inputs"}
     inv = {}
-    for name, level in INVENTORY:
+    for name, level, cap in INVENTORY:
         vals = rl.get(level) or []
         if name == "external_systems":
             vals = [(k, v) for k, v in vals if k not in LOOPBACK]
-        # Fixed top-12, cut by POSITION, not by value: a tie straddling the boundary (item 12
+        # Fixed top-N (12 for every OPEN vocabulary; None — no cut at all — for the closed
+        # `action` level, see INVENTORY), cut by POSITION, not by value: a tie straddling the
+        # boundary (item 12
         # and item 13 sharing the same count) is resolved by rollup()'s tie-break order alone,
         # so which one survives the cut is arbitrary — real for every level, but the one that
         # actually surfaces it is "programs" (exe): the largest inventory dimension by a wide
@@ -83,6 +133,9 @@ def payload(rl):
         # value occupies slot 12 while agreeing on every count — that is not a bug in either
         # run, just an unrepresented tie at the cut. Confirmed on the frozen corpus: 114/572
         # windows differ in "programs"' published set (never its counts) against the pre-Task-7
-        # pandas payload for exactly this reason — see task-7-report.md, Step 5.
-        inv[name] = [{"value": str(k), "n": int(v)} for k, v in vals[:12]]
+        # pandas payload for exactly this reason — see task-7-report.md, Step 5. It is precisely
+        # this effect that `physical_acts` opts out of, because a closed vocabulary gives it
+        # nothing in exchange.
+        inv[name] = [{"value": str(k), "n": int(v)}
+                     for k, v in (vals if cap is None else vals[:cap])]
     return {"schema": SCHEMA, "workstreams": ws, "inventory": inv}

@@ -59,7 +59,20 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           REFUTED and are deliberately absent: token weight, tool-output volume, error
 #           thrashing, error rate. A window that answered with seven fewer keys is a window
 #           answered differently, which is exactly this number's trigger.
-SCHEMA = 6
+#   6 -> 7: `inventory.physical_acts` is added -- the `action` level, published for the first
+#           time. It has been extracted, stored and fed to dynamics since this package existed
+#           and reached no payload at all: measured, `action` appeared ZERO times in
+#           workstreams.py. Assessed as an eighth ALLOCATION dimension it FAILED (coverage 0.185
+#           against a 0.70 bar) and it fails for a reason no other dimension in that series did
+#           -- not thinness (it fires in 97.8% of windows at a median 34 observations, more than
+#           `output_type` or `language`, both of which ship) but PLURALITY: top share p50 0.403,
+#           p50 7 distinct acts per window, and 0.612 coverage even at a 0.30 floor. That is
+#           `named_terms`' profile (97%/19% against this one's 97.8%/18.5%), and INVENTORY is
+#           where this package already resolves it. Published WHOLE, with no top-N cut, because
+#           `vocab.ACTIONS` is closed at 22 values -- see the third column of
+#           `workstreams.INVENTORY`. Measurements:
+#           ~/keld/refseries-context/act-artifact/RESULTS.md (commit 6cf15eb).
+SCHEMA = 7
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

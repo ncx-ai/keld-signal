@@ -64,8 +64,24 @@ type Enrichment struct {
 	// a byte LENGTH — the one function permitted to read `old_string`/
 	// `new_string`/`content` returns an int — and the tempo is derived from
 	// timestamps alone. Absent when the analysis produced no block.
-	Effort         *enrich.Effort `json:"effort,omitempty"`
-	PipelineStatus string         `json:"pipeline_status"`
+	Effort *enrich.Effort `json:"effort,omitempty"`
+	// PhysicalActs is what the window physically DID: an inventory of acts with
+	// counts (see enrich.Act, and enrich.Acts for the closed vocabulary and the
+	// measurement that made this an inventory rather than an eighth workstream).
+	// Same /analyze call as the three blocks above, same no-inference path.
+	//
+	// It is the ONE key of that call's `inventory` block that publishes, and the
+	// reason is provenance, not preference: the `action` level is written from a
+	// tool NAME and from a shell command's argv, both through a closed lookup
+	// table, so no fragment of a transcript can occupy it. Its five siblings stay
+	// on-device — `named_terms` above all, which is read from message text and has
+	// held real person names — and are not modelled in sidecar.InventoryBlock at
+	// all, so there is nowhere here to forward them even by mistake
+	// (TestEnrichmentWireShapeCannotCarryAnalysisInternals fails if that changes).
+	//
+	// Absent when the window recorded no act; never an empty list.
+	PhysicalActs   []enrich.Act `json:"physical_acts,omitempty"`
+	PipelineStatus string       `json:"pipeline_status"`
 	// FacetsSkipped names the passes this run structurally does not have (a
 	// model-dependent pass under ml_backend "deterministic"). It rides with
 	// pipeline_status because it is what makes that field readable: without it,
@@ -122,6 +138,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		Workstreams:       p.Workstreams,
 		Dynamics:          p.Dynamics,
 		Effort:            p.Effort,
+		PhysicalActs:      p.PhysicalActs,
 		PipelineStatus:    p.PipelineStatus,
 		FacetsSkipped:     p.FacetsSkipped,
 		FacetsDegraded:    p.FacetsDegraded,

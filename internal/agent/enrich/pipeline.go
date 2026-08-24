@@ -339,6 +339,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		Workstreams:       workstreamsFrom(ctx.Get("workstreams")),
 		Dynamics:          dynamicsFrom(ctx.Get("workstreams")),
 		Effort:            effortFrom(ctx.Get("workstreams")),
+		PhysicalActs:      actsFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
 		FacetsSkipped:     skipped,
 		FacetsDegraded:    degraded,
@@ -430,6 +431,18 @@ func effortFrom(out map[string]any) *Effort {
 	if out != nil {
 		if e, ok := out["effort"].(*Effort); ok {
 			return e
+		}
+	}
+	return nil
+}
+
+// actsFrom reads the physical-acts half of the same committed pass output. Empty
+// yields nil, so a window that recorded no act publishes no key rather than an
+// empty list that would read as "we looked and the hour did nothing".
+func actsFrom(out map[string]any) []Act {
+	if out != nil {
+		if a, ok := out["physical_acts"].([]Act); ok && len(a) > 0 {
+			return a
 		}
 	}
 	return nil

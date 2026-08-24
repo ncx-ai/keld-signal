@@ -429,3 +429,65 @@ func TestBuildOmitsAnAbsentEffortBlock(t *testing.T) {
 		t.Errorf("an absent effort block was published: %s", b)
 	}
 }
+
+// The PHYSICAL ACTS inventory reaches the wire. It is the one inventory dimension
+// of /analyze that publishes: `action` is derived from tool NAMES and shell argv
+// against a closed 22-value table, never from message text, which is exactly what
+// keeps `named_terms` on-device (see enrich.Act and the sidecar's
+// workstreams.payload docstring).
+func TestBuildCarriesThePhysicalActsInventory(t *testing.T) {
+	p := enrich.Profile{PhysicalActs: []enrich.Act{
+		{Value: "read", N: 41}, {Value: "edit", N: 12}, {Value: "run a service", N: 2},
+	}}
+	e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+	if len(e.PhysicalActs) != 3 {
+		t.Fatalf("acts inventory dropped by Build: %+v", e.PhysicalActs)
+	}
+	if e.PhysicalActs[0].Value != "read" || e.PhysicalActs[0].N != 41 {
+		t.Errorf("acts mangled: %+v", e.PhysicalActs)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PLURAL on the wire, with counts and no shares: an inventory makes no
+	// dominance claim, which is the measured reason this is not an eighth
+	// workstream (coverage 0.185 as one; see enrich.Acts).
+	for _, want := range []string{`"physical_acts"`, `{"value":"read","n":41}`,
+		`{"value":"edit","n":12}`, `{"value":"run a service","n":2}`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("wire missing %s: %s", want, b)
+		}
+	}
+	// Scoped to the acts array, since `confidence` legitimately appears on every
+	// Labeled facet beside it. An entry is a COUNT and nothing else: there is no
+	// denominator to divide by, because the acts do not partition the hour.
+	acts, err := json.Marshal(e.PhysicalActs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unwanted := range []string{`"share"`, `"confidence"`, `"evidence"`, `"provenance"`} {
+		if strings.Contains(string(acts), unwanted) {
+			t.Errorf("an inventory entry must carry no %s: %s", unwanted, acts)
+		}
+	}
+}
+
+// Absent, not an empty list. `"physical_acts":[]` would read as "we analysed the
+// hour and it did nothing" — the same distinction the workstreams and dynamics
+// keys already keep.
+func TestBuildOmitsAnEmptyPhysicalActsInventory(t *testing.T) {
+	for name, p := range map[string]enrich.Profile{
+		"nil":   {},
+		"empty": {PhysicalActs: []enrich.Act{}},
+	} {
+		e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), `"physical_acts"`) {
+			t.Errorf("%s: an empty acts inventory was published: %s", name, b)
+		}
+	}
+}

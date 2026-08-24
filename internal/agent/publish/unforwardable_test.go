@@ -3,6 +3,7 @@ package publish
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -52,6 +53,19 @@ import (
 //     volume — a restated tool-call count), error_rate / n_errors / n_thrash /
 //     max_err_run (a window statistic and a 4.8%-prevalence alert).
 //
+// EXTENDED AGAIN for the physical-acts inventory, and this is the case that tests
+// the LIST itself rather than the payload. `physical_acts` publishes — it is the
+// one key of /analyze's `inventory` block whose values come from tool names and
+// shell argv against a closed 22-value table, never from message text. Its five
+// siblings do not, and `inventory` and `named_terms` STAY on the list below
+// precisely so that adding a publishable inventory key cannot be mistaken for
+// permission to forward the block: a field named `inventory`, or one named
+// `named_terms`, still fails here. What makes that a real guard rather than a
+// coincidence of naming is that `physical_acts` is a TOP-LEVEL key on Enrichment
+// (a sibling of `workstreams`/`dynamics`/`effort`), never nested under an
+// `inventory` object — so nothing had to be removed from this list to let it
+// through, and the presence check below proves the filler reaches it.
+//
 // A field added for any of them fails HERE rather than in a review.
 var forbiddenWireKeys = []string{
 	"inventory", "named_terms", "window_start", "window_end",
@@ -80,7 +94,12 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// The effort block and both of its halves, so the absence checks below
 		// cannot pass merely because the filler stopped reaching it.
 		`"effort"`, `"authored_bytes"`, `"authoring_turns"`, `"authored_status"`,
-		`"fast_share"`, `"gaps"`, `"tempo"`, `"tempo_status"`} {
+		`"fast_share"`, `"gaps"`, `"tempo"`, `"tempo_status"`,
+		// The acts inventory and both fields of an entry, so "inventory" and
+		// "named_terms" staying forbidden below is a real result about a payload
+		// that DOES carry an inventory key, not a vacuous pass over one that
+		// carries none.
+		`"physical_acts"`, `"n":1`} {
 		if !strings.Contains(got, present) {
 			t.Fatalf("filler did not populate %s; the absence checks below would be vacuous:\n%s",
 				present, got)
@@ -92,6 +111,17 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 			t.Errorf("published enrichment carries %q — analysis internals must stay on-device "+
 				"(named terms can be real person names; window bounds are local metadata):\n%s",
 				k, got)
+		}
+	}
+	// Guard the guard, the other way round: the two keys that make this list about
+	// the INVENTORY block must still be on it. Adding a publishable inventory key
+	// must not have widened what the list permits, and deleting an entry to make a
+	// future failure go away is exactly the regression that would.
+	for _, required := range []string{"inventory", "named_terms"} {
+		if !slices.Contains(forbiddenWireKeys, required) {
+			t.Errorf("%q was removed from forbiddenWireKeys: `physical_acts` publishes "+
+				"because its provenance is a closed table, which is no licence to forward "+
+				"the rest of the block", required)
 		}
 	}
 }

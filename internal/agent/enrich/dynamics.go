@@ -77,6 +77,11 @@ type Dynamic struct {
 type WindowAnalysis struct {
 	Workstreams map[string]Labeled
 	Dynamics    map[string]Dynamic
+	// PhysicalActs is what the window's hour physically DID — the `action` level,
+	// published as an INVENTORY rather than a workstream (see Acts for the
+	// measurement, and Act for the shape). Nil, never an empty slice, when the
+	// analysis produced none: "the hour did nothing" is not a fact this can state.
+	PhysicalActs []Act
 	// Effort is the same window's two surviving transcript signals — how much was
 	// authored and how fast the turns came (see Effort). Third half of the same
 	// call, and nil for a sidecar too old to compute the block: a zeroed Effort

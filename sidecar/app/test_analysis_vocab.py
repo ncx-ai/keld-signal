@@ -2,7 +2,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.analysis.vocab import (action_for, toolchain_for, artifacts_for, mcp_provider,
-                                EXT_LANG, CODE_EXT)
+                                ACTIONS, EXE_ACTION, TOOL_ACTION, EXT_LANG, CODE_EXT)
 
 
 def test_a_directory_shape_beats_an_extension():
@@ -152,6 +152,34 @@ def test_code_ext_excludes_prose_and_config():
     for e in (".md", ".json", ".yaml", ".yml"):
         assert e not in CODE_EXT
     assert ".go" in CODE_EXT and ".go" in EXT_LANG
+
+
+def test_actions_enumerates_everything_action_for_can_emit():
+    """`ACTIONS` is the PUBLISHED vocabulary of the `action` level (workstreams.INVENTORY's
+    `physical_acts`), and the level is published UNTRUNCATED precisely because the vocabulary is
+    closed — so an act `action_for` can emit but `ACTIONS` omits would be published under a
+    contract that does not list it. The union below is `action_for`'s own three sources; the same
+    expression already guards activity.py's mapping (test_analysis_activity.py), for the same
+    reason: a new value must not become silently invisible."""
+    emitted = {a for a in TOOL_ACTION.values() if a} | set(EXE_ACTION)
+    emitted |= {"commit", "sync with remote", "test", "build", "install", "run a service",
+                "create", "edit"}            # action_for's verb branch + its heredoc writes
+    assert set(ACTIONS) == emitted, sorted(emitted.symmetric_difference(ACTIONS))
+    assert list(ACTIONS) == sorted(ACTIONS), "ACTIONS is pinned by order in Go (enrich.Acts)"
+    assert len(ACTIONS) == len(set(ACTIONS)), "duplicate act"
+
+
+def test_every_action_value_is_a_closed_vocabulary_member():
+    """The privacy property, asserted rather than assumed: `action_for` returns a member of the
+    closed vocabulary or None — never a fragment of its inputs. It is handed a shell command's
+    own argv, so a leak here would put transcript text on the `action` level, and that level now
+    publishes."""
+    for probe in ("customer-northfield", "s3://acme-private/quarterly.xlsx", "Federico"):
+        for kwargs in ({"tool": probe}, {"exe": probe}, {"verb": probe},
+                       {"exe": "cat", "args": [probe]},
+                       {"exe": "sed", "verb": "sed -i", "args": ["-i", probe]}):
+            got = action_for(**kwargs)
+            assert got is None or got in ACTIONS, (kwargs, got)
 
 
 if __name__ == "__main__":
