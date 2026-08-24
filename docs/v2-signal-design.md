@@ -4,6 +4,10 @@ For a developer new to this system. It explains what runs, when each thing happe
 actually detected, and *why* the design looks the way it does. Reference material lives in
 `AGENTS.md`; this is the orientation.
 
+Current at `enrich.SchemaVersion` **11**. Nearly every number below is a measurement with a commit
+behind it — where a decision looks arbitrary, it usually isn't, and §8 explains why that matters
+more here than in most systems.
+
 ---
 
 ## 1. The one invariant, first
@@ -117,6 +121,18 @@ whole per batch, and a changed workspace answer forces a reparse. Verified acros
 service refuses (`503`) and the job retries. Serving a window missing its last few minutes would
 publish a confidently wrong attribution, which is worse than publishing nothing.
 
+**Two silent data-corruption bugs lived here and are worth knowing about.** Neither was found by a
+test that said what was wrong. `transaction()`'s reentrancy depth was one integer on the Store while
+each thread holds its own connection — so a second writer read `depth == 1`, assumed it was nested,
+skipped its own `BEGIN IMMEDIATE`, ran in autocommit and held the WAL lock until everyone else timed
+out. It surfaced as a 1-in-8 "flaky test", and the real error was *masked* by a secondary exception
+from `__exit__`. And the session key was `basename(path)[:8]`, which is not unique — **445 of 500
+transcripts collided**, since Claude Code writes subagents as `agent-<hash>.jsonl`. It surfaced
+because a study silently reported 550 windows where the truth was 1,022. The key is now
+`sha256(abspath)[:16]`; the *display* label keeps the short form deliberately, because the
+fixture-identity gate fingerprints it and that gate is checked out at a different path on every
+machine.
+
 **Bins are not a fallback for events.** Digests read `event`, not `bin`, because reconciliation must
 be re-scoped per window. So pruning old events does not *narrow* a window — it breaks it. Retention
 is therefore a 400-day horizon plus a refusal (`410`) rather than a silent shortening.
@@ -202,11 +218,72 @@ Half the candidate dynamics were then **dropped on their distributions**: `proje
 zero across all 2,180 comparable windows (a transcript is scoped to one project directory), and
 `model` reported a change **0 times in 2,702 windows**.
 
-### 6d. Classification facets — model-backed, and unmeasured since
+### 6d. Physical acts — *what was done, as an inventory rather than a label*
 
-Seven facets classify the prompt text against a closed vocabulary using GLiNER2 in the sidecar:
+    read · search · edit · create · transform · convert a document · run code ·
+    query a database · test · build · commit · version control · fetch · publish ·
+    deliver a file · delegate · install · manage files · run a service · apply a skill  (22 total)
 
-    task_type · domain · activity_type · personal · function_guess · speech_act · subcategory
+Published as `inventory.physical_acts`. Measured live: `read 162, search 107, edit 63, test 44,
+version control 33, commit 28, run code 14, create 6, build 5, manage files 3`.
+
+**It is an inventory, not an allocation, and that was measured rather than assumed.** As a
+single-winner dimension it covers only **18.5%** of windows — but almost none of that is missing
+data: the level fires in **97.8%** of windows at a median of 34 observations, more evidence than
+`output_type` (10) or `language` (9), both of which ship. The top act's median share is **0.403**,
+and a window carries a median of **7** distinct acts (max 16). No floor recovers it; a 0.30 floor
+still yields 0.612.
+
+An hour of real work reads *and* edits *and* tests. "Which act owns this hour" is the wrong
+question, which is why this joins `named_terms` (97% coverage / 19% dominance) on the inventory
+side rather than the allocation side. It is also the only inventory dimension with **no top-N cut**:
+the vocabulary is closed at 22, and 4 of 10 sampled windows carry 14–15 distinct acts — above the
+12 the open-vocabulary dimensions are truncated to.
+
+Unlike `named_terms`, it **is** published to Atlas. The difference is verified in code, not asserted:
+`action` is written at exactly two sites, both inside the `tool_use` branch, from a tool name and
+from shell argv, each through `action_for`, whose every return is a literal or a closed-table lookup.
+No transcript fragment can occupy the level.
+
+### 6e. Effort — *what the window cost in work*
+
+    authored_bytes · authoring_turns · authored_status
+    fast_share · gaps · tempo · tempo_status
+
+Two signals that survived a six-candidate sweep of everything the transcript carries and the system
+was discarding.
+
+**Diff magnitude** is the byte size of what edits actually wrote. Held at a *fixed edit count*,
+per-window byte totals span **22×–87×** from p10 to p90 — windows indistinguishable under
+`edit >= 5` differ by two orders of magnitude in bytes authored.
+
+**Tempo** is the share of inter-turn gaps under 5s, which separates long autonomous stretches from
+turn-by-turn steering. Its independence is the cleanest of any candidate measured: **r = +0.012**
+against log window volume, −0.001 against the published `evidence` count.
+
+Note `tempo` states a conclusion while `authored_bytes` does not. The corpus supplies a defensible
+cut point for the gap share (median gap 4.15s; a 5s cut puts median `fast_share` nearest 0.5) and
+supplies none for a byte sum — so the byte count publishes with its turn count and refuses to invent
+"large" versus "small".
+
+`absent` and `0` stay distinct: a window with costed edits that authored nothing publishes `0`; a
+window with no magnitude at all publishes `null`.
+
+### 6f. Classification facets — model-backed, and not running this phase
+
+Six facets classify the prompt text against a closed vocabulary using GLiNER2 in the sidecar.
+**None of them runs in this phase** — GLiNER2 is not being shipped, so they publish nothing and are
+named in `facets_skipped`:
+
+    task_type · domain · activity_type · personal · function_guess · subcategory
+
+(`speech_act` was removed outright at SchemaVersion 9 — it scored 0.695 against a 0.713 constant,
+predicting `statement` 22 times and being right zero times.)
+
+Measured live against the gold set when the model *is* enabled: `task_type` 0.733 vs a 0.143
+baseline, `domain` 0.683 vs 0.261, `activity_type` 0.670 vs 0.243. So they work; they are simply not
+part of this phase. `personal` has **zero** gold labels and is unmeasurable; `function_guess` and
+`subcategory` have n=20.
 
 These are the reason `ml_backend:"auto"` still provisions a ~1.8 GB model. They are also the part of
 the system with the weakest evidence behind it — see §9. Classifiers score against readable label
@@ -259,25 +336,54 @@ flattering a half-life, `pdf 54%` for a slide deck built from ten `pdftoppm` cal
   times. Recall read as 0.14 and 0.42 when the true numbers were 1.00 and 0.71.
 - **Inject a mutation and confirm the suite bites.** Vacuously-passing tests were found in nearly
   every work unit — including assertions about masking that ran over empty span lists.
+- **Post-hoc findings usually fail replication.** A binary split scored +0.218 when spotted inside a
+  failed experiment and **+0.061** on a fresh sample — over half the original effect was class
+  balance, the baseline having moved 0.538 -> 0.653 on resampling alone. Treat anything discovered
+  mid-analysis as a hypothesis, never a result.
+- **Correlation with log window volume < 0.5 is the single most informative test here.** Almost every
+  attractive candidate turns out to be a size bucket wearing a label: derived routing clusters named
+  *size x did-anything-run*; output volume scored +0.552; `interactivity` +0.497; a promising
+  authoring split +0.737. Two signals passed it, and both shipped.
+- **Score a stability bar against a permutation null, or it means nothing.** A 0.70 split-half
+  agreement floor looked reasonable until the same procedure on column-permuted noise cleared it out
+  to k=8, matching real data exactly at k=4. The bar sat below its own null's p95.
 - **Pre-register the decision rule** before an experiment, and report the null result when it comes.
   `river` was rejected this way; so was GLiNER2 as a classifier (37.8% against a 67.8% majority
   baseline — 30 points *worse* than a constant guess, and degenerate at 91% one class).
 
 ---
 
-## 9. Deliberately not done
+## 9. Deliberately not done, and what was refuted
 
-- **GLiNER2 is unused by the WORKSTREAM and SENSITIVITY facets** — measured unfit as a classifier of
-  activity and unnecessary for detection. It is **not** unused by the pipeline: the semantic facets
-  (§ the "auto" note above) still issue 6 inferences per prompt, so `auto` genuinely needs the
-  weights. What changed is *when* they arrive: provisioning is triggered by the first attempted
-  inference rather than by daemon start, so a machine that never enriches never downloads them.
-- **Person and address detection**, per §6b.
-- **Enrichment cadence is per prompt.** A tick-based cadence (characterise every N minutes and
-  attach to all activity in the slice) is specified but deferred — the store removed its efficiency
-  justification, leaving a product decision.
+**Not done:**
+
+- **GLiNER2 is not shipping this phase.** The plumbing remains and loads lazily; nothing asks, so
+  nothing downloads. The six classification facets above go with it.
+- **Enrichment cadence is per prompt.** A tick-based cadence is specified and deferred — the store
+  removed its efficiency justification, leaving a product decision.
 - **Codex gets telemetry but no enrichment.** Both capture paths are dead: the watcher requires an
   `ordinal` field real Codex transcripts do not emit (0 of 26 prompts captured across 14 sessions),
-  and its hook events are not prompt submissions. The fix is known but the prompt id must match what
-  Codex's own telemetry emits or the Atlas join orphans every row — unresolved.
+  and its hook events are not prompt submissions. The fix is known, but the prompt id must match what
+  Codex's own telemetry emits or the Atlas join orphans every row.
 - **Cowork** is supported in code but its transcripts moved inside a VM the host cannot read.
+- **`proprietary`** is in the sensitivity vocabulary and structurally unemittable — no detector maps
+  to it.
+
+**Refuted, with the measurement, so nobody repeats them:**
+
+| | result |
+|---|---|
+| `activity_type`, deterministically | **four attempts, closed.** 6-way mapping 0.218 vs a 0.538 constant; derived clustering named size; two binary facets +0.061/+0.060; and a re-run on the *corrected* vocabulary still −0.169 |
+| GLiNER2 as an activity classifier | 37.8% vs a 67.8% baseline, degenerate at 91% one class |
+| spaCy NER for `person`/`address` | 858 spans, ~zero real names (`JSON` alone accounted for 132) |
+| gitleaks as a library | 17/24, **bit-identical** to our 490-line loader, for 204 modules |
+| token-weighted attribution | dominant value flips in **0.89%** of slots — and applying it would have silently deleted `MIN_EVIDENCE`, a count floor being meaningless against a token sum |
+| output volume | +0.552 against log volume — a tool-call count restated |
+| thrashing (consecutive tool errors) | real and concentrated (49 windows hold 29.1% of all errors) but 4.8% prevalence |
+| shape+keyword credential detection | 6 candidates in 2,137 prompts, all git SHAs or prose runs, zero credentials |
+
+**Why `activity_type` closed.** The levels record *what physically touched a file*; the vocabulary
+divides on *what the change meant*. Implementing a feature and reformatting a document are the same
+`Edit`. A vocabulary fix that corrected 96%-wrong `transform` records moved the score 15 points and
+did not move the verdict — which is how we know the two problems were independent. The reframe that
+*did* work was to stop asking what an edit meant and publish what happened: §6d.
