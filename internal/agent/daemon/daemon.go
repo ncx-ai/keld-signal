@@ -848,6 +848,19 @@ func Run(ctx context.Context) error {
 		offer := func(p spool.Pointer) { q.Offer(ingress.JobFrom(p)) }
 		observe := func(source, path string, line []byte) { tel.Observe(source, path, line) }
 		txw := watch.New(offer, observe, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv())
+		// Third use of the same detection: the watcher already knows when a
+		// transcript grew, so it tells the sidecar, which brings its
+		// reference-series store up to date from its own byte offset. That is
+		// what keeps /analyze a query instead of a parse — and, more to the
+		// point, keeps the parse off an enrichment job's per-pass deadline: a
+		// first whole-file ingest measured 5.1s inside an /analyze request.
+		// Fire-and-forget and never on this loop's critical path; the sidecar
+		// deliberately does not poll for growth. See ingestSignalHook for the
+		// scoping and the drop policy, and note /analyze keeps its own on-demand
+		// ingest as the backstop, so a dropped signal costs latency only.
+		if svc.SignalIngest != nil {
+			txw = txw.WithIngestSignal(ingestSignalHook(ctx, svc.SignalIngest))
+		}
 		go txw.Run(ctx)
 	}
 

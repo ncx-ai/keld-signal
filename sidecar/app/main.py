@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.analysis.analyze import PromptNotFound, StoreBehind, analyze_window
+from app.analysis.ingest import ingest_file
 from app.analysis.match import DEFAULT_BUDGET_S as _MATCH_DEFAULT_BUDGET_S
 from app.analysis.match import compile_vocabulary, match_text
 from app.analysis.store import open_store
@@ -262,6 +263,13 @@ class AnalyzeIn(BaseModel):
     span_minutes: int = 60
 
 
+class IngestIn(BaseModel):
+    """A transcript advanced. One field, deliberately: the daemon's watcher knows WHICH file grew
+    and nothing else worth sending — the byte offset to resume from is the store's own, not the
+    watcher's, and the appended bytes stay on the daemon's side of the call."""
+    path: str
+
+
 # /analyze path confinement (KELD_ANALYZE_ROOTS).
 #
 # The sidecar has NO auth: serve.py binds 127.0.0.1 and that is the whole of it. That was
@@ -461,6 +469,82 @@ def _analyze_blocking(path, prompt_id, span_minutes):
             inv["named_terms"] = []
     out["named_terms_status"] = status
     return out
+
+
+def _ingest_blocking(path):
+    """The whole of /ingest's work, on an executor thread.
+
+    `_analysis_nlp()` is resolved HERE, for the same reason `_analyze_blocking` resolves it here
+    (the multi-second load must not run on the event loop) and for one more that is specific to
+    ingest: the pipeline that ingests is part of the store's checkpoint (`ingest.terms_mode`),
+    because `term` is the one level never re-derived. Ingesting under a different pipeline than
+    /analyze resolves would force the very reparse the fingerprint exists to force.
+    """
+    nlp = _analysis_nlp() if _terms_status() == _TERMS_OK else None
+    st = _store()
+    if st is None:
+        raise StoreBehind("the reference-series store could not be opened")
+    return ingest_file(st, path, nlp)
+
+
+@app.post("/ingest")
+async def ingest(body: IngestIn):
+    """The daemon's watcher signalling that a transcript advanced: parse the appended tail into
+    the reference series from the stored byte-offset checkpoint.
+
+    Coordinates only — a path, and the response carries counts, never content.
+
+    WHY THIS ENDPOINT EXISTS. Ingest is also reachable from /analyze, which ingests on demand
+    when it finds the store behind (see analyze.analyze_window's `refresh`) — that stays as the
+    correctness backstop and this does NOT replace it. What it changes is WHEN the work happens:
+    a first whole-file ingest measured 5.1 s on a 90 MB transcript, and inside an /analyze
+    request that lands on an enrichment job's per-pass deadline. Signalled from the watcher it
+    lands on nothing. The daemon signals; the sidecar ingests (see the design spec at
+    docs/superpowers/specs/2026-08-23-incremental-reference-series-store-design.md); the sidecar
+    deliberately does not poll for growth, because the watcher already knows.
+
+    A DROPPED SIGNAL IS RECOVERABLE, AND THAT IS THE DESIGN. Ingest resumes from the stored
+    offset, so a signal lost to a restarting sidecar costs nothing but latency: the next signal
+    for that file catches up on everything since, and /analyze's on-demand ingest catches up even
+    if no further signal ever arrives. That is what lets the daemon side be fire-and-forget with
+    no retry (internal/agent/daemon/ingestsignal.go).
+
+    Like /analyze it bypasses _dispatch/the single-flight runner — a transcript parse is not an
+    inference — and runs in the default executor so a large file cannot stall the event loop out
+    from under /health and /metrics. It needs no model at all.
+    """
+    # Confinement BEFORE the open, and the SAME allowlist /analyze uses (see the block above
+    # _default_analyze_roots). The sidecar has no auth, so an unconfined /ingest would let any
+    # local user make the daemon's user parse an arbitrary path — /analyze's confused deputy with
+    # a persistence side effect, since what it derives is then written to the store.
+    if not _within_roots(body.path, _analyze_roots()):
+        _count("ingest_rejected")
+        raise HTTPException(status_code=403, detail="path is outside the configured transcript roots")
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(None, _ingest_blocking, body.path)
+    except FileNotFoundError:
+        # 404, not 503: the transcript is GONE, which is a permanent fact about the file, and a
+        # transient status would make the daemon re-signal a path that will never come back.
+        # (ingest_file raises this deliberately — see its docstring.)
+        _count("ingest_missing")
+        raise HTTPException(status_code=404, detail="transcript not found") from None
+    except StoreBehind:
+        _count("ingest_failed")
+        raise HTTPException(status_code=503, detail="the reference-series store is unavailable") from None
+    except Exception as exc:
+        # Class name only, and `from None` — the same rule /pii follows and for the same reason:
+        # a parse or sqlite error message can quote the transcript content it failed on, and an
+        # error path is exactly where prompt text escapes.
+        _count("ingest_failed")
+        log.warning("transcript ingest failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="ingest unavailable") from None
+    _count("ingest_served")
+    # Counts and one boolean. `new_lines` is speech turns parsed, so 0 with a moved offset is
+    # correct and normal (a tail of tool_result lines). No watermark timestamp, no offset, no
+    # session: the caller needs none of them to decide anything, and each would be a field a
+    # later publish path could pick up.
+    return {"new_lines": result.new_lines, "reparsed": result.reparsed}
 
 
 @app.get("/health")

@@ -315,6 +315,63 @@ func (c *Client) Analyze(path, promptID string, spanMinutes int) (AnalyzeResult,
 	return r, true
 }
 
+// ingestReq is the whole of the ingest signal: which transcript advanced. No
+// offset (the sidecar checkpoints its own), no line count, and above all no
+// bytes — the appended text stays on this side of the call, exactly as
+// spool.Pointer and Analyze keep it.
+type ingestReq struct {
+	Path string `json:"path"`
+}
+
+// ingestResp is decoded but not used: the counts are the sidecar's own
+// visibility (its /metrics), and the caller has no decision to make on them.
+// It exists because postOnce decodes into something.
+type ingestResp struct {
+	NewLines int  `json:"new_lines"`
+	Reparsed bool `json:"reparsed"`
+}
+
+// ingestSignalTimeout bounds one ingest signal. Sized above the measured worst
+// case — a first whole-file ingest of a 90 MB transcript took 5.1s — so the
+// common big-file case completes within one attempt and the outcome the client
+// reports is the outcome that happened, rather than a timeout over work that
+// actually succeeded. It stays bounded (rather than inheriting no deadline)
+// because the caller dispatches signals serially: a sidecar that accepts
+// connections and never answers must not hold the dispatcher forever.
+const ingestSignalTimeout = 30 * time.Second
+
+// SignalIngest tells the sidecar that the transcript at path has grown, so the
+// reference series is brought up to date OFF the request path (POST /ingest).
+// It sends COORDINATES — a path, nothing else.
+//
+// ONE ATTEMPT, NEVER A RETRY. Every other call here goes through post(), which
+// waits out a reloading/evicted sidecar because its answer is needed and
+// degrading is forbidden. This call is the opposite shape: nothing consumes its
+// result. Ingest resumes from the byte offset the sidecar stored, so a signal
+// lost to an unreachable sidecar costs latency and nothing else — the next
+// signal for that file catches up on everything appended since, and /analyze's
+// own on-demand ingest catches up even if no further signal ever arrives (see
+// analyze.analyze_window's `refresh`, kept as exactly that backstop). Retrying
+// here would trade that free recovery for a caller parked in a backoff sleep.
+//
+// ok=false means this attempt did not land. It is not an error the caller can
+// act on and must not be treated as one; the sidecar counts the real outcomes
+// (ingest_served/rejected/missing/failed in /metrics).
+func (c *Client) SignalIngest(path string) bool {
+	// A shallow copy with its own deadline and its own http.Client: c.hc's
+	// timeout is sized for an inference round-trip and would cut a legitimate
+	// first whole-file ingest short. Transport is left nil, so connections are
+	// still pooled through http.DefaultTransport.
+	cp := *c
+	cp.hc = &http.Client{Timeout: ingestSignalTimeout}
+	ctx, cancel := context.WithTimeout(c.ctx, ingestSignalTimeout)
+	defer cancel()
+	cp.ctx = ctx
+	var r ingestResp
+	ok, _ := cp.postOnce("/ingest", ingestReq{Path: path}, &r)
+	return ok
+}
+
 // Warmup triggers and awaits the sidecar's on-demand model load by issuing a
 // trivial /classify bound to ctx. The sidecar loads the model only when it
 // receives an inference request, so this is the request that starts the load;

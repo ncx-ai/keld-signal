@@ -253,7 +253,26 @@ could raise.
   structurally unforwardable no matter what the level is configured to do. That
   is what makes it safe for the level to be **on by default** (see the
   analysis-service bullet below).
-- ⚠️ **`/analyze` is confined to `KELD_ANALYZE_ROOTS`.** The sidecar has **no
+- **The watcher signals ingest; the sidecar never polls.** `/analyze` answers out
+  of a persistent reference-series store, and the parse that fills it is driven by
+  the transcript watcher: a file that advanced in a poll is signalled once (per
+  file, per poll) to the sidecar's **`POST /ingest`**, which parses only the
+  appended tail from its own byte-offset checkpoint. Coordinates only — a path,
+  never a line, never text. The seam is `watch.WithIngestSignal` (the coarse
+  sibling of the per-line `observe` hook); the daemon-side policy is
+  `daemon/ingestsignal.go`: **fire-and-forget** on a bounded, path-coalescing
+  queue with one serial sender, so an unreachable sidecar can never block or slow
+  the watcher's poll loop — the loop that carries every hook-free prompt. Signals
+  are **dropped, not retried**, because ingest resumes from the stored offset: the
+  next signal catches up, and `/analyze`'s own on-demand ingest is the backstop if
+  none ever comes. Scoped to `enrich.WorkstreamsEligible` sources (the same
+  predicate the pass is gated on — a Codex/Gemini window can never be served, so
+  ingesting it is pure cost). Forward-only by default, matching
+  `KELD_WATCH_BACKFILL`: a first sighting consumes nothing, so a daemon restart is
+  not a herd of whole-file ingests. Why it matters: a first whole-file ingest
+  measured **5.1s on a 90 MB transcript**, and inside an `/analyze` request that
+  lands on an enrichment job's per-pass deadline.
+- ⚠️ **`/analyze` and `/ingest` are confined to `KELD_ANALYZE_ROOTS`.** The sidecar has **no
   auth** — `serve.py` binds 127.0.0.1 and that is the whole of it — which was
   adequate while every endpoint only processed text the caller already held.
   `/analyze` is the first that opens an **arbitrary filesystem path as the
@@ -264,7 +283,8 @@ could raise.
   before the open — `os.path.realpath` on both sides, so neither `../` nor a
   symlink escapes — and anything outside answers **403** (not 404: a rejected
   path and an unresolvable one must stay distinguishable), counted as
-  `analyze_rejected` in `/metrics`. The daemon sets the variable at spawn from
+  `analyze_rejected`/`ingest_rejected` in `/metrics`. `/ingest` shares the
+  allowlist because it is the same read with a persistence side effect. The daemon sets the variable at spawn from
   `watch.AnalyzeRoots()` (`daemon/sidecarenv.go`), which is the **stable
   ancestors** of each layout plus `KELD_WATCH_ROOTS`, not `DiscoverRoots()`'s
   globbed leaves: session directories appear after the sidecar is spawned.

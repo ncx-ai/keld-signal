@@ -756,6 +756,127 @@ def test_analyze_response_carries_no_prompt_text():
         assert f'"{k}":' not in dumped, k
 
 
+# --- POST /ingest --------------------------------------------------------------------------
+#
+# The watcher's signal that a transcript advanced. It exists so the parse happens when the file
+# grows rather than inside an /analyze request, where it lands on a job's per-pass deadline. Same
+# properties as /analyze: coordinates in (a path, nothing else), the same root confinement, no
+# inference, off the runner, and no prompt text in the response.
+
+
+def test_ingest_leaves_the_store_able_to_answer_without_a_request_path_parse():
+    """The whole point of the endpoint, asserted where it shows: after the signal, the window is
+    answerable with refresh OFF — i.e. /analyze has nothing left to ingest. `refresh=False` is
+    the only way to state "no parse happened in this call" without stubbing something."""
+    from app.analysis.analyze import analyze_window
+    from app.metrics import Counts
+
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+    path = _fixture_transcript()
+
+    body = _asyncio.run(m.ingest(m.IngestIn(path=path)))
+    assert body["new_lines"] == 2, body
+    assert m._state["counts"].ingest_served == 1
+    assert m._state["counts"].submitted == 0, "the signal went through the inference runner"
+
+    out = analyze_window(path, _fixture_prompt_id(), 60, m._analysis_nlp(),
+                         store=m._store(), refresh=False)
+    assert out["schema"] >= 1 and "workstreams" in out, out
+
+    # A second signal for an unchanged file is a stat and a no-op: the watcher signals per poll,
+    # so this is the common case, and it must not reparse.
+    again = _asyncio.run(m.ingest(m.IngestIn(path=path)))
+    assert again["new_lines"] == 0 and again["reparsed"] is False, again
+
+
+def test_ingest_is_confined_to_the_configured_roots():
+    """Same allowlist, same reasoning as /analyze (see the block above _default_analyze_roots):
+    the sidecar has no auth, and this endpoint opens an arbitrary path AS THE DAEMON'S USER and
+    writes what it derives into the store. Unconfined it is the same confused deputy /analyze
+    would be, with a persistence side effect."""
+    from app.metrics import Counts
+
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+    path = _fixture_transcript()
+    os.environ["KELD_ANALYZE_ROOTS"] = os.path.join(os.path.dirname(path), "elsewhere")
+    try:
+        _asyncio.run(m.ingest(m.IngestIn(path=path)))
+        assert False, "expected 403"
+    except HTTPException as e:
+        assert e.status_code == 403, e.status_code
+    assert m._state["counts"].ingest_rejected == 1
+
+
+def test_ingest_of_a_vanished_transcript_is_404():
+    """A signal for a file that has since been deleted is a fact about the file, not a transient
+    condition: 404, so the caller does not treat it as "ask again"."""
+    from app.metrics import Counts
+
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+    path = _fixture_transcript()
+    gone = os.path.join(os.path.dirname(path), "ffffffff-0000.jsonl")
+    try:
+        _asyncio.run(m.ingest(m.IngestIn(path=gone)))
+        assert False, "expected 404"
+    except HTTPException as e:
+        assert e.status_code == 404, e.status_code
+    assert m._state["counts"].ingest_missing == 1
+
+
+def test_an_unopenable_store_makes_ingest_503():
+    m = _reload_main(None)
+    _wire(m)
+    path = _fixture_transcript()
+    os.environ["KELD_HOME"] = path            # a FILE where a directory must be
+    try:
+        _asyncio.run(m.ingest(m.IngestIn(path=path)))
+        assert False, "expected 503"
+    except HTTPException as e:
+        assert e.status_code == 503, e.status_code
+
+
+def test_ingest_response_carries_no_prompt_text():
+    m = _reload_main(None)
+    _wire(m)
+    said = "the marker sentence that must not come back"
+    dumped = json.dumps(_asyncio.run(m.ingest(m.IngestIn(path=_fixture_transcript(said=said)))))
+    assert said not in dumped, dumped
+    for k in ("text", "span", "offset", "path"):
+        assert f'"{k}":' not in dumped, k
+
+
+def test_ingest_never_resolves_the_nlp_on_the_event_loop():
+    """Same defect /analyze had, and the same consequence: the spaCy load is seconds long and
+    hundreds of MB, and on the event loop it blocks /health and /metrics. It must also be the
+    SAME pipeline /analyze resolves — `term` rows are never re-derived, so an ingest under a
+    different pipeline forces the reparse `terms_mode` exists to force."""
+    import threading
+
+    m = _reload_main(None)
+    _wire(m)
+    seen = []
+    real = m._analysis_nlp
+
+    def spy():
+        seen.append(threading.get_ident())
+        return real()
+
+    m._analysis_nlp = spy
+    try:
+        _asyncio.run(m.ingest(m.IngestIn(path=_fixture_transcript())))
+    finally:
+        m._analysis_nlp = real
+    assert seen, "the nlp was never resolved at all"
+    assert seen[0] != threading.get_ident(), (
+        "the nlp resolved on the event-loop thread; it must run inside the executor")
+
+
 # --------------------------------------------------------------------- /pii
 #
 # POST /pii is the sensitivity facet's detector. Like /analyze and /match it must answer with

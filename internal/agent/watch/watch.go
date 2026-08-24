@@ -21,6 +21,7 @@ import (
 type Watcher struct {
 	offer      func(spool.Pointer)
 	observe    func(source, transcriptPath string, line []byte)
+	advanced   func(source, transcriptPath string)
 	cursors    *CursorStore
 	discover   func() []Root
 	version    string
@@ -78,6 +79,29 @@ func New(offer func(spool.Pointer), observe func(source, transcriptPath string, 
 			"gemini_cli":  geminiExtractor{},
 		},
 	}
+}
+
+// WithIngestSignal installs the hook called once per transcript that ADVANCED in
+// a poll — the coarse sibling of observe. Where observe fires per line (each one
+// is a telemetry event), this fires per file per poll: its consumer is the
+// sidecar's reference-series ingest, which resumes from its own byte-offset
+// checkpoint and catches up on everything appended since it last ran. One signal
+// per line would ask for the same whole-tail parse once per line of it.
+//
+// It carries COORDINATES ONLY — a source and a path, never a line, never text.
+// The bytes are the thing the consumer re-reads on its own side; sending them
+// would both duplicate the read and put prompt text on a wire.
+//
+// It is the same seam observe is (a nil-able func supplied by the daemon at
+// wiring time), for the same reason: the watcher decides WHAT happened, the
+// daemon decides what to do about it. The daemon's hook is where the policy
+// lives — which sources are worth ingesting, and the non-blocking handoff that
+// keeps an unreachable sidecar off this loop (internal/agent/daemon/
+// ingestsignal.go). Chainable rather than a sixth positional argument to New,
+// which every existing construction and test would otherwise have to pass.
+func (w *Watcher) WithIngestSignal(fn func(source, transcriptPath string)) *Watcher {
+	w.advanced = fn
+	return w
 }
 
 // Run polls until ctx is cancelled. Each poll is panic-isolated so a malformed
@@ -164,6 +188,24 @@ func (w *Watcher) scanFile(source, path string) bool {
 	}
 	if consumed > 0 {
 		w.cursors.Set(path, off+consumed)
+		// Signal AFTER the cursor moves and exactly once, on the same condition
+		// the cursor advances on: complete lines were consumed. Deliberately
+		// keyed on bytes rather than on len(recs) — the reference series ingests
+		// TURNS, not only genuine user prompts, and a tail of assistant or
+		// tool_result lines changes what a window means (workspace evidence and
+		// reconcile are whole-file pre-passes). A prompt-keyed signal would
+		// leave those appends unindexed.
+		//
+		// A first sighting under forward-only (the KELD_WATCH_BACKFILL default)
+		// consumes nothing — the cursor jumps to EOF above and returns early —
+		// so a daemon restart signals nothing at all and cannot become a
+		// thundering herd of whole-file ingests. Only a file that grows after
+		// the daemon came up is signalled. With backfill ON, the first sighting
+		// does read from 0 and does signal, which is precisely what that mode
+		// asks for.
+		if w.advanced != nil {
+			w.advanced(source, path)
+		}
 		return true
 	}
 	return false

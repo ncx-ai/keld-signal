@@ -30,6 +30,26 @@ class Counts:
     # defect: it is the store being behind, and a value that keeps climbing means ingest is not
     # keeping up — a different operator action from every other counter here.
     analyze_not_ingested: int = 0
+    # POST /ingest — the daemon's watcher signalling that a transcript advanced. Its own
+    # counters, and not shared with analyze_served, because the two answer different operator
+    # questions: ingest_served is how often the store was fed OFF the request path, and a healthy
+    # machine has it far above analyze_served (a window is characterised ~4x per hour but a
+    # transcript advances on every poll). The pairing is the diagnosis: ingest_served climbing
+    # while analyze_not_ingested stays at zero is the signal doing its job; analyze_not_ingested
+    # climbing while ingest_served is flat means the signal is not arriving at all.
+    ingest_served: int = 0
+    # Paths refused because they resolve outside KELD_ANALYZE_ROOTS — same allowlist, same
+    # reading as analyze_rejected: on a single-user machine the daemon and the sidecar disagree
+    # about where transcripts live; on a shared one, someone is probing.
+    ingest_rejected: int = 0
+    # Signals for a transcript that is gone. Expected in small numbers (a session file deleted
+    # between the poll and the signal) and not an error; a climbing value means the daemon is
+    # watching a tree something else is pruning.
+    ingest_missing: int = 0
+    # Ingests that raised. Distinct from missing because this one IS a defect surface — the store
+    # or the parse, not the filesystem. The response carries a class-free 503 for the same reason
+    # pii_failed's does: the exception's message can quote what it was parsing.
+    ingest_failed: int = 0
     # POST /pii (presidio + spaCy, no worker, no runner) — its own counters for the same reason
     # analyze_served has its own: a PII spike is not inference load. pii_failed counts scans that
     # raised, which is how an operator sees "the detector is not working" — the response itself

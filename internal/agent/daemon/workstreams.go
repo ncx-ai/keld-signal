@@ -24,6 +24,18 @@ type piiDetector interface {
 	DetectPIIIn(text string, regions []string) (enrich.PIIResult, bool)
 }
 
+// transcriptIngester is the capability behind the watcher's ingest signal (the
+// sidecar's /ingest): "this transcript advanced, bring the reference series up to
+// date". Coordinates only, no inference, and no answer anyone waits for — see
+// sidecar.Client.SignalIngest on why it is one attempt and never a retry.
+//
+// It belongs with the other two rather than on the Model for the same reason
+// they do: it is a service route, it must work with GLiNER2 absent, and it is the
+// producer side of the very store /analyze reads.
+type transcriptIngester interface {
+	SignalIngest(path string) bool
+}
+
 // serviceFacets are the enrichment capabilities that belong to the analysis
 // SERVICE rather than to the Model. Both are non-inference routes on the same
 // sidecar, both must work with GLiNER2 absent entirely, and both are therefore
@@ -38,6 +50,11 @@ type piiDetector interface {
 type serviceFacets struct {
 	Analyze enrich.WorkstreamAnalyzer
 	ScanPII enrich.PIIScanner
+	// SignalIngest is not consumed by a job at all — it is handed to the
+	// transcript watcher (see ingestSignalHook), which is what makes /analyze's
+	// answer cheap. It travels here because it is the same service, resolved from
+	// the same client, in both ml_backend modes that have one.
+	SignalIngest func(path string) bool
 }
 
 // facetsFor returns the service facets of the client it is handed, leaving any
@@ -72,6 +89,9 @@ func facetsFor(m enrich.Model, regions func() []string) serviceFacets {
 			}
 			return p.DetectPIIIn(text, regions())
 		}
+	}
+	if in, ok := m.(transcriptIngester); ok {
+		f.SignalIngest = in.SignalIngest
 	}
 	return f
 }
