@@ -1,0 +1,156 @@
+# Hand labels — the two observable facets. 120 windows, seed 0.
+#
+# FROZEN AND COMMITTED BEFORE `observable_facets.py score` WAS EVER RUN. That ordering is the
+# whole point: git proves the truth was fixed before the mapping was scored.
+#
+# Assigned from `observable-views.txt` — the window's TEXT ONLY: user prompts + assistant prose,
+# fenced code elided, and every `tool_use` / `tool_result` / `thinking` block dropped by
+# `text.text_of` (asserted by `observable_facets.assert_blind`). No tool name, no program, no
+# action, no count, and no volume was visible to the labeller. So the label comes from what was
+# SAID and the prediction comes from what was DONE.
+#
+# CRITERIA, written down before reading and applied throughout:
+#
+#   authoring   y = the window's text shows DURABLE content was created or changed: a file
+#                   written or edited, a spec/plan/report/verdict written to a path, a deck or
+#                   artifact produced.
+#               n = the window only read, searched, inspected, measured, reviewed, planned,
+#                   merged, or discussed. A COMMIT ALONE IS NOT AUTHORING — committing content
+#                   written earlier is bookkeeping, not writing (this is why 25 and 105 are `n`).
+#                   A report delivered only as a chat answer is not authoring either; a report
+#                   written to a file is.
+#   verification  y = the text shows something was EXECUTED to check it: tests run, a build or
+#                   typecheck run, a script/probe/sweep executed, a migration applied, an app
+#                   driven or measured at runtime, a repro run.
+#               n = nothing was executed. Reading a diff, a report or a test file is not
+#                   verification, and neither is fetching a document.
+#   ?           the text genuinely does not say. Reported as an exclusion, never forced.
+#
+# Known soft calls, recorded so a re-labeller can find them: the reviewer windows whose PROMPT
+# instructs "Write the JSON verdict to the path above" are `authoring y` on that instruction plus
+# the assistant confirming it (2, 4, 7, 13, 17, 55, 56, 75, 80, 90, 97, 101, 109, 114, 118),
+# while task-reviewer windows with no write instruction are `n` (3, 8, 84, 86, 92, 119, 120).
+# 65, 102 and 112 are long windows where only the first 14 prose lines render; each was called on
+# what those lines plus the prompts show.
+#
+# format: <wid> <authoring y|n|?> <verification y|n|?>
+fff01ac3#t0298-20260720T1849 y y
+agent-a1#t0318-20260812T0259 y n
+agent-af#t0204-20260804T2033 n n
+agent-a3#t0327-20260812T0301 y n
+139be731#t0003-20260724T1918 y y
+72d3e8b1#t0129-20260811T2021 n y
+agent-a6#t0361-20260812T1855 y n
+agent-a6#t0048-20260810T1913 n n
+agent-a2#t0460-20260810T2025 y y
+c2019c5e#t0211-20260806T0027 y y
+f745121b#t0290-20260729T1915 y y
+9aaa379a#t0166-20260802T1625 y y
+agent-a5#t0347-20260812T0301 y n
+agent-a1#t0022-20260727T2040 n n
+agent-a9#t0146-20260812T0055 n n
+5d4ed7a1#t0104-20260724T0152 y y
+agent-a6#t0354-20260812T0300 y n
+36821116#t0021-20260728T0009 y y
+9a1c9df2#t0494-20260821T1701 y y
+36821116#t0021-20260728T0059 y y
+agent-af#t0126-20260725T2205 y y
+16c69396#t0303-20260821T1222 y y
+agent-aa#t0273-20260804T1436 y y
+d46a1e76#t0224-20260727T1137 y y
+72d3e8b1#t0129-20260810T1601 n y
+agent-a7#t0142-20260812T0105 y y
+agent-ad#t0199-20260805T1859 y y
+f36553d1#t0229-20260804T1623 y y
+agent-aa#t0016-20260722T1509 n y
+3bc7bb39#t0448-20260822T2241 y y
+9aaa379a#t0166-20260804T1415 n n
+1a3aa6d2#t0010-20260721T2121 n n
+agent-ae#t0091-20260810T1945 n n
+16c69396#t0303-20260813T1832 n y
+agent-ac#t0477-20260811T1442 y y
+aa59ef4c#t0172-20260805T1811 y y
+agent-a5#t0259-20260803T0006 n n
+agent-a8#t0116-20260725T2255 y y
+1a3aa6d2#t0010-20260721T2301 y n
+agent-a0#t0454-20260810T1914 n y
+agent-a4#t0132-20260812T0039 n n
+9ac2ecfc#t0171-20260807T1924 y y
+agent-aa#t0147-20260812T2044 y y
+agent-ab#t0150-20260812T1832 y y
+5a36f1d7#t0102-20260723T0017 y y
+agent-a8#t0061-20260811T0030 y y
+f745121b#t0290-20260730T0105 y n
+agent-a4#t0253-20260804T1341 n n
+agent-a6#t0469-20260810T1906 n y
+72d3e8b1#t0129-20260811T2341 y y
+16c69396#t0303-20260812T0232 y y
+agent-a7#t0471-20260810T2319 y y
+129e9a80#t0301-20260810T1532 y y
+16c69396#t0303-20260821T0042 y y
+agent-ad#t0428-20260812T0300 y n
+agent-a2#t0322-20260812T0258 y n
+agent-ad#t0294-20260728T1642 n n
+c2019c5e#t0211-20260806T0117 y y
+agent-ac#t0196-20260804T2049 n n
+agent-aa#t0398-20260812T0053 y y
+0ac739ad#t0299-20260805T1701 y y
+agent-aa#t0148-20260812T0039 y y
+agent-a6#t0136-20260812T0049 y y
+agent-a0#t0028-20260810T2012 n y
+71d70b51#t0128-20260806T1118 y y
+f36553d1#t0229-20260805T1903 n n
+aa59ef4c#t0172-20260804T2121 y y
+agent-ad#t0170-20260801T1859 n n
+16c69396#t0303-20260812T0322 y y
+51476fbe#t0026-20260810T1421 y y
+agent-a8#t0266-20260804T1451 n n
+5dcc6b3a#t0105-20260819T1330 y y
+6e2a58f9#t0106-20260726T0235 y y
+36821116#t0021-20260728T0239 y y
+agent-a7#t0375-20260812T0302 y n
+agent-a4#t0338-20260812T1820 y y
+16c69396#t0303-20260820T1802 y y
+16c69396#t0303-20260814T1702 y y
+a8f58d56#t0000-20260819T1522 y y
+agent-a6#t0358-20260813T2017 y n
+agent-a6#t0052-20260810T1855 n n
+1a3aa6d2#t0010-20260722T1541 y y
+9aaa379a#t0166-20260801T1845 y y
+agent-a8#t0060-20260811T1650 n n
+9a1c9df2#t0494-20260822T0211 y y
+agent-ad#t0200-20260804T2045 n n
+32b52295#t0019-20260806T2337 n y
+agent-a7#t0470-20260811T1233 y y
+agent-a0#t0027-20260810T1925 n n
+agent-a7#t0372-20260812T1854 y n
+5a36f1d7#t0102-20260722T2327 y n
+agent-aa#t0070-20260811T1912 n n
+agent-af#t0289-20260804T1454 n n
+agent-a9#t0268-20260803T0033 n y
+9a1c9df2#t0494-20260821T2251 y y
+agent-a4#t0255-20260804T1925 y y
+agent-af#t0446-20260812T0301 y n
+agent-a9#t0391-20260813T1941 y y
+fff01ac3#t0298-20260720T1939 y y
+9ac2ecfc#t0171-20260807T2014 n y
+agent-a8#t0385-20260812T1855 y n
+71d70b51#t0128-20260806T0348 y n
+9a1c9df2#t0494-20260822T0121 y y
+4658e5d5#t0024-20260814T0103 y y
+4658e5d5#t0024-20260817T1453 n y
+4658e5d5#t0024-20260814T1743 n y
+12c80ab4#t0002-20260721T1452 y y
+agent-aa#t0161-20260731T1440 n n
+agent-ab#t0412-20260812T0300 y n
+d46a1e76#t0224-20260726T2357 y y
+agent-a5#t0346-20260812T2113 y y
+16c69396#t0303-20260812T2002 n n
+16c69396#t0303-20260820T1622 y y
+agent-ac#t0418-20260812T0300 y n
+35eba585#t0020-20260812T0026 n n
+43492104#t0451-20260807T1921 n n
+139be731#t0003-20260724T1738 y y
+agent-af#t0445-20260813T2005 y n
+agent-ad#t0122-20260725T2302 n n
+agent-af#t0223-20260805T2109 n n
