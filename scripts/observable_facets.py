@@ -314,8 +314,12 @@ def read_labels(path):
     genuinely does not say — and is reported as an exclusion rather than forced into a guess."""
     out = {}
     for ln, line in enumerate(open(path), 1):
-        line = line.split("#")[0].strip()
-        if not line:
+        # A comment is a line that STARTS with `#`, not everything after the first `#`. The
+        # activity study's `line.split("#")[0]` idiom is wrong here and fails loudly: a `wid`
+        # contains a `#` (`fff01ac3#t0298-...`, the per-file id that keeps this frame off the
+        # colliding session prefix), so that idiom truncated every label to its prefix.
+        line = line.strip()
+        if not line or line.startswith("#"):
             continue
         parts = line.split()
         assert len(parts) == 3, f"{path}:{ln}: want `wid authoring verification`, got {line!r}"
