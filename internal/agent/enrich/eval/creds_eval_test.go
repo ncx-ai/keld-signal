@@ -47,7 +47,25 @@ func TestLoadCredsParses(t *testing.T) {
 // REAL gitleaks v8.30.1 engine (all 222 rules, allowlists, stopwords,
 // secretGroup) also scores 17/24, missing exactly the same seven rows, and
 // also flags none of the 18 decoys.
-const credDetectBaseline = 17
+//
+// Raised 2026-08-23, 17 -> 20, by the structural detectors in
+// creddetect/structural.go (uri-userinfo-password, twilio-auth-token): rows 19,
+// 20 and 12. Those three were characterised as "no gitleaks rule exists for
+// that shape", which was true and was not the end of the analysis -- a URI
+// userinfo password is a credential DEFINITIONALLY, so net/url decides it with
+// no entropy floor and no keyword proximity anywhere in the decision.
+//
+// The four that remain are deliberate, not pending:
+//   - rows 21, 22 fall below generic-api-key's 3.5-bit entropy floor
+//     ("Gvebk57xvf" scores 3.122). That floor is what bought the precision fix
+//     at 3d6a79d and is not to be weakened for four fixture rows.
+//   - rows 2, 24 (AWS secret access key, Datadog API key) are not structurally
+//     decidable: 40 arbitrary base64 characters and 32 arbitrary hex, the
+//     latter being the SAME shape as this fixture's own decoy rows 33 and 41.
+//     Only a nearby keyword separates them from a checksum, which is exactly
+//     generic-api-key's mechanism. See the "Deliberately NOT added" block in
+//     creddetect/structural.go.
+const credDetectBaseline = 20
 
 // TestCredDetectCorpusRecall pins the pure-Go credential detector against the
 // whole creds.jsonl corpus, with NO model and NO sidecar: at least
