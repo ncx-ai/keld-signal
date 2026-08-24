@@ -18,3 +18,14 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           /analyze also gains `named_terms_status`, which says whether the `term` level ran —
 #           an empty `named_terms` is no longer self-describing (see app/main.py).
 SCHEMA = 2
+
+# How deep the "component" level truncates a directory path (e.g. 3 ->
+# "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own
+# `--component-depth` default.
+#
+# It lives here, at package level, because BOTH front ends need it and neither owns it:
+# `analyze.py` has no caller-supplied value to plumb through and `ingest.py` must use the same
+# one or the reconcile rows it stores would not be the rows a window expects. It was in
+# `analyze.py` until `analyze.py` started importing `ingest.py`, at which point one of the two
+# imports had to stop being a cycle; the constant is the half that belongs to neither.
+COMPONENT_DEPTH = 3

@@ -1,6 +1,15 @@
 import sys, os, json, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.analysis.analyze import analyze_window, PromptNotFound
+from app.analysis.store import open_store
+
+
+def _store(tmp):
+    """A store under the test's own tmpdir. Passed EXPLICITLY: `analyze_window` now serves from
+    the reference series, and its default is the real one at ~/.keld/state/refseries.db, which a
+    unit test must never write to. The equivalence between this path and a parse is the subject
+    of app/test_analyze_store.py; these tests are about the window's own semantics."""
+    return open_store(os.path.join(tmp, "state", "refseries.db"))
 
 
 def _write(tmp, rows):
@@ -27,7 +36,7 @@ def test_window_ends_at_the_prompt_and_looks_back():
             _turn("2026-08-01T10:30:00Z", "target", "the prompt"),
             _turn("2026-08-01T11:00:00Z", text="later work"),
         ])
-        out = analyze_window(p, "target", span_minutes=60)
+        out = analyze_window(p, "target", span_minutes=60, store=_store(tmp))
         assert out["window_end"] == "2026-08-01T10:30:00+00:00", out["window_end"]
         assert out["window_start"] == "2026-08-01T09:30:00+00:00", out["window_start"]
 
@@ -38,7 +47,7 @@ def test_unknown_prompt_id_raises_rather_than_returning_an_empty_window():
     with tempfile.TemporaryDirectory() as tmp:
         p = _write(tmp, [_turn("2026-08-01T10:00:00Z", "known")])
         try:
-            analyze_window(p, "nope")
+            analyze_window(p, "nope", store=_store(tmp))
         except PromptNotFound:
             return
         raise AssertionError("expected PromptNotFound")
@@ -94,7 +103,8 @@ def test_named_terms_are_populated_from_message_text():
             _turn("2026-08-01T10:03:00Z", text="let's loop in Daniel too"),
             _turn("2026-08-01T10:05:00Z", "target", "sounds good"),
         ])
-        out = analyze_window(p, "target", span_minutes=60, nlp=_FakeNlp())
+        out = analyze_window(p, "target", span_minutes=60, nlp=_FakeNlp(),
+                             store=_store(tmp))
         terms = {t["value"] for t in out["inventory"]["named_terms"]}
         assert {"Federico", "Daniel"} <= terms, terms
 
@@ -107,7 +117,8 @@ def test_named_terms_carry_only_value_and_count():
             _turn("2026-08-01T10:00:00Z", text="Federico is on point here"),
             _turn("2026-08-01T10:05:00Z", "target", "thanks"),
         ])
-        out = analyze_window(p, "target", span_minutes=60, nlp=_FakeNlp())
+        out = analyze_window(p, "target", span_minutes=60, nlp=_FakeNlp(),
+                             store=_store(tmp))
         entries = out["inventory"]["named_terms"]
         assert entries, "expected at least one named term"
         for e in entries:
@@ -117,7 +128,7 @@ def test_named_terms_carry_only_value_and_count():
 def test_payload_carries_the_schema_and_no_prompt_text():
     with tempfile.TemporaryDirectory() as tmp:
         p = _write(tmp, [_turn("2026-08-01T10:00:00Z", "t", "secret customer name here")])
-        out = analyze_window(p, "t")
+        out = analyze_window(p, "t", store=_store(tmp))
         assert out["schema"] >= 1
         assert "secret customer name here" not in json.dumps(out)
         # Exact JSON KEYS, not bare substrings: "window_start"/"window_end" are required fields

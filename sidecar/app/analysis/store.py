@@ -61,7 +61,12 @@ PRECOMPUTED_LEVELS = tuple(dict.fromkeys(
 #         batches (see that table's comment). Additive — every v1 table is unchanged, and
 #         `CREATE TABLE IF NOT EXISTS` upgrades an existing file in place, so there is no
 #         migration step. A v1 store simply has an empty `parse_state` and reparses once.
-SCHEMA_VERSION = 2
+# 2 -> 3: `prompt`, the turn-id -> timestamp index (see that table's comment). Additive in the
+#         same way, and an existing store fills it on its next ingest: `ingest.py` treats a
+#         parse state written by an older layout as a reason to reparse, which is what
+#         populates it. Nothing reads it before then, because `analyze.py` refuses to serve a
+#         store whose checkpoint is not current.
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ingest (
@@ -117,6 +122,28 @@ CREATE TABLE IF NOT EXISTS parse_state (
   path  TEXT PRIMARY KEY,
   state TEXT NOT NULL
 );
+
+-- The turn-id -> timestamp index: what `analyze.py:_prompt_time` used to obtain by scanning the
+-- whole transcript. It is here because that scan is the last O(file) step in answering a digest
+-- (measured 67 ms of a 66 MB file's 660 ms), and leaving it in place would mean a store-backed
+-- /analyze still opened and read every transcript it answered about.
+--
+-- `ts` is the turn's timestamp AS WRITTEN, not the quantized epoch the `event` rows carry. The
+-- window's reported `window_end` is derived from it and must stay byte-identical to what the
+-- parse path produced; a value re-formatted through a float epoch can differ in the last
+-- microsecond.
+--
+-- What this holds is ids and timestamps: a `uuid` a caller must already possess to ask a
+-- question, and the instant it happened. No message text, which is the same rule the `event`
+-- table follows. `session` (the 8-char filename prefix) keys it for consistency with
+-- `clear_session`, so a reparse cannot leave a stale index behind -- see `ingest.py` on that
+-- convention's one known sharp edge.
+CREATE TABLE IF NOT EXISTS prompt (
+  session   TEXT NOT NULL,
+  prompt_id TEXT NOT NULL,
+  ts        TEXT NOT NULL,
+  PRIMARY KEY (session, prompt_id)
+) WITHOUT ROWID;
 """
 
 
@@ -404,17 +431,51 @@ class Store:
         return len(agg)
 
     def clear_session(self, session):
-        """Drop every event and bin for one session.
+        """Drop every event, bin and prompt-index row for one session.
 
         A reparse re-reads lines that are already stored under DIFFERENT batch ordinals, so
         without this the same turn is counted once per parse and every window inflates. It is
         the reason a reparse is a distinct outcome in `IngestResult` rather than just a longer
         ingest.
+
+        The prompt index goes too, and must: a rotated file at the same path is a DIFFERENT
+        conversation, and a stale turn id left behind would resolve a window that the events no
+        longer describe.
         """
         with self.transaction():
             c = self._conn()
             c.execute("DELETE FROM event WHERE session = ?", (session,))
             c.execute("DELETE FROM bin WHERE session = ?", (session,))
+            c.execute("DELETE FROM prompt WHERE session = ?", (session,))
+
+    # --- the prompt index ------------------------------------------------------------------
+
+    def upsert_prompts(self, session, rows):
+        """Index `(prompt_id, ts)` pairs for one session. See the `prompt` table's comment.
+
+        `DO NOTHING`, not `DO UPDATE`: `analyze.py`'s scan returned the FIRST turn carrying the
+        id, so a duplicate id must resolve to the first occurrence here too. Ingest replays a
+        tail after a crash, and the replay must be a no-op rather than a revision.
+        """
+        rows = [(session, str(pid), str(ts)) for pid, ts in rows if pid and ts]
+        if not rows:
+            return 0
+        with self.transaction():
+            self._conn().executemany(
+                "INSERT INTO prompt(session, prompt_id, ts) VALUES (?,?,?)"
+                " ON CONFLICT(session, prompt_id) DO NOTHING", rows)
+        return len(rows)
+
+    def prompt_time(self, session, prompt_id):
+        """The indexed turn's timestamp as written, or None if this session has no such turn.
+
+        None is NOT "not in the transcript" on its own — it is only that once the caller has
+        established that the store is caught up with the file (see `ingest.is_current`).
+        """
+        row = self._conn().execute(
+            "SELECT ts FROM prompt WHERE session = ? AND prompt_id = ?",
+            (session, prompt_id)).fetchone()
+        return None if row is None else row[0]
 
     # --- cross-batch parse state -----------------------------------------------------------
 
@@ -469,7 +530,7 @@ class Store:
 
     # --- the window query ------------------------------------------------------------------
 
-    def rollup_window(self, session, start, end):
+    def rollup_window(self, session, start, end, exclude_slots=()):
         """`[start, end)` of one session -> exactly what `window.rollup` returns over the same
         rows: `{level: [(ref, total), ...]}`, descending by total, ties alphabetical on `ref`.
 
@@ -498,11 +559,33 @@ class Store:
         itself, which merges the bin and event halves and applies its own tie-break. That rule
         is a deliberate, documented choice (see its docstring); a second copy of it in an ORDER
         BY clause would be a second place for it to drift.
+
+        `exclude_slots` drops the named `source_line` slots — the mechanism `analyze.py` uses to
+        leave out the stored reconcile rows so it can recompute them at the window's own scope.
+        Passing it FORGOES the precomputed bins: a `bin` row aggregates a whole 5-minute
+        interval and has no slot dimension to filter on, so the interior would have to be
+        served with the excluded rows still in it. The whole window is read from `event`
+        instead, which is exact, and measured at ~1 ms for a 60-minute window — the bins earn
+        their keep on the long spans the dynamics will ask for, not on one hour.
         """
+        return window.rollup(self.window_rows(session, start, end, exclude_slots))
+
+    def window_rows(self, session, start, end, exclude_slots=()):
+        """The rows behind `rollup_window`, in `events_for_turns` shape, for a caller that has
+        rows of its own to merge in before rolling up (see `analyze.py`). Only indices 5-8 —
+        kind, level, ref, n — carry meaning; `window.rollup` reads nothing else."""
         start, end = _epoch(start), _epoch(end)
         if not end > start:
-            return {}
+            return []
         c = self._conn()
+        slots = tuple(int(s) for s in exclude_slots)
+        if slots:
+            ph = ",".join("?" * len(slots))
+            parts = [c.execute(f"""
+                SELECT level, ref, SUM(n) FROM event
+                WHERE session = ? AND ts >= ? AND ts < ? AND source_line NOT IN ({ph})
+                GROUP BY level, ref""", (session, start, end) + slots)]
+            return _pseudo_rows(session, parts)
         first, last = _ceil_bin(start), _floor_bin(end)
         iv_start, iv_end = (first, last) if last > first else (start, start)
 
@@ -526,7 +609,10 @@ class Store:
               AND level NOT IN (SELECT level FROM bin_level)
             GROUP BY level, ref""", (session, start, end)))
 
-        # Pseudo-rows in `events_for_turns` shape, since `window.rollup` reads indices 5-8 only.
-        rows = [(0.0, session, None, None, False, "ref", lv, ref, float(n))
-                for cur in parts for lv, ref, n in cur]
-        return window.rollup(rows)
+        return _pseudo_rows(session, parts)
+
+
+def _pseudo_rows(session, cursors):
+    """Query results in `events_for_turns` shape, since `window.rollup` reads indices 5-8 only."""
+    return [(0.0, session, None, None, False, "ref", lv, ref, float(n))
+            for cur in cursors for lv, ref, n in cur]

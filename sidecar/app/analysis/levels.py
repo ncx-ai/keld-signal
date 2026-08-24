@@ -58,6 +58,21 @@ def _epoch(ts: str) -> float:
     return dt.timestamp()
 
 
+# The series' TIME RESOLUTION. Every row's `t` is rounded to this many decimal places — 0.1 s —
+# and always has been (it was `round(t, 1)` inline in `base` below, and the frozen-corpus
+# identity gate pins the resulting values). It is named here because a CONSUMER now has to know
+# it: `analyze.py` selects a window out of stored rows, and a window boundary finer than the
+# rows' own resolution is not representable, so it must be evaluated at this resolution rather
+# than compared against a raw wall-clock instant. One definition, used by the producer and the
+# consumer, instead of a `round(t, 1)` here and a `round(x, 1)` over there.
+TIME_DECIMALS = 1
+
+
+def quantize(t):
+    """A wall-clock epoch, at the resolution the series actually stores."""
+    return round(t, TIME_DECIMALS)
+
+
 def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None):
     """One transcript's turns -> its rows and pending paths.
 
@@ -100,7 +115,7 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None):
         # machine's ~/.claude/projects against a colleague's export.
         root_key = root
         root_dir = root_dir_resolved
-        base = (round(t, 1), session, repo, o.get("gitBranch") or None,
+        base = (quantize(t), session, repo, o.get("gitBranch") or None,
                 bool(o.get("isSidechain")))
 
         def add(kind, level, ref, n):

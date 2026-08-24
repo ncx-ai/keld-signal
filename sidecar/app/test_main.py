@@ -497,6 +497,12 @@ def _fixture_transcript(said="look at the thing"):
     configured_root), so a fixture under /tmp is otherwise a 403. Tests asserting the rejection
     paths override the variable AFTER calling this.
 
+    And KELD_HOME, for a harder reason: /analyze now serves from the reference-series store,
+    whose default location is ~/.keld/state/refseries.db. Left unset, every test in this file
+    would ingest its fixture into the developer's or the CI runner's REAL store. Set here rather
+    than in each test because it must be in force before the first _store() call, and _store()
+    resolves lazily on the first request — the same reason KELD_ANALYZE_ROOTS is set here.
+
     Uses mkdtemp (not a `with TemporaryDirectory()` block): the file
     must outlive this helper call, not just a `with` body. Shape matches
     sidecar/app/test_analysis_analyze.py's fixture, already proven to round-trip through
@@ -514,6 +520,7 @@ def _fixture_transcript(said="look at the thing"):
         for o in rows:
             fh.write(json.dumps(o, separators=(",", ":")) + "\n")
     os.environ["KELD_ANALYZE_ROOTS"] = tmp
+    os.environ["KELD_HOME"] = os.path.join(tmp, "keld-home")
     return path
 
 
@@ -548,6 +555,53 @@ def test_analyze_unknown_prompt_is_404_not_an_empty_payload():
         assert False, "expected 404"
     except HTTPException as e:
         assert e.status_code == 404
+
+
+def test_a_window_the_store_cannot_answer_yet_is_503_not_404():
+    """/analyze serves from the reference series, so "not ingested yet" is a real outcome and it
+    must be TRANSIENT to the caller. 503 is the only status the Go client's post() waits and
+    retries through; a 404 (a permanent "prompt not in this transcript") or a 500 would fail the
+    workstreams facet and publish the profile as "partial" for a window that was one append away
+    from answerable.
+
+    The condition is produced by the real mechanism rather than a stub: the transcript's last
+    line — the target prompt's own — is written WITHOUT its newline, exactly as a watcher signal
+    arriving mid-write leaves it. Ingest will not consume a torn record (see
+    ingest._read_complete_lines), so the store cannot answer, and it knows it cannot.
+    """
+    from app.metrics import Counts
+
+    m = _reload_main(None)
+    _wire(m)
+    m._state["counts"] = Counts()
+    path = _fixture_transcript()
+    with open(path) as fh:
+        text = fh.read()
+    with open(path, "w") as fh:
+        fh.write(text.rstrip("\n"))          # the prompt's line, mid-write
+    try:
+        _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+        assert False, "expected 503"
+    except HTTPException as e:
+        assert e.status_code == 503, e.status_code
+    assert m._state["counts"].analyze_not_ingested == 1
+    assert m._state["counts"].submitted == 0, "the refusal went through the runner"
+
+
+def test_an_unopenable_store_is_503_and_never_falls_back_to_a_parse():
+    """There is one production path. A store that will not open is reported, not worked around:
+    a silent switch to a second implementation of the same answer is how a divergence between
+    them goes unnoticed."""
+    m = _reload_main(None)
+    _wire(m)
+    path = _fixture_transcript()
+    os.environ["KELD_HOME"] = path            # a FILE where a directory must be
+    try:
+        _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+        assert False, "expected 503"
+    except HTTPException as e:
+        assert e.status_code == 503, e.status_code
+    assert m._store() is None
 
 
 # --- the service must serve without GLiNER2 -------------------------------------------------

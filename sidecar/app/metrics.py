@@ -25,6 +25,11 @@ class Counts:
     # one it means someone is probing. Both need to be visible, and neither is an inference
     # problem.
     analyze_rejected: int = 0
+    # Windows /analyze refused with 503 because the reference series had not caught up with the
+    # transcript (or could not be opened). Its own counter because it is neither load nor a
+    # defect: it is the store being behind, and a value that keeps climbing means ingest is not
+    # keeping up — a different operator action from every other counter here.
+    analyze_not_ingested: int = 0
     # POST /pii (presidio + spaCy, no worker, no runner) — its own counters for the same reason
     # analyze_served has its own: a PII spike is not inference load. pii_failed counts scans that
     # raised, which is how an operator sees "the detector is not working" — the response itself

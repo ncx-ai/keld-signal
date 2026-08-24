@@ -69,8 +69,9 @@ the sensitive level), and `remotes` is recovered partly from prose, which is why
 import collections
 import hashlib
 import os
+import threading
 
-from app.analysis.analyze import COMPONENT_DEPTH
+from app.analysis import COMPONENT_DEPTH
 from app.analysis.levels import events_for_turns
 from app.analysis.reconcile import reconcile
 # `_order_key` is transcript.py's ordering-only timestamp parser. Imported rather than
@@ -88,6 +89,41 @@ RECONCILE_SLOT = 0
 # lines carry the session id and the launch metadata, so the prefix is distinctive well inside
 # this; hashing more would read a megabyte per ingest for nothing.
 HEAD_BYTES = 4096
+
+# The layout of the carried parse state. Bumped when a field is added that the stored state
+# would otherwise be silently missing — the state is opaque JSON, so absence is the only signal
+# there is, and a tail parse resumed against a state missing something it needs is exactly the
+# silent inequality this module exists to prevent. A mismatch forces one reparse, which is exact
+# by definition.
+#
+#   1 -> 2: `terms` (the terms-pipeline fingerprint below), and the prompt index, which a state
+#           written before it existed has no rows for.
+STATE_VERSION = 2
+
+
+def terms_mode(nlp):
+    """A fingerprint of the pipeline the `term` level was computed with.
+
+    `term` is the ONE level that is never re-derived. Every other level is recomputed from the
+    stored turns when anything changes, but a term row is whatever the pipeline that was loaded
+    at ingest time happened to find — so a store holding rows from a run WITHOUT spaCy and rows
+    from a run WITH it is holding two incomparable populations, and nothing in the data says
+    which is which. Worse, and this is the case that motivated it: a transcript ingested under
+    `KELD_TERMS=0` would report no `named_terms` forever, long after terms were switched back
+    on, because the ingest that would have produced them already happened.
+
+    So the fingerprint is part of the checkpoint, and a change to it forces a reparse. It keys
+    on the model's IDENTITY, not merely on presence, so upgrading `en_core_web_sm` also
+    invalidates the rows it produced. `None` — switched off, not installed, or failed to load —
+    is one mode, correctly: in all three cases the stored rows are the regex-only shapes from
+    `terms.candidates`, which are identical. (Whether they are then REPORTED is `app/main.py`'s
+    decision, and a different question from what is stored.)
+    """
+    if nlp is None:
+        return "regex"
+    meta = getattr(nlp, "meta", None) or {}
+    name = "_".join(str(meta.get(k)) for k in ("lang", "name") if meta.get(k))
+    return "spacy:" + ":".join(p for p in (name, str(meta.get("version") or "")) if p)
 
 
 class IngestResult:
@@ -204,6 +240,19 @@ def _answers(cwds, projdir, evidence):
     return out
 
 
+def _state_is_usable(raw, nlp):
+    """Whether a stored parse state may be resumed from, or must be thrown away and reparsed.
+
+    Three reasons it cannot be: it is absent (a store written before `parse_state` existed, or
+    one whose state was pruned — resuming would tail-parse with EMPTY workspace evidence and an
+    empty `pending`, and the offset would look perfectly valid while it happened); it predates a
+    field this code needs (`STATE_VERSION`); or it was written by a different terms pipeline
+    (`terms_mode`).
+    """
+    return bool(raw) and int(raw.get("v") or 0) == STATE_VERSION \
+        and raw.get("terms") == terms_mode(nlp)
+
+
 def _load_state(store, path):
     """The carried parse state as live Python objects, or an empty one."""
     raw = store.parse_state(path) or {}
@@ -218,14 +267,70 @@ def _load_state(store, path):
     return evidence, pending, list(raw.get("cwds") or ()), int(raw.get("lines") or 0)
 
 
-def _dump_state(evidence, pending, cwds, lines):
+def _dump_state(evidence, pending, cwds, lines, nlp):
     marker_dirs, cd_targets, remotes = evidence
-    return {"markers": marker_dirs,
+    return {"v": STATE_VERSION,
+            "terms": terms_mode(nlp),
+            "markers": marker_dirs,
             "cd": sorted(cd_targets),
             "remotes": [[k, v] for k, v in remotes.most_common()],
             "pending": [[list(b), rel, fi, rt] for b, rel, fi, rt in pending],
             "cwds": cwds,
             "lines": lines}
+
+
+def pending_in(store, path, start, end):
+    """The reconcile `pending` entries whose turn falls in `[start, end)`, as live tuples.
+
+    Reconcile's answer depends on WHICH declarations are in scope (see its module docstring), so
+    a window's `file`/`dir`/`ext`/`lang`/`component` rows cannot be sliced out of the whole
+    file's reconciliation — they have to be reconciled at the window's own scope, which is what
+    the parse path did and therefore what the store path must do. The accumulated `pending` is
+    already persisted for ingest's own use, and it is small (measured 104-859 entries per
+    transcript, reconciled in 0-3 ms), so re-scoping is a filter and a call, not a re-parse.
+
+    `start`/`end` are compared against the entry's own `t`, which is already quantized — see
+    `levels.quantize`, and `analyze.py` on why the boundaries must be too.
+    """
+    raw = store.parse_state(path) or {}
+    return [(tuple(b), rel, bool(fi), rt) for b, rel, fi, rt in raw.get("pending") or ()
+            if start <= b[0] < end]
+
+
+def is_current(store, path, nlp=None):
+    """Whether the store holds everything this transcript's bytes say, right now.
+
+    This is the precondition for serving a window out of the store at all, and it is stronger
+    than "the window ends before the watermark" — deliberately. `workspace.scan_workspace` is a
+    whole-FILE pre-pass and `reconcile` resolves against every declaration in the file, so bytes
+    written AFTER a window still change what the turns inside it mean (a `CLAUDE.md` read at
+    17:00 re-resolves the 09:00 turns). An answer computed from a prefix is therefore a
+    different answer, not a partial one, and equality with a parse of the file as it stands is a
+    property of the whole file.
+
+    Four conditions, and each is load-bearing:
+
+    - the size on disk matches the size recorded at the last ingest — the cheap test for
+      "nothing was appended";
+    - the mtime matches — the test for a same-size rewrite, which a size comparison cannot see;
+    - the checkpoint consumed everything it saw (`offset == size`). A trailing line without its
+      newline is deliberately NOT consumed (see `_read_complete_lines`), and it is exactly the
+      line a prompt id may be sitting in: without this, that prompt would resolve to "not in
+      this transcript" — a permanent answer — when it is milliseconds from existing;
+    - the parse state is usable at all (`_state_is_usable`), which is where the terms-pipeline
+      fingerprint is checked.
+
+    `os.stat` only: no file is opened, which is the property `/analyze` is measured against.
+    """
+    st = store.ingest_state(path)
+    if st is None:
+        return False
+    try:
+        size, mtime = os.path.getsize(path), os.path.getmtime(path)
+    except OSError:
+        return False
+    return (st["size"] == size and st["mtime"] == mtime and st["offset"] == size
+            and _state_is_usable(store.parse_state(path), nlp))
 
 
 def _latest(a, b):
@@ -243,22 +348,44 @@ def ingest_file(store, path, nlp=None):
     Raises `FileNotFoundError` if the transcript is gone — a caller that signalled about a file
     that has since been deleted needs to know that, and it is not the same as "nothing new".
 
-    `nlp` is passed through to the `term` level exactly as `analyze_window` passes it. It must be
-    the SAME pipeline for the life of a store: `term` rows ingested with a loaded spaCy model and
-    rows ingested without one are not comparable, and unlike every other level they are never
-    re-derived.
+    `nlp` is passed through to the `term` level exactly as `analyze_window` passes it. A CHANGE
+    of pipeline is not tolerated silently: it is part of the checkpoint (`terms_mode`) and a
+    different one reparses the file, because `term` is the one level never re-derived.
+
+    Single-flight per path. Two callers can legitimately want the same file at the same moment —
+    the daemon's watcher signal (task 4) and an `/analyze` that found the store behind — and
+    while SQLite would serialise the writes, both would parse the same bytes and one would
+    discard the work. The lock makes the second wait and then find nothing to do.
     """
+    with _path_lock(path):
+        return _ingest_locked(store, path, nlp)
+
+
+_LOCKS_MUTEX = threading.Lock()
+_LOCKS = {}
+
+
+def _path_lock(path):
+    """One lock per transcript, created on demand. Never evicted: a `Lock` is tens of bytes and
+    the population is the number of transcripts on the machine (582 on this one), so a reaper
+    would be more code than it saves — and evicting one that a caller is about to take is a
+    correctness question, not a memory one."""
+    with _LOCKS_MUTEX:
+        lk = _LOCKS.get(path)
+        if lk is None:
+            lk = _LOCKS[path] = threading.Lock()
+    return lk
+
+
+def _ingest_locked(store, path, nlp):
     size = os.path.getsize(path)                      # raises FileNotFoundError, deliberately
     state = store.ingest_state(path)
     reparse = (state is None
                or size < state["offset"]
                or not _head_matches(path, state["head_sha"])
-               # A checkpoint with no carried parse state: a store written before `parse_state`
-               # existed (SCHEMA_VERSION 1), or one whose state was pruned. Resuming from the
-               # offset would tail-parse with EMPTY workspace evidence and an empty `pending` --
-               # the exact inequality this module exists to prevent, and silent, because the
-               # offset looks perfectly valid. Reparse instead; it happens at most once.
-               or store.parse_state(path) is None)
+               # A parse state that cannot be resumed from -- absent, older than this code, or
+               # written by a different terms pipeline. See `_state_is_usable`.
+               or not _state_is_usable(store.parse_state(path), nlp))
     result = _ingest_from(store, path, size, 0 if reparse else state["offset"],
                           None if reparse else state["watermark_ts"], reparse, nlp)
     if result is not None:
@@ -306,9 +433,15 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp):
             store.clear_session(session)
         if rows:
             store.upsert_events(session, rows, source_line=batch_line)
+        # The turn-id index, in the same transaction as the events it points at: an id that
+        # resolves to a window whose events were never committed is the one state a reader
+        # could not detect. `iter_turns`/`turns_in` is the filter `analyze.py`'s old scan used,
+        # so indexing every turn it yields keeps resolution semantics identical -- an assistant
+        # turn's uuid resolved then and must resolve now.
+        store.upsert_prompts(session, [(o.get("uuid"), o.get("timestamp")) for o in turns])
         recon_rows, _stats = reconcile(pending, COMPONENT_DEPTH)
         store.replace_events(session, RECONCILE_SLOT, recon_rows)
-        store.set_parse_state(path, _dump_state(evidence, pending, cwds, n_lines))
+        store.set_parse_state(path, _dump_state(evidence, pending, cwds, n_lines, nlp))
         store.record_ingest(path, end_offset, size, _head_fingerprint(path),
                             os.path.getmtime(path), watermark_ts)
     return IngestResult(len(turns), watermark_ts, reparse)

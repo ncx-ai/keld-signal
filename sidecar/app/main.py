@@ -11,15 +11,17 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from app.analysis.analyze import PromptNotFound, analyze_window
+from app.analysis.analyze import PromptNotFound, StoreBehind, analyze_window
 from app.analysis.match import DEFAULT_BUDGET_S as _MATCH_DEFAULT_BUDGET_S
 from app.analysis.match import compile_vocabulary, match_text
+from app.analysis.store import open_store
 from app.cpuscale import CpuScaler
 from app.governor import Governor
 from app.metrics import Counts, build_metrics
@@ -397,6 +399,36 @@ def _analysis_nlp():
     return _ANALYSIS_NLP[0]
 
 
+# The reference-series store, opened once and kept for the process's life.
+#
+# Lazy, and by the same 3-state sentinel pattern as _analysis_nlp above rather than at import:
+# opening it creates ~/.keld/state/refseries.db, which must happen when a request needs it and
+# under the KELD_HOME in force then, not as a side effect of importing this module.
+#
+# There is deliberately NO parse fallback if it cannot be opened. The store is not a
+# lower-fidelity substitute — it answers exactly what a parse answers, which the test suite
+# asserts field for field — but a silent switch between two implementations of one answer is how
+# a divergence between them goes unnoticed, the same reasoning behind this repo's rule against a
+# health-gated substitute for the model's own facets. A store that will not open is reported as
+# 503 and the caller retries.
+_STORE = ["unset"]
+_STORE_LOCK = threading.Lock()
+
+
+def _store():
+    """The store, or None if it could not be opened. Never raises."""
+    with _STORE_LOCK:
+        if _STORE[0] == "unset":
+            try:
+                _STORE[0] = open_store()
+            except Exception as exc:
+                # Path only in the log, never the exception's message: a sqlite error can quote
+                # the statement it failed on.
+                log.error("reference-series store unavailable: %s", type(exc).__name__)
+                _STORE[0] = None
+        return _STORE[0]
+
+
 def _analyze_blocking(path, prompt_id, span_minutes):
     """The whole of /analyze's work, on an executor thread.
 
@@ -404,13 +436,20 @@ def _analyze_blocking(path, prompt_id, span_minutes):
     ARGUMENT to run_in_executor, which means it ran on the EVENT LOOP: the multi-second spaCy
     load blocked /health and /metrics, precisely the failure the executor hop exists to prevent
     (see analyze()'s docstring).
+
+    The nlp is also what the INGEST behind this call uses, which is why it must be resolved
+    before analyze_window rather than inside it: the `term` level is never re-derived, so the
+    pipeline that ingests is part of the store's checkpoint (see ingest.terms_mode).
     """
     status = _terms_status()
     nlp = _analysis_nlp() if status == _TERMS_OK else None
     if status == _TERMS_OK and nlp is None:
         status = _TERMS_NO_SPACY    # enabled, but the model would not load
 
-    out = analyze_window(path, prompt_id, span_minutes, nlp)
+    st = _store()
+    if st is None:
+        raise StoreBehind("the reference-series store could not be opened")
+    out = analyze_window(path, prompt_id, span_minutes, nlp, store=st)
 
     if status == _TERMS_DISABLED:
         # Switched off means not reported. The regex half of terms.candidates() needs no model
@@ -660,3 +699,17 @@ async def analyze(body: AnalyzeIn):
             None, _analyze_blocking, body.path, body.prompt_id, body.span_minutes)
     except PromptNotFound:
         raise HTTPException(status_code=404, detail="prompt not found in transcript")
+    except StoreBehind:
+        # 503, and the status matters. The window cannot be answered EXACTLY yet — the
+        # reference series has not caught up with the transcript's bytes (or could not be
+        # opened) — and that is transient: ingest is resumable, so the same request succeeds
+        # moments later. 404 is wrong because it means "this prompt is not in this transcript",
+        # a permanent fact; a 500 is wrong because it claims a defect. And 503 is the ONE status
+        # the Go client's post() waits and retries through (sidecar/client.go: 503 -> wait +
+        # retry with backoff, anything else -> ok=false), so this reads to the daemon as "not
+        # ready yet, ask again" rather than as errAnalysisUnavailable, which would fail the
+        # workstreams facet and publish the profile as "partial" for a facet that was one
+        # append away from succeeding. That is the same reasoning the enrich pipeline already
+        # applies to a sidecar that is not ready: queue, never degrade.
+        _count("analyze_not_ingested")
+        raise HTTPException(status_code=503, detail="window not yet ingested")
