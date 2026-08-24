@@ -44,19 +44,62 @@ fetch_sidecar() {
           | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4) ;;
   esac
   [ -n "$tag" ] || { echo "  ! could not determine a release to fetch the ML sidecar from" >&2; return 1; }
-  url="https://github.com/${REPO}/releases/download/${tag}/keld-agent-sidecar_darwin_${arch}.tar.gz"
+  asset="keld-agent-sidecar_darwin_${arch}.tar.gz"
+  url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
   echo "  … downloading ML sidecar (${tag}, ~190MB) → ${dest}"
   mkdir -p "$dest"
-  rm -rf "${dest}/keld-agent-sidecar"   # clear a partial/older extract so the dir lands clean
-  if curl -fsSL "$url" | tar -xz -C "$dest"; then
-    chmod +x "${dest}/keld-agent-sidecar/keld-agent-sidecar" 2>/dev/null || true
-    echo "  ✓ ML sidecar → ${dest}/keld-agent-sidecar"
-  else
+  # Download → verify → extract → swap, all inside a temp dir under $dest (same
+  # filesystem, so the final move is a rename). Streaming `curl | tar` straight
+  # into $dest cannot check a hash and leaves the 15,605-file tree half-extracted
+  # on an aborted transfer — and pre-deleting the old tree traded a working
+  # sidecar for nothing. Nothing here touches the installed sidecar until the
+  # replacement is complete and verified.
+  work=$(mktemp -d "${dest}/.keld-sidecar.XXXXXX") || return 1
+  trap 'rm -rf "$work"' RETURN
+  if ! curl -fsSL "$url" -o "${work}/${asset}"; then
     echo "  ! ML sidecar download failed ($url)" >&2
     echo "    Keld will still install and collect telemetry, but on-device enrichment" >&2
     echo "    stays paused (jobs queue) until it is present. Re-run this script to retry." >&2
     return 1
   fi
+  # Integrity: the release publishes <asset>.sha256 beside the tarball. A missing
+  # hash is a warning (it is served by the same host, so it guards corruption, not
+  # a compromised host) — a mismatch is always fatal to the fetch.
+  want=""
+  if curl -fsSL "${url}.sha256" -o "${work}/sha" 2>/dev/null; then
+    want=$(awk 'NR==1 {print $1}' "${work}/sha")
+  fi
+  if [ -n "$want" ]; then
+    got=$(shasum -a 256 "${work}/${asset}" | awk '{print $1}')
+    if [ "$want" != "$got" ]; then
+      echo "  ! ML sidecar CHECKSUM MISMATCH — download corrupt or truncated; not installed." >&2
+      echo "    expected ${want}" >&2
+      echo "    actual   ${got}" >&2
+      echo "    Re-run this script to retry." >&2
+      return 1
+    fi
+  else
+    echo "  ! no published SHA-256 for ${asset}; skipping integrity check." >&2
+  fi
+  mkdir -p "${work}/x"
+  tar -xzf "${work}/${asset}" -C "${work}/x" || {
+    echo "  ! ML sidecar archive could not be unpacked; not installed." >&2
+    return 1
+  }
+  [ -d "${work}/x/keld-agent-sidecar" ] || {
+    echo "  ! ML sidecar archive had an unexpected layout; not installed." >&2
+    return 1
+  }
+  chmod +x "${work}/x/keld-agent-sidecar/keld-agent-sidecar" 2>/dev/null || true
+  rm -rf "${dest}/keld-agent-sidecar.prev"
+  [ -e "${dest}/keld-agent-sidecar" ] && mv "${dest}/keld-agent-sidecar" "${dest}/keld-agent-sidecar.prev"
+  if ! mv "${work}/x/keld-agent-sidecar" "${dest}/keld-agent-sidecar"; then
+    [ -e "${dest}/keld-agent-sidecar.prev" ] && mv "${dest}/keld-agent-sidecar.prev" "${dest}/keld-agent-sidecar"
+    echo "  ! ML sidecar could not be moved into place; not installed." >&2
+    return 1
+  fi
+  rm -rf "${dest}/keld-agent-sidecar.prev"
+  echo "  ✓ ML sidecar → ${dest}/keld-agent-sidecar"
 }
 fetch_sidecar || true
 echo
@@ -69,5 +112,17 @@ if [ -n "$CODE" ]; then
 else
   "$AGENT" install --yes || exit 1
 fi
-echo; echo "Keld is set up and running. You can close this window."; echo
+# Claim success only if it is true: setup is done when an ingest token exists in
+# hook.json, the same file the daemon reads. `keld-agent install` can exit 0 after
+# merely registering the service.
+KELD_HOME_DIR="${KELD_HOME:-${HOME}/.keld}"
+echo
+if grep -q '"ingest_token"[[:space:]]*:[[:space:]]*"[^"]' "${KELD_HOME_DIR}/hook.json" 2>/dev/null; then
+  echo "Keld is set up and running. You can close this window."
+else
+  echo "Keld is installed, but NOT set up yet (nothing is being collected)."
+  echo "Run:  keld login && keld signal setup"
+  echo "The agent is already running and picks the configuration up on its own."
+fi
+echo
 echo "(Re-run anytime: /usr/local/keld/onboard.command)"

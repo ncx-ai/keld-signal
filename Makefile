@@ -94,6 +94,11 @@ signal-dev-artifacts:
 	  KELD_OBFUSCATE=0 PYTHON="$(HOME)/.keld/sidecar-venv/bin/python" bash sidecar/build-freeze.sh; \
 	fi
 	tar -C dist -czf .dev-dl/local/keld-agent-sidecar_linux_amd64.tar.gz keld-agent-sidecar
+	@# install.sh verifies every archive against a published hash — mirror the real
+	@# release layout (checksums.txt for the CLI archive, a .sha256 companion for the
+	@# separately-built sidecar) so the dev path is verified too, not just warned about.
+	@cd .dev-dl/local && sha256sum keld_linux_amd64.tar.gz > checksums.txt \
+	  && sha256sum keld-agent-sidecar_linux_amd64.tar.gz > keld-agent-sidecar_linux_amd64.tar.gz.sha256
 	@echo "built .dev-dl (keld + keld-agent + ML sidecar + install.sh)"
 	@echo "test the install workflow with:  curl -fsSL http://localhost:3000/signal/install.sh | sh"
 
@@ -105,6 +110,12 @@ uninstall-linux:
 .PHONY: enrichments-sink
 enrichments-sink:
 	python3 scripts/enrichments-sink.py $(SINK_PORT)
+
+.PHONY: test-install
+# Hermetic install.sh tests: a fake release on disk, served over curl's file://
+# protocol. No network, no service install, no writes outside a temp dir.
+test-install:
+	sh scripts/test-install.sh
 
 .PHONY: send-test-prompt
 send-test-prompt:

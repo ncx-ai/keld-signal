@@ -52,6 +52,19 @@ gate holds work until the backend is up. Delivery is durable: the hook writes a
 prompt *pointer* (never text) to the on-disk `spool` when the daemon is
 unreachable, and the daemon drains it on startup + a periodic sweep.
 
+**An unconfigured agent IDLES, it does not fail.** The service is routinely
+registered *before* onboarding runs (the documented macOS pkg order), so a
+missing `~/.keld/hook.json` is a normal startup state, not a crash. `Run` waits
+on `daemon.awaitConfig` (re-reads hook.json every `KELD_CONFIG_POLL`, default
+5s; announces the wait once, not per poll) and starts the instant `keld signal
+setup` writes the token — no restart needed. Returning an error here instead
+cost a tester **69 launchd spawns in 12 minutes**, because the plist's
+`KeepAlive` was an unconditional `<true/>`. That is now the
+`SuccessfulExit=false` dictionary, so a clean exit is final while a real crash
+still restarts; systemd's `Restart=on-failure` was already the equivalent
+(don't add `RestartSec` — see the note in `service.go`), and the Windows
+`ONLOGON` scheduled task never retried at all.
+
 **Capture triggers.** Two triggers feed the same queue: the **command hook**
 (`keld __hook --source <tool>`, wired by `keld setup`), and an on-device
 **transcript watcher** (`internal/agent/watch/`) that tails the JSONL transcripts

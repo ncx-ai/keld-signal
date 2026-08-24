@@ -624,13 +624,18 @@ func wellKnownSidecarDirs() []string {
 }
 
 // Run starts the daemon: ingress on loopback, worker, agent.json discovery file.
+//
+// An unconfigured agent IDLES rather than failing: the service is routinely
+// registered before onboarding runs (the documented macOS pkg order), so this
+// waits for hook.json and starts the moment onboarding writes it. See
+// awaitConfig for why exiting here was wrong.
 func Run(ctx context.Context) error {
-	cfg, err := hook.LoadConfig()
+	cfg, err := awaitConfig(ctx, hook.LoadConfig, configPollInterval(), func() {
+		log.Printf("keld-agent: not configured yet — idling until `keld login` + `keld signal setup` "+
+			"write %s; no restart needed once they do", paths.HookConfigPath())
+	})
 	if err != nil {
-		log.Printf("keld-agent: hook config read error: %v", err)
-	}
-	if cfg.Endpoint == "" || cfg.IngestToken == "" {
-		return fmt.Errorf("keld-agent: not configured (run `keld login` / setup first)")
+		return nil // context cancelled while idling: a clean shutdown, not a failure
 	}
 
 	secret, err := agentcfg.NewSecret()

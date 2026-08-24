@@ -239,16 +239,24 @@ jobs:
       # Publish the frozen macOS sidecar as a standalone tarball so the curl|sh installer
       # (scripts/install.sh) can fetch it on macOS — the .pkg bundles it, but the curl path
       # downloads it per-OS/arch like Linux does.
+      # The .sha256 companion is what lets scripts/install.sh verify this asset:
+      # goreleaser's checksums.txt covers only ITS archives, and this tarball is
+      # built in a different job. Without it the installer can only warn.
       - name: Package macOS sidecar tarball
         if: startsWith(matrix.os, 'macos')
         shell: bash
-        run: tar -C dist -czf "keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz" keld-agent-sidecar
+        run: |
+          tar -C dist -czf "keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz" keld-agent-sidecar
+          shasum -a 256 "keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz" \
+            > "keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz.sha256"
 
       - name: Upload macOS sidecar to release
         if: startsWith(matrix.os, 'macos') && env.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz
+          files: |
+            keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz
+            keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz.sha256
 
       - name: Upload macOS sidecar as artifact (dry run)
         if: startsWith(matrix.os, 'macos') && github.event_name == 'workflow_dispatch'
@@ -256,7 +264,9 @@ jobs:
         with:
           name: installers-macos-${{ matrix.goarch }}-sidecar
           if-no-files-found: ignore
-          path: keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz
+          path: |
+            keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz
+            keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz.sha256
 
       - name: Package Windows installer
         if: matrix.os == 'windows-latest'
@@ -373,13 +383,18 @@ jobs:
 
       - name: Package Linux sidecar tarball
         shell: bash
-        run: tar -C dist -czf "keld-agent-sidecar_linux_amd64.tar.gz" keld-agent-sidecar
+        run: |
+          tar -C dist -czf "keld-agent-sidecar_linux_amd64.tar.gz" keld-agent-sidecar
+          sha256sum "keld-agent-sidecar_linux_amd64.tar.gz" \
+            > "keld-agent-sidecar_linux_amd64.tar.gz.sha256"
 
       - name: Upload sidecar to release
         if: env.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: keld-agent-sidecar_linux_amd64.tar.gz
+          files: |
+            keld-agent-sidecar_linux_amd64.tar.gz
+            keld-agent-sidecar_linux_amd64.tar.gz.sha256
 
       - name: Upload sidecar as artifact (dry run)
         if: github.event_name == 'workflow_dispatch'
@@ -387,4 +402,6 @@ jobs:
         with:
           name: installers-linux-amd64
           if-no-files-found: ignore
-          path: keld-agent-sidecar_linux_amd64.tar.gz
+          path: |
+            keld-agent-sidecar_linux_amd64.tar.gz
+            keld-agent-sidecar_linux_amd64.tar.gz.sha256

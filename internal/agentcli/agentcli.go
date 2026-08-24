@@ -268,8 +268,9 @@ func serviceControlCmds() []*cobra.Command {
 // executeCmd runs root and, on error, prints it to stderr (once) before
 // returning exit code 1. The root command keeps SilenceErrors/SilenceUsage so
 // cobra prints neither the error nor usage; printing here is the single place a
-// returned error becomes visible. Without this, a daemon.Run failure (e.g. an
-// unconfigured agent) exits 1 with completely empty output.
+// returned error becomes visible. Without this, a daemon.Run failure exits 1
+// with completely empty output. (An unconfigured agent is no longer such a
+// failure: daemon.Run idles and waits for hook.json — see daemon.awaitConfig.)
 func executeCmd(root *cobra.Command, stderr io.Writer) int {
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(stderr, err)

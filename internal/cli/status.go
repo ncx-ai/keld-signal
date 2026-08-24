@@ -161,7 +161,7 @@ func newDoctorCmd() *cobra.Command {
 				st := adapter.Status(current, tm.Managed)
 				if !st.Configured {
 					problems = append(problems,
-						fmt.Sprintf("%s: manifest records setup but config is not configured (drift). Re-run `keld setup`.", adapter.DisplayName()),
+						fmt.Sprintf("%s: manifest records setup but config is not configured (drift). Re-run `keld signal setup`.", adapter.DisplayName()),
 					)
 				}
 			}
@@ -180,7 +180,7 @@ func newDoctorCmd() *cobra.Command {
 			if bins := keldPATHBinaries(); len(bins) > 1 {
 				problems = append(problems, fmt.Sprintf(
 					"multiple keld binaries on PATH — %s will run, shadowing %v. "+
-						"Repoint or remove the extras (e.g. `ln -sf %s <stray>`), then re-run `keld setup`.",
+						"Repoint or remove the extras (e.g. `ln -sf %s <stray>`), then re-run `keld signal setup`.",
 					bins[0], bins[1:], bins[0]))
 			}
 
