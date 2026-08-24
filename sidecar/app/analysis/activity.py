@@ -1,4 +1,53 @@
-"""`activity_type` from the reference levels: what kind of work the AI+user system was doing.
+"""`activity_type` from the reference levels — MEASURED AND REFUTED. Do not wire this up.
+
+## RESULTS (2026-08-24). It loses to a constant by 32 points.
+
+Measured on 100 hand-labelled windows from the frozen corpus, labelled from window TEXT ONLY
+(prompts + assistant prose, every tool_use block dropped) so the truth is independent of the level
+this reads. Full report + method + limitations:
+`~/keld/refseries-context/facets/DETERMINISTIC-ACTIVITY-RESULTS.md`.
+
+    coverage                     0.78   (78 of 100 answered; thin 21, unmapped 1)
+    accuracy on answered        0.218
+    majority baseline           0.538   (the constant `generate`)
+    LIFT                       -0.321
+    GLiNER2 on the gold set     0.670 against a 0.243 baseline   (+0.427)
+
+**Coverage was not the problem** — 0.78 is respectable. It answers 78% of windows badly.
+
+**How it fails:** `transform` is predicted 36 times and is right ZERO times, on a sample where its
+true support is 0. That is the `speech_act` signature exactly — the facet dropped in schema v9 for
+predicting `statement` 22 times and being right zero times.
+
+**Why, and it is structural rather than a tuning failure.** Precedence worked; the Amendment-1 trap
+did not recur. The defect is the LABEL BINDING: `action` records WHICH PHYSICAL ACT touched a file,
+while this vocabulary divides on WHAT THE CHANGE MEANS. Implementing a feature and reformatting a
+document are the same `Edit` call — one is `generate` ("draft, write, code, ideate"), the other
+`transform` ("rewrite, summarize, translate, reformat") — and no level distinguishes them, because
+the distinction is intent, not act. `vocab.py`'s "the physical act is what a reader needs" is true
+for the workstreams payload and false here. `review` collapses the same way: a reviewer reads 2-4
+files, so 13 of 27 `review` windows fell below the floor as `thin`.
+
+Concede the entire generate/transform distinction — the one arguable labelling call — and the
+mapping still adds **+0.013** over the constant. The verdict does not rest on that call.
+
+**What DID survive, and it is not this facet.** Collapsed to two classes, "was this hour authoring
+or not" scores 0.756 against the same 0.538 baseline (+0.218). That is a real deterministic
+dimension and it is a different vocabulary from these six. It needs its own preregistration; it is
+NOT a relabelling of `Activities`. Both collapses are POST-HOC and claimable only on a fresh sample.
+
+**Retained, not deleted**, for the same reason `analyze.analyze_window_by_parse` is retained: so the
+next person reads the measurement instead of rebuilding the mapping. It must not become a
+`/analyze` field or an `enrich` pass — publishing a facet that scores below a constant is strictly
+worse than publishing nothing, which is this project's standing rule.
+
+Everything below is the mapping as it was pre-registered and committed (4a64c9b), BEFORE the
+measurement existed. It is left unchanged on purpose: editing it to chase the numbers above is
+exactly what would make the result unfalsifiable.
+
+---
+
+What it was for: what kind of work the AI+user system was doing.
 
 The production facet (`Activities` in internal/agent/enrich/labels.go) classifies prompt TEXT on
 GLiNER2. This module answers the same question from the `action` level alone — the physical acts
