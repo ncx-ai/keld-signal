@@ -118,18 +118,27 @@ under 10% of windows — and three of the seven allocation dimensions did not su
 replaced them is `reading`: the conclusion, stated, computed from the numbers already here.
 Tables: `~/keld/refseries-context/dynamics/DYNAMICS-VALUE.md`.
 
-## SCHEMA is bumped; `enrich.SchemaVersion` is deliberately NOT
+## BOTH SCHEMAS ARE BUMPED, AND THE SECOND ONE IS NOW OWED
 
 `app.analysis.SCHEMA` is **3**: this module's published vocabulary changed (three dimension keys
 removed, `emerged`/`decayed` removed, `reading` added with a closed 7-value set).
 
-`enrich.SchemaVersion` stays **7**. That constant gates the vocabulary published to ATLAS, and
-this block does not reach Atlas: `sidecar.AnalyzeResult` has no field for it and `AnalyzeLabeled`
-forwards none of it (pinned Go-side by `TestAnalyzeIgnoresTheDynamicsBlock`). Bumping it would
-tell every Atlas consumer that the sensitivity-span / task_type / function vocabularies changed
-when they did not — a false positive in a contract signal is worse than a missing one, because
-the next real bump becomes unreadable. The moment any dynamics field is given a home in
-`AnalyzeResult`, that changes and the bump is owed.
+`enrich.SchemaVersion` is **8**. It was deliberately left at 7 while this block reached nothing —
+`sidecar.AnalyzeResult` had no field for it, so `json.Decode` dropped it Go-side — and the debt
+came due the moment it got one. What crosses to Atlas is the DERIVED six per dimension: `status`,
+`reading`, `changed`, `turnover`, `decay`, `concentration_shift`. `status` and `reading` are
+mirrored as `enrich.DynamicStatuses`/`DynamicReadings` and pinned against THIS FILE by
+`TestDynamicsVocabulariesMatchTheSidecar`, because the Go side drops a value it does not
+recognise — so a drift here would silently stop publishing a dimension rather than fail.
+
+WHAT DOES NOT CROSS, and it is not a Go-side policy choice: every per-side `slice`/`baseline`
+object (which names the reference LEVEL — on `term`, a name someone spoke), the three timestamps,
+`sizer`/`sizer_detail` (whose `level` is a level name too), `source` and `reconcile_scope`.
+`sidecar.AnalyzeResult` models none of them, so a level value cannot be decoded at all, let alone
+published — pinned at the decode boundary by
+`TestNothingInTheDynamicsSubtreeCanCarryALevelValue` and at the wire by
+`publish.TestEnrichmentWireShapeCannotCarryAnalysisInternals`. Adding a field to this block is
+free; giving it a home Go-side is the contract change.
 """
 import collections
 import math

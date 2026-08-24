@@ -41,7 +41,12 @@ var errAnalysisUnavailable = errors.New("workstreams: window analysis unavailabl
 // (backend absent, transcript/prompt not found, transport failure); a true
 // return with no dimensions means the window genuinely had no dominant value
 // for any dimension.
-type WorkstreamAnalyzer func(path, promptID string, spanMinutes int) (map[string]Labeled, bool)
+//
+// It returns a WindowAnalysis rather than the dimension map alone because ONE
+// /analyze call answers two questions — what the window contains and how it is
+// changing — and asking twice would double the cost of the facet for a block the
+// first call already computed.
+type WorkstreamAnalyzer func(path, promptID string, spanMinutes int) (WindowAnalysis, bool)
 
 // WorkstreamsExtractor publishes the deterministic dimensions a cost report
 // buckets by (project, branch, model, output_type, language, workflow,
@@ -77,15 +82,15 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	if span <= 0 {
 		span = WorkstreamSpanMinutes
 	}
-	ws, ok := e.Analyze(ctx.TranscriptPath, ctx.PromptID, span)
+	an, ok := e.Analyze(ctx.TranscriptPath, ctx.PromptID, span)
 	if !ok {
 		// Absent and empty are different facts: a failed analysis must not
 		// publish "no dimensions applied", which a report would read as a real
 		// answer. Fail the pass instead — the profile publishes as "partial".
 		return nil, errAnalysisUnavailable
 	}
-	out := make(map[string]Labeled, len(ws))
-	for dim, l := range ws {
+	out := make(map[string]Labeled, len(an.Workstreams))
+	for dim, l := range an.Workstreams {
 		// A dimension the window could not attribute is reported as absent, not
 		// as a dimension whose value is the empty string.
 		if l.Value == "" {
@@ -94,5 +99,13 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 		l.Producer = e.Version() // stamped here, as every other pass stamps its own
 		out[dim] = l
 	}
-	return map[string]any{"workstreams": out}, nil
+	res := map[string]any{"workstreams": out}
+	// The derivative half of the same call. No Producer stamp: a Dynamic is not a
+	// Labeled and has no field for one, and the pass is already attributed for
+	// this job through extractor_versions — a second, unparsed attribution
+	// channel is what workstreams' dropped `provenance` was.
+	if len(an.Dynamics) > 0 {
+		res["dynamics"] = an.Dynamics
+	}
+	return res, nil
 }

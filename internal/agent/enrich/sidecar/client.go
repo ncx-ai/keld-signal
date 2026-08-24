@@ -292,6 +292,12 @@ type Workstream struct {
 // Session/WindowStart/WindowEnd are kept: they're metadata about the window
 // (a session hash, timestamps), not content, and are useful for local
 // logging/debugging.
+//
+// Dynamics is modelled the SAME selective way, and for the same reason. The
+// sidecar's block carries, per dimension, a `slice`/`baseline` pair naming the
+// reference level's own value, plus the comparison's timestamps and the sizer's
+// detail. Only the six derived fields below have a home here, so a level value
+// inside the block cannot be decoded at all — the mechanism, not a comment.
 type AnalyzeResult struct {
 	Schema      int                    `json:"schema"`
 	Evidence    int                    `json:"evidence"`
@@ -299,6 +305,34 @@ type AnalyzeResult struct {
 	WindowStart string                 `json:"window_start"`
 	WindowEnd   string                 `json:"window_end"`
 	Workstreams map[string]*Workstream `json:"workstreams"`
+	Dynamics    DynamicsBlock          `json:"dynamics"`
+}
+
+// DynamicsBlock is /analyze's dynamics object, and it models ONE of its keys.
+// The others (sizer, sizer_detail, slice_start/slice_end/baseline_start,
+// slice_minutes/baseline_minutes, source, reconcile_scope) are the block's own
+// bookkeeping: local metadata of exactly the class window_start/window_end
+// already sit in, plus — in `sizer_detail.level` — a reference level's name. A
+// struct with one field is deliberate: it keeps the rest structurally
+// unreachable instead of decoded-then-dropped.
+type DynamicsBlock struct {
+	// Dimensions is keyed by dimension name (branch, output_type, language,
+	// workflow — the set the sidecar's own measurement left standing). A nil
+	// value is a dimension the sidecar reported as null: no comparison at all,
+	// which is a different fact from a zero Dynamic.
+	Dimensions map[string]*Dynamic `json:"dimensions"`
+}
+
+// Dynamic is one dimension's comparison as it arrives on the wire. Pointer
+// metrics because null is a fact here and not an absence — see enrich.Dynamic,
+// which this converts to unchanged.
+type Dynamic struct {
+	Status             string   `json:"status"`
+	Reading            string   `json:"reading"`
+	Changed            *bool    `json:"changed"`
+	Turnover           *float64 `json:"turnover"`
+	Decay              *float64 `json:"decay"`
+	ConcentrationShift *float64 `json:"concentration_shift"`
 }
 
 // Analyze asks the sidecar to characterise the window ending at promptID

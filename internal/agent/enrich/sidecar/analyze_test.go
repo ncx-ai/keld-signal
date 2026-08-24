@@ -67,20 +67,24 @@ func TestAnalyzeReportsFailureOn404(t *testing.T) {
 	}
 }
 
-// TestAnalyzeIgnoresTheDynamicsBlock pins the property the sidecar's dynamics
-// block depends on: /analyze's response grew a "dynamics" object (the recent
-// slice read against a longer baseline — sidecar/app/analysis/dynamics.py) and
-// this client must decode the digest unchanged and forward none of it.
+// TestAnalyzeToleratesUnmodelledDynamicsFields pins the two properties the
+// dynamics forwarding rests on.
 //
-// Two halves, and both matter. Tolerance is not assumed from "encoding/json
-// ignores unknown fields" — a DisallowUnknownFields anywhere in post() would
-// turn every /analyze call into ok=false, i.e. a silently failed workstreams
-// facet on every prompt, so it is asserted against a real payload. And
-// AnalyzeResult deliberately has no field for the block, for the same reason it
-// has none for "inventory": the values inside it are reference levels that stay
-// on this machine, and structurally having nowhere to put them is stronger than
-// a comment saying not to.
-func TestAnalyzeIgnoresTheDynamicsBlock(t *testing.T) {
+// TOLERANCE is not assumed from "encoding/json ignores unknown fields" — a
+// DisallowUnknownFields anywhere in post() would turn every /analyze call into
+// ok=false, i.e. a silently failed workstreams facet on every prompt, so it is
+// asserted against a real payload. The block served here carries fields this
+// client models NOWHERE: the per-side slice/baseline objects, the three
+// timestamps, the sizer detail, and `emerged`/`decayed` — dropped by the
+// sidecar's own SCHEMA 3, kept here because a sidecar is frozen and shipped
+// separately and an older one may still send them.
+//
+// STRUCTURAL ABSENCE is the other half, and it is the same mechanism that keeps
+// "inventory" unforwardable: the six derived fields of Dynamic are modelled and
+// nothing else is, so a reference-level value inside the block has nowhere to be
+// decoded into (asserted exhaustively by
+// TestNothingInTheDynamicsSubtreeCanCarryALevelValue).
+func TestAnalyzeToleratesUnmodelledDynamicsFields(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"schema": 2, "evidence": 180, "session": "d19a4c72",
@@ -95,9 +99,9 @@ func TestAnalyzeIgnoresTheDynamicsBlock(t *testing.T) {
 				"slice_start": "2026-08-20T09:48:17Z", "slice_end": "2026-08-20T10:03:17Z",
 				"baseline_start": "2026-08-20T09:03:17Z", "sizer_detail": map[string]any{},
 				"dimensions": map[string]any{
-					"project": map[string]any{
+					"branch": map[string]any{
 						"status": "compared", "turnover": 1.0, "decay": 1.0,
-						"concentration_shift": 0.4, "changed": true,
+						"concentration_shift": 0.4, "changed": true, "reading": "switched",
 						"slice":    map[string]any{"value": "beacon-api", "share": 1.0, "evidence": 62, "reason": "attributed"},
 						"baseline": map[string]any{"value": "aurora-ledger", "share": 1.0, "evidence": 118, "reason": "attributed"},
 						"emerged":  map[string]any{"n": 1, "top": []map[string]any{{"value": "beacon-api", "share": 1.0}}},
@@ -116,7 +120,7 @@ func TestAnalyzeIgnoresTheDynamicsBlock(t *testing.T) {
 	c := New(srv.URL, 5*time.Second)
 	out, ok := c.Analyze("/tmp/t.jsonl", "prompt-1", 60)
 	if !ok {
-		t.Fatal("a response carrying the dynamics block failed to decode")
+		t.Fatal("a response carrying unmodelled dynamics fields failed to decode")
 	}
 	if out.Evidence != 180 || out.Schema != 2 {
 		t.Errorf("the digest did not survive the added block: %+v", out)
@@ -124,13 +128,20 @@ func TestAnalyzeIgnoresTheDynamicsBlock(t *testing.T) {
 	if proj := out.Workstreams["project"]; proj == nil || proj.Value != "beacon-api" {
 		t.Errorf("bad workstream decode: %+v", proj)
 	}
-	// Nowhere to put it: the block must not be reachable through the labeled view
-	// the enrichment pipeline actually consumes.
-	labeled, ok := c.AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	if br := out.Dynamics.Dimensions["branch"]; br == nil || br.Reading != "switched" {
+		t.Errorf("the six derived fields did not land: %+v", br)
+	}
+
+	// The labeled view the pipeline consumes carries the derived dynamics and
+	// nothing that could name a reference level.
+	got, ok := c.AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	if len(labeled) != 1 || labeled["project"].Value != "beacon-api" {
-		t.Errorf("dynamics leaked into the labeled view: %+v", labeled)
+	if len(got.Workstreams) != 1 || got.Workstreams["project"].Value != "beacon-api" {
+		t.Errorf("workstreams view: %+v", got.Workstreams)
+	}
+	if len(got.Dynamics) != 2 || got.Dynamics["branch"].Reading != "switched" {
+		t.Errorf("dynamics view: %+v", got.Dynamics)
 	}
 }

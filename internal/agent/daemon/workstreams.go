@@ -8,7 +8,7 @@ import "github.com/ncx-ai/keld-signal/internal/agent/enrich"
 // an interface rather than a *sidecar.Client assertion so tests can wire a fake
 // without a live sidecar, mirroring how enrich treats ContextModel/MultiLabelModel.
 type windowAnalyzer interface {
-	AnalyzeLabeled(path, promptID string, spanMinutes int) (map[string]enrich.Labeled, bool)
+	AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.WindowAnalysis, bool)
 }
 
 // piiDetector is the same kind of optional capability for the sidecar's /pii:

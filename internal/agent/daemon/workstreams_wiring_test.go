@@ -23,9 +23,16 @@ type analyzingModel struct {
 	span         int
 }
 
-func (m *analyzingModel) AnalyzeLabeled(path, promptID string, spanMinutes int) (map[string]enrich.Labeled, bool) {
+func (m *analyzingModel) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.WindowAnalysis, bool) {
 	m.path, m.prompt, m.span = path, promptID, spanMinutes
-	return map[string]enrich.Labeled{"project": {Value: "keld-signal", Confidence: 0.8}}, true
+	changed := true
+	turnover := 0.35
+	return enrich.WindowAnalysis{
+		Workstreams: map[string]enrich.Labeled{"project": {Value: "keld-signal", Confidence: 0.8}},
+		Dynamics: map[string]enrich.Dynamic{
+			"branch": {Status: "compared", Reading: "switched", Changed: &changed, Turnover: &turnover},
+		},
+	}, true
 }
 
 func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
@@ -47,6 +54,45 @@ func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
 	}
 	if m.path != "/tmp/t.jsonl" || m.prompt != "p1" || m.span != enrich.WorkstreamSpanMinutes {
 		t.Errorf("job coordinates not threaded: path=%q prompt=%q span=%d", m.path, m.prompt, m.span)
+	}
+	// The dynamics half of the same /analyze call reaches the wire too — this is
+	// the assertion that the block leaves the machine at all.
+	if sent[0].Dynamics["branch"].Reading != "switched" {
+		t.Fatalf("dynamics not threaded into the published enrichment: %+v", sent[0].Dynamics)
+	}
+	if to := sent[0].Dynamics["branch"].Turnover; to == nil || *to != 0.35 {
+		t.Errorf("the number the reading was computed from was dropped: %+v", sent[0].Dynamics["branch"])
+	}
+}
+
+// ml_backend "deterministic": NO Model at all, the analysis service wired on its
+// own. Dynamics ride the same model-free /analyze call the workstreams facet
+// does, so the mode that has no GLiNER2 must still publish them — asserted
+// through `process`, not inferred from the wiring.
+func TestProcessPublishesDynamicsWithNoModel(t *testing.T) {
+	shift := -0.31
+	svc := serviceFacets{Analyze: func(path, promptID string, span int) (enrich.WindowAnalysis, bool) {
+		return enrich.WindowAnalysis{
+			Workstreams: map[string]enrich.Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
+			Dynamics: map[string]enrich.Dynamic{
+				"branch": {Status: "compared", Reading: "broadening", ConcentrationShift: &shift},
+			},
+		}, true
+	}}
+	sender := &fakeSender{}
+	j := queue.Job{Source: "claude_code", Scheme: "prompt_id", ID: "WS-3",
+		TranscriptPath: "/tmp/t.jsonl", PromptID: "p1", Inline: "hello world"}
+
+	if ok := process(context.Background(), j, nil, svc, sender, "actor@keld.co",
+		func() bool { return true }, nil, nil, nil); !ok {
+		t.Fatal("process did not publish")
+	}
+	sent := sender.all()[0]
+	if sent.Dynamics["branch"].Reading != "broadening" {
+		t.Fatalf("deterministic mode dropped the dynamics: %+v", sent.Dynamics)
+	}
+	if sh := sent.Dynamics["branch"].ConcentrationShift; sh == nil || *sh != -0.31 {
+		t.Errorf("concentration_shift dropped: %+v", sent.Dynamics["branch"])
 	}
 }
 

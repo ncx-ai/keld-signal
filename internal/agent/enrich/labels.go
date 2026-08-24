@@ -18,7 +18,69 @@ package enrich
 // sensitivity_spans[].label. The Sensitivity class list itself is unchanged;
 // what changed is the set of entity names a consumer may receive, which is the
 // published contract this constant gates.
-const SchemaVersion = 7
+//
+// v8 ADDS the dynamics facet to the published payload: Profile.Dynamics /
+// Enrichment.dynamics, carrying per-dimension `status` and `reading` from the
+// two closed vocabularies below plus the three shares they are computed from.
+// The block itself is not new — the sidecar has computed it since
+// app.analysis.SCHEMA 2 — but until this bump it reached nothing:
+// sidecar.AnalyzeResult had no field for it, so json.Decode dropped it. A field
+// arriving on the wire is a contract change for every consumer regardless of how
+// long the producer has been computing it, which is exactly this constant's
+// trigger. Producer strings move from `-v7` to `-v8`.
+const SchemaVersion = 8
+
+// DynamicStatuses is the closed set of values the dynamics facet may publish for
+// a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in
+// sidecar/app/analysis/dynamics.py (pinned against that source by
+// TestDynamicsVocabulariesMatchTheSidecar — a drift here silently stops
+// publishing a dimension rather than failing).
+//
+// Only `compared` carries metrics. The other five name WHY there was no
+// comparison, and they exist because "no evidence either side" and "the value
+// changed" were both a bare null before the sidecar's evidence-floor work
+// measured what that cost: `tooling` is absent on 50.3% of 60-minute windows, so
+// a reader who cannot tell absence from stability reads near-constant churn off
+// a dimension that has no data at all.
+var DynamicStatuses = []string{"compared", "both_absent", "slice_absent",
+	"baseline_absent", "slice_thin", "baseline_thin"}
+
+// DynamicReadings is the closed set of values the dynamics facet may publish as
+// its STATED CONCLUSION, mirroring `READINGS` in
+// sidecar/app/analysis/dynamics.py. Order is the precedence the sidecar applies
+// (which value owns the work outranks how concentrated it is, which outranks
+// what came and went underneath it) and is part of the pin.
+//
+// This is the field the facet exists for. Measured on this branch: a document of
+// raw window numbers scored -3.3/-20.0 on synthesis accuracy — worse than
+// emitting nothing — against +36.7 for a digest carrying the same facts with the
+// conclusion stated (~/keld/refseries-context/experiment/RESULTS.md). A reading
+// is UNSTATED (empty) outside status `compared`, never defaulted to `steady`.
+var DynamicReadings = []string{"switched", "narrowing", "broadening", "churning",
+	"widening", "shedding", "steady"}
+
+var (
+	dynamicStatusSet  = setOf(DynamicStatuses)
+	dynamicReadingSet = setOf(DynamicReadings)
+)
+
+func setOf(vs []string) map[string]bool {
+	m := make(map[string]bool, len(vs))
+	for _, v := range vs {
+		m[v] = true
+	}
+	return m
+}
+
+// KnownDynamicStatus reports whether a status is in the published vocabulary. An
+// empty status is NOT: a dimension whose comparison outcome cannot be named is
+// not interpretable and is dropped rather than published.
+func KnownDynamicStatus(s string) bool { return dynamicStatusSet[s] }
+
+// KnownDynamicReading reports whether a reading is publishable. The empty string
+// passes: no conclusion is stated outside status `compared`, and that silence is
+// the honest answer rather than a missing one.
+func KnownDynamicReading(s string) bool { return s == "" || dynamicReadingSet[s] }
 
 // TaskTypes is the canonical task_type vocabulary — routing keys for Keld
 // Inference Exchange order books (real-world async inference job categories).

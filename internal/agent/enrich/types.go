@@ -118,7 +118,13 @@ type Profile struct {
 	// model, ...) counted from tool-call metadata rather than classified — see
 	// WorkstreamsExtractor. Keyed by dimension; a dimension the window could not
 	// attribute is ABSENT rather than present-and-empty.
-	Workstreams    map[string]Labeled `json:"workstreams,omitempty"`
+	Workstreams map[string]Labeled `json:"workstreams,omitempty"`
+	// Dynamics is the same window's DERIVATIVE, keyed by dimension: how the
+	// recent slice differs from the baseline before it (see Dynamic). It comes
+	// from the same /analyze call Workstreams does and is likewise model-free, so
+	// it is published in ml_backend "deterministic" too. Absent when the analysis
+	// computed no comparison.
+	Dynamics       map[string]Dynamic `json:"dynamics,omitempty"`
 	PipelineStatus string             `json:"pipeline_status"`
 	// FacetsSkipped names the passes that did not run because THIS RUN has no
 	// such pass — currently: a model-dependent pass under ml_backend

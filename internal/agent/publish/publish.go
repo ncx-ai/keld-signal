@@ -50,7 +50,14 @@ type Enrichment struct {
 	// no inference, and no text: the analysis is asked for a window by
 	// COORDINATES and only its matched dimension values reach here. Absent when
 	// the window attributed none.
-	Workstreams    map[string]enrich.Labeled `json:"workstreams,omitempty"`
+	Workstreams map[string]enrich.Labeled `json:"workstreams,omitempty"`
+	// Dynamics is how those dimensions are CHANGING: the recent slice of the
+	// window read against the longer baseline before it, keyed by dimension.
+	// Same /analyze call, same no-inference path, no text either — and, unlike
+	// the workstreams beside it, no reference-level VALUE at all: only the
+	// closed status/reading vocabularies and the shares they were computed from
+	// (see enrich.Dynamic). Absent when the analysis compared nothing.
+	Dynamics       map[string]enrich.Dynamic `json:"dynamics,omitempty"`
 	PipelineStatus string                    `json:"pipeline_status"`
 	// FacetsSkipped names the passes this run structurally does not have (a
 	// model-dependent pass under ml_backend "deterministic"). It rides with
@@ -108,6 +115,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		Subcategory:       p.Subcategory,
 		SubcategoryAlt:    p.SubcategoryAlt,
 		Workstreams:       p.Workstreams,
+		Dynamics:          p.Dynamics,
 		PipelineStatus:    p.PipelineStatus,
 		FacetsSkipped:     p.FacetsSkipped,
 		FacetsDegraded:    p.FacetsDegraded,

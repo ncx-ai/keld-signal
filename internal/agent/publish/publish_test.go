@@ -229,6 +229,89 @@ func TestBuildCarriesWorkstreamsAndNoWindowMetadata(t *testing.T) {
 	}
 }
 
+// The dynamics block on the wire. Both halves ship: the STATED READING and the
+// three numbers it was computed from.
+//
+// That choice is measured, not assumed. `~/keld/refseries-context/experiment/`
+// scored three arms on the same windows: a 16 KB window characterisation of raw
+// numbers came in at -3.3/-20.0 on synthesis accuracy — WORSE than emitting
+// nothing — while a digest scored +36.7. The digest was not number-free (it
+// carries "742 recorded tool references", "100%", "x26.2 usual"); what it did was
+// LABEL each number and state the conclusion, and every one of the 14
+// full-document failures was the tempo question, where the reader was handed
+// `engineer_messages: 5` / `assistant_messages: 84` and left to divide. So the
+// arm that won is conclusion + labelled numbers, which is exactly this shape: a
+// closed-vocabulary `reading` plus keyed `turnover`/`decay`/
+// `concentration_shift` (in JSON the key IS the label). What does NOT ship is the
+// unlabelled remainder of the sidecar's block — the per-side value/share/
+// evidence/reason, the timestamps, the sizer detail — which is the part that made
+// the losing arm 16 KB.
+func TestBuildCarriesTheDynamicsReadingAndItsNumbers(t *testing.T) {
+	changed, turnover, decay, shift := false, 0.42, 0.0, -0.31
+	p := enrich.Profile{
+		Workstreams: map[string]enrich.Labeled{
+			"branch": {Value: "feat/ledger", Confidence: 1, Producer: "workstreams-v8"},
+		},
+		Dynamics: map[string]enrich.Dynamic{
+			"branch": {Status: "compared", Reading: "widening", Changed: &changed,
+				Turnover: &turnover, Decay: &decay, ConcentrationShift: &shift},
+			"workflow": {Status: "both_absent", Changed: &changed},
+		},
+	}
+	e := Build(queue.Job{Source: "claude_code"}, p, "dg@keld.co", false, 0, time.Unix(0, 0))
+	if e.Dynamics["branch"].Reading != "widening" {
+		t.Fatalf("dynamics not copied onto the wire shape: %+v", e.Dynamics)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"branch":{"status":"compared","reading":"widening","changed":false,"turnover":0.42,"decay":0,"concentration_shift":-0.31}`) {
+		t.Errorf("the reading and its numbers are not both on the wire: %s", s)
+	}
+	// decay=0.0 is a MEASUREMENT ("nothing left this window"), not an absence, so
+	// it must survive omitempty — which is why the metrics are pointers.
+	if !strings.Contains(s, `"decay":0`) {
+		t.Errorf("a measured zero was omitted, which reads as `not compared`: %s", s)
+	}
+	// Outside `compared` the metrics are null and the reading is unstated; the
+	// three-state `changed` still says False, because a level that never fired
+	// did not change.
+	if !strings.Contains(s, `"workflow":{"status":"both_absent","changed":false}`) {
+		t.Errorf("an uncompared dimension published metrics or a reading: %s", s)
+	}
+}
+
+// A dimension whose `changed` is UNKNOWN (slice_absent: a quiet slice and an
+// abandoned dimension are indistinguishable) must publish no `changed` at all —
+// not false, which reads as "we checked, nothing moved".
+func TestBuildKeepsAnUnknownChangedUnstated(t *testing.T) {
+	p := enrich.Profile{Dynamics: map[string]enrich.Dynamic{
+		"language": {Status: "slice_absent"},
+	}}
+	b, err := json.Marshal(Build(queue.Job{}, p, "", false, 0, time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), `"changed"`) {
+		t.Errorf("an unknown `changed` was published as a decision: %s", b)
+	}
+	if !strings.Contains(string(b), `"language":{"status":"slice_absent"}`) {
+		t.Errorf("the status must still be stated, so the silence is readable: %s", b)
+	}
+}
+
+func TestBuildOmitsAbsentDynamics(t *testing.T) {
+	b, err := json.Marshal(Build(queue.Job{Source: "claude_code"}, enrich.Profile{}, "dg@keld.co", false, 0, time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "dynamics") {
+		t.Fatalf("no comparison must mean an absent key, not an empty object: %s", b)
+	}
+}
+
 func TestBuildOmitsAbsentWorkstreams(t *testing.T) {
 	b, err := json.Marshal(Build(queue.Job{Source: "claude_code"}, enrich.Profile{}, "dg@keld.co", false, 0, time.Unix(0, 0)))
 	if err != nil {

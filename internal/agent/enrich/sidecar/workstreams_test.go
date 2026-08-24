@@ -33,7 +33,7 @@ func TestAnalyzeLabeledConvertsShareToConfidence(t *testing.T) {
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	proj, present := got["project"]
+	proj, present := got.Workstreams["project"]
 	if !present {
 		t.Fatalf("project dimension missing: %+v", got)
 	}
@@ -41,10 +41,10 @@ func TestAnalyzeLabeledConvertsShareToConfidence(t *testing.T) {
 	if proj.Value != "keld-signal" || proj.Confidence != 0.812 {
 		t.Errorf("bad conversion: %+v", proj)
 	}
-	if _, present := got["branch"]; present {
+	if _, present := got.Workstreams["branch"]; present {
 		t.Error("an unattributed (null) dimension must be absent, never a Labeled with an empty Value")
 	}
-	if len(got) != 1 {
+	if len(got.Workstreams) != 1 {
 		t.Errorf("unexpected dimensions: %+v", got)
 	}
 }
@@ -64,6 +64,22 @@ func TestAnalyzeLabeledCarriesNoInventoryOrWindowMetadata(t *testing.T) {
 			"named_terms": []map[string]any{{"value": "Federico", "n": 2}},
 			"programs":    []map[string]any{{"value": "git", "n": 9}},
 		},
+		// The dynamics block's per-side objects name the reference level itself
+		// ("aurora-ledger" is a workspace, and on the `term` level the same slot
+		// would hold a name spoken in conversation). None of it is modelled, so
+		// none of it can reach the value this returns.
+		"dynamics": map[string]any{
+			"sizer": "ewma", "slice_start": "2026-08-23T00:45:00Z",
+			"sizer_detail": map[string]any{"level": "branch"},
+			"dimensions": map[string]any{
+				"branch": map[string]any{
+					"status": "compared", "turnover": 0.5, "decay": 0.1,
+					"concentration_shift": nil, "changed": true, "reading": "switched",
+					"slice":    map[string]any{"value": "beacon-api", "share": 1.0, "evidence": 9, "reason": "attributed"},
+					"baseline": map[string]any{"value": "aurora-ledger", "share": 1.0, "evidence": 30, "reason": "attributed"},
+				},
+			},
+		},
 	})
 	defer srv.Close()
 
@@ -75,7 +91,13 @@ func TestAnalyzeLabeledCarriesNoInventoryOrWindowMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"Federico", "named_terms", "inventory", "453451c2", "window_start", "2026-08-23T00:00:00Z"} {
+	if got.Dynamics["branch"].Reading != "switched" {
+		t.Fatalf("the dynamics half is empty; the leak assertions below would be "+
+			"vacuous for it: %+v", got.Dynamics)
+	}
+	for _, forbidden := range []string{"Federico", "named_terms", "inventory", "453451c2",
+		"window_start", "2026-08-23T00:00:00Z", "aurora-ledger", "beacon-api",
+		"attributed", "sizer", "slice_start"} {
 		if strings.Contains(string(b), forbidden) {
 			t.Errorf("conversion leaked %q: %s", forbidden, b)
 		}
@@ -100,7 +122,7 @@ func TestAnalyzeLabeledEmptyWindowIsASuccess(t *testing.T) {
 	if !ok {
 		t.Fatal("an all-unattributed window is a successful analysis, not a failure")
 	}
-	if len(got) != 0 {
+	if len(got.Workstreams) != 0 {
 		t.Errorf("want no dimensions, got %+v", got)
 	}
 }

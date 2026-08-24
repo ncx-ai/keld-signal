@@ -9,18 +9,18 @@ type fakeAnalyze struct {
 	path   string
 	prompt string
 	span   int
-	out    map[string]Labeled
+	out    WindowAnalysis
 	ok     bool
 }
 
-func (f *fakeAnalyze) fn(path, promptID string, spanMinutes int) (map[string]Labeled, bool) {
+func (f *fakeAnalyze) fn(path, promptID string, spanMinutes int) (WindowAnalysis, bool) {
 	f.calls++
 	f.path, f.prompt, f.span = path, promptID, spanMinutes
 	return f.out, f.ok
 }
 
 func TestWorkstreamsPassPopulatesTheProfileWithoutAModel(t *testing.T) {
-	f := &fakeAnalyze{out: map[string]Labeled{"project": {Value: "acme", Confidence: 0.83}}, ok: true}
+	f := &fakeAnalyze{out: WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme", Confidence: 0.83}}}, ok: true}
 	ctx := NewJobContext("some prompt", "claude_code", Meta{}, nil) // no Model — the point of this pass
 	ctx.TranscriptPath, ctx.PromptID = "/tmp/t.jsonl", "p1"
 
@@ -56,10 +56,10 @@ func TestWorkstreamsPassOmitsTheKeyWhenAnalysisFails(t *testing.T) {
 // empty value published as a dimension reads downstream as a real answer named
 // "".
 func TestWorkstreamsPassDropsUnattributedDimensions(t *testing.T) {
-	f := &fakeAnalyze{ok: true, out: map[string]Labeled{
+	f := &fakeAnalyze{ok: true, out: WindowAnalysis{Workstreams: map[string]Labeled{
 		"project": {Value: "acme", Confidence: 1},
 		"branch":  {}, // unattributed
-	}}
+	}}}
 	got, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
@@ -77,7 +77,7 @@ func TestWorkstreamsPassDropsUnattributedDimensions(t *testing.T) {
 // the pass succeeds (so the profile is not downgraded to "partial") and simply
 // contributes no dimensions.
 func TestWorkstreamsPassSucceedsWithNoDominantValues(t *testing.T) {
-	f := &fakeAnalyze{ok: true, out: map[string]Labeled{"project": {}}}
+	f := &fakeAnalyze{ok: true, out: WindowAnalysis{Workstreams: map[string]Labeled{"project": {}}}}
 	got, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("an empty-but-successful analysis must not fail the pass: %v", err)
@@ -90,7 +90,7 @@ func TestWorkstreamsPassSucceedsWithNoDominantValues(t *testing.T) {
 // Without coordinates there is nothing to analyze: fail fast rather than issue
 // a call that can only 404.
 func TestWorkstreamsPassNeedsCoordinates(t *testing.T) {
-	f := &fakeAnalyze{ok: true, out: map[string]Labeled{"project": {Value: "acme"}}}
+	f := &fakeAnalyze{ok: true, out: WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme"}}}}
 	if _, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(NewJobContext("t", "s", Meta{}, nil)); err == nil {
 		t.Error("missing coordinates must fail the pass")
 	}
@@ -117,11 +117,11 @@ func TestRunPublishesWorkstreamsWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int) (map[string]Labeled, bool) {
+		WithWorkstreams(func(path, promptID string, span int) (WindowAnalysis, bool) {
 			if path != "/tmp/t.jsonl" || promptID != "p1" {
 				t.Errorf("coordinates not threaded into the pipeline: %q %q", path, promptID)
 			}
-			return map[string]Labeled{"project": {Value: "acme", Confidence: 1}}, true
+			return WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
 		}))
 	if p.Workstreams["project"].Value != "acme" {
 		t.Fatalf("profile missing workstreams: %+v", p.Workstreams)
@@ -162,9 +162,9 @@ func TestRunSkipsWorkstreamsForSourcesTheAnalysisCannotRead(t *testing.T) {
 		p := Run("hello", source, Meta{}, nil,
 			WithPassTimeout(0),
 			WithCoordinates("/tmp/t.jsonl", "sess#3"),
-			WithWorkstreams(func(string, string, int) (map[string]Labeled, bool) {
+			WithWorkstreams(func(string, string, int) (WindowAnalysis, bool) {
 				called = true
-				return map[string]Labeled{"project": {Value: "acme", Confidence: 1}}, true
+				return WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
 			}))
 		if called {
 			t.Errorf("%s: the analysis cannot read this source's transcripts; it must not be called", source)

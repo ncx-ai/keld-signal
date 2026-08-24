@@ -335,6 +335,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		Subcategory:       labeledFrom(ctx.Get("subcategory"), "subcategory", "subcategory"),
 		SubcategoryAlt:    altsNamed(ctx.Get("subcategory"), "subcategory_alt"),
 		Workstreams:       workstreamsFrom(ctx.Get("workstreams")),
+		Dynamics:          dynamicsFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
 		FacetsSkipped:     skipped,
 		FacetsDegraded:    degraded,
@@ -402,6 +403,18 @@ func workstreamsFrom(out map[string]any) map[string]Labeled {
 	if out != nil {
 		if ws, ok := out["workstreams"].(map[string]Labeled); ok && len(ws) > 0 {
 			return ws
+		}
+	}
+	return nil
+}
+
+// dynamicsFrom reads the dynamics half of the same committed pass output. Empty
+// yields nil, so a window the analysis could not compare publishes no key rather
+// than an empty object that would read as "we compared and found nothing".
+func dynamicsFrom(out map[string]any) map[string]Dynamic {
+	if out != nil {
+		if d, ok := out["dynamics"].(map[string]Dynamic); ok && len(d) > 0 {
+			return d
 		}
 	}
 	return nil
