@@ -14,11 +14,18 @@ version, cannot be queried or migrated, and would put a hard pandas dependency i
 that is deliberately pandas-free (see `app/analysis/__init__.py`; `window.py` argues `Counter`
 is the entire performance case a window needs). Nothing here imports pandas or numpy.
 
-**What may be stored.** Reference EVENTS only — `(session, ts, level, ref, n)`, derived from
-tool-call inputs. `upsert_events` drops every non-`ref` row on the way in: a `say` row carries
-`len(body)`, a measure of message TEXT, and a `tok` row carries token counts; neither is a
-reference and neither belongs in a durable store. No prompt text and no raw message content
-ever reaches this file, and the database is created 0600.
+**What may be stored.** Two shapes, and only two. Reference EVENTS — `(session, ts, level, ref,
+n)`, derived from tool-call inputs — and per-turn MAGNITUDES — `(session, ts, kind, value)`,
+numbers measuring what a turn cost (`turn_magnitude`, and `app/analysis/magnitude.py` for what
+they mean). `upsert_events` routes `ref` rows to one and `mag` rows to the other and DROPS
+everything else on the way in: a `say` row carries `len(body)`, a measure of message TEXT, and a
+`tok` row carries raw token counts superseded by the price-weighted magnitude. No prompt text and
+no raw message content ever reaches this file, and the database is created 0600.
+
+A magnitude is a number on a TURN, not a reference, so it does not go in `event`: forcing it into
+`ref` as a bucket string ("0-1k tokens") would make the one thing it is — a number — the one
+thing it could no longer be queried as. See `turn_magnitude`'s own comment for why it is a
+sibling table rather than a column on `event`.
 
 ⚠️ One qualification, inherited rather than introduced here: the `term` level is the only one
 in this package drawn from message text rather than tool-call inputs (see `terms.py`), and a
@@ -37,7 +44,7 @@ import sqlite3
 import threading
 import time
 
-from app.analysis import window, workstreams
+from app.analysis import magnitude, window, workstreams
 
 log = logging.getLogger("keld.sidecar.store")
 
@@ -82,7 +89,14 @@ PRECOMPUTED_LEVELS = tuple(dict.fromkeys(
 #         rows cannot be unmerged -- there is no column that says which file a row came from.
 #         So the data is DISCARDED and re-ingested (`_migrate`), which is exact, because the
 #         transcripts are still on disk and ingest is resumable from offset 0.
-SCHEMA_VERSION = 5
+# 5 -> 6: `turn_magnitude`, the per-turn ECONOMIC magnitudes (see that table's comment and
+#         `app/analysis/magnitude.py`). Additive, like 1 -> 2 and 2 -> 3: every v5 table is
+#         unchanged, `CREATE TABLE IF NOT EXISTS` upgrades an existing file in place, and a v5
+#         store simply has no magnitudes until its next ingest -- the correct initial state,
+#         since a weighted rollup over a turn with no stored weight contributes nothing rather
+#         than guessing. NOT a discard: the rows a v5 store holds are already keyed on a unique
+#         session and are exactly the rows this version wants.
+SCHEMA_VERSION = 6
 
 # The first version whose stored `session` values are unique per transcript. A store below this
 # holds merged rows and its data is discarded on open; see the 4 -> 5 note above.
@@ -104,7 +118,11 @@ UNIQUE_SESSION_VERSION = 5
 # `bin_level` is NOT in the list: it is the registry of which levels are precomputed, holds no
 # session, and dropping it would make `_register_levels` backfill from an empty `event` table and
 # quietly leave every level unregistered.
-_SESSION_KEYED_TABLES = ("event", "bin", "prompt", "ingest", "parse_state", "retention")
+#   turn_magnitude    -- keyed on `session` and joined to `event` on the turn's timestamp, so
+#                        merged event rows mean merged magnitudes; and a magnitude whose events
+#                        were discarded is a number nothing can be joined to.
+_SESSION_KEYED_TABLES = ("event", "bin", "prompt", "ingest", "parse_state", "retention",
+                         "turn_magnitude")
 
 # --- Retention -------------------------------------------------------------------------------
 #
@@ -227,6 +245,56 @@ CREATE TABLE IF NOT EXISTS event (
   UNIQUE (session, source_line, ts, level, ref)
 );
 CREATE INDEX IF NOT EXISTS event_session_ts ON event(session, ts);
+
+-- The per-turn ECONOMIC magnitudes: how much a turn cost, as opposed to what it was about.
+-- `kind` names which magnitude (`magnitude.KINDS`: `tokens`, the price-weighted token count in
+-- input-token equivalents; `edit_bytes`, the byte extent of the file text the turn's edits
+-- handled) and `value` is the number. See `app/analysis/magnitude.py` for both definitions.
+--
+-- WHY A SIBLING TABLE AND NOT A COLUMN ON `event`. Three reasons, in order of weight:
+--
+--   1. RECONCILE. `lang` -- an ALLOCATION dimension -- plus `file`/`dir`/`ext`/`component` come
+--      only from `reconcile.reconcile`, which is recomputed wholesale from the accumulated
+--      `pending` list into its own slot (`replace_events`). A weight column on `event` would
+--      have to be carried through `pending`, which means a `parse_state` layout change and
+--      therefore a forced reparse of every existing store -- to store a number that is already
+--      derivable. Joined on `(session, ts)`, reconcile rows pick their turn's magnitude up for
+--      free, because `reconcile` copies the turn's `base` (and so its quantized `ts`) onto every
+--      row it emits.
+--   2. IT IS ONE NUMBER PER TURN. A column on `event` replicates a single turn's cost across
+--      every row that turn produced -- 40-odd rows on a busy turn -- and then "what did this
+--      turn cost" becomes a divide instead of a lookup. On the frozen corpus that is ~532,000
+--      copies of ~70,000 facts.
+--   3. It is ADDITIVE. A new table upgrades a v5 file in place; a new column does not
+--      (`CREATE TABLE IF NOT EXISTS` cannot add one), so the column shape would have meant a
+--      migration on a schema whose last migration had to discard and re-ingest.
+--
+-- `kind` is a DIMENSION, not a bucketed value: it says which magnitude this is, while `value`
+-- stays REAL and stays summable, comparable and averageable in SQL. That is the distinction the
+-- `ref`-as-bucket-string shape would have destroyed. New magnitudes are therefore data rather
+-- than DDL. There is deliberately no `magnitude_kind` registry table paralleling `bin_level`:
+-- `bin` is SPARSE BY DESIGN, so a level's absence there is ambiguous between "not precomputed"
+-- and "no evidence" and needs the registry to disambiguate. Here a missing kind on a turn means
+-- one thing only -- that turn had none of it, i.e. zero -- so there is nothing to disambiguate.
+--
+-- `source_line` is in the key for exactly the reason it is in `event`'s: it makes ingest
+-- IDEMPOTENT. A crash between appending and advancing the byte offset replays the same tail, and
+-- `DO UPDATE SET value = excluded.value` absorbs the replay instead of doubling the cost of
+-- every turn in it. Rows sharing `(source_line, ts, kind)` are summed before insert -- which is
+-- what a turn with several edits needs anyway, and matches what the weighted rollup would sum.
+--
+-- No text. A token count and a byte length are numbers; the strings they measure are read by
+-- `magnitude.edit_bytes`, which returns an `int`, and are never carried past it.
+CREATE TABLE IF NOT EXISTS turn_magnitude (
+  session     TEXT NOT NULL,
+  source_line INTEGER NOT NULL,
+  ts          REAL NOT NULL,
+  kind        TEXT NOT NULL,
+  value       REAL NOT NULL,
+  PRIMARY KEY (session, source_line, ts, kind)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS turn_magnitude_session_kind_ts
+  ON turn_magnitude(session, kind, ts);
 
 -- The registry of levels that ARE precomputed into `bin`. It exists so that "which levels are
 -- binned" is data in the database rather than a constant in one process's memory: `bin.level`
@@ -549,14 +617,22 @@ class Store:
     # --- ingest --------------------------------------------------------------------------
 
     def upsert_events(self, session, rows, source_line=0):
-        """Store one batch of reference events and re-roll the 5-minute bins it touches.
+        """Store one batch of reference events and magnitudes, and re-roll the bins it touches.
 
         `rows` are `levels.events_for_turns` / `reconcile.reconcile` output — the 9-tuple
-        `(t, session, repo, branch, sidechain, kind, level, ref, n)`. Non-`ref` rows are DROPPED
-        here rather than rejected: the natural call is `upsert_events(s, rows + recon_rows)`,
-        and making the caller filter would copy this module's knowledge of the tuple layout into
-        every call site. What is dropped is `say` (a character count of message text) and `tok`
-        (token counts) — neither is a reference event and neither may be persisted.
+        `(t, session, repo, branch, sidechain, kind, level, ref, n)`. Rows are ROUTED by kind and
+        anything unrecognised is DROPPED here rather than rejected: the natural call is
+        `upsert_events(s, rows + recon_rows)`, and making the caller filter would copy this
+        module's knowledge of the tuple layout into every call site. `ref` rows become `event`
+        rows; `mag` rows become `turn_magnitude` rows (`level` is the magnitude's `kind`, `ref` is
+        empty, `n` is the number). What is dropped is `say` (a character count of message text)
+        and `tok` (raw token counts, superseded by the price-weighted `mag`/tokens magnitude —
+        see `app/analysis/magnitude.py` for why their sum is not a cost).
+
+        Magnitudes do not touch `bin`: a bin holds `(level, ref)` sums of reference events, and
+        `bin.level` is constrained to the precomputed reference levels. A weighted rollup reads
+        the raw events regardless (see `weighted_window_rows`), so there is nothing for a bin to
+        precompute here.
 
         `source_line` identifies the ingest batch by the transcript line ordinal it was read
         through; a row may also carry its own as a 10th element, which wins. It is part of the
@@ -570,11 +646,15 @@ class Store:
         because a replayed batch must be absorbed rather than added.
         """
         agg = self._aggregate(rows, source_line)
-        if not agg:
+        mags = self._aggregate_mag(rows, source_line)
+        if not agg and not mags:
             return 0
         touched = {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
         with self.transaction():
-            self._insert(session, agg)
+            if agg:
+                self._insert(session, agg)
+            if mags:
+                self._insert_mag(session, mags)
             self._reroll(session, touched)
         return len(agg)
 
@@ -589,12 +669,46 @@ class Store:
             agg[(line, float(r[0]), r[6], str(r[7]))] += float(r[8])
         return agg
 
+    @staticmethod
+    def _aggregate_mag(rows, source_line):
+        """`(line, ts, kind) -> value` over the `mag` rows only.
+
+        Summing is the point, not an incidental: `levels.events_for_turns` emits ONE ROW PER EDIT
+        EVENT, deliberately, so a turn with three edits arrives as three rows and its per-turn
+        magnitude is their sum. The per-event granularity is preserved where it is needed — in
+        the extraction output a study reads directly — and summed where it is used, which is a
+        weighted rollup over turns.
+        """
+        agg = collections.defaultdict(float)
+        for r in rows:
+            if r[5] != "mag":
+                continue
+            line = int(r[9]) if len(r) > 9 else int(source_line)
+            agg[(line, float(r[0]), str(r[6]))] += float(r[8])
+        # A ZERO magnitude is the ABSENCE of one, and storing it would be a difference without a
+        # distinction that a caller can nonetheless see. `weighted_window_rows` joins on the
+        # existence of a magnitude row, so a stored zero makes a ref appear in the rollup with a
+        # total of 0.0 -- present, competing for the window, contributing nothing -- while an
+        # absent one omits it. Two rollups that agree on every number and disagree on which keys
+        # exist is precisely the kind of near-miss this store's equality contract exists to rule
+        # out (measured: `<synthetic>` model turns and zero-usage lines produced exactly that).
+        return {k: v for k, v in agg.items() if v}
+
     def _insert(self, session, agg):
         self._conn().executemany("""
             INSERT INTO event(session, ts, level, ref, n, source_line)
             VALUES (?,?,?,?,?,?)
             ON CONFLICT(session, source_line, ts, level, ref) DO UPDATE SET n = excluded.n
             """, [(session, ts, lv, ref, n, line) for (line, ts, lv, ref), n in agg.items()])
+
+    def _insert_mag(self, session, agg):
+        """`DO UPDATE SET`, not `+=` — the same idempotency argument as `_insert`: a replayed
+        tail must be absorbed, not added."""
+        self._conn().executemany("""
+            INSERT INTO turn_magnitude(session, source_line, ts, kind, value)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(session, source_line, ts, kind) DO UPDATE SET value = excluded.value
+            """, [(session, line, ts, kind, v) for (line, ts, kind), v in agg.items()])
 
     def _reroll(self, session, bins):
         """Recompute each named bin from `event`. Never incremented: a bin is far longer than
@@ -628,6 +742,7 @@ class Store:
         re-rolled.
         """
         agg = self._aggregate(rows, source_line)
+        mags = self._aggregate_mag(rows, source_line)
         c = self._conn()
         with self.transaction():
             old = c.execute("SELECT ts FROM event WHERE session = ? AND source_line = ?",
@@ -636,13 +751,20 @@ class Store:
             touched |= {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
             c.execute("DELETE FROM event WHERE session = ? AND source_line = ?",
                       (session, int(source_line)))
+            # The slot's magnitudes go with its events, symmetrically. `reconcile` emits none
+            # today, so this is a no-op in practice -- but a slot that half-cleared would leave a
+            # retracted turn's cost behind, which is the same defect one shape over.
+            c.execute("DELETE FROM turn_magnitude WHERE session = ? AND source_line = ?",
+                      (session, int(source_line)))
             if agg:
                 self._insert(session, agg)
+            if mags:
+                self._insert_mag(session, mags)
             self._reroll(session, touched)
         return len(agg)
 
     def clear_session(self, session):
-        """Drop every event, bin and prompt-index row for one session.
+        """Drop every event, magnitude, bin and prompt-index row for one session.
 
         A reparse re-reads lines that are already stored under DIFFERENT batch ordinals, so
         without this the same turn is counted once per parse and every window inflates. It is
@@ -652,10 +774,15 @@ class Store:
         The prompt index goes too, and must: a rotated file at the same path is a DIFFERENT
         conversation, and a stale turn id left behind would resolve a window that the events no
         longer describe.
+
+        The magnitudes go too, and for the same arithmetic reason as the events: a reparse
+        re-derives every turn's cost, and one left behind under a different `source_line` would
+        make the window weigh that turn twice.
         """
         with self.transaction():
             c = self._conn()
             c.execute("DELETE FROM event WHERE session = ?", (session,))
+            c.execute("DELETE FROM turn_magnitude WHERE session = ?", (session,))
             c.execute("DELETE FROM bin WHERE session = ?", (session,))
             c.execute("DELETE FROM prompt WHERE session = ?", (session,))
 
@@ -853,7 +980,7 @@ class Store:
                           max_chunks=PRUNE_MAX_CHUNKS, force=False):
         """Apply the retention policy. The one entry point; `ingest.ingest_file` calls it.
 
-        Three passes, in order, each advancing the floor by what it actually removed:
+        Four passes, in order, the first three each advancing the floor by what they removed:
 
         1. **The time horizon** -- events older than `retain_days`.
         2. **`term`** -- its events AND its bins older than `term_retain_days`. The only level
@@ -865,6 +992,9 @@ class Store:
            equivalence on and what makes "expired" distinguishable from "not in this
            transcript". If pruning every event still does not fit, it stops and reports
            `over_budget_mb` rather than spinning or reaching for something it must not delete.
+        4. **`turn_magnitude`** -- swept to the floor the first three passes left, because a
+           magnitude below it can no longer be joined to any event. It follows the floor rather
+           than carrying a horizon of its own; see the pass itself.
 
         Returns a dict; `ran` is False when the hourly gate declined (see PRUNE_MIN_INTERVAL_S).
         """
@@ -875,7 +1005,8 @@ class Store:
         last = max((s["last_run"] or 0.0) for s in state.values()) if state else 0.0
         if not (force or over or now - last >= PRUNE_MIN_INTERVAL_S):
             return {"ran": False, "event_pruned": 0, "term_pruned": 0, "term_bins_pruned": 0,
-                    "size_pruned": 0, "truncated": False, "live_mb": self.live_mb(),
+                    "size_pruned": 0, "magnitude_pruned": 0,
+                    "truncated": False, "live_mb": self.live_mb(),
                     "file_mb": self.file_mb(), "over_budget_mb": 0.0,
                     "floor": self.serving_floor()}
 
@@ -914,6 +1045,19 @@ class Store:
                 break                          # nothing prunable left; report the shortfall
             out["size_pruned"] += n
             self.note_pruned("size", newest, n, now)
+
+        # 4. The magnitudes, swept to the SERVING FLOOR that passes 1-3 just established. Not a
+        #    horizon of their own: a magnitude is only ever read by joining it to an event at the
+        #    same timestamp, so once the events at or below the floor are gone it is a number
+        #    nothing can be joined to -- and left alone it would be the one table in this store
+        #    with no bound on its growth. `<=`, not `<`, because the floor's promise is that no
+        #    event at OR BEFORE it survives.
+        floor = self.serving_floor()
+        out["magnitude_pruned"] = 0
+        if floor is not None:
+            with self.transaction():
+                cur = self._conn().execute("DELETE FROM turn_magnitude WHERE ts <= ?", (floor,))
+                out["magnitude_pruned"] = cur.rowcount or 0
 
         with self.transaction():
             self._conn().execute("""
@@ -973,7 +1117,8 @@ class Store:
         pol = policy or retention_policy()
         c = self._conn()
         rows = {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                for t in ("event", "bin", "prompt", "parse_state", "ingest")}
+                for t in ("event", "turn_magnitude", "bin", "prompt", "parse_state",
+                          "ingest")}
         oldest = c.execute("SELECT MIN(ts) FROM event").fetchone()[0]
         st = self.retention_state()
         live = self.live_mb()
@@ -1077,6 +1222,94 @@ class Store:
             GROUP BY level, ref""", (session, start, end)))
 
         return _pseudo_rows(session, parts)
+
+
+    # --- the WEIGHTED window query ---------------------------------------------------------
+
+    def weighted_rollup_window(self, session, start, end, kind=magnitude.TOKENS,
+                               exclude_slots=()):
+        """`rollup_window`, but each reference event weighted by its TURN's magnitude.
+
+        Returns exactly `window.rollup`'s shape — `{level: [(ref, total), ...]}`, descending by
+        total, ties alphabetical on `ref` — so `window.dominant`, `window.attribution` and
+        `workstreams.payload` consume it with no change at all. That is the whole point of
+        matching the shape: the token-weighted share is the same question asked of a different
+        denominator, not a different payload.
+
+        **What a row's weight is.** `SUM(event.n * turn_weight)`. A turn's magnitude is
+        distributed across the reference rows it produced in proportion to their counts, then
+        summed per `(level, ref)`. Two consequences worth stating, because a share is a ratio and
+        the choice of numerator is the whole claim:
+
+          - It REDUCES to `rollup_window` when every turn weighs the same, up to that common
+            factor. So the token-weighted share is a strict generalisation of the published
+            event-weighted one rather than a rival metric, and the two can only disagree when
+            turns genuinely differ in cost. `app/test_magnitude.py` pins this.
+          - Within one turn, the distribution across that turn's own values is still by count.
+            Weighting is about which TURNS dominate an hour, which is where the 40x spread lives;
+            re-deciding the within-turn split would be a second, unmeasured claim.
+
+        **Always from `event`, never from `bin`.** A `bin` row aggregates a whole 5-minute
+        interval and has no `ts` to join a turn's magnitude to. That costs nothing here: the
+        digest path already forgoes bins because it passes `exclude_slots` (see `rollup_window`),
+        and a 60-minute window from `event` is measured at ~1 ms.
+
+        An INNER join, so a turn with no stored magnitude of this `kind` contributes nothing.
+        That is arithmetically the same as weight zero and structurally better than a `COALESCE`:
+        a v5 store upgraded in place has no magnitudes at all, and a rollup that silently read
+        every one of its turns as zero-cost would be a plausible wrong number, whereas an empty
+        rollup is visibly empty.
+        """
+        return window.rollup(self.weighted_window_rows(session, start, end, kind, exclude_slots))
+
+    def weighted_window_rows(self, session, start, end, kind=magnitude.TOKENS,
+                             exclude_slots=()):
+        """The rows behind `weighted_rollup_window`, in `events_for_turns` shape. The ORDERING is
+        not reimplemented in SQL, for the same reason `window_rows` does not: `window.rollup`
+        owns the tie-break rule and a second copy of it in an `ORDER BY` would be a second place
+        for it to drift."""
+        start, end = _epoch(start), _epoch(end)
+        if not end > start:
+            return []
+        slots = tuple(int(s) for s in exclude_slots)
+        skip = f"AND e.source_line NOT IN ({','.join('?' * len(slots))})" if slots else ""
+        # The magnitude is summed to one value per (session, ts) FIRST. A turn's magnitude can
+        # be spread over several `source_line` slots -- a reparse writes under a new ordinal, and
+        # two turns can quantize onto the same 0.1 s tick exactly as their event rows do -- so
+        # the join key is the turn's timestamp, which is the only thing an `event` row and a
+        # `reconcile` row provably share.
+        cur = self._conn().execute(f"""
+            WITH m AS (
+              SELECT ts, SUM(value) AS v FROM turn_magnitude
+              WHERE session = ? AND kind = ? AND ts >= ? AND ts < ?
+              GROUP BY ts)
+            SELECT e.level, e.ref, SUM(e.n * m.v)
+            FROM event e JOIN m ON m.ts = e.ts
+            WHERE e.session = ? AND e.ts >= ? AND e.ts < ? {skip}
+            GROUP BY e.level, e.ref""",
+            (session, str(kind), start, end, session, start, end) + slots)
+        return _pseudo_rows(session, [cur])
+
+    def turn_magnitudes(self, session, start, end, kind=magnitude.REQUEST_TOKENS):
+        """Every turn's magnitude in `[start, end)` as `[(ts, value), ...]`, ascending.
+
+        The raw series behind the weighted rollup, for a caller that needs the DISTRIBUTION
+        rather than a rollup — how skewed the window's turns are is what decides whether
+        weighting can move an answer at all, and a rollup has already summed that away.
+
+        Defaults to `request_tokens`, NOT the `tokens` weight the rollup uses, because a caller
+        asking for the series wants the one that SUMS to what the window cost. `tokens` carries a
+        request's cost on every line of that request (see `magnitude.py`), so summing it
+        multiplies a request by its line count. Both are available; the default is the one that
+        is not a trap.
+        """
+        start, end = _epoch(start), _epoch(end)
+        if not end > start:
+            return []
+        return [(ts, v) for ts, v in self._conn().execute("""
+            SELECT ts, SUM(value) FROM turn_magnitude
+            WHERE session = ? AND kind = ? AND ts >= ? AND ts < ?
+            GROUP BY ts ORDER BY ts""", (session, str(kind), start, end))]
 
 
 def _pseudo_rows(session, cursors):

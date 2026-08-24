@@ -9,7 +9,7 @@ import os
 import re
 from datetime import datetime
 
-from app.analysis import terms
+from app.analysis import magnitude, terms
 from app.analysis.paths import PATH_INPUTS, WORKTREE, rel_within
 from app.analysis.shell import bash_refs
 from app.analysis.text import is_command_echo, text_of, think_blocks
@@ -193,12 +193,28 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
             for nchars in think_blocks(content):
                 add("say", "asst_think", "", nchars)   # 0 = not persisted by this store
             u, rid = msg.get("usage"), o.get("requestId")
+            # The ROLLUP WEIGHT: the price-weighted cost of the request this line belongs to, on
+            # EVERY line of that request — deliberately outside the `requestId` dedup below.
+            # A request is written as several assistant lines each repeating its `usage`, and 72%
+            # of all `tool_use` blocks sit on a line that is not the first of its request
+            # (measured: 10,827 of 15,066), so deduping here would leave nearly three quarters of
+            # tool-call evidence weightless. Kind "mag" rather than a level/ref, because this is
+            # a magnitude ON THE TURN — `ref` stays empty and the number stays a number (see
+            # store.turn_magnitude and magnitude.py for both kinds and why there are two).
+            w = magnitude.token_weight(u) if u else 0.0
+            if w:
+                add("mag", magnitude.TOKENS, "", w)
             if u and rid and rid not in seen_req:
                 seen_req.add(rid)
                 add("tok", "out", "", u.get("output_tokens", 0))
                 add("tok", "in_fresh", "", (u.get("input_tokens", 0) +
                                             u.get("cache_creation_input_tokens", 0)))
                 add("tok", "in_cached", "", u.get("cache_read_input_tokens", 0))
+                # The SPEND series: the same number, once per request, so a sum over turns is
+                # what the window actually cost. `mag/tokens` above does not sum to that and is
+                # not meant to.
+                if w:
+                    add("mag", magnitude.REQUEST_TOKENS, "", w)
 
         paths = []
         if isinstance(content, list):
@@ -209,6 +225,15 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 act = action_for(tool=name)
                 if act:
                     add("ref", "action", act, 1)
+                # How much file text this edit handled, in bytes. ONE ROW PER EDIT EVENT, not
+                # per turn, because the count of edits is precisely the useless predictor this
+                # replaces — `edit >= 5` says nothing, a byte extent separates a typo fix from
+                # authoring. `magnitude.edit_bytes` returns an int and is the only thing in this
+                # module that may see `old_string`/`new_string`/`content`: the payload is file
+                # contents, and a length is all that may survive contact with it.
+                nbytes = magnitude.edit_bytes(name, inp)
+                if nbytes:
+                    add("mag", magnitude.EDIT_BYTES, "", nbytes)
                 m = MCP_TOOL.match(name or "")
                 if m:
                     add("ref", "tool", "mcp:" + m["tool"], 1)

@@ -1,7 +1,25 @@
 {
- "rows": 213,
- "sha256": "6ca16ede1b990eed4a933f4309e52d5f7a823e2ba5ffc3704916aea868a2df0c",
+ "rows": 225,
+ "sha256": "bcaa01a4aa8caf08e7ca1720c6319967d9ad3f4d76b2f21b5390647e18985cb9",
  "levels": {
+  "mag/edit_bytes": {
+   "rows": 4,
+   "total": 113.0,
+   "distinct": 1,
+   "sha256": "178b530266ed61e366b7bf2bd4be5c5315d04cd71c941f47314caa03384156d0"
+  },
+  "mag/request_tokens": {
+   "rows": 4,
+   "total": 7278.0,
+   "distinct": 1,
+   "sha256": "2b4a45788bd1c40dbec5bb47ca4802c9d8063b6caa898ce9efed91c794678d6b"
+  },
+  "mag/tokens": {
+   "rows": 4,
+   "total": 7278.0,
+   "distinct": 1,
+   "sha256": "7252967442abc5c902b151442d4f7aecc952cc76a85cc5d44b53303f3c73cc01"
+  },
   "ref/action": {
    "rows": 22,
    "total": 22.0,
