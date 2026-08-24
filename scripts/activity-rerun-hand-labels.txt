@@ -1,0 +1,54 @@
+# Hand labels — six-way `activity_type`, attempt FOUR. 150 windows, seed 0.
+#
+# THIS HEADER — the rubric — IS COMMITTED BEFORE A SINGLE LABEL IS WRITTEN, and the labels are
+# committed before `activity_rerun.py score` is ever run. Both orderings are provable from git,
+# which is the only thing that makes the number falsifiable.
+#
+# Source: `activity-rerun-views.txt` — each window's TEXT ONLY. User prompts + assistant prose,
+# fenced code elided, and every `tool_use` / `tool_result` / `thinking` block dropped by
+# `text.text_of` (asserted by `activity_rerun.assert_blind`, and by a test that proves the exact-
+# equality half of that assertion bites). No tool name, no program, no action, no count, no
+# volume ever reached the labeller. The blind is enforced by tooling, not promised.
+#
+# OVERLAP with the 100-window activity sample and the 120-window observable sample is ZERO,
+# asserted in `sample` over 217 prior `(prefix, stamp)` keys.
+#
+# VOCABULARY — the production `Activities` set (internal/agent/enrich/labels.go), unchanged:
+#   generate    generating new content from scratch: draft, write, code, ideate
+#   transform   transforming existing content: rewrite, summarize, translate, reformat
+#   analyze     analyzing and reasoning over inputs: compute, evaluate, decide
+#   retrieve    gathering and researching information, looking things up
+#   converse    interactive question answering or brainstorming
+#   review      reviewing, critiquing, or checking existing work for errors
+#
+# RUBRIC, fixed here before labelling:
+#
+# 1. The question is what the AI+user system SPENT THE HOUR DOING, judged from what was said.
+#
+# 2. HIERARCHY OF DEMAND, not volume. If the hour sustained authoring it is `generate` however
+#    much reading preceded it. (`prose-activity` Amendment 1 measured the volume trap: a
+#    dominant-class rollup produced a 95.4% majority baseline, unbeatable by construction.)
+#
+# 3. THE ONE CONTENTIOUS CALL, resolved exactly as attempt one resolved it, and stated here so it
+#    is not a post-hoc choice: editing code to IMPLEMENT a feature, a fix, or a refactor with new
+#    behaviour is `generate` — the gloss names "code" explicitly. `transform` is reserved for
+#    changing the FORM of existing content while preserving its substance: reformat, rewrite,
+#    translate, convert, summarize. Attempt one's post-hoc collapse A bounded how much this call
+#    can matter (+0.013 conceding it entirely) and it is scored again here as a declared
+#    diagnostic, so the verdict does not rest on it either way.
+#
+# 4. `review` is checking EXISTING work for errors: code review, verifying a claim someone made,
+#    running a suite to find out whether something is broken, auditing.
+#
+# 5. `analyze` is reasoning over inputs to reach a conclusion: measuring, evaluating options,
+#    computing a number, deciding. The output is a judgement, not an artifact.
+#
+# 6. `retrieve` is looking things up — where does X live, what does Y do, gather the facts.
+#
+# 7. `converse` is discussion, brainstorming, or question-answering that produces no artifact.
+#
+# 8. When two readings apply, pick what the hour was FOR — the demand the user made — not the
+#    incidental supporting work. Every window gets exactly one label; there is no abstention,
+#    matching attempt one (which had none).
+#
+# Format: `<wid> <activity>`, one per line.
