@@ -429,6 +429,76 @@ def test_each_thread_gets_its_own_connection():
         st.close()
 
 
+def test_a_transaction_is_scoped_to_ITS_thread_not_to_the_store():
+    """MEASURED BUG, and the cause of a 1-in-8 flake in `test_retention.py`'s concurrent-writer
+    test: the reentrancy counter behind `transaction()` was ONE integer on the Store while the
+    connections it governs are per-thread.
+
+    Reentrancy has to be per-thread for the same reason connections are. With a shared counter,
+    thread B entering while thread A is inside sees `depth == 1` and skips its own
+    `BEGIN IMMEDIATE` — so B's "transaction" runs in autocommit on B's connection, and the
+    `COMMIT` at the end of B's block is issued against whichever connection happens to reach
+    depth 0. Two things follow, both observed here:
+
+      * A's `BEGIN` is never committed. Its connection holds the write lock indefinitely, every
+        other writer exhausts `busy_timeout=5000` and raises `database is locked`, and the
+        batch is rolled back on close — silently losing rows.
+      * The `COMMIT`/`ROLLBACK` lands on a connection with no active transaction, raising
+        `cannot commit - no transaction is active`. In the prune path that fires from `__exit__`
+        while an exception is already propagating, so it MASKS the real error.
+
+    That second effect is why the store's central durability claim
+    (`test_events_and_the_checkpoint_commit_or_fail_together`) was not enough to catch this: it
+    holds perfectly on one thread, and this store has had two writers since `/ingest` landed —
+    request-driven ingest via `/analyze` and watcher-driven ingest via `POST /ingest`, both
+    dispatched onto arbitrary executor threads.
+
+    Four threads rather than two, and batches of DELIBERATELY UNEQUAL size: with equal work the
+    threads settle into barrier lockstep behind the GIL and the interleaving stops happening at
+    all — measured, two symmetric threads failed 5/10 trials while four asymmetric ones failed
+    10/10.
+    """
+    import threading
+    rounds, nthreads = 25, 4
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _store(tmp)
+        gate = threading.Barrier(nthreads, timeout=60)
+        errors = []
+
+        def batch(line, i):
+            """1..12 rows. Unequal per thread and per round — see the docstring."""
+            k = 1 + (line * 7 + i) % 12
+            return [_row(i * 600.0 + line + j, "tool", "T%d" % j) for j in range(k)]
+
+        def churn(line):
+            try:
+                for i in range(rounds):
+                    gate.wait()
+                    with st.transaction():
+                        st.upsert_events(SESSION, batch(line, i), source_line=line)
+            except Exception as exc:            # noqa: BLE001 - the failure mode under test
+                errors.append("thread %d: %r" % (line, exc))
+                gate.abort()                    # or the peers hang on the barrier
+
+        lines = list(range(1, nthreads + 1))
+        threads = [threading.Thread(target=churn, args=(n,)) for n in lines]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(120)
+
+        assert not errors, errors
+        # Every thread's rows, committed. Counted independently of what the store reported, so a
+        # transaction that was begun and never committed shows up as loss rather than passing.
+        c = st._conn()
+        for line in lines:
+            want = sum(len(batch(line, i)) for i in range(rounds))
+            got = c.execute("SELECT COUNT(*) FROM event WHERE source_line = ?",
+                            (line,)).fetchone()[0]
+            assert got == want, (line, got, want)
+        st.close()
+
+
 def test_bins_are_five_minutes():
     assert BIN_SECONDS == 300
 

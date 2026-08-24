@@ -345,7 +345,9 @@ class Store:
 
     Connections are per-thread (a stdlib `sqlite3` connection is not shareable across threads)
     and every pragma is applied per connection, so a thread that opens late is configured
-    identically to the first.
+    identically to the first. So is `transaction()`'s reentrancy depth, and it must be: a
+    counter shared across threads governs `BEGIN`/`COMMIT` on connections that are not — see
+    `_Tx` for the failure that produced.
     """
 
     def __init__(self, path, precomputed_levels=PRECOMPUTED_LEVELS):
@@ -361,7 +363,6 @@ class Store:
         self._local = threading.local()
         self._conns = []
         self._conns_lock = threading.Lock()
-        self._depth = 0
         self._stats_cache = None
         conn = self._conn()
         with self._conns_lock:
@@ -402,20 +403,35 @@ class Store:
         return False
 
     class _Tx:
+        """The reentrancy depth lives on the THREAD, beside the connection it governs.
+
+        MEASURED BUG (`test_store.test_a_transaction_is_scoped_to_ITS_thread_not_to_the_store`):
+        as one integer on the Store this counter was read and written by every thread, while
+        `BEGIN`/`COMMIT` go to the caller's OWN connection. A thread entering while another was
+        inside therefore saw a non-zero depth, took itself for a nested block, and skipped its
+        `BEGIN IMMEDIATE` — running the batch in autocommit, leaving the other thread's
+        transaction uncommitted and holding the write lock until every other writer exhausted
+        `busy_timeout` with `database is locked`, and finally issuing its `COMMIT` against a
+        connection that had no transaction to commit. Nothing about it is per-store: depth is a
+        property of a call stack, and each thread has its own.
+        """
+
         def __init__(self, store):
             self.store = store
 
         def __enter__(self):
             s = self.store
-            if s._depth == 0:
+            depth = getattr(s._local, "depth", 0)
+            if depth == 0:
                 s._conn().execute("BEGIN IMMEDIATE")
-            s._depth += 1
+            s._local.depth = depth + 1
             return s
 
         def __exit__(self, exc_type, exc, tb):
             s = self.store
-            s._depth -= 1
-            if s._depth == 0:
+            depth = getattr(s._local, "depth", 0) - 1
+            s._local.depth = depth
+            if depth == 0:
                 s._conn().execute("ROLLBACK" if exc_type else "COMMIT")
             return False
 
