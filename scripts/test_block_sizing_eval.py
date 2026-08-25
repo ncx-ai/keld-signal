@@ -187,7 +187,11 @@ def test_a_block_clearing_the_floor_is_left_alone():
 def test_evidence_gated_defers_past_a_cap_it_cannot_attribute():
     """Arm B's whole point. A block reaching the cap with nothing attributable must keep going
     rather than emitting a block that can say nothing — which is what arm A did on 78% of
-    blocks."""
+    blocks. This block never becomes attributable before the span runs out, so it must be
+    distinguishable from a block that never deferred at all (`"session_end_deferred"`, not plain
+    `"session_end"`) — otherwise Tasks 2/3, which count deferrals off `end_reason`, would
+    undercount exactly the population arm B exists to surface: stretches that could never
+    attribute anything however long they ran."""
     with tempfile.TemporaryDirectory() as tmp:
         # sparse first 20 min (1 unit), then enough to attribute
         ev = [_ev(60, "branch", "main", n=1.0), _ev(1500, "branch", "main", n=9.0)]
@@ -195,7 +199,7 @@ def test_evidence_gated_defers_past_a_cap_it_cannot_attribute():
         blocks = b.bound_evidence_gated(st, SESSION, [], 0.0, 1800.0, 10)
         assert len(blocks) == 1, blocks           # the 10m cap was deferred past
         assert blocks[0].end == 1800.0, blocks[0]
-        assert "deferred" in blocks[0].end_reason or blocks[0].end_reason == "session_end", blocks[0]
+        assert blocks[0].end_reason == "session_end_deferred", blocks[0]
 
 
 def test_evidence_gated_cuts_at_the_cap_when_it_can_attribute():
@@ -205,6 +209,22 @@ def test_evidence_gated_cuts_at_the_cap_when_it_can_attribute():
         blocks = b.bound_evidence_gated(st, SESSION, [], 0.0, 1800.0, 10)
         assert len(blocks) > 1, blocks
         assert blocks[0].end == 600.0, blocks[0]
+
+
+def test_evidence_gated_marks_bound_deferred_when_a_later_boundary_succeeds():
+    """The one path that actually produces `"bound_deferred"`: the first cap boundary fails
+    `can_attribute`, the block extends, and the SECOND boundary succeeds. Neither of the two
+    tests above reaches this code path — the first ends via `session_end_deferred` (never
+    attributable), the second succeeds on its very first candidate (`deferred` stays False) — so
+    without this test the label is unpinned."""
+    with tempfile.TemporaryDirectory() as tmp:
+        # first 10 minutes: 1 unit, not attributable. By the second 10-minute boundary (20 min
+        # in), cumulative evidence (1.0 + 9.0 = 10.0) clears the floor.
+        ev = [_ev(60, "branch", "main", n=1.0), _ev(700, "branch", "main", n=9.0)]
+        st = b.CachingStore(_mkstore(tmp, ev))
+        blocks = b.bound_evidence_gated(st, SESSION, [], 0.0, 1800.0, 10)
+        assert blocks[0].end == 1200.0, blocks[0]
+        assert blocks[0].end_reason == "bound_deferred", blocks[0]
 
 
 def test_bound_none_emits_one_block_when_nothing_was_detected():
@@ -222,6 +242,18 @@ def test_bound_turns_cuts_every_n_turns():
         assert len(blocks) >= 3, blocks
         for x, y in zip(blocks, blocks[1:]):
             assert x.end == y.start, (x, y)
+
+
+def test_bound_turns_handles_a_span_with_fewer_turns_than_n():
+    """The awkward case the brief named: a span that never reaches the n-th turn at all must
+    still close as one whole-span block, not hang or raise."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = [_ev(i * 60.0, "branch", "main", n=1.0) for i in range(3)]   # only 3 turns
+        st = b.CachingStore(_mkstore(tmp, ev))
+        blocks = b.bound_turns(st, SESSION, [], 0.0, 600.0, 5)            # n=5 > 3 available
+        assert len(blocks) == 1, blocks
+        assert blocks[0].start == 0.0 and blocks[0].end == 600.0, blocks[0]
+        assert blocks[0].end_reason == "session_end", blocks[0]
 
 
 def test_every_bound_tiles_its_span():

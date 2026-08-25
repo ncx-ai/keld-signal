@@ -145,8 +145,12 @@ def bound_evidence_gated(store, session, cuts, lo, hi, n):
     finally closes via a deferred boundary, mark it `"bound_deferred"` instead — a different fact
     from an ordinary budget cut, and one Task 2/3 need to count separately. A detected cut inside
     the span always wins, at any point in the deferral walk, and keeps `"detected"`; running out
-    of span (no more candidate boundaries fit before `hi`) still ends the block `"session_end"`
-    even if it was mid-deferral, since that is a fact about the span, not about the bound.
+    of span (no more candidate boundaries fit before `hi`) ends the block `"session_end"` ONLY if
+    it never deferred — a block that skipped one or more cap boundaries for want of evidence and
+    then simply ran out of span, never becoming attributable, is `"session_end_deferred"` instead.
+    That population (never attributable, however long it ran) is exactly what arm B exists to
+    surface, and Tasks 2/3 count deferrals off `end_reason`, so collapsing it into plain
+    `"session_end"` would make it invisible downstream and undercount the deferral population.
     """
     cap = n * 60.0
     remaining = [c for c in sorted(cuts) if lo < c < hi]
@@ -160,7 +164,8 @@ def bound_evidence_gated(store, session, cuts, lo, hi, n):
                 end, end_reason = nxt_cut, "detected"
                 break
             if candidate >= hi:
-                end, end_reason = float(hi), "session_end"
+                end = float(hi)
+                end_reason = "session_end_deferred" if deferred else "session_end"
                 break
             trial = Block(t, candidate, reason, "budget")
             if can_attribute(store, session, trial):
