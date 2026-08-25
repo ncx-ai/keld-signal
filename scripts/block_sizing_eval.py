@@ -226,6 +226,74 @@ def bound_none(store, session, cuts, lo, hi, n=None):
     return out
 
 
+# --- Arm E: arm A WITH the pre-registered idle terminator ---------------------------------------
+#
+# The frozen arm table defines ALL FOUR arms as ending on "detection, IDLE, or <bound>", and none
+# of the four implements idle. For A/B/C that drops one terminator of three; for arm D it drops one
+# of only two, and the dominant one — the detector fires in 32 of 496 sessions, so "detection only"
+# is one block per session BY CONSTRUCTION (563 blocks = 496 sessions + 67 cuts, exactly).
+#
+# Retrofitting idle into the existing four would move every number already measured, so this is a
+# FIFTH arm instead: arm A, unchanged, plus the terminator it was specified with. It is the control
+# the comparison was missing — if it closes most of arm A's 75-point gap to arm B, then what the
+# other arms were being credited for is not finding a smarter cut but declining to tile dead air.
+
+# Idle is a run of consecutive EMPTY bins. The series bins at 300s, so an idle threshold is a whole
+# number of bins and cannot be finer. 3 bins = 15 minutes: the smallest run that reads as "work
+# stopped" rather than as a pause between turns. This is a STATED JUDGEMENT, not a measurement, so
+# it is swept (2/3/6 bins = 10/15/30 min) rather than asserted — see `IDLE_SWEEP`.
+IDLE_BINS = 3
+IDLE_SWEEP = (2, 3, 6)
+
+
+def active_segments(store, session, lo, hi, min_bins=None):
+    """`[(start, end), ...]` — the span split at every idle gap, dead air excluded.
+
+    A gap of `min_bins` or more consecutive empty bins ENDS a segment; the next segment begins at
+    the next active bin. The excluded air belongs to no block, which is the whole point: a block
+    is a span of work, and an empty 10-minute tile over silence is not work. Consequence to know:
+    arm E's blocks therefore do NOT tile `[lo, hi)` the way the other four do — they tile the
+    ACTIVE part of it. `test_idle_arm_covers_every_active_bin_without_overlapping` pins that
+    weaker-but-correct invariant.
+    """
+    k = IDLE_BINS if min_bins is None else min_bins
+    bins = [b for b in active_bins(store, session) if lo <= b < hi]
+    if not bins:
+        return []
+    segs, seg_start, prev = [], bins[0], bins[0]
+    for b in bins[1:]:
+        empty_between = int((b - prev) // BIN_SECONDS) - 1
+        if empty_between >= k:
+            segs.append((float(seg_start), float(prev + BIN_SECONDS)))
+            seg_start = b
+        prev = b
+    segs.append((float(seg_start), float(prev + BIN_SECONDS)))
+    return [(s, min(e, float(hi))) for s, e in segs]
+
+
+def bound_time_idle(store, session, cuts, lo, hi, n):
+    """Arm E: detection, IDLE, or `n` minutes elapsed — arm A as the pre-registration wrote it.
+
+    Delegates to `form_blocks` per active segment, so the cap and detection semantics are arm A's
+    exactly, never a second implementation of them. Only the reasons at a segment seam are
+    rewritten: the block before an idle gap ends `idle`, the block after it starts `idle`.
+    """
+    segs = active_segments(store, session, lo, hi)
+    if not segs:
+        return []
+    out = []
+    for i, (s, e) in enumerate(segs):
+        blocks = form_blocks(cuts, s, e, n)
+        if not blocks:
+            continue
+        if i > 0:
+            blocks[0] = blocks[0]._replace(start_reason="idle")
+        if i < len(segs) - 1:
+            blocks[-1] = blocks[-1]._replace(end_reason="idle")
+        out.extend(blocks)
+    return out
+
+
 def choose_cap(rows):
     """The pre-registered rule: the smallest cap whose `budget` share is within 5 **percentage
     points** of the next larger cap's — i.e. `abs(difference) <= 5.0`, not merely "not much
@@ -571,6 +639,7 @@ ARMS = (
     ("evidence_gated", bound_evidence_gated, CAPS),
     ("turns", bound_turns, TURNS),
     ("none", bound_none, (None,)),
+    ("time_idle", bound_time_idle, CAPS),
 )
 
 # Rule 1: ">= 95% of its blocks can attribute something." Not a round number — it is the point at
@@ -590,7 +659,7 @@ MATCHED_MAX_DUR_RATIO = 0.50
 RULE3_MAX_P90_SECONDS = 4 * 3600.0
 # Rule 4: "the one with fewer parameters ships. D has none, A and C have one, B has one plus a
 # deferral rule." Counted exactly as the pre-registration counts them.
-ARM_PARAMS = {"none": 0, "time": 1, "turns": 1, "evidence_gated": 2}
+ARM_PARAMS = {"none": 0, "time": 1, "turns": 1, "evidence_gated": 2, "time_idle": 2}
 
 
 def _n_key(n):
@@ -672,7 +741,7 @@ def run_arm(name, fn, n, store=None, sessions=None):
     thin_ends = collections.Counter()
     absorbed_ends = collections.Counter()
     durations = []
-    n_blocks = attributable = absorbed = 0
+    n_blocks = attributable = absorbed = with_evidence = attributable_active = 0
     max_blocks, max_blocks_session = 0, None
     session_attr_shares = []
     sessions_no_cuts = 0
@@ -691,8 +760,16 @@ def run_arm(name, fn, n, store=None, sessions=None):
             n_blocks += 1
             durations.append(bl.end - bl.start)
             ends[bl.end_reason] += 1
+            # Held ANY allocation evidence at all, vs. actually attributable. The gap between the
+            # two is the empty-tile population: a block over dead air is not a bound cutting in a
+            # poor place, it is a bound cutting where there was nothing to cut. Splitting them is
+            # what lets an idle terminator be told apart from a smarter cut point.
+            has_ev = block_evidence(st, s, bl) > 0
+            if has_ev:
+                with_evidence += 1
             if can_attribute(st, s, bl):
                 attributable += 1
+                attributable_active += 1
                 s_attr += 1
         if blocks:
             session_attr_shares.append(100.0 * s_attr / len(blocks))
@@ -708,6 +785,12 @@ def run_arm(name, fn, n, store=None, sessions=None):
         "n_sessions": n_sess,
         "n_blocks": n_blocks,
         "can_attribute_share": 100.0 * attributable / n_blocks if n_blocks else 0.0,
+        # Every block that held any evidence, and attribution measured over ONLY those blocks.
+        # `can_attribute_share_active` is the arm judged on the work it actually saw, with empty
+        # tiles removed from the denominator — the comparison rule 1 cannot make on its own.
+        "blocks_with_evidence_share": 100.0 * with_evidence / n_blocks if n_blocks else 0.0,
+        "can_attribute_share_active": (100.0 * attributable_active / with_evidence
+                                       if with_evidence else 0.0),
         "session_median_can_attribute_share": _percentile(session_attr_shares, 50),
         "merge_share": 100.0 * absorbed / n_blocks if n_blocks else 0.0,
         "thin_by_end_reason": dict(thin_ends),

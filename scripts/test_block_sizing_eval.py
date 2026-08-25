@@ -257,8 +257,12 @@ def test_bound_turns_handles_a_span_with_fewer_turns_than_n():
 
 
 def test_every_bound_tiles_its_span():
-    """The invariant the attribution model rests on, asserted for all four arms at once so a new
-    bound cannot be added without it."""
+    """The invariant the attribution model rests on, asserted for the four TILING arms at once.
+
+    Arm E (`bound_time_idle`) is deliberately absent: it excludes dead air, so it tiles the ACTIVE
+    part of the span rather than the whole of it. Its weaker-but-correct invariant is pinned by
+    `test_idle_arm_covers_every_active_bin_without_overlapping` — adding a non-tiling bound must
+    cost a test, not silently widen this one."""
     with tempfile.TemporaryDirectory() as tmp:
         ev = [_ev(i * 60.0, "branch", "main", n=2.0) for i in range(30)]
         st = b.CachingStore(_mkstore(tmp, ev))
@@ -490,6 +494,84 @@ def test_run_arm_attributes_arm_b_thinness_to_the_end_that_bypassed_the_gate():
     assert row["absorbed_by_end_reason"] == {"session_end": 1}, row
     assert abs(row["merge_share_by_end_reason"]["session_end"] - row["merge_share"]) < 1e-9, row
 
+
+
+# --- Arm E: the pre-registered idle terminator --------------------------------------------------
+
+def test_active_segments_splits_only_on_a_gap_at_or_over_the_threshold():
+    """The boundary of the definition. A gap of k-1 empty bins is a pause inside one segment; k
+    empty bins ends it. Off by one here silently changes what every arm-E number means."""
+    with tempfile.TemporaryDirectory() as tmp:
+        # bins at 0 and at 0 + (k+1)*300 leave exactly k empty bins between them.
+        k = 3
+        far = (k + 1) * b.BIN_SECONDS
+        near = k * b.BIN_SECONDS           # leaves k-1 empty bins
+        st_far = b.CachingStore(_mkstore(tmp, [_ev(0.0, "branch", "main"),
+                                               _ev(far, "branch", "main")]))
+        segs = b.active_segments(st_far, SESSION, 0.0, far + b.BIN_SECONDS, min_bins=k)
+        assert len(segs) == 2, segs
+    with tempfile.TemporaryDirectory() as tmp2:
+        st_near = b.CachingStore(_mkstore(tmp2, [_ev(0.0, "branch", "main"),
+                                                 _ev(near, "branch", "main")]))
+        segs = b.active_segments(st_near, SESSION, 0.0, near + b.BIN_SECONDS, min_bins=k)
+        assert len(segs) == 1, segs
+
+
+def test_idle_arm_covers_every_active_bin_without_overlapping():
+    """Arm E's invariant, which is NOT tiling: blocks are ordered and disjoint, and every active
+    bin sits inside exactly one of them. Dead air is in none of them, on purpose."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = ([_ev(i * 60.0, "branch", "main", n=2.0) for i in range(10)]
+              + [_ev(3600.0 + i * 60.0, "branch", "main", n=2.0) for i in range(10)])
+        st = b.CachingStore(_mkstore(tmp, ev))
+        lo, hi = b.session_bounds(st, SESSION)
+        blocks = b.bound_time_idle(st, SESSION, [], lo, hi, 10)
+        for x, y in zip(blocks, blocks[1:]):
+            assert x.end <= y.start, (x, y)
+        for bin_ts in b.active_bins(st, SESSION):
+            covering = [bl for bl in blocks if bl.start <= bin_ts < bl.end]
+            assert len(covering) == 1, (bin_ts, covering, blocks)
+
+
+def test_idle_arm_emits_no_empty_block_where_arm_a_tiles_dead_air():
+    """The whole reason arm E exists. One burst of work, an hour of silence, another burst: arm A
+    dices the silence into empty 10-minute tiles, arm E skips it. If this fails, arm E is not
+    modelling idle and the control it provides is worthless."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = ([_ev(i * 60.0, "branch", "main", n=2.0) for i in range(10)]
+              + [_ev(3600.0 + i * 60.0, "branch", "main", n=2.0) for i in range(10)])
+        st = b.CachingStore(_mkstore(tmp, ev))
+        lo, hi = b.session_bounds(st, SESSION)
+        a_blocks = b.bound_time(st, SESSION, [], lo, hi, 10)
+        st.reset()
+        e_blocks = b.bound_time_idle(st, SESSION, [], lo, hi, 10)
+        st.reset()
+        a_empty = sum(1 for bl in a_blocks if b.block_evidence(st, SESSION, bl) == 0)
+        st.reset()
+        e_empty = sum(1 for bl in e_blocks if b.block_evidence(st, SESSION, bl) == 0)
+        assert a_empty > 0, a_blocks
+        assert e_empty == 0, e_blocks
+        assert len(e_blocks) < len(a_blocks), (len(e_blocks), len(a_blocks))
+        assert any(bl.end_reason == "idle" for bl in e_blocks), e_blocks
+        assert any(bl.start_reason == "idle" for bl in e_blocks), e_blocks
+
+
+def test_run_arm_reports_empty_blocks_and_attribution_over_active_blocks_only():
+    """`blocks_with_evidence_share` and `can_attribute_share_active` are what separate 'this bound
+    cuts in poor places' from 'this bound cut where there was nothing'. Pin that they disagree with
+    the pooled share exactly when empty blocks exist."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = ([_ev(i * 60.0, "branch", "main", n=2.0) for i in range(10)]
+              + [_ev(3600.0 + i * 60.0, "branch", "main", n=2.0) for i in range(10)])
+        st = b.CachingStore(_mkstore(tmp, ev))
+        lo, hi = b.session_bounds(st, SESSION)
+        sess = [(SESSION, lo, hi, [])]
+        a = b.run_arm("time", b.bound_time, 10, store=st, sessions=sess)
+        e = b.run_arm("time_idle", b.bound_time_idle, 10, store=st, sessions=sess)
+        assert a["blocks_with_evidence_share"] < 100.0, a
+        assert a["can_attribute_share_active"] > a["can_attribute_share"], a
+        assert e["blocks_with_evidence_share"] == 100.0, e
+        assert e["can_attribute_share_active"] == e["can_attribute_share"], e
 
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
