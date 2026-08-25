@@ -182,6 +182,64 @@ def test_a_block_clearing_the_floor_is_left_alone():
         assert stats["merged"] == 0, stats
 
 
+# --- Task 1: three more bounds -----------------------------------------------------------------
+
+def test_evidence_gated_defers_past_a_cap_it_cannot_attribute():
+    """Arm B's whole point. A block reaching the cap with nothing attributable must keep going
+    rather than emitting a block that can say nothing — which is what arm A did on 78% of
+    blocks."""
+    with tempfile.TemporaryDirectory() as tmp:
+        # sparse first 20 min (1 unit), then enough to attribute
+        ev = [_ev(60, "branch", "main", n=1.0), _ev(1500, "branch", "main", n=9.0)]
+        st = b.CachingStore(_mkstore(tmp, ev))
+        blocks = b.bound_evidence_gated(st, SESSION, [], 0.0, 1800.0, 10)
+        assert len(blocks) == 1, blocks           # the 10m cap was deferred past
+        assert blocks[0].end == 1800.0, blocks[0]
+        assert "deferred" in blocks[0].end_reason or blocks[0].end_reason == "session_end", blocks[0]
+
+
+def test_evidence_gated_cuts_at_the_cap_when_it_can_attribute():
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = [_ev(60, "branch", "main", n=9.0), _ev(1500, "branch", "main", n=9.0)]
+        st = b.CachingStore(_mkstore(tmp, ev))
+        blocks = b.bound_evidence_gated(st, SESSION, [], 0.0, 1800.0, 10)
+        assert len(blocks) > 1, blocks
+        assert blocks[0].end == 600.0, blocks[0]
+
+
+def test_bound_none_emits_one_block_when_nothing_was_detected():
+    blocks = b.bound_none(None, SESSION, [], 0.0, 36000.0)
+    assert len(blocks) == 1, blocks
+    assert blocks[0].start == 0.0 and blocks[0].end == 36000.0, blocks[0]
+    assert blocks[0].end_reason == "session_end", blocks[0]
+
+
+def test_bound_turns_cuts_every_n_turns():
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = [_ev(i * 60.0, "branch", "main", n=1.0) for i in range(20)]
+        st = b.CachingStore(_mkstore(tmp, ev))
+        blocks = b.bound_turns(st, SESSION, [], 0.0, 1200.0, 5)
+        assert len(blocks) >= 3, blocks
+        for x, y in zip(blocks, blocks[1:]):
+            assert x.end == y.start, (x, y)
+
+
+def test_every_bound_tiles_its_span():
+    """The invariant the attribution model rests on, asserted for all four arms at once so a new
+    bound cannot be added without it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = [_ev(i * 60.0, "branch", "main", n=2.0) for i in range(30)]
+        st = b.CachingStore(_mkstore(tmp, ev))
+        for fn, n in ((b.bound_time, 10), (b.bound_evidence_gated, 10),
+                      (b.bound_turns, 5), (b.bound_none, None)):
+            blocks = fn(st, SESSION, [600.0], 0.0, 1800.0, n)
+            assert blocks[0].start == 0.0, (fn.__name__, blocks)
+            assert blocks[-1].end == 1800.0, (fn.__name__, blocks)
+            for x, y in zip(blocks, blocks[1:]):
+                assert x.end == y.start, (fn.__name__, x, y)
+                assert y.start_reason == x.end_reason, (fn.__name__, x, y)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

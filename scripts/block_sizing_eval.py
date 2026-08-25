@@ -120,6 +120,107 @@ def can_attribute(store, session, block):
               for level, floor in ALLOC_LEVELS)
 
 
+# --- Task 1: the four bound arms ----------------------------------------------------------------
+#
+# One signature for all four so Task 2's sweep can call them uniformly:
+#     bound_X(store, session, cuts, lo, hi, n) -> [Block]
+# `bound_none` alone defaults `n=None` (it has no cap to parametrize). In every arm a detected
+# cut inside the span wins over the bound — Phase 0a's own rule, restated here rather than
+# reimplemented per arm.
+
+def bound_time(store, session, cuts, lo, hi, n):
+    """Arm A, the measured baseline: detection, idle (unmodelled), or `n` minutes elapsed.
+    A thin wrapper — `form_blocks` IS arm A, so this delegates rather than re-deriving it; arm
+    A's numbers must not move."""
+    return form_blocks(cuts, lo, hi, n)
+
+
+def bound_evidence_gated(store, session, cuts, lo, hi, n):
+    """Arm B: detection, or `n` minutes elapsed AND the block can attribute something.
+
+    The cap is a candidate boundary, not a cut: at each `n`-minute multiple past the block's own
+    start, ask `can_attribute` of the block-so-far. Attributable ⇒ cut there, `end_reason="budget"`
+    — the SAME reason arm A uses for its cap cut, so the two arms stay comparable at matched
+    boundaries. Not yet attributable ⇒ defer to the next `n`-minute multiple, and once the block
+    finally closes via a deferred boundary, mark it `"bound_deferred"` instead — a different fact
+    from an ordinary budget cut, and one Task 2/3 need to count separately. A detected cut inside
+    the span always wins, at any point in the deferral walk, and keeps `"detected"`; running out
+    of span (no more candidate boundaries fit before `hi`) still ends the block `"session_end"`
+    even if it was mid-deferral, since that is a fact about the span, not about the bound.
+    """
+    cap = n * 60.0
+    remaining = [c for c in sorted(cuts) if lo < c < hi]
+    out, t, reason = [], float(lo), "session_start"
+    while t < hi:
+        nxt_cut = next((c for c in remaining if c > t), None)
+        candidate = t + cap
+        deferred = False
+        while True:
+            if nxt_cut is not None and nxt_cut <= candidate:
+                end, end_reason = nxt_cut, "detected"
+                break
+            if candidate >= hi:
+                end, end_reason = float(hi), "session_end"
+                break
+            trial = Block(t, candidate, reason, "budget")
+            if can_attribute(store, session, trial):
+                end, end_reason = candidate, ("bound_deferred" if deferred else "budget")
+                break
+            deferred = True
+            candidate += cap
+        out.append(Block(t, end, reason, end_reason))
+        t, reason = end, end_reason
+    return out
+
+
+def bound_turns(store, session, cuts, lo, hi, n):
+    """Arm C: detection, idle (unmodelled), or `n` turns elapsed since the block's own start.
+
+    Turn instants come from `store.turn_times(session, lo, hi)` — verified to exist
+    (`sidecar/app/analysis/store.py:1294`) and used directly rather than re-derived from the
+    session's distinct event timestamps, which is exactly what it already computes. A turn
+    exactly AT a block's start boundary is the previous block's own closing instant (or `lo`
+    itself) and does not recount toward this block's `n`; only turns strictly after the start do.
+    """
+    turns = sorted(store.turn_times(session, lo, hi))
+    remaining = sorted(c for c in cuts if lo < c < hi)
+    out, t, reason = [], float(lo), "session_start"
+    ti = ci = 0
+    while t < hi:
+        while ti < len(turns) and turns[ti] <= t:
+            ti += 1
+        cap_idx = ti + n - 1
+        cap_end = float(turns[cap_idx]) if cap_idx < len(turns) else None
+        while ci < len(remaining) and remaining[ci] <= t:
+            ci += 1
+        nxt_cut = remaining[ci] if ci < len(remaining) else None
+        if nxt_cut is not None and (cap_end is None or nxt_cut <= cap_end):
+            end, end_reason = nxt_cut, "detected"
+        elif cap_end is not None:
+            end, end_reason = cap_end, "budget"
+        else:
+            end, end_reason = float(hi), "session_end"
+        out.append(Block(t, end, reason, end_reason))
+        t, reason = end, end_reason
+    return out
+
+
+def bound_none(store, session, cuts, lo, hi, n=None):
+    """Arm D: detection or idle (unmodelled) only — no backstop at all. Not a strawman; it is
+    what "no bound" costs, which every other arm is justified only relative to."""
+    remaining = [c for c in sorted(cuts) if lo < c < hi]
+    out, t, reason = [], float(lo), "session_start"
+    while t < hi:
+        nxt_cut = next((c for c in remaining if c > t), None)
+        if nxt_cut is not None:
+            end, end_reason = nxt_cut, "detected"
+        else:
+            end, end_reason = float(hi), "session_end"
+        out.append(Block(t, end, reason, end_reason))
+        t, reason = end, end_reason
+    return out
+
+
 def choose_cap(rows):
     """The pre-registered rule: the smallest cap whose `budget` share is within 5 **percentage
     points** of the next larger cap's — i.e. `abs(difference) <= 5.0`, not merely "not much
@@ -399,7 +500,7 @@ def merge_sweep(store, cap_minutes, min_evidence=MIN_EVIDENCE):
             "merge_events_forward", "merge_events_backward", "value_changed",
             "value_changed_forward", "value_changed_backward", "value_changed_vs_neighbor",
             "value_changed_vs_neighbor_forward", "value_changed_vs_neighbor_backward")
-    totals = {k: 0 for k in keys}
+    totals: dict[str, float] = {k: 0 for k in keys}
     totals["n_sessions"] = 0
     for s in sessions:
         bounds = session_bounds(store, s)
