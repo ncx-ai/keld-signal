@@ -537,6 +537,312 @@ def merge_sweep(store, cap_minutes, min_evidence=MIN_EVIDENCE):
     return totals
 
 
+# --- Task 2: the four-arm sweep and the matched-duration control --------------------------------
+#
+# Thresholds are QUOTED from BLOCK-BOUND-PREREGISTRATION.md, not re-derived, and named after the
+# rule numbers there so a reader can check them against the frozen document by number.
+
+# Arm C's own candidate grid. Arms A and B sweep `CAPS` (the same minute candidates as the
+# baseline run), arm D has nothing to sweep.
+TURNS = (5, 10, 20, 40, 80)
+
+# `(name, fn, candidates)`. Every bound shares one signature, so the sweep never special-cases an
+# arm; arm D's single `None` candidate is what keeps it in the same table as the parametrised ones
+# rather than in a branch of its own.
+ARMS = (
+    ("time", bound_time, CAPS),
+    ("evidence_gated", bound_evidence_gated, CAPS),
+    ("turns", bound_turns, TURNS),
+    ("none", bound_none, (None,)),
+)
+
+# Rule 1: ">= 95% of its blocks can attribute something." Not a round number — it is the point at
+# which thin blocks are rare enough that no merge rule is needed, and the merge rule is what failed.
+RULE1_MIN_ATTRIBUTE_SHARE = 95.0
+# Rule 2: ">= 10 points of can_attribute% over arm A at the same median duration."
+RULE2_MIN_MATCHED_DELTA = 10.0
+# Rule 3: "an arm whose p90 block duration exceeds 4 hours ... fails legibility." SECONDS, matching
+# `run_arm`'s `dur_p90`.
+RULE3_MAX_P90_SECONDS = 4 * 3600.0
+# Rule 4: "the one with fewer parameters ships. D has none, A and C have one, B has one plus a
+# deferral rule." Counted exactly as the pre-registration counts them.
+ARM_PARAMS = {"none": 0, "time": 1, "turns": 1, "evidence_gated": 2}
+
+
+def _n_key(n):
+    """Sort key for a candidate parameter, treating arm D's `None` as smaller than any number so
+    a mixed list orders deterministically instead of raising on `None < int`."""
+    return float("-inf") if n is None else float(n)
+
+
+def arm_sessions(store):
+    """`[(session, lo, hi, cuts)]` for every session with at least one active bin — the
+    pre-registration's population.
+
+    Computed ONCE and handed to every `run_arm` call: `cut_points` depends on neither the arm nor
+    its parameter (all four arms cut at the same detected edges, by construction), so recomputing
+    it per arm-parameter would be 22x the detector work for an identical answer — the same reuse
+    `sweep()` already makes across `CAPS`, one level up.
+    """
+    sessions = [s for (s,) in store._conn().execute(
+        "SELECT DISTINCT session FROM bin ORDER BY session")]
+    out = []
+    for s in sessions:
+        bounds = session_bounds(store, s)
+        if bounds is None:
+            continue
+        lo, hi = bounds
+        out.append((s, lo, hi, cut_points(store, s, lo, hi)))
+        if hasattr(store, "reset"):
+            store.reset()
+    return out
+
+
+def run_arm(name, fn, n, store=None, sessions=None, min_evidence=MIN_EVIDENCE):
+    """One arm at one parameter over every session. Returns the pre-registration's metric row.
+
+    Durations are reported in **SECONDS** (`dur_p50` / `dur_p90`), because rule 3's threshold is
+    an absolute 4 hours and the matched-duration control pairs on `dur_p50` — both are cleaner
+    without a unit conversion sitting between the measurement and the rule. `sweep()`'s older
+    `median_duration_min` stays in minutes and is deliberately NOT renamed: arm A's published
+    baseline numbers must not move. `dur_p50_min`/`dur_p90_min` are carried alongside purely so a
+    reader of the JSON does not have to divide.
+
+    `merge_share` is the share of blocks `merge_thin` would absorb — reported for every arm
+    because the pre-registration's bar IS "the merge rule becomes unnecessary". Under arm B it
+    should be near zero by construction; if it is not, arm B does not work as designed and that
+    is a finding, not a bug to paper over here.
+
+    Every pooled figure is reported beside a per-session one (`session_median_can_attribute_share`,
+    `max_blocks_one_session_share`) because one ~11.7-day session contributed ~17% of blocks at
+    the 10-minute cap in the baseline run, so a pooled share is partly that one session's share.
+    `sessions_no_cuts_share` is the pre-registration's stated limitation made visible: on a session
+    where the detector never fired, every arm reduces to its bound alone.
+    """
+    st = store if store is not None else CachingStore(open_store(DB))
+    sess = sessions if sessions is not None else arm_sessions(st)
+    ends = collections.Counter()
+    durations = []
+    n_blocks = attributable = absorbed = 0
+    max_blocks, max_blocks_session = 0, None
+    session_attr_shares = []
+    sessions_no_cuts = 0
+    for s, lo, hi, cuts in sess:
+        blocks = fn(st, s, cuts, lo, hi, n)
+        if not cuts:
+            sessions_no_cuts += 1
+        if len(blocks) > max_blocks:
+            max_blocks, max_blocks_session = len(blocks), s
+        _merged, stats = merge_thin(st, s, blocks, min_evidence)
+        absorbed += stats["merged"] + stats["merged_backward"]
+        s_attr = 0
+        for bl in blocks:
+            n_blocks += 1
+            durations.append(bl.end - bl.start)
+            ends[bl.end_reason] += 1
+            if can_attribute(st, s, bl):
+                attributable += 1
+                s_attr += 1
+        if blocks:
+            session_attr_shares.append(100.0 * s_attr / len(blocks))
+        if hasattr(st, "reset"):
+            st.reset()
+
+    p50 = _percentile(durations, 50)
+    p90 = _percentile(durations, 90)
+    n_sess = len(sess)
+    return {
+        "arm": name,
+        "n": n,
+        "n_sessions": n_sess,
+        "n_blocks": n_blocks,
+        "can_attribute_share": 100.0 * attributable / n_blocks if n_blocks else 0.0,
+        "session_median_can_attribute_share": _percentile(session_attr_shares, 50),
+        "merge_share": 100.0 * absorbed / n_blocks if n_blocks else 0.0,
+        "dur_p50": p50,
+        "dur_p90": p90,
+        "dur_p50_min": p50 / 60.0 if p50 is not None else None,
+        "dur_p90_min": p90 / 60.0 if p90 is not None else None,
+        "blocks_per_session": n_blocks / n_sess if n_sess else 0.0,
+        "end_reasons": dict(ends),
+        "end_reason_share": {k: 100.0 * v / n_blocks for k, v in ends.items()} if n_blocks else {},
+        "max_blocks_one_session": max_blocks,
+        "max_blocks_one_session_id": max_blocks_session,
+        "max_blocks_one_session_share": (100.0 * max_blocks / n_blocks if n_blocks else 0.0),
+        "sessions_no_cuts": sessions_no_cuts,
+        "sessions_no_cuts_share": 100.0 * sessions_no_cuts / n_sess if n_sess else 0.0,
+    }
+
+
+def matched_control(arms):
+    """For every NON-TIME arm row, the arm-A row whose median block duration is closest, and the
+    `can_attribute_share` delta against it.
+
+    ⚠️ **This is the control the whole comparison turns on.** Arms B and D produce longer blocks
+    than a short time cap, and longer blocks hold more evidence, so a raw `can_attribute%` win
+    proves nothing — arm A at a larger N gets the same lift for free. Pairing on the PARAMETER
+    (arm B's n=10 against arm A's n=10) would compare a deferred block against a 10-minute one and
+    call the difference intelligence, which is why the pairing is on `dur_p50` and nothing else.
+
+    Ties are possible on a coarse candidate grid, and are broken toward the **smaller n** — fixed
+    by rule rather than left to input order, and the conservative direction: a shorter cap
+    attributes less, so the arm's delta comes out larger and is judged against the weaker
+    baseline. A row with no `dur_p50` (an arm that produced no blocks at all) gets `None`
+    throughout rather than a fabricated pairing.
+    """
+    time_rows = [r for r in arms if r.get("arm") == "time" and r.get("dur_p50") is not None]
+    out = []
+    for r in arms:
+        if r.get("arm") == "time":
+            continue
+        row = {"arm": r.get("arm"), "n": r.get("n"), "dur_p50": r.get("dur_p50"),
+               "can_attribute_share": r.get("can_attribute_share"),
+               "matched_time_n": None, "matched_time_dur_p50": None,
+               "matched_time_can_attribute_share": None, "delta": None}
+        if time_rows and r.get("dur_p50") is not None:
+            best = min(time_rows, key=lambda t: (abs(t["dur_p50"] - r["dur_p50"]),
+                                                 _n_key(t.get("n"))))
+            row["matched_time_n"] = best.get("n")
+            row["matched_time_dur_p50"] = best["dur_p50"]
+            row["matched_time_can_attribute_share"] = best.get("can_attribute_share")
+            if (r.get("can_attribute_share") is not None
+                    and best.get("can_attribute_share") is not None):
+                row["delta"] = r["can_attribute_share"] - best["can_attribute_share"]
+        out.append(row)
+    return out
+
+
+BASELINE_ARM = "time"
+
+
+def _judge(row, ctrl):
+    """Rules 1-3 against one arm-parameter row. Returns `(failed_rules, reasons)`.
+
+    ⚠️ **Every rule is evaluated; nothing short-circuits.** The three are independent — a low
+    `can_attribute_share` says nothing about the p90 — and "failed rule 1" is actionable while
+    "failed 1, 2 and 3" is a dead arm. Stopping at the first failure erases that distinction.
+
+    ⚠️ **Rule 2 is NOT APPLIED to the baseline arm, and that is a reading of the
+    pre-registration rather than something it states.** Rule 2 is written as ">= 10 points of
+    `can_attribute%` over ARM A at the same median duration", so applied to arm A itself it is a
+    self-comparison: `matched_control` pairs each row against the arm-A row of nearest duration,
+    which for an arm-A row is itself, giving a delta of exactly 0. Auto-failing arm A on that
+    would dismiss the baseline on a tautology instead of on rule 1 — the bar that actually judges
+    it, and the one the baseline run already measured it against (61.2% at its best cap). So the
+    rule is recorded N/A here and said out loud in `why`; arm A stands or falls on rules 1 and 3.
+    """
+    failed, why = [], []
+    share = row.get("can_attribute_share")
+    if share is None or share < RULE1_MIN_ATTRIBUTE_SHARE:
+        failed.append(1)
+        why.append(f"rule 1: can_attribute {share if share is None else f'{share:.1f}'}% is under "
+                   f"the {RULE1_MIN_ATTRIBUTE_SHARE:.0f}% bar at which the merge rule becomes "
+                   f"unnecessary")
+    delta = ctrl.get("delta") if ctrl else None
+    matched_n = ctrl.get("matched_time_n") if ctrl else None
+    if row.get("arm") == BASELINE_ARM:
+        why.append("rule 2: n/a — this IS arm A, the matched-duration baseline; a delta against "
+                   "itself is 0 by definition and says nothing about the arm")
+    elif delta is None or delta < RULE2_MIN_MATCHED_DELTA:
+        failed.append(2)
+        why.append(f"rule 2: {'no' if delta is None else f'{delta:+.1f}'} points over the "
+                   f"matched-duration time cap (n={matched_n}), under the "
+                   f"{RULE2_MIN_MATCHED_DELTA:.0f}-point bar — a more complicated way to make "
+                   f"blocks bigger")
+    p90 = row.get("dur_p90")
+    if p90 is None or p90 > RULE3_MAX_P90_SECONDS:
+        failed.append(3)
+        why.append(f"rule 3: legibility — p90 block duration "
+                   f"{'unknown' if p90 is None else f'{p90 / 3600.0:.1f}h'} exceeds "
+                   f"{RULE3_MAX_P90_SECONDS / 3600.0:.0f}h")
+    return failed, why
+
+
+def verdict(rows, control):
+    """Rules 1-4 over the arm rows, keyed by ARM NAME. Never a bare boolean: each arm gets
+    `pass`, `why`, the `failed_rules` list, the parameter it was judged at, and every candidate's
+    own judgement under `candidates`.
+
+    An arm is judged at its BEST candidate — the one failing fewest rules, ties broken toward the
+    smaller parameter — because an arm ships at one setting, not at all of them, and reporting the
+    arm as failing when one of its eight caps clears every bar would be the wrong summary.
+
+    Rule 4 ("simplest winner takes it") is applied ACROSS the survivors and reported as `ships`;
+    it never turns a passing arm into a failing one, since it is a choice between arms rather than
+    a bar. A tie on parameter count is not resolved by the pre-registration, so every tied
+    survivor is marked `ships` and told so in `why` rather than separated by an unregistered
+    rule invented after the numbers were seen. Rule 5 (the null result — no arm reaches 95%) needs
+    no extra machinery: it is the state in which no arm passes, and every arm's `why` says which
+    bar it missed.
+    """
+    ctrl = {(c.get("arm"), c.get("n")): c for c in control}
+    by_arm = {}
+    for r in rows:
+        failed, why = _judge(r, ctrl.get((r.get("arm"), r.get("n"))))
+        c = ctrl.get((r.get("arm"), r.get("n"))) or {}
+        by_arm.setdefault(r.get("arm"), []).append({
+            "n": r.get("n"),
+            "pass": not failed,
+            "failed_rules": failed,
+            "why": "; ".join(why) if why else "clears rules 1-3",
+            "can_attribute_share": r.get("can_attribute_share"),
+            "dur_p50": r.get("dur_p50"),
+            "dur_p90": r.get("dur_p90"),
+            "merge_share": r.get("merge_share"),
+            "matched_time_n": c.get("matched_time_n"),
+            "matched_delta": c.get("delta"),
+        })
+
+    out = {}
+    for arm, cands in by_arm.items():
+        cands.sort(key=lambda c: _n_key(c["n"]))
+        best = min(cands, key=lambda c: (len(c["failed_rules"]), _n_key(c["n"])))
+        out[arm] = {
+            "pass": best["pass"],
+            "why": best["why"],
+            "failed_rules": list(best["failed_rules"]),
+            "n": best["n"],
+            "params": ARM_PARAMS.get(arm),
+            "ships": False,
+            "candidates": cands,
+        }
+
+    survivors = [a for a, v in out.items() if v["pass"]]
+    if survivors:
+        fewest = min(ARM_PARAMS.get(a, 99) for a in survivors)
+        winners = [a for a in survivors if ARM_PARAMS.get(a, 99) == fewest]
+        for a in winners:
+            out[a]["ships"] = True
+            out[a]["why"] += (f"; rule 4: fewest parameters among survivors ({fewest})")
+            if len(winners) > 1:
+                out[a]["why"] += (f" — TIED with {sorted(x for x in winners if x != a)} on "
+                                 f"parameter count, which rule 4 does not separate")
+    return out
+
+
+def run_arms(store=None, arms=ARMS):
+    """Every arm at every candidate, plus the matched-duration control and the verdict. This is
+    the whole of the pre-registered comparison; Task 3 runs it over the frozen corpus."""
+    st = store if store is not None else CachingStore(open_store(DB))
+    sess = arm_sessions(st)
+    rows = [run_arm(name, fn, n, store=st, sessions=sess)
+            for name, fn, cands in arms for n in cands]
+    control = matched_control(rows)
+    v = verdict(rows, control)
+    # Rule 5 keys on the 95% bar SPECIFICALLY ("if no arm reaches 95%"), not on "no arm passed":
+    # an arm that clears rule 1 and then loses the matched-duration control has not shown that the
+    # problem is upstream — it has shown that block size, not the bound, was doing the work. Those
+    # are different findings and collapsing them into one would misreport the second as the first.
+    finding = None
+    shares = [r["can_attribute_share"] for r in rows if r.get("can_attribute_share") is not None]
+    if shares and max(shares) < RULE1_MIN_ATTRIBUTE_SHARE:
+        finding = (f"rule 5: no arm reached the {RULE1_MIN_ATTRIBUTE_SHARE:.0f}% bar (best "
+                   f"{max(shares):.1f}%) — the finding is that no bound fixes this and the "
+                   f"problem is upstream, in the detector's recall, not in where to cut")
+    return {"rows": rows, "control": control, "verdict": v,
+            "sessions": len(sess), "finding": finding}
+
+
 def run_all(caps=None, store=None):
     """Item 2's sweep, plus item 3's `merge_thin` measurement at the cap(s) chosen — or an
     explicit override via `caps`, for exploring more than one candidate."""
@@ -558,9 +864,12 @@ def main(argv=None):
                     help="comma-separated cap minutes (in CAPS) to run merge_thin over; "
                          "default is item 2's chosen cap alone, if any")
     ap.add_argument("--out", default=None, help="path to write the combined JSON result")
+    ap.add_argument("--bounds", action="store_true",
+                    help="run the four-arm bound comparison (ARMS + the matched-duration "
+                         "control + the pre-registered verdict) instead of the cap sweep")
     args = ap.parse_args(argv)
     caps = tuple(int(x) for x in args.caps.split(",")) if args.caps else None
-    result = run_all(caps=caps)
+    result = run_arms() if args.bounds else run_all(caps=caps)
     text = json.dumps(result, indent=2, default=str)
     if args.out:
         with open(args.out, "w") as f:

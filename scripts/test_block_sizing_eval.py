@@ -272,6 +272,89 @@ def test_every_bound_tiles_its_span():
                 assert y.start_reason == x.end_reason, (fn.__name__, x, y)
 
 
+# --- Task 2: the arm sweep and the matched-duration control ------------------------------------
+
+def test_matched_control_pairs_on_median_duration_not_on_parameter():
+    """The control's whole job. Pairing arm B's n=10 against arm A's n=10 would compare a
+    deferred block against a 10-minute one and call the difference intelligence."""
+    arms = [{"arm": "time", "n": 10, "dur_p50": 600.0, "can_attribute_share": 22.2},
+            {"arm": "time", "n": 60, "dur_p50": 3300.0, "can_attribute_share": 46.4},
+            {"arm": "evidence_gated", "n": 10, "dur_p50": 3200.0, "can_attribute_share": 96.0}]
+    ctrl = b.matched_control(arms)
+    row = next(c for c in ctrl if c["arm"] == "evidence_gated")
+    assert row["matched_time_n"] == 60, row      # 3200 is nearest 3300, NOT 600
+    assert abs(row["delta"] - (96.0 - 46.4)) < 0.1, row
+
+
+def test_verdict_fails_an_arm_that_wins_only_by_being_longer():
+    """Rule 2. 96% attributable is worthless if the matched time cap also gets 92%."""
+    rows = [{"arm": "evidence_gated", "n": 10, "can_attribute_share": 96.0, "dur_p90": 7200.0}]
+    ctrl = [{"arm": "evidence_gated", "n": 10, "matched_time_n": 60, "delta": 4.0}]
+    v = b.verdict(rows, ctrl)
+    assert v["evidence_gated"]["pass"] is False, v
+    assert "matched" in v["evidence_gated"]["why"].lower(), v
+
+
+def test_verdict_fails_an_arm_on_legibility_even_when_it_wins_attribution():
+    """Rule 3, written in advance so it cannot be applied selectively afterwards."""
+    rows = [{"arm": "none", "n": None, "can_attribute_share": 99.0, "dur_p90": 20000.0}]
+    ctrl = [{"arm": "none", "n": None, "matched_time_n": 120, "delta": 38.0}]
+    v = b.verdict(rows, ctrl)
+    assert v["none"]["pass"] is False, v
+    assert "legib" in v["none"]["why"].lower() or "p90" in v["none"]["why"], v
+
+
+def test_matched_control_breaks_a_duration_tie_toward_the_smaller_cap():
+    """Two TIME rows equidistant in `dur_p50` from the arm's own median is a real possibility on
+    a coarse candidate grid, and nearest-neighbour alone does not say which wins. Deterministic
+    by rule: the SMALLER n. It is also the conservative pick — the shorter cap attributes less,
+    so the arm's delta comes out LARGER and the arm is judged against the weaker baseline it
+    would prefer, which is exactly why the rule is written down rather than left to dict order."""
+    arms = [{"arm": "time", "n": 10, "dur_p50": 1000.0, "can_attribute_share": 20.0},
+            {"arm": "time", "n": 60, "dur_p50": 2000.0, "can_attribute_share": 50.0},
+            {"arm": "turns", "n": 20, "dur_p50": 1500.0, "can_attribute_share": 60.0}]
+    ctrl = b.matched_control(arms)
+    row = next(c for c in ctrl if c["arm"] == "turns")
+    assert row["matched_time_n"] == 10, row              # equidistant (500 either way) -> smaller n
+    assert abs(row["delta"] - (60.0 - 20.0)) < 0.1, row  # and the delta follows that choice
+
+    # Order-independent: the same tie resolved the same way with the rows reversed.
+    ctrl2 = b.matched_control(list(reversed(arms)))
+    assert next(c for c in ctrl2 if c["arm"] == "turns")["matched_time_n"] == 10, ctrl2
+
+
+def test_verdict_reports_every_failing_rule_not_just_the_first():
+    """A reader has to know whether an arm missed one bar or three: "it failed rule 1" is
+    actionable (more evidence per block), "it failed 1, 2 and 3" is a dead arm. Short-circuiting
+    on the first failure destroys that distinction, and the three rules are independent — a low
+    `can_attribute_share` says nothing about the p90."""
+    rows = [{"arm": "turns", "n": 5, "can_attribute_share": 30.0, "dur_p90": 20000.0}]
+    ctrl = [{"arm": "turns", "n": 5, "matched_time_n": 10, "delta": 1.0}]
+    v = b.verdict(rows, ctrl)
+    assert v["turns"]["pass"] is False, v
+    assert v["turns"]["failed_rules"] == [1, 2, 3], v
+    why = v["turns"]["why"].lower()
+    assert "95" in why and "matched" in why and ("legib" in why or "p90" in why), why
+
+
+def test_verdict_does_not_fail_the_baseline_arm_on_a_comparison_with_itself():
+    """Rule 2 is written as ">= 10 points over ARM A", so applying it to arm A is a
+    self-comparison: `matched_control` would pair an arm-A row against itself for a delta of
+    exactly 0, and arm A would be reported as failing the control it IS. That would dismiss the
+    baseline on a tautology rather than on rule 1, the bar the baseline run actually measured it
+    against. Arm A is judged on rules 1 and 3; rule 2 is stated N/A."""
+    rows = [{"arm": "time", "n": 60, "can_attribute_share": 96.0, "dur_p90": 7200.0}]
+    v = b.verdict(rows, b.matched_control(rows))
+    assert v["time"]["pass"] is True, v
+    assert v["time"]["failed_rules"] == [], v
+    assert "n/a" in v["time"]["why"].lower(), v
+
+    # And it is still failed on a bar that DOES apply to it.
+    rows = [{"arm": "time", "n": 10, "can_attribute_share": 22.2, "dur_p90": 600.0}]
+    v = b.verdict(rows, b.matched_control(rows))
+    assert v["time"]["pass"] is False and v["time"]["failed_rules"] == [1], v
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
