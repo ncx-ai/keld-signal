@@ -13,6 +13,7 @@ two runs is comparing results, not two forks of the same arithmetic. `MIN_EVIDEN
 restated, so ground truth stays deterministic and derived from the store — never hand-labelled.
 """
 import os
+import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -65,3 +66,26 @@ def shuffled(trans, bins, rng):
     choices = [float(x) for x in bins]
     return sorted([t._replace(instant=rng.choice(choices)) for t in trans],
                   key=lambda x: x.instant)
+
+
+def EMPTY_AGG():
+    return {"hit": 0, "fp": 0, "miss": 0, "fires": 0, "windows": 0, "dists": []}
+
+
+def merge(into, r):
+    for k in ("hit", "fp", "miss", "fires", "windows"):
+        into[k] += r[k]
+    into["dists"] += r["dists"]
+    return into
+
+
+def rates(agg):
+    hit, fp, miss = agg["hit"], agg["fp"], agg["miss"]
+    prec = hit / (hit + fp) if (hit + fp) else 0.0
+    rec = hit / (hit + miss) if (hit + miss) else 0.0
+    fire = agg["fires"] / agg["windows"] if agg["windows"] else 0.0
+    med = statistics.median(agg["dists"]) / 60.0 if agg["dists"] else None
+    return {"precision": round(100 * prec, 1), "recall": round(100 * rec, 1),
+            "fire_rate": round(100 * fire, 1),
+            "median_dist_min": None if med is None else round(med, 1),
+            "hit": hit, "fp": fp, "miss": miss, "windows": agg["windows"]}

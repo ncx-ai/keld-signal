@@ -95,6 +95,30 @@ def test_shuffled_on_no_bins_is_empty():
                       random.Random(1)) == []
 
 
+def test_rates_computes_precision_and_recall_separately():
+    """Never an F-score: a false 'the work changed' is a different failure from a missed one,
+    and the pre-registration scores them apart."""
+    r = b.rates({"hit": 3, "fp": 1, "miss": 2, "fires": 4, "windows": 10, "dists": [60, 120, 300]})
+    assert r["precision"] == 75.0, r
+    assert r["recall"] == 60.0, r
+    assert r["fire_rate"] == 40.0, r
+    assert r["median_dist_min"] == 2.0, r
+
+
+def test_rates_on_an_empty_aggregate_is_zero_not_a_crash():
+    r = b.rates(b.EMPTY_AGG())
+    assert r["precision"] == 0.0 and r["recall"] == 0.0, r
+    assert r["median_dist_min"] is None, r
+
+
+def test_merge_accumulates_counts_and_distances():
+    a = b.EMPTY_AGG()
+    b.merge(a, {"hit": 1, "fp": 2, "miss": 3, "fires": 4, "windows": 5, "dists": [10]})
+    b.merge(a, {"hit": 1, "fp": 0, "miss": 1, "fires": 1, "windows": 2, "dists": [20, 30]})
+    assert (a["hit"], a["fp"], a["miss"], a["fires"], a["windows"]) == (2, 2, 4, 5, 7), a
+    assert a["dists"] == [10, 20, 30], a
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
