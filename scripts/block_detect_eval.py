@@ -14,7 +14,6 @@ restated, so ground truth stays deterministic and derived from the store — nev
 """
 import argparse
 import collections
-import json
 import os
 import random
 import statistics
@@ -129,8 +128,12 @@ def score_level(cs, sessions, levels_under_test, gt_levels, rng, exclude=None):
         n_sample += 1
         n_trans += len(trans)
         # Rule 5: coverage is REPORTED, never scored. A level with fine precision on 12% of
-        # sessions does not solve the non-engineering problem.
-        if probe not in floors or has_level(cs, s, probe, floors.get(probe, 0.5)):
+        # sessions does not solve the non-engineering problem. Always MEASURED against the
+        # store: `component`/`action` are INVENTORY levels absent from `ALLOC_LEVELS`, so a
+        # bypass keyed on `probe not in floors` would report those two candidates a silent,
+        # unconditional 100% instead of a real figure. 0.50 is the floor every allocation
+        # dimension uses, and `attribution` works on any level the store holds.
+        if has_level(cs, s, probe, floors.get(probe, 0.50)):
             n_cov += 1
         sz = EwmaSizer(name="ewma:" + "+".join(levels_under_test))
         sz.level = probe            # instance attribute shadows the class attribute
@@ -194,16 +197,13 @@ def run(gt_mode):
 
 
 if __name__ == "__main__":
+    # Prints only — results derive from real developer transcripts and must never land inside
+    # the working tree. Task 5 pipes stdout (e.g. `tee`) to a path under
+    # ~/keld/refseries-context/blocks/ and writes its own JSON there.
     ap = argparse.ArgumentParser()
     ap.add_argument("--gt", choices=("wide", "narrow", "both"), default="wide")
     args = ap.parse_args()
     modes = ("wide", "narrow") if args.gt == "both" else (args.gt,)
-    results = {}
     for mode in modes:
         print(f"--- gt={mode} ---", flush=True)
-        results[mode] = run(mode)
-    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "block-detect-results.json")
-    with open(out_path, "w") as f:
-        json.dump(results, f, indent=2)
-    print(f"wrote {out_path}")
+        run(mode)

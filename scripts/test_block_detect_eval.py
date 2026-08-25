@@ -140,6 +140,24 @@ def test_candidate_labels_are_all_tuples():
         assert isinstance(lv, tuple), (label, lv)
 
 
+def test_coverage_is_measured_not_bypassed_for_a_level_outside_allocation():
+    """`component`/`action` are INVENTORY levels, absent from `ALLOC_LEVELS`. A bypass keyed on
+    `probe not in floors` would report those candidates an automatic 100% coverage regardless of
+    whether the level was ever attributed — a plausible wrong number, not a cosmetic gap.
+    Here `component` is attributed in one of two qualifying sessions, so coverage must read 50%,
+    derived from the store, never 100%."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = b.open_store(os.path.join(tmp, "state", "refseries.db"))
+        st.upsert_events("s1", [_ev(10, "branch", "main"), _ev(310, "branch", "feature"),
+                                _ev(10, "component", "cli")], source_line=1)
+        st.upsert_events("s2", [_ev(10, "branch", "main"), _ev(310, "branch", "feature")],
+                        source_line=1)
+        cs = b.CachingStore(st)
+        got = b.score_level(cs, ["s1", "s2"], ("component",), b.ALLOC_LEVELS, random.Random(1))
+        assert got["sessions_scored"] == 2, got
+        assert got["coverage_pct"] == 50.0, got["coverage_pct"]
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
