@@ -49,6 +49,15 @@ from app.analysis.workspace import resolve_workspace  # noqa: E402
 from app.analysis.reconcile import reconcile  # noqa: E402
 from app.analysis.transcript import iter_turns  # noqa: E402
 from app.analysis.levels import LEVELS, events_for_turns  # noqa: E402
+# The SHIPPED analysis path -- what `context`/`contexts` now project (see `digest`/`executive`
+# below). Everything above this line is the study's OWN pandas pipeline, kept for the other
+# subcommands (`extract`, `series`, `synopsis`, `at`, `episodes`, `window`) and for the
+# frame-derived "vs repo history" lift section `digest`/`executive` accept alongside the payload.
+from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, analyze_window  # noqa: E402
+from app.analysis.dynamics import DEFAULT_SIZER  # noqa: E402
+from app.analysis.ingest import ingest_file, is_current  # noqa: E402
+from app.analysis.store import open_store  # noqa: E402
+from app.analysis.workstreams import ALLOCATION  # noqa: E402
 
 import numpy as np
 import pandas as pd
@@ -662,296 +671,333 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
     return out
 
 
-THIN = 8            # a level resting on fewer events than this is called out as thin
+# ------------------------------------------------------------------ payload projection
+#
+# `digest`/`executive` used to derive from `characterize`'s OWN pandas frame -- a second
+# implementation of facts the shipped `analyze_window` payload already computes (effort/tempo was
+# the clearest case: two code paths free to drift on the exact same conclusion). Both now PROJECT
+# that payload instead: `doc` below is `analyze_window(...)`'s return value (workstreams,
+# inventory, inventory_omitted, dynamics, prior, effort, evidence, schema, session, window_start,
+# window_end -- see sidecar/app/analysis/analyze.py), not a `characterize()` document. That is a
+# call-signature break for the two existing callers of the old shape, `context_value.py` and
+# `prose_probe.py` (`executive(characterize(...))`) -- reported, not silently patched around, per
+# this task's brief.
+#
+# THE CONSTRAINT THAT DECIDES THIS SHAPE (AGENTS.md, "Stating the conclusion IS the feature"): a
+# 16 KB characterisation of raw window numbers scored -3.3/-20.0 on synthesis accuracy -- worse
+# than emitting nothing -- against +36.7 for a digest that LABELLED each number and STATED the
+# conclusion. So every helper below reads a field the payload already computed and states its
+# conclusion (`changed: branch steady`, not `turnover: 0.0`); none of them re-derive anything, and
+# none of them emit a per-side `dynamics[*].slice`/`.baseline` object -- the same cut the Go wire
+# boundary makes for privacy, since `term` (inside those objects) has held real people's names.
+#
+# `frame`, where accepted, is the OLD `characterize()` document for the SAME entity and window --
+# entirely optional, and it feeds a section with NO payload equivalent: `lift` against the
+# repositories' whole prior history (`series`'s "COMPOSITION AND BASELINE ARE DIFFERENT SCOPES").
+# The session-scoped `prior` block is not a substitute for that -- it is the configuration lift
+# was already measured in and found degenerate for "unusual" (a 74-minute-old transcript's own
+# history IS the window, so lift collapsed to x1.0 while the repo's history put the same branch at
+# x33.6). The two baselines answer different questions and are kept in clearly separate,
+# clearly-labelled sections rather than blended, for the same reason numbers stay labelled: an
+# unlabelled mix of two scopes is a reader who cannot tell which yardstick a figure is against.
 
 
-def digest(doc):
-    """Compress a characterisation to the lines that carry it.
+def _work_summary(payload):
+    """One clause per ALLOCATION dimension, in `workstreams.ALLOCATION` order. An unattributed
+    dimension is NAMED (`skill unattributed`), never silently dropped -- the ALLOCATION set is
+    fixed at 7, so a reader can always tell "the pipeline didn't say" from "this wasn't asked"."""
+    ws = payload.get("workstreams") or {}
+    bits = []
+    for name, _level, _floor in ALLOCATION:
+        v = ws.get(name)
+        bits.append(f"{v['value']} {100*v['share']:.0f}%" if v else f"{name} unattributed")
+    return " · ".join(bits)
 
-    Derived from the full document rather than computed separately, so the two can never disagree
-    — the digest is a projection, not a second implementation. Roughly a tenth the size: what the
-    work was on, what is unusual about it, what is missing, and how the pair were working.
-    """
-    w = doc.get("window", {})
-    if not doc.get("rungs"):
-        return {"window": f"{w.get('entity')} {w.get('start')}..{w.get('end')} — "
-                          f"no reference observations"}
 
-    def pick(level_block, k=3):
-        parts = []
-        for it in level_block.get("top", [])[:k]:
-            bit = f"{it['ref']} {100*it['share']:.0f}%"
-            lift = it.get("lift")
-            if lift is not None and (lift >= 2 or lift <= 0.5):
-                bit += f" (x{lift:g}"
-                bit += f", {it['trend']})" if it["trend"] != "flat" else ")"
-            elif it["trend"] != "flat":
-                bit += f" ({it['trend']})"
-            if it.get("repo") and len(w.get("workspaces_whose_files_were_touched", [])) > 1:
-                bit += f" [{it['repo']}]"
-            parts.append(bit)
-        rem = level_block.get("remainder")
-        if rem:
-            parts.append(f"+{rem['references']} more = {100*rem['share']:.0f}%")
-        return " | ".join(parts)
+def _hotspots(payload):
+    """Inventory counts + the hottest couple of values, with the top-N cut named rather than
+    silently absorbed (`inventory_omitted` -- see `workstreams.payload`'s own "dropping must be
+    visible" note, one level up)."""
+    inv = payload.get("inventory") or {}
+    omitted = payload.get("inventory_omitted") or {}
+    counts = [f"{len(inv[name]) + omitted.get(name, 0)} {name}"
+              for name in ("files", "components") if inv.get(name)]
+    if not counts:
+        return None
+    head = ", ".join(counts)
+    top = [it["value"] for it in (inv.get("files") or [])[:2]]
+    if top:
+        head += " — " + ", ".join(top)
+    if omitted:
+        head += "  (truncated: " + ", ".join(f"{k} +{v}" for k, v in omitted.items()) + ")"
+    return head
 
-    levels = {lv: blk for r in doc["rungs"].values() for lv, blk in r["levels"].items()}
-    head = (f"{w['entity']} {w['start'][:16]}Z..{w['end'][11:16]}Z  "
-            f"{w['duration_h']}h  {w['reference_events']} refs  "
-            f"cwd={w.get('workspace_of_cwd')}")
-    touched = w.get("workspaces_whose_files_were_touched") or []
-    if len(touched) > 1:
-        head += f"  files-in={'+'.join(touched)}"
-    out = {"window": head, "work": {}, "tooling": {}}
 
-    for key, level in (("branch", "branch"), ("subsystem", "component"), ("files", "file"),
-                       ("types", "ext")):
-        if level in levels:
-            out["work"][key] = pick(levels[level], 4 if level == "file" else 3)
-    for key, level in (("tools", "tool"), ("programs", "exe"), ("skills", "skill"),
-                       ("services", "service"), ("subagents", "agent")):
-        if level in levels:
-            out["tooling"][key] = pick(levels[level])
-    for k in ("work", "tooling"):
-        if not out[k]:
-            del out[k]
+def _changed_line(payload):
+    """The dynamics block, STATED. `reading` for every `compared` dimension; every other
+    dimension is named alongside its `status` rather than dropped -- `MIN_EVIDENCE`'s own
+    argument is that a status other than `compared` is not "nothing happened", it is "this
+    comparison could not be made", and those are different facts."""
+    dyn = payload.get("dynamics")
+    if not dyn:
+        return None
+    dims = dyn["dimensions"]
+    compared = [f"{name} {v['reading']}" for name, v in dims.items() if v["status"] == "compared"]
+    other = [f"{name} {v['status']}" for name, v in dims.items() if v["status"] != "compared"]
+    head = ", ".join(compared) if compared else "nothing comparable"
+    if other:
+        head += "   [not comparable: " + ", ".join(other) + "]"
+    return head
 
-    # The two negative signals, consolidated: what is unusually prominent, and what is missing.
-    notable = []
-    for lv, blk in levels.items():
-        for it in blk.get("top", []):
-            if (it.get("lift") or 0) >= 3:
-                notable.append((it["lift"], f"{lv} {it['ref']} x{it['lift']:g}"))
-    if notable:
-        out["unusually_prominent"] = [t for _, t in sorted(notable, reverse=True)[:6]]
+
+def _prior_line(payload):
+    """The session prior, STATED as a departure conclusion rather than the per-dimension value/
+    share/evidence dicts. `novel` (new to the session) takes precedence over `agrees` because it
+    is the narrower, more informative fact (see `prior.py`'s own docstring on `skill`); a
+    dimension the WINDOW itself could not attribute is skipped here because `_work_summary`
+    already named it `unattributed` -- restating it as "no prior" would be the same fact twice,
+    not two facts."""
+    pr = payload.get("prior")
+    if not pr:
+        return None
+    ws = payload.get("workstreams") or {}
+    novel, diverge, no_prior = [], [], []
+    for name, v in pr["dimensions"].items():
+        if ws.get(name) is None:
+            continue
+        if v.get("novel"):
+            novel.append(name)
+        elif v.get("agrees") is False:
+            diverge.append(name)
+        elif v.get("agrees") is None:
+            no_prior.append(name)
+    parts = [("new: " + ", ".join(novel)) if novel else "nothing new"]
+    if diverge:
+        parts.append("diverges on " + ", ".join(diverge))
+    if no_prior:
+        parts.append("no session history for " + ", ".join(no_prior))
+    line = "; ".join(parts)
+    return line + " (baseline clamped by retention)" if pr.get("clamped") else line
+
+
+def _effort_line(payload):
+    """ONE tempo, from `effort.tempo` -- the ratio-derived reading `refseries.py` used to compute
+    separately is deleted; `_effort`'s own docstring is the reason (a stated conclusion beat a
+    stated number +36.7 to -3.3, and a bare ratio invites exactly that recompute-it-yourself
+    reading). Each clause is dropped, not defaulted, when its own status says the check did not
+    run -- `authored_bytes`/`fast_share` are `None` on purpose in that case (see `magnitude.py`/
+    `latency.py`), and 0 would be a confident wrong answer, not an honest absence."""
+    e = payload.get("effort") or {}
+    parts = []
+    if e.get("authored_status") == "attributed":
+        n = e["authoring_turns"]
+        parts.append(f"{e['authored_bytes']} B over {n} turn{'s' if n != 1 else ''}")
+    if e.get("tempo_status") == "attributed" and e.get("tempo"):
+        parts.append(e["tempo"])
+    return ", ".join(parts) if parts else None
+
+
+def _window_span(payload):
+    s, e = pd.Timestamp(payload["window_start"]), pd.Timestamp(payload["window_end"])
+    e_str = e.strftime("%H:%MZ") if e.date() == s.date() else e.strftime("%Y-%m-%dT%H:%MZ")
+    return f"{s.strftime('%Y-%m-%dT%H:%MZ')}..{e_str}  {payload.get('evidence', 0)} refs"
+
+
+def _frame_lift_section(frame):
+    """The OLD `characterize()` document's lift-against-repo-history facts, for the section
+    `digest`/`executive` keep SEPARATE from the payload projection (see the module note above).
+    `frame` is optional and this returns `None` when it is absent or empty -- there is no payload
+    field this could silently stand in for, so "no frame" and "frame found nothing" both mean
+    "say nothing here", unlike every payload-derived helper above."""
+    if not frame or not frame.get("rungs"):
+        return None
+    levels = {lv: blk for r in frame["rungs"].values() for lv, blk in r["levels"].items()}
+    notable = [(it["lift"], f"{lv} {it['ref']} x{it['lift']:g}")
+              for lv, blk in levels.items() for it in blk.get("top", [])
+              if (it.get("lift") or 0) >= 3]
     gone = [(a["usual_share"], f"{lv} {a['ref']} (usually {100*a['usual_share']:.0f}%)")
             for lv, blk in levels.items() for a in blk.get("absent_but_usual", [])]
+    out = {}
+    if notable:
+        out["unusually_prominent"] = [t for _, t in sorted(notable, reverse=True)[:6]]
     if gone:
         out["absent_but_usual"] = [t for _, t in sorted(gone, reverse=True)[:6]]
-    thin = [f"{lv} ({blk['events']})" for lv, blk in levels.items() if blk["events"] < THIN]
-    if thin:
-        out["thin_evidence"] = ("levels resting on very few events; treat their shares as "
-                                "indicative only: " + ", ".join(sorted(thin)))
+    return out or None
 
-    t = doc.get("tempo")
-    if t:
-        vs = t.get("vs_own_median", {})
-        out["tempo"] = (
-            f"engineer {t['engineer_messages']} msgs"
-            + (f" (x{vs['engineer_messages']:g} own median)" if vs.get("engineer_messages") else "")
-            + (f", {t['engineer_chars_per_message']} chars each"
-               if t.get("engineer_chars_per_message") else "")
-            + (f", {100*t['engineer_short_message_share']:.0f}% short"
-               if t.get("engineer_short_message_share") else "")
-            + f"; assistant {t['assistant_messages']} msgs, "
-              f"{t['assistant_output_tokens']/1000:.0f}k output tokens")
-        ratio = (t["assistant_messages"] / t["engineer_messages"]
-                 if t["engineer_messages"] else None)
-        if ratio:
-            out["tempo"] += (f"  -> {'unattended execution' if ratio >= 15 else 'close steering'}"
-                             f" ({ratio:.0f} assistant turns per engineer turn)")
-    out["basis"] = ("counts of tool-call references in [start,end); shares are of the level; "
-                    "lift is against the prior history of " +
-                    "+".join(w.get("lift_baseline_scope", [])) +
-                    "; every level is from tool-call inputs EXCEPT `term`, which counts named "
-                    "entities in message text")
+
+_FRAME_NOTE = ("frame-derived (scripts/refseries.py's own pandas pipeline); NOT part of what "
+              "analyze_window ships. Baseline is the repositories' WHOLE PRIOR HISTORY, a wider "
+              "yardstick than vs_session's session-only scope -- the two are not comparable and "
+              "are kept in separate sections for exactly that reason.")
+
+
+def digest(payload, frame=None):
+    """Compress `analyze_window`'s payload to the lines that carry it -- a projection, not a
+    second implementation, of the same rule the old frame-based digest stated: derived from the
+    full document rather than computed separately, so the two can never disagree. See the module
+    note above for `frame` and for why every line here states a conclusion rather than a number.
+    """
+    if not payload.get("evidence"):
+        return {"window": f"{payload.get('window_start')}..{payload.get('window_end')} — "
+                          f"no reference observations"}
+    out = {"window": _window_span(payload), "work": _work_summary(payload)}
+    hot = _hotspots(payload)
+    if hot:
+        out["hotspots"] = hot
+    changed = _changed_line(payload)
+    if changed:
+        out["changed"] = changed
+    prior = _prior_line(payload)
+    if prior:
+        out["vs_session"] = prior
+    effort = _effort_line(payload)
+    if effort:
+        out["effort"] = effort
+    lift = _frame_lift_section(frame)
+    if lift:
+        out["vs_repo_history"] = dict(note=_FRAME_NOTE, **lift)
     return out
 
 
-def executive(doc):
-    """An executive summary: what happened in this window, in sentences.
-
-    Assembled deterministically from the same characterisation the full document reports — no
-    model, no adjectives that are not backed by a figure. Each clause is dropped when the number
-    behind it is missing, so the summary never asserts anything the data did not carry.
+def executive(payload, frame=None):
+    """The same facts, in sentences -- the "normal" (non `--brief`) mode. Keeps the old
+    executive()'s rule that a clause is DROPPED when the number behind it is missing, so the
+    summary never asserts anything the payload did not carry; see the module note above for what
+    changed and why.
     """
-    w = doc.get("window", {})
-    if not doc.get("rungs"):
+    if not payload.get("evidence"):
         return {"headline": "no recorded activity",
-                "summary": f"Transcript {w.get('entity')} has no reference observations between "
-                           f"{w.get('start')} and {w.get('end')}."}
-    L = {lv: blk for r in doc["rungs"].values() for lv, blk in r["levels"].items()}
-    t = doc.get("tempo") or {}
+                "summary": f"No reference observations between {payload.get('window_start')} "
+                           f"and {payload.get('window_end')}."}
+    ws = payload.get("workstreams") or {}
+    inv = payload.get("inventory") or {}
+    start = pd.Timestamp(payload["window_start"]).strftime("%d %b %H:%M")
+    end = pd.Timestamp(payload["window_end"]).strftime("%H:%M")
+    sents = [f"{start}–{end}Z, {payload['evidence']} recorded references."]
 
-    def top(level, i=0):
-        items = L.get(level, {}).get("top", [])
-        return items[i] if len(items) > i else None
+    attributed = [(name, ws[name]) for name, _l, _f in ALLOCATION if ws.get(name)]
+    unattributed = [name for name, _l, _f in ALLOCATION if ws.get(name) is None]
+    if attributed:
+        sents.append("The work was " + ", ".join(
+            f"{v['value']} ({100*v['share']:.0f}% of {name})" for name, v in attributed) + ".")
+    if unattributed:
+        sents.append("No dominant value for " + ", ".join(unattributed) + ".")
 
-    def name(level, i=0):
-        it = top(level, i)
-        return it["ref"] if it else None
+    hot = _hotspots(payload)
+    if hot:
+        sents.append(f"Hotspots: {hot}.")
 
-    def pctf(level, i=0):
-        it = top(level, i)
-        return f"{100*it['share']:.0f}%" if it else None
+    changed = _changed_line(payload)
+    if changed:
+        sents.append(f"Against the baseline inside this same window: {changed}.")
 
-    def distinctive(level, min_share=0.05, min_events=3):
-        """The most UNUSUAL reference at a level, not the largest.
+    prior = _prior_line(payload)
+    if prior:
+        sents.append(f"Against the session so far: {prior}.")
 
-        `read` took the action slot in 20 of 21 consecutive headlines: an agent reads far more than
-        it writes, so the largest share is a constant and a constant carries no information about
-        the hour. Ranking by lift surfaces the act that distinguishes this window — commit, test,
-        convert a document — with a floor on share and events so a single stray call cannot win."""
-        items = L.get(level, {}).get("top", [])
-        ok = [i for i in items
-              if i["share"] >= min_share and i["events"] >= min_events and i.get("lift")]
-        return max(ok, key=lambda i: i["lift"]) if ok else (items[0] if items else None)
+    effort = _effort_line(payload)
+    if effort:
+        sents.append(f"Effort: {effort}.")
 
-    sents, facts = [], []
-    start = pd.Timestamp(w["start"]).strftime("%d %b %H:%M")
-    end = pd.Timestamp(w["end"]).strftime("%H:%M")
-    where = f"in {w.get('workspace_of_cwd')}" if w.get("workspace_of_cwd") else ""
-    touched = w.get("workspaces_whose_files_were_touched") or []
-    cross = (f", though the files it touched span {' and '.join(touched)}"
-             if len(touched) > 1 else "")
-    sents.append(f"{start}–{end}Z, {w['duration_h']}h of transcript {w['entity']} {where}"
-                 f"{cross}, on {w['reference_events']} recorded references.")
-
-    br = L.get("branch", {})
-    if br.get("top"):
-        n = len([i for i in br["top"] if i["share"] >= 0.15])
-        lead = ", ".join(f"{i['ref']} ({100*i['share']:.0f}%)" for i in br["top"][:2])
-        sents.append(f"{'Two branches carried it' if n > 1 else 'One branch carried it'}: {lead}."
-                     if n else f"Branch activity was spread thinly, led by {lead}.")
-    comp, ext = top("component"), top("ext")
-    if comp:
-        bit = f"The work sat mainly in {comp['ref']} ({100*comp['share']:.0f}% of subsystem hits)"
-        c2 = top("component", 1)
-        if c2 and c2["share"] >= 0.15:
-            bit += f", then {c2['ref']} ({100*c2['share']:.0f}%)"
-        if ext:
-            bit += f", and the files were mostly {ext['ref']} ({100*ext['share']:.0f}%)"
-            e2 = top("ext", 1)
-            if e2 and e2["share"] >= 0.15:
-                bit += f" with {e2['ref']} at {100*e2['share']:.0f}%"
-        sents.append(bit + ".")
-    elif ext:
-        sents.append(f"Files touched were {ext['ref']} ({100*ext['share']:.0f}%).")
-
-    art, act = top("artifact"), top("action")
-    if art:
-        bit = f"The work was on {art['ref']}"
-        a2 = top("artifact", 1)
-        if a2 and a2["share"] >= 0.15:
-            bit += f" ({100*art['share']:.0f}%) and {a2['ref']} ({100*a2['share']:.0f}%)"
-        else:
-            bit += f" ({100*art['share']:.0f}% of artifact evidence)"
-        if act:
-            acts = [i["ref"] for i in L["action"]["top"][:3]]
-            bit += ", mostly " + ", ".join(acts)
-            d = distinctive("action")
-            if d and d["ref"] not in acts[:1] and (d.get("lift") or 0) >= 3:
-                bit += f", and distinctively {d['ref']} ({d['lift']:g}x its usual share)"
-        tc = top("toolchain")
-        if tc:
-            bit += f", using {', '.join(i['ref'] for i in L['toolchain']['top'][:2])} tooling"
-        sents.append(bit + ".")
-
-    tl, ex = top("tool"), top("exe")
-    if tl or ex:
+    lift = _frame_lift_section(frame)
+    if lift:
         bits = []
-        if tl:
-            names = [i["ref"] for i in L["tool"]["top"][:3]]
-            bits.append("tools " + ", ".join(names))
-        if ex:
-            names = [i["ref"] for i in L["exe"]["top"][:3]]
-            bits.append(f"{L['exe']['distinct_references']} distinct programs, mostly "
-                        + ", ".join(names))
-        sents.append("Worked through " + "; ".join(bits) + ".")
-    sv = top("service")
-    if sv:
-        names = [i["ref"] for i in L["service"]["top"][:3]]
-        sents.append("Reached " + ", ".join(names) + ".")
+        if lift.get("unusually_prominent"):
+            bits.append("unusually prominent — " + "; ".join(lift["unusually_prominent"]))
+        if lift.get("absent_but_usual"):
+            bits.append("normally present and missing — " + "; ".join(lift["absent_but_usual"]))
+        sents.append("Separately, against the repositories' whole prior history rather than "
+                     "this session (frame-derived, not part of the shipped payload): " +
+                     "; ".join(bits) + ".")
 
-    sk = top("skill")
-    if sk:
-        bit = f"The dominant named activity was {sk['ref']} at {100*sk['share']:.0f}% of skill "
-        bit += "invocations"
-        if (sk.get("lift") or 0) >= 2:
-            bit += f", {sk['lift']:g}x its usual share"
-        sents.append(bit + ".")
-    absent = [a for lv in ("skill", "branch", "component", "ext")
-              for a in L.get(lv, {}).get("absent_but_usual", [])]
-    if absent:
-        absent = sorted(absent, key=lambda a: -a["usual_share"])[:3]
-        sents.append("Normally present and missing here: " +
-                     ", ".join(f"{a['ref']} (usually {100*a['usual_share']:.0f}%)"
-                               for a in absent) + ".")
+    key_facts = [f"{name}: {v['value']} {100*v['share']:.0f}%" for name, v in attributed]
+    if effort:
+        key_facts.append(f"effort: {effort}")
 
-    if t.get("assistant_messages") is not None:
-        em, am = t.get("engineer_messages", 0), t["assistant_messages"]
-        ratio = am / em if em else None
-        mode = ("largely unattended" if ratio and ratio >= 15
-                else "closely steered" if ratio and ratio <= 5 else "mixed")
-        bit = (f"{em} engineer message{'s' if em != 1 else ''} against {am} assistant "
-               f"message{'s' if am != 1 else ''} and "
-               f"{t.get('assistant_output_tokens', 0)/1000:.0f}k output tokens")
-        if ratio:
-            bit += f" — {ratio:.0f} assistant turns per engineer turn, {mode}"
-        sents.append(bit + ".")
-
-    thin = [f"{lv} ({blk['events']} events)" for lv, blk in L.items() if blk["events"] < THIN]
-    if thin:
-        sents.append("Thin evidence, shares indicative only: " + ", ".join(sorted(thin)) + ".")
-
-    facts.append(f"workspace: {w.get('workspace_of_cwd')}")
-    for level, label in (("artifact", "working on"), ("action", "doing"),
-                         ("toolchain", "tooling"), ("branch", "branch"),
-                         ("component", "subsystem"), ("file", "top file"), ("ext", "file type"),
-                         ("skill", "skill"), ("service", "service")):
-        it = top(level)
-        if it:
-            f = f"{label}: {it['ref']} {100*it['share']:.0f}%"
-            if it.get("lift") is not None and (it["lift"] >= 2 or it["lift"] <= 0.5):
-                f += f" (x{it['lift']:g} usual)"
-            facts.append(f)
-    # Fixed slots with an explicit placeholder, so headlines stay comparable across windows: a
-    # level silently dropping out used to shift every later slot leftwards and change the shape
-    # of the line.
-    # Named terms are the only facts here that come from what was SAID rather than what was run,
-    # so they are labelled as such. Counts ride along for the same reason "2659 recorded tool
-    # references" does: an unlabelled number gets read as an identifier (measured — the model
-    # answered 2659 when asked which ticket, and labelling it moved correct declines 76% -> 100%).
-    # Ranked by LIFT, not by count. Measured over 44 sessions: raw frequency puts API (913
-    # mentions, present in 89% of sessions) above UnityPredict (108 mentions, 9%), so the slot
-    # fills with vocabulary every session shares and carries no information about this one. This
-    # is the same correction `distinctive()` makes for actions, for the same reason.
-    #
-    # A floor of 3 events keeps a term seen once from winning on a meaningless lift. Terms below
-    # the floor fall back to count order behind those above it, so the slot is never empty just
-    # because nothing cleared the bar.
-    _terms = L.get("term", {}).get("top") or []
-    _lifted = sorted((i for i in _terms if i["events"] >= 3 and i.get("lift")),
-                     key=lambda i: -i["lift"])
-    _rest = [i for i in _terms if i not in _lifted]
-    tt = (_lifted + _rest)[:5]
-    if tt:
-        named = ", ".join(f"{i['ref']} ({i['events']}x)" for i in tt)
-        sents.append(f"Named in conversation: {named}.")
-        facts.append("named terms (from message text, not tool inputs): " + named)
-
-    da = distinctive("action")
-    slots = [w.get("workspace_of_cwd"), name("artifact"),
-             (f"{da['ref']}" + (f" x{da['lift']:g}" if (da.get("lift") or 0) >= 3 else "")
-              if da else None),
-             name("component"), name("branch")]
-    head = " · ".join(x if x else "—" for x in slots)
-    return {"headline": head,
-            "window": {"entity": w.get("entity"), "start": w.get("start"), "end": w.get("end"),
-                       "duration": f"{w.get('duration_h')} hours",
-                       "workspace": w.get("workspace_of_cwd"),
-                       "evidence": f"{w.get('reference_events')} recorded tool references"},
-            "headline_format": "workspace · artifact · distinctive action (by lift) · subsystem · "
-                               "branch; — means that level saw nothing in this window",
+    top_component = (inv.get("components") or [{}])[0].get("value")
+    slots = [(ws.get("project") or {}).get("value"), (ws.get("output_type") or {}).get("value"),
+             top_component, (ws.get("branch") or {}).get("value")]
+    headline = " · ".join(x if x else "—" for x in slots)
+    return {"headline": headline,
+            "headline_format": "project · output_type · top component · branch; — means that "
+                               "dimension was unattributed or empty in this window",
+            "window": {"start": payload["window_start"], "end": payload["window_end"],
+                       "evidence": f"{payload['evidence']} recorded tool references"},
             "summary": Para(" ".join(sents)),
-            "key_facts": facts,
-            "basis": "counts of tool-call references and per-line metadata, plus named terms "
-                     "counted in message text; window is [start, end) and no later data is "
-                     "used"}
+            "key_facts": key_facts,
+            "basis": "workstreams/inventory/dynamics/prior/effort from analyze_window's "
+                     "reference-series payload (tool-call metadata only, never message text, "
+                     "except inventory.named_terms); dynamics compares a recent slice to a "
+                     "preceding baseline INSIDE this window, prior compares this window to the "
+                     "session before it -- two different, narrower baselines than vs_repo_history "
+                     "above, when that section is present"}
+
+
+def _resolve_transcript(session, roots):
+    """A session-id PREFIX -> the one transcript file it names, under `roots`.
+
+    `analyze_window` answers exactly one transcript at a time, unlike the old frame-based
+    `context`/`contexts`, whose `--repo` could equally name a REPOSITORY (many transcripts
+    pooled) or a session. Only the session form has a `(path, end_ts)` `analyze_window` can
+    accept -- a repo-level window pooling several transcripts is NOT expressible against the
+    shipped payload, and is the one thing the old `--repo <repo-name>` form could do that the
+    re-pointed commands cannot. Say so loudly rather than silently picking one transcript.
+    """
+    hits = sorted({p for root in roots
+                   for p in glob.glob(os.path.join(root, "*", f"{session}*.jsonl"))})
+    if not hits:
+        sys.exit(f"no transcript matching session '{session}' under {', '.join(roots)} "
+                 f"(a repo NAME, pooling several transcripts, has no equivalent here -- see "
+                 f"_resolve_transcript's docstring)")
+    if len(hits) > 1:
+        sys.exit(f"session '{session}' matches {len(hits)} transcripts, be more specific:\n  " +
+                 "\n  ".join(hits))
+    return hits[0]
+
+
+def _frame_doc(outdir, repo, payload, start, end, topk):
+    """The OLD `characterize()` document for the SAME window, if the study frames for a matching
+    repo exist under `outdir` (`extract` + `series` were run) -- optional, and feeds ONLY the
+    `vs_repo_history` lift section `digest`/`executive` keep separate from the payload projection
+    (see the module note above `digest`). `None` when there is nothing to look up; that is not an
+    error, since the lift section is supplementary rather than part of what `analyze_window`
+    itself ships.
+    """
+    refs_path = os.path.join(outdir, "refs.parquet")
+    if not os.path.exists(refs_path):
+        return None
+    entity = repo or (payload.get("workstreams", {}).get("project") or {}).get("value")
+    if not entity:
+        return None
+    refs = pd.read_parquet(refs_path)
+    if entity not in set(refs.repo.astype(str)):
+        return None
+    lvls = pd.read_parquet(os.path.join(outdir, "levels.parquet"))
+    spk = pd.read_parquet(os.path.join(outdir, "speaker.parquet"))
+    bpath = os.path.join(outdir, "baseline.parquet")
+    base = pd.read_parquet(bpath) if os.path.exists(bpath) else None
+    return characterize(refs, lvls, spk, entity, start, end, topk, base=base)
+
+
+def _watermark_iso(store, path, nlp):
+    """The transcript's own last-ingested instant, as the ISO string `analyze_window` wants for
+    `end_ts` -- the re-pointed commands' default window END when `--to`/`--at` is not given,
+    matching the old frame-based default (the entity's last observed bin). `Store.watermark`
+    already returns the turn's timestamp AS WRITTEN (an ISO string, see `ingest.py`), not epoch
+    seconds -- there is no conversion to do here."""
+    if not is_current(store, path, nlp):
+        ingest_file(store, path, nlp)
+    wm = store.watermark(path)
+    if wm is None:
+        sys.exit(f"{path} has no ingested turns")
+    return wm
 
 
 def contexts_cmd(args):
-    """A multi-document YAML for a whole entity, one document per window.
+    """A multi-document YAML across ONE transcript, one document per sliding window, each
+    rendered as `digest`/`executive` over `analyze_window`'s payload -- see `context`'s docstring
+    for why this addresses a SESSION rather than a pooled repo now that it projects the shipped
+    payload, and `_resolve_transcript` for what that costs.
 
     STRIDE AND SPAN ARE SEPARATE, and the stride should not divide the span. Aligned hourly
     windows land on the same clock mark every time, so a transition sitting mid-window is smeared
@@ -966,23 +1012,30 @@ def contexts_cmd(args):
     Finer strides plateau at ~90% coverage rather than continuing to improve, so the benefit is
     alignment, not resolution: below ~45 minutes you buy volume, not fidelity.
     """
-    refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
-    lvls = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
-    spk = pd.read_parquet(os.path.join(args.outdir, "speaker.parquet"))
-    bpath = os.path.join(args.outdir, "baseline.parquet")
-    base = pd.read_parquet(bpath) if os.path.exists(bpath) else None
-    entity = args.repo or refs.repo.value_counts().idxmax()
-    b = refs[refs.repo == entity].bin
-    if b.empty:
-        sys.exit(f"no rows for {entity}")
+    path = _resolve_transcript(args.session, args.roots)
+    st = open_store()
+    nlp = term_nlp()
+    times = [pd.Timestamp(o["timestamp"]) for o in iter_turns(path) if o.get("timestamp")]
+    if not times:
+        sys.exit(f"no turns in {path}")
+    lo, hi = min(times).floor("h"), max(times).ceil("h")
     span, stride = pd.Timedelta(args.span), pd.Timedelta(args.stride)
-    lo, hi = b.min().floor("h"), b.max().ceil("h")
+    span_minutes = span.total_seconds() / 60.0
     docs, t = [], lo
     while t < hi:
-        st, en = t, t + span
-        if ((b >= st) & (b < en)).any():
-            doc = characterize(refs, lvls, spk, entity, st, en, args.topk, base=base)
-            docs.append(digest(doc) if args.brief else executive(doc))
+        end = t + span
+        try:
+            payload = analyze_window(path, None, span_minutes=span_minutes, nlp=nlp, store=st,
+                                     end_ts=end.isoformat(), prior=True, sizer=DEFAULT_SIZER)
+        except (PromptNotFound, StoreBehind, WindowExpired):
+            # Past the watermark (the `hi = ceil("h")` overshoot) or before the retention floor:
+            # neither is an error worth stopping the sweep for, so the window is skipped exactly
+            # as the old code skipped a window with no rows in [t, t+span).
+            t += stride
+            continue
+        if payload.get("evidence"):
+            frame = _frame_doc(args.outdir, args.repo, payload, t, end, args.topk)
+            docs.append(digest(payload, frame) if args.brief else executive(payload, frame))
         t += stride
     out = "\n---\n".join(yaml.safe_dump(d, sort_keys=False, width=110, allow_unicode=True,
                                          default_flow_style=False) for d in docs)
@@ -1004,23 +1057,43 @@ def episodes_cmd(args):
 
 
 def context(args):
-    refs = pd.read_parquet(os.path.join(args.outdir, "refs.parquet"))
-    lvls = pd.read_parquet(os.path.join(args.outdir, "levels.parquet"))
-    spk = pd.read_parquet(os.path.join(args.outdir, "speaker.parquet"))
-    entity = args.repo or refs.repo.value_counts().idxmax()
-    end = pd.Timestamp(args.to, tz="UTC") if args.to else (
-        pd.Timestamp(args.at, tz="UTC") if args.at else refs[refs.repo == entity].bin.max())
-    start = (pd.Timestamp(getattr(args, "from"), tz="UTC") if getattr(args, "from")
-             else end - pd.Timedelta(args.span))
-    bpath = os.path.join(args.outdir, "baseline.parquet")
-    base = pd.read_parquet(bpath) if os.path.exists(bpath) else None
-    doc = characterize(refs, lvls, spk, entity, start, end, args.topk, base=base)
-    # The digest is the deliverable. The full characterisation is the SOURCE it is computed from,
-    # and emitting it as context measured worse than emitting nothing: synthesis accuracy 47-57%
-    # against 67-60% for the window text alone, and 93-97% for the digest, on 13x the bytes and
-    # 3.3x the prefill. See the results table in
-    # docs/superpowers/specs/2026-08-21-reference-series-design.md.
-    doc = digest(doc) if args.brief else executive(doc)
+    """One window's worth of the SHIPPED payload (`analyze_window`), rendered `--brief` (`digest`)
+    or as prose (`executive`) -- the digest is the deliverable; the full document underneath it
+    measured WORSE as context than not supplying it at all (synthesis accuracy 47-57% against
+    67-60% for the window text alone, 93-97% for the digest, on 13x the bytes and 3.3x the
+    prefill -- see docs/superpowers/specs/2026-08-21-reference-series-design.md), which is the
+    same finding AGENTS.md's dynamics section restates for the payload itself.
+
+    Re-pointed from the study's own pandas frame to the production analysis path. `--session`
+    (a transcript-id prefix under `--roots`) replaces `--repo` as the window's own identity,
+    because `analyze_window` answers exactly one transcript -- see `_resolve_transcript`'s
+    docstring for what a pooled-repo window (the old `--repo <repo-name>` form) cannot do here.
+    `--repo` stays as an optional override for the SEPARATE, optional `vs_repo_history` lift
+    section, where it keeps its old meaning (a study-frame entity) because that lookup still
+    reads the pandas frame under `--outdir`.
+    """
+    path = _resolve_transcript(args.session, args.roots)
+    st = open_store()
+    nlp = term_nlp()
+    end_ts = args.to or args.at
+    if end_ts:
+        end_ts = pd.Timestamp(end_ts, tz="UTC").isoformat()
+    else:
+        end_ts = _watermark_iso(st, path, nlp)
+    from_ts = getattr(args, "from")
+    if from_ts:
+        span_minutes = ((pd.Timestamp(end_ts) - pd.Timestamp(from_ts, tz="UTC"))
+                        .total_seconds() / 60.0)
+    else:
+        span_minutes = pd.Timedelta(args.span).total_seconds() / 60.0
+    try:
+        payload = analyze_window(path, None, span_minutes=span_minutes, nlp=nlp, store=st,
+                                 end_ts=end_ts, prior=True, sizer=DEFAULT_SIZER)
+    except (PromptNotFound, StoreBehind, WindowExpired) as e:
+        sys.exit(f"{type(e).__name__}: {e}")
+    start, end = pd.Timestamp(payload["window_start"]), pd.Timestamp(payload["window_end"])
+    frame = _frame_doc(args.outdir, args.repo, payload, start, end, args.topk)
+    doc = digest(payload, frame) if args.brief else executive(payload, frame)
     print(yaml.safe_dump(doc, sort_keys=False, width=110, allow_unicode=True,
                          default_flow_style=False))
 
@@ -1906,24 +1979,38 @@ def main():
     s.add_argument("--detail", action="store_true")
     s.set_defaults(fn=series)
     c = sub.add_parser("context")
-    c.add_argument("--outdir", default=OUTDIR)
-    c.add_argument("--repo", default=None, help="entity: a repo, or a session id")
+    c.add_argument("--outdir", default=OUTDIR,
+                   help="where the OPTIONAL vs_repo_history frame lives (extract+series); the "
+                        "window itself is served live from analyze_window, not from --outdir")
+    c.add_argument("--session", required=True,
+                   help="a transcript-id prefix under --roots -- analyze_window answers exactly "
+                        "one transcript; a pooled REPO name (the old --repo meaning) has no "
+                        "(path, end_ts) here, see _resolve_transcript")
+    c.add_argument("--roots", nargs="+", default=CLAUDE_ROOTS)
+    c.add_argument("--repo", default=None,
+                   help="override the entity used for the OPTIONAL vs_repo_history lift lookup "
+                        "in --outdir's frame; defaults to the window's own project workstream")
     c.add_argument("--at", default=None, help="window END (alias of --to)")
     c.add_argument("--to", default=None)
     c.add_argument("--from", default=None)
     c.add_argument("--span", default="1h", help="window length when --from is not given")
-    c.add_argument("--topk", type=int, default=5)
+    c.add_argument("--topk", type=int, default=5, help="top-N for the vs_repo_history frame only")
     c.add_argument("--brief", action="store_true",
                    help="compact structured view, one line per level, instead of the summary")
     c.set_defaults(fn=context)
     cs = sub.add_parser("contexts")
-    cs.add_argument("--outdir", default=OUTDIR)
-    cs.add_argument("--repo", default=None)
+    cs.add_argument("--outdir", default=OUTDIR,
+                    help="where the OPTIONAL vs_repo_history frame lives (extract+series)")
+    cs.add_argument("--session", required=True,
+                    help="a transcript-id prefix under --roots, see `context --session`")
+    cs.add_argument("--roots", nargs="+", default=CLAUDE_ROOTS)
+    cs.add_argument("--repo", default=None,
+                    help="override the entity used for the OPTIONAL vs_repo_history lift lookup")
     cs.add_argument("--span", default="60min")
     cs.add_argument("--stride", default="50min",
                     help="should NOT divide the span: a precessing grid keeps window edges from "
                          "landing on the same clock mark every time")
-    cs.add_argument("--topk", type=int, default=5)
+    cs.add_argument("--topk", type=int, default=5, help="top-N for the vs_repo_history frame only")
     cs.add_argument("--brief", action="store_true",
                     help="compact structured view instead of the summary")
     cs.add_argument("--out", default=None)
