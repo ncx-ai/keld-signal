@@ -150,13 +150,23 @@ type Effort struct {
 	RequestTokens *int64 `json:"request_tokens,omitempty"`
 	// GapP50S is the median of the window's inter-turn gaps, in seconds — the
 	// same gap population FastShare's fast/slow split is computed over, read as
-	// a distribution instead of a threshold share. Nil under the same floor
-	// FastShare uses (see WHAT GATES EACH above): fewer than latency.MIN_GAPS
-	// gaps is not a population a percentile can describe.
+	// a distribution instead of a threshold share. Nil below latency.MIN_GAPS
+	// gaps (== window.MIN_EVIDENCE == 5; see WHAT GATES EACH above): fewer than
+	// that is not a population a percentile can describe.
+	//
+	// ⚠️ ITS SIBLING IS Tempo/TempoStatus, NOT FastShare. The percentiles abstain
+	// under the SAME floor Tempo's reading is withheld under, so a nil here goes
+	// with TempoStatus "thin" or "absent". FastShare abstains under a strictly
+	// weaker condition — nil only at ZERO gaps — because a share of a thin
+	// sample is still the measurement and only the READING is withheld
+	// (latency.py's `thin` case). So at 1 gap FastShare is a real 0.0 while both
+	// percentiles are nil, and nothing here is co-nullable with it.
 	GapP50S *float64 `json:"gap_p50_s,omitempty"`
 	// GapP90S is the 90th percentile of the same gap population — the tail
 	// FastShare's single split point cannot show: two windows with an identical
 	// fast_share can have very different p90s (a few long waits against many
-	// evenly slow ones). Nil under the same floor as GapP50S.
+	// evenly slow ones). Nil under the same floor as GapP50S, and nil with it:
+	// these two really are co-nullable, which is why they are one namedtuple
+	// sidecar-side.
 	GapP90S *float64 `json:"gap_p90_s,omitempty"`
 }

@@ -191,15 +191,25 @@ def percentiles(times, min_gaps=MIN_GAPS):
     that disagreed about whether the window had enough evidence would be unreadable together.
     """
     g = gaps(times)
-    if len(g) < min_gaps:
+    # `not g` is not implied by the floor: `min_gaps` is a public keyword and a caller sweeping
+    # floors down to 0 would otherwise ask `_pct` for a percentile of an empty list. Zero gaps is
+    # the one case this module already refuses to put a number on (see the docstring above), so
+    # it abstains at every floor rather than at the default one.
+    if not g or len(g) < min_gaps:
         return Percentiles(None, None, len(g))
     return Percentiles(round(_pct(g, 0.50), 3), round(_pct(g, 0.90), 3), len(g))
 
 
 def _pct(sorted_or_not, q):
-    """Linear-interpolated quantile. `statistics.quantiles` needs n>=2 and takes a different
-    convention per method; one explicit definition is cheaper to reason about than remembering
-    which."""
+    """Linear-interpolated quantile, on the `i = q * (n - 1)` convention — NumPy's "linear"
+    (its default) and pandas' `interpolation="linear"`, so `p50` is the ordinary median and
+    `p0`/`p100` are the min and max exactly.
+
+    Named because there are several: `statistics.quantiles` needs n>=2 and its `method="exclusive"`
+    default uses `i = q * (n + 1)`, which gives a DIFFERENT p90 on the same gaps. One explicit
+    definition is cheaper to reason about than remembering which — and naming it here is what
+    stops a later reader "fixing" it into the other one and silently moving every published
+    `gap_p90_s`."""
     xs = sorted(sorted_or_not)
     if len(xs) == 1:
         return float(xs[0])

@@ -225,8 +225,10 @@ func TestNothingInTheEffortSubtreeCanCarryATranscriptString(t *testing.T) {
 		"new_string":   "SUPER_SECRET_NEW_PAYLOAD",
 		"content":      "SUPER_SECRET_WRITE_PAYLOAD",
 		"files":        []string{"/Users/dg/keld/services/api/queue.go"},
-		// And the three still-REFUTED signals, which are measured but must not
-		// publish.
+		// And the four still-REFUTED signals, which are measured but must not
+		// publish: token weight, output volume, error rate and thrashing. Nothing
+		// was un-refuted by Task 1/2 — `request_tokens` is a DIFFERENT
+		// computation that happens to reuse a spelling once tested here.
 		"token_weight": 128740.5, "tokens": 8422,
 		"out_bytes": 993211, "error_rate": 0.11, "n_thrash": 4,
 	}))
@@ -248,14 +250,29 @@ func TestNothingInTheEffortSubtreeCanCarryATranscriptString(t *testing.T) {
 	if got.Effort.RequestTokens == nil || *got.Effort.RequestTokens != 4211 {
 		t.Errorf("request_tokens, now a real field, was dropped: %+v", got.Effort)
 	}
+	// Bare substrings, so every entry here must be one that cannot appear inside a
+	// legitimate key or value. `tokens` is NOT such a string — it is a substring of
+	// `request_tokens`, which now publishes — so it is asserted below as a quoted
+	// key and by its VALUE instead. Its absence from this list was how the
+	// payload's `"tokens": 8422` came to sit under a comment saying it must not
+	// publish with nothing checking that it didn't.
 	for _, forbidden := range []string{
 		"SUPER_SECRET_OLD_PAYLOAD", "SUPER_SECRET_NEW_PAYLOAD", "SUPER_SECRET_WRITE_PAYLOAD",
 		"settleRetry", "edit_preview", "old_string", "new_string", "queue.go", "files",
 		"token_weight", "out_bytes", "error_rate", "n_thrash",
-		"128740", "993211",
+		"128740", "993211", "8422",
 	} {
 		if strings.Contains(string(b), forbidden) {
 			t.Errorf("the effort conversion leaked %q: %s", forbidden, b)
+		}
+	}
+	// The two refuted token spellings as QUOTED keys, the way publish's
+	// unforwardable_test.go does it — `"tokens"` with its quotes cannot be
+	// satisfied by `"request_tokens"`, so this is a real check where a bare
+	// substring would have been unwritable.
+	for _, forbidden := range []string{`"tokens"`, `"token_weight"`} {
+		if strings.Contains(string(b), forbidden) {
+			t.Errorf("the effort conversion leaked the key %s: %s", forbidden, b)
 		}
 	}
 }

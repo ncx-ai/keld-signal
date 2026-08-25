@@ -225,9 +225,13 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #
 #           `gap_p50_s`/`gap_p90_s` (`latency.percentiles`) are the median and 90th-percentile
 #           inter-turn gap -- the tail `fast_share` collapses to one side of a threshold and
-#           cannot report. Both are `None` together below `latency.MIN_GAPS`, the same eligibility
-#           floor `fast_share`/`tempo` already abstain under, computed from the SAME turn-instant
-#           clock (`Store.turn_times` / the oracle's `ref` rows) rather than a second query.
+#           cannot report. Both are `None` together below `latency.MIN_GAPS`, which is the floor
+#           `tempo`'s READING abstains under -- not `fast_share`'s, which is `None` only at ZERO
+#           gaps, because a share of a thin sample is still the measurement and latency.py
+#           withholds only the conclusion (`thin`). At one gap `fast_share` is a real 0.0 while
+#           both percentiles are `None`, so the sibling to read them beside is
+#           `tempo`/`tempo_status`. Computed from the SAME turn-instant clock (`Store.turn_times`
+#           / the oracle's `ref` rows) rather than a second query.
 #
 #           A window that answers with three keys it did not answer with before is a window
 #           answered differently, which is exactly this number's trigger.

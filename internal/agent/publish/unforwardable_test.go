@@ -115,9 +115,9 @@ import (
 // false assurance rather than remove names.
 //
 // `inventory` remaining forbidden still does real work: it keeps the BLOCK
-// unforwardable even though all nine of its keys are now individually
+// unforwardable even though all thirteen of its keys are now individually
 // publishable, so a future change that forwards the whole object wholesale —
-// picking up whatever tenth key the sidecar adds next — still fails here.
+// picking up whatever fourteenth key the sidecar adds next — still fails here.
 //
 // A field added for any of them fails HERE rather than in a review.
 var forbiddenWireKeys = []string{
@@ -187,15 +187,24 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 				k, got)
 		}
 	}
-	// Guard the guard, the other way round: the two keys that make this list about
-	// the INVENTORY block must still be on it. Adding a publishable inventory key
-	// must not have widened what the list permits, and deleting an entry to make a
-	// future failure go away is exactly the regression that would.
-	for _, required := range []string{"inventory"} {
+	// Guard the guard, the other way round: the entries whose REMOVAL would be the
+	// regression must still be on the list. Adding a publishable key must not have
+	// widened what the list permits, and deleting an entry to make a future failure
+	// go away is exactly the change this catches.
+	//
+	// `inventory` is here because all thirteen of its keys now publish individually
+	// and the BLOCK must still not; `tokens` and `token_weight` are here because
+	// `request_tokens` came OFF the list (see the note above) and the prose beside
+	// it — "reviving one spelling is not licence for its sibling" — was the only
+	// thing holding them. This file's own standard is that a change like that fails
+	// HERE rather than in a review, so the two refuted spellings are now held by
+	// the same mechanism `inventory` is.
+	for _, required := range []string{"inventory", "tokens", "token_weight"} {
 		if !slices.Contains(forbiddenWireKeys, required) {
 			t.Errorf("%q was removed from forbiddenWireKeys: `physical_acts` publishes "+
-				"because its provenance is a closed table, which is no licence to forward "+
-				"the rest of the block", required)
+				"because its provenance is a closed table, and `request_tokens` publishes "+
+				"because it is a different computation — neither is licence to forward "+
+				"the rest", required)
 		}
 	}
 }
