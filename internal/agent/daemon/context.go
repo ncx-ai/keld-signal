@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
@@ -140,6 +141,125 @@ func gitBranch(dir string) string {
 		return strings.TrimPrefix(s, prefix)
 	}
 	return "" // detached HEAD (raw sha) has no branch name
+}
+
+// gitCommonDir resolves a git dir to the one that holds `config`.
+//
+// For an ordinary clone that is the git dir itself. For a WORKTREE it is NOT: `gitDir` returns
+// <main>/.git/worktrees/<name>, which has HEAD (per-worktree, which is why gitBranch reads it
+// there and is correct to) but NO `config` — remotes are shared, and the worktree records where
+// via a `commondir` file holding a usually-relative path. Resolving it is the difference between
+// a worktree reporting its repo and reporting nothing, and worktrees are exactly the population
+// this matters most for: a worktree exists to hold a feature branch, so it is disproportionately
+// where interesting work happens (the same argument gitDir's own comment makes for HEAD).
+func gitCommonDir(gd string) string {
+	b, err := os.ReadFile(filepath.Join(gd, "commondir"))
+	if err != nil {
+		return gd // ordinary clone: config lives here
+	}
+	target := strings.TrimSpace(string(b))
+	if target == "" {
+		return gd
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(gd, target)
+	}
+	return filepath.Clean(target)
+}
+
+// originRE matches the url of the `origin` remote in a git config. Deliberately not a full INI
+// parser: the shape is stable, and a parser would be more code to be wrong in.
+var originRE = regexp.MustCompile(`(?ms)^\[remote "origin"\]\s*$(.*?)(?:^\[|\z)`)
+var urlRE = regexp.MustCompile(`(?m)^\s*url\s*=\s*(\S+)\s*$`)
+
+// gitRemote returns a NORMALISED identity for the checkout containing dir — `host/owner/repo`,
+// e.g. "github.com/ncx-ai/keld-atlas" — or "" when there is no checkout, no origin, or the url
+// is a shape we do not recognise.
+//
+// ⚠️ Why this exists at all, and why it is read from git rather than inferred: the analysis
+// tier's `remote` level is derived from `owner/repo` strings appearing in COMMANDS AND MESSAGE
+// TEXT, accepted only when the repo half already matches the workspace directory name. Measured
+// on a 34 MB real transcript with 1,534 resolved workspace observations, that produced ZERO
+// remote rows — a developer working through local paths never types the url. What publishes in
+// its place is the workspace DIRECTORY BASENAME, which is machine-local: two engineers with the
+// same repo under different paths, or in a worktree, do not reconcile to one identity at Atlas.
+//
+// ⚠️ This cannot live in the sidecar. `/analyze` is confined to KELD_ANALYZE_ROOTS
+// (~/.claude/projects and friends) precisely so it cannot open arbitrary paths as the daemon's
+// user; a repo's .git/config is outside that allowlist by construction. The daemon is the only
+// component that may read it, which is also why the existing repoRoot/gitDir machinery is here.
+//
+// ⚠️ A PROJECT DIRECTORY IS NOT NECESSARILY A REPOSITORY, and this returns "" for that case
+// rather than inventing an identity. Plenty of real work happens in a directory that was never
+// `git init`ed — a scratch dir, a mounted share, a notebook folder, a documents tree. The
+// workspace name remains the identity there, and the absence of a repo is a fact about the work,
+// not a failure to resolve one. Never fall back to guessing a remote from the directory name.
+func gitRemote(dir string) string {
+	root := repoRoot(dir)
+	if root == "" {
+		return "" // not a checkout — see the note above; this is normal, not an error
+	}
+	gd := gitDir(root)
+	if gd == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(gitCommonDir(gd), "config"))
+	if err != nil {
+		return ""
+	}
+	sec := originRE.FindStringSubmatch(string(b))
+	if sec == nil {
+		return "" // a checkout with no origin (purely local, or a differently-named remote)
+	}
+	u := urlRE.FindStringSubmatch(sec[1])
+	if u == nil {
+		return ""
+	}
+	return normaliseRemote(u[1])
+}
+
+// normaliseRemote reduces the several url shapes git accepts to one `host/owner/repo` key, so
+// the same repository reached over ssh and over https is ONE identity at Atlas rather than two.
+// Credentials in the url are dropped rather than published: a token pasted into a remote url is
+// a real occurrence, and this is a publish path.
+func normaliseRemote(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimSuffix(s, ".git")
+	switch {
+	case strings.HasPrefix(s, "git@"), strings.HasPrefix(s, "ssh://git@"):
+		s = strings.TrimPrefix(strings.TrimPrefix(s, "ssh://"), "git@")
+		s = strings.Replace(s, ":", "/", 1)
+	default:
+		if i := strings.Index(s, "://"); i >= 0 {
+			s = s[i+3:]
+		}
+		if i := strings.Index(s, "@"); i >= 0 { // strip user[:token]@
+			s = s[i+1:]
+		}
+	}
+	s = strings.Trim(s, "/")
+	// At least host/owner/repo, and the WHOLE path is kept, not the first three
+	// segments. GitLab nests groups arbitrarily deep — team/sub/proj is one
+	// repository, and truncating to three made it collide with every other
+	// repo under team/sub. Caught by probing the normaliser rather than by
+	// reading it.
+	parts := strings.Split(s, "/")
+	if len(parts) < 3 || parts[0] == "" {
+		return "" // a single-segment host, or nothing we can key on
+	}
+	// A host segment must look like a host. This is what rejects a LOCAL PATH
+	// remote (`/srv/git/thing.git`, `../sibling`), which git accepts and which
+	// has no shared identity to publish — three path segments are not
+	// host/owner/repo just because there are three of them. Same probe.
+	if !strings.Contains(parts[0], ".") {
+		return ""
+	}
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." {
+			return ""
+		}
+	}
+	return strings.Join(parts, "/")
 }
 
 // projectName returns the top-level `name` from .keld.toml, looked up at dir and then at the
