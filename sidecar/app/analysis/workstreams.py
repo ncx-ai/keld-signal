@@ -18,13 +18,25 @@ from app.analysis.window import dominant
 # constant for the derivation and the measured cost. The per-dimension number below is the SHARE
 # floor only; the evidence floor is uniform, since it is a property of the arithmetic rather than
 # of any one dimension.
+#
+# `skill` is NOT named `workflow`, and the difference is not cosmetic. The level holds the
+# argument to a `Skill` tool call -- `superpowers:writing-plans`, `anthropic-skills:pptx` -- and
+# skills exist for everything, not only for processes, so `workflow` claims more than the level
+# holds. It is written from exactly two sources (levels.py: `inp["skill"]` on a `Skill`
+# tool_use, and a turn's `attributionSkill` field) and MOST SESSIONS HAVE NEITHER: only 38.4% of
+# 198 corpus transcripts carry any skill evidence at all, and the 38.4% that do are dominated by
+# one plugin (`superpowers:subagent-driven-development` 1518, `superpowers:brainstorming` 1362,
+# `superpowers:writing-plans` 962). A reader who sees `workflow` reasonably expects a dimension
+# populated for every session; a reader who sees `skill` asks the question the numbers actually
+# raise, which is what the other 61.6% of sessions look like. Singular, like every sibling: the
+# key holds one dominant value, not a set.
 ALLOCATION = [
     ("project",     "workspace", 0.50),
     ("branch",      "branch",    0.50),
     ("model",       "model",     0.50),
     ("output_type", "artifact",  0.50),
     ("language",    "lang",      0.50),
-    ("workflow",    "skill",     0.50),
+    ("skill",       "skill",     0.50),
     ("tooling",     "toolchain", 0.50),
 ]
 

@@ -23,7 +23,7 @@ cost report shows is the winning value, so a divergence that never moves the win
 divergence anyone would see.
 
 Reported per dimension, never pooled: `project` and `branch` carry tens of observations an hour
-while `workflow` and `tooling` are mostly empty, and one pooled rate would describe neither. Same
+while `skill` and `tooling` are mostly empty, and one pooled rate would describe neither. Same
 rule, same reason, as scripts/evidence_floor.py.
 
 WHY THE COMPARISON IS FAIR

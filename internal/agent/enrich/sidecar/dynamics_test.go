@@ -39,7 +39,7 @@ func dynamicsResponse() map[string]any {
 					"slice":    map[string]any{"value": "feat/ledger", "share": 1.0, "evidence": 62, "reason": "attributed"},
 					"baseline": map[string]any{"value": "main", "share": 1.0, "evidence": 118, "reason": "attributed"},
 				},
-				"workflow": map[string]any{
+				"skill": map[string]any{
 					"status": "both_absent", "turnover": nil, "decay": nil,
 					"concentration_shift": nil, "changed": false, "reading": nil,
 					"slice":    map[string]any{"value": nil, "share": 0.0, "evidence": 0, "reason": "absent"},
@@ -105,9 +105,9 @@ func TestAnalyzeDecodesTheDynamicsBlock(t *testing.T) {
 	// both_absent: `changed` is definitively FALSE (a level that never fired did
 	// not change) and must arrive as a non-nil false, distinct from the unknown
 	// below. The metrics are null because a share of nothing is not zero.
-	wf := out.Dynamics.Dimensions["workflow"]
+	wf := out.Dynamics.Dimensions["skill"]
 	if wf == nil || wf.Status != "both_absent" {
-		t.Fatalf("workflow dynamics = %+v", wf)
+		t.Fatalf("skill dynamics = %+v", wf)
 	}
 	if wf.Changed == nil || *wf.Changed {
 		t.Errorf("both_absent changed = %v, want a pointer to false", wf.Changed)
@@ -199,7 +199,7 @@ func TestAnalyzeLabeledForwardsTheDynamics(t *testing.T) {
 		t.Errorf("workstreams half lost: %+v", got.Workstreams)
 	}
 	if len(got.Dynamics) != 3 {
-		t.Fatalf("want branch/workflow/language, got %+v", got.Dynamics)
+		t.Fatalf("want branch/skill/language, got %+v", got.Dynamics)
 	}
 	if _, present := got.Dynamics["output_type"]; present {
 		t.Error("a null dimension must be OMITTED, not published as a zero Dynamic: " +
@@ -216,7 +216,7 @@ func TestAnalyzeLabeledForwardsTheDynamics(t *testing.T) {
 	// the answer is definitively no, and NIL where it is unknown. A conversion
 	// that defaulted the unknown to false would publish "we checked, nothing
 	// moved" about a dimension nobody could compare.
-	if c := got.Dynamics["workflow"].Changed; c == nil || *c {
+	if c := got.Dynamics["skill"].Changed; c == nil || *c {
 		t.Errorf("both_absent changed = %v, want a pointer to false", c)
 	}
 	if c := got.Dynamics["language"].Changed; c != nil {
@@ -251,7 +251,7 @@ func TestAnalyzeLabeledDropsAnUnknownDynamicsVocabulary(t *testing.T) {
 	if _, present := got.Dynamics["language"]; present {
 		t.Errorf("an unknown STATUS was published: %+v", got.Dynamics["language"])
 	}
-	if _, present := got.Dynamics["workflow"]; !present {
+	if _, present := got.Dynamics["skill"]; !present {
 		t.Error("a skewed sibling took down the dimensions that were readable")
 	}
 	// The digest half is unaffected: dynamics vocabulary skew must not cost the

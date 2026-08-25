@@ -10,7 +10,7 @@ import (
 
 // priorResponse is a realistic /analyze body carrying the SESSION PRIOR block:
 // the session as it stood BEFORE this window, reported beside the window's own
-// answer. Three dimensions publish it (workflow, language, branch — decided by
+// answer. Three dimensions publish it (skill, language, branch — decided by
 // measurement over 1,022 windows); the block also carries `clamped`, which this
 // client deliberately does not model.
 //
@@ -40,7 +40,7 @@ func priorResponse() map[string]any {
 					"novel": false,
 				},
 				// A skill the session had never run: the phase transition.
-				"workflow": map[string]any{
+				"skill": map[string]any{
 					"value": "superpowers:brainstorming", "share": 1.0, "evidence": 38,
 					"status": "attributed", "agrees": false, "departure": 1.0, "novel": true,
 				},
@@ -95,8 +95,8 @@ func TestAnalyzeDecodesThePriorBlock(t *testing.T) {
 	if br.Value != "" || br.Evidence != 0 {
 		t.Errorf("an absent prior carries a value: %+v", br)
 	}
-	if wf := out.Prior.Dimensions["workflow"]; wf == nil || wf.Novel == nil || !*wf.Novel {
-		t.Errorf("workflow novelty lost: %+v", wf)
+	if wf := out.Prior.Dimensions["skill"]; wf == nil || wf.Novel == nil || !*wf.Novel {
+		t.Errorf("skill novelty lost: %+v", wf)
 	}
 }
 
@@ -162,18 +162,18 @@ func TestThePriorSubtreeCarriesOnlyAnAllocationValueAndAClosedStatus(t *testing.
 // right zero).
 func TestAnUnattributedWindowIsNeverFilledInFromItsPrior(t *testing.T) {
 	body := priorResponse()
-	// The window has no `workflow` value at all; its prior has an emphatic one.
-	body["workstreams"].(map[string]any)["workflow"] = nil
+	// The window has no `skill` value at all; its prior has an emphatic one.
+	body["workstreams"].(map[string]any)["skill"] = nil
 
 	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	if l, present := got.Workstreams["workflow"]; present {
-		t.Errorf("the window's workflow was filled in from the session prior: %+v — "+
+	if l, present := got.Workstreams["skill"]; present {
+		t.Errorf("the window's skill was filled in from the session prior: %+v — "+
 			"an unattributed window stays unattributed", l)
 	}
-	if p, present := got.Prior["workflow"]; !present || p.Value != "superpowers:brainstorming" {
+	if p, present := got.Prior["skill"]; !present || p.Value != "superpowers:brainstorming" {
 		t.Errorf("the prior itself was dropped: %+v (present=%v)", p, present)
 	}
 	// ... and the dimensions the window DID attribute are untouched by any of it.
@@ -188,7 +188,7 @@ func TestAnalyzeLabeledForwardsThePrior(t *testing.T) {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
 	if len(got.Prior) != 3 {
-		t.Fatalf("want branch/language/workflow, got %+v", got.Prior)
+		t.Fatalf("want branch/language/skill, got %+v", got.Prior)
 	}
 	lg := got.Prior["language"]
 	if lg.Value != "TypeScript" || lg.Status != "attributed" || lg.Evidence != 271 {
@@ -232,7 +232,7 @@ func TestAnalyzeLabeledDropsAnUnknownPriorStatus(t *testing.T) {
 	if p, present := got.Prior["language"]; present {
 		t.Errorf("an unknown STATUS was published: %+v", p)
 	}
-	if _, present := got.Prior["workflow"]; !present {
+	if _, present := got.Prior["skill"]; !present {
 		t.Error("a skewed sibling took down the dimensions that were readable")
 	}
 	// The digest half is unaffected: prior vocabulary skew must not cost the
@@ -265,12 +265,12 @@ func TestASidecarWithNoPriorBlockPublishesNoPrior(t *testing.T) {
 // and `evidence: 0`, a real-looking answer nobody computed.
 func TestANullPriorDimensionIsOmittedNotZeroed(t *testing.T) {
 	body := priorResponse()
-	body["prior"].(map[string]any)["dimensions"].(map[string]any)["workflow"] = nil
+	body["prior"].(map[string]any)["dimensions"].(map[string]any)["skill"] = nil
 	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	if p, present := got.Prior["workflow"]; present {
+	if p, present := got.Prior["skill"]; present {
 		t.Errorf("a null dimension was published as a zero Prior: %+v", p)
 	}
 	if len(got.Prior) != 2 {

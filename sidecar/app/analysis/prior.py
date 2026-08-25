@@ -31,7 +31,7 @@ degenerate rather than merely weak:
     0 of 1,022 windows on all seven dimensions, structurally rather than empirically.
   * A session's first window IS its own prior -- agreement 100%, departure 0, contrast vacuous.
   * Every departure shrinks toward zero, monotonically with how much of the session the window
-    is. Measured, `language` agreement moves 70.6% -> 89.9% and `workflow` 25.8% -> 83.8%
+    is. Measured, `language` agreement moves 70.6% -> 89.9% and `skill` 25.8% -> 83.8%
     purely from putting the window inside its own prior.
 
 So the prior covers `[session start, window start)` -- still causal, a strict subset of what the
@@ -64,7 +64,7 @@ from app.analysis.window import MIN_EVIDENCE, attribution
 # refuses); novelty only where the prior has evidence at that level.
 #
 #                  agreement   novelty
-#     workflow        25.8%      44.0%   <- the signal. 40 of 91 windows run a skill the session
+#     skill           25.8%      44.0%   <- the signal. 40 of 91 windows run a skill the session
 #                                           had never run: brainstorming -> writing-plans ->
 #                                           executing -> debugging, the phase transitions of the
 #                                           workflow, and a per-window view has nothing to see
@@ -85,11 +85,11 @@ from app.analysis.window import MIN_EVIDENCE, attribution
 #     could not attribute at all. Re-measure before adding either -- `tooling`'s prior is
 #     attributed on 24.3% of windows, which is not a frame of reference.
 #
-# `workflow` is also the design's central tension, stated rather than smoothed over: it carries
+# `skill` is also the design's central tension, stated rather than smoothed over: it carries
 # the agreement and novelty results and FAILS the coverage bar (36.2% overall, 66.0% even among
 # windows that have a session behind them). It ships because 44% novelty is a fact no other
 # dimension produces, and its `status` says `absent`/`no_majority` loudly the rest of the time.
-ENABLED = ("branch", "language", "workflow")
+ENABLED = ("branch", "language", "skill")
 
 # DERIVED from the published allocation set rather than restated, so the two cannot drift -- and
 # so an INVENTORY level is structurally not addable here. `named_terms` (level `term`) is the one
@@ -136,7 +136,7 @@ def contrast(value, share, prior, prior_counts):
     inside a TypeScript-led session and all nine are caught by it (one at +0.516, where the
     session gives Python 5.5% and the window gives it 57.1%); `novel` was false in all nine.
 
-    `novel` is NARROW and earns its place on `workflow` alone (44.0%; every other dimension is
+    `novel` is NARROW and earns its place on `skill` alone (44.0%; every other dimension is
     at or below 6.1%). It is asked only where the session HAS evidence at this level: against an
     empty prior everything is trivially novel, which is a session with no history rather than
     yield, and reporting it as yield is how 45.1% of windows would come to look like discoveries.

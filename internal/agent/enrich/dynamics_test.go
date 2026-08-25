@@ -18,8 +18,8 @@ func TestWorkstreamsPassCarriesTheDynamics(t *testing.T) {
 	fa := &fakeAnalyze{ok: true, out: WindowAnalysis{
 		Workstreams: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 0.9}},
 		Dynamics: map[string]Dynamic{
-			"branch":   {Status: "compared", Reading: "switched", Changed: b(true), Turnover: f(0.4), Decay: f(0.25)},
-			"workflow": {Status: "both_absent", Changed: b(false)},
+			"branch": {Status: "compared", Reading: "switched", Changed: b(true), Turnover: f(0.4), Decay: f(0.25)},
+			"skill":  {Status: "both_absent", Changed: b(false)},
 		},
 	}}
 	ctx := NewJobContext("some prompt", "claude_code", Meta{}, nil) // no Model: the point of this pass
@@ -39,7 +39,7 @@ func TestWorkstreamsPassCarriesTheDynamics(t *testing.T) {
 	if dyn["branch"].Reading != "switched" || dyn["branch"].Turnover == nil || *dyn["branch"].Turnover != 0.4 {
 		t.Errorf("branch dynamic mangled: %+v", dyn["branch"])
 	}
-	if c := dyn["workflow"].Changed; c == nil || *c {
+	if c := dyn["skill"].Changed; c == nil || *c {
 		t.Errorf("both_absent changed = %v, want a pointer to false", c)
 	}
 }

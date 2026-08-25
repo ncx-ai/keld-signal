@@ -219,7 +219,7 @@ func TestBuildCarriesTheDynamicsReadingAndItsNumbers(t *testing.T) {
 		Dynamics: map[string]enrich.Dynamic{
 			"branch": {Status: "compared", Reading: "widening", Changed: &changed,
 				Turnover: &turnover, Decay: &decay, ConcentrationShift: &shift},
-			"workflow": {Status: "both_absent", Changed: &changed},
+			"skill": {Status: "both_absent", Changed: &changed},
 		},
 	}
 	e := Build(queue.Job{Source: "claude_code"}, p, "dg@keld.co", false, 0, time.Unix(0, 0))
@@ -242,7 +242,7 @@ func TestBuildCarriesTheDynamicsReadingAndItsNumbers(t *testing.T) {
 	// Outside `compared` the metrics are null and the reading is unstated; the
 	// three-state `changed` still says False, because a level that never fired
 	// did not change.
-	if !strings.Contains(s, `"workflow":{"status":"both_absent","changed":false}`) {
+	if !strings.Contains(s, `"skill":{"status":"both_absent","changed":false}`) {
 		t.Errorf("an uncompared dimension published metrics or a reading: %s", s)
 	}
 }
@@ -476,7 +476,7 @@ func TestBuildCarriesThePhysicalActsInventory(t *testing.T) {
 // The SESSION PRIOR reaches the wire, and reaches it BESIDE the window's own
 // answer rather than inside it. This is the whole design expressed at the last
 // place it could be broken: a consumer reading this row sees `workstreams` with
-// no `workflow` — the window could not attribute one — and `prior.workflow`
+// no `skill` — the window could not attribute one — and `prior.skill`
 // naming what the session was doing. The two must never be merged.
 func TestBuildCarriesTheSessionPriorWithoutFillingInTheWindow(t *testing.T) {
 	no, dep, yes := false, 0.516, true
@@ -485,8 +485,8 @@ func TestBuildCarriesTheSessionPriorWithoutFillingInTheWindow(t *testing.T) {
 		Prior: map[string]enrich.Prior{
 			"language": {Value: "TypeScript", Share: 0.886, Evidence: 271,
 				Status: "attributed", Agrees: &no, Departure: &dep, Novel: &no},
-			// The window has NO workflow. The prior has one, and it stays here.
-			"workflow": {Value: "superpowers:brainstorming", Share: 1.0, Evidence: 38,
+			// The window has NO skill. The prior has one, and it stays here.
+			"skill": {Value: "superpowers:brainstorming", Share: 1.0, Evidence: 38,
 				Status: "attributed", Novel: &yes},
 			// A session's first window: absent, and nothing invented for it.
 			"branch": {Status: "absent"},
@@ -496,8 +496,8 @@ func TestBuildCarriesTheSessionPriorWithoutFillingInTheWindow(t *testing.T) {
 	if len(e.Prior) != 3 {
 		t.Fatalf("prior dropped by Build: %+v", e.Prior)
 	}
-	if _, present := e.Workstreams["workflow"]; present {
-		t.Errorf("the window's workflow was filled in from the session: %+v — an "+
+	if _, present := e.Workstreams["skill"]; present {
+		t.Errorf("the window's skill was filled in from the session: %+v — an "+
 			"unattributed window stays unattributed", e.Workstreams)
 	}
 	if e.Workstreams["language"].Value != "Python" {

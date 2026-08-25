@@ -150,7 +150,7 @@ type Profile struct {
 	// A CONTRAST, NEVER A FALLBACK. It is reported ALONGSIDE Workstreams and
 	// never supplies an answer Workstreams lacked: a dimension absent from
 	// Workstreams stays absent no matter what this map says about the session.
-	// Three dimensions carry it (workflow, language, branch), decided by
+	// Three dimensions carry it (skill, language, branch), decided by
 	// measurement over 1,022 windows; `project` and `model` agree with their
 	// session 100.0% of the time and would publish a constant.
 	//

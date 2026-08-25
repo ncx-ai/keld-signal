@@ -126,7 +126,7 @@ def test_a_level_absent_from_both_sides_reports_no_change_not_total_change():
     The metric is None — not 1.0, and not 0.0 either: a level that never fired has no share to
     report. `changed` is the field that answers the reader's question, and for this case it is
     definitively False."""
-    got = compare(_rl("branch", alpha=40), _rl("branch", alpha=90))["workflow"]
+    got = compare(_rl("branch", alpha=40), _rl("branch", alpha=90))["skill"]
     assert got["status"] == "both_absent", got
     assert got["turnover"] is None, got
     assert got["decay"] is None, got
@@ -142,7 +142,7 @@ def test_an_absent_slice_is_not_reported_as_a_context_switch():
     `changed` is unknown rather than True, because a quiet slice and an abandoned dimension look
     identical from here."""
     got = compare(_rl("branch", alpha=40), rollup([_n("branch", "alpha", 90),
-                                                      _n("skill", "brainstorming", 90)]))["workflow"]
+                                                      _n("skill", "brainstorming", 90)]))["skill"]
     assert got["status"] == "slice_absent", got
     assert got["decay"] is None, got
     assert got["turnover"] is None, got
@@ -154,7 +154,7 @@ def test_an_absent_baseline_is_not_reported_as_total_turnover():
     baseline evidence, EVERY slice value is "absent from the baseline" and turnover is 1.0 by
     construction. There is nothing to be a baseline, so there is no comparison."""
     got = compare(rollup([_n("branch", "alpha", 40), _n("skill", "brainstorming", 40)]),
-                  _rl("branch", alpha=90))["workflow"]
+                  _rl("branch", alpha=90))["skill"]
     assert got["status"] == "baseline_absent", got
     assert got["turnover"] is None, got
     assert got["changed"] is None, got
@@ -289,7 +289,7 @@ def test_every_reported_dimension_is_named_the_way_the_payload_names_it():
     # DISCRIMINATING: at least one reported name must differ from the store level behind it, or a
     # version that keyed the block on `level` instead of `name` would pass — `branch` alone would
     # not catch it, because there the two happen to coincide.
-    assert {n for n in got if DIMS[n] != n} == {"output_type", "language", "workflow"}, sorted(got)
+    assert {n for n in got if DIMS[n] != n} == {"output_type", "language"}, sorted(got)
 
 
 def test_every_status_is_one_of_the_named_ones():
@@ -339,7 +339,7 @@ def test_the_dimensions_that_measured_CONSTANT_are_not_reported_at_all():
     Discriminating both ways: the survivors must still be there, or dropping everything passes.
     """
     got = compare(_rl("branch", alpha=40), _rl("branch", alpha=90))
-    assert set(got) == {"branch", "output_type", "language", "workflow"}, sorted(got)
+    assert set(got) == {"branch", "output_type", "language", "skill"}, sorted(got)
     for dropped in ("project", "model", "tooling"):
         assert dropped not in got, dropped
         assert dropped in DIMS, (dropped, "no longer an allocation dimension at all")
@@ -350,14 +350,14 @@ def test_the_entering_and_leaving_lists_are_gone_because_they_were_a_duplicate()
     zero, by construction, since turnover IS the mass of the emerged set — so the only candidate
     fact was the `top` list, and measured over the corpus it is one of two things:
 
-      * on `branch` and `workflow` the top entering value IS `slice.value` (75.3% / 85.4%) — the
+      * on `branch` and `skill` the top entering value IS `slice.value` (75.3% / 85.4%) — the
         field the reader already has;
       * on `output_type` and `language` it is BELOW the 0.50 dominance floor (80.7% / 76.5%) — a
         value `window.dominant` explicitly refuses to name as what the window was about.
         Highlighting it under `emerged` re-introduces, one field over, exactly what that floor
         exists to prevent.
 
-    Median `n` is 0 on every surviving dimension except `workflow`. `TOP_N` went with them.
+    Median `n` is 0 on every surviving dimension except `skill`. `TOP_N` went with them.
     """
     got = compare(_rl("branch", beta=40), _rl("branch", alpha=60))["branch"]
     assert "emerged" not in got and "decayed" not in got, sorted(got)
@@ -450,7 +450,7 @@ def test_no_reading_is_stated_where_no_metric_is_reported():
 def test_the_reading_is_not_itself_a_constant():
     """The stated form is held to the SAME bar as the numbers it summarises: measured over 2,702
     windows it is `steady` on 77.7% of compared `branch` windows, 70.7% of `output_type`, 49.9%
-    of `language` and 30.8% of `workflow` — all under the 90% constancy bar — while the three
+    of `language` and 30.8% of `skill` — all under the 90% constancy bar — while the three
     DROPPED dimensions would have shipped a field saying `steady` 79-100% of the time
     (`project` 100.0%, `model` 99.5%, `tooling` 79.2%). Pinned here as a property rather than a
     number: across a small spread of fixtures the surviving dimension must produce more than one

@@ -94,9 +94,9 @@ func TestThePriorReachesTheProfileWithoutTouchingTheWorkstreams(t *testing.T) {
 		Prior: map[string]Prior{
 			"language": {Value: "TypeScript", Share: 0.886, Evidence: 271,
 				Status: "attributed", Departure: &dep},
-			// The window has no `workflow` at all; the prior does. It must stay
+			// The window has no `skill` at all; the prior does. It must stay
 			// that way all the way to the Profile.
-			"workflow": {Value: "superpowers:brainstorming", Share: 1.0, Evidence: 38,
+			"skill": {Value: "superpowers:brainstorming", Share: 1.0, Evidence: 38,
 				Status: "attributed", Novel: &yes},
 		},
 	}
@@ -115,7 +115,7 @@ func TestThePriorReachesTheProfileWithoutTouchingTheWorkstreams(t *testing.T) {
 		t.Errorf("prior mangled by the pass: %+v", got)
 	}
 	ws := out["workstreams"].(map[string]Labeled)
-	if _, present := ws["workflow"]; present {
+	if _, present := ws["skill"]; present {
 		t.Errorf("the prior leaked into the workstreams: %+v", ws)
 	}
 	if ws["language"].Value != "Python" {
@@ -123,7 +123,7 @@ func TestThePriorReachesTheProfileWithoutTouchingTheWorkstreams(t *testing.T) {
 	}
 	// No Producer stamp: a Prior is not a Labeled and has no field for one, and
 	// the pass is already attributed for this job through extractor_versions.
-	if p := priorFrom(out); len(p) != 2 || p["workflow"].Novel == nil || !*p["workflow"].Novel {
+	if p := priorFrom(out); len(p) != 2 || p["skill"].Novel == nil || !*p["skill"].Novel {
 		t.Errorf("priorFrom lost the block: %+v", p)
 	}
 }

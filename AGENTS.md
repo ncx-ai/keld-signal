@@ -259,7 +259,7 @@ could raise.
 - **`workstreams`** (`enrich/workstreams.go`) is the one pass that runs **no
   inference**: it asks the sidecar's `/analyze` for the deterministic dimensions
   of the hour of work ending at this prompt (project, branch, model,
-  output_type, language, workflow, tooling), counted from tool-call metadata.
+  output_type, language, skill, tooling), counted from tool-call metadata.
   It takes COORDINATES (transcript path + prompt id), never text, and publishes
   as `workstreams` — a map of dimension → `Labeled` (`share` becomes the
   confidence). It declares `ModelFree`+`AlwaysRun`, and is registered only when
@@ -382,7 +382,7 @@ could raise.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").
-- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **11**
+- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **14**
   — bump it and re-run the eval when changing any vocab). Classify calls are
   prefixed with a context preamble (`Meta.PreambleCoding()`; `domain` uses the
   fuller `Meta.Preamble()`). **Facet-selective agentic augmentation:** agentic
@@ -603,7 +603,7 @@ windows (RARE), or if the yes/no a reader acts on is yes on ≥90% of windows
 
 KEPT: `branch` — mean turnover **0.346 INSIDE** a transition window against **0.003
 outside**, which is what a change-of-work metric looks like — plus `output_type`,
-`language` and `workflow`; the last is 2.6 points above the RARE bar and that is
+`language` and `skill`; the last is 2.6 points above the RARE bar and that is
 stated at the constant rather than smoothed. Inventory levels are excluded
 structurally and the exclusion was confirmed by distribution rather than by argument
 (`integrations` `compared` on **0** of 2,702 windows; `named_terms` non-zero on

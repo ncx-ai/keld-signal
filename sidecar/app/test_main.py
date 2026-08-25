@@ -650,7 +650,7 @@ def test_analyze_reports_the_session_the_window_sits_in_and_never_fills_it_in():
     # on this two-turn fixture means honestly unattributed rather than filled in from a session
     # that has nothing to fill it from either.
     assert set(body["workstreams"]) == {n for n, _lv, _f in workstreams.ALLOCATION}, body
-    assert body["workstreams"]["workflow"] is None, body["workstreams"]
+    assert body["workstreams"]["skill"] is None, body["workstreams"]
 
 
 def test_analyze_unknown_prompt_is_404_not_an_empty_payload():

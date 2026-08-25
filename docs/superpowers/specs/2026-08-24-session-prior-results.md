@@ -5,6 +5,14 @@
 `docs/superpowers/specs/2026-08-24-session-prior-design.md` describes; whether it ships is the
 reader's decision.
 
+> **The dimension called `workflow` throughout this document now publishes as `skill`**
+> (`enrich.SchemaVersion` 14, sidecar `SCHEMA` 9). Nothing measured here changed — the level
+> behind it has always been `skill`, the argument to a `Skill` tool call — only the published
+> key. The tables below are left as the harness emitted them at measurement time; read every
+> `workflow` row as `skill`. The rename is why: `workflow` promises a dimension populated for
+> every session, and only 38.4% of 198 corpus transcripts carry any skill evidence at all,
+> which is the same fact the 36.2% coverage row in bar 3 reports.
+
 Harness `scripts/session_prior.py`, tests `scripts/test_session_prior.py` (11 tests, 10
 mutations, every one confirmed to bite with an `AssertionError`). Durable output:
 `~/keld/refseries-context/session-prior/` (`prior-frame.ndjson`, `session-prior-results.json`,

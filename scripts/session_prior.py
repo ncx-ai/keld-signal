@@ -100,7 +100,7 @@ PRIMARY = "before"
 # to one project on one branch, and the `workspace` level has zero transitions across the whole
 # corpus. A pooled agreement number would average those two into the five that can move and
 # describe neither, so no pooled number is reported anywhere below.
-CAN_DIFFER = ("model", "output_type", "language", "workflow", "tooling")
+CAN_DIFFER = ("model", "output_type", "language", "skill", "tooling")
 
 # --------------------------------------------------------------------------- THE FOUR BARS
 # Fixed here, in code, before any result was looked at. Each is justified by what would make the

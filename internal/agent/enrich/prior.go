@@ -21,7 +21,7 @@ package enrich
 // preference. Over 1,022 windows of the frozen corpus
 // (docs/superpowers/specs/2026-08-24-session-prior-results.md):
 //
-//	workflow   agreement 25.8%   novelty 44.0%   <- the signal: brainstorming ->
+//	skill      agreement 25.8%   novelty 44.0%   <- the signal: brainstorming ->
 //	                                               writing-plans -> executing ->
 //	                                               debugging, the phase
 //	                                               transitions of the workflow
@@ -84,7 +84,7 @@ type Prior struct {
 	// 5.5% share and the window gives it 57.1%. Novel was false in all nine.
 	Departure *float64 `json:"departure,omitempty"`
 	// Novel: the window's value has NO presence in the session at all. Narrow,
-	// and it earns its place on `workflow` alone (44.0%; every other dimension
+	// and it earns its place on `skill` alone (44.0%; every other dimension
 	// is at or below 6.1%). Nil where the session has no evidence at this level:
 	// against an empty prior everything is trivially novel, which is a session
 	// with no history rather than yield.

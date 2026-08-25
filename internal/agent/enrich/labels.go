@@ -98,7 +98,7 @@ package enrich
 //
 // THREE of the seven allocation dimensions carry it, and that is a measurement:
 // over 1,022 windows (docs/superpowers/specs/2026-08-24-session-prior-results.md)
-// `workflow` agrees with its session 25.8% of the time and is NOVEL on 44.0% —
+// `skill` agrees with its session 25.8% of the time and is NOVEL on 44.0% —
 // the phase transitions of the workflow, brainstorming -> writing-plans ->
 // executing -> debugging — `language` 70.6%/2.3% and `branch` 76.1%/6.1%.
 // `project` and `model` agree 100.0% with zero disagreements and a largest
@@ -112,7 +112,26 @@ package enrich
 // the time. The sidecar's SCHEMA moves 7 -> 8 for the same addition. Nothing
 // existing changes meaning: every field of v12 publishes identically. Producer
 // strings move from `-v12` to `-v13`.
-const SchemaVersion = 13
+//
+// v14 RENAMES the allocation dimension `workflow` to `skill`, in `workstreams`,
+// in `dynamics` and in `prior` alike. No value, level or number changes: the
+// level behind the key has always been `skill` — the argument to a `Skill` tool
+// call (`superpowers:writing-plans`, `anthropic-skills:pptx`), written from
+// exactly two sources — and only the published key moves.
+//
+// `workflow` INFLATED it. Skills exist for everything, not only for processes,
+// and the dimension is `absent` for most sessions: only 38.4% of 198 corpus
+// transcripts carry ANY skill evidence, and the 38.4% that do are dominated by
+// one plugin (`superpowers:subagent-driven-development` 1518,
+// `superpowers:brainstorming` 1362, `superpowers:writing-plans` 962). A
+// consumer reading `workflow` reasonably expects a column populated for every
+// row and reads the 61.6% of blanks as a defect; a consumer reading `skill`
+// asks the question the numbers actually raise. Singular, like every sibling
+// allocation key, because the field holds one dominant value.
+//
+// The sidecar's SCHEMA moves 8 -> 9 for the same rename. Producer strings move
+// from `-v13` to `-v14`.
+const SchemaVersion = 14
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

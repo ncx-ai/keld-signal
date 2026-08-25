@@ -50,7 +50,7 @@ var errAnalysisUnavailable = errors.New("workstreams: window analysis unavailabl
 type WorkstreamAnalyzer func(path, promptID string, spanMinutes int) (WindowAnalysis, bool)
 
 // WorkstreamsExtractor publishes the deterministic dimensions a cost report
-// buckets by (project, branch, model, output_type, language, workflow,
+// buckets by (project, branch, model, output_type, language, skill,
 // tooling), plus the same window's dynamics, effort and PHYSICAL-ACTS INVENTORY
 // — four answers from one /analyze call. It runs no inference: the values are
 // counted from tool-call metadata in the transcript window, so the pass declares

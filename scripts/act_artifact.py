@@ -10,7 +10,7 @@
 `action` appears ZERO times in `sidecar/app/analysis/workstreams.py`. The level is emitted by
 `levels.events_for_turns` (from tool names and, via `shell.bash_refs`, from the programs a Bash
 command actually runs), stored, and read by `dynamics`/`activity` — and never published. The
-published `ALLOCATION` set is project / branch / model / output_type / language / workflow /
+published `ALLOCATION` set is project / branch / model / output_type / language / skill /
 tooling. Meanwhile `vocab.py`'s own docstring says the physical act is "what a reader needs to
 picture the work". The module that defines it says it is needed; the module that decides what
 ships omits it.
@@ -221,8 +221,22 @@ def build(roots, out):
 
 
 def load_frame(out):
+    """Read the durable frame, normalising the ONE published key that has been renamed since it
+    was written.
+
+    The frame lives outside the repo and is immutable measurement output: it was emitted while
+    the `skill` level published as `workflow`, and rewriting a completed study's durable file to
+    match a later vocabulary would falsify the record of what the run produced. So the rename is
+    absorbed HERE, at the read boundary, keyed on the old name being present and the new one
+    absent — a frame written after the rename passes through untouched, and a frame written
+    before it is read under the name `ALLOCATION` now uses. Nothing else in the file moved: the
+    level, the values and every count are the same.
+    """
     with open(os.path.join(out, "act-frame.ndjson")) as fh:
         recs = [json.loads(l) for l in fh]
+    for r in recs:
+        if "workflow" in r and "skill" not in r:
+            r["skill"] = r.pop("workflow")
     assert len(recs) == EXPECTED_WINDOWS, f"{len(recs)} windows, expected {EXPECTED_WINDOWS}"
     assert len({(r["file"], r["start"]) for r in recs}) == len(recs), "duplicate (file, start)"
     return recs
@@ -353,7 +367,7 @@ def profiles(recs, pr, top_n=6, per_pair=3):
                             f"{r['output_type']['evidence']}",
                 "top_actions": dict(list(r["action_counts"].items())[:5]),
                 "top_artifacts": dict(list(r["artifact_counts"].items())[:5]),
-                "language": r["language"]["value"], "workflow": r["workflow"]["value"],
+                "language": r["language"]["value"], "skill": r["skill"]["value"],
                 "tooling": r["tooling"]["value"]})
         out.append({"pair": f"{a} x {b}", "n": len(wids), "windows": rows})
     return out
@@ -547,7 +561,7 @@ def report(res):
             print(f"      act={w['act']}  artifact={w['artifact']}")
             print(f"      actions={w['top_actions']}")
             print(f"      artifacts={w['top_artifacts']}")
-            print(f"      language={w['language']} workflow={w['workflow']} "
+            print(f"      language={w['language']} skill={w['skill']} "
                   f"tooling={w['tooling']}")
     print("\nVERDICT")
     for q in ("Q1", "Q2", "Q3"):

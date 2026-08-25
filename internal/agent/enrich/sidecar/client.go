@@ -322,7 +322,7 @@ type AnalyzeResult struct {
 // DynamicsBlock's and InventoryBlock's are: it keeps the rest structurally
 // unreachable instead of decoded-then-dropped.
 type PriorBlock struct {
-	// Dimensions is keyed by dimension name (branch, language, workflow — the
+	// Dimensions is keyed by dimension name (branch, language, skill — the
 	// set the sidecar's own measurement left standing; see enrich.Prior). A nil
 	// value is a dimension the sidecar reported as null: no prior at all, which
 	// is a different fact from a zero Prior, whose status would read "" and
@@ -377,7 +377,7 @@ type InventoryItem struct {
 // unreachable instead of decoded-then-dropped.
 type DynamicsBlock struct {
 	// Dimensions is keyed by dimension name (branch, output_type, language,
-	// workflow — the set the sidecar's own measurement left standing). A nil
+	// skill — the set the sidecar's own measurement left standing). A nil
 	// value is a dimension the sidecar reported as null: no comparison at all,
 	// which is a different fact from a zero Dynamic.
 	Dimensions map[string]*Dynamic `json:"dimensions"`

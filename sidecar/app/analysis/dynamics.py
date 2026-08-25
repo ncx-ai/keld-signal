@@ -53,7 +53,7 @@ all) and `no_majority` (evidence, no dominant value) were both a bare `None`. Me
 20,000 windows of the frozen corpus, `tooling` is **77.8% absent at a 5-minute slice and still
 50.3% absent at 60 minutes** — so a turnover that read "no value either side" as "the value
 changed" would report near-constant churn on a dimension that has no data whatsoever, on the
-majority of `tooling` and `workflow` slices.
+majority of `tooling` and `skill` slices.
 
 `STATUSES` therefore names the comparison's own outcome, and a metric is reported ONLY under
 `compared`. In every other case the number would be arithmetic rather than measurement:
@@ -285,11 +285,11 @@ def _absent_mass(items, other, total):
     and Task 4 dropped that. `n` was a restatement: it is zero exactly when this mass is zero, by
     construction, since the mass IS the emerged set's. That left the `top` list as the only
     candidate fact, and measured over 2,702 windows it is one of two things — on `branch` and
-    `workflow` the top entering value IS `slice.value` (75.3% / 85.4%), the field the reader
+    `skill` the top entering value IS `slice.value` (75.3% / 85.4%), the field the reader
     already has; on `output_type` and `language` it is below the 0.50 dominance floor (80.7% /
     76.5%), a value `window.dominant` explicitly refuses to name as what the window was about.
     Highlighting it under `emerged` re-introduced, one field over, exactly what that floor exists
-    to prevent. Median `n` was 0 on every surviving dimension but `workflow`.
+    to prevent. Median `n` was 0 on every surviving dimension but `skill`.
     """
     if not total:
         return 0.0
@@ -323,7 +323,7 @@ def reading(v):
 
     The reading is held to the SAME bar as the numbers: measured over 2,702 windows it is `steady`
     on 77.7% of compared `branch` windows, 70.7% of `output_type`, 49.9% of `language` and 30.8%
-    of `workflow` — all under the 90% constancy bar — while the three dropped dimensions would
+    of `skill` — all under the 90% constancy bar — while the three dropped dimensions would
     have shipped a field saying `steady` 79-100% of the time.
     """
     if v["status"] != "compared":

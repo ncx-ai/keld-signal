@@ -110,7 +110,7 @@ def min_evidence_for(floor=0.5, alpha=0.05):
 #     model       84.1%   90.8%   93.2%   95.3%   96.8%
 #     output_type 54.6%   65.9%   71.0%   78.3%   85.5%
 #     language    51.9%   63.0%   68.0%   74.4%   80.8%
-#     workflow    19.5%   23.4%   25.9%   32.9%   41.4%
+#     skill       19.5%   23.4%   25.9%   32.9%   41.4%
 #     tooling      2.7%    6.8%   11.6%   19.3%   26.4%
 #
 # "Nearly every slice unattributed" is refuted for the three dimensions that carry most of the

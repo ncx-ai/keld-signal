@@ -16,7 +16,7 @@ WHY PER DIMENSION, NEVER AN AGGREGATE
 -------------------------------------
 Roughly twenty defects in this study surfaced as plausible wrong numbers and essentially none was
 caught by reading an aggregate. `project` and `branch` carry tens of observations an hour;
-`workflow` (skill) and `output_type` (artifact) are sparse. A single "attribution rate" averages a
+`skill` and `output_type` (artifact) are sparse. A single "attribution rate" averages a
 dimension that is fine with one that is empty, and reports a number that is true of neither. So
 every table below is keyed on (slice_minutes, dimension), and the reason a slot is unattributed is
 broken out — `thin` (fewer than the floor), `no_majority` (enough evidence, no winner), `tie`,

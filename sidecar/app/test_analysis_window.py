@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.analysis import SCHEMA
 from app.analysis.window import (MIN_EVIDENCE, attribution, dominant,
                                  min_evidence_for, rollup)
-from app.analysis.workstreams import payload
+from app.analysis.workstreams import ALLOCATION, payload
 
 R = [(0, "s", "r", "b", False, "ref", "artifact", "code", 9.0),
      (0, "s", "r", "b", False, "ref", "artifact", "prose", 1.0),
@@ -83,13 +83,36 @@ def test_the_payload_reports_an_underevidenced_dimension_as_unattributed():
 
 
 def test_an_absent_level_produces_no_key_rather_than_an_empty_one():
-    assert payload(rollup(R))["workstreams"]["workflow"] is None
+    assert payload(rollup(R))["workstreams"]["skill"] is None
+
+
+def test_the_skill_level_publishes_under_the_name_skill_not_workflow():
+    """The dimension is the argument to a `Skill` tool call -- `superpowers:writing-plans`,
+    `anthropic-skills:pptx` -- and skills exist for everything, not only for processes, so
+    `workflow` INFLATES what the level holds. It is written from exactly two sources
+    (levels.py: `inp["skill"]` on a `Skill` tool_use, and a turn's `attributionSkill`), and
+    only 38.4% of 198 corpus transcripts carry ANY skill evidence at all: a reader who sees
+    `workflow` expects a dimension populated for everyone, while a reader who sees `skill` asks
+    the right next question, which is what the other 61.6% of sessions look like.
+
+    Asserted on the PUBLISHED payload as well as on ALLOCATION, because the list is what the
+    Go client, dynamics and the prior all derive their vocabulary from."""
+    names = {n for n, _lv, _f in ALLOCATION}
+    assert "skill" in names and "workflow" not in names, sorted(names)
+    assert {n: lv for n, lv, _f in ALLOCATION}["skill"] == "skill", ALLOCATION
+    ws = payload(rollup([_n("skill", "superpowers:writing-plans", 20)]))["workstreams"]
+    # Asserted on MEMBERSHIP before value, so a payload that still emits the old key fails by
+    # assertion rather than dying on a KeyError three lines down -- a crash is a weaker signal
+    # than a statement of what was expected, and this file's runner only catches the latter.
+    assert "skill" in ws and "workflow" not in ws, sorted(ws)
+    assert ws["skill"] == {"value": "superpowers:writing-plans", "share": 1.0, "evidence": 20,
+                           "provenance": "known:tool_inputs"}, ws
 
 
 def test_payload_carries_its_schema_version():
     """These values land in financial reports; a silent shape change is the reproducibility
     failure the earlier handoff called out, so the payload is versioned from the first release."""
-    assert payload(rollup(R))["schema"] == SCHEMA == 8
+    assert payload(rollup(R))["schema"] == SCHEMA == 9
 
 
 # --- the floor generalised to an arbitrary slice length ---------------------------------------
@@ -179,7 +202,7 @@ def test_every_way_a_slot_fails_is_named():
 def test_an_absent_level_is_not_a_thin_one():
     """`bin` is sparse and a level can simply never have fired. Reporting that as `thin` would
     invite a caller to widen the slice to fix something no slice length can fix — measured:
-    `workflow`'s `absent` share only falls 77.5% -> 55.3% from 5 to 60 minutes, while its `thin`
+    `skill`'s `absent` share only falls 77.5% -> 55.3% from 5 to 60 minutes, while its `thin`
     share is under 3% at every length."""
     absent = attribution(rollup([]), "workspace")
     assert (absent.reason, absent.evidence) == ("absent", 0)

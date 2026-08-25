@@ -76,14 +76,24 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           BEFORE this window, reported beside the window's own answer and NEVER supplying one
 #           it lacked. Three of the seven allocation dimensions carry it, decided by measurement
 #           over 1,022 windows (docs/superpowers/specs/2026-08-24-session-prior-results.md):
-#           `workflow` (agreement 25.8%, novelty 44.0% -- the phase transitions of the workflow,
+#           `skill` (agreement 25.8%, novelty 44.0% -- the phase transitions of the workflow,
 #           brainstorming -> writing-plans -> executing -> debugging), `language` (70.6% / 2.3%)
 #           and `branch` (76.1% / 6.1%). `project` and `model` agree 100.0% with ZERO
 #           disagreements and a largest departure of +0.000 / -0.103, so a contrast field there
 #           would publish a constant; `output_type` and `tooling` are held back as live
 #           candidates. A window that answers with a block it did not answer with before is a
 #           window answered differently, which is exactly this number's trigger.
-SCHEMA = 8
+#   8 -> 9: the allocation dimension `workflow` is RENAMED to `skill`. The level behind it is
+#           unchanged (`skill`, written from a `Skill` tool_use's `inp["skill"]` and a turn's
+#           `attributionSkill`) and so is every number -- but the published KEY moves in
+#           `workstreams`, in `dynamics` and in `prior`, so the same window answers with a key
+#           it did not answer with before, which is exactly this number's trigger. `workflow`
+#           INFLATED what the level holds: skills exist for everything, not only for processes,
+#           and only 38.4% of 198 corpus transcripts carry any skill evidence at all -- a name
+#           that promises a dimension populated for every session misdescribes one that is
+#           `absent` for 61.6% of them. Go's `enrich.SchemaVersion` moves 13 -> 14 for the same
+#           rename.
+SCHEMA = 9
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

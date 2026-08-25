@@ -74,9 +74,9 @@ def test_a_window_below_the_floor_is_not_rescued_by_an_agreeing_session():
     """The subtler shape of the same rule: the window HAS evidence and a top value, it is simply
     below the 0.50 share floor. An agreeing session is exactly the tempting case."""
     mixed = _rl("skill", brainstorming=10, executing=9, debugging=8)   # top share 0.37
-    got = compare(mixed, _rl("skill", brainstorming=900))["workflow"]
+    got = compare(mixed, _rl("skill", brainstorming=900))["skill"]
     assert got["agrees"] is None and got["departure"] is None and got["novel"] is None, got
-    assert workstreams.payload(mixed)["workstreams"]["workflow"] is None, mixed
+    assert workstreams.payload(mixed)["workstreams"]["skill"] is None, mixed
 
 
 # --- causal, not retrospective ---------------------------------------------------------------
@@ -86,7 +86,7 @@ def test_a_value_the_session_never_held_is_novel():
     windows on the corpus run a skill the session had never run before -- brainstorming ->
     writing-plans -> executing -> debugging, the phase transitions of the workflow."""
     got = compare(_rl("skill", executing_plans=252),
-                  _rl("skill", brainstorming=38))["workflow"]
+                  _rl("skill", brainstorming=38))["skill"]
     assert got["novel"] is True, got
     assert got["agrees"] is False, got
     assert got["departure"] == 1.0, got
@@ -95,7 +95,7 @@ def test_a_value_the_session_never_held_is_novel():
 def test_novel_is_not_asked_against_a_session_with_no_evidence_at_that_level():
     """45.1% of windows are session-first. Novelty against an empty prior is not yield, it is a
     session with no history -- so it is None, and the prior says `absent` out loud."""
-    got = compare(_rl("skill", executing_plans=30), {})["workflow"]
+    got = compare(_rl("skill", executing_plans=30), {})["skill"]
     assert got["status"] == "absent", got
     assert got["novel"] is None, got
     assert got["agrees"] is None, got
@@ -160,7 +160,7 @@ def test_the_prior_carries_the_evidence_it_rests_on():
     """The design's own requirement: "record the evidence count in the payload so a reader can
     see how much session the prior rests on". A prior over 6 observations and one over 600 are
     not the same frame of reference, and the corpus' median prior evidence runs from 86
-    (`branch`) to 0 (`workflow`)."""
+    (`branch`) to 0 (`skill`)."""
     got = compare(_rl("branch", main=10), _rl("branch", main=317, dev=11))["branch"]
     assert got["evidence"] == 328, got
     assert got["status"] == "attributed", got
@@ -171,7 +171,7 @@ def test_the_prior_carries_the_evidence_it_rests_on():
 # --- which dimensions, and why ---------------------------------------------------------------
 
 def test_the_enabled_set_is_a_list_and_holds_only_the_three_that_measured_a_contrast():
-    """Measured over 1,022 windows: `workflow` agreement 25.8% / novelty 44.0% is the signal;
+    """Measured over 1,022 windows: `skill` agreement 25.8% / novelty 44.0% is the signal;
     `language` 70.6% / 2.3% and `branch` 76.1% / 6.1% carry departures. `project` and `model`
     agree 100.0% with ZERO disagreements, zero novel windows, and a maximum departure of +0.000
     and -0.103 -- a contrast field there publishes a constant.
@@ -180,7 +180,7 @@ def test_the_enabled_set_is_a_list_and_holds_only_the_three_that_measured_a_cont
     deliberately excluded for now, both live candidates, and on John's Cowork session carried by
     the prior in 6 of 7 and 4 of 7 windows where the window itself could not attribute -- is a
     one-line change."""
-    assert sorted(ENABLED) == ["branch", "language", "workflow"], ENABLED
+    assert sorted(ENABLED) == ["branch", "language", "skill"], ENABLED
     assert sorted(n for n, _lv, _f in PRIOR_DIMENSIONS) == sorted(ENABLED), PRIOR_DIMENSIONS
     for dead in ("project", "model"):
         assert dead not in ENABLED, dead
@@ -284,7 +284,7 @@ def test_the_prior_is_cut_at_the_window_START_not_at_its_end():
     """THE CORRECTION the measurement forced on the spec, end to end. Cut at "now" -- the daemon
     recomputing over everything ingested -- the window's own evidence sits inside its own prior,
     and `novel` becomes structurally unable to fire (0/1022 on all seven dimensions, and
-    `workflow` agreement moves 25.8% -> 83.8% purely from the window agreeing with itself).
+    `skill` agreement moves 25.8% -> 83.8% purely from the window agreeing with itself).
 
     Here the second hour is a branch, a language and a skill the first hour never held. If the
     prior reached past the window's start, not one of the three could be novel."""
@@ -299,8 +299,8 @@ def test_the_prior_is_cut_at_the_window_START_not_at_its_end():
             "agrees": False, "departure": 1.0, "novel": True}, br
         assert dims["language"]["value"] == "TypeScript", dims["language"]
         assert dims["language"]["novel"] is True, dims["language"]
-        assert dims["workflow"]["value"] == "superpowers:brainstorming", dims["workflow"]
-        assert dims["workflow"]["novel"] is True, dims["workflow"]
+        assert dims["skill"]["value"] == "superpowers:brainstorming", dims["skill"]
+        assert dims["skill"]["novel"] is True, dims["skill"]
         # ... and the window itself still says what IT saw, unchanged by any of this.
         ws = out["workstreams"]
         assert ws["branch"]["value"] == "feature/ledger-split", ws["branch"]
