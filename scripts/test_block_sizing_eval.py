@@ -109,6 +109,42 @@ def test_block_evidence_counts_the_allocation_rollup():
         assert n == 10, n            # 5.0 + 5.0 across two allocation levels
 
 
+def test_can_attribute_requires_one_level_to_clear_the_floor_not_the_pooled_sum():
+    """`block_evidence` pools evidence across all eight allocation levels, so 1 unit at each of
+    five different levels sums to 5 and clears `MIN_EVIDENCE` — but `window.attribution` gates
+    PER LEVEL, and every one of those five levels, read on its own, is `thin`. A block like that
+    can attribute nothing, and `can_attribute` — not the pooled sum — is the question that has to
+    say so."""
+    with tempfile.TemporaryDirectory() as tmp:
+        thin = b.CachingStore(_mkstore(tmp, [
+            _ev(10, "repo", "keld-signal", n=1.0), _ev(10, "workspace", "keld", n=1.0),
+            _ev(10, "branch", "main", n=1.0), _ev(10, "model", "sonnet", n=1.0),
+            _ev(10, "artifact", "diff", n=1.0)]))
+        block = b.Block(0.0, 300.0, "session_start", "session_end")
+        assert b.block_evidence(thin, SESSION, block) == 5, b.block_evidence(thin, SESSION, block)
+        assert b.can_attribute(thin, SESSION, block) is False
+
+    with tempfile.TemporaryDirectory() as tmp:
+        st = b.CachingStore(_mkstore(tmp, [_ev(10, "branch", "main", n=5.0)]))
+        block = b.Block(0.0, 300.0, "session_start", "session_end")
+        assert b.can_attribute(st, SESSION, block) is True
+
+
+def test_choose_cap_uses_absolute_difference_not_signed():
+    """A budget share that RISES by more than 5 points from a smaller cap to the next larger one
+    must not be read as "within 5 points" just because the SIGNED difference happens to be very
+    negative (`a - bb <= 5.0` is true for any rise at all). Every other fixture in this file
+    happens to fall monotonically and would pass a signed OR an absolute test, so only a
+    non-monotonic input — here, 62.0% at 20m rising to 71.0% at 30m, a 9-point jump — exercises
+    the bug. With `abs()` applied correctly, no pair in this set clears the 5-point bar."""
+    rows = [{"cap": 10, "budget_share": 92.0}, {"cap": 15, "budget_share": 80.0},
+            {"cap": 20, "budget_share": 62.0}, {"cap": 30, "budget_share": 71.0},
+            {"cap": 45, "budget_share": 57.0}]
+    cap, why = b.choose_cap(rows)
+    assert cap != 20, (cap, why)          # the 9-point RISE must not look like "within 5 points"
+    assert cap is None, (cap, why)        # and no other pair in this set qualifies either
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
