@@ -27,9 +27,9 @@ import (
 // alike. A separate struct makes the first one unrepresentable-as-the-second
 // rather than merely discouraged.
 //
-// What it DOES carry is the four blocks a prompt's window carries, converted by
-// exactly the same functions under exactly the same closed-vocabulary gates (see
-// sidecar.TickCharacterised), plus the bounds that say where it applies. No new
+// What it DOES carry is the blocks a prompt's window carries, converted by
+// exactly the same functions under exactly the same vocabulary/structural gates
+// (see sidecar.TickCharacterised), plus the bounds that say where it applies. No new
 // content channel: TestEnrichmentWireShapeCannotCarryAnalysisInternals' rule
 // holds here for the same structural reason it holds there — there is no field a
 // reference-level value or a transcript fragment could occupy.
@@ -52,7 +52,14 @@ type WindowEnrichment struct {
 	Files       []enrich.PathCount `json:"files,omitempty"`
 	Directories []enrich.PathCount `json:"directories,omitempty"`
 	Components  []enrich.PathCount `json:"components,omitempty"`
-	// InventoryOmitted is the cut-visibility map beside the four inventories
+	// HarnessTools, Programs, ExternalSystems and Integrations are what the
+	// window USED — same rule and same meaning as the prompt row's (see
+	// Enrichment.HarnessTools).
+	HarnessTools    []enrich.NameCount `json:"harness_tools,omitempty"`
+	Programs        []enrich.NameCount `json:"programs,omitempty"`
+	ExternalSystems []enrich.NameCount `json:"external_systems,omitempty"`
+	Integrations    []enrich.NameCount `json:"integrations,omitempty"`
+	// InventoryOmitted is the cut-visibility map beside the eight inventories
 	// above — same rule as the prompt row's (see Enrichment.InventoryOmitted).
 	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
 	// Prior is the SESSION this window sat in — same rule and same meaning as
@@ -109,6 +116,10 @@ func BuildWindow(w enrich.WindowCharacterisation, actor string, now time.Time) W
 		Files:             w.Analysis.Files,
 		Directories:       w.Analysis.Directories,
 		Components:        w.Analysis.Components,
+		HarnessTools:      w.Analysis.HarnessTools,
+		Programs:          w.Analysis.Programs,
+		ExternalSystems:   w.Analysis.ExternalSystems,
+		Integrations:      w.Analysis.Integrations,
 		InventoryOmitted:  w.Analysis.InventoryOmitted,
 		Prior:             w.Analysis.Prior,
 		PipelineStatus:    enrich.PipelineStatusWindow,

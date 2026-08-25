@@ -78,6 +78,21 @@ import (
 // entry on the forbidden list below to stay safe; its presence is asserted the
 // same way for the same reason: to prove the filler actually reaches it.
 //
+// EXTENDED AGAIN for the four IDENTIFIER-shaped inventories (`harness_tools`/
+// `programs`/`external_systems`/`integrations`). Same structural reason as the
+// file-path inventories — four more TOP-LEVEL keys, never nested under
+// `inventory` — and the same OPEN vocabulary: a tool name, a program, a
+// hostname or an MCP tool id is not a member of a lookup table either. What
+// stands in for the vocabulary gate is a per-dimension structural rule
+// (identifier shape for harness_tools/integrations, identifier shape plus a
+// path-separator/leading-dot rejection for programs, a bare-IP-literal
+// rejection for external_systems — see enrich.NameCount and
+// sidecar.convertIdentifierInventory/convertProgramInventory/
+// convertExternalSystemInventory). `inventory` and `named_terms` STAY on the
+// list below for the same reason they did after the path inventories: adding a
+// publishable inventory key must never be mistaken for permission to forward
+// the block itself.
+//
 // A field added for any of them fails HERE rather than in a review.
 var forbiddenWireKeys = []string{
 	"inventory", "named_terms", "window_start", "window_end",
@@ -116,6 +131,9 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// so a payload that carries none of them could not make the checks below
 		// pass vacuously.
 		`"files"`, `"directories"`, `"components"`, `"inventory_omitted"`,
+		// The four identifier-shaped inventories, so a payload that carries none
+		// of them could not make the checks below pass vacuously either.
+		`"harness_tools"`, `"programs"`, `"external_systems"`, `"integrations"`,
 		// The session prior and all three contrast measures, so `"reason"`
 		// staying forbidden below is a real result about a payload that DOES
 		// carry a prior block. The prior states its attribution outcome as

@@ -70,13 +70,14 @@ type Enrichment struct {
 	// measurement that made this an inventory rather than an eighth workstream).
 	// Same /analyze call as the three blocks above, same no-inference path.
 	//
-	// It is the ONE key of that call's `inventory` block that publishes, and the
-	// reason is provenance, not preference: the `action` level is written from a
-	// tool NAME and from a shell command's argv, both through a closed lookup
-	// table, so no fragment of a transcript can occupy it. Its five siblings stay
-	// on-device — `named_terms` above all, which is read from message text and has
-	// held real person names — and are not modelled in sidecar.InventoryBlock at
-	// all, so there is nowhere here to forward them even by mistake
+	// It is EIGHT of that call's `inventory` block's nine keys that now publish
+	// (this one plus the seven below), and the reason each earns its place is
+	// provenance, not preference: the `action` level is written from a tool NAME
+	// and from a shell command's argv, both through a closed lookup table, so no
+	// fragment of a transcript can occupy it. Its one remaining sibling,
+	// `named_terms`, stays on-device — it is read from message text and has held
+	// real person names — and is not modelled in sidecar.InventoryBlock at all,
+	// so there is nowhere here to forward it even by mistake
 	// (TestEnrichmentWireShapeCannotCarryAnalysisInternals fails if that changes).
 	//
 	// Absent when the window recorded no act; never an empty list.
@@ -96,12 +97,28 @@ type Enrichment struct {
 	Files       []enrich.PathCount `json:"files,omitempty"`
 	Directories []enrich.PathCount `json:"directories,omitempty"`
 	Components  []enrich.PathCount `json:"components,omitempty"`
+	// HarnessTools, Programs, ExternalSystems and Integrations are what the
+	// window USED: inventories of the `tool`/`exe`/`service`/`mcp_tool` levels
+	// with counts (see enrich.NameCount). Same /analyze call as the three blocks
+	// above, same no-inference path. OPEN vocabulary, like the path inventories
+	// and unlike PhysicalActs, so each is gated per entry by a structural rule
+	// rather than a lookup table (see sidecar.convertIdentifierInventory /
+	// convertProgramInventory / convertExternalSystemInventory):
+	// HarnessTools/Integrations by bare identifier shape, Programs by identifier
+	// shape plus a rejection of path separators and a leading dot,
+	// ExternalSystems by rejecting bare IP literals while deliberately KEEPING
+	// internal/corporate hostnames (see convertExternalSystemInventory for the
+	// argument). Absent when the window used nothing in that dimension; never an
+	// empty list.
+	HarnessTools    []enrich.NameCount `json:"harness_tools,omitempty"`
+	Programs        []enrich.NameCount `json:"programs,omitempty"`
+	ExternalSystems []enrich.NameCount `json:"external_systems,omitempty"`
+	Integrations    []enrich.NameCount `json:"integrations,omitempty"`
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped. It is the visibility the truncation
-	// lacked before this: the six pre-existing inventory dimensions (harness_
-	// tools, programs, external_systems, integrations, named_terms,
-	// physical_acts) truncated silently, and this makes that cut readable for
-	// all nine — even the five whose values never reach this struct at all, since
+	// lacked before this: the pre-existing inventory dimensions truncated
+	// silently, and this makes that cut readable for all nine — even
+	// named_terms, the one whose values never reach this struct at all, since
 	// what publishes here is only a COUNT, never a value. Absent when nothing was
 	// cut.
 	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
@@ -188,6 +205,10 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		Files:             p.Files,
 		Directories:       p.Directories,
 		Components:        p.Components,
+		HarnessTools:      p.HarnessTools,
+		Programs:          p.Programs,
+		ExternalSystems:   p.ExternalSystems,
+		Integrations:      p.Integrations,
 		InventoryOmitted:  p.InventoryOmitted,
 		Prior:             p.Prior,
 		PipelineStatus:    p.PipelineStatus,

@@ -621,3 +621,55 @@ func TestBuildOmitsEmptyFilePathInventoriesAndInventoryOmitted(t *testing.T) {
 		}
 	}
 }
+
+// The four IDENTIFIER-shaped inventories reach the wire the same way the
+// path inventories do — same call, same shape, but each gated per entry by its
+// own structural rule at the sidecar decode boundary rather than a lookup
+// table (see enrich.NameCount).
+func TestBuildCarriesTheIdentifierInventories(t *testing.T) {
+	p := enrich.Profile{
+		HarnessTools:    []enrich.NameCount{{Value: "Bash", N: 30}},
+		Programs:        []enrich.NameCount{{Value: "git", N: 9}},
+		ExternalSystems: []enrich.NameCount{{Value: "github.com", N: 4}},
+		Integrations:    []enrich.NameCount{{Value: "notion-fetch", N: 1}},
+	}
+	e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+	if len(e.HarnessTools) != 1 || len(e.Programs) != 1 || len(e.ExternalSystems) != 1 ||
+		len(e.Integrations) != 1 {
+		t.Fatalf("identifier inventories dropped by Build: %+v", e)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"harness_tools":[{"value":"Bash","n":30}]`,
+		`"programs":[{"value":"git","n":9}]`,
+		`"external_systems":[{"value":"github.com","n":4}]`,
+		`"integrations":[{"value":"notion-fetch","n":1}]`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("wire missing %s: %s", want, b)
+		}
+	}
+}
+
+// Absent, not an empty list — same rule the path inventories already keep.
+func TestBuildOmitsEmptyIdentifierInventories(t *testing.T) {
+	for name, p := range map[string]enrich.Profile{
+		"nil": {},
+		"empty": {
+			HarnessTools: []enrich.NameCount{}, Programs: []enrich.NameCount{},
+			ExternalSystems: []enrich.NameCount{}, Integrations: []enrich.NameCount{},
+		},
+	} {
+		e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, unwanted := range []string{`"harness_tools"`, `"programs"`, `"external_systems"`, `"integrations"`} {
+			if strings.Contains(string(b), unwanted) {
+				t.Errorf("%s: an empty %s was published: %s", name, unwanted, b)
+			}
+		}
+	}
+}

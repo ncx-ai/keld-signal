@@ -195,7 +195,50 @@ package enrich
 // The sidecar's SCHEMA moves 10 -> 11 for the same addition. Nothing existing
 // changes meaning: every field of v15 publishes identically. Producer strings
 // move from `-v15` to `-v16`.
-const SchemaVersion = 16
+//
+// v17 ADDS FOUR MORE INVENTORY dimensions: Profile.HarnessTools/Programs/
+// ExternalSystems/Integrations / Enrichment.harness_tools/programs/
+// external_systems/integrations, over the `tool`/`exe`/`service`/`mcp_tool`
+// levels the sidecar's /analyze has computed since this package existed and had
+// reached no payload at all. Combined with v16's three, EIGHT of the
+// inventory block's nine keys now publish; named_terms is the one that still
+// does not, and stays that way — it is the level read from message text and has
+// carried real person names.
+//
+// OPEN vocabulary, like v16's three: none of the four is a member of a closed
+// table, so each earns its field by a STRUCTURAL, per-entry gate rather than a
+// KnownX lookup (see sidecar.convertIdentifierInventory/
+// convertProgramInventory/convertExternalSystemInventory, and enrich.NameCount):
+//
+//   - harness_tools / integrations: bare identifier shape. Deliberately NOT a
+//     hardcoded allowlist of known tool/MCP names — the harness's own tool set
+//     genuinely grows (ToolSearch, Artifact, SendMessage are all recent
+//     additions in the 220-transcript corpus this was measured over), and a
+//     stale allowlist would silently drop a legitimate new tool.
+//   - programs: identifier shape plus a rejection of anything containing a
+//     path separator or starting with a leading dot. Closes a measured
+//     defect: `.env.example` — a filename, not a program — reaching the
+//     sidecar's bashlex-based exe extraction.
+//   - external_systems: rejects bare IP literals (v4 and v6) and otherwise
+//     keeps the value whole, INCLUDING internal and corporate hostnames. The
+//     220-transcript corpus this dimension was measured over is one
+//     developer's machine on open-source work — 0 RFC1918 addresses, 0
+//     `.local`, 0 `.internal`, 0 corporate hostnames, because none of those
+//     COULD appear on it — so the gate is argued structurally rather than from
+//     "the corpus was clean": an IP literal is not a meaningful observability
+//     category (unstable, unreadable, and the value most likely to identify a
+//     specific machine or customer endpoint), while a hostname comes from the
+//     same tool-call-input provenance `files`/`branch` already publish, and
+//     "which internal systems does AI-driven work touch" is exactly the
+//     question this dimension exists to answer.
+//
+// The sidecar's own SCHEMA does NOT move for this addition — it is already 11,
+// and /analyze already emits all nine inventory keys; nothing about its
+// payload changes. Only the Go-side decode boundary widens, which is why THIS
+// number still bumps: it is the only version an Atlas consumer sees. Nothing
+// existing changes meaning: every field of v16 publishes identically. Producer
+// strings move from `-v16` to `-v17`.
+const SchemaVersion = 17
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in
