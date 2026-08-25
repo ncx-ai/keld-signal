@@ -280,17 +280,17 @@ type Workstream struct {
 
 // AnalyzeResult is the Go-side view of the sidecar's /analyze response.
 //
-// It models the response's "inventory" the same SELECTIVE way it models
-// "dynamics": one field for the one key that publishes. `physical_acts` (the
-// `action` level) has one; harness_tools, programs, external_systems,
-// integrations and above all named_terms do not, and so cannot be decoded at
-// all. named_terms is drawn from the raw transcript and can carry person names
-// (e.g. "Federico", "Daniel" have both appeared in real windows). The rule on
-// this branch is that only matched vocabulary IDs ever reach Atlas — the
-// Workstreams below, and now the closed 22-value act vocabulary, which is
-// gated again in convertActs. Not giving InventoryBlock a field for the rest
-// means a later publish path has structurally nowhere to forward it, rather
-// than merely being told not to by a comment.
+// It models the response's "inventory" object the same SELECTIVE way it models
+// "dynamics" — see InventoryBlock for the full rule, which has WIDENED from
+// "one field for the one closed-vocabulary key" to "closed vocabulary OR a
+// provably-constrained shape, gated per entry": physical_acts, files,
+// directories, components, harness_tools, programs, external_systems and
+// integrations all have a field now. named_terms is the one key that still
+// does not, and so cannot be decoded at all — it is drawn from the raw
+// transcript and can carry person names (e.g. "Federico", "Daniel" have both
+// appeared in real windows). Not giving InventoryBlock a field for it means a
+// later publish path has structurally nowhere to forward it, rather than
+// merely being told not to by a comment.
 //
 // Session/WindowStart/WindowEnd are kept: they're metadata about the window
 // (a session hash, timestamps), not content, and are useful for local
@@ -353,30 +353,53 @@ type Prior struct {
 	Novel     *bool    `json:"novel"`
 }
 
-// InventoryBlock is /analyze's inventory object, and it models FOUR of its nine
-// keys: physical_acts, files, directories, components. The other five —
-// harness_tools, programs, external_systems, integrations and named_terms — are
-// on-device only, and `named_terms` is the reason the distinction is enforced by
-// the struct rather than by a comment: it is the one level drawn from message
-// TEXT, and real person names have been observed in it. A struct with exactly
-// these fields is deliberate, exactly as DynamicsBlock's is: it keeps the rest
-// structurally unreachable instead of decoded-then-dropped.
+// InventoryBlock is /analyze's inventory object, and it models EIGHT of its
+// nine keys: physical_acts, files, directories, components, harness_tools,
+// programs, external_systems, integrations. The one exception is
+// named_terms — the one level drawn from message TEXT, and real person names
+// have been observed in it ("Federico", "Daniel" in real windows). That is why
+// the distinction is enforced by the struct rather than by a comment:
+// named_terms has no field, so it stays structurally undecodable no matter
+// what the sidecar sends, rather than decoded-then-dropped by a rule someone
+// has to remember to keep enforcing.
 //
-// physical_acts is a CLOSED 22-value vocabulary (see convertActs); files,
-// directories and components are OPEN — a file path is not a member of a table
-// — so what stands in place of a vocabulary gate for them is a structural one:
-// convertPathInventory drops any entry that does not look workspace-relative
-// (see enrich.PathCount).
+// THE RULE THIS STRUCT ENCODES HAS WIDENED. It used to be "only matched
+// vocabulary IDs ever reach Atlas" (physical_acts' closed 22-value table). It
+// now reads:
+//
+//	closed/matched vocabulary  OR  provably-constrained shape, gated per entry
+//
+// physical_acts is the CLOSED case (see convertActs). The other seven fields
+// are all OPEN vocabularies — a file path, a tool name, a program name or a
+// hostname is not a member of a table — so each earns its field through a
+// STRUCTURAL gate applied PER ENTRY instead of a vocabulary lookup:
+//
+//   - files / directories / components: workspace-relative shape
+//     (convertPathInventory).
+//   - harness_tools / integrations: bare identifier shape
+//     (convertIdentifierInventory). Deliberately NOT a hardcoded allowlist —
+//     the harness's own tool set genuinely grows.
+//   - programs: identifier shape plus a rejection of path separators and a
+//     leading dot (convertProgramInventory) — closes the measured
+//     `.env.example` defect (a filename reaching the exe extraction).
+//   - external_systems: rejects bare IP literals, v4 and v6
+//     (convertExternalSystemInventory) — see that function for why internal
+//     and corporate HOSTNAMES are kept rather than filtered.
 //
 // Slices, not pointers: an inventory dimension's absence and its emptiness are
 // the same fact ("nothing was recorded"), unlike an effort block, where a zeroed
-// struct would state measurements nobody took. The convert functions still
-// return nil rather than an empty slice, so the published payload omits the key.
+// struct would state measurements nobody took. Every convert function still
+// returns nil rather than an empty slice, so the published payload omits the
+// key.
 type InventoryBlock struct {
-	PhysicalActs []InventoryItem `json:"physical_acts"`
-	Files        []InventoryItem `json:"files"`
-	Directories  []InventoryItem `json:"directories"`
-	Components   []InventoryItem `json:"components"`
+	PhysicalActs    []InventoryItem `json:"physical_acts"`
+	Files           []InventoryItem `json:"files"`
+	Directories     []InventoryItem `json:"directories"`
+	Components      []InventoryItem `json:"components"`
+	HarnessTools    []InventoryItem `json:"harness_tools"`
+	Programs        []InventoryItem `json:"programs"`
+	ExternalSystems []InventoryItem `json:"external_systems"`
+	Integrations    []InventoryItem `json:"integrations"`
 }
 
 // InventoryItem is one entry of an inventory dimension as it arrives on the wire:

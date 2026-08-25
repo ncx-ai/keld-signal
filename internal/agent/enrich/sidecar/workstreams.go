@@ -1,7 +1,9 @@
 package sidecar
 
 import (
+	"net"
 	"regexp"
+	"strings"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
@@ -41,12 +43,15 @@ import (
 //   - Session / WindowStart / WindowEnd stay local: window metadata, useful for
 //     debugging on-device, with no business on the published payload.
 //
-//   - The response's inventory block contributes FOUR of its nine keys:
-//     `physical_acts` (convertActs), and `files`/`directories`/`components`
-//     (convertPathInventory). The other five are not modelled by AnalyzeResult
-//     at all (see InventoryBlock), so there is structurally nothing here to
-//     forward — named_terms above all is drawn from message TEXT and has been
-//     observed to contain real person names; keep it unrepresentable.
+//   - The response's inventory block contributes EIGHT of its nine keys:
+//     `physical_acts` (convertActs), `files`/`directories`/`components`
+//     (convertPathInventory), and `harness_tools`/`integrations`
+//     (convertIdentifierInventory), `programs` (convertProgramInventory) and
+//     `external_systems` (convertExternalSystemInventory). Only `named_terms`
+//     is not modelled by AnalyzeResult at all (see InventoryBlock), so there is
+//     structurally nothing here to forward it — it is drawn from message TEXT
+//     and has been observed to contain real person names; keep it
+//     unrepresentable.
 //
 //   - InventoryOmitted forwards UNCHANGED: it is a map of dimension name to a
 //     COUNT of values cut, never a value, so it carries no privacy weight even
@@ -99,6 +104,10 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.
 		Files:            convertPathInventory(res.Inventory.Files),
 		Directories:      convertPathInventory(res.Inventory.Directories),
 		Components:       convertPathInventory(res.Inventory.Components),
+		HarnessTools:     convertIdentifierInventory(res.Inventory.HarnessTools),
+		Programs:         convertProgramInventory(res.Inventory.Programs),
+		ExternalSystems:  convertExternalSystemInventory(res.Inventory.ExternalSystems),
+		Integrations:     convertIdentifierInventory(res.Inventory.Integrations),
 		InventoryOmitted: convertInventoryOmitted(res.InventoryOmitted),
 		Dynamics:         convertDynamics(res.Dynamics),
 		Effort:           convertEffort(res.Effort),
@@ -221,6 +230,113 @@ func convertPathInventory(items []InventoryItem) []enrich.PathCount {
 			continue
 		}
 		out = append(out, enrich.PathCount{Value: it.Value, N: it.N})
+	}
+	return out
+}
+
+// identifierShape matches a bare, single-token identifier: the shape a harness
+// tool name (Bash, ToolSearch, SendMessage), an MCP tool id (notion-fetch) or a
+// shell program name (git, pnpm, docker-compose) all take. Non-empty, and holds
+// only letters, digits, underscore, hyphen and dot — no whitespace and no
+// path/URL punctuation ("/", "\", ":", "@", ...). It does not by itself reject
+// a leading dot: a dot is fine in the MIDDLE of an identifier (docker-compose,
+// python3.12), so `programs` layers its own explicit leading-dot rejection on
+// top (see convertProgramInventory) rather than this shared shape doing it for
+// every caller.
+var identifierShape = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// convertIdentifierInventory converts the two OPEN-vocabulary inventories whose
+// values are bare identifiers: harness_tools (level `tool`) and integrations
+// (level `mcp_tool`). PER-ENTRY, the same shape convertActs/convertPathInventory
+// use, for the same reason: an inventory is a list of independent items, so one
+// bad entry costs exactly that entry.
+//
+// Deliberately NOT a hardcoded allowlist of known tool/MCP names. The
+// harness's own tool set genuinely grows — ToolSearch, Artifact and
+// SendMessage are all recent additions measured in the same corpus this gate
+// was built from — and a stale allowlist would silently drop a legitimate new
+// tool, which is worse than forwarding an identifier a shape gate already
+// bounds.
+func convertIdentifierInventory(items []InventoryItem) []enrich.NameCount {
+	var out []enrich.NameCount
+	for _, it := range items {
+		if it.Value == "" || !identifierShape.MatchString(it.Value) {
+			continue
+		}
+		out = append(out, enrich.NameCount{Value: it.Value, N: it.N})
+	}
+	return out
+}
+
+// programLeadingDot is the one extra rejection `programs` layers on top of
+// identifierShape. identifierShape's own character class already excludes a
+// path separator, so the explicit separator check convertProgramInventory
+// applies below is defence in depth against a future, wider identifierShape —
+// the leading-dot check is the one doing real work today: it closes a measured
+// defect, `.env.example` (a filename, not a program) reaching the sidecar's
+// bashlex-based exe extraction. Neither restriction is applied to
+// harness_tools/integrations: a tool name or MCP id has no reason to start
+// with a dot, but there is also no measured defect there to justify adding an
+// unevidenced restriction.
+var programLeadingDot = regexp.MustCompile(`^\.`)
+
+// convertProgramInventory converts the `programs` inventory (level `exe`):
+// identifier shape, PLUS a rejection of anything containing a path separator or
+// starting with a leading dot. PER-ENTRY, same reasoning as
+// convertIdentifierInventory.
+func convertProgramInventory(items []InventoryItem) []enrich.NameCount {
+	var out []enrich.NameCount
+	for _, it := range items {
+		if it.Value == "" || !identifierShape.MatchString(it.Value) {
+			continue
+		}
+		if strings.ContainsAny(it.Value, `/\`) || programLeadingDot.MatchString(it.Value) {
+			continue
+		}
+		out = append(out, enrich.NameCount{Value: it.Value, N: it.N})
+	}
+	return out
+}
+
+// convertExternalSystemInventory converts the `external_systems` inventory
+// (level `service`) on exactly one structural rule: reject a BARE IP LITERAL
+// (v4 or v6) and keep everything else — INCLUDING internal and corporate
+// hostnames.
+//
+// ⚠️ THE MEASUREMENT BEHIND THIS DOES NOT GENERALISE, AND THIS GATE MUST NOT BE
+// WRITTEN AS IF IT DID. The corpus this dimension was measured over is one
+// developer's machine doing open-source work: 0 RFC1918 addresses, 0 `.local`,
+// 0 `.internal`, 0 corporate hostnames — because none of those COULD appear on
+// it. An enterprise user's transcripts DO produce `jenkins.corp.internal`,
+// `gitlab.acme.com`, `10.x.x.x`, so "the corpus was clean" cannot be the
+// argument for what this gate does. The argument has to be structural, and it
+// is:
+//
+//   - An IP literal is not a meaningful OBSERVABILITY category on its own: it
+//     is unstable (a service's address can change across requests), unreadable
+//     without a reverse lookup nobody here performs, and it is the value MOST
+//     likely to identify a specific machine or a specific customer's endpoint —
+//     closer to a PII-shaped fact than to "which system did this hour touch".
+//   - A HOSTNAME, by contrast, comes from a tool-call INPUT (a URL fetched, a
+//     host connected to) — the SAME provenance `files`/`branch` already have,
+//     and both of those already publish org-identifying strings (a repo path, a
+//     branch name) without controversy. "Which internal systems does AI-driven
+//     work touch" is precisely the observability question this dimension
+//     exists to answer, and an org's own `jenkins.corp.internal` is the most
+//     on-topic answer it could give — filtering it out because it LOOKS
+//     internal would defeat the dimension for every enterprise user while
+//     protecting nothing for the open-source one this corpus happens to be.
+//
+// So: reject net.ParseIP(value) != nil — it matches both address families and
+// nothing else, since no hostname parses as a bare IP — and keep everything
+// else whole.
+func convertExternalSystemInventory(items []InventoryItem) []enrich.NameCount {
+	var out []enrich.NameCount
+	for _, it := range items {
+		if it.Value == "" || net.ParseIP(it.Value) != nil {
+			continue
+		}
+		out = append(out, enrich.NameCount{Value: it.Value, N: it.N})
 	}
 	return out
 }

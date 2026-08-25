@@ -1,0 +1,208 @@
+package sidecar
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+)
+
+// checkNameCounts is checkPathCounts' twin for the identifier inventories,
+// which decode to enrich.NameCount rather than enrich.PathCount but share the
+// same {Value, N} shape and the same ordering guarantee.
+func checkNameCounts(t *testing.T, name string, got []enrich.NameCount, want []enrichAct) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s = %+v, want %d entries", name, got, len(want))
+	}
+	for i, w := range want {
+		if got[i].Value != w.value || got[i].N != w.n {
+			t.Errorf("%s entry %d = %+v, want %+v", name, i, got[i], w)
+		}
+	}
+}
+
+// Round-trip: the four identifier-shaped inventories arrive on the wire
+// exactly as the acts/path inventories do (see acts_test.go, paths_test.go),
+// and AnalyzeLabeled must carry all four plus their values and counts
+// unchanged.
+func TestAnalyzeLabeledCarriesTheIdentifierInventories(t *testing.T) {
+	srv := analyzeServer(t, inventoryBody(map[string]any{
+		"harness_tools":    acts("Bash", 30, "ToolSearch", 4),
+		"programs":         acts("git", 9, "pnpm", 3),
+		"external_systems": acts("github.com", 4, "api.anthropic.com", 2),
+		"integrations":     acts("notion-fetch", 1, "notion-update-page", 1),
+	}))
+	defer srv.Close()
+
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	if !ok {
+		t.Fatal("AnalyzeLabeled reported failure")
+	}
+	checkNameCounts(t, "HarnessTools", got.HarnessTools, []enrichAct{{"Bash", 30}, {"ToolSearch", 4}})
+	checkNameCounts(t, "Programs", got.Programs, []enrichAct{{"git", 9}, {"pnpm", 3}})
+	checkNameCounts(t, "ExternalSystems", got.ExternalSystems,
+		[]enrichAct{{"github.com", 4}, {"api.anthropic.com", 2}})
+	checkNameCounts(t, "Integrations", got.Integrations,
+		[]enrichAct{{"notion-fetch", 1}, {"notion-update-page", 1}})
+}
+
+// The structural gate for programs: an exe containing a path separator, or one
+// with a leading dot (the measured real defect, `.env.example` reaching the
+// bashlex exe extraction), is dropped WITHOUT dropping the rest of the
+// inventory.
+func TestABadProgramEntryIsDroppedWithoutDroppingTheInventory(t *testing.T) {
+	for _, bad := range []string{".env.example", "bin/git", "sub\\dir\\tool.exe"} {
+		srv := analyzeServer(t, inventoryBody(map[string]any{
+			"programs": acts("git", 9, bad, 4),
+		}))
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		srv.Close()
+		if !ok {
+			t.Fatalf("%q: AnalyzeLabeled reported failure", bad)
+		}
+		if len(got.Programs) != 1 || got.Programs[0].Value != "git" {
+			t.Fatalf("%q: want only the well-shaped entry to survive, got %+v", bad, got.Programs)
+		}
+		b, _ := json.Marshal(got)
+		if strings.Contains(string(b), bad) {
+			t.Errorf("%q: a bad program entry reached the conversion output: %s", bad, b)
+		}
+	}
+}
+
+// The structural gate for harness_tools/integrations: an identifier-shaped
+// value survives, anything holding whitespace, a path separator or other
+// non-identifier punctuation does not — same per-entry drop.
+func TestABadIdentifierEntryIsDroppedWithoutDroppingTheInventory(t *testing.T) {
+	for _, bad := range []string{"two words", "mcp/notion", "notion:fetch", ""} {
+		srv := analyzeServer(t, inventoryBody(map[string]any{
+			"harness_tools": acts("Bash", 30, bad, 4),
+		}))
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		srv.Close()
+		if !ok {
+			t.Fatalf("%q: AnalyzeLabeled reported failure", bad)
+		}
+		if len(got.HarnessTools) != 1 || got.HarnessTools[0].Value != "Bash" {
+			t.Fatalf("%q: want only the well-shaped entry to survive, got %+v", bad, got.HarnessTools)
+		}
+	}
+}
+
+// The structural gate for external_systems: a bare IP literal, v4 or v6, is
+// dropped without dropping the rest of the inventory. LOOPBACK is already
+// filtered sidecar-side (workstreams.payload); this is the client-side
+// decode-boundary defence-in-depth for any OTHER address.
+func TestABareIPServiceEntryIsDroppedWithoutDroppingTheInventory(t *testing.T) {
+	for name, bad := range map[string]string{
+		"IPv4":          "203.0.113.5",
+		"IPv4 RFC1918":  "10.0.0.1",
+		"IPv6":          "2001:db8::1",
+		"IPv6 loopback": "::1",
+	} {
+		srv := analyzeServer(t, inventoryBody(map[string]any{
+			"external_systems": acts("github.com", 4, bad, 2),
+		}))
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		srv.Close()
+		if !ok {
+			t.Fatalf("%s (%q): AnalyzeLabeled reported failure", name, bad)
+		}
+		if len(got.ExternalSystems) != 1 || got.ExternalSystems[0].Value != "github.com" {
+			t.Fatalf("%s (%q): want only the hostname to survive, got %+v", name, bad, got.ExternalSystems)
+		}
+		b, _ := json.Marshal(got)
+		if strings.Contains(string(b), bad) {
+			t.Errorf("%s: a bare IP literal reached the conversion output: %s", name, b)
+		}
+	}
+}
+
+// ⚠️ THE DELIBERATE DECISION, PINNED: a corporate hostname and an
+// RFC1918-LOOKING hostname STRING (as opposed to a literal address) both
+// survive. This is not an oversight to be "tightened" later — see
+// convertExternalSystemInventory's comment for the argument: hostnames come
+// from the same tool-call-input provenance `files`/`branch` already publish,
+// and filtering anything that merely LOOKS internal would defeat the dimension
+// for every enterprise user while this project's own corpus, having none of
+// these shapes, could never catch the regression. A later change that makes
+// this test fail must argue with this comment, not silently walk past it.
+func TestCorporateAndRFC1918LookingHostnamesSurviveTheExternalSystemsGate(t *testing.T) {
+	for _, keep := range []string{
+		"jenkins.corp.internal",
+		"gitlab.acme.com",
+		"10.0.0.1.corp.internal", // RFC1918-looking, but a HOSTNAME, not an IP literal
+	} {
+		srv := analyzeServer(t, inventoryBody(map[string]any{
+			"external_systems": acts(keep, 3),
+		}))
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		srv.Close()
+		if !ok {
+			t.Fatalf("%q: AnalyzeLabeled reported failure", keep)
+		}
+		if len(got.ExternalSystems) != 1 || got.ExternalSystems[0].Value != keep {
+			t.Errorf("%q: a deliberately-kept hostname was dropped, got %+v", keep, got.ExternalSystems)
+		}
+	}
+}
+
+// Nil, not an empty slice, for the same reason the acts/path inventories are:
+// a sidecar too old to publish the level (or a window that used nothing at
+// that level) must not read as "we looked and the hour used nothing".
+func TestNoIdentifierInventoriesIsAbsentNotAnEmptyList(t *testing.T) {
+	for name, inv := range map[string]map[string]any{
+		"no inventory block at all":       nil,
+		"an inventory without these keys": {"physical_acts": acts("read", 2)},
+		"the keys present but empty": {
+			"harness_tools": []map[string]any{}, "programs": []map[string]any{},
+			"external_systems": []map[string]any{}, "integrations": []map[string]any{},
+		},
+		"every entry rejected by its gate": {
+			"harness_tools": acts("two words", 4), "programs": acts(".env.example", 4),
+			"external_systems": acts("10.0.0.1", 4), "integrations": acts("bad id!", 4),
+		},
+	} {
+		body := inventoryBody(inv)
+		if inv == nil {
+			delete(body, "inventory")
+		}
+		srv := analyzeServer(t, body)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		srv.Close()
+		if !ok {
+			t.Fatalf("%s: AnalyzeLabeled reported failure", name)
+		}
+		if got.HarnessTools != nil || got.Programs != nil || got.ExternalSystems != nil || got.Integrations != nil {
+			t.Errorf("%s: want nil, got tools=%+v programs=%+v systems=%+v integrations=%+v",
+				name, got.HarnessTools, got.Programs, got.ExternalSystems, got.Integrations)
+		}
+	}
+}
+
+// named_terms stays undecodable even once the other four widen InventoryBlock
+// further — the guard on the guard, exercised through the same public API the
+// other tests in this file use rather than reflection alone.
+func TestNamedTermsStaysUndecodableAlongsideTheIdentifierInventories(t *testing.T) {
+	srv := analyzeServer(t, inventoryBody(map[string]any{
+		"harness_tools":    acts("Bash", 30),
+		"programs":         acts("git", 9),
+		"external_systems": acts("github.com", 4),
+		"integrations":     acts("notion-fetch", 1),
+		"named_terms":      acts("Federico", 2),
+	}))
+	defer srv.Close()
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	if !ok {
+		t.Fatal("AnalyzeLabeled reported failure")
+	}
+	b, _ := json.Marshal(got)
+	for _, forbidden := range []string{"Federico", "named_terms"} {
+		if strings.Contains(string(b), forbidden) {
+			t.Errorf("named_terms leaked despite the other inventories decoding: %q in %s", forbidden, b)
+		}
+	}
+}

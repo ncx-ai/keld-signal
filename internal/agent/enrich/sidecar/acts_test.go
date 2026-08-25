@@ -138,24 +138,26 @@ func TestNoPhysicalActsIsAbsentNotAnEmptyList(t *testing.T) {
 }
 
 // The guarantee AnalyzeResult has always held for the inventory block, now that
-// four of its nine keys are modelled instead of one: `physical_acts`, `files`,
-// `directories` and `components` have a field, so every other one — above all
-// `named_terms`, which is drawn from message text and has held real person
-// names — stays undecodable rather than decoded-and-dropped. Asserted over the
-// STRUCT, so a field added tomorrow fails here.
-func TestOnlyTheFourInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
+// eight of its nine keys are modelled instead of four: `physical_acts`,
+// `files`, `directories`, `components`, `harness_tools`, `programs`,
+// `external_systems` and `integrations` all have a field, so the one
+// remaining key — `named_terms`, which is drawn from message text and has held
+// real person names — stays undecodable rather than decoded-and-dropped.
+// Asserted over the STRUCT, so a field added tomorrow fails here.
+func TestOnlyEightInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 	rt := reflect.TypeOf(InventoryBlock{})
 	wantTags := map[string]bool{
 		"physical_acts": false, "files": false, "directories": false, "components": false,
+		"harness_tools": false, "programs": false, "external_systems": false, "integrations": false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; only physical_acts/files/directories/components "+
-			"may be decodable — named_terms is drawn from message TEXT and must stay "+
-			"unrepresentable", names)
+		t.Fatalf("InventoryBlock models %v; only physical_acts/files/directories/components/"+
+			"harness_tools/programs/external_systems/integrations may be decodable — "+
+			"named_terms is drawn from message TEXT and must stay unrepresentable", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")
@@ -170,8 +172,9 @@ func TestOnlyTheFourInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T)
 			t.Errorf("expected inventory key %q to be modelled, but no field carries it", tag)
 		}
 	}
-	// And the same property end-to-end, because a struct check alone would not
-	// catch a leak added elsewhere in the conversion.
+	// And the same property end-to-end: every one of the eight decodes and
+	// survives conversion, and named_terms alone does not — because a struct
+	// check alone would not catch a leak added elsewhere in the conversion.
 	srv := analyzeServer(t, inventoryBody(map[string]any{
 		"physical_acts":    acts("read", 5),
 		"files":            acts("internal/agent/daemon/daemon.go", 4),
@@ -191,10 +194,20 @@ func TestOnlyTheFourInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T)
 	if len(got.Files) != 1 || len(got.Directories) != 1 || len(got.Components) != 1 {
 		t.Fatalf("the path inventories are empty; the leak checks would be vacuous: %+v", got)
 	}
+	if len(got.Programs) != 1 || len(got.HarnessTools) != 1 ||
+		len(got.ExternalSystems) != 1 || len(got.Integrations) != 1 {
+		t.Fatalf("the four newly-wired inventories are empty; the checks below would be vacuous: %+v", got)
+	}
 	b, _ := json.Marshal(got)
-	for _, forbidden := range []string{"Federico", "named_terms", "inventory", "git",
-		"programs", "harness_tools", "acme-internal.example", "notion-fetch", "453451c2",
-		"window_start", "2026-08-23T00:00:00Z"} {
+	// These four now DECODE and must survive — the opposite assertion from
+	// before this change, when they were on the forbidden list below.
+	for _, want := range []string{"git", "Bash", "acme-internal.example", "notion-fetch"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%q should now decode and survive conversion, but is missing from: %s", want, b)
+		}
+	}
+	for _, forbidden := range []string{"Federico", "named_terms", "inventory",
+		"453451c2", "window_start", "2026-08-23T00:00:00Z"} {
 		if strings.Contains(string(b), forbidden) {
 			t.Errorf("the inventory conversion leaked %q: %s", forbidden, b)
 		}
