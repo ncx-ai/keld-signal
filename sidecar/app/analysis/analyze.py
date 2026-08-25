@@ -57,7 +57,12 @@ Four refuted signals are deliberately NOT here — token weight (0.89% of domina
 tool-output volume (+0.552 against log volume, a restated tool-call count), error thrashing (4.8%
 prevalence, below the 0.20 floor) and error rate (a window statistic, not a facet). The token
 weight is nonetheless still COMPUTED and stored (`magnitude.TOKENS`) because the weighted rollup
-uses it; what it is not is published.
+uses it; what it is not is published. `magnitude.REQUEST_TOKENS` — the SAME per-turn cost recorded
+once per `requestId` instead of once per line — is a different constant for exactly that reason
+(see its own docstring) and IS published, as `request_tokens`: it is the one form of the token
+signal that sums to what the window actually cost rather than over-counting by a request's line
+count. `gap_p50_s`/`gap_p90_s` (`latency.percentiles`) are the tail `fast_share` collapses away —
+both were computed by these modules before they had a payload key at all.
 
 ## The window edge is quantized, and has to be
 
@@ -253,8 +258,8 @@ def _payload(rl, path, start, end, effort):
     return out
 
 
-def _effort(auth, tmp):
-    """`(Authored, Tempo)` -> the published `effort` block.
+def _effort(auth, tmp, spend, pcts):
+    """`(Authored, Tempo, spend, Percentiles)` -> the published `effort` block.
 
     Numbers and closed-vocabulary labels only; see the module docstring. Every key is named for
     what it is, and each number ships with the count or status that makes it readable — the
@@ -269,6 +274,11 @@ def _effort(auth, tmp):
 
     `tempo` states the conclusion; `authored` deliberately states none, because no measurement
     supplies a cut point on a byte sum (see `magnitude.authored`). Asymmetric on purpose.
+
+    `spend` (`request_tokens`) and `pcts` (`gap_p50_s`/`gap_p90_s`) are computed by the two
+    gatherers, not here — this function only formats. Both abstain to `None` the same way
+    `authored_bytes`/`fast_share` do: `spend` is `None` when nothing was costed, `pcts.p50`/
+    `pcts.p90` are `None` together below `latency.MIN_GAPS`.
     """
     return {
         "authored_bytes": auth.nbytes,
@@ -278,6 +288,14 @@ def _effort(auth, tmp):
         "gaps": tmp.n_gaps,
         "tempo": tmp.reading,
         "tempo_status": tmp.status,
+        # The SPEND series: magnitude.REQUEST_TOKENS is token_weight once per requestId, so it
+        # sums to what the window cost. magnitude.TOKENS must never be summed here -- it carries
+        # a request's cost on every line of that request (median 2 lines, up to 12), and a
+        # 2x-over-counted total that looks like spend is the plausible-wrong-number failure the
+        # two constants exist to prevent.
+        "request_tokens": spend,
+        "gap_p50_s": pcts.p50,
+        "gap_p90_s": pcts.p90,
     }
 
 
@@ -288,26 +306,41 @@ def _effort_from_rows(rows):
     `turn_magnitude` row (`_aggregate_mag`) and `turn_magnitudes` then groups by `ts`, so a
     per-row count here would disagree with the store on `authoring_turns` while agreeing on every
     byte. Zeros are dropped for the same reason — a zero magnitude is never stored.
+
+    `spend` sums the `mag`/`request_tokens` rows the same `events_for_turns` loop writes once per
+    `requestId` (see `levels.py`), mirroring the store's `turn_magnitudes(kind=REQUEST_TOKENS)`.
+    The gap percentiles reuse the same turn-instant list `tempo` is given — one clock, not two.
     """
     per_ts = collections.defaultdict(float)
     recorded = False
+    spend_vals = []
     for r in rows:
         if r[5] != "mag":
             continue
         recorded = recorded or bool(r[8])
         if r[6] == magnitude.EDIT_BYTES:
             per_ts[r[0]] += float(r[8])
+        elif r[6] == magnitude.REQUEST_TOKENS:
+            spend_vals.append(r[8])
+    turn_times = [r[0] for r in rows if r[5] == "ref"]
+    spend = int(round(sum(spend_vals))) if spend_vals else None
     return _effort(magnitude.authored(per_ts.values(), recorded=recorded),
-                   latency.tempo([r[0] for r in rows if r[5] == "ref"]))
+                   latency.tempo(turn_times), spend, latency.percentiles(turn_times))
 
 
 def _effort_from_store(store, session, lo, hi):
-    """The same block, out of the series. Three indexed queries, no transcript opened."""
+    """The same block, out of the series. Four indexed queries, no transcript opened."""
+    turn_times = store.turn_times(session, lo, hi, exclude_slots=(RECONCILE_SLOT,))
+    spend_vals = [v for _ts, v in store.turn_magnitudes(session, lo, hi,
+                                                        kind=magnitude.REQUEST_TOKENS)]
+    spend = int(round(sum(spend_vals))) if spend_vals else None
+    pcts = latency.percentiles(turn_times)
     return _effort(
         magnitude.authored(
             (v for _ts, v in store.turn_magnitudes(session, lo, hi, kind=magnitude.EDIT_BYTES)),
             recorded=store.has_magnitudes(session, lo, hi)),
-        latency.tempo(store.turn_times(session, lo, hi, exclude_slots=(RECONCILE_SLOT,))))
+        latency.tempo(turn_times),
+        spend, pcts)
 
 
 def _bounds(end_iso, span_minutes):

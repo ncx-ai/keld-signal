@@ -209,7 +209,29 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           from ALLOCATION + INVENTORY rather than restated; an unbinned published level would
 #           under-count the interior of every historical window. Go's `enrich.SchemaVersion`
 #           moves 18 -> 19 for this and `repo` together.
-SCHEMA = 13
+#   13 -> 14: the `effort` block gains THREE fields it had computed all along and never
+#           published: `request_tokens` and the gap distribution's `gap_p50_s`/`gap_p90_s`.
+#
+#           `request_tokens` sums `magnitude.REQUEST_TOKENS` -- the request's price-weighted cost
+#           (`magnitude.token_weight`), recorded ONCE per `requestId` -- so it is the SPEND
+#           series: the number that actually sums to what the window cost.
+#           `magnitude.TOKENS` is DELIBERATELY NOT summed for this, and is not among the three:
+#           it carries a request's cost on EVERY line of that request (median 2 lines, up to 12
+#           measured), so summing it over-counts a window's spend by its line count -- the
+#           plausible-wrong-number failure `magnitude.py`'s own docstring names as the reason the
+#           two constants exist. `request_tokens` is `None` when the window costed nothing, the
+#           same abstention `authored_bytes` already makes, never a `0` standing in for "never
+#           looked."
+#
+#           `gap_p50_s`/`gap_p90_s` (`latency.percentiles`) are the median and 90th-percentile
+#           inter-turn gap -- the tail `fast_share` collapses to one side of a threshold and
+#           cannot report. Both are `None` together below `latency.MIN_GAPS`, the same eligibility
+#           floor `fast_share`/`tempo` already abstain under, computed from the SAME turn-instant
+#           clock (`Store.turn_times` / the oracle's `ref` rows) rather than a second query.
+#
+#           A window that answers with three keys it did not answer with before is a window
+#           answered differently, which is exactly this number's trigger.
+SCHEMA = 14
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

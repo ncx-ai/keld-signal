@@ -245,17 +245,20 @@ def test_the_store_answers_the_target_window_exactly_as_a_parse_does():
 
 
 def test_the_effort_block_is_the_two_surviving_transcript_signals_and_nothing_else():
-    """The published shape. Six discarded signals were measured; two passed. The four refuted
-    ones -- token weight, tool-output volume, error thrashing, error rate -- must not appear,
-    and the token weight in particular is still COMPUTED and stored for the weighted rollup, so
-    "not published" is the only thing keeping it out."""
+    """The published shape. Six discarded signals were measured; two passed, each since widened
+    with a field it had computed all along and never published (`request_tokens`,
+    `gap_p50_s`/`gap_p90_s` -- see `app/analysis/__init__.py`'s 13 -> 14 changelog entry). The
+    four refuted ones -- raw token weight, tool-output volume, error thrashing, error rate -- must
+    still not appear, and `magnitude.TOKENS` in particular is still COMPUTED and stored for the
+    weighted rollup, so "not published" is the only thing keeping it out."""
     with tempfile.TemporaryDirectory() as tmp:
         path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
         ingest_file(st, path, nlp)
         eff = analyze_window(path, "TARGET", 60, nlp, store=st)["effort"]
         assert set(eff) == {"authored_bytes", "authoring_turns", "authored_status",
-                            "fast_share", "gaps", "tempo", "tempo_status"}, sorted(eff)
-        for refuted in ("tokens", "token_weight", "request_tokens", "out_bytes", "error_rate",
+                            "fast_share", "gaps", "tempo", "tempo_status",
+                            "request_tokens", "gap_p50_s", "gap_p90_s"}, sorted(eff)
+        for refuted in ("tokens", "token_weight", "out_bytes", "error_rate",
                         "n_errors", "max_err_run", "n_thrash", "slow_share"):
             assert refuted not in eff, f"{refuted} was REFUTED and must not publish"
         st.close()
@@ -289,6 +292,66 @@ def test_the_effort_block_carries_the_tempo_and_the_share_it_was_computed_from()
         assert eff["fast_share"] == 0.0
         assert eff["tempo"] == "autonomous"
         assert eff["tempo_status"] == "attributed"
+        st.close()
+
+
+# The target window holds 11 assistant turns, each with a DISTINCT requestId and IDENTICAL usage
+# (input_tokens=400, output_tokens=60, no cache activity) -- token_weight = 400 + 5*60 = 700.0 per
+# request, and since no requestId repeats, `request_tokens` sums all eleven undeduped.
+SPEND_IN_WINDOW = 11 * 700
+
+
+def test_effort_carries_the_spend_and_the_gap_distribution():
+    """The two withheld signals reach the payload: `request_tokens` is the price-weighted spend
+    (`magnitude.REQUEST_TOKENS`, once per requestId -- NEVER `magnitude.TOKENS`, which repeats a
+    request's cost on every line and would over-count this window's spend by up to 12x), and
+    `gap_p50_s`/`gap_p90_s` are the inter-turn gap distribution `fast_share` collapses away."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        eff = analyze_window(path, "TARGET", 60, nlp, store=st)["effort"]
+        for k in ("request_tokens", "gap_p50_s", "gap_p90_s"):
+            assert k in eff, (k, sorted(eff))
+        assert eff["request_tokens"] == SPEND_IN_WINDOW, eff
+        assert eff["gap_p50_s"] is not None and eff["gap_p90_s"] is not None, eff
+        assert 0 < eff["gap_p50_s"] <= eff["gap_p90_s"], eff
+        st.close()
+
+
+def test_effort_abstains_on_the_gap_percentiles_rather_than_reporting_zero():
+    """A missing measurement is `None`, never 0 -- the rule `authored_bytes`/`fast_share` already
+    follow. Below `latency.MIN_GAPS` the window has gaps, just too few to state a percentile from,
+    so both fields must stay `None` together rather than publish a number computed from a sample
+    too thin to mean anything."""
+    turns = [(0.0, "u", "p1", "First."), (120.0, "u", "p2", "Second."),
+             (240.0, "u", "LAST", "Third.")]
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp, turns), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        eff = analyze_window(path, "LAST", 60, nlp, store=st)["effort"]
+        # Same fixture as test_a_window_with_no_costed_turn_abstains_on_bytes_rather_than_claiming_
+        # zero: one gap, well under MIN_GAPS -- thin, not absent, and thin still abstains.
+        assert eff["gaps"] == 1, eff
+        assert eff["gap_p50_s"] is None and eff["gap_p90_s"] is None, eff
+        assert eff["request_tokens"] is None, eff
+        assert analyze_window_by_parse(path, "LAST", 60, nlp)["effort"] == eff
+        st.close()
+
+
+def test_the_oracle_still_agrees_on_the_spend_and_gap_percentiles():
+    """`analyze_window_by_parse` is the equivalence ORACLE and never a fallback -- adding a field
+    to one gatherer and not the other is exactly the silent divergence it exists to catch. Checked
+    across every prompt id in the fixture, not just the busiest window."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path, st, nlp = _write(tmp), _store(tmp), _FakeNlp()
+        ingest_file(st, path, nlp)
+        for pid in _prompt_ids():
+            served = analyze_window(path, pid, 60, nlp, store=st)["effort"]
+            oracle = analyze_window_by_parse(path, pid, 60, nlp)["effort"]
+            assert served == oracle, (pid, served, oracle)
+        # Not vacuous: the busiest window must actually carry a real spend and a real percentile.
+        eff = analyze_window(path, "TARGET", 60, nlp, store=st)["effort"]
+        assert eff["request_tokens"] and eff["gap_p50_s"], eff
         st.close()
 
 
