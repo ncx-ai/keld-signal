@@ -145,6 +145,43 @@ def test_choose_cap_uses_absolute_difference_not_signed():
     assert cap is None, (cap, why)        # and no other pair in this set qualifies either
 
 
+def test_a_thin_block_merges_forward_taking_the_earlier_start():
+    with tempfile.TemporaryDirectory() as tmp:
+        st = b.CachingStore(_mkstore(tmp, [_ev(10, "branch", "main", n=1.0),
+                                           _ev(400, "branch", "main", n=20.0)]))
+        blocks = [b.Block(0.0, 300.0, "session_start", "detected"),
+                  b.Block(300.0, 600.0, "detected", "session_end")]
+        merged, stats = b.merge_thin(st, SESSION, blocks)
+        assert len(merged) == 1, merged
+        assert merged[0].start == 0.0 and merged[0].end == 600.0, merged[0]
+        assert merged[0].end_reason == "session_end", merged[0]
+        assert stats["merged"] == 1, stats
+
+
+def test_merge_reports_when_it_changed_a_published_value():
+    """The question item 3 exists to answer. A merge that flips a dominant value has rewritten
+    what the window said, which is a different thing from topping up an evidence count."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = b.CachingStore(_mkstore(tmp, [_ev(10, "branch", "old", n=4.0),
+                                           _ev(400, "branch", "new", n=5.0)]))
+        blocks = [b.Block(0.0, 300.0, "session_start", "detected"),
+                  b.Block(300.0, 600.0, "detected", "session_end")]
+        _merged, stats = b.merge_thin(st, SESSION, blocks)
+        assert stats["merged"] == 1, stats
+        assert stats["value_changed"] == 1, stats
+
+
+def test_a_block_clearing_the_floor_is_left_alone():
+    with tempfile.TemporaryDirectory() as tmp:
+        st = b.CachingStore(_mkstore(tmp, [_ev(10, "branch", "main", n=9.0),
+                                           _ev(400, "branch", "main", n=9.0)]))
+        blocks = [b.Block(0.0, 300.0, "session_start", "detected"),
+                  b.Block(300.0, 600.0, "detected", "session_end")]
+        merged, stats = b.merge_thin(st, SESSION, blocks)
+        assert len(merged) == 2, merged
+        assert stats["merged"] == 0, stats
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

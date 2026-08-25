@@ -16,7 +16,9 @@ maps every returned index back to its bucket instant, so what is measured is wha
 Reuses `sizer_eval`'s store helpers BY IMPORT (`CachingStore`, `DB`, `active_bins`), never by
 copy, so a later comparison is comparing results, not two forks of the same arithmetic.
 """
+import argparse
 import collections
+import json
 import os
 import sys
 
@@ -26,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from app.analysis.dynamics import DETECT_LEVEL, DETECT_STEP_S, EwmaSizer  # noqa: E402
 from app.analysis.store import BIN_SECONDS, open_store                    # noqa: E402
 from app.analysis.window import MIN_EVIDENCE, attribution                 # noqa: E402
-from app.analysis.workstreams import ALLOCATION                           # noqa: E402
+from app.analysis.workstreams import ALLOCATION, payload                  # noqa: E402
 from sizer_eval import CachingStore, DB, active_bins                      # noqa: E402
 
 # The duration-cap sweep Task 2 measures over. Minutes.
@@ -260,3 +262,206 @@ def sweep(store=None):
         "chosen_cap": chosen_cap,
         "chosen_reason": why,
     }
+
+
+# --- item 3: the merge-forward rule -------------------------------------------------------------
+
+def _dim_values(rl):
+    """`workstreams.payload(rl)["workstreams"]`, reduced to just `name -> value` (or `None`).
+    Share/evidence are deliberately dropped here: the whole point of item 3 is that a merge is
+    allowed to move them (that is "topping up an evidence count") and is only unsafe when it
+    moves a `value` — the thing a reader actually reads."""
+    ws = payload(rl)["workstreams"]
+    return {name: (None if v is None else v["value"]) for name, v in ws.items()}
+
+
+def merge_thin(store, session, blocks, min_evidence=MIN_EVIDENCE):
+    """Absorb every block whose OWN `block_evidence` is below `min_evidence` into a neighbour,
+    per the pre-registered rule: forward into the next block by default, backward into the
+    previous one only for a thin block that is the session's FINAL block (no successor to take
+    it).
+
+    Returns `(merged_blocks, stats)`. `stats` carries `merged` / `merged_backward` (block counts,
+    forward vs backward), `chained` (how many thin blocks had a thin immediate successor, i.e.
+    would have chained had the walk not absorbed them together), `merge_events` (how many
+    absorption operations occurred — one event can absorb several consecutive thin blocks at
+    once) split `_forward`/`_backward`, and `value_changed` (how many of those EVENTS changed a
+    published `workstreams` value) likewise split.
+
+    ⚠️ **What "value_changed" compares, and why it is not literally "successor vs merged".** The
+    pre-registration's prose reads as "the successor's published workstreams before the merge
+    against the merged block's after" — but a successor that already clears the floor on its own
+    publishes the SAME dominant value whether or not a thin neighbour's evidence is folded in
+    (that neighbour can only ever add a MINORITY of the merged total, because if it could
+    outweigh the successor the successor would not have been the winner post-merge either — the
+    interesting case is not "does the winner flip", it is "does a period that would have
+    published NOTHING (thin, absent) now inherit a confident value drawn mostly from a different
+    stretch of time"). So `before` here is the ABSORBED (thin) span's own honest reading —
+    exactly what would have been published for that period had it been left alone — and `after`
+    is the merged block's reading. Confirmed empirically against the pre-registration's own
+    worked fixture (a 4-vs-5 weighted split): successor-alone vs merged never differs there (the
+    5-count value still wins the pooled 9), while absorbed-alone (thin, "old" is `thin` on its
+    own and reads `None`) vs merged ("new", now attributed) does — a dimension APPEARING is
+    exactly the change the pre-registration's own text says counts. This module measures the
+    ABSORBED-span reading, which is the version of the question the pinned test fixture actually
+    exercises and answers.
+
+    ⚠️ **Causality.** This is computed OFFLINE, blocks list already fully formed end to end. A
+    live pipeline can only decide a merge once its successor closes (see the module docstring's
+    warning), so a number produced here is not automatically the number a live system would
+    produce — it is the version of item 3 the brief asks this study to measure, and the report
+    must say so.
+    """
+    blocks = list(blocks)
+    stats = {"n_blocks": len(blocks), "merged": 0, "merged_backward": 0, "chained": 0,
+              "merge_events": 0, "merge_events_forward": 0, "merge_events_backward": 0,
+              "value_changed": 0, "value_changed_forward": 0, "value_changed_backward": 0,
+              # The brief's/pre-registration's literally-worded comparison (surviving neighbour's
+              # OWN reading, before, against the merged reading, after) — tracked ALONGSIDE the
+              # absorbed-span comparison above so the report can show both rather than silently
+              # picking one. See the docstring warning for why they disagree.
+              "value_changed_vs_neighbor": 0, "value_changed_vs_neighbor_forward": 0,
+              "value_changed_vs_neighbor_backward": 0}
+    if not blocks:
+        return blocks, stats
+
+    thin = [block_evidence(store, session, bl) < min_evidence for bl in blocks]
+    stats["chained"] = sum(1 for k in range(len(blocks) - 1) if thin[k] and thin[k + 1])
+
+    out = []
+    n = len(blocks)
+    i = 0
+    while i < n:
+        if not thin[i]:
+            out.append(blocks[i])
+            i += 1
+            continue
+        j = i
+        while thin[j] and j < n - 1:
+            j += 1
+        if not thin[j]:
+            # blocks[i..j-1] are thin; blocks[j] is the first block after them that clears the
+            # floor on its own — absorb the run FORWARD into it.
+            successor = blocks[j]
+            merged_block = Block(blocks[i].start, successor.end,
+                                 blocks[i].start_reason, successor.end_reason)
+            stats["merged"] += j - i
+            stats["merge_events"] += 1
+            stats["merge_events_forward"] += 1
+            before = _dim_values(store.rollup_window(session, blocks[i].start, successor.start))
+            after = _dim_values(store.rollup_window(session, merged_block.start, merged_block.end))
+            if before != after:
+                stats["value_changed"] += 1
+                stats["value_changed_forward"] += 1
+            neighbor_before = _dim_values(store.rollup_window(session, successor.start,
+                                                               successor.end))
+            if neighbor_before != after:
+                stats["value_changed_vs_neighbor"] += 1
+                stats["value_changed_vs_neighbor_forward"] += 1
+            out.append(merged_block)
+            i = j + 1
+        else:
+            # blocks[i..n-1] are ALL thin with no non-thin successor: a trailing run at the end
+            # of the session. Absorb it BACKWARD into the predecessor already emitted, if any.
+            if out:
+                pred = out.pop()
+                merged_block = Block(pred.start, blocks[-1].end,
+                                     pred.start_reason, blocks[-1].end_reason)
+                stats["merged_backward"] += n - i
+                stats["merge_events"] += 1
+                stats["merge_events_backward"] += 1
+                before = _dim_values(store.rollup_window(session, blocks[i].start, blocks[-1].end))
+                after = _dim_values(store.rollup_window(session, merged_block.start,
+                                                        merged_block.end))
+                if before != after:
+                    stats["value_changed"] += 1
+                    stats["value_changed_backward"] += 1
+                neighbor_before = _dim_values(store.rollup_window(session, pred.start, pred.end))
+                if neighbor_before != after:
+                    stats["value_changed_vs_neighbor"] += 1
+                    stats["value_changed_vs_neighbor_backward"] += 1
+                out.append(merged_block)
+            else:
+                # Nothing to absorb into at all (the whole session is thin blocks) — leave them,
+                # there is no neighbour to merge with.
+                out.extend(blocks[i:])
+            i = n
+    return out, stats
+
+
+def merge_sweep(store, cap_minutes, min_evidence=MIN_EVIDENCE):
+    """Run `merge_thin` over every session in the store at `cap_minutes`, pooling the stats.
+    Mirrors `sweep`'s own session walk (`session_bounds` + `cut_points`) but is scoped to item 3
+    at ONE cap, rather than item 2's sweep across `CAPS`."""
+    sessions = [s for (s,) in store._conn().execute(
+        "SELECT DISTINCT session FROM bin ORDER BY session")]
+    keys = ("n_blocks", "merged", "merged_backward", "chained", "merge_events",
+            "merge_events_forward", "merge_events_backward", "value_changed",
+            "value_changed_forward", "value_changed_backward", "value_changed_vs_neighbor",
+            "value_changed_vs_neighbor_forward", "value_changed_vs_neighbor_backward")
+    totals = {k: 0 for k in keys}
+    totals["n_sessions"] = 0
+    for s in sessions:
+        bounds = session_bounds(store, s)
+        if bounds is None:
+            continue
+        lo, hi = bounds
+        cuts = cut_points(store, s, lo, hi)
+        blocks = form_blocks(cuts, lo, hi, cap_minutes)
+        _merged, stats = merge_thin(store, s, blocks, min_evidence)
+        totals["n_sessions"] += 1
+        for k in keys:
+            totals[k] += stats.get(k, 0)
+        if hasattr(store, "reset"):
+            store.reset()
+    totals["merge_share"] = (100.0 * (totals["merged"] + totals["merged_backward"])
+                             / totals["n_blocks"] if totals["n_blocks"] else 0.0)
+    totals["value_changed_share_forward"] = (100.0 * totals["value_changed_forward"]
+                                             / totals["merge_events_forward"]
+                                             if totals["merge_events_forward"] else 0.0)
+    totals["value_changed_share_overall"] = (100.0 * totals["value_changed"]
+                                             / totals["merge_events"]
+                                             if totals["merge_events"] else 0.0)
+    totals["value_changed_vs_neighbor_share_forward"] = (
+        100.0 * totals["value_changed_vs_neighbor_forward"] / totals["merge_events_forward"]
+        if totals["merge_events_forward"] else 0.0)
+    totals["value_changed_vs_neighbor_share_overall"] = (
+        100.0 * totals["value_changed_vs_neighbor"] / totals["merge_events"]
+        if totals["merge_events"] else 0.0)
+    return totals
+
+
+def run_all(caps=None, store=None):
+    """Item 2's sweep, plus item 3's `merge_thin` measurement at the cap(s) chosen — or an
+    explicit override via `caps`, for exploring more than one candidate."""
+    st = store if store is not None else CachingStore(open_store(DB))
+    sw = sweep(st)
+    if caps is None:
+        caps = (sw["chosen_cap"],) if sw["chosen_cap"] is not None else ()
+    merge = {}
+    for cap in caps:
+        if cap is None:
+            continue
+        merge[str(cap)] = merge_sweep(st, cap)
+    return {"sweep": sw, "merge": merge}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--caps", default=None,
+                    help="comma-separated cap minutes (in CAPS) to run merge_thin over; "
+                         "default is item 2's chosen cap alone, if any")
+    ap.add_argument("--out", default=None, help="path to write the combined JSON result")
+    args = ap.parse_args(argv)
+    caps = tuple(int(x) for x in args.caps.split(",")) if args.caps else None
+    result = run_all(caps=caps)
+    text = json.dumps(result, indent=2, default=str)
+    if args.out:
+        with open(args.out, "w") as f:
+            f.write(text)
+    print(text)
+    return result
+
+
+if __name__ == "__main__":
+    main()
