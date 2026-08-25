@@ -85,6 +85,52 @@ def _evidence(st, block):
                    for _ref, n in (rl.get(level) or [])))
 
 
+# --- the two measured constants ----------------------------------------------------------------
+#
+# Both are pinned as LITERALS, and that is the point: every other test in this file reads the
+# constant, so it passes at any value the constant holds. Source-level mutation found exactly that
+# hole -- `MAX_BLOCK_MINUTES` survived 5/10/15/25/40/120 and `IDLE_BINS` survived 1/2/4/6/9 with
+# the whole suite green. A retuned constant is a re-opened study, not a config change, so it has
+# to be a test failure.
+
+def test_the_measured_constants_are_the_measured_values():
+    """20 minutes and 3 bins, from `BLOCK-BOUND-2-RESULTS.md` (496 sessions, arm A').
+
+    `MAX_BLOCK_MINUTES = 20`: A''s usable range is 15-45 minutes and 20 is where attribution first
+    clears the bar (95.3% per-level) with the maximum block still EQUAL to the cap (0.33h). At 120
+    the whole-session share reaches 50.1% and the cap has stopped bounding anything.
+
+    `IDLE_BINS = 3` (15 minutes): fixed in the pre-registration before the run, then swept over
+    2/3/6 bins. At the shipped 20-minute cap: 94.9% attributable at 10 min, 95.3% at 15, 93.4% at
+    30. The series bins at 300s, so the threshold is a whole number of bins and cannot be finer.
+
+    Changing either number means re-running the four-arm comparison. This assertion is the place
+    that says so.
+    """
+    assert blocks.MAX_BLOCK_MINUTES == 20
+    assert blocks.IDLE_BINS == 3
+
+
+def test_the_shipped_defaults_are_what_actually_runs():
+    """The constants pinned BEHAVIOURALLY, through `cut`'s own defaults -- no `idle_bins=`, no
+    `max_minutes=`, because a test that passes its own parameters never exercises the shipped one.
+
+    The fixture holds two gaps chosen so the answer differs on BOTH sides of 3: a 2-empty-bin gap
+    (a pause) and a 3-empty-bin gap (silence). Segment counts by threshold are 3 / 3 / **2** / 1 /
+    1 / 1 at k = 1 / 2 / 3 / 4 / 6 / 9, so `== 2` is true at the shipped value and at no other
+    value mutation reaches.
+    """
+    st = _store([_ev(0.0), _ev(60.0), _ev(120.0),          # bin 0
+                 _ev(900.0), _ev(960.0),                   # bin 3 -- 2 empty bins back: a PAUSE
+                 _ev(2100.0), _ev(2160.0)])                # bin 7 -- 3 empty bins back: SILENCE
+    lo, hi = _bounds(st)
+    assert len(blocks.active_segments(st, S, lo, hi)) == 2
+    bl = blocks.cut(st, S, lo, hi)
+    # One seam, in the right place: the pause is inside block 1, the silence is between them.
+    assert [b.end_reason for b in bl] == ["idle", "session_end"], bl
+    assert bl[0].end == 1200.0 and bl[1].start == 2100.0, bl
+
+
 # --- the terminators -----------------------------------------------------------------------
 
 def test_idle_splits_only_on_a_gap_at_or_over_the_threshold():
@@ -117,6 +163,28 @@ def test_no_block_is_empty_and_none_exceeds_the_cap():
         assert _evidence(st, b) > 0, b
 
 
+def test_the_cap_cuts_a_long_stretch_into_exact_cap_lengths():
+    """`budget` is the PLURALITY end reason in production and no other test emits one.
+
+    Measured over 496 sessions at the shipped 20-minute cap (`BLOCK-BOUND-2-RESULTS.md`, arm
+    `time_idle` n=20): **budget 45.8%, session_end 32.0%, idle 18.0%, detected 4.3%**. The other
+    fixtures in this file are two 10-minute stretches against a 20-minute cap, so they only ever
+    assert `600 <= 1200` -- deleting the cap branch from `_form` outright left the suite green.
+
+    One hour of one-per-minute events, one ref (so the detector never fires) and no gap (so idle
+    never fires), leaves the cap as the only terminator. The lengths are asserted as the LITERAL
+    1200.0, not as `MAX_BLOCK_MINUTES * 60`, for the reason given above the constants test.
+    """
+    st = _store([_ev(i * 60.0) for i in range(61)])        # 0..3600s, every bin active
+    lo, hi = _bounds(st)
+    bl = blocks.cut(st, S, lo, hi)
+    assert [b.end_reason for b in bl] == ["budget", "budget", "budget", "session_end"], bl
+    for b in bl[:-1]:
+        assert b.end - b.start == 1200.0, b
+    # The tail is the remainder, NOT a padded cap block: the span ran out first.
+    assert bl[-1].start == 3600.0 and bl[-1].end == 3900.0, bl[-1]
+
+
 def test_a_detected_cut_inside_the_cap_ends_the_block_before_the_cap_does():
     """Detection wins over the bound; a block ending `budget` where a cut was available would
     mean the shipped detector is not reaching the cutter."""
@@ -125,6 +193,33 @@ def test_a_detected_cut_inside_the_cap_ends_the_block_before_the_cap_does():
     lo, hi = _bounds(st)
     bl = blocks.cut(st, S, lo, hi)
     assert any(b.end_reason == "detected" for b in bl), bl
+
+
+def test_cut_points_yields_every_rising_edge_not_just_the_last():
+    """THE one behavioural difference from `EwmaSizer.plan`, and the whole reason `cut_points`
+    exists rather than a `plan` call.
+
+    `plan` returns the LAST edge inside its budget because it is sizing a single slice; a session
+    needs them all. A mutant returning `idx[-1:]` is invisible to a fixture with one transition,
+    where the two behaviours coincide -- so this fixture has two, and asserts two blocks END on
+    them.
+
+    ⚠️ The segment sizes are 6/12/18 and GROWING on purpose. `observations()`'s running mode is
+    the majority ref by CUMULATIVE weight, tie-broken alphabetically to match `window.rollup`, so
+    three EQUAL 12/12/12 segments leave "b" and "c" each exactly tied with "a"'s running total and
+    the alphabetical tie-break keeps "a" the mode throughout -- both real transitions collapse
+    into ONE edge. That is a property of the synthetic tie, not a defect in the detector, and it
+    is documented at `scripts/test_block_sizing_eval.py`'s own version of this test. Growing
+    segments let each transition actually overtake the running mode.
+    """
+    st = _store([_ev(i * 60.0, ref=r)
+                 for i, r in enumerate(["a"] * 6 + ["b"] * 12 + ["c"] * 18)])
+    lo, hi = _bounds(st)
+    cuts = blocks.cut_points(st, S, lo, hi)
+    assert len(cuts) >= 2, cuts
+    assert cuts == sorted(cuts), cuts
+    bl = blocks.cut(st, S, lo, hi)
+    assert len([b for b in bl if b.end_reason == "detected"]) >= 2, bl
 
 
 def test_reasons_come_from_the_closed_set_and_chain():
@@ -149,6 +244,45 @@ def test_a_thin_block_is_kept_unattributed_and_never_merged():
     bl = blocks.cut(st, S, lo, hi)
     thin = [b for b in bl if _evidence(st, b) < MIN_EVIDENCE]
     assert thin, bl
+
+
+# --- the live /analyze path ------------------------------------------------------------------
+
+def test_the_live_analyze_path_selects_a_block_from_this_module_and_never_reforms_one():
+    """`/analyze`'s `block` key is a SELECTION out of `cut`, not a second cutter.
+
+    Two things are pinned, and the second is the one that would otherwise ship broken:
+
+    1. Every instant inside a block resolves to that block, and dead air resolves to `None` --
+       so what the payload publishes is `cut`'s own answer, converted to ISO and nothing else.
+       If the live path ever grew its own arithmetic, what ships would stop being the arm the
+       study measured.
+    2. The span it hands `cut` is BIN-ALIGNED. `active_segments` filters on bin STARTS, so a bin
+       straddling `from_ts` is excluded from every segment while `rollup_window` still counts
+       the evidence inside it. A prompt's instant essentially never lands on a 5-minute
+       boundary, so a span derived from one -- rather than from bin starts, as `_block_span`
+       does -- would drop leading evidence on nearly every call.
+    """
+    from app.analysis.analyze import _block_at, _block_span, _instant
+
+    st = _store([_ev(i * 60.0) for i in range(10)]
+                + [_ev(3600.0 + i * 60.0) for i in range(10)])
+    lo, hi = _block_span(st, S)
+    assert lo % BIN_SECONDS == 0 and hi % BIN_SECONDS == 0, (lo, hi)
+
+    bl = blocks.cut(st, S, lo, hi)
+    assert len(bl) > 1, "premise: the fixture must hold more than one block"
+    for b in bl:
+        want = {"start": _instant(b.start), "end": _instant(b.end),
+                "start_reason": b.start_reason, "end_reason": b.end_reason}
+        for t in (b.start, (b.start + b.end) / 2.0, b.end - 0.1):
+            assert _block_at(st, S, t) == want, (t, b)
+
+    # The dead air between the two segments belongs to no block, and the live path says so
+    # rather than reaching for the nearest neighbour.
+    gap = (bl[0].end + bl[-1].start) / 2.0
+    assert not any(b.start <= gap < b.end for b in bl), "premise: pick an instant in the gap"
+    assert _block_at(st, S, gap) is None
 
 
 if __name__ == "__main__":

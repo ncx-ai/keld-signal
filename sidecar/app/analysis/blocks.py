@@ -11,9 +11,14 @@ Three terminators, and the set is closed:
   * **idle** -- `IDLE_BINS` (3) consecutive empty 5-minute bins, i.e. 15 minutes of silence. Not a
     claim about the work at all: a claim that there wasn't any.
   * **budget** -- `MAX_BLOCK_MINUTES` (20) elapsed. Only "we had to cut somewhere", and on this
-    corpus it is the COMMON case (60.9% of ends at the 10-minute cap, against 2.7% detected), which
-    is exactly why the three reasons are reported separately rather than collapsed. A reader who
-    cannot tell `detected` from `budget` reads a claim about the work off an arithmetic boundary.
+    corpus it is the PLURALITY case, which is exactly why the three reasons are reported separately
+    rather than collapsed. A reader who cannot tell `detected` from `budget` reads a claim about
+    the work off an arithmetic boundary.
+
+Measured end-reason mix at the SHIPPED 20-minute cap (496 sessions, `BLOCK-BOUND-2-RESULTS.md`,
+arm `time_idle` n=20): **budget 45.8%, session_end 32.0%, idle 18.0%, detected 4.3%**. Quoted at
+n=20 rather than at any other row of the sweep because that is the cap this module ships; a figure
+from a cap the code does not use is misleading even when the number itself is right.
 
 ## WHY THESE VALUES, AND WHY THEY ARE NOT KNOBS
 
@@ -43,8 +48,19 @@ bins and cannot be expressed more finely.
 
 ## THERE IS NO MERGE RULE, AND THIS IS THE LOAD-BEARING ABSENCE
 
-A block holding less than `window.MIN_EVIDENCE` publishes UNATTRIBUTED and survives as its own
-block. It is never absorbed into a neighbour.
+A block that cannot attribute a dimension publishes that dimension UNATTRIBUTED and survives as its
+own block. It is never absorbed into a neighbour.
+
+⚠️ **"Cannot attribute" means PER LEVEL, not pooled, and the two measures diverge.** The
+attributable question is `window.attribution(rollup, level, floor).reason == "attributed"` asked of
+each ALLOCATION level ON ITS OWN -- that is what the 95.3% above is. It is NOT "the block holds
+`MIN_EVIDENCE` observations", which pools across the eight allocation levels: a block holding one
+unit at each of eight levels pools to 8, past the floor, while every individual level reads `thin`
+and nothing in it is attributable at all. The results table reports both columns and they are 6
+points apart at the shipped cap (95.3% attributable against 99.3% holding any evidence). Neither
+measure is exported here, because nothing in Phase 1 consumes one; whoever adds the first consumer
+must pick the per-level one deliberately rather than reach for a pooled sum because it is shorter
+to write.
 
 The obvious repair -- merge a thin block forward into the next one -- was built and measured
 (`BLOCK-SIZING-RESULTS.md`): it changes a published value in **88.6%** of the merges it performs,
@@ -210,6 +226,21 @@ def cut(store, session, from_ts, to_ts, max_minutes=MAX_BLOCK_MINUTES, idle_bins
     starts `session_start` and the last ends `session_end`. A span with no active bin returns `[]`
     -- there is no work to cut, and an empty list says so more honestly than one empty block.
 
+    ⚠️ **PRECONDITION: `from_ts` and `to_ts` MUST BE BIN-ALIGNED** -- multiples of `BIN_SECONDS`
+    (floor `from_ts`, ceil `to_ts`). The caller owns this; nothing here checks it.
+
+    What goes wrong if you ignore it is SILENT. `active_segments` filters on bin STARTS
+    (`lo <= b < hi`), so a bin whose start falls before a non-aligned `from_ts` is dropped from
+    every segment -- while `rollup_window`, which takes exact instants, still counts the events
+    inside it. Concretely: events at 100s, 250s and 400s with `from_ts = 150.0` yields segments
+    `[(300.0, 600.0)]`, and the 250s event lands in NO block despite being inside the requested
+    span. Nothing errors and no block looks wrong; evidence just quietly goes missing.
+
+    Aligning rather than clamping internally is deliberate. Task 2 pins this function
+    byte-identical to the measured arm A', whose own harness always passed bin-aligned session
+    bounds, so adding a clamp here would mean the shipped cutter is no longer the arm that was
+    measured. The alignment belongs at the call site.
+
     `max_minutes` and `idle_bins` are parameters so the study's sweep stays reproducible against
     this exact arithmetic (the same reason `prior.compare` takes `dimensions`). They are NOT
     switches a request may flip: nothing on the `/analyze` path forwards one.
@@ -222,6 +253,14 @@ def cut(store, session, from_ts, to_ts, max_minutes=MAX_BLOCK_MINUTES, idle_bins
     for i, (s, e) in enumerate(segs):
         bl = _form(cuts, s, e, max_minutes)
         if not bl:
+            # UNREACHABLE today: `active_segments` never returns a segment with `e <= s` (a
+            # segment ends at its last active bin's END, which is strictly past its start), and
+            # `_form` emits at least one block for any non-empty interval. Kept because the
+            # measured arm has it, so `cut` stays byte-identical to `with_idle(bound_time)`.
+            # If it ever DID fire on the final segment, the seam bookkeeping would be wrong: the
+            # preceding block would keep the `idle` end it was given as a non-final segment, and
+            # nothing in the returned list would end `session_end`. Anything relying on the last
+            # block's reason would break silently rather than raise.
             continue
         # Only the reasons AT A SEAM are rewritten; the cap and detection semantics inside a
         # segment are untouched, which is what keeps this equal to the measured arm A'.
