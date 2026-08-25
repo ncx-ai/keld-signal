@@ -170,19 +170,25 @@ def test_the_prior_carries_the_evidence_it_rests_on():
 
 # --- which dimensions, and why ---------------------------------------------------------------
 
-def test_the_enabled_set_is_a_list_and_holds_only_the_three_that_measured_a_contrast():
+def test_the_enabled_set_is_a_list_and_holds_only_the_four_that_measured_a_contrast():
     """Measured over 1,022 windows: `skill` agreement 25.8% / novelty 44.0% is the signal;
-    `language` 70.6% / 2.3% and `branch` 76.1% / 6.1% carry departures. `project` and `model`
-    agree 100.0% with ZERO disagreements, zero novel windows, and a maximum departure of +0.000
-    and -0.103 -- a contrast field there publishes a constant.
+    `language` 70.6% / 2.3%, `branch` 76.1% / 6.1% and `output_type` 86.7% carry departures.
 
-    A LIST, not hardcoded fields, so adding `output_type` (86.7%) or `tooling` (98.5%) -- both
-    deliberately excluded for now, both live candidates, and on John's Cowork session carried by
-    the prior in 6 of 7 and 4 of 7 windows where the window itself could not attribute -- is a
-    one-line change."""
-    assert sorted(ENABLED) == ["branch", "language", "skill"], ENABLED
+    `project` and `model` agree 100.0% with ZERO disagreements, zero novel windows, and a
+    maximum departure of +0.000 and -0.103 -- a contrast field there publishes a constant, so
+    they are REFUTED rather than deferred.
+
+    `tooling` is the one live candidate still held out, and it is held out on evidence: 98.5%
+    agreement over 1,022 windows, and its own prior is attributed on only 24.3% of them, which
+    is not a frame of reference. Four of seven windows on ONE session is not enough to move
+    that. WHAT WOULD: a re-measurement over the corpus showing either agreement at or below
+    0.90, or prior-attributed coverage at or above the 0.70 bar the other four are judged
+    against -- the same two numbers `output_type` cleared.
+
+    A LIST, not hardcoded fields, so this stays a one-line change in both directions."""
+    assert sorted(ENABLED) == ["branch", "language", "output_type", "skill"], ENABLED
     assert sorted(n for n, _lv, _f in PRIOR_DIMENSIONS) == sorted(ENABLED), PRIOR_DIMENSIONS
-    for dead in ("project", "model"):
+    for dead in ("project", "model", "tooling"):
         assert dead not in ENABLED, dead
         assert dead not in compare(_rl("workspace", keld=9), _rl("workspace", keld=90)), dead
     # DERIVED from the published allocation set, so an INVENTORY level cannot enter it: the
@@ -191,6 +197,39 @@ def test_the_enabled_set_is_a_list_and_holds_only_the_three_that_measured_a_cont
     for name, level, floor in PRIOR_DIMENSIONS:
         assert by_name[name] == (level, floor), (name, level, floor)
     assert "term" not in {lv for _n, lv, _f in PRIOR_DIMENSIONS}
+
+
+def test_output_type_is_carried_by_the_prior_where_the_window_cannot_attribute_it():
+    """WHY `output_type` ships, and the case the 86.7% aggregate hid.
+
+    86.7% agreement reads as "rarely fires" -- but agreement is only defined where BOTH sides
+    are attributed, so it says nothing at all about the windows this dimension is FOR. On John's
+    Cowork session the prior carried `output_type` in 6 of 7 windows where the window itself
+    could not attribute one: the deck was built in the first hour and every hour after it shows
+    `absent` while the session says `presentation`. Measured on that session, windows where the
+    window could not attribute but the prior could: `output_type` 6/7, `tooling` 4/7, every
+    other dimension 0/7.
+
+    That shape matters more than the aggregate suggested because it is the SKILL-FREE session --
+    and 61.6% of corpus transcripts are skill-free (see workstreams.ALLOCATION). With `skill`
+    empty for most sessions, `output_type` is what makes the block worth emitting for them.
+
+    AND IT IS STILL A CONTRAST, NEVER A FALLBACK. The window stays honestly unattributed and
+    all three contrast measures are None; the session's answer sits BESIDE it, never in it."""
+    window = _rl("branch", main=40)                      # an hour of edits, no artifact evidence
+    session = _rl("artifact", presentation=180, code=12)
+    block = compare(window, session)
+    # Membership before value, so a block that omits the dimension fails by ASSERTION rather
+    # than dying on a KeyError -- this file's runner reports only the former.
+    assert "output_type" in block, sorted(block)
+    got = block["output_type"]
+    assert got["value"] == "presentation" and got["status"] == "attributed", got
+    assert got["evidence"] == 192, got
+    assert got["agrees"] is None and got["departure"] is None and got["novel"] is None, got
+    # THE RULE: the window keeps its own blank. Nothing here fills `workstreams`.
+    assert workstreams.payload(window)["workstreams"]["output_type"] is None, "the window was filled in"
+    # ... and the fourth dimension arrives beside the other three rather than instead of one.
+    assert sorted(block) == ["branch", "language", "output_type", "skill"], sorted(block)
 
 
 def test_the_prior_uses_the_same_floor_and_evidence_bar_the_window_does():

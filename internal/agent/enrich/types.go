@@ -150,9 +150,10 @@ type Profile struct {
 	// A CONTRAST, NEVER A FALLBACK. It is reported ALONGSIDE Workstreams and
 	// never supplies an answer Workstreams lacked: a dimension absent from
 	// Workstreams stays absent no matter what this map says about the session.
-	// Three dimensions carry it (skill, language, branch), decided by
-	// measurement over 1,022 windows; `project` and `model` agree with their
-	// session 100.0% of the time and would publish a constant.
+	// Four dimensions carry it (skill, language, branch, output_type), decided
+	// by measurement over 1,022 windows; `project` and `model` agree with their
+	// session 100.0% of the time and would publish a constant, and `tooling`
+	// agrees 98.5% over a prior that is itself attributed on 24.3% of windows.
 	//
 	// Nearly half of all windows (45.1% measured) report `status: "absent"` on
 	// every dimension because they are a session's FIRST window. That is

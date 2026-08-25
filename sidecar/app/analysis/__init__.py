@@ -93,7 +93,19 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           that promises a dimension populated for every session misdescribes one that is
 #           `absent` for 61.6% of them. Go's `enrich.SchemaVersion` moves 13 -> 14 for the same
 #           rename.
-SCHEMA = 9
+#   9 -> 10: the SESSION PRIOR gains a FOURTH dimension, `output_type`. Its exclusion came from
+#           the Claude-Code aggregate alone -- 86.7% window/prior agreement, which reads as
+#           "rarely fires" -- and that number cannot speak to the windows the block exists for:
+#           agreement is defined only where BOTH sides are attributed. On John's Cowork session
+#           the prior carried `output_type` in 6 of 7 windows where the window itself could not
+#           attribute at all (the deck was built in the first hour; every later hour reads
+#           `absent` while the session reads `presentation`). `tooling` is NOT added: 98.5%
+#           agreement, a prior attributed on 24.3% of windows, and 4 of 7 on one session.
+#           The rule is unchanged -- contrast, never fallback -- so an unattributed window is
+#           still unattributed; the block simply says one more true thing about the session
+#           beside it. A window that answers with a key it did not answer with before is a
+#           window answered differently, which is exactly this number's trigger.
+SCHEMA = 10
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

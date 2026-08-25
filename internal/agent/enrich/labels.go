@@ -131,7 +131,32 @@ package enrich
 //
 // The sidecar's SCHEMA moves 8 -> 9 for the same rename. Producer strings move
 // from `-v13` to `-v14`.
-const SchemaVersion = 14
+//
+// v15 ADDS A FOURTH DIMENSION to the session prior: `output_type`, beside
+// `branch`, `language` and `skill`. No new field, no new vocabulary, no change
+// to any existing value — `prior` has always been a map keyed by dimension and
+// `output_type` has always published in `workstreams` beside it.
+//
+// IT BUMPS ANYWAY, because this number is the ONLY version an Atlas consumer
+// sees: the sidecar's own SCHEMA is decoded into sidecar.AnalyzeResult and never
+// forwarded, so without a bump here the wire would gain a key under a fixed
+// version. A consumer grouping on `prior`'s keys has to be able to tell the two
+// shapes apart.
+//
+// WHY IT WAS ADDED, since v13 states the opposite: `output_type` was held back
+// on 86.7% window/prior agreement, and agreement is defined ONLY where both
+// sides are attributed — so it says nothing about the windows this block exists
+// for, the ones where the window has no answer. On a real Cowork session the
+// prior carried `output_type` in 6 of 7 windows where the window could not
+// attribute one at all. That shape is the SKILL-FREE session, and 61.6% of
+// corpus transcripts are skill-free, so with `skill` absent for most sessions
+// `output_type` is what makes the block worth emitting for them. `tooling` is
+// still NOT added (98.5% agreement, prior attributed on 24.3% of windows).
+//
+// The rule is untouched: CONTRAST, NEVER FALLBACK. A dimension missing from
+// `workstreams` is still missing. The sidecar's SCHEMA moves 9 -> 10 for the
+// same addition. Producer strings move from `-v14` to `-v15`.
+const SchemaVersion = 15
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

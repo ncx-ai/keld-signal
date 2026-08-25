@@ -17,7 +17,7 @@ package enrich
 // predicted 36 times, right zero; speech_act's `statement`: 22 times, right
 // zero). Do not soften this under any argument about coverage.
 //
-// THREE DIMENSIONS CARRY IT, and that is a measurement rather than a
+// FOUR DIMENSIONS CARRY IT, and that is a measurement rather than a
 // preference. Over 1,022 windows of the frozen corpus
 // (docs/superpowers/specs/2026-08-24-session-prior-results.md):
 //
@@ -27,11 +27,19 @@ package enrich
 //	                                               transitions of the workflow
 //	language   agreement 70.6%   novelty  2.3%
 //	branch     agreement 76.1%   novelty  6.1%
+//	output_type agreement 86.7%  novelty  1.1%  <- the one the aggregate hid
 //
 // `project` and `model` agree 100.0% with ZERO disagreements and a largest
 // departure of +0.000 and -0.103; a contrast there publishes a constant, so the
-// sidecar does not compute one. `output_type` (86.7%) and `tooling` (98.5%) are
-// held back as live candidates. Which dimensions arrive is the sidecar's
+// sidecar does not compute one.
+//
+// `output_type`'s 86.7% reads as "rarely fires" and is not what it looks like:
+// agreement is defined ONLY where both sides are attributed, so it is silent
+// about exactly the windows this block exists for. On a real Cowork session the
+// prior carried `output_type` in 6 of 7 windows where the window could not
+// attribute one — and that session is SKILL-FREE, which 61.6% of corpus
+// transcripts are. `tooling` (98.5%, prior attributed on 24.3% of windows) is
+// still held back. Which dimensions arrive is the sidecar's
 // decision (prior.ENABLED), forwarded here rather than restated — a second list
 // on this side is a second thing to drift, and the same reasoning already
 // governs Workstreams.

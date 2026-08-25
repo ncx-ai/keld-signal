@@ -111,8 +111,9 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.
 //
 // The DIMENSION SET is the sidecar's decision, forwarded rather than restated
 // (the same rule Workstreams already follows). Which dimensions carry a contrast
-// is an empirical result that will move — `output_type` and `tooling` are live
-// candidates — and a second list on this side would be a second thing to drift.
+// is an empirical result that HAS moved (`output_type` was added after the
+// first measurement; `tooling` is the one remaining candidate) — and a second
+// list on this side would be a second thing to drift.
 // It is safe to forward because the sidecar derives the prior's vocabulary from
 // its own ALLOCATION list, so a prior can only ever name a value that publishes
 // in `workstreams` beside it; `named_terms` is structurally not addable there.

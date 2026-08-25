@@ -322,8 +322,9 @@ type AnalyzeResult struct {
 // DynamicsBlock's and InventoryBlock's are: it keeps the rest structurally
 // unreachable instead of decoded-then-dropped.
 type PriorBlock struct {
-	// Dimensions is keyed by dimension name (branch, language, skill — the
-	// set the sidecar's own measurement left standing; see enrich.Prior). A nil
+	// Dimensions is keyed by dimension name (branch, language, output_type,
+	// skill — the set the sidecar's own measurement left standing; see
+	// enrich.Prior). A nil
 	// value is a dimension the sidecar reported as null: no prior at all, which
 	// is a different fact from a zero Prior, whose status would read "" and
 	// whose evidence would read 0.

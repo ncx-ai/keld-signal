@@ -112,7 +112,7 @@ def test_the_skill_level_publishes_under_the_name_skill_not_workflow():
 def test_payload_carries_its_schema_version():
     """These values land in financial reports; a silent shape change is the reproducibility
     failure the earlier handoff called out, so the payload is versioned from the first release."""
-    assert payload(rollup(R))["schema"] == SCHEMA == 9
+    assert payload(rollup(R))["schema"] == SCHEMA == 10
 
 
 # --- the floor generalised to an arbitrary slice length ---------------------------------------

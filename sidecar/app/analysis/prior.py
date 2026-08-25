@@ -71,6 +71,7 @@ from app.analysis.window import MIN_EVIDENCE, attribution
 #                                           them against.
 #     language        70.6%       2.3%   <- carried by `departure`, not by `novel`
 #     branch          76.1%       6.1%
+#     output_type     86.7%       1.1%   <- the one the aggregate HID, see below
 #
 # NOT SHIPPED, and this is the whole per-dimension result rather than a preference:
 #
@@ -79,17 +80,34 @@ from app.analysis.window import MIN_EVIDENCE, attribution
 #     there publishes a constant. (`project` is constant BY CONSTRUCTION: a transcript is scoped
 #     to one project directory and `workspace` had zero transitions in the corpus -- the same
 #     fact that dropped it from `dynamics.DROPPED_DIMENSIONS`.)
-#   * `output_type` (86.7% agreement) and `tooling` (98.5%) are deliberately excluded FOR NOW
-#     and are live candidates rather than refutations: on John's Cowork session the prior
-#     carried `output_type` in 6 of 7 windows and `tooling` in 4 of 7, where the window itself
-#     could not attribute at all. Re-measure before adding either -- `tooling`'s prior is
-#     attributed on 24.3% of windows, which is not a frame of reference.
+#   * `tooling` (98.5% agreement) is the ONE live candidate still held out, and it is held out
+#     on evidence rather than on taste: its own prior is attributed on 24.3% of windows, which
+#     is not a frame of reference, and 4 of 7 windows on ONE session does not move a
+#     1,022-window aggregate. WHAT WOULD CHANGE IT: a re-measurement over the corpus showing
+#     either agreement at or below 0.90, or prior-attributed coverage at or above the 0.70 bar
+#     the shipped four are judged against -- the same two numbers `output_type` cleared. Until
+#     one of those exists, adding it publishes a constant on three windows in four.
 #
 # `skill` is also the design's central tension, stated rather than smoothed over: it carries
 # the agreement and novelty results and FAILS the coverage bar (36.2% overall, 66.0% even among
 # windows that have a session behind them). It ships because 44% novelty is a fact no other
 # dimension produces, and its `status` says `absent`/`no_majority` loudly the rest of the time.
-ENABLED = ("branch", "language", "skill")
+#
+# `output_type` WAS excluded on that 86.7%, and the exclusion was wrong -- not because the
+# number was wrong but because of what agreement can and cannot say. Agreement is defined ONLY
+# where both sides are attributed, so it is silent about exactly the windows this dimension is
+# for: the ones where the window has no answer. On John's Cowork session the prior carried
+# `output_type` in 6 of 7 windows where the window could not attribute at all -- the deck was
+# built in the first hour and every hour after it reads `absent` while the session reads
+# `presentation`. Windows on that session where the window could not attribute but the prior
+# could: `output_type` 6/7, `tooling` 4/7, every other dimension 0/7.
+#
+# That session's SHAPE is why it outweighs its sample size. It is skill-free, and 61.6% of the
+# 198-transcript corpus is skill-free (see `workstreams.ALLOCATION`). With `skill` `absent` for
+# most sessions, a three-dimension prior over `branch` (near-constant within a session) and
+# `language` is thin enough that the block would rarely say anything for the majority case.
+# `output_type` is what makes it worth emitting for them.
+ENABLED = ("branch", "language", "output_type", "skill")
 
 # DERIVED from the published allocation set rather than restated, so the two cannot drift -- and
 # so an INVENTORY level is structurally not addable here. `named_terms` (level `term`) is the one
