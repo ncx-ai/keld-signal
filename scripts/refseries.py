@@ -1836,7 +1836,7 @@ def series(args):
 # both sit at >4wk but answer different questions — what the work IS against how it is DONE — so
 # they are separate rows in the synopsis and would be separate payloads in a prompt.
 LADDER_RUNGS = [
-    ("IDENTITY", ["workspace", "remote", "vcs", "artifact", "action", "ext", "lang", "model"]),
+    ("IDENTITY", ["workspace", "repo", "repo_from_text", "vcs", "artifact", "action", "ext", "lang", "model"]),
     ("TOOLCHAIN", ["toolchain"]),
     ("TOOLING", ["tool", "exe", "verb", "agent", "skill", "mcp_server", "mcp_tool"]),
     ("SERVICES", ["service"]),

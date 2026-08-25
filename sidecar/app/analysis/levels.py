@@ -16,7 +16,7 @@ from app.analysis.text import is_command_echo, text_of, think_blocks
 from app.analysis.vocab import action_for, artifacts_for, mcp_provider, toolchain_for
 from app.analysis.workspace import resolve_workspace, scan_workspace, vcs_of
 
-LEVELS = ["workspace", "workspace_evidence", "repo", "remote", "repo_mentioned", "vcs",
+LEVELS = ["workspace", "workspace_evidence", "repo", "repo_from_text", "repo_mentioned", "vcs",
           "branch", "component", "dir", "file", "artifact", "action", "toolchain", "ext",
           "lang", "tool", "exe", "verb", "service", "agent", "skill", "model", "mcp_server",
           "mcp_tool", "term"]
@@ -176,13 +176,24 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
             # the two are directly comparable per turn.
             if repo_id:
                 add("ref", "repo", repo_id, 1)
-            # A remote is IDENTITY only when it names this workspace. The modal remote
+            # THREE levels here name a repository and they are not interchangeable, so the
+            # names say their provenance rather than their subject:
+            #   `repo`           - the checkout's origin, read from .git/config BY THE DAEMON
+            #                      and sent in. Authoritative. The only one that publishes.
+            #   `repo_from_text` - this workspace's origin as it appears in COMMANDS AND
+            #                      MESSAGE TEXT. Was called `remote`, which read as
+            #                      authoritative and was not: measured on a 34 MB transcript
+            #                      with 1,534 resolved workspace observations it produced ZERO
+            #                      rows, because a developer working through local paths never
+            #                      types the url. Kept as corroboration, never as identity.
+            #   `repo_mentioned` - OTHER repositories merely discussed.
+            # A remote is this workspace's only when it names this workspace. The modal remote
             # in a transcript is often a repository merely discussed: atlas sessions
             # mention ncx-ai/keld-signal constantly, and attributing it as keld-atlas's
             # own remote was the same error as reading a quoted example as a fact.
             for rr, _n in remotes.most_common():
                 if rr.rsplit("/", 1)[-1] == repo:
-                    add("ref", "remote", rr, 1)
+                    add("ref", "repo_from_text", rr, 1)
                     break
             for rr, _n in remotes.most_common(3):
                 if rr.rsplit("/", 1)[-1] != repo:

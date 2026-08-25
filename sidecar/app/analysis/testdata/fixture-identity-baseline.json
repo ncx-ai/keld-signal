@@ -1,6 +1,6 @@
 {
  "rows": 225,
- "sha256": "bcaa01a4aa8caf08e7ca1720c6319967d9ad3f4d76b2f21b5390647e18985cb9",
+ "sha256": "f7c573532fefb7949ef5fc89727dfe13ee8fafb8fb7c412a0955f378207834e9",
  "levels": {
   "mag/edit_bytes": {
    "rows": 4,
@@ -98,11 +98,11 @@
    "distinct": 2,
    "sha256": "acb388e370a1263faebf4902e7d770f995f0a853459f027de092eb4fe9482288"
   },
-  "ref/remote": {
+  "ref/repo_from_text": {
    "rows": 9,
    "total": 9.0,
    "distinct": 2,
-   "sha256": "fa3b21a6bacad90447b86aa1f250b5a4f0d0f4b16f30cda8f0683974768f8289"
+   "sha256": "62ed000c794c6f677e2b9ac974aa00a70bc5c3bc855284949654211e96a0197f"
   },
   "ref/repo_mentioned": {
    "rows": 9,

@@ -21,7 +21,7 @@ from refseries import characterize
 # What each level answers, in the words an analyst would use. This IS the routing table.
 LEVELS={
  "workspace":"the repository or working directory the work happened in",
- "remote":"the canonical repository name on GitHub or GitLab",
+ "repo":"the canonical repository identity, read from the checkout's git config",
  "branch":"the git branch, which is usually the unit of work in flight",
  "component":"the subsystem or area of the codebase",
  "file":"the individual files touched",
@@ -40,7 +40,7 @@ LEVELS={
 EXPECT={  # the level a competent analyst would say answers each question
  "What project is this for?":"workspace",
  "Which repository is this?":"workspace",
- "What is the canonical repo name?":"remote",
+ "What is the canonical repo name?":"repo",
  "Which branch was this work on?":"branch",
  "What part of the codebase was touched?":"component",
  "Which files were changed?":"file",
