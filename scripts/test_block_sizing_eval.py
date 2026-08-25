@@ -84,6 +84,31 @@ def test_each_start_reason_is_the_previous_end_reason():
     assert blocks[-1].end_reason == "session_end", blocks[-1]
 
 
+def test_choose_cap_takes_the_smallest_within_five_points_of_the_next():
+    rows = [{"cap": 10, "budget_share": 92.0}, {"cap": 15, "budget_share": 80.0},
+            {"cap": 20, "budget_share": 62.0}, {"cap": 30, "budget_share": 59.0},
+            {"cap": 45, "budget_share": 57.0}]
+    cap, why = b.choose_cap(rows)
+    assert cap == 20, (cap, why)          # 62.0 - 59.0 = 3.0 <= 5, and 20 is the smallest such
+
+
+def test_choose_cap_returns_none_when_no_candidate_qualifies():
+    """The pre-registration says report it and pick nothing rather than picking anyway."""
+    rows = [{"cap": 10, "budget_share": 95.0}, {"cap": 15, "budget_share": 80.0},
+            {"cap": 20, "budget_share": 60.0}, {"cap": 30, "budget_share": 40.0}]
+    cap, why = b.choose_cap(rows)
+    assert cap is None, (cap, why)
+    assert why, "must say why"
+
+
+def test_block_evidence_counts_the_allocation_rollup():
+    with tempfile.TemporaryDirectory() as tmp:
+        st = b.CachingStore(_mkstore(tmp, [_ev(10, "branch", "main"),
+                                           _ev(20, "lang", "Go")]))
+        n = b.block_evidence(st, SESSION, b.Block(0.0, 300.0, "session_start", "session_end"))
+        assert n == 10, n            # 5.0 + 5.0 across two allocation levels
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
