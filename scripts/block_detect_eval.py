@@ -51,3 +51,17 @@ def transitions(store, session, exclude=(), levels=ALLOC_LEVELS):
                                       round((t - prev[0]) / 60.0, 1)))
             prev = (t, a.value)
     return n_at, sorted(out, key=lambda x: x.instant)
+
+
+def shuffled(trans, bins, rng):
+    """Rule 2: every transition relocated to a random non-empty bin of the SAME session.
+
+    Count and density are preserved; only the relationship to the work is destroyed. This is
+    the control that collapsed the EWMA sizer from 86.4% to 24.1% while every fixed sizer
+    barely moved — which is what makes a positive result here believable rather than assumed.
+    """
+    if not bins:
+        return []
+    choices = [float(x) for x in bins]
+    return sorted([t._replace(instant=rng.choice(choices)) for t in trans],
+                  key=lambda x: x.instant)

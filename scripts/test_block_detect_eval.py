@@ -7,6 +7,7 @@
 run this with the study venv, not the sidecar one.
 """
 import os
+import random
 import sys
 import tempfile
 
@@ -67,6 +68,31 @@ def test_transitions_excludes_every_level_of_a_pair():
                             _ev(10, "artifact", "code"), _ev(310, "artifact", "docs")])
         _, out = b.transitions(st, SESSION, exclude=("lang", "branch"))
         assert {t.level for t in out} == {"artifact"}, out
+
+
+def test_shuffled_preserves_count_and_lands_only_on_active_bins():
+    """Rule 2's control destroys the relationship to the work while preserving how many
+    transitions there were and how dense the session is — otherwise it would be testing
+    a different session, not the same one with its structure removed."""
+    trans = [b.Transition(SESSION, "branch", 300.0, "a", "c", 5.0),
+             b.Transition(SESSION, "lang", 900.0, "Go", "Py", 5.0)]
+    bins = [0, 300, 600, 900, 1200]
+    out = b.shuffled(trans, bins, random.Random(1))
+    assert len(out) == len(trans), out
+    assert all(t.instant in {float(x) for x in bins} for t in out), out
+    assert [t.instant for t in out] == sorted(t.instant for t in out), out
+
+
+def test_shuffled_actually_moves_something():
+    """A control that returned its input would silently make every level pass rule 2."""
+    trans = [b.Transition(SESSION, "branch", 300.0, "a", "c", 5.0)] * 8
+    out = b.shuffled(trans, [0, 300, 600, 900, 1200, 1500], random.Random(7))
+    assert any(t.instant != 300.0 for t in out), out
+
+
+def test_shuffled_on_no_bins_is_empty():
+    assert b.shuffled([b.Transition(SESSION, "branch", 1.0, "a", "c", 0.0)], [],
+                      random.Random(1)) == []
 
 
 if __name__ == "__main__":
