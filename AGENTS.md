@@ -449,7 +449,7 @@ could raise.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").
-- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **16**
+- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **20**
   — bump it and re-run the eval when changing any vocab). Classify calls are
   prefixed with a context preamble (`Meta.PreambleCoding()`; `domain` uses the
   fuller `Meta.Preamble()`). **Facet-selective agentic augmentation:** agentic
@@ -501,6 +501,23 @@ differ from it**.
   would notice, which is why `transaction()` exists. Non-ref rows are dropped on the
   way in — a `say` row carries `len(body)`, a measure of message text, and a `tok`
   row carries token counts; neither is a reference event.
+
+⚠️ **The parse state carries a THIRD accumulator, and adding it forced a one-off reparse of
+every existing store.** `pending` (reconcile) and `cwds` (workspace) were the two; `reqs` is the
+third — the set of `requestId`s already costed. It exists because `events_for_turns` deduped
+requests with a set **local to one call** while incremental ingest calls it once per batch, and
+`turn_magnitude`'s primary key includes `source_line` (the batch ordinal). So a request whose
+assistant lines straddled a batch boundary was written twice and `turn_magnitudes` summed both:
+measured **2x on a three-line request cut after line 1, and 3x ingested a line at a time** —
+exactly lines-per-request. Nothing caught it because the oracle test ingests in ONE batch, the
+fixture used one `requestId` per line (making the dedup a structural no-op), and `test_ingest`'s
+chunked-equivalence comparator did not look at `turn_magnitude` at all. It does now.
+`ingest.STATE_VERSION` 3 → 4 is the REPAIR rather than mere bookkeeping: existing stores already
+hold the duplicate rows and nothing recomputes them, so the version mismatch forces one reparse and
+`clear_session` drops them. **Expect every store to reparse once on upgrade.** The set costs
+1,875 ids / ~59 KB of JSON on a 90 MB transcript — the same order as `pending` — and a truncated
+hash was deliberately rejected, because a collision would silently DROP a request's spend rather
+than double it.
 
 ⚠️ **A tail parse is only equal to a full parse because it was MADE equal.**
 `ingest_file` parses just the bytes a transcript grew by, resuming from the `ingest`
