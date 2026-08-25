@@ -158,6 +158,24 @@ def test_coverage_is_measured_not_bypassed_for_a_level_outside_allocation():
         assert got["coverage_pct"] == 50.0, got["coverage_pct"]
 
 
+def test_branch_on_narrow_ground_truth_replicates_the_published_figure():
+    """SIZER-RESULTS.md published EwmaSizer on `branch` at 86.4% precision / 54.8% recall.
+    NARROW ground truth + no exclusion is that same configuration. Allow +/- 5 points for
+    the anchor-set difference (this harness anchors on every active bin); a miss outside
+    that means the harness moved and every other result in this run is void.
+
+    SKIPPED, not failed, when the frozen store is absent — the store is 60 MB and lives
+    outside the repo, so a checkout without it must still be able to run the unit tests.
+    """
+    if not os.path.exists(b.DB):
+        print("    (skipped: frozen store not present)")
+        return
+    out = b.run("narrow")
+    got = out["levels"]["branch"]["real"]
+    assert abs(got["precision"] - 86.4) <= 5.0, f"precision {got['precision']} vs 86.4"
+    assert abs(got["recall"] - 54.8) <= 5.0, f"recall {got['recall']} vs 54.8"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
