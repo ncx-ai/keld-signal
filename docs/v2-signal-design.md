@@ -147,7 +147,7 @@ Derived from **tool-call inputs only** (which files were read, which commands ra
 checked out) — never from model output, never from prose. A closed vocabulary maps each observation
 to a level, and each level is rolled up over the window:
 
-    project · branch · model · output_type · language · workflow · tooling
+    project · branch · model · output_type · language · skill · tooling
 
 A dimension is **attributed** only if one value holds >= 50% of the window's evidence **and** there
 are at least 5 observations. Below that it says so rather than guessing. The evidence floor is

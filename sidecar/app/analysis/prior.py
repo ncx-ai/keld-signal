@@ -67,7 +67,7 @@ from app.analysis.window import MIN_EVIDENCE, attribution
 #     skill           25.8%      44.0%   <- the signal. 40 of 91 windows run a skill the session
 #                                           had never run: brainstorming -> writing-plans ->
 #                                           executing -> debugging, the phase transitions of the
-#                                           workflow, and a per-window view has nothing to see
+#                                           process, and a per-window view has nothing to see
 #                                           them against.
 #     language        70.6%       2.3%   <- carried by `departure`, not by `novel`
 #     branch          76.1%       6.1%

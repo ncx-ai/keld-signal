@@ -24,7 +24,7 @@ package enrich
 //	skill      agreement 25.8%   novelty 44.0%   <- the signal: brainstorming ->
 //	                                               writing-plans -> executing ->
 //	                                               debugging, the phase
-//	                                               transitions of the workflow
+//	                                               transitions of the process
 //	language   agreement 70.6%   novelty  2.3%
 //	branch     agreement 76.1%   novelty  6.1%
 //	output_type agreement 86.7%  novelty  1.1%  <- the one the aggregate hid

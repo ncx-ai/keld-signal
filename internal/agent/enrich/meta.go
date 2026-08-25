@@ -19,9 +19,14 @@ type Meta struct {
 	// Agentic-framework context (empty for coding tools). Set when the request
 	// originates from an agent step (Mastra/LangChain/LangGraph/CrewAI) so the
 	// classifier can reason over the framework/agent/workflow context.
-	Framework   string   // mastra, langchain, langgraph, crewai
-	AgentRole   string   // e.g. research_agent, billing_assistant
-	Workflow    string   // workflow/graph name
+	Framework string // mastra, langchain, langgraph, crewai
+	AgentRole string // e.g. research_agent, billing_assistant
+	// Workflow is the agentic FRAMEWORK's workflow/graph name (a Mastra or
+	// LangGraph workflow). It is NOT the `skill` workstream dimension, which
+	// was named `workflow` before schema v14 -- different concept, different
+	// source: this comes from framework metadata on the request, that from
+	// Claude Code Skill tool calls. Deliberately keeps the upstream word.
+	Workflow    string   // workflow/graph name (agentic framework, not `skill`)
 	Step        string   // node/step id or index
 	RecentSteps []string // prior agent steps, newest-first
 }
