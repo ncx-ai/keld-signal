@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Ground truth for block-boundary detection. Standalone, per the repo convention (no pytest).
+
+    PYTHONPATH=sidecar ~/.keld/study-venv/bin/python scripts/test_block_detect_eval.py
+
+`sizer_eval` (imported by the module under test) pulls in pandas, which the sidecar venv lacks —
+run this with the study venv, not the sidecar one.
+"""
+import os
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import block_detect_eval as b  # noqa: E402
+
+SESSION = "test-session"
+
+
+def _ev(dt, level, ref, n=5.0):
+    """One reference-event row shaped like `levels.events_for_turns` output: base + (kind,
+    level, ref, n). `n` defaults to `MIN_EVIDENCE` so a lone event is attributed by itself;
+    pass a smaller `n` to build a deliberately thin bin."""
+    return (float(dt), SESSION, "keld-signal", "main", False, "ref", level, ref, float(n))
+
+
+def _mkstore(tmp, events):
+    st = b.open_store(os.path.join(tmp, "state", "refseries.db"))
+    st.upsert_events(SESSION, events, source_line=1)
+    return st
+
+
+def test_transitions_finds_a_flip_between_attributed_bins():
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _mkstore(tmp, [_ev(10, "branch", "main"), _ev(310, "branch", "feature")])
+        n_at, trans = b.transitions(st, SESSION)
+        assert n_at == 2, n_at
+        assert len(trans) == 1, trans
+        assert trans[0].instant == 300.0, trans[0]
+        assert (trans[0].before, trans[0].after) == ("main", "feature"), trans[0]
+
+
+def test_transitions_ignores_a_flip_out_of_absent():
+    """A bin below MIN_EVIDENCE is `absent`, and a flip out of absent is not a transition —
+    the distinction window.REASONS exists to make."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _mkstore(tmp, [_ev(10, "branch", "main", n=1.0), _ev(310, "branch", "feature")])
+        n_at, trans = b.transitions(st, SESSION)
+        assert n_at == 1, n_at
+        assert trans == [], trans
+
+
+def test_transitions_excludes_the_level_under_test():
+    """The tautology guard. `lang` must not be scored on `lang` flips."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _mkstore(tmp, [_ev(10, "lang", "Go"), _ev(310, "lang", "Python"),
+                            _ev(10, "branch", "main"), _ev(310, "branch", "feature")])
+        _, both = b.transitions(st, SESSION)
+        assert {t.level for t in both} == {"lang", "branch"}, both
+        _, without = b.transitions(st, SESSION, exclude=("lang",))
+        assert {t.level for t in without} == {"branch"}, without
+
+
+def test_transitions_excludes_every_level_of_a_pair():
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _mkstore(tmp, [_ev(10, "lang", "Go"), _ev(310, "lang", "Python"),
+                            _ev(10, "branch", "main"), _ev(310, "branch", "feature"),
+                            _ev(10, "artifact", "code"), _ev(310, "artifact", "docs")])
+        _, out = b.transitions(st, SESSION, exclude=("lang", "branch"))
+        assert {t.level for t in out} == {"artifact"}, out
+
+
+if __name__ == "__main__":
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    failed = 0
+    for fn in fns:
+        try:
+            fn()
+            print(f"PASS {fn.__name__}")
+        except AssertionError as e:
+            failed += 1
+            print(f"FAIL {fn.__name__}: {e}")
+    print(f"\n{len(fns) - failed}/{len(fns)} passed")
+    sys.exit(1 if failed else 0)
