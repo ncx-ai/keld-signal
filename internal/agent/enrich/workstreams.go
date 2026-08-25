@@ -151,6 +151,20 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	if len(an.NamedTerms) > 0 {
 		res["named_terms"] = an.NamedTerms
 	}
+	// The last four, same call, same no-Producer reasoning, same
+	// empty-means-no-key rule as every inventory above.
+	if len(an.FileTypes) > 0 {
+		res["file_types"] = an.FileTypes
+	}
+	if len(an.ShellVerbs) > 0 {
+		res["shell_verbs"] = an.ShellVerbs
+	}
+	if len(an.Subagents) > 0 {
+		res["subagents"] = an.Subagents
+	}
+	if len(an.McpServers) > 0 {
+		res["mcp_servers"] = an.McpServers
+	}
 	// The cut-visibility map beside the eight inventories above. Empty means no
 	// key, same rule: an untruncated set of inventories has nothing to report.
 	if len(an.InventoryOmitted) > 0 {

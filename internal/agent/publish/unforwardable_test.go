@@ -149,6 +149,12 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// The four identifier-shaped inventories, so a payload that carries none
 		// of them could not make the checks below pass vacuously either.
 		`"harness_tools"`, `"programs"`, `"external_systems"`, `"integrations"`,
+		// And the last four, over the levels the analysis had always extracted and
+		// never published. All thirteen inventory keys are now individually
+		// publishable, which is exactly why `"inventory"` itself stays forbidden
+		// below: the BLOCK must remain unforwardable so a FOURTEENTH key cannot
+		// ride along wholesale.
+		`"file_types"`, `"shell_verbs"`, `"subagents"`, `"mcp_servers"`,
 		// The session prior and all three contrast measures, so `"reason"`
 		// staying forbidden below is a real result about a payload that DOES
 		// carry a prior block. The prior states its attribution outcome as

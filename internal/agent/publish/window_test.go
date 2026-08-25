@@ -31,6 +31,10 @@ func sampleWindow() enrich.WindowCharacterisation {
 			ExternalSystems:  []enrich.NameCount{{Value: "github.com", N: 4}},
 			Integrations:     []enrich.NameCount{{Value: "notion-fetch", N: 1}},
 			NamedTerms:       []enrich.NameCount{{Value: "Federico", N: 2}},
+			FileTypes:        []enrich.NameCount{{Value: ".go", N: 14}},
+			ShellVerbs:       []enrich.NameCount{{Value: "git rebase", N: 6}},
+			Subagents:        []enrich.NameCount{{Value: "general-purpose", N: 2}},
+			McpServers:       []enrich.NameCount{{Value: "notion", N: 1}},
 			InventoryOmitted: map[string]int{"files": 3},
 		},
 	}
@@ -122,6 +126,8 @@ func TestAWindowRowCarriesItsBoundsAndItsBlocks(t *testing.T) {
 		len(got.Files) == 0 || len(got.Directories) == 0 || len(got.Components) == 0 ||
 		len(got.HarnessTools) == 0 || len(got.Programs) == 0 || len(got.ExternalSystems) == 0 ||
 		len(got.Integrations) == 0 || len(got.NamedTerms) == 0 ||
+		len(got.FileTypes) == 0 || len(got.ShellVerbs) == 0 || len(got.Subagents) == 0 ||
+		len(got.McpServers) == 0 ||
 		len(got.InventoryOmitted) == 0 {
 		t.Fatalf("the analysis blocks did not survive Build: %+v", got)
 	}
@@ -150,6 +156,9 @@ func TestTheWindowWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		"workstreams": true, "dynamics": true, "effort": true, "physical_acts": true,
 		"files": true, "directories": true, "components": true, "inventory_omitted": true,
 		"harness_tools": true, "programs": true, "external_systems": true, "integrations": true,
+		// The last four inventory keys. With these, all thirteen publish — and the
+		// allowlist still does its job, because a FOURTEENTH still fails here.
+		"file_types": true, "shell_verbs": true, "subagents": true, "mcp_servers": true,
 		// named_terms is allowed DELIBERATELY, and is the only key here whose
 		// values come from message text rather than tool-call inputs. It was
 		// excluded — and asserted absent below — until the repo owner decided it

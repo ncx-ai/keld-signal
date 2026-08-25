@@ -138,26 +138,32 @@ func TestNoPhysicalActsIsAbsentNotAnEmptyList(t *testing.T) {
 }
 
 // The guarantee AnalyzeResult has always held for the inventory block, now that
-// eight of its nine keys are modelled instead of four: `physical_acts`,
-// `files`, `directories`, `components`, `harness_tools`, `programs`,
-// `external_systems` and `integrations` all have a field, so the one
-// remaining key — `named_terms`, which is drawn from message text and has held
-// real person names — stays undecodable rather than decoded-and-dropped.
-// Asserted over the STRUCT, so a field added tomorrow fails here.
-func TestAllNineInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
+// ALL THIRTEEN of its keys are modelled: the original four, then `harness_tools`/
+// `programs`/`external_systems`/`integrations`, then `named_terms` (drawn from
+// message text, has held real person names — withheld until that was reversed as
+// an explicit decision), and now `file_types`/`shell_verbs`/`subagents`/
+// `mcp_servers`.
+//
+// WITH NOTHING WITHHELD, THE STRUCT IS STILL THE MECHANISM, and this test is why
+// it keeps working: it asserts the field count EXACTLY, so a fourteenth key the
+// sidecar starts emitting cannot be decoded without failing here first and being
+// argued for. "Nothing is withheld today" is not the same as "anything may be
+// added tomorrow".
+func TestAllInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 	rt := reflect.TypeOf(InventoryBlock{})
 	wantTags := map[string]bool{
 		"physical_acts": false, "files": false, "directories": false, "components": false,
 		"harness_tools": false, "programs": false, "external_systems": false, "integrations": false,
 		"named_terms": false,
+		"file_types":  false, "shell_verbs": false, "subagents": false, "mcp_servers": false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; all nine inventory keys and no others should be "+
-			"decodable", names)
+		t.Fatalf("InventoryBlock models %v; all thirteen inventory keys and no others should be "+
+			"decodable — a fourteenth needs its own argument, not a silent field", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")
@@ -185,6 +191,10 @@ func TestAllNineInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		"harness_tools":    acts("Bash", 30),
 		"external_systems": acts("acme-internal.example", 3),
 		"integrations":     acts("notion-fetch", 1),
+		"file_types":       acts(".tsx", 12),
+		"shell_verbs":      acts("git rebase", 7),
+		"subagents":        acts("general-purpose", 3),
+		"mcp_servers":      acts("notion", 5),
 	}))
 	defer srv.Close()
 	got, _ := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
@@ -196,7 +206,11 @@ func TestAllNineInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 	}
 	if len(got.Programs) != 1 || len(got.HarnessTools) != 1 ||
 		len(got.ExternalSystems) != 1 || len(got.Integrations) != 1 {
-		t.Fatalf("the four newly-wired inventories are empty; the checks below would be vacuous: %+v", got)
+		t.Fatalf("the four identifier inventories are empty; the checks below would be vacuous: %+v", got)
+	}
+	if len(got.FileTypes) != 1 || len(got.ShellVerbs) != 1 ||
+		len(got.Subagents) != 1 || len(got.McpServers) != 1 {
+		t.Fatalf("the last four inventories are empty; the checks below would be vacuous: %+v", got)
 	}
 	b, _ := json.Marshal(got)
 	// These five now DECODE and must survive — the opposite assertion from
@@ -205,7 +219,7 @@ func TestAllNineInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 	// one inventory drawn from message text, and it publishes now. See
 	// sidecar.InventoryBlock.
 	for _, want := range []string{"git", "Bash", "acme-internal.example", "notion-fetch",
-		"Federico"} {
+		"Federico", ".tsx", "git rebase", "general-purpose", "notion"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("%q should now decode and survive conversion, but is missing from: %s", want, b)
 		}

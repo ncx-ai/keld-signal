@@ -292,8 +292,8 @@ type Workstream struct {
 // alternative (publishing only org-declared vocabulary matches through
 // /match + publish.Custom) and taken knowingly.
 //
-// ⚠️ named_terms is NOT like the other eight, and a reader needs to know why
-// even though it no longer changes what happens to it. The other eight derive
+// ⚠️ named_terms is NOT like the other twelve, and a reader needs to know why
+// even though it no longer changes what happens to it. The other twelve derive
 // from tool-call INPUTS — a path opened, a command run, a host connected to.
 // named_terms is proper nouns lifted from MESSAGE TEXT, matched against no
 // declared vocabulary, and has been observed to contain real person names
@@ -368,15 +368,18 @@ type Prior struct {
 	Novel     *bool    `json:"novel"`
 }
 
-// InventoryBlock is /analyze's inventory object, and it models EIGHT of its
-// nine keys: physical_acts, files, directories, components, harness_tools,
-// programs, external_systems, integrations. The one exception is
-// named_terms — the one level drawn from message TEXT, and real person names
-// have been observed in it ("Federico", "Daniel" in real windows). That is why
-// the distinction is enforced by the struct rather than by a comment:
-// named_terms has no field, so it stays structurally undecodable no matter
-// what the sidecar sends, rather than decoded-then-dropped by a rule someone
-// has to remember to keep enforcing.
+// InventoryBlock is /analyze's inventory object, and it models ALL THIRTEEN of
+// its keys: physical_acts, files, directories, components, harness_tools,
+// programs, external_systems, integrations, named_terms, and — since the
+// analysis began publishing the four levels it had always extracted and never
+// emitted — file_types, shell_verbs, subagents, mcp_servers.
+//
+// The STRUCT is still the mechanism rather than a comment, and named_terms is
+// why: it is the one level drawn from message TEXT, real person names have been
+// observed in it ("Federico", "Daniel" in real windows), and it had no field at
+// all until that was reversed as an explicit decision. A key with no field here
+// is undecodable no matter what the sidecar sends. A FOURTEENTH key therefore
+// still cannot ride along.
 //
 // THE RULE THIS STRUCT ENCODES HAS WIDENED. It used to be "only matched
 // vocabulary IDs ever reach Atlas" (physical_acts' closed 22-value table). It
@@ -384,19 +387,23 @@ type Prior struct {
 //
 //	closed/matched vocabulary  OR  provably-constrained shape, gated per entry
 //
-// physical_acts is the CLOSED case (see convertActs). The other seven fields
-// are all OPEN vocabularies — a file path, a tool name, a program name or a
-// hostname is not a member of a table — so each earns its field through a
+// physical_acts is the CLOSED case (see convertActs). Every other field is an
+// OPEN vocabulary — a file path, a tool name, a program name, a hostname, a
+// shell command is not a member of a table — so each earns its field through a
 // STRUCTURAL gate applied PER ENTRY instead of a vocabulary lookup:
 //
 //   - files / directories / components: workspace-relative shape
 //     (convertPathInventory).
-//   - harness_tools / integrations: bare identifier shape
-//     (convertIdentifierInventory). Deliberately NOT a hardcoded allowlist —
-//     the harness's own tool set genuinely grows.
+//   - harness_tools / integrations / file_types / subagents / mcp_servers: bare
+//     identifier shape (convertIdentifierInventory). Deliberately NOT a
+//     hardcoded allowlist — the harness's own tool set genuinely grows, and so
+//     does the set of MCP servers an org installs.
 //   - programs: identifier shape plus a rejection of path separators and a
 //     leading dot (convertProgramInventory) — closes the measured
 //     `.env.example` defect (a filename reaching the exe extraction).
+//   - shell_verbs: the one that CANNOT use identifierShape, because a verb is a
+//     COMMAND and legitimately multi-word (`git rebase`, `pnpm test`) — see
+//     convertShellVerbInventory.
 //   - external_systems: rejects bare IP literals, v4 and v6
 //     (convertExternalSystemInventory) — see that function for why internal
 //     and corporate HOSTNAMES are kept rather than filtered.
@@ -419,6 +426,10 @@ type InventoryBlock struct {
 	// tool-call inputs — see the AnalyzeResult comment above for why that
 	// distinction survives even though the field now exists.
 	NamedTerms []InventoryItem `json:"named_terms"`
+	FileTypes  []InventoryItem `json:"file_types"`
+	ShellVerbs []InventoryItem `json:"shell_verbs"`
+	Subagents  []InventoryItem `json:"subagents"`
+	McpServers []InventoryItem `json:"mcp_servers"`
 }
 
 // InventoryItem is one entry of an inventory dimension as it arrives on the wire:

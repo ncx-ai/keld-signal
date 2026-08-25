@@ -264,7 +264,75 @@ package enrich
 // argument that the `term` level is safe to leave on by default because it
 // could not be forwarded. The sidecar's own SCHEMA does not move — /analyze has
 // always emitted all nine keys. Producer strings move `-v17` -> `-v18`.
-const SchemaVersion = 18
+//
+// v19 ADDS TWO THINGS AT ONCE, both of which are the analysis publishing what it
+// had already computed.
+//
+// FIRST, the FOUR REMAINING INVENTORY dimensions: Profile.FileTypes/ShellVerbs/
+// Subagents/McpServers / Enrichment.file_types/shell_verbs/subagents/mcp_servers,
+// over the `ext`/`verb`/`agent`/`mcp_server` levels the sidecar's
+// `events_for_turns` has emitted since that package existed and which had
+// reached no payload at all — the same gap v11 closed for `action` and v16/v17
+// closed for the path and identifier levels. With these, ALL THIRTEEN of the
+// inventory block's keys publish, and `sidecar.InventoryBlock` still withholds
+// nothing while remaining the mechanism that keeps a FOURTEENTH from riding
+// along.
+//
+// Each COMPLEMENTS a dimension already published rather than restating it, which
+// is the bar an inventory has to clear to be worth its cap: `file_types` says
+// what KIND of work the `files` beside it were (40 files is scattered, 40 `.tsx`
+// files is front-end work); `shell_verbs` is the whole command where `programs`
+// is only the binary (`git` says nothing that `git rebase` does not say better);
+// `subagents` is the ONLY dimension that says work was DELEGATED, invisible in
+// every other level because a subagent's own turns are a different transcript;
+// `mcp_servers` is the SERVER where `integrations` is the tool, which is the
+// grain an org actually governs and pays for.
+//
+// OPEN vocabulary like v16's and v17's, so each is gated per entry structurally
+// rather than by a KnownX lookup. Three take the bare-identifier shape
+// (`sidecar.convertIdentifierInventory`) unchanged. `shell_verbs` is the one that
+// CANNOT: a verb is a command and legitimately multi-word, so a bare-identifier
+// gate would silently drop `git rebase` and `pnpm test` — the entire class this
+// dimension exists to carry and the whole of its advantage over `programs`. It
+// gets `sidecar.convertShellVerbInventory`: a multi-word command shape, a
+// rejection of path separators (a filename is not a command — the same defect
+// `programs` closes) and a length bound, so a `sh -c "…"` script cannot arrive
+// as a verb.
+//
+// SECOND, the ALLOCATION dimension `repo` — Enrichment.workstreams["repo"],
+// which needs no Go-side field because `workstreams` is a map. It is the
+// checkout's NORMALISED IDENTITY (`host/owner/repo`), resolved by the DAEMON from
+// .git/config and sent INTO the sidecar's `/analyze`, `/tick` and `/ingest`,
+// where it is written as a first-class series level and rolls up like any other.
+// The daemon has to be the resolver: the sidecar is confined to
+// KELD_ANALYZE_ROOTS precisely so it cannot open arbitrary paths as its user, and
+// a repo's config is outside that allowlist by construction.
+//
+// ⚠️ `repo` SHIPS ON AN ARGUMENT, NOT ON A MEASURED GAIN, and a reader should not
+// be left to infer otherwise. Over 54 real transcripts, `workspace -> repo` is a
+// PERFECT 1:1 mapping and `repo`'s cardinality is strictly LOWER (4 distinct
+// workspace values against 3 repo values), because a directory that is not a
+// checkout has no repository identity at all. So on the available corpus it adds
+// ZERO discriminating information. What carries it is that a directory BASENAME
+// is machine-local — two engineers with the same repo under different paths do
+// not reconcile to one identity at Atlas, and two orgs whose basenames collide
+// are merged into one — and a single-machine corpus is structurally incapable of
+// showing either. It therefore publishes BESIDE `project`, never instead of it,
+// and it carries `provenance: "known:daemon_git"` sidecar-side so the difference
+// in origin is legible rather than assumed (that field is dropped on the way to
+// Labeled — see sidecar.AnalyzeLabeled — so what an Atlas consumer sees is one
+// more dimension in a map it already iterates).
+//
+// Its DYNAMICS and its PRIOR are both withheld, measured rather than assumed: 0
+// of 50 transcripts span more than one repository while 34 of 50 span more than
+// one DIRECTORY, so it is constant within every window and both blocks would
+// publish a constant — `project`'s exact disqualification one level coarser.
+//
+// The sidecar's own SCHEMA moves 11 -> 13 across the two halves (12 for `repo`,
+// 13 for the inventories): unlike v17 and v18, this time its payload really does
+// change. Nothing existing changes meaning: every field of v18 publishes
+// identically. Producer strings move `-v18` -> `-v19`.
+const SchemaVersion = 19
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

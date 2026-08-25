@@ -188,6 +188,27 @@ type Profile struct {
 	// spaCy's measured ~1% precision a filter would create false assurance
 	// rather than remove names.
 	NamedTerms []NameCount `json:"named_terms,omitempty"`
+	// FileTypes, ShellVerbs, Subagents and McpServers are the last four
+	// inventories the analysis computed and nothing published: the `ext`
+	// (`.tsx`/`.py`/`.css`), `verb` (the whole command — `git rebase`, `pnpm
+	// test`), `agent` (`general-purpose`, `Explore`) and `mcp_server`
+	// (`notion`) levels, with counts (see NameCount). Same /analyze call as
+	// every inventory above, model-free like them.
+	//
+	// Each COMPLEMENTS a sibling rather than restating it, which is the bar an
+	// inventory has to clear: FileTypes says what KIND of work the Files beside
+	// it were (40 files is scattered, 40 `.tsx` files is front-end work);
+	// ShellVerbs is the command where Programs is only the binary (`git` says
+	// nothing that `git rebase` does not say better); Subagents is the ONLY
+	// dimension that says work was DELEGATED, invisible in every other level
+	// because a subagent's own turns are a different transcript; McpServers is
+	// the server where Integrations is the tool, which is the grain an org
+	// governs. Same OPEN vocabulary and same per-entry identifier-shape gate as
+	// HarnessTools/Integrations. Absent, never an empty list.
+	FileTypes  []NameCount `json:"file_types,omitempty"`
+	ShellVerbs []NameCount `json:"shell_verbs,omitempty"`
+	Subagents  []NameCount `json:"subagents,omitempty"`
+	McpServers []NameCount `json:"mcp_servers,omitempty"`
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped — visibility for a cut that used to be
 	// silent for every one of the six pre-existing inventory dimensions (the

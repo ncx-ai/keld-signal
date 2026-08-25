@@ -68,6 +68,25 @@ type WindowEnrichment struct {
 	// spaCy's measured ~1% precision a filter would create false assurance
 	// rather than remove names.
 	NamedTerms []enrich.NameCount `json:"named_terms,omitempty"`
+	// FileTypes, ShellVerbs, Subagents and McpServers are the last four
+	// inventories the analysis computed and nothing published, over the `ext`
+	// (`.tsx`/`.py`/`.css`), `verb` (the whole command — `git rebase`), `agent`
+	// (`general-purpose`, `Explore`) and `mcp_server` (`notion`) levels. Same
+	// /analyze call as every inventory above, same no-inference path, same
+	// per-entry structural gates (identifier shape for three; a multi-word
+	// command shape for ShellVerbs, which is what distinguishes it from
+	// Programs' bare binary — see sidecar.convertShellVerbInventory).
+	//
+	// Each COMPLEMENTS a sibling rather than restating it: what KIND of work the
+	// Files were, the command where Programs is only the binary, the one
+	// dimension that says work was DELEGATED (invisible everywhere else, since a
+	// subagent's turns are a different transcript), and the SERVER where
+	// Integrations is the tool. Absent when the window used nothing in that
+	// dimension; never an empty list.
+	FileTypes  []enrich.NameCount `json:"file_types,omitempty"`
+	ShellVerbs []enrich.NameCount `json:"shell_verbs,omitempty"`
+	Subagents  []enrich.NameCount `json:"subagents,omitempty"`
+	McpServers []enrich.NameCount `json:"mcp_servers,omitempty"`
 	// InventoryOmitted is the cut-visibility map beside the eight inventories
 	// above — same rule as the prompt row's (see Enrichment.InventoryOmitted).
 	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
@@ -130,6 +149,10 @@ func BuildWindow(w enrich.WindowCharacterisation, actor string, now time.Time) W
 		ExternalSystems:   w.Analysis.ExternalSystems,
 		Integrations:      w.Analysis.Integrations,
 		NamedTerms:        w.Analysis.NamedTerms,
+		FileTypes:         w.Analysis.FileTypes,
+		ShellVerbs:        w.Analysis.ShellVerbs,
+		Subagents:         w.Analysis.Subagents,
+		McpServers:        w.Analysis.McpServers,
 		InventoryOmitted:  w.Analysis.InventoryOmitted,
 		Prior:             w.Analysis.Prior,
 		PipelineStatus:    enrich.PipelineStatusWindow,

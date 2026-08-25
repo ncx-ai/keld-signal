@@ -108,3 +108,70 @@ func TestIdentsFromTreatsAnEmptyListAsNoAnswer(t *testing.T) {
 		}
 	}
 }
+
+// The same three properties for the LAST FOUR inventories — the levels the
+// analysis had always extracted and never published. Kept as one test over a
+// table rather than four copies: the properties are identical and the interesting
+// thing is that all four hold.
+func TestWorkstreamsPassCarriesTheLastFourInventories(t *testing.T) {
+	an := WindowAnalysis{
+		Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}},
+		FileTypes:   []NameCount{{".tsx", 12}},
+		ShellVerbs:  []NameCount{{"git rebase", 7}},
+		Subagents:   []NameCount{{"general-purpose", 4}},
+		McpServers:  []NameCount{{"notion", 5}},
+	}
+	fa := &fakeAnalyze{ok: true, out: an}
+	got, err := (WorkstreamsExtractor{Analyze: fa.fn}).Run(coords(t))
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	for key, want := range map[string]NameCount{
+		"file_types":  {".tsx", 12},
+		"shell_verbs": {"git rebase", 7},
+		"subagents":   {"general-purpose", 4},
+		"mcp_servers": {"notion", 5},
+	} {
+		v, ok := got[key].([]NameCount)
+		if !ok || len(v) != 1 || v[0] != want {
+			t.Errorf("%s = %+v, want [%+v]", key, got[key], want)
+		}
+	}
+
+	// Empty means NO KEY, never an empty list: an inventory of nothing is the
+	// absence of an answer, not an answer.
+	bare := &fakeAnalyze{ok: true, out: WindowAnalysis{
+		Workstreams: map[string]Labeled{"branch": {Value: "main", Confidence: 1}}}}
+	got2, err := (WorkstreamsExtractor{Analyze: bare.fn}).Run(coords(t))
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	for _, key := range []string{"file_types", "shell_verbs", "subagents", "mcp_servers"} {
+		if got2[key] != nil {
+			t.Errorf("%s: empty inventory published: %+v", key, got2[key])
+		}
+	}
+}
+
+// End-to-end with NO Model at all — ml_backend "deterministic" — since these four
+// are model-free like every other inventory the window pass carries.
+func TestRunPublishesTheLastFourInventoriesWithoutAModel(t *testing.T) {
+	p := Run("hello", "claude_code", Meta{}, nil,
+		WithPassTimeout(0),
+		WithCoordinates("/tmp/t.jsonl", "p1"),
+		WithWorkstreams(func(path, promptID string, span int) (WindowAnalysis, bool) {
+			return WindowAnalysis{
+				Workstreams: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
+				FileTypes:   []NameCount{{".go", 14}},
+				ShellVerbs:  []NameCount{{"go test", 6}},
+				Subagents:   []NameCount{{"Explore", 2}},
+				McpServers:  []NameCount{{"notion", 1}},
+			}, true
+		}))
+	if len(p.FileTypes) != 1 || p.FileTypes[0].Value != ".go" || p.FileTypes[0].N != 14 {
+		t.Fatalf("profile missing the file_types inventory: %+v", p)
+	}
+	if len(p.ShellVerbs) != 1 || len(p.Subagents) != 1 || len(p.McpServers) != 1 {
+		t.Fatalf("profile missing the shell_verbs/subagents/mcp_servers inventories: %+v", p)
+	}
+}

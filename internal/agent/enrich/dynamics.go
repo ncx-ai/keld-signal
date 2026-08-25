@@ -104,6 +104,17 @@ type WindowAnalysis struct {
 	// (sidecar.convertNamedTerms); see sidecar.InventoryBlock for why it
 	// publishes and why no person-name filter accompanies it.
 	NamedTerms []NameCount
+	// FileTypes, ShellVerbs, Subagents and McpServers are the four inventories
+	// that were extracted and published nowhere — the `ext`/`verb`/`agent`/
+	// `mcp_server` levels — each COMPLEMENTING a dimension already here rather
+	// than restating it: what KIND of work the Files were, the command where
+	// Programs is only the binary, the one dimension that says work was
+	// DELEGATED, and the server where Integrations is the tool. Same NameCount
+	// shape and same per-entry identifier gate. Nil, never an empty slice.
+	FileTypes  []NameCount
+	ShellVerbs []NameCount
+	Subagents  []NameCount
+	McpServers []NameCount
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped — the visibility `Profile.FacetsSkipped`
 	// already gives a dropped FACET, applied one level down to a dropped VALUE

@@ -246,3 +246,102 @@ func TestTheNamedTermsGateBoundsShapeAndKeepsMultiWordTerms(t *testing.T) {
 		}
 	}
 }
+
+// Round-trip for the LAST FOUR inventories — the levels the analysis had always
+// extracted and never published. Same shape and same ordering guarantee as the
+// four above; `shell_verbs` is the one whose values are deliberately multi-word.
+func TestAnalyzeLabeledCarriesTheLastFourInventories(t *testing.T) {
+	srv := analyzeServer(t, inventoryBody(map[string]any{
+		"file_types":  acts(".tsx", 12, ".py", 5),
+		"shell_verbs": acts("git rebase", 7, "pnpm test", 2),
+		"subagents":   acts("general-purpose", 4, "Explore", 1),
+		"mcp_servers": acts("notion", 5, "linear", 1),
+	}))
+	defer srv.Close()
+
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	if !ok {
+		t.Fatal("AnalyzeLabeled reported failure")
+	}
+	checkNameCounts(t, "FileTypes", got.FileTypes, []enrichAct{{".tsx", 12}, {".py", 5}})
+	checkNameCounts(t, "ShellVerbs", got.ShellVerbs,
+		[]enrichAct{{"git rebase", 7}, {"pnpm test", 2}})
+	checkNameCounts(t, "Subagents", got.Subagents,
+		[]enrichAct{{"general-purpose", 4}, {"Explore", 1}})
+	checkNameCounts(t, "McpServers", got.McpServers, []enrichAct{{"notion", 5}, {"linear", 1}})
+}
+
+// ⚠️ THE GATE THAT MAKES `shell_verbs` DIFFERENT FROM ITS THREE SIBLINGS.
+// identifierShape would have been the obvious reuse and it is WRONG here: a verb
+// is a COMMAND, and the whole reason this dimension beats `programs` is that it
+// keeps the subcommand — `git rebase` says something `git` does not. A
+// bare-identifier gate drops every multi-word value, i.e. exactly the class the
+// dimension exists to carry, and it would have done so SILENTLY.
+func TestShellVerbsKeepMultiWordCommandsThatIdentifierShapeWouldDrop(t *testing.T) {
+	for _, v := range []string{"git rebase", "pnpm test", "docker compose up",
+		"cargo build --release", "uv run pytest"} {
+		got := convertShellVerbInventory([]InventoryItem{{Value: v, N: 3}})
+		if len(got) != 1 || got[0].Value != v {
+			t.Errorf("convertShellVerbInventory(%q) = %+v, want it kept whole — dropping a "+
+				"multi-word command discards the whole point of this dimension", v, got)
+		}
+		if len(identifierShape.FindString(v)) != 0 {
+			t.Errorf("premise broken: %q now matches identifierShape, so this test no longer "+
+				"demonstrates why shell_verbs needs its own gate", v)
+		}
+	}
+}
+
+// PER-ENTRY, like every sibling gate: one unusable value costs exactly that
+// value and the rest of the list survives. The rejections are the two the
+// sidecar's own extraction could not have produced — a path separator (a
+// filename is not a command, the same defect convertProgramInventory closes for
+// `programs`) and a value long enough to be a command LINE, which is what `sh -c
+// "…"` puts in one argument.
+func TestShellVerbsDropOneBadEntryAndKeepTheList(t *testing.T) {
+	long := "sh -c " + strings.Repeat("x", shellVerbMaxLen)
+	got := convertShellVerbInventory([]InventoryItem{
+		{Value: "git rebase", N: 7},
+		{Value: "./scripts/build.sh", N: 4}, // a path, not a command
+		{Value: "", N: 2},
+		{Value: long, N: 1},
+		{Value: "pnpm test", N: 2},
+	})
+	checkNameCounts(t, "ShellVerbs", got, []enrichAct{{"git rebase", 7}, {"pnpm test", 2}})
+}
+
+// The other three take identifierShape unchanged, and the same per-entry rule
+// applies: a value the sidecar's normalisation could not have produced is
+// dropped alone.
+func TestTheThreeSingleTokenInventoriesDropOneBadEntryAndKeepTheList(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   []InventoryItem
+		want []enrichAct
+	}{
+		{"file_types", []InventoryItem{
+			{Value: ".tsx", N: 12}, {Value: "src/app/page.tsx", N: 3}, {Value: ".py", N: 5},
+		}, []enrichAct{{".tsx", 12}, {".py", 5}}},
+		{"subagents", []InventoryItem{
+			{Value: "general-purpose", N: 4}, {Value: "an agent with spaces", N: 2},
+			{Value: "Explore", N: 1},
+		}, []enrichAct{{"general-purpose", 4}, {"Explore", 1}}},
+		{"mcp_servers", []InventoryItem{
+			{Value: "notion", N: 5}, {Value: "", N: 9}, {Value: "linear", N: 1},
+		}, []enrichAct{{"notion", 5}, {"linear", 1}}},
+	} {
+		checkNameCounts(t, tc.name, convertIdentifierInventory(tc.in), tc.want)
+	}
+}
+
+// Nil in, nil out — not an empty slice — for all four, so a sidecar too old to
+// emit the key publishes NO key rather than an empty list, which would read as
+// "we looked and the hour used nothing".
+func TestTheLastFourInventoriesAreNilRatherThanEmpty(t *testing.T) {
+	if got := convertShellVerbInventory(nil); got != nil {
+		t.Errorf("convertShellVerbInventory(nil) = %+v, want nil", got)
+	}
+	if got := convertShellVerbInventory([]InventoryItem{{Value: "/bin/sh", N: 1}}); got != nil {
+		t.Errorf("an all-rejected list must be nil, not empty: %+v", got)
+	}
+}

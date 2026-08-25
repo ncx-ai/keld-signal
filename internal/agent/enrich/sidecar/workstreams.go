@@ -44,22 +44,22 @@ import (
 //   - Session / WindowStart / WindowEnd stay local: window metadata, useful for
 //     debugging on-device, with no business on the published payload.
 //
-//   - The response's inventory block contributes ALL NINE of its keys:
+//   - The response's inventory block contributes ALL THIRTEEN of its keys:
 //     `physical_acts` (convertActs), `files`/`directories`/`components`
-//     (convertPathInventory), `harness_tools`/`integrations`
-//     (convertIdentifierInventory), `programs` (convertProgramInventory),
-//     `external_systems` (convertExternalSystemInventory) and `named_terms`
-//     (convertNamedTerms). `named_terms` was withheld until it was decided
-//     otherwise; it is the only one drawn from message TEXT rather than
-//     tool-call inputs, and the only one observed to contain real person
-//     names. See InventoryBlock for that decision and why no person-name
-//     filter accompanies it.
+//     (convertPathInventory), `harness_tools`/`integrations`/`file_types`/
+//     `subagents`/`mcp_servers` (convertIdentifierInventory), `programs`
+//     (convertProgramInventory), `external_systems`
+//     (convertExternalSystemInventory), `shell_verbs`
+//     (convertShellVerbInventory) and `named_terms` (convertNamedTerms).
+//     `named_terms` was withheld until it was decided otherwise; it is the
+//     only one drawn from message TEXT rather than tool-call inputs, and the
+//     only one observed to contain real person names. See InventoryBlock for
+//     that decision and why no person-name filter accompanies it.
 //
 //   - InventoryOmitted forwards UNCHANGED: it is a map of dimension name to a
-//     COUNT of values cut, never a value, so it carries no privacy weight even
-//     for the five inventory keys above that stay on-device — "programs cut 3"
-//     says nothing about which three. Nil rather than an empty map when nothing
-//     was cut (see enrich.WindowAnalysis.InventoryOmitted).
+//     COUNT of values cut, never a value, so it carries no privacy weight —
+//     "programs cut 3" says nothing about which three. Nil rather than an empty
+//     map when nothing was cut (see enrich.WindowAnalysis.InventoryOmitted).
 //
 //   - The SESSION PRIOR block converts field-for-field (see convertPrior) into a
 //     map that is SEPARATE from Workstreams and never merged into it. That
@@ -111,6 +111,10 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.
 		ExternalSystems:  convertExternalSystemInventory(res.Inventory.ExternalSystems),
 		Integrations:     convertIdentifierInventory(res.Inventory.Integrations),
 		NamedTerms:       convertNamedTerms(res.Inventory.NamedTerms),
+		FileTypes:        convertIdentifierInventory(res.Inventory.FileTypes),
+		ShellVerbs:       convertShellVerbInventory(res.Inventory.ShellVerbs),
+		Subagents:        convertIdentifierInventory(res.Inventory.Subagents),
+		McpServers:       convertIdentifierInventory(res.Inventory.McpServers),
 		InventoryOmitted: convertInventoryOmitted(res.InventoryOmitted),
 		Dynamics:         convertDynamics(res.Dynamics),
 		Effort:           convertEffort(res.Effort),
@@ -264,6 +268,44 @@ func convertIdentifierInventory(items []InventoryItem) []enrich.NameCount {
 	var out []enrich.NameCount
 	for _, it := range items {
 		if it.Value == "" || !identifierShape.MatchString(it.Value) {
+			continue
+		}
+		out = append(out, enrich.NameCount{Value: it.Value, N: it.N})
+	}
+	return out
+}
+
+// shellVerbShape bounds `shell_verbs`, and is the one of the four newly-wired
+// inventories that cannot use identifierShape: a verb is a COMMAND, not a single
+// token — `git rebase`, `pnpm test`, `docker compose up` — so a bare-identifier
+// gate would silently drop every multi-word value, which is the whole class this
+// dimension exists to carry and the reason it beats `programs` (the binary
+// alone). The other three ARE single tokens (`.tsx`, `general-purpose`, `notion`)
+// and keep identifierShape.
+//
+// What it does reject is anything that could not have come out of the sidecar's
+// bashlex-based segment head: a path separator (a filename is not a command —
+// the same defect convertProgramInventory closes for `programs`), and anything
+// long enough to be a command LINE rather than a verb. `sh -c "…"` puts a whole
+// script in one argument, and the sidecar's own extraction is what should keep
+// that out; this bounds it here too, at the decode boundary, on the same
+// defence-in-depth reasoning as notWorkspaceRelative.
+var shellVerbShape = regexp.MustCompile(`^[A-Za-z0-9_.:+@=-]+(?: [A-Za-z0-9_.:+@=/-]+)*$`)
+
+// shellVerbMaxLen bounds a verb. Measured, the level holds a segment head plus
+// at most a subcommand or two, so this is generous by an order of magnitude and
+// exists only so a pathological extraction cannot publish a shell script.
+const shellVerbMaxLen = 64
+
+// convertShellVerbInventory converts the `shell_verbs` inventory (level `verb`).
+// PER-ENTRY like every sibling: one unusable value costs exactly that value.
+func convertShellVerbInventory(items []InventoryItem) []enrich.NameCount {
+	var out []enrich.NameCount
+	for _, it := range items {
+		if it.Value == "" || len(it.Value) > shellVerbMaxLen {
+			continue
+		}
+		if strings.ContainsAny(it.Value, `/\`) || !shellVerbShape.MatchString(it.Value) {
 			continue
 		}
 		out = append(out, enrich.NameCount{Value: it.Value, N: it.N})

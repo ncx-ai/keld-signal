@@ -675,3 +675,84 @@ func TestBuildOmitsEmptyIdentifierInventories(t *testing.T) {
 		}
 	}
 }
+
+// The LAST FOUR inventories reach the wire, and their keys are asserted as exact
+// JSON so a renamed field fails here rather than silently publishing a key no
+// Atlas consumer reads. `shell_verbs` carries a MULTI-WORD value deliberately:
+// keeping the subcommand is the whole of its advantage over `programs`, and a
+// gate that dropped it would leave this list looking merely sparse.
+func TestBuildCarriesTheLastFourInventories(t *testing.T) {
+	p := enrich.Profile{
+		FileTypes:  []enrich.NameCount{{Value: ".tsx", N: 12}},
+		ShellVerbs: []enrich.NameCount{{Value: "git rebase", N: 7}},
+		Subagents:  []enrich.NameCount{{Value: "general-purpose", N: 4}},
+		McpServers: []enrich.NameCount{{Value: "notion", N: 5}},
+	}
+	e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+	if len(e.FileTypes) != 1 || len(e.ShellVerbs) != 1 || len(e.Subagents) != 1 ||
+		len(e.McpServers) != 1 {
+		t.Fatalf("the last four inventories were dropped by Build: %+v", e)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"file_types":[{"value":".tsx","n":12}]`,
+		`"shell_verbs":[{"value":"git rebase","n":7}]`,
+		`"subagents":[{"value":"general-purpose","n":4}]`,
+		`"mcp_servers":[{"value":"notion","n":5}]`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("wire missing %s: %s", want, b)
+		}
+	}
+}
+
+// Absent, not an empty list — same rule every inventory before them keeps.
+func TestBuildOmitsTheLastFourInventoriesWhenEmpty(t *testing.T) {
+	for name, p := range map[string]enrich.Profile{
+		"nil": {},
+		"empty": {
+			FileTypes: []enrich.NameCount{}, ShellVerbs: []enrich.NameCount{},
+			Subagents: []enrich.NameCount{}, McpServers: []enrich.NameCount{},
+		},
+	} {
+		e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, unwanted := range []string{`"file_types"`, `"shell_verbs"`, `"subagents"`,
+			`"mcp_servers"`} {
+			if strings.Contains(string(b), unwanted) {
+				t.Errorf("%s: an empty %s was published: %s", name, unwanted, b)
+			}
+		}
+	}
+}
+
+// `repo` reaches the wire through `workstreams` with NO new field, because that
+// field is a map — which is the point of it being a series level rather than a
+// bespoke block. Pinned so a future "repo needs its own key" change has to
+// argue with an existing assertion, and because a map is exactly the shape whose
+// contents nothing else in this file checks.
+func TestBuildCarriesTheRepoWorkstreamThroughTheMap(t *testing.T) {
+	p := enrich.Profile{Workstreams: map[string]enrich.Labeled{
+		"repo":    {Value: "github.com/ncx-ai/keld-atlas", Confidence: 1, Producer: "w-v19"},
+		"project": {Value: "keld-atlas", Confidence: 1, Producer: "w-v19"},
+	}}
+	e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"repo":{"value":"github.com/ncx-ai/keld-atlas"`) {
+		t.Errorf("the repo workstream did not reach the wire: %s", b)
+	}
+	// BESIDE `project`, never instead of it: measured 1:1 on the corpus but with
+	// strictly LOWER cardinality, because a directory that is not a checkout has
+	// no repository identity at all. Replacing one with the other loses a
+	// distinction the series can make.
+	if !strings.Contains(string(b), `"project":{"value":"keld-atlas"`) {
+		t.Errorf("publishing `repo` must not displace `project`: %s", b)
+	}
+}
