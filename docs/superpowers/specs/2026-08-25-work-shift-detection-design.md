@@ -13,8 +13,8 @@ result is a permitted outcome.
 | signal | where | published today |
 |---|---|---|
 | `EDIT_BYTES` per turn | `analysis/magnitude.py`, `turn_magnitude` table | yes, summed, as `effort.authored_bytes` |
-| **`TOKENS`** (price-weighted) | same | **no** |
-| **`REQUEST_TOKENS`** | same | **no** |
+| **`REQUEST_TOKENS`** (price-weighted, per request — the SPEND series) | same | **no** |
+| `TOKENS` (per-line rollup weight — **never sum it**) | same | no, and correctly so |
 | inter-turn gaps | `analysis/latency.py` | only `gaps` (a count) and `fast_share` |
 | **the gap distribution** | derivable from the same times | **no** |
 | inventory membership | `files`, `components`, `programs`, … | the sets, yes — **their movement, no** |
@@ -26,18 +26,35 @@ no: the dominant value changed in **51 of 5,752 slots, 0.89%**. That is a correc
 specific use. It says nothing about the number's value as a published measure of what an hour cost,
 or as an input to change detection, neither of which was tested.
 
-⚠️ **`TOKENS` partly duplicates telemetry, and the difference must be stated on the wire.** Atlas
-already receives `input_tokens`/`output_tokens`/`cache_read_tokens` per `ToolEvent`. The enrichment
-figure is different in two ways: it is **window-scoped** (summed over the block, not the call) and
-**price-weighted** into input-token equivalents — `input + 1.25*write_5m + 2.0*write_1h + 0.1*read
-+ 5.0*output`, ratios rather than dollars, so it needs no price table. Publishing it without saying
-so invites a consumer to double-count. It belongs in `effort` beside `authored_bytes`, not in a new
-block.
+⚠️ **CORRECTION, 2026-08-25 — the field this spec originally named `weighted_tokens` WAS THE TRAP
+THE CODEBASE ALREADY GUARDS AGAINST, and it is removed.** The first draft asked for
+"price-weighted input-token equivalents **over the block**", i.e. a sum of `TOKENS`.
+`magnitude.py`'s own docstring forbids exactly that:
 
-What to add to `effort`:
+> `REQUEST_TOKENS` — the request's cost, ONCE per `requestId`. This is the SPEND SERIES: it is what
+> sums to what a window actually cost. `tokens` does not — summing it multiplies a request by its
+> line count (median 2, up to 12 measured) — and a number that looks like a spend total while
+> over-counting by 2x is exactly the plausible-wrong-number failure this codebase keeps paying for.
+> Hence two names, one per question, instead of one number and a caveat.
 
-    weighted_tokens      int    price-weighted input-token equivalents over the block
-    request_tokens       int    raw request-token count over the block
+`TOKENS` is a PER-LINE weight, existing so a weighted rollup reduces to an event-weighted one when
+every request costs the same. It is not a window total and must never be summed into one.
+
+And the field was redundant as well as wrong: `levels.py:242` computes
+`w = magnitude.token_weight(u)` — the price-weighted value — and emits it as `REQUEST_TOKENS` once
+per request. **`request_tokens` summed IS the price-weighted window cost.** One field, correctly
+named, already carrying the number the draft asked for under a name that invites summing it wrongly.
+
+⚠️ **`request_tokens` partly duplicates telemetry, and the wire must say so.** Atlas already
+receives `input_tokens`/`output_tokens`/`cache_read_tokens` per `ToolEvent`. This figure differs in
+two ways: it is **window-scoped** (summed over the block, not the call) and **price-weighted** into
+input-token equivalents — `input + 1.25*write_5m + 2.0*write_1h + 0.1*read + 5.0*output`, ratios
+rather than dollars, so it needs no price table. Publishing it without saying so invites a consumer
+to double-count. It belongs in `effort` beside `authored_bytes`, not in a new block.
+
+What to add to `effort` — THREE fields, not four:
+
+    request_tokens       int    price-weighted spend over the block, once per request
     gap_p50_s            float  median inter-turn gap
     gap_p90_s            float  90th percentile — the tail is where "stopped to think" lives
     Each omitted when its evidence is absent, never defaulted to 0.
@@ -75,7 +92,7 @@ One distance, one threshold, computed over a vector that mixes categorical and c
   windows' member sets. **Nothing computes this today**, and a changed *set* is a different fact
   from a changed dominant value. The `turnover`/`decay` pair already published for dynamics is
   exactly this idea applied per-dimension; here it feeds detection instead.
-- **Continuous signals** (`weighted_tokens`, `authored_bytes`, `gap_p50`, `fast_share`) — normalised
+- **Continuous signals** (`request_tokens`, `authored_bytes`, `gap_p50`, `fast_share`) — normalised
   per session, then contributing standardised deltas. A shift from reading to authoring is a tempo
   and volume change with **no categorical change at all**, which is a whole class of boundary the
   current detector structurally cannot see.
@@ -119,7 +136,7 @@ gap between them is itself the finding.
 ## Sequencing
 
 Part A is independent and can ship first: it is additive fields on `effort` plus a bump, and the
-signals are already in the store. Part B needs Part A only for `weighted_tokens` and the gap
+signals are already in the store. Part B needs Part A only for `request_tokens` and the gap
 percentiles as detector inputs — the categorical and Jaccard parts need nothing new.
 
 Part B does **not** block Phase 1. The contract already states `branch` as the detection level and
