@@ -23,7 +23,8 @@ type analyzingModel struct {
 	span         int
 }
 
-func (m *analyzingModel) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.WindowAnalysis, bool) {
+func (m *analyzingModel) AnalyzeLabeled(path, promptID string, spanMinutes int,
+	_ enrich.ResolvedFacts) (enrich.WindowAnalysis, bool) {
 	m.path, m.prompt, m.span = path, promptID, spanMinutes
 	changed := true
 	turnover := 0.35
@@ -71,7 +72,7 @@ func TestProcessPublishesWorkstreamsFromTheAnalyzer(t *testing.T) {
 // through `process`, not inferred from the wiring.
 func TestProcessPublishesDynamicsWithNoModel(t *testing.T) {
 	shift := -0.31
-	svc := serviceFacets{Analyze: func(path, promptID string, span int) (enrich.WindowAnalysis, bool) {
+	svc := serviceFacets{Analyze: func(path, promptID string, span int, _ enrich.ResolvedFacts) (enrich.WindowAnalysis, bool) {
 		return enrich.WindowAnalysis{
 			Workstreams: map[string]enrich.Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
 			Dynamics: map[string]enrich.Dynamic{

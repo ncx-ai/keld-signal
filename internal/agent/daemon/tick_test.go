@@ -11,6 +11,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"os/exec"
 )
 
 // --- doubles ---------------------------------------------------------------
@@ -29,12 +30,14 @@ type fakeTickCall struct {
 	cursor    *float64
 	now       time.Time
 	span      float64
+	resolved  enrich.ResolvedFacts
 }
 
 func (f *fakeTicker) TickCharacterised(path, source, sessionID string, promptIDs []string,
-	cursor *float64, now time.Time, spanMinutes float64, maxWindows int) ([]enrich.WindowCharacterisation, float64, bool) {
+	cursor *float64, now time.Time, spanMinutes float64, maxWindows int,
+	resolved enrich.ResolvedFacts) ([]enrich.WindowCharacterisation, float64, bool) {
 	f.calls = append(f.calls, fakeTickCall{path, sessionID, append([]string(nil), promptIDs...),
-		cursor, now, spanMinutes})
+		cursor, now, spanMinutes, resolved})
 	if !f.ok {
 		return nil, 0, false
 	}
@@ -88,7 +91,7 @@ func TestTheTickIsToldWhichPromptsEnrichmentAlreadyCovered(t *testing.T) {
 	st.observe(aJob("/t/a.jsonl", "P1")) // a retry must not double-count
 
 	tk := &fakeTicker{ok: true}
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 
 	if len(tk.calls) != 1 {
 		t.Fatalf("calls = %d, want 1", len(tk.calls))
@@ -117,7 +120,7 @@ func TestATranscriptTheAnalysisCannotReadIsNeverTicked(t *testing.T) {
 	st.observe(queue.Job{Source: "claude_code", PromptID: "P2"}) // no transcript path
 
 	tk := &fakeTicker{ok: true}
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 	if len(tk.calls) != 0 {
 		t.Fatalf("ticked an unanalysable transcript: %+v", tk.calls)
 	}
@@ -132,7 +135,7 @@ func TestAnEmittedWindowIsPublishedUnderItsOwnCorrelation(t *testing.T) {
 		windows: []enrich.WindowCharacterisation{aWindow("sess-1", "2026-08-19T13:46:44Z")}}
 	pub := &fakeWindowSender{}
 
-	if n := tickOnce(context.Background(), st, tk, pub, "me", time.Now(), nil); n != 1 {
+	if n := tickOnce(context.Background(), st, tk, pub, "me", time.Now(), nil, nil); n != 1 {
 		t.Fatalf("published = %d, want 1", n)
 	}
 	if len(pub.sent) != 1 {
@@ -160,24 +163,24 @@ func TestTheCursorAdvancesOnlyOnAnAnsweredAndPublishedTick(t *testing.T) {
 	}
 
 	st, tk := base()
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 	if len(tk.calls) != 2 || tk.calls[1].cursor == nil || *tk.calls[1].cursor != 5000 {
 		t.Fatalf("cursor was not carried into the next tick: %+v", tk.calls)
 	}
 
 	st, tk = base()
 	tk.ok = false // the sidecar could not answer
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 	if tk.calls[1].cursor != nil {
 		t.Errorf("cursor advanced on a tick that was never answered: %v", *tk.calls[1].cursor)
 	}
 
 	st, tk = base()
 	tickOnce(context.Background(), st, tk, &fakeWindowSender{err: errors.New("atlas down")},
-		"me", time.Now(), nil)
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+		"me", time.Now(), nil, nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 	if tk.calls[1].cursor != nil {
 		t.Errorf("cursor advanced past a window that was never published: %v", *tk.calls[1].cursor)
 	}
@@ -189,7 +192,7 @@ func TestTheCursorNeverRewinds(t *testing.T) {
 	st.advance("/t/a.jsonl", 9000)
 	st.advance("/t/a.jsonl", 100) // a stale response, or a rolled-back store
 	tk := &fakeTicker{ok: true}
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 	if c := tk.calls[0].cursor; c == nil || *c != 9000 {
 		t.Fatalf("cursor rewound: %v", c)
 	}
@@ -202,11 +205,11 @@ func TestTheCursorSurvivesARestart(t *testing.T) {
 	st := newTickState(file)
 	st.observe(aJob("/t/a.jsonl", "P1"))
 	tk := &fakeTicker{ok: true, cursor: 4242}
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 
 	again := newTickState(file)
 	tk2 := &fakeTicker{ok: true}
-	tickOnce(context.Background(), again, tk2, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), again, tk2, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 	if len(tk2.calls) != 1 {
 		t.Fatalf("the restarted ticker forgot the transcript: %+v", tk2.calls)
 	}
@@ -226,7 +229,7 @@ func TestACorruptStateFileStartsFreshRatherThanFailing(t *testing.T) {
 	st := newTickState(file)
 	st.observe(aJob("/t/a.jsonl", "P1"))
 	tk := &fakeTicker{ok: true}
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 	if len(tk.calls) != 1 {
 		t.Fatalf("a corrupt state file wedged the ticker: %+v", tk.calls)
 	}
@@ -238,7 +241,7 @@ func TestPromptMemoryIsBoundedAndKeepsTheRecentPrompts(t *testing.T) {
 		st.observe(aJob("/t/a.jsonl", string(rune('a'+i%26))+string(rune('0'+i/26))))
 	}
 	tk := &fakeTicker{ok: true}
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 	ids := tk.calls[0].promptIDs
 	if len(ids) > tickPromptMemory {
 		t.Fatalf("prompt memory is unbounded: %d entries", len(ids))
@@ -257,7 +260,7 @@ func TestAnIdleTranscriptIsRetiredFromMemory(t *testing.T) {
 	st.observe(aJob("/t/a.jsonl", "P1"))
 	tk := &fakeTicker{ok: true}
 	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me",
-		time.Now().Add(tickIdleRetire+time.Hour), nil)
+		time.Now().Add(tickIdleRetire+time.Hour), nil, nil)
 	if len(tk.calls) != 0 {
 		t.Fatalf("a transcript idle past the retire horizon was still ticked: %+v", tk.calls)
 	}
@@ -329,8 +332,99 @@ func TestTheWorkerFeedsPromptsToTheTickerOnlyWhenOneIsRunning(t *testing.T) {
 	noteTickPrompt(aJob("/t/a.jsonl", "P1"))
 
 	tk := &fakeTicker{ok: true}
-	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil)
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil, nil)
 	if len(tk.calls) != 1 || len(tk.calls[0].promptIDs) != 1 {
 		t.Fatalf("the worker's prompt did not reach the ticker: %+v", tk.calls)
 	}
+}
+
+// A TICK CARRIES THE CHECKOUT'S IDENTITY TOO, and it has to recover it without a
+// queue.Job: there is no cwd here, only a transcript path. So the directory comes
+// out of the projects-directory NAME (see projectdir.go) and the facts are
+// resolved per TRANSCRIPT — the granularity they have, since a transcript is
+// scoped to one project directory and every window in the batch sits in the same
+// checkout.
+//
+// Without this, a tick-emitted window would answer with one fewer dimension than
+// a prompt's window over the same hour, which is exactly the "a tick window is
+// not a lesser window" rule broken.
+func TestATickResolvesTheCheckoutFromTheTranscriptPath(t *testing.T) {
+	git := gitInitFixture(t)
+	// A transcript whose projects-directory name encodes the checkout.
+	projects := filepath.Join(t.TempDir(), encodeLike(git)+"")
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(projects, "0badc0de-0000.jsonl")
+
+	st := newTickState(filepath.Join(t.TempDir(), "tick.json"))
+	st.observe(queue.Job{TranscriptPath: path, PromptID: "P1", Source: "claude_code",
+		SessionID: "sess-1"})
+	tk := &fakeTicker{ok: true, cursor: 5}
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil,
+		newFactsCache())
+
+	if len(tk.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(tk.calls))
+	}
+	got := tk.calls[0].resolved
+	if got.Repo != "github.com/ncx-ai/keld-atlas" {
+		t.Errorf("resolved.Repo = %q, want the checkout's normalised remote — the tick did not "+
+			"recover the working directory from the transcript path", got.Repo)
+	}
+	if got.GitBranch != "main" {
+		t.Errorf("resolved.GitBranch = %q, want \"main\"", got.GitBranch)
+	}
+}
+
+// A transcript whose directory does not decode sends EMPTY facts rather than a
+// guess. Transcripts routinely outlive their directories (the pre-VM Cowork
+// session dirs are never cleaned up; /tmp work is deleted), and a guessed path
+// handed to gitRemote could publish some other repository's identity for this
+// work. The tick must still RUN — an unresolvable checkout costs one dimension,
+// not the characterisation.
+func TestATickWithAnUndecodableTranscriptPathSendsEmptyFacts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "-gone-forever", "0badc0de-0000.jsonl")
+	st := newTickState(filepath.Join(t.TempDir(), "tick.json"))
+	st.observe(queue.Job{TranscriptPath: path, PromptID: "P1", Source: "claude_code",
+		SessionID: "sess-1"})
+	tk := &fakeTicker{ok: true, cursor: 5}
+	tickOnce(context.Background(), st, tk, &fakeWindowSender{}, "me", time.Now(), nil,
+		newFactsCache())
+
+	if len(tk.calls) != 1 {
+		t.Fatalf("calls = %d, want 1 — an unresolvable checkout must not skip the tick",
+			len(tk.calls))
+	}
+	if !tk.calls[0].resolved.Zero() {
+		t.Errorf("resolved = %+v, want the zero value; a guess here could name another "+
+			"repository entirely", tk.calls[0].resolved)
+	}
+}
+
+// gitInitFixture makes a real single-commit checkout with an `origin` remote and
+// returns its path. Real git rather than a hand-written .git, for the reason
+// gitremote_test.go gives: the shapes gitRemote reads are git-created.
+func gitInitFixture(t *testing.T) string {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(git, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main", ".")
+	run("remote", "add", "origin", "git@github.com:ncx-ai/keld-atlas.git")
+	return dir
 }

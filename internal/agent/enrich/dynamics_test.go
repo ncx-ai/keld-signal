@@ -71,7 +71,7 @@ func TestRunPublishesDynamicsWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int) (WindowAnalysis, bool) {
+		WithWorkstreams(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
 			return WindowAnalysis{
 				Workstreams: map[string]Labeled{"branch": {Value: "feat/ledger", Confidence: 1}},
 				Dynamics: map[string]Dynamic{

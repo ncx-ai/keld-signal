@@ -145,9 +145,30 @@ func (q *ingestQueue) stats() (int, int) {
 // then, a newly-eligible source's already-existing transcripts are picked up by
 // /analyze's own on-demand ingest on the first window that asks for one — a
 // once-per-file cost on the request path, not a permanent gap.
-func ingestSignalHook(ctx context.Context, signal func(path string) bool) func(source, path string) {
+// ⚠️ THE SIGNAL NOW CARRIES THE DAEMON'S RESOLVED FACTS, AND THE RESOLUTION
+// HAPPENS ON THE SENDER GOROUTINE, NOT ON THE WATCHER'S POLL LOOP. Ingest is
+// where the sidecar's `repo` rows are written — it is a series level per turn,
+// not a value overlaid on a digest — so a signal without the facts leaves the
+// series unable to name the repository for the bytes it just consumed. But the
+// facts cost a ReadDir chain plus a .git/config read, and `offer` is called from
+// the poll loop that carries every hook-free prompt on the machine. So `offer`
+// stays a channel send and nothing else; the resolution is done by the same
+// serial goroutine that does the talking, where a slow filesystem costs ingest
+// latency and nothing else. That is the same division of labour the queue itself
+// exists for.
+//
+// A transcript whose directory does not decode sends EMPTY facts (see
+// projectdir.go): the sidecar writes no `repo` rows for them and the dimension is
+// simply unattributed, which is the honest answer for a transcript whose checkout
+// is gone. A guessed path would be handed to `gitRemote` and could name some
+// other repository entirely.
+func ingestSignalHook(ctx context.Context,
+	signal func(path string, resolved enrich.ResolvedFacts) bool) func(source, path string) {
 	q := newIngestQueue(ingestSignalDepth)
-	go q.run(ctx, signal)
+	facts := newFactsCache()
+	go q.run(ctx, func(path string) bool {
+		return signal(path, facts.forTranscript(path).resolved())
+	})
 	return func(source, path string) {
 		if !enrich.WorkstreamsEligible(source) {
 			return

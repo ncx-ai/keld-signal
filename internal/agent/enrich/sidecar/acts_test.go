@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 // inventoryBody wraps an inventory block in an otherwise minimal /analyze body,
@@ -37,7 +39,7 @@ func TestAnalyzeLabeledCarriesThePhysicalActsInventory(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -72,7 +74,7 @@ func TestPhysicalActsAreNotTruncatedClientSide(t *testing.T) {
 	srv := analyzeServer(t, inventoryBody(map[string]any{"physical_acts": acts(vals...)}))
 	defer srv.Close()
 
-	got, _ := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, _ := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if len(got.PhysicalActs) != 16 {
 		t.Errorf("got %d acts, want all 16: the level is published whole: %+v",
 			len(got.PhysicalActs), got.PhysicalActs)
@@ -89,7 +91,7 @@ func TestAnUnknownActIsDroppedWithoutDroppingTheInventory(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -126,7 +128,7 @@ func TestNoPhysicalActsIsAbsentNotAnEmptyList(t *testing.T) {
 			delete(body, "inventory")
 		}
 		srv := analyzeServer(t, body)
-		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 		srv.Close()
 		if !ok {
 			t.Fatalf("%s: AnalyzeLabeled reported failure", name)
@@ -197,7 +199,7 @@ func TestAllInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		"mcp_servers":      acts("notion", 5),
 	}))
 	defer srv.Close()
-	got, _ := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, _ := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if len(got.PhysicalActs) != 1 || got.PhysicalActs[0].Value != "read" {
 		t.Fatalf("the acts half is empty; the leak checks would be vacuous: %+v", got)
 	}

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 func tickServer(t *testing.T, body map[string]any, seen *map[string]any) *httptest.Server {
@@ -38,7 +40,7 @@ func TestTickSendsCoordinatesAndInstantsOnly(t *testing.T) {
 
 	cur := 7.5
 	_, ok := New(srv.URL, 5*time.Second).Tick("/tmp/t.jsonl", []string{"P1", "P2"}, &cur,
-		time.Unix(1000, 0), 60, 12)
+		time.Unix(1000, 0), 60, 12, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("Tick reported failure on a 200")
 	}
@@ -60,7 +62,7 @@ func TestANeverTickedTranscriptSendsANullCursor(t *testing.T) {
 	var got map[string]any
 	srv := tickServer(t, map[string]any{"cursor": 1.0, "windows": []any{}}, &got)
 	defer srv.Close()
-	New(srv.URL, 5*time.Second).Tick("/tmp/t.jsonl", nil, nil, time.Unix(1000, 0), 60, 12)
+	New(srv.URL, 5*time.Second).Tick("/tmp/t.jsonl", nil, nil, time.Unix(1000, 0), 60, 12, enrich.ResolvedFacts{})
 	if v, present := got["cursor_ts"]; !present || v != nil {
 		t.Fatalf("cursor_ts = %v, want null", v)
 	}
@@ -71,7 +73,8 @@ func TestTickCharacterisedConvertsAWindowTheSameWayAPromptsIsConverted(t *testin
 	defer srv.Close()
 
 	wins, cursor, ok := New(srv.URL, 5*time.Second).TickCharacterised(
-		"/tmp/t.jsonl", "claude_code", "sess-1", []string{"P1"}, nil, time.Unix(1000, 0), 60, 12)
+		"/tmp/t.jsonl", "claude_code", "sess-1", []string{"P1"}, nil, time.Unix(1000, 0), 60, 12,
+		enrich.ResolvedFacts{})
 	if !ok || cursor != 99 || len(wins) != 1 {
 		t.Fatalf("ok=%v cursor=%v wins=%d", ok, cursor, len(wins))
 	}
@@ -110,7 +113,8 @@ func TestAWindowWithNoEvidenceIsNeverForwardedForPublication(t *testing.T) {
 	defer srv.Close()
 
 	wins, _, ok := New(srv.URL, 5*time.Second).TickCharacterised(
-		"/tmp/t.jsonl", "claude_code", "sess-1", []string{"P1"}, nil, time.Unix(1000, 0), 60, 12)
+		"/tmp/t.jsonl", "claude_code", "sess-1", []string{"P1"}, nil, time.Unix(1000, 0), 60, 12,
+		enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("not ok")
 	}
@@ -127,7 +131,8 @@ func TestAWindowWithNoBoundsIsNeverForwarded(t *testing.T) {
 	srv := tickServer(t, map[string]any{"cursor": 5.0, "windows": []any{unbounded}}, nil)
 	defer srv.Close()
 	wins, _, _ := New(srv.URL, 5*time.Second).TickCharacterised(
-		"/tmp/t.jsonl", "claude_code", "sess-1", []string{"P1"}, nil, time.Unix(1000, 0), 60, 12)
+		"/tmp/t.jsonl", "claude_code", "sess-1", []string{"P1"}, nil, time.Unix(1000, 0), 60, 12,
+		enrich.ResolvedFacts{})
 	if len(wins) != 0 {
 		t.Fatalf("an unlocatable window reached the publisher: %+v", wins)
 	}
@@ -142,7 +147,8 @@ func TestAFailedTickReportsNoCursor(t *testing.T) {
 	}))
 	defer srv.Close()
 	wins, cursor, ok := New(srv.URL, 5*time.Second).TickCharacterised(
-		"/tmp/t.jsonl", "claude_code", "sess-1", []string{"P1"}, nil, time.Unix(1000, 0), 60, 12)
+		"/tmp/t.jsonl", "claude_code", "sess-1", []string{"P1"}, nil, time.Unix(1000, 0), 60, 12,
+		enrich.ResolvedFacts{})
 	if ok || cursor != 0 || wins != nil {
 		t.Fatalf("a failed tick reported ok=%v cursor=%v wins=%v", ok, cursor, wins)
 	}

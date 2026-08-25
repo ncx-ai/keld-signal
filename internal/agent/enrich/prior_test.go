@@ -100,7 +100,7 @@ func TestThePriorReachesTheProfileWithoutTouchingTheWorkstreams(t *testing.T) {
 				Status: "attributed", Novel: &yes},
 		},
 	}
-	ex := WorkstreamsExtractor{Analyze: func(string, string, int) (WindowAnalysis, bool) {
+	ex := WorkstreamsExtractor{Analyze: func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
 		return an, true
 	}}
 	out, err := ex.Run(&JobContext{TranscriptPath: "/tmp/t.jsonl", PromptID: "p1"})
@@ -132,7 +132,7 @@ func TestThePriorReachesTheProfileWithoutTouchingTheWorkstreams(t *testing.T) {
 // downstream as "we looked at the session and it said nothing", which is a
 // different fact from a sidecar too old to have looked at all.
 func TestNoPriorPublishesNoKey(t *testing.T) {
-	ex := WorkstreamsExtractor{Analyze: func(string, string, int) (WindowAnalysis, bool) {
+	ex := WorkstreamsExtractor{Analyze: func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
 		return WindowAnalysis{Workstreams: map[string]Labeled{"branch": {Value: "main"}}}, true
 	}}
 	out, err := ex.Run(&JobContext{TranscriptPath: "/tmp/t.jsonl", PromptID: "p1"})

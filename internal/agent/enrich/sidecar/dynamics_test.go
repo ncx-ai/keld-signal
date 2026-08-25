@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 // dynamicsResponse is a realistic /analyze body: the digest, the inventory the
@@ -74,7 +76,7 @@ func serve(t *testing.T, body map[string]any) *Client {
 // "unknown" as 0.0/false — "we checked, nothing moved" — which is the exact
 // misreading dynamics.py exists not to produce.
 func TestAnalyzeDecodesTheDynamicsBlock(t *testing.T) {
-	out, ok := serve(t, dynamicsResponse()).Analyze("/tmp/t.jsonl", "prompt-1", 60)
+	out, ok := serve(t, dynamicsResponse()).Analyze("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("a response carrying the dynamics block failed to decode")
 	}
@@ -191,7 +193,7 @@ func TestNothingInTheDynamicsSubtreeCanCarryALevelValue(t *testing.T) {
 // AnalyzeLabeled is the chokepoint the pipeline consumes, and it converts both
 // halves of one /analyze call: what the window CONTAINS and how it is CHANGING.
 func TestAnalyzeLabeledForwardsTheDynamics(t *testing.T) {
-	got, ok := serve(t, dynamicsResponse()).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	got, ok := serve(t, dynamicsResponse()).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -241,7 +243,7 @@ func TestAnalyzeLabeledDropsAnUnknownDynamicsVocabulary(t *testing.T) {
 	dims["branch"].(map[string]any)["reading"] = "consolidating"
 	dims["language"].(map[string]any)["status"] = "slice_sparse"
 
-	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -271,7 +273,7 @@ func TestAnalyzeLabeledWithoutADynamicsBlock(t *testing.T) {
 			"branch": map[string]any{"value": "main", "share": 1.0, "evidence": 5,
 				"provenance": "known:tool_inputs"},
 		},
-	}).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	}).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("a response without dynamics must not report failure")
 	}

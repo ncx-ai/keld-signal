@@ -27,12 +27,20 @@ import (
 //
 //   - Value -> Value, unchanged.
 //
-//   - Provenance is DROPPED. It is a constant ("known:tool_inputs") for every
-//     dimension the current analysis produces, so it distinguishes nothing;
-//     Labeled.Producer already attributes the value to the pass. If provenance
-//     ever varies per dimension (e.g. a vocabulary-matched value alongside a
-//     counted one), it needs a real field — folding it into Producer would
-//     make the producer string a second, unparsed data channel.
+//   - Provenance is DROPPED, and it is NO LONGER a constant. `repo` publishes
+//     `known:daemon_git` where every other dimension publishes
+//     `known:tool_inputs`, because `repo`'s rows come from facts the daemon read
+//     off disk rather than from tool-call metadata counted in the transcript. So
+//     the field now does distinguish something on-device — but it is still
+//     dropped here, because Labeled has no field for it and folding it into
+//     Producer would make the producer string a second, unparsed data channel.
+//     Giving it a real field is a widening of the published contract with its
+//     own argument to make; a consumer that needs to know which dimension is
+//     daemon-resolved knows it from the dimension NAME, which is fixed.
+//
+//   - `resolved` travels the OTHER WAY: in, on the request. See
+//     enrich.ResolvedFacts for why the daemon is the only component that may
+//     resolve it and why the analysis is the right place to send it.
 //
 //   - Evidence is DROPPED, and this one costs information: share=1.0 over 1
 //     observation and share=1.0 over 500 look identical downstream. Labeled has
@@ -88,8 +96,9 @@ import (
 // *Workstream) is OMITTED, never emitted as a Labeled with an empty Value: a
 // published dimension whose value is "" reads downstream as a real answer.
 // ok=false is propagated unchanged — a failed analysis is not an empty one.
-func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.WindowAnalysis, bool) {
-	res, ok := c.Analyze(path, promptID, spanMinutes)
+func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int,
+	resolved enrich.ResolvedFacts) (enrich.WindowAnalysis, bool) {
+	res, ok := c.Analyze(path, promptID, spanMinutes, resolved)
 	if !ok {
 		return enrich.WindowAnalysis{}, false
 	}

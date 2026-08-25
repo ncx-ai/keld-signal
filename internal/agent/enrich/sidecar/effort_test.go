@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 // effortBody is a realistic /analyze body carrying the effort block plus the
@@ -29,7 +31,7 @@ func TestAnalyzeLabeledCarriesTheEffortBlock(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -57,7 +59,7 @@ func TestNullFastShareDecodesToNoValueNotZero(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -103,7 +105,7 @@ func TestAnEffortBlockWithAnUnknownVocabularyValueIsDropped(t *testing.T) {
 			"fast_share": 0.9, "gaps": 9, "tempo": "steered", "tempo_status": "attributed"}},
 	} {
 		srv := analyzeServer(t, effortBody(c.block))
-		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 		srv.Close()
 		if !ok {
 			t.Fatalf("%s: an unreadable block must not fail the analysis", c.name)
@@ -127,7 +129,7 @@ func TestNoEffortBlockIsAbsentNotZeroed(t *testing.T) {
 		},
 	})
 	defer srv.Close()
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -158,7 +160,7 @@ func TestNothingInTheEffortSubtreeCanCarryATranscriptString(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}

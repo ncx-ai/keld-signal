@@ -20,7 +20,7 @@ func TestAnalyzeLabeledCarriesTheFilePathInventories(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -58,7 +58,7 @@ func TestANonWorkspaceRelativePathEntryIsDroppedWithoutDroppingTheInventory(t *t
 		srv := analyzeServer(t, inventoryBody(map[string]any{
 			"files": acts("internal/agent/daemon/daemon.go", 9, bad, 4),
 		}))
-		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 		srv.Close()
 		if !ok {
 			t.Fatalf("%q: AnalyzeLabeled reported failure", bad)
@@ -90,7 +90,7 @@ func TestNoFilePathInventoriesIsAbsentNotAnEmptyList(t *testing.T) {
 			delete(body, "inventory")
 		}
 		srv := analyzeServer(t, body)
-		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 		srv.Close()
 		if !ok {
 			t.Fatalf("%s: AnalyzeLabeled reported failure", name)
@@ -111,7 +111,7 @@ func TestAnalyzeLabeledCarriesInventoryOmittedUnchanged(t *testing.T) {
 	srv := analyzeServer(t, body)
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -124,7 +124,7 @@ func TestAnalyzeLabeledCarriesInventoryOmittedUnchanged(t *testing.T) {
 func TestNoInventoryOmittedIsAbsentNotAnEmptyMap(t *testing.T) {
 	// Key absent entirely (a sidecar that never sends it).
 	srv := analyzeServer(t, inventoryBody(map[string]any{"files": acts("a.go", 1)}))
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	srv.Close()
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
@@ -139,7 +139,7 @@ func TestNoInventoryOmittedIsAbsentNotAnEmptyMap(t *testing.T) {
 	body["inventory_omitted"] = map[string]any{}
 	srv2 := analyzeServer(t, body)
 	defer srv2.Close()
-	got2, ok := New(srv2.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got2, ok := New(srv2.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 func TestAnalyzeSendsCoordinatesAndNeverText(t *testing.T) {
@@ -32,7 +34,7 @@ func TestAnalyzeSendsCoordinatesAndNeverText(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, 5*time.Second)
-	out, ok := c.Analyze("/tmp/t.jsonl", "prompt-1", 60)
+	out, ok := c.Analyze("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("Analyze reported failure")
 	}
@@ -62,7 +64,7 @@ func TestAnalyzeReportsFailureOn404(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
-	if out, ok := New(srv.URL, 5*time.Second).Analyze("/tmp/t.jsonl", "missing", 60); ok {
+	if out, ok := New(srv.URL, 5*time.Second).Analyze("/tmp/t.jsonl", "missing", 60, enrich.ResolvedFacts{}); ok {
 		t.Errorf("a 404 must report failure, not an empty success, got %+v", out)
 	}
 }
@@ -118,7 +120,7 @@ func TestAnalyzeToleratesUnmodelledDynamicsFields(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, 5*time.Second)
-	out, ok := c.Analyze("/tmp/t.jsonl", "prompt-1", 60)
+	out, ok := c.Analyze("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("a response carrying unmodelled dynamics fields failed to decode")
 	}
@@ -134,7 +136,7 @@ func TestAnalyzeToleratesUnmodelledDynamicsFields(t *testing.T) {
 
 	// The labeled view the pipeline consumes carries the derived dynamics and
 	// nothing that could name a reference level.
-	got, ok := c.AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	got, ok := c.AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}

@@ -9,6 +9,8 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
+	"os"
+	"path/filepath"
 )
 
 // The watcher's poll loop is the daemon's capture path: every prompt from every
@@ -23,7 +25,7 @@ func TestIngestSignalNeverBlocksTheWatcher(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	hook := ingestSignalHook(ctx, func(path string) bool {
+	hook := ingestSignalHook(ctx, func(path string, _ enrich.ResolvedFacts) bool {
 		select {
 		case blocked <- struct{}{}:
 		default:
@@ -67,7 +69,7 @@ func TestIngestSignalOnlyForSourcesTheAnalysisCanServe(t *testing.T) {
 	var got []string
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	hook := ingestSignalHook(ctx, func(path string) bool {
+	hook := ingestSignalHook(ctx, func(path string, _ enrich.ResolvedFacts) bool {
 		mu.Lock()
 		got = append(got, path)
 		mu.Unlock()
@@ -210,5 +212,76 @@ func TestSignalIngestIsAServiceFacetOfTheRealClient(t *testing.T) {
 	c := sidecar.New("http://127.0.0.1:1", time.Second)
 	if f := facetsFor(c, nil); f.SignalIngest == nil {
 		t.Error("the real client must advertise the ingest signal")
+	}
+}
+
+// ⚠️ THE SIGNAL CARRIES THE FACTS, AND THE RESOLUTION MUST NOT HAPPEN ON THE
+// WATCHER'S POLL LOOP. Ingest is where the sidecar WRITES the repository rows — a
+// series level per turn, not a value overlaid on a digest — so a signal without
+// them leaves the series unable to name the repository for the bytes it just
+// consumed. But resolving costs a ReadDir chain plus a .git/config read, and
+// `offer` is called from the loop that carries every hook-free prompt on the
+// machine.
+//
+// So the resolution belongs to the serial sender goroutine. This asserts both
+// halves: the facts arrive at the sender, and `offer` returned before the sender
+// had done any of that work.
+func TestTheIngestSignalCarriesTheResolvedFactsWithoutBlockingTheWatcher(t *testing.T) {
+	git := gitInitFixture(t)
+	projects := filepath.Join(t.TempDir(), encodeLike(git))
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(projects, "0badc0de-0000.jsonl")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type call struct {
+		path     string
+		resolved enrich.ResolvedFacts
+	}
+	got := make(chan call, 4)
+	hook := ingestSignalHook(ctx, func(p string, r enrich.ResolvedFacts) bool {
+		got <- call{p, r}
+		return true
+	})
+	hook("claude_code", path)
+
+	select {
+	case c := <-got:
+		if c.path != path {
+			t.Errorf("path = %q, want %q", c.path, path)
+		}
+		if c.resolved.Repo != "github.com/ncx-ai/keld-atlas" {
+			t.Errorf("resolved.Repo = %q, want the checkout's normalised remote — ingest is "+
+				"where the repository rows are written, so a signal without it leaves the "+
+				"series unable to name the repo", c.resolved.Repo)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the signal never reached the sender")
+	}
+}
+
+// A transcript whose directory does not decode still gets signalled, with EMPTY
+// facts. The ingest itself is what keeps the series current for every OTHER
+// level, so withholding the signal over an unresolvable repository would trade a
+// missing dimension for a stale window.
+func TestAnUndecodableTranscriptIsStillSignalledWithEmptyFacts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan enrich.ResolvedFacts, 4)
+	hook := ingestSignalHook(ctx, func(_ string, r enrich.ResolvedFacts) bool {
+		got <- r
+		return true
+	})
+	hook("claude_code", filepath.Join(t.TempDir(), "-gone-forever", "s.jsonl"))
+
+	select {
+	case r := <-got:
+		if !r.Zero() {
+			t.Errorf("resolved = %+v, want the zero value", r)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an unresolvable checkout must not suppress the ingest signal")
 	}
 }

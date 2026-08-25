@@ -243,7 +243,8 @@ func tickStatePath() string { return filepath.Join(paths.StateDir(), "tick.json"
 // — the same way windowAnalyzer/piiDetector are declared.
 type windowTicker interface {
 	TickCharacterised(path, source, sessionID string, promptIDs []string, cursor *float64,
-		now time.Time, spanMinutes float64, maxWindows int) ([]enrich.WindowCharacterisation, float64, bool)
+		now time.Time, spanMinutes float64, maxWindows int,
+		resolved enrich.ResolvedFacts) ([]enrich.WindowCharacterisation, float64, bool)
 }
 
 // WindowSender publishes a tick-emitted row. Separate from Sender because a
@@ -264,12 +265,17 @@ func runTicker(ctx context.Context, st *tickState, tk windowTicker, pub WindowSe
 	actor string, interval time.Duration, emitter *clientevents.Emitter) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	// One cache for the ticker's lifetime, shared across passes: a transcript's
+	// checkout does not move between ticks, and re-walking the ReadDir chain plus
+	// .git/config for every transcript every interval is pure waste (see
+	// factsCache on what is deliberately NOT cached).
+	facts := newFactsCache()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			tickOnce(ctx, st, tk, pub, actor, time.Now(), emitter)
+			tickOnce(ctx, st, tk, pub, actor, time.Now(), emitter, facts)
 		}
 	}
 }
@@ -282,8 +288,16 @@ func runTicker(ctx context.Context, st *tickState, tk windowTicker, pub WindowSe
 // monotonicity buys. A failed PUBLISH does not advance it either, so the window
 // is re-offered next pass and upserts itself if the first attempt did in fact
 // land (Atlas's uq_enrichment_corr; see publish.WindowCorrID).
+// `facts` resolves the checkout's identity PER TRANSCRIPT, which is the
+// granularity those facts have: a transcript is scoped to one project directory,
+// so every window in one target's batch sits in the same checkout. A tick has no
+// queue.Job and therefore no cwd, so the directory is recovered from the
+// transcript's own path (see projectdir.go) rather than by parsing it — and a
+// path that decodes to nothing sends EMPTY facts, never a guess. May be nil,
+// which sends empty facts for every target (the tests that predate this).
 func tickOnce(ctx context.Context, st *tickState, tk windowTicker, pub WindowSender,
-	actor string, now time.Time, emitter *clientevents.Emitter) (published int) {
+	actor string, now time.Time, emitter *clientevents.Emitter,
+	facts *factsCache) (published int) {
 	for _, tgt := range st.targets(now) {
 		if ctx.Err() != nil {
 			return published
@@ -291,8 +305,13 @@ func tickOnce(ctx context.Context, st *tickState, tk windowTicker, pub WindowSen
 		if len(tgt.PromptIDs) == 0 {
 			continue
 		}
+		var resolved enrich.ResolvedFacts
+		if facts != nil {
+			resolved = facts.forTranscript(tgt.Path).resolved()
+		}
 		wins, cursor, ok := tk.TickCharacterised(tgt.Path, tgt.Source, tgt.Session,
-			tgt.PromptIDs, tgt.Cursor, now, enrich.WindowSpanMinutes, tickMaxWindows)
+			tgt.PromptIDs, tgt.Cursor, now, enrich.WindowSpanMinutes, tickMaxWindows,
+			resolved)
 		if !ok {
 			// The sidecar could not answer (not ready, restarting, behind). Do
 			// not advance: queue rather than degrade, the same rule the

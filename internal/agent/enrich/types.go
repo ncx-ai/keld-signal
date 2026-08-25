@@ -295,6 +295,14 @@ type JobContext struct {
 	TranscriptPath string
 	PromptID       string
 
+	// Resolved are the facts about this job's CHECKOUT that only the daemon can
+	// resolve — see ResolvedFacts for why they travel INTO the analysis rather
+	// than into a prompt preamble. Threaded from queue.Job.Cwd via
+	// WithResolvedFacts; the zero value is normal (no checkout, or a caller with
+	// no cwd at all) and a pass must treat it as "nothing resolved", never as an
+	// error.
+	Resolved ResolvedFacts
+
 	// res is shared by pointer with any per-stage context derived via
 	// withModel, so a stage sees the same committed outputs.
 	res *jobResults
@@ -319,7 +327,8 @@ func NewJobContext(text, source string, meta Meta, m Model) *JobContext {
 // context's committed results. Used to give one pass a deadline-bound model.
 func (c *JobContext) withModel(m Model) *JobContext {
 	return &JobContext{Text: c.Text, Source: c.Source, Meta: c.Meta, Model: m,
-		TranscriptPath: c.TranscriptPath, PromptID: c.PromptID, res: c.res}
+		TranscriptPath: c.TranscriptPath, PromptID: c.PromptID, Resolved: c.Resolved,
+		res: c.res}
 }
 
 // Set commits a stage's output. Called by the pipeline between stages.

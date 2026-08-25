@@ -24,6 +24,13 @@ type tickReq struct {
 	Now        float64  `json:"now"`
 	SpanMin    float64  `json:"span_minutes"`
 	MaxWindows int      `json:"max_windows"`
+	// Resolved rides the tick for the same reason it rides /analyze: a
+	// tick-emitted window is not a lesser window, and one that answered with one
+	// fewer dimension than a prompt's window over the same hour would be exactly
+	// that. Per TRANSCRIPT rather than per window, which is the granularity the
+	// facts have — a transcript is scoped to one project directory, so every
+	// window in the batch sits in the same checkout.
+	Resolved *enrich.ResolvedFacts `json:"resolved,omitempty"`
 }
 
 // TickResult is the Go-side view of POST /tick.
@@ -72,12 +79,13 @@ const tickTimeout = 20 * time.Second
 // advancing a cursor past windows that were never received would silently lose
 // exactly the characterisation this whole path exists to add.
 func (c *Client) Tick(path string, promptIDs []string, cursor *float64, now time.Time,
-	spanMinutes float64, maxWindows int) (TickResult, bool) {
+	spanMinutes float64, maxWindows int, resolved enrich.ResolvedFacts) (TickResult, bool) {
 	var r TickResult
 	req := tickReq{
 		Path: path, PromptIDs: promptIDs, CursorTS: cursor,
 		Now:     float64(now.UnixNano()) / 1e9,
 		SpanMin: spanMinutes, MaxWindows: maxWindows,
+		Resolved: resolvedOrNil(resolved),
 	}
 	if req.PromptIDs == nil {
 		req.PromptIDs = []string{} // an omitted list and an empty one mean the same thing; say so
@@ -100,8 +108,9 @@ func (c *Client) Tick(path string, promptIDs []string, cursor *float64, now time
 // transcript's absolute path, which is machine-local and not the identifier
 // anything downstream can join a session on.
 func (c *Client) TickCharacterised(path, source, sessionID string, promptIDs []string,
-	cursor *float64, now time.Time, spanMinutes float64, maxWindows int) ([]enrich.WindowCharacterisation, float64, bool) {
-	res, ok := c.Tick(path, promptIDs, cursor, now, spanMinutes, maxWindows)
+	cursor *float64, now time.Time, spanMinutes float64, maxWindows int,
+	resolved enrich.ResolvedFacts) ([]enrich.WindowCharacterisation, float64, bool) {
+	res, ok := c.Tick(path, promptIDs, cursor, now, spanMinutes, maxWindows, resolved)
 	if !ok {
 		return nil, 0, false
 	}

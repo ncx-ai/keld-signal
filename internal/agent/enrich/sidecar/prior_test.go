@@ -55,7 +55,7 @@ func priorResponse() map[string]any {
 }
 
 func TestAnalyzeDecodesThePriorBlock(t *testing.T) {
-	out, ok := serve(t, priorResponse()).Analyze("/tmp/t.jsonl", "prompt-1", 60)
+	out, ok := serve(t, priorResponse()).Analyze("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("a response carrying the prior block failed to decode")
 	}
@@ -165,7 +165,7 @@ func TestAnUnattributedWindowIsNeverFilledInFromItsPrior(t *testing.T) {
 	// The window has no `skill` value at all; its prior has an emphatic one.
 	body["workstreams"].(map[string]any)["skill"] = nil
 
-	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -183,7 +183,7 @@ func TestAnUnattributedWindowIsNeverFilledInFromItsPrior(t *testing.T) {
 }
 
 func TestAnalyzeLabeledForwardsThePrior(t *testing.T) {
-	got, ok := serve(t, priorResponse()).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	got, ok := serve(t, priorResponse()).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -225,7 +225,7 @@ func TestAnalyzeLabeledDropsAnUnknownPriorStatus(t *testing.T) {
 	dims := body["prior"].(map[string]any)["dimensions"].(map[string]any)
 	dims["language"].(map[string]any)["status"] = "provisional"
 
-	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -249,7 +249,7 @@ func TestAnalyzeLabeledDropsAnUnknownPriorStatus(t *testing.T) {
 func TestASidecarWithNoPriorBlockPublishesNoPrior(t *testing.T) {
 	body := priorResponse()
 	delete(body, "prior")
-	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -266,7 +266,7 @@ func TestASidecarWithNoPriorBlockPublishesNoPrior(t *testing.T) {
 func TestANullPriorDimensionIsOmittedNotZeroed(t *testing.T) {
 	body := priorResponse()
 	body["prior"].(map[string]any)["dimensions"].(map[string]any)["skill"] = nil
-	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60)
+	got, ok := serve(t, body).AnalyzeLabeled("/tmp/t.jsonl", "prompt-1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}

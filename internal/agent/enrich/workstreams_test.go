@@ -11,11 +11,17 @@ type fakeAnalyze struct {
 	span   int
 	out    WindowAnalysis
 	ok     bool
+	// resolved records the facts the pass forwarded, so a test can assert the
+	// daemon's resolution actually reaches /analyze rather than being dropped
+	// between the JobContext and the call.
+	resolved ResolvedFacts
 }
 
-func (f *fakeAnalyze) fn(path, promptID string, spanMinutes int) (WindowAnalysis, bool) {
+func (f *fakeAnalyze) fn(path, promptID string, spanMinutes int,
+	resolved ResolvedFacts) (WindowAnalysis, bool) {
 	f.calls++
 	f.path, f.prompt, f.span = path, promptID, spanMinutes
+	f.resolved = resolved
 	return f.out, f.ok
 }
 
@@ -117,7 +123,7 @@ func TestRunPublishesWorkstreamsWithoutAModel(t *testing.T) {
 	p := Run("hello", "claude_code", Meta{}, nil,
 		WithPassTimeout(0),
 		WithCoordinates("/tmp/t.jsonl", "p1"),
-		WithWorkstreams(func(path, promptID string, span int) (WindowAnalysis, bool) {
+		WithWorkstreams(func(path, promptID string, span int, _ ResolvedFacts) (WindowAnalysis, bool) {
 			if path != "/tmp/t.jsonl" || promptID != "p1" {
 				t.Errorf("coordinates not threaded into the pipeline: %q %q", path, promptID)
 			}
@@ -162,7 +168,7 @@ func TestRunSkipsWorkstreamsForSourcesTheAnalysisCannotRead(t *testing.T) {
 		p := Run("hello", source, Meta{}, nil,
 			WithPassTimeout(0),
 			WithCoordinates("/tmp/t.jsonl", "sess#3"),
-			WithWorkstreams(func(string, string, int) (WindowAnalysis, bool) {
+			WithWorkstreams(func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
 				called = true
 				return WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
 			}))
@@ -187,6 +193,94 @@ func TestWorkstreamsEligibleSources(t *testing.T) {
 	for _, s := range []string{"codex", "gemini_cli", "", "hook"} {
 		if WorkstreamsEligible(s) {
 			t.Errorf("%s is not analyzable today", s)
+		}
+	}
+}
+
+// THE POINT OF THE WHOLE CHANGE, asserted at the seam: the facts the daemon
+// resolved reach the analyzer. Before this they were resolved and spent on a
+// GLiNER2 prompt STRING (Meta.PreambleCoding()), and enrich.Meta never reaches
+// publish.Enrichment — so the analysis was blind to them and the payload named
+// the repository from the workspace directory basename instead.
+func TestTheWorkstreamsPassForwardsTheDaemonsResolvedFacts(t *testing.T) {
+	want := ResolvedFacts{
+		Repo:      "github.com/ncx-ai/keld-atlas",
+		GitBranch: "feat/ledger",
+		Project:   "keld",
+	}
+	f := &fakeAnalyze{ok: true, out: WindowAnalysis{
+		Workstreams: map[string]Labeled{"repo": {Value: want.Repo, Confidence: 1}}}}
+	ctx := NewJobContext("some prompt", "claude_code", Meta{}, nil)
+	ctx.TranscriptPath, ctx.PromptID = "/tmp/t.jsonl", "p1"
+	ctx.Resolved = want
+
+	if _, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(ctx); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if f.resolved != want {
+		t.Errorf("analyzer received %+v, want %+v — the resolution was dropped between the "+
+			"JobContext and the call", f.resolved, want)
+	}
+}
+
+// Threaded through the pipeline OPTION, not only settable on a hand-built
+// context: the daemon's only way in is enrich.Run(..., WithResolvedFacts(...)),
+// so that is the path worth pinning.
+func TestWithResolvedFactsReachesTheAnalyzerThroughRun(t *testing.T) {
+	var got ResolvedFacts
+	want := ResolvedFacts{Repo: "gitlab.com/team/sub/proj", GitBranch: "main"}
+	Run("hello", "claude_code", Meta{}, nil,
+		WithPassTimeout(0),
+		WithCoordinates("/tmp/t.jsonl", "p1"),
+		WithResolvedFacts(want),
+		WithWorkstreams(func(_, _ string, _ int, r ResolvedFacts) (WindowAnalysis, bool) {
+			got = r
+			return WindowAnalysis{Workstreams: map[string]Labeled{
+				"repo": {Value: r.Repo, Confidence: 1}}}, true
+		}))
+	if got != want {
+		t.Errorf("analyzer received %+v, want %+v", got, want)
+	}
+}
+
+// A caller with no cwd — the eval harness, inline text, localagent — omits the
+// option, and the pass must still RUN. The zero value is a normal answer ("this
+// directory is not a checkout"), not a reason to withhold the analysis: the
+// sidecar writes no repository rows for it and every other dimension is
+// unaffected.
+func TestNoResolvedFactsStillRunsTheAnalysis(t *testing.T) {
+	calls := 0
+	p := Run("hello", "claude_code", Meta{}, nil,
+		WithPassTimeout(0),
+		WithCoordinates("/tmp/t.jsonl", "p1"),
+		WithWorkstreams(func(_, _ string, _ int, r ResolvedFacts) (WindowAnalysis, bool) {
+			calls++
+			if !r.Zero() {
+				t.Errorf("expected the zero value, got %+v", r)
+			}
+			return WindowAnalysis{Workstreams: map[string]Labeled{
+				"branch": {Value: "main", Confidence: 1}}}, true
+		}))
+	if calls != 1 {
+		t.Fatalf("the analysis ran %d times; an unresolved checkout must not skip it", calls)
+	}
+	if p.Workstreams["branch"].Value != "main" {
+		t.Errorf("the other dimensions must be unaffected: %+v", p.Workstreams)
+	}
+}
+
+// Zero() is what decides whether the sidecar sees `resolved: null` (its
+// back-compat path) or an object, so its boundary is worth stating: ANY field
+// set means "something was resolved".
+func TestResolvedFactsZeroIsAllThreeFieldsEmpty(t *testing.T) {
+	if !(ResolvedFacts{}).Zero() {
+		t.Error("the zero value must report Zero")
+	}
+	for _, r := range []ResolvedFacts{
+		{Repo: "github.com/o/r"}, {GitBranch: "main"}, {Project: "keld"},
+	} {
+		if r.Zero() {
+			t.Errorf("%+v reported Zero; any resolved field must send an object", r)
 		}
 	}
 }

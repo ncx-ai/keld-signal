@@ -283,3 +283,37 @@ func projectName(dir string) string {
 	}
 	return cfg.Name
 }
+
+// resolvedFacts is the checkout's identity for one job, in the shape that
+// travels to the sidecar's /analyze.
+//
+// ⚠️ THE SAME THREE RESOLVERS THE PROMPT PREAMBLE ALREADY USED, POINTED SOMEWHERE
+// ELSE. `contextMeta` above spends `gitBranch`/`projectName` on a GLiNER2 prompt
+// STRING (`Meta.PreambleCoding()`), and `enrich.Meta` never reaches
+// `publish.Enrichment` — so before this the analysis was blind to facts only this
+// process can obtain, and repository identity published as the workspace
+// DIRECTORY BASENAME, which is machine-local. Same resolution, sent to the
+// component that does the analysis. ONE resolution, not two.
+//
+// Every field is best-effort and "" is a normal answer, never an error: not a
+// checkout, a detached HEAD, no .keld.toml, a cwd that has since been removed.
+// The sidecar writes no rows for an empty `repo`, so the dimension is
+// unattributed exactly like any level that saw nothing — and never the directory
+// name (see enrich.ResolvedFacts.Repo).
+//
+// Not gated on `enrich.ContextEligible` the way `contextMeta` is: that predicate
+// is about whether a coding-tool PREAMBLE makes sense for the source, and these
+// facts are about the filesystem. A cwd is a cwd whichever tool was invoked in
+// it. What DOES gate their use is `enrich.WorkstreamsEligible`, one level up,
+// since the pass that consumes them is only registered for sources the analysis
+// can read.
+func resolvedFacts(cwd string) enrich.ResolvedFacts {
+	if cwd == "" {
+		return enrich.ResolvedFacts{}
+	}
+	return enrich.ResolvedFacts{
+		Repo:      gitRemote(cwd),
+		GitBranch: gitBranch(cwd),
+		Project:   projectName(cwd),
+	}
+}

@@ -12,7 +12,8 @@ import (
 // an interface rather than a *sidecar.Client assertion so tests can wire a fake
 // without a live sidecar, mirroring how enrich treats ContextModel/MultiLabelModel.
 type windowAnalyzer interface {
-	AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.WindowAnalysis, bool)
+	AnalyzeLabeled(path, promptID string, spanMinutes int,
+		resolved enrich.ResolvedFacts) (enrich.WindowAnalysis, bool)
 }
 
 // piiDetector is the same kind of optional capability for the sidecar's /pii:
@@ -34,7 +35,8 @@ type piiDetector interface {
 // GLiNER2 absent — so it is resolved the same way and travels in serviceFacets.
 type windowTickerCap interface {
 	TickCharacterised(path, source, sessionID string, promptIDs []string, cursor *float64,
-		now time.Time, spanMinutes float64, maxWindows int) ([]enrich.WindowCharacterisation, float64, bool)
+		now time.Time, spanMinutes float64, maxWindows int,
+		resolved enrich.ResolvedFacts) ([]enrich.WindowCharacterisation, float64, bool)
 }
 
 // transcriptIngester is the capability behind the watcher's ingest signal (the
@@ -46,7 +48,7 @@ type windowTickerCap interface {
 // they do: it is a service route, it must work with GLiNER2 absent, and it is the
 // producer side of the very store /analyze reads.
 type transcriptIngester interface {
-	SignalIngest(path string) bool
+	SignalIngest(path string, resolved enrich.ResolvedFacts) bool
 }
 
 // serviceFacets are the enrichment capabilities that belong to the analysis
@@ -67,7 +69,7 @@ type serviceFacets struct {
 	// transcript watcher (see ingestSignalHook), which is what makes /analyze's
 	// answer cheap. It travels here because it is the same service, resolved from
 	// the same client, in both ml_backend modes that have one.
-	SignalIngest func(path string) bool
+	SignalIngest func(path string, resolved enrich.ResolvedFacts) bool
 	// Tick is not consumed by a job either — it is driven by the daemon's own
 	// timer (see tick.go), which is what lets it characterise a burst of
 	// autonomous work AFTER the machine has gone quiet. Nil when the service

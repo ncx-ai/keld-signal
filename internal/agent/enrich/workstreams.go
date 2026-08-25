@@ -48,7 +48,14 @@ var errAnalysisUnavailable = errors.New("workstreams: window analysis unavailabl
 // touched, what TOOLS/PROGRAMS/SYSTEMS it used, and what the SESSION around it
 // looked like — and asking again would multiply the cost of the facet for
 // blocks the first call already computed.
-type WorkstreamAnalyzer func(path, promptID string, spanMinutes int) (WindowAnalysis, bool)
+//
+// `resolved` are the facts about the job's checkout that only the daemon can
+// resolve (see ResolvedFacts). They are a PARAMETER rather than something the
+// analyzer works out, because the analyzer is an HTTP client and must do no
+// filesystem IO — and because the analysis is the thing that should be given
+// them, not a prompt preamble. The zero value is normal.
+type WorkstreamAnalyzer func(path, promptID string, spanMinutes int,
+	resolved ResolvedFacts) (WindowAnalysis, bool)
 
 // WorkstreamsExtractor publishes the deterministic dimensions a cost report
 // buckets by (project, branch, model, output_type, language, skill,
@@ -87,7 +94,11 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	if span <= 0 {
 		span = WorkstreamSpanMinutes
 	}
-	an, ok := e.Analyze(ctx.TranscriptPath, ctx.PromptID, span)
+	// The resolved facts ride the call. `ctx.Resolved` is the zero value for a
+	// caller with no cwd, and an empty repo identity is a normal answer the
+	// analysis handles by writing no rows -- not something to withhold the call
+	// over.
+	an, ok := e.Analyze(ctx.TranscriptPath, ctx.PromptID, span, ctx.Resolved)
 	if !ok {
 		// Absent and empty are different facts: a failed analysis must not
 		// publish "no dimensions applied", which a report would read as a real

@@ -28,6 +28,7 @@ type runCfg struct {
 	piiScan        PIIScanner
 	transcriptPath string
 	promptID       string
+	resolved       ResolvedFacts
 }
 
 // WithPassTimeout sets the per-pass deadline. <= 0 disables it (no deadline).
@@ -56,6 +57,20 @@ func WithCustomExtractors(wave1, wave2 []Extractor) Option {
 // transcript (eval harness, inline text) omit it.
 func WithCoordinates(transcriptPath, promptID string) Option {
 	return func(c *runCfg) { c.transcriptPath, c.promptID = transcriptPath, promptID }
+}
+
+// WithResolvedFacts threads the facts about the job's CHECKOUT that only the
+// daemon can resolve — the normalised remote, the branch, the .keld.toml project
+// name (see ResolvedFacts). The daemon resolves them once per job from
+// queue.Job.Cwd and they travel to the sidecar's /analyze, where the analysis
+// writes the repository identity as a series level.
+//
+// Deliberately an Option and not something a pass resolves for itself: the
+// sidecar client must do no filesystem IO, and neither must an extractor. Callers
+// with no cwd (the eval harness, inline text, localagent) omit it, and the zero
+// value is a normal answer rather than a failure.
+func WithResolvedFacts(r ResolvedFacts) Option {
+	return func(c *runCfg) { c.resolved = r }
 }
 
 // WithWorkstreams enables the deterministic workstream pass, backed by fn (the
@@ -229,6 +244,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	}
 	ctx := NewJobContext(text, source, meta, m)
 	ctx.TranscriptPath, ctx.PromptID = cfg.transcriptPath, cfg.promptID
+	ctx.Resolved = cfg.resolved
 	exs := append(Wave1(cfg.piiScan), cfg.customW1...)
 	// Registered only when an analysis backend exists AND the analysis can read
 	// this source's transcripts: an ineligible source would fail the pass on

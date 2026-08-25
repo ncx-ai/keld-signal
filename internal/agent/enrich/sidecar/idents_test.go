@@ -37,7 +37,7 @@ func TestAnalyzeLabeledCarriesTheIdentifierInventories(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -58,7 +58,7 @@ func TestABadProgramEntryIsDroppedWithoutDroppingTheInventory(t *testing.T) {
 		srv := analyzeServer(t, inventoryBody(map[string]any{
 			"programs": acts("git", 9, bad, 4),
 		}))
-		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 		srv.Close()
 		if !ok {
 			t.Fatalf("%q: AnalyzeLabeled reported failure", bad)
@@ -81,7 +81,7 @@ func TestABadIdentifierEntryIsDroppedWithoutDroppingTheInventory(t *testing.T) {
 		srv := analyzeServer(t, inventoryBody(map[string]any{
 			"harness_tools": acts("Bash", 30, bad, 4),
 		}))
-		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 		srv.Close()
 		if !ok {
 			t.Fatalf("%q: AnalyzeLabeled reported failure", bad)
@@ -106,7 +106,7 @@ func TestABareIPServiceEntryIsDroppedWithoutDroppingTheInventory(t *testing.T) {
 		srv := analyzeServer(t, inventoryBody(map[string]any{
 			"external_systems": acts("github.com", 4, bad, 2),
 		}))
-		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 		srv.Close()
 		if !ok {
 			t.Fatalf("%s (%q): AnalyzeLabeled reported failure", name, bad)
@@ -139,7 +139,7 @@ func TestCorporateAndRFC1918LookingHostnamesSurviveTheExternalSystemsGate(t *tes
 		srv := analyzeServer(t, inventoryBody(map[string]any{
 			"external_systems": acts(keep, 3),
 		}))
-		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 		srv.Close()
 		if !ok {
 			t.Fatalf("%q: AnalyzeLabeled reported failure", keep)
@@ -171,7 +171,7 @@ func TestNoIdentifierInventoriesIsAbsentNotAnEmptyList(t *testing.T) {
 			delete(body, "inventory")
 		}
 		srv := analyzeServer(t, body)
-		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+		got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 		srv.Close()
 		if !ok {
 			t.Fatalf("%s: AnalyzeLabeled reported failure", name)
@@ -202,7 +202,7 @@ func TestNamedTermsDecodesAlongsideTheIdentifierInventories(t *testing.T) {
 		"named_terms":      acts("Federico", 2),
 	}))
 	defer srv.Close()
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -228,7 +228,7 @@ func TestTheNamedTermsGateBoundsShapeAndKeepsMultiWordTerms(t *testing.T) {
 		},
 	}))
 	defer srv.Close()
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -259,7 +259,7 @@ func TestAnalyzeLabeledCarriesTheLastFourInventories(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}

@@ -265,6 +265,31 @@ type analyzeReq struct {
 	Path        string `json:"path"`
 	PromptID    string `json:"prompt_id"`
 	SpanMinutes int    `json:"span_minutes"`
+	// Resolved are the facts the DAEMON resolved because this side structurally
+	// cannot: /analyze is confined to KELD_ANALYZE_ROOTS precisely so it cannot
+	// open a repo's .git/config as the daemon's user. Omitted entirely when
+	// nothing was resolved, so a request from a caller with no cwd is
+	// byte-identical to what it was before this field existed (and so the
+	// sidecar's own `resolved is None` back-compat path is the one that runs).
+	//
+	// ⚠️ THE CLIENT DOES NO FILESYSTEM IO. These arrive as a parameter; nothing
+	// here resolves them. That is not tidiness — an HTTP client that stat'd the
+	// filesystem per call would put the resolution inside the per-pass deadline
+	// and inside the single-flight, and it would be unable to answer for a job
+	// whose cwd has since been removed.
+	Resolved *enrich.ResolvedFacts `json:"resolved,omitempty"`
+}
+
+// resolvedOrNil is the ONE place the "empty means omit" rule is applied, shared
+// by all three requests that carry the facts (/analyze, /tick, /ingest). Sending
+// three empty strings and sending nothing are the same fact, and the sidecar
+// distinguishes them (`resolved is None` is its back-compat path), so they must
+// not be able to diverge per call site.
+func resolvedOrNil(r enrich.ResolvedFacts) *enrich.ResolvedFacts {
+	if r.Zero() {
+		return nil
+	}
+	return &r
 }
 
 // Workstream is one deterministic dimension the sidecar's /analyze computed
@@ -499,9 +524,11 @@ type Dynamic struct {
 // hook. ok=false on any failure, including a 404 (prompt id not found in the
 // transcript): that is a different fact than "resolved, zero dimensions" and
 // must not be reported as an empty success.
-func (c *Client) Analyze(path, promptID string, spanMinutes int) (AnalyzeResult, bool) {
+func (c *Client) Analyze(path, promptID string, spanMinutes int,
+	resolved enrich.ResolvedFacts) (AnalyzeResult, bool) {
 	var r AnalyzeResult
-	if !c.post("/analyze", analyzeReq{path, promptID, spanMinutes}, &r) {
+	req := analyzeReq{path, promptID, spanMinutes, resolvedOrNil(resolved)}
+	if !c.post("/analyze", req, &r) {
 		return AnalyzeResult{}, false
 	}
 	return r, true
@@ -513,6 +540,15 @@ func (c *Client) Analyze(path, promptID string, spanMinutes int) (AnalyzeResult,
 // spool.Pointer and Analyze keep it.
 type ingestReq struct {
 	Path string `json:"path"`
+	// Resolved rides the ingest signal because INGEST IS WHERE THE ROWS ARE
+	// WRITTEN. The sidecar's `repo` level is a series level written per turn by
+	// its extractor, not a value overlaid on a digest, so the watcher-driven
+	// ingest is the path that normally creates it — a transcript ingested without
+	// the facts holds turns that no later recomputation can supply a row for
+	// (the sidecar's own `repo_mode` parse-state fingerprint is what forces the
+	// one reparse that repairs it). Still coordinates-plus-identifiers: no
+	// offset, no line count, no bytes.
+	Resolved *enrich.ResolvedFacts `json:"resolved,omitempty"`
 }
 
 // ingestResp is decoded but not used: the counts are the sidecar's own
@@ -549,7 +585,7 @@ const ingestSignalTimeout = 30 * time.Second
 // ok=false means this attempt did not land. It is not an error the caller can
 // act on and must not be treated as one; the sidecar counts the real outcomes
 // (ingest_served/rejected/missing/failed in /metrics).
-func (c *Client) SignalIngest(path string) bool {
+func (c *Client) SignalIngest(path string, resolved enrich.ResolvedFacts) bool {
 	// A shallow copy with its own deadline and its own http.Client: c.hc's
 	// timeout is sized for an inference round-trip and would cut a legitimate
 	// first whole-file ingest short. Transport is left nil, so connections are
@@ -560,7 +596,7 @@ func (c *Client) SignalIngest(path string) bool {
 	defer cancel()
 	cp.ctx = ctx
 	var r ingestResp
-	ok, _ := cp.postOnce("/ingest", ingestReq{Path: path}, &r)
+	ok, _ := cp.postOnce("/ingest", ingestReq{Path: path, Resolved: resolvedOrNil(resolved)}, &r)
 	return ok
 }
 

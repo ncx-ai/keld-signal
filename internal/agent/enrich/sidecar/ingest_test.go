@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 func TestSignalIngestSendsThePathAndNothingElse(t *testing.T) {
@@ -20,7 +22,7 @@ func TestSignalIngestSendsThePathAndNothingElse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if !New(srv.URL, 5*time.Second).SignalIngest("/tmp/t.jsonl") {
+	if !New(srv.URL, 5*time.Second).SignalIngest("/tmp/t.jsonl", enrich.ResolvedFacts{}) {
 		t.Fatal("SignalIngest reported failure on a 200")
 	}
 	if got["path"] != "/tmp/t.jsonl" {
@@ -47,7 +49,7 @@ func TestSignalIngestDoesNotRetry(t *testing.T) {
 	defer srv.Close()
 
 	start := time.Now()
-	if New(srv.URL, 5*time.Second).SignalIngest("/tmp/t.jsonl") {
+	if New(srv.URL, 5*time.Second).SignalIngest("/tmp/t.jsonl", enrich.ResolvedFacts{}) {
 		t.Error("a 503 must report failure, not success")
 	}
 	if n := atomic.LoadInt32(&hits); n != 1 {
@@ -63,7 +65,7 @@ func TestSignalIngestReportsFailureOnErrors(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(code)
 		}))
-		if New(srv.URL, 5*time.Second).SignalIngest("/tmp/t.jsonl") {
+		if New(srv.URL, 5*time.Second).SignalIngest("/tmp/t.jsonl", enrich.ResolvedFacts{}) {
 			t.Errorf("status %d must report failure", code)
 		}
 		srv.Close()
@@ -78,7 +80,7 @@ func TestSignalIngestOnAnUnreachableSidecarReturnsPromptly(t *testing.T) {
 	srv.Close() // nothing is listening now
 
 	done := make(chan bool, 1)
-	go func() { done <- New(url, 2*time.Second).SignalIngest("/tmp/t.jsonl") }()
+	go func() { done <- New(url, 2*time.Second).SignalIngest("/tmp/t.jsonl", enrich.ResolvedFacts{}) }()
 	select {
 	case ok := <-done:
 		if ok {

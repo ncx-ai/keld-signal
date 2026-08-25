@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
 // analyzeServer serves one canned /analyze body.
@@ -29,7 +31,7 @@ func TestAnalyzeLabeledConvertsShareToConfidence(t *testing.T) {
 	})
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -83,7 +85,7 @@ func TestAnalyzeLabeledCarriesNoInventoryOrWindowMetadata(t *testing.T) {
 	})
 	defer srv.Close()
 
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
@@ -118,7 +120,7 @@ func TestAnalyzeLabeledReportsFailure(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
-	if got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "missing", 60); ok {
+	if got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "missing", 60, enrich.ResolvedFacts{}); ok {
 		t.Errorf("a 404 must report failure, not an empty success, got %+v", got)
 	}
 }
@@ -127,7 +129,7 @@ func TestAnalyzeLabeledReportsFailure(t *testing.T) {
 func TestAnalyzeLabeledEmptyWindowIsASuccess(t *testing.T) {
 	srv := analyzeServer(t, map[string]any{"schema": 1, "workstreams": map[string]any{"project": nil, "branch": nil}})
 	defer srv.Close()
-	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("an all-unattributed window is a successful analysis, not a failure")
 	}

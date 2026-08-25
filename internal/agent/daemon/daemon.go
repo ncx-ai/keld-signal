@@ -486,6 +486,15 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, svc serviceFacets
 		// Coordinates (never text) for the model-free passes that characterise
 		// the window around this prompt rather than its text.
 		enrich.WithCoordinates(j.TranscriptPath, j.PromptID),
+		// The facts about this job's CHECKOUT that only the daemon can resolve,
+		// travelling INTO the analysis rather than into a prompt preamble. This
+		// path resolves FRESH per job rather than through the ticker's cache,
+		// because it has the real cwd (`j.Cwd`) and because `git_branch` is the
+		// field that goes stale — a branch changes often, and a prompt's window
+		// is exactly where that matters. Every field is best-effort and an empty
+		// result is normal: a project directory is not necessarily a repository.
+		// See enrich.ResolvedFacts.
+		enrich.WithResolvedFacts(resolvedFacts(j.Cwd)),
 	}, customOpts...)
 	// Wire the deterministic workstream pass only when this run actually has a
 	// window-analysis backend; without one the pass stays unregistered rather
