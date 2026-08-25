@@ -162,11 +162,39 @@ ALLOCATION = [
 # zero absolute paths, zero `~`/`/Users`/`/home`, zero `../` escapes, zero URLs, zero Windows
 # drive paths -- because `reconcile()` normalizes every one of them against the workspace root
 # before this module ever sees them. That is what makes publishing them acceptable.
+# `file_types`, `shell_verbs`, `subagents` and `mcp_servers` (levels `ext`/`verb`/`agent`/
+# `mcp_server`) join for the SAME structural reason `physical_acts` and the path levels did:
+# `events_for_turns` has emitted all four since this package existed and workstreams.py published
+# none of them. With these, thirteen of the levels the extractor emits reach a payload.
+#
+# Each COMPLEMENTS a dimension already published rather than restating it, which is the bar an
+# inventory has to clear to be worth its cap:
+#
+#   * `file_types` (.tsx/.py/.css, 9 distinct on the sample store) says what KIND of work the
+#     `files` inventory beside it was. A window over 40 files is scattered; a window over 40
+#     `.tsx` files is front-end work.
+#   * `shell_verbs` (307 distinct over 32,227 observations) is the COMMAND where `programs` is
+#     only the binary. `git` says nothing that `git rebase` does not say better, and this is the
+#     widest of the four by an order of magnitude -- hence its own cap.
+#   * `subagents` (general-purpose, Explore) is the one dimension that says work was DELEGATED.
+#     It is invisible in every other level because a subagent's own turns are a different
+#     transcript entirely.
+#   * `mcp_servers` (notion) is the SERVER where `integrations` is the tool (mcp_tool). The
+#     server is the grain an org actually governs and pays for.
+#
+# CAPS: the open-vocabulary default 12 for three of them -- the same cut every inventory
+# dimension except the measured path levels and the closed `action` level takes -- and 24 for
+# `shell_verbs`, whose distinct count is an order of magnitude above its siblings'. All four
+# levels enter `store.PRECOMPUTED_LEVELS` automatically, since that tuple is DERIVED from
+# ALLOCATION + INVENTORY rather than restated; an unbinned published level would under-count the
+# interior of every historical window.
 INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              ("external_systems", "service", 12), ("integrations", "mcp_tool", 12),
              ("named_terms", "term", 12), ("physical_acts", "action", None),
              ("files", "file", 40), ("directories", "dir", 24),
-             ("components", "component", 16)]
+             ("components", "component", 16),
+             ("file_types", "ext", 12), ("shell_verbs", "verb", 24),
+             ("subagents", "agent", 12), ("mcp_servers", "mcp_server", 12)]
 
 # Loopback is not an external system. It is 85% of the raw service level and would otherwise be
 # the top "system this org depends on".

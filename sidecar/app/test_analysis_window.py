@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.analysis import SCHEMA
 from app.analysis.window import (MIN_EVIDENCE, attribution, dominant,
                                  min_evidence_for, rollup)
-from app.analysis.workstreams import ALLOCATION, payload
+from app.analysis.workstreams import ALLOCATION, INVENTORY, payload
 
 R = [(0, "s", "r", "b", False, "ref", "artifact", "code", 9.0),
      (0, "s", "r", "b", False, "ref", "artifact", "prose", 1.0),
@@ -112,7 +112,7 @@ def test_the_skill_level_publishes_under_the_name_skill_not_workflow():
 def test_payload_carries_its_schema_version():
     """These values land in financial reports; a silent shape change is the reproducibility
     failure the earlier handoff called out, so the payload is versioned from the first release."""
-    assert payload(rollup(R))["schema"] == SCHEMA == 12
+    assert payload(rollup(R))["schema"] == SCHEMA == 13
 
 
 # --- the floor generalised to an arbitrary slice length ---------------------------------------
@@ -322,6 +322,53 @@ def test_no_published_path_value_is_absolute_or_escapes_the_workspace():
         for entry in inv[dim]:
             assert not ABS_OR_ESCAPING.search(entry["value"]), \
                 f"{dim} published a non-workspace-relative value: {entry['value']!r}"
+
+
+# --- the four inventory dimensions that were extracted and published nowhere -----------------
+
+def test_the_four_identifier_levels_publish_as_inventory_with_correct_counts():
+    """`ext`/`verb`/`agent`/`mcp_server` have been emitted by `events_for_turns` since this
+    package existed and reached no payload at all -- the same gap `physical_acts` closed for
+    `action` and the path levels closed for `file`/`dir`/`component`.
+
+    Each COMPLEMENTS a published sibling rather than restating it, which is the bar an inventory
+    has to clear: `file_types` says what KIND of work the `files` beside it was, `shell_verbs` is
+    the command where `programs` is only the binary, `subagents` is the one dimension that says
+    work was DELEGATED, and `mcp_servers` is the server where `integrations` is the tool."""
+    rl = rollup([_n("ext", ".tsx", 9), _n("ext", ".py", 3),
+                 _n("verb", "git rebase", 7), _n("verb", "pnpm test", 2),
+                 _n("agent", "general-purpose", 4), _n("agent", "Explore", 1),
+                 _n("mcp_server", "notion", 5)])
+    inv = payload(rl)["inventory"]
+    assert inv["file_types"] == [{"value": ".tsx", "n": 9}, {"value": ".py", "n": 3}]
+    assert inv["shell_verbs"] == [{"value": "git rebase", "n": 7}, {"value": "pnpm test", "n": 2}]
+    assert inv["subagents"] == [{"value": "general-purpose", "n": 4},
+                                {"value": "Explore", "n": 1}]
+    assert inv["mcp_servers"] == [{"value": "notion", "n": 5}]
+
+
+def test_shell_verbs_gets_its_own_cap_and_the_cut_is_reported():
+    """`shell_verbs` is the widest of the four by an order of magnitude (307 distinct over 32,227
+    observations), so it carries 24 where its three siblings take the open-vocabulary default 12.
+    And the cut must be VISIBLE: `inventory_omitted` is the AGENTS.md "dropping must be visible"
+    rule applied to this layer, so a truncated dimension names how many it lost."""
+    caps = {n: c for n, _lv, c in INVENTORY}
+    assert caps["shell_verbs"] == 24, caps
+    assert caps["file_types"] == caps["subagents"] == caps["mcp_servers"] == 12, caps
+    rl = rollup([_n("verb", f"cmd{i:03d}", 40 - i) for i in range(30)])
+    out = payload(rl)
+    assert len(out["inventory"]["shell_verbs"]) == 24
+    assert out["inventory_omitted"]["shell_verbs"] == 6, out["inventory_omitted"]
+
+
+def test_every_inventory_level_is_precomputed_so_no_window_interior_undercounts():
+    """DERIVED, not restated: `store.PRECOMPUTED_LEVELS` comes from ALLOCATION + INVENTORY, which
+    is what makes adding a dimension here enough. An unbinned published level would be served
+    from `event` at the two window edges and from a bin that does not exist in the interior --
+    an undercount, not an error, which is why this is asserted rather than trusted."""
+    from app.analysis.store import PRECOMPUTED_LEVELS
+    for _name, level, _cap in INVENTORY + list(ALLOCATION):
+        assert level in PRECOMPUTED_LEVELS, level
 
 
 # --- `repo`: a series level fed by the DAEMON, not a stamp on the payload --------------------

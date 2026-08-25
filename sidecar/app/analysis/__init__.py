@@ -185,7 +185,31 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           test produce byte-identical rows -- which is why this number moves for a window
 #           GAINING a dimension rather than for any existing answer changing. Go's
 #           `enrich.SchemaVersion` moves 18 -> 19 for this and the four inventories below.
-SCHEMA = 12
+#   12 -> 13: FOUR MORE INVENTORY dimensions publish -- `file_types`, `shell_verbs`, `subagents`,
+#           `mcp_servers`, over the `ext`/`verb`/`agent`/`mcp_server` levels `events_for_turns`
+#           has emitted since this package existed and which had reached no payload at all. The
+#           same gap `physical_acts` closed for `action` at 6 -> 7 and the path levels closed at
+#           10 -> 11; with these four, thirteen of the nineteen levels the extractor emits are
+#           published somewhere.
+#
+#           Each complements a dimension already published rather than restating it: `file_types`
+#           (`.tsx`/`.py`/`.css`, 9 distinct on the sample store) says what KIND of work the
+#           `files` inventory beside it was; `shell_verbs` (307 distinct over 32,227
+#           observations) is the command, where `programs` is only the binary -- `git` says
+#           nothing that `git rebase` does not say better; `subagents` (`general-purpose`,
+#           `Explore`) is the one dimension that says work was DELEGATED, invisible in every
+#           other level because a subagent's own turns are a different transcript; and
+#           `mcp_servers` (`notion`) is the SERVER where `integrations` is the tool, which is the
+#           grain an org actually governs.
+#
+#           CAPS: 12 -- the open-vocabulary default every inventory dimension except the path
+#           levels and the closed `action` level shares -- for all but `shell_verbs`, which gets
+#           24 because it is the widest of the four by an order of magnitude. All four levels
+#           join PRECOMPUTED_LEVELS automatically, since `store.PRECOMPUTED_LEVELS` is DERIVED
+#           from ALLOCATION + INVENTORY rather than restated; an unbinned published level would
+#           under-count the interior of every historical window. Go's `enrich.SchemaVersion`
+#           moves 18 -> 19 for this and `repo` together.
+SCHEMA = 13
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

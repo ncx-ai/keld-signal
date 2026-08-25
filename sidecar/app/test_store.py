@@ -44,19 +44,31 @@ def _corpus():
     for i in range(200):
         dt = i * 27.0
         rows.append(_row(dt, "workspace", "keld-signal" if i % 3 else "keld-atlas"))
+        # The one level whose rows come from the REQUEST rather than the transcript -- the
+        # daemon's resolved checkout identity. Precomputed like every other ALLOCATION level.
+        rows.append(_row(dt, "repo", "github.com/ncx-ai/keld-signal"))
         rows.append(_row(dt, "branch", "feat/refseries"))
         rows.append(_row(dt, "model", "claude-opus-5"))
         rows.append(_row(dt, "tool", ["Bash", "Read", "Edit", "Grep"][i % 4]))
         rows.append(_row(dt, "exe", "go", 2))
-        # NOT precomputed: these must still be answered, from the raw events.
-        rows.append(_row(dt, "verb", ["git status", "go test"][i % 2]))
-        rows.append(_row(dt, "ext", ".go"))
+        # NOT precomputed: these must still be answered, from the raw events. `verb`/`ext` were
+        # the exemplars here until they joined PRECOMPUTED_LEVELS as `shell_verbs`/`file_types`;
+        # `vcs` and `workspace_evidence` take their place, and neither is published anywhere, so
+        # neither is a candidate to move next.
+        rows.append(_row(dt, "vcs", ["git", "none"][i % 2]))
+        rows.append(_row(dt, "workspace_evidence", "marker [high]"))
         # PRECOMPUTED (published as inventory dimensions): `action` since `physical_acts`,
-        # `file`/`dir`/`component` since `files`/`directories`/`components`.
+        # `file`/`dir`/`component` since `files`/`directories`/`components`, and
+        # `ext`/`verb`/`agent`/`mcp_server` since `file_types`/`shell_verbs`/`subagents`/
+        # `mcp_servers`.
         rows.append(_row(dt, "action", "run tests"))
         rows.append(_row(dt, "file", "internal/agent/daemon/daemon.go"))
         rows.append(_row(dt, "dir", "internal/agent/daemon"))
         rows.append(_row(dt, "component", "internal/agent/daemon"))
+        rows.append(_row(dt, "verb", ["git status", "go test"][i % 2]))
+        rows.append(_row(dt, "ext", ".go"))
+        rows.append(_row(dt, "agent", "general-purpose"))
+        rows.append(_row(dt, "mcp_server", "notion"))
         if i % 5 == 0:
             rows.append(_row(dt, "term", "Federico", 3))
             rows.append(_row(dt, "lang", "Go"))
@@ -212,17 +224,21 @@ def test_start_and_end_accept_datetimes_and_iso_strings():
 # --- sparse bins: absence must never read as "no evidence" -----------------------------------
 
 def test_a_level_that_is_not_precomputed_is_still_answered_in_full():
-    """`bin` holds only the 16 default levels; `events_for_turns` emits 19. If rollup_window
-    served bins alone, `verb` would come back empty and a reader would take that for "nothing
-    happened". The raw events are retained precisely so the answer stays complete.
+    """`bin` holds only the levels the payload consumes; `events_for_turns` emits more. If
+    rollup_window served bins alone, an unbinned level would come back empty and a reader would
+    take that for "nothing happened". The raw events are retained precisely so the answer stays
+    complete.
 
-    `file` was an example here until it joined PRECOMPUTED_LEVELS alongside `dir`/`component`
-    (see the test below); `ext` takes its place as a level that is genuinely never precomputed."""
+    THE EXEMPLARS HAVE MOVED TWICE, which is itself the thing this file is guarding. `file` was
+    one until it joined PRECOMPUTED_LEVELS as `files`; `verb`/`ext` took over and have now joined
+    as `shell_verbs`/`file_types`. `vcs` and `workspace_evidence` are the current pair, and they
+    are the right choice rather than merely the next one available: neither is published in any
+    payload, so neither is a candidate to move again."""
     with tempfile.TemporaryDirectory() as tmp:
         st, rows = _loaded(tmp)
         start, end = T0 + 71.3, T0 + 3671.3
         got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
-        for level in ("verb", "ext"):
+        for level in ("vcs", "workspace_evidence"):
             assert level not in PRECOMPUTED_LEVELS, level
             assert want[level], f"premise: {level} must carry evidence or this asserts nothing"
             assert got[level] == want[level], (level, got.get(level), want[level])
@@ -265,6 +281,40 @@ def test_the_bin_path_and_the_event_path_agree_on_the_newly_precomputed_path_lev
         st.close()
 
 
+def test_the_bin_path_and_the_event_path_agree_on_the_four_newly_precomputed_levels():
+    """`ext`/`verb`/`agent`/`mcp_server` are the next four to join PRECOMPUTED_LEVELS, for the
+    same reason `action` and the path levels did: they now publish, as `file_types`/`shell_verbs`/
+    `subagents`/`mcp_servers`. Same property, same file: moving a level into the precomputed set
+    changes WHICH of the two paths answers for it, and must not change the ANSWER."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, rows = _loaded(tmp)
+        start, end = T0 + 71.3, T0 + 3671.3
+        got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
+        for level in ("ext", "verb", "agent", "mcp_server"):
+            assert level in PRECOMPUTED_LEVELS, (
+                f"`{level}` is published as an inventory dimension, so workstreams.INVENTORY "
+                "must put it in the precomputed set: an unbinned published level under-counts "
+                "the interior of every historical window")
+            assert want[level], f"premise: the fixture must exercise the {level} level"
+            assert got[level] == want[level], (level, got.get(level), want[level])
+        st.close()
+
+
+def test_the_bin_path_and_the_event_path_agree_on_the_repo_level():
+    """`repo` is an ALLOCATION level as of the resolved-facts change, so it is precomputed too --
+    and it is the one level whose rows come from the REQUEST rather than the transcript, which
+    makes "the two paths agree" worth stating separately rather than folding into the four
+    above."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, rows = _loaded(tmp)
+        start, end = T0 + 71.3, T0 + 3671.3
+        got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
+        assert "repo" in PRECOMPUTED_LEVELS, PRECOMPUTED_LEVELS
+        assert want["repo"], "premise: the fixture must exercise the repo level"
+        assert got["repo"] == want["repo"], (got.get("repo"), want["repo"])
+        st.close()
+
+
 def test_the_bin_table_physically_cannot_hold_a_level_that_is_not_precomputed():
     """A structural guard, not a comment. `bin.level` references the registry of precomputed
     levels, so the table's contents are self-describing: everything in it is precomputed, and
@@ -280,7 +330,7 @@ def test_the_bin_table_physically_cannot_hold_a_level_that_is_not_precomputed():
         levels = {r[0] for r in raw.execute("SELECT DISTINCT level FROM bin")}
         assert levels and levels <= set(PRECOMPUTED_LEVELS), levels
         try:
-            raw.execute("INSERT INTO bin VALUES (?,?,?,?,?)", (SESSION, 0, "verb", "x", 1.0))
+            raw.execute("INSERT INTO bin VALUES (?,?,?,?,?)", (SESSION, 0, "vcs", "x", 1.0))
             raw.commit()
             raise AssertionError("bin accepted a level that is not precomputed")
         except sqlite3.IntegrityError:
