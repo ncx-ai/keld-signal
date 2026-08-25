@@ -72,10 +72,14 @@ def _user(off, uuid, text):
             "gitBranch": BRANCH, "message": {"role": "user", "content": text}}
 
 
-def _asst(off, uuid, text, blocks=()):
+def _asst(off, uuid, text, blocks=(), rid=None):
+    """One assistant line. `rid` defaults to a per-LINE request id, which makes
+    `events_for_turns`' once-per-request dedup a structural no-op for this fixture — see the
+    `SPEND_IN_WINDOW` note below. `SHARED_REQ_TURNS` overrides it so that several lines belong to
+    one request, which is the shape a chunk boundary can cut."""
     content = [{"type": "text", "text": text}] + list(blocks)
     return {"type": "assistant", "uuid": uuid, "timestamp": _ts(off), "cwd": CWD,
-            "gitBranch": BRANCH, "requestId": "req-" + uuid,
+            "gitBranch": BRANCH, "requestId": rid or ("req-" + uuid),
             "message": {"role": "assistant", "model": MODEL, "content": content,
                         "usage": {"input_tokens": 400, "output_tokens": 60,
                                   "cache_creation_input_tokens": 0,
@@ -168,6 +172,16 @@ TURNS = [
 ]
 
 
+def _lines(turns):
+    out = []
+    for off, kind, uuid, text, *rest in turns:
+        blocks = rest[0] if rest else ()
+        rid = rest[1] if len(rest) > 1 else None
+        o = _user(off, uuid, text) if kind == "u" else _asst(off, uuid, text, blocks, rid)
+        out.append(json.dumps(o, separators=(",", ":")) + "\n")
+    return out
+
+
 def _write(tmp, turns=TURNS):
     """The fixture transcript, at `<root>/<projdir>/<session>.jsonl` -- the shape
     `analyze_window` and `ingest_file` both derive `root`/`projdir` from."""
@@ -175,10 +189,26 @@ def _write(tmp, turns=TURNS):
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, FILENAME)
     with open(path, "w") as fh:
-        for off, kind, uuid, text, *rest in turns:
-            blocks = rest[0] if rest else ()
-            o = _user(off, uuid, text) if kind == "u" else _asst(off, uuid, text, blocks)
-            fh.write(json.dumps(o, separators=(",", ":")) + "\n")
+        fh.writelines(_lines(turns))
+    return path
+
+
+def _write_and_ingest_in_chunks(tmp, st, nlp, turns=TURNS, cuts=None):
+    """Grow the fixture transcript one piece at a time, ingesting after each append.
+
+    This is `test_ingest.py`'s `_ingest_in_chunks` applied to THIS file's fixture, and it exists
+    because everything else here ingests in a single batch -- which leaves every cross-batch
+    property of the `effort` block untested from the payload's own side. `cuts` are line counts;
+    the default cuts a line at a time, so every boundary a request could straddle is cut.
+    """
+    lines = _lines(turns)
+    d = os.path.join(tmp, "projects", PROJDIR)
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, FILENAME)
+    for end in (cuts or range(1, len(lines) + 1)):
+        with open(path, "w") as fh:
+            fh.writelines(lines[:end])
+        ingest_file(st, path, nlp)
     return path
 
 
@@ -316,6 +346,78 @@ def test_effort_carries_the_spend_and_the_gap_distribution():
         assert eff["gap_p50_s"] is not None and eff["gap_p90_s"] is not None, eff
         assert 0 < eff["gap_p50_s"] <= eff["gap_p90_s"], eff
         st.close()
+
+
+# A window whose API REQUESTS each span several assistant lines — the shape `TURNS` above cannot
+# express, because its per-line `requestId` makes the once-per-request dedup a no-op. Requests A
+# and B own three lines each and C owns two, so the spend is THREE requests' worth however the
+# file was chunked. `_write_and_ingest_in_chunks` cuts a line at a time, which cuts inside all
+# three.
+SHARED_REQ_TURNS = [
+    (0.0, "u", "p1", "Start on the settlement ledger."),
+    (11.0, "a", "a1", "Reading.", [_read(DECLARED_EARLY)], "req-A"),
+    (23.0, "a", "a2", "Same request, second line.", [_bash("go test ./services/api/...")], "req-A"),
+    (37.0, "a", "a3", "Same request, third line.", [_bash("go build ./...")], "req-A"),
+    (301.0, "u", "p2", "Now the retry path."),
+    (315.0, "a", "a4", "Editing.",
+     [_tool("Edit", {"file_path": CWD + "/services/api/queue.go",
+                     "old_string": _FIX_OLD, "new_string": _FIX_NEW})], "req-B"),
+    (329.0, "a", "a5", "Second line of B.", [_bash("go vet ./...")], "req-B"),
+    (344.0, "a", "a6", "Third line of B.", [_bash("gofmt -l .")], "req-B"),
+    (620.0, "u", "p3", "And the Halcyon case."),
+    (634.0, "a", "a7", "Checking.", [_read(CWD + "/services/api/queue_test.go")], "req-C"),
+    (651.0, "a", "a8", "Second line of C.", [_bash("git log --oneline -3")], "req-C"),
+    (900.0, "u", "TARGET", "Summarise what we did."),
+]
+# Three requests, identical usage: token_weight = 400 + 5*60 = 700.0 each.
+SHARED_REQ_SPEND = 3 * 700
+
+
+def test_a_multi_batch_ingest_still_answers_the_effort_block_as_a_parse_does():
+    """The oracle equality must hold for a store built by MANY batches, not just by one.
+
+    Every other test in this file calls `ingest_file` once, so the whole cross-batch half of the
+    contract went unmeasured — and one defect lived there: `mag/request_tokens` is recorded once
+    per `requestId`, the dedup that makes "once" true was local to a single `events_for_turns`
+    call, and a request whose assistant lines straddled a batch boundary was therefore costed
+    again in the tail batch. `_effort_from_store` SUMS those rows, so the published
+    `request_tokens` grew with how the transcript happened to be chunked — measured at 3x on a
+    line-at-a-time ingest of three-line requests, against a whole-file oracle.
+
+    Compared against `analyze_window_by_parse` for every prompt id rather than against a written
+    number, on this file's standing argument, and pinned to the arithmetic afterwards so an
+    equality of two wrong answers cannot pass.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        st, nlp = _store(tmp), _FakeNlp()
+        path = _write_and_ingest_in_chunks(tmp, st, nlp, SHARED_REQ_TURNS)
+        for pid in _prompt_ids(SHARED_REQ_TURNS):
+            served = analyze_window(path, pid, 60, nlp, store=st)["effort"]
+            oracle = analyze_window_by_parse(path, pid, 60, nlp)["effort"]
+            assert served == oracle, (pid, served, oracle)
+        eff = analyze_window(path, "TARGET", 60, nlp, store=st)["effort"]
+        assert eff["request_tokens"] == SHARED_REQ_SPEND, eff
+        st.close()
+
+
+def test_a_multi_batch_ingest_of_the_main_fixture_matches_a_single_batch_one():
+    """The same property over the discriminating fixture and its whole payload, not just
+    `effort`: a store grown a line at a time must answer every window exactly as a store built in
+    one pass does."""
+    with tempfile.TemporaryDirectory() as tmp:
+        chunked, nlp = _store(os.path.join(tmp, "c")), _FakeNlp()
+        path = _write_and_ingest_in_chunks(os.path.join(tmp, "c"), chunked, nlp)
+        one = _store(os.path.join(tmp, "w"))
+        whole = _write(os.path.join(tmp, "w"))
+        ingest_file(one, whole, nlp)
+        for pid in _prompt_ids():
+            got = analyze_window(path, pid, 60, nlp, store=chunked)
+            want = analyze_window(whole, pid, 60, nlp, store=one)
+            assert got["effort"] == want["effort"], (pid, want["effort"], got["effort"])
+            assert got["workstreams"] == want["workstreams"], pid
+        assert analyze_window(path, "TARGET", 60, nlp, store=chunked)["effort"][
+            "request_tokens"] == SPEND_IN_WINDOW
+        chunked.close(); one.close()
 
 
 def test_effort_abstains_on_the_gap_percentiles_rather_than_reporting_zero():

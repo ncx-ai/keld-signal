@@ -107,7 +107,15 @@ HEAD_BYTES = 4096
 #           than out of the transcript. So an existing store reparses ONCE and its whole history
 #           gains the level, instead of reporting the repository as unattributed for every window
 #           older than this code.
-STATE_VERSION = 3
+#   3 -> 4: `reqs` (the `requestId`s already costed, below). A state written before it existed has
+#           no record of them, so a resumed tail parse re-costs every request whose lines it
+#           straddled -- and a store written by the code that had no cross-batch set at all
+#           ALREADY HOLDS those duplicate `mag/request_tokens` rows. Nothing recomputes them: the
+#           `turn_magnitude` key carries the batch ordinal, so each duplicate is a legitimate
+#           member of its own batch and no upsert can collapse it. So this bump is what REPAIRS
+#           an existing store -- it forces one reparse, `clear_session` drops the magnitudes, and
+#           the whole history is re-derived with the set carried. Exact by definition.
+STATE_VERSION = 4
 
 
 def terms_mode(nlp):
@@ -338,10 +346,25 @@ def _load_state(store, path):
     for name, n in raw.get("remotes") or ():
         evidence[2][name] += n
     pending = [(tuple(b), rel, bool(fi), rt) for b, rel, fi, rt in raw.get("pending") or ()]
-    return evidence, pending, list(raw.get("cwds") or ()), int(raw.get("lines") or 0)
+    return (evidence, pending, list(raw.get("cwds") or ()), int(raw.get("lines") or 0),
+            set(raw.get("reqs") or ()))
 
 
-def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None):
+def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None, reqs=()):
+    """The state as storable JSON. `reqs` is a SET on the way in and a sorted list on the way
+    out: nothing reads it but a membership test, and sorting makes the stored blob a function of
+    the file rather than of Python's iteration order — which is what lets two ingests of the same
+    tail be compared at all.
+
+    Its size is the one thing worth knowing here, since it is the only carried field that grows
+    with request COUNT rather than being bounded like `cwds` (1-8) or small like `pending`
+    (104-859 entries measured). Measured over the largest real transcripts on this machine: a
+    90 MB / 9,016-line transcript holds 1,875 distinct request ids, about 59 KB of JSON; a 27 MB
+    one holds 446. That is the same order as `pending`, which this state already rewrites every
+    batch, so it is a cost the design has already accepted rather than a new one. A truncated
+    hash would shrink it, and is deliberately NOT used: a collision would silently DROP a
+    request's spend, and an under-count arrived at by chance is worse than 59 KB.
+    """
     marker_dirs, cd_targets, remotes = evidence
     return {"v": STATE_VERSION,
             "terms": terms_mode(nlp),
@@ -351,6 +374,7 @@ def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None):
             "remotes": [[k, v] for k, v in remotes.most_common()],
             "pending": [[list(b), rel, fi, rt] for b, rel, fi, rt in pending],
             "cwds": cwds,
+            "reqs": sorted(reqs),
             "lines": lines}
 
 
@@ -503,16 +527,22 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
     session, (root, projdir) = session_of(path), _scope(path)
     lines, end_offset = _read_complete_lines(path, offset, size)
 
-    evidence, pending, cwds, prev_lines = ((new_evidence(), [], [], 0) if reparse
-                                           else _load_state(store, path))
+    evidence, pending, cwds, prev_lines, reqs = ((new_evidence(), [], [], 0, set()) if reparse
+                                                 else _load_state(store, path))
     before = _answers(cwds, projdir, evidence)
     scan_tool_use(tool_use_in(lines), into=evidence)
     if not reparse and _answers(cwds, projdir, evidence) != before:
         return None
 
     turns = list(turns_in(lines))
+    # `seen_requests=reqs` is MUTATED in place by the call, exactly as `evidence` is: a request
+    # is written as several assistant lines, so the "cost this request once" rule spans batches
+    # and cannot live inside one call. See `levels.events_for_turns`' `seen_requests` for the
+    # measured over-count that follows when it does. Mutating a local loaded from the store per
+    # call is safe under rollback: the state and the events commit in ONE transaction, so a
+    # dropped commit drops the additions with them and the next batch reloads the old set.
     rows, new_pending, _n = events_for_turns(turns, path, root, (), nlp, evidence=evidence,
-                                             resolved=resolved)
+                                             resolved=resolved, seen_requests=reqs)
     pending += new_pending
     for o in turns:
         cwd = o.get("cwd") or ""
@@ -545,7 +575,7 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
         recon_rows, _stats = reconcile(pending, COMPONENT_DEPTH)
         store.replace_events(session, RECONCILE_SLOT, recon_rows)
         store.set_parse_state(path,
-                              _dump_state(evidence, pending, cwds, n_lines, nlp, resolved))
+                              _dump_state(evidence, pending, cwds, n_lines, nlp, resolved, reqs))
         store.record_ingest(path, end_offset, size, _head_fingerprint(path),
                             os.path.getmtime(path), watermark_ts)
     return IngestResult(len(turns), watermark_ts, reparse)

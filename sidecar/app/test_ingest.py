@@ -63,7 +63,15 @@ def _laid_out(tmp, projdir, fname, lines):
 
 
 def _dump(store, path):
-    """Every stored event and bin, ordered — the whole observable content of the store.
+    """Every stored event, bin and turn magnitude, ordered — the whole observable content.
+
+    `turn_magnitude` is here for the same reason `event` is, and it was added late: a magnitude
+    is keyed on the batch ordinal exactly as an event is, so it is subject to the same
+    retroactive-and-therefore-unequal risk, and NOTHING else in this file looked at it. The
+    defect that proved the point: `mag/request_tokens` is emitted once per `requestId`, and the
+    dedup that makes "once" true was local to one `events_for_turns` call — so a request whose
+    assistant lines straddled a chunk boundary stored a SECOND row at a different ordinal and the
+    window's spend summed both. See `_multi_line_request_lines`.
 
     `path` is the transcript the store holds. Its key is replaced by `"<session>"`, because the
     store keys on a digest of the transcript's ABSOLUTE path (`ingest.session_of`) and the
@@ -89,7 +97,7 @@ def _dump(store, path):
     """
     c = store._conn()
     key = session_of(path)
-    for table in ("event", "bin"):
+    for table in ("event", "bin", "turn_magnitude"):
         seen = {r[0] for r in c.execute(f"SELECT DISTINCT session FROM {table}")}
         assert seen <= {key}, (
             f"{table} holds session(s) that are not {os.path.basename(path)}'s: {seen - {key}}")
@@ -99,7 +107,13 @@ def _dump(store, path):
                                       "ORDER BY session, ts, level, ref")]
     bn = [canon(r) for r in c.execute("SELECT session, bin_ts, level, ref, n FROM bin "
                                       "ORDER BY session, bin_ts, level, ref")]
-    return sorted(ev), sorted(bn)
+    # Summed over `source_line` on the same argument as `event` above, and the once-per-request
+    # magnitudes still show through: a duplicate lands at the ts of a DIFFERENT transcript line,
+    # so it appears as an extra (ts, kind) key rather than being folded away.
+    mg = [canon(r) for r in c.execute("SELECT session, ts, kind, SUM(value) FROM turn_magnitude "
+                                      "GROUP BY session, ts, kind "
+                                      "ORDER BY session, ts, kind")]
+    return sorted(ev), sorted(bn), sorted(mg)
 
 
 def _full_parse_rollup(path, nlp=None):
@@ -216,6 +230,56 @@ def _stable_lines(n=6, start=0):
     return _lines_of(objs)
 
 
+def _asst_of_request(ts, rid, text, blocks=None, cwd="/workspace/kexample/demo"):
+    """An assistant line belonging to request `rid`, repeating that request's `usage`.
+
+    That repetition is how Claude Code writes a transcript, not a quirk of this fixture: one API
+    request emits several assistant lines and EVERY one of them carries the same `usage` object.
+    `levels.events_for_turns` therefore emits `mag/tokens` on all of them (the rollup weight) and
+    `mag/request_tokens` on the FIRST only (the spend), and it is that "first only" that a chunk
+    boundary can break.
+    """
+    o = _turn(ts, "assistant", text, cwd=cwd, blocks=blocks)
+    o["requestId"] = rid
+    o["message"]["usage"] = {"input_tokens": 400, "output_tokens": 60,
+                             "cache_creation_input_tokens": 0,
+                             "cache_read_input_tokens": 0}
+    return o
+
+
+def _multi_line_request_lines():
+    """A transcript whose API REQUESTS span several assistant lines each.
+
+    Nothing else in this file carries a `requestId` at all, so `events_for_turns`' once-per-request
+    dedup was a structural no-op across the whole chunked-equivalence suite and the defect it
+    guards against could not be seen. Here request `req-A` owns three consecutive assistant lines
+    and `req-B` owns two, so ANY cut inside either of them re-offers a request whose spend was
+    already recorded — and a cut one line at a time (this suite's default) makes every one of
+    those cuts.
+
+    The evidence is complete in the first turn, deliberately: a reparse partway through would
+    reset the dedup and mask exactly what is being measured (the same reason `_stable_lines`
+    front-loads its evidence).
+    """
+    cwd = "/workspace/kexample/demo"
+    return _lines_of([
+        _turn("2026-08-14T11:00:00Z", "user", "start on the ledger", cwd=cwd),
+        _asst_of_request("2026-08-14T11:00:10Z", "req-A", "reading",
+                         blocks=[_tool("Read", file_path=cwd + "/CLAUDE.md")], cwd=cwd),
+        _asst_of_request("2026-08-14T11:00:20Z", "req-A", "still the same request",
+                         blocks=[_tool("Bash", command="go test ./internal/ledger/...")], cwd=cwd),
+        _asst_of_request("2026-08-14T11:00:30Z", "req-A", "and still",
+                         blocks=[_tool("Bash", command="go build ./...")], cwd=cwd),
+        _turn("2026-08-14T11:01:00Z", "user", "now the retry path", cwd=cwd),
+        _asst_of_request("2026-08-14T11:01:10Z", "req-B", "editing",
+                         blocks=[_tool("Edit", file_path=cwd + "/internal/retry/queue.go",
+                                       old_string="x" * 40, new_string="y" * 60)], cwd=cwd),
+        _asst_of_request("2026-08-14T11:01:20Z", "req-B", "second line of B",
+                         blocks=[_tool("Bash", command="go vet ./...")], cwd=cwd),
+        _turn("2026-08-14T11:02:00Z", "user", "thanks", cwd=cwd),
+    ])
+
+
 def _lines_of(objs):
     return [json.dumps(o, separators=(",", ":")) + "\n" for o in objs]
 
@@ -237,7 +301,9 @@ def _assert_chunked_equals_whole(objs_or_lines, projdir="-workspace-kexample-dem
         assert got == want, (
             f"chunked ingest ({len(cuts)} chunks) differs from a single pass\n"
             f"  only in chunked: {sorted(set(got[0]) - set(want[0]))[:8]}\n"
-            f"  only in whole:   {sorted(set(want[0]) - set(got[0]))[:8]}")
+            f"  only in whole:   {sorted(set(want[0]) - set(got[0]))[:8]}\n"
+            f"  mag only in chunked: {sorted(set(got[2]) - set(want[2]))[:8]}\n"
+            f"  mag only in whole:   {sorted(set(want[2]) - set(got[2]))[:8]}")
         # And both must equal what the existing one-pass parse path computes.
         session = session_of(cpath)
         served = cs.rollup_window(session, 0, 4e9)
@@ -266,6 +332,54 @@ def test_late_workspace_evidence_still_equals_a_full_parse():
 def test_late_declaration_still_equals_a_full_parse():
     """The retroactive case for reconcile: a prose path is declared only in a later chunk."""
     _assert_chunked_equals_whole(_late_declaration_lines())
+
+
+def test_a_request_spanning_a_chunk_boundary_is_costed_once():
+    """The spend series must not grow with how the file was chunked.
+
+    `mag/request_tokens` is recorded once per `requestId`, so a request whose assistant lines are
+    split across batches must still contribute ONE row. Cut a line at a time, both of this
+    fixture's multi-line requests straddle boundaries, and the whole-file ingest is the oracle.
+    """
+    _assert_chunked_equals_whole(_multi_line_request_lines())
+
+
+def test_a_request_split_across_three_batches_is_costed_once():
+    """A request can span more than two batches, so remembering only the previous batch's ids is
+    not enough. `req-A`'s three lines land in three different chunks here."""
+    lines = _multi_line_request_lines()
+    _assert_chunked_equals_whole(lines, cuts=[2, 3, 4, len(lines)])
+
+
+def test_a_state_from_an_older_layout_reparses_and_clears_stale_magnitudes():
+    """The REPAIR path for the over-count above, and the reason `STATE_VERSION` was bumped.
+
+    A store written by the code whose request dedup was per-call already holds the duplicate
+    `mag/request_tokens` rows, and nothing recomputes them: the `turn_magnitude` key carries the
+    batch ordinal, so each duplicate is a legitimate member of its own batch and no upsert
+    collapses it. The version bump is what fixes those stores — a state below `STATE_VERSION` is
+    unusable, `_ingest_locked` reparses whole, and `clear_session` drops the magnitudes before
+    they are re-derived. Simulated here by planting a duplicate row and downgrading the stored
+    `v`, which is exactly the state such a store is in.
+    """
+    lines = _multi_line_request_lines()
+    with tempfile.TemporaryDirectory() as tmp:
+        st, p, _r = _ingest_whole(tmp, "-workspace-kexample-demo",
+                                  "0badc0de-0000-0000-0000-000000000000.jsonl", lines)
+        good = _dump(st, p)[2]
+        c = st._conn()
+        ts, kind, val = [r for r in good if r[2] == "request_tokens"][0][1:]
+        c.execute("INSERT INTO turn_magnitude(session, source_line, ts, kind, value) "
+                  "VALUES (?,?,?,?,?)", (session_of(p), 999, ts + 5.0, kind, val))
+        raw = st.parse_state(p)
+        assert raw["v"] == 4, raw["v"]
+        raw["v"] = 3
+        st.set_parse_state(p, raw)
+        assert _dump(st, p)[2] != good, "the planted duplicate did not land"
+
+        ingest_file(st, p)
+        assert _dump(st, p)[2] == good, "the reparse did not clear the stale magnitude"
+        st.close()
 
 
 def test_chunk_boundary_splitting_a_five_minute_bin_equals_one_pass():
@@ -595,7 +709,7 @@ def _repo_values(store, path):
     reparse that cleared the events while leaving a stale bin behind would answer the interior of
     every historical window with the old identity while the edges answered with the new one --
     visible in a rollup and invisible in an events-only check."""
-    ev, bn = _dump(store, path)
+    ev, bn, _mg = _dump(store, path)
     return {r[3] for r in ev if r[2] == "repo"} | {r[3] for r in bn if r[2] == "repo"}
 
 

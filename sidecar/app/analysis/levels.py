@@ -93,7 +93,7 @@ def display_session(path):
 
 
 def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, session=None,
-                     resolved=None):
+                     resolved=None, seen_requests=None):
     """One transcript's turns -> its rows and pending paths.
 
     `turns` is the output of `transcript.iter_turns(path)` — already filtered to `user`/
@@ -128,6 +128,18 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
     directory that was never `git init`ed must leave the dimension unattributed rather than
     carry an empty value. That default is also what keeps every existing caller -- the study,
     `analyze_window_by_parse`, the tests -- producing byte-identical rows.
+
+    `seen_requests` is the `requestId`s ALREADY COSTED, as a mutable set this function ADDS to —
+    the accumulating sibling of `evidence`, and it exists for the same reason: this function is
+    called once per INGEST BATCH, and a fact that spans batches cannot live in a local variable.
+    A request is written as several assistant lines (median 2, up to 12 measured), so
+    `mag/request_tokens` — which must be recorded ONCE per request, because it is the series that
+    SUMS to what a window cost — has to know about a request first seen in an earlier batch. With
+    the set local, a request whose lines straddled a batch boundary was costed once per batch it
+    touched: measured, a line-at-a-time ingest of three-line requests published a window spend of
+    3x the whole-file answer, at a `turn_magnitude` key (`session, source_line, ts, kind`) that
+    differs per batch and therefore cannot collapse the duplicate. `None` keeps the whole-file
+    callers exactly as they were: a fresh local set, i.e. one pass over one file.
     """
     rows, pending, n_lines = [], [], 0
     projdir = os.path.basename(os.path.dirname(path))
@@ -139,7 +151,7 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                                         else scan_workspace(path))
     ws_cache = {}
     session = display_session(path) if session is None else session
-    seen_req = set()
+    seen_req = set() if seen_requests is None else seen_requests
     for o in turns:
         ts = o.get("timestamp")
         n_lines += 1
@@ -251,6 +263,11 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 # The SPEND series: the same number, once per request, so a sum over turns is
                 # what the window actually cost. `mag/tokens` above does not sum to that and is
                 # not meant to.
+                #
+                # "Once" is only true if `seen_req` outlives THIS CALL whenever the caller's file
+                # does — see `seen_requests` in the docstring. Incremental ingest passes its
+                # persisted set; nothing collapses a duplicate downstream, because the store's
+                # key carries the batch ordinal.
                 if w:
                     add("mag", magnitude.REQUEST_TOKENS, "", w)
 
