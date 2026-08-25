@@ -135,6 +135,7 @@ func TestTheWindowWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 	allowed := map[string]bool{
 		"source": true, "correlation": true, "actor": true, "window": true,
 		"workstreams": true, "dynamics": true, "effort": true, "physical_acts": true,
+		"prior":           true,
 		"pipeline_status": true, "extractor_versions": true, "schema_version": true, "ts": true,
 	}
 	for k := range raw {

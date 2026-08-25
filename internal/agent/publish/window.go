@@ -47,6 +47,11 @@ type WindowEnrichment struct {
 	// PhysicalActs is absent, never an empty list, when the window recorded no
 	// act — same rule as the prompt row's.
 	PhysicalActs []enrich.Act `json:"physical_acts,omitempty"`
+	// Prior is the SESSION this window sat in — same rule and same meaning as
+	// the prompt row's (see Enrichment.Prior): a contrast reported beside
+	// `workstreams`, never a value supplied in its place. A tick-emitted window
+	// is not a lesser window, so it carries the block too.
+	Prior map[string]enrich.Prior `json:"prior,omitempty"`
 	// PipelineStatus is always enrich.PipelineStatusWindow. It rides here so a
 	// reader can tell WHY there is no task_type on this row (there was never a
 	// prompt) rather than inferring it from an absence.
@@ -93,6 +98,7 @@ func BuildWindow(w enrich.WindowCharacterisation, actor string, now time.Time) W
 		Dynamics:          w.Analysis.Dynamics,
 		Effort:            w.Analysis.Effort,
 		PhysicalActs:      w.Analysis.PhysicalActs,
+		Prior:             w.Analysis.Prior,
 		PipelineStatus:    enrich.PipelineStatusWindow,
 		ExtractorVersions: windowExtractorVersions(),
 		SchemaVersion:     enrich.SchemaVersion,

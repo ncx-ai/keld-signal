@@ -88,4 +88,12 @@ type WindowAnalysis struct {
 	// would state every count as 0 and every status as "", which reads as a real
 	// answer nobody measured.
 	Effort *Effort
+	// Prior is the SESSION the window sat in, keyed by dimension (see Prior).
+	// Fifth answer from the same call and the only one that is about something
+	// OUTSIDE the window, which is exactly why a per-window view cannot produce
+	// it. It is a CONTRAST and never a fallback: it sits beside Workstreams and
+	// never fills a dimension Workstreams left blank. Nil for a sidecar too old
+	// to compute the block — "we looked at the session and it said nothing" is a
+	// different fact from "nobody looked".
+	Prior map[string]Prior
 }

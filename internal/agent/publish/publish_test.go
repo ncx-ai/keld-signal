@@ -473,6 +473,81 @@ func TestBuildCarriesThePhysicalActsInventory(t *testing.T) {
 	}
 }
 
+// The SESSION PRIOR reaches the wire, and reaches it BESIDE the window's own
+// answer rather than inside it. This is the whole design expressed at the last
+// place it could be broken: a consumer reading this row sees `workstreams` with
+// no `workflow` — the window could not attribute one — and `prior.workflow`
+// naming what the session was doing. The two must never be merged.
+func TestBuildCarriesTheSessionPriorWithoutFillingInTheWindow(t *testing.T) {
+	no, dep, yes := false, 0.516, true
+	p := enrich.Profile{
+		Workstreams: map[string]enrich.Labeled{"language": {Value: "Python", Confidence: 0.571}},
+		Prior: map[string]enrich.Prior{
+			"language": {Value: "TypeScript", Share: 0.886, Evidence: 271,
+				Status: "attributed", Agrees: &no, Departure: &dep, Novel: &no},
+			// The window has NO workflow. The prior has one, and it stays here.
+			"workflow": {Value: "superpowers:brainstorming", Share: 1.0, Evidence: 38,
+				Status: "attributed", Novel: &yes},
+			// A session's first window: absent, and nothing invented for it.
+			"branch": {Status: "absent"},
+		},
+	}
+	e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+	if len(e.Prior) != 3 {
+		t.Fatalf("prior dropped by Build: %+v", e.Prior)
+	}
+	if _, present := e.Workstreams["workflow"]; present {
+		t.Errorf("the window's workflow was filled in from the session: %+v — an "+
+			"unattributed window stays unattributed", e.Workstreams)
+	}
+	if e.Workstreams["language"].Value != "Python" {
+		t.Errorf("the window's own answer was overwritten by its session: %+v", e.Workstreams)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"prior"`, `"value":"TypeScript"`, `"departure":0.516`,
+		`"agrees":false`, `"novel":true`, `"status":"absent"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("wire missing %s: %s", want, b)
+		}
+	}
+	// A session-first window states its absence and INVENTS NOTHING. If Agrees,
+	// Departure and Novel were plain bool/float64 they would marshal here as
+	// false/0/false — "we compared this window to its session and it matched" —
+	// about a comparison nobody could make.
+	one, err := json.Marshal(e.Prior["branch"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unwanted := range []string{`"agrees"`, `"departure"`, `"novel"`, `"value"`} {
+		if strings.Contains(string(one), unwanted) {
+			t.Errorf("an absent prior stated %s: %s", unwanted, one)
+		}
+	}
+}
+
+// Absent, not an empty object. `"prior":{}` would read as "we looked at the
+// session and it said nothing", which is a different fact from a sidecar too old
+// to have looked — the same distinction workstreams, dynamics and physical_acts
+// already keep.
+func TestBuildOmitsAnEmptySessionPrior(t *testing.T) {
+	for name, p := range map[string]enrich.Profile{
+		"nil":   {},
+		"empty": {Prior: map[string]enrich.Prior{}},
+	} {
+		e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), `"prior"`) {
+			t.Errorf("%s: an empty prior was published: %s", name, b)
+		}
+	}
+}
+
 // Absent, not an empty list. `"physical_acts":[]` would read as "we analysed the
 // hour and it did nothing" — the same distinction the workstreams and dynamics
 // keys already keep.

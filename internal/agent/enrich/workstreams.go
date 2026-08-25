@@ -43,10 +43,10 @@ var errAnalysisUnavailable = errors.New("workstreams: window analysis unavailabl
 // for any dimension.
 //
 // It returns a WindowAnalysis rather than the dimension map alone because ONE
-// /analyze call answers four questions — what the window contains, how that is
-// changing, what it cost in work, and what it physically did — and asking again
-// would multiply the cost of the facet for blocks the first call already
-// computed.
+// /analyze call answers five questions — what the window contains, how that is
+// changing, what it cost in work, what it physically did, and what the SESSION
+// around it looked like — and asking again would multiply the cost of the facet
+// for blocks the first call already computed.
 type WorkstreamAnalyzer func(path, promptID string, spanMinutes int) (WindowAnalysis, bool)
 
 // WorkstreamsExtractor publishes the deterministic dimensions a cost report
@@ -120,6 +120,14 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	// absence of one, and the two must not look alike downstream.
 	if len(an.PhysicalActs) > 0 {
 		res["physical_acts"] = an.PhysicalActs
+	}
+	// The SESSION PRIOR, same call, same no-Producer reasoning — and published
+	// as its OWN key rather than merged into `workstreams` above. That is the
+	// design in one line: the prior is a contrast, never a fallback, so a
+	// dimension the loop above skipped for having no value stays skipped no
+	// matter what the session says about it.
+	if len(an.Prior) > 0 {
+		res["prior"] = an.Prior
 	}
 	return res, nil
 }

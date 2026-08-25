@@ -99,7 +99,14 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// "named_terms" staying forbidden below is a real result about a payload
 		// that DOES carry an inventory key, not a vacuous pass over one that
 		// carries none.
-		`"physical_acts"`, `"n":1`} {
+		`"physical_acts"`, `"n":1`,
+		// The session prior and all three contrast measures, so `"reason"`
+		// staying forbidden below is a real result about a payload that DOES
+		// carry a prior block. The prior states its attribution outcome as
+		// `status`, never `reason` — a second meaning for a key already used by
+		// the dynamics per-side objects (which do not publish at all) is a
+		// reader's error waiting to happen, and this list is what enforces it.
+		`"prior"`, `"agrees"`, `"departure"`, `"novel"`, `"status"`} {
 		if !strings.Contains(got, present) {
 			t.Fatalf("filler did not populate %s; the absence checks below would be vacuous:\n%s",
 				present, got)

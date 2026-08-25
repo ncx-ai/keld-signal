@@ -134,6 +134,7 @@ func (c *Client) TickCharacterised(path, source, sessionID string, promptIDs []s
 				PhysicalActs: convertActs(w.Inventory.PhysicalActs),
 				Dynamics:     convertDynamics(w.Dynamics),
 				Effort:       convertEffort(w.Effort),
+				Prior:        convertPrior(w.Prior),
 			},
 		})
 	}

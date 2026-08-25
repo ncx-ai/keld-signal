@@ -140,8 +140,27 @@ type Profile struct {
 	// windows, median 34 observations) but because an hour reads AND edits AND
 	// tests — top-act share p50 0.403 over p50 7 distinct acts. See Acts.
 	// Absent, never an empty list, when the analysis produced none.
-	PhysicalActs   []Act  `json:"physical_acts,omitempty"`
-	PipelineStatus string `json:"pipeline_status"`
+	PhysicalActs []Act `json:"physical_acts,omitempty"`
+	// Prior is the SESSION the same window sat in, keyed by dimension (see
+	// Prior). Fifth answer from the same /analyze call, model-free like the other
+	// four, so it is published in ml_backend "deterministic" too — and the only
+	// one of the five that is about something OUTSIDE the window, which is why a
+	// per-window view structurally cannot produce it.
+	//
+	// A CONTRAST, NEVER A FALLBACK. It is reported ALONGSIDE Workstreams and
+	// never supplies an answer Workstreams lacked: a dimension absent from
+	// Workstreams stays absent no matter what this map says about the session.
+	// Three dimensions carry it (workflow, language, branch), decided by
+	// measurement over 1,022 windows; `project` and `model` agree with their
+	// session 100.0% of the time and would publish a constant.
+	//
+	// Nearly half of all windows (45.1% measured) report `status: "absent"` on
+	// every dimension because they are a session's FIRST window. That is
+	// arithmetic, not a defect, and a reader has to be told so up front or they
+	// will read the blank as a bug — and a blank read as a bug is what someone
+	// eventually fills in.
+	Prior          map[string]Prior `json:"prior,omitempty"`
+	PipelineStatus string           `json:"pipeline_status"`
 	// FacetsSkipped names the passes that did not run because THIS RUN has no
 	// such pass — currently: a model-dependent pass under ml_backend
 	// "deterministic", where ctx.Model is nil by design. It is the companion

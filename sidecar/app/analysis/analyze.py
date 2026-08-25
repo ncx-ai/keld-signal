@@ -80,7 +80,7 @@ import os
 from datetime import datetime, timedelta
 
 from app.analysis import COMPONENT_DEPTH, SCHEMA
-from app.analysis import latency, magnitude, window, workstreams
+from app.analysis import latency, magnitude, prior as prior_mod, window, workstreams
 from app.analysis.dynamics import dynamics_for
 from app.analysis.ingest import (RECONCILE_SLOT, ingest_file, is_current, pending_in,
                                  session_of)
@@ -126,7 +126,7 @@ class StoreBehind(Exception):
 
 
 def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refresh=True,
-                   sizer=None, end_ts=None):
+                   sizer=None, end_ts=None, prior=False):
     """The `span_minutes` of work ending at `prompt_id` -> the workstream + inventory payload,
     served from the reference series.
 
@@ -175,7 +175,43 @@ def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refre
     if sizer is not None:
         out["dynamics"] = dynamics_for(st, session_of(path), end, span_minutes,
                                        sizer=sizer, floor=st.serving_floor())
+    if prior:
+        out["prior"] = _prior_block(st, path, session_of(path), rl, start, st.serving_floor())
     return out
+
+
+def _prior_block(store, path, session, window_rl, start, floor):
+    """The session as it stood BEFORE this window, contrasted with the window's own answer.
+
+    `[floor or the beginning of time, quantize(window start))` -- HALF-OPEN on the right, and
+    that half-openness is the whole of the causal claim: an event at the boundary instant is
+    inside the window being characterised, and admitting it would put the window into its own
+    frame of reference (see `prior.py` on why that reading is degenerate rather than merely
+    weak). The prior's upper bound is the identical `lo` the digest's own rollup used, so the
+    two intervals abut exactly and no evidence is counted on both sides.
+
+    RETENTION CLAMPS, IT DOES NOT REFUSE. A prior starts before the window it contrasts, so it
+    reaches under the serving floor whenever one exists -- refusing there would 410 every window
+    on a pruned store for a block that is decoration beside the digest. `clamped` says the
+    prior's lower bound is retention's floor rather than the session's own start, exactly as
+    `FixedSizer` reports the same fact about a baseline: a silently shorter input is the defect
+    `omittedNotice` exists to prevent, one level up.
+
+    `clamped` is the mere EXISTENCE of a floor, and it cannot be sharpened into "the floor
+    actually cut something off": the rows that would say whether this session began before it
+    are precisely the rows retention deleted. So it over-warns for a session younger than the
+    horizon rather than under-warning for one older than it, which is the direction a reader can
+    do something about -- and unlike `FixedSizer`, whose baseline has a definite intended start
+    to compare against, the prior's intended start is the session's, which nothing here knows.
+
+    RECOMPUTED, never accumulated -- see `prior.py`. Nothing is cached between calls, which is
+    what makes the answer checkable against the stored events at any moment.
+    """
+    hi = quantize(start.timestamp())
+    lo = 0.0 if floor is None else float(floor)
+    prior_rl = _rollup_at(store, path, session, lo, hi) if hi > lo else {}
+    return {"clamped": floor is not None,
+            "dimensions": prior_mod.compare(window_rl, prior_rl)}
 
 
 def analyze_window_by_parse(path, prompt_id, span_minutes=60, nlp=None):
@@ -306,10 +342,29 @@ def _rollup_from_store(store, path, prompt_id, span_minutes=60, nlp=None, refres
     # reconciliation, and slicing that by timestamp would attribute a path using a declaration
     # the window never saw. `pending_in` re-scopes it for ~1 ms. Excluding a slot also forgoes
     # the precomputed bins (see `Store.rollup_window`), which for one hour costs nothing.
+    return (_rollup_at(store, path, session, lo, hi), start, end,
+            _effort_from_store(store, session, lo, hi))
+
+
+def _rollup_at(store, path, session, lo, hi):
+    """`[lo, hi)` of one session -> a rollup, THE one way this file computes one.
+
+    Extracted so the digest window and the SESSION PRIOR beside it cannot be computed
+    differently. `prior.contrast`'s `departure` subtracts the session's share from the window's,
+    which is only a number if both were measured the same way -- and `language` is the dimension
+    that makes that real, since `lang` rows exist ONLY through reconcile (see its module
+    docstring) and reconcile's answer depends on WHICH declarations are in scope. A prior served
+    from the stored, FILE-scoped reconciliation while the window re-scoped its own would compare
+    two different quantities and look entirely plausible doing it.
+
+    That is also the deliberate divergence from `dynamics`, which passes NO `exclude_slots` and
+    takes the precomputed bins: its two sides are compared only against each other, so consistency
+    with the digest costs it nothing and the bins buy it a long baseline. Here the comparison
+    CROSSES that boundary, so the digest's method wins and the bins are forgone.
+    """
     rows = store.window_rows(session, lo, hi, exclude_slots=(RECONCILE_SLOT,))
     recon_rows, _stats = reconcile(pending_in(store, path, lo, hi), COMPONENT_DEPTH)
-    return (window.rollup(rows + recon_rows), start, end,
-            _effort_from_store(store, session, lo, hi))
+    return window.rollup(rows + recon_rows)
 
 
 def _prompt_time(path, prompt_id):

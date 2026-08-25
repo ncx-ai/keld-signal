@@ -80,8 +80,30 @@ type Enrichment struct {
 	// (TestEnrichmentWireShapeCannotCarryAnalysisInternals fails if that changes).
 	//
 	// Absent when the window recorded no act; never an empty list.
-	PhysicalActs   []enrich.Act `json:"physical_acts,omitempty"`
-	PipelineStatus string       `json:"pipeline_status"`
+	PhysicalActs []enrich.Act `json:"physical_acts,omitempty"`
+	// Prior is the SESSION this window sat in, keyed by dimension (see
+	// enrich.Prior): the same three measures per dimension the daemon reads
+	// on-device — the session's own value/share/evidence/status, and the
+	// contrast (agrees, departure, novel). Same /analyze call as the four blocks
+	// above, same no-inference path, no text.
+	//
+	// A CONTRAST, NEVER A FALLBACK, and that rule survives to the wire: a
+	// dimension missing from `workstreams` above stays missing here too. A
+	// consumer must not read `prior.language.value` as the window's language —
+	// it is what the SESSION was, offered so that `workstreams.language` can be
+	// read as an excursion or as business as usual.
+	//
+	// Its values are reference levels of the same class `workstreams` already
+	// publishes (a branch, a language, a skill), because the sidecar derives the
+	// prior's vocabulary from its own ALLOCATION list — `named_terms`, the one
+	// level read from message text, is structurally not addable to it.
+	//
+	// Absent when the analysis produced no block. `status: "absent"` on every
+	// dimension is the EXPECTED answer for a session's first window and is 45.1%
+	// of all windows measured; it means the session had nothing to say, not that
+	// the field failed.
+	Prior          map[string]enrich.Prior `json:"prior,omitempty"`
+	PipelineStatus string                  `json:"pipeline_status"`
 	// FacetsSkipped names the passes this run structurally does not have (a
 	// model-dependent pass under ml_backend "deterministic"). It rides with
 	// pipeline_status because it is what makes that field readable: without it,
@@ -139,6 +161,7 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		Dynamics:          p.Dynamics,
 		Effort:            p.Effort,
 		PhysicalActs:      p.PhysicalActs,
+		Prior:             p.Prior,
 		PipelineStatus:    p.PipelineStatus,
 		FacetsSkipped:     p.FacetsSkipped,
 		FacetsDegraded:    p.FacetsDegraded,

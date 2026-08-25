@@ -340,6 +340,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		Dynamics:          dynamicsFrom(ctx.Get("workstreams")),
 		Effort:            effortFrom(ctx.Get("workstreams")),
 		PhysicalActs:      actsFrom(ctx.Get("workstreams")),
+		Prior:             priorFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
 		FacetsSkipped:     skipped,
 		FacetsDegraded:    degraded,
@@ -443,6 +444,21 @@ func actsFrom(out map[string]any) []Act {
 	if out != nil {
 		if a, ok := out["physical_acts"].([]Act); ok && len(a) > 0 {
 			return a
+		}
+	}
+	return nil
+}
+
+// priorFrom reads the SESSION PRIOR half of the same committed pass output. It
+// reads its OWN key and never `workstreams`, which is the structural half of
+// "contrast, never fallback": there is no code path by which a session value can
+// arrive in the window's dimension map. Empty yields nil, so a window whose
+// session said nothing publishes no key rather than an empty object that would
+// read as "we looked at the session and it said nothing".
+func priorFrom(out map[string]any) map[string]Prior {
+	if out != nil {
+		if p, ok := out["prior"].(map[string]Prior); ok && len(p) > 0 {
+			return p
 		}
 	}
 	return nil

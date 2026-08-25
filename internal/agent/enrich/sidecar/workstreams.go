@@ -44,6 +44,13 @@ import "github.com/ncx-ai/keld-signal/internal/agent/enrich"
 //     message TEXT and has been observed to contain real person names; keep it
 //     unrepresentable.
 //
+//   - The SESSION PRIOR block converts field-for-field (see convertPrior) into a
+//     map that is SEPARATE from Workstreams and never merged into it. That
+//     separation is the design: the prior is reported alongside the window's own
+//     answer and never supplies one it lacked, so an unattributed window stays
+//     unattributed. The block's `clamped` flag is dropped — AnalyzeResult does
+//     not model it (see PriorBlock).
+//
 //   - The DYNAMICS block converts field-for-field (see convertDynamics) for the
 //     six derived fields and drops everything else structurally — AnalyzeResult
 //     models no per-side value, no timestamp, no sizer detail. What this function
@@ -81,7 +88,59 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.
 		PhysicalActs: convertActs(res.Inventory.PhysicalActs),
 		Dynamics:     convertDynamics(res.Dynamics),
 		Effort:       convertEffort(res.Effort),
+		Prior:        convertPrior(res.Prior),
 	}, true
+}
+
+// convertPrior is the same VOCABULARY GATE convertDynamics is, applied to the
+// SESSION PRIOR block: `status` is a closed published set (enrich.PriorStatuses,
+// pinned against the sidecar's window.REASONS), and a value this binary does not
+// recognise is version skew from a separately-shipped sidecar. The whole
+// dimension drops rather than half of it — a `departure` of 0.516 with an
+// unreadable status is a number a reader cannot place, since whether the session
+// was attributed at all is exactly what the status says.
+//
+// IT IS A SEPARATE MAP FROM Workstreams, AND THAT IS THE WHOLE DESIGN. The prior
+// is a CONTRAST, never a fallback: it is reported alongside the window's own
+// answer and never supplies one the window lacked. Nothing here reads
+// res.Workstreams, so a dimension the window could not attribute cannot be
+// filled in from the session by this function or by anything downstream of it —
+// structurally, not by a comment. Inheriting would launder "we do not know" into
+// something confident, which is the defect the sidecar's MIN_EVIDENCE exists to
+// prevent and which this project has paid for twice.
+//
+// The DIMENSION SET is the sidecar's decision, forwarded rather than restated
+// (the same rule Workstreams already follows). Which dimensions carry a contrast
+// is an empirical result that will move — `output_type` and `tooling` are live
+// candidates — and a second list on this side would be a second thing to drift.
+// It is safe to forward because the sidecar derives the prior's vocabulary from
+// its own ALLOCATION list, so a prior can only ever name a value that publishes
+// in `workstreams` beside it; `named_terms` is structurally not addable there.
+//
+// Nil rather than an empty map when nothing survives — including when the whole
+// block is absent, which is what a sidecar too old to compute it sends: the pass
+// then publishes no key at all instead of an empty object, which would read as
+// "we looked at the session and it said nothing".
+func convertPrior(b PriorBlock) map[string]enrich.Prior {
+	var out map[string]enrich.Prior
+	for dim, p := range b.Dimensions {
+		// A null dimension is no prior at all; publishing a zero Prior would
+		// state a status of "", i.e. a real-looking outcome nobody can read.
+		if p == nil {
+			continue
+		}
+		if !enrich.KnownPriorStatus(p.Status) {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]enrich.Prior, len(b.Dimensions))
+		}
+		out[dim] = enrich.Prior{
+			Value: p.Value, Share: p.Share, Evidence: p.Evidence, Status: p.Status,
+			Agrees: p.Agrees, Departure: p.Departure, Novel: p.Novel,
+		}
+	}
+	return out
 }
 
 // convertActs is the same VOCABULARY GATE convertDynamics and convertEffort are,

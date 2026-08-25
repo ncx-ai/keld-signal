@@ -516,7 +516,13 @@ def _analyze_blocking(path, prompt_id, span_minutes):
     # Task 3's pre-registered comparison measured it at +74.6 precision / +27.0 recall points over
     # the fixed 15-minute slice with no new dependency, and the fixed slice survives as its
     # no-detection fallback (see `dynamics.EWMA_FAST` for the table and the control).
-    out = analyze_window(path, prompt_id, span_minutes, nlp, store=st, sizer=DEFAULT_SIZER)
+    # `prior` turns on the SESSION PRIOR block (app/analysis/prior.py): the session as it stood
+    # BEFORE this window, reported beside the window's own answer and never supplying one it
+    # lacked. Opt-in in `analyze_window` for the same reason `sizer` is -- the parse-path
+    # equivalence oracle structurally cannot compute a second, much wider rollup -- so
+    # production is again the one caller that asks for it.
+    out = analyze_window(path, prompt_id, span_minutes, nlp, store=st, sizer=DEFAULT_SIZER,
+                         prior=True)
 
     if status == _TERMS_DISABLED:
         # Switched off means not reported. The regex half of terms.candidates() needs no model
@@ -568,7 +574,7 @@ def _tick_blocking(path, prompt_ids, cursor_ts, now, span_minutes, max_windows):
             prompt_ts.append(_order_key(iso).timestamp())
     return tick_windows_for(st, path, cursor_ts=cursor_ts, prompt_ts=prompt_ts, now=now,
                             span_minutes=span_minutes, nlp=nlp, sizer=DEFAULT_SIZER,
-                            max_windows=max_windows)
+                            max_windows=max_windows, prior=True)
 
 
 @app.post("/tick")

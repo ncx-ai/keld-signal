@@ -72,7 +72,18 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           `vocab.ACTIONS` is closed at 22 values -- see the third column of
 #           `workstreams.INVENTORY`. Measurements:
 #           ~/keld/refseries-context/act-artifact/RESULTS.md (commit 6cf15eb).
-SCHEMA = 7
+#   7 -> 8: the SESSION PRIOR block is added (app/analysis/prior.py) -- the session as it stood
+#           BEFORE this window, reported beside the window's own answer and NEVER supplying one
+#           it lacked. Three of the seven allocation dimensions carry it, decided by measurement
+#           over 1,022 windows (docs/superpowers/specs/2026-08-24-session-prior-results.md):
+#           `workflow` (agreement 25.8%, novelty 44.0% -- the phase transitions of the workflow,
+#           brainstorming -> writing-plans -> executing -> debugging), `language` (70.6% / 2.3%)
+#           and `branch` (76.1% / 6.1%). `project` and `model` agree 100.0% with ZERO
+#           disagreements and a largest departure of +0.000 / -0.103, so a contrast field there
+#           would publish a constant; `output_type` and `tooling` are held back as live
+#           candidates. A window that answers with a block it did not answer with before is a
+#           window answered differently, which is exactly this number's trigger.
+SCHEMA = 8
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

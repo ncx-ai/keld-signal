@@ -618,6 +618,41 @@ def test_analyze_reports_how_the_window_is_changing_not_only_what_it_holds():
         assert "emerged" not in dim and "decayed" not in dim, dim
 
 
+def test_analyze_reports_the_session_the_window_sits_in_and_never_fills_it_in():
+    """The SESSION PRIOR block on the endpoint. The window's own answer says what this hour was;
+    the prior says what the session around it looked like, so a value sitting just over the
+    attribution floor is distinguishable from one that is the whole story.
+
+    What is pinned HERE is that the endpoint carries it (the measures themselves are unit-tested
+    in app/test_analysis_prior.py) and THE RULE: this fixture is a session's first window, so
+    every dimension's prior is `absent` — and the block is still emitted, still says `absent` out
+    loud, and supplies nothing. 45.1% of real windows look exactly like this; a suppressed block
+    reads as an oversight, and an oversight is what someone eventually "fixes"."""
+    from app.analysis import prior, workstreams
+
+    m = _reload_main(None)
+    _wire(m)
+    body = _asyncio.run(m.analyze(
+        m.AnalyzeIn(path=_fixture_transcript(), prompt_id=_fixture_prompt_id())))
+    assert "prior" in body, ("/analyze answered without asking for the prior at all: "
+                             f"{sorted(body)}")
+    p = body["prior"]
+    assert p["clamped"] is False, p
+    assert set(p["dimensions"]) == set(prior.ENABLED), p["dimensions"]
+    # The two dimensions the measurement refuted are absent from the block entirely: 100.0%
+    # agreement with zero disagreements over 1,022 windows is a constant, not a contrast.
+    assert set(p["dimensions"]).isdisjoint({"project", "model"}), p["dimensions"]
+    for name, d in p["dimensions"].items():
+        assert d["status"] == "absent", (name, d)
+        assert d["value"] is None and d["evidence"] == 0, (name, d)
+        assert d["agrees"] is None and d["departure"] is None and d["novel"] is None, (name, d)
+    # ... and the window itself is answered exactly as it was before the block existed, which
+    # on this two-turn fixture means honestly unattributed rather than filled in from a session
+    # that has nothing to fill it from either.
+    assert set(body["workstreams"]) == {n for n, _lv, _f in workstreams.ALLOCATION}, body
+    assert body["workstreams"]["workflow"] is None, body["workstreams"]
+
+
 def test_analyze_unknown_prompt_is_404_not_an_empty_payload():
     m = _reload_main(None)
     _wire(m)
@@ -950,6 +985,7 @@ def _tick_in(m, path, **kw):
 def test_tick_characterises_the_window_no_prompt_reaches_without_touching_the_runner():
     """THE POINT OF THE ENDPOINT. The twenty minutes of autonomous work fall outside every
     prompt's hour, so before this they were characterised by nothing at all."""
+    from app.analysis import prior
     from app.metrics import Counts
 
     m = _reload_main(None)
@@ -964,6 +1000,15 @@ def test_tick_characterises_the_window_no_prompt_reaches_without_touching_the_ru
     assert _epoch(w["window_start"]) == _epoch(_TICK_PROMPT_1), w["window_start"]
     assert _epoch(w["window_end"]) == _epoch(_TICK_PROMPT_2) - 3600, w["window_end"]
     assert w["evidence"] > 0 and "workstreams" in w and "inventory" in w, w
+    # A tick-emitted window is not a lesser window: it carries the SESSION PRIOR the prompt's
+    # own digest does, or a reader would see the contrast beside one row and not the other with
+    # no way to know why. This is the SESSION-FIRST shape (the gap fixture's tick window opens
+    # the session), so the prior is present, named on every enabled dimension, and honestly
+    # empty — which is the 45.1% case and exactly the one a `prior=False` would be mistaken for.
+    assert "prior" in w, w.keys()
+    assert set(w["prior"]["dimensions"]) == set(prior.ENABLED), w["prior"]
+    for name, d in w["prior"]["dimensions"].items():
+        assert d["status"] == "absent" and d["novel"] is None, (name, d)
     counts = m._state["counts"]
     assert counts.tick_served == 1 and counts.tick_windows == 1, vars(counts)
     assert counts.submitted == 0, "must not have gone through the runner"

@@ -81,7 +81,38 @@ package enrich
 // wrong question, exactly as it is for a named term. The sidecar's SCHEMA moves 6
 // -> 7 for the same addition. Nothing existing changes meaning: every field of v10
 // publishes identically. Producer strings move from `-v10` to `-v11`.
-const SchemaVersion = 12
+//
+// v13 ADDS the SESSION PRIOR to the published payload: Profile.Prior /
+// Enrichment.prior, keyed by dimension — the session as it stood BEFORE this
+// window (value/share/evidence/status) plus the contrast against the window's
+// own answer (agrees/departure/novel). See enrich.Prior. It adds one closed
+// vocabulary a consumer must know: PriorStatuses.
+//
+// It is a CONTRAST AND NEVER A FALLBACK, and a consumer has to be told that in
+// the same breath as the field: `prior.language.value` is what the SESSION was,
+// never what this window was. A dimension missing from `workstreams` is still
+// missing — the prior does not fill it — because inheriting a session value into
+// a thin window launders "we do not know" into something confident, which is the
+// defect that made v9 remove `speech_act` (predicted `statement` 22 times, right
+// zero).
+//
+// THREE of the seven allocation dimensions carry it, and that is a measurement:
+// over 1,022 windows (docs/superpowers/specs/2026-08-24-session-prior-results.md)
+// `workflow` agrees with its session 25.8% of the time and is NOVEL on 44.0% —
+// the phase transitions of the workflow, brainstorming -> writing-plans ->
+// executing -> debugging — `language` 70.6%/2.3% and `branch` 76.1%/6.1%.
+// `project` and `model` agree 100.0% with zero disagreements and a largest
+// departure of +0.000 and -0.103, so a contrast field there publishes a
+// constant. `output_type` (86.7%) and `tooling` (98.5%) are held back as live
+// candidates.
+//
+// EXPECT `status: "absent"` ON NEARLY HALF OF ALL ROWS: 45.1% of measured windows
+// are a session's FIRST and have no prior at all. That is arithmetic, not a
+// defect, and a consumer that reads the blank as a failure will be wrong 45% of
+// the time. The sidecar's SCHEMA moves 7 -> 8 for the same addition. Nothing
+// existing changes meaning: every field of v12 publishes identically. Producer
+// strings move from `-v12` to `-v13`.
+const SchemaVersion = 13
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

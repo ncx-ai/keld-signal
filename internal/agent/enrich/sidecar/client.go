@@ -311,6 +311,37 @@ type AnalyzeResult struct {
 	Inventory   InventoryBlock         `json:"inventory"`
 	Dynamics    DynamicsBlock          `json:"dynamics"`
 	Effort      *EffortBlock           `json:"effort"`
+	Prior       PriorBlock             `json:"prior"`
+}
+
+// PriorBlock is /analyze's `prior` object, and it models ONE of its two keys.
+// The other, `clamped`, says the prior's lower bound is the store's retention
+// floor rather than the session's own start — local observability of exactly the
+// class `sizer_detail` already sits in, useful on-device and with no business on
+// a published enrichment. A struct with one field is deliberate, exactly as
+// DynamicsBlock's and InventoryBlock's are: it keeps the rest structurally
+// unreachable instead of decoded-then-dropped.
+type PriorBlock struct {
+	// Dimensions is keyed by dimension name (branch, language, workflow — the
+	// set the sidecar's own measurement left standing; see enrich.Prior). A nil
+	// value is a dimension the sidecar reported as null: no prior at all, which
+	// is a different fact from a zero Prior, whose status would read "" and
+	// whose evidence would read 0.
+	Dimensions map[string]*Prior `json:"dimensions"`
+}
+
+// Prior is one dimension's session prior as it arrives on the wire. The three
+// contrast measures are POINTERS because null is a FACT here and not an absence:
+// 45.1% of real windows are a session's first and can report no contrast at all.
+// See enrich.Prior, which this converts to unchanged.
+type Prior struct {
+	Value     string   `json:"value"`
+	Share     float64  `json:"share"`
+	Evidence  int      `json:"evidence"`
+	Status    string   `json:"status"`
+	Agrees    *bool    `json:"agrees"`
+	Departure *float64 `json:"departure"`
+	Novel     *bool    `json:"novel"`
 }
 
 // InventoryBlock is /analyze's inventory object, and it models ONE of its six
