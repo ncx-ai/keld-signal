@@ -43,18 +43,20 @@ var errAnalysisUnavailable = errors.New("workstreams: window analysis unavailabl
 // for any dimension.
 //
 // It returns a WindowAnalysis rather than the dimension map alone because ONE
-// /analyze call answers six questions — what the window contains, how that is
+// /analyze call answers seven questions — what the window contains, how that is
 // changing, what it cost in work, what it physically did, what PATHS it
-// touched, and what the SESSION around it looked like — and asking again would
-// multiply the cost of the facet for blocks the first call already computed.
+// touched, what TOOLS/PROGRAMS/SYSTEMS it used, and what the SESSION around it
+// looked like — and asking again would multiply the cost of the facet for
+// blocks the first call already computed.
 type WorkstreamAnalyzer func(path, promptID string, spanMinutes int) (WindowAnalysis, bool)
 
 // WorkstreamsExtractor publishes the deterministic dimensions a cost report
 // buckets by (project, branch, model, output_type, language, skill,
-// tooling), plus the same window's dynamics, effort, PHYSICAL-ACTS INVENTORY and
-// FILE-PATH INVENTORIES (files/directories/components) — six answers from one
-// /analyze call. It runs no inference: the values are counted from tool-call
-// metadata in the transcript window, so the pass declares itself ModelFree and
+// tooling), plus the same window's dynamics, effort, PHYSICAL-ACTS INVENTORY,
+// FILE-PATH INVENTORIES (files/directories/components) and IDENTIFIER
+// INVENTORIES (harness_tools/programs/external_systems/integrations) — seven
+// answers from one /analyze call. It runs no inference: the values are counted
+// from tool-call metadata in the transcript window, so the pass declares itself ModelFree and
 // must still run when ctx.Model is nil (ml_backend "deterministic", or a
 // sidecar that has no model resident). Gating it on inference readiness would
 // defeat the point of having a model-free facet.
@@ -132,7 +134,21 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	if len(an.Components) > 0 {
 		res["components"] = an.Components
 	}
-	// The cut-visibility map beside the four inventories above. Empty means no
+	// The four identifier-shaped inventories, same call, same no-Producer
+	// reasoning, same empty-means-no-key rule as physical_acts/files above.
+	if len(an.HarnessTools) > 0 {
+		res["harness_tools"] = an.HarnessTools
+	}
+	if len(an.Programs) > 0 {
+		res["programs"] = an.Programs
+	}
+	if len(an.ExternalSystems) > 0 {
+		res["external_systems"] = an.ExternalSystems
+	}
+	if len(an.Integrations) > 0 {
+		res["integrations"] = an.Integrations
+	}
+	// The cut-visibility map beside the eight inventories above. Empty means no
 	// key, same rule: an untruncated set of inventories has nothing to report.
 	if len(an.InventoryOmitted) > 0 {
 		res["inventory_omitted"] = an.InventoryOmitted

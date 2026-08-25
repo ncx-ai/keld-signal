@@ -90,6 +90,15 @@ type WindowAnalysis struct {
 	Files       []PathCount
 	Directories []PathCount
 	Components  []PathCount
+	// HarnessTools, Programs, ExternalSystems and Integrations are what the
+	// window's hour USED — the `tool`/`exe`/`service`/`mcp_tool` levels,
+	// published as INVENTORIES the same way the acts/path inventories above are
+	// (see NameCount for the shape and each dimension's own structural gate).
+	// Nil, never an empty slice, when the analysis produced none.
+	HarnessTools    []NameCount
+	Programs        []NameCount
+	ExternalSystems []NameCount
+	Integrations    []NameCount
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped — the visibility `Profile.FacetsSkipped`
 	// already gives a dropped FACET, applied one level down to a dropped VALUE

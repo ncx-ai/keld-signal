@@ -155,6 +155,30 @@ type Profile struct {
 	Files       []PathCount `json:"files,omitempty"`
 	Directories []PathCount `json:"directories,omitempty"`
 	Components  []PathCount `json:"components,omitempty"`
+	// HarnessTools, Programs, ExternalSystems and Integrations are what the same
+	// window's hour USED: inventories of the `tool` (the calling harness's own
+	// tool set — Bash, Edit, Read, ToolSearch, ...), `exe` (shell programs it
+	// invoked — git, pnpm, docker, ...), `service` (external hosts it reached —
+	// api.anthropic.com, github.com, ...) and `mcp_tool` (MCP tool ids it called
+	// — notion-fetch, ...) levels, with counts (see NameCount). Same /analyze
+	// call as PhysicalActs/Files/Directories/Components, model-free like them,
+	// so all four publish in ml_backend "deterministic" too.
+	//
+	// OPEN vocabulary, like the path inventories and unlike PhysicalActs' closed
+	// one, so each is gated per entry by a STRUCTURAL rule rather than a lookup
+	// table (see sidecar.convertIdentifierInventory / convertProgramInventory /
+	// convertExternalSystemInventory): HarnessTools/Integrations by bare
+	// identifier shape, Programs by identifier shape plus a rejection of path
+	// separators and a leading dot (closes the measured `.env.example` defect),
+	// ExternalSystems by rejecting bare IP literals while deliberately KEEPING
+	// internal/corporate hostnames — see convertExternalSystemInventory for the
+	// argument, which is structural and does not rest on what this project's own
+	// corpus happens to contain. Absent, never an empty list, when the analysis
+	// produced none.
+	HarnessTools    []NameCount `json:"harness_tools,omitempty"`
+	Programs        []NameCount `json:"programs,omitempty"`
+	ExternalSystems []NameCount `json:"external_systems,omitempty"`
+	Integrations    []NameCount `json:"integrations,omitempty"`
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped — visibility for a cut that used to be
 	// silent for every one of the six pre-existing inventory dimensions (the

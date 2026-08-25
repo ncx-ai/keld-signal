@@ -343,6 +343,10 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		Files:             pathsFrom(ctx.Get("workstreams"), "files"),
 		Directories:       pathsFrom(ctx.Get("workstreams"), "directories"),
 		Components:        pathsFrom(ctx.Get("workstreams"), "components"),
+		HarnessTools:      identsFrom(ctx.Get("workstreams"), "harness_tools"),
+		Programs:          identsFrom(ctx.Get("workstreams"), "programs"),
+		ExternalSystems:   identsFrom(ctx.Get("workstreams"), "external_systems"),
+		Integrations:      identsFrom(ctx.Get("workstreams"), "integrations"),
 		InventoryOmitted:  inventoryOmittedFrom(ctx.Get("workstreams")),
 		Prior:             priorFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
@@ -461,6 +465,21 @@ func actsFrom(out map[string]any) []Act {
 func pathsFrom(out map[string]any, key string) []PathCount {
 	if out != nil {
 		if p, ok := out[key].([]PathCount); ok && len(p) > 0 {
+			return p
+		}
+	}
+	return nil
+}
+
+// identsFrom reads one of the four identifier-shaped inventory halves of the
+// same committed pass output (key is "harness_tools", "programs",
+// "external_systems" or "integrations") — the same emptiness rule pathsFrom
+// applies to the three path inventories, for the same reason: nil rather than
+// an empty list, so a window that used nothing at that dimension publishes no
+// key rather than one that reads as "we looked and the hour used nothing".
+func identsFrom(out map[string]any, key string) []NameCount {
+	if out != nil {
+		if p, ok := out[key].([]NameCount); ok && len(p) > 0 {
 			return p
 		}
 	}
