@@ -148,6 +148,9 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	if len(an.Integrations) > 0 {
 		res["integrations"] = an.Integrations
 	}
+	if len(an.NamedTerms) > 0 {
+		res["named_terms"] = an.NamedTerms
+	}
 	// The cut-visibility map beside the eight inventories above. Empty means no
 	// key, same rule: an untruncated set of inventories has nothing to report.
 	if len(an.InventoryOmitted) > 0 {

@@ -95,7 +95,16 @@ func TestAnalyzeLabeledCarriesNoInventoryOrWindowMetadata(t *testing.T) {
 		t.Fatalf("the dynamics half is empty; the leak assertions below would be "+
 			"vacuous for it: %+v", got.Dynamics)
 	}
-	for _, forbidden := range []string{"Federico", "named_terms", "inventory", "453451c2",
+	// "Federico" came OFF this list when named_terms began publishing: the one
+	// inventory read from message text now decodes like the other eight. The
+	// dynamics per-side values ("aurora-ledger", "beacon-api", "attributed",
+	// "sizer", "slice_start") and the block's own metadata stay forbidden —
+	// those are still structurally unrepresentable, and that is what this test
+	// is now guarding.
+	if len(got.NamedTerms) == 0 {
+		t.Fatal("named_terms is empty; its removal from the forbidden list below is vacuous")
+	}
+	for _, forbidden := range []string{"inventory", "453451c2",
 		"window_start", "2026-08-23T00:00:00Z", "aurora-ledger", "beacon-api",
 		"attributed", "sizer", "slice_start"} {
 		if strings.Contains(string(b), forbidden) {

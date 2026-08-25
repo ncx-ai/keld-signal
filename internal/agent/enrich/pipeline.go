@@ -347,6 +347,7 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		Programs:          identsFrom(ctx.Get("workstreams"), "programs"),
 		ExternalSystems:   identsFrom(ctx.Get("workstreams"), "external_systems"),
 		Integrations:      identsFrom(ctx.Get("workstreams"), "integrations"),
+		NamedTerms:        identsFrom(ctx.Get("workstreams"), "named_terms"),
 		InventoryOmitted:  inventoryOmittedFrom(ctx.Get("workstreams")),
 		Prior:             priorFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,

@@ -280,17 +280,32 @@ type Workstream struct {
 
 // AnalyzeResult is the Go-side view of the sidecar's /analyze response.
 //
-// It models the response's "inventory" object the same SELECTIVE way it models
-// "dynamics" — see InventoryBlock for the full rule, which has WIDENED from
-// "one field for the one closed-vocabulary key" to "closed vocabulary OR a
-// provably-constrained shape, gated per entry": physical_acts, files,
-// directories, components, harness_tools, programs, external_systems and
-// integrations all have a field now. named_terms is the one key that still
-// does not, and so cannot be decoded at all — it is drawn from the raw
-// transcript and can carry person names (e.g. "Federico", "Daniel" have both
-// appeared in real windows). Not giving InventoryBlock a field for it means a
-// later publish path has structurally nowhere to forward it, rather than
-// merely being told not to by a comment.
+// It models ALL NINE keys of the response's "inventory" object. That is a
+// reversal, and worth stating plainly because most of this file's surrounding
+// prose was written under the opposite rule.
+//
+// The rule began as "one field for the one closed-vocabulary key", widened to
+// "closed vocabulary OR a provably-constrained shape, gated per entry" when the
+// path and identifier inventories were wired, and no longer withholds a key at
+// all. named_terms was the last holdout and is now decoded like the rest — an
+// explicit product decision by the repo owner, made against a stated
+// alternative (publishing only org-declared vocabulary matches through
+// /match + publish.Custom) and taken knowingly.
+//
+// ⚠️ named_terms is NOT like the other eight, and a reader needs to know why
+// even though it no longer changes what happens to it. The other eight derive
+// from tool-call INPUTS — a path opened, a command run, a host connected to.
+// named_terms is proper nouns lifted from MESSAGE TEXT, matched against no
+// declared vocabulary, and has been observed to contain real person names
+// ("Federico", "Daniel" both appeared in real windows). It is the only
+// inventory whose provenance is the prompt itself.
+//
+// There is deliberately NO person-name filter, and adding one would be worse
+// than the absence. spaCy's person detection measured ~1% precision on
+// developer prompts here — 998 of 1,090 spans with zero confirmed names — which
+// is why presidio's SpacyRecognizer was removed from the sensitivity facet
+// outright. A filter at that precision would not remove person names; it would
+// only make callers believe they had been removed.
 //
 // Session/WindowStart/WindowEnd are kept: they're metadata about the window
 // (a session hash, timestamps), not content, and are useful for local
@@ -313,9 +328,9 @@ type AnalyzeResult struct {
 	// of its values the sidecar's own top-N cut dropped, for every dimension it
 	// actually truncated (a dimension it did not cut is absent, so an
 	// untruncated payload decodes to an empty map, not nine zeros). It is just a
-	// COUNT — never a value — so it carries no privacy weight even for the five
-	// inventory keys this struct cannot otherwise decode (named_terms above
-	// all): forwarding "programs cut 3 values" says nothing about which three.
+	// COUNT — never a value — so it carried no privacy weight back when this
+	// struct could not decode some of the keys it counts, and carries none now
+	// that it can: "programs cut 3 values" says nothing about which three.
 	InventoryOmitted map[string]int `json:"inventory_omitted"`
 	Dynamics         DynamicsBlock  `json:"dynamics"`
 	Effort           *EffortBlock   `json:"effort"`
@@ -400,6 +415,10 @@ type InventoryBlock struct {
 	Programs        []InventoryItem `json:"programs"`
 	ExternalSystems []InventoryItem `json:"external_systems"`
 	Integrations    []InventoryItem `json:"integrations"`
+	// NamedTerms is the one inventory drawn from message TEXT rather than
+	// tool-call inputs — see the AnalyzeResult comment above for why that
+	// distinction survives even though the field now exists.
+	NamedTerms []InventoryItem `json:"named_terms"`
 }
 
 // InventoryItem is one entry of an inventory dimension as it arrives on the wire:

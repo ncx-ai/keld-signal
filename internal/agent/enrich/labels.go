@@ -238,7 +238,33 @@ package enrich
 // number still bumps: it is the only version an Atlas consumer sees. Nothing
 // existing changes meaning: every field of v16 publishes identically. Producer
 // strings move from `-v16` to `-v17`.
-const SchemaVersion = 17
+// v18 ADDS THE NINTH AND LAST INVENTORY dimension: Profile.NamedTerms /
+// Enrichment.named_terms, over the `term` level. This is a REVERSAL, not
+// another widening, and it is the only entry in this changelog that removes a
+// restriction rather than adding a capability.
+//
+// Every prior inventory addition (v11 `action`, v16 the path levels, v17 the
+// identifier levels) left `named_terms` withheld, and said so explicitly. It
+// was withheld because it is the ONE level read from message TEXT rather than
+// tool-call inputs, and had been observed carrying real person names
+// ("Federico", "Daniel"). Its absence from sidecar.InventoryBlock was the
+// mechanism — a publish path had structurally nowhere to forward it.
+//
+// The repo owner decided it should publish, against a stated alternative
+// (org-declared vocabulary matches through /match + publish.Custom, which
+// carries the customers and suppliers without the undeclared remainder). It is
+// bounded by SHAPE only — sidecar.convertNamedTerms rejects what the sidecar's
+// own normalisation could not have produced, and nothing more. There is
+// deliberately NO person-name filter: spaCy's person detection measured ~1%
+// precision on this corpus, so a filter would not remove names, only the
+// belief that they were removed.
+//
+// Two documented rationales elsewhere depended on the old behaviour and were
+// rewritten with it: the invariant at the top of AGENTS.md/CLAUDE.md, and the
+// argument that the `term` level is safe to leave on by default because it
+// could not be forwarded. The sidecar's own SCHEMA does not move — /analyze has
+// always emitted all nine keys. Producer strings move `-v17` -> `-v18`.
+const SchemaVersion = 18
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

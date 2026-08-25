@@ -139,6 +139,7 @@ func (c *Client) TickCharacterised(path, source, sessionID string, promptIDs []s
 				Programs:         convertProgramInventory(w.Inventory.Programs),
 				ExternalSystems:  convertExternalSystemInventory(w.Inventory.ExternalSystems),
 				Integrations:     convertIdentifierInventory(w.Inventory.Integrations),
+				NamedTerms:       convertNamedTerms(w.Inventory.NamedTerms),
 				InventoryOmitted: convertInventoryOmitted(w.InventoryOmitted),
 				Dynamics:         convertDynamics(w.Dynamics),
 				Effort:           convertEffort(w.Effort),

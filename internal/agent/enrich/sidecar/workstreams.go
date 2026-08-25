@@ -4,6 +4,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
@@ -43,15 +44,16 @@ import (
 //   - Session / WindowStart / WindowEnd stay local: window metadata, useful for
 //     debugging on-device, with no business on the published payload.
 //
-//   - The response's inventory block contributes EIGHT of its nine keys:
+//   - The response's inventory block contributes ALL NINE of its keys:
 //     `physical_acts` (convertActs), `files`/`directories`/`components`
-//     (convertPathInventory), and `harness_tools`/`integrations`
-//     (convertIdentifierInventory), `programs` (convertProgramInventory) and
-//     `external_systems` (convertExternalSystemInventory). Only `named_terms`
-//     is not modelled by AnalyzeResult at all (see InventoryBlock), so there is
-//     structurally nothing here to forward it — it is drawn from message TEXT
-//     and has been observed to contain real person names; keep it
-//     unrepresentable.
+//     (convertPathInventory), `harness_tools`/`integrations`
+//     (convertIdentifierInventory), `programs` (convertProgramInventory),
+//     `external_systems` (convertExternalSystemInventory) and `named_terms`
+//     (convertNamedTerms). `named_terms` was withheld until it was decided
+//     otherwise; it is the only one drawn from message TEXT rather than
+//     tool-call inputs, and the only one observed to contain real person
+//     names. See InventoryBlock for that decision and why no person-name
+//     filter accompanies it.
 //
 //   - InventoryOmitted forwards UNCHANGED: it is a map of dimension name to a
 //     COUNT of values cut, never a value, so it carries no privacy weight even
@@ -108,6 +110,7 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.
 		Programs:         convertProgramInventory(res.Inventory.Programs),
 		ExternalSystems:  convertExternalSystemInventory(res.Inventory.ExternalSystems),
 		Integrations:     convertIdentifierInventory(res.Inventory.Integrations),
+		NamedTerms:       convertNamedTerms(res.Inventory.NamedTerms),
 		InventoryOmitted: convertInventoryOmitted(res.InventoryOmitted),
 		Dynamics:         convertDynamics(res.Dynamics),
 		Effort:           convertEffort(res.Effort),
@@ -261,6 +264,50 @@ func convertIdentifierInventory(items []InventoryItem) []enrich.NameCount {
 	var out []enrich.NameCount
 	for _, it := range items {
 		if it.Value == "" || !identifierShape.MatchString(it.Value) {
+			continue
+		}
+		out = append(out, enrich.NameCount{Value: it.Value, N: it.N})
+	}
+	return out
+}
+
+// termShape bounds `named_terms`, and is deliberately LOOSER than
+// identifierShape: a named term is prose-derived and legitimately multi-word
+// ("Developer Preview"), so a bare-identifier shape would silently drop every
+// term containing a space — a whole class of the values this inventory exists
+// to carry.
+//
+// What it does reject is a value that could not have come from the sidecar's
+// own normalisation: terms.py collapses internal whitespace
+// (`" ".join(s.split())`), strips surrounding punctuation and drops anything of
+// one character or purely numeric, so a control character or newline arriving
+// here means the value did not take that path. Rejecting it is defence against
+// a future producer, not distrust of the current one.
+//
+// It is a BOUND, not a filter on meaning. It cannot tell "ACME" from
+// "Federico", and nothing here tries — see InventoryBlock on why a person-name
+// filter at spaCy's measured ~1% precision would be worse than none.
+const termMaxLen = 128
+
+func termShaped(v string) bool {
+	if v == "" || len(v) > termMaxLen {
+		return false
+	}
+	for _, r := range v {
+		if r == '\n' || r == '\r' || r == '\t' || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// convertNamedTerms converts the `named_terms` inventory (level `term`),
+// PER-ENTRY like every other inventory here: one unusable value costs exactly
+// that value, not the list.
+func convertNamedTerms(items []InventoryItem) []enrich.NameCount {
+	var out []enrich.NameCount
+	for _, it := range items {
+		if !termShaped(it.Value) {
 			continue
 		}
 		out = append(out, enrich.NameCount{Value: it.Value, N: it.N})

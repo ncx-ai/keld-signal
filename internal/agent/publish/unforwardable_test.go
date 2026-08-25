@@ -88,14 +88,29 @@ import (
 // path-separator/leading-dot rejection for programs, a bare-IP-literal
 // rejection for external_systems — see enrich.NameCount and
 // sidecar.convertIdentifierInventory/convertProgramInventory/
-// convertExternalSystemInventory). `inventory` and `named_terms` STAY on the
-// list below for the same reason they did after the path inventories: adding a
-// publishable inventory key must never be mistaken for permission to forward
+// convertExternalSystemInventory). `inventory` STAYS on the list below: adding
+// a publishable inventory key must never be mistaken for permission to forward
 // the block itself.
+//
+// ⚠️ `named_terms` CAME OFF this list, and it is the only entry ever to do so.
+// Every earlier extension above added publishable keys while leaving the
+// forbidden list untouched — that was the point, and it is why the list was a
+// real guard rather than a naming coincidence. This one is different: the repo
+// owner decided that named_terms should publish, knowing it is the sole
+// inventory drawn from message TEXT and that it has been observed to carry real
+// person names. It is now a TOP-LEVEL key like its eight siblings, gated on
+// shape alone (sidecar.convertNamedTerms), with no person-name filter, because
+// spaCy's ~1% measured precision on this corpus means a filter would create
+// false assurance rather than remove names.
+//
+// `inventory` remaining forbidden still does real work: it keeps the BLOCK
+// unforwardable even though all nine of its keys are now individually
+// publishable, so a future change that forwards the whole object wholesale —
+// picking up whatever tenth key the sidecar adds next — still fails here.
 //
 // A field added for any of them fails HERE rather than in a review.
 var forbiddenWireKeys = []string{
-	"inventory", "named_terms", "window_start", "window_end",
+	"inventory", "window_start", "window_end",
 	"slice", "baseline", "slice_start", "slice_end", "baseline_start",
 	"slice_minutes", "baseline_minutes", "sizer", "sizer_detail",
 	"reconcile_scope", "emerged", "decayed", "provenance", "reason",
@@ -158,7 +173,7 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 	// the INVENTORY block must still be on it. Adding a publishable inventory key
 	// must not have widened what the list permits, and deleting an entry to make a
 	// future failure go away is exactly the regression that would.
-	for _, required := range []string{"inventory", "named_terms"} {
+	for _, required := range []string{"inventory"} {
 		if !slices.Contains(forbiddenWireKeys, required) {
 			t.Errorf("%q was removed from forbiddenWireKeys: `physical_acts` publishes "+
 				"because its provenance is a closed table, which is no licence to forward "+

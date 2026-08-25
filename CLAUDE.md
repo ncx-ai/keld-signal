@@ -12,7 +12,13 @@ source of truth:
 - **This repo is the on-device half of Keld.** The enrichment agent
   (`keld-agent` + sidecar) is the core, not the CLI. Keep the privacy invariant
   front of mind: **raw prompt text is read locally and must never be transmitted**
-  — only masked labels + masked spans are published.
+  — only masked labels + masked spans are published. ⚠️ **One deliberate
+  exception since schema v18:** `named_terms` publishes proper nouns lifted from
+  message text (term + count, never a span or offset), and real person names have
+  been observed in it. It is the only published signal not derived from tool-call
+  inputs — see AGENTS.md for the decision, why no person-name filter accompanies
+  it, and the `/match` alternative that was not taken. Don't add a second
+  text-derived signal by analogy.
 - **Do work, then verify with real output.** Run `go test ./...` for Go and the
   standalone sidecar test scripts before claiming something passes; paste results.
 - **Go → host toolchain; sidecar → the venv.** Run sidecar code/tests with

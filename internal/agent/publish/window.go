@@ -59,6 +59,15 @@ type WindowEnrichment struct {
 	Programs        []enrich.NameCount `json:"programs,omitempty"`
 	ExternalSystems []enrich.NameCount `json:"external_systems,omitempty"`
 	Integrations    []enrich.NameCount `json:"integrations,omitempty"`
+	// NamedTerms is the ninth inventory and the ONLY one drawn from message
+	// TEXT rather than tool-call inputs: proper nouns lifted from the prompt,
+	// matched against no declared vocabulary, observed to contain real person
+	// names. It was withheld from the wire until that was reversed as an
+	// explicit decision; it is bounded by shape only (see
+	// sidecar.convertNamedTerms) and carries no person-name filter, because at
+	// spaCy's measured ~1% precision a filter would create false assurance
+	// rather than remove names.
+	NamedTerms []enrich.NameCount `json:"named_terms,omitempty"`
 	// InventoryOmitted is the cut-visibility map beside the eight inventories
 	// above — same rule as the prompt row's (see Enrichment.InventoryOmitted).
 	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
@@ -120,6 +129,7 @@ func BuildWindow(w enrich.WindowCharacterisation, actor string, now time.Time) W
 		Programs:          w.Analysis.Programs,
 		ExternalSystems:   w.Analysis.ExternalSystems,
 		Integrations:      w.Analysis.Integrations,
+		NamedTerms:        w.Analysis.NamedTerms,
 		InventoryOmitted:  w.Analysis.InventoryOmitted,
 		Prior:             w.Analysis.Prior,
 		PipelineStatus:    enrich.PipelineStatusWindow,

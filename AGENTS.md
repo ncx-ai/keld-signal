@@ -10,6 +10,15 @@ machine. It has two jobs, and the second is the core of the project:
    Atlas only the derived, masked signal. **Raw prompt text never leaves the
    machine.** This is the privacy-preserving intelligence the CLI installs.
 
+⚠️ **One qualification, added at schema v18.** `inventory.named_terms` publishes
+proper nouns lifted from message TEXT — the only signal that does not derive from
+tool-call inputs, and one in which real person names have been observed. It is
+still not raw text, a span, or an offset: it is a term and a count. But "nothing
+derived from the prompt's own words crosses" stopped being true, and the honest
+statement is narrower than it used to be. See the `named_terms` note in the
+workstreams bullet under *The enrichment agent* for the decision and the
+alternative that was not taken.
+
 Go single static binaries (`keld`, `keld-agent`) + an optional Python ML sidecar.
 No runtime dependencies for the CLI itself.
 
@@ -282,16 +291,27 @@ could raise.
   distinguishes the window from a coin flip. Measured on the 572-window
   reference sample: 347 of 2927 attributed dimension slots become unattributed,
   330 of which were publishing at share 1.0 and 129 off a single observation.
-  **Nothing from `/analyze` reaches Atlas except those dimensions and the
-  published inventory ones.** The inventory block publishes SELECTIVELY, and
-  which half is which is the privacy boundary: `physical_acts` and the three
-  PATH dimensions cross, `named_terms` does not. In
-  particular `inventory.named_terms` (proper nouns lifted from message text —
-  real person names have been observed) is deliberately unmodelled on
-  `sidecar.AnalyzeResult`: the field is dropped at the wire boundary, so it is
-  structurally unforwardable no matter what the level is configured to do. That
-  is what makes it safe for the level to be **on by default** (see the
-  analysis-service bullet below).
+  **Nothing from `/analyze` reaches Atlas except those dimensions and the nine
+  inventory ones.** ⚠️ **All nine inventories now publish, including
+  `named_terms`** — a deliberate reversal (schema v18) of the rule that governed
+  this file for most of its life. `inventory.named_terms` is proper nouns lifted
+  from **message text**, matched against no declared vocabulary, and real person
+  names have been observed in it ("Federico", "Daniel"). It used to be
+  unmodelled on `sidecar.AnalyzeResult` precisely so a publish path had
+  structurally nowhere to forward it; it is now modelled like its eight
+  siblings, bounded by SHAPE alone (`sidecar.convertNamedTerms`).
+  There is deliberately **no person-name filter**, and adding one would be worse
+  than the absence: spaCy's person detection measured **~1% precision** on this
+  corpus (998 of 1,090 spans with zero confirmed names), which is why presidio's
+  `SpacyRecognizer` was removed from `sensitivity` outright. A filter at that
+  precision does not remove names, it only removes the belief that names are
+  present. The alternative that was NOT taken, and is still the safer shape if
+  this is ever revisited, is `/match` + `publish.Custom`: an org declares its
+  customers/suppliers/initiatives and only the **matched id** publishes — never
+  a span, an offset, or the text. What still holds: `inventory` as a BLOCK
+  remains unforwardable (a test pins it), so a tenth key the sidecar adds later
+  cannot ride along; no raw prompt text, no spans and no offsets cross; masking
+  is still enforced Go-side.
 - **The PATH inventory dimensions (`files`, `directories`, `components`) publish
   a frequency distribution, and their caps are per-level.** The `file`/`dir`/
   `component` levels were extracted and stored long before they were published;
@@ -321,7 +341,9 @@ could raise.
   because the vocabulary is OPEN — `physical_acts` can lean on a closed table,
   and these cannot. The residual exposure is repo *structure* (`services/api/app/billing`)
   and any customer name inside a filename — the same class `branch` already
-  crosses, not the class `named_terms` does. Do not add a producer for these
+  crosses. (That comparison used to end "not the class `named_terms` does";
+  since v18 `named_terms` crosses too, so paths are no longer the more exposed
+  of the two.) Do not add a producer for these
   levels that bypasses `reconcile()`. Note they are coding-heavy: a
   non-engineering session yields **3 distinct paths in total**, so an empty list
   here is a real answer, not a gap.
@@ -406,7 +428,15 @@ could raise.
   inference worker still `down` (pinned in `test_main.py` against the real
   `lifespan`). `/analyze`'s `named_terms` level is **on** by default
   (`KELD_TERMS=0` switches it off) and loads spaCy — ~619 MB, into the FastAPI
-  parent, permanently, since the parent is never recycled. That coexists with
+  parent, permanently, since the parent is never recycled.
+  ⚠️ **That default used to be justified by the level being unforwardable, and
+  that argument no longer exists** — `named_terms` publishes as of schema v18
+  (see the workstreams bullet above). The default is unchanged, but it is now an
+  open decision resting on the level's usefulness rather than on its output
+  being confined to the device, and it costs 619 MB in a parent that is never
+  recycled, inside a budget already documented below as oversubscribed. Anyone
+  revisiting `KELD_TERMS`' default should know it was never re-argued on its own
+  merits. That coexists with
   GLiNER2 fine (~60 + ~619 + ~2740 MB against a 4096 MB budget); what did not
   was the **accounting** — see the parent-reserve bullet under Resource safety.
   The response carries `named_terms_status` (`ok` / `skipped:disabled` /
@@ -1198,6 +1228,12 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   be transmitted; the daemon publishes only masked labels + masked spans. Masking
   is enforced Go-side (`enrich/mask.go`) before publish; the sidecar returns raw
   spans and never publishes.
+  ⚠️ **`named_terms` is the one exception and it is deliberate** (schema v18):
+  proper nouns lifted from message text, published as term + count, with no
+  person-name filter because none measured reliable enough to be honest (~1%
+  precision — see the workstreams bullet). Still no raw text, no spans, no
+  offsets. This is the ONLY published signal not derived from tool-call inputs;
+  do not add a second one by analogy to it.
 - **Config via env (`KELD_*`)**, resolved through `internal/config` /
   `internal/paths`; credentials/tokens/hook/manifest under `~/.keld` with
   user-only permissions.

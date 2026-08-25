@@ -183,10 +183,17 @@ func TestNoIdentifierInventoriesIsAbsentNotAnEmptyList(t *testing.T) {
 	}
 }
 
-// named_terms stays undecodable even once the other four widen InventoryBlock
-// further — the guard on the guard, exercised through the same public API the
-// other tests in this file use rather than reflection alone.
-func TestNamedTermsStaysUndecodableAlongsideTheIdentifierInventories(t *testing.T) {
+// named_terms DECODES, alongside the other eight. This test previously asserted
+// the exact opposite — that named_terms stayed structurally unforwardable while
+// the rest widened — and it is rewritten rather than deleted so the reversal is
+// visible in the history of this file rather than only in a commit message.
+//
+// The value used is deliberately still "Federico": a real person name, the same
+// one the old guard was written around. What changed is not the risk but the
+// decision about it (see sidecar.InventoryBlock). A test asserting a person name
+// now reaches the caller is the honest expression of that, and if someone later
+// finds this uncomfortable, this is exactly the right place for them to find it.
+func TestNamedTermsDecodesAlongsideTheIdentifierInventories(t *testing.T) {
 	srv := analyzeServer(t, inventoryBody(map[string]any{
 		"harness_tools":    acts("Bash", 30),
 		"programs":         acts("git", 9),
@@ -199,10 +206,43 @@ func TestNamedTermsStaysUndecodableAlongsideTheIdentifierInventories(t *testing.
 	if !ok {
 		t.Fatal("AnalyzeLabeled reported failure")
 	}
-	b, _ := json.Marshal(got)
-	for _, forbidden := range []string{"Federico", "named_terms"} {
-		if strings.Contains(string(b), forbidden) {
-			t.Errorf("named_terms leaked despite the other inventories decoding: %q in %s", forbidden, b)
+	if len(got.NamedTerms) != 1 || got.NamedTerms[0].Value != "Federico" || got.NamedTerms[0].N != 2 {
+		t.Fatalf("named_terms did not round-trip: %+v", got.NamedTerms)
+	}
+}
+
+// The shape gate is a BOUND, not a filter on meaning: it drops what the
+// sidecar's own normalisation could not have produced, and keeps everything
+// else — including multi-word terms, which a bare-identifier gate would have
+// silently swallowed. Per-entry, so one bad value costs one value.
+func TestTheNamedTermsGateBoundsShapeAndKeepsMultiWordTerms(t *testing.T) {
+	long := strings.Repeat("x", 129)
+	srv := analyzeServer(t, inventoryBody(map[string]any{
+		"named_terms": []map[string]any{
+			{"value": "Developer Preview", "n": 5}, // multi-word: MUST survive
+			{"value": "Together.ai", "n": 3},
+			{"value": "line\nbreak", "n": 2}, // could not come from terms.py
+			{"value": long, "n": 1},          // over termMaxLen
+			{"value": "", "n": 9},
+			{"value": "ACME", "n": 7},
+		},
+	}))
+	defer srv.Close()
+	got, ok := New(srv.URL, 5*time.Second).AnalyzeLabeled("/tmp/t.jsonl", "p1", 60)
+	if !ok {
+		t.Fatal("AnalyzeLabeled reported failure")
+	}
+	var kept []string
+	for _, nt := range got.NamedTerms {
+		kept = append(kept, nt.Value)
+	}
+	want := []string{"Developer Preview", "Together.ai", "ACME"}
+	if len(kept) != len(want) {
+		t.Fatalf("want %v, got %v", want, kept)
+	}
+	for i, w := range want {
+		if kept[i] != w {
+			t.Errorf("entry %d: want %q, got %q", i, w, kept[i])
 		}
 	}
 }

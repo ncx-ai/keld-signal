@@ -99,6 +99,11 @@ type WindowAnalysis struct {
 	Programs        []NameCount
 	ExternalSystems []NameCount
 	Integrations    []NameCount
+	// NamedTerms is the ninth inventory and the only one whose values come from
+	// message TEXT rather than tool-call inputs. Bounded by shape only
+	// (sidecar.convertNamedTerms); see sidecar.InventoryBlock for why it
+	// publishes and why no person-name filter accompanies it.
+	NamedTerms []NameCount
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped — the visibility `Profile.FacetsSkipped`
 	// already gives a dropped FACET, applied one level down to a dropped VALUE

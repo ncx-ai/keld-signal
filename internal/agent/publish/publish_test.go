@@ -632,10 +632,11 @@ func TestBuildCarriesTheIdentifierInventories(t *testing.T) {
 		Programs:        []enrich.NameCount{{Value: "git", N: 9}},
 		ExternalSystems: []enrich.NameCount{{Value: "github.com", N: 4}},
 		Integrations:    []enrich.NameCount{{Value: "notion-fetch", N: 1}},
+		NamedTerms:      []enrich.NameCount{{Value: "Federico", N: 2}},
 	}
 	e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
 	if len(e.HarnessTools) != 1 || len(e.Programs) != 1 || len(e.ExternalSystems) != 1 ||
-		len(e.Integrations) != 1 {
+		len(e.Integrations) != 1 || len(e.NamedTerms) != 1 {
 		t.Fatalf("identifier inventories dropped by Build: %+v", e)
 	}
 	b, err := json.Marshal(e)
@@ -659,6 +660,7 @@ func TestBuildOmitsEmptyIdentifierInventories(t *testing.T) {
 		"empty": {
 			HarnessTools: []enrich.NameCount{}, Programs: []enrich.NameCount{},
 			ExternalSystems: []enrich.NameCount{}, Integrations: []enrich.NameCount{},
+			NamedTerms: []enrich.NameCount{},
 		},
 	} {
 		e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())

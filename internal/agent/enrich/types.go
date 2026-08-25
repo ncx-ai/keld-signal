@@ -179,6 +179,15 @@ type Profile struct {
 	Programs        []NameCount `json:"programs,omitempty"`
 	ExternalSystems []NameCount `json:"external_systems,omitempty"`
 	Integrations    []NameCount `json:"integrations,omitempty"`
+	// NamedTerms is the ninth inventory and the ONLY one drawn from message
+	// TEXT rather than tool-call inputs: proper nouns lifted from the prompt,
+	// matched against no declared vocabulary, observed to contain real person
+	// names. It was withheld from the wire until that was reversed as an
+	// explicit decision; it is bounded by shape only (see
+	// sidecar.convertNamedTerms) and carries no person-name filter, because at
+	// spaCy's measured ~1% precision a filter would create false assurance
+	// rather than remove names.
+	NamedTerms []NameCount `json:"named_terms,omitempty"`
 	// InventoryOmitted names, per inventory dimension, how many values the
 	// sidecar's own top-N cut dropped — visibility for a cut that used to be
 	// silent for every one of the six pre-existing inventory dimensions (the

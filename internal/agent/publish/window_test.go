@@ -30,6 +30,7 @@ func sampleWindow() enrich.WindowCharacterisation {
 			Programs:         []enrich.NameCount{{Value: "git", N: 9}},
 			ExternalSystems:  []enrich.NameCount{{Value: "github.com", N: 4}},
 			Integrations:     []enrich.NameCount{{Value: "notion-fetch", N: 1}},
+			NamedTerms:       []enrich.NameCount{{Value: "Federico", N: 2}},
 			InventoryOmitted: map[string]int{"files": 3},
 		},
 	}
@@ -120,7 +121,8 @@ func TestAWindowRowCarriesItsBoundsAndItsBlocks(t *testing.T) {
 	if len(got.Workstreams) == 0 || len(got.Dynamics) == 0 || len(got.PhysicalActs) == 0 ||
 		len(got.Files) == 0 || len(got.Directories) == 0 || len(got.Components) == 0 ||
 		len(got.HarnessTools) == 0 || len(got.Programs) == 0 || len(got.ExternalSystems) == 0 ||
-		len(got.Integrations) == 0 || len(got.InventoryOmitted) == 0 {
+		len(got.Integrations) == 0 || len(got.NamedTerms) == 0 ||
+		len(got.InventoryOmitted) == 0 {
 		t.Fatalf("the analysis blocks did not survive Build: %+v", got)
 	}
 	if got.SchemaVersion != enrich.SchemaVersion {
@@ -148,6 +150,12 @@ func TestTheWindowWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		"workstreams": true, "dynamics": true, "effort": true, "physical_acts": true,
 		"files": true, "directories": true, "components": true, "inventory_omitted": true,
 		"harness_tools": true, "programs": true, "external_systems": true, "integrations": true,
+		// named_terms is allowed DELIBERATELY, and is the only key here whose
+		// values come from message text rather than tool-call inputs. It was
+		// excluded — and asserted absent below — until the repo owner decided it
+		// should publish. The allowlist still does its job: a TENTH inventory
+		// key, or any other new field, still fails here.
+		"named_terms":     true,
 		"prior":           true,
 		"pipeline_status": true, "extractor_versions": true, "schema_version": true, "ts": true,
 	}
@@ -158,10 +166,14 @@ func TestTheWindowWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 				"it cannot", k)
 		}
 	}
-	// named_terms is the level that has held real person names. It is not
-	// modelled anywhere on the path, so it cannot appear; assert it anyway,
-	// because that is the one whose absence must never become accidental.
-	if strings.Contains(string(body), "named_terms") {
-		t.Fatal("named_terms reached the wire")
+	// named_terms is the level that has held real person names, and it now
+	// REACHES the wire — the inverse of what this block asserted before. Kept
+	// as a positive assertion rather than deleted: the presence of a person-name
+	// channel on a window row is a fact about this payload that should be
+	// stated somewhere a reader will trip over, not merely permitted by the
+	// allowlist above.
+	if !strings.Contains(string(body), "named_terms") {
+		t.Fatal("named_terms should reach the wire, but is absent — the allowlist entry above " +
+			"would be vacuous")
 	}
 }

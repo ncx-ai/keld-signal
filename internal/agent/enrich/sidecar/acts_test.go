@@ -144,20 +144,20 @@ func TestNoPhysicalActsIsAbsentNotAnEmptyList(t *testing.T) {
 // remaining key — `named_terms`, which is drawn from message text and has held
 // real person names — stays undecodable rather than decoded-and-dropped.
 // Asserted over the STRUCT, so a field added tomorrow fails here.
-func TestOnlyEightInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
+func TestAllNineInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 	rt := reflect.TypeOf(InventoryBlock{})
 	wantTags := map[string]bool{
 		"physical_acts": false, "files": false, "directories": false, "components": false,
 		"harness_tools": false, "programs": false, "external_systems": false, "integrations": false,
+		"named_terms": false,
 	}
 	if rt.NumField() != len(wantTags) {
 		var names []string
 		for i := 0; i < rt.NumField(); i++ {
 			names = append(names, rt.Field(i).Name)
 		}
-		t.Fatalf("InventoryBlock models %v; only physical_acts/files/directories/components/"+
-			"harness_tools/programs/external_systems/integrations may be decodable — "+
-			"named_terms is drawn from message TEXT and must stay unrepresentable", names)
+		t.Fatalf("InventoryBlock models %v; all nine inventory keys and no others should be "+
+			"decodable", names)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		tag := rt.Field(i).Tag.Get("json")
@@ -199,14 +199,20 @@ func TestOnlyEightInventoryKeysAreDecodableFromTheInventoryBlock(t *testing.T) {
 		t.Fatalf("the four newly-wired inventories are empty; the checks below would be vacuous: %+v", got)
 	}
 	b, _ := json.Marshal(got)
-	// These four now DECODE and must survive — the opposite assertion from
+	// These five now DECODE and must survive — the opposite assertion from
 	// before this change, when they were on the forbidden list below.
-	for _, want := range []string{"git", "Bash", "acme-internal.example", "notion-fetch"} {
+	// "Federico" is a person name and is here deliberately: named_terms is the
+	// one inventory drawn from message text, and it publishes now. See
+	// sidecar.InventoryBlock.
+	for _, want := range []string{"git", "Bash", "acme-internal.example", "notion-fetch",
+		"Federico"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("%q should now decode and survive conversion, but is missing from: %s", want, b)
 		}
 	}
-	for _, forbidden := range []string{"Federico", "named_terms", "inventory",
+	// "inventory" and the window metadata stay forbidden: the block's own
+	// bookkeeping keys still have no home on WindowAnalysis.
+	for _, forbidden := range []string{"inventory",
 		"453451c2", "window_start", "2026-08-23T00:00:00Z"} {
 		if strings.Contains(string(b), forbidden) {
 			t.Errorf("the inventory conversion leaked %q: %s", forbidden, b)
