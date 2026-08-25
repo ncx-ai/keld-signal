@@ -573,6 +573,84 @@ def test_run_arm_reports_empty_blocks_and_attribution_over_active_blocks_only():
         assert e["blocks_with_evidence_share"] == 100.0, e
         assert e["can_attribute_share_active"] == e["can_attribute_share"], e
 
+# --- Round 2: the corrected rules ---------------------------------------------------------------
+
+def _row2(arm, n, share, p50, p90, mx, ws=10.0):
+    return {"arm": arm, "n": n, "can_attribute_share": share, "dur_p50": p50,
+            "dur_p90": p90, "dur_max": mx, "whole_session_share": ws}
+
+
+def test_rule3_now_catches_a_long_tail_that_the_old_p90_bar_passed():
+    """The exact round-1 failure: arm D passed at p90 141 min while its longest block was 9.13
+    days. Same 4h threshold, maximum instead of p90 — it must now fail."""
+    rows = [_row2("time_idle", 10, 96.0, 600.0, 600.0, 1200.0),
+            _row2("idle_only", None, 98.0, 600.0, 8460.0, 9.13 * 86400)]
+    v = b.verdict2(rows, b.matched_control2(rows))["verdict"]
+    assert 3 in v["idle_only"]["failed_rules"], v["idle_only"]
+    assert v["idle_only"]["pass"] is False, v["idle_only"]
+    assert 3 not in v["time_idle"]["failed_rules"], v["time_idle"]
+
+
+def test_rule4_fails_a_session_model_however_well_it_attributes():
+    """A bound inactive for most of the corpus is not a bound. 98% attributable does not save it."""
+    rows = [_row2("time_idle", 10, 96.0, 600.0, 600.0, 1200.0),
+            _row2("idle_only", None, 98.0, 600.0, 700.0, 1200.0, ws=88.1)]
+    v = b.verdict2(rows, b.matched_control2(rows))["verdict"]
+    assert 4 in v["idle_only"]["failed_rules"], v["idle_only"]
+    assert "session model" in v["idle_only"]["why"], v["idle_only"]
+
+
+def test_control_now_requires_both_p50_and_p90_to_match():
+    """Round 1's control bounded the medians alone, so a 17x-different distribution matched at
+    ratio 0.000. Equal medians with a wildly different p90 must now read UNMATCHED."""
+    rows = [_row2("time_idle", 10, 22.0, 600.0, 600.0, 1200.0),
+            _row2("idle_only", None, 98.0, 600.0, 8460.0, 20000.0)]
+    ctrl = b.matched_control2(rows)
+    row = next(c for c in ctrl if c["arm"] == "idle_only")
+    assert row["ratio_p50"] == 0.0, row          # medians identical, as in round 1
+    assert row["ratio_p90"] > 0.5, row           # tail is not
+    assert row["matched"] is False, row
+    v = b.verdict2(rows, ctrl)["verdict"]
+    assert v["idle_only"]["rule2"] == "unmatched", v["idle_only"]
+    assert 2 not in v["idle_only"]["failed_rules"], v["idle_only"]   # unjudgeable, not disqualified
+
+
+def test_rule2_fails_an_arm_whose_margin_over_the_new_baseline_is_small():
+    """The whole point of moving the baseline from A to A'. Against broken arm A the deferral arm
+    was +75; against A' it is a couple of points, and a couple of points is a rule-2 failure."""
+    rows = [_row2("time_idle", 20, 95.3, 1200.0, 1200.0, 1300.0),
+            _row2("evidence_gated_idle", 20, 98.0, 1200.0, 1500.0, 3000.0)]
+    v = b.verdict2(rows, b.matched_control2(rows))["verdict"]
+    eg = v["evidence_gated_idle"]
+    assert eg["rule2"] == "fail", eg
+    assert 2 in eg["failed_rules"], eg
+    assert eg["pass"] is False, eg
+    assert v["time_idle"]["rule2"] == "n/a", v["time_idle"]
+
+
+def test_idle_is_not_counted_as_a_parameter_of_any_arm():
+    """Settled in advance because round 1's ambiguity decided a tie-break. Every arm carries idle,
+    so it belongs to none of them."""
+    assert b.ARM2_PARAMS["time_idle"] == 1, b.ARM2_PARAMS
+    assert b.ARM2_PARAMS["idle_only"] == 0, b.ARM2_PARAMS
+    assert b.ARM2_PARAMS["evidence_gated_idle"] == 2, b.ARM2_PARAMS
+
+
+def test_every_round2_arm_actually_carries_the_idle_terminator():
+    """A wrapped arm that emitted no `idle` end would silently be its round-1 self. Guards against
+    the exact defect round 2 exists to correct."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = ([_ev(i * 60.0, "branch", "main", n=2.0) for i in range(10)]
+              + [_ev(3600.0 + i * 60.0, "branch", "main", n=2.0) for i in range(10)])
+        st = b.CachingStore(_mkstore(tmp, ev))
+        lo, hi = b.session_bounds(st, SESSION)
+        for name, fn, cands in b.ARMS2:
+            blocks = fn(st, SESSION, [], lo, hi, cands[0])
+            st.reset()
+            assert any(bl.end_reason == "idle" for bl in blocks), (name, blocks)
+            assert all(b.block_evidence(st, SESSION, bl) > 0 for bl in blocks), (name, blocks)
+            st.reset()
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

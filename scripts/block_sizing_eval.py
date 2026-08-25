@@ -271,27 +271,43 @@ def active_segments(store, session, lo, hi, min_bins=None):
     return [(s, min(e, float(hi))) for s, e in segs]
 
 
-def bound_time_idle(store, session, cuts, lo, hi, n):
-    """Arm E: detection, IDLE, or `n` minutes elapsed — arm A as the pre-registration wrote it.
+def with_idle(fn, name):
+    """Wrap any bound so idle ends a block: `fn` is applied per ACTIVE segment, dead air excluded.
 
-    Delegates to `form_blocks` per active segment, so the cap and detection semantics are arm A's
-    exactly, never a second implementation of them. Only the reasons at a segment seam are
-    rewritten: the block before an idle gap ends `idle`, the block after it starts `idle`.
+    One wrapper rather than four transcriptions, so every arm gets the identical terminator and no
+    arm can differ from another by an accident of restating it. The wrapped bound's cap and
+    detection semantics are untouched — only the reasons at a segment seam are rewritten: the block
+    before a gap ends `idle`, the block after it starts `idle`.
+
+    ⚠️ Wrapped bounds do NOT tile `[lo, hi)`; they tile its ACTIVE part. That is the point, and it
+    is why `test_every_bound_tiles_its_span` covers the round-1 bounds only.
     """
-    segs = active_segments(store, session, lo, hi)
-    if not segs:
-        return []
-    out = []
-    for i, (s, e) in enumerate(segs):
-        blocks = form_blocks(cuts, s, e, n)
-        if not blocks:
-            continue
-        if i > 0:
-            blocks[0] = blocks[0]._replace(start_reason="idle")
-        if i < len(segs) - 1:
-            blocks[-1] = blocks[-1]._replace(end_reason="idle")
-        out.extend(blocks)
-    return out
+    def bound(store, session, cuts, lo, hi, n):
+        segs = active_segments(store, session, lo, hi)
+        if not segs:
+            return []
+        out = []
+        for i, (s, e) in enumerate(segs):
+            blocks = fn(store, session, cuts, s, e, n)
+            if not blocks:
+                continue
+            if i > 0:
+                blocks[0] = blocks[0]._replace(start_reason="idle")
+            if i < len(segs) - 1:
+                blocks[-1] = blocks[-1]._replace(end_reason="idle")
+            out.extend(blocks)
+        return out
+    bound.__name__ = name
+    bound.__doc__ = f"`{fn.__name__}` with the pre-registered idle terminator (see `with_idle`)."
+    return bound
+
+
+# Round 2's four arms. Every one of them carries idle, because the frozen table always said they
+# did; the round-1 versions above are kept unchanged so round 1 stays reproducible.
+bound_time_idle = with_idle(bound_time, "bound_time_idle")               # A' — the new BASELINE
+bound_evidence_gated_idle = with_idle(bound_evidence_gated, "bound_evidence_gated_idle")  # B'
+bound_turns_idle = with_idle(bound_turns, "bound_turns_idle")            # C'
+bound_idle_only = with_idle(bound_none, "bound_idle_only")               # D' — detection or idle
 
 
 def choose_cap(rows):
@@ -742,6 +758,7 @@ def run_arm(name, fn, n, store=None, sessions=None):
     absorbed_ends = collections.Counter()
     durations = []
     n_blocks = attributable = absorbed = with_evidence = attributable_active = 0
+    whole_session = 0
     max_blocks, max_blocks_session = 0, None
     session_attr_shares = []
     sessions_no_cuts = 0
@@ -764,6 +781,12 @@ def run_arm(name, fn, n, store=None, sessions=None):
             # two is the empty-tile population: a block over dead air is not a bound cutting in a
             # poor place, it is a bound cutting where there was nothing to cut. Splitting them is
             # what lets an idle terminator be told apart from a smarter cut point.
+            # A block spanning its whole session start-to-end. Round-2 rule 4: an arm made mostly
+            # of these is a session model, not a block model — its bound is inactive for most of
+            # the corpus. Round 1 measured this (arm D: 88.1%) and never made it a bar.
+            if (bl.start_reason == "session_start"
+                    and bl.end_reason in ("session_end", "session_end_deferred")):
+                whole_session += 1
             has_ev = block_evidence(st, s, bl) > 0
             if has_ev:
                 with_evidence += 1
@@ -778,6 +801,10 @@ def run_arm(name, fn, n, store=None, sessions=None):
 
     p50 = _percentile(durations, 50)
     p90 = _percentile(durations, 90)
+    # Round-2 rule 3 is measured on the MAXIMUM, not a percentile: round 1's p90 bar passed an arm
+    # whose longest block was 9.13 days, because 90% of its blocks were short. One unreadable block
+    # is enough to make the timeline unreadable, and only the extreme can express that.
+    dur_max = max(durations) if durations else None
     n_sess = len(sess)
     return {
         "arm": name,
@@ -791,6 +818,9 @@ def run_arm(name, fn, n, store=None, sessions=None):
         "blocks_with_evidence_share": 100.0 * with_evidence / n_blocks if n_blocks else 0.0,
         "can_attribute_share_active": (100.0 * attributable_active / with_evidence
                                        if with_evidence else 0.0),
+        "dur_max": dur_max,
+        "dur_max_min": (dur_max / 60.0) if dur_max is not None else None,
+        "whole_session_share": 100.0 * whole_session / n_blocks if n_blocks else 0.0,
         "session_median_can_attribute_share": _percentile(session_attr_shares, 50),
         "merge_share": 100.0 * absorbed / n_blocks if n_blocks else 0.0,
         "thin_by_end_reason": dict(thin_ends),
@@ -1125,3 +1155,177 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
+
+# --- Round 2: the corrected rules -----------------------------------------------------------------
+#
+# BLOCK-BOUND-2-PREREGISTRATION.md, written before any arm was re-scored with idle. Round 1's
+# `ARMS`/`matched_control`/`verdict` are left untouched above so its numbers stay reproducible;
+# these are separate functions, not edits to those.
+
+ARMS2 = (
+    ("time_idle", bound_time_idle, CAPS),                    # A' — the BASELINE
+    ("evidence_gated_idle", bound_evidence_gated_idle, CAPS),  # B'
+    ("turns_idle", bound_turns_idle, TURNS),                 # C'
+    ("idle_only", bound_idle_only, (None,)),                 # D'
+)
+
+# Idle is a property of ALL FOUR arms, so it is NOT a parameter of any one of them. Settling this
+# in advance is deliberate: round 1 left it ambiguous and the ambiguity decided a tie-break.
+ARM2_PARAMS = {"idle_only": 0, "time_idle": 1, "turns_idle": 1, "evidence_gated_idle": 2}
+BASELINE_ARM2 = "time_idle"
+
+# Rule 3, corrected: the bar is unchanged at 4 hours; the STATISTIC moves from p90 to the maximum.
+RULE3_MAX_BLOCK_SECONDS = 4 * 3600.0
+# Rule 4a: "an arm whose whole-session blocks are >= 50% of its blocks is a session model."
+# Definitional rather than tuned — if the bound is inactive for most of the corpus it is not a
+# bound. Round 1's arm D sat at 88.1%.
+RULE4_MAX_WHOLE_SESSION_SHARE = 50.0
+# The control now bounds p50 AND p90. Round 1 bounded the medians alone and a 17x-different
+# distribution matched at ratio 0.000.
+MATCHED2_MAX_RATIO = 0.50
+
+
+def matched_control2(arms):
+    """Pair every non-baseline arm against the A' row of nearest median duration, and require BOTH
+    p50 and p90 within `MATCHED2_MAX_RATIO`.
+
+    Two bounds is the minimum that can say "the same size" about a DISTRIBUTION rather than about
+    one point of it. Selection is nearest on p50 with the tie to the LARGER n — the stronger
+    baseline, the smaller delta, the harder bar.
+    """
+    base = [r for r in arms if r["arm"] == BASELINE_ARM2 and r.get("dur_p50")]
+    out = []
+    for r in arms:
+        if r["arm"] == BASELINE_ARM2 or not base:
+            continue
+        b = min(base, key=lambda x: (abs(x["dur_p50"] - r["dur_p50"]), -_n_key(x.get("n"))))
+        def ratio(a, c):
+            return abs(a - c) / c if c else float("inf")
+        r50 = ratio(r["dur_p50"], b["dur_p50"])
+        r90 = ratio(r.get("dur_p90") or 0.0, b.get("dur_p90") or 0.0)
+        out.append({
+            "arm": r["arm"], "n": r["n"],
+            "dur_p50": r["dur_p50"], "dur_p90": r.get("dur_p90"),
+            "can_attribute_share": r["can_attribute_share"],
+            "matched_base_n": b["n"],
+            "matched_base_dur_p50": b["dur_p50"], "matched_base_dur_p90": b.get("dur_p90"),
+            "matched_base_can_attribute_share": b["can_attribute_share"],
+            "delta": r["can_attribute_share"] - b["can_attribute_share"],
+            "ratio_p50": r50, "ratio_p90": r90,
+            "matched": r50 <= MATCHED2_MAX_RATIO and r90 <= MATCHED2_MAX_RATIO,
+        })
+    return out
+
+
+def _judge2(row, ctrl):
+    """Rules 1-4 for one arm-parameter row. Every rule is evaluated; none short-circuits."""
+    failed, why = [], []
+    share = row.get("can_attribute_share")
+    if share is None or share < RULE1_MIN_ATTRIBUTE_SHARE:
+        failed.append(1)
+        why.append(f"rule 1: can_attribute {share:.1f}% is under the "
+                   f"{RULE1_MIN_ATTRIBUTE_SHARE:.0f}% bar")
+    else:
+        why.append(f"rule 1: {share:.1f}% attributable, clears the bar")
+
+    if row["arm"] == BASELINE_ARM2:
+        rule2 = "n/a"
+        why.append("rule 2: n/a — this IS A', the matched-duration baseline; a delta against "
+                   "itself is 0 by definition")
+    elif ctrl is None:
+        rule2 = "unmatched"
+        why.append("rule 2: UNMATCHED — no A' candidate to pair against")
+    elif not ctrl["matched"]:
+        rule2 = "unmatched"
+        why.append(f"rule 2: UNMATCHED — nearest A' (n={ctrl['matched_base_n']}) differs by "
+                   f"{ctrl['ratio_p50']:.0%} on p50 and {ctrl['ratio_p90']:.0%} on p90, over the "
+                   f"{MATCHED2_MAX_RATIO:.0%} bound; its {ctrl['delta']:+.1f} pt delta cannot be "
+                   f"read as a same-size comparison")
+    elif ctrl["delta"] < RULE2_MIN_MATCHED_DELTA:
+        rule2 = "fail"
+        failed.append(2)
+        why.append(f"rule 2: only {ctrl['delta']:+.1f} pts over A' n={ctrl['matched_base_n']} at "
+                   f"matched duration, under the {RULE2_MIN_MATCHED_DELTA:.0f}-pt bar — a more "
+                   f"complicated way to make blocks bigger")
+    else:
+        rule2 = "pass"
+        why.append(f"rule 2: {ctrl['delta']:+.1f} pts over A' n={ctrl['matched_base_n']} at "
+                   f"matched duration")
+
+    mx = row.get("dur_max")
+    if mx is None:
+        failed.append(3)
+        why.append("rule 3: longest block could not be measured (this arm produced no blocks), so "
+                   "it is not shown to be within 4h; unmeasured is counted as a failure, not waived")
+    elif mx > RULE3_MAX_BLOCK_SECONDS:
+        failed.append(3)
+        why.append(f"rule 3: legibility — longest block {mx/3600:.1f}h exceeds 4h")
+    else:
+        why.append(f"rule 3: longest block {mx/3600:.2f}h, within 4h")
+
+    ws = row.get("whole_session_share")
+    if ws is not None and ws >= RULE4_MAX_WHOLE_SESSION_SHARE:
+        failed.append(4)
+        why.append(f"rule 4: {ws:.1f}% of its blocks span a whole session, at or over the "
+                   f"{RULE4_MAX_WHOLE_SESSION_SHARE:.0f}% bar — this is a session model, not a "
+                   f"block model; its bound is inactive for most of the corpus")
+    else:
+        why.append(f"rule 4: {ws:.1f}% whole-session blocks, the bound is doing work")
+
+    return {"pass": not failed and rule2 != "unmatched", "failed_rules": failed,
+            "rule2": rule2, "why": "; ".join(why)}
+
+
+def verdict2(rows, control):
+    """Round-2 PASS/FAIL per arm, plus rule 4's parameter tie-break among survivors and rule 5."""
+    ctrl = {(c["arm"], c["n"]): c for c in control}
+    out = {}
+    for arm in dict.fromkeys(r["arm"] for r in rows):
+        cands = []
+        for r in (x for x in rows if x["arm"] == arm):
+            j = _judge2(r, ctrl.get((arm, r["n"])))
+            cands.append({**j, "n": r["n"], "can_attribute_share": r["can_attribute_share"],
+                          "dur_p50": r["dur_p50"], "dur_p90": r["dur_p90"],
+                          "dur_max": r["dur_max"], "whole_session_share": r["whole_session_share"]})
+        # Rank a MATCHED all-pass candidate above an unmatched one — round 1's ranking treated them
+        # as interchangeable and published arm C as unjudgeable when two settings genuinely passed.
+        best = min(cands, key=lambda c: (len(c["failed_rules"]),
+                                         0 if c["rule2"] in ("pass", "n/a") else 1,
+                                         _n_key(c["n"])))
+        out[arm] = {**best, "params": ARM2_PARAMS.get(arm), "candidates": cands, "ships": False}
+
+    survivors = [a for a, v in out.items() if v["pass"]]
+    if survivors:
+        fewest = min(ARM2_PARAMS.get(a, 99) for a in survivors)
+        winners = [a for a in survivors if ARM2_PARAMS.get(a, 99) == fewest]
+        if len(winners) > 1:
+            # Minutes beat turns: a minute means the same thing on every machine and next year,
+            # while turn density drifts with agent autonomy.
+            mins = [a for a in winners if a != "turns_idle"]
+            if "turns_idle" in winners and mins:
+                out["turns_idle"]["why"] += ("; rule 4: tied on parameter count and LOSES to a "
+                                             "minute-parameterised arm (turn density drifts with "
+                                             "agent autonomy; a minute does not)")
+                winners = mins
+        for a in winners:
+            out[a]["ships"] = True
+        if len(winners) > 1:
+            out[winners[0]]["why"] += "; rule 4: a tie no rule resolves"
+    shares = [r["can_attribute_share"] for r in rows if r.get("can_attribute_share") is not None]
+    finding = None
+    if shares and max(shares) < RULE1_MIN_ATTRIBUTE_SHARE:
+        finding = ("Rule 5: no arm reached the 95% bar. No bound fixes this; the problem is "
+                   "upstream in the detector's ~7% recall.")
+    return {"verdict": out, "finding": finding}
+
+
+def run_round2(store=None):
+    """The round-2 sweep: four arms, every one of them carrying the idle terminator."""
+    st = store if store is not None else CachingStore(open_store(DB))
+    sess = arm_sessions(st)
+    rows = [run_arm(name, fn, n, store=st, sessions=sess)
+            for name, fn, cands in ARMS2 for n in cands]
+    control = matched_control2(rows)
+    v = verdict2(rows, control)
+    return {"rows": rows, "control": control, "sessions": len(sess), **v}
