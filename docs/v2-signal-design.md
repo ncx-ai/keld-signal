@@ -245,7 +245,40 @@ Unlike `named_terms`, it **is** published to Atlas. The difference is verified i
 from shell argv, each through `action_for`, whose every return is a literal or a closed-table lookup.
 No transcript fragment can occupy the level.
 
-### 6e. Effort — *what the window cost in work*
+### 6e. File paths — *which parts of the tree were hot*
+
+    files · directories · components
+
+Three inventory dimensions over the same reconciled paths the workspace resolution already
+produces, published as a frequency distribution (`[{value, n}, ...]`) rather than a single owner —
+"which files were hot this hour" is a distribution question, so allocation is the wrong shape.
+
+The caps are per-level rather than the blanket 12 the other open vocabularies use, and that
+difference is measured. Distinct paths per one-hour window, over 165 windows:
+
+    file        p50  8   p90 32   max 54      cap 40
+    dir         p50  5   p90 14   max 27      cap 24
+    component   p50  3   p90  7   max 17      cap 16
+
+At a cap of 12, a third of all windows would be truncated on `file` alone. Truncation keeps the
+top N by count, so a hotspot is never what gets cut — but the tail is what distinguishes an hour
+spent in three files from an hour scattered across forty, and dropping it silently makes the
+second look like the first. So the cut is reported in a sibling `inventory_omitted` block, which
+also covers the six older inventory dimensions that had been truncating silently at 12.
+
+**Why publishing paths is acceptable here** is worth stating, since it is the first dimension
+carrying strings lifted from the filesystem. Every value is already workspace-relative —
+`reconcile()` resolves each path against the resolved workspace root — and that was verified
+rather than assumed: across the full 500-transcript corpus plus a Cowork session, zero absolute
+paths, zero home directories, zero `../` escapes, at all three levels. A test pins it. What does
+cross the wire is repository *structure* and whatever appears in a filename, which is the same
+exposure `branch` already carries.
+
+These dimensions are coding-heavy. A non-engineering session produces three distinct paths in
+total, so an empty list here is an accurate answer about the work rather than a failure to
+measure it.
+
+### 6f. Effort — *what the window cost in work*
 
     authored_bytes · authoring_turns · authored_status
     fast_share · gaps · tempo · tempo_status
@@ -269,7 +302,7 @@ supplies none for a byte sum — so the byte count publishes with its turn count
 `absent` and `0` stay distinct: a window with costed edits that authored nothing publishes `0`; a
 window with no magnitude at all publishes `null`.
 
-### 6f. Classification facets — model-backed, and not running this phase
+### 6g. Classification facets — model-backed, and not running this phase
 
 Six facets classify the prompt text against a closed vocabulary using GLiNER2 in the sidecar.
 **None of them runs in this phase** — GLiNER2 is not being shipped, so they publish nothing and are
@@ -292,6 +325,57 @@ load-bearing.
 
 In `ml_backend:"deterministic"` these seven do not run at all, and the profile publishes the
 model-free facets with the others named in `facets_skipped`.
+
+### 6h. The session prior — *what the session looked like before this hour*
+
+A window is characterised on its own, which loses something obvious: a value that barely cleared
+the 50% attribution floor looks exactly like a value that is the whole story. The session the
+window sits in is a cheap frame of reference that tells them apart, so each enabled dimension
+also carries the session's own answer and three ways of comparing:
+
+    prior:  value · share · evidence · status        the session before this window
+    agrees      did the window's value match the session's?
+    departure   the window's share minus that value's share of the session
+    novel       is the window's value one the session had never produced?
+
+It costs no second parse and no inference — it is the same rollup the window already uses, run
+over wider bounds, about 1.6 µs per dimension.
+
+**The rule that governs everything else here: the prior is a contrast, never a fallback.** It is
+reported *beside* the window's answer and never supplies one the window lacked. If the window
+could not attribute a dimension, all three comparisons are null and the dimension stays blank.
+Letting a thin window inherit the session's value would buy coverage by turning "we don't know"
+into something that reads as confident — the precise failure the evidence floor exists to
+prevent, and one this project has already paid for twice (two facets that predicted a label
+dozens of times and were right zero times). Note that **45.1% of windows have no prior at all**,
+because they are a session's first. That number is the standing temptation to relax the rule;
+the block instead says `absent` out loud, since a silently omitted block reads as an oversight
+and oversights get "fixed".
+
+**The prior stops at the window's start**, which corrects the design's own wording. "The session
+so far" read literally would include the window inside its own prior, and that is not merely
+weaker — it is degenerate. `novel` could never fire (0 of 1,022 windows, by construction), a
+session's first window would be its own prior at 100% agreement, and every departure shrinks
+toward zero the more of the session the window represents. So the range is `[session start,
+window start)`: still causal, still a subset of what the daemon knew.
+
+**Four of the seven dimensions carry it** — `branch`, `language`, `output_type`, `skill` —
+chosen by measurement over 1,022 windows. `project` and `model` agree with the session 100% of
+the time with zero disagreements, so a comparison there would publish a constant.
+
+The `output_type` decision is worth reading, because the first answer was wrong for an
+instructive reason. It was excluded on 86.7% agreement — seemingly too predictable to be worth
+reporting. But agreement is only defined where *both* the window and the session have an answer,
+so it is silent about exactly the case the prior is for: windows with no answer of their own. On
+a real non-engineering session the prior supplied `output_type` in 6 of 7 windows the window
+itself could not attribute — a deck built in the first hour, with every hour after reading
+`absent` while the session reads `presentation`. A metric that cannot see the case a feature
+exists for is the wrong metric, not a verdict.
+
+The dimension list is *derived* from the published allocation set rather than written out again.
+That is a privacy property, not tidiness: it makes an inventory level structurally impossible to
+add here, which is what keeps `named_terms` — the one level read from message text, which has
+held real people's names — out of this block by construction.
 
 ---
 

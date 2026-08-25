@@ -258,8 +258,9 @@ reached the ceiling of the severity order (`phi`), which no missing evidence
 could raise.
 - **`workstreams`** (`enrich/workstreams.go`) is the one pass that runs **no
   inference**: it asks the sidecar's `/analyze` for the deterministic dimensions
-  of the hour of work ending at this prompt (project, branch, model,
-  output_type, language, skill, tooling), counted from tool-call metadata.
+  of the hour of work ending at this prompt — the seven ALLOCATION dimensions
+  (project, branch, model, output_type, language, skill, tooling) plus the
+  published INVENTORY ones — counted from tool-call metadata.
   It takes COORDINATES (transcript path + prompt id), never text, and publishes
   as `workstreams` — a map of dimension → `Labeled` (`share` becomes the
   confidence). It declares `ModelFree`+`AlwaysRun`, and is registered only when
@@ -281,13 +282,45 @@ could raise.
   distinguishes the window from a coin flip. Measured on the 572-window
   reference sample: 347 of 2927 attributed dimension slots become unattributed,
   330 of which were publishing at share 1.0 and 129 off a single observation.
-  **Nothing from `/analyze` reaches Atlas except those dimensions.** In
+  **Nothing from `/analyze` reaches Atlas except those dimensions and the
+  published inventory ones.** The inventory block publishes SELECTIVELY, and
+  which half is which is the privacy boundary: `physical_acts` and the three
+  PATH dimensions cross, `named_terms` does not. In
   particular `inventory.named_terms` (proper nouns lifted from message text —
   real person names have been observed) is deliberately unmodelled on
   `sidecar.AnalyzeResult`: the field is dropped at the wire boundary, so it is
   structurally unforwardable no matter what the level is configured to do. That
   is what makes it safe for the level to be **on by default** (see the
   analysis-service bullet below).
+- **The PATH inventory dimensions (`files`, `directories`, `components`) publish
+  a frequency distribution, and their caps are per-level.** The `file`/`dir`/
+  `component` levels were extracted and stored long before they were published;
+  they answer "which paths were hot this hour", which is a distribution, not a
+  single owner — so they are INVENTORY, never ALLOCATION. ⚠️ **The blanket
+  open-vocabulary cap of 12 is wrong for them**, and silently: measured over 165
+  one-hour windows, distinct-per-window runs p50 8 / p90 32 / max 54 for `file`,
+  p50 5 / p90 14 / max 27 for `dir`, p50 3 / p90 7 / max 17 for `component`, so
+  a cap of 12 truncates **33% of windows** on `file` alone. Truncation is top-N
+  by count, so a hotspot can never be the thing cut — but the tail is what
+  separates "this hour touched three files" from "this hour touched forty", and
+  losing it silently makes a scattered window read as a focused one. Caps sit
+  just above each level's own p90 (**40 / 24 / 16**) and the cut is **declared**
+  in the sibling `inventory_omitted`, which is what stops a truncated inventory
+  from being indistinguishable from a short one — the `omittedNotice` rule
+  (Conventions → never cut text mid-sentence) applied one level up. That block
+  covers ALL nine inventory dimensions, since the other six were silently
+  truncating at 12 already.
+  ⚠️ **What makes these safe to publish is that they are ALREADY
+  workspace-relative** — `reconcile()` resolves every path against the resolved
+  workspace root. Verified over the full 500-transcript corpus plus a Cowork
+  session: **zero** absolute paths, zero `~`/`/Users`/`/home`, zero `../`
+  escapes, zero URLs, zero Windows drive paths, at all three levels. A test
+  pins it. The residual exposure is repo *structure* (`services/api/app/billing`)
+  and any customer name inside a filename — the same class `branch` already
+  crosses, not the class `named_terms` does. Do not add a producer for these
+  levels that bypasses `reconcile()`. Note they are coding-heavy: a
+  non-engineering session yields **3 distinct paths in total**, so an empty list
+  here is a real answer, not a gap.
 - **The watcher signals ingest; the sidecar never polls.** `/analyze` answers out
   of a persistent reference-series store, and the parse that fills it is driven by
   the transcript watcher: a file that advanced in a poll is signalled once (per
@@ -418,7 +451,7 @@ differ from it**.
   physically cannot hold an unregistered level — asserted with a direct INSERT), and
   `rollup_window` routing unbinned levels to `event`, so the sparseness never reaches
   a caller. `PRECOMPUTED_LEVELS` is **derived** from `workstreams.ALLOCATION` +
-  `INVENTORY` (12 levels) rather than typed, against the 19 `events_for_turns` emits;
+  `INVENTORY` (16 levels) rather than typed, against the 19 `events_for_turns` emits;
   registering a new level backfills its bins from the retained events, with no
   transcript re-read.
 - **Row timestamps are quantized to the series' own 0.1s resolution**
@@ -614,6 +647,67 @@ published vocabulary cannot be widened by a caller** — the parameter exists on
 reproduce that measurement. The dropped three are still reported as allocation
 workstreams by the digest; only their *dynamics* are gone.
 
+**The session prior (`analysis/prior.py`) — the session this window sits in, reported
+BESIDE it.** A window is characterised in isolation, so a value sitting just over the
+attribution floor is indistinguishable from one that is the whole story. The session is a
+cheap, stable frame of reference that makes the difference visible: per dimension a
+`value`/`share`/`evidence`/`status` for the session, plus three contrast measures —
+`agrees`, `departure` (the window's share minus that value's share of the prior) and
+`novel` (the window's value never occurred before it). Same `rollup_window`, wider bounds,
+no second parse and no inference.
+
+⚠️ **CONTRAST, NEVER FALLBACK — every other rule here is subordinate to this one.** The
+prior never supplies a value the window lacked: with no window value all three contrasts
+are `None` and `workstreams` keeps its honest blank. A thin window inheriting the
+session's value buys coverage by laundering "we do not know" into something confident,
+which is the exact defect `MIN_EVIDENCE` exists to prevent and which this project has
+already paid for twice (`activity_type`'s `transform` predicted 36 times, right zero;
+`speech_act`'s `statement` 22 times, right zero). **45.1% of windows have no prior at
+all** — 461 of 1,022 are a session's first — and that number is the standing pressure to
+soften this. Don't. The block is emitted anyway, saying `absent` out loud, because a
+suppressed block reads as an oversight and an oversight is what someone eventually
+"fixes".
+
+⚠️ **The prior is cut at the window's START, which is a deliberate correction to its own
+spec.** "The session so far" taken literally puts the window INSIDE its own prior, and
+that reading is degenerate rather than merely weak: `novel` cannot fire — 0 of 1,022
+windows on all seven dimensions, structurally — a session's first window IS its own prior
+(agreement 100%, departure 0), and every departure shrinks toward zero monotonically with
+how much of the session the window is (`language` agreement 70.6% → 89.9%, `skill` 25.8%
+→ 83.8%, purely from the overlap). So it covers `[session start, window start)`: still
+causal, a strict subset of what the daemon knew, and the only reading under which all
+three measures are non-degenerate. Nothing is accumulated — the prior is **recomputed**
+per request from stored events, because an incrementally-updated one would drift from
+those events with no way to check it.
+
+**`ENABLED = ("branch", "language", "output_type", "skill")`**, decided over 1,022 windows
+(`docs/superpowers/specs/2026-08-24-session-prior-results.md`): `skill` 25.8% agreement /
+44.0% novelty — the signal, being the phase transitions of the process — `language` 70.6%
+/ 2.3%, `branch` 76.1% / 6.1%, `output_type` 86.7% / 1.1%. `project` and `model` agree
+**100.0% with zero disagreements**, so a contrast there would publish a constant.
+⚠️ **`output_type` was excluded on that 86.7% and the exclusion was WRONG** — not because
+the number was wrong but because of what agreement can say: it is defined only where BOTH
+sides are attributed, so it is silent about precisely the windows the dimension is for.
+On John's Cowork session the prior carried `output_type` in **6 of 7** windows where the
+window could not attribute at all (the deck is built in hour one; every hour after reads
+`absent` while the session reads `presentation`) against `tooling` 4/7 and every other
+dimension 0/7. That session's SHAPE outweighs its size: it is skill-free, as is 61.6% of
+the corpus, and without `output_type` the block would rarely say anything for the majority
+case. `tooling` stays out, with the bar for revisiting it written into `prior.py` and its
+test rather than remembered: agreement ≤ 0.90 **or** prior-attributed coverage ≥ 0.70,
+against its current 98.5% / 24.3%.
+
+`PRIOR_DIMENSIONS` is **derived** from `workstreams.ALLOCATION` rather than restated, so
+the two cannot drift and **an INVENTORY level is structurally not addable** — which is
+what keeps `named_terms` (the one level read from message text, and which has held real
+person names) out of this block by construction rather than by care. `status` is named
+`status`, not `reason`: `reason` is on publish's `forbiddenWireKeys` as the dynamics
+per-side key, and a second meaning on the wire is a reader's error waiting to happen. A
+prior that is itself `no_majority` is **informative** — the window's ambiguity is the
+session's — and is never collapsed into "no prior". Cost is 1.6 µs per dimension; the
+block's ~16.7 ms is its two rollups, paid per call regardless of how many dimensions ride
+it.
+
 **Model backends.** `ml_backend` (local, startup-only, `settings.Settings`)
 selects one of three modes:
 - **`"auto"`/`""` (default)** — Enrichment is **ML-only** for its full facet
@@ -712,8 +806,9 @@ selects one of three modes:
   and neither moves `pipeline_status`. The sensitivity **vocabulary** is
   unchanged — `"none"` plus the marker is the honest pair, and a new
   `"unknown"` label would be a contract break for no extra information — so
-  that work bumped nothing. (`SchemaVersion` is now **8**; the dynamics block
-  below took it 7 → 8 when it began publishing.)
+  that work bumped nothing. (The dynamics block below took `SchemaVersion`
+  7 → 8 when it began publishing; the current value is stated once, above, at
+  the `labels.go` bullet — don't restate it here, it only goes stale twice.)
 - **`"off"`** — enrichment is **disabled entirely**: no enrichment worker is
   started and `/enrich` accepts-and-discards (returns 202, never enqueues).
   Telemetry and client-events are unaffected.
