@@ -579,8 +579,14 @@ def _analyze_blocking(path, prompt_id, span_minutes, resolved=None):
     # lacked. Opt-in in `analyze_window` for the same reason `sizer` is -- the parse-path
     # equivalence oracle structurally cannot compute a second, much wider rollup -- so
     # production is again the one caller that asks for it.
+    # `block` turns on the BLOCK block (app/analysis/blocks.py): which measured block of work
+    # this prompt fell in -- span and the two boundary reasons, nothing else. Opt-in in
+    # `analyze_window` for the third time and for the same reason `sizer` and `prior` are: the
+    # parse-path oracle holds no store and cannot cut a session into blocks. ADDITIVE -- the
+    # window is unchanged and still the 60 minutes ending at the prompt; this only makes the
+    # boundary the pre-registered study measured VISIBLE beside it.
     out = analyze_window(path, prompt_id, span_minutes, nlp, store=st, sizer=DEFAULT_SIZER,
-                         prior=True, resolved=resolved)
+                         prior=True, resolved=resolved, block=True)
 
     if status == _TERMS_DISABLED:
         # Switched off means not reported. The regex half of terms.candidates() needs no model

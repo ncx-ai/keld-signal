@@ -64,6 +64,15 @@ signal that sums to what the window actually cost rather than over-counting by a
 count. `gap_p50_s`/`gap_p90_s` (`latency.percentiles`) are the tail `fast_share` collapses away —
 both were computed by these modules before they had a payload key at all.
 
+## The block is reported BESIDE the window, and does not narrow it
+
+`block` (opt-in, `app/analysis/blocks.py`) names which measured block of work the prompt fell in:
+a span and the two boundary reasons. A window is an arbitrary hour and a block is a piece of
+work, so the two answer different questions and the block does not replace the window — every
+other field is still computed over `[end - span_minutes, end)`, unchanged. Making the block the
+unit of attribution is a later phase with its own eval re-run; this is the boundary the study
+measured becoming visible.
+
 ## The window edge is quantized, and has to be
 
 Row timestamps are stored at the series' own resolution — `levels.quantize`, 0.1s, which
@@ -81,17 +90,19 @@ straddling the cut — the unrepresented-tie effect `workstreams.payload` alread
 allocation dimension changed value in the sample.
 """
 import collections
+import math
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.analysis import COMPONENT_DEPTH, SCHEMA
+from app.analysis import blocks as blocks_mod
 from app.analysis import latency, magnitude, prior as prior_mod, window, workstreams
 from app.analysis.dynamics import dynamics_for
 from app.analysis.ingest import (RECONCILE_SLOT, ingest_file, is_current, pending_in,
                                  session_of)
 from app.analysis.levels import events_for_turns, quantize
 from app.analysis.reconcile import reconcile
-from app.analysis.store import open_store
+from app.analysis.store import BIN_SECONDS, open_store
 from app.analysis.transcript import _order_key, iter_turns, turns_between
 
 
@@ -131,7 +142,7 @@ class StoreBehind(Exception):
 
 
 def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refresh=True,
-                   sizer=None, end_ts=None, prior=False, resolved=None):
+                   sizer=None, end_ts=None, prior=False, resolved=None, block=False):
     """The `span_minutes` of work ending at `prompt_id` -> the workstream + inventory payload,
     served from the reference series.
 
@@ -170,6 +181,18 @@ def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refre
     otherwise, can open a retention surface `/analyze` has not already checked. The floor is
     handed to it for the one case it must handle itself: a baseline reaching below it.
 
+    `block` adds the BLOCK BLOCK: which measured block of work this prompt fell in
+    (`app/analysis/blocks.py`). OPT-IN for exactly the reason `sizer` and `prior` are — the
+    parse-path oracle below holds no store and so structurally cannot cut a session into blocks
+    — so production is again the one caller that asks for it, and the field-for-field equality
+    the suite asserts between the two paths stays expressible as equality rather than as
+    "equal except for these keys".
+
+    It is REPORTED BESIDE the window, never instead of it. The window is still the 60 minutes
+    ending at the prompt and every existing field is computed from exactly those bounds; the
+    block says where the boundary the study measured actually fell. Narrowing the window to the
+    block is a later phase with its own eval re-run.
+
     `resolved` is the FACTS THE CALLER RESOLVED because this process structurally cannot: a
     plain dict (never a model -- see the package docstring on pandas/pydantic) carrying the
     daemon's `repo`/`git_branch`/`project`. This endpoint is confined to KELD_ANALYZE_ROOTS
@@ -196,7 +219,87 @@ def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refre
                                        sizer=sizer, floor=st.serving_floor())
     if prior:
         out["prior"] = _prior_block(st, path, session_of(path), rl, start, st.serving_floor())
+    if block:
+        # The PROMPT'S OWN INSTANT, quantized -- the same resolution the window's edges are
+        # evaluated at (see the module docstring). A boundary finer than 0.1s is not
+        # representable in the stored rows, so asking "which block holds this instant" at a
+        # finer one would be asking about a distinction the series cannot make.
+        out["block"] = _block_at(st, session_of(path), quantize(end.timestamp()))
     return out
+
+
+def _block_span(store, session):
+    """`(lo, hi)` -- the span `blocks.cut` is asked to cut, or `None` for a session with no
+    active bin.
+
+    The first active bin's start to the last active bin's end: the study's own `session_bounds`
+    (`scripts/block_sizing_eval.py`), because the blocks that ship have to be the blocks that
+    were measured, and the measured arm formed them over the WHOLE session. Not over the
+    60-minute window — the EWMA means carry across the span, so a per-window detector run is a
+    different detector, the same reason `blocks.cut_points` runs once over the whole span rather
+    than once per segment.
+
+    ⚠️ **`cut` requires a BIN-ALIGNED `from_ts`, and that precondition is this function's job.**
+    `active_segments` filters on bin STARTS (`lo <= b < hi`), so a bin straddling `lo` is
+    excluded from every segment and the evidence inside it lands in NO block while
+    `rollup_window` still counts it. A `bin_ts` is bin-aligned by construction, so the floor/ceil
+    below are no-ops today — they are here because the precondition is invisible at the call
+    site otherwise, and the one thing that must never happen is a raw prompt instant or a raw
+    `window_start` reaching `cut()`. A window ending at a prompt essentially never lands on a bin
+    boundary (see the module docstring), so that mistake would drop leading evidence on nearly
+    every call and publish a block that starts later than the work did.
+
+    Not clamped to the retention serving floor. Pruning removes `event` rows and keeps `bin`
+    rows, so segmentation -- which reads `bin` alone -- is unaffected; only the detector's view
+    of the pruned prefix thins, and the block containing the prompt is inside the window
+    `analyze_window` has already refused to serve below the floor.
+
+    Cost, measured over the 496-session frozen corpus: p50 0.3 ms, p90 2.3 ms, p99 37.7 ms,
+    max 108.8 ms (a 280-hour session). Comparable to the prior block's ~16.7 ms, and paid only
+    when a caller asks for the block.
+    """
+    bins = blocks_mod.active_bins(store, session)
+    if not bins:
+        return None
+    lo = math.floor(float(bins[0]) / BIN_SECONDS) * BIN_SECONDS
+    hi = math.ceil(float(bins[-1] + BIN_SECONDS) / BIN_SECONDS) * BIN_SECONDS
+    return float(lo), float(hi)
+
+
+def _block_at(store, session, t):
+    """The block holding instant `t`, as the published object -- or `None`.
+
+    SPAN AND REASONS ONLY: `start`/`end` as ISO instants (the format `window_start`/`window_end`
+    already use) and the two reasons from `blocks.REASONS`. No evidence or attributability
+    field, and that is a decision rather than an omission -- see `blocks.py`'s note on the two
+    measures. They disagree by ~4 points at the shipped cap (95.3% per-level attributable
+    against 99.3% holding any pooled evidence), because a block holding one unit at each of the
+    eight allocation levels pools past `MIN_EVIDENCE` while every level on its own reads `thin`.
+    The measured headline is the PER-LEVEL one, so publishing the pooled sum -- the shorter
+    thing to write, and the only thinness helper that currently exists in the tree -- would
+    overstate attributability on the wire. Neither ships.
+
+    `None` is a REAL ANSWER, not a failure: blocks tile the ACTIVE part of a session and not the
+    session, so an instant in dead air is in no block. A prompt normally opens a bin of its own
+    and so lands inside one; what does not is a prompt whose turn contributed no reference event
+    at all, arriving after a gap. See `blocks.py` on why tiling the silence was measured to cost
+    65 points of attribution.
+    """
+    span = _block_span(store, session)
+    if span is None:
+        return None
+    for b in blocks_mod.cut(store, session, *span):
+        if b.start <= t < b.end:
+            return {"start": _instant(b.start), "end": _instant(b.end),
+                    "start_reason": b.start_reason, "end_reason": b.end_reason}
+    return None
+
+
+def _instant(ts):
+    """Epoch seconds -> the ISO form `window_start`/`window_end` are already published in.
+    `blocks.py` keys everything on epoch seconds (the series' own unit); only the payload
+    converts."""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
 def _prior_block(store, path, session, window_rl, start, floor):

@@ -235,7 +235,35 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #
 #           A window that answers with three keys it did not answer with before is a window
 #           answered differently, which is exactly this number's trigger.
-SCHEMA = 14
+#   14 -> 15: the `block` key -- which measured BLOCK OF WORK the prompt fell in
+#           (`app/analysis/blocks.py`), as `{start, end, start_reason, end_reason}` or `null`.
+#
+#           The window is an arbitrary hour; a block is a piece of work, bounded by the three
+#           terminators a pre-registered four-arm study over 496 sessions settled on -- a
+#           20-minute cap, 15 minutes of silence, and the shipped change detector's rising edges
+#           (`~/keld/refseries-context/blocks/BLOCK-BOUND-2-RESULTS.md`). That boundary existed
+#           in the study and nowhere on the live path; this key is it becoming visible.
+#
+#           STRICTLY ADDITIVE. `window_start`, `window_end`, the 60-minute look-back and every
+#           workstreams / inventory / dynamics / prior / effort value are byte-identical to what
+#           schema 14 answered -- pinned by
+#           `test_adding_the_block_changed_no_existing_analyze_field`. Narrowing what the window
+#           characterises to the block is a later phase with its own eval re-run.
+#
+#           `null` is a real answer, not a failure: blocks tile a session's ACTIVE part and not
+#           the session, so a prompt landing in dead air is in no block. And the object carries
+#           SPAN AND REASONS ONLY -- no evidence or attributability field, because this repo
+#           holds two conflicting definitions of a block's thinness (pooled across allocation
+#           levels versus `window.attribution`'s per-level gate) which disagree, and the measured
+#           95.3% headline is the per-level one; publishing the pooled sum would overstate
+#           attributability on the wire.
+#
+#           A window that answers with a key it did not answer with before is this number's
+#           trigger, exactly as at 13 -> 14. Go tolerates the new field --
+#           `internal/agent/enrich/sidecar/analyze_test.go` pins that `DisallowUnknownFields` is
+#           deliberately ABSENT from `post()` -- so nothing crosses to Atlas for it and
+#           `enrich.SchemaVersion` does not move.
+SCHEMA = 15
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

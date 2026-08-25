@@ -1,7 +1,10 @@
-import sys, os, json, tempfile
+import sys, os, json, math, tempfile
+from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.analysis.analyze import analyze_window, PromptNotFound
-from app.analysis.store import open_store
+from app.analysis import blocks
+from app.analysis.analyze import analyze_window, PromptNotFound, _block_span
+from app.analysis.ingest import session_of
+from app.analysis.store import BIN_SECONDS, open_store
 
 
 def _store(tmp):
@@ -234,6 +237,150 @@ def test_payload_carries_the_schema_and_no_prompt_text():
         dumped = json.dumps(out)
         for k in ("text", "span", "start", "end", "offset"):
             assert f'"{k}":' not in dumped, k
+
+
+# --- the block containing the prompt ----------------------------------------------------------
+#
+# A window is an arbitrary hour; a BLOCK is a piece of work, bounded by the three terminators a
+# pre-registered four-arm study over 496 sessions settled on (app/analysis/blocks.py). Until now
+# that boundary existed only in the study. These tests hold the live path to two things: that it
+# reports the block, and that reporting it changed NOTHING else.
+
+# Every key /analyze answered with at schema 14, i.e. before `block` existed. Written out rather
+# than derived from a second call, so a key ADDED by accident fails here instead of quietly
+# matching itself.
+KEYS_BEFORE_BLOCK = {"schema", "session", "window_start", "window_end", "evidence", "effort",
+                     "workstreams", "inventory", "inventory_omitted"}
+
+
+def _epoch(iso):
+    return datetime.fromisoformat(iso).timestamp()
+
+
+def _block_fixture(tmp):
+    """A dense session whose target prompt lands MID-BIN — the ordinary case, since a window
+    ending at a prompt's own instant essentially never lands on a 5-minute boundary."""
+    return _write(tmp, [
+        _turn("2026-08-01T10:00:30Z", "u0", "early work"),
+        _turn("2026-08-01T10:03:00Z", "u1", "more work"),
+        _turn("2026-08-01T10:07:00Z", "u2", "still going"),
+        _turn("2026-08-01T10:12:00Z", "target", "the prompt"),
+    ])
+
+
+def test_analyze_reports_the_block_containing_the_prompt():
+    """The live path cuts the session with the shipped cutter and names the block the prompt fell
+    in. Opt-in for the same reason `sizer` and `prior` are: the parse-path oracle holds no store
+    and cannot cut a session at all."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _block_fixture(tmp)
+        out = analyze_window(p, "target", span_minutes=60, store=_store(tmp), block=True)
+        b = out["block"]
+        assert b is not None, out
+        assert b["start_reason"] in blocks.REASONS and b["end_reason"] in blocks.REASONS, b
+        # The instant it claims to hold really is inside it, and the span is a real span.
+        t = _epoch(out["window_end"])
+        assert _epoch(b["start"]) <= t < _epoch(b["end"]), (b, out["window_end"])
+        # ... and never longer than the measured cap, which is the whole property arm A' won on:
+        # being a plain cap, its maximum block EQUALS its cap.
+        assert _epoch(b["end"]) - _epoch(b["start"]) <= blocks.MAX_BLOCK_MINUTES * 60.0 + 1e-6, b
+
+
+def test_the_block_carries_a_span_and_two_reasons_and_nothing_else():
+    """SPAN AND REASONS ONLY. No evidence or attributability field — this repo holds two
+    conflicting definitions of a block's thinness (pooled across the allocation levels versus
+    `window.attribution`'s per-level gate) and they disagree, so publishing the pooled sum would
+    overstate attributability on the wire. Neither ships.
+
+    The keys `start`/`end` are asserted to be INSTANTS here because
+    test_payload_carries_the_schema_and_no_prompt_text rejects a bare `"start":` key anywhere
+    else in the payload — that guard is aimed at a leaked span object
+    ({"text":.., "start":.., "end":..}, character offsets into prompt text), and a block's two
+    ends are wall-clock times of the same kind `window_start`/`window_end` already publish."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = analyze_window(_block_fixture(tmp), "target", span_minutes=60,
+                             store=_store(tmp), block=True)
+        b = out["block"]
+        assert set(b) == {"start", "end", "start_reason", "end_reason"}, b
+        for k in ("start", "end"):
+            assert _epoch(b[k]) > 0, b            # parses as an instant, not an offset
+        # Nothing else in the payload gained a bare span-shaped key.
+        rest = json.dumps({k: v for k, v in out.items() if k != "block"})
+        for k in ("text", "span", "start", "end", "offset"):
+            assert f'"{k}":' not in rest, k
+
+
+def test_adding_the_block_changed_no_existing_analyze_field():
+    """The regression that matters. The block is ADDITIVE: the window is still the 60 minutes
+    ending at the prompt, and every field schema 14 answered with is byte-identical. A reviewer
+    finding this task altering a published value should treat it as a Critical defect, so the
+    check is dict equality against the same call with the block off — not a spot check."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _block_fixture(tmp)
+        st = _store(tmp)
+        without = analyze_window(p, "target", span_minutes=60, store=st)
+        with_block = analyze_window(p, "target", span_minutes=60, store=st, block=True)
+        assert set(without) == KEYS_BEFORE_BLOCK, sorted(without)
+        assert set(with_block) == KEYS_BEFORE_BLOCK | {"block"}, sorted(with_block)
+        assert {k: v for k, v in with_block.items() if k != "block"} == without
+        # And the look-back itself is untouched: 60 minutes ending at the prompt, stated as
+        # literals so a change to the anchoring cannot pass by moving both sides together.
+        assert without["window_end"] == "2026-08-01T10:12:00+00:00", without["window_end"]
+        assert without["window_start"] == "2026-08-01T09:12:00+00:00", without["window_start"]
+        # The block is NOT the window. If these ever coincided the test above would be vacuous.
+        assert (with_block["block"]["start"], with_block["block"]["end"]) != (
+            without["window_start"], without["window_end"]), with_block["block"]
+
+
+def test_the_block_span_is_bin_aligned_so_no_leading_evidence_falls_outside_it():
+    """`blocks.cut` requires a BIN-ALIGNED `from_ts` and does not say so: `active_segments`
+    filters on bin STARTS, so a bin straddling `lo` is excluded from every segment while
+    `rollup_window` still counts the evidence inside it — events at 100s/250s/400s cut from
+    lo=150 put the 250s event in no block at all.
+
+    A prompt's instant essentially never lands on a 5-minute boundary, so handing `cut` a raw
+    prompt instant or a raw `window_start` would drop leading evidence on nearly every call and
+    publish a block starting later than the work did. The span therefore comes from bin starts
+    and is aligned explicitly; this pins both halves — the alignment, and the covering it buys."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _block_fixture(tmp)
+        st = _store(tmp)
+        out = analyze_window(p, "target", span_minutes=60, store=st, block=True)
+        t = _epoch(out["window_end"])
+        assert t % BIN_SECONDS != 0, (
+            "premise: the prompt must land mid-bin, or this asserts nothing")
+        lo, hi = _block_span(st, session_of(p))
+        assert lo % BIN_SECONDS == 0 and hi % BIN_SECONDS == 0, (lo, hi)
+        # The prompt's OWN bin — the one holding the evidence closest to the window's end — lies
+        # wholly inside the block, front edge included.
+        own_bin = math.floor(t / BIN_SECONDS) * BIN_SECONDS
+        b = out["block"]
+        assert _epoch(b["start"]) <= own_bin, (b, own_bin)
+        # And no active bin of the session escapes the cut the payload was read off.
+        bl = blocks.cut(st, session_of(p), lo, hi)
+        for bin_ts in blocks.active_bins(st, session_of(p)):
+            assert len([x for x in bl if x.start <= bin_ts < x.end]) == 1, (bin_ts, bl)
+
+
+def test_a_prompt_that_falls_in_dead_air_is_in_no_block():
+    """`null` is a REAL ANSWER. Blocks tile a session's ACTIVE part and not the session — tiling
+    the silence was measured to cost 65 points of attribution — so a prompt landing in a gap is
+    in no block, and saying so is not a failure. Here the prompt arrives an hour after the last
+    work and contributes no reference event of its own, which is exactly that shape."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _write(tmp, [
+            _turn("2026-08-01T10:00:00Z", "u0", "work"),
+            _turn("2026-08-01T10:03:00Z", "u1", "more work"),
+            # No cwd: nothing to attribute, so this turn opens no bin of its own.
+            {"type": "user", "timestamp": "2026-08-01T11:00:00Z", "uuid": "target",
+             "message": {"content": [{"type": "text", "text": "back again"}]}},
+        ])
+        st = _store(tmp)
+        out = analyze_window(p, "target", span_minutes=60, store=st, block=True)
+        assert "block" in out, sorted(out)
+        assert out["block"] is None, out["block"]
+        # The premise: there WAS a session to cut, it just does not reach the prompt.
+        assert blocks.cut(st, session_of(p), *_block_span(st, session_of(p))), "empty fixture"
 
 
 if __name__ == "__main__":

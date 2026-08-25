@@ -769,6 +769,35 @@ def test_analyze_reports_the_session_the_window_sits_in_and_never_fills_it_in():
     assert body["workstreams"]["skill"] is None, body["workstreams"]
 
 
+def test_analyze_reports_the_block_of_work_the_prompt_fell_in():
+    """The BLOCK block on the endpoint. A window is an arbitrary hour; a block is a piece of
+    work, bounded by the three terminators a pre-registered four-arm study over 496 sessions
+    settled on (app/analysis/blocks.py). It is opt-in in `analyze_window` — the parse-path oracle
+    holds no store and cannot cut a session — so the one thing that can only be pinned HERE is
+    that production actually asks for it. The cutting itself is unit-tested in
+    app/test_analysis_blocks.py and the additivity in app/test_analysis_analyze.py.
+
+    ADDITIVE: the window is unchanged, so the block is asserted to be a DIFFERENT span from the
+    hour beside it rather than a rename of it."""
+    from app.analysis import blocks
+
+    m = _reload_main(None)
+    _wire(m)
+    body = _asyncio.run(m.analyze(
+        m.AnalyzeIn(path=_fixture_transcript(), prompt_id=_fixture_prompt_id())))
+    assert "block" in body, ("/analyze answered without asking for the block at all: "
+                            f"{sorted(body)}")
+    b = body["block"]
+    assert b is not None, body
+    # Span and the two reasons, and nothing else -- no evidence or attributability field, because
+    # this repo holds two conflicting definitions of a block's thinness and they disagree by ~4
+    # points; see app/analysis/blocks.py on why neither is exported.
+    assert set(b) == {"start", "end", "start_reason", "end_reason"}, b
+    assert b["start_reason"] in blocks.REASONS and b["end_reason"] in blocks.REASONS, b
+    assert (b["start"], b["end"]) != (body["window_start"], body["window_end"]), (
+        "the block is not the window; if these coincided the additivity claim would be empty")
+
+
 def test_analyze_unknown_prompt_is_404_not_an_empty_payload():
     m = _reload_main(None)
     _wire(m)
