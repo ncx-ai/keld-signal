@@ -304,23 +304,25 @@ def test_verdict_fails_an_arm_on_legibility_even_when_it_wins_attribution():
     assert "legib" in v["none"]["why"].lower() or "p90" in v["none"]["why"], v
 
 
-def test_matched_control_breaks_a_duration_tie_toward_the_smaller_cap():
+def test_matched_control_breaks_a_duration_tie_toward_the_larger_cap():
     """Two TIME rows equidistant in `dur_p50` from the arm's own median is a real possibility on
     a coarse candidate grid, and nearest-neighbour alone does not say which wins. Deterministic
-    by rule: the SMALLER n. It is also the conservative pick — the shorter cap attributes less,
-    so the arm's delta comes out LARGER and the arm is judged against the weaker baseline it
-    would prefer, which is exactly why the rule is written down rather than left to dict order."""
+    by rule: the LARGER n (Amendment 4). That is the direction a control against false wins must
+    take — the longer cap attributes MORE, so it is the stronger baseline, the challenger's delta
+    comes out SMALLER and rule 2 is HARDER to clear. The first implementation took the smaller n
+    and called it conservative; that was backwards, since the weaker baseline is lenient toward
+    the challenger."""
     arms = [{"arm": "time", "n": 10, "dur_p50": 1000.0, "can_attribute_share": 20.0},
             {"arm": "time", "n": 60, "dur_p50": 2000.0, "can_attribute_share": 50.0},
             {"arm": "turns", "n": 20, "dur_p50": 1500.0, "can_attribute_share": 60.0}]
     ctrl = b.matched_control(arms)
     row = next(c for c in ctrl if c["arm"] == "turns")
-    assert row["matched_time_n"] == 10, row              # equidistant (500 either way) -> smaller n
-    assert abs(row["delta"] - (60.0 - 20.0)) < 0.1, row  # and the delta follows that choice
+    assert row["matched_time_n"] == 60, row              # equidistant (500 either way) -> larger n
+    assert abs(row["delta"] - (60.0 - 50.0)) < 0.1, row  # the SMALLER delta, i.e. the harder bar
 
     # Order-independent: the same tie resolved the same way with the rows reversed.
     ctrl2 = b.matched_control(list(reversed(arms)))
-    assert next(c for c in ctrl2 if c["arm"] == "turns")["matched_time_n"] == 10, ctrl2
+    assert next(c for c in ctrl2 if c["arm"] == "turns")["matched_time_n"] == 60, ctrl2
 
 
 def test_verdict_reports_every_failing_rule_not_just_the_first():
@@ -353,6 +355,140 @@ def test_verdict_does_not_fail_the_baseline_arm_on_a_comparison_with_itself():
     rows = [{"arm": "time", "n": 10, "can_attribute_share": 22.2, "dur_p90": 600.0}]
     v = b.verdict(rows, b.matched_control(rows))
     assert v["time"]["pass"] is False and v["time"]["failed_rules"] == [1], v
+
+
+def test_matched_control_bounds_the_pairing_distance_at_fifty_percent():
+    """Amendment 3. Nearest-neighbour always returns SOMETHING: `CAPS` stops at 120 minutes, so
+    arm D would pair against the 120-minute cap however much longer its blocks are, and the delta
+    would then carry exactly the block-size effect this control exists to remove. Both sides of
+    the 0.50 bound are pinned, because the bound is the whole of the amendment."""
+    base = {"arm": "time", "n": 30, "dur_p50": 1000.0, "can_attribute_share": 30.0}
+
+    inside = b.matched_control(
+        [base, {"arm": "none", "n": None, "dur_p50": 1500.0, "can_attribute_share": 99.0}])[0]
+    assert inside["matched"] is True, inside
+    assert abs(inside["matched_dur_ratio"] - 0.50) < 1e-9, inside   # exactly ON the bound
+    assert abs(inside["matched_dur_gap"] - 500.0) < 1e-9, inside
+
+    outside = b.matched_control(
+        [base, {"arm": "none", "n": None, "dur_p50": 1600.0, "can_attribute_share": 99.0}])[0]
+    assert outside["matched"] is False, outside
+    assert outside["matched_dur_ratio"] > 0.50, outside
+    assert abs(outside["matched_dur_gap"] - 600.0) < 1e-9, outside
+
+
+def test_verdict_reports_an_unmatched_arm_as_unjudgeable_not_as_a_winner():
+    """Amendment 3's other half. An arm that cannot be matched is NOT disqualified — but it must
+    not quietly claim a win on rules 1 and 3 alone either, because the control that would have
+    caught "it only made blocks bigger" never ran. `ships` is the third state, None."""
+    rows = [{"arm": "time", "n": 120, "dur_p50": 7000.0, "dur_p90": 10000.0,
+             "can_attribute_share": 61.2},
+            {"arm": "none", "n": None, "dur_p50": 11000.0, "dur_p90": 13000.0,
+             "can_attribute_share": 99.0}]
+    v = b.verdict(rows, b.matched_control(rows))
+    assert v["none"]["rule2"] == "unmatched", v["none"]
+    assert v["none"]["pass"] is True, v["none"]          # rules 1 and 3 both clear
+    assert 2 not in v["none"]["failed_rules"], v["none"]  # neither pass nor fail
+    assert v["none"]["ships"] is None, v["none"]          # not True, and not False either
+    why = v["none"]["why"].lower()
+    assert "unmatched" in why and "50%" in why, why
+
+
+def test_verdict_gives_the_time_versus_turns_tie_to_time():
+    """Amendment 2. Arms A and C both have one parameter, so rule 4 as written names no winner
+    between them; the amendment (written before any arm-B/C/D number existed) gives the tie to
+    arm A — the block is displayed on a time axis where a turn count is invisible, and turn
+    density drifts with agent autonomy while a minute does not.
+
+    The tie is reachable only because arm A is judged at its BEST candidate while arm C is
+    matched against the arm-A candidate of nearest duration: arm A ships at n=120 (96%) while
+    arm C at 96% is matched against arm A's n=15 (80%), a +16 point win on rule 2."""
+    rows = [{"arm": "time", "n": 15, "dur_p50": 800.0, "dur_p90": 900.0,
+             "can_attribute_share": 80.0},
+            {"arm": "time", "n": 120, "dur_p50": 7200.0, "dur_p90": 10000.0,
+             "can_attribute_share": 96.0},
+            {"arm": "turns", "n": 20, "dur_p50": 900.0, "dur_p90": 1000.0,
+             "can_attribute_share": 96.0}]
+    v = b.verdict(rows, b.matched_control(rows))
+    assert v["time"]["pass"] is True and v["turns"]["pass"] is True, v
+    assert v["time"]["ships"] is True, v["time"]
+    assert v["turns"]["ships"] is False, v["turns"]      # passes rules 1-3, loses the tie
+    assert "amendment 2" in v["time"]["why"].lower(), v["time"]["why"]
+    assert "amendment 2" in v["turns"]["why"].lower(), v["turns"]["why"]
+    # The pre-amendment text claimed rule 4 could not separate this pair. It can now.
+    assert "does not separate" not in v["time"]["why"].lower(), v["time"]["why"]
+
+
+def test_verdict_says_an_unmeasured_p90_could_not_be_measured():
+    """An arm that produced no blocks fails rule 3 — unmeasured is not waived — but the sentence
+    must not assert a measurement it does not have ("p90 unknown exceeds 4h" claims both)."""
+    rows = [{"arm": "none", "n": None, "can_attribute_share": None, "dur_p90": None}]
+    v = b.verdict(rows, b.matched_control(rows))
+    assert 3 in v["none"]["failed_rules"], v
+    why = v["none"]["why"].lower()
+    assert "could not be measured" in why, why
+    assert "exceeds" not in why.split("rule 3:")[1], why
+
+
+def test_run_arm_over_a_session_with_no_cuts_emits_exactly_one_block_for_arm_d():
+    """Arm D is detection only, so a session the detector never fired on is ONE block spanning
+    the whole span — and `blocks_per_session` has to say 1.0, because that is the number rule 3's
+    legibility argument is about. Also pins `sessions_no_cuts_share`, the pre-registration's
+    stated limitation made visible."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = [_ev(i * 60.0, "branch", "main") for i in range(10)]
+        st = b.CachingStore(_mkstore(tmp, ev))
+        row = b.run_arm("none", b.bound_none, None, store=st,
+                        sessions=[(SESSION, 0.0, 1800.0, [])])
+    assert row["n_blocks"] == 1, row
+    assert row["blocks_per_session"] == 1.0, row
+    assert row["end_reasons"] == {"session_end": 1}, row
+    assert row["dur_p50"] == 1800.0 and row["dur_p50_min"] == 30.0, row
+    assert row["sessions_no_cuts_share"] == 100.0, row
+
+
+def test_run_arm_merge_share_is_zero_when_every_block_clears_the_floor():
+    """The rule-1 bar IS "the merge rule becomes unnecessary", so `merge_share` is the column
+    that says whether it did. If it reported anything but 0.0 on a store where no block is thin,
+    every arm's number would be unreadable."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = [_ev(i * 60.0, "branch", "main", n=5.0) for i in range(30)]
+        st = b.CachingStore(_mkstore(tmp, ev))
+        row = b.run_arm("time", b.bound_time, 10, store=st,
+                        sessions=[(SESSION, 0.0, 1800.0, [])])
+    assert row["n_blocks"] == 3, row
+    assert row["merge_share"] == 0.0, row
+    assert row["absorbed_by_end_reason"] == {}, row
+    assert row["thin_by_end_reason"] == {}, row
+    assert row["can_attribute_share"] == 100.0, row
+
+
+def test_run_arm_attributes_arm_b_thinness_to_the_end_that_bypassed_the_gate():
+    """⚠️ The claim this pins is the NARROW one, and the wide one it replaces was wrong.
+
+    Under arm B a thin block cannot come from the gate: `can_attribute` needs some ALLOCATION
+    level's OWN total to reach `MIN_EVIDENCE`, `block_evidence` is the POOLED sum over those same
+    levels, so pooled >= per-level and `can_attribute` ⇒ not thin. Only the reverse is possible
+    (pooled >= 5, nothing attributed), and that cannot make a block thin. So a non-zero
+    `merge_share` under arm B is NEVER the two evidence definitions disagreeing — it is a block
+    whose end BYPASSED the gate: a detected cut, or a `session_end`/`session_end_deferred` tail.
+
+    Here the last candidate boundary runs past `hi`, so the final block closes on `session_end`
+    without `can_attribute` ever being asked, and it is thin. The counters must name that reason
+    and NOT `budget`/`bound_deferred`, or Task 3 has to hedge a number it could attribute."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = [_ev(i * 60.0, "branch", "main", n=5.0) for i in range(20)]   # 0..1140s: two full
+        ev.append(_ev(1500.0, "branch", "main", n=1.0))                    # thin 1200..1800 tail
+        st = b.CachingStore(_mkstore(tmp, ev))
+        row = b.run_arm("evidence_gated", b.bound_evidence_gated, 10, store=st,
+                        sessions=[(SESSION, 0.0, 1800.0, [])])
+    assert row["n_blocks"] == 3, row
+    assert row["end_reasons"] == {"budget": 2, "session_end": 1}, row
+    assert row["merge_share"] > 0.0, row
+    # The whole of it is the tail that never met the gate.
+    assert row["thin_by_end_reason"] == {"session_end": 1}, row
+    assert row["absorbed_by_end_reason"] == {"session_end": 1}, row
+    assert abs(row["merge_share_by_end_reason"]["session_end"] - row["merge_share"]) < 1e-9, row
 
 
 if __name__ == "__main__":

@@ -427,12 +427,27 @@ def merge_thin(store, session, blocks, min_evidence=MIN_EVIDENCE):
               # absorbed-span comparison above so the report can show both rather than silently
               # picking one. See the docstring warning for why they disagree.
               "value_changed_vs_neighbor": 0, "value_changed_vs_neighbor_forward": 0,
-              "value_changed_vs_neighbor_backward": 0}
+              "value_changed_vs_neighbor_backward": 0,
+              # ⚠️ Which KIND of boundary produced a thin block, and which produced an absorbed
+              # one. Without this a non-zero merge share is a bare number the report has to
+              # hedge; with it the number is attributable. It matters most under arm B, where a
+              # thin block can ONLY be one whose end bypassed the evidence gate — see
+              # `run_arm`'s docstring for the proof that arm B's own gate cannot produce one.
+              "thin_by_end_reason": {}, "absorbed_by_end_reason": {}}
     if not blocks:
         return blocks, stats
 
     thin = [block_evidence(store, session, bl) < min_evidence for bl in blocks]
     stats["chained"] = sum(1 for k in range(len(blocks) - 1) if thin[k] and thin[k + 1])
+    for bl, is_thin in zip(blocks, thin):
+        if is_thin:
+            stats["thin_by_end_reason"][bl.end_reason] = (
+                stats["thin_by_end_reason"].get(bl.end_reason, 0) + 1)
+
+    def _count_absorbed(absorbed):
+        for bl in absorbed:
+            stats["absorbed_by_end_reason"][bl.end_reason] = (
+                stats["absorbed_by_end_reason"].get(bl.end_reason, 0) + 1)
 
     out = []
     n = len(blocks)
@@ -452,6 +467,7 @@ def merge_thin(store, session, blocks, min_evidence=MIN_EVIDENCE):
             merged_block = Block(blocks[i].start, successor.end,
                                  blocks[i].start_reason, successor.end_reason)
             stats["merged"] += j - i
+            _count_absorbed(blocks[i:j])
             stats["merge_events"] += 1
             stats["merge_events_forward"] += 1
             before = _dim_values(store.rollup_window(session, blocks[i].start, successor.start))
@@ -474,6 +490,7 @@ def merge_thin(store, session, blocks, min_evidence=MIN_EVIDENCE):
                 merged_block = Block(pred.start, blocks[-1].end,
                                      pred.start_reason, blocks[-1].end_reason)
                 stats["merged_backward"] += n - i
+                _count_absorbed(blocks[i:n])
                 stats["merge_events"] += 1
                 stats["merge_events_backward"] += 1
                 before = _dim_values(store.rollup_window(session, blocks[i].start, blocks[-1].end))
@@ -561,6 +578,13 @@ ARMS = (
 RULE1_MIN_ATTRIBUTE_SHARE = 95.0
 # Rule 2: ">= 10 points of can_attribute% over arm A at the same median duration."
 RULE2_MIN_MATCHED_DELTA = 10.0
+# Amendment 3: "the same median duration" needs a distance bound, because nearest-neighbour always
+# returns SOMETHING. `CAPS` tops out at 120 minutes, so arm D pairs against the 120-minute cap no
+# matter how much longer its blocks actually are, and the delta then contains exactly the
+# block-size effect this control exists to remove. A pairing counts as MATCHED only within 50%:
+# "`CAPS`' own neighbouring candidates sit 33-50% apart, so a tighter bound would reject pairings
+# the grid can never supply." Outside it, rule 2 is UNMATCHED — neither pass nor fail.
+MATCHED_MAX_DUR_RATIO = 0.50
 # Rule 3: "an arm whose p90 block duration exceeds 4 hours ... fails legibility." SECONDS, matching
 # `run_arm`'s `dur_p90`.
 RULE3_MAX_P90_SECONDS = 4 * 3600.0
@@ -598,7 +622,7 @@ def arm_sessions(store):
     return out
 
 
-def run_arm(name, fn, n, store=None, sessions=None, min_evidence=MIN_EVIDENCE):
+def run_arm(name, fn, n, store=None, sessions=None):
     """One arm at one parameter over every session. Returns the pre-registration's metric row.
 
     Durations are reported in **SECONDS** (`dur_p50` / `dur_p90`), because rule 3's threshold is
@@ -609,9 +633,32 @@ def run_arm(name, fn, n, store=None, sessions=None, min_evidence=MIN_EVIDENCE):
     reader of the JSON does not have to divide.
 
     `merge_share` is the share of blocks `merge_thin` would absorb — reported for every arm
-    because the pre-registration's bar IS "the merge rule becomes unnecessary". Under arm B it
-    should be near zero by construction; if it is not, arm B does not work as designed and that
-    is a finding, not a bug to paper over here.
+    because the pre-registration's bar IS "the merge rule becomes unnecessary" — and it is split
+    by the absorbed block's own `end_reason` (`merge_share_by_end_reason`, counts in
+    `absorbed_by_end_reason`, plus `thin_by_end_reason` over every thin block whether absorbed or
+    not), so a non-zero share is attributable rather than a bare number the report has to hedge.
+
+    ⚠️ **Under arm B a thin block can ONLY be one whose end BYPASSED the gate, and this is a
+    proof, not a hope.** `can_attribute` requires some ALLOCATION level's OWN total to reach
+    `MIN_EVIDENCE`, while `block_evidence` is the POOLED sum over those same levels; pooled >=
+    per-level, so `can_attribute` ⇒ not thin, always. Arm B's gate therefore cannot emit a thin
+    `budget`/`bound_deferred` block. Only the reverse direction is possible (pooled >= 5 with no
+    single level attributed — the case `can_attribute` exists for), and that direction cannot
+    make a block thin. So every thin block under arm B is one the gate never judged: a
+    `detected` cut (detection wins over the gate at any point in the deferral walk) or a
+    `session_end` / `session_end_deferred` tail (the span ran out). **A non-zero `merge_share`
+    under arm B is therefore NEVER the two evidence definitions disagreeing** — an earlier note
+    here claimed it might be, and that was wrong in the direction it claimed — it is the
+    end-reason split saying which bypass produced it.
+
+    There is deliberately **no `min_evidence` parameter.** One was removed rather than threaded:
+    it reached `merge_thin`'s thin/merge definition but not `can_attribute`'s attributable one
+    (which is `MIN_EVIDENCE` via `attribution`'s default), and — decisively — arm B's own gate
+    calls `can_attribute` INSIDE `bound_evidence_gated`, a Task 1 bound function this task must
+    not modify. No parameter here could move all three definitions together, and one that moves
+    a subset is an incoherent pair (Minor 8). The floor is the shipped `MIN_EVIDENCE`, which is
+    what the pre-registration is written against. `merge_thin`/`merge_sweep` keep their own
+    parameter — that is Task 1's API and its tests use it.
 
     Every pooled figure is reported beside a per-session one (`session_median_can_attribute_share`,
     `max_blocks_one_session_share`) because one ~11.7-day session contributed ~17% of blocks at
@@ -622,6 +669,8 @@ def run_arm(name, fn, n, store=None, sessions=None, min_evidence=MIN_EVIDENCE):
     st = store if store is not None else CachingStore(open_store(DB))
     sess = sessions if sessions is not None else arm_sessions(st)
     ends = collections.Counter()
+    thin_ends = collections.Counter()
+    absorbed_ends = collections.Counter()
     durations = []
     n_blocks = attributable = absorbed = 0
     max_blocks, max_blocks_session = 0, None
@@ -633,8 +682,10 @@ def run_arm(name, fn, n, store=None, sessions=None, min_evidence=MIN_EVIDENCE):
             sessions_no_cuts += 1
         if len(blocks) > max_blocks:
             max_blocks, max_blocks_session = len(blocks), s
-        _merged, stats = merge_thin(st, s, blocks, min_evidence)
+        _merged, stats = merge_thin(st, s, blocks)
         absorbed += stats["merged"] + stats["merged_backward"]
+        thin_ends.update(stats["thin_by_end_reason"])
+        absorbed_ends.update(stats["absorbed_by_end_reason"])
         s_attr = 0
         for bl in blocks:
             n_blocks += 1
@@ -659,6 +710,10 @@ def run_arm(name, fn, n, store=None, sessions=None, min_evidence=MIN_EVIDENCE):
         "can_attribute_share": 100.0 * attributable / n_blocks if n_blocks else 0.0,
         "session_median_can_attribute_share": _percentile(session_attr_shares, 50),
         "merge_share": 100.0 * absorbed / n_blocks if n_blocks else 0.0,
+        "thin_by_end_reason": dict(thin_ends),
+        "absorbed_by_end_reason": dict(absorbed_ends),
+        "merge_share_by_end_reason": ({k: 100.0 * v / n_blocks for k, v in absorbed_ends.items()}
+                                      if n_blocks else {}),
         "dur_p50": p50,
         "dur_p90": p90,
         "dur_p50_min": p50 / 60.0 if p50 is not None else None,
@@ -684,11 +739,24 @@ def matched_control(arms):
     (arm B's n=10 against arm A's n=10) would compare a deferred block against a 10-minute one and
     call the difference intelligence, which is why the pairing is on `dur_p50` and nothing else.
 
-    Ties are possible on a coarse candidate grid, and are broken toward the **smaller n** — fixed
-    by rule rather than left to input order, and the conservative direction: a shorter cap
-    attributes less, so the arm's delta comes out larger and is judged against the weaker
-    baseline. A row with no `dur_p50` (an arm that produced no blocks at all) gets `None`
-    throughout rather than a fabricated pairing.
+    ⚠️ **The pairing is BOUNDED (Amendment 3).** Nearest-neighbour always returns something,
+    however far away, so an arm whose blocks are far longer than the longest cap would pair
+    against that cap and the delta would contain the very block-size effect the control removes —
+    quietly vacuous for the one arm that needs it most (arm D). Every row therefore carries
+    `matched_dur_gap` (absolute seconds) and `matched_dur_ratio`
+    (`abs(arm_p50 - matched_p50) / matched_p50`), and `matched` is True only when that ratio is
+    <= `MATCHED_MAX_DUR_RATIO`. Outside it rule 2 is **UNMATCHED — neither pass nor fail**: the
+    arm is not disqualified for being unmatchable, it is unjudgeable on that rule, and `verdict`
+    says so out loud rather than letting it claim a win on rules 1 and 3 alone.
+
+    Ties are possible on a coarse candidate grid, and are broken toward the **LARGER n**
+    (Amendment 4) — fixed by rule rather than left to input order, and the direction a control
+    against false wins must take: the longer cap attributes MORE, so it is the stronger baseline,
+    the arm's delta comes out SMALLER, and rule 2 is harder to clear. (The first implementation
+    took the smaller n and called that "conservative"; that was backwards — the weaker baseline
+    is lenient toward the challenger. Exact ties between float medians are near-impossible on
+    this grid, so the correction is for direction, not for effect.) A row with no `dur_p50` (an
+    arm that produced no blocks at all) gets `None` throughout rather than a fabricated pairing.
     """
     time_rows = [r for r in arms if r.get("arm") == "time" and r.get("dur_p50") is not None]
     out = []
@@ -698,13 +766,21 @@ def matched_control(arms):
         row = {"arm": r.get("arm"), "n": r.get("n"), "dur_p50": r.get("dur_p50"),
                "can_attribute_share": r.get("can_attribute_share"),
                "matched_time_n": None, "matched_time_dur_p50": None,
-               "matched_time_can_attribute_share": None, "delta": None}
+               "matched_time_can_attribute_share": None, "delta": None,
+               "matched_dur_gap": None, "matched_dur_ratio": None, "matched": None}
         if time_rows and r.get("dur_p50") is not None:
+            # Amendment 4: nearest `dur_p50`, ties to the LARGER n (negated key, so `None` — arm
+            # D's own parameter, never a time row's — would sort last rather than first).
             best = min(time_rows, key=lambda t: (abs(t["dur_p50"] - r["dur_p50"]),
-                                                 _n_key(t.get("n"))))
+                                                 -_n_key(t.get("n"))))
+            gap = abs(best["dur_p50"] - r["dur_p50"])
+            ratio = (gap / best["dur_p50"]) if best["dur_p50"] else float("inf")
             row["matched_time_n"] = best.get("n")
             row["matched_time_dur_p50"] = best["dur_p50"]
             row["matched_time_can_attribute_share"] = best.get("can_attribute_share")
+            row["matched_dur_gap"] = gap
+            row["matched_dur_ratio"] = ratio
+            row["matched"] = ratio <= MATCHED_MAX_DUR_RATIO
             if (r.get("can_attribute_share") is not None
                     and best.get("can_attribute_share") is not None):
                 row["delta"] = r["can_attribute_share"] - best["can_attribute_share"]
@@ -713,10 +789,22 @@ def matched_control(arms):
 
 
 BASELINE_ARM = "time"
+# Amendment 2's other side: arm C. Named rather than inlined so the tie-break reads as the rule it
+# is.
+TIEBREAK_LOSER_ARM = "turns"
+
+
+def _fmt_secs(x):
+    """Seconds as `"1234s (20.6m)"`, or `"unknown"`. Both units, because rule 3 is written in
+    hours, the pairing is measured in seconds, and a reader of `why` should not have to divide."""
+    return "unknown" if x is None else f"{x:.0f}s ({x / 60.0:.1f}m)"
 
 
 def _judge(row, ctrl):
-    """Rules 1-3 against one arm-parameter row. Returns `(failed_rules, reasons)`.
+    """Rules 1-3 against one arm-parameter row. Returns `(failed_rules, reasons, rule2)`, where
+    `rule2` is one of `"pass"` / `"fail"` / `"n/a"` (the baseline arm) / `"unmatched"` (Amendment
+    3's distance bound) — a four-state fact `failed_rules` alone cannot carry, since two of those
+    states put nothing in it for opposite reasons.
 
     ⚠️ **Every rule is evaluated; nothing short-circuits.** The three are independent — a low
     `can_attribute_share` says nothing about the p90 — and "failed rule 1" is actionable while
@@ -740,22 +828,47 @@ def _judge(row, ctrl):
                    f"unnecessary")
     delta = ctrl.get("delta") if ctrl else None
     matched_n = ctrl.get("matched_time_n") if ctrl else None
+    ratio = ctrl.get("matched_dur_ratio") if ctrl else None
     if row.get("arm") == BASELINE_ARM:
+        rule2 = "n/a"
         why.append("rule 2: n/a — this IS arm A, the matched-duration baseline; a delta against "
                    "itself is 0 by definition and says nothing about the arm")
+    elif ratio is not None and ratio > MATCHED_MAX_DUR_RATIO:
+        # Amendment 3. NOT a failure and NOT a pass: the control could not be applied, so the
+        # arm is unjudgeable on rule 2 and the gap is stated so the reader can decide.
+        rule2 = "unmatched"
+        why.append(f"rule 2: UNMATCHED — neither pass nor fail. The nearest arm-A row (n="
+                   f"{matched_n}) has dur_p50 "
+                   f"{_fmt_secs(ctrl.get('matched_time_dur_p50'))} against this arm's "
+                   f"{_fmt_secs(row.get('dur_p50'))}, a gap of "
+                   f"{_fmt_secs(ctrl.get('matched_dur_gap'))} ({ratio * 100.0:.0f}% of the "
+                   f"baseline, over Amendment 3's {MATCHED_MAX_DUR_RATIO * 100.0:.0f}% bound), so "
+                   f"the control cannot remove the block-size effect it exists to remove and its "
+                   f"delta ({'none' if delta is None else f'{delta:+.1f}'} points) is not "
+                   f"interpretable. This arm is unjudgeable on rule 2, not disqualified by it")
     elif delta is None or delta < RULE2_MIN_MATCHED_DELTA:
+        rule2 = "fail"
         failed.append(2)
         why.append(f"rule 2: {'no' if delta is None else f'{delta:+.1f}'} points over the "
                    f"matched-duration time cap (n={matched_n}), under the "
                    f"{RULE2_MIN_MATCHED_DELTA:.0f}-point bar — a more complicated way to make "
                    f"blocks bigger")
+    else:
+        rule2 = "pass"
     p90 = row.get("dur_p90")
-    if p90 is None or p90 > RULE3_MAX_P90_SECONDS:
+    if p90 is None:
+        # Minor 12: unmeasured is treated as a failure — a bound that produced no blocks has not
+        # been SHOWN to be legible — but the sentence must not claim a measurement that says so.
         failed.append(3)
-        why.append(f"rule 3: legibility — p90 block duration "
-                   f"{'unknown' if p90 is None else f'{p90 / 3600.0:.1f}h'} exceeds "
+        why.append(f"rule 3: legibility — p90 block duration could not be measured (this arm "
+                   f"produced no blocks), so it is not shown to be within "
+                   f"{RULE3_MAX_P90_SECONDS / 3600.0:.0f}h; unmeasured is counted as a failure, "
+                   f"not waived")
+    elif p90 > RULE3_MAX_P90_SECONDS:
+        failed.append(3)
+        why.append(f"rule 3: legibility — p90 block duration {p90 / 3600.0:.1f}h exceeds "
                    f"{RULE3_MAX_P90_SECONDS / 3600.0:.0f}h")
-    return failed, why
+    return failed, why, rule2
 
 
 def verdict(rows, control):
@@ -769,21 +882,39 @@ def verdict(rows, control):
 
     Rule 4 ("simplest winner takes it") is applied ACROSS the survivors and reported as `ships`;
     it never turns a passing arm into a failing one, since it is a choice between arms rather than
-    a bar. A tie on parameter count is not resolved by the pre-registration, so every tied
-    survivor is marked `ships` and told so in `why` rather than separated by an unregistered
-    rule invented after the numbers were seen. Rule 5 (the null result — no arm reaches 95%) needs
-    no extra machinery: it is the state in which no arm passes, and every arm's `why` says which
-    bar it missed.
+    a bar.
+
+    **A tie on parameter count between arms A and C IS resolved — by Amendment 2, `time` wins.**
+    Arms A and C both have one parameter, so rule 4 as written names no winner between them; the
+    amendment (written before any arm-B/C/D number existed) gives the tie to arm A for two
+    reasons, neither about attribution: the block is displayed on a TIME axis, so a minute bound
+    is directly legible where a turn count is not visible there at all; and turn density is a
+    property of how autonomous the agent is, so the same `n` turns means different things on
+    different machines and drifts as tooling changes, while a minute means the same thing
+    everywhere — the `MIN_EVIDENCE`-is-a-sample-size argument applied to the bound. Arm C still
+    wins outright if it beats arm A on rules 1-3; the amendment governs ties only. Any OTHER tie
+    is reported as genuinely unresolved rather than separated by an invented rule — on the current
+    `ARM_PARAMS` no other pair can tie, but the guard stays.
+
+    **An UNMATCHED arm (Amendment 3) never claims `ships`.** It cleared the rules that could be
+    applied to it, but rule 2 could not be, so it cannot be said to have won the matched-duration
+    control and cannot take the prize off rules 1 and 3 alone. Its `ships` is **None**, not True
+    or False, and it is excluded from the rule-4 comparison — so Task 3 has to state it rather
+    than read a win.
+
+    Rule 5 (the null result — no arm reaches 95%) needs no extra machinery: it is the state in
+    which no arm passes, and every arm's `why` says which bar it missed.
     """
     ctrl = {(c.get("arm"), c.get("n")): c for c in control}
     by_arm = {}
     for r in rows:
-        failed, why = _judge(r, ctrl.get((r.get("arm"), r.get("n"))))
+        failed, why, rule2 = _judge(r, ctrl.get((r.get("arm"), r.get("n"))))
         c = ctrl.get((r.get("arm"), r.get("n"))) or {}
         by_arm.setdefault(r.get("arm"), []).append({
             "n": r.get("n"),
             "pass": not failed,
             "failed_rules": failed,
+            "rule2": rule2,
             "why": "; ".join(why) if why else "clears rules 1-3",
             "can_attribute_share": r.get("can_attribute_share"),
             "dur_p50": r.get("dur_p50"),
@@ -791,6 +922,9 @@ def verdict(rows, control):
             "merge_share": r.get("merge_share"),
             "matched_time_n": c.get("matched_time_n"),
             "matched_delta": c.get("delta"),
+            "matched_dur_gap": c.get("matched_dur_gap"),
+            "matched_dur_ratio": c.get("matched_dur_ratio"),
+            "matched": c.get("matched"),
         })
 
     out = {}
@@ -801,6 +935,7 @@ def verdict(rows, control):
             "pass": best["pass"],
             "why": best["why"],
             "failed_rules": list(best["failed_rules"]),
+            "rule2": best["rule2"],
             "n": best["n"],
             "params": ARM_PARAMS.get(arm),
             "ships": False,
@@ -808,15 +943,42 @@ def verdict(rows, control):
         }
 
     survivors = [a for a, v in out.items() if v["pass"]]
-    if survivors:
-        fewest = min(ARM_PARAMS.get(a, 99) for a in survivors)
-        winners = [a for a in survivors if ARM_PARAMS.get(a, 99) == fewest]
+    # Amendment 3: an arm that could not be matched is unjudgeable on rule 2, so it is neither a
+    # candidate for the prize nor disqualified. `ships = None` is the third state that keeps those
+    # apart; `False` would read as "judged and lost".
+    unmatched = [a for a in survivors if out[a]["rule2"] == "unmatched"]
+    for a in unmatched:
+        out[a]["ships"] = None
+        out[a]["why"] += ("; rule 4: NOT EVALUATED — this arm clears every rule that could be "
+                          "applied to it, but rule 2 could not be (UNMATCHED, above), so it "
+                          "cannot be said to have won the matched-duration control and does not "
+                          "compete for the prize on rules 1 and 3 alone. `ships` is null, not "
+                          "true and not false")
+    judged = [a for a in survivors if a not in unmatched]
+    if judged:
+        fewest = min(ARM_PARAMS.get(a, 99) for a in judged)
+        winners = [a for a in judged if ARM_PARAMS.get(a, 99) == fewest]
+        # Amendment 2: the one tie rule 4 leaves open is A-vs-C, and it goes to A (time).
+        amendment2 = BASELINE_ARM in winners and TIEBREAK_LOSER_ARM in winners
+        if amendment2:
+            winners = [w for w in winners if w != TIEBREAK_LOSER_ARM]
+            out[TIEBREAK_LOSER_ARM]["ships"] = False
+            out[TIEBREAK_LOSER_ARM]["why"] += (
+                f"; rule 4: tied with arm A ({BASELINE_ARM}) on parameter count ({fewest}) and "
+                f"LOSES the tie under Amendment 2 — the block is displayed on a time axis where a "
+                f"turn count is not visible at all, and turn density is not stable, so a turn "
+                f"cap's meaning drifts between machines and over time while a minute does not. "
+                f"Clears rules 1-3; does not ship")
         for a in winners:
             out[a]["ships"] = True
             out[a]["why"] += (f"; rule 4: fewest parameters among survivors ({fewest})")
+            if a == BASELINE_ARM and amendment2:
+                out[a]["why"] += (f" — tied with arm C ({TIEBREAK_LOSER_ARM}) and WINS the tie "
+                                 f"under Amendment 2 (time axis legibility; turn density drifts)")
             if len(winners) > 1:
                 out[a]["why"] += (f" — TIED with {sorted(x for x in winners if x != a)} on "
-                                 f"parameter count, which rule 4 does not separate")
+                                 f"parameter count, a tie neither rule 4 nor any amendment "
+                                 f"resolves (Amendment 2 covers A-vs-C only)")
     return out
 
 
