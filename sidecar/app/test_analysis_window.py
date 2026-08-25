@@ -112,7 +112,7 @@ def test_the_skill_level_publishes_under_the_name_skill_not_workflow():
 def test_payload_carries_its_schema_version():
     """These values land in financial reports; a silent shape change is the reproducibility
     failure the earlier handoff called out, so the payload is versioned from the first release."""
-    assert payload(rollup(R))["schema"] == SCHEMA == 11
+    assert payload(rollup(R))["schema"] == SCHEMA == 12
 
 
 # --- the floor generalised to an arbitrary slice length ---------------------------------------
@@ -322,6 +322,73 @@ def test_no_published_path_value_is_absolute_or_escapes_the_workspace():
         for entry in inv[dim]:
             assert not ABS_OR_ESCAPING.search(entry["value"]), \
                 f"{dim} published a non-workspace-relative value: {entry['value']!r}"
+
+
+# --- `repo`: a series level fed by the DAEMON, not a stamp on the payload --------------------
+#
+# `repo` is the one ALLOCATION dimension whose rows the sidecar cannot produce for itself:
+# /analyze and /ingest are confined to KELD_ANALYZE_ROOTS precisely so they cannot open a repo's
+# .git/config as the daemon's user. The facts arrive on the request and are written as EVENTS
+# during ingest, which is what these pin -- because the alternative design (overlay the value
+# onto the digest) would look identical from a single payload and would not roll up, bin, or
+# carry an evidence count.
+
+def test_repo_is_an_allocation_dimension_with_its_own_provenance():
+    """It rolls up exactly like its siblings -- same `dominant` call, real share, real evidence
+    count -- but its `provenance` is DIFFERENT, and that difference is the whole point: a reader
+    who cannot tell "we counted this from tool inputs" from "the daemon read this off disk"
+    cannot judge either."""
+    names = {n for n, _lv, _f in ALLOCATION}
+    assert "repo" in names, sorted(names)
+    assert {n: lv for n, lv, _f in ALLOCATION}["repo"] == "repo", ALLOCATION
+    ws = payload(rollup([_n("repo", "github.com/ncx-ai/keld-atlas", 40)]))["workstreams"]
+    assert ws["repo"] == {"value": "github.com/ncx-ai/keld-atlas", "share": 1.0, "evidence": 40,
+                          "provenance": "known:daemon_git"}, ws
+    # And every sibling keeps the constant it always had -- the override is per dimension, not a
+    # rename of the field's default.
+    assert payload(rollup([_n("branch", "main", 20)]))["workstreams"]["branch"]["provenance"] \
+        == "known:tool_inputs"
+
+
+def test_repo_is_absent_not_empty_when_nothing_resolved_it():
+    """A PROJECT DIRECTORY IS NOT NECESSARILY A REPOSITORY. A scratch dir, a mounted share, a
+    documents tree -- real work happens in directories that were never `git init`ed, and the
+    daemon sends "" for them. No rows are written, so the dimension is unattributed exactly like
+    any other level that saw nothing. Never an empty string, and never the directory name:
+    `project` remains the identity there.
+
+    Asserted on a rollup that HAS other levels, so this is "repo specifically said nothing"
+    rather than "the payload was empty"."""
+    ws = payload(rollup([_n("workspace", "scratch-notes", 30)]))["workstreams"]
+    assert ws["repo"] is None, ws["repo"]
+    assert ws["project"] == {"value": "scratch-notes", "share": 1.0, "evidence": 30,
+                             "provenance": "known:tool_inputs"}, ws["project"]
+
+
+def test_repo_publishes_beside_project_and_never_instead_of_it():
+    """Measured over 54 real transcripts, `workspace -> repo` is a PERFECT 1:1 mapping and
+    `repo`'s cardinality is strictly LOWER (4 distinct workspaces -> 3 distinct repos), because
+    `tmp` is real work in a directory that is not a checkout. So replacing `project` with `repo`
+    would lose a distinction the series can make. Both ship, always."""
+    rl = rollup([_n("repo", "github.com/ncx-ai/keld-signal", 30),
+                 _n("workspace", "keld-signal", 30)])
+    ws = payload(rl)["workstreams"]
+    assert ws["repo"]["value"] == "github.com/ncx-ai/keld-signal"
+    assert ws["project"]["value"] == "keld-signal"
+
+
+def test_repo_reports_no_dynamics_and_no_prior():
+    """Both withheld on the SAME measurement, not by oversight: 0 of 50 real transcripts span
+    more than one repository (34 of 50 span more than one DIRECTORY and none of them changes
+    repo), so a dynamic would be identically 0.000 and a prior would agree 100% of the time --
+    `project`'s exact disqualification, one level coarser. Publishing a constant is what those
+    two measurements exist to prevent."""
+    from app.analysis.dynamics import DROPPED_DIMENSIONS, DYNAMIC_DIMENSIONS
+    from app.analysis.prior import ENABLED, PRIOR_DIMENSIONS
+    assert "repo" in DROPPED_DIMENSIONS, DROPPED_DIMENSIONS
+    assert "repo" not in {n for n, _lv, _f in DYNAMIC_DIMENSIONS}
+    assert "repo" not in ENABLED, ENABLED
+    assert "repo" not in {n for n, _lv, _f in PRIOR_DIMENSIONS}
 
 
 if __name__ == "__main__":

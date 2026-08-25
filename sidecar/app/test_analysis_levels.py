@@ -103,6 +103,71 @@ def test_z_and_explicit_offset_parse_identically():
     assert _epoch("2026-08-01T00:00:00Z") == _epoch("2026-08-01T00:00:00+00:00")
 
 
+# --- the `repo` level: facts the DAEMON resolved, written as events ---------------------------
+#
+# The sidecar cannot resolve these. /analyze and /ingest are confined to KELD_ANALYZE_ROOTS
+# precisely so they cannot open a repo's .git/config as the daemon's user, so the identity
+# arrives on the request and `events_for_turns` writes it as rows. Three properties matter and
+# each is pinned: it is written PER TURN (so it rolls up like any level), it is written on the
+# SAME condition `workspace` is (so the two are comparable per turn), and `resolved=None`
+# produces byte-identical rows to before the argument existed.
+
+def _one_turn(tmp):
+    return _write(tmp, [{"type": "assistant", "timestamp": "2026-08-01T00:00:00Z", "cwd": tmp,
+                         "gitBranch": "main", "message": {"model": "claude-opus-5",
+                         "content": [{"type": "text", "text": "hi"}]}},
+                        {"type": "assistant", "timestamp": "2026-08-01T00:00:01Z", "cwd": tmp,
+                         "gitBranch": "main", "message": {"model": "claude-opus-5",
+                         "content": [{"type": "text", "text": "again"}]}}])
+
+
+def test_a_resolved_repo_becomes_one_ref_row_per_turn():
+    """PER TURN, not once per file, because that is what makes it a series level: the rollup
+    counts rows, so a single row would publish share 1.0 over evidence 1 and be discarded by the
+    MIN_EVIDENCE floor no matter how much work the window held."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _one_turn(tmp)
+        turns = list(iter_turns(p))
+        rows, _pending, _n = events_for_turns(
+            turns, p, tmp, None, resolved={"repo": "github.com/ncx-ai/keld-atlas",
+                                           "git_branch": "main", "project": "keld"})
+        repo = [r for r in rows if r[6] == "repo"]
+        ws = [r for r in rows if r[6] == "workspace"]
+        assert len(repo) == len(turns) == 2, repo
+        # Same cadence as `workspace`, which is the level it exists to be compared against.
+        assert len(repo) == len(ws), (len(repo), len(ws))
+        assert {r[7] for r in repo} == {"github.com/ncx-ai/keld-atlas"}, repo
+        assert all(r[5] == "ref" and r[8] == 1.0 for r in repo), repo
+
+
+def test_no_resolved_facts_writes_no_repo_rows_and_changes_nothing_else():
+    """The back-compat guarantee, and it is the reason the fixture identity gate still holds:
+    the study, `analyze_window_by_parse` and every existing caller pass nothing, so they must
+    produce EXACTLY the rows they produced before this argument existed -- asserted as row-for-row
+    equality against an explicit empty-facts call, not merely as "no repo rows"."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _one_turn(tmp)
+        turns = list(iter_turns(p))
+        base, _pd, _n = events_for_turns(turns, p, tmp, None)
+        empty, _pd2, _n2 = events_for_turns(turns, p, tmp, None, resolved={"repo": ""})
+        assert base == empty, "an empty repo identity must be identical to sending none"
+        assert not [r for r in base if r[6] == "repo"], base
+
+
+def test_a_repo_row_needs_a_resolved_workspace_not_only_a_resolved_repo():
+    """It rides the `if repo:` branch `workspace`/`vcs` ride, deliberately. A turn whose cwd
+    resolves to no workspace at all is a turn the series cannot place, and attributing a
+    repository to it would put a confident identity on evidence the rest of the row set refuses
+    to touch."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _write(tmp, [{"type": "assistant", "timestamp": "2026-08-01T00:00:00Z",
+                          "message": {"content": [{"type": "text", "text": "hi"}]}}])
+        rows, _pending, _n = events_for_turns(
+            list(iter_turns(p)), p, tmp, None, resolved={"repo": "github.com/o/r"})
+        assert not [r for r in rows if r[6] == "workspace"], rows
+        assert not [r for r in rows if r[6] == "repo"], rows
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

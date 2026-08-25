@@ -30,7 +30,53 @@ from app.analysis.window import dominant
 # populated for every session; a reader who sees `skill` asks the question the numbers actually
 # raise, which is what the other 61.6% of sessions look like. Singular, like every sibling: the
 # key holds one dominant value, not a set.
+# `repo` LEADS, and it is a first-class level rather than a stamp on the payload. Its rows are
+# written during ingest from the facts the daemon resolved (`levels.events_for_turns`' `resolved`
+# argument), which is what makes it roll up, bin, and carry a real share and evidence count like
+# every sibling below. A dimension the analysis does not analyse is not a dimension; it is a
+# label riding along.
+#
+# ⚠️ IT SHIPS ON AN ARGUMENT, NOT ON A MEASURED GAIN, AND THE MEASUREMENT SAYS SO. Over 54 real
+# transcripts, every `cwd` resolved through the same git logic the daemon uses:
+#
+#     workspace (dominant)  ->  repo (dominant)                 transcripts
+#     keld-atlas            ->  github.com/ncx-ai/keld-atlas         38
+#     keld-signal           ->  github.com/ncx-ai/keld-signal        11
+#     (none)                ->  (no repo)                             4
+#     tmp                   ->  (no repo)                             1
+#     distinct workspace values: 4      distinct repo values: 3
+#
+# That is a PERFECT 1:1 mapping: on this corpus `repo` adds ZERO discriminating information over
+# `workspace`, and its cardinality is strictly LOWER, because `tmp` is real work in a directory
+# that is not a checkout and has no repository identity at all. The measurement is
+# neutral-to-negative and the reasoning is what carries the dimension:
+#
+#   `project` is the `workspace` level, a directory BASENAME, and a basename is machine-local.
+#   Two engineers with the same repository under different paths -- or one of them in a worktree
+#   -- do not reconcile to one identity at Atlas, and two orgs whose basenames collide are merged
+#   into one. A single-machine corpus is STRUCTURALLY INCAPABLE of showing either, which is why
+#   no measurement here could have supported it and none is claimed to.
+#
+# ⚠️ SO IT PUBLISHES BESIDE `project`, NEVER INSTEAD OF IT. `tmp -> (no repo)` is the case that
+# makes that concrete: replacing `project` with `repo` would lose a distinction the series can
+# make. Both ship.
+#
+# The series' own text-inferred `remote_mentioned` level was the other candidate and it does not
+# fire at all: measured on a 34 MB real transcript with 1,534 resolved `workspace` observations,
+# ZERO rows, because a developer working through local paths never types the url. The daemon is
+# the only component that may read .git/config (`/analyze` is confined to KELD_ANALYZE_ROOTS
+# precisely so it cannot open arbitrary paths as its user), so the resolution stays there and its
+# OUTPUT travels in -- ONE resolution, feeding the analysis.
+#
+# It is legitimately ABSENT: a project directory is not necessarily a repository, and a scratch
+# dir, a mounted share or a documents tree is real work in a directory that was never `git
+# init`ed. No rows then, so no dominant value, so the dimension is unattributed -- the same
+# answer every other level gives when it saw nothing, and never an empty string.
+#
+# ⚠️ ITS DYNAMICS ARE DROPPED AND ITS PRIOR IS NOT ENABLED, both MEASURED rather than assumed --
+# see `dynamics.DROPPED_DIMENSIONS` for the numbers. 0 of 50 transcripts span more than one repo.
 ALLOCATION = [
+    ("repo",        "repo",      0.50),
     ("project",     "workspace", 0.50),
     ("branch",      "branch",    0.50),
     ("model",       "model",     0.50),
@@ -126,6 +172,19 @@ INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
 # the top "system this org depends on".
 LOOPBACK = {"127.0.0.1", "localhost", "0.0.0.0", "::1", "enrich-sidecar"}
 
+# PROVENANCE says where a dimension's value CAME FROM, and until `repo` it was the constant
+# `known:tool_inputs` for every dimension -- counted from tool-call metadata inside the
+# transcript. `repo` is the first exception and the reason the field stops being decoration: its
+# rows are written from facts the DAEMON resolved off disk (a checkout's .git/config), which this
+# process structurally cannot read, so a reader who cannot tell "we counted this" from "the
+# daemon read this" cannot judge either.
+#
+# Note what this does NOT change: `repo` is a real series level like every other entry in
+# ALLOCATION -- it rolls up, it bins, it has a share and an evidence count computed by the same
+# `dominant` call. Only the ORIGIN of its rows differs, which is exactly what this field is for.
+TOOL_INPUTS = "known:tool_inputs"
+PROVENANCE = {"repo": "known:daemon_git"}
+
 
 def payload(rl):
     """rollup -> {"workstreams": {...}, "inventory": {...}}.
@@ -170,7 +229,7 @@ def payload(rl):
         v, share, tot = dominant(rl, level, floor)
         ws[name] = None if v is None else {
             "value": v, "share": round(share, 3), "evidence": tot,
-            "provenance": "known:tool_inputs"}
+            "provenance": PROVENANCE.get(name, TOOL_INPUTS)}
     inv = {}
     omitted = {}
     for name, level, cap in INVENTORY:

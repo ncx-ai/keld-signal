@@ -126,7 +126,7 @@ class StoreBehind(Exception):
 
 
 def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refresh=True,
-                   sizer=None, end_ts=None, prior=False):
+                   sizer=None, end_ts=None, prior=False, resolved=None):
     """The `span_minutes` of work ending at `prompt_id` -> the workstream + inventory payload,
     served from the reference series.
 
@@ -165,12 +165,26 @@ def analyze_window(path, prompt_id, span_minutes=60, nlp=None, store=None, refre
     otherwise, can open a retention surface `/analyze` has not already checked. The floor is
     handed to it for the one case it must handle itself: a baseline reaching below it.
 
+    `resolved` is the FACTS THE CALLER RESOLVED because this process structurally cannot: a
+    plain dict (never a model -- see the package docstring on pandas/pydantic) carrying the
+    daemon's `repo`/`git_branch`/`project`. This endpoint is confined to KELD_ANALYZE_ROOTS
+    precisely so it cannot open arbitrary paths as its user, and a repo's .git/config is outside
+    that allowlist by construction; the daemon has no such confinement. So the resolution stays
+    on that side and its OUTPUT travels here -- ONE resolution, feeding the analysis, rather
+    than the daemon resolving for a prompt preamble while the analysis publishes a worse answer
+    from a worse source. None (the default) changes nothing, which is what keeps every existing
+    caller -- the study, the tests, an older daemon -- answering exactly as before.
+
+    It is deliberately NOT persisted into the reference series. These are facts about the repo
+    as it stands NOW, not observations at an instant, and writing them as events would mean a
+    branch rename retroactively relabelling last week's windows.
+
     Raises `PromptNotFound` if the prompt is not in the transcript, and `StoreBehind` if the
     series cannot answer the window exactly. See the module docstring on why those are different.
     """
     st = store if store is not None else open_store()
     rl, start, end, effort = _rollup_from_store(st, path, prompt_id, span_minutes, nlp, refresh,
-                                                end_ts=end_ts)
+                                                end_ts=end_ts, resolved=resolved)
     out = _payload(rl, path, start, end, effort)
     if sizer is not None:
         out["dynamics"] = dynamics_for(st, session_of(path), end, span_minutes,
@@ -214,10 +228,15 @@ def _prior_block(store, path, session, window_rl, start, floor):
             "dimensions": prior_mod.compare(window_rl, prior_rl)}
 
 
-def analyze_window_by_parse(path, prompt_id, span_minutes=60, nlp=None):
+def analyze_window_by_parse(path, prompt_id, span_minutes=60, nlp=None, resolved=None):
     """The same answer, computed by parsing the transcript. THE EQUIVALENCE ORACLE — see the
-    module docstring. Not called by any endpoint, and must not become a fallback."""
-    rl, start, end, effort = _rollup_by_parse(path, prompt_id, span_minutes, nlp)
+    module docstring. Not called by any endpoint, and must not become a fallback.
+
+    It takes `resolved` for the same reason it takes `nlp`: the oracle's claim is that the two
+    paths agree FIELD FOR FIELD on the same inputs, and a parameter only one of them accepted
+    would weaken that to "agree except where they were asked different questions". The facts are
+    the caller's either way -- neither path resolves them, and neither could."""
+    rl, start, end, effort = _rollup_by_parse(path, prompt_id, span_minutes, nlp, resolved)
     return _payload(rl, path, start, end, effort)
 
 
@@ -297,13 +316,22 @@ def _bounds(end_iso, span_minutes):
 
 
 def _rollup_from_store(store, path, prompt_id, span_minutes=60, nlp=None, refresh=True,
-                       end_ts=None):
+                       end_ts=None, resolved=None):
     """`(rollup, start, end, effort)` for the window, out of the series. No transcript is
-    opened."""
-    current = is_current(store, path, nlp)
+    opened.
+
+    `resolved` reaches only the INGEST below, never the rollup: the `repo` level is written as
+    events by `levels.events_for_turns`, so by the time a window is rolled up the facts are
+    already rows and there is nothing left to overlay. That is the whole difference between a
+    dimension the analysis ANALYSES and a label stamped onto the payload."""
+    current = is_current(store, path, nlp, resolved)
     if refresh and not current:
-        ingest_file(store, path, nlp)                 # FileNotFoundError if it is gone
-        current = is_current(store, path, nlp)
+        # FileNotFoundError if it is gone. This is also the path that installs the `repo` level
+        # on a store first ingested without the daemon's facts: `is_current` reads False for a
+        # stale repository fingerprint, so the refresh reparses and the level appears for the
+        # transcript's whole history rather than only its tail.
+        ingest_file(store, path, nlp, resolved)
+        current = is_current(store, path, nlp, resolved)
 
     session = session_of(path)
     # An anchored window skips prompt resolution and NOTHING ELSE: the retention floor, the
@@ -376,7 +404,7 @@ def _prompt_time(path, prompt_id):
     raise PromptNotFound(prompt_id)
 
 
-def _rollup_by_parse(path, prompt_id, span_minutes=60, nlp=None):
+def _rollup_by_parse(path, prompt_id, span_minutes=60, nlp=None, resolved=None):
     """`(rollup, start, end, effort)` for the window, by parsing. See `analyze_window_by_parse`.
 
     Turn selection is quantized to match the series' resolution (see the module docstring), so
@@ -398,7 +426,7 @@ def _rollup_by_parse(path, prompt_id, span_minutes=60, nlp=None):
     # a candidate checkout against, and doesn't need one to resolve a workspace from transcript
     # evidence alone.
     root = os.path.dirname(os.path.dirname(path))
-    rows, pending, _n_lines = events_for_turns(turns, path, root, (), nlp)
+    rows, pending, _n_lines = events_for_turns(turns, path, root, (), nlp, resolved=resolved)
     # `pending` is reconciled prose paths, not optional decoration: `file`/`dir`/`ext`/`lang`/
     # `component` rows are ONLY ever produced by reconcile() (see its module docstring), so
     # skipping this step would leave the "language" workstream permanently unattributed.

@@ -16,8 +16,8 @@ from app.analysis.text import is_command_echo, text_of, think_blocks
 from app.analysis.vocab import action_for, artifacts_for, mcp_provider, toolchain_for
 from app.analysis.workspace import resolve_workspace, scan_workspace, vcs_of
 
-LEVELS = ["workspace", "workspace_evidence", "remote", "repo_mentioned", "vcs", "branch",
-          "component", "dir", "file", "artifact", "action", "toolchain", "ext",
+LEVELS = ["workspace", "workspace_evidence", "repo", "remote", "repo_mentioned", "vcs",
+          "branch", "component", "dir", "file", "artifact", "action", "toolchain", "ext",
           "lang", "tool", "exe", "verb", "service", "agent", "skill", "model", "mcp_server",
           "mcp_tool", "term"]
 
@@ -92,7 +92,8 @@ def display_session(path):
     return os.path.basename(path)[:8]
 
 
-def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, session=None):
+def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, session=None,
+                     resolved=None):
     """One transcript's turns -> its rows and pending paths.
 
     `turns` is the output of `transcript.iter_turns(path)` — already filtered to `user`/
@@ -110,9 +111,30 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
     accumulates the triple batch-by-batch from the bytes the transcript grew by, and re-reading
     the whole file here to rebuild it would put the O(file) cost straight back into the one path
     built to avoid it. Default `None` keeps every existing caller on the whole-file pre-pass.
+
+    `resolved` is the facts the CALLER resolved because nothing here can: a dict carrying
+    `repo` (a normalised `host/owner/repo` read from the checkout's .git/config), plus
+    `git_branch`/`project` which this function does not consume. It is the source of the `repo`
+    level, and it is a caller's argument rather than something read here for a hard reason --
+    the sidecar's `/analyze` and `/ingest` are confined to KELD_ANALYZE_ROOTS precisely so they
+    cannot open arbitrary filesystem paths as their user, and a repo's .git/config is outside
+    that allowlist by construction. The daemon has no such confinement and is the only component
+    that may read it, so the resolution stays there and its OUTPUT travels here.
+
+    A `repo` row is emitted PER TURN, on the same condition `workspace`/`vcs` are (`if repo`,
+    i.e. the turn resolved to a workspace at all), so the level rolls up, bins and carries a real
+    share and evidence count like every other reference level. `resolved=None`, or an empty
+    `repo` within it, emits nothing: a project directory is not necessarily a repository, and a
+    directory that was never `git init`ed must leave the dimension unattributed rather than
+    carry an empty value. That default is also what keeps every existing caller -- the study,
+    `analyze_window_by_parse`, the tests -- producing byte-identical rows.
     """
     rows, pending, n_lines = [], [], 0
     projdir = os.path.basename(os.path.dirname(path))
+    # The one resolved fact this function consumes. Named `repo_id` because `repo` below is
+    # already the workspace's own name (a directory basename) -- two different things, and
+    # telling them apart is the entire reason this level exists.
+    repo_id = (resolved or {}).get("repo") or ""
     marker_dirs, cd_targets, remotes = (evidence if evidence is not None
                                         else scan_workspace(path))
     ws_cache = {}
@@ -149,6 +171,11 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
             add("ref", "workspace", repo, 1)
             add("ref", "workspace_evidence", f"{ws_src} [{ws_conf}]", 1)
             add("ref", "vcs", vcs_of(o.get("cwd"), o.get("gitBranch")), 1)
+            # The DAEMON-resolved repository identity, beside the machine-local workspace name
+            # it exists to replace. Same condition and same cadence as `workspace` above, so
+            # the two are directly comparable per turn.
+            if repo_id:
+                add("ref", "repo", repo_id, 1)
             # A remote is IDENTITY only when it names this workspace. The modal remote
             # in a transcript is often a repository merely discussed: atlas sessions
             # mention ncx-ai/keld-signal constantly, and attributing it as keld-atlas's

@@ -576,6 +576,120 @@ def test_ingest_state_survives_reopening_the_store():
         st.close(); ref.close()
 
 
+# ---------------------------------------------------------------- the `repo` fingerprint
+#
+# `repo` is the SECOND level that is never re-derived, and unlike `term` it does not come out of
+# the transcript at all: it arrives with the request, because only the daemon may read a
+# checkout's .git/config. So a tail parsed while the daemon sent nothing stores turns that no
+# later recomputation can supply a `repo` row for -- the exact trap `terms_mode` exists for -- and
+# `repo_mode` joins the parse-state fingerprint to force a reparse instead.
+
+RESOLVED = {"repo": "github.com/ncx-ai/keld-atlas", "git_branch": "main", "project": "keld"}
+OTHER = {"repo": "github.com/ncx-ai/keld-signal", "git_branch": "main", "project": "keld"}
+
+
+def _repo_values(store, path):
+    """The distinct `repo` refs the store holds, from BOTH the events and the precomputed bins.
+
+    Both, deliberately: `repo` is an ALLOCATION level so it is in `PRECOMPUTED_LEVELS`, and a
+    reparse that cleared the events while leaving a stale bin behind would answer the interior of
+    every historical window with the old identity while the edges answered with the new one --
+    visible in a rollup and invisible in an events-only check."""
+    ev, bn = _dump(store, path)
+    return {r[3] for r in ev if r[2] == "repo"} | {r[3] for r in bn if r[2] == "repo"}
+
+
+def test_a_store_ingested_without_facts_reparses_once_when_they_arrive():
+    """The whole reason the fingerprint exists. Without it the transcript's HISTORY would report
+    the repository as unattributed forever, because the ingest that would have written those rows
+    already happened -- and the byte offset would look perfectly valid while it did."""
+    projdir, fname, lines = PROJ, FNAME, _stable_lines()
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        p = _laid_out(tmp, projdir, fname, lines)
+        ingest_file(st, p)
+        assert not _repo_values(st, p), "premise: no facts, no rows"
+        r = ingest_file(st, p, None, RESOLVED)
+        assert r.reparsed is True, r
+        assert r.new_lines == len(lines), r
+        assert _repo_values(st, p) == {RESOLVED["repo"]}, \
+            "the reparse must install the level over the whole history"
+        st.close()
+
+
+def test_a_tail_ingest_with_the_same_facts_does_not_reparse():
+    """The fingerprint must cost one reparse, not one per signal. Steady state is the common
+    case: every /ingest and every /analyze refresh for a transcript carries the same identity."""
+    projdir, fname, lines = PROJ, FNAME, _stable_lines()
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        p = _laid_out(tmp, projdir, fname, lines[:4])
+        ingest_file(st, p, None, RESOLVED)
+        p = _laid_out(tmp, projdir, fname, lines)
+        r = ingest_file(st, p, None, RESOLVED)
+        assert r.reparsed is False, r
+        assert r.new_lines == len(lines) - 4, r
+        st.close()
+
+
+def test_an_empty_identity_never_displaces_a_stored_one():
+    """⚠️ THE ASYMMETRY, and it is load-bearing rather than tidy. TWO writers reach ingest -- the
+    watcher's /ingest and /analyze's own on-demand refresh -- and they resolve the facts from
+    different starting points, so one legitimately has an identity where the other has none (a
+    transcript whose directory has since been removed, a job with no cwd). Invalidating
+    symmetrically would make those two alternate WHOLE-FILE reparses of the same file forever,
+    each installing its own fingerprint. Asymmetric, the store adopts an identity the first time
+    any caller supplies one and is never reset by a caller that has none."""
+    projdir, fname, lines = PROJ, FNAME, _stable_lines()
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        p = _laid_out(tmp, projdir, fname, lines)
+        ingest_file(st, p, None, RESOLVED)
+        r = ingest_file(st, p, None, None)             # the other writer, with nothing resolved
+        assert r.reparsed is False, r
+        assert r.new_lines == 0, r
+        assert _repo_values(st, p) == {RESOLVED["repo"]}, \
+            "a caller with no facts must not erase the rows a caller with facts wrote"
+        st.close()
+
+
+def test_a_genuinely_different_identity_does_reparse():
+    """The other direction: a repository that was renamed, or a directory that now resolves to a
+    different checkout, is a real change of answer and the stored rows are wrong. One reparse,
+    and the old value must be REPLACED rather than accumulated beside the new one."""
+    projdir, fname, lines = PROJ, FNAME, _stable_lines()
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        p = _laid_out(tmp, projdir, fname, lines)
+        ingest_file(st, p, None, RESOLVED)
+        r = ingest_file(st, p, None, OTHER)
+        assert r.reparsed is True, r
+        assert _repo_values(st, p) == {OTHER["repo"]}, \
+            "a reparse must replace the old identity, not merge two of them"
+        st.close()
+
+
+def test_chunked_ingest_with_facts_still_equals_one_pass():
+    """The file's own central contract, extended to the new argument: a tail parse must equal a
+    full parse, `repo` rows included. They are written per turn from a constant, so this is the
+    cheap half of the equivalence -- which is exactly why it should be pinned rather than
+    assumed."""
+    projdir, fname, lines = PROJ, FNAME, _stable_lines()
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "s.db")
+        for k in range(1, len(lines) + 1):
+            st = open_store(db)
+            p = _laid_out(tmp, projdir, fname, lines[:k])
+            ingest_file(st, p, None, RESOLVED)
+            st.close()
+        st = open_store(db)
+        ref = open_store(os.path.join(tmp, "ref.db"))
+        p2 = _laid_out(os.path.join(tmp, "r"), projdir, fname, lines)
+        ingest_file(ref, p2, None, RESOLVED)
+        assert _dump(st, p) == _dump(ref, p2)
+        st.close(); ref.close()
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

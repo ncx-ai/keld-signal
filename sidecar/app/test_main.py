@@ -571,6 +571,122 @@ def test_analyze_returns_a_payload_without_touching_the_runner():
     assert m._state["counts"].analyze_served == 1
 
 
+def _attributable_transcript():
+    """A fixture with enough turns for the MIN_EVIDENCE floor to be satisfied.
+
+    `_fixture_transcript` above holds ONE turn inside the window, and `window.MIN_EVIDENCE` is 5
+    — deliberately, since share=1.0 over one observation is a ratio and not a measurement — so
+    every allocation dimension there is correctly unattributed. The `repo` assertions need a
+    window that CAN attribute, or they would pass against a payload that dropped the facts
+    entirely.
+
+    Six turns in the same checkout, then the anchor prompt as the window's exclusive upper bound.
+    Wholly invented paths and repos, matching the convention above.
+    """
+    tmp = tempfile.mkdtemp(prefix="keld-analyze-repo-")
+    path = os.path.join(tmp, "fixture002-0000.jsonl")
+    rows = [{"type": "user", "timestamp": f"2026-08-01T10:{n:02d}:00Z",
+             "cwd": "/workspace/widget-app", "gitBranch": "trunk",
+             "message": {"content": [{"type": "text", "text": f"step {n}"}]}}
+            for n in range(0, 30, 5)]
+    rows.append({"type": "user", "timestamp": "2026-08-01T10:40:00Z",
+                 "cwd": "/workspace/widget-app", "gitBranch": "trunk",
+                 "uuid": _fixture_prompt_id(),
+                 "message": {"content": [{"type": "text", "text": "now fix the bug"}]}})
+    with open(path, "w") as fh:
+        for o in rows:
+            fh.write(json.dumps(o, separators=(",", ":")) + "\n")
+    os.environ["KELD_ANALYZE_ROOTS"] = tmp
+    os.environ["KELD_HOME"] = os.path.join(tmp, "keld-home")
+    return path
+
+
+def test_resolved_facts_reach_the_repo_dimension_end_to_end():
+    """THE DIRECTION OF FLOW, pinned at the endpoint. The daemon resolves what this process
+    structurally cannot -- /analyze and /ingest are confined to KELD_ANALYZE_ROOTS precisely so
+    they cannot open a repo's .git/config as the daemon's user -- and sends it IN, where the
+    analysis writes it as `repo` events during ingest and rolls them up like any other level.
+
+    Asserted through the whole endpoint rather than on `payload()` alone, because the interesting
+    part is not the arithmetic (unit-tested in test_analysis_window.py) but the plumbing: the
+    Pydantic model -> a plain dict at the executor boundary -> `events_for_turns` -> the store ->
+    the rollup. Every one of those hops was a place the facts could have been dropped."""
+    m = _reload_main(None)
+    _wire(m)
+    path = _attributable_transcript()
+    body = _asyncio.run(m.analyze(m.AnalyzeIn(
+        path=path, prompt_id=_fixture_prompt_id(),
+        resolved=m.ResolvedFacts(repo="github.com/ncx-ai/keld-atlas", git_branch="trunk",
+                                 project="keld"))))
+    ws = body["workstreams"]
+    assert ws["repo"] is not None, ("the resolved repository never reached the payload: "
+                                    f"{ws!r}")
+    assert ws["repo"]["value"] == "github.com/ncx-ai/keld-atlas", ws["repo"]
+    # A REAL share and a REAL evidence count, computed by the same `dominant` call every sibling
+    # goes through -- which is the observable difference between a series level and a value
+    # stamped onto the payload. A stamp would publish share 1.0 over evidence 1.
+    assert ws["repo"]["evidence"] >= 5, ws["repo"]
+    assert ws["repo"]["provenance"] == "known:daemon_git", ws["repo"]
+    # And it publishes BESIDE `project`, never instead of it: measured 1:1 on the corpus but
+    # strictly lower cardinality, because a directory that is not a checkout has no repo at all.
+    assert ws["project"]["value"] == "widget-app", ws["project"]
+    assert ws["project"]["provenance"] == "known:tool_inputs", ws["project"]
+
+
+def test_resolved_facts_are_a_closed_set_not_a_side_channel():
+    """Modelled as a Pydantic model rather than a free dict so the accepted keys are CLOSED. An
+    open dict would make this a general side channel into the analysis, which is exactly what the
+    daemon's privilege to read .git/config must not become."""
+    m = _reload_main(None)
+    assert set(m.ResolvedFacts().model_dump()) == {"repo", "git_branch", "project"}
+    facts = m.ResolvedFacts(**{"repo": "github.com/o/r", "prompt_text": "secret"})
+    assert "prompt_text" not in facts.model_dump(), facts.model_dump()
+
+
+def test_resolved_facts_default_to_none_and_change_nothing():
+    """BACK-COMPAT, and it is what lets a daemon older than this field keep working rather than
+    publishing a window with a dimension it cannot supply. The response must be identical to the
+    one a request with no `resolved` at all produced -- asserted as equality of the whole payload
+    minus `repo`, so a stray key or a shifted count fails here.
+
+    Two separate stores, deliberately: ingesting the same transcript twice into one store would
+    let the first call's rows answer the second, and the equality would hold for the wrong
+    reason."""
+    m = _reload_main(None)
+    _wire(m)
+    p1 = _attributable_transcript()
+    without = _asyncio.run(m.analyze(m.AnalyzeIn(path=p1, prompt_id=_fixture_prompt_id())))
+    m2 = _reload_main(None)
+    _wire(m2)
+    p2 = _attributable_transcript()
+    explicit_none = _asyncio.run(m2.analyze(m2.AnalyzeIn(
+        path=p2, prompt_id=_fixture_prompt_id(), resolved=None)))
+    assert without["workstreams"]["repo"] is None, without["workstreams"]["repo"]
+    # `session` is a digest of the transcript's ABSOLUTE path, so two fixtures in two temp dirs
+    # differ there by construction -- window metadata, not part of the answer (see
+    # sidecar/workstreams.go, which keeps it local and never publishes it). Everything else must
+    # match key for key.
+    assert {k: v for k, v in without.items() if k != "session"} \
+        == {k: v for k, v in explicit_none.items() if k != "session"}, \
+        "an omitted `resolved` and an explicit None must agree"
+
+
+def test_ingest_carries_the_facts_because_ingest_is_where_the_rows_are_written():
+    """/ingest needs the channel as much as /analyze does, and this is why: `repo` rows are
+    written by `events_for_turns` during INGEST, so the watcher-driven path is the one that
+    normally creates them. Without the field, a transcript ingested by the watcher would hold no
+    `repo` rows and /analyze's refresh would be a no-op that never noticed."""
+    m = _reload_main(None)
+    _wire(m)
+    path = _attributable_transcript()
+    _asyncio.run(m.ingest(m.IngestIn(
+        path=path, resolved=m.ResolvedFacts(repo="github.com/ncx-ai/keld-signal"))))
+    # Now a digest with NO facts of its own still finds the level, because the rows are stored.
+    body = _asyncio.run(m.analyze(m.AnalyzeIn(path=path, prompt_id=_fixture_prompt_id())))
+    assert body["workstreams"]["repo"] is not None, body["workstreams"]
+    assert body["workstreams"]["repo"]["value"] == "github.com/ncx-ai/keld-signal"
+
+
 def test_analyze_reports_how_the_window_is_changing_not_only_what_it_holds():
     """The DYNAMICS block on the endpoint. /analyze answers what a window contains; on its own
     that is a state, and a state cannot say whether the hour just turned over or has looked like

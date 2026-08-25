@@ -260,10 +260,38 @@ class PiiIn(BaseModel):
     regions: list[str] | None = None
 
 
+class ResolvedFacts(BaseModel):
+    """Facts the DAEMON resolved because the sidecar structurally cannot.
+
+    /analyze is confined to KELD_ANALYZE_ROOTS and so cannot open a repo's .git/config;
+    the daemon can. This keeps the request COORDINATES-PLUS-RESOLVED-FACTS and still
+    never text: every field here is an identifier the daemon read from git metadata.
+
+    Modelled explicitly rather than as a free dict so the accepted keys are a CLOSED SET.
+    A dict would make this a general side channel into the analysis, and the whole reason
+    the daemon is the one allowed to read a repo's config is that its output is narrow and
+    nameable; an open dict would give that away at the first caller who wanted one more
+    thing. A key not listed here is dropped by Pydantic, not forwarded.
+
+    Every field is legitimately EMPTY, and empty is not an error. `repo` is "" for a
+    directory that was never `git init`ed -- a scratch dir, a mounted share, a documents
+    tree -- and real work happens in those; `git_branch` is "" on a detached HEAD; `project`
+    is "" without a .keld.toml. What consumes these must treat "" as ABSENT (the dimension
+    is omitted) and never as a value.
+    """
+    repo: str = ""         # normalised host/owner/repo, "" when not a checkout
+    git_branch: str = ""   # from the checkout root, worktree-aware
+    project: str = ""      # .keld.toml name, NOT a git fact
+
+
 class AnalyzeIn(BaseModel):
     path: str
     prompt_id: str
     span_minutes: int = 60
+    # Optional, and None must change nothing about the answer (pinned by
+    # test_resolved_facts_default_to_none_and_change_nothing): every deployed daemon older
+    # than this field keeps working, and so does every local caller and the study.
+    resolved: ResolvedFacts | None = None
 
 
 class TickIn(BaseModel):
@@ -288,6 +316,11 @@ class TickIn(BaseModel):
 
     `now` is the daemon's clock, injected rather than read here, because it is what the frontier
     is computed from and a test that cannot move it cannot exercise the settle rule at all.
+
+    `resolved` is the same channel /analyze has, for the same reason: a tick characterises a
+    WINDOW, and a tick-emitted window is not a lesser window (see TickResult in the Go client).
+    It is per TRANSCRIPT rather than per window because that is the granularity the facts have
+    -- a transcript is scoped to one project directory, so its checkout is one checkout.
     """
     path: str
     prompt_ids: list[str] = []
@@ -295,13 +328,23 @@ class TickIn(BaseModel):
     now: float | None = None
     span_minutes: float = 60.0
     max_windows: int = DEFAULT_MAX_WINDOWS
+    resolved: ResolvedFacts | None = None
 
 
 class IngestIn(BaseModel):
-    """A transcript advanced. One field, deliberately: the daemon's watcher knows WHICH file grew
-    and nothing else worth sending — the byte offset to resume from is the store's own, not the
-    watcher's, and the appended bytes stay on the daemon's side of the call."""
+    """A transcript advanced. The path is what the daemon's watcher knows and the byte offset to
+    resume from is the store's own, not the watcher's — the appended bytes stay on the daemon's
+    side of the call.
+
+    `resolved` is the SECOND field, and it is here rather than only on /analyze because the
+    `repo` level is written as EVENTS during ingest (`levels.events_for_turns`), not overlaid on
+    a digest. Ingest is therefore the only place those rows can be created, and a transcript
+    whose tail was ingested without them holds turns that nothing can later supply a `repo` row
+    for — the same trap `ingest.terms_mode` exists for. /analyze keeps the field too, since its
+    own `refresh=True` can be the first thing to ingest a transcript.
+    """
     path: str
+    resolved: ResolvedFacts | None = None
 
 
 # /analyze path confinement (KELD_ANALYZE_ROOTS).
@@ -488,8 +531,23 @@ def _store_stats():
         return {"error": type(exc).__name__}
 
 
-def _analyze_blocking(path, prompt_id, span_minutes):
+def _resolved_dict(resolved):
+    """`ResolvedFacts | None` -> a plain dict or None, for the analysis package.
+
+    None in, None out -- deliberately NOT an empty dict. `app/analysis/` treats a falsy
+    `resolved` as "the caller sent nothing", and the two spellings must not be able to mean
+    different things there.
+    """
+    return None if resolved is None else resolved.model_dump()
+
+
+def _analyze_blocking(path, prompt_id, span_minutes, resolved=None):
     """The whole of /analyze's work, on an executor thread.
+
+    `resolved` arrives as a PLAIN DICT, not the Pydantic model: `app/analysis/` is imported by
+    `scripts/refseries.py` as well as by this app and may not depend on pydantic (see that
+    package's docstring). Converting at this boundary is what keeps the analysis importable by
+    both front ends. None means the caller sent nothing, which must change nothing.
 
     _analysis_nlp() is resolved HERE and not at the call site. It used to be evaluated as an
     ARGUMENT to run_in_executor, which means it ran on the EVENT LOOP: the multi-second spaCy
@@ -522,7 +580,7 @@ def _analyze_blocking(path, prompt_id, span_minutes):
     # equivalence oracle structurally cannot compute a second, much wider rollup -- so
     # production is again the one caller that asks for it.
     out = analyze_window(path, prompt_id, span_minutes, nlp, store=st, sizer=DEFAULT_SIZER,
-                         prior=True)
+                         prior=True, resolved=resolved)
 
     if status == _TERMS_DISABLED:
         # Switched off means not reported. The regex half of terms.candidates() needs no model
@@ -536,7 +594,7 @@ def _analyze_blocking(path, prompt_id, span_minutes):
     return out
 
 
-def _ingest_blocking(path):
+def _ingest_blocking(path, resolved=None):
     """The whole of /ingest's work, on an executor thread.
 
     `_analysis_nlp()` is resolved HERE, for the same reason `_analyze_blocking` resolves it here
@@ -549,10 +607,10 @@ def _ingest_blocking(path):
     st = _store()
     if st is None:
         raise StoreBehind("the reference-series store could not be opened")
-    return ingest_file(st, path, nlp)
+    return ingest_file(st, path, nlp, resolved)
 
 
-def _tick_blocking(path, prompt_ids, cursor_ts, now, span_minutes, max_windows):
+def _tick_blocking(path, prompt_ids, cursor_ts, now, span_minutes, max_windows, resolved=None):
     """The whole of /tick's work, on an executor thread.
 
     `_analysis_nlp()` is resolved here for the same reason `_analyze_blocking` resolves it here
@@ -574,7 +632,7 @@ def _tick_blocking(path, prompt_ids, cursor_ts, now, span_minutes, max_windows):
             prompt_ts.append(_order_key(iso).timestamp())
     return tick_windows_for(st, path, cursor_ts=cursor_ts, prompt_ts=prompt_ts, now=now,
                             span_minutes=span_minutes, nlp=nlp, sizer=DEFAULT_SIZER,
-                            max_windows=max_windows, prior=True)
+                            max_windows=max_windows, prior=True, resolved=resolved)
 
 
 @app.post("/tick")
@@ -611,7 +669,7 @@ async def tick(body: TickIn):
     try:
         out = await loop.run_in_executor(
             None, _tick_blocking, body.path, body.prompt_ids, body.cursor_ts, now,
-            body.span_minutes, body.max_windows)
+            body.span_minutes, body.max_windows, _resolved_dict(body.resolved))
     except FileNotFoundError:
         # The transcript is GONE. Permanent, like /ingest's 404 for the same case.
         raise HTTPException(status_code=404, detail="transcript not found") from None
@@ -666,7 +724,8 @@ async def ingest(body: IngestIn):
         raise HTTPException(status_code=403, detail="path is outside the configured transcript roots")
     loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(None, _ingest_blocking, body.path)
+        result = await loop.run_in_executor(None, _ingest_blocking, body.path,
+                                            _resolved_dict(body.resolved))
     except FileNotFoundError:
         # 404, not 503: the transcript is GONE, which is a permanent fact about the file, and a
         # transient status would make the daemon re-signal a path that will never come back.
@@ -933,7 +992,8 @@ async def analyze(body: AnalyzeIn):
     loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(
-            None, _analyze_blocking, body.path, body.prompt_id, body.span_minutes)
+            None, _analyze_blocking, body.path, body.prompt_id, body.span_minutes,
+            _resolved_dict(body.resolved))
     except PromptNotFound:
         raise HTTPException(status_code=404, detail="prompt not found in transcript")
     except StoreBehind:

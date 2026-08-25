@@ -199,7 +199,7 @@ READINGS = ("switched",    # the dominant value changed
 STATUSES = ("compared", "both_absent", "slice_absent", "baseline_absent",
             "slice_thin", "baseline_thin")
 
-# The three allocation dimensions whose dynamics MEASURED CONSTANT and are therefore not
+# The four allocation dimensions whose dynamics MEASURED CONSTANT and are therefore not
 # reported. Measured over 51 sessions and 2,702 windows — every window /analyze could answer, the
 # quiet ones included, sized by this module's own DEFAULT_SIZER; full tables in
 # `~/keld/refseries-context/dynamics/DYNAMICS-VALUE.md`, reproduce with
@@ -224,11 +224,33 @@ STATUSES = ("compared", "both_absent", "slice_absent", "baseline_absent",
 #   * `tooling`  — `compared` on 3.9% (106 of 2,702) against the 10% bar, 83.7% absent; `changed`
 #                  never True; and where it IS comparable it points the WRONG WAY — mean turnover
 #                  0.010 inside a transition window against 0.070 outside (lift -0.060).
+#   * `repo`     — DISQUALIFIED BEFORE IT EVER PUBLISHED A DYNAMIC, and by `project`'s own cause
+#                  rather than a fresh one. Measured over 54 real transcripts with every `cwd`
+#                  resolved through the same git logic the daemon uses:
 #
-# The digest still reports all three as allocation workstreams (`workstreams.payload`); only
+#                      transcripts whose cwds span >1 distinct DIRECTORY : 34/50
+#                      transcripts whose cwds span >1 distinct REPO      :  0/50
+#                      transcripts resolving to NO repo at all           :  1/50
+#                      distinct workspace values 4  ->  distinct repo values 3
+#
+#                  ZERO of 50 transcripts span more than one repository, so both sides of every
+#                  comparison hold the single same value and turnover/decay/shift are 0.000 with
+#                  `changed` never True — identically `project`'s profile, for the identical
+#                  structural reason one level coarser: a transcript is scoped to one project
+#                  directory, and a checkout CONTAINS that directory, so `repo` can only be MORE
+#                  constant than the `workspace` that already had zero transitions across 51
+#                  sessions. Note the middle row: 34 of 50 transcripts DO move between
+#                  directories and none of them changes repository, which is the measurement
+#                  making the coarsening argument rather than the argument standing alone.
+#
+#                  It is excluded from `prior.ENABLED` on the same evidence — a contrast that
+#                  agrees 100% of the time with zero disagreements publishes a constant, which
+#                  is exactly why `project` is absent from that list too.
+#
+# The digest still reports all four as allocation workstreams (`workstreams.payload`); only
 # their DYNAMICS are dropped. Do not restore one without re-running `dist` — "it seems useful"
 # is what the 16 KB characterisation was built on, and it scored below emitting nothing.
-DROPPED_DIMENSIONS = ("project", "model", "tooling")
+DROPPED_DIMENSIONS = ("project", "model", "tooling", "repo")
 
 # The names dynamics reports under, DERIVED from the published payload rather than restated, so
 # the two vocabularies cannot drift. Allocation dimensions only: spend divides among them and one

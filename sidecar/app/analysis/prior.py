@@ -107,6 +107,12 @@ from app.analysis.window import MIN_EVIDENCE, attribution
 # most sessions, a three-dimension prior over `branch` (near-constant within a session) and
 # `language` is thin enough that the block would rarely say anything for the majority case.
 # `output_type` is what makes it worth emitting for them.
+# `repo` is DELIBERATELY ABSENT, on measurement rather than oversight, and for `project`'s own
+# reason: 0 of 50 real transcripts span more than one repository (see
+# `dynamics.DROPPED_DIMENSIONS` for the table), so a session prior for it would agree with the
+# window 100% of the time with zero disagreements -- a contrast field publishing a constant,
+# which is exactly why `project` and `model` are not here either. It remains a published
+# ALLOCATION dimension; only its contrast is withheld.
 ENABLED = ("branch", "language", "output_type", "skill")
 
 # DERIVED from the published allocation set rather than restated, so the two cannot drift -- and

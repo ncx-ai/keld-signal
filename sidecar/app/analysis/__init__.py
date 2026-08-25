@@ -137,7 +137,55 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           or `reconcile()` itself. A window that answers with three keys it did not answer
 #           with before is a window answered differently, which is exactly this number's
 #           trigger. Go's `enrich.SchemaVersion` moves 15 -> 16 for the same addition.
-SCHEMA = 11
+#   11 -> 12: `repo` is added as a FIRST-CLASS SERIES LEVEL and, through it, an eighth ALLOCATION
+#           workstream. Its rows are written during INGEST (`levels.events_for_turns`' new
+#           `resolved` argument), one per turn on the same condition `workspace`/`vcs` are, so it
+#           rolls up, bins, and carries a real share and evidence count computed by the same
+#           `dominant` call as every sibling. It is deliberately NOT overlaid onto the payload at
+#           digest time: a dimension the analysis does not analyse is a label riding along, not a
+#           dimension.
+#
+#           The FACTS travel in on the request -- `resolved` on `AnalyzeIn`, `TickIn` AND
+#           `IngestIn` -- because only the DAEMON may read a checkout's .git/config: `/analyze`
+#           and `/ingest` are confined to KELD_ANALYZE_ROOTS precisely so they cannot open
+#           arbitrary paths as their user, and a repo's config is outside that allowlist by
+#           construction. `IngestIn` carries it because ingest is the only place the rows can be
+#           created; /analyze carries it because its own `refresh=True` can be the first thing to
+#           ingest a transcript. `repo_mode` joins the parse-state fingerprint for the same
+#           reason `terms_mode` is in it (`STATE_VERSION` 2 -> 3): the identity comes in with the
+#           request rather than out of the transcript, so a tail parsed without it stores turns
+#           nothing can later supply a row for. That invalidation is ASYMMETRIC -- an empty
+#           identity never displaces a stored one -- because two writers reach ingest and they do
+#           not always resolve the same facts.
+#
+#           `provenance` is `known:daemon_git`, the first value that field has taken other than
+#           the constant `known:tool_inputs`: a reader who cannot tell "we counted this" from
+#           "the daemon read this off disk" cannot judge either.
+#
+#           ⚠️ IT SHIPS ON AN ARGUMENT, NOT ON A MEASURED GAIN. Over 54 real transcripts with
+#           every cwd resolved through the daemon's own git logic, `workspace -> repo` is a
+#           PERFECT 1:1 mapping (keld-atlas -> github.com/ncx-ai/keld-atlas 38, keld-signal ->
+#           .../keld-signal 11, no-workspace -> no-repo 4, tmp -> NO REPO 1; 4 distinct workspace
+#           values against 3 distinct repo values). So on this corpus it adds ZERO discriminating
+#           information over `workspace` and its cardinality is strictly LOWER -- `tmp` is real
+#           work in a directory that is not a checkout. The measurement is neutral-to-negative;
+#           what carries the dimension is that a directory BASENAME is machine-local, so two
+#           engineers with the same repo under different paths do not reconcile to one identity
+#           and two orgs whose basenames collide are merged into one -- neither of which a
+#           single-machine corpus can demonstrate. It therefore publishes BESIDE `project`, never
+#           instead of it.
+#
+#           Its DYNAMICS are dropped and its PRIOR is not enabled, both on that same measurement:
+#           0 of 50 transcripts span more than one repository (34 of 50 span more than one
+#           DIRECTORY and none of them changes repo), so both are constants -- `project`'s exact
+#           disqualification one level coarser. See `dynamics.DROPPED_DIMENSIONS`.
+#
+#           ABSENT, never empty, when the daemon resolved nothing. `resolved` defaulting to None
+#           changes nothing at all, so the study, `analyze_window_by_parse` and every existing
+#           test produce byte-identical rows -- which is why this number moves for a window
+#           GAINING a dimension rather than for any existing answer changing. Go's
+#           `enrich.SchemaVersion` moves 18 -> 19 for this and the four inventories below.
+SCHEMA = 12
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

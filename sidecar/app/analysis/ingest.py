@@ -101,7 +101,13 @@ HEAD_BYTES = 4096
 #
 #   1 -> 2: `terms` (the terms-pipeline fingerprint below), and the prompt index, which a state
 #           written before it existed has no rows for.
-STATE_VERSION = 2
+#   2 -> 3: `repo` (the daemon-resolved repository identity below). A state written before it
+#           existed has no `repo` rows for the turns it already stored, and -- exactly like
+#           `terms` -- nothing recomputes them, because the fact came in with the request rather
+#           than out of the transcript. So an existing store reparses ONCE and its whole history
+#           gains the level, instead of reporting the repository as unattributed for every window
+#           older than this code.
+STATE_VERSION = 3
 
 
 def terms_mode(nlp):
@@ -280,17 +286,45 @@ def _answers(cwds, projdir, evidence):
     return out
 
 
-def _state_is_usable(raw, nlp):
+def repo_mode(resolved):
+    """The daemon-resolved repository identity this ingest would write, as a fingerprint.
+
+    `repo` is the SECOND level that is never re-derived, and for a different reason than `term`:
+    it does not come out of the transcript at all. It arrives with the request, because only the
+    daemon may read a checkout's .git/config (see `levels.events_for_turns`' `resolved`). So a
+    tail parsed while the daemon was sending nothing stores turns with no `repo` row, and no
+    later recomputation can supply one -- the same trap `terms_mode` exists for, one level over.
+
+    "" is a real mode, not a missing one: it is what a directory that was never `git init`ed
+    resolves to, and it must be storable as such.
+    """
+    return (resolved or {}).get("repo") or ""
+
+
+def _state_is_usable(raw, nlp, resolved=None):
     """Whether a stored parse state may be resumed from, or must be thrown away and reparsed.
 
-    Three reasons it cannot be: it is absent (a store written before `parse_state` existed, or
+    Four reasons it cannot be: it is absent (a store written before `parse_state` existed, or
     one whose state was pruned — resuming would tail-parse with EMPTY workspace evidence and an
     empty `pending`, and the offset would look perfectly valid while it happened); it predates a
-    field this code needs (`STATE_VERSION`); or it was written by a different terms pipeline
-    (`terms_mode`).
+    field this code needs (`STATE_VERSION`); it was written by a different terms pipeline
+    (`terms_mode`); or it was written under a different repository identity (`repo_mode`).
+
+    ⚠️ THE `repo` RULE IS ASYMMETRIC ON PURPOSE: an EMPTY incoming identity never invalidates a
+    stored non-empty one. Two callers legitimately ingest the same transcript — the watcher's
+    `/ingest` and `/analyze`'s own on-demand refresh — and they resolve the facts from different
+    starting points, so one can have an identity where the other has none (a transcript whose
+    directory no longer exists, a job with no cwd). Invalidating symmetrically would make those
+    two writers alternate whole-file reparses of the same file forever, each installing its own
+    fingerprint. Asymmetric, the store ADOPTS an identity the first time any caller supplies one
+    and is never reset by a caller that has none, which is also the direction that cannot lose
+    rows.
     """
-    return bool(raw) and int(raw.get("v") or 0) == STATE_VERSION \
-        and raw.get("terms") == terms_mode(nlp)
+    if not (bool(raw) and int(raw.get("v") or 0) == STATE_VERSION
+            and raw.get("terms") == terms_mode(nlp)):
+        return False
+    stored, incoming = raw.get("repo") or "", repo_mode(resolved)
+    return not incoming or stored == incoming
 
 
 def _load_state(store, path):
@@ -307,10 +341,11 @@ def _load_state(store, path):
     return evidence, pending, list(raw.get("cwds") or ()), int(raw.get("lines") or 0)
 
 
-def _dump_state(evidence, pending, cwds, lines, nlp):
+def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None):
     marker_dirs, cd_targets, remotes = evidence
     return {"v": STATE_VERSION,
             "terms": terms_mode(nlp),
+            "repo": repo_mode(resolved),
             "markers": marker_dirs,
             "cd": sorted(cd_targets),
             "remotes": [[k, v] for k, v in remotes.most_common()],
@@ -337,7 +372,7 @@ def pending_in(store, path, start, end):
             if start <= b[0] < end]
 
 
-def is_current(store, path, nlp=None):
+def is_current(store, path, nlp=None, resolved=None):
     """Whether the store holds everything this transcript's bytes say, right now.
 
     This is the precondition for serving a window out of the store at all, and it is stronger
@@ -357,6 +392,12 @@ def is_current(store, path, nlp=None):
       newline is deliberately NOT consumed (see `_read_complete_lines`), and it is exactly the
       line a prompt id may be sitting in: without this, that prompt would resolve to "not in
       this transcript" — a permanent answer — when it is milliseconds from existing;
+    `resolved` is forwarded to `_state_is_usable` so that a store ingested WITHOUT the daemon's
+    facts reads as not-current the moment a caller arrives with them, which is what makes
+    `analyze_window`'s own `refresh` install the `repo` level rather than answering a window
+    that is silently missing a published dimension. Asymmetric, so a caller with no facts does
+    not invalidate a store that has them — see `_state_is_usable`.
+
     - the parse state is usable at all (`_state_is_usable`), which is where the terms-pipeline
       fingerprint is checked.
 
@@ -370,7 +411,7 @@ def is_current(store, path, nlp=None):
     except OSError:
         return False
     return (st["size"] == size and st["mtime"] == mtime and st["offset"] == size
-            and _state_is_usable(store.parse_state(path), nlp))
+            and _state_is_usable(store.parse_state(path), nlp, resolved))
 
 
 def _latest(a, b):
@@ -382,7 +423,7 @@ def _latest(a, b):
     return a if _order_key(a) >= _order_key(b) else b
 
 
-def ingest_file(store, path, nlp=None):
+def ingest_file(store, path, nlp=None, resolved=None):
     """Ingest whatever `path` has grown by (or the whole file) into `store`.
 
     Raises `FileNotFoundError` if the transcript is gone — a caller that signalled about a file
@@ -391,6 +432,13 @@ def ingest_file(store, path, nlp=None):
     `nlp` is passed through to the `term` level exactly as `analyze_window` passes it. A CHANGE
     of pipeline is not tolerated silently: it is part of the checkpoint (`terms_mode`) and a
     different one reparses the file, because `term` is the one level never re-derived.
+
+    `resolved` is passed through to the `repo` level the same way, and is part of the checkpoint
+    for the same reason (`repo_mode`): the repository identity comes in with the request rather
+    than out of the transcript, so a tail parsed without it stores turns that nothing can later
+    supply a `repo` row for. The invalidation is ASYMMETRIC -- an empty identity never displaces
+    a stored one -- because two writers reach this function and they do not always resolve the
+    same facts; see `_state_is_usable`.
 
     Single-flight per path. Two callers can legitimately want the same file at the same moment —
     the daemon's watcher signal (task 4) and an `/analyze` that found the store behind — and
@@ -407,7 +455,7 @@ def ingest_file(store, path, nlp=None):
     exception to 503, which would make the daemon re-signal a file that was ingested perfectly.
     """
     with _path_lock(path):
-        result = _ingest_locked(store, path, nlp)
+        result = _ingest_locked(store, path, nlp, resolved)
     try:
         store.enforce_retention()
     except Exception as exc:                     # noqa: BLE001 - see above; never fail an ingest
@@ -431,7 +479,7 @@ def _path_lock(path):
     return lk
 
 
-def _ingest_locked(store, path, nlp):
+def _ingest_locked(store, path, nlp, resolved=None):
     size = os.path.getsize(path)                      # raises FileNotFoundError, deliberately
     state = store.ingest_state(path)
     reparse = (state is None
@@ -439,18 +487,18 @@ def _ingest_locked(store, path, nlp):
                or not _head_matches(path, state["head_sha"])
                # A parse state that cannot be resumed from -- absent, older than this code, or
                # written by a different terms pipeline. See `_state_is_usable`.
-               or not _state_is_usable(store.parse_state(path), nlp))
+               or not _state_is_usable(store.parse_state(path), nlp, resolved))
     result = _ingest_from(store, path, size, 0 if reparse else state["offset"],
-                          None if reparse else state["watermark_ts"], reparse, nlp)
+                          None if reparse else state["watermark_ts"], reparse, nlp, resolved)
     if result is not None:
         return result
     # A batch's own evidence re-resolved turns that are already stored. Only a full re-read can
     # correct them; it is exact by definition, and `_ingest_from` cannot recurse again because
     # a whole-file parse has no earlier state to invalidate.
-    return _ingest_from(store, path, size, 0, None, True, nlp)
+    return _ingest_from(store, path, size, 0, None, True, nlp, resolved)
 
 
-def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp):
+def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved=None):
     """One pass from `offset`. Returns None to mean "this must be redone as a reparse"."""
     session, (root, projdir) = session_of(path), _scope(path)
     lines, end_offset = _read_complete_lines(path, offset, size)
@@ -463,7 +511,8 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp):
         return None
 
     turns = list(turns_in(lines))
-    rows, new_pending, _n = events_for_turns(turns, path, root, (), nlp, evidence=evidence)
+    rows, new_pending, _n = events_for_turns(turns, path, root, (), nlp, evidence=evidence,
+                                             resolved=resolved)
     pending += new_pending
     for o in turns:
         cwd = o.get("cwd") or ""
@@ -495,7 +544,8 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp):
         store.upsert_prompts(session, [(o.get("uuid"), o.get("timestamp")) for o in turns])
         recon_rows, _stats = reconcile(pending, COMPONENT_DEPTH)
         store.replace_events(session, RECONCILE_SLOT, recon_rows)
-        store.set_parse_state(path, _dump_state(evidence, pending, cwds, n_lines, nlp))
+        store.set_parse_state(path,
+                              _dump_state(evidence, pending, cwds, n_lines, nlp, resolved))
         store.record_ingest(path, end_offset, size, _head_fingerprint(path),
                             os.path.getmtime(path), watermark_ts)
     return IngestResult(len(turns), watermark_ts, reparse)

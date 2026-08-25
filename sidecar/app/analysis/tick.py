@@ -77,7 +77,7 @@ def _iso(epoch):
 
 
 def tick(store, path, cursor_ts, prompt_ts, now, span_minutes=60, nlp=None, sizer=None,
-         max_windows=DEFAULT_MAX_WINDOWS, prior=False):
+         max_windows=DEFAULT_MAX_WINDOWS, prior=False, resolved=None):
     """Characterise this transcript's uncovered slices.
 
     `cursor_ts` / `prompt_ts` / `now` are epoch seconds; `cursor_ts` may be None for a session
@@ -94,6 +94,12 @@ def tick(store, path, cursor_ts, prompt_ts, now, span_minutes=60, nlp=None, size
     prior beside a prompt's digest and not beside the tick's would have no way to know why. Each
     tick window recomputes its OWN prior, cut at its own start -- the cost this buys is measured
     and stated in `.superpowers/sdd/2026-08-24-session-prior/wire-report.md`.
+
+    `resolved` is forwarded unchanged too, and it is per TRANSCRIPT rather than per window
+    because that is the granularity the facts have: a transcript is scoped to one project
+    directory, so every window in this batch sits in the same checkout. Same rule as the two
+    above -- a tick-emitted window is not a lesser window, so it must not answer with one fewer
+    dimension than a prompt's window over the same hour.
     """
     span = span_minutes * 60.0
     watermark = _epoch(store.watermark(path))
@@ -111,7 +117,8 @@ def tick(store, path, cursor_ts, prompt_ts, now, span_minutes=60, nlp=None, size
     for start, end in planned:
         try:
             out = analyze_window(path, None, (end - start) / 60.0, nlp, store=store,
-                                 refresh=False, sizer=sizer, end_ts=_iso(end), prior=prior)
+                                 refresh=False, sizer=sizer, end_ts=_iso(end), prior=prior,
+                                 resolved=resolved)
         except WindowExpired:
             expired += 1
             continue
