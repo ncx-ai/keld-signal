@@ -184,6 +184,39 @@ def test_no_majority_and_tie_are_unreachable_and_that_is_stated():
     assert "tie" not in latency.STATUSES
 
 
+# --- percentiles -------------------------------------------------------------------------------
+
+def test_percentiles_are_none_below_the_gap_floor():
+    """The same abstention rule `tempo` uses, and for the same reason: three timing fields that
+    disagree about whether the window had enough evidence would be unreadable together."""
+    p = latency.percentiles([0.0, 10.0])          # 1 gap, MIN_GAPS is 5
+    assert p.n_gaps == 1, p
+    assert p.p50 is None and p.p90 is None, p
+
+
+def test_percentiles_over_enough_gaps():
+    # gaps: 1,2,3,4,100 -> p50 = 3, p90 near the tail
+    p = latency.percentiles([0.0, 1.0, 3.0, 6.0, 10.0, 110.0])
+    assert p.n_gaps == 5, p
+    assert p.p50 == 3.0, p.p50
+    assert p.p90 > 50.0, p.p90
+
+
+def test_percentiles_use_the_same_deduped_gaps_as_tempo():
+    """`gaps()` sorts and dedupes because stored timestamps are quantised to 0.1s; two turns in
+    one bucket are ONE instant. Percentiles must not re-derive gaps and reintroduce zeros."""
+    times = [5.0, 0.0, 1.0, 1.0, 2.0, 3.0, 4.0]       # unsorted, one duplicate
+    assert latency.percentiles(times).n_gaps == len(latency.gaps(times))
+
+
+def test_percentiles_tail_separates_two_windows_fast_share_cannot():
+    """The reason this field exists. Steady 30s turns and alternating 2s/5m turns both sit at the
+    same side of the 5s threshold for most gaps, so `fast_share` alone cannot tell them apart."""
+    steady = latency.percentiles([0.0, 30, 60, 90, 120, 150])
+    spiky = latency.percentiles([0.0, 2, 302, 304, 604, 606])
+    assert steady.p90 < spiky.p90, (steady, spiky)
+
+
 # --- mutation audit: every rule above must BITE ----------------------------------------------
 
 def mutations():

@@ -168,3 +168,42 @@ def tempo(times, fast_gap_s=FAST_GAP_S, min_gaps=MIN_GAPS, majority=MAJORITY):
         # The measurement, with the conclusion withheld. See `window.attribution`.
         return Tempo(share, n, None, "thin")
     return Tempo(share, n, TEMPOS[0] if share >= majority else TEMPOS[1], "attributed")
+
+
+# `p50`/`p90` are None TOGETHER below `min_gaps`, same shape as `Tempo`'s withheld reading — a
+# namedtuple so neither can be silently defaulted to 0.0 by a `.get`.
+Percentiles = collections.namedtuple("Percentiles", "p50 p90 n_gaps")
+
+
+def percentiles(times, min_gaps=MIN_GAPS):
+    """Turn timestamps -> the median and 90th-percentile inter-turn gap.
+
+    `fast_share` collapses the whole distribution to one side of a 5-second threshold, so a
+    window of steady 30-second turns and one alternating between 2s and 5m are indistinguishable
+    by it. The tail is where "stopped to think" lives, and it is the half that decides whether a
+    stretch was continuous work or a series of restarts.
+
+    Reuses `gaps()` rather than re-deriving, so the sorting and the 0.1s-resolution dedupe apply
+    identically -- a second derivation is a second place for the storage resolution to
+    manufacture a zero-second gap.
+
+    Abstains as `tempo` does, on the same `min_gaps`: both are None below it. Three timing fields
+    that disagreed about whether the window had enough evidence would be unreadable together.
+    """
+    g = gaps(times)
+    if len(g) < min_gaps:
+        return Percentiles(None, None, len(g))
+    return Percentiles(round(_pct(g, 0.50), 3), round(_pct(g, 0.90), 3), len(g))
+
+
+def _pct(sorted_or_not, q):
+    """Linear-interpolated quantile. `statistics.quantiles` needs n>=2 and takes a different
+    convention per method; one explicit definition is cheaper to reason about than remembering
+    which."""
+    xs = sorted(sorted_or_not)
+    if len(xs) == 1:
+        return float(xs[0])
+    i = q * (len(xs) - 1)
+    lo = int(i)
+    hi = min(lo + 1, len(xs) - 1)
+    return float(xs[lo] + (xs[hi] - xs[lo]) * (i - lo))
