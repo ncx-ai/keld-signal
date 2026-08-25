@@ -56,9 +56,10 @@ log = logging.getLogger("keld.sidecar.store")
 BIN_SECONDS = 300
 
 # The levels binned eagerly, DERIVED from the payload that consumes them rather than restated:
-# the 7 ALLOCATION levels and the 6 INVENTORY levels, 13 in all. `events_for_turns` emits 19.
-# The other 6 — and any dimension invented later — are not binned and do not need to be: the raw
-# events are retained, so adding a rollup is a backfill query over `event` (see
+# the 7 ALLOCATION levels and the 9 INVENTORY levels, 16 in all (INVENTORY grew from 6 to 9 when
+# `file`/`dir`/`component` joined it as `files`/`directories`/`components`). `events_for_turns`
+# emits 19. The other 3 — and any dimension invented later — are not binned and do not need to
+# be: the raw events are retained, so adding a rollup is a backfill query over `event` (see
 # `_register_levels`), never a transcript re-read.
 #
 # Deriving this from `workstreams` is the point. Hardcoding the thirteen would let the payload and

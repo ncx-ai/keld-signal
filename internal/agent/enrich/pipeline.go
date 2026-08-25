@@ -340,6 +340,10 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		Dynamics:          dynamicsFrom(ctx.Get("workstreams")),
 		Effort:            effortFrom(ctx.Get("workstreams")),
 		PhysicalActs:      actsFrom(ctx.Get("workstreams")),
+		Files:             pathsFrom(ctx.Get("workstreams"), "files"),
+		Directories:       pathsFrom(ctx.Get("workstreams"), "directories"),
+		Components:        pathsFrom(ctx.Get("workstreams"), "components"),
+		InventoryOmitted:  inventoryOmittedFrom(ctx.Get("workstreams")),
 		Prior:             priorFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
 		FacetsSkipped:     skipped,
@@ -444,6 +448,34 @@ func actsFrom(out map[string]any) []Act {
 	if out != nil {
 		if a, ok := out["physical_acts"].([]Act); ok && len(a) > 0 {
 			return a
+		}
+	}
+	return nil
+}
+
+// pathsFrom reads one of the three file-path inventory halves of the same
+// committed pass output (key is "files", "directories" or "components"). Same
+// emptiness rule as actsFrom: nil rather than an empty list, so a window that
+// touched no path in that dimension publishes no key rather than one that reads
+// as "we looked and the hour touched nothing".
+func pathsFrom(out map[string]any, key string) []PathCount {
+	if out != nil {
+		if p, ok := out[key].([]PathCount); ok && len(p) > 0 {
+			return p
+		}
+	}
+	return nil
+}
+
+// inventoryOmittedFrom reads the cut-visibility map beside the four inventories
+// above. Nil rather than an empty map when nothing was cut, so an untruncated
+// set of inventories publishes no key rather than one that reads as "we
+// checked and nothing was ever cut" — a fact this pass has no way to assert for
+// a sidecar too old to report it at all.
+func inventoryOmittedFrom(out map[string]any) map[string]int {
+	if out != nil {
+		if m, ok := out["inventory_omitted"].(map[string]int); ok && len(m) > 0 {
+			return m
 		}
 	}
 	return nil

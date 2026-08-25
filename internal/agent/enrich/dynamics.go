@@ -82,6 +82,21 @@ type WindowAnalysis struct {
 	// measurement, and Act for the shape). Nil, never an empty slice, when the
 	// analysis produced none: "the hour did nothing" is not a fact this can state.
 	PhysicalActs []Act
+	// Files, Directories and Components are what the window's hour TOUCHED — the
+	// `file`/`dir`/`component` levels, published as INVENTORIES the same way
+	// PhysicalActs is (see PathCount for the shape and its structural, rather
+	// than vocabulary, gate). Nil, never an empty slice, when the analysis
+	// produced none.
+	Files       []PathCount
+	Directories []PathCount
+	Components  []PathCount
+	// InventoryOmitted names, per inventory dimension, how many values the
+	// sidecar's own top-N cut dropped — the visibility `Profile.FacetsSkipped`
+	// already gives a dropped FACET, applied one level down to a dropped VALUE
+	// within one that still published. Nil when nothing was cut, including for a
+	// sidecar too old to report it at all: the two read the same to a consumer,
+	// since neither can name a value that was actually lost.
+	InventoryOmitted map[string]int
 	// Effort is the same window's two surviving transcript signals — how much was
 	// authored and how fast the turns came (see Effort). Third half of the same
 	// call, and nil for a sidecar too old to compute the block: a zeroed Effort

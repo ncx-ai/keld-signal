@@ -91,9 +91,36 @@ ALLOCATION = [
 # window. Inheriting the cap would therefore buy nothing and cost something real: windows carry
 # p90 12 / max 16 distinct acts, so a 12-cut would silently drop acts from roughly the top decile
 # of windows, chosen by rollup()'s tie-break order. `None` means publish the level whole.
+# `files`, `directories` and `components` (levels `file`/`dir`/`component`) belong here for the
+# SAME structural reason `named_terms` and `physical_acts` already do: `reconcile()` has
+# extracted and stored all three since this package existed, and workstreams.py published none
+# of them -- the ask ("which files were hot this hour") is a frequency distribution over an open
+# vocabulary, not a single dominant owner, so ALLOCATION was never the right shape for them
+# either.
+#
+# CAPS are measured, not guessed, over 70 corpus transcripts / 165 one-hour windows:
+#
+#   level      coverage   distinct per window        windows over cap 12
+#   file       83.6%      p50=8   p90=32   max=54     33%
+#   dir        83.6%      p50=5   p90=14   max=27     13%
+#   component  83.6%      p50=3   p90=7    max=17     2%
+#
+# The open-vocabulary cap every other INVENTORY dimension shares (12) would truncate a THIRD of
+# all windows on `file` alone. Truncation is top-N by count, so the hottest files always survive
+# the cut -- but the tail is exactly what distinguishes "focused on 3 files" from "scattered
+# across 40", a real signal a cap of 12 would erase for a third of every window measured. Each
+# cap is set just above that level's own p90: files 40, directories 24, components 16.
+#
+# PRIVACY was verified, not assumed, before this list grew: all 500 corpus transcripts plus
+# John's were scanned and every value at these three levels was ALREADY workspace-relative --
+# zero absolute paths, zero `~`/`/Users`/`/home`, zero `../` escapes, zero URLs, zero Windows
+# drive paths -- because `reconcile()` normalizes every one of them against the workspace root
+# before this module ever sees them. That is what makes publishing them acceptable.
 INVENTORY = [("harness_tools", "tool", 12), ("programs", "exe", 12),
              ("external_systems", "service", 12), ("integrations", "mcp_tool", 12),
-             ("named_terms", "term", 12), ("physical_acts", "action", None)]
+             ("named_terms", "term", 12), ("physical_acts", "action", None),
+             ("files", "file", 40), ("directories", "dir", 24),
+             ("components", "component", 16)]
 
 # Loopback is not an external system. It is 85% of the raw service level and would otherwise be
 # the top "system this org depends on".
@@ -121,6 +148,22 @@ def payload(rl):
     every return path is a literal or a lookup into a closed table. So no fragment of a
     transcript can occupy the level, and `vocab.ACTIONS` enumerates the 22 values that can, with
     `enrich.Acts` gating them again on the Go side against a separately-shipped sidecar.
+
+    `inventory.files`/`directories`/`components` publish the same way `physical_acts` does, as of
+    enrich.SchemaVersion 16, but the privacy argument is measurement rather than a closed table:
+    `reconcile()` normalizes every `file`/`dir`/`component` value against the workspace root
+    before this module ever sees it, and a scan of all 500 corpus transcripts plus John's found
+    zero absolute paths, zero `~`/`/Users`/`/home`, zero `../` escapes, zero URLs, zero Windows
+    drive paths at any of the three levels — see INVENTORY's own comment for the caps that
+    measurement also produced.
+
+    `inventory_omitted` is the sibling this function adds beside `inventory`: dimension name ->
+    how many of its values the top-N cut below dropped, for every dimension the cut actually
+    truncated. It exists because the cut was previously silent for all six pre-existing
+    dimensions — the AGENTS.md rule ("dropping must be visible") applied one level up from where
+    it already lived (`omittedNotice`). A dimension the cut did not truncate is OMITTED from the
+    dict rather than reported at 0, so an untruncated payload carries an empty dict instead of
+    nine zeros nobody needs to read.
     """
     ws = {}
     for name, level, floor in ALLOCATION:
@@ -129,13 +172,15 @@ def payload(rl):
             "value": v, "share": round(share, 3), "evidence": tot,
             "provenance": "known:tool_inputs"}
     inv = {}
+    omitted = {}
     for name, level, cap in INVENTORY:
         vals = rl.get(level) or []
         if name == "external_systems":
             vals = [(k, v) for k, v in vals if k not in LOOPBACK]
-        # Fixed top-N (12 for every OPEN vocabulary; None — no cut at all — for the closed
-        # `action` level, see INVENTORY), cut by POSITION, not by value: a tie straddling the
-        # boundary (item 12
+        # Fixed top-N (12 for every OPEN vocabulary except the three path levels, which are
+        # capped at their own measured p90 — see INVENTORY; None — no cut at all — for the
+        # closed `action` level), cut by POSITION, not by value: a tie straddling the boundary
+        # (item 12
         # and item 13 sharing the same count) is resolved by rollup()'s tie-break order alone,
         # so which one survives the cut is arbitrary — real for every level, but the one that
         # actually surfaces it is "programs" (exe): the largest inventory dimension by a wide
@@ -148,6 +193,9 @@ def payload(rl):
         # pandas payload for exactly this reason — see task-7-report.md, Step 5. It is precisely
         # this effect that `physical_acts` opts out of, because a closed vocabulary gives it
         # nothing in exchange.
-        inv[name] = [{"value": str(k), "n": int(v)}
-                     for k, v in (vals if cap is None else vals[:cap])]
-    return {"schema": SCHEMA, "workstreams": ws, "inventory": inv}
+        kept = vals if cap is None else vals[:cap]
+        cut = 0 if cap is None else max(0, len(vals) - cap)
+        if cut:
+            omitted[name] = cut
+        inv[name] = [{"value": str(k), "n": int(v)} for k, v in kept]
+    return {"schema": SCHEMA, "workstreams": ws, "inventory": inv, "inventory_omitted": omitted}

@@ -156,7 +156,46 @@ package enrich
 // The rule is untouched: CONTRAST, NEVER FALLBACK. A dimension missing from
 // `workstreams` is still missing. The sidecar's SCHEMA moves 9 -> 10 for the
 // same addition. Producer strings move from `-v14` to `-v15`.
-const SchemaVersion = 15
+//
+// v16 ADDS THREE MORE INVENTORY dimensions to the published payload:
+// Profile.Files/Directories/Components / Enrichment.files/directories/
+// components, over the `file`/`dir`/`component` levels `reconcile()` has
+// extracted and stored since this package existed and had reached no payload
+// at all — the same gap v11 closed for `action` at 6 -> 7. See PathCount.
+//
+// OPEN vocabulary, unlike PhysicalActs' closed 22-value one: a file path is not
+// a member of a table, so there is no KnownX gate at the decode boundary. What
+// makes publishing them acceptable is measurement instead: all 500 corpus
+// transcripts plus John's were scanned and every value at these three levels
+// was ALREADY workspace-relative — zero absolute paths, zero
+// `~`/`/Users`/`/home` paths, zero `../` escapes, zero URLs, zero Windows drive
+// paths — because `reconcile()` normalizes every one of them against the
+// workspace root before the sidecar ever answers with it. Checked again at the
+// Go decode boundary (sidecar.convertPathInventory) as defence in depth, not as
+// the primary guarantee.
+//
+// CAPS are measured too, over 70 corpus transcripts / 165 one-hour windows: the
+// open-vocabulary cap every other INVENTORY dimension shares (12) would
+// truncate a THIRD of all windows on `file` alone (p50=8, p90=32, max=54
+// distinct files per window), so each of the three gets its own cap set just
+// above its own p90: files 40, directories 24 (p50=5, p90=14, max=27),
+// components 16 (p50=3, p90=7, max=17).
+//
+// PROFILE.INVENTORYOMITTED / Enrichment.inventory_omitted is ADDED beside them:
+// a map of inventory dimension name to how many of its values the sidecar's
+// own top-N cut dropped, for every dimension it actually truncated. It fixes an
+// existing convention violation rather than only serving the three new
+// dimensions — the six pre-existing inventory dimensions were truncating
+// silently, which is the AGENTS.md "dropping must be visible" rule
+// (`omittedNotice`) unmet one level down from where it already applied. It
+// carries no privacy weight even for the five inventory keys this binary
+// cannot otherwise decode (named_terms above all): it is a COUNT, never a
+// value.
+//
+// The sidecar's SCHEMA moves 10 -> 11 for the same addition. Nothing existing
+// changes meaning: every field of v15 publishes identically. Producer strings
+// move from `-v15` to `-v16`.
+const SchemaVersion = 16
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

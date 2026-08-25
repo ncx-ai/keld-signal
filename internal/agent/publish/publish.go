@@ -81,6 +81,30 @@ type Enrichment struct {
 	//
 	// Absent when the window recorded no act; never an empty list.
 	PhysicalActs []enrich.Act `json:"physical_acts,omitempty"`
+	// Files, Directories and Components are what the window physically TOUCHED:
+	// inventories of the `file`/`dir`/`component` levels with counts (see
+	// enrich.PathCount). Same /analyze call as PhysicalActs, same no-inference
+	// path. OPEN vocabulary, unlike PhysicalActs — a file path is not a member of
+	// a closed table — so what makes publishing them acceptable is measurement,
+	// not a lookup: `reconcile()` normalizes every value against the workspace
+	// root before the sidecar ever sees it, verified over 500 real corpus
+	// transcripts plus John's (zero absolute paths, zero `~`/`/Users`/`/home`
+	// paths, zero `../` escapes, zero URLs, zero Windows drive paths), and
+	// checked again structurally at the Go decode boundary
+	// (sidecar.convertPathInventory). Absent when the window touched no path in
+	// that dimension; never an empty list.
+	Files       []enrich.PathCount `json:"files,omitempty"`
+	Directories []enrich.PathCount `json:"directories,omitempty"`
+	Components  []enrich.PathCount `json:"components,omitempty"`
+	// InventoryOmitted names, per inventory dimension, how many values the
+	// sidecar's own top-N cut dropped. It is the visibility the truncation
+	// lacked before this: the six pre-existing inventory dimensions (harness_
+	// tools, programs, external_systems, integrations, named_terms,
+	// physical_acts) truncated silently, and this makes that cut readable for
+	// all nine — even the five whose values never reach this struct at all, since
+	// what publishes here is only a COUNT, never a value. Absent when nothing was
+	// cut.
+	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
 	// Prior is the SESSION this window sat in, keyed by dimension (see
 	// enrich.Prior): the same three measures per dimension the daemon reads
 	// on-device — the session's own value/share/evidence/status, and the
@@ -161,6 +185,10 @@ func Build(j queue.Job, p enrich.Profile, actor string, includeEntityText bool, 
 		Dynamics:          p.Dynamics,
 		Effort:            p.Effort,
 		PhysicalActs:      p.PhysicalActs,
+		Files:             p.Files,
+		Directories:       p.Directories,
+		Components:        p.Components,
+		InventoryOmitted:  p.InventoryOmitted,
 		Prior:             p.Prior,
 		PipelineStatus:    p.PipelineStatus,
 		FacetsSkipped:     p.FacetsSkipped,

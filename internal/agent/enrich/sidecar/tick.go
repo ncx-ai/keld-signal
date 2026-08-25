@@ -130,11 +130,15 @@ func (c *Client) TickCharacterised(path, source, sessionID string, promptIDs []s
 				Evidence:    w.Evidence,
 			},
 			Analysis: enrich.WindowAnalysis{
-				Workstreams:  dims,
-				PhysicalActs: convertActs(w.Inventory.PhysicalActs),
-				Dynamics:     convertDynamics(w.Dynamics),
-				Effort:       convertEffort(w.Effort),
-				Prior:        convertPrior(w.Prior),
+				Workstreams:      dims,
+				PhysicalActs:     convertActs(w.Inventory.PhysicalActs),
+				Files:            convertPathInventory(w.Inventory.Files),
+				Directories:      convertPathInventory(w.Inventory.Directories),
+				Components:       convertPathInventory(w.Inventory.Components),
+				InventoryOmitted: convertInventoryOmitted(w.InventoryOmitted),
+				Dynamics:         convertDynamics(w.Dynamics),
+				Effort:           convertEffort(w.Effort),
+				Prior:            convertPrior(w.Prior),
 			},
 		})
 	}

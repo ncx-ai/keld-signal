@@ -105,7 +105,39 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           still unattributed; the block simply says one more true thing about the session
 #           beside it. A window that answers with a key it did not answer with before is a
 #           window answered differently, which is exactly this number's trigger.
-SCHEMA = 10
+#   10 -> 11: THREE MORE INVENTORY dimensions publish -- `files`, `directories`, `components`,
+#           over the `file`/`dir`/`component` levels `reconcile()` has extracted and stored
+#           since this package existed and had reached no payload at all, the same gap
+#           `physical_acts` closed for `action` at 6 -> 7. `inventory_omitted` is ADDED beside
+#           `inventory`: a dimension name -> how many of its values the top-N cut dropped,
+#           omitting any dimension it did not cut (an untruncated payload carries `{}`, not nine
+#           zeros) -- the six existing INVENTORY dimensions were truncating silently before this,
+#           which is the `omittedNotice` rule (AGENTS.md: "dropping must be visible") applied one
+#           level up.
+#
+#           CAPS are measured, not guessed, over 70 corpus transcripts / 165 one-hour windows:
+#
+#             level      coverage   distinct per window        windows over cap 12
+#             file       83.6%      p50=8   p90=32   max=54     33%
+#             dir        83.6%      p50=5   p90=14   max=27     13%
+#             component  83.6%      p50=3   p90=7    max=17     2%
+#
+#           The open-vocabulary cap every existing INVENTORY dimension shares (12) would have
+#           truncated a THIRD of all windows on `file` alone, and the tail it cuts is the signal
+#           that tells "focused on 3 files" apart from "scattered across 40" -- so each of the
+#           three gets its own cap, set just above its own p90: files 40, directories 24,
+#           components 16.
+#
+#           PRIVACY was verified before this, not assumed: all 500 corpus transcripts plus
+#           John's were scanned and every value at these three levels was ALREADY
+#           workspace-relative -- zero absolute paths, zero `~`/`/Users`/`/home`, zero `../`
+#           escapes, zero URLs, zero Windows drive paths -- because `reconcile()` normalizes
+#           every one of them against the workspace root before this package ever sees them.
+#           That is what makes publishing acceptable; nothing in this change touches extraction
+#           or `reconcile()` itself. A window that answers with three keys it did not answer
+#           with before is a window answered differently, which is exactly this number's
+#           trigger. Go's `enrich.SchemaVersion` moves 15 -> 16 for the same addition.
+SCHEMA = 11
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

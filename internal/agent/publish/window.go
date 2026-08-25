@@ -47,6 +47,14 @@ type WindowEnrichment struct {
 	// PhysicalActs is absent, never an empty list, when the window recorded no
 	// act — same rule as the prompt row's.
 	PhysicalActs []enrich.Act `json:"physical_acts,omitempty"`
+	// Files, Directories and Components are what the window physically TOUCHED —
+	// same rule and same meaning as the prompt row's (see Enrichment.Files).
+	Files       []enrich.PathCount `json:"files,omitempty"`
+	Directories []enrich.PathCount `json:"directories,omitempty"`
+	Components  []enrich.PathCount `json:"components,omitempty"`
+	// InventoryOmitted is the cut-visibility map beside the four inventories
+	// above — same rule as the prompt row's (see Enrichment.InventoryOmitted).
+	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
 	// Prior is the SESSION this window sat in — same rule and same meaning as
 	// the prompt row's (see Enrichment.Prior): a contrast reported beside
 	// `workstreams`, never a value supplied in its place. A tick-emitted window
@@ -98,6 +106,10 @@ func BuildWindow(w enrich.WindowCharacterisation, actor string, now time.Time) W
 		Dynamics:          w.Analysis.Dynamics,
 		Effort:            w.Analysis.Effort,
 		PhysicalActs:      w.Analysis.PhysicalActs,
+		Files:             w.Analysis.Files,
+		Directories:       w.Analysis.Directories,
+		Components:        w.Analysis.Components,
+		InventoryOmitted:  w.Analysis.InventoryOmitted,
 		Prior:             w.Analysis.Prior,
 		PipelineStatus:    enrich.PipelineStatusWindow,
 		ExtractorVersions: windowExtractorVersions(),

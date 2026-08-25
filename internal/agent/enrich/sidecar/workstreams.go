@@ -1,6 +1,10 @@
 package sidecar
 
-import "github.com/ncx-ai/keld-signal/internal/agent/enrich"
+import (
+	"regexp"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+)
 
 // AnalyzeLabeled is Analyze in the shape the enrichment pipeline consumes: the
 // window's deterministic dimensions as enrich.Labeled, plus the same window's
@@ -37,12 +41,18 @@ import "github.com/ncx-ai/keld-signal/internal/agent/enrich"
 //   - Session / WindowStart / WindowEnd stay local: window metadata, useful for
 //     debugging on-device, with no business on the published payload.
 //
-//   - The response's inventory block contributes exactly ONE of its six keys:
-//     `physical_acts`, converted by convertActs below. The other five are not
-//     modelled by AnalyzeResult at all (see InventoryBlock), so there is
-//     structurally nothing here to forward — named_terms above all is drawn from
-//     message TEXT and has been observed to contain real person names; keep it
-//     unrepresentable.
+//   - The response's inventory block contributes FOUR of its nine keys:
+//     `physical_acts` (convertActs), and `files`/`directories`/`components`
+//     (convertPathInventory). The other five are not modelled by AnalyzeResult
+//     at all (see InventoryBlock), so there is structurally nothing here to
+//     forward — named_terms above all is drawn from message TEXT and has been
+//     observed to contain real person names; keep it unrepresentable.
+//
+//   - InventoryOmitted forwards UNCHANGED: it is a map of dimension name to a
+//     COUNT of values cut, never a value, so it carries no privacy weight even
+//     for the five inventory keys above that stay on-device — "programs cut 3"
+//     says nothing about which three. Nil rather than an empty map when nothing
+//     was cut (see enrich.WindowAnalysis.InventoryOmitted).
 //
 //   - The SESSION PRIOR block converts field-for-field (see convertPrior) into a
 //     map that is SEPARATE from Workstreams and never merged into it. That
@@ -84,11 +94,15 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int) (enrich.
 		out[dim] = enrich.Labeled{Value: w.Value, Confidence: w.Share}
 	}
 	return enrich.WindowAnalysis{
-		Workstreams:  out,
-		PhysicalActs: convertActs(res.Inventory.PhysicalActs),
-		Dynamics:     convertDynamics(res.Dynamics),
-		Effort:       convertEffort(res.Effort),
-		Prior:        convertPrior(res.Prior),
+		Workstreams:      out,
+		PhysicalActs:     convertActs(res.Inventory.PhysicalActs),
+		Files:            convertPathInventory(res.Inventory.Files),
+		Directories:      convertPathInventory(res.Inventory.Directories),
+		Components:       convertPathInventory(res.Inventory.Components),
+		InventoryOmitted: convertInventoryOmitted(res.InventoryOmitted),
+		Dynamics:         convertDynamics(res.Dynamics),
+		Effort:           convertEffort(res.Effort),
+		Prior:            convertPrior(res.Prior),
 	}, true
 }
 
@@ -177,6 +191,52 @@ func convertActs(items []InventoryItem) []enrich.Act {
 			continue
 		}
 		out = append(out, enrich.Act{Value: it.Value, N: it.N})
+	}
+	return out
+}
+
+// notWorkspaceRelative mirrors the assertion
+// sidecar/app/test_analysis_window.py pins on the producing side: `reconcile()`
+// normalizes every `file`/`dir`/`component` value against the workspace root
+// before the sidecar ever answers with it, verified over all 500 real corpus
+// transcripts plus John's (zero absolute paths, zero `~`/`/Users`/`/home`
+// paths, zero `../` escapes, zero URLs, zero Windows drive paths). Checking it
+// AGAIN here, at the decode boundary, is defence in depth — the same reasoning
+// as the "loopback is not an external system" filter and the wire-shape test
+// below: a sidecar that ever regressed on this must not have its output
+// forwarded unfiltered just because nothing local happened to catch it.
+var notWorkspaceRelative = regexp.MustCompile(`^/|^~|^[A-Za-z]:|\.\.(/|$)`)
+
+// convertPathInventory converts one of the three OPEN-vocabulary path
+// inventories (files/directories/components). PER-ENTRY, the same shape
+// convertActs uses, for the analogous reason: an inventory is a list of
+// independent items, so one bad entry costs exactly that entry rather than the
+// whole list. There is no closed table to check membership against here — see
+// enrich.PathCount — so the gate is the structural relative-path invariant
+// instead of vocabulary membership.
+func convertPathInventory(items []InventoryItem) []enrich.PathCount {
+	var out []enrich.PathCount
+	for _, it := range items {
+		if it.Value == "" || notWorkspaceRelative.MatchString(it.Value) {
+			continue
+		}
+		out = append(out, enrich.PathCount{Value: it.Value, N: it.N})
+	}
+	return out
+}
+
+// convertInventoryOmitted forwards the sidecar's cut-counts unchanged: it is a
+// map of dimension name to a COUNT of values dropped, never a value, so there
+// is nothing here to gate. Nil rather than an empty map when nothing was cut —
+// including when the sidecar is too old to send the key at all — so the two
+// read the same to a consumer, neither able to name a value that was lost.
+func convertInventoryOmitted(m map[string]int) map[string]int {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(m))
+	for k, v := range m {
+		out[k] = v
 	}
 	return out
 }

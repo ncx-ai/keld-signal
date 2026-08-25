@@ -309,9 +309,17 @@ type AnalyzeResult struct {
 	WindowEnd   string                 `json:"window_end"`
 	Workstreams map[string]*Workstream `json:"workstreams"`
 	Inventory   InventoryBlock         `json:"inventory"`
-	Dynamics    DynamicsBlock          `json:"dynamics"`
-	Effort      *EffortBlock           `json:"effort"`
-	Prior       PriorBlock             `json:"prior"`
+	// InventoryOmitted is the sibling of `inventory`: dimension name -> how many
+	// of its values the sidecar's own top-N cut dropped, for every dimension it
+	// actually truncated (a dimension it did not cut is absent, so an
+	// untruncated payload decodes to an empty map, not nine zeros). It is just a
+	// COUNT — never a value — so it carries no privacy weight even for the five
+	// inventory keys this struct cannot otherwise decode (named_terms above
+	// all): forwarding "programs cut 3 values" says nothing about which three.
+	InventoryOmitted map[string]int `json:"inventory_omitted"`
+	Dynamics         DynamicsBlock  `json:"dynamics"`
+	Effort           *EffortBlock   `json:"effort"`
+	Prior            PriorBlock     `json:"prior"`
 }
 
 // PriorBlock is /analyze's `prior` object, and it models ONE of its two keys.
@@ -345,20 +353,30 @@ type Prior struct {
 	Novel     *bool    `json:"novel"`
 }
 
-// InventoryBlock is /analyze's inventory object, and it models ONE of its six
-// keys. The other five — harness_tools, programs, external_systems, integrations
-// and named_terms — are on-device only, and `named_terms` is the reason the
-// distinction is enforced by the struct rather than by a comment: it is the one
-// level drawn from message TEXT, and real person names have been observed in it.
-// A struct with one field is deliberate, exactly as DynamicsBlock's is: it keeps
-// the rest structurally unreachable instead of decoded-then-dropped.
+// InventoryBlock is /analyze's inventory object, and it models FOUR of its nine
+// keys: physical_acts, files, directories, components. The other five —
+// harness_tools, programs, external_systems, integrations and named_terms — are
+// on-device only, and `named_terms` is the reason the distinction is enforced by
+// the struct rather than by a comment: it is the one level drawn from message
+// TEXT, and real person names have been observed in it. A struct with exactly
+// these fields is deliberate, exactly as DynamicsBlock's is: it keeps the rest
+// structurally unreachable instead of decoded-then-dropped.
 //
-// A slice, not a pointer: an inventory dimension's absence and its emptiness are
+// physical_acts is a CLOSED 22-value vocabulary (see convertActs); files,
+// directories and components are OPEN — a file path is not a member of a table
+// — so what stands in place of a vocabulary gate for them is a structural one:
+// convertPathInventory drops any entry that does not look workspace-relative
+// (see enrich.PathCount).
+//
+// Slices, not pointers: an inventory dimension's absence and its emptiness are
 // the same fact ("nothing was recorded"), unlike an effort block, where a zeroed
-// struct would state measurements nobody took. convertActs still returns nil
-// rather than an empty slice, so the published payload omits the key.
+// struct would state measurements nobody took. The convert functions still
+// return nil rather than an empty slice, so the published payload omits the key.
 type InventoryBlock struct {
 	PhysicalActs []InventoryItem `json:"physical_acts"`
+	Files        []InventoryItem `json:"files"`
+	Directories  []InventoryItem `json:"directories"`
+	Components   []InventoryItem `json:"components"`
 }
 
 // InventoryItem is one entry of an inventory dimension as it arrives on the wire:

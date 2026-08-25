@@ -141,6 +141,28 @@ type Profile struct {
 	// tests — top-act share p50 0.403 over p50 7 distinct acts. See Acts.
 	// Absent, never an empty list, when the analysis produced none.
 	PhysicalActs []Act `json:"physical_acts,omitempty"`
+	// Files, Directories and Components are what the same window physically
+	// TOUCHED: inventories of the `file`/`dir`/`component` levels, with counts
+	// (see PathCount). Same /analyze call as PhysicalActs, model-free like it,
+	// so all three publish in ml_backend "deterministic" too.
+	//
+	// OPEN vocabulary, unlike PhysicalActs' closed one — a file path is not a
+	// member of a table — so the caps that bound them are measured rather than
+	// structural: 40/24/16 respectively, each set just above that level's own
+	// p90 over 70 corpus transcripts / 165 one-hour windows (see
+	// sidecar/app/analysis/workstreams.py's INVENTORY). Absent, never an empty
+	// list, when the analysis produced none.
+	Files       []PathCount `json:"files,omitempty"`
+	Directories []PathCount `json:"directories,omitempty"`
+	Components  []PathCount `json:"components,omitempty"`
+	// InventoryOmitted names, per inventory dimension, how many values the
+	// sidecar's own top-N cut dropped — visibility for a cut that used to be
+	// silent for every one of the six pre-existing inventory dimensions (the
+	// AGENTS.md "dropping must be visible" rule, applied one level below
+	// FacetsSkipped: that field names a dropped FACET, this names a dropped
+	// VALUE within one that still published). Absent when nothing was cut,
+	// including for a sidecar too old to report it at all.
+	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
 	// Prior is the SESSION the same window sat in, keyed by dimension (see
 	// Prior). Fifth answer from the same /analyze call, model-free like the other
 	// four, so it is published in ml_backend "deterministic" too — and the only

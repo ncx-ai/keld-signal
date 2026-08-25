@@ -566,3 +566,58 @@ func TestBuildOmitsAnEmptyPhysicalActsInventory(t *testing.T) {
 		}
 	}
 }
+
+// The three FILE-PATH inventories, and the cut-visibility map beside them,
+// reach the wire the same way PhysicalActs does — same call, same shape, but
+// an OPEN vocabulary (a file path is not a member of a closed table): what
+// makes publishing them acceptable is `reconcile()`'s measured
+// workspace-relative guarantee, not a lookup (see enrich.PathCount).
+func TestBuildCarriesTheFilePathInventoriesAndInventoryOmitted(t *testing.T) {
+	p := enrich.Profile{
+		Files:            []enrich.PathCount{{Value: "internal/agent/daemon/daemon.go", N: 5}},
+		Directories:      []enrich.PathCount{{Value: "internal/agent/daemon", N: 5}},
+		Components:       []enrich.PathCount{{Value: "internal/agent/daemon", N: 5}},
+		InventoryOmitted: map[string]int{"files": 5},
+	}
+	e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+	if len(e.Files) != 1 || len(e.Directories) != 1 || len(e.Components) != 1 {
+		t.Fatalf("path inventories dropped by Build: %+v", e)
+	}
+	if len(e.InventoryOmitted) != 1 || e.InventoryOmitted["files"] != 5 {
+		t.Fatalf("inventory_omitted dropped by Build: %+v", e.InventoryOmitted)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"files":[{"value":"internal/agent/daemon/daemon.go","n":5}]`,
+		`"directories":[{"value":"internal/agent/daemon","n":5}]`,
+		`"components":[{"value":"internal/agent/daemon","n":5}]`,
+		`"inventory_omitted":{"files":5}`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("wire missing %s: %s", want, b)
+		}
+	}
+}
+
+// Absent, not an empty list/map — same rule PhysicalActs already keeps.
+func TestBuildOmitsEmptyFilePathInventoriesAndInventoryOmitted(t *testing.T) {
+	for name, p := range map[string]enrich.Profile{
+		"nil": {},
+		"empty": {
+			Files: []enrich.PathCount{}, Directories: []enrich.PathCount{},
+			Components: []enrich.PathCount{}, InventoryOmitted: map[string]int{},
+		},
+	} {
+		e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, unwanted := range []string{`"files"`, `"directories"`, `"components"`, `"inventory_omitted"`} {
+			if strings.Contains(string(b), unwanted) {
+				t.Errorf("%s: an empty %s was published: %s", name, unwanted, b)
+			}
+		}
+	}
+}

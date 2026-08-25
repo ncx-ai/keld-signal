@@ -20,9 +20,13 @@ func sampleWindow() enrich.WindowCharacterisation {
 			SpanMinutes: 54.133, Evidence: 63,
 		},
 		Analysis: enrich.WindowAnalysis{
-			Workstreams:  map[string]enrich.Labeled{"branch": {Value: "main", Confidence: 0.9}},
-			Dynamics:     map[string]enrich.Dynamic{"branch": {Status: "compared", Reading: "steady", Changed: &b, Turnover: &turnover}},
-			PhysicalActs: []enrich.Act{{Value: "read", N: 12}},
+			Workstreams:      map[string]enrich.Labeled{"branch": {Value: "main", Confidence: 0.9}},
+			Dynamics:         map[string]enrich.Dynamic{"branch": {Status: "compared", Reading: "steady", Changed: &b, Turnover: &turnover}},
+			PhysicalActs:     []enrich.Act{{Value: "read", N: 12}},
+			Files:            []enrich.PathCount{{Value: "internal/agent/daemon/daemon.go", N: 5}},
+			Directories:      []enrich.PathCount{{Value: "internal/agent/daemon", N: 5}},
+			Components:       []enrich.PathCount{{Value: "internal/agent/daemon", N: 5}},
+			InventoryOmitted: map[string]int{"files": 3},
 		},
 	}
 }
@@ -109,7 +113,9 @@ func TestAWindowRowCarriesItsBoundsAndItsBlocks(t *testing.T) {
 	if got.Window.SpanMinutes != 54.133 {
 		t.Errorf("span = %v, want the fractional gap width", got.Window.SpanMinutes)
 	}
-	if len(got.Workstreams) == 0 || len(got.Dynamics) == 0 || len(got.PhysicalActs) == 0 {
+	if len(got.Workstreams) == 0 || len(got.Dynamics) == 0 || len(got.PhysicalActs) == 0 ||
+		len(got.Files) == 0 || len(got.Directories) == 0 || len(got.Components) == 0 ||
+		len(got.InventoryOmitted) == 0 {
 		t.Fatalf("the analysis blocks did not survive Build: %+v", got)
 	}
 	if got.SchemaVersion != enrich.SchemaVersion {
@@ -135,6 +141,7 @@ func TestTheWindowWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 	allowed := map[string]bool{
 		"source": true, "correlation": true, "actor": true, "window": true,
 		"workstreams": true, "dynamics": true, "effort": true, "physical_acts": true,
+		"files": true, "directories": true, "components": true, "inventory_omitted": true,
 		"prior":           true,
 		"pipeline_status": true, "extractor_versions": true, "schema_version": true, "ts": true,
 	}

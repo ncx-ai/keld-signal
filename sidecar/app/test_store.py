@@ -50,8 +50,13 @@ def _corpus():
         rows.append(_row(dt, "exe", "go", 2))
         # NOT precomputed: these must still be answered, from the raw events.
         rows.append(_row(dt, "verb", ["git status", "go test"][i % 2]))
+        rows.append(_row(dt, "ext", ".go"))
+        # PRECOMPUTED (published as inventory dimensions): `action` since `physical_acts`,
+        # `file`/`dir`/`component` since `files`/`directories`/`components`.
         rows.append(_row(dt, "action", "run tests"))
         rows.append(_row(dt, "file", "internal/agent/daemon/daemon.go"))
+        rows.append(_row(dt, "dir", "internal/agent/daemon"))
+        rows.append(_row(dt, "component", "internal/agent/daemon"))
         if i % 5 == 0:
             rows.append(_row(dt, "term", "Federico", 3))
             rows.append(_row(dt, "lang", "Go"))
@@ -207,14 +212,17 @@ def test_start_and_end_accept_datetimes_and_iso_strings():
 # --- sparse bins: absence must never read as "no evidence" -----------------------------------
 
 def test_a_level_that_is_not_precomputed_is_still_answered_in_full():
-    """`bin` holds only the 13 default levels; `events_for_turns` emits 19. If rollup_window
+    """`bin` holds only the 16 default levels; `events_for_turns` emits 19. If rollup_window
     served bins alone, `verb` would come back empty and a reader would take that for "nothing
-    happened". The raw events are retained precisely so the answer stays complete."""
+    happened". The raw events are retained precisely so the answer stays complete.
+
+    `file` was an example here until it joined PRECOMPUTED_LEVELS alongside `dir`/`component`
+    (see the test below); `ext` takes its place as a level that is genuinely never precomputed."""
     with tempfile.TemporaryDirectory() as tmp:
         st, rows = _loaded(tmp)
         start, end = T0 + 71.3, T0 + 3671.3
         got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
-        for level in ("verb", "file"):
+        for level in ("verb", "ext"):
             assert level not in PRECOMPUTED_LEVELS, level
             assert want[level], f"premise: {level} must carry evidence or this asserts nothing"
             assert got[level] == want[level], (level, got.get(level), want[level])
@@ -236,6 +244,24 @@ def test_the_bin_path_and_the_event_path_agree_on_a_newly_precomputed_level():
             "interior of every historical window")
         assert want["action"], "premise: the fixture must exercise the action level"
         assert got["action"] == want["action"], (got.get("action"), want["action"])
+        st.close()
+
+
+def test_the_bin_path_and_the_event_path_agree_on_the_newly_precomputed_path_levels():
+    """`file`/`dir`/`component` are the next three to join PRECOMPUTED_LEVELS, for the same
+    reason `action` did: they now publish, as `inventory.files`/`directories`/`components`. Same
+    property, same file: moving a level into the precomputed set must not change the ANSWER."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, rows = _loaded(tmp)
+        start, end = T0 + 71.3, T0 + 3671.3
+        got, want = st.rollup_window(SESSION, start, end), _expected(rows, start, end)
+        for level in ("file", "dir", "component"):
+            assert level in PRECOMPUTED_LEVELS, (
+                f"`{level}` is published as inventory.{level}s, so workstreams.INVENTORY must "
+                "put it in the precomputed set: an unbinned published level under-counts the "
+                "interior of every historical window")
+            assert want[level], f"premise: the fixture must exercise the {level} level"
+            assert got[level] == want[level], (level, got.get(level), want[level])
         st.close()
 
 

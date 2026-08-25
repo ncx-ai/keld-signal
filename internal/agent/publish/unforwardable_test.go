@@ -66,6 +66,18 @@ import (
 // `inventory` object — so nothing had to be removed from this list to let it
 // through, and the presence check below proves the filler reaches it.
 //
+// EXTENDED AGAIN for the file-path inventories (`files`/`directories`/
+// `components`) and `inventory_omitted`. The first three publish for the same
+// structural reason `physical_acts` does — three more TOP-LEVEL keys, never
+// nested under `inventory` — except their vocabulary is OPEN rather than
+// closed: a file path is not a member of a lookup table, so what stands in for
+// the vocabulary gate is the measured, and separately re-checked, invariant
+// that `reconcile()` only ever hands back a workspace-relative value (see
+// enrich.PathCount). `inventory_omitted` publishes too, but it can never carry
+// a value — only a per-dimension COUNT of what a cut removed — so it needs no
+// entry on the forbidden list below to stay safe; its presence is asserted the
+// same way for the same reason: to prove the filler actually reaches it.
+//
 // A field added for any of them fails HERE rather than in a review.
 var forbiddenWireKeys = []string{
 	"inventory", "named_terms", "window_start", "window_end",
@@ -100,6 +112,10 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// that DOES carry an inventory key, not a vacuous pass over one that
 		// carries none.
 		`"physical_acts"`, `"n":1`,
+		// The three file-path inventories and the cut-visibility map beside them,
+		// so a payload that carries none of them could not make the checks below
+		// pass vacuously.
+		`"files"`, `"directories"`, `"components"`, `"inventory_omitted"`,
 		// The session prior and all three contrast measures, so `"reason"`
 		// staying forbidden below is a real result about a payload that DOES
 		// carry a prior block. The prior states its attribution outcome as

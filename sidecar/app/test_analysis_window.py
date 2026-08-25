@@ -112,7 +112,7 @@ def test_the_skill_level_publishes_under_the_name_skill_not_workflow():
 def test_payload_carries_its_schema_version():
     """These values land in financial reports; a silent shape change is the reproducibility
     failure the earlier handoff called out, so the payload is versioned from the first release."""
-    assert payload(rollup(R))["schema"] == SCHEMA == 10
+    assert payload(rollup(R))["schema"] == SCHEMA == 11
 
 
 # --- the floor generalised to an arbitrary slice length ---------------------------------------
@@ -239,6 +239,89 @@ def test_loopback_is_not_an_external_system():
     'system this org depends on'."""
     ext = payload(rollup(R))["inventory"]["external_systems"]
     assert [e["value"] for e in ext] == ["github.com"], ext
+
+
+# --- files / directories / components ---------------------------------------------------------
+#
+# `reconcile()` has written `file`/`dir`/`component` rows since this package existed; these three
+# publish that data for the first time, as INVENTORY (a frequency distribution), not ALLOCATION —
+# see workstreams.INVENTORY's own comment for the corpus measurement that set each cap.
+
+def test_the_three_path_levels_publish_as_inventory_with_correct_counts():
+    rl = rollup([_n("file", "internal/agent/daemon/daemon.go", 5),
+                 _n("file", "sidecar/app/main.py", 3),
+                 _n("dir", "internal/agent/daemon", 5),
+                 _n("dir", "sidecar/app", 3),
+                 _n("component", "internal/agent/daemon", 5),
+                 _n("component", "sidecar/app", 3)])
+    inv = payload(rl)["inventory"]
+    assert inv["files"] == [{"value": "internal/agent/daemon/daemon.go", "n": 5},
+                            {"value": "sidecar/app/main.py", "n": 3}], inv["files"]
+    assert inv["directories"] == [{"value": "internal/agent/daemon", "n": 5},
+                                  {"value": "sidecar/app", "n": 3}], inv["directories"]
+    assert inv["components"] == [{"value": "internal/agent/daemon", "n": 5},
+                                 {"value": "sidecar/app", "n": 3}], inv["components"]
+
+
+def test_the_file_cap_truncates_at_forty_and_reports_the_cut():
+    """45 distinct files, strictly descending counts so the boundary is unambiguous: f00 (45)
+    down to f44 (1). The cap (40) keeps f00..f39 and reports the 5 it dropped."""
+    rows = [_n("file", f"f{i:02d}.py", 45 - i) for i in range(45)]
+    files = payload(rollup(rows))["inventory"]["files"]
+    assert len(files) == 40, len(files)
+    assert files[0] == {"value": "f00.py", "n": 45}
+    assert files[-1] == {"value": "f39.py", "n": 6}
+    survivors = {f["value"] for f in files}
+    assert survivors.isdisjoint({"f40.py", "f41.py", "f42.py", "f43.py", "f44.py"}), survivors
+
+
+def test_directories_and_components_cap_at_their_own_measured_n():
+    rl = rollup([_n("dir", f"d{i:02d}", 30 - i) for i in range(30)] +
+                [_n("component", f"c{i:02d}", 20 - i) for i in range(20)])
+    inv = payload(rl)["inventory"]
+    assert len(inv["directories"]) == 24, len(inv["directories"])
+    assert len(inv["components"]) == 16, len(inv["components"])
+
+
+def test_inventory_omitted_reports_the_cut_per_dimension():
+    rl = rollup([_n("file", f"f{i:02d}.py", 45 - i) for i in range(45)] +
+                [_n("dir", f"d{i:02d}", 30 - i) for i in range(30)] +
+                [_n("component", f"c{i:02d}", 20 - i) for i in range(20)])
+    assert payload(rl)["inventory_omitted"] == {"files": 5, "directories": 6, "components": 4}
+
+
+def test_inventory_omitted_is_empty_when_nothing_is_cut():
+    """An untruncated payload carries an empty dict, not nine zeros nobody needs to read."""
+    assert payload(rollup(R))["inventory_omitted"] == {}
+
+
+def test_a_dimension_under_its_own_cap_is_not_named_in_inventory_omitted():
+    rl = rollup([_n("file", f"f{i:02d}.py", 45 - i) for i in range(45)])
+    omitted = payload(rl)["inventory_omitted"]
+    assert omitted == {"files": 5}, omitted
+    assert "directories" not in omitted and "components" not in omitted
+
+
+# The privacy assertion the brief requires: no published file/dir/component value may look
+# absolute, home-relative, a Windows drive path, or escape the workspace via `../`. This is not
+# re-litigating the corpus scan (already done, see workstreams.INVENTORY's comment) — it pins the
+# invariant so a future change to `payload()` that ever let a raw value through unfiltered fails
+# HERE rather than in a privacy review.
+ABS_OR_ESCAPING = re.compile(r"^/|^~|^[A-Za-z]:|\.\.(/|$)")
+
+
+def test_no_published_path_value_is_absolute_or_escapes_the_workspace():
+    rl = rollup([_n("file", "internal/agent/daemon/daemon.go", 9),
+                 _n("file", "sidecar/app/main.py", 3),
+                 _n("dir", "internal/agent/daemon", 9),
+                 _n("dir", "sidecar/app", 3),
+                 _n("component", "internal/agent/daemon", 9),
+                 _n("component", "sidecar/app", 3)])
+    inv = payload(rl)["inventory"]
+    for dim in ("files", "directories", "components"):
+        for entry in inv[dim]:
+            assert not ABS_OR_ESCAPING.search(entry["value"]), \
+                f"{dim} published a non-workspace-relative value: {entry['value']!r}"
 
 
 if __name__ == "__main__":
