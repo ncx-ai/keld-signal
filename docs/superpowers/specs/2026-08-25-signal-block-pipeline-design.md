@@ -36,54 +36,84 @@ error — when `ctx.Model == nil` and the tool is not a coding tool. Coding sour
 `Work` pill through the transition; non-coding sources report it absent, honestly. This is a
 one-file change and it should land early, independent of everything else.
 
-## Phase 0 — measure, before any of it is built
+## Phase 0 — MEASURED, 2026-08-25
 
-The bars are in the contract; this is where they run. **No block cutting merges until Phase 0
-reports.**
+Ran. Full results in `~/keld/refseries-context/blocks/` (`BLOCK-BOUND-RESULTS.md`,
+`BLOCK-BOUND-2-RESULTS.md`); pre-registrations beside them. Summary, because it changed this spec:
 
-**0a. Which levels detect.** The detector reads `branch` only, because that is where transitions
-were observable — `workspace` has **zero** across 51 sessions. Test `skill`, `component`,
-`output_type`, `language` and `action` beside it on the same population (25 sessions / 111
-transitions / 1,966 windows), scored identically: precision, recall, median detection distance,
-against both the `FixedSizer` control and the shuffled-truth control. A level ships as a detection
-input only if it beats fixed on both metrics **and** drops ≥ 20 points under shuffled truth.
+**0a. Which levels detect — a pre-registered NULL.** Nothing beat `branch`. On wide ground truth
+`branch` itself fails rule 1 (recall 7.1 vs the fixed control's 17.3); `language` 12.9,
+`output_type` 18.6, `component` 7.7 and `skill` 17.7 all missed the 20-point shuffle bar, and
+`action` scored **−3.5** — better on shuffled truth than on real truth — while firing on 93% of
+windows. **`EwmaSizer` is a branch-change detector, not a work-change detector.** Detection stays
+`branch`-only and fires on just **32 of 496 sessions**, so on most sessions the bound and the idle
+rule decide every boundary. That is the stated, expected outcome, not a defect.
 
-⚠️ The stakes are the non-engineering population. A session with no branch activity — John's
-Cowork session, any analyst — returns `budget` on every boundary if nothing else detects. That is
-a valid outcome and must be *reported*, not discovered later.
+**0b. Maximum block duration — 20 minutes.** ⚠️ The rule this spec proposed ("the smallest cap at
+which the `budget`-ended share stops falling materially") was **retired**: the curve declines
+shallowly and monotonically (99.3% → 91.4% across 10–120 min), so the rule fires on the first pair
+it sees and returns a number by proving there is no elbow. Replaced by a four-arm comparison
+against pre-registered bars. **Arm A′ — a plain time cap plus the idle terminator — ships at
+n = 20**: 95.3% of blocks attribute something, longest block 0.33 h, 25.7% whole-session, 3.12
+blocks per session. Its usable range is 15–45 min; at 120 min its whole-session share reaches 50.1%
+and the cap stops bounding anything.
 
-**0b. Maximum block duration.** Derived: the smallest cap at which the share of `budget`-ended
-blocks stops falling materially. Not a round number chosen for looking reasonable.
+**0b′. The idle terminator, which this spec had left unvalued — 15 minutes.** ⚠️ It is also the
+single most consequential finding: the first round's arms did not implement idle at all, and
+**arm A without it scored 22.2% only because 74.6% of its blocks were empty tiles over silence**.
+Adding it moves the same cap from 29.8% → 95.3% at n = 20. Idle is **≥ 3 consecutive empty
+5-minute bins**; swept at 10/15/30 min, attribution holds at 93.4–95.4% across all three, so the
+conclusion does not rest on the value.
 
-**0c. The merge rule.** What share of blocks fall under `MIN_EVIDENCE` and merge forward, and —
-the question that matters — does merging change any published VALUE, or only evidence counts?
+**0c. The merge rule — NOT BUILT.** The bar was written as "the merge rule becomes unnecessary at
+≥ 95% attributable", and A′@20 clears it at 95.3% with a **1.4%** merge rate. Round 1 also measured
+that when merging does fire it changes a published VALUE **88.6%** of the time, against a 5% bar.
+So a thin block **publishes as unattributed** rather than being folded into a neighbour and
+silently changing that neighbour's answer. **Do not implement the merge rule**; the 4.7% of blocks
+that cannot attribute are an honest blank, and the alternative was measured to be worse.
 
-**0d. Tiling equality.** Every turn in exactly one block, no turn in none, asserted over the
-frozen corpus. This is the invariant the whole attribution model rests on, so it is a test, not a
-measurement.
+**0d. Tiling — over the ACTIVE span, not the whole span.** Idle time belongs to **no block**, which
+is the whole point of the terminator. The invariant is therefore: blocks are ordered and disjoint,
+and **every active bin lies in exactly one block**. It is a test, not a measurement.
 
-Harness: `scripts/`, results durable in `~/keld/refseries-context/blocks/`, never in `docs/`.
+**What no arm could establish.** C′ (turns) was UNMATCHED at every setting — its blocks are far
+shorter than any A′ candidate, so no same-size comparison existed. Its raw attribution is the
+corpus best (96.2%). Judging turns against minutes needs a control pairing on something other than
+duration, which this design does not have. Recorded as a gap, not as a result about turns.
 
 ## Phase 1 — cut blocks (sidecar)
 
 New module `sidecar/app/analysis/blocks.py`. Pure functions over stored rows, no I/O, mirroring
-`dynamics.py`/`prior.py`.
+`dynamics.py`/`prior.py`. The reference implementation is `scripts/block_sizing_eval.py`'s
+`with_idle(bound_time)` — the arm that shipped — and the port must reproduce it.
 
-    cut(store, session, from_ts, to_ts, levels, max_minutes, min_evidence) -> [Block]
+    cut(store, session, from_ts, to_ts, max_minutes=MAX_BLOCK_MINUTES,
+        idle_bins=IDLE_BINS) -> [Block]
 
-- Encodes the detection levels as `dynamics.EwmaSizer` already does — a per-bucket novelty share
-  on a 60-second observation step — and takes every rising edge of `fast - slow` as a cut, not
-  just the last one. That is the single behavioural change to the detector: it currently returns
-  ONE cut (the slice start) inside a window; blocks need all of them across a span.
-- Emits contiguous blocks with `start_reason`/`end_reason` from the closed set.
-- `idle` closes a block when no turn of any kind appears for the idle threshold.
-- A block under `min_evidence` merges into its successor, taking the earlier `start` and the later
-  `end_reason`. Deferred until the successor closes, so it is never retroactive.
+    MAX_BLOCK_MINUTES = 20   # measured, 0b
+    IDLE_BINS = 3            # 15 minutes, measured, 0b′
+
+- Detection reuses `dynamics.EwmaSizer` unchanged, taking **every** rising edge of `fast - slow`
+  rather than only the last. That is the one behavioural change: the sizer currently returns ONE
+  cut because it is sizing a slice; blocks need all of them across a span. `fire_indices` already
+  computes them, so nothing about the detector is reimplemented and what ships is what was
+  measured.
+- **Idle splits the span into active segments first**, and the cap and detection run *within* each
+  segment. Dead air is in no block.
+- Emits blocks with `start_reason`/`end_reason` from a closed set:
+  `session_start` / `detected` / `idle` / `budget` / `session_end`.
+- **No merge rule** (0c). A block below `MIN_EVIDENCE` publishes unattributed.
+
+⚠️ **One consequence of idle to know:** a detected cut falling inside a silent gap is consumed with
+the gap — 66 detected ends against 67 without idle. Correct, since nothing changed during silence,
+but it means detected-cut counts are no longer identical across bounds, and that identity was the
+strongest evidence the tiling held.
 
 **What this retires.** `coverage.py` exists because v1 windows were prompt-anchored and left gaps:
 `covered(prompt_ts, span)` computes which regions a prompt's look-back reached and `gaps()` finds
-the rest. Under tiling there are no gaps — blocks cover all activity — so both retire along with
-`plan()`'s fixed-span windows.
+the rest. Blocks cover all **activity**, so both retire along with `plan()`'s fixed-span windows.
+(They cover all activity, not all time — the gaps that remain are precisely the silence, which by
+construction has nothing to characterise.)
 
 ⚠️ **`frontier()` and `tail_closed()` SURVIVE UNCHANGED and are load-bearing.** Never emit above
 `min(watermark, now - span)`: time `t` below that can only be covered by a prompt in `(t, t+span]`,
