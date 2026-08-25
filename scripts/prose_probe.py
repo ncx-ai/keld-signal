@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pandas as pd
 import yaml
 
-from refseries import characterize, executive
+from refseries import characterize, executive, payload_for_window
+from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired
 from context_value import window_text
 
 REPO_FRAMES = "/tmp/refseries"          # repo-scoped: used only for the gate counts
@@ -146,7 +147,15 @@ def cmd_render(args):
         if not doc.get("rungs"):
             print(f"  !! {r.wid} {r.session}: no rungs", file=sys.stderr)
             continue
-        digest = yaml.safe_dump(executive(doc), sort_keys=False, width=110, allow_unicode=True)
+        # `executive` projects the SHIPPED payload now; `doc` rides along as the frame, which
+        # feeds only the digest's separate `vs_repo_history` lift section.
+        try:
+            payload = payload_for_window(path, st, en)
+        except (PromptNotFound, StoreBehind, WindowExpired) as e:
+            print(f"  !! {r.wid} {r.session}: {type(e).__name__}: {e}", file=sys.stderr)
+            continue
+        digest = yaml.safe_dump(executive(payload, doc), sort_keys=False, width=110,
+                                allow_unicode=True)
         text = window_text(path, st, en)
         cases.append(dict(wid=r.wid, group=r.arm_group, session=r.session, repo=r.repo,
                           start=str(st), end=str(en), prose=r.prose, code=r.code,

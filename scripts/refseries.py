@@ -979,6 +979,30 @@ def _frame_doc(outdir, repo, payload, start, end, topk):
     return characterize(refs, lvls, spk, entity, start, end, topk, base=base)
 
 
+def payload_for_window(path, start, end, store=None, nlp=None):
+    """The SHIPPED payload for a (transcript, start, end) window.
+
+    `executive`/`digest` used to take `characterize()`'s frame document directly; they now
+    project `analyze_window`'s payload, so every study script that still addresses a window by
+    (path, start, end) needs one place to cross that boundary. Without this the crossing gets
+    reimplemented per script, which is how the two renderers drifted from what ships in the
+    first place.
+
+    `refresh` is left at its default (True): a study script may be the first thing ever to touch
+    this transcript's store, and an un-ingested transcript would otherwise answer empty rather
+    than answering at all.
+
+    Raises `PromptNotFound` / `StoreBehind` / `WindowExpired` unchanged — a caller sweeping many
+    windows must decide for itself whether to skip or stop, and swallowing them here would hide
+    a pruned-retention horizon behind an empty digest.
+    """
+    st = store if store is not None else open_store()
+    span_minutes = (pd.Timestamp(end) - pd.Timestamp(start)).total_seconds() / 60.0
+    return analyze_window(path, None, span_minutes=span_minutes,
+                          nlp=term_nlp() if nlp is None else nlp, store=st,
+                          end_ts=pd.Timestamp(end).isoformat(), prior=True, sizer=DEFAULT_SIZER)
+
+
 def _watermark_iso(store, path, nlp):
     """The transcript's own last-ingested instant, as the ISO string `analyze_window` wants for
     `end_ts` -- the re-pointed commands' default window END when `--to`/`--at` is not given,
