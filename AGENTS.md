@@ -657,7 +657,24 @@ could answer — **51 sessions, 2,702 windows**, the quiet ones included, sized 
 shipped `DEFAULT_SIZER` — against a bar written down FIRST: disqualified if 90% of
 readings fall inside one 0.05-wide band (CONSTANT), if `compared` on under 10% of
 windows (RARE), or if the yes/no a reader acts on is yes on ≥90% of windows
-(ALWAYS-YES). `DROPPED_DIMENSIONS = ("project", "model", "tooling")`:
+(ALWAYS-YES).
+⚠️ **RE-MEASURED 2026-08-25 on 500 transcripts / 2,555 windows, because the original ran on
+55.** The store every pre-`bbb74b4` study used held 55 of 500 transcripts — a unique-session-key
+filter dropped all 445 `agent-*.jsonl` subagent transcripts, whose names collide in 8 characters.
+On the rebuilt corpus `project` (100% zero), `model` (98.6%) and `tooling` (comparable on 3.2%)
+all REPLICATE, so the drops stand on 9x the evidence. Full results:
+`~/keld/refseries-context/blocks/DYNAMICS-REMEASURED.md`.
+⚠️ **And the CONSTANT band test alone MISCLASSIFIES A SPARSE SIGNAL — never apply it without the
+inside/outside contrast beside it.** Re-measured, `branch` sits at 90.2% inside one band and so
+"fails" CONSTANT by 0.2 points, while its turnover is **0.346 inside a transition window against
+0.003 outside** — a 115x separation, and the actual reason it is kept. A metric that is zero on
+90% of windows and large on the rest is concentrated AND informative; those are not opposites and
+the band test cannot distinguish them. Applied alone it recommends removing exactly the signals
+that fire rarely and mean the most. `skill` likewise re-measures at 9.0% comparable against the
+10% RARE bar, down from 12.6%, and is KEPT: the 445 newly-included subagent transcripts are short
+and skill-free, so they enlarge the denominator without adding comparable windows — a population
+effect, not a weakening signal.
+`DROPPED_DIMENSIONS = ("project", "model", "tooling")`:
 - `project` — turnover, decay and shift **identically 0.000 on all 2,180 compared
   windows**, `changed` never True, reading `steady` 100.0%. Constant **BY
   CONSTRUCTION**: a transcript is scoped to one project directory, the same fact

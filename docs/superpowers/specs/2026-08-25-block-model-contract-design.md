@@ -31,27 +31,69 @@ A contiguous span of one session's activity, cut at change points.
 
     block := (session, start, end, start_reason, end_reason, facets, covers)
 
-**Boundaries are DETECTED, not fixed.** The window was a fixed 60-minute look-back; the block is
-sized by the change detector that already ships. `EwmaSizer` (fast 0.3, slow 0.02, threshold 0.2,
-60-second observation step) is promoted from sizing a slice inside a window to cutting the blocks
-themselves. It was chosen by measurement: **86.4% precision / 54.8% recall against
-`FixedSizer(15)`'s 11.8% / 27.8%** over 25 sessions / 111 transitions / 1,966 windows, median
-detection 2.0 min from the nearest real transition against fixed's 10.0. The shuffled-truth
-control is why that is believed — relocating every transition to a random non-empty bin collapses
-the EWMA to 24.1% while every fixed sizer barely moves (11.9% → 10.9%), i.e. a constant offset
-was never a detector.
+⚠️ **Boundaries are DETECTED WHERE THE BRANCH CHANGES, and cut for length everywhere else.** This
+section previously said "detected, not fixed" and treated `budget` as a fallback. Phase 0a measured
+that and the proportions are the other way round. Results:
+`~/keld/refseries-context/blocks/BLOCK-DETECTION-RESULTS.md`.
+
+`EwmaSizer` (fast 0.3, slow 0.02, threshold 0.2, 60-second observation step) is still promoted from
+sizing a slice inside a window to cutting the blocks themselves — nothing beat it and nothing
+replaces it. What changed is the claim about what it detects. Scored on the same corpus, the same
+detector, the same scoring:
+
+| ground truth | precision | recall |
+|---|---|---|
+| the BRANCH (or workspace) changed | **86.5%** | **55.8%** |
+| ANY published allocation dimension changed | **49.5%** | **7.1%** |
+| `FixedSizer(15)`, any-dimension truth | 27.6% | 17.3% |
+
+Those are not in tension. They say something specific and it governs this whole section:
+**`EwmaSizer` is a branch-change detector, not a work-change detector.** Against general work
+change its recall is 7.1% — *below* a fixed constant's 17.3% — so it misses roughly nineteen work
+transitions in twenty.
+
+The 86.5% / 55.8% figure replicates the published 86.4% / 54.8% within a point, on a rebuilt store
+with correct session keying and a 28% larger population, so the original measurement was sound on
+its own population. The shuffled-truth control is why any of it is believed: relocating every
+transition to a random non-empty bin of the same session drops `branch` by 60.9 points, while every
+other candidate drops under 20 and `action` scores **-3.5** — better against randomised truth than
+real truth, at a 93% firing rate, which is what a volume counter looks like.
+
+**Nothing else detects, and this was tested rather than assumed.** `language`, `output_type`,
+`component`, `skill`, `action` and the `branch+language` pair were each scored against ground truth
+excluding their own level, against pre-registered bars. All failed. Two near-misses are recorded at
+the constant rather than smoothed: `output_type` missed the 20-point shuffle bar by 1.4 points, the
+pair by 0.6. The bars were fixed before the run and were not moved. `workspace` has **0**
+transitions across 496 sessions, replicated.
+
+### What follows for the reasons, and it is the important part
 
 `start_reason` / `end_reason`, from a closed set, and **always stated**:
 
 | reason | meaning |
 |---|---|
-| `detected` | the detector fired here. **A claim that the work changed.** |
-| `budget` | no transition found within the maximum duration; cut for length. Not a claim. |
+| `detected` | the detector fired here. **A claim that the branch changed** — not that the work did. |
+| `budget` | no transition found within the maximum duration; cut for length. **Not a claim.** |
 | `idle` | activity stopped. See below. |
 | `session_start` / `session_end` | the transcript's own edges. |
 
-⚠️ **A consumer must render `detected` and `budget` differently.** Treating them alike shows
-invented transitions, which is the same defect `dynamics.status` exists to prevent one level down.
+⚠️ **`budget` is the COMMON boundary, not the exception — including for engineering sessions.** At
+7.1% recall against general work change, most real shifts produce no detection, so most blocks end
+because they hit their duration cap. The earlier draft of this document worried about
+`budget`-everywhere for the non-engineering population; measured, it is the normal case for
+everyone. Two consequences:
+
+- **A `budget` edge must be visually and semantically distinct**, and that is now a primary
+  requirement rather than a nicety. A consumer that renders the two alike does not merely lose
+  nuance — it presents a length cut as a work transition on the majority of blocks.
+- **`detected` must not be read as "the work changed here".** It means "the branch changed here",
+  which is a narrower and more useful thing to say. Any UI copy, digest line or downstream
+  inference that widens it is overstating what was measured.
+
+⚠️ **Do not widen the detection level set hoping for better recall.** Six candidates were tested
+and refuted. Improving work-shift detection needs a different mechanism — combining signals rather
+than swapping the single level the EWMA reads — and that is its own spec with its own
+pre-registration, not a parameter change here.
 
 ## Idle
 
@@ -156,29 +198,47 @@ construction there, since the rail sorts by session.
 - `corr_session_id` is written on every row and never read, joined or indexed — the natural hook
   is half-built and inert.
 
-## Measured first, before any of it ships
+## Measurement status
 
-⚠️ **The detector currently reads `branch` only**, because that is the level where transitions
-could be observed: `workspace` has **zero** transitions across 51 sessions. Sessions with no
-branch activity — which is the entire non-engineering population — would return every boundary as
-`budget`. Widening the detection level set is part of this work, not a caveat on it.
+**Item 1 is DONE and came back NULL.** Full results:
+`~/keld/refseries-context/blocks/BLOCK-DETECTION-RESULTS.md`; harness
+`scripts/block_detect_eval.py` (13 tests); pre-registration in the same directory, written before
+the run.
 
-Pre-registered, bars written down before the numbers exist:
+`skill`, `component`, `output_type`, `language`, `action` and `branch+language` were each scored
+against ground truth excluding their own level. **None passed.** `branch` stays as the sole
+detection level, and the finding that matters is recorded in the boundary section above: the
+detector detects branch change, not work change, so `budget` is the common boundary.
 
-1. **Which levels detect.** Test `skill`, `component`, `output_type`, `language` and `action`
-   beside `branch` on the same 25-session / 111-transition population, scored the same way
-   (precision, recall, median detection distance) against the same `FixedSizer` control and the
-   same shuffled-truth control. A level ships as a detection input only if it beats fixed on both
-   metrics AND drops ≥ 20 points under shuffled truth.
+⚠️ The earlier draft of this section said the non-engineering population "would return every
+boundary as `budget`" as though that were the bad case to avoid. Measured, it is the normal case
+for every population. The problem is not that some sessions lack `branch` — it is that branch
+change is a narrow proxy for work change.
+
+Three items remain, bars unchanged and still fixed before their runs:
+
 2. **Maximum block duration** (the `budget` cut). Derived, not chosen: the smallest duration at
-   which the share of blocks ending in `budget` stops falling materially.
+   which the share of blocks ending in `budget` stops falling materially. ⚠️ This matters far more
+   than when it was written, because `budget` is now the common boundary rather than the fallback —
+   this number sets the typical block length for most sessions.
 3. **Minimum viable block.** Confirm the merge-forward rule against `MIN_EVIDENCE`: what share of
    blocks merge, and does merging change any published VALUE rather than only its evidence count.
-4. **Tiling equality.** A session's blocks must partition its activity exactly — every turn in
-   exactly one block, no turn in none. Asserted over the frozen corpus, not argued.
+4. **Tiling equality.** A session's blocks must partition their session's activity exactly — every
+   turn in exactly one block, no turn in none. Asserted over the corpus, not argued.
 
-Report nulls. If no level beyond `branch` detects, blocks are `budget`-cut for non-engineering
-sessions and the contract still holds — but that must be stated rather than discovered.
+### The corpus itself had to be rebuilt, and that is worth knowing
+
+Phase 0a's replication check discovered that the frozen store every prior store-derived study used
+held **55 of 500 transcripts** — `evidence_floor.transcripts()` keeps only unique session keys, and
+under the pre-`bbb74b4` scheme (`basename(path)[:8]`) all 445 `agent-<hash>.jsonl` subagent
+transcripts collided and were dropped. Not merged evidence: a silently narrow, non-randomly
+selected sample. Rebuilt with `sha256(abspath)[:16]`: 500 transcripts, 496 sessions, 681,857
+events, 30s.
+
+The published sizer figure replicates on the rebuilt store within a point, so that measurement was
+sound on its own population. **`DYNAMICS-VALUE.md`, which chose `DROPPED_DIMENSIONS` in shipped
+code, was computed on the same 55-transcript store and is being re-run.** No dimension stays
+dropped on 11%-of-corpus evidence.
 
 ## Out of scope
 
