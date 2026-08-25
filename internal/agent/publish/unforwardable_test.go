@@ -102,10 +102,11 @@ import (
 // a publishable inventory key must never be mistaken for permission to forward
 // the block itself.
 //
-// ⚠️ `named_terms` CAME OFF this list, and it is the only entry ever to do so.
-// Every earlier extension above added publishable keys while leaving the
-// forbidden list untouched — that was the point, and it is why the list was a
-// real guard rather than a naming coincidence. This one is different: the repo
+// ⚠️ `named_terms` CAME OFF this list — one of two entries ever to do so; see
+// `request_tokens` above for the other. Every earlier extension above added
+// publishable keys while leaving the forbidden list untouched — that was the
+// point, and it is why the list was a real guard rather than a naming
+// coincidence. This one is different: the repo
 // owner decided that named_terms should publish, knowing it is the sole
 // inventory drawn from message TEXT and that it has been observed to carry real
 // person names. It is now a TOP-LEVEL key like its eight siblings, gated on
