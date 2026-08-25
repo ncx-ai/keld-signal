@@ -119,6 +119,27 @@ def test_merge_accumulates_counts_and_distances():
     assert a["dists"] == [10, 20, 30], a
 
 
+def test_a_pair_is_scored_with_both_its_levels_excluded_from_ground_truth():
+    """The bug this task exists to prevent: scoring `branch+language` against ground truth
+    that still contains branch and lang flips, which is the tautology the pre-registration
+    forbids and which an earlier draft of this harness had."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _mkstore(tmp, [_ev(10, "lang", "Go"), _ev(310, "lang", "Python"),
+                            _ev(10, "branch", "main"), _ev(310, "branch", "feature"),
+                            _ev(10, "artifact", "code"), _ev(310, "artifact", "docs")])
+        cs = b.CachingStore(st)
+        got = b.score_level(cs, [SESSION], ("branch", "lang"), b.ALLOC_LEVELS,
+                            random.Random(1))
+        assert got["gt_excluded"] == ["branch", "lang"], got["gt_excluded"]
+        assert got["gt_transitions"] == 1, got["gt_transitions"]
+
+
+def test_candidate_labels_are_all_tuples():
+    """One shape for singles and pairs, so exclude= never needs a special case."""
+    for label, lv in b.CANDIDATES:
+        assert isinstance(lv, tuple), (label, lv)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

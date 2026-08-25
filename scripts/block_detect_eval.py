@@ -12,13 +12,18 @@ two runs is comparing results, not two forks of the same arithmetic. `MIN_EVIDEN
 `window.attribution` are the SHIPPED ones from `app.analysis.window`, imported rather than
 restated, so ground truth stays deterministic and derived from the store — never hand-labelled.
 """
+import argparse
+import collections
+import json
 import os
+import random
 import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sidecar"))
 
+from app.analysis.dynamics import EwmaSizer, FixedSizer                             # noqa: E402
 from app.analysis.store import BIN_SECONDS, open_store                              # noqa: E402
 from app.analysis.window import MIN_EVIDENCE, attribution                           # noqa: E402
 from app.analysis.workstreams import ALLOCATION                                     # noqa: E402
@@ -89,3 +94,116 @@ def rates(agg):
             "fire_rate": round(100 * fire, 1),
             "median_dist_min": None if med is None else round(med, 1),
             "hit": hit, "fp": fp, "miss": miss, "windows": agg["windows"]}
+
+
+# Every candidate's detection levels are a TUPLE, including singles, so `exclude=` and the sizer
+# assignment have exactly one shape. `workspace` is excluded as a candidate: zero transitions
+# across 51 sessions, already measured (see `dynamics.py`'s `DETECT_LEVEL` note).
+CANDIDATES = (("branch", ("branch",)), ("language", ("lang",)),
+              ("output_type", ("artifact",)), ("component", ("component",)),
+              ("skill", ("skill",)), ("action", ("action",)),
+              ("branch+language", ("branch", "lang")))
+
+
+def score_level(cs, sessions, levels_under_test, gt_levels, rng, exclude=None):
+    """One candidate over every qualifying session: real and shuffled, plus coverage.
+
+    `exclude` defaults to `levels_under_test` itself — the tautology guard: a detector must
+    never be scored against ground truth built from its own level's flips. NARROW ground-truth
+    mode passes `exclude=()` instead, because narrow ground truth IS workspace+branch and
+    excluding `branch` there would leave almost nothing to score against; that mode exists only
+    to replicate a published figure where no exclusion was applied.
+    """
+    exclude = levels_under_test if exclude is None else exclude
+    real, shuf = EMPTY_AGG(), EMPTY_AGG()
+    n_sample, n_cov, n_trans, skip = 0, 0, 0, collections.Counter()
+    floors = dict(ALLOC_LEVELS)
+    probe = levels_under_test[0]
+    for s in sessions:
+        n_at, trans = transitions(cs, s, exclude=exclude, levels=gt_levels)
+        bins = active_bins(cs, s)
+        if n_at < MIN_ATTRIBUTED:
+            skip["too_few_attributed"] += 1; cs.reset(); continue
+        if len(trans) < MIN_TRANSITIONS:
+            skip["no_transition"] += 1; cs.reset(); continue
+        n_sample += 1
+        n_trans += len(trans)
+        # Rule 5: coverage is REPORTED, never scored. A level with fine precision on 12% of
+        # sessions does not solve the non-engineering problem.
+        if probe not in floors or has_level(cs, s, probe, floors.get(probe, 0.5)):
+            n_cov += 1
+        sz = EwmaSizer(name="ewma:" + "+".join(levels_under_test))
+        sz.level = probe            # instance attribute shadows the class attribute
+        a = anchors_for(cs, s)
+        merge(real, score(sz, cs, s, a, trans))
+        merge(shuf, score(sz, cs, s, a, shuffled(trans, bins, rng)))
+        cs.reset()
+    rr, sr = rates(real), rates(shuf)
+    return {"detection_levels": list(levels_under_test),
+            "gt_excluded": list(exclude),
+            "sessions_scored": n_sample, "gt_transitions": n_trans,
+            "coverage_pct": round(100 * n_cov / n_sample, 1) if n_sample else 0.0,
+            "real": rr, "shuffled": sr,
+            "precision_drop": round(rr["precision"] - sr["precision"], 1),
+            "skipped": dict(skip)}
+
+
+def has_level(store, session, level, floor):
+    for t in active_bins(store, session):
+        if attribution(store.rollup_window(session, t, t + BIN_SECONDS), level, floor,
+                       MIN_EVIDENCE).reason == "attributed":
+            return True
+    return False
+
+
+def anchors_for(store, session):
+    return [float(t) + BIN_SECONDS for t in active_bins(store, session)]
+
+
+def run(gt_mode):
+    st = open_store(DB)
+    cs = CachingStore(st)
+    sessions = [s for (s,) in st._conn().execute(
+        "SELECT DISTINCT session FROM bin ORDER BY session")]
+    gt_levels = (tuple((lv, fl) for lv, fl in ALLOC_LEVELS
+                       if lv in ("workspace", "branch")) if gt_mode == "narrow"
+                 else ALLOC_LEVELS)
+    rng = random.Random(SEED)
+    out = {"gt_mode": gt_mode, "sessions_seen": len(sessions), "levels": {}}
+    for label, lv in CANDIDATES:
+        # In NARROW mode the ground truth IS workspace/branch, so excluding `branch` would
+        # leave almost nothing to score against. Narrow exists only to replicate the
+        # 2026-08-24 numbers, where no exclusion was applied.
+        r = score_level(cs, sessions, lv, gt_levels, rng,
+                        exclude=() if gt_mode == "narrow" else None)
+        out["levels"][label] = r
+        print(f"  {label:<16} n={r['sessions_scored']:<3} "
+              f"prec={r['real']['precision']:>5} rec={r['real']['recall']:>5} "
+              f"fire={r['real']['fire_rate']:>5} drop={r['precision_drop']:>5} "
+              f"cov={r['coverage_pct']:>5}%", flush=True)
+    fx = EMPTY_AGG()
+    for s in sessions:
+        n_at, trans = transitions(cs, s, exclude=(), levels=gt_levels)
+        if n_at >= MIN_ATTRIBUTED and len(trans) >= MIN_TRANSITIONS:
+            merge(fx, score(FixedSizer(15), cs, s, anchors_for(cs, s), trans))
+        cs.reset()
+    out["fixed_15"] = rates(fx)
+    print(f"  {'FixedSizer(15)':<16} prec={out['fixed_15']['precision']:>5} "
+          f"rec={out['fixed_15']['recall']:>5}", flush=True)
+    return out
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--gt", choices=("wide", "narrow", "both"), default="wide")
+    args = ap.parse_args()
+    modes = ("wide", "narrow") if args.gt == "both" else (args.gt,)
+    results = {}
+    for mode in modes:
+        print(f"--- gt={mode} ---", flush=True)
+        results[mode] = run(mode)
+    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "block-detect-results.json")
+    with open(out_path, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"wrote {out_path}")
