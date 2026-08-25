@@ -651,6 +651,52 @@ def test_every_round2_arm_actually_carries_the_idle_terminator():
             assert all(b.block_evidence(st, SESSION, bl) > 0 for bl in blocks), (name, blocks)
             st.reset()
 
+
+def test_shipped_cutter_is_identical_to_the_measured_arm():
+    """What ships must BE what was measured. `blocks.cut` and `with_idle(bound_time)` at the
+    shipped constants must agree block-for-block, reason-for-reason, on a store exercising all
+    five reasons: a detected cut, a cap, an idle gap and both session edges.
+
+    The codebase's own idiom, one level down: `analyze_window_by_parse` is retained as the ORACLE
+    for `analyze_window` and never as a fallback. The study arm is the DEFINITION of what the
+    pre-registered run measured, so the shipped cutter is asserted equal to it rather than assumed
+    equal — a future edit to `blocks.py` that changes a boundary or renames a reason fails here.
+
+    The fixture is built to be discriminating rather than merely green: 6 minutes on `main`, 24 on
+    `feature` (which the unmodified `EwmaSizer` fires on at 360s), then a 90-minute silence and 20
+    more minutes. That yields `session_start` -> `detected` -> `budget` -> `idle` -> `session_end`,
+    i.e. every member of `blocks.REASONS`. An equality test over a fixture producing one or two
+    reasons would pass while proving almost nothing, which is what the final assertion pins.
+    """
+    from app.analysis import blocks
+    with tempfile.TemporaryDirectory() as tmp:
+        ev = ([_ev(i * 60.0, "branch", "main", n=2.0) for i in range(6)]
+              + [_ev(360.0 + i * 60.0, "branch", "feature", n=2.0) for i in range(24)]
+              + [_ev(7200.0 + i * 60.0, "branch", "feature", n=2.0) for i in range(20)])
+        st = b.CachingStore(_mkstore(tmp, ev))
+        lo, hi = b.session_bounds(st, SESSION)
+        study_fn = b.with_idle(b.bound_time, "x")
+        # The two CONSTANTS are pinned before the two IMPLEMENTATIONS, because the equality below
+        # cannot see a constant at all: the cap is read off `blocks` and handed to the study arm,
+        # and `with_idle`'s segmenter reads the study module's own `IDLE_BINS`, so a retuned
+        # constant moves both sides together and the block-for-block comparison stays green. Pinned
+        # by assertion rather than by assignment: `b.IDLE_BINS` is module state, and setting it here
+        # would leave every test that runs afterwards in this process under a changed threshold.
+        assert blocks.IDLE_BINS == b.IDLE_BINS, (blocks.IDLE_BINS, b.IDLE_BINS)
+        assert blocks.MAX_BLOCK_MINUTES == 20, blocks.MAX_BLOCK_MINUTES  # arm A''s winning cap
+        assert blocks.MAX_BLOCK_MINUTES in b.CAPS, (blocks.MAX_BLOCK_MINUTES, b.CAPS)
+        study = study_fn(st, SESSION, b.cut_points(st, SESSION, lo, hi), lo, hi,
+                         blocks.MAX_BLOCK_MINUTES)
+        st.reset()
+        shipped = blocks.cut(st, SESSION, lo, hi)
+        assert len(shipped) == len(study), (len(shipped), len(study))
+        for s, m in zip(shipped, study):
+            assert (s.start, s.end, s.start_reason, s.end_reason) == \
+                   (m.start, m.end, m.start_reason, m.end_reason), (s, m)
+        reasons = {x.end_reason for x in shipped} | {x.start_reason for x in shipped}
+        assert {"detected", "budget", "idle", "session_start", "session_end"} <= reasons, reasons
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
