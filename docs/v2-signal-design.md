@@ -4,7 +4,7 @@ For a developer new to this system. It explains what runs, when each thing happe
 actually detected, and *why* the design looks the way it does. Reference material lives in
 `AGENTS.md`; this is the orientation.
 
-Current at `enrich.SchemaVersion` **11**. Nearly every number below is a measurement with a commit
+Current at `enrich.SchemaVersion` **16**. Nearly every number below is a measurement with a commit
 behind it — where a decision looks arbitrary, it usually isn't, and §8 explains why that matters
 more here than in most systems.
 

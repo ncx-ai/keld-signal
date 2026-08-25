@@ -99,7 +99,7 @@ package enrich
 // THREE of the seven allocation dimensions carry it, and that is a measurement:
 // over 1,022 windows (docs/superpowers/specs/2026-08-24-session-prior-results.md)
 // `skill` agrees with its session 25.8% of the time and is NOVEL on 44.0% —
-// the phase transitions of the workflow, brainstorming -> writing-plans ->
+// the phase transitions of the process, brainstorming -> writing-plans ->
 // executing -> debugging — `language` 70.6%/2.3% and `branch` 76.1%/6.1%.
 // `project` and `model` agree 100.0% with zero disagreements and a largest
 // departure of +0.000 and -0.103, so a contrast field there publishes a

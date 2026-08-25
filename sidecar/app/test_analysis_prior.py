@@ -84,7 +84,7 @@ def test_a_window_below_the_floor_is_not_rescued_by_an_agreeing_session():
 def test_a_value_the_session_never_held_is_novel():
     """Bar 2's product, and the one a per-window view structurally cannot produce: 40 of 91
     windows on the corpus run a skill the session had never run before -- brainstorming ->
-    writing-plans -> executing -> debugging, the phase transitions of the workflow."""
+    writing-plans -> executing -> debugging, the phase transitions of the process."""
     got = compare(_rl("skill", executing_plans=252),
                   _rl("skill", brainstorming=38))["skill"]
     assert got["novel"] is True, got

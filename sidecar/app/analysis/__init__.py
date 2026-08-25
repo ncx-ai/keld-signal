@@ -76,7 +76,7 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           BEFORE this window, reported beside the window's own answer and NEVER supplying one
 #           it lacked. Three of the seven allocation dimensions carry it, decided by measurement
 #           over 1,022 windows (docs/superpowers/specs/2026-08-24-session-prior-results.md):
-#           `skill` (agreement 25.8%, novelty 44.0% -- the phase transitions of the workflow,
+#           `skill` (agreement 25.8%, novelty 44.0% -- the phase transitions of the process,
 #           brainstorming -> writing-plans -> executing -> debugging), `language` (70.6% / 2.3%)
 #           and `branch` (76.1% / 6.1%). `project` and `model` agree 100.0% with ZERO
 #           disagreements and a largest departure of +0.000 / -0.103, so a contrast field there

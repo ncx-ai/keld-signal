@@ -314,8 +314,12 @@ could raise.
   workspace-relative** — `reconcile()` resolves every path against the resolved
   workspace root. Verified over the full 500-transcript corpus plus a Cowork
   session: **zero** absolute paths, zero `~`/`/Users`/`/home`, zero `../`
-  escapes, zero URLs, zero Windows drive paths, at all three levels. A test
-  pins it. The residual exposure is repo *structure* (`services/api/app/billing`)
+  escapes, zero URLs, zero Windows drive paths, at all three levels. It is
+  gated TWICE, not merely tested: the sidecar payload asserts the shape, and
+  `sidecar.notWorkspaceRelative` re-checks it per entry at the Go decode
+  boundary, dropping a bad value without losing the rest of the list. Two gates
+  because the vocabulary is OPEN — `physical_acts` can lean on a closed table,
+  and these cannot. The residual exposure is repo *structure* (`services/api/app/billing`)
   and any customer name inside a filename — the same class `branch` already
   crosses, not the class `named_terms` does. Do not add a producer for these
   levels that bypasses `reconcile()`. Note they are coding-heavy: a
@@ -415,7 +419,7 @@ could raise.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").
-- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **14**
+- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **16**
   — bump it and re-run the eval when changing any vocab). Classify calls are
   prefixed with a context preamble (`Meta.PreambleCoding()`; `domain` uses the
   fuller `Meta.Preamble()`). **Facet-selective agentic augmentation:** agentic
