@@ -46,12 +46,22 @@ import (
 //     magnitude.py's edit_bytes), so what crosses into Go is a length — but the
 //     rule this list enforces is that no wire field can hold the string even if
 //     that ever changed.
-//   - token_weight / tokens / request_tokens were REFUTED (0.89% of dominant
-//     values flip) and are still computed and stored on-device for the weighted
-//     rollup, which makes "not published" the only thing keeping them off the
-//     wire. Likewise out_bytes / out_lines (output volume, +0.552 against log
-//     volume — a restated tool-call count), error_rate / n_errors / n_thrash /
-//     max_err_run (a window statistic and a 4.8%-prevalence alert).
+//   - token_weight / tokens were REFUTED (0.89% of dominant values flip) and are
+//     still computed and stored on-device for the weighted rollup, which makes
+//     "not published" the only thing keeping them off the wire. Likewise
+//     out_bytes / out_lines (output volume, +0.552 against log volume — a
+//     restated tool-call count), error_rate / n_errors / n_thrash / max_err_run
+//     (a window statistic and a 4.8%-prevalence alert).
+//
+// ⚠️ `request_tokens` CAME OFF this list, the same way `named_terms` did below —
+// it is a DIFFERENT computation from the REFUTED "token weight" candidate that
+// key spelling was tested against here (0.89% dominant-value flips): the window's
+// spend, priced into input-token equivalents (Effort.RequestTokens), plus
+// gap_p50_s/gap_p90_s, the same inter-turn gap population fast_share already
+// summarises as a share, read instead as a distribution. All three are asserted
+// PRESENT below rather than forbidden. `tokens` (unpriced, per-line, over-counts
+// a request) stays on the list — reviving one spelling is not licence for its
+// sibling.
 //
 // EXTENDED AGAIN for the physical-acts inventory, and this is the case that tests
 // the LIST itself rather than the payload. `physical_acts` publishes — it is the
@@ -115,7 +125,7 @@ var forbiddenWireKeys = []string{
 	"slice_minutes", "baseline_minutes", "sizer", "sizer_detail",
 	"reconcile_scope", "emerged", "decayed", "provenance", "reason",
 	"old_string", "new_string", "new_source", "content", "edit_preview",
-	"token_weight", "tokens", "request_tokens",
+	"token_weight", "tokens",
 	"out_bytes", "out_lines", "error_rate", "n_errors", "n_thrash", "max_err_run",
 }
 
@@ -137,6 +147,7 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// cannot pass merely because the filler stopped reaching it.
 		`"effort"`, `"authored_bytes"`, `"authoring_turns"`, `"authored_status"`,
 		`"fast_share"`, `"gaps"`, `"tempo"`, `"tempo_status"`,
+		`"request_tokens"`, `"gap_p50_s"`, `"gap_p90_s"`,
 		// The acts inventory and both fields of an entry, so "inventory" and
 		// "named_terms" staying forbidden below is a real result about a payload
 		// that DOES carry an inventory key, not a vacuous pass over one that

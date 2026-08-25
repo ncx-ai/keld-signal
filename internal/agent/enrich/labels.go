@@ -332,7 +332,21 @@ package enrich
 // 13 for the inventories): unlike v17 and v18, this time its payload really does
 // change. Nothing existing changes meaning: every field of v18 publishes
 // identically. Producer strings move `-v18` -> `-v19`.
-const SchemaVersion = 19
+//
+// v20 ADDS three fields to the effort facet: Effort.RequestTokens (the window's
+// spend, priced into input-token equivalents) and Effort.GapP50S/GapP90S (the
+// median and 90th percentile of the same inter-turn gap population FastShare
+// already summarises as a share). No new vocabulary — all three are pointer
+// numbers, gated the same way AuthoredBytes/FastShare already are: nil is "no
+// evidence", never a measured zero. RequestTokens is NOT the raw per-event
+// token counts Atlas already receives from telemetry — it is window-scoped and
+// price-weighted, so a consumer that sums the two double-counts (see
+// enrich.Effort.RequestTokens). Adding a field to an already-published facet is
+// a published-contract change in the same way v8's dynamics addition was, so it
+// takes a bump even though nothing existing changes meaning: every field of v19
+// publishes identically. Sidecar SCHEMA moves 13 -> 14 alongside it. Producer
+// strings move `-v19` -> `-v20`.
+const SchemaVersion = 20
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

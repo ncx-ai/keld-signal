@@ -12,6 +12,11 @@ import (
 func sampleWindow() enrich.WindowCharacterisation {
 	b := true
 	turnover := 0.4
+	authoredBytes := int64(6520)
+	requestTokens := int64(18422)
+	gapP50 := 12.5
+	gapP90 := 187.0
+	fastShare := 0.542
 	return enrich.WindowCharacterisation{
 		SessionID: "a8f58d56-f6e0-4f32-a78c-9d85e1d8df37",
 		Source:    "claude_code",
@@ -20,8 +25,13 @@ func sampleWindow() enrich.WindowCharacterisation {
 			SpanMinutes: 54.133, Evidence: 63,
 		},
 		Analysis: enrich.WindowAnalysis{
-			Workstreams:      map[string]enrich.Labeled{"branch": {Value: "main", Confidence: 0.9}},
-			Dynamics:         map[string]enrich.Dynamic{"branch": {Status: "compared", Reading: "steady", Changed: &b, Turnover: &turnover}},
+			Workstreams: map[string]enrich.Labeled{"branch": {Value: "main", Confidence: 0.9}},
+			Dynamics:    map[string]enrich.Dynamic{"branch": {Status: "compared", Reading: "steady", Changed: &b, Turnover: &turnover}},
+			Effort: &enrich.Effort{
+				AuthoredBytes: &authoredBytes, AuthoringTurns: 3, AuthoredStatus: "attributed",
+				FastShare: &fastShare, Gaps: 41, Tempo: "steered", TempoStatus: "attributed",
+				RequestTokens: &requestTokens, GapP50S: &gapP50, GapP90S: &gapP90,
+			},
 			PhysicalActs:     []enrich.Act{{Value: "read", N: 12}},
 			Files:            []enrich.PathCount{{Value: "internal/agent/daemon/daemon.go", N: 5}},
 			Directories:      []enrich.PathCount{{Value: "internal/agent/daemon", N: 5}},
@@ -136,6 +146,36 @@ func TestAWindowRowCarriesItsBoundsAndItsBlocks(t *testing.T) {
 	}
 	if got.ExtractorVersions["workstreams"] == "" {
 		t.Errorf("a window row is unattributed: %v", got.ExtractorVersions)
+	}
+}
+
+// The effort block's spend and gap distribution reach a window row exactly as
+// the rest of the block already does — Effort travels through BuildWindow as
+// one pointer, so this is really a fixture check: the round trip only proves
+// anything if sampleWindow's Effort actually carries the three new fields.
+func TestAWindowRowCarriesTheEffortSpendAndGapDistribution(t *testing.T) {
+	got := BuildWindow(sampleWindow(), "x", time.Now())
+	if got.Effort == nil {
+		t.Fatalf("effort block dropped: %+v", got)
+	}
+	e := got.Effort
+	if e.RequestTokens == nil || *e.RequestTokens != 18422 {
+		t.Errorf("request_tokens did not survive BuildWindow: %+v", e)
+	}
+	if e.GapP50S == nil || *e.GapP50S != 12.5 {
+		t.Errorf("gap_p50_s did not survive BuildWindow: %+v", e)
+	}
+	if e.GapP90S == nil || *e.GapP90S != 187.0 {
+		t.Errorf("gap_p90_s did not survive BuildWindow: %+v", e)
+	}
+	body, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"request_tokens":18422`, `"gap_p50_s":12.5`, `"gap_p90_s":187`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("missing %s on the wire: %s", want, body)
+		}
 	}
 }
 

@@ -499,6 +499,12 @@ type DynamicsBlock struct {
 // lengths measure are file contents — so, exactly as with inventory and the
 // dynamics per-side objects, what is not modelled here is structurally
 // unforwardable rather than merely discouraged.
+//
+// RequestTokens/GapP50S/GapP90S are the block's spend and gap distribution
+// (sidecar SCHEMA 14): a price-weighted, window-scoped token figure and the
+// median/p90 of the same inter-turn gap population FastShare summarises as a
+// share. See enrich.Effort for what each means and why RequestTokens is not the
+// raw token counts Atlas already receives from telemetry.
 type EffortBlock struct {
 	AuthoredBytes  *int64   `json:"authored_bytes"`
 	AuthoringTurns int      `json:"authoring_turns"`
@@ -507,6 +513,9 @@ type EffortBlock struct {
 	Gaps           int      `json:"gaps"`
 	Tempo          string   `json:"tempo"`
 	TempoStatus    string   `json:"tempo_status"`
+	RequestTokens  *int64   `json:"request_tokens"`
+	GapP50S        *float64 `json:"gap_p50_s"`
+	GapP90S        *float64 `json:"gap_p90_s"`
 }
 
 type Dynamic struct {

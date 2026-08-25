@@ -133,4 +133,30 @@ type Effort struct {
 	// TempoStatus is from TempoStatuses: `attributed`, or which of the two
 	// abstentions it was. Always stated.
 	TempoStatus string `json:"tempo_status"`
+	// RequestTokens is the window's spend, priced into input-token equivalents:
+	// magnitude.REQUEST_TOKENS summed once per requestId (never
+	// magnitude.TOKENS, which repeats a request's cost per transcript line and
+	// would over-count).
+	//
+	// ⚠️ THIS IS NOT THE TOKEN COUNTS ATLAS ALREADY HAS. Atlas already receives
+	// raw `input_tokens`/`output_tokens`/`cache_read_tokens` per ToolEvent from
+	// telemetry — this figure is a DIFFERENT thing: window-scoped (summed over
+	// the hour ending at this prompt, not one event) AND price-weighted (a
+	// cache-read token and a fresh input token do not cost the same, so this is
+	// input-token EQUIVALENTS, not a token tally). A consumer that adds this to
+	// the telemetry totals double-counts, and nothing else on the wire warns it.
+	// Nil when the window priced no request at all — never 0, which would claim
+	// a window that spent nothing rather than one nobody measured.
+	RequestTokens *int64 `json:"request_tokens,omitempty"`
+	// GapP50S is the median of the window's inter-turn gaps, in seconds — the
+	// same gap population FastShare's fast/slow split is computed over, read as
+	// a distribution instead of a threshold share. Nil under the same floor
+	// FastShare uses (see WHAT GATES EACH above): fewer than latency.MIN_GAPS
+	// gaps is not a population a percentile can describe.
+	GapP50S *float64 `json:"gap_p50_s,omitempty"`
+	// GapP90S is the 90th percentile of the same gap population — the tail
+	// FastShare's single split point cannot show: two windows with an identical
+	// fast_share can have very different p90s (a few long waits against many
+	// evenly slow ones). Nil under the same floor as GapP50S.
+	GapP90S *float64 `json:"gap_p90_s,omitempty"`
 }

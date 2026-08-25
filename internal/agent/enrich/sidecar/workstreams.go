@@ -512,5 +512,8 @@ func convertEffort(b *EffortBlock) *enrich.Effort {
 		Gaps:           b.Gaps,
 		Tempo:          b.Tempo,
 		TempoStatus:    b.TempoStatus,
+		RequestTokens:  b.RequestTokens,
+		GapP50S:        b.GapP50S,
+		GapP90S:        b.GapP90S,
 	}
 }
