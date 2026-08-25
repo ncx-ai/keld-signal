@@ -4,19 +4,40 @@ A `Block` is a contiguous span of one session's ACTIVE time. It is the unit the 
 over -- a window is an arbitrary hour, a block is a piece of work -- and the only question this
 module answers is where one ends.
 
-Three terminators, and the set is closed:
+Two terminators, and the set is closed:
 
-  * **detection** -- the shipped change detector (`dynamics.EwmaSizer`) found a rising edge in the
-    `branch` series. A claim that the WORK changed.
   * **idle** -- `IDLE_BINS` (3) consecutive empty 5-minute bins, i.e. 15 minutes of silence. Not a
     claim about the work at all: a claim that there wasn't any.
   * **budget** -- `MAX_BLOCK_MINUTES` (20) elapsed. Only "we had to cut somewhere", and on this
-    corpus it is the PLURALITY case, which is exactly why the three reasons are reported separately
-    rather than collapsed. A reader who cannot tell `detected` from `budget` reads a claim about
-    the work off an arithmetic boundary.
+    corpus it is the PLURALITY case. It is reported separately from `idle` because a reader who
+    cannot tell them apart cannot tell "we cut here arbitrarily" from "the work stopped".
+
+⚠️ **THERE WAS A THIRD, AND ABLATING IT MADE EVERY NUMBER BETTER.** The detector
+(`dynamics.EwmaSizer` on the `branch` series) was the third terminator in the arm that won the
+pre-registered round-2 comparison. A post-hoc ablation over the same corpus
+(`BLOCK-BOUND-2-ABLATION.md`) removed it and measured, at the shipped cap:
+
+    attributable      95.29%  ->  96.21%
+    held any evidence  99.3%  ->  100.0%      <- the detector was the ONLY source of empty blocks
+    merge rate         1.36%  ->   0.67%
+    longest block        20m  ->     20m      (unchanged; the cap is the cap)
+
+A detected cut ends a block EARLY, so the block holds less evidence and is likelier to fall under
+`MIN_EVIDENCE`. The detector was buying its 4.3% of boundaries by thinning the blocks around them.
+What is given up is the claim that those cuts sat in more MEANINGFUL places -- which is exactly
+what Phase 0a could not establish: 7.1% recall against a fixed-interval control's 17.3%, with every
+alternative detection level failing its bar (`action` scored -3.5, better on shuffled truth than on
+real truth). So the removed component improved no measured metric, fired on 32 of 496 sessions, and
+failed its own validation study.
+
+Two consequences worth knowing. The bound is now **fully domain-agnostic** -- detection was its only
+branch-dependent part, so a session with no repository behaves identically to one with a repository,
+nothing missing and nothing degraded. And `blocks.py` no longer imports `dynamics` at all;
+`EwmaSizer` remains in use there for SLICE sizing, which is a separate, measured, shipped use that
+this ablation does not touch.
 
 Measured end-reason mix at the SHIPPED 20-minute cap (496 sessions, `BLOCK-BOUND-2-RESULTS.md`,
-arm `time_idle` n=20): **budget 45.8%, session_end 32.0%, idle 18.0%, detected 4.3%**. Quoted at
+arm `time_idle` n=20, detector ablated): **budget 48.5%, session_end 33.0%, idle 18.5%**. Quoted at
 n=20 rather than at any other row of the sweep because that is the cap this module ships; a figure
 from a cap the code does not use is misleading even when the number itself is right.
 
@@ -82,13 +103,15 @@ accident, tiling silence with empty 20-minute blocks, and it cost arm A 65 point
 (29.8% -> 95.3% once corrected). A future reader tempted to make the blocks abut across a gap is
 reintroducing exactly that defect.
 
-## THE DETECTOR IS CONSUMED, NEVER REIMPLEMENTED
+## WHY `_form` STILL TAKES A CUT LIST IT IS NEVER GIVEN
 
-`cut_points` calls the same `observations`/`fire_indices` that `EwmaSizer.plan` calls; `plan` takes
-only the LAST edge because it is sizing a single slice, while a session needs every edge. The level
-is set as an INSTANCE attribute (`sz.level = level`), which shadows the class default -- no
-monkeypatching, no subclass that changes behaviour. If the shipped detector were altered here, what
-ships would no longer be what was measured.
+`_form`'s `cuts` parameter and its `detected` branch survive the ablation, always called with `[]`.
+Keeping them is what makes the shipped arithmetic IDENTICAL to the measured arm evaluated with an
+empty cut list -- which is precisely what the ablation measured -- rather than a second, cut-free
+code path that would have to be shown equal to it. The branch is unreachable from `cut`, so
+`detected` is deliberately NOT in `REASONS`: that tuple is what `cut` can actually emit, and a
+reason listed but never emitted is the defect this module's own review caught in the other
+direction.
 
 Its honest limitation, inherited: cut points come from `branch` alone, and the detector fires in
 only 32 of 496 sessions. On most sessions a block is ended by the cap or by silence, and nothing
@@ -102,7 +125,6 @@ closed vocabulary.
 """
 import collections
 
-from app.analysis.dynamics import DETECT_LEVEL, EwmaSizer
 from app.analysis.store import BIN_SECONDS
 
 # The measured cap. See "WHY THESE VALUES" above: 20 is where attribution first clears the bar with
@@ -114,16 +136,19 @@ MAX_BLOCK_MINUTES = 20
 # pre-registration and then swept (2/3/6); 3 is the best of the three at the shipped cap.
 IDLE_BINS = 3
 
-# One block of work. `start_reason`/`end_reason` are never interchangeable -- `detected` is a claim
-# the work changed, `budget` is only "we had to cut somewhere", and `idle` is a claim there was no
-# work at all. On this corpus `budget` is the common case, so conflating them would mislabel most
-# boundaries. `session_start`/`session_end` mark the two ends of the span, which are boundaries of
-# neither kind. Timestamps are epoch SECONDS, the unit the series is keyed on.
+# One block of work. `start_reason`/`end_reason` are never interchangeable -- `budget` is only "we
+# had to cut somewhere" while `idle` is a claim there was no work at all, and a reader who cannot
+# tell them apart cannot tell an arithmetic boundary from a real pause. On this corpus `budget` is
+# the common case. `session_start`/`session_end` mark the two ends of the span, which are boundaries
+# of neither kind. Timestamps are epoch SECONDS, the unit the series is keyed on.
 Block = collections.namedtuple("Block", "start end start_reason end_reason")
 
 # The closed set. Exported so a consumer can validate rather than restate it -- the same reason
 # `dynamics.DynamicReadings` exists Go-side.
-REASONS = ("session_start", "detected", "idle", "budget", "session_end")
+# `detected` is absent BY ABLATION, not by oversight -- see the module docstring. `_form` retains
+# the branch for arithmetic equality with the measured arm, but `cut` never supplies a cut, so no
+# block can carry it.
+REASONS = ("session_start", "idle", "budget", "session_end")
 
 
 def active_bins(store, session):
@@ -163,27 +188,6 @@ def active_segments(store, session, lo, hi, idle_bins=IDLE_BINS):
         prev = b
     segs.append((float(seg_start), float(prev + BIN_SECONDS)))
     return [(s, min(e, float(hi))) for s, e in segs]
-
-
-def cut_points(store, session, lo, hi, level=DETECT_LEVEL):
-    """Every rising edge the SHIPPED detector finds in `[lo, hi)`, epoch seconds, ascending.
-
-    `EwmaSizer.plan` returns ONE cut -- the last edge inside its budget -- because it is sizing a
-    slice. A session needs every edge across the whole span, and `fire_indices` already computes
-    exactly that; this only maps the indices back to their bucket instants. Nothing about the
-    detector is reimplemented, so what cuts here is what was measured.
-
-    Computed over the WHOLE span, once, and then filtered per segment by `_form`. A per-segment
-    detector run would be a different detector: the EWMA means carry across a gap, and reseeding
-    them at every segment start would fire on the first bucket after every pause.
-    """
-    sz = EwmaSizer()
-    sz.level = level  # instance attribute shadows the class default; no monkeypatching.
-    obs = sz.observations(store, session, lo, hi)
-    if not obs:
-        return []
-    idx = sz.fire_indices([x for _t, x in obs])
-    return [float(obs[i][0]) for i in sorted(idx)]
 
 
 def _form(cuts, lo, hi, max_minutes):
@@ -248,7 +252,10 @@ def cut(store, session, from_ts, to_ts, max_minutes=MAX_BLOCK_MINUTES, idle_bins
     segs = active_segments(store, session, from_ts, to_ts, idle_bins)
     if not segs:
         return []
-    cuts = cut_points(store, session, from_ts, to_ts)
+    # No detection: ablated, see the module docstring. `_form` keeps its `cuts` parameter so
+    # the arithmetic stays identical to the measured arm with the cut list empty, which is
+    # exactly what the ablation measured -- rather than a second, cut-free code path.
+    cuts = []
     out = []
     for i, (s, e) in enumerate(segs):
         bl = _form(cuts, s, e, max_minutes)

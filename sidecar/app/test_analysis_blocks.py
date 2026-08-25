@@ -21,6 +21,7 @@ import atexit
 import itertools
 import os
 import sys
+import pathlib
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -185,41 +186,40 @@ def test_the_cap_cuts_a_long_stretch_into_exact_cap_lengths():
     assert bl[-1].start == 3600.0 and bl[-1].end == 3900.0, bl[-1]
 
 
-def test_a_detected_cut_inside_the_cap_ends_the_block_before_the_cap_does():
-    """Detection wins over the bound; a block ending `budget` where a cut was available would
-    mean the shipped detector is not reaching the cutter."""
-    st = _store([_ev(i * 60.0, ref="main") for i in range(6)]
-                + [_ev(360.0 + i * 60.0, ref="feature") for i in range(18)])
-    lo, hi = _bounds(st)
-    bl = blocks.cut(st, S, lo, hi)
-    assert any(b.end_reason == "detected" for b in bl), bl
+def test_the_detector_is_ablated_and_nothing_can_emit_a_detected_reason():
+    """The ablation, pinned from three directions so it cannot be half-undone.
 
+    These are the exact fixtures that produced `detected` before the ablation: a branch switch
+    inside the cap (6x main then 18x feature), and three GROWING segments (6/12/18) chosen because
+    three EQUAL segments collapse to one edge under the running mode's alphabetical tie-break. Both
+    used to end blocks on detection; neither may now.
 
-def test_cut_points_yields_every_rising_edge_not_just_the_last():
-    """THE one behavioural difference from `EwmaSizer.plan`, and the whole reason `cut_points`
-    exists rather than a `plan` call.
-
-    `plan` returns the LAST edge inside its budget because it is sizing a single slice; a session
-    needs them all. A mutant returning `idx[-1:]` is invisible to a fixture with one transition,
-    where the two behaviours coincide -- so this fixture has two, and asserts two blocks END on
-    them.
-
-    ⚠️ The segment sizes are 6/12/18 and GROWING on purpose. `observations()`'s running mode is
-    the majority ref by CUMULATIVE weight, tie-broken alphabetically to match `window.rollup`, so
-    three EQUAL 12/12/12 segments leave "b" and "c" each exactly tied with "a"'s running total and
-    the alphabetical tie-break keeps "a" the mode throughout -- both real transitions collapse
-    into ONE edge. That is a property of the synthetic tie, not a defect in the detector, and it
-    is documented at `scripts/test_block_sizing_eval.py`'s own version of this test. Growing
-    segments let each transition actually overtake the running mode.
+    Ablation rationale and the numbers behind it: BLOCK-BOUND-2-ABLATION.md. Removing the detector
+    raised attribution 95.29% -> 96.21% and took empty blocks from 0.7% to zero, because a detected
+    cut ends a block early and thins it below MIN_EVIDENCE.
     """
-    st = _store([_ev(i * 60.0, ref=r)
-                 for i, r in enumerate(["a"] * 6 + ["b"] * 12 + ["c"] * 18)])
-    lo, hi = _bounds(st)
-    cuts = blocks.cut_points(st, S, lo, hi)
-    assert len(cuts) >= 2, cuts
-    assert cuts == sorted(cuts), cuts
-    bl = blocks.cut(st, S, lo, hi)
-    assert len([b for b in bl if b.end_reason == "detected"]) >= 2, bl
+    for ev in ([_ev(i * 60.0, ref="main") for i in range(6)]
+               + [_ev(360.0 + i * 60.0, ref="feature") for i in range(18)],
+               [_ev(i * 60.0, ref=r)
+                for i, r in enumerate(["a"] * 6 + ["b"] * 12 + ["c"] * 18)]):
+        st = _store(ev)
+        lo, hi = _bounds(st)
+        bl = blocks.cut(st, S, lo, hi)
+        assert bl, ev
+        assert not any(b.end_reason == "detected" for b in bl), bl
+        assert not any(b.start_reason == "detected" for b in bl), bl
+
+    # 2. `detected` is not an emittable reason at all.
+    assert "detected" not in blocks.REASONS, blocks.REASONS
+
+    # 3. The module does not consult the detector. This is the half that would otherwise rot: a
+    #    future edit could reintroduce a cut_points call and the two assertions above would still
+    #    pass on fixtures that happen not to fire.
+    import app.analysis.blocks as _m
+    src = pathlib.Path(_m.__file__).read_text()
+    code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    assert "EwmaSizer" not in code.split('"""')[-1], "blocks.py consults the detector again"
+    assert not hasattr(_m, "cut_points"), "cut_points is back; the ablation was undone"
 
 
 def test_reasons_come_from_the_closed_set_and_chain():
@@ -227,7 +227,7 @@ def test_reasons_come_from_the_closed_set_and_chain():
                 + [_ev(3600.0 + i * 60.0) for i in range(10)])
     lo, hi = _bounds(st)
     bl = blocks.cut(st, S, lo, hi)
-    ok = {"session_start", "detected", "idle", "budget", "session_end"}
+    ok = {"session_start", "idle", "budget", "session_end"}   # no `detected`: ablated
     assert bl[0].start_reason == "session_start"
     assert bl[-1].end_reason == "session_end"
     for b in bl:

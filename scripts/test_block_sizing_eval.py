@@ -654,19 +654,27 @@ def test_every_round2_arm_actually_carries_the_idle_terminator():
 
 def test_shipped_cutter_is_identical_to_the_measured_arm():
     """What ships must BE what was measured. `blocks.cut` and `with_idle(bound_time)` at the
-    shipped constants must agree block-for-block, reason-for-reason, on a store exercising all
-    five reasons: a detected cut, a cap, an idle gap and both session edges.
+    shipped constants must agree block-for-block, reason-for-reason, on a store exercising every
+    reason the shipped cutter can emit: a cap, an idle gap and both session edges.
+
+    ⚠️ THE REFERENCE IS THE ABLATED ARM. The detector was removed from the block cutter after the
+    pre-registered run (BLOCK-BOUND-2-ABLATION.md: attribution 95.29% -> 96.21%, empty blocks 0.7%
+    -> 0, because a detected cut ends a block early and thins it below MIN_EVIDENCE). So the study
+    side is called with an EMPTY cut list, which is exactly the configuration the ablation measured
+    -- not a detection-free reimplementation that would itself need proving equal.
 
     The codebase's own idiom, one level down: `analyze_window_by_parse` is retained as the ORACLE
     for `analyze_window` and never as a fallback. The study arm is the DEFINITION of what the
     pre-registered run measured, so the shipped cutter is asserted equal to it rather than assumed
     equal — a future edit to `blocks.py` that changes a boundary or renames a reason fails here.
 
-    The fixture is built to be discriminating rather than merely green: 6 minutes on `main`, 24 on
-    `feature` (which the unmodified `EwmaSizer` fires on at 360s), then a 90-minute silence and 20
-    more minutes. That yields `session_start` -> `detected` -> `budget` -> `idle` -> `session_end`,
-    i.e. every member of `blocks.REASONS`. An equality test over a fixture producing one or two
-    reasons would pass while proving almost nothing, which is what the final assertion pins.
+    The fixture is built to be discriminating rather than merely green: 6 minutes on `main` and 24
+    on `feature` (a stretch longer than the cap, so `budget` fires), then a 90-minute silence and 20
+    more minutes. That yields `session_start` -> `budget` -> `idle` -> `session_end`, i.e. every
+    member of `blocks.REASONS`. An equality test over a fixture producing one or two reasons would
+    pass while proving almost nothing, which is what the final assertion pins. The branch switch is
+    KEPT in the fixture on purpose: under the ablation it must produce no boundary at all, so the
+    fixture doubles as a check that the study side is genuinely detection-free too.
     """
     from app.analysis import blocks
     with tempfile.TemporaryDirectory() as tmp:
@@ -685,8 +693,12 @@ def test_shipped_cutter_is_identical_to_the_measured_arm():
         assert blocks.IDLE_BINS == b.IDLE_BINS, (blocks.IDLE_BINS, b.IDLE_BINS)
         assert blocks.MAX_BLOCK_MINUTES == 20, blocks.MAX_BLOCK_MINUTES  # arm A''s winning cap
         assert blocks.MAX_BLOCK_MINUTES in b.CAPS, (blocks.MAX_BLOCK_MINUTES, b.CAPS)
-        study = study_fn(st, SESSION, b.cut_points(st, SESSION, lo, hi), lo, hi,
-                         blocks.MAX_BLOCK_MINUTES)
+        # Empty cut list == the ablated arm. Asserted, not assumed: the detector WOULD fire on
+        # this fixture (that is what it was built for), so passing its cuts here would diverge
+        # immediately -- which is the check that this line is doing real work.
+        assert b.cut_points(st, SESSION, lo, hi), "fixture no longer fires the detector"
+        st.reset()
+        study = study_fn(st, SESSION, [], lo, hi, blocks.MAX_BLOCK_MINUTES)
         st.reset()
         shipped = blocks.cut(st, SESSION, lo, hi)
         assert len(shipped) == len(study), (len(shipped), len(study))
@@ -694,7 +706,8 @@ def test_shipped_cutter_is_identical_to_the_measured_arm():
             assert (s.start, s.end, s.start_reason, s.end_reason) == \
                    (m.start, m.end, m.start_reason, m.end_reason), (s, m)
         reasons = {x.end_reason for x in shipped} | {x.start_reason for x in shipped}
-        assert {"detected", "budget", "idle", "session_start", "session_end"} <= reasons, reasons
+        assert set(blocks.REASONS) <= reasons, (reasons, blocks.REASONS)
+        assert "detected" not in reasons, reasons
 
 
 if __name__ == "__main__":
