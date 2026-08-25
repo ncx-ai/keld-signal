@@ -61,9 +61,16 @@ from app.analysis.window import dominant
 # makes that concrete: replacing `project` with `repo` would lose a distinction the series can
 # make. Both ship.
 #
-# The series' own text-inferred `remote_mentioned` level was the other candidate and it does not
-# fire at all: measured on a 34 MB real transcript with 1,534 resolved `workspace` observations,
-# ZERO rows, because a developer working through local paths never types the url. The daemon is
+# ⚠️ DO NOT CONFUSE `repo` WITH THE `remote` LEVEL, which is the other candidate and a much
+# WEAKER fact: `remote` is inferred from `owner/repo` strings appearing in commands and message
+# TEXT, accepted only when the repo half matches the workspace directory basename. It means "a
+# remote named in the conversation", not "the checkout's origin", and it does not fire at all --
+# measured on a 34 MB real transcript with 1,534 resolved `workspace` observations, ZERO rows,
+# because a developer working through local paths never types the url. (A rename to
+# `remote_mentioned`, to make that distinction unmissable, is PENDING: it moves a level name and
+# so changes the fixture identity fingerprint, which is the guard that a rename did not alter
+# extraction -- see the note in scripts/check-fixture-identity.sh. Neither name is published, so
+# nothing downstream can confuse the two today.) The daemon is
 # the only component that may read .git/config (`/analyze` is confined to KELD_ANALYZE_ROOTS
 # precisely so it cannot open arbitrary paths as its user), so the resolution stays there and its
 # OUTPUT travels in -- ONE resolution, feeding the analysis.
