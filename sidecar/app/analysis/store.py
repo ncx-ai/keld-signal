@@ -355,6 +355,28 @@ CREATE TABLE IF NOT EXISTS prompt (
   PRIMARY KEY (session, prompt_id)
 ) WITHOUT ROWID;
 
+-- WHERE A BIN'S FIRST LINE IS, in bytes. Written only under `KELD_CAPTURE=1`.
+--
+-- It exists so a block's own messages can be re-read without re-reading the transcript.
+-- ⚠️ `transcript.turns_between` is O(FILE) -- it does `sorted(iter_turns(path))`, a whole-file
+-- parse measured at 0.79s on a 90 MB transcript -- so a consumer that opened a block through it
+-- would put back exactly the cost this store exists to remove, once per block. A block is
+-- bin-aligned by construction (`analyze._block_span` floors and ceils), so a block span maps to
+-- a byte range and reading it is one seek and a bounded scan. Go's `resolve.scanFrom` already
+-- does the equivalent on its side.
+--
+-- The value is the SMALLEST offset seen in the bin, enforced on write with MIN() rather than
+-- left to insertion order: incremental ingest is designed to replay a tail after a crash, and a
+-- replay must not be able to raise the offset past the lines it is meant to reach.
+--
+-- ~12 rows per active hour. No text: a bin timestamp and a byte position.
+CREATE TABLE IF NOT EXISTS bin_offset (
+  session  TEXT    NOT NULL,
+  bin_ts   INTEGER NOT NULL,
+  "offset" INTEGER NOT NULL,
+  PRIMARY KEY (session, bin_ts)
+) WITHOUT ROWID;
+
 -- The pruning ledger, and the SERVING FLOOR derived from it. `pruned_before` is a promise about
 -- what the store no longer contains: no `event` row at or before it survives for that scope.
 --
@@ -780,7 +802,7 @@ class Store:
         return len(agg)
 
     def clear_session(self, session):
-        """Drop every event, magnitude, bin and prompt-index row for one session.
+        """Drop every event, magnitude, bin, prompt-index and bin-offset row for one session.
 
         A reparse re-reads lines that are already stored under DIFFERENT batch ordinals, so
         without this the same turn is counted once per parse and every window inflates. It is
@@ -801,6 +823,11 @@ class Store:
             c.execute("DELETE FROM turn_magnitude WHERE session = ?", (session,))
             c.execute("DELETE FROM bin WHERE session = ?", (session,))
             c.execute("DELETE FROM prompt WHERE session = ?", (session,))
+            # The offsets go too, and for the reason the prompt index does: a rotated file at
+            # the same path is a DIFFERENT conversation, and a stale offset would seek into a
+            # file the events no longer describe -- silently, since a byte position is valid
+            # for any file long enough to contain it.
+            c.execute("DELETE FROM bin_offset WHERE session = ?", (session,))
 
     # --- the prompt index ------------------------------------------------------------------
 
@@ -1389,6 +1416,39 @@ class Store:
             SELECT ts, SUM(value) FROM turn_magnitude
             WHERE session = ? AND kind = ? AND ts >= ? AND ts < ?
             GROUP BY ts ORDER BY ts""", (session, str(kind), start, end))]
+
+    # --- the bin-offset index ---------------------------------------------------------------
+
+    def upsert_bin_offsets(self, session, pairs):
+        """Record where each 5-minute bin's first line starts. `pairs` is `{bin_ts: offset}`.
+
+        MIN() on conflict, not overwrite: see the table's comment. A replayed batch re-presents
+        offsets it has already stored, and the smallest is the answer in every case.
+        """
+        if not pairs:
+            return 0
+        self._conn().executemany("""
+            INSERT INTO bin_offset(session, bin_ts, "offset") VALUES (?,?,?)
+            ON CONFLICT(session, bin_ts)
+            DO UPDATE SET "offset" = MIN("offset", excluded."offset")
+            """, [(session, int(b), int(o)) for b, o in pairs.items()])
+        return len(pairs)
+
+    def bin_offset(self, session, bin_ts):
+        """The byte offset of `bin_ts`'s first line, or None if the bin was never recorded.
+
+        None is a real answer and means "not recorded" -- a store ingested with capture off holds
+        none of these, and that is not the same as a bin starting at byte 0.
+        """
+        row = self._conn().execute(
+            'SELECT "offset" FROM bin_offset WHERE session = ? AND bin_ts = ?',
+            (session, int(bin_ts))).fetchone()
+        return None if row is None else int(row[0])
+
+    def all_bin_offsets(self, session):
+        """Every recorded bin offset for one session, as `{bin_ts: offset}`."""
+        return {int(b): int(o) for b, o in self._conn().execute(
+            'SELECT bin_ts, "offset" FROM bin_offset WHERE session = ?', (session,))}
 
 
 def _pseudo_rows(session, cursors):

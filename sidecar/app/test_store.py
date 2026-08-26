@@ -751,6 +751,21 @@ def test_bins_are_five_minutes():
     assert BIN_SECONDS == 300
 
 
+def test_bin_offset_keeps_the_smallest_and_survives_replay():
+    """The offset's only purpose is to be seeked to, so it is the FIRST line of the bin. A
+    replayed batch -- which incremental ingest is designed to tolerate -- must not raise it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        st.upsert_bin_offsets(SESSION, {1000: 500, 1300: 900})
+        st.upsert_bin_offsets(SESSION, {1000: 700})
+        assert st.bin_offset(SESSION, 1000) == 500, "a later offset must not win"
+        st.upsert_bin_offsets(SESSION, {1000: 120})
+        assert st.bin_offset(SESSION, 1000) == 120, "an earlier offset must win"
+        assert st.bin_offset(SESSION, 9999) is None
+        assert st.all_bin_offsets(SESSION) == {1000: 120, 1300: 900}
+        st.close()
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

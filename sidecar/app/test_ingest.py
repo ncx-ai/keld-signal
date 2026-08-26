@@ -97,7 +97,7 @@ def _dump(store, path):
     """
     c = store._conn()
     key = session_of(path)
-    for table in ("event", "bin", "turn_magnitude"):
+    for table in ("event", "bin", "turn_magnitude", "bin_offset"):
         seen = {r[0] for r in c.execute(f"SELECT DISTINCT session FROM {table}")}
         assert seen <= {key}, (
             f"{table} holds session(s) that are not {os.path.basename(path)}'s: {seen - {key}}")
@@ -113,7 +113,12 @@ def _dump(store, path):
     mg = [canon(r) for r in c.execute("SELECT session, ts, kind, SUM(value) FROM turn_magnitude "
                                       "GROUP BY session, ts, kind "
                                       "ORDER BY session, ts, kind")]
-    return sorted(ev), sorted(bn), sorted(mg)
+    # `bin_offset` is MIN()-on-conflict, not summed, so a chunked ingest that touches a bin
+    # from several batches must still land on the SAME smallest offset a whole-file ingest
+    # would record -- there is no "over" argument the way there is for a count.
+    bo = [canon(r) for r in c.execute('SELECT session, bin_ts, "offset" FROM bin_offset '
+                                      "ORDER BY session, bin_ts")]
+    return sorted(ev), sorted(bn), sorted(mg), sorted(bo)
 
 
 def _full_parse_rollup(path, nlp=None):
@@ -709,7 +714,7 @@ def _repo_values(store, path):
     reparse that cleared the events while leaving a stale bin behind would answer the interior of
     every historical window with the old identity while the edges answered with the new one --
     visible in a rollup and invisible in an events-only check."""
-    ev, bn, _mg = _dump(store, path)
+    ev, bn, _mg, _bo = _dump(store, path)
     return {r[3] for r in ev if r[2] == "repo"} | {r[3] for r in bn if r[2] == "repo"}
 
 
@@ -834,6 +839,80 @@ def test_capture_mode_is_part_of_the_parse_state():
         legacy.pop("capture")
         assert _state_is_usable(legacy, None) is True, \
             "a state predating the key must read as capture-off, not force a reparse"
+    finally:
+        if prev is None:
+            os.environ.pop("KELD_CAPTURE", None)
+        else:
+            os.environ["KELD_CAPTURE"] = prev
+
+
+def test_read_complete_lines_offsets_are_byte_exact_on_invalid_utf8():
+    """⚠️ Offsets MUST come from the raw bytes, never from re-encoding the decoded strings.
+
+    `_read_complete_lines` decodes with `errors="replace"`, which turns one invalid byte into
+    U+FFFD -- three bytes when re-encoded. So a cumulative sum over `len(line.encode())` drifts
+    by two bytes per invalid byte, silently, and every offset after the first bad line points
+    into the middle of a record. This fixture has one invalid byte precisely to catch that.
+    """
+    import tempfile
+    from app.analysis.ingest import _read_complete_lines
+    with tempfile.TemporaryDirectory() as tmp:
+        p = os.path.join(tmp, "t.jsonl")
+        raw = [b'{"a":1}\n', b'{"b":"\xff"}\n', b'{"c":3}\n']
+        with open(p, "wb") as fh:
+            fh.write(b"".join(raw))
+        lines, offsets, end = _read_complete_lines(p, 0, os.path.getsize(p))
+        assert len(lines) == 3 and len(offsets) == 3
+        want, at = [], 0
+        for b in raw:
+            want.append(at); at += len(b)
+        assert offsets == want, f"{offsets} != {want}"
+        assert end == at
+        naive = []
+        at = 0
+        for L in lines:
+            naive.append(at); at += len(L.encode("utf-8"))
+        assert naive != want, "fixture must actually exercise the drift, or it proves nothing"
+
+
+def test_ingest_writes_bin_offsets_and_tool_outcomes_only_under_capture():
+    """The two capture signals that come from raw lines rather than from `events_for_turns`."""
+    import tempfile
+    from app.analysis import magnitude
+    from app.analysis.ingest import ingest_file, session_of
+    from app.analysis.store import open_store
+    prev = os.environ.get("KELD_CAPTURE")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "t.jsonl")
+            with open(p, "w") as fh:
+                fh.write('{"type":"user","timestamp":"2026-08-26T10:00:00.000Z","cwd":"/w",'
+                         '"message":{"role":"user","content":"hello"}}\n')
+                fh.write('{"type":"user","timestamp":"2026-08-26T10:01:00.000Z","cwd":"/w",'
+                         '"message":{"role":"user","content":[{"type":"tool_result",'
+                         '"is_error":true,"content":"boom"}]}}\n')
+            sess = session_of(p)
+
+            os.environ["KELD_CAPTURE"] = "0"
+            st = open_store(os.path.join(tmp, "off.db"))
+            ingest_file(st, p)
+            assert st.turn_magnitudes(sess, 0, 4e9, kind=magnitude.TOOL_ERRORS) == [], \
+                "capture off must write no outcomes"
+            assert st.all_bin_offsets(sess) == {}, "capture off must write no offsets"
+            st.close()
+
+            os.environ["KELD_CAPTURE"] = "1"
+            st = open_store(os.path.join(tmp, "on.db"))
+            ingest_file(st, p)
+            errs = st.turn_magnitudes(sess, 0, 4e9, kind=magnitude.TOOL_ERRORS)
+            assert [v for _ts, v in errs] == [1.0], errs
+            chars = st.turn_magnitudes(sess, 0, 4e9, kind=magnitude.TOOL_RESULT_CHARS)
+            assert chars and chars[0][1] > 0
+            rows = st.all_bin_offsets(sess)
+            assert rows, "capture on must record at least one bin offset"
+            assert min(rows.values()) == 0, f"the file's first bin starts at byte 0: {rows}"
+            assert all(v % 1 == 0 and v >= 0 for v in rows.values()), rows
+            st.close()
     finally:
         if prev is None:
             os.environ.pop("KELD_CAPTURE", None)
