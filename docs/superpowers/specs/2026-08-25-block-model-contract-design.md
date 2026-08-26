@@ -31,77 +31,96 @@ A contiguous span of one session's activity, cut at change points.
 
     block := (session, start, end, start_reason, end_reason, facets, covers)
 
-⚠️ **Boundaries are DETECTED WHERE THE BRANCH CHANGES, and cut for length everywhere else.** This
-section previously said "detected, not fixed" and treated `budget` as a fallback. Phase 0a measured
-that and the proportions are the other way round. Results:
-`~/keld/refseries-context/blocks/BLOCK-DETECTION-RESULTS.md`.
+⚠️ **THERE IS NO DETECTOR. A block ends on LENGTH or on SILENCE, and nothing else.** Two earlier
+drafts of this section said otherwise — the first that boundaries are detected rather than fixed,
+the second that they are detected at branch changes and cut for length everywhere else. Both are
+superseded. Results: `~/keld/refseries-context/blocks/BLOCK-BOUND-2-RESULTS.md` and
+`BLOCK-BOUND-2-ABLATION.md`.
 
-`EwmaSizer` (fast 0.3, slow 0.02, threshold 0.2, 60-second observation step) is still promoted from
-sizing a slice inside a window to cutting the blocks themselves — nothing beat it and nothing
-replaces it. What changed is the claim about what it detects. Scored on the same corpus, the same
-detector, the same scoring:
+The rule, in full:
 
-| ground truth | precision | recall |
+> **A block is at most 20 minutes of activity. Fifteen minutes of silence ends it, and the silence
+> belongs to no block.**
+
+Two constants, both measured, neither tunable by a request: `MAX_BLOCK_MINUTES = 20`,
+`IDLE_BINS = 3` (three consecutive empty five-minute bins).
+
+**Why the detector went.** `EwmaSizer` WAS the third terminator, and it won a pre-registered
+four-arm comparison as part of arm A′. A post-hoc ablation over the same 496-session corpus then
+removed it, at the shipped cap:
+
+| | with detector | ablated |
 |---|---|---|
-| the BRANCH (or workspace) changed | **86.5%** | **55.8%** |
-| ANY published allocation dimension changed | **49.5%** | **7.1%** |
-| `FixedSizer(15)`, any-dimension truth | 27.6% | 17.3% |
+| blocks that attribute something | 95.29% | **96.21%** |
+| blocks holding any evidence at all | 99.3% | **100.0%** |
+| merge rate | 1.36% | **0.67%** |
+| longest block | 20m | 20m |
 
-Those are not in tension. They say something specific and it governs this whole section:
-**`EwmaSizer` is a branch-change detector, not a work-change detector.** Against general work
-change its recall is 7.1% — *below* a fixed constant's 17.3% — so it misses roughly nineteen work
-transitions in twenty.
+Every measured number improved, and the second row is the one that matters: **the detector was the
+only source of empty blocks.** A detected cut ends a block early, so the block holds less evidence
+and is likelier to fall under the attribution floor — it was buying its 4.3% of boundaries by
+thinning the blocks around them.
 
-The 86.5% / 55.8% figure replicates the published 86.4% / 54.8% within a point, on a rebuilt store
-with correct session keying and a 28% larger population, so the original measurement was sound on
-its own population. The shuffled-truth control is why any of it is believed: relocating every
-transition to a random non-empty bin of the same session drops `branch` by 60.9 points, while every
-other candidate drops under 20 and `action` scores **-3.5** — better against randomised truth than
-real truth, at a 93% firing rate, which is what a volume counter looks like.
+What was given up is the claim that those cuts sat in more MEANINGFUL places. That claim is exactly
+what Phase 0a could not establish: scored against any-dimension work change, the detector recalled
+**7.1%** against a fixed-interval control's **17.3%** — worse than a constant — and every
+alternative level failed its pre-registered bar, `action` scoring **−3.5** (better against shuffled
+truth than real truth, at a 93% firing rate, which is what a volume counter looks like).
 
-**Nothing else detects, and this was tested rather than assumed.** `language`, `output_type`,
-`component`, `skill`, `action` and the `branch+language` pair were each scored against ground truth
-excluding their own level, against pre-registered bars. All failed. Two near-misses are recorded at
-the constant rather than smoothed: `output_type` missed the 20-point shuffle bar by 1.4 points, the
-pair by 0.6. The bars were fixed before the run and were not moved. `workspace` has **0**
-transitions across 496 sessions, replicated.
+**Two consequences Atlas depends on:**
+
+1. **The unit is now fully domain-agnostic.** Detection was its only branch-dependent part. A
+   session with no repository — a designer, an analyst, anyone outside engineering — produces
+   blocks by the identical rule, with nothing missing and nothing degraded. There is no
+   engineering/non-engineering split to handle.
+2. **Every boundary is arithmetic, and none is a claim about the work.** A consumer can no longer
+   present any edge as "the work changed here", because nothing in the system asserts that. This
+   REMOVES a requirement the previous draft imposed (rendering `detected` distinctly from
+   `budget`); it does not soften one.
+
+⚠️ **`EwmaSizer` is NOT deleted from the codebase.** It keeps its separate, measured, shipped use
+sizing the dynamics slice. Only the block cutter stopped consulting it.
+
+⚠️ **Do not reintroduce a detector hoping for better boundaries.** Six candidate levels were tested
+and refuted, and the one that survived was then measured to make things worse. Better work-shift
+detection needs a different mechanism — distributional statistics over the tool-call mix rather
+than novelty on a single categorical level — and that is its own spec with its own
+pre-registration and an unsolved ground-truth problem, not a parameter change here.
 
 ### What follows for the reasons, and it is the important part
 
-`start_reason` / `end_reason`, from a closed set, and **always stated**:
+`start_reason` / `end_reason`, from a closed set of **four**, and **always stated**:
 
 | reason | meaning |
 |---|---|
-| `detected` | the detector fired here. **A claim that the branch changed** — not that the work did. |
-| `budget` | no transition found within the maximum duration; cut for length. **Not a claim.** |
-| `idle` | activity stopped. See below. |
+| `budget` | the 20-minute cap was reached; cut for length. **Not a claim about the work.** |
+| `idle` | activity stopped for 15 minutes. A claim there was NO work, not that it changed. |
 | `session_start` / `session_end` | the transcript's own edges. |
 
-⚠️ **`budget` is the COMMON boundary, not the exception — including for engineering sessions.** At
-7.1% recall against general work change, most real shifts produce no detection, so most blocks end
-because they hit their duration cap. The earlier draft of this document worried about
-`budget`-everywhere for the non-engineering population; measured, it is the normal case for
-everyone. Two consequences:
+⚠️ **`detected` is gone from this set.** Anything Atlas built to render it should be removed rather
+than left dormant — a reason that can never arrive is a branch nobody will ever see exercised.
 
-- **A `budget` edge must be visually and semantically distinct**, and that is now a primary
-  requirement rather than a nicety. A consumer that renders the two alike does not merely lose
-  nuance — it presents a length cut as a work transition on the majority of blocks.
-- **`detected` must not be read as "the work changed here".** It means "the branch changed here",
-  which is a narrower and more useful thing to say. Any UI copy, digest line or downstream
-  inference that widens it is overstating what was measured.
-
-⚠️ **Do not widen the detection level set hoping for better recall.** Six candidates were tested
-and refuted. Improving work-shift detection needs a different mechanism — combining signals rather
-than swapping the single level the EWMA reads — and that is its own spec with its own
-pre-registration, not a parameter change here.
+⚠️ **`budget` is the plurality boundary** — 48.5% of blocks at the shipped cap, against
+`session_end` 33.0% and `idle` 18.5%. The distinction that still matters is `budget` versus `idle`:
+one says "we had to cut somewhere", the other says "the person stopped". A consumer that renders
+them alike turns a lunch break into a work transition.
 
 ## Idle
 
-**Idle means no turn of any kind — human OR agent.** A long autonomous run has turns, so it is
-never idle: it is cut by `detected` or by `budget`, never skipped. Only a genuine gap in all
-activity closes a block without a successor. Coverage is driven by turn presence, not prompt
-presence — which is the point, since **only 55.0% of transcript turns fall inside any prompt's
-60-minute look-back**, and the gap is worse the more autonomous the agent.
+**Idle means no turn of any kind — human OR agent — for 15 minutes.** A long autonomous run has
+turns, so it is never idle: it is cut by `budget`, never skipped. Only a genuine gap in all
+activity closes a block. Coverage is driven by turn presence, not prompt presence — which is the
+point, since **only 55.0% of transcript turns fall inside any prompt's 60-minute look-back**, and
+the gap is worse the more autonomous the agent.
+
+⚠️ **The silence itself belongs to NO BLOCK.** This is the single most consequential thing in this
+document for a consumer, and it is what makes the unit work at all. Before idle was modelled, a
+plain 20-minute cap attributed **29.8%** of blocks; with it, **95.3%** — because three quarters of
+the old blocks were empty tiles laid over overnight and weekend silence. A timeline must therefore
+render gaps between blocks as *nothing*, not as an unlabelled block.
+
+The threshold was swept: at caps of 20–30 minutes, attribution holds between 93.4% and 95.4% across
+idle thresholds of 10, 15 and 30 minutes. Nothing hinges on the exact value.
 
 ## Tiling — the invariant, and its exact limit
 
@@ -125,19 +144,24 @@ Two things follow that a consumer must not get wrong:
   block must sort by block; grouping headers over a time-ordered multi-session feed assert an
   ownership that is false.
 
-## Thin blocks merge forward
+## Thin blocks are published UNATTRIBUTED — there is no merge rule
+
+⚠️ **This section previously specified merging forward. Do not build that.** It was measured and it
+is harmful.
 
 A block below the evidence floor cannot attribute anything: `window.MIN_EVIDENCE` is 5, derived
 rather than chosen — under the 0.50 share floor read as a null hypothesis, unanimity over *n*
-observations has probability `0.5**n`, which first clears 5% at n=5. A 90-second block would
-therefore publish with every dimension absent, which is a row a consumer must render and can say
-nothing about.
+observations has probability `0.5**n`, which first clears 5% at n=5.
 
-So a block that cannot clear the floor is **merged into its successor**, and the merged block
-takes the earlier `start` and the later `end_reason`. Merging forward rather than backward keeps
-the operation causal: at the moment a thin block closes, its successor's content is not yet
-known, so the merge is deferred until the successor closes — never applied retroactively to a
-block already published.
+The bar for the whole bound comparison was written as *"the merge rule becomes unnecessary at ≥ 95%
+attributable"*, and the shipped rule clears it at **96.2%**, with a residual thin population of
+**0.67%**. Round 1 also measured what merging costs when it does fire: it changes a published VALUE
+**88.6%** of the time, against a pre-registered 5% bar. Folding a thin block into its neighbour does
+not fill in a blank — it silently changes the neighbour's answer.
+
+So a thin block **publishes as itself, with its dimensions absent**. That is an honest blank, and
+the alternative was measured to be worse. Atlas renders such a row as a block with a span and no
+characterisation; it must not hide it, and it must not attach the neighbour's facets to it.
 
 ## `covers` — the mapping Atlas cannot compute
 
@@ -215,16 +239,28 @@ boundary as `budget`" as though that were the bad case to avoid. Measured, it is
 for every population. The problem is not that some sessions lack `branch` — it is that branch
 change is a narrow proxy for work change.
 
-Three items remain, bars unchanged and still fixed before their runs:
+**Items 2-4 are now DONE too.** Results: `BLOCK-BOUND-2-RESULTS.md`, `BLOCK-BOUND-2-ABLATION.md`;
+pre-registration `BLOCK-BOUND-2-PREREGISTRATION.md` with four amendments, all written before their
+runs; harness `scripts/block_sizing_eval.py`.
 
-2. **Maximum block duration** (the `budget` cut). Derived, not chosen: the smallest duration at
-   which the share of blocks ending in `budget` stops falling materially. ⚠️ This matters far more
-   than when it was written, because `budget` is now the common boundary rather than the fallback —
-   this number sets the typical block length for most sessions.
-3. **Minimum viable block.** Confirm the merge-forward rule against `MIN_EVIDENCE`: what share of
-   blocks merge, and does merging change any published VALUE rather than only its evidence count.
-4. **Tiling equality.** A session's blocks must partition their session's activity exactly — every
-   turn in exactly one block, no turn in none. Asserted over the corpus, not argued.
+2. **Maximum block duration — 20 minutes.** ⚠️ The rule this document proposed for deriving it
+   ("the smallest duration at which the `budget` share stops falling materially") was **retired**:
+   the curve declines shallowly and monotonically across the whole 10-120 minute range, so that
+   rule fires on the first pair it sees and returns a number by proving there is no elbow. Replaced
+   by a four-arm comparison against pre-registered bars, won by a plain cap plus idle. Usable range
+   15-45 min; at 120 the cap stops bounding anything (50.1% of blocks become whole sessions).
+3. **Minimum viable block — the merge rule is NOT BUILT.** See the section above: the 95% bar was
+   *defined* as the point at which merging becomes unnecessary, the shipped rule clears it at
+   96.2%, and merging was measured to change a published value 88.6% of the time it fires.
+4. **Tiling — done, and the invariant is narrower than this document assumed.** Blocks tile the
+   ACTIVE part of a session, not the whole span, because idle time belongs to no block. The
+   assertion is "every active bin lies in exactly one block", pinned as a test rather than
+   measured.
+
+⚠️ **A fifth thing was learned that no item asked for**, and it is the largest single effect in the
+whole study: the first round's arms did not implement the idle terminator at all, and a plain
+20-minute cap without it attributed **29.8%** of blocks — because 74.6% of its blocks were empty
+tiles over silence. Idle is not a refinement of the bound; it is most of the bound.
 
 ### The corpus itself had to be rebuilt, and that is worth knowing
 
