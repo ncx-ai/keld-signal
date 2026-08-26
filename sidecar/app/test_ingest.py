@@ -387,6 +387,44 @@ def test_a_state_from_an_older_layout_reparses_and_clears_stale_magnitudes():
         st.close()
 
 
+def test_chunked_ingest_equals_one_pass_WITH_CAPTURE_ON():
+    """⚠️ EVERY OTHER EQUIVALENCE TEST HERE RUNS AT THE AMBIENT ENVIRONMENT, WHICH IS CAPTURE
+    OFF. `_dump` gained a `bin_offset` column when the capture branch landed, and with the
+    toggle off that column is `[]` on both sides -- a comparator that cannot fail. AGENTS.md
+    records the precedent verbatim: the duplicate-request bug survived because the chunked
+    comparator did not look at `turn_magnitude` at all.
+
+    So this is the same assertion with the toggle ON, and the non-vacuity check beside it. Both
+    new populations have to survive chunking for the right reasons and they are different
+    reasons: `turn_magnitude` is summed per `(source_line, ts, kind)` and the comparator sums
+    over `source_line`, while `bin_offset` is MIN()-on-conflict and has no "over" direction at
+    all -- a bin touched by four batches must still land on the smallest offset a single pass
+    would have recorded.
+    """
+    prev = os.environ.get("KELD_CAPTURE")
+    os.environ["KELD_CAPTURE"] = "1"
+    try:
+        projdir, fname, lines = _fixture_lines("-workspace-fixture-corpus-anders-aurora-ledger")
+        _assert_chunked_equals_whole(lines, projdir, fname)
+        _assert_chunked_equals_whole(_multi_line_request_lines())
+        # And the columns are populated, or the equality above proves nothing.
+        import tempfile
+        from app.analysis import magnitude
+        with tempfile.TemporaryDirectory() as tmp:
+            st, p, _r = _ingest_whole(tmp, projdir, fname, lines)
+            _ev, _bn, mg, bo = _dump(st, p)
+            assert bo, "the fixture recorded no bin offsets -- the bin_offset column is vacuous"
+            kinds = {r[2] for r in mg}
+            assert kinds & set(magnitude.CAPTURE_KINDS), (
+                f"no capture kind was stored -- the magnitude column is vacuous: {kinds}")
+            st.close()
+    finally:
+        if prev is None:
+            os.environ.pop("KELD_CAPTURE", None)
+        else:
+            os.environ["KELD_CAPTURE"] = prev
+
+
 def test_chunk_boundary_splitting_a_five_minute_bin_equals_one_pass():
     """An uneven split whose boundary lands inside a bin, not between two."""
     _assert_chunked_equals_whole(_late_evidence_lines(), cuts=[2, 3, 5])
