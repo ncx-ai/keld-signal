@@ -89,7 +89,10 @@ Nullable columns on `enrichments`, left NULL by every v1 row:
 
     start_ts        timestamptz  -- block span start
     end_ts          timestamptz  -- block span end
-    start_reason    text         -- detected | budget | idle | session_start | session_end
+    start_reason    text         -- budget | idle | session_start | session_end
+                                 -- NOTE: no `detected`. The change detector was ablated after
+                                 -- measurement; see the contract. Do not add a column value or a
+                                 -- render branch for it.
     end_reason      text
     covers          jsonb        -- [{prompt_id, from, to, complete}]
 
@@ -123,13 +126,29 @@ constraint that made Direction A expensive, and a separate rail avoids it entire
 A block rail, and a detail pane.
 
 **Rail:** grouped by session, blocks in time order within each group. Boundary reasons rendered
-distinctly — `detected` is a claim the work changed, `budget` is only "cut for length", and
-showing them alike invents transitions. Idle spans shown greyed rather than omitted, so a gap
-reads as a gap.
+distinctly — the set is FOUR, not five, and none of them is a claim that the work changed:
+`budget` is only "cut for length" (48.5% of blocks), `idle` means the person stopped (18.5%), and
+`session_start`/`session_end` are the transcript's own edges. Showing `budget` and `idle` alike
+turns a lunch break into a work transition. **Idle spans are genuine GAPS — no block covers them —
+and must render as gaps rather than as unlabelled blocks**; that is what makes the unit work at all
+(a cap without the idle rule attributes 29.8% of blocks against 95.3% with it, because three
+quarters of its blocks were empty tiles over silence).
 
 **Pane:** the selected block's facets — the 8 allocation dimensions, the 9 inventories, `dynamics`
 readings, `prior`, `effort` — then its turns. This is the only surface with room for a block's own
 facts, which is why C won over the banded feed.
+
+⚠️ **Every allocation dimension arrives with a `status`, and rendering one alike regardless is a
+misreport.** Each carries `(value, share, evidence, status)` with `status` in
+`attributed | thin | no_majority | tie | absent`. Measured shares of the 12,016 dimension-slots:
+53.2% attributed, 38.7% absent, **7.7% thin**, 0.4% tie/no_majority. A `thin` value is real evidence
+under the significance floor — 198 slots held four observations, one short — so it must be shown,
+visibly distinguished, never promoted to a plain value and never dropped. `absent` means no data at
+all and is the only status with a null value.
+
+The reason the producer no longer filters these is that it now sends `evidence`, and the floor's
+own justification was that it could not. The consumer owns the threshold; the contract owns the
+label.
 
 Two things the pane should say that nothing in the product says today:
 

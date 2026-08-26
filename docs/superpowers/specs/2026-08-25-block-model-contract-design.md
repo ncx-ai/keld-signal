@@ -205,6 +205,52 @@ prompt in `(t, t+span]`, all of which have arrived, so the covered set there is 
 emitted block can never later overlap a new one. Not a margin — exact, and replayed against
 randomised incremental prompt streams. Coverage goes **55.0% → 99.5%**.
 
+## Every dimension publishes its EVIDENCE and its STATUS — the floor moves to the consumer
+
+⚠️ **This reverses the previous rule that a sub-floor dimension is simply absent.** Measured over
+the shipped cutter's 1,502 blocks x 8 dimensions = 12,016 dimension-slots:
+
+| status | slots | share |
+|---|---|---|
+| `attributed` | 6,396 | 53.2% |
+| `absent` (genuinely no data) | 4,650 | 38.7% |
+| **`thin`** (data, under the floor) | **924** | **7.7%** |
+| `tie` / `no_majority` | 46 | 0.4% |
+
+**970 slots hold real evidence and publish nothing.** Of the thin ones, **198 held FOUR
+observations** — one short of the floor — and another 171 held three. Per dimension the loss is
+lopsided: `lang` discards 284 against 845 published, `artifact` 270 against 875, and **`toolchain`
+discards 172 against 138 — more than it publishes.**
+
+So every dimension publishes four fields, always:
+
+    dimension := (value, share, evidence, status)
+    status    := attributed | thin | no_majority | tie | absent
+
+`value`/`share` are null only under `absent`. **`evidence` is new on the wire** and is the whole
+point: `MIN_EVIDENCE`'s own derivation was justified by its absence — "evidence is dropped on the
+way to the published enrichment, so nothing downstream can tell one observation from five hundred."
+Publish the count and the floor stops being a publish GATE and becomes a LABEL. Its arithmetic is
+unchanged (below n=5, unanimity is indistinguishable from a coin flip at alpha=0.05); what changes
+is that the consumer, not the producer, decides what to do about it.
+
+⚠️ **`status` is MANDATORY, never inferred from a null.** The risk this creates is a weak value read
+as a confident one, and the mitigation is that the uncertainty travels with the value rather than
+the value being deleted. A consumer that renders `thin` identically to `attributed` is
+misreporting — that is a rendering requirement on Atlas, stated here because the contract cannot
+enforce it.
+
+This aligns block attribution with what the rest of the system already does: `dynamics` publishes a
+closed six-value `status` precisely so a missing metric is readable rather than merely absent; the
+session `prior` says `absent` out loud rather than being suppressed; `named_terms_status` exists
+because an empty list is not self-describing; `facets_degraded` sits beside `facets_skipped`. Block
+attribution was the one place that silently dropped instead of stating.
+
+**A thin BLOCK is therefore not a blank row.** It is a block whose dimensions carry what little was
+seen, labelled as little. The 0.67% of blocks with nothing at all still publish — a span with every
+dimension `absent` — because a suppressed row reads as an oversight, and an oversight is what
+someone eventually "fixes".
+
 ## What Atlas has to change
 
 Named here because the contract is unusable without it; specified in the Atlas document.
