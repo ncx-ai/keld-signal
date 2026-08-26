@@ -1,6 +1,21 @@
 # Signal embeddings — the training corpus for future-work prediction
 
-**Status:** design. Nothing below is built.
+**Status:** ⚠️ **PARTLY BUILT, and three of this spec's claims were WRONG. Corrected in place,
+2026-08-26 — the old claim is stated beside the new one everywhere, because a number silently
+edited is a number someone re-derives from the prose instead of the code.** What changed:
+
+1. **The width is 1,534, not 1,414** (`features.DIMS`, `FEATURE_SPEC_VERSION` 2). The
+   per-group arithmetic here was wrong before the text scalars were added — see *Once per row*.
+2. **Embedding does NOT run "at block close"** — that reading is synchronous inside the request and
+   was refuted by measurement. See the encoding-architecture correction under *Text vectors*, and
+   the cursor contract under *Anchors*.
+3. **The measured cost is 766 ms/message and ~1.9 GB, not 20–50 ms** — see *Performance budget*,
+   where the duty-cycle conclusion is recomputed rather than merely restated.
+
+Built (all four steps of *Delivery order*): the capture rows and `bin_offset`, `S(t)` and
+`POST /features`, the Go emitter half with its `features`/`publish` org toggles, and the
+per-message text encoder. Every toggle ships OFF. Not built: the `sidecar/loadtest/` arm, and
+Atlas has no consumer for a feature row yet.
 
 Companion research: `2026-08-26-joint-embeddings-design.md`, which compared three approaches and
 recommended the structured-only one (A). This spec is that approach, extended with a client-side
@@ -55,7 +70,7 @@ Three row kinds, all published. **They carry different things** — a message ro
 | kind | cadence | carries |
 |---|---|---|
 | `message` | one per user/assistant message | **the text vector only** (one stream, tagged), plus its timestamp and role. No shell ladder — a single message has no lookback. This is the only kind that preserves ORDER, which any sequence model needs and which pooling destroys. |
-| `bin` | one per non-empty 5-minute bin | **the full `S(t)` shell ladder** (1,414 dims) + the per-shell pooled text scalars (`dispersion`, `drift`, `novelty`). No centroids — they are re-poolable at Keld from the message rows. |
+| `bin` | one per non-empty 5-minute bin | **the full `S(t)` shell ladder** (1,534 dims — see the correction under *Once per row*) + the per-shell pooled text scalars (`dispersion`, `drift`, `novelty`). No centroids — they are re-poolable at Keld from the message rows. |
 | `block` | one per closed block | the same as `bin`, at the block's own end instant, plus `start_reason` / `end_reason`. Published because Atlas already renders blocks, not because it is the right sampling grid. |
 
 ⚠️ **Centroids are deliberately NOT published on `bin`/`block` rows.** They are an exact pooling of
@@ -73,6 +88,27 @@ because they are the right grid.
 
 Higher grains are derivable from lower ones by pooling; the reverse is not. That asymmetry is why
 all three publish.
+
+⚠️ **AS SHIPPED, THE SIDECAR ENUMERATES THE ANCHORS AND THE CALLER SUPPLIES A CURSOR.** This table
+was written as though a caller named the instants, and one route in this design still works that
+way (`POST /features/probe`, kept for studies). The production route does not. Only this process
+can see where the non-empty bins and the CLOSED blocks are — it owns the reference-series store —
+so a daemon asking for a grid it cannot see would have to guess one, and a guessed grid is silently
+wrong rather than visibly wrong. The contract is the one `POST /blocks` already had:
+
+    POST /features   {path, since_ts, now, max_rows, resolved}
+                  -> {schema, feature_spec, spec_sha, dims, session, rows[], watermark,
+                      text_status?, text_frontier?}
+
+`since_ts` is compared against **a row's own instant** with `>`, and rows are chronological across
+all three anchor kinds, so one cursor covers the whole stream. `watermark` is returned even when no
+row is emittable, because "nothing yet" and "nothing ever" are different answers.
+
+⚠️ **`text_frontier` holds back the WHOLE row stream, not just the message rows** — see the
+encoding-architecture correction under *Text vectors*. A `bin` or `block` row emitted past the
+frontier would carry text scalars measured over a fraction of the message history, which is a
+confident number over incomplete evidence: the failure `MIN_EVIDENCE` and `prior.py`'s
+CONTRAST-NEVER-FALLBACK exist to prevent, one modality across.
 
 ## Shells, not nested windows
 
@@ -96,18 +132,24 @@ wants the whole distribution. `MIN_EVIDENCE` is a LABEL on a published attributi
 evidence: a sub-floor rollup is perfectly good input to a model even where it is not honest to
 publish as an attribution.
 
-### Per shell (~265 dims)
+### Per shell (288 dims)
 
-| group | source | dims |
-|---|---|---|
-| `action` histogram | `vocab.ACTIONS` — genuinely closed | 22 + 1 other |
-| `artifact` histogram | `vocab.ARTIFACT_EXT` keys + `code` + `chart` | 13 + 1 |
-| `lang` histogram | distinct values of `vocab.EXT_LANG` | 37 + 1 |
-| `toolchain` histogram | `vocab.TOOLCHAIN_EXE` keys | 8 + 1 |
-| `tool` histogram | `vocab.TOOL_ACTION` keys + one `mcp:*` bucket | 21 + 2 |
-| `vcs`, `model` family | git / reported-unverifiable / other; opus / sonnet / haiku / fable / synthetic / other | 3 + 6 |
-| **shape stats, all 25 levels** | `log1p(evidence)`, `n_distinct`, `top1_share`, `top3_mass`, `norm_entropy` | 125 |
-| effort + magnitudes | see below | 22 |
+⚠️ **The heading said `~265` and the table below summed to 263. Both were wrong, and the shipped
+number is 288** (`features.MANIFEST`, `FEATURE_SPEC_VERSION` 2). The `dims` column is corrected in
+place; what each row USED to claim is in the last column, because an estimate that was off by a
+handful is exactly the kind of thing someone re-derives from the prose rather than from the code.
+
+| group | source | dims | was |
+|---|---|---|---|
+| `action` histogram | `vocab.ACTIONS` — genuinely closed | 22 + 1 other | 22 + 1 |
+| `artifact` histogram | `vocab.ARTIFACT_EXT` keys + `code` + `chart` | 13 + 1 | 13 + 1 |
+| `lang` histogram | distinct values of `vocab.EXT_LANG` | 37 + 1 | 37 + 1 |
+| `toolchain` histogram | `vocab.TOOLCHAIN_EXE` keys | 8 + 1 | 8 + 1 |
+| `tool` histogram | `vocab.TOOL_ACTION` keys + one `mcp` bucket + other | 20 + 2 | 21 + 2 |
+| `vcs`, `model` family | git / reported-unverifiable / **none / unknown** / other; opus / sonnet / haiku / fable / synthetic / other | 5 + 6 | 3 + 6 |
+| **shape stats, all 25 levels** | `log1p(evidence)`, `n_distinct`, `top1_share`, `top3_mass`, `norm_entropy` | 125 | 125 |
+| effort + magnitudes | see below | 25 | 22 |
+| **text scalars** | 3 streams × (`n`, `dispersion`, `drift`, `novelty`, and a `_known` flag for each of the three) | 21 | — |
 
 **The shape stats are how the OPEN levels contribute without publishing identity.** `file`, `dir`,
 `component`, `exe`, `verb`, `term`, `skill`, `branch`, `workspace`, `service` have unbounded
@@ -116,25 +158,60 @@ One-hot is impossible, and hashing them would publish a fingerprint of the ident
 statistics say how concentrated and how varied the level was, which is what a model can use, and
 carry no value string at all.
 
-The effort group, with the newly-wired rows marked NEW:
+The effort group **as shipped** (25 slots), with the newly-wired rows marked NEW. Three names in
+the original listing did not survive contact with the data and are called out rather than quietly
+swapped:
 
-    request_tokens (price-weighted), edit_bytes, authoring_turns
+    request_tokens (price-weighted), edit_bytes, authoring_turns, cost_recorded
     NEW tok:   out, in_fresh, in_cached, cache_ratio = in_cached/(in_cached+in_fresh)
-    NEW say:   user_chars, user_echo_chars, asst_chars, asst_think_chars, think_ratio
-    NEW tool:  error_count, error_rate, result_bytes_total, result_bytes_p90
+    NEW say:   user_chars, user_echo_chars, asst_chars, asst_think_blocks, think_turn_share
+    NEW tool:  errors, error_rate, result_chars
     tempo:     fast_share, n_gaps, gap_p50_s, gap_p90_s
-    counts:    turns, human_prompts, tool_calls
+    counts:    turns, human_prompts, tool_calls, coverage, minutes
 
-### Once per row (89 dims)
+⚠️ **`asst_think_chars` is not in the data and no toggle changes that**, so the slot is
+`say_asst_think_blocks` — a COUNT. Every thinking block a platform writes carries a signature and
+an EMPTY `thinking` string (9,148 measured in `text.think_blocks`, re-measured 7,648, and 9,144
+again over the 40 largest local transcripts — 0 of non-zero length in all three). A length slot
+would have been a permanent zero presented as a measurement. `result_bytes_p90` was dropped for the
+same class of reason — one `result_chars` total carries the signal and a p90 over a handful of
+calls per shell is noise — and `cost_recorded`, `coverage` and `minutes` were added: the first
+because ABSENT IS NOT ZERO (a store ingested with `KELD_CAPTURE` off has no cost rows at all, and
+a model must be able to tell that from a quiet shell), and `coverage`/`minutes` because a shell
+clamped by the session's start is SHORTER than its nominal span and nothing else in the vector says
+so — without them a young session's outer shells read as four hours of silence. Note `coverage` is
+per SHELL here, not the single row-level "shell coverage" slot the positional group listed below.
 
-| group | dims |
-|---|---|
-| `dynamics` — 4 kept dimensions × (`turnover`, `decay`, `concentration_shift`, `changed` as 2, `status` one-hot 6, `reading` one-hot 7) | 68 |
-| `prior` — 4 dimensions × (`agrees`, `departure`, `novel`) | 12 |
-| positional — hour sin/cos, weekday sin/cos, `log(session age)`, `log(gap since last turn)`, shell coverage, block position | 9 |
+### Once per row (94 dims)
 
-**5 × 265 + 89 = 1,414 dims.** int8-quantised (nearly everything is a share in `[0,1]`) that is
-1.4 KB per row.
+| group | dims | was |
+|---|---|---|
+| `dynamics` — 4 kept dimensions × (`turnover`, `decay`, `concentration_shift`, `changed` as 2, `status` one-hot 6, `reading` one-hot 7) | 72 | 68 |
+| `prior` — 4 dimensions × (`agrees`, `departure`, `novel`) | 12 | 12 |
+| positional — hour sin/cos, weekday sin/cos, `log(session age)`, `log(gap since last turn)`, `in_block`, `block_position` | 8 | 9 |
+| `meta` — `capture_recorded`, `text_recorded` | 2 | — |
+
+⚠️ **`dynamics` was 68 here and it is 72: the row's own parenthetical enumerates 18 slots per
+dimension (3 + 2 + 6 + 7) and 4 × 18 = 72.** The claim was a mis-multiplication, not a design
+change, and it is called out rather than silently fixed because a reader who trusted the total
+would conclude the shipped vector had four dimensions they could not find. Positional lost one
+slot the other way: "shell coverage" is per-SHELL effort (above), so the row-level group is 8.
+
+**5 × 288 + 94 = 1,534 dims** (`features.DIMS`, asserted against `MANIFEST` at import so a
+producer/manifest drift can never be silent). int8-quantised that is 1.5 KB per row.
+
+⚠️ **The published width is 1,534 whether or not `KELD_TEXTEMBED` is on.** The per-shell text
+scalars (105) and `row.meta.text_recorded` (1) are present regardless — 1,428 was the width before
+they existed, and the same arithmetic gives it: `5 × 267 + 93`. Making them conditional would make
+`DIMS` a function of one machine's configuration, so index `i` would mean different things in
+different rows of one corpus, which is the incoherent-corpus failure invariant 1 below is entirely
+about. **ABSENT IS NOT ZERO** is answered by `text_recorded` and the per-scalar `_known` flags, not
+by a narrower vector.
+
+⚠️ **`FEATURE_SPEC_VERSION` is 2, and the history is: 1,414 (this spec's arithmetic, wrong) →
+1,428 (spec version 1, the arithmetic corrected against `MANIFEST`) → 1,534 (spec version 2, the
+text scalars).** `SPEC_SHA` — a digest of the ordered manifest — rides every payload beside the
+version, so a slot that moves is detectable at Keld even if nobody bumps anything.
 
 ### Three invariants of the spec itself
 
@@ -169,6 +246,40 @@ Three reasons, each independently sufficient:
    Encoding per message means **each message is encoded once, ever**, and every shell of every row
    containing it reuses that vector. Amortised cost is one forward pass per message: ~100/day.
 
+### ⚠️ Encoding runs OFF THE REQUEST, behind a cached source and a frontier
+
+**This spec said embedding runs "at block close, in the sidecar", which reads as synchronous inside
+the call that needs the vectors. That cannot work, and it was refuted by measurement, not by
+taste.** The daemon's sidecar client has a **5-second** HTTP timeout (`daemon.go`, sized for
+enrichment inference). One measured batch of 64 real messages from a 26 MB transcript costs
+**~92 s**, plus **~90 s** for the child's first model load; even four messages is ~6 s. So no batch
+size worth having lands inside one call. And the failure would not have been one slow response: a
+timed-out POST is a transport error, which `Client.post` classes as **retryable**, so the shipped
+consequence of the original reading is an unbounded retry loop against work that can never finish
+in time — the amplification `KELD_ENRICH_PASS_TIMEOUT` was introduced to kill one layer up.
+
+What shipped instead (`analysis/featuretext.py`):
+
+1. **A process-wide cached `TextSource`.** Vectors are memoised per `(session, turn id, stream,
+   block ordinal)` for the process's life, so a message is encoded once ever and every shell of
+   every row reuses it. The cache is the cost model, not an optimisation: uncached, a session with
+   `n` messages costs `O(n)` forward passes per CALL. Deliberately **not persisted** — a vector on
+   disk is a vector at rest derived from message text.
+2. **A single background pass.** `vectors()` serves what the cache holds and hands the remainder to
+   one daemon thread, oldest first, bounded by `KELD_TEXTEMBED_MAX_ENCODE` (64). Nothing on the
+   request path ever waits: calls return in **0.40–0.44 s**.
+3. **A frontier.** The instant of the first message with no vector is returned, and **no row at or
+   after it is emitted** — bin and block rows included, not just message rows. That is what makes
+   every published row's text half a measurement over a COMPLETE message history up to its own
+   instant. The frontier retreats call by call as the worker catches up, so a long session is many
+   cheap calls rather than one that cannot succeed.
+4. **`pending:encoding` as a stated status.** Neither `ok` nor `empty` nor degraded; without a name
+   for it a caller reads a partial answer as a complete one.
+
+⚠️ A **degraded** encoder returns NO frontier and drops the text half whole. A frontier says "the
+history is complete up to here"; with the encoder down that is not what happened, and returning one
+would hold every row back on a failure that is supposed to cost only the text half.
+
 ### Streams, encoder, derived scalars
 
 **Three streams, kept separate and never concatenated** — they are different registers, and mixing
@@ -176,11 +287,18 @@ them averages away the distinction:
 
 - `user` — the human's own words. Smallest volume, highest density.
 - `asst` — assistant prose, excluding thinking and excluding tool results.
-- `think` — `think_blocks` content. Largest volume, and where the reasoning is.
+- `think` — `think_blocks` content. ⚠️ Expected to be the largest volume; measured **EMPTY**. Every
+  thinking block a platform writes carries a signature and an empty `thinking` string (0 of
+  non-zero length across three measurements, up to 9,148 blocks). The stream is wired and reports
+  `skipped:empty` as a stated outcome; a producer that starts writing thinking text populates it
+  with no code change. Do not plan around it carrying the reasoning.
 
-**Encoder: Qwen3-Embedding-0.6B, 1024-d.** Chosen over EmbeddingGemma-300M now that RAM is not
-binding: it is the stronger model, MRL-truncatable, and at a duty cycle below 0.3% the 2× latency
-does not matter, while vector quality compounds across the whole corpus. EmbeddingGemma-300M @ 256-d
+**Encoder: Qwen3-Embedding-0.6B, 1024-d, bfloat16.** Chosen over EmbeddingGemma-300M now that RAM is
+not binding: it is the stronger model, MRL-truncatable, and the latency is paid off the request (see
+above) rather than inside one, while vector quality compounds across the whole corpus.
+⚠️ **bf16 is measured on both axes and is not a latency trade**: on 200 real messages at 2 threads,
+float32 costs **3,113 MB / 804.0 ms per message** and bfloat16 **1,673 MB (1,813 peak) /
+766.2 ms** — 1,313 MB cheaper and marginally FASTER. EmbeddingGemma-300M @ 256-d
 is the fallback if the measurement below comes back badly. **Not a generative LLM's hidden states** —
 a decoder's last-token state is a poor sentence embedding without contrastive tuning and costs more;
 the GGUF models already on hand would be a downgrade for this specific job.
@@ -288,14 +406,22 @@ Per-message rows, per-bin rows and per-block rows, batched and spooled — the `
 mechanism, not a new one: bounded buffer, periodic flush, `internal/retry`, drop-oldest spool under
 `~/.keld/spool/`.
 
-Volume, int8-quantised, per user per active day:
+⚠️ **The sidecar publishes NOTHING. `POST /features` computes and returns; the daemon's emitter
+(`internal/agent/features`) owns the cursor, the batching and the wire** — the split this section
+assumed but did not state, and the reason the route's answer carries `watermark` and
+`text_frontier` at all. The cursor contract is under *Anchors* above; the study entry point with
+caller-supplied anchor instants is `POST /features/probe`, which has no cursor and no text half.
+
+Volume, int8-quantised, per user per active day (bin/block widths corrected to the shipped 1,534):
 
 | | rows | bytes |
 |---|---|---|
 | message vectors (3 streams, MRL-truncated to 256-d) | ~100 | ~77 KB |
-| bin rows (1,414 dims) | ~72 | ~101 KB |
-| block rows | ~18 | ~25 KB |
-| | | **~200 KB/day, ~50 MB/user/year** |
+| bin rows (1,534 dims) | ~72 | ~110 KB |
+| block rows | ~18 | ~28 KB |
+| | | **~215 KB/day, ~54 MB/user/year** |
+
+(The year figure is ~250 ACTIVE days, not 365 — the same basis the original ~50 MB used.)
 
 Nothing here rides `Enrichment` or `BlockEnrichment`. It is its own row type under its own
 correlation scheme, for the same reason the block row needed one: Atlas keys enrichments
@@ -304,15 +430,16 @@ column, so sharing a scheme overwrites rather than dedups.
 
 ## Toggles
 
-Three, each a `KELD_*` env / `agent-config.json` value with an Atlas per-org override riding the
+⚠️ **FOUR, not three** — each a `KELD_*` env / `agent-config.json` value with an Atlas per-org override riding the
 existing `/v1/enrichment-settings` poll — the `client_telemetry` precedent, remote overrides local,
 non-fatal if Atlas is unreachable.
 
 | toggle | governs | flipping it |
 |---|---|---|
-| `capture` | the extra ingest rows (`say`, `tok`, tool outcome, `bin_offset`) | ⚠️ **fingerprinted into `parse_state`; a change forces a reparse.** Without this a store silently holds two incomparable populations — the exact trap `ingest.terms_mode` exists for. |
-| `features` | computing and storing the vectors locally | free either way |
-| `publish` | sending them to Atlas | free either way |
+| `capture` (`KELD_CAPTURE`) | the extra ingest rows (`say`, `tok`, tool outcome, `bin_offset`) | ⚠️ **fingerprinted into `parse_state`; a change forces a reparse.** Without this a store silently holds two incomparable populations — the exact trap `ingest.terms_mode` exists for. ⚠️ It has NO org override, deliberately: a control-plane poll must not be able to trigger a whole-corpus reparse. |
+| `features` (`KELD_FEATURES`) | computing and storing the vectors locally | free either way |
+| `publish` (`KELD_FEATURES_PUBLISH`) | sending them to Atlas | free either way |
+| **`text` (`KELD_TEXTEMBED`)** | ⚠️ **a FOURTH toggle this section did not anticipate** — the text half: the encoder child, the per-message vectors, and the text scalars' VALUES | free either way, and separable for the reason the others are: the vector's WIDTH does not depend on it (see *Once per row*), so a corpus collected with it off is poolable with one collected with it on. Only `features`/`publish` have org overrides. |
 
 Separating `capture` is what makes the other two free: turning publishing off must not cost a full
 reparse to turn back on.
@@ -337,14 +464,14 @@ The constraint is explicit: **data collection must not affect the end user's exp
 
 | risk | control |
 |---|---|
-| ingest hot path | untouched. Embedding runs at block close, in the sidecar. The watcher poll loop — which carries every hook-free prompt — never waits on it. |
+| ingest hot path | untouched. Embedding runs in the sidecar, on a background pass behind a cached source and a frontier — **not** "at block close", which would have meant inside the request; see the correction under *Text vectors*. The watcher poll loop — which carries every hook-free prompt — never waits on it, and neither does `/features`, which returns in **0.40–0.44 s**. |
 | file re-reads | `bin_offset`. O(block), not O(file). |
 | CPU | rides the **existing** `governor.py` CPU-EWMA pacing and `cpuscale.py` thread cap (~50% of cores under host load). No second load-protection mechanism is built. |
 | concurrency | the existing single-flight runner. Never fan out. |
-| duty cycle | a block closes ~every 20 min; ~30 messages batched at 20–50 ms ≈ 0.6–1.5 s per block. **Below 0.3%**, and paced. |
-| RAM | the encoder runs in **its own worker child**, not the FastAPI parent — recyclable, idle-unloadable, and never loaded at all when `features` is off. |
+| duty cycle | ⚠️ **"20–50 ms per message" was an estimate and it was out by a factor of ~20.** Measured: **766 ms/message** (bf16, 200 real messages, 2 threads) and **~1.44 s/message** on a loaded host encoding a real 26 MB transcript. The CONCLUSION survives the correction, recomputed: at the amortised ~100 messages/day the encoder burns 77–144 s of a 86,400 s day, i.e. **0.09–0.17%** — still below 0.3%, and paced by the existing governor. What does NOT survive is the per-block arithmetic in this row: 30 messages is **~43 s inside a 1,200 s block (3.6%)**, not 0.6–1.5 s, and the first call on an existing session encodes its whole history — measured **~40 minutes for 1,646 messages**, once. That is why the work is bounded per pass (`KELD_TEXTEMBED_MAX_ENCODE`) and held off the request by the frontier rather than merely being "small". |
+| RAM | the encoder runs in **its own child**, not the FastAPI parent — idle-unloadable (`KELD_TEXTEMBED_IDLE_UNLOAD_S`), never spawned at all when the toggle is off. ⚠️ **~1.9 GB resident, measured**, against a budget `worker_manager` already reports as oversubscribed by 444.6 MB; the parent was never an option because `parent_reserve_mb()` is a high-water LATCH, so anything resident there permanently shrinks the inference worker's hard limit. |
 | backlog | a machine with many closed blocks caps per-sweep work and drains. Bounded and coalescing, the shape `daemon/ingestsignal.go` already uses. Never a herd. |
-| proof | not asserted. The embedder joins `sidecar/loadtest/`'s smoke arm; `/metrics` gains an `embed` block (p50/p90 per block, RSS, queue depth) beside `worker` and `store`. |
+| proof | not asserted. `/metrics` **has** the `embed` block beside `worker` and `store`: child state + stated status, live RSS **and `peak_rss_mb`**, weights presence, encoder identity and published width, the backlog behind the frontier + whether a pass is running, cache size, and the encode/spawn/idle-unload counters. ⚠️ **The peak is the field that mattered** — this repo's RSS-oscillation incident is on record as an instantaneous sample making a worker oscillating 2,715 → 5,692 MB against a 3,409 MB ceiling look healthy, and a second ~1.9 GB child with no peak would have been the same mistake twice. "p50/p90 per block" did NOT ship and should not: encoding is no longer per block, so the percentile has no unit. The loadtest arm is still outstanding. |
 
 ## The label side (`y`)
 
