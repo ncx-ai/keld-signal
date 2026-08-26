@@ -420,6 +420,25 @@ CREATE TABLE IF NOT EXISTS prompt (
 -- names. A consumer reading `[offset(a), offset(b))` must therefore order its two ends rather
 -- than assume them.
 --
+-- ⚠️ AND ORDERING THE ENDS IS NOT ENOUGH -- A CONSUMER NEEDS ITS OWN SPAN CAP. This is the
+-- sentence to read before writing the first consumer, because the failure is silent and does
+-- not reproduce on typical data. Ordering fixes the sign of `offset(b) - offset(a)`; it does
+-- nothing about the MAGNITUDE. Measured over the same 40 transcripts, the seven out-of-order
+-- pairs imply ordered-read spans of 4.84 MB, 60 KB, 59 KB, 22 KB, 13 KB and two smaller: six
+-- are noise and ONE is 100x the intended read. The 4.84 MB case is `129e9a80`, bin
+-- 1786494000, anchored at 5,307,336 against a next bin at 471,652 -- a `queue-operation`
+-- record at line 39 of the file carrying a timestamp from hours later. So a bounded scan
+-- derived from two anchors is bounded only in the sense that the file is finite. Read at most
+-- a fixed budget of bytes, or stop at the first line whose own timestamp leaves the bin;
+-- either way the cap belongs in the consumer, which is the only code that knows what "too
+-- much" means for what it is doing.
+--
+-- ⚠️ DO NOT "FIX" THIS BY ENFORCING MONOTONICITY ON WRITE. It is the obvious repair and it is
+-- strictly worse than the defect: refusing an offset below the previous bin's would push the
+-- anchor PAST the line it names, turning an over-read that costs time into an under-read that
+-- silently drops messages. An expensive right answer beats a cheap wrong one, and this store's
+-- whole contract is that a tail parse equals a full parse.
+--
 -- ~12 rows per active hour. No text: a bin timestamp and a byte position.
 CREATE TABLE IF NOT EXISTS bin_offset (
   session  TEXT    NOT NULL,

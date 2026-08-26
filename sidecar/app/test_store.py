@@ -771,6 +771,34 @@ def test_bin_offset_keeps_the_smallest_and_survives_replay():
         st.close()
 
 
+def test_bin_offset_does_not_clamp_a_later_bin_to_an_earlier_ones_offset():
+    """A NON-MONOTONE pair survives storage, because the transcript itself is non-monotone.
+
+    ⚠️ This test exists to fail the "obvious" repair. Real transcripts carry records whose
+    timestamp precedes their file position -- measured, 7 adjacent bin pairs across the 40
+    largest local transcripts, one of them anchoring a bin 4.84 MB above its successor (a
+    `queue-operation` record at line 39 carrying a timestamp from hours later). Seeing that, the
+    natural instinct is to refuse an offset below the previous bin's and call the map monotone.
+
+    That is strictly worse than the defect. Clamping moves the anchor PAST the line it names, so
+    a bounded read starting there silently DROPS the bin's first messages -- an over-read that
+    costs time becomes an under-read that loses data, and nothing reports it. The store's
+    standing contract is that a tail parse equals a full parse; a clamp breaks it invisibly.
+
+    The right bound is a span cap in the CONSUMER, which is the only code that knows what "too
+    much" means for what it is doing. See the `bin_offset` DDL comment.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        # Bin 2000 is LATER in time and EARLIER in the file than bin 1000 -- the shape measured
+        # above, in miniature.
+        st.upsert_bin_offsets(SESSION, {1000: 5_307_336, 2000: 471_652})
+        assert st.bin_offset(SESSION, 2000) == 471_652, \
+            "a later bin's own offset must be stored as measured, never raised to its predecessor's"
+        assert st.bin_offset(SESSION, 1000) == 5_307_336, "and the earlier bin must not be lowered"
+        st.close()
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
