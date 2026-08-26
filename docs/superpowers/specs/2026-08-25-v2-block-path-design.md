@@ -43,13 +43,26 @@ So the daemon ends up with two independent producers:
 
 The only genuinely new concept. A block may be emitted once nothing can still change it:
 
-    closed(b)  ==  b.end <= watermark            # the store has ingested the whole span
-               and now - last_activity >= IDLE   # no later turn can extend or reopen it
+    closed(b)  ==  b.end <= watermark                      # the store has ingested the whole span
+               and ( activity exists after b.end           # something later proves b.end is real
+                     or now - b.end >= IDLE_SECONDS )      # or enough silence has settled it
 
-The second clause is the whole of it. A `budget` cut is final the moment it is reached — later
-activity starts a NEW block and cannot alter this one. The only block that can still move is the
-LAST one of a live session, which keeps growing until silence settles it. Waiting one idle threshold
-past the last activity settles that case and no other.
+⚠️ **The disjunction is load-bearing and an earlier draft got it wrong.** That draft required
+`now - last_activity >= IDLE` for EVERY block, which would emit nothing at all during an active
+session — a full working day would produce its first block only after the person stopped. Blocks
+must close continuously as work moves past them.
+
+The reasoning: a `budget` or `idle` cut is final the moment it is reached, because later activity
+starts a NEW block and cannot alter this one. So any block with activity after it is settled
+immediately. The ONLY provisional block is the trailing one, whose end is "where the data currently
+stops" rather than a real boundary — and one idle threshold of silence settles that.
+
+**Latency, stated because the UI depends on it:** a block is emitted at most
+`IDLE_SECONDS + emitter interval` after its own end for the trailing case, and roughly one emitter
+interval in the common case. Mid-session blocks are NOT delayed by the idle wait.
+
+**Emission is idempotent.** A block's identity is `(session, block.start)`, deterministic and
+immutable. Re-emitting is an upsert, so a crash mid-batch costs nothing.
 
 ⚠️ **This replaces the tick's frontier, and it is much weaker on purpose.** The frontier had to
 reason about which FUTURE PROMPTS might sweep over a moment, because a prompt's window reached
@@ -57,8 +70,26 @@ backwards. A block reaches nowhere: it is a span with a determined end. Nothing 
 Do not port `frontier()` / `tail_closed()` into this path — they solve a problem this model does not
 have.
 
-**Emission is idempotent.** A block's identity is `(session, block.start)`, deterministic and
-immutable. Re-emitting is an upsert, so a crash mid-batch costs nothing.
+## ⚠️ RAW ACTIVITY KEEPS ARRIVING LIVE. Blocks are a LATER LAYER ON TOP.
+
+Telemetry and enrichment are separate lanes and always have been: the hook posts usage telemetry
+straight to Atlas with no daemon involvement, so tool events and token usage appear in the app as
+they happen. **Nothing in this design may delay that, and nothing may make the app wait for a block
+before showing work.**
+
+The consequence is that the timeline has a permanently uncharacterised leading edge — the most
+recent stretch, up to one idle threshold plus an emitter interval, always has activity with no block
+attached yet. That is inherent, not a defect.
+
+Three requirements follow, and they belong to Atlas as much as here:
+
+1. **Live activity renders with no block.** The app shows the work as it arrives, unlabelled.
+2. **A block attaches RETROACTIVELY** to activity already on screen, when it arrives. This is why
+   the join matters: a block row must be attachable to rows the app has already drawn.
+3. **"Not characterised yet" must be visually distinct from "characterised, found nothing."** Same
+   principle as `thin` versus `absent` on a dimension: never let not-yet-known render as
+   known-to-be-nothing. A pending leading edge that looks like an empty one tells the reader their
+   last half hour was idle when it was the busiest part of the day.
 
 ## Module layout
 
