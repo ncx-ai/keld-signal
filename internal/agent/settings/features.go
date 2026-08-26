@@ -37,3 +37,17 @@ const (
 	FeaturesEnv        = "KELD_FEATURES"
 	FeaturesPublishEnv = "KELD_FEATURES_PUBLISH"
 )
+
+// FeaturesLocalEnabled resolves the `features` toggle's LOCAL precedence only
+// (KELD_FEATURES > agent-config.json > off) — the same computation NewLive
+// folds into Live.base, exposed standalone for a caller that has no running
+// daemon to ask (a diagnostic command reading settings.Load() directly).
+//
+// ⚠️ It cannot see an org's remote override: that only exists inside a running
+// daemon's Live.eff, is never persisted, and there is no channel today that
+// hands it to an out-of-process reader. A machine an org just switched on
+// remotely reads as "off" here until the next restart. That is the safe
+// direction to be wrong in for a diagnostic whose standing risk is nagging
+// about a model nobody needs (see AGENTS.md) — undercounting costs a missed
+// heads-up, overcounting costs a permanent false problem line.
+func (s Settings) FeaturesLocalEnabled() bool { return featuresEnvBool(FeaturesEnv, s.Features) }
