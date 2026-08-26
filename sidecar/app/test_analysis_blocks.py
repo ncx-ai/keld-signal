@@ -285,6 +285,157 @@ def test_the_live_analyze_path_selects_a_block_from_this_module_and_never_reform
     assert _block_at(st, S, gap) is None
 
 
+# --- covers: the episode <-> block mapping -----------------------------------------------------
+#
+# `covers` is PURE -- blocks in, prompts in, lists out -- so these tests build `Block`s directly
+# rather than cutting a store. That is not a shortcut: the function reads nothing but `.start` and
+# `.end`, and a fixture that went through `cut` would test the cutter's arithmetic a second time
+# while making the episode geometry (the thing under test) harder to read off the page. The one
+# case where the SHAPE of a real cut matters -- an idle gap -- goes through `cut` as well, below.
+
+def _bl(start, end):
+    """A block with the two fields `covers` reads. Reasons are filler: the mapping is geometry."""
+    return blocks.Block(float(start), float(end), "session_start", "session_end")
+
+
+def test_covers_takes_prompts_from_the_caller_and_cannot_query_the_store():
+    """The seam, pinned. The store's `prompt` index holds every user- AND assistant-shaped turn --
+    ~260 rows for one real session's 14 human prompts -- so a `covers` that resolved its own
+    prompts would attribute the agent's turns as episodes and swallow the session. The daemon owns
+    the human-prompt filter (`internal/agent/watch/filter.go`); `tick()` already takes `prompt_ts`
+    for exactly this reason.
+
+    Two assertions, because either alone rots: the signature cannot accept a store, and the
+    function body issues no query. A future edit that added `store` back would have to delete a
+    test rather than merely fail to notice.
+    """
+    import inspect
+    assert list(inspect.signature(blocks.covers).parameters) == ["blocks", "prompts"]
+    src = inspect.getsource(blocks.covers)
+    body = src.split('"""')[-1]
+    for banned in ("store", "SELECT", "_conn"):
+        assert banned not in body, "covers reaches for the store: %r" % banned
+
+
+def test_one_episode_inside_one_block_is_complete_there_and_absent_elsewhere():
+    """Case 1. `p1`'s episode opens at 100 and closes at 300, both inside block 1, so block 1
+    holds it whole and marks it complete -- and block 2, which it never reaches, does not list it.
+    """
+    bl = [_bl(0, 600), _bl(600, 1200)]
+    got = blocks.covers(bl, [("p1", 100.0), ("p2", 300.0)])
+    assert got[0][0] == {"prompt_id": "p1", "from": 100.0, "to": 300.0, "complete": True}, got[0]
+    assert [e["prompt_id"] for e in got[1]] == ["p2"], got[1]
+
+
+def test_an_episode_spanning_three_blocks_is_clipped_to_each_and_completes_in_the_last():
+    """Case 2, and the numbers are asserted rather than the count.
+
+    A test that only counted entries would pass with the clipping broken -- the failure mode is a
+    `from`/`to` carrying the EPISODE's own bounds in every block, which renders as three identical
+    full-width bars instead of a run that starts mid-block-1 and ends mid-block-3.
+
+    The middle block's segment must equal that block's own span EXACTLY: the episode covers all of
+    it, so both edges are clipped and neither is the episode's.
+    """
+    bl = [_bl(0, 600), _bl(600, 1200), _bl(1200, 1800)]
+    got = blocks.covers(bl, [("p1", 300.0), ("p2", 1500.0)])
+
+    assert got[0] == [{"prompt_id": "p1", "from": 300.0, "to": 600.0, "complete": False}], got[0]
+    assert got[1] == [{"prompt_id": "p1", "from": 600.0, "to": 1200.0, "complete": False}], got[1]
+    assert got[2][0] == {"prompt_id": "p1", "from": 1200.0, "to": 1500.0, "complete": True}, got[2]
+    # The middle segment IS the block, edge to edge.
+    assert (got[1][0]["from"], got[1][0]["to"]) == (bl[1].start, bl[1].end)
+    assert [e["complete"] for e in (got[0][0], got[1][0], got[2][0])] == [False, False, True]
+
+
+def test_a_prompt_in_an_idle_gap_covers_the_next_block_and_the_gap_gets_nothing():
+    """Case 3, over a REAL cut so the gap's shape is the shipped cutter's own.
+
+    Blocks do not tile the span, so an episode can run across dead air. Two things must hold and
+    the second is the one a naive implementation breaks: the episode is not lost (it still covers
+    the block after the gap), and no part of the gap is attributed to any block -- every emitted
+    `[from, to)` lies inside the block that emitted it.
+    """
+    st = _store([_ev(i * 60.0) for i in range(10)]
+                + [_ev(3600.0 + i * 60.0) for i in range(10)])
+    lo, hi = _bounds(st)
+    bl = blocks.cut(st, S, lo, hi)
+    assert [(b.start, b.end) for b in bl] == [(0.0, 600.0), (3600.0, 4200.0)], bl
+
+    gap_prompt = 1800.0                                   # squarely in the dead air
+    assert not any(b.start <= gap_prompt < b.end for b in bl), "premise: the prompt is in the gap"
+    got = blocks.covers(bl, [("before", 100.0), ("in_gap", gap_prompt)])
+
+    # `before`'s episode ends in the gap, so block 1 shows a run that did not finish there.
+    assert got[0] == [{"prompt_id": "before", "from": 100.0, "to": 600.0, "complete": False}]
+    # `in_gap` is in no block, but its episode reaches the block after the gap and is complete
+    # there -- the last episode runs to the end of the last block.
+    assert got[1] == [{"prompt_id": "in_gap", "from": 3600.0, "to": 4200.0, "complete": True}]
+    # Nothing is attributed to the silence.
+    for b, entries in zip(bl, got):
+        for e in entries:
+            assert b.start <= e["from"] < e["to"] <= b.end, (b, e)
+
+
+def test_a_block_with_no_overlapping_episode_gets_an_empty_list():
+    """Case 4: pure agent activity before the first human prompt. An empty list, not a missing
+    entry and not the nearest episode reached for."""
+    bl = [_bl(0, 600), _bl(600, 1200)]
+    got = blocks.covers(bl, [("p1", 700.0)])
+    assert got[0] == []
+    assert [e["prompt_id"] for e in got[1]] == ["p1"]
+
+
+def test_zero_prompts_gives_every_block_an_empty_list():
+    """Case 5. Parallel to `blocks`, one empty list each -- not `[]`, which would break the
+    positional correspondence a consumer zips on."""
+    bl = [_bl(0, 600), _bl(600, 1200), _bl(1800, 2400)]
+    assert blocks.covers(bl, []) == [[], [], []]
+    # And no blocks at all is an empty result, not a crash on `blocks[-1]`.
+    assert blocks.covers([], [("p1", 10.0)]) == []
+    assert blocks.covers([], []) == []
+
+
+def test_a_prompt_before_the_first_block_still_covers_it():
+    """Case 6. The episode opens before any block exists -- the prompt landed in dead air, or
+    before the requested span -- and the block clips it to its own start rather than dropping it.
+    """
+    bl = [_bl(1000, 1600)]
+    got = blocks.covers(bl, [("early", 400.0)])
+    assert got[0] == [{"prompt_id": "early", "from": 1000.0, "to": 1600.0, "complete": True}]
+
+    # ... and an episode that both opens AND closes before the first block reaches nothing:
+    # `early` now ends at `also_early`'s prompt, 500s before any block starts.
+    got2 = blocks.covers(bl, [("early", 400.0), ("also_early", 500.0)])
+    assert got2[0] == [{"prompt_id": "also_early", "from": 1000.0, "to": 1600.0,
+                        "complete": True}], got2[0]
+
+
+def test_two_prompts_in_one_block_partition_its_covered_part():
+    """Case 7, numbers asserted. Ordered, abutting, non-overlapping, and together exactly the
+    part of the block from the first prompt to the block's end -- the leading stretch before the
+    first prompt belongs to no episode and must NOT be back-filled onto it."""
+    bl = [_bl(0, 1200)]
+    got = blocks.covers(bl, [("p1", 200.0), ("p2", 500.0)])
+    assert got[0] == [{"prompt_id": "p1", "from": 200.0, "to": 500.0, "complete": True},
+                      {"prompt_id": "p2", "from": 500.0, "to": 1200.0, "complete": True}], got[0]
+    # abutting and non-overlapping
+    assert got[0][0]["to"] == got[0][1]["from"]
+    # and the union is [first prompt, block end), not [block start, block end)
+    assert (got[0][0]["from"], got[0][-1]["to"]) == (200.0, 1200.0)
+
+
+def test_the_entry_shape_is_the_contract():
+    """Four keys, exactly, with the contract's own names and types. `from` is a Python keyword,
+    which is why an entry is a dict and not a namedtuple."""
+    got = blocks.covers([_bl(0, 600)], [("p1", 100.0)])
+    (e,) = got[0]
+    assert set(e) == {"prompt_id", "from", "to", "complete"}, e
+    assert isinstance(e["prompt_id"], str)
+    assert isinstance(e["from"], float) and isinstance(e["to"], float)
+    assert isinstance(e["complete"], bool)
+
+
 if __name__ == "__main__":
     fns = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     bad = 0
