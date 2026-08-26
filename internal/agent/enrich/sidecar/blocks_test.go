@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,13 +34,6 @@ func oneBlock(evidence int, startReason, endReason string) map[string]any {
 		"end_reason":    endReason,
 		"block_minutes": 20.0,
 		"evidence":      evidence,
-		"covers": []any{
-			map[string]any{"prompt_id": "p1", "from": 1000.0, "to": 1500.0, "complete": true},
-			// Zero-width: covers no time, so it names no episode.
-			map[string]any{"prompt_id": "p2", "from": 1500.0, "to": 1500.0, "complete": false},
-			// No id at all: names no prompt.
-			map[string]any{"prompt_id": "", "from": 1600.0, "to": 1900.0, "complete": true},
-		},
 		"workstreams": map[string]any{
 			"branch": map[string]any{"value": "main", "share": 1.0, "status": "attributed", "evidence": 9},
 		},
@@ -49,25 +44,25 @@ func oneBlock(evidence int, startReason, endReason string) map[string]any {
 	}
 }
 
-// The request must carry coordinates, ids and instants — and nothing else. This
-// is the call that would leak prompt text if the emitter ever reached for the
-// text lister instead of the ids one.
-func TestBlocksSendsCoordinatesIDsAndInstantsOnly(t *testing.T) {
+// The request must carry coordinates and instants — and nothing else. Since
+// `covers` was deleted it carries no ids either, so there is no longer any list
+// on this call that a text lister could have filled by mistake.
+func TestBlocksSendsCoordinatesAndInstantsOnly(t *testing.T) {
 	var got map[string]any
 	srv := blocksServer(t, map[string]any{"blocks": []any{}, "watermark": 99.0}, &got)
 	defer srv.Close()
 
 	since := 7.5
-	_, ok := New(srv.URL, 5*time.Second).Blocks("/tmp/t.jsonl", []string{"P1", "P2"}, &since,
+	_, ok := New(srv.URL, 5*time.Second).Blocks("/tmp/t.jsonl", &since,
 		time.Unix(1000, 0), 24, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("Blocks reported failure on a 200")
 	}
-	want := map[string]bool{"path": true, "since_ts": true, "prompts": true, "now": true,
-		"max_blocks": true}
+	want := map[string]bool{"path": true, "since_ts": true, "now": true, "max_blocks": true}
 	for k := range got {
 		if !want[k] {
-			t.Errorf("unexpected key %q — /blocks takes coordinates, ids and instants, never text", k)
+			t.Errorf("unexpected key %q — /blocks takes coordinates and instants, never text "+
+				"and never an id", k)
 		}
 	}
 	if got["path"] != "/tmp/t.jsonl" || got["since_ts"] != 7.5 || got["now"] != 1000.0 ||
@@ -84,14 +79,10 @@ func TestBlocksSendsANullSinceForAFirstCall(t *testing.T) {
 	srv := blocksServer(t, map[string]any{"blocks": []any{}, "watermark": nil}, &got)
 	defer srv.Close()
 
-	New(srv.URL, 5*time.Second).Blocks("/tmp/t.jsonl", nil, nil, time.Unix(1, 0), 0,
+	New(srv.URL, 5*time.Second).Blocks("/tmp/t.jsonl", nil, time.Unix(1, 0), 0,
 		enrich.ResolvedFacts{})
 	if v, ok := got["since_ts"]; !ok || v != nil {
 		t.Fatalf("since_ts = %v, want an explicit null", v)
-	}
-	// An omitted prompt list and an empty one mean the same thing; say so.
-	if ps, ok := got["prompts"].([]any); !ok || len(ps) != 0 {
-		t.Fatalf("prompts = %v, want an explicit empty list", got["prompts"])
 	}
 }
 
@@ -103,7 +94,7 @@ func TestBlocksCharacterisedConvertsThroughTheSameGatesAWindowRowUses(t *testing
 	defer srv.Close()
 
 	got, wm, ok := New(srv.URL, 5*time.Second).BlocksCharacterised("/tmp/t.jsonl", "claude_code",
-		"sess-abc", []string{"p1"}, nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{})
+		"sess-abc", nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{})
 	if !ok || len(got) != 1 {
 		t.Fatalf("got %d blocks ok=%v", len(got), ok)
 	}
@@ -139,13 +130,6 @@ func TestBlocksCharacterisedConvertsThroughTheSameGatesAWindowRowUses(t *testing
 	if len(b.Analysis.NamedTerms) != 1 {
 		t.Errorf("named_terms = %v", b.Analysis.NamedTerms)
 	}
-	// Covers: only the entry that names a prompt AND covers time survives.
-	if len(b.Covers) != 1 || b.Covers[0].PromptID != "p1" || !b.Covers[0].Complete {
-		t.Fatalf("covers = %+v", b.Covers)
-	}
-	if b.Covers[0].From != 1000 || b.Covers[0].To != 1500 {
-		t.Errorf("cover bounds = %v/%v", b.Covers[0].From, b.Covers[0].To)
-	}
 }
 
 // A boundary reason this binary cannot read is version skew from a
@@ -163,7 +147,7 @@ func TestBlocksCharacterisedDropsABlockWithAnUnreadableReason(t *testing.T) {
 	defer srv.Close()
 
 	got, _, ok := New(srv.URL, 5*time.Second).BlocksCharacterised("/t.jsonl", "claude_code",
-		"s", nil, nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{})
+		"s", nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("not ok")
 	}
@@ -185,7 +169,7 @@ func TestBlocksCharacterisedDropsAnEmptyOrSpanlessBlock(t *testing.T) {
 	defer srv.Close()
 
 	got, _, ok := New(srv.URL, 5*time.Second).BlocksCharacterised("/t.jsonl", "claude_code",
-		"s", nil, nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{})
+		"s", nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{})
 	if !ok || len(got) != 0 {
 		t.Fatalf("got %d blocks ok=%v, want none", len(got), ok)
 	}
@@ -199,7 +183,7 @@ func TestBlocksCharacterisedPassesANullWatermarkThrough(t *testing.T) {
 	defer srv.Close()
 
 	_, wm, ok := New(srv.URL, 5*time.Second).BlocksCharacterised("/t.jsonl", "claude_code",
-		"s", nil, nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{})
+		"s", nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{})
 	if !ok {
 		t.Fatal("not ok")
 	}
@@ -214,8 +198,57 @@ func TestBlocksReportsFailureRatherThanAnEmptyAnswer(t *testing.T) {
 	}))
 	defer srv.Close()
 	if _, _, ok := New(srv.URL, 2*time.Second).BlocksCharacterised("/t.jsonl", "claude_code",
-		"s", nil, nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{}); ok {
+		"s", nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{}); ok {
 		t.Fatal("a 403 must not read as a successful empty answer — the emitter would " +
 			"retire the transcript and stop asking")
+	}
+}
+
+// ⚠️ THE REQUEST CARRIES NO PROMPTS AT ALL. `covers` is deleted, so the id list
+// that fed it has nowhere to go — and the honest pin is on the WIRE, because the
+// sidecar's request model tolerates an unknown key silently (pydantic's
+// extra="ignore", which is what lets the two halves ship separately). A Go side
+// that kept sending them would look fine from either end.
+func TestBlocksSendsNoPromptIDsBecauseThereIsNoCoversMapping(t *testing.T) {
+	var got map[string]any
+	srv := blocksServer(t, map[string]any{"blocks": []any{}, "watermark": 99.0}, &got)
+	defer srv.Close()
+
+	since := 7.5
+	if _, ok := New(srv.URL, 5*time.Second).Blocks("/tmp/t.jsonl", &since,
+		time.Unix(1000, 0), 24, enrich.ResolvedFacts{}); !ok {
+		t.Fatal("Blocks reported failure on a 200")
+	}
+	if _, ok := got["prompts"]; ok {
+		t.Errorf("the request still carries `prompts`: %v", got)
+	}
+	for k := range got {
+		if strings.Contains(k, "prompt") {
+			t.Errorf("unexpected prompt-shaped key %q on a /blocks request", k)
+		}
+	}
+}
+
+// A sidecar that still answers with `covers` is version skew, and the Go side
+// must DROP it rather than model it. Pinned on the decoded value: an unknown key
+// in the response is ignored by encoding/json, and this asserts that is the whole
+// of what happens to it.
+func TestABlocksResponseCoversKeyIsDroppedNotModelled(t *testing.T) {
+	b := oneBlock(9, "idle", "budget")
+	b["covers"] = []any{map[string]any{"prompt_id": "p1", "from": 1000.0, "to": 1500.0}}
+	srv := blocksServer(t, map[string]any{"blocks": []any{b}, "watermark": 3000.0}, nil)
+	defer srv.Close()
+
+	got, _, ok := New(srv.URL, 5*time.Second).BlocksCharacterised("/tmp/t.jsonl", "claude_code",
+		"sess-abc", nil, time.Unix(1, 0), 24, enrich.ResolvedFacts{})
+	if !ok || len(got) != 1 {
+		t.Fatalf("got %d blocks ok=%v — a legacy `covers` key must not cost the block", len(got), ok)
+	}
+	rt := reflect.TypeOf(BlockResult{})
+	for i := 0; i < rt.NumField(); i++ {
+		if strings.Contains(strings.ToLower(rt.Field(i).Name), "cover") {
+			t.Errorf("BlockResult.%s: the response's covers key must not be modelled",
+				rt.Field(i).Name)
+		}
 	}
 }

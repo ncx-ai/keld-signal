@@ -10,7 +10,6 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
-	"github.com/ncx-ai/keld-signal/internal/agent/resolve"
 )
 
 // THE V2 BLOCK PATH's daemon wiring. The emitter itself is
@@ -58,10 +57,11 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	// ReadDir chain plus .git/config for every active transcript every interval
 	// is pure waste. Same cache the ticker and the ingest signal use.
 	facts := newFactsCache()
-	// resolve.PromptIDsInRange, not resolve.RecentPromptIDs: the emitter drains
-	// chronologically from a cursor, and the tail-shaped lister left `covers`
-	// empty on every block of a 20 MB transcript. See blocks.PromptIDs.
-	em := blocks.New(dig, pub, resolve.PromptIDsInRange,
+	// NO PROMPT-ID READER: the emitter has no such seam any more. The `covers`
+	// mapping it fed is deleted — a block is time end to end, and the time join
+	// Atlas needs for cost attribution is the same one that answers which turns
+	// ran inside a block. See the blocks package comment.
+	em := blocks.New(dig, pub,
 		func(path string) enrich.ResolvedFacts { return facts.forTranscript(path).resolved() },
 		actor, blocks.StatePath())
 	interval := blocks.IntervalFromEnv()

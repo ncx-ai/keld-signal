@@ -6,8 +6,8 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
-// THE V2 PATH's client half: POST /blocks. Coordinates, ids and instants —
-// never text, never a span into a message, never an offset.
+// THE V2 PATH's client half: POST /blocks. Coordinates and instants — never
+// text, never an id, never a span into a message, never an offset.
 //
 // v2 IS A PATH, NOT A PARAMETER (design spec
 // docs/superpowers/specs/2026-08-25-v2-block-path-design.md). This file is its
@@ -20,13 +20,15 @@ import (
 
 // blocksReq is one /blocks call over one transcript.
 //
-// Prompts are HUMAN prompt ids and the DAEMON names them, exactly as it does
-// for /tick and for the same reason: the store's `prompt` index holds every
-// user- AND assistant-shaped turn (~260 rows against 14 human prompts on a real
-// session), so a sidecar that discovered its own prompts would make every agent
-// turn an episode and swallow the session. They come from
-// resolve.RecentPromptIDs, which is a deliberately separate method from the one
-// that returns prompt TEXT — see resolve.RecentIDReader.
+// ⚠️ IT CARRIES NO PROMPT IDS, and that is the deletion rather than an omission.
+// It used to carry a `prompts` list feeding the sidecar's `covers` mapping; both
+// are gone. A block is TIME end to end and Atlas has to join
+// `event_ts ∈ [start, end)` within the session for cost attribution regardless —
+// a turn spanning several blocks would double-count its spend through a prompt
+// mapping — and that join answers the display question too. The list also never
+// resolved: the daemon's filter yields `promptId` and the store indexes the
+// per-message `uuid`. The sidecar's request model ignores an unknown key, so an
+// older daemon still sending one is tolerated rather than 422'd.
 //
 // SinceTS is compared against a block's START, `>=`, so the caller resumes by
 // passing the LAST EMITTED BLOCK'S END: blocks abut inside an active segment,
@@ -41,7 +43,6 @@ import (
 type blocksReq struct {
 	Path      string   `json:"path"`
 	SinceTS   *float64 `json:"since_ts"`
-	Prompts   []string `json:"prompts"`
 	Now       float64  `json:"now"`
 	MaxBlocks int      `json:"max_blocks"`
 	// Resolved rides a /blocks call for the reason it rides /analyze and
@@ -53,8 +54,8 @@ type blocksReq struct {
 
 // BlockResult is one closed block as it arrives on the wire.
 //
-// It models the SAME analysis fields AnalyzeResult does, plus the three a block
-// has and a window does not: its two boundary reasons and its covers mapping.
+// It models the SAME analysis fields AnalyzeResult does, plus the two a block
+// has and a window does not: its two boundary reasons.
 // It deliberately does NOT embed AnalyzeResult — a window's `window_start`/
 // `window_end` are ISO instants anchored to a prompt and a block's bounds are
 // epoch seconds chosen by the cutter, so sharing the struct would mean carrying
@@ -68,36 +69,25 @@ type blocksReq struct {
 type BlockResult struct {
 	Schema  int    `json:"schema"`
 	Session string `json:"session"`
-	// Start and End are EPOCH SECONDS — the unit the cutter keys everything on,
-	// the unit `since_ts` is in, and the unit `covers` reports. The Go side
-	// converts once, at the publish boundary.
+	// Start and End are EPOCH SECONDS — the unit the cutter keys everything on
+	// and the unit `since_ts` is in. The Go side converts once, at the publish
+	// boundary.
 	Start        float64 `json:"start"`
 	End          float64 `json:"end"`
 	StartReason  string  `json:"start_reason"`
 	EndReason    string  `json:"end_reason"`
 	BlockMinutes float64 `json:"block_minutes"`
 	Evidence     int     `json:"evidence"`
-	// Covers is the block <-> prompt-episode mapping, parallel to the ids this
-	// call sent. Empty for a block no known prompt overlaps, which is an
-	// ordinary fact about autonomous work, not a failure.
-	Covers           []CoverItem            `json:"covers"`
+	// ⚠️ No `covers`, deliberately. A sidecar old enough to still answer with one
+	// has it DROPPED here — an unmodelled key is ignored by encoding/json — for
+	// the reason no other unforwardable key is modelled: a field this binary
+	// names is a field a publish path can forward.
 	Workstreams      map[string]*Workstream `json:"workstreams"`
 	Inventory        InventoryBlock         `json:"inventory"`
 	InventoryOmitted map[string]int         `json:"inventory_omitted"`
 	Dynamics         DynamicsBlock          `json:"dynamics"`
 	Effort           *EffortBlock           `json:"effort"`
 	Prior            PriorBlock             `json:"prior"`
-}
-
-// CoverItem is one episode's overlap with one block as it arrives on the wire:
-// an id and two instants clipped to the block, plus whether the episode ended
-// inside it. No text and no offset into a message — the sidecar has the id
-// because the daemon sent it, and times it against the store.
-type CoverItem struct {
-	PromptID string  `json:"prompt_id"`
-	From     float64 `json:"from"`
-	To       float64 `json:"to"`
-	Complete bool    `json:"complete"`
 }
 
 // BlocksResult is POST /blocks' whole answer.
@@ -119,17 +109,14 @@ type BlocksResult struct {
 // report: the emitter's cursor and the blocks are one answer, and advancing a
 // cursor past blocks that never arrived would permanently lose exactly the
 // characterisation this path exists to publish.
-func (c *Client) Blocks(path string, promptIDs []string, since *float64, now time.Time,
+func (c *Client) Blocks(path string, since *float64, now time.Time,
 	maxBlocks int, resolved enrich.ResolvedFacts) (BlocksResult, bool) {
 	var r BlocksResult
 	req := blocksReq{
-		Path: path, SinceTS: since, Prompts: promptIDs,
+		Path: path, SinceTS: since,
 		Now:       float64(now.UnixNano()) / 1e9,
 		MaxBlocks: maxBlocks,
 		Resolved:  resolvedOrNil(resolved),
-	}
-	if req.Prompts == nil {
-		req.Prompts = []string{} // an omitted list and an empty one mean the same thing; say so
 	}
 	if !c.post("/blocks", req, &r) {
 		return BlocksResult{}, false
@@ -162,10 +149,10 @@ func (c *Client) Blocks(path string, promptIDs []string, since *float64, now tim
 //
 // The watermark is returned so the caller can seed a first-sight cursor without
 // a second call. nil means the transcript has never been ingested.
-func (c *Client) BlocksCharacterised(path, source, sessionID string, promptIDs []string,
+func (c *Client) BlocksCharacterised(path, source, sessionID string,
 	since *float64, now time.Time, maxBlocks int,
 	resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool) {
-	res, ok := c.Blocks(path, promptIDs, since, now, maxBlocks, resolved)
+	res, ok := c.Blocks(path, since, now, maxBlocks, resolved)
 	if !ok {
 		return nil, nil, false
 	}
@@ -190,37 +177,11 @@ func (c *Client) BlocksCharacterised(path, source, sessionID string, promptIDs [
 			},
 			StartTS: b.Start,
 			EndTS:   b.End,
-			Covers:  convertCovers(b.Covers),
 			Analysis: analysisFrom(b.Workstreams, b.Inventory, b.InventoryOmitted,
 				b.Dynamics, b.Effort, b.Prior),
 		})
 	}
 	return out, res.Watermark, true
-}
-
-// convertCovers maps the episode overlaps onto the published shape, PER ENTRY
-// like every inventory conversion: one unusable entry costs exactly that entry.
-//
-// The one gate is structural rather than a vocabulary: an entry with no prompt
-// id names no episode, and an entry whose interval is empty or inverted covers
-// no time — both would render as a zero-width bar attributed to a prompt.
-// There is nothing else to check, because there is nothing else in the shape:
-// an id the daemon itself supplied, and two instants.
-//
-// Nil rather than an empty slice when nothing survives, so the published row
-// omits the key instead of stating "we mapped the episodes and found none" —
-// the same rule every inventory here follows.
-func convertCovers(items []CoverItem) []enrich.Cover {
-	var out []enrich.Cover
-	for _, it := range items {
-		if it.PromptID == "" || it.To <= it.From {
-			continue
-		}
-		out = append(out, enrich.Cover{
-			PromptID: it.PromptID, From: it.From, To: it.To, Complete: it.Complete,
-		})
-	}
-	return out
 }
 
 // epochRFC3339 renders an epoch-second instant as a UTC RFC3339 string, the one

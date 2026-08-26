@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -31,12 +32,8 @@ func sampleBlock() enrich.BlockCharacterisation {
 			SpanMinutes: 20, Evidence: 63,
 			StartReason: "idle", EndReason: "budget",
 		},
-		StartTS: 1787144000,
-		EndTS:   1787145200,
-		Covers: []enrich.Cover{
-			{PromptID: "p1", From: 1787144100, To: 1787144600, Complete: true},
-			{PromptID: "p2", From: 1787144600, To: 1787145200, Complete: false},
-		},
+		StartTS:  1787144000,
+		EndTS:    1787145200,
 		Analysis: w.Analysis,
 	}
 }
@@ -56,7 +53,7 @@ func TestABlockRowMatchesTheAtlasContract(t *testing.T) {
 	}
 	for _, k := range []string{
 		"source", "correlation", "session_id", "actor", "window",
-		"start_reason", "end_reason", "covers",
+		"start_reason", "end_reason",
 		"workstreams", "dynamics", "prior", "effort",
 		"pipeline_status", "extractor_versions", "schema_version", "ts",
 	} {
@@ -86,16 +83,6 @@ func TestABlockRowMatchesTheAtlasContract(t *testing.T) {
 	// reads, as well as inside `window`.
 	if raw["start_reason"] != "idle" || raw["end_reason"] != "budget" {
 		t.Errorf("reasons = %v/%v", raw["start_reason"], raw["end_reason"])
-	}
-	covers, _ := raw["covers"].([]any)
-	if len(covers) != 2 {
-		t.Fatalf("covers = %v", covers)
-	}
-	first, _ := covers[0].(map[string]any)
-	for _, k := range []string{"prompt_id", "from", "to", "complete"} {
-		if _, ok := first[k]; !ok {
-			t.Errorf("a cover entry is missing %q", k)
-		}
 	}
 }
 
@@ -159,7 +146,7 @@ func TestTheBlockWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 	}
 	allowed := map[string]bool{
 		"source": true, "correlation": true, "session_id": true, "actor": true,
-		"window": true, "start_reason": true, "end_reason": true, "covers": true,
+		"window": true, "start_reason": true, "end_reason": true,
 		"workstreams": true, "dynamics": true, "effort": true, "physical_acts": true,
 		"files": true, "directories": true, "components": true, "inventory_omitted": true,
 		"harness_tools": true, "programs": true, "external_systems": true, "integrations": true,
@@ -176,18 +163,6 @@ func TestTheBlockWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 			t.Errorf("unexpected key %q on a block row — every new key is a channel a "+
 				"transcript fragment could occupy; add it to `allowed` only after checking "+
 				"it cannot", k)
-		}
-	}
-	// A cover entry is an id and two instants. Nothing else may ride it: this is
-	// the one block-specific field, and it is the one that touches prompts.
-	covers, _ := raw["covers"].([]any)
-	entry, _ := covers[0].(map[string]any)
-	for k := range entry {
-		switch k {
-		case "prompt_id", "from", "to", "complete":
-		default:
-			t.Errorf("unexpected key %q on a cover entry — a covers mapping is ids and "+
-				"instants, never text or an offset into a message", k)
 		}
 	}
 }
@@ -267,5 +242,51 @@ func TestSendBlocksSkipsAnEmptyBatch(t *testing.T) {
 	defer srv.Close()
 	if err := New(srv.URL, func() string { return "t" }, "a").SendBlocks(nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ⚠️ `covers` IS DELETED FROM THE BLOCK ROW, and this asserts the SUBSTRING is
+// absent rather than the key, for the reason every unforwardable-key test here
+// does: a field revived under a different tag, or nested inside `window`, would
+// pass a top-level key check and still put a prompt-id space back on the wire.
+//
+// The argument, so nobody restores it: a block is TIME end to end — a cap, a
+// silence threshold, a rollup over a span — and Atlas has to join
+// `event_ts ∈ [start, end)` within the session for COST anyway, because a turn
+// spanning several blocks would double-count spend through `covers`. That join
+// also answers the display question (Atlas holds ToolEvent.session_id and
+// event_ts), so `covers` was a second, weaker copy of it. It also shipped
+// broken: watch/filter.go yields `promptId` and the sidecar's store indexes the
+// per-message `uuid`, so every real run published an empty list.
+func TestABlockRowCarriesNoCoversMapping(t *testing.T) {
+	body, err := json.Marshal(BuildBlock(sampleBlock(), "dg@keld.co", time.Unix(1787145300, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "covers") {
+		t.Fatalf("a block row still carries `covers` — a block is (principal, session, span, "+
+			"reasons, facets) and nothing else:\n%s", body)
+	}
+	if strings.Contains(string(body), "prompt_id") {
+		t.Fatalf("a block row names a prompt id:\n%s", body)
+	}
+}
+
+// The type behind the row, not just this marshalling of it. A `Covers` field
+// left on the struct with `json:"-"` would satisfy the wire test above and still
+// force every producer to keep resolving prompt ids to fill it.
+func TestTheBlockTypesHaveNoCoversFieldAtAll(t *testing.T) {
+	for _, rt := range []reflect.Type{
+		reflect.TypeOf(enrich.BlockCharacterisation{}),
+		reflect.TypeOf(BlockEnrichment{}),
+		reflect.TypeOf(enrich.BlockRef{}),
+	} {
+		for i := 0; i < rt.NumField(); i++ {
+			name := rt.Field(i).Name
+			if strings.Contains(strings.ToLower(name), "cover") ||
+				strings.Contains(strings.ToLower(name), "prompt") {
+				t.Errorf("%s.%s: the block path has no prompt-id space", rt.Name(), name)
+			}
+		}
 	}
 }

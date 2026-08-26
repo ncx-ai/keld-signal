@@ -97,7 +97,7 @@ func TestTheBlockDigesterIsAServiceFacetOfTheRealClient(t *testing.T) {
 
 type stubDigester struct{}
 
-func (stubDigester) BlocksCharacterised(path, source, sessionID string, promptIDs []string,
+func (stubDigester) BlocksCharacterised(path, source, sessionID string,
 	since *float64, now time.Time, maxBlocks int,
 	resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool) {
 	return nil, nil, false

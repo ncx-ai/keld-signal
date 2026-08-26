@@ -33,8 +33,8 @@ import (
 // decision. A tick window is v1: an hour anchored to a prompt, published under
 // corr_scheme "window" to the enrichments route, and slated for retirement with
 // the rest of the prompt-anchored path. A block is a span the cutter chose,
-// with two boundary REASONS and a covers mapping a window has no equivalent of,
-// on its own Atlas route with its own identity. Bending one type to serve both
+// with two boundary REASONS a window has no equivalent of, on its own Atlas
+// route with its own identity. Bending one type to serve both
 // would make the stepping stone look like the destination — precisely the
 // failure the design spec was written to prevent. What the two DO share is
 // AnalysisFacets, embedded by both, because that part genuinely is the same
@@ -47,8 +47,18 @@ import (
 //	source, correlation{session_id} | session_id, actor,
 //	window{start,end} | start/end, start_reason, end_reason,
 //	workstreams{}, dynamics{}, prior{}, effort{},
-//	covers[{prompt_id, from, to, complete}],
 //	pipeline_status, extractor_versions, schema_version, ts
+//
+// ⚠️ NO `covers`. A block row used to carry the prompt episodes overlapping it;
+// the field is DELETED, and Atlas's own ingest ignores one an older client still
+// sends. A block is TIME end to end, and Atlas must join
+// `event_ts ∈ [start, end)` within the session for cost attribution regardless —
+// a turn spanning several blocks would double-count its spend through a prompt
+// mapping — so that mandatory join is also what answers "which turns ran in this
+// block": Atlas holds ToolEvent.session_id and event_ts. `covers` was a second,
+// weaker copy of it, and it published empty on every real run because the daemon
+// named prompts by `promptId` while the sidecar's store indexed the per-message
+// `uuid`. A block row is (principal, session, span, reasons, facets).
 //
 // A block with no span or no session is a 422 there; both are refused on this
 // side first (see sidecar.BlocksCharacterised and BuildBlock).
@@ -72,12 +82,6 @@ type BlockEnrichment struct {
 	// reader finding the right nesting.
 	StartReason string `json:"start_reason"`
 	EndReason   string `json:"end_reason"`
-	// Covers is the block <-> prompt-episode mapping: which human prompts' work
-	// ran inside this block, clipped to it, and whether each episode ENDED here
-	// (see enrich.Cover). Ids and instants only. Absent, never an empty list,
-	// for a block no known prompt overlaps — which is the ordinary shape of
-	// autonomous work, not a failure.
-	Covers []enrich.Cover `json:"covers,omitempty"`
 	// AnalysisFacets is the deterministic analysis of this block: workstreams,
 	// dynamics, effort, the thirteen inventories, the cut-visibility map and
 	// the session prior. Embedded and SHARED with WindowEnrichment — see
@@ -119,7 +123,6 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) Blo
 		Window:            b.Ref,
 		StartReason:       b.Ref.StartReason,
 		EndReason:         b.Ref.EndReason,
-		Covers:            b.Covers,
 		AnalysisFacets:    facetsOf(b.Analysis),
 		PipelineStatus:    enrich.PipelineStatusBlock,
 		ExtractorVersions: blockExtractorVersions(),

@@ -55,28 +55,31 @@ const BlockCorrScheme = "block"
 // not compute.
 const PipelineStatusBlock = "block"
 
-// Cover is one prompt EPISODE's overlap with one block: which human prompt, the
-// portion of its episode that falls inside this block, and whether the episode
-// ENDED here.
+// ⚠️ THERE IS NO `Cover` TYPE, AND THIS PATH HAS NO PROMPT-ID SPACE.
 //
-// An episode is a human prompt plus every agent turn that follows it. From and
-// To are epoch seconds CLIPPED TO THE BLOCK — never the episode's own bounds —
-// because a consumer renders one bar per entry and an unclipped To would draw a
-// run overflowing its own block. Complete=false means the episode continues
-// past the block's end, which is what lets a UI render CONTINUATION rather than
-// implying the work stopped at an arithmetic boundary the cutter chose.
+// There used to be one: a block <-> prompt-episode mapping (`covers`), an id
+// plus two clipped instants plus a `complete` flag. It was DELETED, not
+// repaired, and the argument is worth keeping here because the type is the
+// obvious thing to re-add.
 //
-// A prompt ID and two instants: no text, no span into the message, no offset.
-// The ids come from the daemon's own human-prompt filter
-// (resolve.RecentPromptIDs -> watch.HumanPromptID) and the store only TIMES
-// them; see resolve.RecentIDReader for why that lister is a separate method
-// from the one that returns text.
-type Cover struct {
-	PromptID string  `json:"prompt_id"`
-	From     float64 `json:"from"`
-	To       float64 `json:"to"`
-	Complete bool    `json:"complete"`
-}
+// A block is TIME end to end — a cap, a silence threshold, a rollup over a
+// span — and the principal comes from the device's own auth. Nothing in the
+// cutter, the digest, the dimensions, the dynamics, the prior or the effort
+// touches a prompt id. Atlas must join on time REGARDLESS: cost attribution is
+// `event_ts ∈ [block.start, block.end)` within the session, never through a
+// prompt mapping, because a turn spanning several blocks would double-count its
+// spend through one. That mandatory join answers the DISPLAY question too —
+// Atlas holds `ToolEvent.session_id` and `event_ts`, so given a span it can
+// find the events inside, which IS which turns overlap, and "this turn
+// continues past the block" falls out of the same rows. So `covers` was a
+// second, weaker copy of a join Atlas owes anyway.
+//
+// It also never worked: the daemon's own human-prompt filter
+// (watch/filter.go) yields `promptId` while the sidecar's store indexes the
+// per-message `uuid`, so the store's lookup resolved NONE of the ids it was
+// sent and every real run published an empty list.
+//
+// A block is exactly (principal, session, span, boundary reasons, facets).
 
 // BlockRef is where a block sits and how big it was. The block equivalent of
 // WindowRef, and separate from it because the two are not interchangeable: a
@@ -85,8 +88,8 @@ type Cover struct {
 // names WHY each edge is where it is.
 type BlockRef struct {
 	// Start and End are RFC3339 instants, half-open [Start, End). The sidecar
-	// answers in epoch seconds — the unit its cursor and `covers` are in — and
-	// the conversion happens once, at the decode boundary, so the wire carries
+	// answers in epoch seconds — the unit its cursor is in — and the
+	// conversion happens once, at the decode boundary, so the wire carries
 	// one spelling of an instant rather than two.
 	Start string `json:"start"`
 	End   string `json:"end"`
@@ -105,8 +108,8 @@ type BlockRef struct {
 }
 
 // BlockCharacterisation is one closed block of work: where it sits, why its
-// edges are where they are, which prompt episodes it covers, and the same
-// deterministic analysis a window row carries.
+// edges are where they are, and the same deterministic analysis a window row
+// carries. No prompt ids — see the note above the BlockRef type.
 //
 // StartTS/EndTS are the epoch-second forms the sidecar answered with, kept
 // alongside the RFC3339 Ref because the EMITTER'S CURSOR is in those units: it
@@ -122,6 +125,5 @@ type BlockCharacterisation struct {
 	Ref       BlockRef
 	StartTS   float64
 	EndTS     float64
-	Covers    []Cover
 	Analysis  WindowAnalysis
 }

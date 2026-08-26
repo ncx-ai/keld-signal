@@ -118,24 +118,33 @@ Its honest limitation, inherited: cut points come from `branch` alone, and the d
 only 32 of 496 sessions. On most sessions a block is ended by the cap or by silence, and nothing
 here claims otherwise.
 
-## `covers` -- THE OTHER UNIT, AND WHY IT LIVES HERE
+## `covers` WAS DELETED, AND THIS IS WHY IT MUST NOT COME BACK
 
-Atlas rolls activity up to a user's prompt: a prompt plus every agent turn that follows it, until
-the next prompt. Call that an EPISODE. A block cuts the same time a different way, and neither unit
-contains the other -- one long autonomous episode spans many blocks, a rapid back-and-forth puts
-many episodes in one block. `covers` is the mapping, and it is the only thing that can be: nothing
-downstream can tell a human prompt from an agent turn.
+There used to be a `covers()` here: for each block, the prompt EPISODES overlapping it (an episode
+being a human prompt plus every agent turn that follows it), clipped to the block, with a
+`complete` flag. It is gone, and not because it was broken -- though it was: the daemon's
+`internal/agent/watch/filter.go` yields `promptId` while `ingest.py` indexes the per-message
+`uuid`, so `store.prompt_time` resolved NONE of the ids it was sent and every real run published
+an empty list.
 
-That mismatch is INFORMATION, not something to flatten. An episode spanning four blocks says the
-run changed character partway through, and four blocks say more about it than one label over the
-whole thing.
+It is gone because a block is TIME, end to end. Cutting is a cap plus a silence threshold; the
+digest is a rollup over a span; the principal comes from the device's own auth. Nothing in the
+cutter, the digest, the dimensions, the dynamics, the prior or the effort touches a prompt id. And
+Atlas has to join on time REGARDLESS: cost attribution is `event.ts in [block.start, block.end)`
+within the session, never through a prompt mapping, because a turn spanning several blocks would
+double-count its spend through one. That mandatory join also answers the display question, since
+Atlas holds `ToolEvent.session_id` and `event_ts` -- given a span it can find the events inside,
+which IS which turns overlap, and "this turn continues past the block" is derivable from the same
+rows. So `covers` was a second, weaker copy of a join Atlas owes anyway.
+
+A block is now exactly **(principal, session, span, boundary reasons, facets)**. No ids.
 
 ## PRIVACY
 
 Everything is computed from stored coordinate rows -- bin timestamps and `(level, ref)` counts. No
 prompt text, no spans, no offsets are read, and a `Block` carries four numbers and two words from a
-closed vocabulary. `covers` adds prompt IDS and instants, which are coordinates too -- the daemon
-already publishes both as an enrichment's correlation.
+closed vocabulary. Nothing here reads, returns or times a prompt id -- see the section above on
+why `covers` was deleted rather than repaired.
 """
 import collections
 
@@ -290,75 +299,4 @@ def cut(store, session, from_ts, to_ts, max_minutes=MAX_BLOCK_MINUTES, idle_bins
         if i < len(segs) - 1:
             bl[-1] = bl[-1]._replace(end_reason="idle")
         out.extend(bl)
-    return out
-
-
-def covers(blocks, prompts):
-    """`[[{prompt_id, from, to, complete}, ...], ...]` -- parallel to `blocks`, one list per block.
-
-    The episode <-> block mapping. An EPISODE is a human prompt plus every agent turn that follows
-    it: `[prompt_ts, next_prompt_ts)`, with the LAST episode running to the end of the last block
-    (there is no next prompt to close it, and the cut span is the only other bound available).
-    Each block lists every episode overlapping `[block.start, block.end)`, in time order.
-
-      * `from`/`to` are epoch seconds CLIPPED TO THIS BLOCK -- the portion of that episode inside
-        THIS block, never the episode's own bounds. A consumer renders one bar per entry, so an
-        unclipped `to` would draw a run that overflows its own block.
-      * `complete` is True iff the episode ENDS inside this block. False means it runs past the
-        block's end, which is what lets a UI render CONTINUATION rather than implying the work
-        stopped at an arithmetic boundary the cutter chose.
-
-    ⚠️ **`prompts` IS SUPPLIED BY THE CALLER AND MUST NOT BE QUERIED HERE.** `[(prompt_id,
-    ts_epoch), ...]`, ascending, HUMAN prompts only. The store's `prompt` index is not that: it
-    holds every user- AND assistant-shaped turn (`ingest.py` indexes everything `turns_in` yields,
-    so an assistant uuid still resolves), which is ~260 rows for one real session's 14 human
-    prompts. Resolving prompts in here would therefore make every agent turn its own episode and
-    swallow the session -- the same trap `tick()` avoids by taking `prompt_ts` as an argument. The
-    daemon owns the human-prompt filter (`internal/agent/watch/filter.go`) and is the only party
-    that knows the answer; the store only times them. That split is what keeps this function PURE:
-    no store, no I/O, no clock, and therefore testable without a corpus.
-
-    Three consequences of "blocks tile the ACTIVE span, not the span" (module docstring) that a
-    reader will meet:
-
-    1. **An episode can run across dead air, and the gap's portion is in NO block's list.** Each
-       entry is clipped to the block that emitted it, so the silence is dropped by construction
-       rather than attributed to whichever block is nearest.
-    2. **An episode that ends inside an idle gap reads `complete: false` in the block before it**,
-       and then appears nowhere. That is the honest reading: the episode did not end at the block's
-       edge -- the next prompt is what ends it, and that came after the silence. Reporting `true`
-       there would claim the work stopped at a boundary the cutter picked.
-    3. **An episode covering no block time at all is in no list**, and so is absent from the whole
-       result: a prompt that lands in a gap and is followed by another prompt still inside it, or
-       two prompts sharing an instant (a zero-length episode). Nothing is lost that covered
-       anything -- an episode with no active time under it has nothing to attribute.
-
-    `prompts` is sorted defensively rather than trusted: out of order, the episode bounds invert
-    and prompts vanish silently, which is the one failure mode nothing downstream could detect.
-    Ties keep the caller's order (`sorted` is stable). O(blocks x prompts), both small -- a block
-    is at most 20 minutes and a session's human prompts are counted in tens.
-    """
-    if not blocks:
-        return []
-    ordered = sorted(prompts, key=lambda p: p[1])
-    # The last episode has no next prompt to close it, so the cut's own end closes it. Anything
-    # later than that is outside every block and drops out of the overlap test below.
-    last_end = float(blocks[-1].end)
-    episodes = []
-    for i, (prompt_id, ts) in enumerate(ordered):
-        start = float(ts)
-        end = float(ordered[i + 1][1]) if i + 1 < len(ordered) else last_end
-        episodes.append((prompt_id, start, end))
-
-    out = []
-    for block in blocks:
-        lo, hi = float(block.start), float(block.end)
-        out.append([{"prompt_id": prompt_id,
-                     "from": max(start, lo),
-                     "to": min(end, hi),
-                     # Ends HERE, not merely "does not continue": an episode reaching exactly the
-                     # block's end is complete in it and absent from the next, since the next
-                     # block's overlap test is strict.
-                     "complete": end <= hi}
-                    for prompt_id, start, end in episodes if start < hi and end > lo])
     return out

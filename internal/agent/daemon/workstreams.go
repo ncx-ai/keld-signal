@@ -51,7 +51,7 @@ type windowTickerCap interface {
 // path has no holes to patch. The two are wired independently so v2 can be
 // promoted, or deleted, without unpicking v1.
 type blockDigesterCap interface {
-	BlocksCharacterised(path, source, sessionID string, promptIDs []string,
+	BlocksCharacterised(path, source, sessionID string,
 		since *float64, now time.Time, maxBlocks int,
 		resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool)
 }

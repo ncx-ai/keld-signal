@@ -47,11 +47,21 @@
 //
 // # WHAT CROSSES TO THE SIDECAR
 //
-// Coordinates, human prompt IDS and instants. Never text. The ids come from
-// resolve.PromptIDsInRange, which is a deliberately SEPARATE method from the one
-// that returns prompt text (resolve.RangeIDReader) — a flag on one method
-// would be a text leak one wrong argument away. It is a RANGE question rather
-// than a tail one because this path is chronological; see the PromptIDs seam.
+// A transcript PATH, a cursor instant, the clock, a batch bound, and the
+// repository facts the sidecar is confined out of reading. Nothing else — no
+// text, and (since the `covers` mapping was deleted) NO IDS EITHER.
+//
+// ⚠️ Do not re-add a prompt-id list here. A block is TIME end to end: cutting
+// is a cap plus a silence threshold, the digest is a rollup over a span, and the
+// principal comes from the device's own auth. Atlas must join
+// `event_ts ∈ [block.start, block.end)` within the session for cost attribution
+// regardless — a turn spanning several blocks would double-count its spend
+// through a prompt mapping — and that same join answers the display question,
+// because Atlas holds ToolEvent.session_id and event_ts. The mapping was
+// therefore a second, weaker copy of a join Atlas owes anyway; it also never
+// worked, since watch/filter.go names prompts by `promptId` while the sidecar's
+// store indexes the per-message `uuid`, so every real block published an empty
+// list.
 package blocks
 
 import (
@@ -74,7 +84,7 @@ import (
 // is testable without a live sidecar, mirroring how the daemon declares
 // windowAnalyzer / piiDetector / windowTicker.
 type Digester interface {
-	BlocksCharacterised(path, source, sessionID string, promptIDs []string,
+	BlocksCharacterised(path, source, sessionID string,
 		since *float64, now time.Time, maxBlocks int,
 		resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool)
 }
@@ -86,23 +96,6 @@ type Digester interface {
 type Sender interface {
 	SendBlocks([]publish.BlockEnrichment) error
 }
-
-// PromptIDs lists the human prompt ids a SPAN of a transcript holds: every one
-// whose instant falls in [fromTS, toTS], ascending, plus the last one at or
-// before fromTS, bounded to n. It is resolve.PromptIDsInRange in production.
-//
-// ⚠️ A RANGE, NOT A TAIL, and that is a measured correction rather than a
-// generalisation. It used to be resolve.RecentPromptIDs, which reads a bounded
-// FILE TAIL — right for its own consumer (a model's context window) and wrong
-// here, because this emitter drains blocks CHRONOLOGICALLY from a persisted
-// cursor. Measured on the first real run against a 20 MB transcript: 72 blocks
-// emitted, `covers` EMPTY on every one of them, because their prompts sat in the
-// first 4 MB and the tail window was the last 16. `covers[].prompt_id` is what
-// Atlas joins its display on, so an empty list is the whole feature missing.
-//
-// ⚠️ It must NEVER be resolve.RecentPrompts: that returns prompt TEXT, and this
-// value rides an HTTP request to the sidecar.
-type PromptIDs func(source, transcriptPath string, fromTS, toTS float64, n int) []string
 
 // Facts resolves the daemon-side repository facts for a transcript. The sidecar
 // is confined out of reading a repo's .git/config, so a block that could not
@@ -147,29 +140,14 @@ const maxPerSweep = 24
 // and Atlas upserts) but LOSING progress across a flaky link is not.
 const batchSize = 8
 
-// promptIDBudget bounds how many human prompt ids ride one /blocks call, for
-// the `covers` mapping.
-//
-// Sized against what a sweep can EMIT rather than against a session: maxPerSweep
-// (24) blocks of at most 20 minutes is 8 hours of work, and the measured
-// density is a mean of 3.8 human prompts per hour (max 20). 64 clears the mean
-// case by two orders of magnitude and the dense case comfortably.
-//
-// It is now the ONLY bound that decides which prompts come back, because the
-// lister answers a range rather than a tail: resolve's remaining byte bound
-// (rangeLookbehindBytes) limits only how far back the single LEADING prompt is
-// hunted, never which part of the file the range can see.
-const promptIDBudget = 64
-
 // Emitter is the block path's daemon-side loop. Zero value is not usable; see
 // New.
 type Emitter struct {
-	dig    Digester
-	pub    Sender
-	prompt PromptIDs
-	facts  Facts
-	actor  string
-	st     *state
+	dig   Digester
+	pub   Sender
+	facts Facts
+	actor string
+	st    *state
 
 	mu sync.Mutex
 	// active is the bounded set of transcripts that might still have an
@@ -179,12 +157,14 @@ type Emitter struct {
 	active map[string]bool
 }
 
-// New builds an emitter over the given state file. prompt and facts may be nil
-// in tests; a nil prompt lister means no `covers` mapping (an honest empty,
-// not a wrong one) and a nil facts resolver means empty resolved facts.
-func New(dig Digester, pub Sender, prompt PromptIDs, facts Facts, actor, stateFile string) *Emitter {
+// New builds an emitter over the given state file. facts may be nil in tests,
+// which sends empty resolved facts.
+//
+// There is deliberately no prompt-id reader parameter: see the package comment
+// on why the `covers` mapping that needed one was deleted rather than fixed.
+func New(dig Digester, pub Sender, facts Facts, actor, stateFile string) *Emitter {
 	return &Emitter{
-		dig: dig, pub: pub, prompt: prompt, facts: facts, actor: actor,
+		dig: dig, pub: pub, facts: facts, actor: actor,
 		st: newState(stateFile), active: map[string]bool{},
 	}
 }
@@ -285,8 +265,8 @@ func (e *Emitter) Sweep(ctx context.Context, now time.Time) int {
 // FIRST SIGHT IS FORWARD-ONLY, and it costs one call that emits nothing. The
 // sidecar reads a nil `since_ts` as "from the beginning of the session", i.e.
 // BACKFILL — so on a transcript with no cursor the emitter asks for the
-// WATERMARK and no blocks (max_blocks 0, no prompt ids), seeds the cursor
-// there, and emits on the next sweep. That matches KELD_WATCH_BACKFILL's
+// WATERMARK and no blocks (max_blocks 0), seeds the cursor there, and emits on
+// the next sweep. That matches KELD_WATCH_BACKFILL's
 // forward-only default and is what stops a daemon restart, or a first install
 // on a machine with 496 transcripts, from emitting a herd of history.
 //
@@ -307,32 +287,15 @@ func (e *Emitter) sweepOne(tgt target, now time.Time) int {
 
 	if tgt.Cursor == nil {
 		_, watermark, ok := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
-			nil, nil, now, 0, resolved)
+			nil, now, 0, resolved)
 		if ok && watermark != nil {
 			e.st.advance(tgt.Path, *watermark)
 		}
 		return 0
 	}
 
-	var ids []string
-	if e.prompt != nil {
-		// ONE CALL PER SWEEP, FOR THE SPAN BEING DRAINED — not one per block.
-		// The blocks a sweep returns are contiguous and ordered, and they all lie
-		// inside [cursor, now]: the sidecar admits a block whose START is >= the
-		// cursor, and no block can END after the clock. So one range serves the
-		// whole batch. It cannot be tightened to the exact block edges, because
-		// the ids ride the SAME request that asks for the blocks — the emitter
-		// does not know their edges yet, and a second round-trip to find out
-		// would cost more than the slightly wider range does.
-		//
-		// COST: the range scan is proportional to the span, so the steady state
-		// (a cursor one interval old) reads almost nothing, and the worst case —
-		// a transcript coming back after a long gap — reads from the cursor to
-		// the end of the file, once, and then falls back to the steady state.
-		ids = e.prompt(tgt.Source, tgt.Path, *tgt.Cursor, unixSeconds(now), promptIDBudget)
-	}
 	blocks, _, ok := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
-		ids, tgt.Cursor, now, maxPerSweep, resolved)
+		tgt.Cursor, now, maxPerSweep, resolved)
 	if !ok {
 		// The sidecar could not answer (not ready, restarting, store behind).
 		// Do not advance and do not retire: the next sweep asks for the same

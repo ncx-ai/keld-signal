@@ -341,13 +341,12 @@ class BlocksIn(BaseModel):
     and still answers the v1 question — a 60-minute window anchored to a prompt. The one previous
     attempt threaded blocks through /analyze as an additive key and was reverted.
 
-    `prompts` are HUMAN prompt IDS, and WHICH ids they are comes from the daemon rather than from
-    the store for the same reason TickIn.prompt_ids does: the store's `prompt` index holds every
-    user- AND assistant-shaped turn (~260 rows against 14 human prompts on a real session), so
-    resolving them here would make every agent turn its own episode and swallow the session. The
-    daemon applies `internal/agent/watch/filter.go`'s human-prompt filter and is the only party
-    that knows the answer; the store only TIMES them, and an id it cannot time is dropped rather
-    than defaulted. They feed `blocks.covers` — the block <-> episode mapping — and nothing else.
+    ⚠️ **THERE IS NO `prompts` FIELD, and an older daemon that still sends one is TOLERATED.**
+    This model takes pydantic's default `extra="ignore"`, so the key is dropped rather than 422'd
+    — which is what lets this half and the daemon half ship in either order. `prompts` fed the
+    deleted `covers` mapping (see app/analysis/blocks.py) and fed nothing else: a block is TIME
+    end to end, and Atlas must join `event.ts in [block.start, block.end)` within the session for
+    cost attribution anyway, which answers the display question too. Do not re-add it.
 
     `since_ts` is where the last call for this transcript stopped, compared against a block's
     START: the caller passes the last emitted block's END, and because blocks abut inside an
@@ -366,7 +365,6 @@ class BlocksIn(BaseModel):
     """
     path: str
     since_ts: float | None = None
-    prompts: list[str] = []
     now: float | None = None
     max_blocks: int = DEFAULT_MAX_BLOCKS
     resolved: ResolvedFacts | None = None
@@ -682,7 +680,7 @@ def _tick_blocking(path, prompt_ids, cursor_ts, now, span_minutes, max_windows, 
                             max_windows=max_windows, prior=True, resolved=resolved)
 
 
-def _blocks_blocking(path, since_ts, prompts, now, max_blocks, resolved=None):
+def _blocks_blocking(path, since_ts, now, max_blocks, resolved=None):
     """The whole of /blocks' work, on an executor thread.
 
     A QUERY, never a parse: `digest_blocks` reads the series and this function does not ingest,
@@ -714,7 +712,7 @@ def _blocks_blocking(path, since_ts, prompts, now, max_blocks, resolved=None):
         # was ingested from it, and those blocks are as closed as they will ever be. Treated as
         # "not current" so only the activity-after branch closes anything.
         current = False
-    out = digest_blocks(st, path, since_ts=since_ts, prompt_ids=prompts, now=now,
+    out = digest_blocks(st, path, since_ts=since_ts, now=now,
                         max_blocks=max_blocks, current=current)
     # Switched off means not reported, exactly as on /analyze: the regex half of
     # terms.candidates() needs no model and still ran at INGEST time, so returning its output
@@ -743,10 +741,11 @@ async def blocks(body: BlocksIn):
     app/analysis/blockdigest.py for when it may be EMITTED and what its digest holds.
 
     Returns `{"blocks": [...], "watermark": ...}`. A block carries its span
-    (`start`/`end`/`block_minutes`, epoch seconds — the unit `since_ts` and `covers` are in), the
-    two boundary reasons from the closed `blocks.REASONS` vocabulary, `covers` (the block <->
-    prompt-episode mapping), and the same analysis payload /analyze publishes for a window:
-    `workstreams`, `inventory`, `inventory_omitted`, `evidence`, `effort`, `dynamics`, `prior`.
+    (`start`/`end`/`block_minutes`, epoch seconds — the unit `since_ts` is in), the two boundary
+    reasons from the closed `blocks.REASONS` vocabulary, and the same analysis payload /analyze
+    publishes for a window: `workstreams`, `inventory`, `inventory_omitted`, `evidence`, `effort`,
+    `dynamics`, `prior`. NO prompt ids: a block is (principal, session, span, reasons, facets),
+    and the `covers` mapping that once carried them is deleted — see BlocksIn.
 
     `watermark` is returned even when no block is closed, because it is the one fact that
     separates "nothing has settled yet" from "this transcript has never been ingested" (null).
@@ -778,7 +777,7 @@ async def blocks(body: BlocksIn):
     loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(
-            None, _blocks_blocking, body.path, body.since_ts, body.prompts, now,
+            None, _blocks_blocking, body.path, body.since_ts, now,
             body.max_blocks, _resolved_dict(body.resolved))
     except StoreBehind:
         # The store could not be OPENED at all. A store that is merely behind the file is not

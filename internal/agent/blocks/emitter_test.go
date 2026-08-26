@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -28,16 +29,15 @@ type fakeDig struct {
 type digCall struct {
 	Path      string
 	Since     *float64
-	Prompts   []string
 	MaxBlocks int
 }
 
-func (f *fakeDig) BlocksCharacterised(path, source, sessionID string, promptIDs []string,
+func (f *fakeDig) BlocksCharacterised(path, source, sessionID string,
 	since *float64, now time.Time, maxBlocks int,
 	resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, digCall{Path: path, Since: since, Prompts: promptIDs, MaxBlocks: maxBlocks})
+	f.calls = append(f.calls, digCall{Path: path, Since: since, MaxBlocks: maxBlocks})
 	if f.fail {
 		return nil, nil, false
 	}
@@ -120,7 +120,7 @@ const txPath = "/home/x/.claude/projects/p/sess.jsonl"
 
 func newTestEmitter(t *testing.T, dig Digester, pub Sender) *Emitter {
 	t.Helper()
-	return New(dig, pub, nil, nil, "actor", filepath.Join(t.TempDir(), "blocks.json"))
+	return New(dig, pub, nil, "actor", filepath.Join(t.TempDir(), "blocks.json"))
 }
 
 // FORWARD-ONLY ON FIRST SIGHT. A machine has hundreds of transcripts (496 in
@@ -228,7 +228,7 @@ func TestTheCursorSurvivesARestart(t *testing.T) {
 	pub := &fakeSender{}
 	now := time.Unix(9000, 0)
 
-	e := New(dig, pub, nil, nil, "actor", file)
+	e := New(dig, pub, nil, "actor", file)
 	e.advanceAt("claude_code", txPath, now)
 	e.Sweep(context.Background(), now) // seed
 	e.Sweep(context.Background(), now) // publish block(1000)
@@ -238,7 +238,7 @@ func TestTheCursorSurvivesARestart(t *testing.T) {
 
 	// Restart: same state file, fresh emitter, empty active set.
 	pub2 := &fakeSender{}
-	e2 := New(dig, pub2, nil, nil, "actor", file)
+	e2 := New(dig, pub2, nil, "actor", file)
 	e2.advanceAt("claude_code", txPath, now)
 	if n := e2.Sweep(context.Background(), now); n != 0 {
 		t.Fatalf("a restarted emitter re-published %d rows", n)
@@ -421,138 +421,45 @@ func TestAPartialDrainAdvancesToTheLastContiguousSuccess(t *testing.T) {
 	}
 }
 
-// ⚠️ THE PRIVACY SEAM. The ids that ride a /blocks call must come from the
-// ids-only lister, never from the one that returns prompt TEXT. Asserted by
-// giving the emitter a lister that returns ids and checking what reaches the
-// digester — the same call that would carry text if the wrong sibling were
-// wired.
-func TestTheEmitterSendsPromptIDsAndNothingElse(t *testing.T) {
-	dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000)}, watermark: f64(900)}
-	lister := func(source, path string, from, to float64, n int) []string {
-		if n != promptIDBudget {
-			t.Errorf("budget = %d, want %d", n, promptIDBudget)
-		}
-		return []string{"p1", "p2"}
+// ⚠️ THE PROMPT-ID SEAM IS DELETED, and this pins the absence at the INTERFACE
+// rather than at the constructor, because the constructor is only the wiring: a
+// `promptIDs []string` left on Digester keeps the sidecar request shape alive
+// and would let a future edit re-add the reader without touching this package's
+// public surface.
+//
+// Why it went, so it does not come back: a block is TIME end to end — a cap, a
+// silence threshold, a rollup over a span — and Atlas must join
+// `event_ts ∈ [start, end)` within the session for cost attribution anyway,
+// because a turn spanning several blocks would double-count spend through a
+// prompt mapping. That join answers the display question too. It also never
+// worked: watch/filter.go yields `promptId`, the store indexes the per-message
+// `uuid`, so every real block published an empty mapping.
+func TestTheEmitterHasNoPromptIDSeam(t *testing.T) {
+	if _, ok := reflect.TypeOf(&Emitter{}).Elem().FieldByName("prompt"); ok {
+		t.Error("Emitter still holds a prompt-id reader")
 	}
-	e := New(dig, &fakeSender{}, lister, nil, "actor", filepath.Join(t.TempDir(), "b.json"))
+	m, ok := reflect.TypeOf((*Digester)(nil)).Elem().MethodByName("BlocksCharacterised")
+	if !ok {
+		t.Fatal("Digester lost BlocksCharacterised")
+	}
+	strs := reflect.TypeOf([]string(nil))
+	for i := 0; i < m.Type.NumIn(); i++ {
+		if m.Type.In(i) == strs {
+			t.Errorf("Digester.BlocksCharacterised still takes a []string at %d — the "+
+				"only []string it ever carried was the prompt ids", i)
+		}
+	}
+}
+
+// The emitter is constructible with no prompt-id reader at all: the seam is not
+// optional-and-nil, it is gone. A five-argument New is the assertion.
+func TestTheEmitterIsConstructedWithoutAnyPromptReader(t *testing.T) {
+	dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000)}, watermark: f64(900)}
+	e := New(dig, &fakeSender{}, nil, "actor", filepath.Join(t.TempDir(), "b.json"))
 	now := time.Unix(9000, 0)
 	e.advanceAt("claude_code", txPath, now)
-	e.Sweep(context.Background(), now) // seeding: no prompts needed at all
-	if c := dig.lastCall(); len(c.Prompts) != 0 {
-		t.Errorf("the seeding call carried prompt ids: %v", c.Prompts)
-	}
-	e.Sweep(context.Background(), now)
-	if c := dig.lastCall(); len(c.Prompts) != 2 || c.Prompts[0] != "p1" {
-		t.Fatalf("prompts = %v", c.Prompts)
-	}
-}
-
-// ⚠️ THE RANGE, AND ONE CALL FOR IT. The lister used to be asked for a TAIL,
-// which on any transcript over 16 MB answered about the wrong part of the file
-// entirely — measured: 72 blocks, `covers` empty on all of them. It is now asked
-// for the span being drained, and asked ONCE per sweep: a per-block call would
-// multiply a 24-block drain into 24 range scans of overlapping ground for an
-// answer one scan already contains.
-func TestTheEmitterAsksForTheSweptSpanOnceNotPerBlock(t *testing.T) {
-	var all []enrich.BlockCharacterisation
-	for i := 0; i < 12; i++ {
-		all = append(all, block(float64(1000+i*1200)))
-	}
-	dig := &fakeDig{all: all, watermark: f64(900)}
-	type ask struct{ from, to float64 }
-	var asks []ask
-	lister := func(source, path string, from, to float64, n int) []string {
-		asks = append(asks, ask{from, to})
-		return []string{"p1"}
-	}
-	e := New(dig, &fakeSender{}, lister, nil, "actor", filepath.Join(t.TempDir(), "b.json"))
-	now := time.Unix(90000, 0)
-	e.advanceAt("claude_code", txPath, now)
-	e.Sweep(context.Background(), now) // seeding: asks for nothing
-	if len(asks) != 0 {
-		t.Fatalf("the seeding sweep asked for prompt ids: %v", asks)
-	}
-
-	if n := e.Sweep(context.Background(), now); n != len(all) {
-		t.Fatalf("published %d, want all %d blocks", n, len(all))
-	}
-	if len(asks) != 1 {
-		t.Fatalf("%d range calls for one sweep of %d blocks, want exactly 1", len(asks), len(all))
-	}
-	// The span asked for is the one being drained: from the cursor (no block
-	// starting earlier can come back) to now (no block can end later). It must
-	// therefore cover every block the sweep published.
-	if asks[0].from != 900 {
-		t.Errorf("range started at %v, want the cursor 900", asks[0].from)
-	}
-	if asks[0].to < all[len(all)-1].EndTS {
-		t.Errorf("range ended at %v, before the last block's end %v",
-			asks[0].to, all[len(all)-1].EndTS)
-	}
-	for _, b := range all {
-		if b.StartTS < asks[0].from || b.EndTS > asks[0].to {
-			t.Errorf("block [%v,%v] lies outside the asked range [%v,%v]",
-				b.StartTS, b.EndTS, asks[0].from, asks[0].to)
-		}
-	}
-}
-
-// The emitter must sweep only the ACTIVE set. A machine with hundreds of known
-// transcripts would otherwise do hundreds of round-trips an interval, forever,
-// almost all returning nothing.
-func TestOnlyActiveTranscriptsAreSwept(t *testing.T) {
-	dig := &fakeDig{watermark: f64(900)}
-	e := newTestEmitter(t, dig, &fakeSender{})
-	now := time.Unix(10000, 0)
-	for i := 0; i < 5; i++ {
-		e.advanceAt("claude_code", filepath.Join("/p", string(rune('a'+i))+".jsonl"), now)
-	}
-	e.Sweep(context.Background(), now)
-	if got := dig.callCount(); got != 5 {
-		t.Fatalf("swept %d transcripts, want the 5 active ones", got)
-	}
-	// Settle them all; the next sweep costs nothing.
-	e.Sweep(context.Background(), now.Add(idleSeconds+settleGrace+time.Minute))
-	before := dig.callCount()
-	e.Sweep(context.Background(), now.Add(24*time.Hour))
-	if dig.callCount() != before {
-		t.Fatalf("a settled machine still made %d calls", dig.callCount()-before)
-	}
-}
-
-func TestEnabledDefaultsOff(t *testing.T) {
-	t.Setenv(EnvEnabled, "")
-	if Enabled() {
-		t.Fatal("the block path must ship OFF: Atlas stores blocks but nothing reads them yet")
-	}
-	t.Setenv(EnvEnabled, "1")
-	if !Enabled() {
-		t.Fatal("KELD_BLOCKS=1 did not enable the path")
-	}
-}
-
-func TestIntervalFromEnv(t *testing.T) {
-	t.Setenv(EnvInterval, "")
-	if got := IntervalFromEnv(); got != DefaultInterval {
-		t.Fatalf("default = %s, want %s", got, DefaultInterval)
-	}
-	t.Setenv(EnvInterval, "90s")
-	if got := IntervalFromEnv(); got != 90*time.Second {
-		t.Fatalf("override = %s", got)
-	}
-	// A nonsense value falls back rather than disabling the sweep.
-	t.Setenv(EnvInterval, "not-a-duration")
-	if got := IntervalFromEnv(); got != DefaultInterval {
-		t.Fatalf("bad override = %s", got)
-	}
-}
-
-// The sweep interval must never be finer than the reference series' own bin,
-// because a block's edges ARE bin edges: a shorter interval buys no freshness,
-// only repeated queries returning what the last one did.
-func TestTheDefaultIntervalIsNotFinerThanABin(t *testing.T) {
-	const binSeconds = 5 * time.Minute
-	if DefaultInterval < binSeconds {
-		t.Fatalf("interval %s is finer than the 5-minute bin blocks are cut on", DefaultInterval)
+	e.Sweep(context.Background(), now) // seeds the cursor
+	if n := e.Sweep(context.Background(), now); n != 1 {
+		t.Fatalf("published %d blocks with no prompt reader, want 1", n)
 	}
 }

@@ -104,8 +104,9 @@ precision result was measured on, and a re-measurement at block scale has not be
 
 ## PRIVACY
 
-Coordinates only, and the same set `/analyze` already publishes: bin timestamps, `(level, ref)`
-counts, prompt IDs and instants for `covers`. No prompt text, no spans, no offsets are read. The
+Coordinates only, and a SUBSET of what `/analyze` publishes: bin timestamps and `(level, ref)`
+counts. No prompt id, no prompt text, no spans, no offsets are read -- the block <-> episode
+mapping that once carried ids is deleted (see `blocks.py`, "`covers` WAS DELETED"). The
 one text-derived level, `term`, publishes as `inventory.named_terms` exactly as it does on
 `/analyze` -- this path adds no new class of data and, like `prior.py`, cannot: `PRIOR_DIMENSIONS`
 is derived from ALLOCATION and `dynamics` carries no level value at all.
@@ -250,7 +251,7 @@ def digest(store, session, block, path, floor=None, sizer=None, prior=True):
     """Characterise ONE block: `blocks.Block` -> the published payload.
 
     `start`/`end` are EPOCH SECONDS, the unit `blocks.py` keys everything on and the unit
-    `since_ts` and `covers`' `from`/`to` are in. `/analyze` converts its window edges to ISO
+    `since_ts` is in. `/analyze` converts its window edges to ISO
     because a window is anchored to a prompt's own ISO instant; a block is anchored to a bin, and
     a consumer that has to parse an ISO string back into a float to advance its cursor is being
     handed the wrong type.
@@ -323,33 +324,7 @@ def is_closed(cut, i, watermark, now, current=True, idle_seconds=IDLE_SECONDS):
     return bool(current) and (float(now) - float(b.end)) >= float(idle_seconds)
 
 
-def time_prompts(store, session, prompt_ids):
-    """`[(prompt_id, epoch)]` ascending, for the ids the store can time. The daemon NAMES the
-    human prompts; the store only TIMES them.
-
-    ⚠️ **The `prompt` table must never be queried to DISCOVER prompts.** It indexes every user-
-    AND assistant-shaped turn (`ingest.py` stores everything `turns_in` yields, so an assistant
-    uuid resolves too) -- ~260 rows for one real session's 14 human prompts -- so a caller that
-    read it would make every agent turn its own episode and swallow the session. Only the daemon
-    knows which ids enrichment fired on, because only it applies
-    `internal/agent/watch/filter.go`'s human-prompt filter.
-
-    An id the store cannot resolve is DROPPED, not defaulted and not fatal: a not-yet-ingested
-    prompt is a real and ordinary case -- the daemon's list can be ahead of the store by one poll
-    -- and a prompt whose instant is unknown simply cannot define an episode. Inventing one would
-    either hide an episode or manufacture one.
-    """
-    out = []
-    for pid in prompt_ids:
-        iso = store.prompt_time(session, pid)
-        if iso is None:
-            continue
-        out.append((pid, _order_key(iso).timestamp()))
-    out.sort(key=lambda p: p[1])
-    return out
-
-
-def digest_blocks(store, path, since_ts=None, prompt_ids=(), now=None,
+def digest_blocks(store, path, since_ts=None, now=None,
                   max_blocks=DEFAULT_MAX_BLOCKS, current=True, floor=None, sizer=None,
                   prior=True):
     """`POST /blocks`' whole answer: `{"blocks": [...], "watermark": ...}`.
@@ -397,13 +372,6 @@ def digest_blocks(store, path, since_ts=None, prompt_ids=(), now=None,
     if not cut:
         return out
 
-    # `covers` is computed over the WHOLE cut list and then indexed, never over the emitted
-    # subset. `blocks.covers` closes the final episode at `blocks[-1].end`, so running it on a
-    # truncated list would report an episode as `complete` inside the last emitted block when it
-    # actually continues into a block this call is not returning yet -- a UI would draw the work
-    # as having stopped at a boundary the cutter chose.
-    per_block = blocks_mod.covers(cut, time_prompts(store, session, prompt_ids))
-
     floor = store.serving_floor() if floor is None else floor
     for i, b in enumerate(cut):
         if len(out["blocks"]) >= max_blocks:
@@ -414,7 +382,6 @@ def digest_blocks(store, path, since_ts=None, prompt_ids=(), now=None,
             continue
         if floor is not None and quantize(float(b.start)) < float(floor):
             continue
-        d = digest(store, session, b, path, floor=floor, sizer=sizer, prior=prior)
-        d["covers"] = per_block[i]
-        out["blocks"].append(d)
+        out["blocks"].append(
+            digest(store, session, b, path, floor=floor, sizer=sizer, prior=prior))
     return out

@@ -25,9 +25,9 @@ not for re-deriving numbers that `test_analysis_window.py`, `test_analysis_prior
 `test_analysis_dynamics.py`, `test_magnitude.py` and `test_latency.py` already own.
 
 The fixture is a real transcript through a real `ingest_file` into a real SQLite store, not a
-stub: `active_bins` reads the `bin` table, the watermark comes from the `ingest` checkpoint, and
-`covers` needs the `prompt` index. Every one of those is a thing a fake would have to fake
-correctly, and the closure rule is exactly a claim about how they line up.
+stub: `active_bins` reads the `bin` table and the watermark comes from the `ingest` checkpoint.
+Both are things a fake would have to fake correctly, and the closure rule is exactly a claim about
+how they line up.
 """
 import atexit
 import asyncio
@@ -54,8 +54,8 @@ atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 # that ran after it -- and the runner's order is alphabetical, so it did.
 _SEQ = itertools.count()
 
-# Two prompts, so `covers` has two episodes to map and the "unknown id" test has a real id to
-# survive beside the bogus one.
+# Two user turns in the fixture. They are uuids in the transcript, nothing more: no block field is
+# derived from a prompt id since `covers` was deleted, and the absence tests below pin that.
 P1, P2 = "blk-prompt-0001", "blk-prompt-0002"
 
 
@@ -263,52 +263,65 @@ def test_max_blocks_bounds_the_response_and_bounding_it_loses_nothing():
     assert rest["blocks"][0]["start"] == cut[-1].start, _spans(rest)
 
 
-# --- covers: the block <-> episode mapping -------------------------------------------------------
+# --- covers is DELETED, and `store.prompt_time` with it ------------------------------------------
+#
+# The block -> prompt-episode mapping is gone. Not repaired: DELETED. A block is time end to end
+# (a cap, a silence threshold, a rollup over a span) and Atlas must join
+# `event.ts in [block.start, block.end)` within the session for COST regardless -- a turn spanning
+# several blocks would double-count spend through `covers` -- and that join also answers the
+# display question, since Atlas holds `ToolEvent.session_id` and `event_ts`. `covers` was a second,
+# weaker copy of it, and it shipped BROKEN: `internal/agent/watch/filter.go` yields `promptId`
+# while `ingest.py` indexes the per-message `uuid`, so `store.prompt_time` resolved none of the ids
+# and every real run published an empty list.
+#
+# These tests pin the ABSENCE of the whole apparatus, including the lookup, because a lookup that
+# silently answers `None` for every id is exactly what nothing noticed for a whole release.
 
-def test_an_unknown_prompt_id_is_dropped_rather_than_being_fatal():
-    """A not-yet-ingested prompt is an ordinary case — the daemon's list can be one poll ahead of
-    the store — and a prompt whose instant is unknown simply cannot define an episode. Inventing
-    one would either hide an episode or manufacture one, and raising would discard every block in
-    the call over one id."""
+def test_no_block_carries_a_covers_key():
     store, path = _fixture()
-    session = session_of(path)
-    assert blockdigest.time_prompts(store, session, ["not-a-prompt"]) == []
-    timed = blockdigest.time_prompts(store, session, [P2, "not-a-prompt", P1])
-    assert [pid for pid, _ts in timed] == [P1, P2], timed      # and sorted ascending
-
     now = _cut(store, path)[-1].end + blockdigest.IDLE_SECONDS
-    out = blockdigest.digest_blocks(store, path, now=now,
-                                    prompt_ids=["ghost-0", P1, "ghost-1", P2])
-    ids = {e["prompt_id"] for b in out["blocks"] for e in b["covers"]}
-    assert ids == {P1, P2}, ids
+    out = blockdigest.digest_blocks(store, path, now=now)
+    assert out["blocks"], "premise: the fixture closes blocks"
+    for b in out["blocks"]:
+        assert "covers" not in b, sorted(b)
 
 
-def test_covers_rides_each_block_and_is_cut_from_the_whole_session():
-    """`covers` is a member of the block object rather than a parallel array, because the response
-    is already a list of block objects and a sibling list would have to be re-zipped by every
-    consumer.
+def test_digest_blocks_takes_no_prompt_argument_and_time_prompts_is_gone():
+    """The seam, not just the key. A `prompt_ids` parameter left behind would invite a caller to
+    pass ids that nothing consumes, and `time_prompts` was the only thing that timed them."""
+    import inspect
+    assert not hasattr(blockdigest, "time_prompts"), "time_prompts is back"
+    params = list(inspect.signature(blockdigest.digest_blocks).parameters)
+    assert not any("prompt" in p for p in params), params
 
-    It is computed over the WHOLE cut list and then indexed, never over the emitted subset:
-    `blocks.covers` closes the final episode at `blocks[-1].end`, so running it on a truncated
-    list would report an episode as `complete` inside the last emitted block when it actually
-    continues into a block this call has not returned yet. A UI would draw the work as stopping at
-    a boundary the cutter chose.
-    """
+
+def test_the_blocks_path_never_calls_store_prompt_time():
+    """⚠️ THE SPECIFIC DEFECT. `store.prompt_time` returned `None` for every id the daemon sent,
+    because the two sides index different id spaces, and nothing raised. So this pins that the
+    call is GONE rather than merely unused: a store whose `prompt_time` explodes must still serve
+    a whole digest.
+
+    Both halves matter -- the source check catches a call reachable only on a branch this fixture
+    does not take, and the exploding store catches one reached through an alias the source check
+    cannot see."""
+    import inspect
+    for mod in (blockdigest, blocks_mod):
+        # The module docstring is excluded on purpose: both modules RECORD the deleted lookup in
+        # prose so a reader learns why it is not there, and a test that forbade the words would
+        # forbid the explanation.
+        src = inspect.getsource(mod).replace(mod.__doc__ or "", "")
+        assert "prompt_time" not in src, \
+            "%s still reaches for store.prompt_time" % mod.__name__
+
     store, path = _fixture()
-    cut = _cut(store, path)
-    now = cut[-1].end + blockdigest.IDLE_SECONDS
-    partial = blockdigest.digest_blocks(store, path, now=now, prompt_ids=[P1, P2], max_blocks=1)
-    b0 = partial["blocks"][0]
-    assert [e["prompt_id"] for e in b0["covers"]] == [P1], b0["covers"]
-    # P1's episode runs to P2 at 11:00, well past this block's 10:20 end.
-    assert b0["covers"][0]["complete"] is False, b0["covers"]
-    assert b0["covers"][0]["to"] == b0["end"], b0["covers"]
 
-    whole = blockdigest.digest_blocks(store, path, now=now, prompt_ids=[P1, P2])
-    assert [[e["prompt_id"] for e in b["covers"]] for b in whole["blocks"]] == [[P1], [P1], [P2]]
-    # No prompts supplied is not an error: the mapping is simply empty for every block.
-    bare = blockdigest.digest_blocks(store, path, now=now)
-    assert [b["covers"] for b in bare["blocks"]] == [[], [], []], _spans(bare)
+    def _boom(*a, **kw):
+        raise AssertionError("the /blocks path called store.prompt_time")
+
+    store.prompt_time = _boom
+    now = _cut(store, path)[-1].end + blockdigest.IDLE_SECONDS
+    out = blockdigest.digest_blocks(store, path, now=now)
+    assert len(out["blocks"]) == 3, _spans(out)
 
 
 # --- the digest itself ---------------------------------------------------------------------------
@@ -407,8 +420,7 @@ def test_the_response_carries_no_prompt_text():
     resolves them before this module ever sees a value."""
     store, path = _fixture()
     cut = _cut(store, path)
-    out = blockdigest.digest_blocks(store, path, now=cut[-1].end + blockdigest.IDLE_SECONDS,
-                                    prompt_ids=[P1, P2])
+    out = blockdigest.digest_blocks(store, path, now=cut[-1].end + blockdigest.IDLE_SECONDS)
     blob = json.dumps(out)
     for forbidden in ("build the thing", "now ship it", "/workspace/", "cwd", "message"):
         assert forbidden not in blob, forbidden
@@ -446,9 +458,16 @@ def test_the_blocks_endpoint_is_confined_to_the_analyze_roots_and_answers_off_th
         assert exc.status_code == 403, exc.status_code
 
     cut = _cut(store, path)
+    # ⚠️ `prompts` is DELETED from the request model, and an older daemon still sending it must be
+    # TOLERATED rather than 422'd: the two halves of this deletion ship separately. Pydantic's
+    # default `extra="ignore"` is what makes that true, so it is asserted rather than assumed.
     body = m.BlocksIn(path=path, prompts=[P1, P2],
                       now=cut[-1].end + blockdigest.IDLE_SECONDS)
+    assert "prompts" not in m.BlocksIn.model_fields, sorted(m.BlocksIn.model_fields)
+    assert not hasattr(body, "prompts"), "an ignored extra must not become an attribute"
     out = asyncio.run(m.blocks(body))
+    for b in out["blocks"]:
+        assert "covers" not in b, sorted(b)
     assert [b["end_reason"] for b in out["blocks"]] == ["budget", "idle", "session_end"], \
         _spans(out)
     # The status rides every block for `/analyze`'s reason: an empty `named_terms` is otherwise
