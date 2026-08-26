@@ -27,6 +27,17 @@ Signal↔Atlas contract corrected against the measurements.
 
 ## NEXT — Signal side
 
+- [ ] ⚠️ **`internal/agent/publish/report.go` now renders a THIN value as if it were attributed.**
+      Introduced by the evidence+status change, live today, and in an uncommitted file owned by
+      someone else so it was left alone. `report.go:96` gates on `l.Value != ""`, which WAS
+      equivalent to "attributed" — under the old contract a sub-floor dimension had an empty value.
+      It no longer is: a `thin` value passes that guard and prints beside attributed ones with no
+      indication it sits under the floor, which is exactly the misreading `status` exists to
+      prevent. Fix is one condition, and the same file already has the idiom at line 235 for
+      effort: `e.Effort.AuthoredStatus != "attributed"` appends the status rather than hiding the
+      value. Gate on `l.Status == "attributed"`, or print the status beside a thin value.
+
+
 - [ ] **Spec: weight edits heavier than reads.** Reads outnumber edits 3.4:1 (read 34.5%, search
       17.3%, edit 11.5%, create 3.3%), and every path touch currently emits at weight 1.0, so a
       block that skimmed twelve files and rewrote one publishes what it skimmed.
@@ -80,7 +91,10 @@ joins `enrichment.corr_id == tool_event.prompt_id`, so a block row is stored and
       lacks; the store already holds every ingested session, so it is the prior's mechanism with a
       wider scope key. Complementary to `prior`, not a substitute (session scope collapses every
       lift to x1.0).
-- [ ] **Why does `repo` attribute 0 of 1,502 blocks?** It is in ALLOCATION and never fires on this
+- [ ] **Why does `repo` attribute 0 of 1,502 blocks?** Possibly related: `scripts/test_act_artifact.py`
+      fails 21/22 with `KeyError: 'repo'` on a committed study frame that predates the dimension —
+      reproduced at HEAD, so pre-existing, but it is the second sign that `repo` was added and never
+      fully landed. It is in ALLOCATION and never fires on this
       corpus. Either the remote is unresolvable for these sessions or the level is not being
       emitted. Unexplained.
 
