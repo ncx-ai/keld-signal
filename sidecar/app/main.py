@@ -20,6 +20,8 @@ from pydantic import BaseModel
 
 from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, analyze_window
 from app.analysis.blockdigest import DEFAULT_MAX_BLOCKS, digest_blocks
+from app.analysis.features import DEFAULT_MAX_FEATURE_ROWS
+from app.analysis.features import features as features_for, manifest as feature_manifest
 from app.analysis.tick import DEFAULT_MAX_WINDOWS, tick as tick_windows_for
 from app.analysis.dynamics import DEFAULT_SIZER
 from app.analysis.ingest import ingest_file, is_current, session_of
@@ -368,6 +370,34 @@ class BlocksIn(BaseModel):
     now: float | None = None
     max_blocks: int = DEFAULT_MAX_BLOCKS
     resolved: ResolvedFacts | None = None
+
+
+class FeaturesIn(BaseModel):
+    """`S(t)` at one or more ANCHOR INSTANTS of one transcript. Coordinates and instants only —
+    never text, never a span, never an offset, and never a prompt id.
+
+    `ats` are epoch seconds, the unit the whole block/feature path keys on (see BlocksIn on why
+    an ISO string would be the wrong type for a cursor). They are ANCHORS, not a range: the
+    caller decides the sampling grid — per closed block, per non-empty 5-minute bin, or an
+    arbitrary probe from a study — and this endpoint has no opinion about which, because the
+    design spec is explicit that blocks are NOT a sufficient grid on their own (every block
+    boundary is arithmetic and no boundary is a claim about the work).
+
+    ⚠️ **There is no `capture` field and there must not be one.** Whether the capture rows exist
+    is a property of the STORE, fingerprinted per transcript into `parse_state`, and the row
+    reports it back as `capture_recorded`. A caller-supplied flag would let a daemon assert
+    capture over a transcript whose rows were written without it — the incoherent-corpus failure
+    the fingerprint exists to prevent.
+
+    `manifest` asks for the ordered slot names beside the rows. Off by default: it is
+    `features.DIMS` strings, an order of magnitude more bytes than the vectors it describes, and
+    a caller needs it once per build. `spec_sha` rides every response so a cached manifest can be
+    invalidated without fetching it.
+    """
+    path: str
+    ats: list[float] = []
+    max_rows: int = DEFAULT_MAX_FEATURE_ROWS
+    manifest: bool = False
 
 
 class IngestIn(BaseModel):
@@ -782,6 +812,77 @@ async def blocks(body: BlocksIn):
     except StoreBehind:
         # The store could not be OPENED at all. A store that is merely behind the file is not
         # this — it just closes fewer blocks (see _blocks_blocking).
+        raise HTTPException(status_code=503,
+                            detail="the reference-series store is unavailable") from None
+
+
+def _features_blocking(path, ats, max_rows, want_manifest):
+    """The whole of /features' work, on an executor thread.
+
+    A QUERY, never a parse, for `_blocks_blocking`'s reason one step further along: this route is
+    driven by a sampling grid the caller chose, so it can be asked for dozens of rows at once and
+    a whole-file parse inside any one of them would be paid dozens of times. What the store has
+    not read yet simply has no row yet, and the next call gets it.
+
+    `_analysis_nlp()` is NOT resolved here — nothing on this path parses a transcript, so no
+    spaCy pipeline is needed and a multi-second load must not be triggered by a read. The `term`
+    level reaches the vector as five shape statistics computed off rows that were written at
+    INGEST time; whether the terms pipeline ran is already fingerprinted into `parse_state`.
+    """
+    st = _store()
+    if st is None:
+        raise StoreBehind("the reference-series store could not be opened")
+    out = features_for(st, path, ats, max_rows=max_rows)
+    if want_manifest:
+        out["manifest"] = list(feature_manifest())
+    return out
+
+
+@app.post("/features")
+async def features(body: FeaturesIn):
+    """`S(t)` — the STRUCTURED FEATURE VECTOR at each requested anchor of one transcript.
+
+        a reference series -> a fixed-width vector of numbers, per anchor
+
+    Step 2 of `docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`. NOTHING IS
+    PUBLISHED BY THIS ROUTE and no encoder is loaded: it computes and returns, and the Go emitter
+    half plus the wire type are step 3. See app/analysis/features.py for the disjoint shell
+    ladder, the frozen vocabulary manifest, the normalisation transforms and why
+    `workstreams.payload` is the wrong input.
+
+    Returns `{"feature_spec", "spec_sha", "dims", "session", "rows": [...]}`, one row per anchor
+    the store could characterise, in the order asked. A row is `{"at", "session",
+    "session_start", "capture_recorded", "values"}` where `values` is `dims` floats in
+    `manifest()` order — numbers only, no identity string anywhere in it. Anchors the store
+    cannot characterise (before the session's first active bin, or a transcript never ingested)
+    are SKIPPED rather than returned as a row of zeros, which would enter a training set as a
+    real observation of nothing happening.
+
+    ⚠️ `feature_spec` and `spec_sha` are not decoration. A vector is the one artefact where
+    pooling two incompatible versions is invisible — the widths can even match while index 700
+    means two different things — so both ride every response and a corpus builder must partition
+    on them. Same argument as `ingest.terms_mode`.
+
+    Like /analyze, /ingest, /tick and /blocks it bypasses _dispatch and the single-flight runner:
+    this is a series query, not inference, and it must answer while the runner is occupied or no
+    worker has ever been spawned. It runs in the default executor so a long batch cannot stall
+    the event loop out from under /health and /metrics.
+    """
+    # Confinement BEFORE anything else, the SAME allowlist /analyze, /ingest, /tick and /blocks
+    # use. The sidecar has no auth, and this reads a transcript's series as the daemon's user.
+    # 403, not 404: a rejected path and an unresolvable one are different facts. Counted as
+    # analyze_rejected for /blocks' reason — it is literally the same allowlist and a
+    # features_rejected field would mean editing app/metrics.py, which this path does not touch.
+    if not _within_roots(body.path, _analyze_roots()):
+        _count("analyze_rejected")
+        raise HTTPException(status_code=403,
+                            detail="path is outside the configured transcript roots")
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(
+            None, _features_blocking, body.path, list(body.ats),
+            max(0, int(body.max_rows)), bool(body.manifest))
+    except StoreBehind:
         raise HTTPException(status_code=503,
                             detail="the reference-series store is unavailable") from None
 
