@@ -12,6 +12,20 @@ Signal↔Atlas contract corrected against the measurements.
 
 ## IN FLIGHT
 
+- [x] **DONE `c0c7ab5`** — `blockdigest.py` + `POST /blocks`. 39 sidecar tests, 45 Go packages,
+      `analyze.py` untouched (v2 as its own path). `max_blocks=24` = 8h of work; one digest 1.1 ms
+      short-session / 5.9 ms at 8h; a day's backlog 142 ms / 129 KB.
+- [ ] **The Go emitter** — the remaining half of Signal v2. Asks `/blocks` from a per-transcript
+      cursor in `~/.keld/state/`, publishes each block once. NOT the tick and must not be built on
+      it. Salvaged and reusable: an ids-only human-prompt lister was written and reverted with the
+      bad wiring — see `/home/dg/.claude/jobs/5f1b5571/tmp/salvage/recentids.go`. ⚠️ Its sibling
+      `resolve.RecentPrompts` returns prompt TEXT and must never be the thing sent to the sidecar.
+- [ ] ⚠️ **The digest is O(session) per block, so a session costs O(T squared).** Measured 1.1 ms at
+      short session, 5.9 ms at 8 hours; the growth is `prior`, which spans
+      `[session start, block start)`. The corpus holds an 11.7-day session — ~840 blocks each
+      rolling up half of it. Per-device and emitter-side, not page-side, so not urgent — but it is
+      the one superlinear place in the design. Cap the prior's span, or cache it per session.
+
 - [ ] **`evidence` + `status` on every workstream dimension.** Sub-floor dimensions are suppressed
       today; measured, 924 of 12,016 dimension-slots hold real evidence and publish nothing (198 of
       them held FOUR observations against a floor of 5). Chain: `workstreams.payload` →
