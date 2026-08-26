@@ -14,4 +14,12 @@ type Remote struct {
 	// Atlas does not serve this key yet. The client seam exists now so adopting
 	// it later is a server change alone, rather than a second client migration.
 	PIIRegions *[]string `json:"pii_regions"`
+	// Features is the org's control over THE SIGNAL-EMBEDDINGS PATH: whether
+	// feature vectors are collected, and whether they are published. Both
+	// default OFF locally, and a nil block leaves both at the local value.
+	//
+	// Atlas does not serve this key yet. The client seam exists now so adopting
+	// it later is a server change alone, rather than a second client migration
+	// — the same reason PIIRegions above is already modelled.
+	Features *Features `json:"features"`
 }

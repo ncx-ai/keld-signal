@@ -56,6 +56,23 @@ type Settings struct {
 	// KELD_PII_REGIONS > agent-config.json > `us`, and remote wins over all
 	// three when the key is present.
 	PIIRegions []string `json:"pii_regions"`
+
+	// Features and FeaturesPublish are THE SIGNAL-EMBEDDINGS PATH's two local
+	// toggles: collecting the vectors, and sending them to Atlas. BOTH DEFAULT
+	// OFF — the zero value is the default, which is why these are plain bools
+	// where PIIRegions is a slice: "absent" and "false" are the same answer
+	// here, and the org override is expressed with pointers on Remote.Features
+	// instead.
+	//
+	// Shaped local-then-remote like IncludeEntityText, and read per sweep
+	// rather than at startup, so an org flipping either takes effect on the
+	// next sweep rather than the next restart.
+	//
+	// ⚠️ The third toggle in the design, `capture`, is deliberately absent: it
+	// is the sidecar's KELD_CAPTURE and is fingerprinted into `parse_state`, so
+	// flipping it forces a reparse. See settings/features.go.
+	Features        bool `json:"features"`
+	FeaturesPublish bool `json:"features_publish"`
 }
 
 // PIIRegionsEnv overrides the config file's pii_regions. Comma-separated

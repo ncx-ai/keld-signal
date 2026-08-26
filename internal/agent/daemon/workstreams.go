@@ -5,6 +5,7 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/features"
 )
 
 // windowAnalyzer is the OPTIONAL capability a backend advertises when it can
@@ -97,6 +98,17 @@ type serviceFacets struct {
 	// signal (see blocks.go). Nil when the service cannot provide it, which
 	// switches the emitter off rather than degrading it.
 	Blocks blocks.Digester
+	// Features is THE SIGNAL-EMBEDDINGS PATH's producer, and like Tick and
+	// Blocks it is consumed by no job: it is driven by the feature emitter's own
+	// timer off the watcher's advance signal (see features.go).
+	//
+	// ⚠️ IT IS SET BY deterministicBackend ALONE, never by facetsFor, and that
+	// asymmetry is the scope decision rather than an oversight. facetsFor runs
+	// in both ml_backend modes that have a service; this path is scoped to
+	// "deterministic", where it must be ABSENT under "auto" — never registered,
+	// so it appears in neither facets_skipped nor extractor_versions. See
+	// featureSourceFor.
+	Features features.Source
 }
 
 // facetsFor returns the service facets of the client it is handed, leaving any
