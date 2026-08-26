@@ -16,11 +16,31 @@ is the entire performance case a window needs). Nothing here imports pandas or n
 
 **What may be stored.** Two shapes, and only two. Reference EVENTS — `(session, ts, level, ref,
 n)`, derived from tool-call inputs — and per-turn MAGNITUDES — `(session, ts, kind, value)`,
-numbers measuring what a turn cost (`turn_magnitude`, and `app/analysis/magnitude.py` for what
-they mean). `upsert_events` routes `ref` rows to one and `mag` rows to the other and DROPS
-everything else on the way in: a `say` row carries `len(body)`, a measure of message TEXT, and a
-`tok` row carries raw token counts superseded by the price-weighted magnitude. No prompt text and
-no raw message content ever reaches this file, and the database is created 0600.
+numbers measuring a turn (`turn_magnitude`, and `app/analysis/magnitude.py` for what they mean).
+`upsert_events` routes `ref` rows to the first and `mag` rows to the second, and everything else
+is dropped on the way in — WITH ONE CONDITIONAL EXCEPTION, added under `KELD_CAPTURE=1`:
+
+  ⚠️ Under capture, `say` and `tok` rows ALSO become magnitudes, under the derived kinds in
+  `magnitude.CAPTURE_KINDS`. A `say` row carries `len(body)` — a measure of message TEXT — and a
+  `tok` row carries the raw token split. Both were dropped unconditionally before this branch,
+  and that sentence used to be this header's flat statement of the contract. It is now
+  conditional, and the DEFAULT IS STILL DROP (`KELD_CAPTURE` is off unless set).
+
+  What did not change is the invariant those drops were protecting: a character count is a
+  number ABOUT text, never a byte OF it. Nothing routes these rows to `event`, no span and no
+  offset into a message is stored, and `bin_offset` holds a byte position in the transcript
+  FILE, not into any message. No prompt text and no raw message content ever reaches this file,
+  and the database is created 0600.
+
+  ⚠️ AND THE TOGGLE IS NOT UNIFORM ACROSS A STORE. `ingest.capture_mode` fingerprints the
+  setting into `parse_state`, so a change forces a reparse and no single transcript can hold
+  rows from both settings. That is a per-TRANSCRIPT guarantee, and the store is not one
+  transcript: flip `KELD_CAPTURE=1` and only the sessions that see another append reparse, so a
+  dormant session keeps no capture rows for as long as it stays dormant. A corpus builder
+  querying this store therefore CAN see two incomparable populations. Whether that needs a
+  per-session capture marker is a step-2 design decision and deliberately not answered here —
+  the honest reading today is `Store.bin_offset`'s: a missing row means *not recorded*, which is
+  not the same as zero.
 
 A magnitude is a number on a TURN, not a reference, so it does not go in `event`: forcing it into
 `ref` as a bucket string ("0-1k tokens") would make the one thing it is — a number — the one
@@ -122,8 +142,16 @@ UNIQUE_SESSION_VERSION = 5
 #   turn_magnitude    -- keyed on `session` and joined to `event` on the turn's timestamp, so
 #                        merged event rows mean merged magnitudes; and a magnitude whose events
 #                        were discarded is a number nothing can be joined to.
+#   bin_offset        -- keyed on `session`, and a byte offset into a file whose events were
+#                        discarded points at lines nothing can be joined to either. Listed for
+#                        completeness rather than for effect: this tuple's only consumer is
+#                        `_migrate`, which fires below UNIQUE_SESSION_VERSION -- a store from
+#                        before this table existed, so it is always empty there (the schema is
+#                        applied first, so the DELETE is valid and counts 0). The tuple reads as
+#                        a REGISTRY of what is session-keyed, and an incomplete registry is a
+#                        trap for the next migration, which will not be below that version.
 _SESSION_KEYED_TABLES = ("event", "bin", "prompt", "ingest", "parse_state", "retention",
-                         "turn_magnitude")
+                         "turn_magnitude", "bin_offset")
 
 # --- Retention -------------------------------------------------------------------------------
 #
@@ -275,8 +303,21 @@ CREATE INDEX IF NOT EXISTS event_session_ts ON event(session, ts);
 -- `ref`-as-bucket-string shape would have destroyed. New magnitudes are therefore data rather
 -- than DDL. There is deliberately no `magnitude_kind` registry table paralleling `bin_level`:
 -- `bin` is SPARSE BY DESIGN, so a level's absence there is ambiguous between "not precomputed"
--- and "no evidence" and needs the registry to disambiguate. Here a missing kind on a turn means
--- one thing only -- that turn had none of it, i.e. zero -- so there is nothing to disambiguate.
+-- and "no evidence" and needs the registry to disambiguate.
+--
+-- ⚠️ THAT ARGUMENT USED TO END "here a missing kind on a turn means one thing only -- that turn
+-- had none of it, i.e. zero -- so there is nothing to disambiguate", AND THE CAPTURE KINDS MADE
+-- IT FALSE. A missing `say_user` now means either "no user text on that turn" or "capture was
+-- off when this session was ingested". It stays true of the COST kinds, which are written
+-- unconditionally, and that is the set `has_magnitudes` is scoped to.
+--
+-- No registry is added for it in this wave, deliberately. A registry would have to be keyed per
+-- SESSION to say anything useful -- the fingerprint in `ingest.capture_mode` already prevents
+-- mixing within one transcript, and what it cannot prevent is one store holding a session
+-- ingested under capture beside a dormant session that has not reparsed since the flip. Whether
+-- that marker is needed is a step-2 decision (see this module's header), and adding DDL to
+-- answer a question nobody has asked yet is how a schema acquires a column no reader trusts.
+-- Until then the honest reading is `bin_offset`'s: absent means NOT RECORDED, not zero.
 --
 -- `source_line` is in the key for exactly the reason it is in `event`'s: it makes ingest
 -- IDEMPOTENT. A crash between appending and advancing the byte offset replays the same tail, and
@@ -368,6 +409,16 @@ CREATE TABLE IF NOT EXISTS prompt (
 -- The value is the SMALLEST offset seen in the bin, enforced on write with MIN() rather than
 -- left to insertion order: incremental ingest is designed to replay a tail after a crash, and a
 -- replay must not be able to raise the offset past the lines it is meant to reach.
+--
+-- ⚠️ THE MAP IS ALMOST, BUT NOT QUITE, MONOTONE, AND THAT RESIDUE IS THE TRANSCRIPT'S OWN. A
+-- transcript is not perfectly time-ordered -- AGENTS.md records 9 of 9,937 real turns whose
+-- timestamp precedes the previous line's -- so a bin can legitimately anchor above the next
+-- one's. Measured over the 40 largest real transcripts, that is **7 adjacent pairs**, and
+-- `capture.scan` now reproduces exactly the 7 a `json.loads` ground truth gives (it produced 66
+-- before the top-level-timestamp fix). It is deliberately NOT clamped: the module's contract is
+-- to see what `json.loads` sees, and a clamp would silently move an anchor away from the line it
+-- names. A consumer reading `[offset(a), offset(b))` must therefore order its two ends rather
+-- than assume them.
 --
 -- ~12 rows per active hour. No text: a bin timestamp and a byte position.
 CREATE TABLE IF NOT EXISTS bin_offset (
@@ -1035,9 +1086,10 @@ class Store:
            equivalence on and what makes "expired" distinguishable from "not in this
            transcript". If pruning every event still does not fit, it stops and reports
            `over_budget_mb` rather than spinning or reaching for something it must not delete.
-        4. **`turn_magnitude`** -- swept to the floor the first three passes left, because a
-           magnitude below it can no longer be joined to any event. It follows the floor rather
-           than carrying a horizon of its own; see the pass itself.
+        4. **`turn_magnitude` and `bin_offset`** -- swept to the floor the first three passes
+           left, because a magnitude below it can no longer be joined to any event and a byte
+           offset below it points into a span `/analyze` refuses. Both follow the floor rather
+           than carrying a horizon of their own; see the pass itself.
 
         Returns a dict; `ran` is False when the hourly gate declined (see PRUNE_MIN_INTERVAL_S).
         """
@@ -1048,7 +1100,7 @@ class Store:
         last = max((s["last_run"] or 0.0) for s in state.values()) if state else 0.0
         if not (force or over or now - last >= PRUNE_MIN_INTERVAL_S):
             return {"ran": False, "event_pruned": 0, "term_pruned": 0, "term_bins_pruned": 0,
-                    "size_pruned": 0, "magnitude_pruned": 0,
+                    "size_pruned": 0, "magnitude_pruned": 0, "bin_offset_pruned": 0,
                     "truncated": False, "live_mb": self.live_mb(),
                     "file_mb": self.file_mb(), "over_budget_mb": 0.0,
                     "floor": self.serving_floor()}
@@ -1089,18 +1141,27 @@ class Store:
             out["size_pruned"] += n
             self.note_pruned("size", newest, n, now)
 
-        # 4. The magnitudes, swept to the SERVING FLOOR that passes 1-3 just established. Not a
-        #    horizon of their own: a magnitude is only ever read by joining it to an event at the
-        #    same timestamp, so once the events at or below the floor are gone it is a number
-        #    nothing can be joined to -- and left alone it would be the one table in this store
-        #    with no bound on its growth. `<=`, not `<`, because the floor's promise is that no
-        #    event at OR BEFORE it survives.
+        # 4. The magnitudes AND the bin offsets, swept to the SERVING FLOOR that passes 1-3 just
+        #    established. Neither carries a horizon of its own, for the same reason: both are
+        #    read only by joining them to events at the same instant. A magnitude below the floor
+        #    is a number nothing can be joined to; a `bin_offset` below it is a seek into a span
+        #    whose events are gone, which `/analyze` refuses outright (410). Left alone they
+        #    would be the tables in this store with no bound on their growth -- `bin_offset` is
+        #    ~1 MB/year, which is bookkeeping rather than risk, but "unbounded and nobody swept
+        #    it" is not a state this module leaves lying around. `<=`, not `<`, because the
+        #    floor's promise is that no event at OR BEFORE it survives; a bin is swept only when
+        #    the WHOLE of it is below the floor, since its offset still anchors the surviving
+        #    tail of a straddling bin.
         floor = self.serving_floor()
         out["magnitude_pruned"] = 0
+        out["bin_offset_pruned"] = 0
         if floor is not None:
             with self.transaction():
                 cur = self._conn().execute("DELETE FROM turn_magnitude WHERE ts <= ?", (floor,))
                 out["magnitude_pruned"] = cur.rowcount or 0
+                cur = self._conn().execute(
+                    "DELETE FROM bin_offset WHERE bin_ts + ? <= ?", (BIN_SECONDS, floor))
+                out["bin_offset_pruned"] = cur.rowcount or 0
 
         with self.transaction():
             self._conn().execute("""
@@ -1160,8 +1221,11 @@ class Store:
         pol = policy or retention_policy()
         c = self._conn()
         rows = {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                for t in ("event", "turn_magnitude", "bin", "prompt", "parse_state",
-                          "ingest")}
+                # `bin_offset` is here for the reason every other table is: an operator who
+                # cannot see a table's row count cannot see it grow. It reads 0 with capture
+                # off, which is itself the answer to "is capture on for this store".
+                for t in ("event", "turn_magnitude", "bin", "bin_offset", "prompt",
+                          "parse_state", "ingest")}
         oldest = c.execute("SELECT MIN(ts) FROM event").fetchone()[0]
         st = self.retention_state()
         live = self.live_mb()
