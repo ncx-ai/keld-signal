@@ -119,6 +119,21 @@ import (
 // publishable, so a future change that forwards the whole object wholesale —
 // picking up whatever fourteenth key the sidecar adds next — still fails here.
 //
+// ⚠️ `evidence` and `status` are INTENDED on the wire and were never on this
+// list; nothing came off it for them. They are the workstream dimensions'
+// observation count and attribution outcome, added at enrich.SchemaVersion 21
+// so a sub-floor dimension can publish LABELLED instead of being deleted (924
+// of 12,016 measured dimension-slots held real evidence and published nothing).
+// Both are counts-and-closed-vocabulary, the same class as `physical_acts`'
+// `n`. What stays forbidden is what the analysis knows and Atlas must not:
+// `provenance` (which the sidecar computes per dimension and the Go side
+// deliberately drops — the pass is attributed through `extractor_versions`, and
+// a second unparsed attribution channel is what the field was) and `reason`
+// (the dynamics per-side key, which sits beside a per-side `value` naming a
+// reference level; the workstream outcome is `status` precisely so the two
+// spellings cannot be confused, the same rule the session prior already
+// follows).
+//
 // A field added for any of them fails HERE rather than in a review.
 var forbiddenWireKeys = []string{
 	"inventory", "window_start", "window_end",
@@ -173,7 +188,12 @@ func TestEnrichmentWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// `status`, never `reason` — a second meaning for a key already used by
 		// the dynamics per-side objects (which do not publish at all) is a
 		// reader's error waiting to happen, and this list is what enforces it.
-		`"prior"`, `"agrees"`, `"departure"`, `"novel"`, `"status"`} {
+		`"prior"`, `"agrees"`, `"departure"`, `"novel"`, `"status"`,
+		// The workstream dimensions' own two published fields, so `"provenance"`
+		// and `"reason"` staying forbidden below is a real result about a payload
+		// whose workstreams DO carry an evidence count and an attribution
+		// outcome, not a vacuous pass over one that carries neither.
+		`"evidence"`} {
 		if !strings.Contains(got, present) {
 			t.Fatalf("filler did not populate %s; the absence checks below would be vacuous:\n%s",
 				present, got)

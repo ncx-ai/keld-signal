@@ -92,10 +92,39 @@ import (
 // it emits (see enrich.WorkstreamsExtractor), the same way every other pass
 // does, so attribution does not depend on which analyzer supplied the map.
 //
-// A dimension with no dominant value (JSON null, decoding to a nil
-// *Workstream) is OMITTED, never emitted as a Labeled with an empty Value: a
-// published dimension whose value is "" reads downstream as a real answer.
+//   - The WORKSTREAM dimensions carry `status` and `evidence` through onto the
+//     Labeled, and that is the whole of what makes an unattributed dimension
+//     publishable rather than deleted. It is the SAME VOCABULARY GATE as the two
+//     blocks above (enrich.KnownWorkstreamStatus, mirroring the sidecar's
+//     window.REASONS): a status this binary cannot read is version skew, and the
+//     dimension drops whole rather than publishing a value with an unreadable
+//     outcome beside it — a `thin` value rendered as an attributed one is exactly
+//     the misreading the status exists to prevent, so a value with no readable
+//     status is worse than no value.
+//
 // ok=false is propagated unchanged — a failed analysis is not an empty one.
+//
+// TWO WAYS A DIMENSION CAN SAY "no dominant value", and they come from different
+// sidecars:
+//
+//   - JSON null (a nil *Workstream) is what a sidecar OLDER than SCHEMA 16
+//     sends, and it is still OMITTED. There is nothing else to do with it: that
+//     sidecar deleted the count before answering, so there is no evidence and no
+//     status to publish, and a zero Labeled would state an outcome of "" that
+//     nobody can read.
+//
+//   - An object with `status` naming the outcome is what SCHEMA 16 and later
+//     send for every dimension, attributed or not, and it is CARRIED. Under
+//     `absent` that is a Labeled with an empty Value and Evidence 0 — a real
+//     answer ("this level never fired"), readable as such only because Status
+//     says so.
+//
+// An object with NO status at all is the third case and also comes from a
+// pre-16 sidecar, which emitted an object only for a dimension it had
+// attributed. It is read as "attributed" for exactly that reason. Defaulting it
+// to anything else — or dropping it — would blank every workstream on a machine
+// whose frozen sidecar has not been updated, and those machines exist: the
+// sidecar ships separately and can sit in ~/.local/bin indefinitely.
 func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int,
 	resolved enrich.ResolvedFacts) (enrich.WindowAnalysis, bool) {
 	res, ok := c.Analyze(path, promptID, spanMinutes, resolved)
@@ -104,10 +133,11 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int,
 	}
 	out := make(map[string]enrich.Labeled, len(res.Workstreams))
 	for dim, w := range res.Workstreams {
-		if w == nil || w.Value == "" {
+		l, keep := labeledWorkstream(w)
+		if !keep {
 			continue
 		}
-		out[dim] = enrich.Labeled{Value: w.Value, Confidence: w.Share}
+		out[dim] = l
 	}
 	return enrich.WindowAnalysis{
 		Workstreams:      out,
@@ -128,6 +158,36 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int,
 		Dynamics:         convertDynamics(res.Dynamics),
 		Effort:           convertEffort(res.Effort),
 		Prior:            convertPrior(res.Prior),
+	}, true
+}
+
+// labeledWorkstream converts one /analyze dimension into the Labeled the pass
+// publishes, reporting whether it may be carried at all. Shared by AnalyzeLabeled
+// and the tick path so the two cannot answer the same dimension differently.
+//
+// The three cases and why each behaves as it does are in AnalyzeLabeled's
+// comment above: nil drops (a pre-16 sidecar deleted the count, so there is
+// nothing to state), an empty status is read as "attributed" (a pre-16 sidecar
+// answered with an object ONLY when it had attributed), an unrecognised status
+// drops (version skew — a value whose outcome cannot be read is worse than no
+// value, because it renders as a confident one).
+//
+// Confidence is the dimension's share, unchanged: a 0..1 dominance fraction is
+// the natural confidence, and it is now readable as such because Status says
+// what it is a fraction OF.
+func labeledWorkstream(w *Workstream) (enrich.Labeled, bool) {
+	if w == nil {
+		return enrich.Labeled{}, false
+	}
+	status := w.Status
+	if status == "" {
+		status = "attributed"
+	}
+	if !enrich.KnownWorkstreamStatus(status) {
+		return enrich.Labeled{}, false
+	}
+	return enrich.Labeled{
+		Value: w.Value, Confidence: w.Share, Evidence: w.Evidence, Status: status,
 	}, true
 }
 

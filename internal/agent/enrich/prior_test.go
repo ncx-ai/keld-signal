@@ -32,6 +32,15 @@ func TestPriorStatusVocabularyMatchesTheSidecar(t *testing.T) {
 	if strings.Join(want, ",") != strings.Join(PriorStatuses, ",") {
 		t.Errorf("REASONS drifted:\n python %v\n go     %v", want, PriorStatuses)
 	}
+	// The WORKSTREAM dimensions publish the same vocabulary under their own
+	// name, and this pin covers both because there is only one list. Asserted
+	// rather than assumed: `WorkstreamStatuses = PriorStatuses` is what makes
+	// two names safe, and retyping it would put a second copy of window.REASONS
+	// in this package with nothing pinning it.
+	if strings.Join(want, ",") != strings.Join(WorkstreamStatuses, ",") {
+		t.Errorf("WorkstreamStatuses is not the same list:\n python %v\n go     %v",
+			want, WorkstreamStatuses)
+	}
 }
 
 func TestKnownPriorStatusVocabulary(t *testing.T) {

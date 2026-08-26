@@ -346,7 +346,36 @@ package enrich
 // takes a bump even though nothing existing changes meaning: every field of v19
 // publishes identically. Sidecar SCHEMA moves 13 -> 14 alongside it. Producer
 // strings move `-v19` -> `-v20`.
-const SchemaVersion = 20
+//
+// v21 PUBLISHES EVERY WORKSTREAM DIMENSION, ATTRIBUTED OR NOT, and states which
+// it was. Labeled gains `evidence` (the observation count) and `status`
+// (WorkstreamStatuses — a new five-value closed vocabulary a consumer must know,
+// which is what makes this contract-affecting rather than cosmetic). Both are
+// omitempty and set only by the workstreams pass, so every ML facet's payload is
+// byte-identical to v20.
+//
+// A dimension below the evidence floor used to be DELETED before publish, on
+// both sides — the sidecar answered JSON null and the Go pass skipped an empty
+// value. Measured over 1,502 blocks x 8 dimensions = 12,016 dimension-slots:
+// 6,396 attributed, 4,650 genuinely absent, and 924 (7.7%) holding REAL EVIDENCE
+// while publishing nothing, 198 of them four observations against a floor of
+// five. `lang` discarded 284 slots against 845 published, `artifact` 270 against
+// 875, and `toolchain` discarded 172 against 138 — more than it published.
+//
+// ⚠️ THE FLOOR DID NOT MOVE AND NOTHING WAS PROMOTED. `status:"attributed"`
+// still requires the sidecar's window.MIN_EVIDENCE (5) observations and the
+// 0.50 share floor, and means exactly what it meant at v20; removing the floor
+// would take P(false attribution) from 0.031 to 0.50. The floor's own
+// justification was that "evidence is dropped on the way to the published
+// enrichment, so nothing downstream can tell one observation from five hundred"
+// — so sending the count and the status turns it from a publish GATE into a
+// LABEL, with the consumer rather than the producer deciding. A consumer that
+// renders `thin` identically to `attributed` is misreporting; the contract can
+// state that but cannot enforce it.
+//
+// Sidecar SCHEMA moves 15 -> 16 alongside it. Producer strings move `-v20` ->
+// `-v21`.
+const SchemaVersion = 21
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

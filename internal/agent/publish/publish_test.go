@@ -756,3 +756,78 @@ func TestBuildCarriesTheRepoWorkstreamThroughTheMap(t *testing.T) {
 		t.Errorf("publishing `repo` must not displace `project`: %s", b)
 	}
 }
+
+// THE POINT OF THE WHOLE CHANGE, asserted at the last place it could be broken:
+// a dimension BELOW the evidence floor reaches Atlas, carrying its observation
+// count and saying that it is thin.
+//
+// It used to be deleted — twice over, once sidecar-side as a JSON null and once
+// Go-side by an empty-Value skip. Measured over 1,502 blocks x 8 dimensions,
+// that discarded 924 of 12,016 dimension-slots (7.7%) that held real evidence,
+// 198 of them four observations against a floor of five, and on `toolchain` it
+// discarded more slots (172) than it published (138).
+//
+// ⚠️ Nothing is promoted. `attributed` still means the sidecar's MIN_EVIDENCE (5)
+// observations plus the share floor — pinned on the producing side by
+// sidecar/app/test_analysis_window.py's
+// test_the_payload_never_calls_a_sub_floor_dimension_attributed. What this test
+// pins is that the label travels WITH the value, because a thin value published
+// without its status renders as a confident one.
+func TestBuildPublishesASubFloorWorkstreamWithItsEvidenceAndStatus(t *testing.T) {
+	p := enrich.Profile{Workstreams: map[string]enrich.Labeled{
+		"toolchain": {Value: "pytest", Confidence: 1, Evidence: 4, Status: "thin",
+			Producer: "workstreams-v21"},
+		"project": {Value: "keld-signal", Confidence: 0.9, Evidence: 30, Status: "attributed",
+			Producer: "workstreams-v21"},
+		// A level that never fired at all. It publishes too: 4,650 of those
+		// 12,016 slots are genuinely absent, and a reader who cannot tell
+		// absence from thinness reads a gap as a weak answer.
+		"skill": {Status: "absent", Producer: "workstreams-v21"},
+	}}
+	e := Build(queue.Job{ID: "j1"}, p, "actor", false, 0, time.Now())
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	for _, want := range []string{
+		`"toolchain":{"value":"pytest","confidence":1,"evidence":4,"status":"thin"`,
+		`"project":{"value":"keld-signal","confidence":0.9,"evidence":30,"status":"attributed"`,
+		`"skill":{"value":"","confidence":0,"status":"absent"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("wire missing %s:\n%s", want, got)
+		}
+	}
+}
+
+// The other half of the same contract: widening `Labeled` must not have cost the
+// ML facets a single byte. They share the type and have neither an observation
+// count nor an attribution outcome, so publishing `"evidence":0` or `"status":""`
+// beside one would state a measurement nobody took — which is why both fields
+// are `omitempty`.
+//
+// Asserted on the EXACT serialisation of a facet rather than on the absence of a
+// substring elsewhere in the payload, so a field added to Labeled in future
+// fails here rather than silently appearing on seven facets at once.
+func TestAnMLFacetsLabeledPayloadIsUnchangedByTheWorkstreamFields(t *testing.T) {
+	l := enrich.Labeled{Value: "code_generation", Confidence: 0.83, Producer: "task_type-v21"}
+	b, err := json.Marshal(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"value":"code_generation","confidence":0.83,"producer":"task_type-v21"}`
+	if string(b) != want {
+		t.Errorf("an ML facet's payload changed:\n got %s\nwant %s", b, want)
+	}
+	// And the whole enrichment, so a facet reached through Build cannot pick the
+	// keys up by some other route.
+	e := Build(queue.Job{ID: "j1"}, enrich.Profile{TaskType: l}, "actor", false, 0, time.Now())
+	eb, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(eb), `"task_type":`+want) {
+		t.Errorf("task_type did not reach the wire unchanged: %s", eb)
+	}
+}

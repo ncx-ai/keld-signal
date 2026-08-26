@@ -54,8 +54,11 @@ def main():
         doc = payload(rl)
         for name, _, _ in ALLOCATION:
             v = doc["workstreams"][name]
+            # `status`, not a null check: sidecar SCHEMA 16 answers every dimension with an
+            # object, sub-floor ones included, so coverage is the attributed share and nothing
+            # else. Same bar, different field.
             cover[name][1] += 1
-            if v is not None:
+            if v is not None and v.get("status") == "attributed":
                 cover[name][0] += 1
                 buckets[name][v["value"]] += 1
         rows.append({"session": sess, "window_start": t.isoformat(),

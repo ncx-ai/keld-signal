@@ -661,7 +661,7 @@ def test_resolved_facts_default_to_none_and_change_nothing():
     p2 = _attributable_transcript()
     explicit_none = _asyncio.run(m2.analyze(m2.AnalyzeIn(
         path=p2, prompt_id=_fixture_prompt_id(), resolved=None)))
-    assert without["workstreams"]["repo"] is None, without["workstreams"]["repo"]
+    assert without["workstreams"]["repo"]["status"] == "absent", without["workstreams"]["repo"]
     # `session` is a digest of the transcript's ABSOLUTE path, so two fixtures in two temp dirs
     # differ there by construction -- window metadata, not part of the answer (see
     # sidecar/workstreams.go, which keeps it local and never publishes it). Everything else must
@@ -766,7 +766,12 @@ def test_analyze_reports_the_session_the_window_sits_in_and_never_fills_it_in():
     # on this two-turn fixture means honestly unattributed rather than filled in from a session
     # that has nothing to fill it from either.
     assert set(body["workstreams"]) == {n for n, _lv, _f in workstreams.ALLOCATION}, body
-    assert body["workstreams"]["skill"] is None, body["workstreams"]
+    # `skill` never fired on this fixture, and as of SCHEMA 16 the dimension SAYS SO rather than
+    # being deleted -- `absent` with no value and no count. The rule under test is unchanged:
+    # nothing from the session reaches it.
+    assert body["workstreams"]["skill"] == {
+        "value": None, "share": 0.0, "evidence": 0, "status": "absent",
+        "provenance": "known:tool_inputs"}, body["workstreams"]
 
 
 def test_analyze_reports_the_block_of_work_the_prompt_fell_in():

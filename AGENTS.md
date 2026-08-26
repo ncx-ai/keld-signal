@@ -278,19 +278,39 @@ could raise.
   (`enrich.WorkstreamsEligible`): the analysis resolves a prompt by Claude-Code
   JSONL shape, so Codex/Gemini prompt ids 404, and registering it there would
   downgrade every one of their jobs to `"partial"` for a facet that was never
-  obtainable. Callers with no backend (eval, localagent) are unchanged. A dimension the window could not
-  attribute is **absent**, never present-with-an-empty-value; a failed analysis
+  obtainable. Callers with no backend (eval, localagent) are unchanged. A failed analysis
   fails the pass (`pipeline_status:"partial"`) rather than publishing an empty
   set. Attribution needs **two** things, not one: the winning value's share is
   ≥ 0.50 **and** the window holds ≥ `window.MIN_EVIDENCE` (5) observations at
   that level. The second exists because a share is a ratio — one tool call
-  gives share 1.0 by construction — and `evidence` is dropped on the way to the
-  published enrichment, so nothing downstream can tell one observation from
-  five hundred. Five is derived, not chosen: under the 0.50 floor read as a
-  null hypothesis, `0.5**n` first falls below 5% at n=5, so below it no share
-  distinguishes the window from a coin flip. Measured on the 572-window
-  reference sample: 347 of 2927 attributed dimension slots become unattributed,
-  330 of which were publishing at share 1.0 and 129 off a single observation.
+  gives share 1.0 by construction. Five is derived, not chosen: under the 0.50
+  floor read as a null hypothesis, `0.5**n` first falls below 5% at n=5, so
+  below it no share distinguishes the window from a coin flip. Measured on the
+  572-window reference sample: 347 of 2927 attributed dimension slots become
+  unattributed, 330 of which were publishing at share 1.0 and 129 off a single
+  observation.
+  ⚠️ **EVERY dimension now publishes, and the floor is a LABEL rather than a
+  publish gate** (schema v21 / sidecar SCHEMA 16). This reverses the rule that a
+  sub-floor dimension is simply absent, and it reverses the second half of
+  MIN_EVIDENCE's own justification, which used to read "`evidence` is dropped on
+  the way to the published enrichment, so nothing downstream can tell one
+  observation from five hundred". It isn't dropped any more: `Labeled` carries
+  `evidence` (the count) and `status` (`attributed`/`thin`/`tie`/`no_majority`/
+  `absent` — `enrich.WorkstreamStatuses`, the sidecar's `window.REASONS`), both
+  `omitempty` so the ML facets that share the type are byte-unchanged. Deleting
+  the dimension cost 924 of 12,016 measured dimension-slots (7.7%) that held
+  **real evidence and published nothing** — 198 of them one observation short —
+  with `toolchain` discarding more slots (172) than it published (138).
+  **The floor did NOT move and nothing was promoted:** `attributed` still means
+  exactly what it meant, the two conditions above are unchanged, and removing
+  them would take P(false attribution) from 0.031 to 0.50. A consumer that
+  renders `thin` identically to `attributed` is misreporting — the contract
+  states that and cannot enforce it. A dimension is now
+  present-with-a-stated-outcome, never silently missing; only a **pre-16
+  sidecar**'s JSON null still drops (it sent no count and no status, so there is
+  nothing to state), and an object with no `status` from that same sidecar reads
+  as `attributed`, because that sidecar emitted an object only when it had
+  attributed.
   **Nothing from `/analyze` reaches Atlas except those dimensions and the nine
   inventory ones.** ⚠️ **All nine inventories now publish, including
   `named_terms`** — a deliberate reversal (schema v18) of the rule that governed
@@ -449,7 +469,7 @@ could raise.
 - **Classifiers score against readable label DESCRIPTIONS, not bare id strings**
   (the bi-encoder keys on token/semantic overlap — the label wording is
   load-bearing; e.g. `code_generation` scores against "software engineering").
-- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **20**
+- Label vocabularies live in `labels.go` (gated by `SchemaVersion`, currently **21**
   — bump it and re-run the eval when changing any vocab). Classify calls are
   prefixed with a context preamble (`Meta.PreambleCoding()`; `domain` uses the
   fuller `Meta.Preamble()`). **Facet-selective agentic augmentation:** agentic
@@ -628,8 +648,11 @@ on how many times the coin was flipped (`0.5**n` first falls below 5% at n=5, an
 duration-scaled floor cannot be written by accident). A duration-scaled floor is not a
 generalisation of that argument but a worse one: it would make the significance of a
 published attribution a function of slice length while `value` and `share` look
-identical either way, and `evidence` is **dropped before publish**, so no reader could
-tell a 3%-confident claim from a 50%-confident one. Measured over 20,000 windows
+identical either way. (`evidence` used to be **dropped before publish** too, so no reader
+could tell a 3%-confident claim from a 50%-confident one; since v21 the count and the
+status DO publish — see the workstreams bullet — which is what turned the floor into a
+label. The duration argument is unaffected: a duration-scaled floor would still make
+significance a function of slice length, and it is the FLOOR ITSELF that must not move.) Measured over 20,000 windows
 (4,000 seeded anchors x 5 slice lengths, 55 transcripts / 542 MB): median `workspace`
 evidence falls **130 → 20** from 60 to 5 minutes — a sixth, as the plan predicted —
 but a sixth of 130 is still four times the floor. Buying back the 424 of 3,902

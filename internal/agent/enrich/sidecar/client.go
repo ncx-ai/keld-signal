@@ -293,13 +293,26 @@ func resolvedOrNil(r enrich.ResolvedFacts) *enrich.ResolvedFacts {
 }
 
 // Workstream is one deterministic dimension the sidecar's /analyze computed
-// for the window (e.g. "project", "tooling"). A nil *Workstream (JSON null)
-// means the window had no dominant value for that dimension — a different
-// fact than an empty Workstream{}, which is why the map holds pointers.
+// for the window (e.g. "project", "tooling").
+//
+// As of sidecar SCHEMA 16 EVERY dimension answers with an object and states its
+// own outcome in Status (window.REASONS: attributed / thin / tie / no_majority /
+// absent). A nil *Workstream is therefore no longer the normal way an
+// unattributed dimension arrives — it is what a sidecar OLDER than 16 sends,
+// which is a real case because the sidecar is frozen and shipped separately and
+// can sit in ~/.local/bin indefinitely. The map still holds pointers for exactly
+// that: an old sidecar's null and a new sidecar's `status:"absent"` object are
+// different facts on the wire, and only the second one carries a count.
+//
+// Value is empty and Evidence 0 under `absent` — there was no value to name.
+// Under every other status Value is the leading value and Evidence the count it
+// was drawn from, and Status is what says whether it may be read as the window's
+// answer. Do not read Value without reading Status.
 type Workstream struct {
 	Value      string  `json:"value"`
 	Share      float64 `json:"share"`
 	Evidence   int     `json:"evidence"`
+	Status     string  `json:"status"`
 	Provenance string  `json:"provenance"`
 }
 

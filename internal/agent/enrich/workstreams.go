@@ -27,6 +27,31 @@ var workstreamAnalyzableSources = map[string]bool{"claude_code": true, "cowork":
 // window analysis (mirrors ContextEligible's shape).
 func WorkstreamsEligible(source string) bool { return workstreamAnalyzableSources[source] }
 
+// WorkstreamStatuses is the closed published vocabulary of Labeled.Status on a
+// workstream dimension: the ATTRIBUTION OUTCOME, mirroring the sidecar's
+// window.REASONS.
+//
+// It is the SAME LIST as PriorStatuses and is defined as that list rather than
+// retyped, because they are the same fact asked of two intervals — the window
+// and the session before it — and two copies of one vocabulary is one more thing
+// to drift. TestPriorStatusVocabularyMatchesTheSidecar pins it against
+// window.REASONS for both.
+//
+// Only "attributed" may be read as the window's answer, and the floor behind it
+// is UNCHANGED by this vocabulary reaching the wire: window.MIN_EVIDENCE
+// observations (5) plus the per-dimension 0.50 share floor, exactly as before.
+// What changed is that "thin" (evidence, under the floor), "tie", "no_majority"
+// and "absent" now publish AS THEMSELVES instead of the dimension being deleted
+// — 924 of 12,016 measured dimension-slots held real evidence and published
+// nothing, 198 of them one observation short of the floor.
+var WorkstreamStatuses = PriorStatuses
+
+// KnownWorkstreamStatus gates a status against the published set. A value this
+// binary does not recognise is sidecar version skew — the sidecar is frozen and
+// shipped separately from keld-agent — and forwarding it would publish a label
+// no Atlas consumer's vocabulary contains.
+func KnownWorkstreamStatus(s string) bool { return KnownPriorStatus(s) }
+
 // errAnalysisUnavailable marks the pass failed because the window analysis
 // could not be obtained at all — a different fact from "the analysis ran and
 // found no dominant value", which is a real answer and succeeds with no
@@ -107,11 +132,20 @@ func (e WorkstreamsExtractor) Run(ctx *JobContext) (map[string]any, error) {
 	}
 	out := make(map[string]Labeled, len(an.Workstreams))
 	for dim, l := range an.Workstreams {
-		// A dimension the window could not attribute is reported as absent, not
-		// as a dimension whose value is the empty string.
-		if l.Value == "" {
-			continue
-		}
+		// EVERY dimension the analyzer answered with is carried, including the
+		// ones it could not attribute. The old `l.Value == ""` skip here was the
+		// Go-side half of a suppression that discarded the evidence count along
+		// with the value: measured over 1,502 blocks x 8 dimensions, 924 of
+		// 12,016 slots (7.7%) held real evidence and published nothing, 198 of
+		// them one observation short of the floor, and `toolchain` discarded
+		// more slots than it published.
+		//
+		// Nothing is PROMOTED by this. The floor is untouched — Status still
+		// reads "attributed" only at window.MIN_EVIDENCE observations and the
+		// share floor — it is simply stated instead of enforced by deletion, so
+		// the consumer decides. l.Evidence and l.Status arrive already set by the
+		// analyzer (sidecar.AnalyzeLabeled) and are carried through unchanged;
+		// Confidence keeps its existing mapping from the dimension's share.
 		l.Producer = e.Version() // stamped here, as every other pass stamps its own
 		out[dim] = l
 	}

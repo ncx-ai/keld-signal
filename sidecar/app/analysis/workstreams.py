@@ -3,17 +3,29 @@
 Ported from `scripts/workstreams.py`, which discovered this shape against the real corpus before
 any of it was production code — which workstreams earn a place, and how large the honest
 unattributed row is. Nothing here infers: every value is a deterministic reference level, and a
-window with no dominant value is reported as unattributed rather than given a plausible one.
+window with no dominant value is LABELLED unattributed rather than given a plausible one.
+
+⚠️ **Labelled, not deleted — and that is a reversal.** Until SCHEMA 16 a dimension without a
+dominant value published as JSON `null`, which threw away the evidence count along with the
+value. Measured over 1,502 blocks x 8 dimensions, 924 slots (7.7%) held real evidence and
+published nothing at all — 198 of them one observation short of the floor — and `toolchain`
+discarded more slots (172) than it published (138). Every dimension now publishes
+`(value, share, evidence, status)` always, with `status` from `window.REASONS`. THE FLOOR DID NOT
+MOVE: `status == "attributed"` still requires `window.MIN_EVIDENCE` observations and the 0.50
+share floor, and its `value` still means exactly what it meant before. What changed is that the
+sub-floor slots are now visible AND labelled as sub-floor, so the consumer rather than the
+producer decides what to do about them — which is what `MIN_EVIDENCE`'s own derivation assumed
+was impossible ("evidence is dropped on the way to the published enrichment").
 """
 from app.analysis import SCHEMA
-from app.analysis.window import dominant
+from app.analysis.window import attribution
 
 # ALLOCATION workstreams: spend divides among them, so one value must own the window. The floor is
 # what makes "unattributed" honest — below it there is no dominant value and we say so rather than
 # picking the largest of several near-equals. 0.5 is deliberate: a bucket holding under half the
 # evidence is not what the hour was about.
 #
-# The share floor is only half of it. `dominant` also requires window.MIN_EVIDENCE observations,
+# The share floor is only half of it. `attribution` also requires window.MIN_EVIDENCE observations,
 # because a share is a ratio and a ratio over one observation is 1.0 by construction — see that
 # constant for the derivation and the measured cost. The per-dimension number below is the SHARE
 # floor only; the evidence floor is uniform, since it is a property of the arithmetic rather than
@@ -224,6 +236,12 @@ PROVENANCE = {"repo": "known:daemon_git"}
 def payload(rl):
     """rollup -> {"workstreams": {...}, "inventory": {...}}.
 
+    EVERY ALLOCATION dimension is present and non-null, carrying `value`, `share`, `evidence`,
+    `status` and `provenance`. `status` is `window.REASONS` — `attributed` is the only one a
+    consumer may read as the window's answer, and it is unchanged by this shape (the floor is
+    still `window.MIN_EVIDENCE` observations plus the per-dimension share floor). See the module
+    docstring for what the old `null` cost and why the label replaced it.
+
     PRIVACY NOTE for `inventory.named_terms`: unlike every other value in this payload, a named
     term is drawn from message TEXT (see terms.py), not from tool-call inputs, and can legitimately
     be a person's name — confirmed on a real window ("Federico", "Daniel"). That is acceptable for
@@ -261,10 +279,15 @@ def payload(rl):
     """
     ws = {}
     for name, level, floor in ALLOCATION:
-        v, share, tot = dominant(rl, level, floor)
-        ws[name] = None if v is None else {
-            "value": v, "share": round(share, 3), "evidence": tot,
-            "provenance": PROVENANCE.get(name, TOOL_INPUTS)}
+        a = attribution(rl, level, floor)
+        # `a.top` rather than `a.value`: the leading value is reported whatever the outcome, and
+        # `a.reason` beside it says whether it may be READ as the window's answer. `a.value` keeps
+        # its old meaning (None unless attributed) and is deliberately not what lands here -- the
+        # floor is now a LABEL on the wire instead of a deletion before it. Under `absent` there
+        # is no value to name, so `value` is null and `evidence` is 0.
+        ws[name] = {
+            "value": a.top, "share": round(a.share, 3), "evidence": a.evidence,
+            "status": a.reason, "provenance": PROVENANCE.get(name, TOOL_INPUTS)}
     inv = {}
     omitted = {}
     for name, level, cap in INVENTORY:

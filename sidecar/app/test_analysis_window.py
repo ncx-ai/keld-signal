@@ -28,10 +28,19 @@ def test_a_tie_is_unattributed_rather_than_an_arbitrary_pick():
 # --- minimum evidence -----------------------------------------------------------------------
 #
 # The share floor alone says nothing about how much was counted. One tool call gives share=1.0,
-# and AnalyzeLabeled drops `evidence` on the way to the published enrichment, so a report cannot
-# tell one observation from five hundred. Measured on the 572-window sample in
+# and until SCHEMA 16 AnalyzeLabeled dropped `evidence` on the way to the published enrichment, so
+# a report could not tell one observation from five hundred. Measured on the 572-window sample in
 # ~/keld/refseries-context/workstreams.ndjson: 330 dimension slots publish share=1.0 off fewer
 # than five observations, 129 of them off a single one.
+#
+# ⚠️ THE COUNT NOW CROSSES, AND THE FLOOR STILL STANDS. `evidence` and `status` publish as of
+# SCHEMA 16, which removes the premise of the sentence above — a report CAN now tell one
+# observation from five hundred — so MIN_EVIDENCE stopped being a publish gate and became a
+# label. It did not stop being the bar: `attributed` is what a reader acts on, and it still
+# requires five observations and the share floor. The 330 slots above would publish today, as
+# `thin`, at share 1.0, saying so. What the floor prevents is any of them being called the
+# window's answer, which is why `test_the_payload_never_calls_a_sub_floor_dimension_attributed`
+# pins the boundary from both sides.
 
 def _n(level, ref, n):
     return (0, "s", "r", "b", False, "ref", level, ref, float(n))
@@ -76,14 +85,48 @@ def test_min_evidence_is_overridable_per_call():
 
 def test_the_payload_reports_an_underevidenced_dimension_as_unattributed():
     """The property that actually reaches Atlas: workstreams.payload must not hand a
-    one-observation dimension to publish as a real answer."""
+    one-observation dimension to publish as a real answer.
+
+    As of SCHEMA 16 that is done by LABELLING it rather than deleting it. The dimension is
+    present, it carries what little was seen, and it says `thin` -- so a consumer that reads
+    `status` cannot mistake one observation for the window's answer, and a consumer that wants
+    the sub-floor content can have it. The floor itself is untouched: `attributed` is what a
+    reader acts on and it still needs MIN_EVIDENCE."""
     rl = rollup([_n("workspace", "scratch", 1), _n("branch", "main", 1)])
     ws = payload(rl)["workstreams"]
-    assert ws["project"] is None and ws["branch"] is None, ws
+    assert ws["project"]["status"] == "thin" and ws["branch"]["status"] == "thin", ws
+    assert ws["project"]["value"] == "scratch" and ws["project"]["evidence"] == 1, ws
+    assert ws["project"]["share"] == 1.0, ws   # a ratio over one observation, hence the label
 
 
-def test_an_absent_level_produces_no_key_rather_than_an_empty_one():
-    assert payload(rollup(R))["workstreams"]["skill"] is None
+def test_the_payload_never_calls_a_sub_floor_dimension_attributed():
+    """⚠️ THE FLOOR DID NOT MOVE. Publishing the count and the status made MIN_EVIDENCE a LABEL
+    instead of a publish gate, and the one thing that must not follow is a sub-floor dimension
+    being promoted: removing the floor takes P(false attribution) from 0.031 to 0.50, and 330 of
+    the 347 slots it excludes were publishing at share 1.0 with 129 off a SINGLE observation.
+
+    Asserted at the exact boundary and from both sides, over a UNANIMOUS level -- the most
+    tempting case, and the one the floor exists for, since a share of 1.0 looks maximally
+    confident whatever it was measured over."""
+    for n in range(1, MIN_EVIDENCE):
+        ws = payload(rollup([_n("workspace", "scratch", n)]))["workstreams"]
+        assert ws["project"] == {"value": "scratch", "share": 1.0, "evidence": n,
+                                 "status": "thin",
+                                 "provenance": "known:tool_inputs"}, (n, ws["project"])
+    at = payload(rollup([_n("workspace", "scratch", MIN_EVIDENCE)]))["workstreams"]["project"]
+    assert at["status"] == "attributed" and at["evidence"] == MIN_EVIDENCE, at
+    # And the floor is the SAME number the arithmetic derives, not one typed beside it.
+    assert MIN_EVIDENCE == 5, MIN_EVIDENCE
+
+
+def test_an_absent_level_states_its_absence_rather_than_going_missing():
+    """A level that never fired is a real answer and says so. It was JSON `null` until SCHEMA
+    16, which is indistinguishable from a thin level and from a level nobody asked about -- and
+    `absent` is the majority outcome (4,650 of 12,016 measured dimension-slots), so the one
+    status a reader most needs to tell apart from `thin` was exactly the one being erased."""
+    got = payload(rollup(R))["workstreams"]["skill"]
+    assert got["status"] == "absent", got
+    assert got["value"] is None and got["evidence"] == 0 and got["share"] == 0.0, got
 
 
 def test_the_skill_level_publishes_under_the_name_skill_not_workflow():
@@ -106,13 +149,13 @@ def test_the_skill_level_publishes_under_the_name_skill_not_workflow():
     # than a statement of what was expected, and this file's runner only catches the latter.
     assert "skill" in ws and "workflow" not in ws, sorted(ws)
     assert ws["skill"] == {"value": "superpowers:writing-plans", "share": 1.0, "evidence": 20,
-                           "provenance": "known:tool_inputs"}, ws
+                           "status": "attributed", "provenance": "known:tool_inputs"}, ws
 
 
 def test_payload_carries_its_schema_version():
     """These values land in financial reports; a silent shape change is the reproducibility
     failure the earlier handoff called out, so the payload is versioned from the first release."""
-    assert payload(rollup(R))["schema"] == SCHEMA == 15
+    assert payload(rollup(R))["schema"] == SCHEMA == 16
 
 
 # --- the floor generalised to an arbitrary slice length ---------------------------------------
@@ -390,7 +433,7 @@ def test_repo_is_an_allocation_dimension_with_its_own_provenance():
     assert {n: lv for n, lv, _f in ALLOCATION}["repo"] == "repo", ALLOCATION
     ws = payload(rollup([_n("repo", "github.com/ncx-ai/keld-atlas", 40)]))["workstreams"]
     assert ws["repo"] == {"value": "github.com/ncx-ai/keld-atlas", "share": 1.0, "evidence": 40,
-                          "provenance": "known:daemon_git"}, ws
+                          "status": "attributed", "provenance": "known:daemon_git"}, ws
     # And every sibling keeps the constant it always had -- the override is per dimension, not a
     # rename of the field's default.
     assert payload(rollup([_n("branch", "main", 20)]))["workstreams"]["branch"]["provenance"] \
@@ -407,8 +450,9 @@ def test_repo_is_absent_not_empty_when_nothing_resolved_it():
     Asserted on a rollup that HAS other levels, so this is "repo specifically said nothing"
     rather than "the payload was empty"."""
     ws = payload(rollup([_n("workspace", "scratch-notes", 30)]))["workstreams"]
-    assert ws["repo"] is None, ws["repo"]
+    assert ws["repo"]["status"] == "absent" and ws["repo"]["value"] is None, ws["repo"]
     assert ws["project"] == {"value": "scratch-notes", "share": 1.0, "evidence": 30,
+                             "status": "attributed",
                              "provenance": "known:tool_inputs"}, ws["project"]
 
 

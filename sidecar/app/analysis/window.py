@@ -139,7 +139,18 @@ MIN_EVIDENCE = min_evidence_for(0.5, 0.05)   # == 5
 #   no_majority — enough evidence, top share below `floor`. The work was genuinely mixed.
 REASONS = ("attributed", "absent", "thin", "tie", "no_majority")
 
-Attribution = collections.namedtuple("Attribution", "value share evidence reason")
+# `value` is the ATTRIBUTED value and is None unless `reason == "attributed"` — that is the whole
+# of the floor, and `can_attribute`, `dominant`, `dynamics` and `prior` all read it that way. `top`
+# is the rollup's leading value REGARDLESS of the reason, populated whenever there is any evidence
+# at all (None only under `absent`, where there is no value to name).
+#
+# TWO FIELDS RATHER THAN ONE because they answer two different questions, and collapsing them was
+# how the sub-floor evidence went missing for as long as it did: "which value owns this level" is
+# answerable off a single observation, "may a consumer read that as the answer" is not. `top` is
+# what lets a caller report a thin level's content while `value` keeps meaning exactly what it
+# meant before. A caller that wants the floor reads `value` (or `reason`); a caller that wants to
+# SHOW what little was seen reads `top` and must publish `reason` beside it.
+Attribution = collections.namedtuple("Attribution", "value share evidence reason top")
 
 
 def attribution(rl, level, floor=0.5, min_evidence=MIN_EVIDENCE):
@@ -150,10 +161,14 @@ def attribution(rl, level, floor=0.5, min_evidence=MIN_EVIDENCE):
     not a genuinely divided window, it is two observations; calling that `tie` would tell a
     reader the work was split when the truth is that almost nothing was counted, and a dynamics
     metric built on that reading would score noise as change.
+
+    Under `tie` the `top` value is the one `rollup`'s alphabetical tie-break put first, which is
+    reproducible but arbitrary between equals — the reason `value` stays None there, and the
+    reason a consumer must read `reason` before reading `top`.
     """
     items = rl.get(level) or []
     if not items:
-        return Attribution(None, 0.0, 0, "absent")
+        return Attribution(None, 0.0, 0, "absent", None)
     total = sum(n for _, n in items)
     value, top = items[0]
     share = top / total
@@ -165,7 +180,7 @@ def attribution(rl, level, floor=0.5, min_evidence=MIN_EVIDENCE):
         reason = "no_majority"
     else:
         reason = "attributed"
-    return Attribution(value if reason == "attributed" else None, share, int(total), reason)
+    return Attribution(value if reason == "attributed" else None, share, int(total), reason, value)
 
 
 def dominant(rl, level, floor=0.5, min_evidence=MIN_EVIDENCE):

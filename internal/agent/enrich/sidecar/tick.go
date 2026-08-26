@@ -123,12 +123,19 @@ func (c *Client) TickCharacterised(path, source, sessionID string, promptIDs []s
 		if w.Evidence <= 0 || w.WindowStart == "" || w.WindowEnd == "" {
 			continue
 		}
+		// The SAME conversion AnalyzeLabeled uses, shared rather than repeated:
+		// a tick window and a prompt window are the same analysis over different
+		// bounds, so a dimension must not be readable in one and deleted in the
+		// other. In particular a `thin` dimension carries its count and its
+		// status here too — publishing the value with no status would render a
+		// sub-floor reading as a confident one.
 		dims := make(map[string]enrich.Labeled, len(w.Workstreams))
 		for dim, ws := range w.Workstreams {
-			if ws == nil || ws.Value == "" {
+			l, keep := labeledWorkstream(ws)
+			if !keep {
 				continue
 			}
-			dims[dim] = enrich.Labeled{Value: ws.Value, Confidence: ws.Share}
+			dims[dim] = l
 		}
 		out = append(out, enrich.WindowCharacterisation{
 			SessionID: sessionID,

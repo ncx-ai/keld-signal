@@ -57,39 +57,67 @@ func TestWorkstreamsPassOmitsTheKeyWhenAnalysisFails(t *testing.T) {
 	}
 }
 
-// A dimension the window could not attribute (JSON null in /analyze, dropped by
-// the converter) must stay ABSENT, never a Labeled with an empty Value: an
-// empty value published as a dimension reads downstream as a real answer named
-// "".
-func TestWorkstreamsPassDropsUnattributedDimensions(t *testing.T) {
+// A dimension the window could not attribute is CARRIED AND LABELLED, not
+// dropped. This is the reversal of the rule this test used to pin: the pass used
+// to skip any dimension with an empty Value, which threw away the observation
+// count along with the value — measured, 924 of 12,016 dimension-slots (7.7%)
+// held real evidence and published nothing, 198 of them one observation short of
+// the floor.
+//
+// Nothing is promoted by carrying it. `thin` is still `thin` on the wire, and a
+// consumer that reads it as `attributed` is misreporting a fact the payload
+// states plainly.
+func TestWorkstreamsPassCarriesUnattributedDimensionsWithTheirStatus(t *testing.T) {
 	f := &fakeAnalyze{ok: true, out: WindowAnalysis{Workstreams: map[string]Labeled{
-		"project": {Value: "acme", Confidence: 1},
-		"branch":  {}, // unattributed
+		"project": {Value: "acme", Confidence: 1, Evidence: 30, Status: "attributed"},
+		"branch":  {Value: "feat/x", Confidence: 1, Evidence: 4, Status: "thin"},
+		"skill":   {Status: "absent"},
 	}}}
 	got, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	ws, _ := got["workstreams"].(map[string]Labeled)
-	if _, present := ws["branch"]; present {
-		t.Errorf("unattributed dimension must be absent, got %+v", ws)
+	if len(ws) != 3 {
+		t.Fatalf("every dimension the analysis answered with must be carried, got %+v", ws)
 	}
-	if len(ws) != 1 {
-		t.Errorf("want only the attributed dimension, got %+v", ws)
+	// The sub-floor dimension: present, with its count, and SAYING it is thin.
+	// Value without Status would render as a confident answer off four
+	// observations, which is the whole thing the label exists to prevent.
+	br := ws["branch"]
+	if br.Value != "feat/x" || br.Evidence != 4 || br.Status != "thin" {
+		t.Errorf("thin dimension mangled: %+v", br)
+	}
+	// A level that never fired is still stated, so "we looked and saw nothing"
+	// is distinguishable from "we did not look".
+	if sk := ws["skill"]; sk.Status != "absent" || sk.Value != "" || sk.Evidence != 0 {
+		t.Errorf("absent dimension mangled: %+v", sk)
+	}
+	if pr := ws["project"]; pr.Status != "attributed" || pr.Evidence != 30 {
+		t.Errorf("attributed dimension mangled: %+v", pr)
+	}
+	for dim, l := range ws {
+		if l.Producer != (WorkstreamsExtractor{}).Version() {
+			t.Errorf("%s lost its producer stamp: %+v", dim, l)
+		}
 	}
 }
 
 // "The window has no dominant value anywhere" is a real answer, not a failure:
-// the pass succeeds (so the profile is not downgraded to "partial") and simply
-// contributes no dimensions.
+// the pass succeeds (so the profile is not downgraded to "partial") and now says
+// so per dimension rather than contributing nothing at all. A blank row that
+// still publishes is deliberate — a suppressed row reads as an oversight, and an
+// oversight is what someone eventually "fixes".
 func TestWorkstreamsPassSucceedsWithNoDominantValues(t *testing.T) {
-	f := &fakeAnalyze{ok: true, out: WindowAnalysis{Workstreams: map[string]Labeled{"project": {}}}}
+	f := &fakeAnalyze{ok: true, out: WindowAnalysis{
+		Workstreams: map[string]Labeled{"project": {Status: "absent"}}}}
 	got, err := (WorkstreamsExtractor{Analyze: f.fn}).Run(coords(t))
 	if err != nil {
 		t.Fatalf("an empty-but-successful analysis must not fail the pass: %v", err)
 	}
-	if ws, _ := got["workstreams"].(map[string]Labeled); len(ws) != 0 {
-		t.Errorf("want no dimensions, got %+v", ws)
+	ws, _ := got["workstreams"].(map[string]Labeled)
+	if len(ws) != 1 || ws["project"].Status != "absent" || ws["project"].Value != "" {
+		t.Errorf("want one dimension stating its absence, got %+v", ws)
 	}
 }
 

@@ -7,10 +7,35 @@ import (
 )
 
 // Labeled is a single classification result with provenance.
+//
+// Evidence and Status are the DETERMINISTIC half's two extra fields and are set
+// only by the workstreams pass; every ML facet (task_type, domain,
+// activity_type, personal, function_guess, subcategory, sensitivity) leaves both
+// zero and marshals byte-identically to before they existed. That is what
+// `omitempty` is for here and it is load-bearing, not tidiness: an ML facet has
+// no observation count and no attribution outcome, so publishing `"evidence":0`
+// beside one would state a measurement nobody took.
+//
+// Status is why this is safe to widen at all. A workstream dimension below
+// window.MIN_EVIDENCE used to be DELETED before publish, which discarded the
+// count with the value — measured at 924 of 12,016 dimension-slots (7.7%)
+// holding real evidence and publishing nothing, 198 of them one observation
+// short. The floor is unchanged; it is now stated rather than enforced by
+// deletion, and stating it requires both fields: the count, and whether the
+// value may be read as the answer.
 type Labeled struct {
 	Value      string  `json:"value"`
 	Confidence float64 `json:"confidence"`
-	Producer   string  `json:"producer,omitempty"`
+	// Evidence is how many observations the value was drawn from. Workstreams
+	// only; 0 (omitted) means "not a counted facet", never "counted zero" — an
+	// absent dimension says so in Status.
+	Evidence int `json:"evidence,omitempty"`
+	// Status is the attribution outcome, from WorkstreamStatuses. Workstreams
+	// only; empty (omitted) on every ML facet. A consumer that renders `thin`
+	// identically to `attributed` is misreporting — the uncertainty travels with
+	// the value precisely so it does not have to be inferred from a null.
+	Status   string `json:"status,omitempty"`
+	Producer string `json:"producer,omitempty"`
 }
 
 // Ranked is one scored candidate label.

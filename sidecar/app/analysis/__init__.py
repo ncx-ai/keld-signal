@@ -263,7 +263,42 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           `internal/agent/enrich/sidecar/analyze_test.go` pins that `DisallowUnknownFields` is
 #           deliberately ABSENT from `post()` -- so nothing crosses to Atlas for it and
 #           `enrich.SchemaVersion` does not move.
-SCHEMA = 15
+#   15 -> 16: EVERY ALLOCATION dimension now answers with an object, and that object carries a
+#           `status` -- `attributed` / `thin` / `tie` / `no_majority` / `absent`, the
+#           `window.REASONS` vocabulary. A dimension without a dominant value used to be JSON
+#           `null`, which discarded the evidence count along with the value.
+#
+#           WHAT THAT COST, measured over 1,502 blocks x 8 dimensions = 12,016 dimension-slots:
+#           6,396 attributed, 4,650 genuinely absent, and 924 (7.7%) holding REAL EVIDENCE while
+#           publishing nothing -- 198 of them four observations, one short of the floor -- plus
+#           46 more as tie/no_majority. The loss is lopsided per dimension: `lang` discarded 284
+#           against 845 published, `artifact` 270 against 875, and `toolchain` discarded 172
+#           against 138, i.e. more than it published.
+#
+#           ⚠️ THE FLOOR DID NOT MOVE, AND `attributed` MEANS EXACTLY WHAT IT MEANT AT 15.
+#           `window.MIN_EVIDENCE` is still 5 and the per-dimension share floor is still 0.50;
+#           removing either takes P(false attribution) from 0.031 to 0.50, and 330 of the 347
+#           slots the floor excludes were publishing at share 1.0 with 129 off a SINGLE
+#           observation (the measurement that produced the floor at 1 -> 2). This change is
+#           purely additive: a sub-floor dimension becomes VISIBLE and LABELLED, never promoted.
+#           `MIN_EVIDENCE` stops being a publish GATE and becomes a LABEL, which is what its own
+#           derivation assumed was impossible -- it was justified by the fact that "evidence is
+#           dropped on the way to the published enrichment, so nothing downstream can tell one
+#           observation from five hundred". Send the count and the status, and the consumer
+#           rather than the producer decides.
+#
+#           `window.Attribution` gains a fifth field, `top`: the rollup's leading value whatever
+#           the outcome, None only under `absent`. `Attribution.value` is UNCHANGED (None unless
+#           attributed) because `can_attribute`, `dominant`, `dynamics` and `prior` all depend on
+#           that meaning -- the two fields answer two different questions and collapsing them is
+#           how the sub-floor evidence went missing.
+#
+#           A window that answers with a key it did not answer with before is a window answered
+#           differently, which is exactly this number's trigger. Go's `enrich.SchemaVersion`
+#           moves 20 -> 21 for the same addition: `status` is a new five-value published
+#           vocabulary (`enrich.WorkstreamStatuses`) and `evidence` a new published field on
+#           `enrich.Labeled`.
+SCHEMA = 16
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

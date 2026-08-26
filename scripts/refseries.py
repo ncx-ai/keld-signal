@@ -59,6 +59,7 @@ from app.analysis.ingest import ingest_file, is_current  # noqa: E402
 from app.analysis.store import open_store  # noqa: E402
 from app.analysis.workstreams import ALLOCATION  # noqa: E402
 
+
 import numpy as np
 import pandas as pd
 
@@ -702,6 +703,22 @@ def characterize(refs, lvls, spk, entity, start, end, topk, usual=0.05, base=Non
 # unlabelled mix of two scopes is a reader who cannot tell which yardstick a figure is against.
 
 
+def _attributed(ws, name):
+    """The dimension's published object if it may be READ as the window's answer, else None.
+
+    Every dimension answers with an object as of sidecar SCHEMA 16, including the ones below the
+    evidence floor -- so a truthiness test on the dict is no longer the attribution question and
+    would report `absent` (value None, evidence 0) as a real answer named "None". The floor did
+    not move; the check did. `status == "attributed"` is the same bar `dominant` applied before,
+    asked of the field that now states it.
+
+    This report deliberately does NOT surface `thin`/`tie`/`no_majority` as values: it is a prose
+    digest handed to a reader, and a sub-floor value rendered beside attributed ones is exactly
+    the misreading the status exists to prevent. `unattributed` remains the honest word here."""
+    v = ws.get(name)
+    return v if v and v.get("status") == "attributed" else None
+
+
 def _work_summary(payload):
     """One clause per ALLOCATION dimension, in `workstreams.ALLOCATION` order. An unattributed
     dimension is NAMED (`skill unattributed`), never silently dropped -- the ALLOCATION set is
@@ -709,7 +726,7 @@ def _work_summary(payload):
     ws = payload.get("workstreams") or {}
     bits = []
     for name, _level, _floor in ALLOCATION:
-        v = ws.get(name)
+        v = _attributed(ws, name)
         bits.append(f"{v['value']} {100*v['share']:.0f}%" if v else f"{name} unattributed")
     return " · ".join(bits)
 
@@ -763,7 +780,7 @@ def _prior_line(payload):
     ws = payload.get("workstreams") or {}
     novel, diverge, no_prior = [], [], []
     for name, v in pr["dimensions"].items():
-        if ws.get(name) is None:
+        if _attributed(ws, name) is None:
             continue
         if v.get("novel"):
             novel.append(name)
@@ -875,8 +892,9 @@ def executive(payload, frame=None):
     end = pd.Timestamp(payload["window_end"]).strftime("%H:%M")
     sents = [f"{start}–{end}Z, {payload['evidence']} recorded references."]
 
-    attributed = [(name, ws[name]) for name, _l, _f in ALLOCATION if ws.get(name)]
-    unattributed = [name for name, _l, _f in ALLOCATION if ws.get(name) is None]
+    attributed = [(name, _attributed(ws, name)) for name, _l, _f in ALLOCATION
+                  if _attributed(ws, name)]
+    unattributed = [name for name, _l, _f in ALLOCATION if _attributed(ws, name) is None]
     if attributed:
         sents.append("The work was " + ", ".join(
             f"{v['value']} ({100*v['share']:.0f}% of {name})" for name, v in attributed) + ".")
@@ -915,8 +933,9 @@ def executive(payload, frame=None):
         key_facts.append(f"effort: {effort}")
 
     top_component = (inv.get("components") or [{}])[0].get("value")
-    slots = [(ws.get("project") or {}).get("value"), (ws.get("output_type") or {}).get("value"),
-             top_component, (ws.get("branch") or {}).get("value")]
+    slots = [(_attributed(ws, "project") or {}).get("value"),
+             (_attributed(ws, "output_type") or {}).get("value"),
+             top_component, (_attributed(ws, "branch") or {}).get("value")]
     headline = " · ".join(x if x else "—" for x in slots)
     return {"headline": headline,
             "headline_format": "project · output_type · top component · branch; — means that "
@@ -966,7 +985,7 @@ def _frame_doc(outdir, repo, payload, start, end, topk):
     refs_path = os.path.join(outdir, "refs.parquet")
     if not os.path.exists(refs_path):
         return None
-    entity = repo or (payload.get("workstreams", {}).get("project") or {}).get("value")
+    entity = repo or (_attributed(payload.get("workstreams") or {}, "project") or {}).get("value")
     if not entity:
         return None
     refs = pd.read_parquet(refs_path)

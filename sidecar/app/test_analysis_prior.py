@@ -67,7 +67,12 @@ def test_the_prior_never_supplies_a_value_the_window_lacks():
     # The prior's own value is still REPORTED -- that is the contrast -- but the window keeps its
     # own (absent) answer, which lives in `workstreams` and is not touched here.
     assert got["value"] == "TypeScript", got
-    assert workstreams.payload(thin)["workstreams"]["language"] is None, "the window was filled in"
+    # The window's OWN answer stays sub-floor. It publishes (labelled `thin`, with its count of
+    # 3) but it is still the window's own top value, never the session's -- inheriting is what
+    # this test forbids, and publishing-with-a-label is not inheriting.
+    win = workstreams.payload(thin)["workstreams"]["language"]
+    assert win["status"] == "thin" and win["evidence"] == 3, win
+    assert win["value"] == "Python" != got["value"], (win, got)
 
 
 def test_a_window_below_the_floor_is_not_rescued_by_an_agreeing_session():
@@ -76,7 +81,12 @@ def test_a_window_below_the_floor_is_not_rescued_by_an_agreeing_session():
     mixed = _rl("skill", brainstorming=10, executing=9, debugging=8)   # top share 0.37
     got = compare(mixed, _rl("skill", brainstorming=900))["skill"]
     assert got["agrees"] is None and got["departure"] is None and got["novel"] is None, got
-    assert workstreams.payload(mixed)["workstreams"]["skill"] is None, mixed
+    # Here the window's top value HAPPENS to equal the session's, which is exactly the tempting
+    # case: it is still below the share floor and still says so, and `agrees` above is still
+    # None. A matching value is not an attribution.
+    win = workstreams.payload(mixed)["workstreams"]["skill"]
+    assert win["status"] == "no_majority", win
+    assert win["value"] == got["value"] == "brainstorming", (win, got)
 
 
 # --- causal, not retrospective ---------------------------------------------------------------
@@ -227,7 +237,9 @@ def test_output_type_is_carried_by_the_prior_where_the_window_cannot_attribute_i
     assert got["evidence"] == 192, got
     assert got["agrees"] is None and got["departure"] is None and got["novel"] is None, got
     # THE RULE: the window keeps its own blank. Nothing here fills `workstreams`.
-    assert workstreams.payload(window)["workstreams"]["output_type"] is None, "the window was filled in"
+    win = workstreams.payload(window)["workstreams"]["output_type"]
+    assert win["status"] != "attributed", win
+    assert win["value"] != got["value"], (win, got)
     # ... and the fourth dimension arrives beside the other three rather than instead of one.
     assert sorted(block) == ["branch", "language", "output_type", "skill"], sorted(block)
 

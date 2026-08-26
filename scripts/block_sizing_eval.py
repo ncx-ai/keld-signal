@@ -462,7 +462,13 @@ def _dim_values(rl):
     allowed to move them (that is "topping up an evidence count") and is only unsafe when it
     moves a `value` — the thing a reader actually reads."""
     ws = payload(rl)["workstreams"]
-    return {name: (None if v is None else v["value"]) for name, v in ws.items()}
+    # Gated on `status`, not on the object being present. Every dimension answers with an object
+    # as of sidecar SCHEMA 16 -- a sub-floor one included, labelled `thin` -- so "did this period
+    # publish a value a reader would act on" is now the status question and NOT a null check. The
+    # bar is unchanged (`attributed` is the same floor `dominant` applied when this study ran),
+    # so the measurement this function feeds still means what it meant when it was recorded.
+    return {name: (v["value"] if v and v.get("status") == "attributed" else None)
+            for name, v in ws.items()}
 
 
 def merge_thin(store, session, blocks, min_evidence=MIN_EVIDENCE):
