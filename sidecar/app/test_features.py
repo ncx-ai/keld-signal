@@ -471,14 +471,15 @@ def test_the_row_group_widths_are_what_the_spec_says():
                  + len(F.TOOLCHAIN_SLOTS) + len(F.TOOL_SLOTS) + len(F.VCS_SLOTS)
                  + len(F.MODEL_SLOTS)
                  + len(LEVELS) * len(F.SHAPE_STATS)
-                 + len(F.EFFORT_SLOTS))
+                 + len(F.EFFORT_SLOTS)
+                 + len(F.TEXT_STREAMS) * len(F.TEXT_SCALARS))
     row = (len(F.DYNAMIC_DIMENSIONS) * (len(F.DYNAMIC_SCALARS) + len(F.STATUSES)
                                         + len(F.READINGS))
            + len(F.PRIOR_DIMENSIONS) * len(F.PRIOR_SCALARS)
-           + len(F.POSITION_SLOTS) + 1)
-    assert per_shell == 267, per_shell
-    assert row == 93, row
-    assert F.DIMS == len(F.SHELLS) * per_shell + row == 1428, F.DIMS
+           + len(F.POSITION_SLOTS) + 2)
+    assert per_shell == 288, per_shell
+    assert row == 94, row
+    assert F.DIMS == len(F.SHELLS) * per_shell + row == 1534, F.DIMS
 
 
 # --- composition: the row itself ---------------------------------------------------------------
@@ -585,13 +586,15 @@ def test_features_never_opens_a_transcript():
 # series.
 
 def _call_features(**kw):
+    """The PROBE entry, which is what this file's endpoint tests are about: anchors in, raw float
+    rows out. The cursor entry `/features` drives is `test_featurerows.py`."""
     import asyncio
     from app import main
-    return asyncio.run(main.features(main.FeaturesIn(**kw)))
+    return asyncio.run(main.features_probe(main.FeaturesProbeIn(**kw)))
 
 
 def test_the_endpoint_is_confined_to_the_analyze_roots():
-    """⚠️ The sidecar has NO auth. /features reads a transcript's series as the daemon's user and
+    """⚠️ The sidecar has NO auth. /features/probe reads a transcript's series as the daemon's user and
     answers with numbers derived from it, so it takes the SAME allowlist /analyze, /ingest, /tick
     and /blocks take. 403, not 404: a rejected path and an unresolvable one are different facts."""
     from fastapi import HTTPException
@@ -640,8 +643,14 @@ def test_the_request_model_cannot_assert_capture():
     into `parse_state`. A caller-supplied flag would let a daemon assert capture over a transcript
     whose rows were written without it — the incoherent-corpus failure the fingerprint prevents."""
     from app import main
-    assert "capture" not in main.FeaturesIn.model_fields
-    assert set(main.FeaturesIn.model_fields) == {"path", "ats", "max_rows", "manifest"}
+    for model in (main.FeaturesIn, main.FeaturesProbeIn):
+        assert "capture" not in model.model_fields, model
+        # And no `text` field either, for the identical reason: whether the encoder ran is
+        # reported back as `text_recorded`, never asserted by a caller.
+        assert "text" not in model.model_fields, model
+    assert set(main.FeaturesProbeIn.model_fields) == {"path", "ats", "max_rows", "manifest"}
+    assert set(main.FeaturesIn.model_fields) == {"path", "since_ts", "now", "max_rows",
+                                                 "resolved"}
 
 
 if __name__ == "__main__":

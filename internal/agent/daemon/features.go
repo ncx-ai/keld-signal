@@ -50,10 +50,6 @@ func signalFeaturesEndpoint(ingest string) string {
 // blockDigesterCap — a service route, no inference, works with GLiNER2 absent —
 // which is what makes it resolvable from the deterministic backend's service
 // client at all.
-//
-// ⚠️ TODO(sidecar): POST /features does not exist yet; step 2 of the design is
-// in flight in parallel. Until it lands every call reports !ok, the emitter
-// holds its cursors, and nothing is collected, published or lost.
 type featureSourceCap interface {
 	FeatureRowsFor(path, source, sessionID string,
 		since *float64, now time.Time, maxRows int,

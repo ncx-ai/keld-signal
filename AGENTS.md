@@ -609,6 +609,53 @@ that direction is closed.
   is `None` where it could not be computed, never 0.0 — an absent comparison and a
   comparison that found no movement are different facts.
 
+⚠️ **`POST /features` is a CURSOR route, not an anchor-instant one, and the sidecar chooses the
+anchors** (schema **17**; `analysis/features.py`'s `feature_rows`, `analysis/featuretext.py`).
+`{path, since_ts, now, max_rows, resolved}` → `{schema, rows, watermark}` — `POST /blocks`' shape,
+because only this process owns the store and can therefore see where the non-empty 5-minute bins
+and the closed blocks are; a daemon supplying a grid would have to guess it. The anchor-instant form
+is kept, unchanged, as **`POST /features/probe`** for studies, which want raw floats in `manifest()`
+order rather than the transport. Three anchor kinds ride one **globally chronological** stream
+(`message` / `bin` / `block`) and `since_ts` is `>` on a row's own instant, so a batch is cut at an
+instant boundary and **never inside one** — two rows can share a 0.1 s tick, and emitting half of
+them would advance the caller's cursor past the other half forever. `anchor_id` is REQUIRED on a
+`message` row (the turn's uuid) for the same reason. Rows carry the vector int8-quantised as
+`{dims, scale, q}`, `q` base64 of two's-complement bytes, `dims` declared so the Go side compares
+rather than trusts. Measured end to end on a real 26 MB transcript: **1.6 s for 96 rows** structured
+only, 604 rows across the whole session replayed in 90 cursor calls with **0 lost and 0 repeated**,
+and **0 of 604 rows dropped** by `sidecar.FeatureRowsFor`'s six refusals.
+- **`FEATURE_SPEC_VERSION` is 2 and `DIMS` is 1534, not the spec's 1,414.** `S(t)` gained the
+  per-shell, per-stream text scalars (`<shell>.text.<stream>.{n,dispersion,drift,novelty}` plus a
+  `_known` flag per scalar) and `row.meta.text_recorded`. ⚠️ Those 106 slots are present **whether
+  or not `KELD_TEXTEMBED` is on**: a width that depended on a machine's environment is exactly the
+  incoherent-corpus failure the frozen manifest exists to prevent, so the flag beside them is what
+  says they may be read — `capture_recorded`'s idiom one group along.
+- ⚠️ **A `message` row exists ONLY where the text half ran, and that is ABSENT rather than empty.**
+  A message has no lookback, so there is no structured vector to compute; with the toggle off the
+  kind simply does not appear. `bin`/`block` rows never carry a `text` block at all — the centroid
+  is not published — so the text half reaches them as those scalars.
+- ⚠️ **ENCODING RUNS OFF THE REQUEST, and that is forced by a measurement, not tidiness.** The
+  daemon's sidecar client has a **5-second** timeout and one batch of 64 real messages costs
+  **~92 s** (~1.44 s/message with the real weights, 2 threads) plus **~90 s** for the child's first
+  load; a whole 1,646-message session is ~40 minutes. A synchronous encode could not land at any
+  useful batch size, and a timed-out POST is classed as *retryable*, so the failure mode is an
+  unbounded retry loop rather than one slow response. `featuretext.TextSource` therefore serves what
+  its cache holds (measured **0.12-0.44 s** per call, real weights) and hands the remainder to one
+  background pass. The instant of the first message with no vector is the **FRONTIER**, and NO row
+  at or after it is emitted — including `bin`/`block` rows — so every published row's text half is
+  measured over a **complete** message history up to its own instant, and the cursor never runs past
+  an unencoded message. `pending:encoding` is the stated status meanwhile.
+- ⚠️ **A message the encoder RAN on and produced nothing for is cached as such, or the frontier
+  LATCHES AND THE CURSOR WEDGES FOREVER.** A message whose every sentence exceeds the chunk cap is
+  dropped whole and will never have a vector; left as a cache miss it would pin the frontier at its
+  own instant permanently. That is kept distinct from a **degraded** encoder, which must be retried —
+  and a degraded encoder drops the text half WHOLE and returns no frontier, because publishing rows
+  over a prefix of the history while the rest is unreachable is the confident-number-over-a-fraction
+  failure the frontier exists to prevent.
+- The encoder child is idle-unloaded from the same 1 s poll loop that recycles the inference worker
+  (measured **~1.9 GB** resident, bf16, real weights) — nothing else would ever release it, because
+  `/features` only ever spawns.
+
 ⚠️ **The parse state carries a THIRD accumulator, and adding it forced a one-off reparse of
 every existing store.** `pending` (reconcile) and `cwds` (workspace) were the two; `reqs` is the
 third — the set of `requestId`s already costed. It exists because `events_for_turns` deduped

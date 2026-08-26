@@ -109,16 +109,18 @@ func ValidAnchorID(id string) bool {
 
 // QuantisedVector is one int8-quantised vector: value_i = int8(Q[i]) * Scale.
 //
-// ⚠️ THE GO SIDE IS DELIBERATELY AGNOSTIC ABOUT LENGTH. The spec's current
-// structured vector is 1,414 dimensions and the published text width is 256,
-// and BOTH are expected to move — the vocabulary manifest grows, and the MRL
-// truncation width is a measurement not yet run. A constant here would be a
-// second place to change and the one that fails silently: a length check
-// against a stale constant drops every row a widened sidecar produces. The
-// dimension count is the sidecar's, and it rides the row.
+// ⚠️ THE GO SIDE IS DELIBERATELY AGNOSTIC ABOUT LENGTH, AND IT HAS ALREADY PAID
+// OFF ONCE. The spec quoted a 1,414-dimension structured vector; the shipped
+// sidecar emits 1,534 (the per-shell text scalars and `text_recorded` landed
+// with feature_spec 2), and this file needed no edit for that. The published
+// text width is 256, and it is expected to move too — the vocabulary manifest
+// grows, and the MRL truncation width is a measurement not yet run. A constant
+// here would be a second place to change and the one that fails silently: a
+// length check against a stale constant drops every row a widened sidecar
+// produces. The dimension count is the sidecar's, and it rides the row.
 //
 // Q is []byte rather than []int8 because encoding/json renders a byte slice as
-// base64 — 1,414 dimensions in 1,886 characters against ~5,600 for an array of
+// base64 — 1,534 dimensions in 2,048 characters against ~6,000 for an array of
 // decimal numbers. At ~200 KB per user per active day, which is an order more
 // than any existing row type, that difference is the difference between a
 // batched publish and a problem. The bytes are TWO'S-COMPLEMENT int8, so a

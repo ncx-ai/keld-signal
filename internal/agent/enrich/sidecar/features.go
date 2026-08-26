@@ -9,43 +9,74 @@ import (
 // THE SIGNAL-EMBEDDINGS PATH's client half: POST /features. Coordinates and
 // instants — never text, never a span into a message, never an offset.
 //
-// ⚠️ TODO(sidecar): `POST /features` DOES NOT EXIST YET. Step 2 of the design
-// (docs/superpowers/specs/2026-08-26-signal-embeddings-design.md — features.py,
-// the vocabulary manifest, the local rows) is being built in parallel; this file
-// is step 3, the Go publish half, coded against the contract below. Until the
-// route lands the sidecar answers 404, `post` reports !ok, and the emitter
-// simply holds its cursor and asks again — the same "queue rather than degrade"
-// behaviour a not-yet-ready sidecar already gets from every other route here.
-// Nothing publishes and nothing is lost.
-//
-// THE CONTRACT THIS SIDE EXPECTS:
+// THE CONTRACT, and it is the sidecar's own (app/analysis/features.py's
+// `feature_rows`, routed in app/main.py; app/analysis/featuretext.py for the
+// text half):
 //
 //	POST /features
 //	  { "path": str, "since_ts": float|null, "now": float,
 //	    "max_rows": int, "resolved": {...}|null }
 //	->
-//	  { "schema": int,
+//	  { "schema": int, "feature_spec": int, "spec_sha": str, "dims": int,
+//	    "session": str, "watermark": float|null,
+//	    "text_status": {stream: str},          # present only with the text half on
 //	    "rows": [ { "anchor": "message"|"bin"|"block",
-//	                "anchor_id": str,          # required for message
+//	                "anchor_id": str,          # REQUIRED for message
 //	                "ts": float,               # epoch seconds
 //	                "role": "user"|"assistant",# message rows only
 //	                "start_reason": str, "end_reason": str,   # block rows only
-//	                "feature_spec": int,
+//	                "feature_spec": int, "spec_sha": str,
 //	                "encoder": {"model": str, "width": int, "projection": str},
 //	                "structured": {"dims": int, "scale": float, "q": base64},
+//	                "capture_recorded": bool, "text_recorded": bool,
 //	                "text": {"user"|"asst"|"think":
-//	                         {"dims": int, "scale": float, "q": base64}} } ],
-//	    "watermark": float|null }
+//	                         {"dims": int, "scale": float, "q": base64}} } ] }
+//
+// ⚠️ THE SIDECAR ENUMERATES THE ANCHORS; THIS SIDE SENDS ONLY A CURSOR. That is
+// not an accident of who wrote which half: the sidecar owns the reference-series
+// store, so it is the only side that can see where the non-empty 5-minute bins
+// and the CLOSED blocks are. A daemon supplying a grid would have to guess it,
+// and a guessed grid is silently wrong rather than visibly wrong. It is also
+// exactly the shape POST /blocks has (`{path, since_ts, resolved}` ->
+// `{rows, watermark}`), and consistency with the sibling route outweighs either
+// half's local preference. The anchor-instant form lives on as
+// POST /features/probe, for studies; nothing here calls it.
 //
 // `since_ts` is compared against a row's OWN instant with `>`, so the caller
 // resumes by passing the last emitted row's instant: rows are chronological
-// within a transcript, so that admits the next row and excludes the one already
-// sent. Nil means "from the beginning of the session" — BACKFILL — and the
-// caller owns that choice; the emitter seeds its own cursor forward-only
-// instead (see internal/agent/features).
+// ACROSS ALL THREE ANCHOR KINDS within a transcript, so that admits the next row
+// and excludes the one already sent — and the sidecar never cuts a batch inside
+// an instant, because two rows can share one and emitting half of them would
+// advance this cursor past the other half forever. Nil means "from the beginning
+// of the session" — BACKFILL — and the caller owns that choice; the emitter
+// seeds its own cursor forward-only instead (see internal/agent/features).
 //
 // `q` is base64 of TWO'S-COMPLEMENT int8 bytes, and `dims` is the declared
 // length. They are compared here, not trusted: see FeatureRowsFor.
+//
+// FOUR KEYS ARE DELIBERATELY UNMODELLED, and encoding/json drops them:
+//
+//   - `spec_sha` — a digest of the sidecar's ordered slot manifest, so a slot
+//     inserted without a `feature_spec` bump is still detectable. It is a
+//     PRODUCER-side change detector and a corpus-builder's partition key, not
+//     something this binary can act on: the row's published identity is
+//     `feature_spec`, and a client that noticed a sha it did not recognise could
+//     only do what it already does — forward the row and let Keld partition.
+//   - `capture_recorded` / `text_recorded` — whether the capture slots and the
+//     per-shell text slots of `structured` may be read at all. They are not lost
+//     by being dropped here: both are also DIMENSIONS of the vector itself
+//     (`row.meta.capture_recorded`, `row.meta.text_recorded`), which is where a
+//     consumer that is reading the slots is already looking.
+//   - `text_status` — the per-stream reason there is no vector (off, no weights,
+//     encoder unavailable, or a stream that genuinely held nothing). An operator
+//     and study fact; it names a local machine state, so there is nothing for it
+//     to mean at Atlas.
+//
+// ⚠️ A `message` ROW EXISTS ONLY WHERE THE TEXT HALF RAN. It carries no
+// `structured` vector — a single message has no lookback to compute one from —
+// so with KELD_TEXTEMBED off the kind is simply ABSENT from the stream rather
+// than emitted empty. `bin` and `block` rows are unaffected and carry the text
+// half, when there is one, as per-shell scalars inside `structured`.
 
 // featuresReq is one /features call over one transcript.
 type featuresReq struct {
@@ -103,11 +134,12 @@ type FeaturesResult struct {
 // Features asks the sidecar for the feature rows this transcript has produced
 // since the cursor.
 //
-// ok=false on any transport or status failure — including the 404 the route
-// currently answers, since it is not built yet. There is no partial success to
+// ok=false on any transport or status failure. There is no partial success to
 // report: the cursor and the rows are one answer, and advancing past rows that
 // never arrived would permanently lose exactly the vectors this path exists to
-// collect.
+// collect. A sidecar too old to know the route answers 404 and lands here, which
+// is the same "hold the cursor and ask again" behaviour every other route in
+// this package gets from a not-yet-ready sidecar.
 func (c *Client) Features(path string, since *float64, now time.Time,
 	maxRows int, resolved enrich.ResolvedFacts) (FeaturesResult, bool) {
 	var r FeaturesResult

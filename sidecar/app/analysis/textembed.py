@@ -106,6 +106,13 @@ import re
 USER, ASST, THINK = "user", "asst", "think"
 STREAMS = (USER, ASST, THINK)
 
+# stream -> the AUTHOR of the turn it came off, from the published `message` row's closed role
+# vocabulary (`enrich.FeatureRoles`, two values). `think` is the assistant's, not a third role: a
+# thinking block is written by the assistant and a row published under a third role would be
+# dropped whole at the Go decode boundary. Stated as a table because the mapping is a published
+# contract and an `if stream == THINK` at the one call site is where it would quietly become one.
+ROLE_OF = {USER: "user", ASST: "assistant", THINK: "assistant"}
+
 # Encode width and publish width. Different numbers; see the docstring.
 DIM_ENCODE = 1024
 DIM_PUBLISH = int(os.environ.get("KELD_TEXTEMBED_DIM", "256"))
@@ -124,7 +131,14 @@ STATUS_DISABLED = "skipped:disabled"
 STATUS_EMPTY = "skipped:empty"
 STATUS_NO_WEIGHTS = "degraded:weights_unavailable"
 STATUS_UNAVAILABLE = "degraded:encoder_unavailable"
-STATUSES = (STATUS_OK, STATUS_DISABLED, STATUS_EMPTY, STATUS_NO_WEIGHTS, STATUS_UNAVAILABLE)
+# ⚠️ A SIXTH OUTCOME, and it is not a degradation. Encoding runs OFF the request (see
+# `featuretext.TextSource`: the daemon's sidecar client has a 5-second timeout and one measured
+# batch of 64 real messages costs ~92 s, so a synchronous encode could never land), so "the encoder
+# is working through this session's backlog" is a real state that is neither `ok` nor `empty` nor
+# degraded. Without a name for it a caller reads a partial answer as a complete one.
+STATUS_PENDING = "pending:encoding"
+STATUSES = (STATUS_OK, STATUS_DISABLED, STATUS_EMPTY, STATUS_NO_WEIGHTS, STATUS_UNAVAILABLE,
+            STATUS_PENDING)
 
 DOWN, READY, UNAVAILABLE = "down", "ready", "unavailable"
 
@@ -175,15 +189,21 @@ def weights_dir():
 # tests; the published shape is MessageVector below, which holds no text.
 
 class Message:
-    """One message of one stream: an instant, a stream tag, and its text.
+    """One message of one stream: an instant, a stream tag, its text, and the turn's own id.
 
     ⚠️ INTERNAL. Text lives inside this process and inside the encoder child, and nowhere else.
-    No API in this module returns a `Message` to a caller outside it, and none is logged."""
+    No API in this module returns a `Message` to a caller outside it, and none is logged.
 
-    __slots__ = ("t", "stream", "text")
+    `id` is the transcript turn's `uuid` — AN IDENTIFIER, never a fragment of the message. It is
+    here because an instant is not a sufficient message key: the reference series quantizes to
+    0.1 s and two turns can collide on one tick, so a published `message` row keyed on its instant
+    could upsert its neighbour at Atlas. Last in the slot order and defaulted, so the constructor
+    stays call-compatible with the tests that predate it."""
 
-    def __init__(self, t, stream, text):
-        self.t, self.stream, self.text = t, stream, text
+    __slots__ = ("t", "stream", "text", "id")
+
+    def __init__(self, t, stream, text, id=None):     # noqa: A002 — `id` is the wire field's name
+        self.t, self.stream, self.text, self.id = t, stream, text, id
 
 
 def _blocks_of(kind, content):
@@ -229,20 +249,25 @@ def messages_in(turns, epoch_fn):
             t = epoch_fn(o["timestamp"])
         except Exception:                  # noqa: BLE001 — a transcript is another process's data
             continue
+        # The turn's own id, carried so a published `message` row has a key that is not its
+        # instant. `str()` and not a cast to anything narrower: it is another process's data and
+        # its SHAPE is re-checked at the decode boundary, not its type here.
+        mid = o.get("uuid")
+        mid = str(mid) if mid else None
         if role == "user":
             for body in _blocks_of("text", content):
                 body = (body or "").strip()
                 if body and not is_command_echo(body):
-                    out.append(Message(t, USER, body))
+                    out.append(Message(t, USER, body, mid))
         elif role == "assistant":
             for body in _blocks_of("text", content):
                 body = (body or "").strip()
                 if body:
-                    out.append(Message(t, ASST, body))
+                    out.append(Message(t, ASST, body, mid))
             for body in _blocks_of("thinking", content):
                 body = (body or "").strip()
                 if body:
-                    out.append(Message(t, THINK, body))
+                    out.append(Message(t, THINK, body, mid))
     return out
 
 
@@ -297,13 +322,16 @@ class MessageVector:
     """The published per-message row: an instant, a stream tag, a vector, and what was dropped.
 
     ⚠️ No text field, and `test_textembed.py` asserts that by reflection rather than by reading.
-    `dropped_chars` is a COUNT — it says a paragraph was too long to encode, never what it said."""
+    `dropped_chars` is a COUNT — it says a paragraph was too long to encode, never what it said.
+    `id` is the turn's `uuid`, carried through from `Message` — an identifier, and bounded and
+    whitespace-checked again at the Go decode boundary (`enrich.ValidAnchorID`)."""
 
-    __slots__ = ("t", "stream", "vector", "chunks", "dropped_chars")
+    __slots__ = ("t", "stream", "vector", "chunks", "dropped_chars", "id")
 
-    def __init__(self, t, stream, vector, chunks, dropped_chars):
+    def __init__(self, t, stream, vector, chunks, dropped_chars, id=None):  # noqa: A002
         self.t, self.stream, self.vector = t, stream, vector
         self.chunks, self.dropped_chars = chunks, dropped_chars
+        self.id = id
 
 
 def normalize(v):
@@ -708,7 +736,7 @@ def embed(messages, encoder, matrix=None, dim=None, cap=None):
             continue
         pooled = mean_pool(chunks)                 # at the encode width
         published = project(truncate(pooled, dim), matrix)
-        out.append(MessageVector(m.t, m.stream, published, len(chunks), dropped[i]))
+        out.append(MessageVector(m.t, m.stream, published, len(chunks), dropped[i], m.id))
     for s in present:
         statuses[s] = STATUS_OK if any(v.stream == s for v in out) else STATUS_EMPTY
     return out, statuses
@@ -741,10 +769,29 @@ def novelty_of(vector, earlier):
     """`1 − max cos(vector, any earlier vector)`. `None` when there is no earlier message: a first
     message is not maximally novel, it is unmeasured, and returning 1.0 would publish the strongest
     possible reading of no evidence at all — the CONTRAST-NEVER-FALLBACK rule `prior.py` states one
-    level up."""
+    level up.
+
+    ⚠️ **The max is taken in numpy, and that is a COST fix rather than a preference.** This is the
+    only quadratic quantity in the module — every message of a shell against every message before
+    it — and `/features` computes a ladder per anchor row, up to 96 in one call. Measured on a real
+    session: the pure-Python double loop cost ~4 s for ONE row at 500 message vectors (0.08 * n^2
+    cosines of 256 components each), i.e. minutes per call; the same arithmetic in numpy is
+    milliseconds. The formula is unchanged — norms are divided out exactly as `cosine` does, so a
+    non-unit vector reads the same — and a zero-norm row contributes 0.0, matching `cosine`'s own
+    definition here rather than dividing by zero.
+    """
     if not earlier:
         return None
-    return max(0.0, 1.0 - max(cosine(vector.vector, e.vector) for e in earlier))
+    import numpy as np
+
+    v = np.asarray(vector.vector, dtype=np.float64)
+    m = np.asarray([e.vector for e in earlier], dtype=np.float64)
+    nv = math.sqrt(float(v @ v))
+    nm = np.sqrt((m * m).sum(axis=1))
+    if nv == 0.0:
+        return max(0.0, 1.0 - 0.0)
+    cos = np.where(nm == 0.0, 0.0, (m @ v) / np.where(nm == 0.0, 1.0, nm) / nv)
+    return max(0.0, 1.0 - float(cos.max()))
 
 
 def shell_stats(shell, stream, prev_centroid=None, earlier=None):

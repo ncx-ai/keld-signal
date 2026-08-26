@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, analyze_window
 from app.analysis.blockdigest import DEFAULT_MAX_BLOCKS, digest_blocks
 from app.analysis.features import DEFAULT_MAX_FEATURE_ROWS
+from app.analysis.features import feature_rows as feature_rows_for
 from app.analysis.features import features as features_for, manifest as feature_manifest
 from app.analysis.tick import DEFAULT_MAX_WINDOWS, tick as tick_windows_for
 from app.analysis.dynamics import DEFAULT_SIZER
@@ -182,6 +183,17 @@ async def lifespan(app: FastAPI):
                 await loop.run_in_executor(None, wm.poll)  # poll may block on kill/join
             except Exception:
                 pass
+            # The TEXT ENCODER child rides the same loop, and it needs to: it costs ~1.9 GB
+            # resident (measured, bf16, real weights) against a budget already documented as
+            # oversubscribed, and its duty cycle is ~100 messages a day. Nothing else would ever
+            # release it — `/features` only ever spawns. Guarded so a machine with the toggle off
+            # never builds a source at all.
+            try:
+                src = _TEXT_SOURCE
+                if src is not None:
+                    await loop.run_in_executor(None, src.maybe_unload)
+            except Exception:
+                pass
             await asyncio.sleep(interval)
 
     # 1s: poll() both samples RSS (for the peak high-water) and enforces the
@@ -200,6 +212,8 @@ async def lifespan(app: FastAPI):
             pass
     await runner.stop()
     await asyncio.get_running_loop().run_in_executor(None, wm.shutdown)
+    if _TEXT_SOURCE is not None:
+        await asyncio.get_running_loop().run_in_executor(None, _TEXT_SOURCE.shutdown)
     _state.clear()
 
 
@@ -373,21 +387,57 @@ class BlocksIn(BaseModel):
 
 
 class FeaturesIn(BaseModel):
-    """`S(t)` at one or more ANCHOR INSTANTS of one transcript. Coordinates and instants only —
-    never text, never a span, never an offset, and never a prompt id.
+    """THE FEATURE ROWS one transcript has produced since a CURSOR. Coordinates and instants only
+    — never text, never a span, never an offset, and never a prompt id.
 
-    `ats` are epoch seconds, the unit the whole block/feature path keys on (see BlocksIn on why
-    an ISO string would be the wrong type for a cursor). They are ANCHORS, not a range: the
-    caller decides the sampling grid — per closed block, per non-empty 5-minute bin, or an
-    arbitrary probe from a study — and this endpoint has no opinion about which, because the
-    design spec is explicit that blocks are NOT a sufficient grid on their own (every block
-    boundary is arithmetic and no boundary is a claim about the work).
+    ⚠️ **THE SIDECAR ENUMERATES THE ANCHORS. The caller supplies a cursor, not a grid.** This
+    process owns the reference-series store, so it is the only side that can see where the
+    non-empty 5-minute bins and the CLOSED blocks are; a daemon asking for a grid it cannot see
+    would have to guess one, and a guessed grid is silently wrong rather than visibly wrong. It is
+    also exactly the shape `POST /blocks` already has (`{path, since_ts, now, resolved}` ->
+    `{rows, watermark}`), and consistency with the sibling route outweighs either half's local
+    preference. The anchor-instant form is kept as `POST /features/probe` for studies.
+
+    `since_ts` is where the last call for this transcript stopped, compared against A ROW'S OWN
+    INSTANT with `>`: rows are chronological across all three anchor kinds, so that admits the
+    next row and excludes the one already sent. Null means from the beginning of the session, so
+    FORWARD-ONLY is the caller's choice to make by seeding its own cursor (matching
+    `KELD_WATCH_BACKFILL`'s default), not something this endpoint decides.
+
+    `now` is the daemon's clock, injected rather than read here, for BlocksIn's reason: it is what
+    the trailing bin's and the trailing block's idle settle are measured against, and a test that
+    cannot move it cannot exercise the settle rule at all.
+
+    `resolved` is the same channel /analyze, /ingest, /tick and /blocks have — facts the daemon
+    read off a repo's .git/config, which this process is confined out of reading. It reaches
+    ingest currency here (`is_current`), which is what makes the idle settle honest: silence in
+    the SERIES is not silence on the MACHINE while there are unparsed bytes on disk.
 
     ⚠️ **There is no `capture` field and there must not be one.** Whether the capture rows exist
     is a property of the STORE, fingerprinted per transcript into `parse_state`, and the row
     reports it back as `capture_recorded`. A caller-supplied flag would let a daemon assert
     capture over a transcript whose rows were written without it — the incoherent-corpus failure
-    the fingerprint exists to prevent.
+    the fingerprint exists to prevent. The same argument covers text: there is no `text` field
+    either, and `text_recorded` is reported rather than asserted.
+    """
+    path: str
+    since_ts: float | None = None
+    now: float | None = None
+    max_rows: int = DEFAULT_MAX_FEATURE_ROWS
+    resolved: ResolvedFacts | None = None
+
+
+class FeaturesProbeIn(BaseModel):
+    """`S(t)` at one or more ANCHOR INSTANTS THE CALLER CHOSE. THE STUDY ENTRY, not the daemon's.
+
+    Kept as a second, clearly separated route rather than folded into /features, because it is
+    genuinely a different question and the two answers have different shapes. A study sweeps
+    seeded anchors over a frozen corpus at instants no emitter would ever pick, needs them in the
+    order it asked, and wants the RAW floats in `manifest()` order rather than the quantised wire
+    form. Nothing on this route is emittable and nothing here has a cursor.
+
+    `ats` are epoch seconds, the unit the whole block/feature path keys on (see BlocksIn on why an
+    ISO string would be the wrong type for a cursor).
 
     `manifest` asks for the ordered slot names beside the rows. Off by default: it is
     `features.DIMS` strings, an order of magnitude more bytes than the vectors it describes, and
@@ -816,19 +866,77 @@ async def blocks(body: BlocksIn):
                             detail="the reference-series store is unavailable") from None
 
 
-def _features_blocking(path, ats, max_rows, want_manifest):
+# The text half's process-wide handle: the transcript reader, the per-message vector cache, and the
+# encoder child. Lazily built and only when `KELD_TEXTEMBED` is on, so the default path imports no
+# torch, spawns no child and opens no transcript. `None` is passed straight through to
+# `feature_rows`, which then produces no `message` anchors and reports `text_recorded: False` —
+# ABSENT, never zeros.
+_TEXT_SOURCE = None
+_TEXT_LOCK = threading.Lock()
+
+
+def _text_source():
+    """The `featuretext.TextSource`, or `None` when text embedding is switched off.
+
+    The import is INSIDE the function for the reason `textembed` keeps its own heavy imports child-
+    side: `featuretext` pulls the transcript reader and, transitively, the encoder handle, and the
+    default path must not pay for either. Re-checked per call rather than latched, because the
+    toggle is read from the environment and a latch would make an operator restart the sidecar to
+    turn the feature OFF as well as on.
+    """
+    from app.analysis import featuretext, textembed
+
+    if not textembed.enabled():
+        return None
+    global _TEXT_SOURCE
+    with _TEXT_LOCK:
+        if _TEXT_SOURCE is None:
+            _TEXT_SOURCE = featuretext.TextSource()
+        return _TEXT_SOURCE
+
+
+def _features_blocking(path, since_ts, now, max_rows, resolved=None):
     """The whole of /features' work, on an executor thread.
 
-    A QUERY, never a parse, for `_blocks_blocking`'s reason one step further along: this route is
-    driven by a sampling grid the caller chose, so it can be asked for dozens of rows at once and
-    a whole-file parse inside any one of them would be paid dozens of times. What the store has
-    not read yet simply has no row yet, and the next call gets it.
+    A QUERY of the series, never a parse of it, for `_blocks_blocking`'s reason: the emitter behind
+    this route runs on a timer, and paying a whole-file series parse on a timer is exactly what the
+    watcher's /ingest signal exists to avoid. What the store has not read yet simply has no row
+    yet, and the next call gets it.
 
-    `_analysis_nlp()` is NOT resolved here — nothing on this path parses a transcript, so no
-    spaCy pipeline is needed and a multi-second load must not be triggered by a read. The `term`
-    level reaches the vector as five shape statistics computed off rows that were written at
-    INGEST time; whether the terms pipeline ran is already fingerprinted into `parse_state`.
+    ⚠️ **The TEXT half does open the transcript, and only when the toggle is on.** That is not a
+    contradiction of the line above: `features.py` stays a pure store query (pinned by
+    `test_features_never_opens_a_transcript`) and the reader lives in `featuretext.py` behind an
+    injected seam. The cost is a `turns_in` pass — 0.79 s on a 90 MB transcript — plus a forward
+    pass per message the cache has not already seen, which after the first call on a session is a
+    handful. With `KELD_TEXTEMBED` off neither is paid at all.
+
+    `is_current` is consulted for the reason /blocks consults it: it gates the IDLE settle that
+    closes the trailing bin and the trailing block. Silence in the series is not silence on the
+    machine while there are unparsed bytes on disk, and a trailing anchor emitted on that reading
+    describes a span that is still growing.
+
+    `_analysis_nlp()` is NOT resolved here — nothing on this path writes rows, so no spaCy pipeline
+    is needed and a multi-second load must not be triggered by a read. The `term` level reaches the
+    vector as five shape statistics computed off rows written at INGEST time; whether the terms
+    pipeline ran is already fingerprinted into `parse_state`.
     """
+    st = _store()
+    if st is None:
+        raise StoreBehind("the reference-series store could not be opened")
+    try:
+        current = is_current(st, path, None, resolved)
+    except OSError:
+        # The transcript is gone or unreadable. Not fatal: the SERIES still holds everything that
+        # was ingested from it. Treated as "not current" so only the activity-after branch closes
+        # anything — the same call /blocks makes.
+        current = False
+    return feature_rows_for(st, path, since_ts=since_ts, now=now, max_rows=max_rows,
+                            current=current, text=_text_source())
+
+
+def _features_probe_blocking(path, ats, max_rows, want_manifest):
+    """The whole of /features/probe's work, on an executor thread. The study entry — anchors in,
+    raw float rows out, no cursor and no text half."""
     st = _store()
     if st is None:
         raise StoreBehind("the reference-series store could not be opened")
@@ -840,28 +948,44 @@ def _features_blocking(path, ats, max_rows, want_manifest):
 
 @app.post("/features")
 async def features(body: FeaturesIn):
-    """`S(t)` — the STRUCTURED FEATURE VECTOR at each requested anchor of one transcript.
+    """THE FEATURE ROWS one transcript has produced since a cursor. THE SIGNAL-EMBEDDINGS PATH.
 
-        a reference series -> a fixed-width vector of numbers, per anchor
+        a reference series (+ the messages)  ->  quantised feature rows  ->  the daemon  ->  Atlas
 
-    Step 2 of `docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`. NOTHING IS
-    PUBLISHED BY THIS ROUTE and no encoder is loaded: it computes and returns, and the Go emitter
-    half plus the wire type are step 3. See app/analysis/features.py for the disjoint shell
-    ladder, the frozen vocabulary manifest, the normalisation transforms and why
-    `workstreams.payload` is the wrong input.
+    `docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`. NOTHING IS PUBLISHED BY THIS
+    ROUTE: it computes and returns, and the daemon's emitter (`internal/agent/features`) owns the
+    cursor, the batching and the wire. See app/analysis/features.py for the disjoint shell ladder,
+    the frozen vocabulary manifest, the normalisation transforms and why `workstreams.payload` is
+    the wrong input; app/analysis/featuretext.py for the text half.
 
-    Returns `{"feature_spec", "spec_sha", "dims", "session", "rows": [...]}`, one row per anchor
-    the store could characterise, in the order asked. A row is `{"at", "session",
-    "session_start", "capture_recorded", "values"}` where `values` is `dims` floats in
-    `manifest()` order — numbers only, no identity string anywhere in it. Anchors the store
-    cannot characterise (before the session's first active bin, or a transcript never ingested)
-    are SKIPPED rather than returned as a row of zeros, which would enter a training set as a
-    real observation of nothing happening.
+    Returns `{"schema", "feature_spec", "spec_sha", "dims", "session", "rows": [...],
+    "watermark"}`. THE SIDECAR CHOOSES THE ANCHORS — see FeaturesIn — emitting three kinds, oldest
+    first, every one of them strictly after `since_ts`:
 
-    ⚠️ `feature_spec` and `spec_sha` are not decoration. A vector is the one artefact where
-    pooling two incompatible versions is invisible — the widths can even match while index 700
-    means two different things — so both ride every response and a corpus builder must partition
-    on them. Same argument as `ingest.terms_mode`.
+      * `message` — one per user/assistant TURN, carrying that turn's own text vectors under
+        `text` and its `role`. Present ONLY where the text half ran: a message has no lookback, so
+        there is no structured vector to compute, and with `KELD_TEXTEMBED` off this kind is
+        ABSENT rather than emitted empty. `anchor_id` is REQUIRED here and is the turn's uuid —
+        instants are quantized to 0.1 s and two turns can collide on one tick, so the instant
+        alone is not a key and a row published under one could upsert its neighbour.
+      * `bin` — one per non-empty, CLOSED 5-minute bin, at the bin's end.
+      * `block` — one per CLOSED block (app/analysis/blocks.py's measured 20-minute cap and
+        15-minute idle terminator), at the block's end, plus the two boundary reasons.
+
+    A `bin`/`block` row carries `structured`: the full `dims`-wide vector, int8-quantised as
+    `{"dims", "scale", "q"}` with `q` base64 of two's-complement bytes. `dims` is redundant with
+    `len(q)` ON PURPOSE — they are compared at the Go decode boundary, so a truncated payload is
+    refused rather than read as a shorter vector.
+
+    ⚠️ ABSENT IS NOT ZERO. `capture_recorded` and `text_recorded` say whether the capture slots and
+    the per-shell text slots may be read at all; the `text` block is absent, never zeroed, wherever
+    no encoder produced a vector. `watermark` is returned even with no rows, because it is the one
+    fact separating "nothing new yet" from "never ingested" (null).
+
+    ⚠️ `feature_spec` and `spec_sha` are not decoration. A vector is the one artefact where pooling
+    two incompatible versions is invisible — the widths can even match while index 700 means two
+    different things — so both ride every response and every row, and a corpus builder must
+    partition on them. Same argument as `ingest.terms_mode`.
 
     Like /analyze, /ingest, /tick and /blocks it bypasses _dispatch and the single-flight runner:
     this is a series query, not inference, and it must answer while the runner is occupied or no
@@ -869,10 +993,41 @@ async def features(body: FeaturesIn):
     the event loop out from under /health and /metrics.
     """
     # Confinement BEFORE anything else, the SAME allowlist /analyze, /ingest, /tick and /blocks
-    # use. The sidecar has no auth, and this reads a transcript's series as the daemon's user.
-    # 403, not 404: a rejected path and an unresolvable one are different facts. Counted as
-    # analyze_rejected for /blocks' reason — it is literally the same allowlist and a
-    # features_rejected field would mean editing app/metrics.py, which this path does not touch.
+    # use. The sidecar has no auth, and this reads a transcript's series — and, with the text half
+    # on, the transcript itself — as the daemon's user. 403, not 404: a rejected path and an
+    # unresolvable one are different facts. Counted as analyze_rejected for /blocks' reason: it is
+    # literally the same allowlist and a features_rejected field would mean editing
+    # app/metrics.py, which this path does not touch.
+    if not _within_roots(body.path, _analyze_roots()):
+        _count("analyze_rejected")
+        raise HTTPException(status_code=403,
+                            detail="path is outside the configured transcript roots")
+    now = body.now if body.now is not None else time.time()
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(
+            None, _features_blocking, body.path, body.since_ts, now,
+            max(0, int(body.max_rows)), _resolved_dict(body.resolved))
+    except StoreBehind:
+        raise HTTPException(status_code=503,
+                            detail="the reference-series store is unavailable") from None
+
+
+@app.post("/features/probe")
+async def features_probe(body: FeaturesProbeIn):
+    """`S(t)` at anchor instants THE CALLER chose. THE STUDY ENTRY — see FeaturesProbeIn.
+
+    Returns `{"feature_spec", "spec_sha", "dims", "session", "rows": [...]}`, one row per anchor
+    the store could characterise, IN THE ORDER ASKED. A row is `{"at", "session", "session_start",
+    "capture_recorded", "text_recorded", "values"}` where `values` is `dims` RAW floats in
+    `manifest()` order — numbers only, no identity string anywhere in it, and unquantised because a
+    study wants the numbers rather than the transport. Anchors the store cannot characterise
+    (before the session's first active bin, or a transcript never ingested) are SKIPPED rather than
+    returned as a row of zeros, which would enter a training set as a real observation of nothing
+    happening.
+
+    No cursor, no watermark, no text half: this route emits nothing and advances nothing.
+    """
     if not _within_roots(body.path, _analyze_roots()):
         _count("analyze_rejected")
         raise HTTPException(status_code=403,
@@ -880,7 +1035,7 @@ async def features(body: FeaturesIn):
     loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(
-            None, _features_blocking, body.path, list(body.ats),
+            None, _features_probe_blocking, body.path, list(body.ats),
             max(0, int(body.max_rows)), bool(body.manifest))
     except StoreBehind:
         raise HTTPException(status_code=503,

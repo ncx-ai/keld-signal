@@ -81,7 +81,12 @@ def test_published_row_holds_no_text():
     vecs, _ = te.embed(msgs, StubEncoder())
     assert len(vecs) == 1
     row = vecs[0]
-    assert set(te.MessageVector.__slots__) == {"t", "stream", "vector", "chunks", "dropped_chars"}
+    # `id` is the transcript TURN'S UUID, not a fragment of the message: an instant is not a
+    # sufficient message key (the series quantizes to 0.1 s and two turns can collide on one tick),
+    # so a published `message` row keyed on its instant could upsert its neighbour at Atlas. It is
+    # bounded and whitespace-checked again at the Go decode boundary (`enrich.ValidAnchorID`).
+    assert set(te.MessageVector.__slots__) == {"t", "stream", "vector", "chunks",
+                                               "dropped_chars", "id"}
     for slot in te.MessageVector.__slots__:
         val = getattr(row, slot)
         if slot == "stream":

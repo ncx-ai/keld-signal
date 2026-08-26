@@ -68,11 +68,11 @@ import (
 // is testable without a live sidecar, mirroring how the daemon declares
 // windowAnalyzer / piiDetector / windowTicker / blocks.Digester.
 //
-// ⚠️ TODO(sidecar): the route it names is NOT BUILT YET — step 2 of the design
-// is in flight in parallel. Until it lands the client reports !ok on every
-// call, the emitter holds every cursor, and nothing is collected or lost. See
-// internal/agent/enrich/sidecar/features.go for the contract this is coded
-// against.
+// The route enumerates the anchors itself and takes only a cursor, because the
+// sidecar owns the store and is the only side that can see where the non-empty
+// bins and the closed blocks are. See internal/agent/enrich/sidecar/features.go
+// for the full contract and for the four response keys this side deliberately
+// does not model.
 type Source interface {
 	FeatureRowsFor(path, source, sessionID string,
 		since *float64, now time.Time, maxRows int,

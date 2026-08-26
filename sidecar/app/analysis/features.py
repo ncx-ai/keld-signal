@@ -150,14 +150,16 @@ No raw text, no spans, no offsets, no identity strings — counts and shares onl
 (v1's frozen entry point) and `levels.events_for_turns` (the oracle's producer) are neither
 imported nor touched.
 """
+import base64
 import datetime as dt
 import hashlib
 import math
 import time
 
-from app.analysis import COMPONENT_DEPTH
+from app.analysis import COMPONENT_DEPTH, SCHEMA
 from app.analysis import blocks as blocks_mod
 from app.analysis import latency, magnitude, prior as prior_mod, window
+from app.analysis.blockdigest import IDLE_SECONDS, is_closed, span_of
 from app.analysis.dynamics import (DEFAULT_SIZER, DYNAMIC_DIMENSIONS, READINGS, STATUSES,
                                    dynamics_for)
 from app.analysis.ingest import RECONCILE_SLOT, pending_in, session_of
@@ -165,6 +167,9 @@ from app.analysis.levels import LEVELS, quantize
 from app.analysis.prior import PRIOR_DIMENSIONS
 from app.analysis.reconcile import reconcile
 from app.analysis.store import BIN_SECONDS
+from app.analysis.textembed import (ROLE_OF, STREAMS as TEXT_STREAMS,
+                                    ladder as ladder_for, mean_pool)
+from app.analysis.transcript import _order_key
 from app.analysis.vocab import ACTIONS, ARTIFACT_EXT, ARTIFACT_SKILL, EXT_LANG, TOOLCHAIN_EXE, \
     TOOL_ACTION
 
@@ -173,7 +178,7 @@ from app.analysis.vocab import ACTIONS, ARTIFACT_EXT, ARTIFACT_SKILL, EXT_LANG, 
 # vocabulary table and forgets. Same argument as `ingest.terms_mode` fingerprinting the terms
 # pipeline's identity into `parse_state`: an unversioned corpus of vectors is not repairable
 # after the fact, because the rows carry no record of what they meant.
-FEATURE_SPEC_VERSION = 1
+FEATURE_SPEC_VERSION = 2
 
 # The DISJOINT lookback ladder, in minutes back from the anchor. `None` means "to the session's
 # first active bin" — the only open shell, and the reason `coverage` exists. See the module
@@ -287,6 +292,53 @@ PRIOR_SCALARS = ("agrees", "departure", "novel")
 # than as a number where 23:00 and 00:00 sit maximally far apart.
 POSITION_SLOTS = ("hour_sin", "hour_cos", "weekday_sin", "weekday_cos",
                   "session_age", "gap_since_last_turn", "in_block", "block_position")
+
+# The per-shell, per-stream TEXT scalars — `textembed.shell_stats`' three numbers plus the count,
+# each with the companion flag its tri-state needs.
+#
+# ⚠️ THEY RIDE THE STRUCTURED VECTOR, AND THE WIDTH DOES NOT DEPEND ON THE TOGGLE. A `bin`/`block`
+# row's text half is three SCALARS per stream, not a vector (the centroid is deliberately not
+# published — it is an exact pooling of message vectors Atlas already holds), so there is nowhere
+# else for them to go. Emitting them only under `KELD_TEXTEMBED=1` would make `DIMS` a function of
+# a machine's environment, which is rule 2 of the module docstring — index `i` meaning two things
+# on two machines — expressed one level up. So the slots are always present and always the same
+# width; `row.meta.text_recorded` is what says whether they may be read, exactly as
+# `row.meta.capture_recorded` does for the capture slots. The cost is 105 always-zero dimensions
+# on a machine with the toggle off, against a corpus that cannot be pooled at all otherwise.
+#
+# `dispersion` / `drift` / `novelty` are `None` where they could not be computed and each carries
+# its own `_known` flag, for `changed`'s reason: an absent comparison and a comparison that found
+# no movement are different facts, and 0.0 would publish the second for the first. `n` needs none
+# — `log1p(0)` is 0 and `log1p(n>0)` is not, so the count states its own presence.
+TEXT_SCALARS = ("n", "dispersion", "dispersion_known", "drift", "drift_known",
+                "novelty", "novelty_known")
+
+# WHERE A ROW IS SNAPSHOTTED. Closed, and mirrored Go-side as `enrich.FeatureAnchors` — the three
+# carry different things, so a kind the consumer cannot read is dropped rather than pooled with
+# rows that mean something else.
+#
+#   message — one per user/assistant TURN. Text vectors only: a single message has no lookback, so
+#             there is no shell ladder and no structured vector to compute. The only kind that
+#             preserves order, which pooling destroys, and the only one that needs an `anchor_id`.
+#   bin     — one per non-empty 5-minute bin, at the bin's END. The dense grid.
+#   block   — one per CLOSED block, at the block's own end, plus the two boundary reasons.
+MESSAGE, BIN, BLOCK = "message", "bin", "block"
+ANCHORS = (MESSAGE, BIN, BLOCK)
+
+# int8 quantisation. `value_i = int8(q[i]) * scale`, with the scale chosen per vector as
+# `max(|v|)/127` so the largest component saturates and nothing clips.
+#
+# ⚠️ 127 AND NOT 128. int8 spans [-128, 127], and using 128 for the negative side would make the
+# scale asymmetric — a component at exactly `-max` would dequantise to a different magnitude than
+# its positive mirror, which for `concentration_shift` and `departure` (the two signed groups) is a
+# sign-dependent bias rather than rounding noise.
+QUANT_MAX = 127.0
+
+# The floor on a quantisation scale. A vector that is entirely zero has no natural scale, and 0.0
+# is REFUSED at the Go decode boundary (`QuantisedVector.Valid`) precisely because it would render
+# every dimension as 0.0 while looking like a vector that says everything is average. So an
+# all-zero vector gets a positive scale and honest zeros.
+MIN_SCALE = 1e-9
 
 # ⚠️ THE GROUPS WHOSE INPUTS ARE NOT A STRICTLY CAUSAL PREFIX, named so a training run can drop
 # them rather than rediscover the trap. `workspace.scan_workspace` is a WHOLE-FILE pre-pass: a
@@ -522,8 +574,8 @@ def shell_bounds(at, session_start):
     return out
 
 
-def _shell_values(store, path, session, lo, hi, cov):
-    """One shell's ~267 numbers, in manifest order: histograms, then shape, then effort."""
+def _shell_values(store, path, session, lo, hi, cov, text=None):
+    """One shell's numbers, in manifest order: histograms, shape, effort, then the text scalars."""
     rl = _rollup_at(store, path, session, lo, hi) if hi > lo else {}
     vals = []
     for level, slots in HISTOGRAMS:
@@ -532,6 +584,26 @@ def _shell_values(store, path, session, lo, hi, cov):
         vals.extend(shape(rl.get(level) or []))
     tool_calls = sum(_num(n) for _ref, n in (rl.get("tool") or []))
     vals.extend(effort(store, session, lo, hi, tool_calls, cov))
+    vals.extend(_text_values(text))
+    return vals
+
+
+def _text_values(entry):
+    """One shell's text scalars, in `TEXT_STREAMS` x `TEXT_SCALARS` order.
+
+    `entry` is one element of `textembed.ladder`'s output (`{"bounds", "streams"}`), or `None`
+    where the text half did not run at all. Both cases emit the same width — see `TEXT_SCALARS`
+    on why the width may not depend on the toggle — and `row.meta.text_recorded` is what
+    separates them.
+    """
+    streams = (entry or {}).get("streams") or {}
+    vals = []
+    for stream in TEXT_STREAMS:
+        st = streams.get(stream) or {}
+        vals.append(_log1p(st.get("n")))
+        for name in ("dispersion", "drift", "novelty"):
+            v = st.get(name)
+            vals.extend([_num(v), 0.0 if v is None else 1.0])
     return vals
 
 
@@ -617,7 +689,8 @@ def _build_manifest():
     """The ordered slot names. Built ONCE at import and frozen; `manifest()` hands out the tuple.
 
     Names are dot-separated and stable: `<shell>.hist.<level>.<slot>`, `<shell>.shape.<level>.
-    <stat>`, `<shell>.effort.<name>`, `row.dyn.<dimension>.<field>`, `row.prior.<dimension>.
+    <stat>`, `<shell>.effort.<name>`, `<shell>.text.<stream>.<field>`,
+    `row.dyn.<dimension>.<field>`, `row.prior.<dimension>.
     <field>`, `row.pos.<field>`, `row.meta.<field>`. A consumer that stores the manifest once and
     asserts it against `spec_sha` needs nothing else to align two machines' rows.
     """
@@ -628,6 +701,8 @@ def _build_manifest():
         for level in LEVELS:
             names.extend(f"{shell}.shape.{level}.{s}" for s in SHAPE_STATS)
         names.extend(f"{shell}.effort.{s}" for s in EFFORT_SLOTS)
+        for stream in TEXT_STREAMS:
+            names.extend(f"{shell}.text.{stream}.{s}" for s in TEXT_SCALARS)
     for name, _level, _floor in DYNAMIC_DIMENSIONS:
         names.extend(f"row.dyn.{name}.{s}" for s in DYNAMIC_SCALARS)
         names.extend(f"row.dyn.{name}.status.{s}" for s in STATUSES)
@@ -636,6 +711,7 @@ def _build_manifest():
         names.extend(f"row.prior.{name}.{s}" for s in PRIOR_SCALARS)
     names.extend(f"row.pos.{s}" for s in POSITION_SLOTS)
     names.append("row.meta.capture_recorded")
+    names.append("row.meta.text_recorded")
     return tuple(names)
 
 
@@ -693,7 +769,8 @@ def _captured(store, path):
     return (store.parse_state(path) or {}).get("capture") == "1"
 
 
-def features_at(store, path, at, floor=None, sizer=None, captured=None, start=None):
+def features_at(store, path, at, floor=None, sizer=None, captured=None, start=None,
+                text_ladder=None):
     """ONE ROW: `S(t)` at instant `at`, as `{"at", "values", ...}`.
 
     `values` is `DIMS` floats in `manifest()` order and nothing else — no strings, no identity,
@@ -704,6 +781,13 @@ def features_at(store, path, at, floor=None, sizer=None, captured=None, start=No
     are: a study reproduces this exact arithmetic without a clock or an environment, and a batch
     caller resolves the per-transcript facts once instead of per row. Production passes none of
     them.
+
+    `text_ladder` is `textembed.ladder`'s output for this anchor — one entry per shell, in
+    `SHELLS` order — or `None` when the text half did not run. It is INJECTED rather than computed
+    here because computing it means opening the transcript, and this module never does: the text
+    provider lives in `featuretext.py` (see `test_features.py`'s
+    `test_features_never_opens_a_transcript`). `None` and a ladder emit the same width, and
+    `row.meta.text_recorded` is the flag that says which.
 
     Returns `None` for a session the store has never seen an active bin for — an honest "there is
     nothing to characterise", never a row of zeros, which would enter a training set as a real
@@ -717,9 +801,9 @@ def features_at(store, path, at, floor=None, sizer=None, captured=None, start=No
     captured = _captured(store, path) if captured is None else bool(captured)
 
     vals = []
-    for _name, lo, hi, cov in shell_bounds(at, start):
-        vals.extend(_shell_values(store, path, session,
-                                  quantize(lo), quantize(hi), cov))
+    for i, (_name, lo, hi, cov) in enumerate(shell_bounds(at, start)):
+        vals.extend(_shell_values(store, path, session, quantize(lo), quantize(hi), cov,
+                                  text=(text_ladder[i] if text_ladder else None)))
 
     # Row-level blocks. `dynamics_for` is the same call `/analyze` and `/blocks` make, so the
     # measured `DEFAULT_SIZER` seam is exercised in production rather than only in tests.
@@ -738,15 +822,25 @@ def features_at(store, path, at, floor=None, sizer=None, captured=None, start=No
     last = store.turn_times(session, start, at, exclude_slots=(RECONCILE_SLOT,))
     vals.extend(_position_values(store, session, at, start, last[-1] if last else None))
     vals.append(1.0 if captured else 0.0)
+    vals.append(1.0 if text_ladder is not None else 0.0)
 
     if len(vals) != DIMS:                       # a manifest/producer drift is never silent
         raise AssertionError(f"features produced {len(vals)} values, manifest has {DIMS}")
     return {"at": float(at), "session": session, "session_start": float(start),
-            "capture_recorded": captured, "values": [float(v) for v in vals]}
+            "capture_recorded": captured, "text_recorded": text_ladder is not None,
+            "values": [float(v) for v in vals]}
 
 
 def features(store, path, ats, floor=None, sizer=None, max_rows=None):
-    """`POST /features`' whole answer: `{"rows": [...], "dims", "feature_spec", "spec_sha", ...}`.
+    """THE PROBE ENTRY (`POST /features/probe`): `S(t)` at anchor instants THE CALLER chose.
+
+    ⚠️ **This is the second entry, not the one the daemon drives.** `POST /features` enumerates
+    the anchors itself (`feature_rows` below) because only this process can see where the
+    non-empty bins and the closed blocks are. This one takes them as an argument, and it is kept
+    because a STUDY needs exactly that: a sweep of seeded anchors over a frozen corpus, at
+    instants no emitter would ever choose, reproducible without a clock. It returns the RAW row
+    (`values` as floats, in `manifest()` order) rather than the quantised wire shape, for the same
+    reason — a study wants the numbers, not the transport.
 
     One row per anchor in `ats`, in the order given, skipping any the store cannot characterise.
     The per-transcript facts — the capture fingerprint, the session start, the serving floor —
@@ -776,3 +870,279 @@ def features(store, path, ats, floor=None, sizer=None, max_rows=None):
     return {"feature_spec": FEATURE_SPEC_VERSION, "spec_sha": SPEC_SHA, "dims": DIMS,
             "session": session, "rows": rows,
             "generated_at": time.time()}
+
+
+# ---- THE WIRE: quantisation, anchor enumeration, and the cursor entry -------------------------
+#
+# ⚠️ THE SIDECAR ENUMERATES THE ANCHORS; THE CALLER SUPPLIES ONLY A CURSOR. The probe entry above
+# takes `ats` and that is right for a study, but it is the wrong contract for the daemon: this
+# process owns the store, so it is the only side that can know where the non-empty 5-minute bins
+# and the closed blocks are. A daemon asking for a grid it cannot see would have to guess it, and
+# a guessed grid is silently wrong rather than visibly wrong. It is also exactly how `POST /blocks`
+# already works (`{path, since_ts, resolved}` -> `{rows, watermark}`), and consistency with the
+# sibling route outweighs either half's local preference.
+#
+# `since_ts` is compared against A ROW'S OWN INSTANT with `>`, so the caller resumes by passing the
+# last emitted row's instant. That works only because the stream is GLOBALLY CHRONOLOGICAL across
+# the three anchor kinds — see `feature_rows` on why a batch is cut at an instant boundary and
+# never inside one.
+
+# The text ladder's bounds, DERIVED from `SHELLS` rather than restated. `textembed.SHELL_BOUNDS`
+# holds the same ladder and `ladder()` takes the bounds as an argument precisely so the two
+# constants cannot silently disagree while both look right.
+TEXT_BOUNDS = tuple((lo, hi) for _name, lo, hi in SHELLS)
+
+
+def quantise(values):
+    """A list of floats -> `{"dims", "scale", "q"}`, `q` base64 of two's-complement int8 bytes.
+
+    `value_i == int8(q[i]) * scale`. The scale is per vector — `max(|v|) / 127` — so the largest
+    component saturates and nothing clips; a global constant would have to be sized for the
+    heaviest `log1p` count in the manifest and would quantise every share (which is nearly every
+    dimension) into two or three buckets.
+
+    ⚠️ **`dims` is emitted even though it equals `len(q)`, and that redundancy is the point.** The
+    two are COMPARED at the Go decode boundary (`enrich.QuantisedVector.Valid`), so a payload
+    truncated in transit is refused rather than read as a shorter vector — a vector cut short is
+    not a smaller vector, it is a false one.
+
+    Base64 and not an array of decimal numbers: 1,534 dimensions in 2,048 characters against
+    ~6,000, and at ~200 KB per user per active day that is the difference between a batched
+    publish and a problem.
+    """
+    vals = [float(v) for v in values]
+    peak = max((abs(v) for v in vals), default=0.0)
+    scale = max(peak / QUANT_MAX, MIN_SCALE)
+    q = bytes((max(-127, min(127, int(round(v / scale)))) & 0xFF) for v in vals)
+    return {"dims": len(vals), "scale": scale, "q": base64.b64encode(q).decode("ascii")}
+
+
+def _watermark(store, path):
+    """The series' ingestion frontier for this transcript, in epoch seconds, or `None`.
+
+    `None` is not "nothing has settled" — it is "this transcript has never been ingested", and the
+    two are what a caller cannot tell apart from an empty row list. It is returned on every
+    response for that reason, exactly as `/blocks` returns it.
+    """
+    iso = store.watermark(path)
+    return None if iso is None else _order_key(iso).timestamp()
+
+
+def _bin_anchors(store, session, watermark, now, current):
+    """One anchor per non-empty 5-minute bin that is CLOSED, at the bin's END instant.
+
+    The end, not the start: the row characterises the work up to its anchor (every shell looks
+    BACK), so anchoring at the start would describe the hour before a bin and attribute it to the
+    bin.
+
+    ⚠️ **A bin is closed on the same disjunction `blockdigest.is_closed` uses, evaluated one
+    resolution finer.** `bin_end <= watermark` means the series holds a turn at or after the bin's
+    end, which is positive proof no further turn can land inside it — the "activity after" branch,
+    and for a bin the instant comparison is exactly right rather than needing `bin_ceiling`'s
+    correction (a bin's end IS a bin boundary, which is the whole reason that correction exists for
+    blocks). The idle branch settles the trailing bin, which otherwise waits forever on a dormant
+    session; it needs `current`, because silence in the SERIES is not silence on the MACHINE while
+    there are unparsed bytes on disk.
+    """
+    out = []
+    for b in blocks_mod.active_bins(store, session):
+        end = quantize(float(b) + BIN_SECONDS)
+        if end <= watermark or (current and (float(now) - end) >= IDLE_SECONDS):
+            out.append({"anchor": BIN, "anchor_id": "bin@%d" % int(round(end)),
+                        "ts": end, "lo": float(b)})
+    return out
+
+
+def _block_anchors(store, session, watermark, now, current):
+    """One anchor per CLOSED block, at the block's own end, carrying the two boundary reasons.
+
+    `blocks.cut` and `blockdigest.is_closed` are IMPORTED rather than reimplemented. That is a
+    deliberate exception to this module's "duplicate a composition, never a definition" rule, and
+    it falls on the right side of it: where a block ends and when it may be emitted are
+    DEFINITIONS — a measured 20-minute cap, a 15-minute idle terminator, and a disjunction whose
+    load-bearing halves `blockdigest`'s docstring spends two screens on. A second copy would be
+    free to drift from the one `/blocks` publishes, and then Atlas would hold two disagreeing
+    accounts of the same span.
+    """
+    span = span_of(store, session)
+    if span is None:
+        return []
+    cut = blocks_mod.cut(store, session, *span)
+    out = []
+    for i, b in enumerate(cut):
+        if not is_closed(cut, i, watermark, now, current=current):
+            continue
+        end = quantize(float(b.end))
+        out.append({"anchor": BLOCK, "anchor_id": "block@%d" % int(round(end)),
+                    "ts": end, "lo": float(b.start),
+                    "start_reason": b.start_reason, "end_reason": b.end_reason})
+    return out
+
+
+def _message_anchors(vectors, watermark):
+    """One anchor per TURN that produced a text vector, keyed on the turn's own id.
+
+    ⚠️ **A `message` row exists ONLY where the text half ran and produced a vector**, and that is
+    not a degradation: a single message has no lookback, so there is no shell ladder and no
+    structured vector to compute, and a `message` row with no text vector would carry nothing at
+    all. With `KELD_TEXTEMBED` off there are simply no `message` anchors — ABSENT, which is what
+    the Go side reads as "this kind was not produced", never a row of zeros.
+
+    ONE ROW PER TURN, not per stream: an assistant turn can hold both prose and thinking, and two
+    rows sharing a turn id would share a correlation id and upsert each other at Atlas. The
+    streams ride together under `text`, which is the shape the wire already has.
+
+    Turns beyond the watermark are held back. A message needs no series row to be characterised,
+    but the emitted stream must stay chronological across all three kinds — a message published
+    past the frontier would advance the caller's cursor over bins and blocks that are not closed
+    yet, and `since_ts` is a `>` comparison, so those would never be offered again.
+    """
+    by_turn = {}
+    for v in vectors:
+        if not v.id or not v.vector:
+            continue
+        ts = quantize(float(v.t))
+        if ts > watermark:
+            continue
+        e = by_turn.get(v.id)
+        if e is None:
+            e = by_turn[v.id] = {"anchor": MESSAGE, "anchor_id": str(v.id), "ts": ts,
+                                 "streams": {}}
+        e["ts"] = min(e["ts"], ts)
+        e["streams"].setdefault(v.stream, []).append(v.vector)
+    for e in by_turn.values():
+        # The turn's AUTHOR, from the streams it produced. `user` is exclusive of the other two by
+        # construction (`messages_in` branches on the turn's role), so the test is a lookup and
+        # not a precedence rule.
+        stream = TEXT_STREAMS[0] if TEXT_STREAMS[0] in e["streams"] \
+            else next(iter(sorted(e["streams"])))
+        e["role"] = ROLE_OF.get(stream)
+    return list(by_turn.values())
+
+
+def _wire_row(store, path, session, a, *, floor, sizer, captured, start, vectors, encoder):
+    """One anchor -> one wire row, or `None` where there is nothing to publish.
+
+    `None` rather than a row of zeros, for `features_at`'s reason: an anchor the store cannot
+    characterise is an honest absence, and a zero row would enter a training set as a real
+    observation of nothing happening.
+    """
+    row = {"anchor": a["anchor"], "anchor_id": a["anchor_id"], "ts": float(a["ts"]),
+           "feature_spec": FEATURE_SPEC_VERSION, "spec_sha": SPEC_SHA}
+    if a["anchor"] == MESSAGE:
+        text = {}
+        for stream, vecs in a["streams"].items():
+            v = vecs[0] if len(vecs) == 1 else mean_pool(vecs)
+            if v:
+                text[stream] = quantise(v)
+        if not text or not encoder:
+            # A text vector with no encoder identity is dropped Go-side and would be dropped here
+            # anyway: two corpora encoded by different models must never be pooled, and nothing
+            # downstream can tell from the numbers.
+            return None
+        row["role"] = a["role"]
+        row["text"] = text
+        row["encoder"] = dict(encoder)
+        return row
+
+    ladder = ladder_for(a["ts"], vectors, bounds=TEXT_BOUNDS) if vectors else None
+    fr = features_at(store, path, a["ts"], floor=floor, sizer=sizer,
+                     captured=captured, start=start, text_ladder=ladder)
+    if fr is None:
+        return None
+    row["structured"] = quantise(fr["values"])
+    row["capture_recorded"] = fr["capture_recorded"]
+    row["text_recorded"] = fr["text_recorded"]
+    if a["anchor"] == BLOCK:
+        row["start_reason"], row["end_reason"] = a["start_reason"], a["end_reason"]
+    return row
+
+
+def feature_rows(store, path, since_ts=None, now=None, max_rows=DEFAULT_MAX_FEATURE_ROWS,
+                 floor=None, sizer=None, current=True, text=None):
+    """`POST /features`' whole answer: `{"schema", "rows": [...], "watermark", ...}`.
+
+    Every emittable feature row of this transcript whose own instant is strictly after `since_ts`,
+    OLDEST FIRST, bounded to `max_rows`, across the three anchor kinds. `None` means from the
+    session's start — BACKFILL — and the caller owns that choice by seeding its own cursor
+    forward-only, matching `KELD_WATCH_BACKFILL` and `/blocks`.
+
+    ⚠️ **A BATCH IS CUT AT AN INSTANT BOUNDARY, NEVER INSIDE ONE.** The cursor is a `>` comparison
+    against a row's own instant, and instants are quantized to 0.1 s, so two rows can share one —
+    a bin ending exactly where a block ends, or two turns on the same tick. Emitting one of them
+    and stopping would advance the caller past the other permanently. So `max_rows` is honoured at
+    group granularity: all rows at an instant, or none. A single instant holding more rows than the
+    bound emits anyway, over the bound, because the alternative is a cursor that can never move.
+
+    `watermark` is returned unconditionally, including when no row is emittable, because it is the
+    one fact separating "nothing new yet" from "this transcript has never been ingested" (`None`).
+
+    `text` is the optional text provider (`featuretext.TextSource`) — the only thing on this path
+    that opens a transcript, which is why it is injected rather than imported. `None` means the
+    text half did not run: `message` anchors are then ABSENT and every text slot of a `bin`/`block`
+    row's structured vector reads 0.0 under `text_recorded: False`. Absent and zero stay
+    distinguishable, which is the discipline the whole `thin`/`absent`/`capture_recorded` design
+    rests on.
+
+    RETENTION: an anchor whose own evidence was pruned is DROPPED rather than answered from what
+    survived, the same call `/blocks` makes — a plausible wrong number is worse than no number,
+    and one unanswerable anchor must not discard the answerable ones behind it.
+    """
+    now = time.time() if now is None else float(now)
+    session = session_of(path)
+    watermark = _watermark(store, path)
+    out = {"schema": SCHEMA, "feature_spec": FEATURE_SPEC_VERSION, "spec_sha": SPEC_SHA,
+           "dims": DIMS, "session": session, "rows": [], "watermark": watermark}
+    if watermark is None:
+        return out
+    floor = store.serving_floor() if floor is None else floor
+    start = session_start(store, session, floor)
+    if start is None:
+        return out
+    captured = _captured(store, path)
+
+    vectors, encoder, frontier = [], None, None
+    if text is not None:
+        vectors, statuses, encoder, frontier = text.vectors(path)
+        out["text_status"] = statuses
+        if frontier is not None:
+            out["text_frontier"] = float(frontier)
+
+    cands = (_bin_anchors(store, session, watermark, now, current)
+             + _block_anchors(store, session, watermark, now, current)
+             + _message_anchors(vectors, watermark))
+    kept = []
+    for a in cands:
+        if since_ts is not None and not (a["ts"] > float(since_ts)):
+            continue
+        if floor is not None and quantize(float(a.get("lo", a["ts"]))) < float(floor):
+            continue
+        # ⚠️ THE TEXT FRONTIER HOLDS THE WHOLE STREAM BACK, not just the `message` rows. Past it the
+        # message history is incomplete (the provider bounds how much it encodes per call — see
+        # `featuretext._MAX_ENCODE`, where an unbounded first call measured ~28 minutes on a real
+        # 26 MB transcript), so a `bin`/`block` row emitted there would publish a confident text
+        # scalar measured over a fraction of the words that were actually said. Holding the stream
+        # means every emitted row's text half is computed over a COMPLETE history up to its own
+        # instant, and the next call continues from where this one stopped. Nothing is lost; the
+        # structured half of a held row is simply emitted later than it could have been.
+        if frontier is not None and a["ts"] >= float(frontier):
+            continue
+        kept.append(a)
+    # Chronological, then by kind, then by id: a total order, so a batch boundary is reproducible
+    # and a caller replaying a cursor gets the same rows in the same order.
+    kept.sort(key=lambda a: (a["ts"], ANCHORS.index(a["anchor"]), a["anchor_id"]))
+
+    i = 0
+    while i < len(kept):
+        j = i
+        while j < len(kept) and kept[j]["ts"] == kept[i]["ts"]:
+            j += 1
+        if out["rows"] and len(out["rows"]) + (j - i) > max_rows:
+            break
+        for a in kept[i:j]:
+            row = _wire_row(store, path, session, a, floor=floor, sizer=sizer,
+                            captured=captured, start=start, vectors=vectors, encoder=encoder)
+            if row is not None:
+                out["rows"].append(row)
+        i = j
+    return out
