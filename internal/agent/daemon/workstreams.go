@@ -3,6 +3,7 @@ package daemon
 import (
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
@@ -37,6 +38,22 @@ type windowTickerCap interface {
 	TickCharacterised(path, source, sessionID string, promptIDs []string, cursor *float64,
 		now time.Time, spanMinutes float64, maxWindows int,
 		resolved enrich.ResolvedFacts) ([]enrich.WindowCharacterisation, float64, bool)
+}
+
+// blockDigesterCap is the capability behind THE V2 BLOCK PATH (the sidecar's
+// POST /blocks): "which CLOSED blocks of work does this transcript have, and
+// what was each one". Same shape as the three around it — a service route, no
+// inference, works with GLiNER2 absent — so it is resolved the same way and
+// travels in serviceFacets.
+//
+// It is declared here, beside windowTickerCap, and is emphatically not built on
+// it: the tick patches the holes a prompt-anchored window leaves, and a block
+// path has no holes to patch. The two are wired independently so v2 can be
+// promoted, or deleted, without unpicking v1.
+type blockDigesterCap interface {
+	BlocksCharacterised(path, source, sessionID string, promptIDs []string,
+		since *float64, now time.Time, maxBlocks int,
+		resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool)
 }
 
 // transcriptIngester is the capability behind the watcher's ingest signal (the
@@ -75,6 +92,11 @@ type serviceFacets struct {
 	// autonomous work AFTER the machine has gone quiet. Nil when the service
 	// cannot provide it, which switches the ticker off rather than degrading it.
 	Tick windowTicker
+	// Blocks is THE V2 PATH's producer, and like Tick it is consumed by no job:
+	// it is driven by the block emitter's own timer off the watcher's advance
+	// signal (see blocks.go). Nil when the service cannot provide it, which
+	// switches the emitter off rather than degrading it.
+	Blocks blocks.Digester
 }
 
 // facetsFor returns the service facets of the client it is handed, leaving any
@@ -115,6 +137,9 @@ func facetsFor(m enrich.Model, regions func() []string) serviceFacets {
 	}
 	if t, ok := m.(windowTickerCap); ok {
 		f.Tick = t
+	}
+	if b, ok := m.(blockDigesterCap); ok {
+		f.Blocks = b
 	}
 	return f
 }

@@ -47,6 +47,27 @@ func parsePrompt(line []byte) (promptRec, bool) {
 	return promptRec{PromptID: ln.PromptID, Cwd: ln.Cwd, SessionID: ln.SessionID}, true
 }
 
+// HumanPromptID is parsePrompt's answer reduced to the one field a caller
+// outside this package may need: the promptId of a GENUINE human prompt line,
+// and nothing else off the record.
+//
+// It exists so the human-prompt filter has exactly ONE definition on the
+// daemon side. The sidecar's block/window analysis maps prompt EPISODES onto
+// spans of work, and the ids for that mapping must be the same ids enrichment
+// fires on — the store's own `prompt` index is not that (it holds every user-
+// AND assistant-shaped turn, ~260 rows against 14 human prompts on a real
+// session), so a second, looser filter anywhere else would silently turn an
+// episode mapping into a turn mapping. Callers get the id; the cwd and session
+// stay internal, because a caller that wanted those would be synthesizing a
+// pointer, which is this package's job.
+func HumanPromptID(line []byte) (string, bool) {
+	r, ok := parsePrompt(line)
+	if !ok {
+		return "", false
+	}
+	return r.PromptID, true
+}
+
 func hasHumanText(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false

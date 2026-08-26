@@ -174,5 +174,14 @@ func ingestSignalHook(ctx context.Context,
 			return
 		}
 		q.offer(path)
+		// THE V2 BLOCK PATH's only trigger for adding work rides here, behind
+		// the SAME eligibility gate, because it is the same question one step
+		// later: a transcript whose bytes are being ingested is exactly a
+		// transcript that may have a block to close, and one the analysis
+		// cannot serve can never have one. A no-op unless KELD_BLOCKS is on
+		// (see blocks.go). It must stay as cheap as q.offer — this is the
+		// watcher's poll loop, which carries every hook-free prompt on the
+		// machine — and it is: a map write under a short mutex, no I/O.
+		noteBlockAdvance(source, path)
 	}
 }

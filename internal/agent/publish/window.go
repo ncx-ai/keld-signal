@@ -40,61 +40,19 @@ type WindowEnrichment struct {
 	// Window is where this row's characterisation applies. Mandatory: a prompt
 	// row is located by its prompt and this one has no prompt, so without the
 	// bounds the row says nothing about anything.
-	Window      enrich.WindowRef          `json:"window"`
-	Workstreams map[string]enrich.Labeled `json:"workstreams,omitempty"`
-	Dynamics    map[string]enrich.Dynamic `json:"dynamics,omitempty"`
-	Effort      *enrich.Effort            `json:"effort,omitempty"`
-	// PhysicalActs is absent, never an empty list, when the window recorded no
-	// act — same rule as the prompt row's.
-	PhysicalActs []enrich.Act `json:"physical_acts,omitempty"`
-	// Files, Directories and Components are what the window physically TOUCHED —
-	// same rule and same meaning as the prompt row's (see Enrichment.Files).
-	Files       []enrich.PathCount `json:"files,omitempty"`
-	Directories []enrich.PathCount `json:"directories,omitempty"`
-	Components  []enrich.PathCount `json:"components,omitempty"`
-	// HarnessTools, Programs, ExternalSystems and Integrations are what the
-	// window USED — same rule and same meaning as the prompt row's (see
-	// Enrichment.HarnessTools).
-	HarnessTools    []enrich.NameCount `json:"harness_tools,omitempty"`
-	Programs        []enrich.NameCount `json:"programs,omitempty"`
-	ExternalSystems []enrich.NameCount `json:"external_systems,omitempty"`
-	Integrations    []enrich.NameCount `json:"integrations,omitempty"`
-	// NamedTerms is the ninth inventory and the ONLY one drawn from message
-	// TEXT rather than tool-call inputs: proper nouns lifted from the prompt,
-	// matched against no declared vocabulary, observed to contain real person
-	// names. It was withheld from the wire until that was reversed as an
-	// explicit decision; it is bounded by shape only (see
-	// sidecar.convertNamedTerms) and carries no person-name filter, because at
-	// spaCy's measured ~1% precision a filter would create false assurance
-	// rather than remove names.
-	NamedTerms []enrich.NameCount `json:"named_terms,omitempty"`
-	// FileTypes, ShellVerbs, Subagents and McpServers are the last four
-	// inventories the analysis computed and nothing published, over the `ext`
-	// (`.tsx`/`.py`/`.css`), `verb` (the whole command — `git rebase`), `agent`
-	// (`general-purpose`, `Explore`) and `mcp_server` (`notion`) levels. Same
-	// /analyze call as every inventory above, same no-inference path, same
-	// per-entry structural gates (identifier shape for three; a multi-word
-	// command shape for ShellVerbs, which is what distinguishes it from
-	// Programs' bare binary — see sidecar.convertShellVerbInventory).
+	Window enrich.WindowRef `json:"window"`
+	// AnalysisFacets is the deterministic analysis: workstreams, dynamics,
+	// effort, the thirteen inventories, the cut-visibility map and the session
+	// prior. EMBEDDED rather than restated, and shared with BlockEnrichment,
+	// because a tick window and a v2 block carry exactly the same set — see
+	// AnalysisFacets for why keeping two copies of that list is the defect
+	// this avoids. Anonymous and untagged, so every field inlines and this
+	// row's wire shape is unchanged by the extraction.
 	//
-	// Each COMPLEMENTS a sibling rather than restating it: what KIND of work the
-	// Files were, the command where Programs is only the binary, the one
-	// dimension that says work was DELEGATED (invisible everywhere else, since a
-	// subagent's turns are a different transcript), and the SERVER where
-	// Integrations is the tool. Absent when the window used nothing in that
-	// dimension; never an empty list.
-	FileTypes  []enrich.NameCount `json:"file_types,omitempty"`
-	ShellVerbs []enrich.NameCount `json:"shell_verbs,omitempty"`
-	Subagents  []enrich.NameCount `json:"subagents,omitempty"`
-	McpServers []enrich.NameCount `json:"mcp_servers,omitempty"`
-	// InventoryOmitted is the cut-visibility map beside the eight inventories
-	// above — same rule as the prompt row's (see Enrichment.InventoryOmitted).
-	InventoryOmitted map[string]int `json:"inventory_omitted,omitempty"`
-	// Prior is the SESSION this window sat in — same rule and same meaning as
-	// the prompt row's (see Enrichment.Prior): a contrast reported beside
-	// `workstreams`, never a value supplied in its place. A tick-emitted window
-	// is not a lesser window, so it carries the block too.
-	Prior map[string]enrich.Prior `json:"prior,omitempty"`
+	// A tick-emitted window is not a lesser window, which is why it carries all
+	// of it — including the session prior, a CONTRAST reported beside
+	// `workstreams` and never a value supplied in its place.
+	AnalysisFacets
 	// PipelineStatus is always enrich.PipelineStatusWindow. It rides here so a
 	// reader can tell WHY there is no task_type on this row (there was never a
 	// prompt) rather than inferring it from an absence.
@@ -137,24 +95,7 @@ func BuildWindow(w enrich.WindowCharacterisation, actor string, now time.Time) W
 		},
 		Actor:             actor,
 		Window:            w.Ref,
-		Workstreams:       w.Analysis.Workstreams,
-		Dynamics:          w.Analysis.Dynamics,
-		Effort:            w.Analysis.Effort,
-		PhysicalActs:      w.Analysis.PhysicalActs,
-		Files:             w.Analysis.Files,
-		Directories:       w.Analysis.Directories,
-		Components:        w.Analysis.Components,
-		HarnessTools:      w.Analysis.HarnessTools,
-		Programs:          w.Analysis.Programs,
-		ExternalSystems:   w.Analysis.ExternalSystems,
-		Integrations:      w.Analysis.Integrations,
-		NamedTerms:        w.Analysis.NamedTerms,
-		FileTypes:         w.Analysis.FileTypes,
-		ShellVerbs:        w.Analysis.ShellVerbs,
-		Subagents:         w.Analysis.Subagents,
-		McpServers:        w.Analysis.McpServers,
-		InventoryOmitted:  w.Analysis.InventoryOmitted,
-		Prior:             w.Analysis.Prior,
+		AnalysisFacets:    facetsOf(w.Analysis),
 		PipelineStatus:    enrich.PipelineStatusWindow,
 		ExtractorVersions: windowExtractorVersions(),
 		SchemaVersion:     enrich.SchemaVersion,

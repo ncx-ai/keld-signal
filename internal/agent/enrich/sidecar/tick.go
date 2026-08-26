@@ -129,14 +129,6 @@ func (c *Client) TickCharacterised(path, source, sessionID string, promptIDs []s
 		// other. In particular a `thin` dimension carries its count and its
 		// status here too — publishing the value with no status would render a
 		// sub-floor reading as a confident one.
-		dims := make(map[string]enrich.Labeled, len(w.Workstreams))
-		for dim, ws := range w.Workstreams {
-			l, keep := labeledWorkstream(ws)
-			if !keep {
-				continue
-			}
-			dims[dim] = l
-		}
 		out = append(out, enrich.WindowCharacterisation{
 			SessionID: sessionID,
 			Source:    source,
@@ -145,26 +137,8 @@ func (c *Client) TickCharacterised(path, source, sessionID string, promptIDs []s
 				SpanMinutes: spanBetween(w.WindowStart, w.WindowEnd),
 				Evidence:    w.Evidence,
 			},
-			Analysis: enrich.WindowAnalysis{
-				Workstreams:      dims,
-				PhysicalActs:     convertActs(w.Inventory.PhysicalActs),
-				Files:            convertPathInventory(w.Inventory.Files),
-				Directories:      convertPathInventory(w.Inventory.Directories),
-				Components:       convertPathInventory(w.Inventory.Components),
-				HarnessTools:     convertIdentifierInventory(w.Inventory.HarnessTools),
-				Programs:         convertProgramInventory(w.Inventory.Programs),
-				ExternalSystems:  convertExternalSystemInventory(w.Inventory.ExternalSystems),
-				Integrations:     convertIdentifierInventory(w.Inventory.Integrations),
-				NamedTerms:       convertNamedTerms(w.Inventory.NamedTerms),
-				FileTypes:        convertIdentifierInventory(w.Inventory.FileTypes),
-				ShellVerbs:       convertShellVerbInventory(w.Inventory.ShellVerbs),
-				Subagents:        convertIdentifierInventory(w.Inventory.Subagents),
-				McpServers:       convertIdentifierInventory(w.Inventory.McpServers),
-				InventoryOmitted: convertInventoryOmitted(w.InventoryOmitted),
-				Dynamics:         convertDynamics(w.Dynamics),
-				Effort:           convertEffort(w.Effort),
-				Prior:            convertPrior(w.Prior),
-			},
+			Analysis: analysisFrom(w.Workstreams, w.Inventory, w.InventoryOmitted,
+				w.Dynamics, w.Effort, w.Prior),
 		})
 	}
 	return out, res.Cursor, true

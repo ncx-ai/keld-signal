@@ -131,34 +131,56 @@ func (c *Client) AnalyzeLabeled(path, promptID string, spanMinutes int,
 	if !ok {
 		return enrich.WindowAnalysis{}, false
 	}
-	out := make(map[string]enrich.Labeled, len(res.Workstreams))
-	for dim, w := range res.Workstreams {
+	return analysisFrom(res.Workstreams, res.Inventory, res.InventoryOmitted,
+		res.Dynamics, res.Effort, res.Prior), true
+}
+
+// analysisFrom is THE ONE conversion from a sidecar analysis payload into the
+// enrich.WindowAnalysis every published row carries. Every gate described in
+// AnalyzeLabeled's comment above lives behind this call.
+//
+// It is shared by all three callers — a prompt's window (/analyze), a tick's
+// window (/tick) and a v2 BLOCK (/blocks) — and that sharing is the point, not
+// a convenience. These are the same deterministic analysis over different
+// bounds, so a dimension must not be readable on one row and deleted on
+// another, and a NEW inventory key must not be able to reach one row's wire
+// shape while silently missing from the others. A second copy of this
+// assignment list is exactly how that divergence happens; there was one before
+// the block path arrived, and this removes it rather than adding a third.
+//
+// It is not a v2-reaches-into-v1 seam either: it composes the per-field convert
+// functions, which are the measured definitions, and holds no window-specific
+// or block-specific knowledge at all.
+func analysisFrom(ws map[string]*Workstream, inv InventoryBlock, omitted map[string]int,
+	dyn DynamicsBlock, eff *EffortBlock, prior PriorBlock) enrich.WindowAnalysis {
+	dims := make(map[string]enrich.Labeled, len(ws))
+	for dim, w := range ws {
 		l, keep := labeledWorkstream(w)
 		if !keep {
 			continue
 		}
-		out[dim] = l
+		dims[dim] = l
 	}
 	return enrich.WindowAnalysis{
-		Workstreams:      out,
-		PhysicalActs:     convertActs(res.Inventory.PhysicalActs),
-		Files:            convertPathInventory(res.Inventory.Files),
-		Directories:      convertPathInventory(res.Inventory.Directories),
-		Components:       convertPathInventory(res.Inventory.Components),
-		HarnessTools:     convertIdentifierInventory(res.Inventory.HarnessTools),
-		Programs:         convertProgramInventory(res.Inventory.Programs),
-		ExternalSystems:  convertExternalSystemInventory(res.Inventory.ExternalSystems),
-		Integrations:     convertIdentifierInventory(res.Inventory.Integrations),
-		NamedTerms:       convertNamedTerms(res.Inventory.NamedTerms),
-		FileTypes:        convertIdentifierInventory(res.Inventory.FileTypes),
-		ShellVerbs:       convertShellVerbInventory(res.Inventory.ShellVerbs),
-		Subagents:        convertIdentifierInventory(res.Inventory.Subagents),
-		McpServers:       convertIdentifierInventory(res.Inventory.McpServers),
-		InventoryOmitted: convertInventoryOmitted(res.InventoryOmitted),
-		Dynamics:         convertDynamics(res.Dynamics),
-		Effort:           convertEffort(res.Effort),
-		Prior:            convertPrior(res.Prior),
-	}, true
+		Workstreams:      dims,
+		PhysicalActs:     convertActs(inv.PhysicalActs),
+		Files:            convertPathInventory(inv.Files),
+		Directories:      convertPathInventory(inv.Directories),
+		Components:       convertPathInventory(inv.Components),
+		HarnessTools:     convertIdentifierInventory(inv.HarnessTools),
+		Programs:         convertProgramInventory(inv.Programs),
+		ExternalSystems:  convertExternalSystemInventory(inv.ExternalSystems),
+		Integrations:     convertIdentifierInventory(inv.Integrations),
+		NamedTerms:       convertNamedTerms(inv.NamedTerms),
+		FileTypes:        convertIdentifierInventory(inv.FileTypes),
+		ShellVerbs:       convertShellVerbInventory(inv.ShellVerbs),
+		Subagents:        convertIdentifierInventory(inv.Subagents),
+		McpServers:       convertIdentifierInventory(inv.McpServers),
+		InventoryOmitted: convertInventoryOmitted(omitted),
+		Dynamics:         convertDynamics(dyn),
+		Effort:           convertEffort(eff),
+		Prior:            convertPrior(prior),
+	}
 }
 
 // labeledWorkstream converts one /analyze dimension into the Labeled the pass
