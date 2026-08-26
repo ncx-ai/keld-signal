@@ -1,129 +1,97 @@
-# Block model — open work, as of 2026-08-25
+# Block model — open work
 
-Everything outstanding from the block-bound study and its wiring. Ordered by what blocks what, not
-by size. Results referenced here live in `~/keld/refseries-context/blocks/`, never in this repo.
+Rewritten 2026-08-26. The previous version was stale in a way worth naming: it still listed the
+Signal-side "Phases 3-5" from a plan that assumed **the tick becomes the block trigger**. That was
+superseded — blocks tile active time, so there are no gaps to fill and the tick's gap-finding is
+obsolete. Ticking checkboxes would have preserved a dead plan.
 
-**Landed today:** the measured cutter (`sidecar/app/analysis/blocks.py`, 20-minute cap + 15-minute
-idle), its equality oracle against the study arm, the detector ablation, `/analyze`'s additive
-`block` key, `SCHEMA` 14→15, CI gating on all 37 sidecar test files, AGENTS.md coverage, and the
-Signal↔Atlas contract corrected against the measurements.
+Atlas's side is NOT duplicated here. It lives in `~/keld/keld-atlas`:
+`docs/superpowers/plans/2026-08-25-workstreams-v2-roadmap.md`.
 
 ---
 
-## IN FLIGHT
+## SHIPPED
 
-- [x] **DONE `c0c7ab5`** — `blockdigest.py` + `POST /blocks`. 39 sidecar tests, 45 Go packages,
-      `analyze.py` untouched (v2 as its own path). `max_blocks=24` = 8h of work; one digest 1.1 ms
-      short-session / 5.9 ms at 8h; a day's backlog 142 ms / 129 KB.
-- [ ] **The Go emitter** — the remaining half of Signal v2. Asks `/blocks` from a per-transcript
-      cursor in `~/.keld/state/`, publishes each block once. NOT the tick and must not be built on
-      it. Salvaged and reusable: an ids-only human-prompt lister was written and reverted with the
-      bad wiring — see `/home/dg/.claude/jobs/5f1b5571/tmp/salvage/recentids.go`. ⚠️ Its sibling
-      `resolve.RecentPrompts` returns prompt TEXT and must never be the thing sent to the sidecar.
-- [ ] ⚠️ **The digest is O(session) per block, so a session costs O(T squared).** Measured 1.1 ms at
-      short session, 5.9 ms at 8 hours; the growth is `prior`, which spans
-      `[session start, block start)`. The corpus holds an 11.7-day session — ~840 blocks each
-      rolling up half of it. Per-device and emitter-side, not page-side, so not urgent — but it is
-      the one superlinear place in the design. Cap the prior's span, or cache it per session.
+Signal v2 is complete end-to-end and ships OFF behind `KELD_BLOCKS`.
 
-- [ ] **`evidence` + `status` on every workstream dimension.** Sub-floor dimensions are suppressed
-      today; measured, 924 of 12,016 dimension-slots hold real evidence and publish nothing (198 of
-      them held FOUR observations against a floor of 5). Chain: `workstreams.payload` →
-      `sidecar.Workstream` → **`enrich.Labeled`** (the drop point — no field for either) →
-      `enrich/workstreams.go`'s `if l.Value == "" { continue }`. Sidecar `SCHEMA` 15→16,
-      `enrich.SchemaVersion` 20→21.
-      ⚠️ **The floor does NOT move.** 5 stays 5; `attributed` keeps its exact meaning. Removing the
-      floor was measured at P(false attribution) 0.031 → 0.50.
-- [ ] **Data formats out of `lang`; extend the extension map.** Markdown is 7.4% of `lang` events
-      and is not a programming language; JSON+YAML are 0.3%. They move to the `artifact` dimension.
-      Map extension is unvalidatable on this corpus (only `.mjs`/`.html` are real gaps) — insurance
-      for other users.
+- The cutter — 20-minute cap, 15-minute idle, detector ablated (`0e8244e`, `681f60c`), pinned equal
+  to the measured arm (`7a75ca3`).
+- `covers` — the episode-to-block mapping (`76e8087`).
+- `blockdigest.py` + `POST /blocks` (`c0c7ab5`).
+- The Go emitter and its start (`ff30d0b`, `505013b`).
+- `evidence` + `status` on every workstream dimension (`874c727`) — 924 of 12,016 dimension-slots
+  were being silently suppressed.
+- Data formats out of `lang`, extension map extended (`db26c44`).
+- CI now gates merges on all 37 sidecar test files (`6ec59a9`) — it ran none of them before.
+- AGENTS.md covers the cutter and the four decisions someone will try to revert (`730db55`).
 
-## NEXT — Signal side
+**Verified end-to-end on real data, 2026-08-26:** a real transcript through the new sidecar's
+`/blocks` yields 20-minute blocks with `project`/`branch`/`language`/`skill` attributed and their
+evidence counts; Atlas's own validation and storage accept them and upsert on re-delivery.
 
-- [ ] **Spec: weight edits heavier than reads.** Reads outnumber edits 3.4:1 (read 34.5%, search
-      17.3%, edit 11.5%, create 3.3%), and every path touch currently emits at weight 1.0, so a
-      block that skimmed twelve files and rewrote one publishes what it skimmed.
-      ⚠️ **The trap that must be solved first:** `attribution` computes `total = sum(n for _, n in
-      items)` — evidence IS the sum of weights, and `MIN_EVIDENCE = 5` is derived as a SAMPLE SIZE
-      (`0.5**n` first below 5% at n=5). Weighting an edit at 3.0 lets two edits clear a floor
-      calibrated for five observations — silently lowering the floor. Weights must drive the SHARE
-      while evidence stays a COUNT, which means `rollup`/`attribution` carrying both, and those are
-      shared by `dynamics`, `prior` and `workstreams`.
-      ⚠️ **Feasibility unknown:** it is not yet established that `reconcile()` knows whether a file
-      touch was a read or an edit at the point it emits the row. Check before designing.
-      ⚠️ **No ground truth exists** for "what language was this block really about", so this is
-      judgement informed by measurement, not validation. Sweep 1:1/2:1/3:1/5:1, count blocks whose
-      published value changes, hand-review a sample, and check stability across the range.
-- [ ] **Phase 2 — `covers`.** Map prompt ids to block spans, `complete:false` when an episode runs
-      past a block's end. Buildable now; the daemon owns the human-prompt filter, the store owns
-      the times.
+---
 
-## BLOCKED ON ATLAS
+## OPEN — Signal side
 
-Building these now adds to the pile of inert code the tick already sits in — every Atlas consumer
-joins `enrichment.corr_id == tool_event.prompt_id`, so a block row is stored and joins to nothing.
+- [ ] **The emitter's LOOP has never run against reality.** Its two endpoints have, and it has unit
+      tests, but the cursor/sweep/active-set behaviour has only been exercised synthetically. First
+      real run should check: the cursor advancing and resuming, a transcript leaving the active set,
+      and that a settled machine makes zero calls.
+- [ ] **Weight edits heavier than reads.** Spec written (`d9bb785`,
+      `2026-08-25-act-weighted-paths-design.md`), unbuilt. Reads outnumber edits 3.4:1 and every
+      path touch emits at weight 1.0, so a block that skimmed twelve files and rewrote one publishes
+      what it skimmed. ⚠️ The trap the spec exists for: `evidence` is `sum(weights)` and
+      `MIN_EVIDENCE` is a SAMPLE SIZE, so a weighted edit would silently lower a floor whose removal
+      measures at P(false attribution) 0.031 → 0.50. Weights must drive the SHARE while evidence
+      stays a COUNT.
+- [ ] ⚠️ **The digest is O(session) per block, so a session costs O(T²).** Measured 1.1 ms at short
+      session, 5.9 ms at 8 hours; the growth is `prior`, which spans `[session start, block start)`.
+      The corpus holds an 11.7-day session — ~840 blocks each rolling up half of it. Emitter-side and
+      per-device, so not urgent, but it is the one superlinear place in the design. Cap the prior's
+      span, or cache it per session.
 
-- [ ] **Phase 3 — the Go wire.** `WindowEnrichment` becomes the primary row; the per-prompt
-      `Enrichment` shrinks to `sensitivity` plus correlation.
-- [ ] **Phase 4 — the tick becomes the trigger.** Coverage 55.0% → 99.5%. `frontier()` /
-      `tail_closed()` survive unchanged and are load-bearing.
-- [ ] **Phase 5 — flip `KELD_TICK` on.** One line, the day Atlas has a time+identity join.
-- [ ] **Atlas itself** — `2026-08-25-atlas-block-activity-design.md`, v1 as a PATH not a parameter,
-      `v1compat/` boundary, the unplugging checklist.
-
-## RESEARCH — unblocked, nothing depends on it
+## OPEN — research, nothing depends on it
 
 - [ ] **A domain-general work-shift detector.** The ablated detector was branch-only and failed its
-      own validation (7.1% recall vs a fixed control's 17.3%). The store already holds the right
+      own validation (7.1% recall vs a fixed control's 17.3%). The store already holds better
       material: `action` (51,618 events, 22 closed values, 488 of 496 sessions) and `tool` (31,888,
       27 values, 488 sessions) — denser and wider-covering than `file` (337 sessions), and both
-      describe what KIND of work rather than what codebase.
-      Candidates: Shannon entropy of the tool/action mix per bucket; Jensen–Shannon divergence
-      between consecutive windows; rate/burstiness (`latency.py` already has gap percentiles).
+      describe what KIND of work rather than what codebase. Candidates: Shannon entropy of the
+      tool/action mix per bucket, Jensen-Shannon divergence between consecutive windows,
+      rate/burstiness (`latency.py` already has gap percentiles).
       ⚠️ Phase 0a's rejection of `action` does NOT refute this — it tested `action` through
       `EwmaSizer`'s novelty encoding, which asks "is a new value outweighing the incumbent", a
       question that is noise for a level whose 22 values recur constantly and never succeed one
       another. Distributional statistics ask a different question.
       ⚠️ **The blocker is ground truth, not compute.** Every detector so far was scored against
-      branch transitions, which is circular for a domain-general detector. Needs either a small
-      labelled set or a self-supervised target, with the shuffled-truth control retained.
-      This is Part B of `2026-08-25-work-shift-detection-design.md`.
+      branch transitions, which is circular for a domain-general detector. Needs a small labelled
+      set or a self-supervised target, with the shuffled-truth control retained. Part B of
+      `2026-08-25-work-shift-detection-design.md`.
 - [ ] **`lift` / `unusually_prominent` / `absent_but_usual`** — measured superior for the routing
-      goal, still living only in `scripts/refseries.py`. Needs a repo-scoped baseline the payload
-      lacks; the store already holds every ingested session, so it is the prior's mechanism with a
-      wider scope key. Complementary to `prior`, not a substitute (session scope collapses every
-      lift to x1.0).
-- [x] **RESOLVED, and it was never broken.** `repo` attributed 0 of 1,502 corpus blocks because
-      `repo` rows are written at INGEST from the daemon-supplied `resolved={"repo": ...}`
-      (`levels.py:149`, `if repo_id: add("ref","repo",...)`) and the study harness that built the
-      corpus never passes it. Verified live on this repo's own transcript: ingesting WITH
-      `resolved` returns `reparsed: true` — the fingerprint at `ingest.py:298` forces it — and then
-      `repo = github.com/ncx-ai/keld-signal, status=attributed, evidence=49`. Production does
-      supply it (`ingestsignal.go`: `signal(path, facts.forTranscript(path).resolved())`).
-      ⚠️ **Keep this consequence: ANY corpus measurement of `repo` is uninformative**, because that
-      store was ingested without `resolved`. `test_act_artifact.py`'s `KeyError: 'repo'` is a
-      separate, unrelated sighting — a committed study frame predating the dimension.
+      goal, still only in `scripts/refseries.py`. Needs a repo-scoped baseline the payload lacks;
+      the store holds every ingested session, so it is the prior's mechanism with a wider scope key.
+      Complementary to `prior`, not a substitute (session scope collapses every lift to ×1.0).
+      ⚠️ **This is now a dependency of the agreed Atlas page design**: the amber
+      `Go absent — usually 50% of this repo` pill IS this feature. The pane degrades honestly
+      without it, but the mockup promises it.
 
-- [x] **NOT a defect either — `authored_bytes: 0` with `authored_status: attributed`.** It measures
-      bytes written via file EDITS, not prompt bytes, and the early blocks of the session I tested
-      were brainstorming plus Bash work with no `Edit`/`Write` calls (measured: Bash 1266, Agent
-      172, Write 5, Edit ~0). Under the store's own session key the session does carry
-      `edit_bytes`: 6 rows, 66,500 bytes. `attributed` correctly meant "measured, and it is zero" —
-      the truthful-zero-versus-abstention split is what made this checkable.
+---
 
 ## KNOWN GAPS — stated, not fixed
 
-- **The no-repo population is unmeasured.** Zero of 496 sessions lack branch data, so the claim
-  that a repo-less session behaves identically rests on a counterfactual (deleting `branch`/`repo`
-  from repo-having sessions leaves attribution at 95.3%), not on real non-engineering work.
+- **⚠️ Any corpus measurement of `repo` is uninformative.** `repo` rows are written at INGEST from
+  the daemon-supplied `resolved={"repo": ...}`, and the study harness that built the frozen corpus
+  never passes it. Verified 2026-08-26: ingesting with `resolved` returns `reparsed: true` and
+  `repo` attributes at evidence 49. The dimension is fine; the corpus cannot measure it.
+- **The no-repo population is unmeasured.** Zero of 496 sessions lack branch data, so "a repo-less
+  session behaves identically" rests on a counterfactual (deleting `branch`/`repo` leaves attribution
+  at 95.3%), not on real non-engineering work.
 - **Arm C (turns) was never judged.** UNMATCHED at every setting — its blocks are far shorter than
   any A′ candidate, so no same-size comparison existed. Its raw attribution is the corpus best
   (96.2%). Judging turns against minutes needs a control pairing on something other than duration.
-- **The detector blind spot every prior study inherited:** three EQUAL-weight segments leave the
-  later ones tied at cumulative weight, so the alphabetical tie-break collapses two real transitions
-  into one edge. Verified against shipped code, never measured on the corpus. Now moot for blocks
-  (the detector is ablated) but still live for `dynamics`' slice sizing.
+- **The detector's equal-weight blind spot.** Three equal-weight segments leave the later ones tied
+  at cumulative weight, so the alphabetical tie-break collapses two real transitions into one edge.
+  Moot for blocks (ablated), still live for `dynamics`' slice sizing.
 - **`tie` / `no_majority` are 46 of 12,016 slots** — real but tiny; the evidence+status work makes
   them visible.
 
@@ -132,18 +100,20 @@ joins `enrichment.corr_id == tool_event.prompt_id`, so a block row is stored and
 - `blocks.active_bins` reaches into `store._conn()` with raw SQL rather than a `Store` method.
   Byte-identical to the study helper, which is what makes the oracle exact; refactor with the
   equality test standing guard.
-- `bin` outlives `event` (400-day event retention, bins never pruned except `term`), so
-  `active_bins` can report a bin active after its events are gone. Not reachable today; any caller
-  must keep the `WindowExpired`/410 gate in front of `cut()`.
+- `bin` outlives `event` (400-day event retention, bins never pruned except `term`), so `active_bins`
+  can report a bin active after its events are gone. Not reachable today; any caller must keep the
+  `WindowExpired`/410 gate in front of `cut()`.
 - `active_bins` reads only PRECOMPUTED levels, so a period whose only events are unbinned levels
   reads as idle. Theoretical.
-- `sidecar.open_store()` opens the corpus **read-write** and changes its SHA on close — every study
+- ⚠️ **`sidecar.open_store()` opens the corpus READ-WRITE and changes its SHA on close.** Every study
   run needs a verified copy. Wants a `--db` flag or `?mode=ro&immutable=1`.
 - `block_sizing_eval.verdict`'s best-candidate ranking treats an UNMATCHED candidate as
   interchangeable with a matched all-passing one.
-- The retired `choose_cap` rule ("smallest cap within 5 points") is still live and is what
-  `main()` runs with no flag, despite its own pre-registration saying it is not reused.
+- The retired `choose_cap` rule ("smallest cap within 5 points") is still live and is what `main()`
+  runs with no flag, despite its own pre-registration saying it is not reused.
 - `internal/agent/publish/report.go` + `report_show_test.go` (634 lines, untracked) are **DEAD** —
-  the rendered report is not going to Atlas. Everything in them is unexported and nothing outside
-  the package references them, so they compile and nothing else notices. Delete when convenient;
-  left in place because untracked files have no git copy to recover from.
+  the rendered report is not going to Atlas. Everything in them is unexported and unreferenced.
+  Delete when convenient; left in place because untracked files have no git copy to recover from.
+- ⚠️ **`services/api/tests/test_agents.py` fails for everyone** (Atlas repo): `NOW` is hardcoded to
+  2026-07-24 against a 30-day window, so it has failed since 2026-08-24 and will keep failing.
+  Unrelated to any of this work.
