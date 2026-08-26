@@ -143,6 +143,26 @@ def terms_mode(nlp):
     return "spacy:" + ":".join(p for p in (name, str(meta.get("version") or "")) if p)
 
 
+def capture_mode():
+    """A fingerprint of the CAPTURE pipeline the store's magnitude rows were written with.
+
+    The sibling of `terms_mode`, and it exists for the identical reason: the capture rows
+    (`magnitude.CAPTURE_KINDS` -- per-role character counts, the raw token split, tool outcomes
+    -- plus the `bin_offset` index) are written at INGEST and are never re-derived. A transcript
+    ingested under `KELD_CAPTURE=0` holds none of them, and no later call can supply them,
+    because the bytes they came from have already been consumed and the checkpoint advanced.
+    So a store holding rows from a run with capture and rows from a run without it is holding
+    two incomparable populations, and nothing in the data says which is which.
+
+    ⚠️ THE DEFAULT IS OFF, AND AN ABSENT KEY READS AS OFF. `_state_is_usable` compares against
+    `raw.get("capture") or "0"`, so a state written before this key existed is still resumable.
+    The alternative -- bumping STATE_VERSION -- would force a whole-file reparse of every
+    transcript on every machine at upgrade, to obtain rows that a machine with capture off will
+    never hold. Turning capture ON is what costs a reparse, and it costs it once.
+    """
+    return "1" if os.environ.get("KELD_CAPTURE", "0") == "1" else "0"
+
+
 class IngestResult:
     """`new_lines` is the number of transcript lines PARSED — i.e. speech turns; `turns_in`
     discards everything else by a substring check before JSON decoding, so a tail of
@@ -312,11 +332,12 @@ def repo_mode(resolved):
 def _state_is_usable(raw, nlp, resolved=None):
     """Whether a stored parse state may be resumed from, or must be thrown away and reparsed.
 
-    Four reasons it cannot be: it is absent (a store written before `parse_state` existed, or
+    Five reasons it cannot be: it is absent (a store written before `parse_state` existed, or
     one whose state was pruned — resuming would tail-parse with EMPTY workspace evidence and an
     empty `pending`, and the offset would look perfectly valid while it happened); it predates a
     field this code needs (`STATE_VERSION`); it was written by a different terms pipeline
-    (`terms_mode`); or it was written under a different repository identity (`repo_mode`).
+    (`terms_mode`); or it was written under a different capture setting (`capture_mode`); or it
+    was written under a different repository identity (`repo_mode`).
 
     ⚠️ THE `repo` RULE IS ASYMMETRIC ON PURPOSE: an EMPTY incoming identity never invalidates a
     stored non-empty one. Two callers legitimately ingest the same transcript — the watcher's
@@ -329,7 +350,8 @@ def _state_is_usable(raw, nlp, resolved=None):
     rows.
     """
     if not (bool(raw) and int(raw.get("v") or 0) == STATE_VERSION
-            and raw.get("terms") == terms_mode(nlp)):
+            and raw.get("terms") == terms_mode(nlp)
+            and (raw.get("capture") or "0") == capture_mode()):
         return False
     stored, incoming = raw.get("repo") or "", repo_mode(resolved)
     return not incoming or stored == incoming
@@ -368,6 +390,7 @@ def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None, reqs=()):
     marker_dirs, cd_targets, remotes = evidence
     return {"v": STATE_VERSION,
             "terms": terms_mode(nlp),
+            "capture": capture_mode(),
             "repo": repo_mode(resolved),
             "markers": marker_dirs,
             "cd": sorted(cd_targets),

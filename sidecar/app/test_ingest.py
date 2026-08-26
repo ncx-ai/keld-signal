@@ -27,7 +27,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.analysis import window
-from app.analysis.ingest import COMPONENT_DEPTH, ingest_file, session_of
+from app.analysis.ingest import COMPONENT_DEPTH, ingest_file, new_evidence, session_of
 from app.analysis.levels import events_for_turns
 from app.analysis.reconcile import reconcile
 from app.analysis.store import open_store
@@ -802,6 +802,43 @@ def test_chunked_ingest_with_facts_still_equals_one_pass():
         ingest_file(ref, p2, None, RESOLVED)
         assert _dump(st, p) == _dump(ref, p2)
         st.close(); ref.close()
+
+
+def test_capture_mode_is_part_of_the_parse_state():
+    """Flipping KELD_CAPTURE changes what the store permanently holds, so a state written under
+    one setting must not be resumed under the other -- the same trap `terms_mode` exists for.
+
+    ⚠️ And a state that PREDATES the key must read as capture-off, not as a mismatch. Treating
+    the absent key as unusable would force a whole-file reparse of every transcript on every
+    machine at upgrade, including machines that never turn capture on.
+    """
+    from app.analysis.ingest import _dump_state, _state_is_usable, capture_mode
+    prev = os.environ.get("KELD_CAPTURE")
+    try:
+        os.environ["KELD_CAPTURE"] = "0"
+        assert capture_mode() == "0"
+        off = _dump_state(new_evidence(), [], [], 0, None)
+        assert off["capture"] == "0"
+        assert _state_is_usable(off, None) is True
+
+        os.environ["KELD_CAPTURE"] = "1"
+        assert capture_mode() == "1"
+        assert _state_is_usable(off, None) is False, "capture-on must not resume a capture-off state"
+        on = _dump_state(new_evidence(), [], [], 0, None)
+        assert _state_is_usable(on, None) is True
+
+        os.environ["KELD_CAPTURE"] = "0"
+        assert _state_is_usable(on, None) is False, "capture-off must not resume a capture-on state"
+
+        legacy = dict(off)
+        legacy.pop("capture")
+        assert _state_is_usable(legacy, None) is True, \
+            "a state predating the key must read as capture-off, not force a reparse"
+    finally:
+        if prev is None:
+            os.environ.pop("KELD_CAPTURE", None)
+        else:
+            os.environ["KELD_CAPTURE"] = prev
 
 
 if __name__ == "__main__":
