@@ -812,6 +812,13 @@ func Run(ctx context.Context) error {
 		// Atlas yet; see tick.go's envTick for the whole of that reasoning. Started
 		// BEFORE the worker so the observer is in place for the first job.
 		setTickObserver(startTicker(ctx, svc.Tick, pub, actor, emitter))
+		// v2's block emitter, and the reason it sits beside the tick rather than
+		// inside it: a block reaches nowhere, so it needs none of the tick's
+		// frontier reasoning about which future prompts might sweep over a
+		// moment. OFF by default (KELD_BLOCKS) for the same reason the tick is —
+		// Atlas stores blocks now but nothing reads them yet. Returns nil when
+		// off, which setBlockAdvance takes as "no observer".
+		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter))
 		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 
