@@ -593,6 +593,15 @@ that direction is closed.
   float32 **3113 MB / 804.0 ms per message**, bfloat16 **1673 MB (1813 peak) /
   766.2 ms** — bf16 is 1313 MB cheaper and no slower, so it is not a latency trade.
   Idle-unloaded (`KELD_TEXTEMBED_IDLE_UNLOAD_S`), never spawned when the toggle is off.
+  ⚠️ **Two of those bf16 figures were SINGLE-SHOT and did not survive the sustained
+  arm** (`loadtest embed`, 104 messages / 23 batches / 181 s on a real 14.4 MB
+  transcript, same host): resident replicates (1673 → **1700 MB**), but the peak is
+  **2345-2432 MB, not 1813** — a one-shot script cannot see an in-flight transient, and the peak is
+  not a stable number (2072/2345/2414/2432/2389 across five runs) — and the
+  cost is **1119-1635 ms/message, not 766.2** (message LENGTH is the variable, and ~1.1-1.6 s
+  is what `featuretext`'s independent ~1.44 s/message already said). The dtype comparison
+  is unaffected — both arms ran the same inputs — and bf16 stands on the 1313 MB, which
+  replicated. Size any per-message or per-block cost off **~1.6 s**.
 - **Absent weights are a STATED status, never a crash or a stall.** They are provisioned
   on demand into `~/.keld/models` and handed over as `KELD_TEXTEMBED_DIR`, the sibling of
   `KELD_GLINER2_DIR`; nothing downloads at import. `degraded:weights_unavailable`, an
@@ -636,8 +645,11 @@ and **0 of 604 rows dropped** by `sidecar.FeatureRowsFor`'s six refusals.
   is not published — so the text half reaches them as those scalars.
 - ⚠️ **ENCODING RUNS OFF THE REQUEST, and that is forced by a measurement, not tidiness.** The
   daemon's sidecar client has a **5-second** timeout and one batch of 64 real messages costs
-  **~92 s** (~1.44 s/message with the real weights, 2 threads) plus **~90 s** for the child's first
-  load; a whole 1,646-message session is ~40 minutes. A synchronous encode could not land at any
+  **~92 s** (~1.44 s/message with the real weights, 2 threads — and **1119-1635 ms/message** re-measured
+  under `loadtest embed`'s sustained arm, which is the figure to size with) plus the child's first
+  load, measured at **2.8 s warm / ~20 s cold** (this line said ~90 s, one cold contended reading;
+  the argument never turned on it, since even 2.8 s plus any encoding is past the 5 s budget);
+  a whole 1,646-message session is ~40 minutes. A synchronous encode could not land at any
   useful batch size, and a timed-out POST is classed as *retryable*, so the failure mode is an
   unbounded retry loop rather than one slow response. `featuretext.TextSource` therefore serves what
   its cache holds (measured **0.12-0.44 s** per call, real weights) and hands the remainder to one
@@ -653,8 +665,19 @@ and **0 of 604 rows dropped** by `sidecar.FeatureRowsFor`'s six refusals.
   over a prefix of the history while the rest is unreachable is the confident-number-over-a-fraction
   failure the frontier exists to prevent.
 - The encoder child is idle-unloaded from the same 1 s poll loop that recycles the inference worker
-  (measured **~1.9 GB** resident, bf16, real weights) — nothing else would ever release it, because
-  `/features` only ever spawns.
+  (measured **1.70 GB resident / 2.35-2.43 GB peak**, bf16, real weights — the "~1.9 GB" this line used
+  to carry sat between the two and named neither) — nothing else would ever release it, because
+  `/features` only ever spawns. ⚠️ **That unload is now MEASURED end to end rather than asserted:**
+  `python -m loadtest embed` is the encoder's arm of the load-test harness (`sidecar/loadtest/`,
+  opt-in, never part of `smoke`) and it drives a sustained encode off a real transcript to establish
+  no leak (**+32 MB** over 180 s), a bounded peak, that idle-unload actually returns **1711 MB** to
+  the OS and the next request respawns the child, that `/analyze`, `/blocks` and `/features` keep
+  answering *during* a pass (p50 **17→20 / 117→165 / 54→77 ms**), and the per-message cost above.
+  ⚠️ Its first run found `embed.peak_rss_mb` pinned to the TROUGH — 1717 MB reported against a live
+  2072 MB — because `Encoder.maybe_unload` took the encode lock BLOCKING and stalled the very poll
+  loop whose lock-free `observe_rss` ran one line earlier. That is the RSS-oscillation incident's
+  shape one child over; fixed, and pinned by `app/test_guard_visibility.py`'s encoder block. **A
+  lock-free sampler behind a blocking caller is not a lock-free sampler.**
 
 ⚠️ **The parse state carries a THIRD accumulator, and adding it forced a one-off reparse of
 every existing store.** `pending` (reconcile) and `cwds` (workspace) were the two; `reqs` is the

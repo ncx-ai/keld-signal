@@ -183,7 +183,7 @@ async def lifespan(app: FastAPI):
                 await loop.run_in_executor(None, wm.poll)  # poll may block on kill/join
             except Exception:
                 pass
-            # The TEXT ENCODER child rides the same loop, and it needs to: it costs ~1.9 GB
+            # The TEXT ENCODER child rides the same loop, and it needs to: it costs ~1.7-2.3 GB
             # resident (measured, bf16, real weights) against a budget already documented as
             # oversubscribed, and its duty cycle is ~100 messages a day. Nothing else would ever
             # release it — `/features` only ever spawns. Guarded so a machine with the toggle off
@@ -191,7 +191,7 @@ async def lifespan(app: FastAPI):
             #
             # `poll()`, not `maybe_unload()`: it also samples the child's RSS into a high-water
             # mark for /metrics, and that sample has to happen on a timer rather than on a metrics
-            # poll — the peak of a ~1.9 GB child is only visible if something is looking DURING an
+            # poll — the peak of a ~1.7-2.3 GB child is only visible if something is looking DURING an
             # encode, which is the lesson worker_manager's own guard was rewritten for.
             try:
                 src = _TEXT_SOURCE

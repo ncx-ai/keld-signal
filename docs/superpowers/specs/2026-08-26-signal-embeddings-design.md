@@ -9,8 +9,10 @@ edited is a number someone re-derives from the prose instead of the code.** What
 2. **Embedding does NOT run "at block close"** — that reading is synchronous inside the request and
    was refuted by measurement. See the encoding-architecture correction under *Text vectors*, and
    the cursor contract under *Anchors*.
-3. **The measured cost is 766 ms/message and ~1.9 GB, not 20–50 ms** — see *Performance budget*,
-   where the duty-cycle conclusion is recomputed rather than merely restated.
+3. **The measured cost is ~1.1–1.6 s/message and 1.70 GB resident / 2.35–2.43 GB peak, not 20–50 ms** — see
+   *Performance budget*, where the duty-cycle conclusion is recomputed rather than merely restated.
+   ⚠️ This line first read "766 ms/message and ~1.9 GB", from single-shot scripts; both halves were
+   re-measured under sustained load by `sidecar/loadtest`'s `embed` arm (2026-08-26) and both moved.
 
 Built (all four steps of *Delivery order*): the capture rows and `bin_offset`, `S(t)` and
 `POST /features`, the Go emitter half with its `features`/`publish` org toggles, and the
@@ -252,7 +254,9 @@ Three reasons, each independently sufficient:
 the call that needs the vectors. That cannot work, and it was refuted by measurement, not by
 taste.** The daemon's sidecar client has a **5-second** HTTP timeout (`daemon.go`, sized for
 enrichment inference). One measured batch of 64 real messages from a 26 MB transcript costs
-**~92 s**, plus **~90 s** for the child's first model load; even four messages is ~6 s. So no batch
+**~92 s**, plus the child's first model load — **2.8 s warm / ~20 s cold**, re-measured by
+`loadtest embed`; this said ~90 s, one cold contended reading, and the argument never turned on it.
+Even four messages is ~6 s. So no batch
 size worth having lands inside one call. And the failure would not have been one slow response: a
 timed-out POST is a transport error, which `Client.post` classes as **retryable**, so the shipped
 consequence of the original reading is an unbounded retry loop against work that can never finish
@@ -298,7 +302,11 @@ not binding: it is the stronger model, MRL-truncatable, and the latency is paid 
 above) rather than inside one, while vector quality compounds across the whole corpus.
 ⚠️ **bf16 is measured on both axes and is not a latency trade**: on 200 real messages at 2 threads,
 float32 costs **3,113 MB / 804.0 ms per message** and bfloat16 **1,673 MB (1,813 peak) /
-766.2 ms** — 1,313 MB cheaper and marginally FASTER. EmbeddingGemma-300M @ 256-d
+766.2 ms** — 1,313 MB cheaper and marginally FASTER. ⚠️ Two of those bf16 numbers are single-shot
+and were corrected by the sustained arm: **2,345 MB peak** (not 1,813 — a one-shot script cannot see
+an in-flight transient, and unstable run to run: 2,072 / 2,345 / 2,414 / 2,432 MB) and **1,119–1,635
+ms/message** (not 766.2). Resident replicated at 1,700 MB, so
+the 1,313 MB the dtype choice rests on is unaffected. EmbeddingGemma-300M @ 256-d
 is the fallback if the measurement below comes back badly. **Not a generative LLM's hidden states** —
 a decoder's last-token state is a poor sentence embedding without contrastive tuning and costs more;
 the GGUF models already on hand would be a downgrade for this specific job.
@@ -468,8 +476,8 @@ The constraint is explicit: **data collection must not affect the end user's exp
 | file re-reads | `bin_offset`. O(block), not O(file). |
 | CPU | rides the **existing** `governor.py` CPU-EWMA pacing and `cpuscale.py` thread cap (~50% of cores under host load). No second load-protection mechanism is built. |
 | concurrency | the existing single-flight runner. Never fan out. |
-| duty cycle | ⚠️ **"20–50 ms per message" was an estimate and it was out by a factor of ~20.** Measured: **766 ms/message** (bf16, 200 real messages, 2 threads) and **~1.44 s/message** on a loaded host encoding a real 26 MB transcript. The CONCLUSION survives the correction, recomputed: at the amortised ~100 messages/day the encoder burns 77–144 s of a 86,400 s day, i.e. **0.09–0.17%** — still below 0.3%, and paced by the existing governor. What does NOT survive is the per-block arithmetic in this row: 30 messages is **~43 s inside a 1,200 s block (3.6%)**, not 0.6–1.5 s, and the first call on an existing session encodes its whole history — measured **~40 minutes for 1,646 messages**, once. That is why the work is bounded per pass (`KELD_TEXTEMBED_MAX_ENCODE`) and held off the request by the frontier rather than merely being "small". |
-| RAM | the encoder runs in **its own child**, not the FastAPI parent — idle-unloadable (`KELD_TEXTEMBED_IDLE_UNLOAD_S`), never spawned at all when the toggle is off. ⚠️ **~1.9 GB resident, measured**, against a budget `worker_manager` already reports as oversubscribed by 444.6 MB; the parent was never an option because `parent_reserve_mb()` is a high-water LATCH, so anything resident there permanently shrinks the inference worker's hard limit. |
+| duty cycle | ⚠️ **"20–50 ms per message" was an estimate and it was out by a factor of ~20 — and the correction below is itself corrected: the sustained arm (`loadtest embed`) measures 1,119–1,635 ms/message, so the factor is ~30–40 and every number in this row scales by 1.5–2.1x (≈0.13–0.35% of a day, ~34–49 s per 30-message block).** Measured: **766 ms/message** (bf16, 200 real messages, 2 threads) and **~1.44 s/message** on a loaded host encoding a real 26 MB transcript. The CONCLUSION survives the correction, recomputed: at the amortised ~100 messages/day the encoder burns 77–144 s of a 86,400 s day, i.e. **0.09–0.17%** — still below 0.3%, and paced by the existing governor. What does NOT survive is the per-block arithmetic in this row: 30 messages is **~43 s inside a 1,200 s block (3.6%)**, not 0.6–1.5 s, and the first call on an existing session encodes its whole history — measured **~40 minutes for 1,646 messages**, once. That is why the work is bounded per pass (`KELD_TEXTEMBED_MAX_ENCODE`) and held off the request by the frontier rather than merely being "small". |
+| RAM | the encoder runs in **its own child**, not the FastAPI parent — idle-unloadable (`KELD_TEXTEMBED_IDLE_UNLOAD_S`, measured by `loadtest embed` to actually return **1,712 MB** to the OS and to respawn on the next request), never spawned at all when the toggle is off. ⚠️ **1.70 GB resident / 2.35–2.43 GB PEAK, measured under sustained load** (this row said "~1.9 GB resident", which sat between the two and named neither), against a budget `worker_manager` already reports as oversubscribed by 444.6 MB; the parent was never an option because `parent_reserve_mb()` is a high-water LATCH, so anything resident there permanently shrinks the inference worker's hard limit. |
 | backlog | a machine with many closed blocks caps per-sweep work and drains. Bounded and coalescing, the shape `daemon/ingestsignal.go` already uses. Never a herd. |
 | proof | not asserted. `/metrics` **has** the `embed` block beside `worker` and `store`: child state + stated status, live RSS **and `peak_rss_mb`**, weights presence, encoder identity and published width, the backlog behind the frontier + whether a pass is running, cache size, and the encode/spawn/idle-unload counters. ⚠️ **The peak is the field that mattered** — this repo's RSS-oscillation incident is on record as an instantaneous sample making a worker oscillating 2,715 → 5,692 MB against a 3,409 MB ceiling look healthy, and a second ~1.9 GB child with no peak would have been the same mistake twice. "p50/p90 per block" did NOT ship and should not: encoding is no longer per block, so the percentile has no unit. The loadtest arm is still outstanding. |
 

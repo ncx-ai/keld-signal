@@ -156,7 +156,7 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
         # `state: "down"` when nothing is running, because "the encoder is not running" is an
         # answer and a missing block is not.
         #
-        # ⚠️ It reports `peak_rss_mb` for the same measured reason `worker` does: a ~1.9 GB child
+        # ⚠️ It reports `peak_rss_mb` for the same measured reason `worker` does: a ~1.7-2.3 GB child
         # observed only through an instantaneous sample is the RSS-oscillation incident again.
         "embed": embed_stats,
         "uptime_s": round(uptime_s, 1),

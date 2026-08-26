@@ -36,7 +36,10 @@ set is one or two.
 
 The daemon's sidecar client has a **5-second** HTTP timeout (`daemon.go`, sized for enrichment
 inference), and one measured batch of 64 real messages from a 26 MB transcript costs **~92 s** —
-plus **~90 s** for the child's first model load. A synchronous encode could not land inside one
+plus the child's first model load, measured by `loadtest embed` at **2.8 s with a warm page cache
+and ~20 s cold** (this docstring said ~90 s, which was one cold contended reading and is corrected
+here; the argument does not turn on it, since even 2.8 s is past the 5 s budget once any encoding
+follows it). A synchronous encode could not land inside one
 call at ANY batch size worth having: even four messages is ~6 s. And a timed-out POST is a
 transport error, which `Client.post` classes as retryable, so the failure mode is not one slow
 response but an unbounded retry loop against work that never finishes in time.
@@ -84,6 +87,10 @@ _CACHE_SESSIONS = int(os.environ.get("KELD_TEXTEMBED_CACHE_SESSIONS", "4"))
 # ~92 s per 64 messages, i.e. ~1.44 s/message, against the module's own 766 ms/message figure
 # measured on shorter inputs. A whole such session is ~40 minutes of encoding, once, and that is
 # the honest cost of turning the toggle on mid-session.
+#
+# ⚠️ The ~1.44 s is the figure that REPLICATED, and 766 ms is the one that did not: `loadtest embed`
+# measured **1,119-1,635 ms/message** across runs, over 104-134 messages of sustained encoding on a
+# real 14.4 MB transcript. Size any per-message cost off ~1.1-1.6 s (see textembed._load).
 _MAX_ENCODE = int(os.environ.get("KELD_TEXTEMBED_MAX_ENCODE", "64"))
 
 # The encoder's published identity. The model name is read off the weights DIRECTORY rather than
@@ -358,7 +365,7 @@ class TextSource:
 def embed_stats(source):
     """The `embed` block of /metrics: the text encoder child, its memory, and its backlog.
 
-    ⚠️ **This block exists because an unobserved ~1.9 GB child is the mistake this codebase has
+    ⚠️ **This block exists because an unobserved ~1.7-2.3 GB child is the mistake this codebase has
     already paid for.** `worker_manager` reports `peak_rss_mb` for exactly one reason — an
     instantaneous sample made a worker oscillating 2715 -> 5692 MB against a 3409 MB ceiling look
     healthy — and this child is of the same order and rides the same budget. So the peak is
