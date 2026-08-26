@@ -776,6 +776,95 @@ session's — and is never collapsed into "no prior". Cost is 1.6 µs per dimens
 block's ~16.7 ms is its two rollups, paid per call regardless of how many dimensions ride
 it.
 
+**The block cutter (`analysis/blocks.py`) — where a piece of work ENDS.** A window is an
+arbitrary hour; a **block** is a contiguous span of one session's ACTIVE time, and where one
+ends is the only question this module answers. Two terminators, and the set is closed:
+**idle** — `IDLE_BINS` (3) consecutive empty 5-minute bins, i.e. 15 minutes of silence, which
+is not a claim about the work but a claim there wasn't any — and **budget**,
+`MAX_BLOCK_MINUTES` (20) elapsed, which is only "we had to cut somewhere". They are reported
+separately (`REASONS = session_start / idle / budget / session_end`) because a reader who
+cannot tell them apart cannot tell an arithmetic boundary from a real pause. Both numbers are
+MEASURED, in a pre-registered four-arm study over 496 sessions
+(`~/keld/refseries-context/blocks/BLOCK-BOUND-2-{PREREGISTRATION,RESULTS}.md`, harness
+`scripts/block_sizing_eval.py`): a plain time cap (A′), an evidence-gated cap that defers
+until the block can attribute (B′), a turn count (C′), and no bound at all (D′). **A′ won, at
+20 minutes** — and on the CONSTRAINTS rather than on the metric: with dead air excluded every
+arm attributes within a point of every other (**95.2-96.2%**), so what separated them is that
+A′'s maximum block EQUALS its cap by construction (**0.33h**), while B′ is **bit-identical**
+to A′ at every cap ≥ 30 min (the deferral gate never fires once idle is handled) and D′
+produces **7.5-hour** blocks with **53.0%** of them spanning a whole session. `IDLE_BINS` was
+fixed in the pre-registration and then swept (2/3/6 bins = 10/15/30 min) rather than left
+asserted: at the shipped cap, **94.9%** attributable at 10 min, **95.3% at 15**, **93.4%** at
+30. Retuning either re-opens the four-arm comparison.
+
+**Blocks tile the ACTIVE part of a session, not `[lo, hi)`.** Idle splits the span into active
+segments first and the cap runs WITHIN each; the dead air between them belongs to NO block. So
+the invariant is **every active bin lies in exactly one block**, and never "the blocks cover
+the span" — which is what round 1 of the study measured by accident, tiling silence with empty
+20-minute blocks, and it cost arm A its attribution outright (**29.8% → 95.3%** once
+corrected). A reader tempted to make blocks abut across a gap is reintroducing exactly that.
+
+⚠️ **There is NO merge rule, and the absence is the design.** The 95% attribution bar was
+DEFINED, in the pre-registration and before the run, as the point at which a merge rule becomes
+unnecessary; A′@20 clears it (**95.3%**, **96.21%** after the ablation below). The obvious
+repair — fold a thin block forward into its neighbour — was built and measured
+(`BLOCK-SIZING-RESULTS.md`): it changes a published VALUE in **88.6%** of the merges it
+performs, against a pre-registered **5%** bar, and merges chain (**94.6%** of the 7,391
+absorbed blocks were followed by a block that was itself thin). Merging does not recover a thin
+block's answer; it overwrites it with the neighbour's. So a thin block publishes UNATTRIBUTED
+and survives as its own block — an honest blank, the same call `window.MIN_EVIDENCE` and
+`prior.py`'s CONTRAST-NEVER-FALLBACK make one level down. Do not add a merge rule and do not
+add a knob for one: a knob is a merge rule with the decision deferred.
+
+⚠️ **A THIRD terminator was ABLATED, and every measured number improved.** The change detector
+(`EwmaSizer` over the `branch` series) was the third terminator in the arm that won the
+pre-registered comparison. A post-hoc ablation over the same 496-session corpus at the shipped
+cap (`BLOCK-BOUND-2-ABLATION.md`) emptied its cut list: attributable **95.29% → 96.21%**,
+blocks holding any evidence **99.3% → 100.0%** — the detector was the **ONLY** source of empty
+blocks, which is the precise failure the idle terminator was introduced to eliminate — merge
+rate **1.36% → 0.67%**, longest block unchanged at 20m. The mechanism is not subtle: a detected
+cut ends a block EARLY, so it holds less evidence and is likelier to fall under `MIN_EVIDENCE`;
+the detector was buying its **4.3%** of boundaries by thinning the blocks around them. What is
+given up is the claim those cuts sat in more MEANINGFUL places — which is exactly the claim
+**Phase 0a could not establish**: `branch` recalled **7.1%** of real work shifts against a
+fixed-interval control's **17.3%**, and every alternative detection level failed its bar, with
+`action` scoring **−3.5** — better on shuffled truth than on real truth. Two consequences worth
+knowing: the bound is now **fully domain-agnostic** (detection was its only branch-dependent
+part, so a session with no repository behaves identically — nothing missing, nothing degraded),
+and `blocks.py` no longer imports `dynamics` at all. ⚠️ **`EwmaSizer` was NOT removed** — it
+keeps its separate, measured, shipped use sizing the dynamics SLICE (above), which this
+ablation does not touch. `_form` likewise keeps the `cuts` parameter it is now always handed
+`[]` for, so the shipped arithmetic stays identical to the measured arm evaluated with an empty
+cut list rather than being a second code path that would have to be shown equal to it;
+`detected` is therefore deliberately absent from `REASONS`, which is what `cut` can emit.
+
+⚠️ **`cut()` requires BIN-ALIGNED bounds and fails SILENTLY without them.** `active_segments`
+filters on bin STARTS, so a bin straddling a non-aligned `from_ts` is dropped from every
+segment while `rollup_window`, which takes exact instants, still counts the events inside it:
+evidence lands in no block, nothing errors, and no block looks wrong. The caller owns the
+alignment (`analyze._block_span` floors and ceils). It is deliberately not clamped inside
+`cut()`, because the study oracle pins that function byte-identical to the measured arm, whose
+harness always passed bin-aligned session bounds — a clamp would mean the shipped cutter is no
+longer the arm that was measured.
+
+**`/analyze` reports the block BESIDE the window, never instead of it.** An additive `block`
+key (opt-in) carrying the span and the two boundary reasons, and nothing else — no evidence or
+attributability field, because the two definitions of thinness in this codebase disagree:
+per-level attribution reads 95.3% against 99.3% for holding any pooled evidence, and a block
+holding one unit at each of eight allocation levels clears a pooled floor while every level in
+it reads `thin`. Whoever adds the first consumer picks the per-level measure deliberately
+rather than reaching for the shorter pooled sum. Sidecar `SCHEMA` 14 → 15; every other field is
+still computed over the hour, and narrowing the window to the block is a later phase with its
+own eval re-run. **Phases 2-5 of
+`docs/superpowers/specs/2026-08-25-signal-block-pipeline-design.md` are NOT built** — `covers`
+(the prompt-id → block-span episode mapping, `complete: false` where an episode runs past the
+block), the Go wire (the deterministic facets move onto `publish.WindowEnrichment` and
+`publish.Enrichment` shrinks to `sensitivity` plus correlation), the tick becoming the primary
+trigger rather than a gap-filler, and the `ml_backend:"deterministic"` default flip. The last
+two are gated on Atlas, for the same reason the tick ships inert (below): flipping the default
+before Atlas renders block facets **blanks its Context column**, since `function_guess`,
+`subcategory` and `activity_type` are all in the deterministic skipped set.
+
 **Model backends.** `ml_backend` (local, startup-only, `settings.Settings`)
 selects one of three modes:
 - **`"auto"`/`""` (default)** — Enrichment is **ML-only** for its full facet
@@ -1217,6 +1306,7 @@ sidecar/
       ingest.py        incremental tail parse from a byte offset (== a full parse)
       analyze.py       window digest; analyze_window_by_parse is the ORACLE
       dynamics.py      what MOVED in the window + the EWMA slice sizer
+      blocks.py        the block cutter: 20m cap + 15m idle, no merge rule
       window.py        rollup / attribution / dominant; MIN_EVIDENCE
       levels.py        level vocabulary + 0.1s timestamp quantization
       workstreams.py   ALLOCATION + INVENTORY payload (the published shape)
