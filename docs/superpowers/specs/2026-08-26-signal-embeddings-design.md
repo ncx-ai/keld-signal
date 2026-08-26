@@ -223,9 +223,23 @@ All four are numbers. None is text, a span, or an offset into text.
 
 1. **`say`** — per-turn character counts by role (`user`, `user_echo`, `asst`, `asst_think`).
    Already computed by `levels.events_for_turns` and **dropped by `store.upsert_events`**. Zero
-   extra parse cost; one table write. `asst_think` already carries a real count from
-   `think_blocks()` — the "0 = not persisted by this store" comment in `levels.py` means the row is
-   discarded downstream, not that the number is zero.
+   extra parse cost; one table write.
+
+   ⚠️ **This section claimed `asst_think` "already carries a real count from `think_blocks()`",
+   and that the `# 0 = not persisted by this store` comment in `levels.py` meant the row is
+   discarded downstream "not that the number is zero". BOTH HALVES WERE FALSE.** The number IS
+   zero: `think_blocks`' own docstring records that all 9,148 blocks in platform-written Claude
+   Code transcripts carry a signature and an EMPTY `thinking` string, and the final review
+   re-measured 7,648 blocks across the local corpus with **0 of nonzero length**. The only corpus
+   that ever held real thinking text was a manual claude.ai export, which this system does not
+   read. `_aggregate_mag` drops zeros, so `say_asst_think` is emitted and never stored.
+
+   What IS available is what `text.py` names as the designed-for signal: block **incidence**.
+   The COUNT of thinking blocks on a turn is captured as its own kind,
+   `magnitude.SAY_THINK_BLOCKS` (`say_asst_think_blocks`) — the fact the zero-drop was
+   destroying. `SAY_THINK` is kept, because the drop is the ONLY thing suppressing it and a
+   producer that ever writes thinking text would populate it with no code change; nothing
+   downstream may depend on it, and step 2 must not build a length feature on it.
 2. **`tok`** — raw token counts (`out`, `in_fresh`, `in_cached`). Also computed and dropped, because
    the price-weighted `mag` magnitude superseded it **as a measure of cost**. The split is a
    different fact: `in_cached / (in_cached + in_fresh)` measures conversation reuse and context
@@ -238,6 +252,14 @@ All four are numbers. None is text, a span, or an offset into text.
    ships**, against the current parse time, and the measurement recorded.
 4. **Per-turn reconstruction** — `event` already carries `source_line`, so grouping by
    `(session, source_line)` should suffice; whatever is missing for a per-message row is added.
+
+   ⚠️ **IT DOES NOT SUFFICE, and step 2 must not build on this sentence.** `source_line` is the
+   BATCH ordinal — the absolute line the batch was read through — so it is IDENTICAL for every
+   row an ingest wrote, and a whole-file ingest gives every row in the file the same value. The
+   only per-turn key these rows carry is `ts`, quantized to 0.1 s (`levels.quantize`), and
+   `store.py` already notes that two turns can collide on one tick. Recovering a genuine
+   per-message row therefore needs a key that does not exist yet; designing it is step 2's
+   first task, not an assumption it inherits. No code change was made for this in step 1.
 
 ### `bin_offset` — the index that makes the bounded read possible
 
@@ -294,6 +316,20 @@ non-fatal if Atlas is unreachable.
 
 Separating `capture` is what makes the other two free: turning publishing off must not cost a full
 reparse to turn back on.
+
+⚠️ **The fingerprint's guarantee is per TRANSCRIPT, not per STORE, and the table above overstated
+it.** `ingest.capture_mode` fingerprints the setting into `parse_state`, so a change forces a
+reparse and no single transcript can hold rows from both settings — that much holds. But only the
+sessions that see another append ever reparse: flip `KELD_CAPTURE=1` and a dormant session keeps
+no capture rows for as long as it stays dormant. The STORE is the query unit for a corpus builder,
+and it therefore CAN hold the two incomparable populations this row claims the fingerprint
+prevents.
+
+No schema change was made for this in step 1, deliberately. `Store.bin_offset` already models the
+honest reading — a missing row means **not recorded**, which is not the same as zero — and whether
+a per-session capture marker is worth DDL is a step-2 design decision, to be taken when the corpus
+builder exists and can say what it needs. It is recorded in `store.py`'s header and in
+`turn_magnitude`'s own comment so it cannot be discovered late.
 
 ## Performance budget
 

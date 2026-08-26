@@ -520,7 +520,53 @@ differ from it**.
   ingest re-reads the same tail. A half-applied batch is the state nothing downstream
   would notice, which is why `transaction()` exists. Non-ref rows are dropped on the
   way in — a `say` row carries `len(body)`, a measure of message text, and a `tok`
-  row carries token counts; neither is a reference event.
+  row carries token counts; neither is a reference event. ⚠️ **That drop is now
+  conditional** — see `KELD_CAPTURE` below — but the default is still drop, and
+  nothing routes those rows to `event` either way.
+
+⚠️ **`KELD_CAPTURE` (default OFF) keeps four signals the store used to compute and
+discard, and flipping it costs a reparse.** They are the training corpus step 2 of
+`docs/superpowers/specs/2026-08-26-signal-embeddings-design.md` needs, and all four
+are numbers: per-role message CHARACTER COUNTS (`say`), the raw token split (`tok`),
+tool-call OUTCOMES (`is_error` + result size), and `bin_offset` — the byte position
+where each 5-minute bin's first line starts. The first three ride `turn_magnitude`'s
+existing `kind` dimension (a new magnitude is data, not DDL); only `bin_offset` adds
+a table. `Store.has_magnitudes` stays scoped to the COST kinds so a published field
+cannot move because a character count arrived.
+- **Why a byte index at all:** `transcript.turns_between` is O(FILE) — a whole-file
+  parse, 0.79 s on the 90 MB transcript — so re-reading one block through it puts
+  back the exact cost this store exists to remove. A block is bin-aligned by
+  construction, so a block span maps to a byte range: one seek, one bounded scan.
+- ⚠️ **The anchoring timestamp must be the RECORD'S OWN, and a bare regex does not
+  give that.** `capture.scan` reads the instant off the raw line without decoding it,
+  and taking the first `"timestamp"` anywhere in the line took a NESTED one:
+  `file-history-snapshot` records have no top-level timestamp at all, and measured
+  over 73,449 lines of the 40 largest real transcripts 1,135 of them (1.5%) match. The
+  result was not merely imprecise but NON-MONOTONE — 31 of those 40 transcripts held a
+  bin whose offset disagreed with `json.loads`, one anchoring at byte 13,931 of a 24 MB
+  file whose preceding bin anchored at 9,426,720, i.e. a negative-length byte range —
+  and these rows are written once at ingest and never re-derived. The line is therefore
+  routed: a message-shaped line (`"type":"user"`/`"assistant"`, the shape `turns_in`
+  gates on) keeps the regex, measured exact on 45,587 lines and 293.7 MB of the 321.3 MB
+  corpus; anything else is DECODED, exact by construction and so robust to a record type
+  Claude Code has not invented yet, and affordable because the bookkeeping records are
+  the small ones — 8.3 ms to decode every one of them on the 90 MB transcript.
+- ⚠️ **`KELD_CAPTURE` is fingerprinted into `parse_state`** (`ingest.capture_mode`, the
+  sibling of `terms_mode`), so a change forces one reparse and no single transcript can
+  hold rows from two settings. That is a per-TRANSCRIPT guarantee and the store is not
+  one transcript: flip it on and only sessions that see another append reparse, so a
+  dormant session keeps no capture rows. A corpus builder querying the store CAN
+  therefore see two incomparable populations; whether a per-session marker is needed is
+  a step-2 decision, deliberately not answered. Absent means NOT RECORDED, never zero.
+- ⚠️ **Thinking-block LENGTH is not in this data and no toggle changes that.** Every
+  block a platform writes carries a signature and an EMPTY `thinking` string (9,148
+  measured in `text.think_blocks`, re-measured 7,648 with 0 of nonzero length), so
+  `say_asst_think` is emitted and, being zero, never stored. The COUNT is the signal and
+  is captured as `say_asst_think_blocks`. Don't wire a length consumer.
+- `bin_offset` and `turn_magnitude` are both swept to the retention SERVING FLOOR
+  rather than carrying horizons of their own: below it, one is a number nothing can be
+  joined to and the other a seek into a window `/analyze` refuses (410). `/metrics`
+  reports both row counts under `store.rows`.
 
 ⚠️ **The parse state carries a THIRD accumulator, and adding it forced a one-off reparse of
 every existing store.** `pending` (reconcile) and `cwds` (workspace) were the two; `reqs` is the
