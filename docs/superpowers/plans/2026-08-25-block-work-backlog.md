@@ -94,12 +94,23 @@ joins `enrichment.corr_id == tool_event.prompt_id`, so a block row is stored and
       lacks; the store already holds every ingested session, so it is the prior's mechanism with a
       wider scope key. Complementary to `prior`, not a substitute (session scope collapses every
       lift to x1.0).
-- [ ] **Why does `repo` attribute 0 of 1,502 blocks?** Possibly related: `scripts/test_act_artifact.py`
-      fails 21/22 with `KeyError: 'repo'` on a committed study frame that predates the dimension —
-      reproduced at HEAD, so pre-existing, but it is the second sign that `repo` was added and never
-      fully landed. It is in ALLOCATION and never fires on this
-      corpus. Either the remote is unresolvable for these sessions or the level is not being
-      emitted. Unexplained.
+- [x] **RESOLVED, and it was never broken.** `repo` attributed 0 of 1,502 corpus blocks because
+      `repo` rows are written at INGEST from the daemon-supplied `resolved={"repo": ...}`
+      (`levels.py:149`, `if repo_id: add("ref","repo",...)`) and the study harness that built the
+      corpus never passes it. Verified live on this repo's own transcript: ingesting WITH
+      `resolved` returns `reparsed: true` — the fingerprint at `ingest.py:298` forces it — and then
+      `repo = github.com/ncx-ai/keld-signal, status=attributed, evidence=49`. Production does
+      supply it (`ingestsignal.go`: `signal(path, facts.forTranscript(path).resolved())`).
+      ⚠️ **Keep this consequence: ANY corpus measurement of `repo` is uninformative**, because that
+      store was ingested without `resolved`. `test_act_artifact.py`'s `KeyError: 'repo'` is a
+      separate, unrelated sighting — a committed study frame predating the dimension.
+
+- [x] **NOT a defect either — `authored_bytes: 0` with `authored_status: attributed`.** It measures
+      bytes written via file EDITS, not prompt bytes, and the early blocks of the session I tested
+      were brainstorming plus Bash work with no `Edit`/`Write` calls (measured: Bash 1266, Agent
+      172, Write 5, Edit ~0). Under the store's own session key the session does carry
+      `edit_bytes`: 6 rows, 66,500 bytes. `attributed` correctly meant "measured, and it is zero" —
+      the truthful-zero-versus-abstention split is what made this checkable.
 
 ## KNOWN GAPS — stated, not fixed
 
