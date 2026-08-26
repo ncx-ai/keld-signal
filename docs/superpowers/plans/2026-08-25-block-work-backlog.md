@@ -27,17 +27,6 @@ Signal↔Atlas contract corrected against the measurements.
 
 ## NEXT — Signal side
 
-- [ ] ⚠️ **`internal/agent/publish/report.go` now renders a THIN value as if it were attributed.**
-      Introduced by the evidence+status change, live today, and in an uncommitted file owned by
-      someone else so it was left alone. `report.go:96` gates on `l.Value != ""`, which WAS
-      equivalent to "attributed" — under the old contract a sub-floor dimension had an empty value.
-      It no longer is: a `thin` value passes that guard and prints beside attributed ones with no
-      indication it sits under the floor, which is exactly the misreading `status` exists to
-      prevent. Fix is one condition, and the same file already has the idiom at line 235 for
-      effort: `e.Effort.AuthoredStatus != "attributed"` appends the status rather than hiding the
-      value. Gate on `l.Status == "attributed"`, or print the status beside a thin value.
-
-
 - [ ] **Spec: weight edits heavier than reads.** Reads outnumber edits 3.4:1 (read 34.5%, search
       17.3%, edit 11.5%, create 3.3%), and every path touch currently emits at weight 1.0, so a
       block that skimmed twelve files and rewrote one publishes what it skimmed.
@@ -129,4 +118,7 @@ joins `enrichment.corr_id == tool_event.prompt_id`, so a block row is stored and
   interchangeable with a matched all-passing one.
 - The retired `choose_cap` rule ("smallest cap within 5 points") is still live and is what
   `main()` runs with no flag, despite its own pre-registration saying it is not reused.
-- `internal/agent/publish/report.go` lags the new wire fields (owner's uncommitted file).
+- `internal/agent/publish/report.go` + `report_show_test.go` (634 lines, untracked) are **DEAD** —
+  the rendered report is not going to Atlas. Everything in them is unexported and nothing outside
+  the package references them, so they compile and nothing else notices. Delete when convenient;
+  left in place because untracked files have no git copy to recover from.
