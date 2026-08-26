@@ -145,10 +145,31 @@ class StubEncoder:
         self.dim = dim or te.DIM_PUBLISH
         self.fail = fail
         self.calls = 0
+        # The observability surface the real `Encoder` carries and `featuretext.embed_stats`
+        # reads. Stubbed here so the /metrics block is testable without torch and without a
+        # child process — the same reason the encode itself is stubbed.
+        self.state = te.DOWN
+        self.status = te.STATUS_OK
+        self.peak_rss_mb = 0.0
+        self.counts = {"spawns": 0, "kills_idle": 0, "failures": 0, "batches": 0}
+
+    def rss_mb(self):
+        return 0.0
+
+    def maybe_unload(self):
+        return False
+
+    def observe_rss(self):
+        return 0.0
 
     def encode(self, texts):
         if self.fail:
+            self.state, self.status = te.UNAVAILABLE, self.fail
+            self.counts["failures"] += 1
             return [], self.fail
+        self.state, self.status = te.READY, te.STATUS_OK
+        self.counts["spawns"] = self.counts["spawns"] or 1
+        self.counts["batches"] += 1
         self.calls += len(texts)
         out = []
         for t in texts:
@@ -556,6 +577,95 @@ def test_only_one_background_pass_runs_at_a_time():
     assert src.drain(timeout=30.0)
     assert src.counts["passes"] == 1, src.counts
     st.close()
+
+
+# --- the /metrics block -------------------------------------------------------------------------
+
+def test_embed_stats_with_no_source_states_not_running():
+    """⚠️ "The encoder is not running" is an ANSWER and is reported as a block that says so. A
+    null block (the shape `store` uses for an unopenable store) is indistinguishable from a broken
+    poll, and the whole reason this block exists is that the child was invisible."""
+    os.environ.pop("KELD_TEXTEMBED", None)
+    b = featuretext.embed_stats(None)
+    assert b["enabled"] is False and b["state"] == te.DOWN
+    assert b["rss_mb"] == 0.0 and b["peak_rss_mb"] == 0.0
+    assert b["cached_sessions"] == 0 and b["pending_messages"] == 0
+    assert b["encoding"] is False
+    # The identity is stated even with nothing running: `width` is the PUBLISHED width, which is
+    # the one parameter a collected corpus cannot revise retroactively.
+    assert b["encoder"]["width"] == te.DIM_PUBLISH and b["encode_width"] == te.DIM_ENCODE
+    assert set(b["counts"]) == {"encoded", "reused", "reads", "passes",
+                                "spawns", "batches", "failures", "kills_idle"}
+
+
+def test_embed_stats_reports_the_child_after_an_encode():
+    """After real work the block has to show the work: state, the cache the cost model depends on,
+    the counters, and the encoder's own spawn/batch figures beside this module's."""
+    st, path = _store_with()
+    src = _text_source()
+    src.vectors(path)
+    b = featuretext.embed_stats(src)
+    assert b["enabled"] is True and b["state"] == te.READY, b
+    assert b["cached_sessions"] == 1 and b["cached_messages"] > 0
+    assert b["counts"]["encoded"] > 0 and b["counts"]["reads"] == 1
+    assert b["counts"]["passes"] == 1 and b["counts"]["batches"] >= 1
+    # A second call re-uses the cache rather than re-encoding: the block is where that claim is
+    # observable at all (`encoded` flat, `reused` climbing).
+    before = b["counts"]["encoded"]
+    src.vectors(path)
+    b2 = featuretext.embed_stats(src)
+    assert b2["counts"]["encoded"] == before and b2["counts"]["reused"] > b["counts"]["reused"]
+    assert b2["pending_messages"] == 0 and b2["encoding"] is False
+    st.close()
+
+
+def test_embed_stats_reports_the_backlog_behind_the_frontier():
+    """`pending_messages` is what the caller's cursor is waiting on. Recorded by the last call,
+    because recomputing it means opening a transcript and /metrics must not."""
+    st, path = _store_with()
+    src = featuretext.TextSource(encoder=StubEncoder(), background=False)
+    os.environ["KELD_TEXTEMBED"] = "1"
+    _v, _s, _r, frontier = src.vectors(path, max_encode=1)
+    b = featuretext.embed_stats(src)
+    assert frontier is not None and b["pending_messages"] > 1, (frontier, b)
+    st.close()
+
+
+def test_embed_stats_states_a_degraded_encoder():
+    """A degraded encoder is the state an operator acts on, so the block carries the encoder's own
+    stated status and the failure count -- never just `state`."""
+    st, path = _store_with()
+    src = _text_source(fail=te.STATUS_NO_WEIGHTS)
+    src.vectors(path)
+    b = featuretext.embed_stats(src)
+    assert b["status"] == te.STATUS_NO_WEIGHTS, b
+    assert b["counts"]["failures"] == 1 and b["state"] == te.UNAVAILABLE
+    st.close()
+
+
+def test_the_peak_rss_is_a_high_water_not_the_live_sample():
+    """⚠️ The whole point of the block. `worker.peak_rss_mb` exists because an instantaneous sample
+    made a worker oscillating 2715 -> 5692 MB against a 3409 MB ceiling look healthy; this child
+    is ~1.9 GB and rides the same budget. A peak that fell back to the live reading would repeat
+    exactly that mistake."""
+    samples = iter([1200.0, 1813.0, 900.0])
+    enc = te.Encoder(spawn_fn=lambda spec: (_FakeProc(), None, None),
+                     rss_fn=lambda pid: next(samples), weights="/nonexistent-but-not-consulted")
+    enc._proc = _FakeProc()          # a child exists; nothing is spawned by this test
+    for _ in range(3):
+        enc.observe_rss()
+    # The last sample was 900; the peak is the 1813 spike, which is the fact a poll landing between
+    # batches would have missed entirely.
+    assert enc.peak_rss_mb == 1813.0, enc.peak_rss_mb
+    # A new generation resets it: a peak carried across a kill describes a process that is gone.
+    enc._kill()
+    assert enc.peak_rss_mb == 0.0
+
+
+class _FakeProc:
+    pid = 1
+    def kill(self): pass
+    def join(self, timeout=None): pass
 
 
 # --- 6. the quantisation ------------------------------------------------------------------------

@@ -139,7 +139,24 @@ class TextSource:
         self._worker = None
         # The encoder's own last word, so a status can be reported by a call that did no encoding.
         self._last_status = None
+        # Un-encoded messages seen by the LAST call — the backlog behind the frontier, which is
+        # what a caller's cursor is actually waiting on. Recorded rather than recomputed because
+        # deriving it costs a transcript read, and /metrics must not open one.
+        self._pending = 0
         self.counts = {"encoded": 0, "reused": 0, "reads": 0, "passes": 0}
+
+    def poll(self):
+        """The periodic lifecycle+observability tick, called off the event loop.
+
+        Two things, in this order, for the reason `worker_manager.poll` does the same: the RSS
+        sample must happen whether or not the policy below fires, and it must happen before a kill
+        clears the child's peak. Keeping them in one method is what stops a caller from wiring the
+        policy and silently dropping the sampling (see `textembed.Encoder.observe_rss`)."""
+        self._encoder.observe_rss()
+        return self.maybe_unload()
+
+    def observe_rss(self):
+        return self._encoder.observe_rss()
 
     def maybe_unload(self):
         """Let the encoder child go if it has been idle. Called from the same poll loop that
@@ -165,6 +182,41 @@ class TextSource:
     @property
     def state(self):
         return self._encoder.state
+
+    def stats(self, block):
+        """Fill `block` (from `embed_stats`) with this source's live figures.
+
+        Takes the skeleton rather than building one so the block has ONE shape whether or not a
+        source exists — a /metrics consumer must not have to handle two.
+
+        `peak_rss_mb` is the high-water for the current child generation and `rss_mb` the
+        instantaneous reading; both, never one. See `textembed.Encoder.observe_rss` for why the
+        instantaneous one alone is not observability.
+        """
+        e = self._encoder
+        w = self._worker
+        with self._lock:
+            sessions = len(self._cache)
+            # Cached ENTRIES, not vectors: a message the encoder ran on and produced nothing for
+            # is a real entry (`_NO_VECTOR`) and is exactly what stops the frontier latching, so
+            # counting only vectors would under-report the work already done.
+            cached = sum(len(v) for v in self._cache.values())
+            pending, status = self._pending, self._last_status
+        block.update({
+            "state": e.state,
+            "status": status or e.status,
+            "rss_mb": round(e.rss_mb(), 1),
+            "peak_rss_mb": round(e.peak_rss_mb, 1),
+            "pending_messages": pending,
+            # A background pass in flight. `pending_messages` above is a backlog, this is whether
+            # anything is working through it — flat backlog with `encoding: false` is the shape of
+            # a wedged encoder, and neither field says it alone.
+            "encoding": bool(w is not None and w.is_alive()),
+            "cached_sessions": sessions,
+            "cached_messages": cached,
+            "counts": dict(self.counts, **e.counts),
+        })
+        return block
 
     def _touch(self, session):
         """Move `session` to the most-recently-used end and evict down to the bound."""
@@ -215,6 +267,7 @@ class TextSource:
             pending = [(k, m) for k, m in zip(keys, messages)
                        if k is not None and k not in cache]
             self.counts["reused"] += len(messages) - len(pending)
+            self._pending = len(pending)
             # OLDEST FIRST, and the bound cuts the TAIL. `messages_in` yields file order, so the
             # un-encoded remainder is contiguous and its first member is the frontier — which is
             # what lets the caller's cursor stop cleanly rather than straddle a gap.
@@ -300,6 +353,59 @@ class TextSource:
                 self.counts["passes"] += 1
         finally:
             self._worker = None
+
+
+def embed_stats(source):
+    """The `embed` block of /metrics: the text encoder child, its memory, and its backlog.
+
+    ⚠️ **This block exists because an unobserved ~1.9 GB child is the mistake this codebase has
+    already paid for.** `worker_manager` reports `peak_rss_mb` for exactly one reason — an
+    instantaneous sample made a worker oscillating 2715 -> 5692 MB against a 3409 MB ceiling look
+    healthy — and this child is of the same order and rides the same budget. So the peak is
+    reported beside the live reading, never instead of it.
+
+    `source` is `None` when no `TextSource` has been built: the toggle is off, or it is on and no
+    `/features` call has needed one yet. Those are reported as `state: "down"` with the
+    environment-level facts still stated, NOT as a null block — "the encoder is not running" is a
+    correct and useful answer, and a null one is indistinguishable from a broken poll.
+
+    ⚠️ **Pure reads only.** A metrics poll must never build a `TextSource`, spawn the child, load
+    weights, open a transcript or wait behind the encode lock; every field here is a counter, a
+    cached number, an environment read or a lock-free RSS sample. `pending_messages` is the
+    backlog recorded by the last `/features` call for that reason — recomputing it means a
+    transcript read.
+    """
+    enc = te.enabled()
+    block = {
+        # The toggle, and the child's own state, kept separate: enabled-but-down is the normal
+        # state of a machine between sessions (idle-unloaded), and enabled-but-unavailable is a
+        # failure. One field cannot say both.
+        "enabled": enc,
+        "state": te.DOWN,
+        "status": None,
+        # Whether the weights are on disk at all. The single most common reason for
+        # `degraded:weights_unavailable`, and the one an operator can act on: provisioning is
+        # asynchronous, so "not yet" is a normal early state rather than a defect.
+        "weights_present": te.weights_dir() is not None,
+        # The identity every published vector must be pooled under, stated even with the child
+        # down: `width` is the PUBLISHED width (256), which is the one parameter that cannot be
+        # revised retroactively, and `projection` is the seed, so a fleet-wide rotation is visible.
+        "encoder": encoder_ref(),
+        # The encode width (1024) beside it, because the two differ by 4x and conflating them puts
+        # any volume estimate out by the same factor.
+        "encode_width": te.DIM_ENCODE,
+        "rss_mb": 0.0,
+        "peak_rss_mb": 0.0,
+        "pending_messages": 0,
+        "encoding": False,
+        "cached_sessions": 0,
+        "cached_messages": 0,
+        "counts": {"encoded": 0, "reused": 0, "reads": 0, "passes": 0,
+                   "spawns": 0, "batches": 0, "failures": 0, "kills_idle": 0},
+    }
+    if source is None:
+        return block
+    return source.stats(block)
 
 
 def _keys(messages):

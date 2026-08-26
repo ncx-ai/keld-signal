@@ -188,10 +188,15 @@ async def lifespan(app: FastAPI):
             # oversubscribed, and its duty cycle is ~100 messages a day. Nothing else would ever
             # release it — `/features` only ever spawns. Guarded so a machine with the toggle off
             # never builds a source at all.
+            #
+            # `poll()`, not `maybe_unload()`: it also samples the child's RSS into a high-water
+            # mark for /metrics, and that sample has to happen on a timer rather than on a metrics
+            # poll — the peak of a ~1.9 GB child is only visible if something is looking DURING an
+            # encode, which is the lesson worker_manager's own guard was rewritten for.
             try:
                 src = _TEXT_SOURCE
                 if src is not None:
-                    await loop.run_in_executor(None, src.maybe_unload)
+                    await loop.run_in_executor(None, src.poll)
             except Exception:
                 pass
             await asyncio.sleep(interval)
@@ -646,6 +651,24 @@ def _store_stats():
         return None
     try:
         return st.store_stats()
+    except Exception as exc:                     # noqa: BLE001 - /metrics must always answer
+        return {"error": type(exc).__name__}
+
+
+def _embed_stats():
+    """The text encoder child's block for /metrics. Never raises, never has a side effect.
+
+    ⚠️ Reads `_TEXT_SOURCE` DIRECTLY and never calls `_text_source()`: that one BUILDS the source,
+    and a metrics poll must not create a subsystem it is only supposed to describe. With the
+    toggle on but no `/features` call yet the honest answer is "not running", which is what
+    `featuretext.embed_stats(None)` states.
+
+    The import is deferred for the same reason `_text_source`'s is — the default path must not pay
+    for the analysis text modules — but nothing here is heavy: no torch, no spawn, no transcript.
+    """
+    try:
+        from app.analysis import featuretext
+        return featuretext.embed_stats(_TEXT_SOURCE)
     except Exception as exc:                     # noqa: BLE001 - /metrics must always answer
         return {"error": type(exc).__name__}
 
@@ -1188,7 +1211,7 @@ def metrics():
         peak_rss_mb=wm.peak_rss_mb, ceiling_mb=wm.ceiling_mb(),
         hard_limit_mb=wm.hard_limit_mb(), parent_reserve_mb=wm.parent_reserve_mb(),
         budget_shortfall_mb=wm.budget_shortfall_mb() if wm.ceiling_mb() is not None else None,
-        store_stats=_store_stats(),
+        store_stats=_store_stats(), embed_stats=_embed_stats(),
     )
 
 

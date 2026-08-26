@@ -108,6 +108,44 @@ def test_build_metrics_store_block_is_none_when_the_store_is_not_open():
     assert m["store"] is None
 
 
+def _embed_kw(**over):
+    kw = dict(worker_state="ready", worker_rss_mb=None, parent_rss_mb=None, model_cost_mb=None,
+              governor=Governor(disabled=True), runner=_FakeRunner(), counts=Counts(),
+              recycles=0, kills={"timeout": 0, "pressure": 0, "idle": 0, "crash": 0},
+              uptime_s=1.0, clock=lambda: 1.0)
+    kw.update(over)
+    return kw
+
+
+def test_build_metrics_reports_the_text_encoder_child():
+    """The text encoder is a SECOND ~1.9 GB child and it had no block at all, which is the
+    RSS-oscillation incident set up to happen again: worker.peak_rss_mb exists because an
+    instantaneous sample made an oscillating worker look healthy. So the block reports the peak
+    beside the live reading, and it is its own block -- folding it into `worker` would make that
+    field mean two processes."""
+    stats = {"enabled": True, "state": "ready", "status": "ok", "weights_present": True,
+             "encoder": {"model": "qwen3-embedding-0.6b", "width": 256, "projection": "orth-0"},
+             "encode_width": 1024, "rss_mb": 1673.0, "peak_rss_mb": 1813.4,
+             "pending_messages": 12, "encoding": True,
+             "cached_sessions": 1, "cached_messages": 320,
+             "counts": {"encoded": 64, "reused": 256, "reads": 5, "passes": 1,
+                        "spawns": 1, "batches": 8, "failures": 0, "kills_idle": 0}}
+    m = build_metrics(embed_stats=stats, **_embed_kw())
+    assert m["embed"] == stats
+    # The peak, not only the live sample: 1813 against 1673 is the spike a poll between batches
+    # would never have seen.
+    assert m["embed"]["peak_rss_mb"] == 1813.4 and m["embed"]["rss_mb"] == 1673.0
+    assert m["embed"]["counts"]["kills_idle"] == 0
+
+
+def test_build_metrics_embed_block_absent_only_on_the_degrade_path():
+    """None only where no block could be assembled at all (pre-lifespan). "Not running" is a
+    real answer and is reported as a block that says so -- see test_embed_stats_with_no_source
+    in app/test_featurerows.py -- because a null block and a broken poll look identical."""
+    m = build_metrics(**_embed_kw())
+    assert m["embed"] is None
+
+
 def test_counts_has_the_expired_window_counter():
     """A 410 is neither load nor a defect: it is retention doing its job, and it must not be
     read as analyze_not_ingested (which means "ingest is falling behind" -- a different operator

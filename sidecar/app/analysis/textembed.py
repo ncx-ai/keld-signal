@@ -561,6 +561,12 @@ class Encoder:
         self.status = STATUS_OK
         self._unavailable_at = None
         self._last_activity = self._clock()
+        # High-water RSS for the CURRENT child generation, sampled lock-free by `observe_rss`.
+        # ⚠️ An instantaneous sample of a ~1.9 GB child is exactly what let the inference worker
+        # oscillate 2715 -> 5692 MB against a 3409 MB ceiling with `recycles == 0`
+        # (worker_manager.py's own account). Reset on `_kill` because a new child is a new
+        # generation and a peak carried across one would describe a process that no longer exists.
+        self._peak_rss = 0.0
         self.counts = {"spawns": 0, "kills_idle": 0, "failures": 0, "batches": 0}
 
     # -- lifecycle --
@@ -620,6 +626,7 @@ class Encoder:
             except Exception:
                 pass
         self._proc = self._req = self._resp = None
+        self._peak_rss = 0.0          # new generation, new high-water
         if self.state == READY:
             self.state = DOWN
 
@@ -645,8 +652,41 @@ class Encoder:
             self.state = DOWN
 
     def rss_mb(self):
+        # Snapshot `_proc`: the poll loop (an executor thread) may null it between the check and
+        # the `.pid` access, which would 500 the /metrics call it is being read for.
         p = self._proc
         return self._rss_fn(p.pid) if p else 0.0
+
+    @property
+    def peak_rss_mb(self):
+        """High-water RSS for the current child generation, or 0.0 with no child."""
+        return self._peak_rss
+
+    def observe_rss(self):
+        """Sample the child's RSS into the peak, WITHOUT taking the encoder lock.
+
+        ⚠️ **Lock-free is the whole point, not a micro-optimisation.** `encode` holds `_lock` for
+        an entire batch — measured ~92 s for 64 real messages — so a sampler that waited for the
+        lock could only ever read BETWEEN batches, right after the child had returned its heap.
+        Every in-flight spike would be invisible, which is precisely how the inference worker came
+        to oscillate 2715 -> 5692 MB against a 3409 MB ceiling while reporting `recycles == 0`
+        (see `worker_manager.observe_rss`). Reading RSS mutates nothing; only mutating the child
+        needs the lock.
+
+        Sampling is all this does — there is no ceiling and no kill here, because the child is
+        already bounded by idle-unload and by being a child at all. It exists so ~1.9 GB
+        (measured, bf16, real weights) is not invisible in /metrics.
+        """
+        p = self._proc
+        if p is None:
+            return 0.0
+        try:
+            rss = self._rss_fn(p.pid)
+        except Exception:      # noqa: BLE001 — a metrics sample must never take the poll loop down
+            return self._peak_rss
+        if rss and rss > self._peak_rss:
+            self._peak_rss = rss
+        return rss
 
     # -- dispatch --
     def encode(self, texts):
