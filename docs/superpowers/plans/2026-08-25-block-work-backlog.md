@@ -33,27 +33,35 @@ evidence counts; Atlas's own validation and storage accept them and upsert on re
 
 ## OPEN — Signal side
 
-- [ ] ⚠️ **`covers` IS EMPTY ON HISTORICAL BLOCKS, and it is the field Atlas needs.** Found on the
-      first real run, 2026-08-26. `resolve.RecentUserPromptIDs` reads only the FILE TAIL —
-      `idTailBytes = 16 MB`, seeking to `size - idTailBytes` — because it was built for "recent
-      prompts for a model's context window". But the emitter drains blocks CHRONOLOGICALLY from a
-      cursor, so on a transcript larger than 16 MB every block whose prompts fall before that
-      offset gets `covers: []`. Measured: a 20 MB transcript, 72 blocks emitted, **0 covers on all
-      of them** — their prompts sit in the first 4 MB.
-      The bigger the session, the more blocks lose their episode mapping, and `covers` is precisely
-      the Atlas display join (`covers[].prompt_id` -> `turn_key`). Unit tests cannot catch this:
-      any fixture small enough to be a fixture has its head inside the tail window.
-      Fix is a design choice, not a one-liner: give the reader the block's TIME RANGE and let it
-      seek, or drive prompt ids from the store's `prompt` index (which has every turn plus its
-      timestamp) with the daemon supplying the human-prompt filter it already owns.
+- [ ] ⚠️ **`covers` IS STILL EMPTY — the prompt ids and the store index are DIFFERENT ID SPACES.**
+      Found on the second real run, 2026-08-26, after the range fix below landed. Both sides, in one
+      view:
 
-- [x] **The emitter's loop DOES work — verified against reality 2026-08-26.** Ran an isolated
-      daemon (`KELD_HOME` + `KELD_BLOCKS=1`, 20s interval) against this repo's own transcript:
-      the sweep found closed blocks, emitted **72 blocks in 9 batches** under
-      `corr_scheme: "block"` with id `<session>@<start>`, all eight dimensions attributed
-      (including `repo`, since the daemon supplies `resolved`), schema 21.
-      Both cursor paths confirmed: against a 401 the cursor **held at 0.0 and re-offered the same
-      blocks** on the next sweep; against a 201 it **advanced** to 1787519400.
+          internal/agent/watch/filter.go:15   PromptID string `json:"promptId"`
+          sidecar/app/analysis/ingest.py:574  upsert_prompts(session, [(o.get("uuid"), ...)])
+
+      The daemon's human-prompt filter yields **`promptId`**; the store's `prompt` index records the
+      per-message **`uuid`**. So `store.prompt_time()` resolves NONE of them, the sidecar correctly
+      drops every id, and `covers` is `[]`. Verified: 48 blocks emitted, 0 with covers; the
+      transcript's first human `promptId` (`859b54df…`) has no row in a `prompt` table holding
+      32,458 of them.
+      ⚠️ **This is a specification error of mine.** The `/blocks` brief said "the daemon names the
+      prompt ids and the store times them", quoting AGENTS.md — but that line describes the TICK,
+      which passes `prompt_ts` (TIMESTAMPS, not ids), so it never had this problem.
+      ⚠️ **`promptId` is also not unique per line** — three consecutive `user` records shared
+      `859b54df…`, because it groups the messages of one prompt. Any fix that indexes it must treat
+      it as 1:many.
+      **The right fix is to stop looking it up at all.** `resolve`'s reader already parses the line,
+      so it already has the timestamp: change the contract so the emitter sends `[{id, ts}]` and the
+      sidecar drops its `prompt_time` call. That also keeps `covers[].prompt_id` in the id space
+      Atlas actually indexes — the per-prompt enrichment publishes `corr_id` from the same
+      `promptId`, which is what `turn_key` is built from.
+
+- [x] **The tail-window bug IS fixed** (`b8678e0`): `resolve.PromptIDsInRange` binary-searches the
+      start offset, forward-scans to the range end, and returns the last prompt at-or-before the
+      range start. Verified on an 86 MB live transcript — head-of-file hour ranges answer in
+      2.8-3.9 ms on ground the old tail scan could not see at all. Real and necessary; it was
+      masking the id-space bug above.
 
 - [ ] **Weight edits heavier than reads.** Spec written (`d9bb785`,
       `2026-08-25-act-weighted-paths-design.md`), unbuilt. Reads outnumber edits 3.4:1 and every
