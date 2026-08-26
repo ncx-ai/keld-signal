@@ -58,7 +58,10 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	// ReadDir chain plus .git/config for every active transcript every interval
 	// is pure waste. Same cache the ticker and the ingest signal use.
 	facts := newFactsCache()
-	em := blocks.New(dig, pub, resolve.RecentPromptIDs,
+	// resolve.PromptIDsInRange, not resolve.RecentPromptIDs: the emitter drains
+	// chronologically from a cursor, and the tail-shaped lister left `covers`
+	// empty on every block of a 20 MB transcript. See blocks.PromptIDs.
+	em := blocks.New(dig, pub, resolve.PromptIDsInRange,
 		func(path string) enrich.ResolvedFacts { return facts.forTranscript(path).resolved() },
 		actor, blocks.StatePath())
 	interval := blocks.IntervalFromEnv()

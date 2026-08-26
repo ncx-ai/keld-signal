@@ -428,9 +428,7 @@ func TestAPartialDrainAdvancesToTheLastContiguousSuccess(t *testing.T) {
 // wired.
 func TestTheEmitterSendsPromptIDsAndNothingElse(t *testing.T) {
 	dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000)}, watermark: f64(900)}
-	var askedFor string
-	lister := func(source, path, current string, n int) []string {
-		askedFor = current
+	lister := func(source, path string, from, to float64, n int) []string {
 		if n != promptIDBudget {
 			t.Errorf("budget = %d, want %d", n, promptIDBudget)
 		}
@@ -447,10 +445,55 @@ func TestTheEmitterSendsPromptIDsAndNothingElse(t *testing.T) {
 	if c := dig.lastCall(); len(c.Prompts) != 2 || c.Prompts[0] != "p1" {
 		t.Fatalf("prompts = %v", c.Prompts)
 	}
-	// The emitter has no "current" prompt — it is not answering about one — so
-	// nothing is excluded from the episode mapping.
-	if askedFor != "" {
-		t.Errorf("current prompt = %q, want empty", askedFor)
+}
+
+// ⚠️ THE RANGE, AND ONE CALL FOR IT. The lister used to be asked for a TAIL,
+// which on any transcript over 16 MB answered about the wrong part of the file
+// entirely — measured: 72 blocks, `covers` empty on all of them. It is now asked
+// for the span being drained, and asked ONCE per sweep: a per-block call would
+// multiply a 24-block drain into 24 range scans of overlapping ground for an
+// answer one scan already contains.
+func TestTheEmitterAsksForTheSweptSpanOnceNotPerBlock(t *testing.T) {
+	var all []enrich.BlockCharacterisation
+	for i := 0; i < 12; i++ {
+		all = append(all, block(float64(1000+i*1200)))
+	}
+	dig := &fakeDig{all: all, watermark: f64(900)}
+	type ask struct{ from, to float64 }
+	var asks []ask
+	lister := func(source, path string, from, to float64, n int) []string {
+		asks = append(asks, ask{from, to})
+		return []string{"p1"}
+	}
+	e := New(dig, &fakeSender{}, lister, nil, "actor", filepath.Join(t.TempDir(), "b.json"))
+	now := time.Unix(90000, 0)
+	e.advanceAt("claude_code", txPath, now)
+	e.Sweep(context.Background(), now) // seeding: asks for nothing
+	if len(asks) != 0 {
+		t.Fatalf("the seeding sweep asked for prompt ids: %v", asks)
+	}
+
+	if n := e.Sweep(context.Background(), now); n != len(all) {
+		t.Fatalf("published %d, want all %d blocks", n, len(all))
+	}
+	if len(asks) != 1 {
+		t.Fatalf("%d range calls for one sweep of %d blocks, want exactly 1", len(asks), len(all))
+	}
+	// The span asked for is the one being drained: from the cursor (no block
+	// starting earlier can come back) to now (no block can end later). It must
+	// therefore cover every block the sweep published.
+	if asks[0].from != 900 {
+		t.Errorf("range started at %v, want the cursor 900", asks[0].from)
+	}
+	if asks[0].to < all[len(all)-1].EndTS {
+		t.Errorf("range ended at %v, before the last block's end %v",
+			asks[0].to, all[len(all)-1].EndTS)
+	}
+	for _, b := range all {
+		if b.StartTS < asks[0].from || b.EndTS > asks[0].to {
+			t.Errorf("block [%v,%v] lies outside the asked range [%v,%v]",
+				b.StartTS, b.EndTS, asks[0].from, asks[0].to)
+		}
 	}
 }
 

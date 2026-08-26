@@ -65,7 +65,15 @@ func RecentPromptIDs(source, transcriptPath, currentPromptID string, n int) []st
 // ids are useful, this says how much file that is allowed to cost, and whichever
 // binds first wins. Cost, measured on a 16 MB synthetic transcript of realistic
 // shape: see TestRecentPromptIDsCostOnAFullBudgetTail.
-const idTailBytes = 16 << 20
+//
+// ⚠️ A VAR, NOT A CONST, AND ONLY SO A TEST CAN SHRINK IT. The tail is what
+// makes this scan wrong for a chronological consumer — the block emitter's
+// `covers` came back empty on every one of 72 blocks emitted from a real 20 MB
+// transcript, because their prompts sat below the window (see
+// rangeids.go). A property about a 16 MB bound cannot be tested with a fixture
+// small enough to be a fixture, so the bound is injectable and the regression
+// test shrinks it instead of writing 16 MB. Production never assigns it.
+var idTailBytes int64 = 16 << 20
 
 // RecentUserPromptIDs tail-scans the transcript (bounded window) for HUMAN
 // prompts, excludes currentPromptID, and returns up to n ids newest-first. Like

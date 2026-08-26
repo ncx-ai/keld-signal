@@ -121,7 +121,7 @@ func TestRecentPromptIDsCostOnAFullBudgetTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	blob := strings.Repeat("x", 64*1024)
-	written := 0
+	written := int64(0)
 	prompts := 0
 	for written < idTailBytes+(2<<20) {
 		// One human prompt per ~1.3 MB of agent output, the density measured on
@@ -132,7 +132,7 @@ func TestRecentPromptIDsCostOnAFullBudgetTail(t *testing.T) {
 			"message":  map[string]any{"role": "user", "content": "do the thing"},
 		})
 		n, _ := f.Write(append(line, '\n'))
-		written += n
+		written += int64(n)
 		prompts++
 		for i := 0; i < 20; i++ {
 			tr, _ := json.Marshal(map[string]any{
@@ -142,7 +142,7 @@ func TestRecentPromptIDsCostOnAFullBudgetTail(t *testing.T) {
 					"content": []any{map[string]any{"type": "tool_result", "content": blob}}},
 			})
 			n, _ := f.Write(append(tr, '\n'))
-			written += n
+			written += int64(n)
 		}
 	}
 	f.Close()

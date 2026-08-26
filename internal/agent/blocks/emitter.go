@@ -48,9 +48,10 @@
 // # WHAT CROSSES TO THE SIDECAR
 //
 // Coordinates, human prompt IDS and instants. Never text. The ids come from
-// resolve.RecentPromptIDs, which is a deliberately SEPARATE method from the one
-// that returns prompt text (resolve.RecentIDReader) — a flag on one method
-// would be a text leak one wrong argument away.
+// resolve.PromptIDsInRange, which is a deliberately SEPARATE method from the one
+// that returns prompt text (resolve.RangeIDReader) — a flag on one method
+// would be a text leak one wrong argument away. It is a RANGE question rather
+// than a tail one because this path is chronological; see the PromptIDs seam.
 package blocks
 
 import (
@@ -86,11 +87,22 @@ type Sender interface {
 	SendBlocks([]publish.BlockEnrichment) error
 }
 
-// PromptIDs lists the human prompt ids of a transcript, newest-first, bounded
-// to n. It is resolve.RecentPromptIDs in production. ⚠️ It must NEVER be
-// resolve.RecentPrompts: that returns prompt TEXT, and this value rides an HTTP
-// request to the sidecar.
-type PromptIDs func(source, transcriptPath, currentPromptID string, n int) []string
+// PromptIDs lists the human prompt ids a SPAN of a transcript holds: every one
+// whose instant falls in [fromTS, toTS], ascending, plus the last one at or
+// before fromTS, bounded to n. It is resolve.PromptIDsInRange in production.
+//
+// ⚠️ A RANGE, NOT A TAIL, and that is a measured correction rather than a
+// generalisation. It used to be resolve.RecentPromptIDs, which reads a bounded
+// FILE TAIL — right for its own consumer (a model's context window) and wrong
+// here, because this emitter drains blocks CHRONOLOGICALLY from a persisted
+// cursor. Measured on the first real run against a 20 MB transcript: 72 blocks
+// emitted, `covers` EMPTY on every one of them, because their prompts sat in the
+// first 4 MB and the tail window was the last 16. `covers[].prompt_id` is what
+// Atlas joins its display on, so an empty list is the whole feature missing.
+//
+// ⚠️ It must NEVER be resolve.RecentPrompts: that returns prompt TEXT, and this
+// value rides an HTTP request to the sidecar.
+type PromptIDs func(source, transcriptPath string, fromTS, toTS float64, n int) []string
 
 // Facts resolves the daemon-side repository facts for a transcript. The sidecar
 // is confined out of reading a repo's .git/config, so a block that could not
@@ -141,10 +153,12 @@ const batchSize = 8
 // Sized against what a sweep can EMIT rather than against a session: maxPerSweep
 // (24) blocks of at most 20 minutes is 8 hours of work, and the measured
 // density is a mean of 3.8 human prompts per hour (max 20). 64 clears the mean
-// case by two orders of magnitude and the dense case comfortably. It composes
-// with resolve's own independent byte bound on the tail scan (idTailBytes);
-// whichever binds first wins, which is the intended shape — this says how many
-// ids are useful, that says how much file reading them is allowed to cost.
+// case by two orders of magnitude and the dense case comfortably.
+//
+// It is now the ONLY bound that decides which prompts come back, because the
+// lister answers a range rather than a tail: resolve's remaining byte bound
+// (rangeLookbehindBytes) limits only how far back the single LEADING prompt is
+// hunted, never which part of the file the range can see.
 const promptIDBudget = 64
 
 // Emitter is the block path's daemon-side loop. Zero value is not usable; see
@@ -302,9 +316,20 @@ func (e *Emitter) sweepOne(tgt target, now time.Time) int {
 
 	var ids []string
 	if e.prompt != nil {
-		// currentPromptID is empty: the emitter has no "current" prompt — it is
-		// not answering about one — so nothing is excluded from the mapping.
-		ids = e.prompt(tgt.Source, tgt.Path, "", promptIDBudget)
+		// ONE CALL PER SWEEP, FOR THE SPAN BEING DRAINED — not one per block.
+		// The blocks a sweep returns are contiguous and ordered, and they all lie
+		// inside [cursor, now]: the sidecar admits a block whose START is >= the
+		// cursor, and no block can END after the clock. So one range serves the
+		// whole batch. It cannot be tightened to the exact block edges, because
+		// the ids ride the SAME request that asks for the blocks — the emitter
+		// does not know their edges yet, and a second round-trip to find out
+		// would cost more than the slightly wider range does.
+		//
+		// COST: the range scan is proportional to the span, so the steady state
+		// (a cursor one interval old) reads almost nothing, and the worst case —
+		// a transcript coming back after a long gap — reads from the cursor to
+		// the end of the file, once, and then falls back to the steady state.
+		ids = e.prompt(tgt.Source, tgt.Path, *tgt.Cursor, unixSeconds(now), promptIDBudget)
 	}
 	blocks, _, ok := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
 		ids, tgt.Cursor, now, maxPerSweep, resolved)
@@ -381,6 +406,12 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 	}
 	return sent
 }
+
+// unixSeconds is an instant in the form every seam on this path speaks — epoch
+// seconds as a float, the same shape as the cursor and as a block's
+// StartTS/EndTS. Sub-second precision is kept: a range edge is compared against
+// record timestamps that carry milliseconds.
+func unixSeconds(t time.Time) float64 { return float64(t.UnixNano()) / 1e9 }
 
 // sessionIDFor is the session identifier a block row publishes: the
 // transcript's file stem.
