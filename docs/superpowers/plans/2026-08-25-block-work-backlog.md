@@ -33,10 +33,28 @@ evidence counts; Atlas's own validation and storage accept them and upsert on re
 
 ## OPEN — Signal side
 
-- [ ] **The emitter's LOOP has never run against reality.** Its two endpoints have, and it has unit
-      tests, but the cursor/sweep/active-set behaviour has only been exercised synthetically. First
-      real run should check: the cursor advancing and resuming, a transcript leaving the active set,
-      and that a settled machine makes zero calls.
+- [ ] ⚠️ **`covers` IS EMPTY ON HISTORICAL BLOCKS, and it is the field Atlas needs.** Found on the
+      first real run, 2026-08-26. `resolve.RecentUserPromptIDs` reads only the FILE TAIL —
+      `idTailBytes = 16 MB`, seeking to `size - idTailBytes` — because it was built for "recent
+      prompts for a model's context window". But the emitter drains blocks CHRONOLOGICALLY from a
+      cursor, so on a transcript larger than 16 MB every block whose prompts fall before that
+      offset gets `covers: []`. Measured: a 20 MB transcript, 72 blocks emitted, **0 covers on all
+      of them** — their prompts sit in the first 4 MB.
+      The bigger the session, the more blocks lose their episode mapping, and `covers` is precisely
+      the Atlas display join (`covers[].prompt_id` -> `turn_key`). Unit tests cannot catch this:
+      any fixture small enough to be a fixture has its head inside the tail window.
+      Fix is a design choice, not a one-liner: give the reader the block's TIME RANGE and let it
+      seek, or drive prompt ids from the store's `prompt` index (which has every turn plus its
+      timestamp) with the daemon supplying the human-prompt filter it already owns.
+
+- [x] **The emitter's loop DOES work — verified against reality 2026-08-26.** Ran an isolated
+      daemon (`KELD_HOME` + `KELD_BLOCKS=1`, 20s interval) against this repo's own transcript:
+      the sweep found closed blocks, emitted **72 blocks in 9 batches** under
+      `corr_scheme: "block"` with id `<session>@<start>`, all eight dimensions attributed
+      (including `repo`, since the daemon supplies `resolved`), schema 21.
+      Both cursor paths confirmed: against a 401 the cursor **held at 0.0 and re-offered the same
+      blocks** on the next sweep; against a 201 it **advanced** to 1787519400.
+
 - [ ] **Weight edits heavier than reads.** Spec written (`d9bb785`,
       `2026-08-25-act-weighted-paths-design.md`), unbuilt. Reads outnumber edits 3.4:1 and every
       path touch emits at weight 1.0, so a block that skimmed twelve files and rewrote one publishes
