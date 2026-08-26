@@ -5,12 +5,64 @@ it; do not condense them.
 """
 import re
 
+# WHAT LANGUAGE a file is written in — the `lang` level, published as the `language` allocation
+# dimension. PROGRAMMING languages only.
+#
+# ⚠️ A DATA FORMAT IS NOT A PROGRAMMING LANGUAGE, and four of them used to be in here: `.md`
+# ("Markdown"), `.yaml`/`.yml` ("YAML") and `.json` ("JSON"). Measured over the corpus, the `lang`
+# level's own distribution was:
+#     TypeScript 42.5%  Python 30.0%  Go 17.8%  Markdown 7.4%  CSS 1.3%
+#     Bash 0.5%  JSON 0.2%  YAML 0.1%  JavaScript 0.0%
+# so this is in practice "Markdown is not a programming language" (7.4%), with JSON+YAML 0.3%
+# between them. They are not lost: the question they answer — what KIND of thing is this file —
+# is the `artifact` level's, and ARTIFACT_EXT already maps every one of them (`.md` -> `prose`,
+# `.json` -> `data`, `.yaml`/`.yml` -> `config`). Removing them from here therefore MOVES the
+# signal rather than dropping it, and adds no artifact kind: the vocabulary is unchanged on both
+# levels except that `language` can no longer answer "Markdown"/"YAML"/"JSON".
+#
+# ⚠️ THE ADDITIONS BELOW ARE UNVALIDATABLE ON THIS CORPUS — insurance for other users, not a
+# measured improvement here. The only extensions this corpus holds that the table did not map are
+# `.txt`(90) `.jsonl`(24) `.toml`(13) `.svg`(9) `.mjs`(8) `.xml`(6) `.html`(6) `.png`(4) `.ini`(2),
+# and all but `.mjs`/`.html` are artifact kinds rather than languages. Nothing here can be scored
+# against our own data; the claim is only that a Haskell or Elixir user's `language` dimension
+# stops reading `absent` for their whole session.
+#
+# ⚠️ AMBIGUOUS EXTENSIONS ARE DELIBERATELY ABSENT, because this table never guesses (see the
+# module docstring) and a wrong deterministic mapping is worse than a missing one — an absent
+# `language` says "we do not know", a wrong one says "MATLAB" to a room full of Objective-C:
+#     .m       Objective-C vs MATLAB (vs Mathematica)
+#     .ml      OCaml vs Standard ML
+#     .s/.asm  many assemblers, no single language
+#     .d       D vs a make depfile
+#     .v       Verilog vs Coq vs V
+# `.h` is the one ambiguous entry that STAYS (C vs C++ vs Objective-C headers). Changing it is a
+# behaviour change on real data, which this is not; it is called out here so the next reader knows
+# it was seen rather than missed.
 EXT_LANG = {".go":"Go", ".py":"Python", ".ts":"TypeScript", ".tsx":"TypeScript",
             ".js":"JavaScript", ".jsx":"JavaScript", ".rs":"Rust", ".java":"Java",
             ".rb":"Ruby", ".sql":"SQL", ".sh":"Bash", ".css":"CSS", ".scss":"CSS",
-            ".md":"Markdown", ".yaml":"YAML", ".yml":"YAML", ".json":"JSON",
             ".tf":"Terraform", ".c":"C", ".h":"C", ".cpp":"C++", ".swift":"Swift",
-            ".kt":"Kotlin", ".php":"PHP", ".cs":"C#"}
+            ".kt":"Kotlin", ".php":"PHP", ".cs":"C#",
+            # Unvalidatable on this corpus (see above). Module forms of the two JS dialects first,
+            # then languages the table simply had no entry for.
+            ".mjs":"JavaScript", ".cjs":"JavaScript", ".mts":"TypeScript", ".cts":"TypeScript",
+            ".html":"HTML", ".htm":"HTML", ".sass":"CSS", ".less":"CSS",
+            ".ex":"Elixir", ".exs":"Elixir", ".erl":"Erlang", ".hs":"Haskell", ".lua":"Lua",
+            ".jl":"Julia", ".dart":"Dart", ".scala":"Scala", ".clj":"Clojure",
+            ".cljs":"Clojure", ".zig":"Zig", ".ps1":"PowerShell", ".r":"R", ".pl":"Perl",
+            ".groovy":"Groovy", ".f90":"Fortran", ".sol":"Solidity",
+            ".vue":"Vue", ".svelte":"Svelte", ".proto":"Protobuf",
+            ".graphql":"GraphQL", ".gql":"GraphQL"}
+
+# WHAT MAKES A BARE TOKEN READ AS A FILE, which is a WIDER question than "what language is this"
+# and must not narrow when EXT_LANG does. `paths.PATH_TOKEN` matches an extensionless-looking word
+# only if it carries a known extension, and it was built off EXT_LANG's keys — so dropping the
+# four data formats above would have silently stopped `README.md`, `config.yaml` and `pkg.json`
+# from being recognised as paths at all when mentioned without a slash. That is a `file`/`dir`
+# inventory regression with no relation to what the `language` dimension should say, so the two
+# questions are now separate tables and this one keeps every extension the old EXT_LANG had.
+DATA_EXT = (".md", ".yaml", ".yml", ".json")
+PATH_EXT = tuple(EXT_LANG) + DATA_EXT
 
 # WHAT IS PHYSICALLY BEING DONE, as distinct from what it is being done to. `tool` says Bash 55%,
 # which is an implementation detail; the physical act — reading, authoring, running, searching,
@@ -209,11 +261,23 @@ ARTIFACT_EXT = {
     "image": (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".heic", ".ico"),
     "notebook": (".ipynb",),
     "data": (".json", ".jsonl", ".parquet", ".db", ".sqlite", ".sql", ".ndjson", ".avro"),
-    "prose": (".md", ".mdx", ".rst", ".txt", ".adoc"),
-    "web": (".html", ".htm", ".css", ".scss", ".less"),
-    "config": (".yaml", ".yml", ".toml", ".ini", ".cfg", ".env", ".lock", ".properties"),
+    "prose": (".md", ".markdown", ".mdx", ".rst", ".txt", ".adoc"),
+    "web": (".html", ".htm", ".css", ".scss", ".sass", ".less"),
+    "config": (".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".lock",
+               ".properties"),
     "markup": (".xml", ".xsd", ".xsl"),
 }
+# ⚠️ THE FOUR EXTENSIONS EXT_LANG GAVE UP LAND HERE, and every one of them already had a home
+# above — this table is where "what kind of thing is this file" was always answered. No kind was
+# added, so the published `output_type` vocabulary is unchanged.
+#   `.md` -> `prose`, NOT `document`: `document` is meaningfully the OFFICE word-processor kind
+#   (.docx/.doc/.odt/.rtf/.pages), it is the kind ARTIFACT_DIR's `word/document` shape resolves an
+#   unpacked .docx to, and TOOLCHAIN_EXE points pandoc at it. Filing a README with a Word file
+#   would conflate the two and make `document` unreadable; `prose` already means exactly the
+#   markup-free-writing kind and already held `.rst`/`.txt`/`.adoc`.
+#   `.json`/`.jsonl` -> `data`, NOT `config`: they sit with `.parquet`/`.db`/`.sql`, which is what
+#   they are; a package.json is the exception, not the rule, and `config` is for the declarative
+#   formats (`.yaml`/`.toml`/`.ini`) that have no other use.
 # An unpacked office document is a directory shape, not an extension: this is what identifies the
 # deck when every touched file is a bare slide XML.
 ARTIFACT_DIR = {"presentation": ("ppt/slides", "ppt/", "/ppt"),
@@ -235,7 +299,11 @@ TOOLCHAIN_EXE = {
 }
 ARTIFACT_SKILL = {"pptx": "presentation", "xlsx": "spreadsheet", "docx": "document",
                   "pdf": "pdf", "dataviz": "chart", "artifact": "web"}
-CODE_EXT = tuple(e for e in EXT_LANG if e not in (".md", ".json", ".yaml", ".yml"))
+# Every language extension is code. This used to subtract `.md`/`.json`/`.yaml`/`.yml` because
+# EXT_LANG claimed them as languages; they are no longer language entries at all, so the
+# subtraction is now empty by construction rather than by list. (It was already inert in
+# `artifacts_for`, which consults ARTIFACT_EXT first and finds all four there.)
+CODE_EXT = tuple(EXT_LANG)
 
 
 def toolchain_for(exe):

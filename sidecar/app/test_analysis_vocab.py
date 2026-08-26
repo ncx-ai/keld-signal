@@ -2,7 +2,8 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.analysis.vocab import (action_for, toolchain_for, artifacts_for, mcp_provider,
-                                ACTIONS, EXE_ACTION, TOOL_ACTION, EXT_LANG, CODE_EXT)
+                                ACTIONS, EXE_ACTION, TOOL_ACTION, EXT_LANG, CODE_EXT,
+                                ARTIFACT_EXT, DATA_EXT, PATH_EXT)
 
 
 def test_a_directory_shape_beats_an_extension():
@@ -152,6 +153,91 @@ def test_code_ext_excludes_prose_and_config():
     for e in (".md", ".json", ".yaml", ".yml"):
         assert e not in CODE_EXT
     assert ".go" in CODE_EXT and ".go" in EXT_LANG
+
+
+# --- EXT_LANG: a data format is not a programming language ---------------------------------
+
+
+def test_a_data_format_is_not_a_programming_language():
+    """Measured over the corpus, the `lang` level read TypeScript 42.5% / Python 30.0% / Go 17.8%
+    / Markdown 7.4% / CSS 1.3% / Bash 0.5% / JSON 0.2% / YAML 0.1%. Markdown is the whole of the
+    defect and JSON+YAML are 0.3% between them; none of the four is a language."""
+    for e in DATA_EXT:
+        assert e not in EXT_LANG, e
+
+
+def test_the_kind_question_is_answered_by_the_artifact_level_instead():
+    """The signal MOVES rather than disappearing, and needed no new artifact kind: every one of
+    the four already had a home in ARTIFACT_EXT."""
+    assert artifacts_for(ext=".md") == ["prose"]
+    assert artifacts_for(ext=".markdown") == ["prose"]
+    assert artifacts_for(ext=".txt") == ["prose"]
+    assert artifacts_for(ext=".rst") == ["prose"]
+    assert artifacts_for(ext=".adoc") == ["prose"]
+    assert artifacts_for(ext=".json") == ["data"]
+    assert artifacts_for(ext=".jsonl") == ["data"]
+    assert artifacts_for(ext=".yaml") == ["config"]
+    assert artifacts_for(ext=".yml") == ["config"]
+    assert artifacts_for(ext=".toml") == ["config"]
+    assert artifacts_for(ext=".ini") == ["config"]
+    assert artifacts_for(ext=".cfg") == ["config"]
+    assert artifacts_for(ext=".conf") == ["config"]
+    assert artifacts_for(ext=".xml") == ["markup"]
+
+
+def test_prose_is_not_the_office_document_kind():
+    """`document` is the word-processor kind — the one `word/document` resolves an unpacked .docx
+    to and the one pandoc is filed under. A README filed there would make it unreadable."""
+    assert ".md" not in ARTIFACT_EXT["document"]
+    assert artifacts_for(ext=".docx") == ["document"]
+    assert artifacts_for(rel="unpacked/word/document.xml", ext=".xml") == ["document"]
+
+
+def test_a_path_is_still_a_path_after_the_four_left_the_language_table():
+    """The regression this split exists to prevent: `paths.PATH_TOKEN` recognises a bare token as
+    a file only by its extension, and it was built off EXT_LANG's keys. Whether a token is a FILE
+    is a wider question than what language it is written in."""
+    for e in DATA_EXT:
+        assert e in PATH_EXT, e
+    for e in EXT_LANG:
+        assert e in PATH_EXT, e
+
+
+def test_the_added_languages_are_insurance_not_a_measured_win():
+    """⚠️ UNVALIDATABLE on our corpus: the only unmapped extensions it holds are `.txt`(90)
+    `.jsonl`(24) `.toml`(13) `.svg`(9) `.mjs`(8) `.xml`(6) `.html`(6) `.png`(4) `.ini`(2), and all
+    but `.mjs`/`.html` are artifact kinds. These entries stop a Haskell or Elixir user's
+    `language` dimension from reading `absent` for a whole session; nothing more is claimed."""
+    for ext, lang in ((".mjs", "JavaScript"), (".cjs", "JavaScript"), (".mts", "TypeScript"),
+                      (".cts", "TypeScript"), (".html", "HTML"), (".htm", "HTML"),
+                      (".ex", "Elixir"), (".exs", "Elixir"), (".erl", "Erlang"),
+                      (".hs", "Haskell"), (".lua", "Lua"), (".jl", "Julia"), (".dart", "Dart"),
+                      (".scala", "Scala"), (".clj", "Clojure"), (".cljs", "Clojure"),
+                      (".zig", "Zig"), (".ps1", "PowerShell"), (".r", "R"), (".pl", "Perl"),
+                      (".groovy", "Groovy"), (".f90", "Fortran"), (".sol", "Solidity"),
+                      (".vue", "Vue"), (".svelte", "Svelte"), (".proto", "Protobuf"),
+                      (".graphql", "GraphQL"), (".gql", "GraphQL"),
+                      (".sass", "CSS"), (".less", "CSS")):
+        assert EXT_LANG[ext] == lang, ext
+
+
+def test_an_ambiguous_extension_is_absent_rather_than_guessed():
+    """A wrong deterministic mapping is worse than a missing one: an absent `language` says "we do
+    not know", a wrong one says MATLAB to a room full of Objective-C. `.h` is the one ambiguous
+    entry that stays, because changing it is a behaviour change on real data."""
+    for e in (".m", ".ml", ".s", ".asm", ".d", ".v"):
+        assert e not in EXT_LANG, e
+    assert EXT_LANG[".h"] == "C"
+
+
+def test_a_new_language_that_is_also_a_web_or_data_file_keeps_its_artifact_kind():
+    """`artifacts_for` consults ARTIFACT_EXT before the code fallback, so adding `.html` to the
+    language table must not turn a web file into generic `code`."""
+    assert artifacts_for(ext=".html") == ["web"]
+    assert artifacts_for(ext=".sass") == ["web"]
+    assert artifacts_for(ext=".sql") == ["data"]
+    assert artifacts_for(ext=".mjs") == ["code"]
+    assert artifacts_for(ext=".vue") == ["code"]
 
 
 def test_actions_enumerates_everything_action_for_can_emit():

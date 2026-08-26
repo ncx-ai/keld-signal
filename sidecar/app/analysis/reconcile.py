@@ -12,7 +12,7 @@ defect; do not condense them.
 import collections
 import os
 
-from app.analysis.vocab import EXT_LANG, artifacts_for
+from app.analysis.vocab import EXT_LANG, PATH_EXT, artifacts_for
 
 
 def reconcile(pending, component_depth):
@@ -65,7 +65,10 @@ def reconcile(pending, component_depth):
     for base, rel, from_input, root in pending:
         repo = base[2]
         ext0 = os.path.splitext(rel)[1].lower()
-        looks_file = from_input or ext0 in EXT_LANG or "." in os.path.basename(rel)
+        # PATH_EXT, not EXT_LANG: "is this token a file" must not narrow because `.md`/`.json`/
+        # `.yaml` stopped being LANGUAGES. (The basename fallback already covered them, so this is
+        # the same answer by the intended route rather than by accident.)
+        looks_file = from_input or ext0 in PATH_EXT or "." in os.path.basename(rel)
         if not from_input and rel not in declared.get((root, repo), ()):
             def same_machine(cands):
                 return {c for c in cands if c[0] == root}
@@ -106,6 +109,9 @@ def reconcile(pending, component_depth):
         if is_file:
             rows.append(b + ("ref", "file", rel, 1.0))
             rows.append(b + ("ref", "ext", ext or "(no extension)", 1.0))
+            # A data format emits NO `lang` row and one `artifact` row: `.md` is `prose`, `.json`
+            # is `data`, `.yaml` is `config`. `lang` answers what language a program is written
+            # in, and Markdown is not one — see EXT_LANG's own comment for the measurement.
             if ext in EXT_LANG:
                 rows.append(b + ("ref", "lang", EXT_LANG[ext], 1.0))
             for kind in artifacts_for(ext=ext, rel=rel):

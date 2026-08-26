@@ -10,11 +10,14 @@ declared paths) that both of those, and `shell.bash_refs`, build on.
 import os
 import re
 
-from app.analysis.vocab import EXT_LANG
+from app.analysis.vocab import PATH_EXT
 
 WORKTREE = re.compile(r"/\.claude/worktrees/[^/]+")
+# PATH_EXT, not EXT_LANG: whether a bare token is a FILE is a wider question than what language it
+# is written in, and the two tables split when `.md`/`.yaml`/`.yml`/`.json` stopped being claimed
+# as languages. Reading this off EXT_LANG would have silently stopped `README.md` being a path.
 PATH_TOKEN = re.compile(r"[\w.\-/]*/[\w.\-/]+|[\w.\-]+\.(?:" +
-                        "|".join(e[1:] for e in EXT_LANG) + r")\b")
+                        "|".join(e[1:] for e in PATH_EXT) + r")\b")
 PLAUSIBLE_PATH = re.compile(r"^(?:[\w.@+\-]+/)+[\w.@+\-]*[A-Za-z][\w.@+\-]*\.[A-Za-z0-9]{1,6}$")
 
 
