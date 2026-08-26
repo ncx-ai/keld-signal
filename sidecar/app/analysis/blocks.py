@@ -36,8 +36,9 @@ nothing missing and nothing degraded. And `blocks.py` no longer imports `dynamic
 `EwmaSizer` remains in use there for SLICE sizing, which is a separate, measured, shipped use that
 this ablation does not touch.
 
-Measured end-reason mix at the SHIPPED 20-minute cap (496 sessions, `BLOCK-BOUND-2-RESULTS.md`,
-arm `time_idle` n=20, detector ablated): **budget 48.5%, session_end 33.0%, idle 18.5%**. Quoted at
+Measured end-reason mix at the SHIPPED 20-minute cap (496 sessions,
+arm `time_idle` n=20, detector ablated -- the mix is tabulated in `BLOCK-BOUND-2-ABLATION.md`):
+**budget 48.47%, session_end 33.02%, idle 18.51%** over 1,502 blocks. Quoted at
 n=20 rather than at any other row of the sweep because that is the cap this module ships; a figure
 from a cap the code does not use is misleading even when the number itself is right.
 
