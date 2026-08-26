@@ -1327,7 +1327,7 @@ class Store:
         return [ts for (ts,) in self._conn().execute(q + " ORDER BY ts", args)]
 
     def has_magnitudes(self, session, start, end):
-        """Does this window carry a magnitude of ANY kind?
+        """Does this window carry a COST magnitude — one of `magnitude.KINDS`?
 
         The gate between a truthful "authored 0 bytes" and an honest "no record" -- see
         `magnitude.authored`. It is a separate question from `turn_magnitudes(kind=EDIT_BYTES)`
@@ -1335,14 +1335,24 @@ class Store:
         ingest (see this module's 5 -> 6 schema note), and reporting 0 bytes authored on the
         strength of never having looked is precisely the plausible wrong number this series keeps
         paying for.
+
+        ⚠️ IT IS SCOPED TO THE COST KINDS, AND USED TO SAY "ANY KIND". `turn_magnitude` is a
+        deliberate extension point -- its `kind` is a dimension, so a new magnitude is data
+        rather than DDL -- and the capture kinds (`magnitude.CAPTURE_KINDS`: character counts,
+        the token split, tool outcomes) now live in the same table. Unscoped, this question would
+        be answered "yes, we looked" by the mere presence of a message, on a window where nothing
+        was ever costed. The predicate is what keeps a published field from moving because an
+        unrelated row arrived.
         """
         start, end = _epoch(start), _epoch(end)
         if not end > start:
             return False
-        return self._conn().execute("""
+        holes = ",".join("?" * len(magnitude.KINDS))
+        return self._conn().execute(f"""
             SELECT 1 FROM turn_magnitude
-            WHERE session = ? AND ts >= ? AND ts < ? LIMIT 1""",
-            (session, start, end)).fetchone() is not None
+            WHERE session = ? AND ts >= ? AND ts < ? AND kind IN ({holes})
+            LIMIT 1""",
+            (session, start, end) + tuple(magnitude.KINDS)).fetchone() is not None
 
     def turn_magnitudes(self, session, start, end, kind=magnitude.REQUEST_TOKENS):
         """Every turn's magnitude in `[start, end)` as `[(ts, value), ...]`, ascending.

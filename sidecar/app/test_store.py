@@ -445,6 +445,28 @@ def test_has_magnitudes_separates_no_record_from_no_edits():
         st.close()
 
 
+def test_has_magnitudes_ignores_non_cost_kinds():
+    """`has_magnitudes` gates `magnitude.authored`'s "no record" answer, which reaches the
+    published `authored_status`. It must answer for COST kinds only.
+
+    ⚠️ Without the kind filter, storing any other magnitude — a character count, a token split,
+    a tool-error count — would flip a window from "we never looked" to "we looked and it was
+    zero", on windows where nothing was ever costed. That is a published field changing because
+    an unrelated table gained rows.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        capture = (round(T0 + 5, 1), SESSION, None, None, False, "mag", "say_asst", "", 1873.0)
+        st.upsert_events(SESSION, [capture], source_line=1)
+        assert st.has_magnitudes(SESSION, T0 - 1, T0 + 3600) is False, \
+            "a non-cost magnitude must not answer the authored-record question"
+        cost = (round(T0 + 6, 1), SESSION, None, None, False, "mag", "edit_bytes", "", 42.0)
+        st.upsert_events(SESSION, [cost], source_line=2)
+        assert st.has_magnitudes(SESSION, T0 - 1, T0 + 3600) is True, \
+            "a cost magnitude must still answer it"
+        st.close()
+
+
 def test_the_database_is_owner_only():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "state", "refseries.db")
