@@ -1199,7 +1199,7 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 	sup := NewSupervisor(
 		func(p int) (*exec.Cmd, error) {
 			cmd := exec.CommandContext(ctx, binPath, fmt.Sprintf("--port=%d", p))
-			cmd.Env = sidecarEnv(os.Environ(), modelDir, watch.AnalyzeRoots())
+			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(), watch.AnalyzeRoots())
 			return cmd, nil
 		},
 		scPort,

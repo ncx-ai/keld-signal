@@ -118,6 +118,29 @@ func startFeatureEmitter(ctx context.Context, src features.Source, ingestEndpoin
 	}
 	go em.Run(ctx, interval)
 	go rep.Run(ctx, flush)
+
+	// THE TEXT ENCODER'S WEIGHTS ARE OWED TO THIS HOOK, and to nothing else.
+	//
+	// The emitter's own comment says Advance "is the emitter's ONLY trigger for
+	// adding work", which makes it the precise analogue of Worker's warmup call
+	// for GLiNER2: the one signal that means something actually wants what the
+	// weights produce. So the fetch hangs off it. A machine with KELD_TEXTEMBED
+	// off gets a nil provisioner and never fetches; a machine whose org has the
+	// `features` toggle off gets one that declines at demand time and can still
+	// be switched on later in the same run; a machine where no eligible
+	// transcript ever grows never fetches either, which is correct — no message
+	// wanted a vector.
+	//
+	// ⚠️ Wrapping Advance rather than sweeping is deliberate: NOTHING in the
+	// sweep, the flush or any sidecar request may wait on this download, and the
+	// only way to be sure of that is for the trigger to be fire-and-forget on a
+	// path that already forbids blocking. See encoder_on_demand.go.
+	if enc := newEncoderProvisioner(ctx, enabled, emitter); enc != nil {
+		return func(source, path string) {
+			em.Advance(source, path)
+			enc.demand()
+		}
+	}
 	return em.Advance
 }
 
