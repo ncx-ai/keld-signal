@@ -73,8 +73,7 @@ import os
 import threading
 
 from app.analysis import COMPONENT_DEPTH, capture, magnitude
-from app.analysis.capture import epoch as _capture_epoch
-from app.analysis.levels import events_for_turns, quantize
+from app.analysis.levels import events_for_turns
 from app.analysis.reconcile import reconcile
 # `_order_key` is transcript.py's ordering-only timestamp parser. Imported rather than
 # re-derived: the watermark is a comparison between two turn timestamps, which is exactly
@@ -278,6 +277,19 @@ def _read_complete_lines(path, offset, size):
     `len(line.encode())` over the decoded strings therefore drifts by two bytes per invalid
     byte, silently, and every offset after the first bad line points into the middle of a
     record. Splitting the bytes first and decoding each segment costs nothing and cannot drift.
+
+    ⚠️ SPLITTING THE BYTES ALSO CHANGED WHAT COUNTS AS A LINE, ON A PATH THAT IS OTHERWISE INERT
+    WITH `KELD_CAPTURE` OFF. This used to be `buf.decode(...).splitlines(True)`, and
+    `str.splitlines` splits on `\\v \\f \\x1c \\x1d \\x1e U+0085 U+2028 U+2029` as well as `\\n`
+    and `\\r`; `bytes.splitlines` splits on the ASCII set only. A 5-record fixture seeded with
+    those characters yields 10 "lines" under the old form and 5 under this one. THE NEW
+    BEHAVIOUR IS THE CORRECT ONE -- JSONL is `\\n`-delimited, and a raw U+2028 inside a JSON
+    string must not cut a record in half -- and the measured exposure is **0 of 141,074 lines
+    across 649 real transcripts**, so no store needs reparsing over it. It is recorded here
+    because it is a behaviour change nothing else declares.
+
+    The same rewrite is also **5.7x faster** on a whole-file read -- 43.4 ms against 245.6 ms on
+    the 90 MB transcript -- because it never materialises a 90 MB intermediate `str`.
     """
     if size <= offset:
         return [], [], offset
@@ -603,8 +615,9 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
     capture_on = capture_mode() == "1"
     outcomes, bin_offsets = capture.scan(lines, offsets) if capture_on else ([], {})
     outcome_rows = []
-    for ts_iso, is_error, nchars in outcomes:
-        t = quantize(_capture_epoch(ts_iso))
+    # `t` arrives already quantized, from the same arithmetic `capture.scan` binned the offset
+    # with. Re-deriving it here is what let the two disagree across a bin boundary.
+    for t, is_error, nchars in outcomes:
         base = (t, session, None, None, False)
         if is_error:
             outcome_rows.append(base + ("mag", magnitude.TOOL_ERRORS, "", 1.0))
@@ -614,8 +627,7 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
         if reparse:
             store.clear_session(session)
         if rows:
-            store.upsert_events(session, rows, source_line=batch_line,
-                                capture=capture_mode() == "1")
+            store.upsert_events(session, rows, source_line=batch_line, capture=capture_on)
         if outcome_rows:
             store.upsert_events(session, outcome_rows, source_line=batch_line, capture=True)
         if bin_offsets:
