@@ -276,6 +276,104 @@ def test_ref_rows_are_unchanged_by_the_new_kind():
     assert all(r[5] in ("ref", "say", "tok", "mag") for r in rows)
 
 
+# --- the CAPTURE kinds -----------------------------------------------------------------------
+
+def _capture_turns():
+    """A turn of each shape the capture kinds are derived from: a real user message, a
+    slash-command echo, an assistant message with a THINKING block, and usage for the token
+    split."""
+    def ts(dt):
+        import datetime
+        return (datetime.datetime.fromtimestamp(T0 + dt, datetime.timezone.utc)
+                .isoformat().replace("+00:00", "Z"))
+    return [
+        {"type": "user", "timestamp": ts(0), "uuid": "u1", "cwd": "/home/x/proj",
+         "message": {"role": "user", "content": "fix the retry cap"}},
+        {"type": "user", "timestamp": ts(1), "uuid": "u2", "cwd": "/home/x/proj",
+         "message": {"role": "user", "content": "<command-name>/login</command-name>"}},
+        {"type": "assistant", "timestamp": ts(2), "uuid": "a1", "requestId": "req_1",
+         "cwd": "/home/x/proj",
+         "message": {"role": "assistant", "model": "claude-opus-5", "content": [
+             {"type": "thinking", "thinking": "", "signature": "sig"},
+             {"type": "text", "text": "Bumping it."}],
+             "usage": {"input_tokens": 100, "output_tokens": 10,
+                       "cache_read_input_tokens": 1000,
+                       "cache_creation_input_tokens": 40}}},
+    ]
+
+
+def _capture_kinds_of(rows):
+    """The kinds `store._aggregate_mag` would DERIVE from these rows -- the f-string, not the
+    constants, because the whole point is that the two can drift apart."""
+    return {f"{r[5]}_{r[6]}" for r in rows if r[5] in ("say", "tok")}
+
+
+def test_the_derived_capture_kinds_are_pinned_to_the_constants():
+    """⚠️ `CAPTURE_KINDS` IS DOCUMENTATION UNLESS SOMETHING PINS IT. Seven of its members are
+    referenced by no production code at all: the stored kind is built by `_aggregate_mag` as
+    `f"{row kind}_{row level}"` out of `levels.py`'s level strings, so renaming `asst_think` to
+    `think` there would write `say_think`, leave `SAY_THINK` reading `"say_asst_think"`, break
+    nothing, and give step 2 a feature column of all zeros.
+
+    This is the same assertion `test_no_magnitude_row_carries_a_ref` already makes for the cost
+    kinds, one family across.
+    """
+    rows, _pending, _n = events_for_turns(
+        _capture_turns(), "/home/x/.claude/projects/proj/sess.jsonl",
+        "/home/x/.claude/projects", ("/home/x/proj",), None,
+        evidence=new_evidence(), session=SESSION)
+    derived = _capture_kinds_of(rows)
+    assert derived <= set(magnitude.CAPTURE_KINDS), derived - set(magnitude.CAPTURE_KINDS)
+    # And the fixture must actually exercise every kind `events_for_turns` can produce, or the
+    # subset above is satisfied by an empty set.
+    # `SAY_THINK` is emitted here and still never STORED -- its value is 0 and `_aggregate_mag`
+    # drops zeros. That is the whole of the I2 finding, pinned in the next test.
+    assert derived == {magnitude.SAY_USER, magnitude.SAY_USER_ECHO, magnitude.SAY_ASST,
+                       magnitude.SAY_THINK, magnitude.SAY_THINK_BLOCKS, magnitude.TOK_OUT,
+                       magnitude.TOK_IN_FRESH, magnitude.TOK_IN_CACHED}, derived
+
+
+def test_thinking_incidence_is_recorded_and_thinking_LENGTH_is_not_obtainable():
+    """⚠️ THE SPEC CLAIMED `asst_think` "already carries a real count". IT DOES NOT.
+
+    Every thinking block a platform writes carries a signature and an EMPTY `thinking` string --
+    `text.think_blocks` measured 9,148 with none, and this review re-measured 7,648 blocks across
+    the local corpus with 0 of nonzero length. So the length row is always 0, `_aggregate_mag`
+    drops zeros, and `say_asst_think` is never stored. The COUNT is obtainable and is the signal
+    `text.py` names (`asst_think_msgs`); it is recorded as its own kind.
+
+    Both rows are asserted here: the length one because keeping it is a decision (a producer that
+    ever writes thinking text populates it with no code change), the count one because it is the
+    thing the zero-drop was destroying.
+    """
+    rows, _pending, _n = events_for_turns(
+        _capture_turns(), "/home/x/.claude/projects/proj/sess.jsonl",
+        "/home/x/.claude/projects", ("/home/x/proj",), None,
+        evidence=new_evidence(), session=SESSION)
+    lens = [r for r in rows if r[5] == "say" and r[6] == "asst_think"]
+    blocks = [r for r in rows if r[5] == "say" and r[6] == "asst_think_blocks"]
+    assert [r[8] for r in lens] == [0], lens
+    assert [r[8] for r in blocks] == [1], blocks
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _store(tmp)
+        st.upsert_events(SESSION, rows, source_line=1, capture=True)
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 100, kind=magnitude.SAY_THINK) == [], \
+            "a zero-length thinking row must not be stored -- zero is the absence of a magnitude"
+        got = st.turn_magnitudes(SESSION, T0 - 1, T0 + 100, kind=magnitude.SAY_THINK_BLOCKS)
+        assert [v for _ts, v in got] == [1.0], got
+        st.close()
+
+
+def test_the_capture_kinds_from_the_raw_line_pass_are_named_too():
+    """`tool_errors`/`tool_result_chars` are built in `ingest.py` FROM the constants rather than
+    derived from a level string, so they cannot drift the same way -- but they are members of the
+    same tuple and a reader checking the tuple should find them accounted for."""
+    assert magnitude.TOOL_ERRORS in magnitude.CAPTURE_KINDS
+    assert magnitude.TOOL_RESULT_CHARS in magnitude.CAPTURE_KINDS
+    assert not set(magnitude.CAPTURE_KINDS) & set(magnitude.KINDS), \
+        "a capture kind sharing a name with a cost kind would silently join has_magnitudes"
+
+
 # --- the store -------------------------------------------------------------------------------
 
 def _store(tmp):
@@ -482,6 +580,46 @@ def test_magnitudes_do_not_survive_the_retention_floor():
         assert out["magnitude_pruned"] == 1, out
         left = st._conn().execute("SELECT value FROM turn_magnitude").fetchall()
         assert left == [(7.0,)], left
+        st.close()
+
+
+def test_bin_offsets_do_not_survive_the_retention_floor_either():
+    """`bin_offset` rode the same argument in and must ride the same sweep out: an offset into a
+    span whose events are pruned is a seek into a window `/analyze` refuses (410). Left alone it
+    is a table with no bound on its growth -- ~1 MB/year, bookkeeping rather than risk, but the
+    pass-4 comment claims `turn_magnitude` was the only such table and that has to stay true.
+
+    A bin is swept only when the WHOLE of it is below the floor: the offset of a bin the floor
+    cuts through still anchors that bin's surviving tail.
+    """
+    from app.analysis.store import BIN_SECONDS
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _store(tmp)
+        old = T0 - 500 * 86400.0
+        st.upsert_events(SESSION, [(round(old, 1), SESSION, "r", "main", False, "ref",
+                                    "workspace", "a", 1.0)], source_line=1)
+        st.upsert_events(SESSION, [_ref(0, "workspace", "b")], source_line=2)
+        # Three bins: one wholly below the floor, one the floor lands ON (its events at the
+        # floor exactly are pruned, but its span reaches above it), and one above.
+        old_bin = int(old // BIN_SECONDS) * BIN_SECONDS
+        new_bin = int(T0 // BIN_SECONDS) * BIN_SECONDS
+        st.upsert_bin_offsets(SESSION,
+                              {old_bin - BIN_SECONDS: 0, old_bin: 512, new_bin: 4096})
+        out = st.enforce_retention(now=T0, force=True)
+        assert out["bin_offset_pruned"] == 1, out
+        assert st.all_bin_offsets(SESSION) == {old_bin: 512, new_bin: 4096}, \
+            st.all_bin_offsets(SESSION)
+        st.close()
+
+
+def test_metrics_reports_the_bin_offset_row_count():
+    """An operator who cannot see a table's row count cannot see it grow -- and with capture off
+    the 0 is itself the answer to "is this store capturing"."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _store(tmp)
+        st.upsert_bin_offsets(SESSION, {1786462800: 13931})
+        rows = st.store_stats(ttl=0)["rows"]
+        assert rows["bin_offset"] == 1, rows
         st.close()
 
 

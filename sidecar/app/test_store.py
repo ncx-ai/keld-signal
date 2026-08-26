@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.analysis import window, workstreams
+from app.analysis import magnitude, window, workstreams
 from app.analysis.store import (BIN_SECONDS, PRECOMPUTED_LEVELS, default_path, open_store)
 
 SESSION = "3f1a9c2b"
@@ -401,17 +401,20 @@ def test_capture_routes_say_and_tok_into_turn_magnitude():
     with tempfile.TemporaryDirectory() as tmp:
         st = open_store(os.path.join(tmp, "off.db"))
         st.upsert_events(SESSION, rows, source_line=1)
-        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60, kind="say_user") == [], \
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60,
+                                  kind=magnitude.SAY_USER) == [], \
             "capture defaults OFF and must change nothing"
         st.close()
 
         st = open_store(os.path.join(tmp, "on.db"))
         st.upsert_events(SESSION, rows, source_line=1, capture=True)
-        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60, kind="say_user") == \
-            [(round(T0 + 5, 1), 1873.0)]
-        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60, kind="say_asst_think") == \
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60,
+                                  kind=magnitude.SAY_USER) == [(round(T0 + 5, 1), 1873.0)]
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60,
+                                  kind=magnitude.SAY_THINK) == \
             [(round(T0 + 5, 1), 1000.0)], "same kind at one instant must SUM"
-        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60, kind="tok_in_cached") == \
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60,
+                                  kind=magnitude.TOK_IN_CACHED) == \
             [(round(T0 + 5, 1), 257333.0)]
         st.close()
 
@@ -516,11 +519,13 @@ def test_has_magnitudes_ignores_non_cost_kinds():
     """
     with tempfile.TemporaryDirectory() as tmp:
         st = open_store(os.path.join(tmp, "s.db"))
-        capture = (round(T0 + 5, 1), SESSION, None, None, False, "mag", "say_asst", "", 1873.0)
+        capture = (round(T0 + 5, 1), SESSION, None, None, False, "mag",
+                   magnitude.SAY_ASST, "", 1873.0)
         st.upsert_events(SESSION, [capture], source_line=1)
         assert st.has_magnitudes(SESSION, T0 - 1, T0 + 3600) is False, \
             "a non-cost magnitude must not answer the authored-record question"
-        cost = (round(T0 + 6, 1), SESSION, None, None, False, "mag", "edit_bytes", "", 42.0)
+        cost = (round(T0 + 6, 1), SESSION, None, None, False, "mag",
+                magnitude.EDIT_BYTES, "", 42.0)
         st.upsert_events(SESSION, [cost], source_line=2)
         assert st.has_magnitudes(SESSION, T0 - 1, T0 + 3600) is True, \
             "a cost magnitude must still answer it"
