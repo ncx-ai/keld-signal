@@ -588,7 +588,8 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
         if reparse:
             store.clear_session(session)
         if rows:
-            store.upsert_events(session, rows, source_line=batch_line)
+            store.upsert_events(session, rows, source_line=batch_line,
+                                capture=capture_mode() == "1")
         # The turn-id index, in the same transaction as the events it points at: an id that
         # resolves to a window whose events were never committed is the one state a reader
         # could not detect. `iter_turns`/`turns_in` is the filter `analyze.py`'s old scan used,

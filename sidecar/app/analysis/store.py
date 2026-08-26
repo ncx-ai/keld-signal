@@ -617,18 +617,21 @@ class Store:
 
     # --- ingest --------------------------------------------------------------------------
 
-    def upsert_events(self, session, rows, source_line=0):
+    def upsert_events(self, session, rows, source_line=0, capture=False):
         """Store one batch of reference events and magnitudes, and re-roll the bins it touches.
 
         `rows` are `levels.events_for_turns` / `reconcile.reconcile` output — the 9-tuple
         `(t, session, repo, branch, sidechain, kind, level, ref, n)`. Rows are ROUTED by kind and
         anything unrecognised is DROPPED here rather than rejected: the natural call is
         `upsert_events(s, rows + recon_rows)`, and making the caller filter would copy this
-        module's knowledge of the tuple layout into every call site. `ref` rows become `event`
-        rows; `mag` rows become `turn_magnitude` rows (`level` is the magnitude's `kind`, `ref` is
-        empty, `n` is the number). What is dropped is `say` (a character count of message text)
-        and `tok` (raw token counts, superseded by the price-weighted `mag`/tokens magnitude —
-        see `app/analysis/magnitude.py` for why their sum is not a cost).
+        module's knowledge of the tuple layout into every call site.
+
+        `ref` rows become `event` rows; `mag` rows become `turn_magnitude` rows (`level` is the
+        magnitude's `kind`, `ref` is empty, `n` is the number). Under `capture`, `say` and `tok`
+        rows ALSO become `turn_magnitude` rows, under the derived kinds in
+        `magnitude.CAPTURE_KINDS`; without it they are dropped as before, which is the default.
+        Nothing routes them to `event`: a character count is a number about text, not a
+        reference, and the `event` table's no-text invariant is unchanged.
 
         Magnitudes do not touch `bin`: a bin holds `(level, ref)` sums of reference events, and
         `bin.level` is constrained to the precomputed reference levels. A weighted rollup reads
@@ -647,7 +650,7 @@ class Store:
         because a replayed batch must be absorbed rather than added.
         """
         agg = self._aggregate(rows, source_line)
-        mags = self._aggregate_mag(rows, source_line)
+        mags = self._aggregate_mag(rows, source_line, capture=capture)
         if not agg and not mags:
             return 0
         touched = {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
@@ -671,21 +674,33 @@ class Store:
         return agg
 
     @staticmethod
-    def _aggregate_mag(rows, source_line):
-        """`(line, ts, kind) -> value` over the `mag` rows only.
+    def _aggregate_mag(rows, source_line, capture=False):
+        """`(line, ts, kind) -> value` over the `mag` rows -- plus, under `capture`, the `say`
+        and `tok` rows, whose kind is `"{row kind}_{row level}"`.
 
         Summing is the point, not an incidental: `levels.events_for_turns` emits ONE ROW PER EDIT
         EVENT, deliberately, so a turn with three edits arrives as three rows and its per-turn
         magnitude is their sum. The per-event granularity is preserved where it is needed — in
         the extraction output a study reads directly — and summed where it is used, which is a
-        weighted rollup over turns.
+        weighted rollup over turns. The same holds for `say_asst_think`: a turn with several
+        think blocks emits one row each and the turn's thinking length is their total.
+
+        ⚠️ THE MAPPING IS HERE AND NOT IN `levels.py`. `events_for_turns` is the ORACLE's
+        producer -- `analyze_window_by_parse` is asserted equal to the store path over its rows --
+        so changing what it emits changes the thing the store is checked against. Routing at this
+        boundary leaves that function byte-identical, and leaves `test_magnitude.py`'s assertion
+        that its `mag` kinds are a subset of `magnitude.KINDS` true.
         """
         agg = collections.defaultdict(float)
         for r in rows:
-            if r[5] != "mag":
+            if r[5] == "mag":
+                kind = str(r[6])
+            elif capture and r[5] in ("say", "tok"):
+                kind = f"{r[5]}_{r[6]}"
+            else:
                 continue
             line = int(r[9]) if len(r) > 9 else int(source_line)
-            agg[(line, float(r[0]), str(r[6]))] += float(r[8])
+            agg[(line, float(r[0]), kind)] += float(r[8])
         # A ZERO magnitude is the ABSENCE of one, and storing it would be a difference without a
         # distinction that a caller can nonetheless see. `weighted_window_rows` joins on the
         # existence of a magnitude row, so a stored zero makes a ref appear in the rollup with a

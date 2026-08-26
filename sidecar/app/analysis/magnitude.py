@@ -110,7 +110,34 @@ TIER = {"batch": 0.5}
 TOKENS = "tokens"
 REQUEST_TOKENS = "request_tokens"
 EDIT_BYTES = "edit_bytes"
+# The COST kinds. `Store.has_magnitudes` is scoped to exactly this tuple, because it answers
+# "was anything costed here", and the capture kinds below are not costs.
 KINDS = (TOKENS, REQUEST_TOKENS, EDIT_BYTES)
+
+# The CAPTURE kinds: written only under `KELD_CAPTURE=1`, and never a cost. They ride
+# `turn_magnitude` rather than a table of their own because that table's `kind` is a DIMENSION
+# -- a new magnitude is data, not DDL (see the table's own comment in store.py).
+#
+# `say_*` are per-role CHARACTER COUNTS of message text and `tok_*` is the raw token split. Both
+# are computed by `levels.events_for_turns` already and were discarded on the way in. The token
+# split is NOT a second spelling of `TOKENS`: that one is price-weighted and answers what a turn
+# COST, while `tok_in_cached / (tok_in_cached + tok_in_fresh)` answers how much of the context
+# was reused, which no cost figure expresses.
+#
+# `tool_errors` / `tool_result_chars` come from `analysis/capture.py`, not from
+# `events_for_turns`, because a `tool_result` line is filtered out before that function sees it.
+SAY_USER = "say_user"
+SAY_USER_ECHO = "say_user_echo"
+SAY_ASST = "say_asst"
+SAY_THINK = "say_asst_think"
+TOK_OUT = "tok_out"
+TOK_IN_FRESH = "tok_in_fresh"
+TOK_IN_CACHED = "tok_in_cached"
+TOOL_ERRORS = "tool_errors"
+TOOL_RESULT_CHARS = "tool_result_chars"
+CAPTURE_KINDS = (SAY_USER, SAY_USER_ECHO, SAY_ASST, SAY_THINK,
+                 TOK_OUT, TOK_IN_FRESH, TOK_IN_CACHED,
+                 TOOL_ERRORS, TOOL_RESULT_CHARS)
 
 # tool name -> (old-side key, new-side key). A tool absent from this map has no diff magnitude,
 # which is the correct answer for `Read`/`Bash`/`Grep` and for a tool that does not exist.
@@ -244,8 +271,9 @@ def authored(values, recorded=False):
     counted: `_aggregate_mag` never stores a zero, so keeping them here would make the two paths
     disagree on `turns` while agreeing on every byte.
 
-    `recorded` says whether the window carries a magnitude of ANY kind -- see the block comment
-    above for why that, and not the byte sum, decides between a truthful 0 and an abstention.
+    `recorded` says whether the window carries a COST magnitude (`Store.has_magnitudes` is scoped
+    to `KINDS`, not `CAPTURE_KINDS`) -- see the block comment above for why that, and not the byte
+    sum, decides between a truthful 0 and an abstention.
 
     Returns an `int` byte count. That is the same privacy contract `edit_bytes` states: a length
     is the only thing this module can hand back, and there is no variant that returns the text.

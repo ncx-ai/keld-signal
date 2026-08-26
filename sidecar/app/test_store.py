@@ -358,9 +358,18 @@ def test_registering_a_new_precomputed_level_backfills_it_from_the_raw_events():
 
 # --- what may be stored ----------------------------------------------------------------------
 
-def test_say_and_tok_rows_are_not_stored():
+def test_say_and_tok_rows_are_not_reference_events():
     """`say` rows carry `len(body)` — a measure of message TEXT — and `tok` rows carry token
-    counts. Neither is a reference event. The store holds level/ref/count and nothing else."""
+    counts. Neither is a reference event, and neither may reach `event`.
+
+    ⚠️ THIS USED TO SAY THEY ARE NOT STORED AT ALL, and that is no longer true: under
+    `KELD_CAPTURE=1` they are stored as `turn_magnitude` rows (see
+    `test_capture_routes_say_and_tok_into_turn_magnitude`). The invariant that survived the
+    change, and the one this test pins, is narrower and is the one that matters: the `event`
+    table holds a level, a ref and a count, and nothing derived from message text. A character
+    count is a number about text, not text — the same line `magnitude.edit_bytes` already sits
+    on.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "state", "refseries.db")
         st = open_store(path)
@@ -371,6 +380,57 @@ def test_say_and_tok_rows_are_not_stored():
         assert not (levels & {"user", "user_echo", "asst", "asst_think", "out", "in_fresh",
                               "in_cached"}), levels
         assert not [r for r in raw.execute("SELECT 1 FROM event WHERE ref = '' LIMIT 1")]
+        raw.close()
+
+
+def test_capture_routes_say_and_tok_into_turn_magnitude():
+    """`say` and `tok` rows are computed by `events_for_turns` and were discarded here. Under
+    capture they become `turn_magnitude` rows -- data, not DDL, which is exactly what that
+    table's `kind` dimension exists for.
+
+    The kind is `"{row kind}_{row level}"`: a `say`/`user` row becomes `say_user`. Two rows of
+    the same kind at the same instant SUM, which is the same arithmetic the cost magnitudes
+    already use and what a turn with several think blocks needs.
+    """
+    rows = [
+        (round(T0 + 5, 1), SESSION, None, None, False, "say", "user", "", 1873.0),
+        (round(T0 + 5, 1), SESSION, None, None, False, "say", "asst_think", "", 400.0),
+        (round(T0 + 5, 1), SESSION, None, None, False, "say", "asst_think", "", 600.0),
+        (round(T0 + 5, 1), SESSION, None, None, False, "tok", "in_cached", "", 257333.0),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "off.db"))
+        st.upsert_events(SESSION, rows, source_line=1)
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60, kind="say_user") == [], \
+            "capture defaults OFF and must change nothing"
+        st.close()
+
+        st = open_store(os.path.join(tmp, "on.db"))
+        st.upsert_events(SESSION, rows, source_line=1, capture=True)
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60, kind="say_user") == \
+            [(round(T0 + 5, 1), 1873.0)]
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60, kind="say_asst_think") == \
+            [(round(T0 + 5, 1), 1000.0)], "same kind at one instant must SUM"
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60, kind="tok_in_cached") == \
+            [(round(T0 + 5, 1), 257333.0)]
+        st.close()
+
+
+def test_capture_rows_never_reach_the_event_table():
+    """The store's standing invariant, restated against the new routing: a character count is a
+    magnitude, never a reference event. `event` holds level/ref/count and no empty `ref`."""
+    rows = [
+        (round(T0 + 5, 1), SESSION, None, None, False, "say", "user", "", 1873.0),
+        (round(T0 + 5, 1), SESSION, None, None, False, "tok", "out", "", 4211.0),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "state", "refseries.db")
+        st = open_store(path)
+        st.upsert_events(SESSION, rows, source_line=1, capture=True)
+        st.close()
+        raw = sqlite3.connect(path)
+        assert not [r for r in raw.execute("SELECT 1 FROM event LIMIT 1")], \
+            "capture rows are magnitudes, never events"
         raw.close()
 
 
