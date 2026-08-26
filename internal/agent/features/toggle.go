@@ -34,6 +34,31 @@ const EnvEnabled = "KELD_FEATURES"
 // which is the state this ships in.
 const EnvPublish = "KELD_FEATURES_PUBLISH"
 
+// EnvTextEmbed is the SIDECAR'S text-embedding toggle, READ here and never set.
+//
+// ⚠️ It is NOT a fourth Go-side toggle and must not grow an org key by analogy
+// to the two above. textembed.enabled() reads this variable out of the
+// environment the sidecar was spawned with, and the daemon reads the same
+// variable for exactly one purpose: deciding whether to fetch the encoder
+// weights at all. No machine whose sidecar will read the toggle as OFF may
+// download ~1.2 GB for it.
+//
+// Which is why the comparison is STRICTLY "1" and does not go through envBool's
+// generous vocabulary. textembed.enabled() is `os.environ.get(...) == "1"`, so
+// KELD_TEXTEMBED=true is OFF sidecar-side; accepting it here would fetch
+// 1,191,586,416 bytes of weights for an encoder that is never asked to run.
+// This is the one asymmetry in this file that costs gigabytes to get wrong.
+const EnvTextEmbed = "KELD_TEXTEMBED"
+
+// TextEmbedEnabled mirrors textembed.enabled() exactly.
+//
+// Read once at daemon start rather than per call, and that is not a shortcut:
+// the sidecar reads the variable from the environment it was SPAWNED with, so
+// a mid-run change to this process's environment cannot reach the running
+// sidecar. A live read would let the daemon fetch weights for an encoder the
+// already-running sidecar still has switched off.
+func TextEmbedEnabled() bool { return os.Getenv(EnvTextEmbed) == "1" }
+
 // EnvInterval overrides the sweep interval.
 const EnvInterval = "KELD_FEATURES_INTERVAL"
 
