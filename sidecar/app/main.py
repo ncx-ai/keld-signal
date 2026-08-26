@@ -19,9 +19,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, analyze_window
+from app.analysis.blockdigest import DEFAULT_MAX_BLOCKS, digest_blocks
 from app.analysis.tick import DEFAULT_MAX_WINDOWS, tick as tick_windows_for
 from app.analysis.dynamics import DEFAULT_SIZER
-from app.analysis.ingest import ingest_file, session_of
+from app.analysis.ingest import ingest_file, is_current, session_of
 from app.analysis.match import DEFAULT_BUDGET_S as _MATCH_DEFAULT_BUDGET_S
 from app.analysis.match import compile_vocabulary, match_text
 from app.analysis.store import open_store
@@ -328,6 +329,46 @@ class TickIn(BaseModel):
     now: float | None = None
     span_minutes: float = 60.0
     max_windows: int = DEFAULT_MAX_WINDOWS
+    resolved: ResolvedFacts | None = None
+
+
+class BlocksIn(BaseModel):
+    """THE V2 ENTRY POINT: which CLOSED blocks of work does this transcript have, and what were
+    they. Coordinates and instants only — never text, never a span, never an offset.
+
+    v2 is a PATH, not a parameter (see app/analysis/blockdigest.py and the design spec). This is
+    its own route with its own request model and its own module behind it; /analyze is untouched
+    and still answers the v1 question — a 60-minute window anchored to a prompt. The one previous
+    attempt threaded blocks through /analyze as an additive key and was reverted.
+
+    `prompts` are HUMAN prompt IDS, and WHICH ids they are comes from the daemon rather than from
+    the store for the same reason TickIn.prompt_ids does: the store's `prompt` index holds every
+    user- AND assistant-shaped turn (~260 rows against 14 human prompts on a real session), so
+    resolving them here would make every agent turn its own episode and swallow the session. The
+    daemon applies `internal/agent/watch/filter.go`'s human-prompt filter and is the only party
+    that knows the answer; the store only TIMES them, and an id it cannot time is dropped rather
+    than defaulted. They feed `blocks.covers` — the block <-> episode mapping — and nothing else.
+
+    `since_ts` is where the last call for this transcript stopped, compared against a block's
+    START: the caller passes the last emitted block's END, and because blocks abut inside an
+    active segment that admits the next block and excludes the one already emitted. Null means
+    from the beginning of the session, so FORWARD-ONLY is the caller's choice to make by seeding
+    its own cursor (matching KELD_WATCH_BACKFILL's default), not something this endpoint decides.
+
+    `now` is the daemon's clock, injected rather than read here, for TickIn's reason: it is what
+    the trailing block's idle settle is measured against, and a test that cannot move it cannot
+    exercise the settle rule at all.
+
+    `resolved` is the same channel /analyze and /tick have — facts the daemon read off a repo's
+    .git/config, which this process is confined out of reading. It reaches ingest currency here
+    (is_current), not the digest: the `repo` level is written as EVENTS, so by the time a block is
+    rolled up the facts are already rows.
+    """
+    path: str
+    since_ts: float | None = None
+    prompts: list[str] = []
+    now: float | None = None
+    max_blocks: int = DEFAULT_MAX_BLOCKS
     resolved: ResolvedFacts | None = None
 
 
@@ -639,6 +680,111 @@ def _tick_blocking(path, prompt_ids, cursor_ts, now, span_minutes, max_windows, 
     return tick_windows_for(st, path, cursor_ts=cursor_ts, prompt_ts=prompt_ts, now=now,
                             span_minutes=span_minutes, nlp=nlp, sizer=DEFAULT_SIZER,
                             max_windows=max_windows, prior=True, resolved=resolved)
+
+
+def _blocks_blocking(path, since_ts, prompts, now, max_blocks, resolved=None):
+    """The whole of /blocks' work, on an executor thread.
+
+    A QUERY, never a parse: `digest_blocks` reads the series and this function does not ingest,
+    for the reason /tick does not either. The emitter behind this route runs on a TIMER, and
+    paying a whole-file parse on a timer is exactly what the watcher's /ingest signal exists to
+    avoid — a first whole-file ingest measured 5.1 s on a 90 MB transcript. What the store has
+    not read yet simply is not closed yet, and the next call gets it.
+
+    `is_current` is consulted rather than ignored, and it is what makes the trailing block's idle
+    settle honest: silence in the SERIES is not silence on the MACHINE while there are unparsed
+    bytes on disk, and a trailing block closed on that reading is a mid-session block mislabelled
+    as settled. When the store is behind, only the "activity after" branch can close a block —
+    which is sound whatever the tail is doing. Mid-session blocks are therefore never delayed by
+    it.
+
+    `_analysis_nlp()` is NOT resolved here, unlike /analyze and /ingest: nothing on this path
+    parses a transcript, so no spaCy pipeline is needed and a multi-second load must not be
+    triggered by a read. It is passed to `is_current` as None, which is the honest question for a
+    caller that will not ingest — the terms-mode fingerprint only matters to something about to
+    write rows.
+    """
+    st = _store()
+    if st is None:
+        raise StoreBehind("the reference-series store could not be opened")
+    try:
+        current = is_current(st, path, None, resolved)
+    except OSError:
+        # The transcript is gone or unreadable. Not fatal: the SERIES still holds everything that
+        # was ingested from it, and those blocks are as closed as they will ever be. Treated as
+        # "not current" so only the activity-after branch closes anything.
+        current = False
+    out = digest_blocks(st, path, since_ts=since_ts, prompt_ids=prompts, now=now,
+                        max_blocks=max_blocks, current=current)
+    # Switched off means not reported, exactly as on /analyze: the regex half of
+    # terms.candidates() needs no model and still ran at INGEST time, so returning its output
+    # would contradict the status beside it and make the switch look like a performance knob.
+    status = _terms_status()
+    if status == _TERMS_DISABLED:
+        for b in out["blocks"]:
+            inv = b.get("inventory")
+            if isinstance(inv, dict) and "named_terms" in inv:
+                inv["named_terms"] = []
+    for b in out["blocks"]:
+        b["named_terms_status"] = status
+    return out
+
+
+@app.post("/blocks")
+async def blocks(body: BlocksIn):
+    """The CLOSED blocks of work in one transcript, each characterised. THE V2 PATH.
+
+        a transcript -> blocks of work -> one characterisation per block
+
+    No prompt anchor, no look-back window, no gap-filling: blocks TILE ACTIVE TIME, so coverage
+    is 100% of activity by construction and there are no holes for a tick to patch. See
+    app/analysis/blocks.py for where a block ends (a measured 20-minute cap and a 15-minute idle
+    terminator, from a pre-registered four-arm study over 496 sessions) and
+    app/analysis/blockdigest.py for when it may be EMITTED and what its digest holds.
+
+    Returns `{"blocks": [...], "watermark": ...}`. A block carries its span
+    (`start`/`end`/`block_minutes`, epoch seconds — the unit `since_ts` and `covers` are in), the
+    two boundary reasons from the closed `blocks.REASONS` vocabulary, `covers` (the block <->
+    prompt-episode mapping), and the same analysis payload /analyze publishes for a window:
+    `workstreams`, `inventory`, `inventory_omitted`, `evidence`, `effort`, `dynamics`, `prior`.
+
+    `watermark` is returned even when no block is closed, because it is the one fact that
+    separates "nothing has settled yet" from "this transcript has never been ingested" (null).
+
+    Answers with NO refusal status of its own beyond the two below, and that is the design. A
+    block whose evidence retention pruned is DROPPED rather than 410'd: this route answers about a
+    RANGE, and one unanswerable block must not discard the answerable ones behind it — the same
+    call /tick makes. A store that is behind is likewise not a refusal here, only fewer closed
+    blocks.
+
+    Like /analyze, /ingest and /tick it bypasses _dispatch and the single-flight runner: this is a
+    series query, not inference, and it must answer while the runner is occupied or no worker has
+    ever been spawned. It runs in the default executor so a long session's cut cannot stall the
+    event loop out from under /health and /metrics.
+    """
+    # Confinement BEFORE anything else, the SAME allowlist /analyze, /ingest and /tick use — the
+    # sidecar has no auth, and this reads a transcript's series as the daemon's user and answers
+    # with its workspaces, branches and named terms. 403, not 404: a rejected path and an
+    # unresolvable one are different facts.
+    if not _within_roots(body.path, _analyze_roots()):
+        # Counted as analyze_rejected rather than under a counter of its own: it is literally the
+        # same allowlist and the operator reading is identical (the daemon and the sidecar
+        # disagree about where transcripts live, or someone is probing). A blocks_rejected field
+        # would mean editing app/metrics.py, and v2's rule is that main.py is the only existing
+        # file this path touches.
+        _count("analyze_rejected")
+        raise HTTPException(status_code=403, detail="path is outside the configured transcript roots")
+    now = body.now if body.now is not None else time.time()
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(
+            None, _blocks_blocking, body.path, body.since_ts, body.prompts, now,
+            body.max_blocks, _resolved_dict(body.resolved))
+    except StoreBehind:
+        # The store could not be OPENED at all. A store that is merely behind the file is not
+        # this — it just closes fewer blocks (see _blocks_blocking).
+        raise HTTPException(status_code=503,
+                            detail="the reference-series store is unavailable") from None
 
 
 @app.post("/tick")
