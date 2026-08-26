@@ -29,7 +29,12 @@ Two consequences, both deliberate:
 
 A contiguous span of one session's activity, cut at change points.
 
-    block := (session, start, end, start_reason, end_reason, facets, covers)
+    block := (session, start, end, start_reason, end_reason, facets)
+
+⚠️ **`covers` was here and is deleted (`9d47e71`).** After the deletion a block is exactly
+`(principal, session, span, boundary reasons, facets)` — the principal from the device's own auth,
+the span as `(start, end)`. See "`covers` — deleted, and why" below for the argument; it is
+recorded there rather than merely dropped from this tuple.
 
 ⚠️ **THERE IS NO DETECTOR. A block ends on LENGTH or on SILENCE, and nothing else.** Two earlier
 drafts of this section said otherwise — the first that boundaries are detected rather than fixed,
@@ -163,38 +168,55 @@ So a thin block **publishes as itself, with its dimensions absent**. That is an 
 the alternative was measured to be worse. Atlas renders such a row as a block with a span and no
 characterisation; it must not hide it, and it must not attach the neighbour's facets to it.
 
-## `covers` — the mapping Atlas cannot compute
+## `covers` — deleted, and why (`9d47e71`)
 
-Atlas groups activity under the preceding user prompt. Signal's unit is a block. Neither contains
-the other: a long autonomous episode spans many blocks; a rapid back-and-forth puts many episodes
-in one block.
+This section originally specified `covers`: a block-to-prompt-episode mapping,
+`covers: [{prompt_id, from, to, complete}]`, computed because Atlas groups activity under the
+preceding user prompt while Signal's unit is a block, and neither contains the other. It was built,
+shipped, measured against real data, and then deleted rather than repaired. The argument, so it is
+not re-litigated:
 
-**That mismatch is information, not something to flatten.** An episode spanning four blocks means
-the agent's work changed character mid-run — exactly what the detector detects — and a sequence of
-blocks is strictly more informative than one label over the whole run. Many episodes in one block
-means those prompts were all the same work.
+1. **The block model is time-based end to end.** Cutting is a cap plus a silence threshold; the
+   digest is a rollup over a span; the principal comes from the device's own auth. Nothing in the
+   cutter, digest, dimensions, dynamics, prior or effort touches a prompt id. `covers` was the one
+   field on the whole object that did.
+2. **Cost attribution already has to join on time.** Atlas must compute
+   `event.ts ∈ [block.start, block.end)` within the session regardless of anything here — a turn
+   spanning several blocks would double-count its spend through `covers` if cost were attributed by
+   the mapping instead. That join is mandatory and id-free.
+3. **The same join answers the display question `covers` existed for.** Atlas holds
+   `ToolEvent.session_id` and `event_ts`, and the table is partitioned on it. Given a block's span it
+   can find the events inside — which IS which episodes overlap it — and `complete: false` is
+   derivable the same way: a turn whose events extend past the block's end is incomplete. Everything
+   `covers` reported, the time join Atlas already owes reports too.
+4. **So `covers` was a second, weaker copy of a join Atlas needs anyway — and it shipped broken.**
+   The daemon's human-prompt filter (`watch/filter.go`) yields `promptId`; the store's `prompt`
+   index (`sidecar/app/analysis/ingest.py`) is keyed on the per-message `uuid`. Those are different
+   id spaces, so `store.prompt_time()` resolved none of them and every real run published
+   `covers: []` — measured, 48 blocks emitted, 0 with covers, against a `prompt` table holding
+   32,458 rows. The fix on offer was to stop looking the id up at all (have the emitter carry
+   `{id, ts}` itself); once that fix is written out, it degenerates to the same time-bounded
+   selection Atlas would have to build regardless. Deleting is the smaller system.
 
-⚠️ **Only Signal can compute this mapping.** The daemon owns the human-prompt filter
-(`watch/filter.go`); the store's `prompt` index holds every user- AND assistant-shaped turn — ~260
-rows for one real session's 14 human prompts — so anything planning against the store alone
-swallows the session. Nothing downstream can tell a human prompt from an agent turn.
+**What deletion buys:** no id-space to mismatch, no `prompt_time` lookup on the block path at all
+(pinned by a test that serves a whole digest from a store whose `prompt_time` raises), no
+prompt-derived value on the `/blocks` request, one fewer table in Atlas, and a smaller contract. A
+block is now exactly `(principal, session, span, boundary reasons, facets)` — no ids of any kind.
+`store.prompt_time` is not deleted — `/tick` still calls it and is untouched by any of this; it is
+only unreachable from the block path now.
 
-So the block carries it:
-
-    covers: [{prompt_id, from, to, complete}]
-
-The episode segments inside this block: the anchoring human prompt, the portion of its episode
-falling in this block, and whether the episode ended here or continues into the next. An episode
-view collects the blocks naming its `prompt_id`; a timeline view walks blocks. `complete: false`
-is what lets a UI show continuation rather than implying the work stopped.
+The mismatch this section opened with — a long autonomous episode spans many blocks; a rapid
+back-and-forth puts many episodes in one block — is still true and still information. It is just
+Atlas's to surface, from the time join, not Signal's to precompute and ship as a member of the block
+object.
 
 ## The published rows
 
 **`WindowEnrichment` becomes the primary row.** It already exists (`publish/window.go`) and is
 already the right shape — a window row with no text facets — built as an inert secondary under
-`KELD_TICK`. It carries the block: span, boundary reasons, `covers`, and the deterministic facets
-(8 allocation dimensions including `repo`, all 9 inventories, `inventory_omitted`, `dynamics`,
-`prior`, `effort`).
+`KELD_TICK`. It carries the block: span, boundary reasons, and the deterministic facets (8
+allocation dimensions including `repo`, all 9 inventories, `inventory_omitted`, `dynamics`,
+`prior`, `effort`). No `covers` — see above.
 
 **The per-prompt `Enrichment` shrinks to `sensitivity`** plus correlation and the pipeline
 metadata. Everything else it carried today moves to the block.

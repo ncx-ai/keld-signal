@@ -122,23 +122,39 @@ overlap a new one. Exact, not a margin, and replayed against randomised incremen
 streams. Deleting it because "blocks tile anyway" would reintroduce double-publish on every
 in-flight session.
 
-## Phase 2 — `covers`
+## Phase 2 — `covers` — DELETED (`9d47e71`)
 
-The episode mapping, computed where the human-prompt filter lives.
+This phase built the episode mapping described below, computed where the human-prompt filter
+lives: the daemon names the human prompt ids (`watch/filter.go`), the store times them, `blocks.py`
+intersects them with block spans, and emits `[{prompt_id, from, to, complete}]` — `complete: false`
+when the episode continues past the block's end.
 
-The daemon names the human prompt ids (`watch/filter.go`); the store times them. That split is
-already how the tick plans — the store's `prompt` index holds every user- AND assistant-shaped
-turn (~260 rows for one session's 14 human prompts), so planning against it swallows the session.
-Same division here: the daemon supplies the ids, `blocks.py` intersects them with block spans and
-emits `[{prompt_id, from, to, complete}]`.
+It shipped, was verified end-to-end, and was then removed rather than fixed. Keeping the heading
+and the original description here rather than deleting them, because a spec that goes quiet about a
+deleted phase invites someone to rebuild it. The argument (full version in the contract doc's
+`covers` section):
 
-`complete: false` when the episode continues past the block's end. That is what lets a consumer
-render continuation instead of implying the work stopped.
+1. The block model is time-based end to end — nothing in the cutter, digest, dimensions, dynamics,
+   prior or effort touches a prompt id. `covers` was the one exception.
+2. Atlas already has to join on time for cost attribution (`event.ts ∈ [block.start, block.end)`
+   within the session), or a turn spanning several blocks double-counts its spend.
+3. That same join answers the display question `covers` existed for — Atlas has
+   `ToolEvent.session_id` and `event_ts`, and `complete: false` is derivable the same way a turn
+   whose events extend past the block's end is incomplete.
+4. It also shipped broken: the daemon's human-prompt filter yields `promptId`
+   (`internal/agent/watch/filter.go:15`) while the store's `prompt` index is keyed on the
+   per-message `uuid` (`sidecar/app/analysis/ingest.py:574`) — different id spaces, so
+   `store.prompt_time()` resolved none of them. Measured: 48 blocks emitted, 0 with covers, against
+   a `prompt` table holding 32,458 rows.
+
+`blocks.py` now exports `cut()` only; `blockdigest.py` and the `/blocks` response carry no
+prompt-shaped field.
 
 ## Phase 3 — the wire (Go)
 
-- `enrich.WindowCharacterisation` gains the span, both boundary reasons and `covers`.
-  `WindowRef` already carries start/end; the reasons and `covers` are new.
+- `enrich.WindowCharacterisation` gains the span and both boundary reasons. `WindowRef` already
+  carries start/end; the reasons are new. (`covers` was here too when this phase was written; it
+  was deleted before ship — see Phase 2, above.)
 - `publish.WindowEnrichment` gains the same, and becomes the row that carries the deterministic
   facet set. It already carries all of it — 8 allocation dimensions including `repo`, 9
   inventories, `inventory_omitted`, `dynamics`, `prior`, `effort`.

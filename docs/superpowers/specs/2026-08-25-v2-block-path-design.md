@@ -97,9 +97,13 @@ Everything new, nothing threaded through an existing function.
 
 **Sidecar**
 
-    app/analysis/blocks.py          cut() + covers()          EXISTS, unchanged
+    app/analysis/blocks.py          cut()                      EXISTS, unchanged
     app/analysis/blockdigest.py     NEW. characterise ONE block span -> the payload
     app/main.py                     NEW endpoint POST /blocks  (the only edit to an existing file)
+
+⚠️ **`covers()` was built, shipped, then deleted (`9d47e71`).** It mapped a block to the prompt
+episodes overlapping it — see the contract doc's `covers` section for the argument. Nothing in this
+spec's module layout should be read as reintroducing it: `blocks.py` exports `cut()` only.
 
 `blockdigest` composes what already exists and is already span-parameterised — `rollup_window`,
 `workstreams.payload`, `dynamics`, `prior`, `effort`. None of those know about prompts; they take
@@ -110,9 +114,15 @@ retired. No `block` key, no `prompts` argument, no shared helper reached across 
 `blockdigest` needs something `analyze.py` has, that thing moves DOWN into a module both can import,
 it is not called sideways.
 
-**`POST /blocks`** — request `{path, since_ts, resolved, prompts}`, response
-`{blocks: [{start, end, start_reason, end_reason, covers, ...facets}], watermark}`.
+**`POST /blocks`** — request `{path, since_ts, resolved}`, response
+`{blocks: [{start, end, start_reason, end_reason, ...facets}], watermark}`.
 Coordinates only, same `KELD_ANALYZE_ROOTS` confinement as `/analyze`.
+
+⚠️ **The request no longer takes `prompts`, and the response no longer carries `covers`.** Both are
+in this spec's original text below (Open question 3) because this document predates the deletion;
+see the contract doc for why: the join `covers` computed is one Atlas owes anyway for cost
+attribution, and it shipped resolving no ids at all (`promptId` vs. the store's per-message `uuid`
+— different id spaces).
 
 **Go**
 
@@ -136,7 +146,11 @@ That retirement is a separate, later change; v2 must be shipping and proven firs
    interval after it closes — so this is a product choice, not a measurement.
 2. **Backfill.** On first sight of a transcript, emit history or start forward-only? `KELD_WATCH_BACKFILL`
    is forward-only by default and this should match it.
-3. **Does `covers` ride the block or sit beside it?** It is a mapping to a different unit (prompt
-   episodes), so a sibling key may read more honestly than a member of the block object.
+3. ~~Does `covers` ride the block or sit beside it?~~ **Moot — `covers` is deleted (`9d47e71`).** A
+   block carries no prompt-shaped field at all. The mapping this question was about turned out to
+   be a second, weaker copy of a time join Atlas already has to build for cost attribution
+   (`event.ts ∈ [block.start, block.end)`); that same join answers the display question this
+   question was trying to solve, so there was no honest place left for it to ride. See the
+   contract doc's `covers` section for the full argument.
 4. **One row per block, or one batch per transcript?** Atlas dedups on a key either way; batching is
    a transport decision.

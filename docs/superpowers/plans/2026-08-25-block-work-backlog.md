@@ -16,7 +16,9 @@ Signal v2 is complete end-to-end and ships OFF behind `KELD_BLOCKS`.
 
 - The cutter — 20-minute cap, 15-minute idle, detector ablated (`0e8244e`, `681f60c`), pinned equal
   to the measured arm (`7a75ca3`).
-- `covers` — the episode-to-block mapping (`76e8087`).
+- `covers` — the episode-to-block mapping (`76e8087`). **Deleted (`9d47e71`)** — see the OPEN item
+  below, now closed, for why: a different id space than the store's meant it published `[]` on
+  every real run, and the join it existed for is one Atlas owes anyway for cost attribution.
 - `blockdigest.py` + `POST /blocks` (`c0c7ab5`).
 - The Go emitter and its start (`ff30d0b`, `505013b`).
 - `evidence` + `status` on every workstream dimension (`874c727`) — 924 of 12,016 dimension-slots
@@ -33,35 +35,39 @@ evidence counts; Atlas's own validation and storage accept them and upsert on re
 
 ## OPEN — Signal side
 
-- [ ] ⚠️ **`covers` IS STILL EMPTY — the prompt ids and the store index are DIFFERENT ID SPACES.**
-      Found on the second real run, 2026-08-26, after the range fix below landed. Both sides, in one
-      view:
+- [x] **`covers` was empty on every real run — RESOLVED BY DELETION (`9d47e71`), not by fixing the
+      id-space bug.** Found on the second real run, 2026-08-26, after the range fix below landed:
 
           internal/agent/watch/filter.go:15   PromptID string `json:"promptId"`
           sidecar/app/analysis/ingest.py:574  upsert_prompts(session, [(o.get("uuid"), ...)])
 
       The daemon's human-prompt filter yields **`promptId`**; the store's `prompt` index records the
-      per-message **`uuid`**. So `store.prompt_time()` resolves NONE of them, the sidecar correctly
-      drops every id, and `covers` is `[]`. Verified: 48 blocks emitted, 0 with covers; the
-      transcript's first human `promptId` (`859b54df…`) has no row in a `prompt` table holding
+      per-message **`uuid`**. So `store.prompt_time()` resolved NONE of them, the sidecar correctly
+      dropped every id, and `covers` was `[]`. Verified: 48 blocks emitted, 0 with covers; the
+      transcript's first human `promptId` (`859b54df…`) had no row in a `prompt` table holding
       32,458 of them.
-      ⚠️ **This is a specification error of mine.** The `/blocks` brief said "the daemon names the
-      prompt ids and the store times them", quoting AGENTS.md — but that line describes the TICK,
-      which passes `prompt_ts` (TIMESTAMPS, not ids), so it never had this problem.
-      ⚠️ **`promptId` is also not unique per line** — three consecutive `user` records shared
-      `859b54df…`, because it groups the messages of one prompt. Any fix that indexes it must treat
-      it as 1:many.
-      **The right fix is to stop looking it up at all.** `resolve`'s reader already parses the line,
-      so it already has the timestamp: change the contract so the emitter sends `[{id, ts}]` and the
-      sidecar drops its `prompt_time` call. That also keeps `covers[].prompt_id` in the id space
-      Atlas actually indexes — the per-prompt enrichment publishes `corr_id` from the same
-      `promptId`, which is what `turn_key` is built from.
+      ⚠️ That was a specification error of mine — the `/blocks` brief said "the daemon names the
+      prompt ids and the store times them", quoting AGENTS.md, but that line describes the TICK,
+      which passes `prompt_ts` (TIMESTAMPS, not ids), so it never had this problem. `promptId` is
+      also not unique per line — three consecutive `user` records shared `859b54df…`, because it
+      groups the messages of one prompt.
+      **The fix on offer was to stop looking it up at all** — have the emitter carry `{id, ts}`
+      itself, since `resolve`'s reader already has the timestamp. Writing that fix out made the
+      actual conclusion visible: it degenerates to the same time-bounded selection Atlas has to
+      build anyway for cost attribution (`event.ts ∈ [block.start, block.end)`), which also answers
+      the display question `covers` was for. So the id-space bug was not repaired — `covers` was
+      deleted outright. Full argument in the contract doc's `covers` section
+      (`docs/superpowers/specs/2026-08-25-block-model-contract-design.md`).
 
 - [x] **The tail-window bug IS fixed** (`b8678e0`): `resolve.PromptIDsInRange` binary-searches the
       start offset, forward-scans to the range end, and returns the last prompt at-or-before the
       range start. Verified on an 86 MB live transcript — head-of-file hour ranges answer in
       2.8-3.9 ms on ground the old tail scan could not see at all. Real and necessary; it was
       masking the id-space bug above.
+      ⚠️ **`PromptIDsInRange` itself is now gone (`9d47e71`, `rangeids.go`).** It lived less than a
+      day. Its only caller was the emitter's `covers` wiring, and when that wiring was deleted with
+      `covers` this went with it — the function was correct and stayed correct the whole time; it is
+      gone because its consumer is gone, not because anything about it was wrong.
 
 - [ ] **Weight edits heavier than reads.** Spec written (`d9bb785`,
       `2026-08-25-act-weighted-paths-design.md`), unbuilt. Reads outnumber edits 3.4:1 and every
@@ -137,6 +143,11 @@ evidence counts; Atlas's own validation and storage accept them and upsert on re
   interchangeable with a matched all-passing one.
 - The retired `choose_cap` rule ("smallest cap within 5 points") is still live and is what `main()`
   runs with no flag, despite its own pre-registration saying it is not reused.
+- `resolve.RecentPromptIDs` + `ClaudeReader.RecentUserPromptIDs` are now **DEAD CODE with no
+  caller.** They were already dead before the `covers` deletion — the emitter had already moved onto
+  `resolve.PromptIDsInRange`, which the deletion commit (`9d47e71`) removed — so that commit
+  correctly left them under "delete only what this change orphans." They should still go; nothing
+  reaches them now.
 - `internal/agent/publish/report.go` + `report_show_test.go` (634 lines, untracked) are **DEAD** —
   the rendered report is not going to Atlas. Everything in them is unexported and unreferenced.
   Delete when convenient; left in place because untracked files have no git copy to recover from.
