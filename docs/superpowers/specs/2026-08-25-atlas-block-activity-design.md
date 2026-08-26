@@ -1,3 +1,25 @@
+> # ⚠️ SUPERSEDED — do not build from this file
+>
+> Atlas's side of the block model now lives IN THE ATLAS REPO, written against that code rather
+> than against assumptions made from here:
+> `keld-atlas:docs/superpowers/specs/2026-08-25-block-model-atlas-design.md`, with its plan at
+> `keld-atlas:docs/superpowers/plans/2026-08-25-workstreams-v2-roadmap.md`.
+>
+> This file is kept for its history and is WRONG in at least three ways:
+>
+> 1. **`covers` is DELETED** (`9d47e71`). Below it is a `jsonb` column and a schema line.
+> 2. **Its central claim about `covers` is refuted.** It says *"Atlas cannot derive it, since only
+>    the daemon…"*. Atlas can: it has `ToolEvent.session_id` and `event_ts`, the table is
+>    RANGE-partitioned on `event_ts`, and it must run that time join anyway for COST — a turn
+>    spanning several blocks would double-count spend through `covers`. Display and cost share one
+>    join. Anyone reading that sentence would rebuild the thing we removed.
+> 3. **It reads as though blocks replace the activity feed.** They do not: telemetry is a separate
+>    lane already delivering raw activity live, and a block rail can only ever show SETTLED blocks,
+>    so a blocks-only page is permanently blind exactly where the user is looking.
+>
+> It also lists "Signal Phases 0-4 … `covers`, the wire, the tick" — that sequencing died too: the
+> tick's gap-finding is obsolete under blocks, because blocks tile active time and leave no gaps.
+
 # Atlas's side of the block model — and how v1 comes out cleanly
 
 Consumes `2026-08-25-block-model-contract-design.md`. Executed in `keld-atlas`; specified here
