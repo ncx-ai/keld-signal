@@ -568,6 +568,47 @@ cannot move because a character count arrived.
   joined to and the other a seek into a window `/analyze` refuses (410). `/metrics`
   reports both row counts under `store.rows`.
 
+⚠️ **`KELD_TEXTEMBED` (default OFF) is the TEXT half of the same corpus, and it is the
+first thing in this repo that reads message text in order to keep something derived
+from it** (`analysis/textembed.py`). The deterministic half enters as numbers; this
+half enters as a text embedding, and neither is ever serialised into the other's
+modality — a bi-encoder fed digest PROSE answered `record` on 36 of 36 inputs, so
+that direction is closed.
+- **The unit is the MESSAGE, not the shell.** A 240-minute shell holds hundreds of KB;
+  `tool_result` lines are the huge ones `turns_in` skips unparsed and must stay that
+  way (this module reads only `text` and `thinking` content BLOCKS, so a `tool_result`
+  riding a `tool_use` line is unreadable by construction, not by filter); and shells
+  overlap across rows, so per-message encoding means each message is encoded ONCE EVER
+  and every shell reuses the vector. Three streams — `user`, `asst`, `think` — kept
+  separate and never concatenated. `think` is `skipped:empty` in practice: 9,144
+  thinking blocks re-measured over the 40 largest local transcripts, **0 non-empty**.
+- **Qwen3-Embedding-0.6B via `transformers.AutoModel`, encode 1024-d, publish MRL
+  prefix-sliced to 256-d.** Nothing was added to `sidecar/requirements.txt` — gliner2
+  already pulls torch and transformers. The 256 is the one parameter that cannot be
+  revised retroactively: a corpus collected at 256 cannot be widened without
+  re-embedding every machine's history.
+- **Its own child process, and bf16 is MEASURED on both axes.** Not the FastAPI parent:
+  `parent_reserve_mb()` is a high-water latch, so anything resident there permanently
+  shrinks the inference worker's hard limit. Measured on 200 real messages, 2 threads:
+  float32 **3113 MB / 804.0 ms per message**, bfloat16 **1673 MB (1813 peak) /
+  766.2 ms** — bf16 is 1313 MB cheaper and no slower, so it is not a latency trade.
+  Idle-unloaded (`KELD_TEXTEMBED_IDLE_UNLOAD_S`), never spawned when the toggle is off.
+- **Absent weights are a STATED status, never a crash or a stall.** They are provisioned
+  on demand into `~/.keld/models` and handed over as `KELD_TEXTEMBED_DIR`, the sibling of
+  `KELD_GLINER2_DIR`; nothing downloads at import. `degraded:weights_unavailable`, an
+  empty vector list, and a retry cooldown — not a latch, because provisioning is
+  asynchronous, and not per call, because a failed spawn costs seconds.
+- **A fixed ORTHOGONAL projection is applied before publish**, generated deterministically
+  from `KELD_TEXTEMBED_PROJECTION_SEED`. It preserves cosine and inner products exactly,
+  so training is unaffected, and it withholds the embedding space from off-the-shelf
+  inversion tooling. ⚠️ The matrix is **Keld's, not the client's** — issued to the fleet,
+  so the client multiplies by a constant it did not choose.
+- ⚠️ **Never cut a message mid-sentence.** Long messages are split at sentence boundaries
+  and the chunk vectors mean-pooled; a single sentence over the cap is dropped WHOLE and
+  the drop is declared as `dropped_chars`. Every scalar (`dispersion`/`drift`/`novelty`)
+  is `None` where it could not be computed, never 0.0 — an absent comparison and a
+  comparison that found no movement are different facts.
+
 ⚠️ **The parse state carries a THIRD accumulator, and adding it forced a one-off reparse of
 every existing store.** `pending` (reconcile) and `cwds` (workspace) were the two; `reqs` is the
 third — the set of `requestId`s already costed. It exists because `events_for_turns` deduped
