@@ -82,6 +82,52 @@ jobs:
       - name: fixture identity gate
         run: make fixture-identity-check STUDY_PYTHON=python
 
+  # The sidecar's own unit tests (sidecar/app/test_*.py + sidecar/loadtest/test_*.py,
+  # 37 files, ~12.7k lines) were previously ungated: the Go half has three
+  # enforcement points above (gofmt/vet/test, crosscheck, goreleaser check) and the
+  # Python half had zero, despite covering the reference store, incremental ingest,
+  # dynamics, the session prior, retention, PII, the well-known-value gate and the
+  # block cutter. These are standalone scripts, not pytest (AGENTS.md → Testing) —
+  # each ends in a `__main__` runner that calls every `test_*` function in the file
+  # and lets an uncaught `AssertionError` propagate, which exits the interpreter
+  # non-zero; this was verified by breaking one assertion, confirming the loop below
+  # failed, and restoring it, rather than assumed.
+  #
+  # No torch, no gliner2, no uvicorn, no spaCy model download. Empirically (not
+  # merely by grepping top-level imports, since `app.worker`/`app.main` pull heavy
+  # deps only *inside* functions this job never calls — model loading happens in a
+  # spawned worker child, and this job starts no server), every one of the 37 files
+  # runs clean under exactly: the fixture-identity job's light deps
+  # (pandas/pyarrow/bashlex/wordfreq/pyyaml) plus `fastapi` (imported at module level
+  # by app/main.py, transitively by app/test_main.py and app/test_maxlen.py — no
+  # TestClient/httpx anywhere in these tests, so plain `import fastapi` is enough)
+  # and `presidio-analyzer` (app/pii.py's `scan()`, exercised by app/test_pii.py and
+  # app/test_pii_regions.py, builds its AnalyzerEngine over `spacy.blank("en")` — see
+  # `_nlp_engine()`'s docstring — so presidio pulls in spaCy's *tokenizer* only, ~5MB,
+  # never `en_core_web_sm`). Versions pinned to sidecar/requirements.txt so this job
+  # tracks the same exact pins the frozen sidecar ships, rather than drifting on its
+  # own schedule. Nothing needs skipping: all 37 files run and are asserted below.
+  sidecar-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install sidecar test deps (no torch, no gliner2, no spaCy model)
+        run: |
+          pip install --quiet pandas pyarrow bashlex wordfreq pyyaml \
+            fastapi==0.141.1 presidio-analyzer==2.2.362
+      - name: sidecar unit tests (standalone scripts, not pytest)
+        working-directory: sidecar
+        run: |
+          set -euo pipefail
+          for f in app/test_*.py loadtest/test_*.py; do
+            echo "::group::$f"
+            PYTHONPATH=. python "$f"
+            echo "::endgroup::"
+          done
+
   # fastapi==0.115.* and uvicorn[standard]==0.32.* sat 26 / 20 minor releases
   # behind for over a year with nothing anywhere checking — a trailing-wildcard
   # pin silently freezes once upstream abandons that series, and there was no
