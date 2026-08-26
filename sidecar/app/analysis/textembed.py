@@ -442,6 +442,24 @@ def _load(spec):
     rather than take it. (Both runs shared the host with a live sidecar at 131% CPU, so the
     latencies are upper bounds; the RSS figures are not affected.)
 
+    ⚠️ **TWO OF THOSE bf16 NUMBERS DID NOT SURVIVE A SUSTAINED MEASUREMENT.** The table above came
+    from a single-shot script; `loadtest embed` (2026-08-26, same 20-core host) drove 104 messages
+    / 23 batches over 181 s off a real 14.4 MB transcript and measured:
+
+        bfloat16  1700 MB resident (idle), ~2050 MB median in-flight, 2345-2432 MB PEAK,
+                  1119-1635 ms/message
+
+    Resident holds (1673 -> 1700 MB, and 1699 MB again on the re-run). The PEAK does not —
+    **2345-2432 MB, ~32% above the 1813 MB quoted** — because a one-shot script cannot see an
+    in-flight transient, and neither could /metrics until `maybe_unload`'s blocking acquire was
+    fixed. Nor does the latency: **1119-1635 vs 766.2 ms/message**, and the sustained figure is
+    the one corroborated by
+    `featuretext._MAX_ENCODE`'s independent ~1.44 s/message on a 26 MB transcript. Message LENGTH
+    is the variable — the 200-message sample behind 766 ms was shorter-tailed than a whole real
+    session — so the dtype comparison above is unaffected (both arms ran the same inputs) while
+    any per-message COST estimate should use ~1.6 s, not 766 ms. The bf16 choice stands on the
+    1313 MB, which is the number that replicated.
+
     bf16 rather than fp16 because this runs on CPU: torch's CPU kernels cover bfloat16, and fp16
     on CPU is emulated where it exists at all."""
     import torch
@@ -562,7 +580,7 @@ class Encoder:
         self._unavailable_at = None
         self._last_activity = self._clock()
         # High-water RSS for the CURRENT child generation, sampled lock-free by `observe_rss`.
-        # ⚠️ An instantaneous sample of a ~1.9 GB child is exactly what let the inference worker
+        # ⚠️ An instantaneous sample of a ~1.7-2.3 GB child is exactly what let the inference worker
         # oscillate 2715 -> 5692 MB against a 3409 MB ceiling with `recycles == 0`
         # (worker_manager.py's own account). Reset on `_kill` because a new child is a new
         # generation and a peak carried across one would describe a process that no longer exists.
@@ -631,14 +649,32 @@ class Encoder:
             self.state = DOWN
 
     def maybe_unload(self):
-        """Kill an idle child. The encoder's duty cycle is ~100 messages a day; holding ~1.4 GB
-        between them is the cost this child exists to avoid."""
-        with self._lock:
+        """Kill an idle child. The encoder's duty cycle is ~100 messages a day; holding ~1.7 GB
+        between them is the cost this child exists to avoid.
+
+        ⚠️ **The lock is taken NON-BLOCKING, and that is what makes `observe_rss` lock-free in
+        fact rather than only in intent.** `encode` holds `_lock` for an entire batch, and the one
+        caller of this method is `TextSource.poll` — the 1 s loop that samples `observe_rss`
+        immediately before it. A blocking acquire here stalls that loop for the whole batch, so
+        the sample ahead of it lands once per BATCH, at the moment the lock frees: right after
+        `_release_memory()`, i.e. the TROUGH. Measured by `loadtest embed` before this fix, on a
+        real 8-message batch: `/metrics` reported `embed.peak_rss_mb` **1717 MB** while the live
+        `rss_mb` it was sampled beside climbed to **2072 MB** — the RSS-oscillation incident's
+        exact shape one child over (`worker_manager.poll`, which acquires non-blocking for this
+        same reason, after that guard could only ever see post-trim troughs).
+
+        Declining to wait costs nothing: a child that is busy is by definition not idle, and one
+        that is idle is still idle at the next poll a second later."""
+        if not self._lock.acquire(blocking=False):
+            return False       # a batch is in flight; an idle decision waits for the boundary
+        try:
             if self.state == READY and self._idle > 0 and \
                     (self._clock() - self._last_activity) >= self._idle:
                 self._kill()
                 self.counts["kills_idle"] += 1
                 return True
+        finally:
+            self._lock.release()
         return False
 
     def shutdown(self):
@@ -674,7 +710,7 @@ class Encoder:
         needs the lock.
 
         Sampling is all this does — there is no ceiling and no kill here, because the child is
-        already bounded by idle-unload and by being a child at all. It exists so ~1.9 GB
+        already bounded by idle-unload and by being a child at all. It exists so ~1.7-2.3 GB
         (measured, bf16, real weights) is not invisible in /metrics.
         """
         p = self._proc
