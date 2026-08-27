@@ -51,7 +51,13 @@ func Handler(q *queue.Queue, secret string) http.Handler {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if q.Offer(JobFrom(p)) {
+		// 202 for Duplicate as well as Accepted: both mean the daemon has taken
+		// the prompt on. 429 is reserved for real backpressure, because the hook
+		// treats any >=400 as failure and durably spools the pointer — so
+		// answering 429 to a dedup makes it spool work that is already done.
+		// The hook/watcher overlap that produces duplicates is designed
+		// (queue.Complete exists for it) and must not read as overload.
+		if q.Offer(JobFrom(p)).TakenOn() {
 			w.WriteHeader(http.StatusAccepted)
 		} else {
 			w.WriteHeader(http.StatusTooManyRequests)

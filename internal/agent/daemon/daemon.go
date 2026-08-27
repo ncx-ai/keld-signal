@@ -931,7 +931,12 @@ func Run(ctx context.Context) error {
 // a full queue leaves the row in place for the next call to retry.
 func drainEnrichSpool(q *queue.Queue, emitter *clientevents.Emitter) {
 	if _, err := spool.Drain(func(p spool.Pointer) error {
-		if q.Offer(ingress.JobFrom(p)) {
+		// TakenOn, not "accepted": a DUPLICATE row must be deleted too. The
+		// prompt is already queued or already published, so keeping the file
+		// would re-offer it on every sweep forever — it can never become
+		// acceptable — and the spool would grow without bound. Only real
+		// backpressure (Full/Closed) keeps the row.
+		if q.Offer(ingress.JobFrom(p)).TakenOn() {
 			return nil
 		}
 		return errQueueFull // queue full: keep the file, retry next sweep
