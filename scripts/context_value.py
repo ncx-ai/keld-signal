@@ -36,7 +36,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pandas as pd
 import yaml
 
-from refseries import characterize, executive, text_of, is_command_echo
+from refseries import (characterize, executive, text_of, is_command_echo,
+                       payload_for_window)
+from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired
 from qwen_windows import clip
 from app.analysis.transcript import iter_turns  # noqa: E402 — sys.path set up by refseries import
 
@@ -151,6 +153,15 @@ def build_cases(dirs, n_per, seed=7):
             doc = characterize(refs, lvls, spk, ent, st, en, 5, base=base)
             if not doc.get("rungs"):
                 continue
+            # The `+digest` arm renders the SHIPPED payload now, not this frame document — the
+            # renderers were re-pointed at analyze_window (see refseries.payload_for_window).
+            # `doc` is still passed as the frame, which is what feeds the digest's separate
+            # `vs_repo_history` lift section, and still IS the `+full` arm verbatim.
+            try:
+                payload = payload_for_window(path, st, en)
+            except (PromptNotFound, StoreBehind, WindowExpired) as e:
+                print(f"  !! {ent} {st}: {type(e).__name__}: {e}", file=sys.stderr)
+                continue
             L = {lv: blk for r in doc["rungs"].values() for lv, blk in r["levels"].items()}
 
             def truth(level):
@@ -188,8 +199,8 @@ def build_cases(dirs, n_per, seed=7):
                                                     "working unattended or steering turn by turn?",
                            "options": o, "truth": attended})
             cases.append({"entity": ent, "start": st, "end": en, "text": text,
-                          "digest": yaml.safe_dump(executive(doc), sort_keys=False, width=110,
-                                                   allow_unicode=True),
+                          "digest": yaml.safe_dump(executive(payload, doc), sort_keys=False,
+                                                   width=110, allow_unicode=True),
                           "full": yaml.safe_dump(doc, sort_keys=False, width=110,
                                                  allow_unicode=True),
                           "questions": qs})
@@ -220,11 +231,43 @@ def main():
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--n-per", type=int, default=10)
     ap.add_argument("--out", default="/tmp/context_value.json")
+    ap.add_argument("--dump", default=None,
+                    help="write the exact prompt for every ask, with the recorded answer beside "
+                         "it, and exit without asking the model. Only the answers were stored, "
+                         "so a claim about what the model READ was not checkable.")
     args = ap.parse_args()
     dirs = [("/tmp/refseries-f745121b", "f745121b"), ("/tmp/refseries-a8f58d56", "a8f58d56")]
     cases = build_cases(dirs, args.n_per)
     n_q = sum(len(c["questions"]) for c in cases)
     print(f"{len(cases)} windows, {n_q} questions, {len(ARMS)} arms = {n_q*len(ARMS)} asks")
+    if args.dump:
+        # Cases are built from a fixed seed against unchanged frames, so this reproduces exactly
+        # what was sent. Answers are joined in from a completed run when one is given.
+        prior = {}
+        if os.path.exists(args.out):
+            for r in json.load(open(args.out)):
+                prior[(r["entity"], r["start"], r["q"], r["arm"])] = (r["answer"], r["ok"])
+        os.makedirs(args.dump, exist_ok=True)
+        for c in cases:
+            name = f"{c['entity']}-{c['start']:%Y%m%dT%H%M}.md"
+            out = [f"# {c['entity']}  {c['start']} → {c['end']}", "",
+                   "## The digest the model was given", "", "```yaml", c["digest"].rstrip(),
+                   "```", "", "## The conversation it was given", "", "```",
+                   c["text"], "```", ""]
+            for q in c["questions"]:
+                out += [f"## [{q['kind']}] {q['q']}", "",
+                        f"- options: {', '.join(q['options'])}", f"- truth: **{q['truth']}**", ""]
+                for arm in ARMS:
+                    got = prior.get((c["entity"], str(c["start"]), q["q"], arm))
+                    if got:
+                        out.append(f"- `{arm}` answered **{got[0]}** "
+                                   f"{'(correct)' if got[1] else '(WRONG)'}")
+                    else:
+                        out.append(f"- `{arm}` — no recorded answer in {args.out}")
+                out.append("")
+            open(os.path.join(args.dump, name), "w").write("\n".join(out) + "\n")
+        print(f"  dumped {len(cases)} case files to {args.dump}")
+        return
     if args.device == "gpu":
         print("[GPU smoke test — confirm anything real with --device cpu]")
     rows = []
