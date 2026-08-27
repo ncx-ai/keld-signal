@@ -463,3 +463,39 @@ func TestTheEmitterIsConstructedWithoutAnyPromptReader(t *testing.T) {
 		t.Fatalf("published %d blocks with no prompt reader, want 1", n)
 	}
 }
+
+func TestEnabledEnvOverridesConfigBothWays(t *testing.T) {
+	// Env unset: the agent-config value decides. This is the path an installer
+	// takes — it writes the file and sets no variable anywhere.
+	t.Setenv(EnvEnabled, "")
+	if !Enabled(true) {
+		t.Error("config true, env unset: want enabled")
+	}
+	if Enabled(false) {
+		t.Error("config false, env unset: want disabled")
+	}
+
+	// Env on wins over a config that says off.
+	for _, v := range []string{"1", "true", "on", "yes"} {
+		t.Setenv(EnvEnabled, v)
+		if !Enabled(false) {
+			t.Errorf("KELD_BLOCKS=%q over config false: want enabled", v)
+		}
+	}
+
+	// Env off wins over a config that says on. This direction is what lets an
+	// operator disable a machine the installer switched on, without editing
+	// JSON — and it is the half a one-directional toggle would silently lose.
+	for _, v := range []string{"0", "false", "off", "no"} {
+		t.Setenv(EnvEnabled, v)
+		if Enabled(true) {
+			t.Errorf("KELD_BLOCKS=%q over config true: want disabled", v)
+		}
+	}
+
+	// An unrecognised value is not an opinion: fall through to the config.
+	t.Setenv(EnvEnabled, "maybe")
+	if !Enabled(true) {
+		t.Error("unrecognised env value should fall through to config true")
+	}
+}

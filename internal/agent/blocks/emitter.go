@@ -395,6 +395,11 @@ func sessionIDFor(path string) string {
 // the same shape the tick already ships in, and the rule this repo holds to is
 // that such rows are opt-in and announced rather than quietly accumulated.
 // Flipping the default is a one-line change the day Atlas reads them.
+//
+// ⚠️ The COMPILED-IN default is still off and this work did not change it. What
+// changed is that a v2 installer now writes `"blocks": true` per machine (see
+// docs/superpowers/specs/2026-08-27-v2-installer-design.md), so an installed
+// machine emits blocks while a `go run` / CI / eval machine does not.
 const EnvEnabled = "KELD_BLOCKS"
 
 // EnvInterval overrides the sweep interval.
@@ -420,14 +425,30 @@ const EnvInterval = "KELD_BLOCKS_INTERVAL"
 // package comment on why that distinction is the whole design.
 const DefaultInterval = 5 * time.Minute
 
-// Enabled reports whether the block path is switched on. Default off;
-// "1"/"true"/"on"/"yes" enable it.
-func Enabled() bool {
+// Enabled reports the LOCAL value of the `blocks` toggle: KELD_BLOCKS, else the
+// agent-config value the caller resolved, else off.
+//
+// It takes the config value rather than reading agent-config.json itself for the
+// reason features.Enabled does: the precedence is stated in one place, and this
+// package does not import settings.
+//
+// ⚠️ The config key exists because an env-only toggle is UNREACHABLE FROM AN
+// INSTALLER. No service definition on any OS carries an environment block —
+// LaunchAgentPlist and SystemdUnit have none, and the Windows scheduled task is a
+// bare /TR "<exe>" run — so there is nowhere an installer could put KELD_BLOCKS
+// that the daemon would ever see. The v2 installer writes `"blocks": true` into
+// agent-config.json instead.
+//
+// The env variable still WINS, in both directions, so KELD_BLOCKS=0 switches off
+// a machine the installer switched on without editing JSON.
+func Enabled(fromConfig bool) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvEnabled))) {
 	case "1", "true", "on", "yes":
 		return true
+	case "0", "false", "off", "no":
+		return false
 	}
-	return false
+	return fromConfig
 }
 
 // IntervalFromEnv is the sweep interval, DefaultInterval unless overridden.

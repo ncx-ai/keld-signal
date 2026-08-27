@@ -47,8 +47,8 @@ func signalBlocksEndpoint(ingest string) string {
 // publisher would post blocks at /v1/enrichments, where the envelope is not
 // even the same shape.
 func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint string,
-	token func() string, actor string, emitter *clientevents.Emitter) func(source, path string) {
-	if !blocks.Enabled() || dig == nil || token == nil {
+	token func() string, actor string, emitter *clientevents.Emitter, blocksConfigured bool) func(source, path string) {
+	if !blocks.Enabled(blocksConfigured) || dig == nil || token == nil {
 		return nil
 	}
 	pub := publish.New(signalBlocksEndpoint(ingestEndpoint), token, actor)

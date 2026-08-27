@@ -818,7 +818,7 @@ func Run(ctx context.Context) error {
 		// moment. OFF by default (KELD_BLOCKS) for the same reason the tick is —
 		// Atlas stores blocks now but nothing reads them yet. Returns nil when
 		// off, which setBlockAdvance takes as "no observer".
-		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter))
+		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks))
 		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
 		// future-work prediction. svc.Features is non-nil ONLY under
 		// ml_backend "deterministic" (see deterministicBackend), so this is

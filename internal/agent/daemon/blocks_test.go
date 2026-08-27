@@ -26,11 +26,40 @@ func TestSignalBlocksEndpointDerivation(t *testing.T) {
 // The v2 block path must ship OFF, the way KELD_TICK does: Atlas stores blocks
 // but nothing reads them yet, and rows nobody joins are opt-in and announced,
 // never quietly accumulated.
+//
+// "Off by default" now means BOTH switches at their zero value — KELD_BLOCKS
+// unset AND no `blocks` key in agent-config.json. The compiled-in default did
+// not move when the config key arrived; what changed is that an installer can
+// now write the key per machine.
 func TestTheBlockEmitterIsOffByDefault(t *testing.T) {
 	t.Setenv(blocks.EnvEnabled, "")
 	if got := startBlockEmitter(context.Background(), stubDigester{}, "https://a/v1/x",
-		func() string { return "tok" }, "actor", nil); got != nil {
-		t.Fatal("the block emitter started with KELD_BLOCKS unset")
+		func() string { return "tok" }, "actor", nil, false); got != nil {
+		t.Fatal("the block emitter started with KELD_BLOCKS unset and no config key")
+	}
+}
+
+// The installer's path: agent-config.json says blocks, no environment variable
+// exists anywhere. This is the whole reason the config key was added — no
+// service definition on any OS carries an environment block, so KELD_BLOCKS
+// alone can never be set by an installer.
+func TestTheBlockEmitterStartsFromTheConfigKeyAlone(t *testing.T) {
+	t.Setenv(blocks.EnvEnabled, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if got := startBlockEmitter(ctx, stubDigester{}, "https://a/v1/x",
+		func() string { return "tok" }, "actor", nil, true); got == nil {
+		t.Fatal("the block emitter stayed off with blocks:true in agent-config.json")
+	}
+}
+
+// And the env variable still wins in the OFF direction, so an operator can
+// disable a machine the installer switched on without editing JSON.
+func TestKeldBlocksZeroOverridesTheConfigKey(t *testing.T) {
+	t.Setenv(blocks.EnvEnabled, "0")
+	if got := startBlockEmitter(context.Background(), stubDigester{}, "https://a/v1/x",
+		func() string { return "tok" }, "actor", nil, true); got != nil {
+		t.Fatal("KELD_BLOCKS=0 did not override blocks:true in agent-config.json")
 	}
 }
 
@@ -39,7 +68,7 @@ func TestTheBlockEmitterIsOffByDefault(t *testing.T) {
 func TestTheBlockEmitterNeedsADigester(t *testing.T) {
 	t.Setenv(blocks.EnvEnabled, "1")
 	if got := startBlockEmitter(context.Background(), nil, "https://a/v1/x",
-		func() string { return "tok" }, "actor", nil); got != nil {
+		func() string { return "tok" }, "actor", nil, false); got != nil {
 		t.Fatal("the block emitter started with no digester")
 	}
 }

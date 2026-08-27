@@ -73,6 +73,22 @@ type Settings struct {
 	// flipping it forces a reparse. See settings/features.go.
 	Features        bool `json:"features"`
 	FeaturesPublish bool `json:"features_publish"`
+
+	// Blocks is THE V2 PATH's toggle: whether the block emitter runs at all.
+	// Local, read at startup, default OFF — the zero value is the default, same
+	// as Features.
+	//
+	// ⚠️ It exists because KELD_BLOCKS alone is unreachable from an installer:
+	// no service definition on any OS carries an environment block. A v2
+	// install writes this key; KELD_BLOCKS still overrides it either way. See
+	// blocks.Enabled.
+	//
+	// NO REMOTE OVERRIDE, deliberately. Remote.Features governs the
+	// signal-embeddings toggles; blocks has no equivalent and adding one is a
+	// separate decision with Atlas-side work. The asymmetry is real and worth
+	// knowing: an org can turn feature rows off fleet-wide and cannot turn
+	// blocks off.
+	Blocks bool `json:"blocks"`
 }
 
 // PIIRegionsEnv overrides the config file's pii_regions. Comma-separated
