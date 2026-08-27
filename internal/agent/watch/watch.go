@@ -26,12 +26,15 @@ type Watcher struct {
 	// under forward-only, without offering any of the file's historical prompts.
 	// See scanFile and WithFirstSightSignal.
 	signalFirstSight bool
-	cursors          *CursorStore
-	discover         func() []Root
-	version          string
-	poll             time.Duration
-	backfill         bool
-	extractors       map[string]promptExtractor
+	// firstSight is the backlog of transcripts sighted for the first time and
+	// not yet signalled. Drained a few per poll — see pollOnce.
+	firstSight []advanceRef
+	cursors    *CursorStore
+	discover   func() []Root
+	version    string
+	poll       time.Duration
+	backfill   bool
+	extractors map[string]promptExtractor
 }
 
 // promptExtractor detects a genuine user prompt within a single transcript
@@ -159,7 +162,46 @@ func (w *Watcher) pollOnce() {
 			debuglog.Append("watch: cursor save failed: %v", err)
 		}
 	}
+	w.drainFirstSight()
 }
+
+// drainFirstSight signals up to firstSightPerPoll backlogged first sightings.
+// See the constant for why this is paced rather than fired in one burst.
+func (w *Watcher) drainFirstSight() {
+	if w.advanced == nil {
+		w.firstSight = nil
+		return
+	}
+	n := len(w.firstSight)
+	if n > firstSightPerPoll {
+		n = firstSightPerPoll
+	}
+	for _, a := range w.firstSight[:n] {
+		w.advanced(a.source, a.path)
+	}
+	w.firstSight = append(w.firstSight[:0], w.firstSight[n:]...)
+}
+
+// advanceRef is one backlogged first sighting: coordinates only.
+type advanceRef struct{ source, path string }
+
+// firstSightPerPoll bounds how many backlogged first sightings are signalled per
+// poll.
+//
+// ⚠️ THE BOUND IS THE WHOLE POINT. The ingest signal rides a 64-slot,
+// path-coalescing queue whose policy is DROP rather than retry — which is safe
+// for a growing transcript because the next signal catches up, and unsafe for a
+// first sighting, which has no next signal: the cursor is at EOF and a dormant
+// transcript never grows again. Firing every sighting at once on a machine with
+// 2,152 known transcripts filled the 64 slots and dropped ~2,088 PERMANENTLY.
+// A few per poll never overflows it, and the backlog drains across polls; the
+// work is one-time per transcript.
+//
+// Four rather than a larger number because the real limit is downstream: the
+// signal queue has ONE serial sender and a first whole-file ingest measured 5.1s
+// on a 90 MB transcript. Handing it work faster than it can drain would only
+// refill the queue it is meant to keep clear.
+const firstSightPerPoll = 4
 
 // scanFile reads new complete lines from path's cursor, offers each genuine
 // prompt, and advances the cursor. Returns true if the cursor moved.
@@ -182,7 +224,7 @@ func (w *Watcher) scanFile(source, path string) bool {
 				// coordinates only, so it is independent of where the cursor
 				// sits.
 				if w.signalFirstSight && w.advanced != nil {
-					w.advanced(source, path)
+					w.firstSight = append(w.firstSight, advanceRef{source, path})
 				}
 				return true
 			}

@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,7 +183,9 @@ func TestFirstSightSignalsIngestWhenHistoryIsWanted(t *testing.T) {
 	w.advanced = func(source, path string) { rec = append(rec, advance{source, path}) }
 	w.signalFirstSight = true
 
-	w.scanFile("claude_code", p)
+	// Through pollOnce, not scanFile: the signal is BACKLOGGED at the sighting
+	// and drained by the poll, so that pacing is on the path under test.
+	w.pollOnce()
 
 	if len(rec) != 1 || rec[0].path != p {
 		t.Fatalf("first sight signalled %v, want exactly one signal for %s", rec, p)
@@ -205,8 +208,65 @@ func TestFirstSightIsSilentWhenHistoryIsNotWanted(t *testing.T) {
 	w := signalWatcher(t, Root{SourceID: "claude_code", Dir: dir}, false, &rec)
 	w.signalFirstSight = false
 
-	w.scanFile("claude_code", p)
+	w.pollOnce()
 	if len(rec) != 0 {
 		t.Fatalf("first sight signalled %v with signalFirstSight off, want silence", rec)
+	}
+}
+
+// FIRST-SIGHT SIGNALS MUST BE PACED, OR THEY ARE DROPPED AND NEVER RETRIED.
+//
+// ⚠️ The daemon's ingest signal rides a 64-slot, path-coalescing queue whose
+// policy is DROP, not retry — safe for a growing transcript, because "the next
+// signal catches up". A first sighting has no next signal: the cursor is now at
+// EOF and a dormant transcript never grows again. So firing every first sighting
+// at once meant a machine with 2,152 known transcripts filled 64 slots and
+// dropped ~2,088 permanently — measured here, the ones that most needed
+// ingesting were exactly the ones lost.
+//
+// So first sightings go onto a backlog and drain a few per poll. The pacing is
+// the same idiom the block emitter uses for its own backlog: bounded per tick,
+// drained across ticks, and the work is one-time.
+func TestFirstSightSignalsArePacedAcrossPolls(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := 0; i < firstSightPerPoll*3; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("%08d-0000.jsonl", i))
+		if err := os.WriteFile(p, []byte(genuineSaying("P", "pre-existing")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	var rec []advance
+	w := signalWatcher(t, Root{SourceID: "claude_code", Dir: dir}, false, &rec)
+	w.signalFirstSight = true
+
+	// First poll sights them all but must signal only a paced slice.
+	w.pollOnce()
+	if len(rec) != firstSightPerPoll {
+		t.Fatalf("first poll signalled %d, want %d — an unpaced burst is what the "+
+			"64-slot queue drops", len(rec), firstSightPerPoll)
+	}
+	// Successive polls drain the rest; nothing is lost.
+	w.pollOnce()
+	w.pollOnce()
+	if len(rec) != len(paths) {
+		t.Fatalf("after three polls signalled %d of %d — the backlog must drain, not drop",
+			len(rec), len(paths))
+	}
+	seen := map[string]int{}
+	for _, a := range rec {
+		seen[a.path]++
+	}
+	for _, p := range paths {
+		if seen[p] != 1 {
+			t.Errorf("%s signalled %d times, want exactly 1", filepath.Base(p), seen[p])
+		}
+	}
+	// And the backlog is empty: a fourth poll signals nothing.
+	before := len(rec)
+	w.pollOnce()
+	if len(rec) != before {
+		t.Fatalf("a drained backlog kept signalling: %d -> %d", before, len(rec))
 	}
 }
