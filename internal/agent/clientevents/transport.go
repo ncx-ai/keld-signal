@@ -3,6 +3,7 @@ package clientevents
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -46,7 +47,34 @@ type Transport struct {
 	clock    func() time.Time
 
 	httpClient *http.Client
+
+	// onAuthRejection fires at most once per drain when Atlas REJECTS the
+	// credential. It is how the daemon's reauther learns to refresh without this
+	// package importing it.
+	onAuthRejection func()
 }
+
+// IsAuthRejection reports whether err is Atlas REJECTING the credential
+// (401/403), as opposed to being unavailable or refusing a payload.
+//
+// ⚠️ THIS IS A THIRD FAILURE CLASS AND IT DID NOT EXIST. retry.IsTransient
+// answers a two-way question — retry or not — and puts 401 in "permanent", which
+// DrainSpool implements as "delete the batch and carry on". For a rejection both
+// halves are wrong: the batch is fine and delivers after a re-onboard, and
+// carrying on means learning the same rejection once per spooled file. A laptop
+// back from a week offline would turn one revoked token into hundreds of
+// requests at the moment an org least wants them.
+func IsAuthRejection(err error) bool {
+	var se *retry.StatusError
+	if errors.As(err, &se) {
+		return se.Code == http.StatusUnauthorized || se.Code == http.StatusForbidden
+	}
+	return false
+}
+
+// OnAuthRejection registers the callback fired when a drain hits a rejection.
+// Not safe for concurrent use with a running drain; set it at construction.
+func (t *Transport) OnAuthRejection(fn func()) { t.onAuthRejection = fn }
 
 // NewTransport builds a Transport posting to endpoint with the ingest token
 // from token (a getter, so a later credential rotation — creds.Token.Set — is
@@ -102,7 +130,9 @@ func (t *Transport) Deliver(ctx context.Context, body []byte) error {
 	if err == nil {
 		return nil
 	}
-	if retry.IsTransient(err) || ctx.Err() != nil {
+	// A rejection is spooled, not dropped: it is fixed by re-onboarding, and the
+	// batch is perfectly good.
+	if retry.IsTransient(err) || IsAuthRejection(err) || ctx.Err() != nil {
 		if spoolErr := t.spool(body); spoolErr != nil {
 			return fmt.Errorf("%w (spool failed: %v)", err, spoolErr)
 		}
@@ -186,9 +216,22 @@ func (t *Transport) DrainSpool(ctx context.Context) error {
 
 		postErr := t.postWithRetry(ctx, body)
 		if postErr != nil {
+			// REJECTED: keep the file and stop. Every remaining batch would be
+			// told the same thing, and re-sending one with a token already known
+			// to be rejected is the burst this guards against.
+			if IsAuthRejection(postErr) {
+				if t.onAuthRejection != nil {
+					t.onAuthRejection()
+				}
+				return nil
+			}
+			// UNAVAILABLE: keep the file and end this sweep — the same condition
+			// would meet every remaining batch. Never a re-onboard.
 			if retry.IsTransient(postErr) {
 				return nil
 			}
+			// REFUSED: this payload is bad, the connection is fine. Drop it and
+			// CONTINUE, or one malformed batch blocks every good one behind it.
 			if rmErr := os.Remove(f); rmErr != nil && !os.IsNotExist(rmErr) {
 				return fmt.Errorf("remove poison spool file %s: %w", f, rmErr)
 			}
