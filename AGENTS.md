@@ -55,8 +55,38 @@ flowchart LR
 ```
 
 **Two lanes, one privacy invariant.**
-- **Telemetry (push):** the hook posts usage telemetry straight to Atlas. No
-  daemon involvement.
+- **Telemetry (push):** AI tools POST OTLP to the daemon's loopback telemetry
+  proxy (`internal/agent/teleproxy`, fixed port **14318**, `KELD_TELEMETRY_PORT`
+  to move it), which forwards to Atlas with the daemon's own token.
+  ⚠️ **This bullet used to read "the hook posts usage telemetry straight to
+  Atlas. No daemon involvement", and the change is the whole point rather than a
+  refactor.** A tool reads its configuration ONCE, at startup, and keeps the
+  credential in memory — so when the org's ingest token rotated, every running
+  tool went on posting the old one and its telemetry was rejected until a human
+  restarted the editor. Measured on a real machine: `tool_events` froze for 40
+  minutes while `keld signal doctor` reported no problems, **correctly** — every
+  fact it can reach was right, and the stale copy lived inside a process it
+  cannot inspect. The hook cannot detect it either: a Claude Code child process
+  sees **no `OTEL_*` variables at all**, because Claude Code applies its `env`
+  block to its own OTEL SDK and exports nothing. So detection was impossible and
+  remediation could only ever be "ask the human to restart"; the fix is to stop
+  handing the tool a credential. `keld signal setup` writes the loopback address
+  and a **stable local secret** (`agentcfg.TelemetrySecret`, generated once and
+  never rotated — unlike `Info.Secret`, regenerated every daemon start, which
+  would rebuild the bug one layer down and fire it daily). The token the daemon
+  attaches is read **per request**, so a rotation mid-flight is picked up.
+  ⚠️ **Telemetry now depends on the daemon**, where it did not before. Paid for
+  with a bounded spool under `spool/telemetry` and not hoped away; a machine
+  whose daemon never starts collects nothing, and `keld signal doctor` is the
+  detector — which can only exist AFTER this path, since pre-proxy the client
+  kept no record of tool telemetry at all. Delivery is confirmed from the
+  RESPONSE, not the status code: captive portals answer **200 with an HTML login
+  page**, and a status-only check would delete the batch. A drain **stops on a
+  REJECTION** (401/403 — every remaining batch would be told the same thing),
+  **ends the sweep on UNAVAILABLE** (net/5xx — never a re-onboard, nothing is
+  wrong with the credential), and **continues past a REFUSED payload** (4xx —
+  or one bad batch blocks every good one behind it). See
+  `docs/superpowers/specs/2026-08-27-telemetry-loopback-proxy-design.md`.
 - **Enrichment (local):** the hook fire-and-forgets a *pointer* (transcript path
   + prompt id — **never text**) to the daemon's loopback `/enrich`. The daemon's
   background worker resolves the text on-device, runs the enrichment pipeline,
@@ -1702,6 +1732,8 @@ internal/
                      (KELD_BLOCKS enables it; KELD_BLOCKS_BACKFILL, default ON,
                       decides what FIRST SIGHT of a transcript does)
     features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
+    teleproxy/       loopback OTLP receiver: tools post here, the daemon forwards
+                     with its own token so no tool ever holds an Atlas credential
     publish/         build + POST masked enrichments to Atlas; block, window and
                      feature rows each under their own corr_scheme
     settings/ agentcfg/  per-org control-plane polling
