@@ -1162,6 +1162,54 @@ selects one of three modes:
   started and `/enrich` accepts-and-discards (returns 202, never enqueues).
   Telemetry and client-events are unaffected.
 
+⚠️ **WHAT A FRESH INSTALL LANDS ON, AND WHY IT IS NOT THE COMPILED-IN DEFAULT.**
+`keld-agent install` writes two keys into `~/.keld/agent-config.json` —
+`{"ml_backend": "deterministic", "blocks": true}` — via
+`settings.WriteInstallDefaults`, which MERGES, so an operator's `pii_regions`,
+`include_entity_text` and feature toggles survive an installer run. That is v2: the
+model-free facet set plus the block emitter, and **no multi-gigabyte model download,
+ever**. It is written FIRST in `runInstall`, before login, because `ml_backend` is
+read at daemon startup and never re-read — the restart inside `installService`
+(`launchctl bootout`+`bootstrap` / `systemctl --user restart` / `schtasks /End`+`/Run`)
+is what makes the new mode take effect in the same run. On macOS that is not
+academic: the pkg's `postinstall` kickstarts the agent BEFORE opening
+`onboard.command`, so a daemon is already running on the old settings by then. A
+test pins the order.
+
+The **compiled-in defaults are unchanged** (`ml_backend` zero value = `"auto"`,
+`Settings.Blocks` = false) and that is deliberate, not a hedge. Every machine an
+installer never writes to — a binary upgraded in place, `go run`, CI, the eval
+harness — keeps the full ML facet set, `TestBuiltInPipelineStillDemandsAModel` keeps
+passing untouched, and Atlas's Context column keeps rendering `function_guess` /
+`subcategory` / `activity_type` for that population. Phase 5 of
+`docs/superpowers/specs/2026-08-25-signal-block-pipeline-design.md` (the default
+flip) is still unstarted and still gated on Atlas.
+
+⚠️ **`ml_backend` has NO REMOTE OVERRIDE.** It is local and startup-only and nothing
+in `agentcfg/` touches it, so Atlas can neither move a machine between modes nor roll
+one back. **The installer is the only lever that will ever exist**, which has two
+consequences worth stating rather than discovering: a re-install FLIPS an existing
+`auto` machine (deliberate — every re-install converges), and an existing fleet's
+Atlas Context column therefore empties machine-by-machine at whatever pace people
+upgrade, with no server-side brake. If that pace ever needs controlling, the control
+is a staged rollout of the installer itself. `--backend auto|deterministic|off` on
+`keld-agent install` is the manual path back.
+
+`blocks` likewise has no remote override — an asymmetry with `Remote.Features`, which
+CAN turn feature rows off fleet-wide — and `KELD_BLOCKS=0` is what switches a single
+machine off without editing JSON. The key exists at all because an env-only toggle is
+**unreachable from an installer**: `LaunchAgentPlist` and `SystemdUnit` carry no
+environment block and the Windows task is a bare `/TR "<exe>" run`, so there is
+nowhere to put `KELD_BLOCKS` that the daemon would see.
+
+⚠️ **`make install-linux` routes through `keld-agent install` too** (`Makefile`'s
+`install-service` target), so a dev machine converges on `deterministic` like
+everyone else — pass `--backend auto` to keep exercising GLiNER2 locally. And
+⚠️ **do not run `keld-agent install` to test the config write**: `KELD_HOME`
+isolates `~/.keld` but NOT the service path, which `service.Install` resolves from
+`os.UserHomeDir()` — it will rewrite your real unit to point at the `go run` temp
+binary and restart it into `failed`.
+
 **Delivery reliability (never degrade, never wedge).** When enrichment is
 enabled, it always runs on GLiNER2 — there is no fallback to swap to. A sidecar
 that isn't ready yet (not yet provisioned, restarting, mid-recycle, or the
@@ -1728,6 +1776,17 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   file (falls back to the latest-release API for dry-run builds), Apple-Silicon-only,
   and non-fatal on failure: telemetry still works, enrichment jobs spool, re-running
   the script retries.
+  ⚠️ **What the installers fetch is the ANALYSIS service, not "the ML sidecar".**
+  `/analyze`, `/ingest`, `/blocks` and `/pii` are what turn transcripts into
+  workstreams, dynamics and blocks; GLiNER2 is one capability the same binary loads
+  lazily, and a v2 install never asks for it. It is ONE tarball either way — the
+  same asset serves `deterministic` and `auto`. So `install.sh` still ABORTS when
+  the fetch fails: the conclusion was always right, only its stated reason
+  ("on-device ML has no deterministic fallback") was wrong, and it is now MORE
+  justified than when it was written — without this binary a Keld install derives
+  nothing from a transcript and publishes credential detection alone.
+  `onboard.command` cannot abort a pkg install that already completed, so it stays
+  non-fatal; the two now agree in WORDING about what is lost.
   ⚠️ **Apple's notary queue is unbounded and unobservable** — no error, no log, no
   queue position, with the service reported healthy throughout. So the release does
   NOT block on it either: submit, wait only
@@ -1766,12 +1825,30 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   or failed code), then `keld signal setup --yes`, then `keld-agent install` —
   **last**, since onboarding precedes the agent: `postinstall` no longer
   pre-registers the service headlessly. Best-effort (`|| true`) and safe to re-run.
-- **Windows onboarding UI:** `installers/windows/keld-agent.iss` `[Code]` adds a
-  post-install Inno wizard page ("Set up Keld") that drives the `keld --json`
-  interface (WinAPI timer + async NDJSON temp-file polling). Compiled by `iscc` on
-  the Windows CI runner; UX is human-verified on Windows. Unlike macOS, the Windows
-  installer's headless `keld-agent install` still pre-registers the service (the
-  TTY guard); the wizard page then drives interactive login/setup.
+- **Windows onboarding UI:** `installers/windows/onboard.cmd`, staged into the
+  payload by the `.iss` `[Files]` section and opened by the post-install `[Run]`
+  step with `postinstall shellexec skipifsilent`. It is the sibling of macOS's
+  `onboard.command` and does the same three things: prompt for the one-time setup
+  code, run `keld-agent install --code "$CODE"` (falling back to `--yes` browser
+  login), and report success from OBSERVED STATE — an `ingest_token` in
+  `hook.json` — never from an exit code. `skipifsilent` is there so an MDM
+  `/SILENT` push does not block on a console waiting for a human; such a machine
+  is finished by `keld-agent install --code <CODE>` from the management tool.
+  ⚠️ **This bullet used to describe an Inno `[Code]` wizard page driving `keld
+  --json` with a WinAPI timer and async NDJSON polling, and said its "UX is
+  human-verified on Windows". THAT PAGE NEVER EXISTED** — `git log` on the `.iss`
+  shows two commits and neither added it. What was actually there was `[Run]
+  keld-agent.exe install` with `runhidden nowait`: an interactive login in a
+  window nobody could see, on a step Inno neither waited for nor could report.
+  Every Windows machine registered its logon task and then idled on
+  `awaitConfig` forever — nothing collected, nothing said. A doc describing
+  unbuilt code as built is what kept that invisible, which is why the correction
+  is stated rather than quietly swapped. **Do not re-add `runhidden` to that
+  `[Run]` line.** The wizard page is a nicer UX and remains a legitimate future
+  change; it is an aspiration, not a description.
+  ⚠️ **Not verified on Windows.** `iscc` compiling the `.iss` in CI proves
+  `onboard.cmd` is staged (a missing `Source:` is a compile error) and nothing
+  more; no CI check can confirm a console appeared and a human pasted a code.
 - **Managed tool settings** (e.g. Claude Code org/remote-managed `settings.json`)
   override user settings — if telemetry goes nowhere, check the managed OTLP
   endpoint.
