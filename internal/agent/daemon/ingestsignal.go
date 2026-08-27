@@ -59,15 +59,19 @@ func newIngestQueue(depth int) *ingestQueue {
 	return &ingestQueue{ch: make(chan string, depth), pending: map[string]struct{}{}}
 }
 
-// offer queues path for signalling. It never blocks. false means the signal was
-// coalesced into one already waiting, or dropped because the queue is full —
-// both recoverable (see the type comment).
+// offer queues path for signalling. It never blocks.
+//
+// ⚠️ TRUE MEANS "TAKEN ON", NOT "ENQUEUED", and the difference is the same one
+// queue.Offer had to learn. A COALESCED path is already pending and WILL be
+// signalled, so the caller has nothing left to do — reporting it as a failure
+// would make a first-sight caller retry a sighting that is already handled.
+// Only a full queue is a refusal.
 func (q *ingestQueue) offer(path string) bool {
 	q.mu.Lock()
 	if _, dup := q.pending[path]; dup {
 		q.coalesced++
 		q.mu.Unlock()
-		return false
+		return true // already queued: the signal is coming
 	}
 	q.pending[path] = struct{}{}
 	q.mu.Unlock()
@@ -163,17 +167,19 @@ func (q *ingestQueue) stats() (int, int) {
 // is gone. A guessed path would be handed to `gitRemote` and could name some
 // other repository entirely.
 func ingestSignalHook(ctx context.Context,
-	signal func(path string, resolved enrich.ResolvedFacts) bool) func(source, path string) {
+	signal func(path string, resolved enrich.ResolvedFacts) bool) func(source, path string) bool {
 	q := newIngestQueue(ingestSignalDepth)
 	facts := newFactsCache()
 	go q.run(ctx, func(path string) bool {
 		return signal(path, facts.forTranscript(path).resolved())
 	})
-	return func(source, path string) {
+	return func(source, path string) bool {
 		if !enrich.WorkstreamsEligible(source) {
-			return
+			// Not eligible is not a refusal: nothing will ever signal this
+			// source, so a caller holding a backlog must drop it, not retry.
+			return true
 		}
-		q.offer(path)
+		accepted := q.offer(path)
 		// THE V2 BLOCK PATH's only trigger for adding work rides here, behind
 		// the SAME eligibility gate, because it is the same question one step
 		// later: a transcript whose bytes are being ingested is exactly a
@@ -190,5 +196,8 @@ func ingestSignalHook(ctx context.Context,
 		// features.go), and as cheap as the two calls above it — a map write
 		// under a short mutex, no I/O.
 		noteFeatureAdvance(source, path)
+		// The block and feature observers above are in-memory map writes that
+		// cannot refuse, so the caller's answer is the ingest queue's alone.
+		return accepted
 	}
 }

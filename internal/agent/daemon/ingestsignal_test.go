@@ -116,8 +116,14 @@ func TestIngestQueueCoalescesAndDropsRatherThanWaiting(t *testing.T) {
 	if !q.offer("/a.jsonl") {
 		t.Fatal("first offer must be accepted")
 	}
-	if q.offer("/a.jsonl") {
-		t.Fatal("a path already queued must coalesce, not queue twice")
+	// ⚠️ COALESCED REPORTS TRUE, and that is a deliberate change of meaning: the
+	// answer is "taken on", not "enqueued". The path is already pending and WILL
+	// be signalled, so a caller holding a first-sight backlog has nothing left to
+	// do — reporting it as a refusal would make it retry a sighting that is
+	// already handled, forever. Only a FULL queue is a refusal. The coalescing
+	// itself is asserted on the counter below, where it belongs.
+	if !q.offer("/a.jsonl") {
+		t.Fatal("a coalesced path is taken on: it is already queued and will be signalled")
 	}
 	if !q.offer("/b.jsonl") {
 		t.Fatal("a different path must be accepted")

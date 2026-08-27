@@ -28,7 +28,7 @@ type advance struct{ source, path string }
 func signalWatcher(t *testing.T, root Root, backfill bool, rec *[]advance) *Watcher {
 	t.Helper()
 	w := testWatcher(t, root, func(spool.Pointer) {}, backfill)
-	w.advanced = func(source, path string) { *rec = append(*rec, advance{source, path}) }
+	w.advanced = func(source, path string) bool { *rec = append(*rec, advance{source, path}); return true }
 	return w
 }
 
@@ -144,11 +144,16 @@ func TestNilIngestSignalIsInert(t *testing.T) {
 func TestWithIngestSignalWires(t *testing.T) {
 	var got []advance
 	w := New(func(spool.Pointer) {}, nil, "t", time.Second, false).
-		WithIngestSignal(func(source, path string) { got = append(got, advance{source, path}) })
+		WithIngestSignal(func(source, path string) bool {
+			got = append(got, advance{source, path})
+			return true
+		})
 	if w.advanced == nil {
 		t.Fatal("WithIngestSignal did not install the hook")
 	}
-	w.advanced("claude_code", "/x.jsonl")
+	if !w.advanced("claude_code", "/x.jsonl") {
+		t.Fatal("the hook's acceptance answer was not passed through")
+	}
 	if len(got) != 1 || got[0].source != "claude_code" || got[0].path != "/x.jsonl" {
 		t.Fatalf("hook not called through: %+v", got)
 	}
@@ -180,7 +185,7 @@ func TestFirstSightSignalsIngestWhenHistoryIsWanted(t *testing.T) {
 	w := testWatcher(t, Root{SourceID: "claude_code", Dir: dir}, func(pt spool.Pointer) {
 		offered = append(offered, pt)
 	}, false)
-	w.advanced = func(source, path string) { rec = append(rec, advance{source, path}) }
+	w.advanced = func(source, path string) bool { rec = append(rec, advance{source, path}); return true }
 	w.signalFirstSight = true
 
 	// Through pollOnce, not scanFile: the signal is BACKLOGGED at the sighting
@@ -268,5 +273,60 @@ func TestFirstSightSignalsArePacedAcrossPolls(t *testing.T) {
 	w.pollOnce()
 	if len(rec) != before {
 		t.Fatalf("a drained backlog kept signalling: %d -> %d", before, len(rec))
+	}
+}
+
+// ⚠️ A BACKLOGGED SIGHTING MUST ONLY BE POPPED IF IT WAS TAKEN ON.
+//
+// drainFirstSight called `advanced` and shifted the entry off regardless. The
+// hook behind it drops when the 64-slot ingest queue is full and said nothing, so
+// pacing at a fixed 4-per-poll was a GUESS against measured drain throughput
+// (~51/min vs 48/min offered, with one 90 MB transcript costing 5.1s of that
+// budget). A burst of large transcripts overruns it and the loss is silent and
+// permanent — a first sighting has no next signal, which is the whole reason this
+// backlog exists.
+//
+// Reporting acceptance turns the guess into real backpressure: a refused entry
+// stays at the head and is retried next poll.
+func TestARefusedFirstSightStaysOnTheBacklog(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("%08d-0000.jsonl", i))
+		if err := os.WriteFile(p, []byte(genuineSaying("P", "pre-existing")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var seen []advance
+	accept := false
+	w := testWatcher(t, Root{SourceID: "claude_code", Dir: dir}, func(spool.Pointer) {}, false)
+	w.advanced = func(source, path string) bool {
+		seen = append(seen, advance{source, path})
+		return accept
+	}
+	w.signalFirstSight = true
+
+	// Queue full: offered, refused, and NOT lost.
+	w.pollOnce()
+	refused := len(seen)
+	if refused == 0 {
+		t.Fatal("nothing was offered at all")
+	}
+	if len(w.firstSight) != 3 {
+		t.Fatalf("backlog = %d, want all 3 kept — a refused signal has no next chance", len(w.firstSight))
+	}
+
+	// Queue drains: the same paths are re-offered and now stick.
+	accept = true
+	w.pollOnce()
+	w.pollOnce()
+	if len(w.firstSight) != 0 {
+		t.Fatalf("backlog = %d after acceptance, want 0", len(w.firstSight))
+	}
+	got := map[string]bool{}
+	for _, a := range seen {
+		got[a.path] = true
+	}
+	if len(got) != 3 {
+		t.Fatalf("only %d distinct transcripts ever signalled, want 3", len(got))
 	}
 }

@@ -19,9 +19,11 @@ import (
 // and Claude Code launch surfaces where hooks may not run). It never reads or
 // forwards prompt TEXT — only pointers.
 type Watcher struct {
-	offer    func(spool.Pointer)
-	observe  func(source, transcriptPath string, line []byte)
-	advanced func(source, transcriptPath string)
+	offer   func(spool.Pointer)
+	observe func(source, transcriptPath string, line []byte)
+	// advanced reports whether the signal was TAKEN ON. A refused one must not be
+	// dropped — see drainFirstSight.
+	advanced func(source, transcriptPath string) bool
 	// signalFirstSight makes a FIRST SIGHTING fire the ingest/blocks signal even
 	// under forward-only, without offering any of the file's historical prompts.
 	// See scanFile and WithFirstSightSignal.
@@ -115,7 +117,7 @@ func (w *Watcher) WithFirstSightSignal(on bool) *Watcher {
 	return w
 }
 
-func (w *Watcher) WithIngestSignal(fn func(source, transcriptPath string)) *Watcher {
+func (w *Watcher) WithIngestSignal(fn func(source, transcriptPath string) bool) *Watcher {
 	w.advanced = fn
 	return w
 }
@@ -176,10 +178,20 @@ func (w *Watcher) drainFirstSight() {
 	if n > firstSightPerPoll {
 		n = firstSightPerPoll
 	}
+	// ⚠️ POP ONLY WHAT WAS TAKEN ON. The hook behind `advanced` drops when the
+	// bounded ingest queue is full; popping regardless made the pacing rate a
+	// GUESS against the sidecar's real drain throughput, and an overrun lost the
+	// sighting permanently — a first sighting has no next signal, which is the
+	// entire reason this backlog exists. Reporting acceptance turns the guess
+	// into backpressure: a refused entry stays at the head for the next poll.
+	taken := 0
 	for _, a := range w.firstSight[:n] {
-		w.advanced(a.source, a.path)
+		if !w.advanced(a.source, a.path) {
+			break
+		}
+		taken++
 	}
-	w.firstSight = append(w.firstSight[:0], w.firstSight[n:]...)
+	w.firstSight = append(w.firstSight[:0], w.firstSight[taken:]...)
 }
 
 // advanceRef is one backlogged first sighting: coordinates only.
