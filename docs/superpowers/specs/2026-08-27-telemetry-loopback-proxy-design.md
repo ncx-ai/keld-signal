@@ -190,9 +190,17 @@ Separately approved and useful in both worlds. `keld signal doctor` compares the
 write time against the last successful telemetry forward and reports **"telemetry configured
 but not flowing — restart your AI tools"** when a machine is configured and silent.
 
-Before the proxy lands this is the primary defence. After it lands it is the safety net for
-the populations the proxy does not reach: direct-push installs that have not re-run setup,
-and org-managed endpoints.
+⚠️ **IT CANNOT SHIP BEFORE THE PROXY, and an earlier draft of this document said it should.**
+"The last successful telemetry forward" is a daemon-side fact that only EXISTS once the daemon
+is the one forwarding. Today the tool posts straight to Atlas and the client keeps no record of
+it — verified: nothing under `internal/` tracks tool-telemetry success, because there is nothing
+to track. Pre-proxy the client genuinely cannot distinguish "flowing" from "silently 401ing";
+that fact lives only in Atlas.
+
+So the check lands WITH the forwarder and reads its recorded timestamp. For the populations the
+proxy does not reach — direct-push installs that have not re-run setup, and org-managed
+endpoints — the honest report is `unknown`, never a confident "broken": the same rule
+`localagent.ModelState` follows, that an inconclusive check must never produce a finding.
 
 It must obey the rule `localagent.ModelState` already follows: **never report a problem from
 an inconclusive check.** "No telemetry yet on a machine installed four minutes ago" is not a
@@ -301,8 +309,10 @@ rather than an assumption.
 ## Risks, named
 
 - **Telemetry now depends on the daemon.** Mitigated by the spool, but a machine whose
-  daemon never starts collects nothing where it previously collected everything. `doctor`
-  is the detector, and this is the strongest argument for the check landing FIRST.
+  daemon never starts collects nothing where it previously collected everything. `doctor` is
+  the detector — and note it can only detect this AFTER the proxy ships, since pre-proxy there
+  is no client-side record of tool telemetry at all. There is no ordering that gives us the
+  detector first; the risk is carried, not sequenced away.
 - **A fixed port can collide.** Reported loudly rather than silently mis-delivered, and
   overridable — but it is a new way for a machine to need attention.
 - **The daemon sees payloads it did not author.** The text-stripping guard is the answer,
