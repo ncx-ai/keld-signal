@@ -262,3 +262,62 @@ func TestLastForwardIsReadableFromDisk(t *testing.T) {
 		t.Fatal("recorded a zero instant")
 	}
 }
+
+// ⚠️ THE TOOLS DO NOT SEND OUR HEADER NAME, AND EVERY UNIT TEST HERE MISSED IT.
+// Live, all three tools were 401'd by this proxy while the whole suite passed —
+// because the suite used the name this package chose rather than the names the
+// tool writers actually emit:
+//
+//	Claude Code / Codex   x-keld-ingest-token: <secret>
+//	Gemini                ?token=<secret>          (its OTLP SDK sends no custom header)
+//
+// So the credential is accepted from every place a tool can put it. Changing the
+// writers instead was the alternative and is worse: Gemini CANNOT send a custom
+// header, so the query form has to be understood regardless, and the header
+// shapes are the ones already known to work with each tool.
+func TestAcceptsTheCredentialInEveryShapeAToolCanSendIt(t *testing.T) {
+	const secret = "s3cret"
+	p := New("http://a/v1/logs", "http://a/v1/metrics", func() string { return "t" }, secret, t.TempDir())
+
+	// Claude Code and Codex: the ingest-token header.
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/logs", strings.NewReader(`{"resourceLogs":[]}`))
+	req.Header.Set("x-keld-ingest-token", secret)
+	p.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Errorf("x-keld-ingest-token header: code = %d, want 202 (Claude Code and Codex send this)", rr.Code)
+	}
+
+	// Gemini: the query parameter.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/v1/logs?token="+secret, strings.NewReader(`{"resourceLogs":[]}`))
+	p.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Errorf("?token= query: code = %d, want 202 (Gemini's SDK sends no custom header)", rr.Code)
+	}
+
+	// And our own name keeps working.
+	if rr := post(t, p, "/v1/logs", secret, `{"resourceLogs":[]}`); rr.Code != http.StatusAccepted {
+		t.Errorf("x-keld-telemetry-secret: code = %d, want 202", rr.Code)
+	}
+}
+
+// Widening where the credential may appear must not widen WHAT is accepted.
+func TestAWrongCredentialIsRejectedInEveryShape(t *testing.T) {
+	p := New("http://a/v1/logs", "http://a/v1/metrics", func() string { return "t" }, "right", t.TempDir())
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/logs", strings.NewReader(`{}`))
+	req.Header.Set("x-keld-ingest-token", "wrong")
+	p.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("wrong ingest-token header accepted: %d", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/v1/logs?token=wrong", strings.NewReader(`{}`))
+	p.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("wrong ?token= accepted: %d", rr.Code)
+	}
+}

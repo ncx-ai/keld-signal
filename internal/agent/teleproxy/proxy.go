@@ -184,12 +184,7 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		// ⚠️ An EMPTY configured secret rejects everything rather than accepting
-		// everything. ConstantTimeCompare("", "") is 1, so without this an
-		// unconfigured proxy would authenticate any local caller — a fail-open
-		// default on the one route that injects billable usage into the org.
-		if p.secret == "" ||
-			subtle.ConstantTimeCompare([]byte(r.Header.Get("x-keld-telemetry-secret")), []byte(p.secret)) != 1 {
+		if !p.authorized(r) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -209,6 +204,42 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 		}()
 		w.WriteHeader(http.StatusAccepted)
 	}
+}
+
+// authorized checks the caller's credential against every place a tool can put
+// it.
+//
+// ⚠️ THE TOOLS DO NOT SEND THIS PACKAGE'S OWN HEADER NAME, and assuming they did
+// meant all three were 401'd live while every unit test passed — the tests used
+// the name chosen here rather than the names telemetry.ClaudeEnv,
+// CodexBlockBody and GeminiTelemetry actually emit:
+//
+//	Claude Code, Codex   x-keld-ingest-token: <secret>
+//	Gemini               ?token=<secret>
+//
+// Gemini's OTLP SDK cannot send a custom header at all, which is why its token
+// rides the URL — so the query form has to be understood whatever the headers
+// do, and rewriting the tool writers would not have removed the need for it.
+//
+// ⚠️ An EMPTY configured secret rejects everything rather than accepting
+// everything: ConstantTimeCompare("", "") is 1, so without the guard an
+// unconfigured proxy would authenticate any local caller — fail-open on the one
+// route that injects billable usage into the org.
+func (p *Proxy) authorized(r *http.Request) bool {
+	if p.secret == "" {
+		return false
+	}
+	want := []byte(p.secret)
+	for _, got := range []string{
+		r.Header.Get("x-keld-telemetry-secret"),
+		r.Header.Get("x-keld-ingest-token"),
+		r.URL.Query().Get("token"),
+	} {
+		if got != "" && subtle.ConstantTimeCompare([]byte(got), want) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // textKey reports whether an OTLP attribute key names free text from the user or
