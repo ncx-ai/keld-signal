@@ -321,3 +321,58 @@ func TestAWrongCredentialIsRejectedInEveryShape(t *testing.T) {
 		t.Errorf("wrong ?token= accepted: %d", rr.Code)
 	}
 }
+
+// ⚠️ THE DETECTOR MUST BE ARMED BEFORE THE FIRST FORWARD, NOT BY IT.
+//
+// LastForwardOnDisk reported known=false whenever the state file was absent, and
+// the file was written only by a SUCCESSFUL forward — so the one population the
+// doctor check exists for (a machine that migrated but whose tools were never
+// restarted, and has therefore never forwarded) could never produce a finding.
+// Verified live before this fix: credential three hours old, no forward ever,
+// doctor silent. The unit test that "covered" it hand-built Known:true with a
+// zero LastForward — a state the wiring could not produce.
+//
+// `known` now means "a proxy runs on this machine", which is what its doc always
+// claimed, and is established at START.
+func TestMarkRunningArmsTheDetectorBeforeAnyForward(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+
+	if _, known := LastForwardOnDisk(); known {
+		t.Fatal("known before the proxy has ever run")
+	}
+	if err := MarkRunning(); err != nil {
+		t.Fatalf("MarkRunning: %v", err)
+	}
+	last, known := LastForwardOnDisk()
+	if !known {
+		t.Fatal("after MarkRunning the proxy must be KNOWN to run here")
+	}
+	if !last.IsZero() {
+		t.Fatalf("last forward = %v, want zero — nothing has been forwarded yet", last)
+	}
+}
+
+// MarkRunning must not erase a real forward when the daemon restarts.
+func TestMarkRunningPreservesAnExistingForward(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL, srv.URL, func() string { return "t" }, "s", t.TempDir())
+	post(t, p, "/v1/logs", "s", `{"resourceLogs":[]}`)
+	p.WaitIdle()
+	before, known := LastForwardOnDisk()
+	if !known || before.IsZero() {
+		t.Fatalf("no forward recorded: known=%v t=%v", known, before)
+	}
+
+	if err := MarkRunning(); err != nil { // daemon restart
+		t.Fatal(err)
+	}
+	after, known := LastForwardOnDisk()
+	if !known || !after.Equal(before) {
+		t.Fatalf("a restart erased the recorded forward: %v -> %v", before, after)
+	}
+}

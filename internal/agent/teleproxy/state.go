@@ -12,12 +12,39 @@ import (
 // StatePath is where the proxy records when telemetry last reached Atlas.
 func StatePath() string { return filepath.Join(paths.StateDir(), "telemetry.json") }
 
-// LastForwardOnDisk reads the recorded instant, and whether it is KNOWN.
+// MarkRunning records that a telemetry proxy runs on this machine, WITHOUT
+// claiming anything has been forwarded.
+//
+// ⚠️ IT IS CALLED AT PROXY START, AND THE DETECTOR IS INERT WITHOUT IT. The file
+// used to be written only by a successful forward, so `known` was false on
+// exactly the population `keld signal doctor` exists for: a machine that migrated
+// to the proxy but whose tools were never restarted has never forwarded, so it
+// had no file, so it produced no finding — ever. Verified live: credential three
+// hours old, no forward, doctor silent.
+//
+// `known` therefore means "a proxy runs here", which is what LastForwardOnDisk's
+// doc always claimed. An existing recorded forward is preserved, so a daemon
+// restart does not look like a machine that has never delivered.
+func MarkRunning() error {
+	if _, err := os.Stat(StatePath()); err == nil {
+		return nil // already armed; keep whatever forward is recorded
+	}
+	if err := os.MkdirAll(filepath.Dir(StatePath()), 0o700); err != nil {
+		return err
+	}
+	buf, err := json.Marshal(state{})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(StatePath(), buf, 0o600)
+}
+
+// LastForwardOnDisk reads the recorded instant, and whether a proxy runs here.
 //
 // ⚠️ known=false is a first-class answer and must never be reported as a fault.
-// The file is absent on a machine whose proxy has never run — a direct-push
-// install, or one whose bind failed — and on one that has simply never forwarded
-// yet. Neither is evidence that anything is broken.
+// It means no proxy runs on this machine — a direct-push install, or one whose
+// bind failed. A running proxy that has never forwarded answers (zero, true),
+// which IS a reportable state: see MarkRunning.
 func LastForwardOnDisk() (t time.Time, known bool) {
 	data, err := os.ReadFile(StatePath())
 	if err != nil {

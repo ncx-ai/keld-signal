@@ -51,6 +51,13 @@ func startTelemetryProxy(ctx context.Context, emitter *clientevents.Emitter,
 		p.OnAuthRejection(onAuthRejection)
 	}
 
+	// Arm the doctor check NOW, not on the first successful forward: the machine
+	// this check exists for is one whose tools were never restarted, which will
+	// never forward at all. See teleproxy.MarkRunning.
+	if err := teleproxy.MarkRunning(); err != nil {
+		log.Printf("keld-agent: telemetry state not recorded (doctor cannot judge telemetry): %v", err)
+	}
+
 	srv := &http.Server{Handler: p.Handler()}
 	go func() {
 		<-ctx.Done()
