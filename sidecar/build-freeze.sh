@@ -61,14 +61,21 @@ if [ "$OBF" = "1" ]; then
   # Recurse: app/ has subpackages (e.g. app/analysis/) whose .py files must be
   # obfuscated too — a plain `app/*.py` glob here previously missed them
   # entirely, so an entire subpackage shipped as plain source (the .spec's
-  # hiddenimports walk is already recursive; this loop wasn't). test_*.py is
-  # processed same as before (harmless — the .spec never hidden-imports it,
-  # so it never reaches the frozen bundle regardless).
+  # hiddenimports walk is already recursive; this loop wasn't).
+  #
+  # ⚠️ test_*.py IS EXCLUDED, and processing it was a hard build failure rather
+  # than the harmless waste this comment used to claim. Tests are 42 of the 53
+  # files in app/, they never reach the frozen bundle (the .spec skips them in
+  # hiddenimports) and the coverage gate already excludes them
+  # (scripts/check-obfuscation-coverage.sh) — so obfuscating them bought nothing
+  # and spent PyArmor's free-tier licence budget. Once the suite grew past the
+  # cap, `ERROR out of license` failed the freeze on ALL THREE OSes, blocking the
+  # release. This is now the same file set the .spec and the coverage gate use.
   while IFS= read -r -d '' f; do
     rel="${f#sidecar/app/}"
     mkdir -p "build/obf/app/$(dirname "$rel")"
     "$PY" -m python_minifier "${MIN_ARGS[@]}" -o "build/obf/app/$rel" "$f"
-  done < <(find sidecar/app -name '*.py' -print0)
+  done < <(find sidecar/app -name '*.py' -not -name 'test_*.py' -print0)
   # 2) PyArmor free-tier bytecode encryption over the renamed tree. pyarmor has
   #    no `python -m` entry, so use the console script beside $PY (venv case),
   #    falling back to PATH (CI, where pip put `pyarmor` on PATH).
