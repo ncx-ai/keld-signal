@@ -29,7 +29,7 @@ func TestDrainStopsAndKeepsOnAuthRejection(t *testing.T) {
 	tr := NewTransport("http://atlas.invalid/v1/logs", func() string { return "tok" }, dir)
 	tr.policy = onePolicy()
 	posts := 0
-	tr.post = func(ctx context.Context, body []byte) (int, error) { posts++; return 401, nil }
+	tr.post = func(ctx context.Context, body []byte) (int, []byte, error) { posts++; return 401, nil, nil }
 	authHits := 0
 	tr.OnAuthRejection(func() { authHits++ })
 
@@ -61,7 +61,7 @@ func TestUnavailableNeverTriggersReonboard(t *testing.T) {
 	dir := t.TempDir()
 	tr := NewTransport("http://atlas.invalid/v1/logs", func() string { return "tok" }, dir)
 	tr.policy = onePolicy()
-	tr.post = func(ctx context.Context, body []byte) (int, error) { return 503, nil }
+	tr.post = func(ctx context.Context, body []byte) (int, []byte, error) { return 503, nil, nil }
 	authHits := 0
 	tr.OnAuthRejection(func() { authHits++ })
 
@@ -87,12 +87,12 @@ func TestRefusedPayloadDoesNotBlockTheQueueBehindIt(t *testing.T) {
 	tr := NewTransport("http://atlas.invalid/v1/logs", func() string { return "tok" }, dir)
 	tr.policy = onePolicy()
 	delivered := 0
-	tr.post = func(ctx context.Context, body []byte) (int, error) {
+	tr.post = func(ctx context.Context, body []byte) (int, []byte, error) {
 		if bytes.Contains(body, []byte("bad")) {
-			return 422, nil
+			return 422, nil, nil
 		}
 		delivered++
-		return 200, nil
+		return 200, nil, nil
 	}
 	if err := tr.spool([]byte(`{"v":"bad"}`)); err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestATornSpoolFileDoesNotStallTheDrain(t *testing.T) {
 	tr := NewTransport("http://atlas.invalid/v1/logs", func() string { return "tok" }, dir)
 	tr.policy = onePolicy()
 	delivered := 0
-	tr.post = func(ctx context.Context, body []byte) (int, error) { delivered++; return 200, nil }
+	tr.post = func(ctx context.Context, body []byte) (int, []byte, error) { delivered++; return 200, nil, nil }
 
 	// Sorts before the spooled file, so it is drained first.
 	if err := os.WriteFile(filepath.Join(dir, "0000-torn.json"), []byte(`{"resourceL`), 0o600); err != nil {
@@ -173,7 +173,7 @@ func TestSpoolFailureIsReportedNotFatal(t *testing.T) {
 	tr := NewTransport("http://atlas.invalid/v1/logs", func() string { return "tok" },
 		filepath.Join(blocker, "spool"))
 	tr.policy = onePolicy()
-	tr.post = func(ctx context.Context, body []byte) (int, error) { return 0, errors.New("network down") }
+	tr.post = func(ctx context.Context, body []byte) (int, []byte, error) { return 0, nil, errors.New("network down") }
 
 	if err := tr.Deliver(context.Background(), []byte(`{"n":1}`)); err == nil {
 		t.Fatal("an unspoolable failure was reported as success")

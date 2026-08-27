@@ -41,8 +41,11 @@ type Transport struct {
 	token    func() string
 	spoolDir string
 
-	policy   retry.Policy
-	post     func(ctx context.Context, body []byte) (int, error)
+	policy retry.Policy
+	// post is the real POST, returning the RESPONSE BODY as well as the status so
+	// delivery can be judged on content — see notAtlasResponse. Swapped out in
+	// tests that want a fake instead of an httptest server.
+	post     func(ctx context.Context, body []byte) (int, []byte, error)
 	maxSpool int
 	clock    func() time.Time
 
@@ -93,25 +96,45 @@ func NewTransport(endpoint string, token func() string, spoolDir string) *Transp
 	return t
 }
 
-// doPost is the real HTTP POST; swapped out in tests that want to inject a fake
-// transport instead of an httptest server.
-func (t *Transport) doPost(ctx context.Context, body []byte) (int, error) {
+// notAtlasResponse reports whether a 2xx body is something other than Atlas's.
+//
+// ⚠️ A CAPTIVE PORTAL RETURNS 200 WITH AN HTML LOGIN PAGE. Hotel and airport
+// wifi answer every request that way, so a transport that keys success on the
+// status code considers the batch delivered and DELETES it — silent data loss on
+// exactly the networks employee laptops sit on.
+//
+// The test is deliberately crude and one-sided: Atlas answers JSON or nothing,
+// so anything that is neither is treated as not-delivered. Being over-strict
+// costs a retry; being under-strict costs the data.
+func notAtlasResponse(body []byte) bool {
+	b := bytes.TrimSpace(body)
+	if len(b) == 0 {
+		return false // some Atlas routes answer 2xx with an empty body
+	}
+	return b[0] != '{' && b[0] != '['
+}
+
+// doPost is the real HTTP POST, returning the response body so the caller can
+// judge delivery by content rather than by status alone.
+func (t *Transport) doPost(ctx context.Context, body []byte) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	req.Header.Set("x-keld-ingest-token", t.token())
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	// Drain the body so the connection can be reused; the response payload
-	// itself carries nothing the caller needs.
+	// Read a BOUNDED prefix: enough to tell Atlas's JSON from a captive portal's
+	// HTML, and never enough for a hostile or enormous response to matter. The
+	// body is still drained so the connection can be reused.
+	head, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	_, _ = io.Copy(io.Discard, resp.Body)
-	return resp.StatusCode, nil
+	return resp.StatusCode, head, nil
 }
 
 // Deliver POSTs one already-marshalled batch, retrying transient failures, and
@@ -145,12 +168,18 @@ func (t *Transport) Deliver(ctx context.Context, body []byte) error {
 // classifier — and the caller's spool-vs-drop decision — can judge it.
 func (t *Transport) postWithRetry(ctx context.Context, body []byte) error {
 	return retry.Do(ctx, t.policy, func() error {
-		code, err := t.post(ctx, body)
+		code, respBody, err := t.post(ctx, body)
 		if err != nil {
 			return err
 		}
 		if code < 200 || code >= 300 {
 			return retry.HTTPStatus(code)
+		}
+		// A 2xx that is not Atlas's is a captive portal, not a delivery. Reported
+		// as 502 so it classifies TRANSIENT: the laptop will be off this network
+		// soon and the batch must survive until it is.
+		if notAtlasResponse(respBody) {
+			return retry.HTTPStatus(http.StatusBadGateway)
 		}
 		return nil
 	})
