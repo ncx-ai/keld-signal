@@ -124,6 +124,23 @@ written; a hand-rolled one here is the thing to refuse.
 A batch that fails on a permanent, non-auth status is spooled once and dropped by the
 bounded spool's own eviction, never retried forever.
 
+⚠️ **The drain STOPS on the first auth failure**, re-onboards once, and resumes. It must not
+walk the rest of the spool learning the same thing: a laptop that was offline for a week
+comes back with hundreds of batches and, if its token was revoked while it slept, a per-batch
+401 becomes a per-batch re-onboard — a self-inflicted burst against Atlas at the exact moment
+an org least wants one. Single-flighting inside `reauther` is necessary but not sufficient
+here; the drain loop itself has to yield.
+
+⚠️ **Delivery is confirmed from the RESPONSE, not the status code alone.** Hotel and airport
+captive portals answer every request with **200 and an HTML login page**. A forwarder that
+keys success on the status will consider the batch delivered and delete it — silent data loss
+on precisely the networks employee laptops sit on. The response must be recognisably Atlas's;
+anything else is a failure that KEEPS the data.
+
+⚠️ **The token is read per request** (`tok.Get`), never captured when the drain starts, so a
+rotation mid-drain is picked up by the remaining batches. Capturing it would rebuild, inside
+the daemon, the same stale-credential-in-memory bug this document exists to remove.
+
 ## A privacy gain worth taking
 
 The daemon becomes a conduit for OTLP payloads it did not author. That is an opportunity:
@@ -172,16 +189,88 @@ fault, and neither is a daemon that has been up for ten seconds.
 
 ## Testing
 
-- **Forwarder:** a 401 produces exactly ONE re-onboard attempt, not a loop (the property
-  most likely to regress); an unreachable Atlas spools rather than drops; a payload carrying
-  a prompt-text field is forwarded without it.
-- **Secret stability:** the telemetry secret survives a daemon restart while the ingress
-  secret does not — asserted together, because their difference is the whole design.
-- **Config writers:** `ClaudeEnv`, `CodexBlockBody` and `GeminiTelemetry` emit **no Atlas
-  ingest token** and no Atlas URL. This is the regression test for the bug itself.
-- **Port:** an unbindable telemetry port is reported, and setup does not write a dead
-  endpoint.
-- **Doctor:** silent-and-configured reports; silent-and-freshly-installed does not.
+⚠️ **The happy path is not where this breaks.** It runs on employee laptops: suspended mid-flush,
+on hotel wifi, behind a corporate proxy, offline for a week, with a full disk. Every scenario
+below is a test, and each names the wrong behaviour it exists to catch.
+
+### A. Anti-spam under adversity — the headline requirement
+
+- **A revoked token against a FULL spool must produce ONE re-onboard, not one per batch.** A
+  laptop offline for a week comes back with hundreds of spooled batches and a token revoked
+  while it slept. Draining them naively yields a 401 per batch and, without single-flighting,
+  a re-onboard per 401 — a self-inflicted burst against Atlas at exactly the moment the org
+  is least likely to want one. The drain must stop on the first auth failure, re-onboard
+  once through `reauther`'s cooldown, and resume; it must not walk the whole spool learning
+  the same thing hundreds of times.
+- **A permanently-failing Atlas must not become a hot loop.** 400/404/422 is spooled once and
+  evicted by the bounded spool, never retried forever. Asserted by counting requests over a
+  simulated hour, not by inspecting code.
+- **A token rotated MID-DRAIN** is picked up by the remaining batches without restarting the
+  drain, because the forwarder reads `tok.Get` per request rather than capturing it.
+
+### B. Laptop reality
+
+- **Suspend/resume mid-forward.** The in-flight connection dies with a net error, not an HTTP
+  status. It must classify as transient, spool, and retry — not be mistaken for a permanent
+  failure and dropped.
+- ⚠️ **A captive portal returns 200 with an HTML body.** This is the nastiest realistic case:
+  hotel and airport wifi answer every request with a success status and a login page. A
+  forwarder that keys success on the status code alone will consider the batch delivered and
+  **delete it**. The response must be validated as Atlas's, and anything else treated as a
+  failure that KEEPS the data.
+- **VPN up/down and corporate TLS interception.** Certificate errors are permanent-looking but
+  are an environment condition; they must spool rather than discard, because the same laptop
+  will be on the VPN in an hour.
+- **Days offline.** The spool fills, drop-oldest evicts, and the NEWEST events must survive —
+  the failure to catch is an eviction policy that keeps the oldest and discards what just
+  happened.
+
+### C. Resources and interruption
+
+- **Disk full while spooling.** The write fails; the daemon must stay up and keep serving the
+  listener, degrading to in-memory loss with a stated client-event rather than crashing or
+  wedging the tools that are POSTing to it.
+- **Kill -9 mid-spool-write.** The next start must not choke on a torn file: a partial batch
+  is discarded and the rest of the spool drains.
+- **An oversized batch** is rejected at the listener with a clear status rather than buffered
+  into memory pressure — the ingress already caps bodies at 1 MiB and this route needs its own
+  deliberate bound.
+
+### D. Contention on the fixed port
+
+- **Port 14318 already bound** by something else: reported once per run and surfaced in
+  `doctor`; setup must not write an endpoint the daemon could not bind.
+- ⚠️ **Two daemons.** A developer running `keld-agent run` by hand while the service is running
+  is normal on an engineer's laptop. The second must fail to bind and say so plainly, not
+  silently steal or silently lose telemetry. This is the case a fixed port introduces and the
+  ephemeral one never had.
+- **Several tools POSTing concurrently** (Claude Code, Codex and Gemini all open) interleave
+  without corrupting the spool.
+
+### E. Time
+
+- ⚠️ **A laptop that wakes with a skewed clock must not make `doctor` lie.** The check compares
+  the `hook.json` write time against the last successful forward; if the clock jumps backwards
+  those are unordered, and the honest answer is "cannot determine", never a confident
+  "telemetry is broken". This is `localagent.ModelState`'s rule — never report a problem from
+  an inconclusive check — applied to a second surface.
+- **A freshly installed machine is silent and fine.** No finding within the settling window.
+
+### F. Invariants that must not drift
+
+- **`ClaudeEnv`, `CodexBlockBody` and `GeminiTelemetry` emit no Atlas ingest token and no Atlas
+  URL.** This is the regression test for the original bug and should read like one.
+- **The telemetry secret survives a daemon restart while the ingress secret does not**, asserted
+  in the same test, because their difference *is* the design.
+- **A payload carrying a prompt-text field is forwarded without it**, including a field name no
+  current tool emits — the guard must be structural, not a list of today's three tools.
+
+### What cannot be tested here, stated rather than implied
+
+No automated test can prove a real Claude Code picks up a loopback endpoint from
+`settings.json` and pushes to it; that needs one human run per tool. The suite covers
+everything on our side of the socket, and the manual step is one line in the release checklist
+rather than an assumption.
 
 ## Risks, named
 
