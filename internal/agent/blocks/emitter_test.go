@@ -118,15 +118,29 @@ func f64(v float64) *float64 { return &v }
 
 const txPath = "/home/x/.claude/projects/p/sess.jsonl"
 
+// newTestEmitter builds an emitter with the first-sight policy PINNED to
+// forward-only, so most of this file exercises cursor and publish semantics
+// (which are identical either way) with a deterministic first sweep.
+//
+// ⚠️ Pinned rather than inherited: New() reads KELD_BLOCKS_BACKFILL, so without
+// this a developer's ambient environment would change what these tests measure.
+// The backfill default has its own tests, which opt in explicitly.
 func newTestEmitter(t *testing.T, dig Digester, pub Sender) *Emitter {
 	t.Helper()
-	return New(dig, pub, nil, "actor", filepath.Join(t.TempDir(), "blocks.json"))
+	e := New(dig, pub, nil, "actor", filepath.Join(t.TempDir(), "blocks.json"))
+	e.backfill = false
+	return e
 }
 
-// FORWARD-ONLY ON FIRST SIGHT. A machine has hundreds of transcripts (496 in
-// the reference corpus) and a daemon restart must not emit a herd of history.
-// The first sweep learns the watermark and emits NOTHING; only work after it
-// publishes.
+// FORWARD-ONLY ON FIRST SIGHT — the KELD_BLOCKS_BACKFILL=0 branch.
+//
+// ⚠️ THIS WAS THE DEFAULT AND IS NO LONGER. The reasoning was that a machine has
+// hundreds of transcripts (496 in the reference corpus) and a daemon restart
+// must not emit a herd of history. What it actually cost was every block that
+// existed before the moment of install — on this repo's own corpus, 24 closed
+// blocks in one transcript, none of which ever reached Atlas — so the default
+// is now backfill (see BackfillEnabled). This test keeps the opt-out branch
+// honest: the first sweep learns the watermark and emits NOTHING.
 func TestFirstSightIsForwardOnlyAndEmitsNothing(t *testing.T) {
 	dig := &fakeDig{
 		all:       []enrich.BlockCharacterisation{block(1000), block(2200), block(6000)},
@@ -134,6 +148,7 @@ func TestFirstSightIsForwardOnlyAndEmitsNothing(t *testing.T) {
 	}
 	pub := &fakeSender{}
 	e := newTestEmitter(t, dig, pub)
+	e.backfill = false
 	now := time.Unix(9000, 0)
 
 	e.advanceAt("claude_code", txPath, now)
@@ -158,13 +173,16 @@ func TestFirstSightIsForwardOnlyAndEmitsNothing(t *testing.T) {
 	}
 }
 
-// A transcript the store has never ingested answers a nil watermark. It must be
-// left UNSEEDED rather than seeded at zero — zero is a real instant in 1970 and
-// would backfill everything on the next sweep.
+// A transcript the store has never ingested answers a nil watermark. In the
+// KELD_BLOCKS_BACKFILL=0 branch it must be left UNSEEDED rather than seeded at
+// zero — zero is a real instant in 1970 and would backfill everything on the
+// next sweep. (Under the backfill default there is no seeding call at all, so
+// this hazard cannot arise; the branch still exists and is still pinned.)
 func TestAnUningestedTranscriptIsLeftUnseeded(t *testing.T) {
 	dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000)}, watermark: nil}
 	pub := &fakeSender{}
 	e := newTestEmitter(t, dig, pub)
+	e.backfill = false
 	e.advanceAt("claude_code", txPath, time.Unix(9000, 0))
 
 	e.Sweep(context.Background(), time.Unix(9000, 0))
@@ -455,10 +473,13 @@ func TestTheEmitterHasNoPromptIDSeam(t *testing.T) {
 // optional-and-nil, it is gone. A five-argument New is the assertion.
 func TestTheEmitterIsConstructedWithoutAnyPromptReader(t *testing.T) {
 	dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000)}, watermark: f64(900)}
+	// Deliberately the real New, ambient default and all: this test is about the
+	// five-argument signature, and under the backfill default a single sweep
+	// publishes rather than seeding.
+	t.Setenv(EnvBackfill, "1")
 	e := New(dig, &fakeSender{}, nil, "actor", filepath.Join(t.TempDir(), "b.json"))
 	now := time.Unix(9000, 0)
 	e.advanceAt("claude_code", txPath, now)
-	e.Sweep(context.Background(), now) // seeds the cursor
 	if n := e.Sweep(context.Background(), now); n != 1 {
 		t.Fatalf("published %d blocks with no prompt reader, want 1", n)
 	}
@@ -497,5 +518,83 @@ func TestEnabledEnvOverridesConfigBothWays(t *testing.T) {
 	t.Setenv(EnvEnabled, "maybe")
 	if !Enabled(true) {
 		t.Error("unrecognised env value should fall through to config true")
+	}
+}
+
+// BACKFILL ON FIRST SIGHT. The forward-only default above means the history a
+// machine already has is never emitted — on a fresh v2 install that is every
+// block before the moment of install, and on this repo's own corpus that was 24
+// closed blocks in a single transcript, none of which reached Atlas.
+//
+// Backfill is what an operator wants when the point of installing is to see the
+// work that has already happened. It is safe to emit because it is PACED, not
+// unbounded: maxPerSweep (24, the sidecar's own DEFAULT_MAX_BLOCKS) bounds one
+// transcript's batch, the cursor advances only past contiguous successes, and a
+// backlog therefore drains over successive sweeps instead of arriving as one
+// burst on the wire.
+func TestBackfillOnFirstSightEmitsHistory(t *testing.T) {
+	dig := &fakeDig{
+		all:       []enrich.BlockCharacterisation{block(1000), block(2200), block(6000)},
+		watermark: f64(5000),
+	}
+	pub := &fakeSender{}
+	e := newTestEmitter(t, dig, pub)
+	e.backfill = true
+	now := time.Unix(9000, 0)
+
+	e.advanceAt("claude_code", txPath, now)
+	if n := e.Sweep(context.Background(), now); n != 3 {
+		t.Fatalf("backfill published %d rows, want all 3 historical blocks", n)
+	}
+	// It asked from the BEGINNING of the session (nil since) for a real batch,
+	// rather than the seeding call's max_blocks 0.
+	if c := dig.lastCall(); c.Since != nil || c.MaxBlocks != maxPerSweep {
+		t.Fatalf("backfill call = %+v, want a nil since and max_blocks %d", c, maxPerSweep)
+	}
+	if got := pub.sent(); len(got) != 3 {
+		t.Fatalf("published %v, want all three", got)
+	}
+}
+
+// Backfill must still advance the cursor, so the SECOND sweep does not re-send
+// the history it just sent. The cursor, not the toggle, is what makes backfill
+// a one-time cost.
+func TestBackfillDoesNotRepeatItself(t *testing.T) {
+	dig := &fakeDig{
+		all:       []enrich.BlockCharacterisation{block(1000), block(2200), block(6000)},
+		watermark: f64(5000),
+	}
+	pub := &fakeSender{}
+	e := newTestEmitter(t, dig, pub)
+	e.backfill = true
+	now := time.Unix(9000, 0)
+
+	e.advanceAt("claude_code", txPath, now)
+	e.Sweep(context.Background(), now)
+	first := len(pub.sent())
+
+	if n := e.Sweep(context.Background(), now); n != 0 {
+		t.Fatalf("second sweep published %d rows, want 0 — the cursor must have advanced", n)
+	}
+	if len(pub.sent()) != first {
+		t.Fatalf("second sweep re-sent history: %v", pub.sent())
+	}
+}
+
+// With backfill OFF the documented forward-only seeding is unchanged. Pinned
+// alongside so a future change to one branch cannot silently move the other.
+func TestBackfillOffKeepsForwardOnlySeeding(t *testing.T) {
+	dig := &fakeDig{
+		all:       []enrich.BlockCharacterisation{block(1000), block(6000)},
+		watermark: f64(5000),
+	}
+	pub := &fakeSender{}
+	e := newTestEmitter(t, dig, pub)
+	e.backfill = false
+	now := time.Unix(9000, 0)
+
+	e.advanceAt("claude_code", txPath, now)
+	if n := e.Sweep(context.Background(), now); n != 0 {
+		t.Fatalf("backfill off published %d rows on first sight, want 0", n)
 	}
 }

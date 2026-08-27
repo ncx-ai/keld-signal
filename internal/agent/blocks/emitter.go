@@ -149,6 +149,11 @@ type Emitter struct {
 	actor string
 	st    *state
 
+	// backfill decides what FIRST SIGHT of a transcript does: emit the history
+	// the store already holds, or seed the cursor at the watermark and emit only
+	// what happens next. See sweepOne.
+	backfill bool
+
 	mu sync.Mutex
 	// active is the bounded set of transcripts that might still have an
 	// unsettled block. See the package comment: this is what keeps work
@@ -166,7 +171,34 @@ func New(dig Digester, pub Sender, facts Facts, actor, stateFile string) *Emitte
 	return &Emitter{
 		dig: dig, pub: pub, facts: facts, actor: actor,
 		st: newState(stateFile), active: map[string]bool{},
+		backfill: BackfillEnabled(),
 	}
+}
+
+// EnvBackfill switches what FIRST SIGHT of a transcript does.
+const EnvBackfill = "KELD_BLOCKS_BACKFILL"
+
+// BackfillEnabled reports whether first sight emits history. DEFAULT ON.
+//
+// ⚠️ THIS DEFAULT IS A REVERSAL, and the reasoning it reverses is recorded in
+// sweepOne. Forward-only was chosen so a daemon restart could not "emit a herd
+// of history", by analogy with KELD_WATCH_BACKFILL. The analogy does not hold:
+// the watcher's backfill re-reads whole transcripts from disk and its cost is
+// unbounded in FILE SIZE, whereas a block backfill is a query against a store
+// that already holds the answer, bounded to maxPerSweep rows per transcript per
+// sweep and drained over successive sweeps by the cursor.
+//
+// What forward-only actually cost was the thing an install is FOR: on a fresh
+// v2 machine every block before the moment of install was unreachable — measured
+// here, 24 closed blocks in one transcript, none of which ever reached Atlas —
+// plus, permanently, the block each transcript was mid-way through at first
+// sight. Set KELD_BLOCKS_BACKFILL=0 to restore the old behaviour.
+func BackfillEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvBackfill))) {
+	case "0", "false", "off", "no":
+		return false
+	}
+	return true
 }
 
 // StatePath is where the emitter's cursors live. Beside the tick's tick.json
@@ -285,7 +317,12 @@ func (e *Emitter) sweepOne(tgt target, now time.Time) int {
 		resolved = e.facts(tgt.Path)
 	}
 
-	if tgt.Cursor == nil {
+	// FIRST SIGHT. With backfill on (the default) this branch is skipped and the
+	// normal path below runs with a nil cursor, which the sidecar reads as "from
+	// the beginning of the session" — so the history publishes, paced by
+	// maxPerSweep and drained across sweeps by the cursor. With it off, seed the
+	// cursor at the watermark and emit nothing.
+	if tgt.Cursor == nil && !e.backfill {
 		_, watermark, ok := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
 			nil, now, 0, resolved)
 		if ok && watermark != nil {
