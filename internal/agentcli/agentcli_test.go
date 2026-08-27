@@ -52,7 +52,7 @@ func TestRunInstallSequence(t *testing.T) { // no code, TTY → login, signal se
 	calls, run := recorder()
 	installed := false
 	err := runInstall(installConfig{}, func() bool { return true },
-		func() (string, error) { return "/fake/keld", nil }, run, func() error { installed = true; return nil })
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { installed = true; return nil })
 	if err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRunInstallWithCodeIsHeadlessCapable(t *testing.T) { // code set, no TTY
 	calls, run := recorder()
 	installed := false
 	err := runInstall(installConfig{code: "AB12-CD34"}, func() bool { return false },
-		func() (string, error) { return "/fake/keld", nil }, run, func() error { installed = true; return nil })
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { installed = true; return nil })
 	if err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestRunInstallCodeAbortsBeforeService(t *testing.T) {
 	}
 	installed := false
 	err := runInstall(installConfig{code: "NOPE"}, func() bool { return false },
-		func() (string, error) { return "/fake/keld", nil }, run, func() error { installed = true; return nil })
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { installed = true; return nil })
 	if err == nil {
 		t.Fatal("expected error when login --code fails")
 	}
@@ -113,7 +113,7 @@ func TestRunInstallTTYLoginFailureAbortsBeforeService(t *testing.T) {
 	}
 	installed := false
 	err := runInstall(installConfig{}, func() bool { return true },
-		func() (string, error) { return "/fake/keld", nil }, run, func() error { installed = true; return nil })
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { installed = true; return nil })
 	if err == nil {
 		t.Fatal("expected error when login fails in the TTY branch")
 	}
@@ -126,7 +126,7 @@ func TestRunInstallApiURLAndJSONPassthrough(t *testing.T) {
 	calls, run := recorder()
 	err := runInstall(installConfig{code: "X1-Y2", apiURL: "http://localhost:8000", jsonOut: true},
 		func() bool { return false },
-		func() (string, error) { return "/fake/keld", nil }, run, func() error { return nil })
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { return nil })
 	if err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestRunInstallApiURLAndJSONPassthrough(t *testing.T) {
 func TestRunInstallYesInTTY(t *testing.T) { // no code, TTY, yes=true → setup --yes
 	calls, run := recorder()
 	err := runInstall(installConfig{yes: true}, func() bool { return true },
-		func() (string, error) { return "/fake/keld", nil }, run, func() error { return nil })
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { return nil })
 	if err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestRunInstallPrintsStartingAgentHeaderHuman(t *testing.T) {
 	defer func() { console.Out = old }()
 
 	err := runInstall(installConfig{}, func() bool { return true },
-		func() (string, error) { return "/fake/keld", nil }, run, func() error { return nil })
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { return nil })
 	if err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestRunInstallSuppressesHumanLinesInJSONMode(t *testing.T) {
 	defer func() { console.Out = old }()
 
 	err := runInstall(installConfig{jsonOut: true, code: "X1"}, func() bool { return false },
-		func() (string, error) { return "/fake/keld", nil }, run, func() error { return nil })
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { return nil })
 	if err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestRunInstallAbortsWhenKeldMissing(t *testing.T) {
 	installed := false
 	install := func() error { installed = true; return nil }
 
-	if err := runInstall(installConfig{}, func() bool { return true }, resolve, run, install); err == nil {
+	if err := runInstall(installConfig{}, func() bool { return true }, resolve, run, noopConfig, install); err == nil {
 		t.Fatal("expected error when keld is missing")
 	}
 	if ran || installed {
@@ -222,7 +222,7 @@ func TestRunInstallNoTTYSkipsLoginAndSetup(t *testing.T) {
 	installed := false
 	install := func() error { installed = true; return nil }
 
-	if err := runInstall(installConfig{}, func() bool { return false }, resolve, run, install); err != nil {
+	if err := runInstall(installConfig{}, func() bool { return false }, resolve, run, noopConfig, install); err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
 	if len(calls) != 0 {
@@ -347,5 +347,120 @@ func TestExecuteCmdSuccessIsSilent(t *testing.T) {
 	}
 	if buf.String() != "" {
 		t.Fatalf("stderr = %q, want empty", buf.String())
+	}
+}
+
+// noopConfig is the config writer for tests that are not about the config.
+func noopConfig(string, bool) error { return nil }
+
+// configRecorder records what runInstall asked to be written.
+type configRecorder struct {
+	calls   int
+	backend string
+	blocks  bool
+	err     error
+}
+
+func (c *configRecorder) write(backend string, blocks bool) error {
+	c.calls++
+	c.backend = backend
+	c.blocks = blocks
+	return c.err
+}
+
+func TestRunInstallWritesV2Config(t *testing.T) {
+	_, run := recorder()
+	var cfgw configRecorder
+	err := runInstall(installConfig{backend: "deterministic"}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, cfgw.write, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	if cfgw.calls != 1 {
+		t.Fatalf("writeConfig called %d times, want 1", cfgw.calls)
+	}
+	if cfgw.backend != "deterministic" || !cfgw.blocks {
+		t.Errorf("wrote backend=%q blocks=%v, want deterministic/true", cfgw.backend, cfgw.blocks)
+	}
+}
+
+// The headless branch registers the service without onboarding — it still needs
+// the right config, or a GUI-installer machine runs v1 behaviour forever.
+func TestRunInstallWritesConfigInHeadlessBranch(t *testing.T) {
+	_, run := recorder()
+	var cfgw configRecorder
+	err := runInstall(installConfig{backend: "deterministic"}, func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, cfgw.write, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	if cfgw.calls != 1 {
+		t.Errorf("writeConfig called %d times in the headless branch, want 1", cfgw.calls)
+	}
+}
+
+// ml_backend is startup-only, so the write is worthless unless the service
+// restart that follows it actually happens after it. Pin the ORDER.
+func TestRunInstallWritesConfigBeforeInstallingService(t *testing.T) {
+	_, run := recorder()
+	var order []string
+	writeConfig := func(string, bool) error { order = append(order, "config"); return nil }
+	installService := func() error { order = append(order, "service"); return nil }
+
+	err := runInstall(installConfig{backend: "deterministic"}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, writeConfig, installService)
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	want := []string{"config", "service"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v — ml_backend is read at startup, so the "+
+			"restart in installService must come after the write", order, want)
+	}
+}
+
+// A config write that fails must abort before anything is registered or started.
+func TestRunInstallConfigFailureAbortsBeforeService(t *testing.T) {
+	_, run := recorder()
+	cfgw := configRecorder{err: errors.New("disk full")}
+	installed := false
+	err := runInstall(installConfig{backend: "deterministic"}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, cfgw.write,
+		func() error { installed = true; return nil })
+	if err == nil {
+		t.Fatal("want an error when the config write fails, got nil")
+	}
+	if installed {
+		t.Error("service was installed despite a failed config write")
+	}
+}
+
+func TestRunInstallHonoursBackendOverride(t *testing.T) {
+	_, run := recorder()
+	var cfgw configRecorder
+	err := runInstall(installConfig{backend: "auto"}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, cfgw.write, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	if cfgw.backend != "auto" {
+		t.Errorf("backend = %q, want auto — --backend must be able to put a "+
+			"machine back on the model without hand-editing JSON", cfgw.backend)
+	}
+}
+
+// An empty backend (nothing passed) must default to deterministic, not to the
+// empty string — which Settings reads as "auto" and would silently make every
+// install a v1 install.
+func TestRunInstallDefaultsToDeterministic(t *testing.T) {
+	_, run := recorder()
+	var cfgw configRecorder
+	err := runInstall(installConfig{}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, cfgw.write, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	if cfgw.backend != "deterministic" {
+		t.Errorf("backend = %q with none given, want deterministic", cfgw.backend)
 	}
 }
