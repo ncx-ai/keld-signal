@@ -1,11 +1,19 @@
-"""Per-turn ECONOMIC magnitudes: what a turn COST, not what it was about.
+"""Per-turn MAGNITUDES: numbers on a turn, not what the turn was about.
 
 Every other module in this package answers "what was this turn about" and answers it as a
 reference — a level and a value. This one answers a different question with a different shape: a
-single number per turn. It is separate for that reason, not for tidiness. Attribution today
-divides a window by how many tool calls touched a thing; the thing an attribution product is
-actually dividing is spend, and the numbers that measure spend are already sitting in every
-transcript line `transcript.turns_in` parses.
+single number per turn. It is separate for that reason, not for tidiness.
+
+Two families, and the distinction is load-bearing rather than cosmetic. The COST kinds
+(`KINDS` — token weight and diff magnitude) measure what a turn SPENT, and they are what
+`Store.has_magnitudes` and the weighted rollup are scoped to. The CAPTURE kinds
+(`CAPTURE_KINDS`, written only under `KELD_CAPTURE=1`) are never a cost: a character count, a
+raw token split, a tool outcome. This module used to call itself "ECONOMIC magnitudes: what a
+turn COST", which stopped being true of the whole of it the moment the second family arrived.
+
+Attribution today divides a window by how many tool calls touched a thing; the thing an
+attribution product is actually dividing is spend, and the numbers that measure spend are
+already sitting in every transcript line `transcript.turns_in` parses.
 
 Nothing here reads a `tool_result`, and nothing here retains a byte of the strings it measures.
 `message.usage` is on the assistant line itself and `tool_use.input` is a block on that same
@@ -110,7 +118,50 @@ TIER = {"batch": 0.5}
 TOKENS = "tokens"
 REQUEST_TOKENS = "request_tokens"
 EDIT_BYTES = "edit_bytes"
+# The COST kinds. `Store.has_magnitudes` is scoped to exactly this tuple, because it answers
+# "was anything costed here", and the capture kinds below are not costs.
 KINDS = (TOKENS, REQUEST_TOKENS, EDIT_BYTES)
+
+# The CAPTURE kinds: written only under `KELD_CAPTURE=1`, and never a cost. They ride
+# `turn_magnitude` rather than a table of their own because that table's `kind` is a DIMENSION
+# -- a new magnitude is data, not DDL (see the table's own comment in store.py).
+#
+# `say_*` are per-role CHARACTER COUNTS of message text and `tok_*` is the raw token split. Both
+# are computed by `levels.events_for_turns` already and were discarded on the way in. The token
+# split is NOT a second spelling of `TOKENS`: that one is price-weighted and answers what a turn
+# COST, while `tok_in_cached / (tok_in_cached + tok_in_fresh)` answers how much of the context
+# was reused, which no cost figure expresses.
+#
+# `tool_errors` / `tool_result_chars` come from `analysis/capture.py`, not from
+# `events_for_turns`, because a `tool_result` line is filtered out before that function sees it.
+#
+# ⚠️ THESE STRINGS ARE NOT WHAT THE STORE WRITES -- they are what it MUST write. The stored kind
+# is built by `store._aggregate_mag` as `f"{row kind}_{row level}"` out of `levels.py`'s own
+# strings, so renaming a level there would silently write a kind no constant here names and
+# leave a downstream feature column reading all-zero. `test_magnitude.py` pins the derived set
+# against this tuple over real `events_for_turns` output, which is the same assertion this
+# module already carries for `KINDS`.
+#
+# ⚠️ `SAY_THINK` IS A KIND NOTHING WRITES IN PRACTICE, DELIBERATELY. Thinking-block LENGTH is not
+# in this data -- every block a platform writes carries a signature and an empty `thinking`
+# string (measured 9,148 in `text.think_blocks`, re-measured 7,648 with 0 of nonzero length) --
+# and `_aggregate_mag` drops zeros, so the row is emitted and never stored. It is kept because
+# the drop is the only thing suppressing it: a producer that ever writes real thinking text
+# populates it with no code change. `SAY_THINK_BLOCKS` is the signal that IS available: the
+# COUNT of thinking blocks on the turn, i.e. whether it thought at all.
+SAY_USER = "say_user"
+SAY_USER_ECHO = "say_user_echo"
+SAY_ASST = "say_asst"
+SAY_THINK = "say_asst_think"
+SAY_THINK_BLOCKS = "say_asst_think_blocks"
+TOK_OUT = "tok_out"
+TOK_IN_FRESH = "tok_in_fresh"
+TOK_IN_CACHED = "tok_in_cached"
+TOOL_ERRORS = "tool_errors"
+TOOL_RESULT_CHARS = "tool_result_chars"
+CAPTURE_KINDS = (SAY_USER, SAY_USER_ECHO, SAY_ASST, SAY_THINK, SAY_THINK_BLOCKS,
+                 TOK_OUT, TOK_IN_FRESH, TOK_IN_CACHED,
+                 TOOL_ERRORS, TOOL_RESULT_CHARS)
 
 # tool name -> (old-side key, new-side key). A tool absent from this map has no diff magnitude,
 # which is the correct answer for `Read`/`Bash`/`Grep` and for a tool that does not exist.
@@ -244,8 +295,9 @@ def authored(values, recorded=False):
     counted: `_aggregate_mag` never stores a zero, so keeping them here would make the two paths
     disagree on `turns` while agreeing on every byte.
 
-    `recorded` says whether the window carries a magnitude of ANY kind -- see the block comment
-    above for why that, and not the byte sum, decides between a truthful 0 and an abstention.
+    `recorded` says whether the window carries a COST magnitude (`Store.has_magnitudes` is scoped
+    to `KINDS`, not `CAPTURE_KINDS`) -- see the block comment above for why that, and not the byte
+    sum, decides between a truthful 0 and an abstention.
 
     Returns an `int` byte count. That is the same privacy contract `edit_bytes` states: a length
     is the only thing this module can hand back, and there is no variant that returns the text.

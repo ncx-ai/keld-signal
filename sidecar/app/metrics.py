@@ -96,7 +96,7 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
                   governor, runner, counts, recycles, kills, uptime_s,
                   cpu_threads=None, peak_rss_mb=None, ceiling_mb=None,
                   hard_limit_mb=None, parent_reserve_mb=None, budget_shortfall_mb=None,
-                  store_stats=None, clock=time.monotonic):
+                  store_stats=None, embed_stats=None, clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     return {
         "worker": {
@@ -149,5 +149,15 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
         # on DELETE, so a cap enforced on the file size would look like a cap that is not
         # working (measured: 41.5 MB file, 21.1 MB live, after deleting half of 400,000 events).
         "store": store_stats,
+        # The TEXT ENCODER child (app/analysis/featuretext.py's embed_stats). Its own block and not
+        # part of `worker` above: a different child, a different lifecycle (idle-unload, no
+        # ceiling, no recycle), and folding it in would make `worker.peak_rss_mb` mean two
+        # processes. None only on the pre-lifespan degrade path; otherwise a block that says
+        # `state: "down"` when nothing is running, because "the encoder is not running" is an
+        # answer and a missing block is not.
+        #
+        # ⚠️ It reports `peak_rss_mb` for the same measured reason `worker` does: a ~1.7-2.3 GB child
+        # observed only through an instantaneous sample is the RSS-oscillation incident again.
+        "embed": embed_stats,
         "uptime_s": round(uptime_s, 1),
     }

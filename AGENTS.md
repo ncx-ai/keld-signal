@@ -10,14 +10,26 @@ machine. It has two jobs, and the second is the core of the project:
    Atlas only the derived, masked signal. **Raw prompt text never leaves the
    machine.** This is the privacy-preserving intelligence the CLI installs.
 
-⚠️ **One qualification, added at schema v18.** `inventory.named_terms` publishes
-proper nouns lifted from message TEXT — the only signal that does not derive from
-tool-call inputs, and one in which real person names have been observed. It is
-still not raw text, a span, or an offset: it is a term and a count. But "nothing
-derived from the prompt's own words crosses" stopped being true, and the honest
-statement is narrower than it used to be. See the `named_terms` note in the
-workstreams bullet under *The enrichment agent* for the decision and the
-alternative that was not taken.
+⚠️ **Two qualifications, and this said "One" until the second arrived.**
+
+1. **Schema v18.** `inventory.named_terms` publishes proper nouns lifted from
+   message TEXT, and real person names have been observed in it. It is still not
+   raw text, a span, or an offset: it is a term and a count. See the
+   `named_terms` note in the workstreams bullet under *The enrichment agent* for
+   the decision and the alternative that was not taken.
+2. **`KELD_TEXTEMBED`, off by default.** Message text is encoded ON DEVICE and a
+   256-d vector is published — MRL-truncated, then multiplied by a fixed
+   orthogonal projection that preserves cosine and inner products exactly, so
+   training is unaffected while off-the-shelf inversion tooling needs a matrix
+   the client did not choose. See *Text vectors* in
+   `docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`.
+
+So **"nothing derived from the prompt's own words crosses" is not the invariant**
+and has not been since v18; the honest statement is narrower and is the one at
+the top of this file: **raw prompt text never leaves the machine.** Text, spans
+and offsets do not cross. Things MEASURED from text — a count, a length, a
+vector — may, each on its own argument and its own evidence, never by analogy to
+one already here.
 
 Go single static binaries (`keld`, `keld-agent`) + an optional Python ML sidecar.
 No runtime dependencies for the CLI itself.
@@ -520,7 +532,164 @@ differ from it**.
   ingest re-reads the same tail. A half-applied batch is the state nothing downstream
   would notice, which is why `transaction()` exists. Non-ref rows are dropped on the
   way in — a `say` row carries `len(body)`, a measure of message text, and a `tok`
-  row carries token counts; neither is a reference event.
+  row carries token counts; neither is a reference event. ⚠️ **That drop is now
+  conditional** — see `KELD_CAPTURE` below — but the default is still drop, and
+  nothing routes those rows to `event` either way.
+
+⚠️ **`KELD_CAPTURE` (default OFF) keeps four signals the store used to compute and
+discard, and flipping it costs a reparse.** They are the training corpus step 2 of
+`docs/superpowers/specs/2026-08-26-signal-embeddings-design.md` needs, and all four
+are numbers: per-role message CHARACTER COUNTS (`say`), the raw token split (`tok`),
+tool-call OUTCOMES (`is_error` + result size), and `bin_offset` — the byte position
+where each 5-minute bin's first line starts. The first three ride `turn_magnitude`'s
+existing `kind` dimension (a new magnitude is data, not DDL); only `bin_offset` adds
+a table. `Store.has_magnitudes` stays scoped to the COST kinds so a published field
+cannot move because a character count arrived.
+- **Why a byte index at all:** `transcript.turns_between` is O(FILE) — a whole-file
+  parse, 0.79 s on the 90 MB transcript — so re-reading one block through it puts
+  back the exact cost this store exists to remove. A block is bin-aligned by
+  construction, so a block span maps to a byte range: one seek, one bounded scan.
+- ⚠️ **The anchoring timestamp must be the RECORD'S OWN, and a bare regex does not
+  give that.** `capture.scan` reads the instant off the raw line without decoding it,
+  and taking the first `"timestamp"` anywhere in the line took a NESTED one:
+  `file-history-snapshot` records have no top-level timestamp at all, and measured
+  over 73,449 lines of the 40 largest real transcripts 1,135 of them (1.5%) match. The
+  result was not merely imprecise but NON-MONOTONE — 31 of those 40 transcripts held a
+  bin whose offset disagreed with `json.loads`, one anchoring at byte 13,931 of a 24 MB
+  file whose preceding bin anchored at 9,426,720, i.e. a negative-length byte range —
+  and these rows are written once at ingest and never re-derived. The line is therefore
+  routed: a message-shaped line (`"type":"user"`/`"assistant"`, the shape `turns_in`
+  gates on) keeps the regex, measured exact on 45,587 lines and 293.7 MB of the 321.3 MB
+  corpus; anything else is DECODED, exact by construction and so robust to a record type
+  Claude Code has not invented yet, and affordable because the bookkeeping records are
+  the small ones — 8.3 ms to decode every one of them on the 90 MB transcript.
+- ⚠️ **`KELD_CAPTURE` is fingerprinted into `parse_state`** (`ingest.capture_mode`, the
+  sibling of `terms_mode`), so a change forces one reparse and no single transcript can
+  hold rows from two settings. That is a per-TRANSCRIPT guarantee and the store is not
+  one transcript: flip it on and only sessions that see another append reparse, so a
+  dormant session keeps no capture rows. A corpus builder querying the store CAN
+  therefore see two incomparable populations; whether a per-session marker is needed is
+  a step-2 decision, deliberately not answered. Absent means NOT RECORDED, never zero.
+- ⚠️ **Thinking-block LENGTH is not in this data and no toggle changes that.** Every
+  block a platform writes carries a signature and an EMPTY `thinking` string (9,148
+  measured in `text.think_blocks`, re-measured 7,648 with 0 of nonzero length), so
+  `say_asst_think` is emitted and, being zero, never stored. The COUNT is the signal and
+  is captured as `say_asst_think_blocks`. Don't wire a length consumer.
+- `bin_offset` and `turn_magnitude` are both swept to the retention SERVING FLOOR
+  rather than carrying horizons of their own: below it, one is a number nothing can be
+  joined to and the other a seek into a window `/analyze` refuses (410). `/metrics`
+  reports both row counts under `store.rows`.
+
+⚠️ **`KELD_TEXTEMBED` (default OFF) is the TEXT half of the same corpus, and it is the
+first thing in this repo that reads message text in order to keep something derived
+from it** (`analysis/textembed.py`). The deterministic half enters as numbers; this
+half enters as a text embedding, and neither is ever serialised into the other's
+modality — a bi-encoder fed digest PROSE answered `record` on 36 of 36 inputs, so
+that direction is closed.
+- **The unit is the MESSAGE, not the shell.** A 240-minute shell holds hundreds of KB;
+  `tool_result` lines are the huge ones `turns_in` skips unparsed and must stay that
+  way (this module reads only `text` and `thinking` content BLOCKS, so a `tool_result`
+  riding a `tool_use` line is unreadable by construction, not by filter); and shells
+  overlap across rows, so per-message encoding means each message is encoded ONCE EVER
+  and every shell reuses the vector. Three streams — `user`, `asst`, `think` — kept
+  separate and never concatenated. `think` is `skipped:empty` in practice: 9,144
+  thinking blocks re-measured over the 40 largest local transcripts, **0 non-empty**.
+- **Qwen3-Embedding-0.6B via `transformers.AutoModel`, encode 1024-d, publish MRL
+  prefix-sliced to 256-d.** Nothing was added to `sidecar/requirements.txt` — gliner2
+  already pulls torch and transformers. The 256 is the one parameter that cannot be
+  revised retroactively: a corpus collected at 256 cannot be widened without
+  re-embedding every machine's history.
+- **Its own child process, and bf16 is MEASURED on both axes.** Not the FastAPI parent:
+  `parent_reserve_mb()` is a high-water latch, so anything resident there permanently
+  shrinks the inference worker's hard limit. Measured on 200 real messages, 2 threads:
+  float32 **3113 MB / 804.0 ms per message**, bfloat16 **1673 MB (1813 peak) /
+  766.2 ms** — bf16 is 1313 MB cheaper and no slower, so it is not a latency trade.
+  Idle-unloaded (`KELD_TEXTEMBED_IDLE_UNLOAD_S`), never spawned when the toggle is off.
+  ⚠️ **Two of those bf16 figures were SINGLE-SHOT and did not survive the sustained
+  arm** (`loadtest embed`, 104 messages / 23 batches / 181 s on a real 14.4 MB
+  transcript, same host): resident replicates (1673 → **1700 MB**), but the peak is
+  **2345-2432 MB, not 1813** — a one-shot script cannot see an in-flight transient, and the peak is
+  not a stable number (2072/2345/2414/2432/2389 across five runs) — and the
+  cost is **1119-1635 ms/message, not 766.2** (message LENGTH is the variable, and ~1.1-1.6 s
+  is what `featuretext`'s independent ~1.44 s/message already said). The dtype comparison
+  is unaffected — both arms ran the same inputs — and bf16 stands on the 1313 MB, which
+  replicated. Size any per-message or per-block cost off **~1.6 s**.
+- **Absent weights are a STATED status, never a crash or a stall.** They are provisioned
+  on demand into `~/.keld/models` and handed over as `KELD_TEXTEMBED_DIR`, the sibling of
+  `KELD_GLINER2_DIR`; nothing downloads at import. `degraded:weights_unavailable`, an
+  empty vector list, and a retry cooldown — not a latch, because provisioning is
+  asynchronous, and not per call, because a failed spawn costs seconds.
+- **A fixed ORTHOGONAL projection is applied before publish**, generated deterministically
+  from `KELD_TEXTEMBED_PROJECTION_SEED`. It preserves cosine and inner products exactly,
+  so training is unaffected, and it withholds the embedding space from off-the-shelf
+  inversion tooling. ⚠️ The matrix is **Keld's, not the client's** — issued to the fleet,
+  so the client multiplies by a constant it did not choose.
+- ⚠️ **Never cut a message mid-sentence.** Long messages are split at sentence boundaries
+  and the chunk vectors mean-pooled; a single sentence over the cap is dropped WHOLE and
+  the drop is declared as `dropped_chars`. Every scalar (`dispersion`/`drift`/`novelty`)
+  is `None` where it could not be computed, never 0.0 — an absent comparison and a
+  comparison that found no movement are different facts.
+
+⚠️ **`POST /features` is a CURSOR route, not an anchor-instant one, and the sidecar chooses the
+anchors** (schema **17**; `analysis/features.py`'s `feature_rows`, `analysis/featuretext.py`).
+`{path, since_ts, now, max_rows, resolved}` → `{schema, rows, watermark}` — `POST /blocks`' shape,
+because only this process owns the store and can therefore see where the non-empty 5-minute bins
+and the closed blocks are; a daemon supplying a grid would have to guess it. The anchor-instant form
+is kept, unchanged, as **`POST /features/probe`** for studies, which want raw floats in `manifest()`
+order rather than the transport. Three anchor kinds ride one **globally chronological** stream
+(`message` / `bin` / `block`) and `since_ts` is `>` on a row's own instant, so a batch is cut at an
+instant boundary and **never inside one** — two rows can share a 0.1 s tick, and emitting half of
+them would advance the caller's cursor past the other half forever. `anchor_id` is REQUIRED on a
+`message` row (the turn's uuid) for the same reason. Rows carry the vector int8-quantised as
+`{dims, scale, q}`, `q` base64 of two's-complement bytes, `dims` declared so the Go side compares
+rather than trusts. Measured end to end on a real 26 MB transcript: **1.6 s for 96 rows** structured
+only, 604 rows across the whole session replayed in 90 cursor calls with **0 lost and 0 repeated**,
+and **0 of 604 rows dropped** by `sidecar.FeatureRowsFor`'s six refusals.
+- **`FEATURE_SPEC_VERSION` is 2 and `DIMS` is 1534, not the spec's 1,414.** `S(t)` gained the
+  per-shell, per-stream text scalars (`<shell>.text.<stream>.{n,dispersion,drift,novelty}` plus a
+  `_known` flag per scalar) and `row.meta.text_recorded`. ⚠️ Those 106 slots are present **whether
+  or not `KELD_TEXTEMBED` is on**: a width that depended on a machine's environment is exactly the
+  incoherent-corpus failure the frozen manifest exists to prevent, so the flag beside them is what
+  says they may be read — `capture_recorded`'s idiom one group along.
+- ⚠️ **A `message` row exists ONLY where the text half ran, and that is ABSENT rather than empty.**
+  A message has no lookback, so there is no structured vector to compute; with the toggle off the
+  kind simply does not appear. `bin`/`block` rows never carry a `text` block at all — the centroid
+  is not published — so the text half reaches them as those scalars.
+- ⚠️ **ENCODING RUNS OFF THE REQUEST, and that is forced by a measurement, not tidiness.** The
+  daemon's sidecar client has a **5-second** timeout and one batch of 64 real messages costs
+  **~92 s** (~1.44 s/message with the real weights, 2 threads — and **1119-1635 ms/message** re-measured
+  under `loadtest embed`'s sustained arm, which is the figure to size with) plus the child's first
+  load, measured at **2.8 s warm / ~20 s cold** (this line said ~90 s, one cold contended reading;
+  the argument never turned on it, since even 2.8 s plus any encoding is past the 5 s budget);
+  a whole 1,646-message session is ~40 minutes. A synchronous encode could not land at any
+  useful batch size, and a timed-out POST is classed as *retryable*, so the failure mode is an
+  unbounded retry loop rather than one slow response. `featuretext.TextSource` therefore serves what
+  its cache holds (measured **0.12-0.44 s** per call, real weights) and hands the remainder to one
+  background pass. The instant of the first message with no vector is the **FRONTIER**, and NO row
+  at or after it is emitted — including `bin`/`block` rows — so every published row's text half is
+  measured over a **complete** message history up to its own instant, and the cursor never runs past
+  an unencoded message. `pending:encoding` is the stated status meanwhile.
+- ⚠️ **A message the encoder RAN on and produced nothing for is cached as such, or the frontier
+  LATCHES AND THE CURSOR WEDGES FOREVER.** A message whose every sentence exceeds the chunk cap is
+  dropped whole and will never have a vector; left as a cache miss it would pin the frontier at its
+  own instant permanently. That is kept distinct from a **degraded** encoder, which must be retried —
+  and a degraded encoder drops the text half WHOLE and returns no frontier, because publishing rows
+  over a prefix of the history while the rest is unreachable is the confident-number-over-a-fraction
+  failure the frontier exists to prevent.
+- The encoder child is idle-unloaded from the same 1 s poll loop that recycles the inference worker
+  (measured **1.70 GB resident / 2.35-2.43 GB peak**, bf16, real weights — the "~1.9 GB" this line used
+  to carry sat between the two and named neither) — nothing else would ever release it, because
+  `/features` only ever spawns. ⚠️ **That unload is now MEASURED end to end rather than asserted:**
+  `python -m loadtest embed` is the encoder's arm of the load-test harness (`sidecar/loadtest/`,
+  opt-in, never part of `smoke`) and it drives a sustained encode off a real transcript to establish
+  no leak (**+32 MB** over 180 s), a bounded peak, that idle-unload actually returns **1711 MB** to
+  the OS and the next request respawns the child, that `/analyze`, `/blocks` and `/features` keep
+  answering *during* a pass (p50 **17→20 / 117→165 / 54→77 ms**), and the per-message cost above.
+  ⚠️ Its first run found `embed.peak_rss_mb` pinned to the TROUGH — 1717 MB reported against a live
+  2072 MB — because `Encoder.maybe_unload` took the encode lock BLOCKING and stalled the very poll
+  loop whose lock-free `observe_rss` ran one line earlier. That is the RSS-oscillation incident's
+  shape one child over; fixed, and pinned by `app/test_guard_visibility.py`'s encoder block. **A
+  lock-free sampler behind a blocking caller is not a lock-free sampler.**
 
 ⚠️ **The parse state carries a THIRD accumulator, and adding it forced a one-off reparse of
 every existing store.** `pending` (reconcile) and `cwds` (workspace) were the two; `reqs` is the
@@ -1116,6 +1285,56 @@ before extending enrichment to agentic sources.
 (`KELD_SETTINGS_POLL`). Remote overrides local; non-fatal if Atlas is unreachable.
 See `docs/enrichment-settings.md`.
 
+**The signal-embeddings publish half (`internal/agent/features/`).** The daemon
+side of `POST /features`: an emitter with a per-transcript cursor, the sibling of
+`internal/agent/blocks/` and built the same way — it asks the sidecar which rows
+exist past its cursor and publishes them. Rows ride `publish.FeatureRow` under
+their **own `corr_scheme`**, never `Enrichment` or `BlockEnrichment`, because
+Atlas keys enrichments `UNIQUE(org_id, source_id, corr_scheme, corr_id)` and
+upserts `ON CONFLICT DO UPDATE` over every column — sharing a scheme OVERWRITES
+rather than dedups, the same trap `publish/window.go` documents at length. The
+corr id is `session@feature@anchor@key`: four segments against a block id's two
+and a prompt id's zero, so the id spaces are disjoint by SHAPE as well as by
+scheme. Transport is `clientevents`' batch path (extracted in `a00a1e1` so a
+second route could reuse it), with its own spool dir — a shared one would
+cross-post bodies between routes.
+⚠️ **The cursor advances on BUFFERING, not on delivery**, because a batching path
+cannot observe delivery. That is made safe by backpressure rather than by hope: a
+sweep never takes more rows than the buffer has room for, so a full buffer HOLDS
+the cursor instead of dropping rows the sidecar would never re-offer.
+
+**Four toggles, all OFF by default, and they are not interchangeable.**
+`KELD_CAPTURE` (the extra ingest rows + `bin_offset`) ⚠️ is fingerprinted into
+`parse_state`, so flipping it forces one reparse — that is why it is separate,
+and why turning publishing off must never cost a reparse to turn back on.
+`KELD_TEXTEMBED` gates the encoder child. `KELD_FEATURES` computes and stores
+rows locally; `KELD_FEATURES_PUBLISH` sends them to Atlas. The last two carry an
+Atlas per-org override riding the existing settings poll (`Remote.Features`,
+`Remote.FeaturesPublish`) — the `client_telemetry` precedent, remote overrides
+local, and an OMITTED key leaves the local base rather than defaulting on, so a
+silent fleet-wide enable is not reachable from the server.
+The whole subsystem registers only under `ml_backend:"deterministic"`. Under
+`"auto"` it is ABSENT — never registered, so it appears in neither
+`facets_skipped` nor `extractor_versions`, which is this codebase's existing
+distinction between a pass that was skipped and one that was never wired.
+
+**`keld signal doctor` / `status` report on-device model state**
+(`internal/localagent/models.go`). ⚠️ **Presence is a filesystem stat, never a
+daemon probe**, and that is what makes it correct rather than merely cheap: no
+endpoint exposes GLiNER2 weight-presence at all, the encoder's `/metrics` field
+only answers while the sidecar is up, and a CLI that cannot reach the daemon does
+not thereby know a model is missing. Reading disk makes daemon reachability
+irrelevant, so "unreachable" can never render as "absent" — the same
+`thin`/`absent` discipline the rest of this codebase runs on. ⚠️ **A model that
+is absent but NOT NEEDED is not a problem and must not be reported as one**, or
+every v2 user is nagged forever about a 1.9 GB model they will never load:
+GLiNER2 is needed only under `"auto"`, the encoder only when `KELD_TEXTEMBED` and
+the local `features` toggle are both on. When one IS needed and absent, the line
+states the reason and that the work defers rather than fails. Neither command may
+trigger a download or a model load. Known limit: `Needed` resolves from
+local-only config, so it is blind to an org remote override — the same limitation
+`ml_backend` already has.
+
 **Auth & self-heal.** Both client tokens are long-lived and revoke-only (no
 TTL) — the CLI token (`~/.keld/auth.json`) and the org ingest token
 (`~/.keld/hook.json`) — so normal background operation needs no re-auth. The
@@ -1167,6 +1386,38 @@ memory reset) on an **RSS ceiling** (`model_cost_mb + KELD_SIDECAR_RSS_MARGIN_MB
 until headroom returns), **idle** (`KELD_SIDECAR_IDLE_UNLOAD_S`, `<=0` disables),
 a **hung-job timeout** (`KELD_SIDECAR_JOB_DEADLINE_S`), or a crash; it respawns
 lazily on the next request.
+
+⚠️ **A SUPERVISOR KILL REAPS THE PROCESS GROUP, NOT THE PID IT CAN SEE — and until
+`e40dd53` it did not.** Every mechanism above assumes killing the sidecar reclaims
+what the sidecar was holding, and that assumption was false for the whole life of
+the worker child. `Supervisor.killChild` sent `cmd.Process.Kill()` — SIGKILL, to the
+sidecar's pid alone. SIGKILL cannot be caught, so `main.py`'s `lifespan` teardown
+(`wm.shutdown`, `_TEXT_SOURCE.shutdown`) never ran, and the `multiprocessing`
+children were reparented to init and held their memory indefinitely. Measured on a
+real machine: an inference worker at **2.9 GB** and encoder children at **0.55-1.9 GB**
+surviving their parent, reparented to `systemd --user`.
+
+The fix is `Setpgid` at spawn plus `stopChild`: **SIGTERM to the sidecar ALONE**, so
+the `lifespan` teardown that already existed can finally run and exit the children
+cleanly, then **SIGKILL to the GROUP unconditionally**, because a tidy parent exit can
+still leave a straggler. `Setpgid` is set in the supervisor rather than in each spawn
+func so no caller can forget it, and `childGroup` refuses to signal a group whose
+`pgid != pid` — that would be the daemon's own group — falling back to a pid-only kill,
+never worse than the old behaviour. A process group over `Pdeathsig` because the latter
+is Linux-only. Multiprocessing spawn inherits the group, so the frozen binary's
+`freeze_support()` re-exec lands inside it.
+`KELD_SIDECAR_STOP_GRACE` (default **5s**) is a BOUND, not a budget: idle teardown
+measures **110.6 ms**, while an encoder mid-weights-load does *not* finish in 5s and is
+reaped by the group kill. It must not track the worst case — `TextSource.shutdown` can
+drain a ~92s encode, and launchd SIGKILLs the daemon itself at 20s.
+⚠️ Two changes elsewhere are what make this work at all, and removing either makes the
+fix silently inert while every test still passes: `sidecarService` uses `exec.Command`
+rather than `CommandContext` (whose cancel hook SIGKILLs the pid immediately and
+pre-empts the SIGTERM), and `Run` waits on `AwaitSidecarStop` (because `serve()`
+returned microseconds after ctx cancel and the daemon exited mid-reap).
+**Windows is PARTIAL:** `taskkill /T` reaps the tree, but no SIGTERM is reachable from
+a console-less service, so `lifespan` still does not run there; the job object that
+would be the real answer is not implemented. Stated in `procgroup_windows.go`'s header.
 
 **The guard must not sample under the inference lock.** `poll()` used to read the
 worker's RSS while holding the same lock `call()` holds for an entire inference,
@@ -1304,11 +1555,16 @@ internal/
       lenstat/           adaptive input truncation (mu+2sigma prompt-length stats)
       creddetect/        deterministic credential detection (vendored gitleaks rules)
       eval/              enrichment quality eval harness
-    provision/       model provisioning (weights → ~/.keld/models)
-    publish/         build + POST masked enrichments to Atlas
+    provision/       model provisioning (weights → ~/.keld/models); GLiNER2 and
+                     the Qwen3 text encoder, both on demand, neither at startup
+    blocks/          the v2 block emitter + its per-transcript cursor
+    features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
+    publish/         build + POST masked enrichments to Atlas; block, window and
+                     feature rows each under their own corr_scheme
     settings/ agentcfg/  per-org control-plane polling
     service/         OS service install (darwin/linux/windows)
     daemon/          wires it all together; spawns/superwises the sidecar
+                     procgroup_*.go: a kill reaps the GROUP, not the bare pid
   spool/             durable on-disk pointer queue (hook fallback + re-spool/quarantine)
   auth/ cli/ tools/ diffview/ hook/ paths/ telemetry/ config/ console/ ...
 sidecar/
@@ -1330,6 +1586,11 @@ sidecar/
       analyze.py       window digest; analyze_window_by_parse is the ORACLE
       dynamics.py      what MOVED in the window + the EWMA slice sizer
       blocks.py        the block cutter: 20m cap + 15m idle, no merge rule
+      blockdigest.py   characterise ONE block -> the v2 payload (POST /blocks)
+      capture.py       raw-line pass: tool outcomes + bin offsets, no json.loads
+      features.py      S(t), the 1,534-dim shell ladder (POST /features)
+      featuretext.py   the text half's cache, background pass and FRONTIER
+      textembed.py     per-message text vectors, in their own encoder child
       window.py        rollup / attribution / dominant; MIN_EVIDENCE
       levels.py        level vocabulary + 0.1s timestamp quantization
       workstreams.py   ALLOCATION + INVENTORY payload (the published shape)
@@ -1375,12 +1636,26 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   be transmitted; the daemon publishes only masked labels + masked spans. Masking
   is enforced Go-side (`enrich/mask.go`) before publish; the sidecar returns raw
   spans and never publishes.
-  ⚠️ **`named_terms` is the one exception and it is deliberate** (schema v18):
-  proper nouns lifted from message text, published as term + count, with no
-  person-name filter because none measured reliable enough to be honest (~1%
-  precision — see the workstreams bullet). Still no raw text, no spans, no
-  offsets. This is the ONLY published signal not derived from tool-call inputs;
-  do not add a second one by analogy to it.
+  ⚠️ **`named_terms` was the one exception** (schema v18): proper nouns lifted
+  from message text, published as term + count, with no person-name filter
+  because none measured reliable enough to be honest (~1% precision — see the
+  workstreams bullet). Still no raw text, no spans, no offsets.
+  ⚠️ **IT IS NO LONGER THE ONLY ONE, AND THIS BULLET USED TO SAY IT WAS** — "the
+  ONLY published signal not derived from tool-call inputs; do not add a second
+  one by analogy to it." The second arrived deliberately, not by analogy:
+  `KELD_TEXTEMBED` (off by default) encodes message text ON DEVICE and publishes
+  a 256-d vector, MRL-truncated and then multiplied by a fixed orthogonal
+  projection — cosine and inner products preserved exactly, so training is
+  unaffected, while off-the-shelf inversion tooling (vec2text, ALGEN) needs a
+  matrix the client does not choose and an attacker does not have. The encoder
+  never leaves the machine; only its output does.
+  **So "derived from text" stopped being the test.** The test is whether TEXT, a
+  SPAN, or an OFFSET crosses — and it never does. That is the stronger rule and
+  it is the one to enforce. A sentence embedding is invertible in principle
+  (measured elsewhere at up to 92% exact recovery on 32-token inputs), which is
+  precisely why the projection exists, why the toggle ships off, and why a THIRD
+  text-derived signal is a decision needing its own evidence rather than an
+  analogy to these two.
 - **Config via env (`KELD_*`)**, resolved through `internal/config` /
   `internal/paths`; credentials/tokens/hook/manifest under `~/.keld` with
   user-only permissions.
@@ -1543,6 +1818,13 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 
 Specs in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`; control
 plane in `docs/enrichment-settings.md`; sidecar resource safety + load testing in
-`sidecar/loadtest/README.md`; macOS Developer ID signing + the **unresolved**
+`sidecar/loadtest/README.md` (including the `embed` arm, which is what found the
+encoder's real peak and the two defects behind it); the signal-embeddings training
+corpus — what `S(t)` holds, why the digest is never serialised into the encoder,
+the cursor contract, and the corrections its own measurements forced — in
+`docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`, with the
+three-approach comparison behind it (and its three superseded conclusions marked
+rather than deleted) in `2026-08-26-joint-embeddings-design.md`;
+macOS Developer ID signing + the **unresolved**
 notarization problem (zero verdicts on this account; the account-provisioning check
 that still needs doing) in `docs/macos-signing-and-notarization.md`.

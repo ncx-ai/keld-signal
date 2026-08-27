@@ -183,5 +183,12 @@ func ingestSignalHook(ctx context.Context,
 		// watcher's poll loop, which carries every hook-free prompt on the
 		// machine — and it is: a map write under a short mutex, no I/O.
 		noteBlockAdvance(source, path)
+		// THE SIGNAL-EMBEDDINGS PATH's only trigger, behind the SAME gate for
+		// the same reason: a transcript the analysis cannot serve is a
+		// transcript no feature vector can be computed from. A no-op unless
+		// the deterministic backend wired it and a toggle is on (see
+		// features.go), and as cheap as the two calls above it — a map write
+		// under a short mutex, no I/O.
+		noteFeatureAdvance(source, path)
 	}
 }

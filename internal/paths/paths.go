@@ -31,21 +31,21 @@ func KeldHome() string {
 	return filepath.Join(home, ".keld")
 }
 
-func AuthPath() string              { return filepath.Join(KeldHome(), "auth.json") }
-func ManifestPath() string          { return filepath.Join(KeldHome(), "manifest.json") }
-func HookConfigPath() string        { return filepath.Join(KeldHome(), "hook.json") }
-func AgentInfoPath() string         { return filepath.Join(KeldHome(), "agent.json") }
-func AgentConfigPath() string       { return filepath.Join(KeldHome(), "agent-config.json") }
-func DebugLogPath() string          { return filepath.Join(KeldHome(), "agent.log") }
-func AgentLogDir() string           { return filepath.Join(KeldHome(), "logs") }
-func AgentStdoutLog() string        { return filepath.Join(AgentLogDir(), "agent.out.log") }
-func AgentStderrLog() string        { return filepath.Join(AgentLogDir(), "agent.err.log") }
-func StateDir() string              { return filepath.Join(KeldHome(), "state") }
+func AuthPath() string        { return filepath.Join(KeldHome(), "auth.json") }
+func ManifestPath() string    { return filepath.Join(KeldHome(), "manifest.json") }
+func HookConfigPath() string  { return filepath.Join(KeldHome(), "hook.json") }
+func AgentInfoPath() string   { return filepath.Join(KeldHome(), "agent.json") }
+func AgentConfigPath() string { return filepath.Join(KeldHome(), "agent-config.json") }
+func DebugLogPath() string    { return filepath.Join(KeldHome(), "agent.log") }
+func AgentLogDir() string     { return filepath.Join(KeldHome(), "logs") }
+func AgentStdoutLog() string  { return filepath.Join(AgentLogDir(), "agent.out.log") }
+func AgentStderrLog() string  { return filepath.Join(AgentLogDir(), "agent.err.log") }
+func StateDir() string        { return filepath.Join(KeldHome(), "state") }
 
 // PromptLengthsPath holds the streaming prompt-length distribution the daemon
 // uses to size enrichment's input truncation (see agent/enrich/lenstat).
 // Lengths only — never prompt text.
-func PromptLengthsPath() string { return filepath.Join(StateDir(), "prompt-lengths.json") }
+func PromptLengthsPath() string     { return filepath.Join(StateDir(), "prompt-lengths.json") }
 func BackupsDir() string            { return filepath.Join(KeldHome(), "backups") }
 func ModelsDir(model string) string { return filepath.Join(KeldHome(), "models", model) }
 func InstallIDPath() string         { return filepath.Join(KeldHome(), "install-id") }
@@ -81,6 +81,19 @@ func WatchDir() string { return filepath.Join(KeldHome(), "watch") }
 // ClientEventsSpoolDir is where the clientevents Reporter spools batches that
 // failed to POST to Atlas (e.g. Atlas unreachable), for a later drain sweep.
 func ClientEventsSpoolDir() string { return filepath.Join(SpoolDir(), "clientevents") }
+
+// FeaturesSpoolDir is where THE SIGNAL-EMBEDDINGS PATH's reporter spools
+// batches that failed to POST, for a later drain sweep.
+//
+// ⚠️ A DIRECTORY OF ITS OWN, NOT A SHARE WITH clientevents. A drain sweep
+// re-posts every *.json it finds to ITS OWN endpoint, so two paths sharing a
+// spool dir would post each other's bodies to each other's routes — feature
+// vectors to /v1/signal/client-events and back — where each is a 400, which
+// the transport classifies as permanent and deletes. The separation is what
+// makes the drain sweeps independent, and it also keeps the two drop-oldest
+// caps from evicting each other's batches: these rows are ~1.4 KB against a
+// client event's tens of bytes.
+func FeaturesSpoolDir() string { return filepath.Join(SpoolDir(), "features") }
 
 func APIBase() string {
 	if apiOverrideSet {

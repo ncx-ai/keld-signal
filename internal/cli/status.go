@@ -8,7 +8,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/features"
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/console"
@@ -22,6 +24,20 @@ import (
 type statusRow struct {
 	displayName string
 	status      tools.ToolStatus
+}
+
+// modelStates resolves the on-device model states from local, read-only
+// sources only: settings.Load() (~/.keld/agent-config.json) and
+// features.TextEmbedEnabled() (the KELD_TEXTEMBED env var), plus a filesystem
+// stat of each model's weights directory. No daemon round-trip, so it can
+// never block and is unaffected by whether keld-agent is even running — see
+// localagent.ModelState's doc for why that is the right design rather than a
+// shortcut.
+func modelStates() (gliner2, encoder localagent.ModelState) {
+	set := settings.Load()
+	gliner2 = localagent.GLiNER2State(set.MLBackend)
+	encoder = localagent.EncoderState(features.TextEmbedEnabled(), set.FeaturesLocalEnabled())
+	return gliner2, encoder
 }
 
 // collectStatus mirrors Python's _collect_status: for every adapter it ALWAYS
@@ -88,6 +104,21 @@ func newStatusCmd() *cobra.Command {
 			health := localagent.Health(info, service.Status, localagent.FetchText)
 			for _, line := range renderLocalService(health) {
 				console.Print(line)
+			}
+
+			gliner2, encoder := modelStates()
+			var modelLines []string
+			if l := gliner2.StatusLine("gliner2"); l != "" {
+				modelLines = append(modelLines, l)
+			}
+			if l := encoder.StatusLine("encoder"); l != "" {
+				modelLines = append(modelLines, l)
+			}
+			if len(modelLines) > 0 {
+				console.Print("On-device models:")
+				for _, l := range modelLines {
+					console.Print(l)
+				}
 			}
 
 			if required, _ := paths.ReauthRequired(); required {
@@ -170,6 +201,18 @@ func newDoctorCmd() *cobra.Command {
 				if _, err := os.Stat(paths.HookConfigPath()); os.IsNotExist(err) {
 					problems = append(problems, "hook config (~/.keld/hook.json) is missing. Re-run `keld signal setup`.")
 				}
+			}
+
+			// On-device model state: a problem only when the current local
+			// configuration actually needs the model and its weights are
+			// confidently (not merely "could not tell") absent. See
+			// localagent.ModelState.ProblemLine.
+			gliner2, encoder := modelStates()
+			if p := gliner2.ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+			if p := encoder.ProblemLine(); p != "" {
+				problems = append(problems, p)
 			}
 
 			// Multiple keld binaries on PATH → a stale one can shadow the

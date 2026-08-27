@@ -72,7 +72,7 @@ import hashlib
 import os
 import threading
 
-from app.analysis import COMPONENT_DEPTH
+from app.analysis import COMPONENT_DEPTH, capture, magnitude
 from app.analysis.levels import events_for_turns
 from app.analysis.reconcile import reconcile
 # `_order_key` is transcript.py's ordering-only timestamp parser. Imported rather than
@@ -141,6 +141,26 @@ def terms_mode(nlp):
     meta = getattr(nlp, "meta", None) or {}
     name = "_".join(str(meta.get(k)) for k in ("lang", "name") if meta.get(k))
     return "spacy:" + ":".join(p for p in (name, str(meta.get("version") or "")) if p)
+
+
+def capture_mode():
+    """A fingerprint of the CAPTURE pipeline the store's magnitude rows were written with.
+
+    The sibling of `terms_mode`, and it exists for the identical reason: the capture rows
+    (`magnitude.CAPTURE_KINDS` -- per-role character counts, the raw token split, tool outcomes
+    -- plus the `bin_offset` index) are written at INGEST and are never re-derived. A transcript
+    ingested under `KELD_CAPTURE=0` holds none of them, and no later call can supply them,
+    because the bytes they came from have already been consumed and the checkpoint advanced.
+    So a store holding rows from a run with capture and rows from a run without it is holding
+    two incomparable populations, and nothing in the data says which is which.
+
+    ⚠️ THE DEFAULT IS OFF, AND AN ABSENT KEY READS AS OFF. `_state_is_usable` compares against
+    `raw.get("capture") or "0"`, so a state written before this key existed is still resumable.
+    The alternative -- bumping STATE_VERSION -- would force a whole-file reparse of every
+    transcript on every machine at upgrade, to obtain rows that a machine with capture off will
+    never hold. Turning capture ON is what costs a reparse, and it costs it once.
+    """
+    return "1" if os.environ.get("KELD_CAPTURE", "0") == "1" else "0"
 
 
 class IngestResult:
@@ -244,22 +264,47 @@ def _head_matches(path, stored):
 
 
 def _read_complete_lines(path, offset, size):
-    """The complete lines in `[offset, size)`, and the offset just past the last one.
+    """The complete lines in `[offset, size)`, their BYTE offsets, and the offset just past the
+    last one.
 
     A trailing fragment with no newline is NOT consumed. The watcher can signal mid-write, and
     advancing the checkpoint over a half-written record would drop it permanently — the same
     rule `AGENTS.md` states for text generally, applied to the one delimiter JSONL has.
+
+    ⚠️ THE OFFSETS ARE MEASURED ON THE RAW BYTES, BEFORE DECODING, AND THAT IS NOT COSMETIC.
+    This function decodes with `errors="replace"`, which turns one invalid byte into U+FFFD --
+    three bytes when re-encoded. A caller computing offsets by accumulating
+    `len(line.encode())` over the decoded strings therefore drifts by two bytes per invalid
+    byte, silently, and every offset after the first bad line points into the middle of a
+    record. Splitting the bytes first and decoding each segment costs nothing and cannot drift.
+
+    ⚠️ SPLITTING THE BYTES ALSO CHANGED WHAT COUNTS AS A LINE, ON A PATH THAT IS OTHERWISE INERT
+    WITH `KELD_CAPTURE` OFF. This used to be `buf.decode(...).splitlines(True)`, and
+    `str.splitlines` splits on `\\v \\f \\x1c \\x1d \\x1e U+0085 U+2028 U+2029` as well as `\\n`
+    and `\\r`; `bytes.splitlines` splits on the ASCII set only. A 5-record fixture seeded with
+    those characters yields 10 "lines" under the old form and 5 under this one. THE NEW
+    BEHAVIOUR IS THE CORRECT ONE -- JSONL is `\\n`-delimited, and a raw U+2028 inside a JSON
+    string must not cut a record in half -- and the measured exposure is **0 of 141,074 lines
+    across 649 real transcripts**, so no store needs reparsing over it. It is recorded here
+    because it is a behaviour change nothing else declares.
+
+    The same rewrite is also **5.7x faster** on a whole-file read -- 43.4 ms against 245.6 ms on
+    the 90 MB transcript -- because it never materialises a 90 MB intermediate `str`.
     """
     if size <= offset:
-        return [], offset
+        return [], [], offset
     with open(path, "rb") as fh:
         fh.seek(offset)
         buf = fh.read(size - offset)
     cut = buf.rfind(b"\n")
     if cut < 0:
-        return [], offset
-    text = buf[:cut + 1].decode("utf-8", errors="replace")
-    return text.splitlines(True), offset + cut + 1
+        return [], [], offset
+    raw = buf[:cut + 1].splitlines(True)
+    offsets, at = [], offset
+    for b in raw:
+        offsets.append(at)
+        at += len(b)
+    return [b.decode("utf-8", errors="replace") for b in raw], offsets, offset + cut + 1
 
 
 def _remote_choice(remotes, repo):
@@ -312,11 +357,12 @@ def repo_mode(resolved):
 def _state_is_usable(raw, nlp, resolved=None):
     """Whether a stored parse state may be resumed from, or must be thrown away and reparsed.
 
-    Four reasons it cannot be: it is absent (a store written before `parse_state` existed, or
+    Five reasons it cannot be: it is absent (a store written before `parse_state` existed, or
     one whose state was pruned — resuming would tail-parse with EMPTY workspace evidence and an
     empty `pending`, and the offset would look perfectly valid while it happened); it predates a
     field this code needs (`STATE_VERSION`); it was written by a different terms pipeline
-    (`terms_mode`); or it was written under a different repository identity (`repo_mode`).
+    (`terms_mode`); or it was written under a different capture setting (`capture_mode`); or it
+    was written under a different repository identity (`repo_mode`).
 
     ⚠️ THE `repo` RULE IS ASYMMETRIC ON PURPOSE: an EMPTY incoming identity never invalidates a
     stored non-empty one. Two callers legitimately ingest the same transcript — the watcher's
@@ -329,7 +375,8 @@ def _state_is_usable(raw, nlp, resolved=None):
     rows.
     """
     if not (bool(raw) and int(raw.get("v") or 0) == STATE_VERSION
-            and raw.get("terms") == terms_mode(nlp)):
+            and raw.get("terms") == terms_mode(nlp)
+            and (raw.get("capture") or "0") == capture_mode()):
         return False
     stored, incoming = raw.get("repo") or "", repo_mode(resolved)
     return not incoming or stored == incoming
@@ -368,6 +415,7 @@ def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None, reqs=()):
     marker_dirs, cd_targets, remotes = evidence
     return {"v": STATE_VERSION,
             "terms": terms_mode(nlp),
+            "capture": capture_mode(),
             "repo": repo_mode(resolved),
             "markers": marker_dirs,
             "cd": sorted(cd_targets),
@@ -525,7 +573,7 @@ def _ingest_locked(store, path, nlp, resolved=None):
 def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved=None):
     """One pass from `offset`. Returns None to mean "this must be redone as a reparse"."""
     session, (root, projdir) = session_of(path), _scope(path)
-    lines, end_offset = _read_complete_lines(path, offset, size)
+    lines, offsets, end_offset = _read_complete_lines(path, offset, size)
 
     evidence, pending, cwds, prev_lines, reqs = ((new_evidence(), [], [], 0, set()) if reparse
                                                  else _load_state(store, path))
@@ -561,11 +609,29 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
     n_lines = prev_lines + len(lines)
     batch_line = n_lines if lines else 0
 
+    # The CAPTURE pass: two signals that cannot come from `events_for_turns`. A `tool_result`
+    # line is filtered out before that function sees it (see `capture.py`), and a byte offset is
+    # not a property of a turn at all. One walk, no `json.loads`.
+    capture_on = capture_mode() == "1"
+    outcomes, bin_offsets = capture.scan(lines, offsets) if capture_on else ([], {})
+    outcome_rows = []
+    # `t` arrives already quantized, from the same arithmetic `capture.scan` binned the offset
+    # with. Re-deriving it here is what let the two disagree across a bin boundary.
+    for t, is_error, nchars in outcomes:
+        base = (t, session, None, None, False)
+        if is_error:
+            outcome_rows.append(base + ("mag", magnitude.TOOL_ERRORS, "", 1.0))
+        outcome_rows.append(base + ("mag", magnitude.TOOL_RESULT_CHARS, "", float(nchars)))
+
     with store.transaction():
         if reparse:
             store.clear_session(session)
         if rows:
-            store.upsert_events(session, rows, source_line=batch_line)
+            store.upsert_events(session, rows, source_line=batch_line, capture=capture_on)
+        if outcome_rows:
+            store.upsert_events(session, outcome_rows, source_line=batch_line, capture=True)
+        if bin_offsets:
+            store.upsert_bin_offsets(session, bin_offsets)
         # The turn-id index, in the same transaction as the events it points at: an id that
         # resolves to a window whose events were never committed is the one state a reader
         # could not detect. `iter_turns`/`turns_in` is the filter `analyze.py`'s old scan used,

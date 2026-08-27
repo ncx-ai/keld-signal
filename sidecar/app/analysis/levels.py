@@ -240,8 +240,24 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 add("say", "asst", "", len(said))
                 for t in terms.tally([said], nlp):
                     add("ref", "term", t["term"], t["n"])
-            for nchars in think_blocks(content):
-                add("say", "asst_think", "", nchars)   # 0 = not persisted by this store
+            # ⚠️ THE LENGTH IS UNAVAILABLE AND THE INCIDENCE IS THE SIGNAL. Every thinking
+            # block a platform writes carries a signature and an EMPTY `thinking` string --
+            # `text.think_blocks`' own docstring measured 9,148 with none, and this review
+            # re-measured 7,648 across the local corpus with 0 of nonzero length. So the length
+            # row is always 0 and `store._aggregate_mag` drops zeros: `say_asst_think` is, in
+            # practice, never written. It is still emitted rather than deleted because the drop
+            # is the ONLY reason it is not stored -- a producer that ever does write thinking
+            # text starts populating it with no change here, and deleting the row would silently
+            # discard that data the day it appears.
+            #
+            # The COUNT is obtainable and is what `text.py` names as the designed-for signal
+            # (`asst_think_msgs`), so it is emitted as its own row: whether this turn thought at
+            # all, which the zero-length drop otherwise destroys.
+            blocks = think_blocks(content)
+            for nchars in blocks:
+                add("say", "asst_think", "", nchars)
+            if blocks:
+                add("say", "asst_think_blocks", "", len(blocks))
             u, rid = msg.get("usage"), o.get("requestId")
             # The ROLLUP WEIGHT: the price-weighted cost of the request this line belongs to, on
             # EVERY line of that request — deliberately outside the `requestId` dedup below.

@@ -31,10 +31,18 @@ import (
 // sidecar reads an absent variable as "use your built-in defaults" and an empty
 // one as "deny everything", and a daemon that resolved no roots means the
 // latter.
-func sidecarEnv(base []string, modelDir string, analyzeRoots []string) []string {
-	env := make([]string, 0, len(base)+8)
+// encoderDir is the text encoder's weights directory, or "" to leave
+// KELD_TEXTEMBED_DIR unset. Unlike KELD_GLINER2_DIR it is NOT always assigned:
+// see encoderDirForSpawn for why an eager assignment would be a claim rather
+// than a configuration. Recomputed per spawn by the caller, so a respawn after
+// the fetch landed adopts the weights.
+func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []string) []string {
+	env := make([]string, 0, len(base)+9)
 	env = append(env, base...)
 	env = append(env, "KELD_GLINER2_DIR="+modelDir)
+	if encoderDir != "" {
+		env = append(env, "KELD_TEXTEMBED_DIR="+encoderDir)
+	}
 
 	if !hasEnvKey(base, "KELD_ANALYZE_ROOTS") {
 		env = append(env, "KELD_ANALYZE_ROOTS="+

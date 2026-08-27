@@ -1,5 +1,28 @@
 # Joint embeddings over messages, windows and blocks — three candidate designs
 
+⚠️ **SUPERSEDED IN THREE PLACES by `2026-08-26-signal-embeddings-design.md`.** Kept because the
+comparison of the three approaches, and the measured priors behind it, are still the argument for
+what shipped. But three of its conclusions were wrong and are recorded here rather than quietly
+edited out:
+
+1. **"Centroids are local-only; a text embedding cannot cross the wire."** Wrong about the
+   requirement. Keld trains centrally; the client computes and publishes and never learns, so text
+   vectors DO go to Atlas. The invariant is that **raw prompt text** never leaves the machine, which
+   a vector computed on-device satisfies. The residual inversion risk is handled by a fixed
+   orthogonal projection applied before publish (exact cosine preservation, no training cost), not
+   by withholding the vector.
+2. **"The fleet corpus is structured-only by construction."** Follows from (1) and falls with it.
+   The fleet corpus is the full corpus. Approach C's cross-modal distillation is therefore a
+   modelling option rather than the only route to a text-informed signal.
+3. **Approach A3 — "materialise at block close, recompute the dense series locally at export."**
+   Wrong once Atlas is the corpus: Atlas holds no event series, so nothing unpublished can be
+   recomputed there. **Publish granularity IS training granularity**, and all three grains
+   (message, 5-minute bin, block) publish.
+
+A fourth, smaller error: this document said a block's messages could be re-read cheaply via
+`transcript.turns_between`. That function is O(FILE) — `sorted(iter_turns(path))`, 0.79 s on a
+90 MB transcript. The shipped design adds a `bin_offset` index instead.
+
 **Status:** research. Nothing below is built. Written against v2 as it stands on 2026-08-26
 (`docs/superpowers/specs/2026-08-25-v2-block-path-design.md`,
 `2026-08-25-block-model-contract-design.md`), which a parallel session is actively shipping.

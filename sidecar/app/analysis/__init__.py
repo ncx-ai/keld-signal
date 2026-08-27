@@ -298,7 +298,21 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           moves 20 -> 21 for the same addition: `status` is a new five-value published
 #           vocabulary (`enrich.WorkstreamStatuses`) and `evidence` a new published field on
 #           `enrich.Labeled`.
-SCHEMA = 16
+#
+#      17 - `POST /features` became a CURSOR route (`{path, since_ts, now, max_rows, resolved}` ->
+#           `{schema, rows, watermark}`), the shape `POST /blocks` already had, and emits the three
+#           anchor kinds itself -- `message` / `bin` / `block` -- because only this process can see
+#           where the non-empty bins and the closed blocks are. The anchor-instant form it replaced
+#           is kept, unchanged, as `POST /features/probe` for studies.
+#
+#           `features.FEATURE_SPEC_VERSION` moves 1 -> 2 alongside, and that is the number a
+#           corpus partitions on: `S(t)` gained 106 slots -- the per-shell, per-stream text
+#           scalars (`<shell>.text.<stream>.*`) and `row.meta.text_recorded` -- so `DIMS` moves
+#           1428 -> 1534 and `SPEC_SHA` with it. The slots are present whether or not
+#           `KELD_TEXTEMBED` is on, because a width that depended on a machine's environment is
+#           the incoherent-corpus failure the frozen manifest exists to prevent; the flag beside
+#           them is what says they may be read.
+SCHEMA = 17
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

@@ -15,10 +15,24 @@ source of truth:
   — only masked labels + masked spans are published. ⚠️ **One deliberate
   exception since schema v18:** `named_terms` publishes proper nouns lifted from
   message text (term + count, never a span or offset), and real person names have
-  been observed in it. It is the only published signal not derived from tool-call
-  inputs — see AGENTS.md for the decision, why no person-name filter accompanies
-  it, and the `/match` alternative that was not taken. Don't add a second
-  text-derived signal by analogy.
+  been observed in it. See AGENTS.md for the decision, why no person-name filter
+  accompanies it, and the `/match` alternative that was not taken.
+  ⚠️ **A SECOND text-derived signal now exists, and this bullet used to end
+  "don't add a second text-derived signal by analogy."** That sentence is
+  retired because it was overtaken deliberately, not because it was wrong to
+  write: `KELD_TEXTEMBED` (off by default) encodes message text on device and
+  publishes a 256-d VECTOR. The line it does not cross is the same one:
+  no raw text, no span, no offset ever leaves the machine, the encoder runs
+  locally, and a fixed orthogonal projection is applied before publish — cosine
+  and inner products preserved exactly, so training is unaffected while
+  off-the-shelf inversion tooling needs a matrix it does not have. What it is
+  NOT is free of judgement: a sentence embedding is invertible in principle
+  (vec2text recovers up to 92% exact text at 32 tokens), which is why the
+  projection exists and why the toggle ships off. So the rule this bullet was
+  reaching for still stands in its stronger form — **raw prompt text never
+  leaves the machine** — and "is it derived from text?" is no longer the test.
+  The test is whether text, a span, or an offset crosses. A third such signal is
+  a deliberate decision with its own evidence, never an analogy to these two.
 - **Do work, then verify with real output.** Run `go test ./...` for Go and the
   standalone sidecar test scripts before claiming something passes; paste results.
 - **Go → host toolchain; sidecar → the venv.** Run sidecar code/tests with

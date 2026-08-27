@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.analysis import window, workstreams
+from app.analysis import magnitude, window, workstreams
 from app.analysis.store import (BIN_SECONDS, PRECOMPUTED_LEVELS, default_path, open_store)
 
 SESSION = "3f1a9c2b"
@@ -358,9 +358,18 @@ def test_registering_a_new_precomputed_level_backfills_it_from_the_raw_events():
 
 # --- what may be stored ----------------------------------------------------------------------
 
-def test_say_and_tok_rows_are_not_stored():
+def test_say_and_tok_rows_are_not_reference_events():
     """`say` rows carry `len(body)` — a measure of message TEXT — and `tok` rows carry token
-    counts. Neither is a reference event. The store holds level/ref/count and nothing else."""
+    counts. Neither is a reference event, and neither may reach `event`.
+
+    ⚠️ THIS USED TO SAY THEY ARE NOT STORED AT ALL, and that is no longer true: under
+    `KELD_CAPTURE=1` they are stored as `turn_magnitude` rows (see
+    `test_capture_routes_say_and_tok_into_turn_magnitude`). The invariant that survived the
+    change, and the one this test pins, is narrower and is the one that matters: the `event`
+    table holds a level, a ref and a count, and nothing derived from message text. A character
+    count is a number about text, not text — the same line `magnitude.edit_bytes` already sits
+    on.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "state", "refseries.db")
         st = open_store(path)
@@ -371,6 +380,60 @@ def test_say_and_tok_rows_are_not_stored():
         assert not (levels & {"user", "user_echo", "asst", "asst_think", "out", "in_fresh",
                               "in_cached"}), levels
         assert not [r for r in raw.execute("SELECT 1 FROM event WHERE ref = '' LIMIT 1")]
+        raw.close()
+
+
+def test_capture_routes_say_and_tok_into_turn_magnitude():
+    """`say` and `tok` rows are computed by `events_for_turns` and were discarded here. Under
+    capture they become `turn_magnitude` rows -- data, not DDL, which is exactly what that
+    table's `kind` dimension exists for.
+
+    The kind is `"{row kind}_{row level}"`: a `say`/`user` row becomes `say_user`. Two rows of
+    the same kind at the same instant SUM, which is the same arithmetic the cost magnitudes
+    already use and what a turn with several think blocks needs.
+    """
+    rows = [
+        (round(T0 + 5, 1), SESSION, None, None, False, "say", "user", "", 1873.0),
+        (round(T0 + 5, 1), SESSION, None, None, False, "say", "asst_think", "", 400.0),
+        (round(T0 + 5, 1), SESSION, None, None, False, "say", "asst_think", "", 600.0),
+        (round(T0 + 5, 1), SESSION, None, None, False, "tok", "in_cached", "", 257333.0),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "off.db"))
+        st.upsert_events(SESSION, rows, source_line=1)
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60,
+                                  kind=magnitude.SAY_USER) == [], \
+            "capture defaults OFF and must change nothing"
+        st.close()
+
+        st = open_store(os.path.join(tmp, "on.db"))
+        st.upsert_events(SESSION, rows, source_line=1, capture=True)
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60,
+                                  kind=magnitude.SAY_USER) == [(round(T0 + 5, 1), 1873.0)]
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60,
+                                  kind=magnitude.SAY_THINK) == \
+            [(round(T0 + 5, 1), 1000.0)], "same kind at one instant must SUM"
+        assert st.turn_magnitudes(SESSION, T0 - 1, T0 + 60,
+                                  kind=magnitude.TOK_IN_CACHED) == \
+            [(round(T0 + 5, 1), 257333.0)]
+        st.close()
+
+
+def test_capture_rows_never_reach_the_event_table():
+    """The store's standing invariant, restated against the new routing: a character count is a
+    magnitude, never a reference event. `event` holds level/ref/count and no empty `ref`."""
+    rows = [
+        (round(T0 + 5, 1), SESSION, None, None, False, "say", "user", "", 1873.0),
+        (round(T0 + 5, 1), SESSION, None, None, False, "tok", "out", "", 4211.0),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "state", "refseries.db")
+        st = open_store(path)
+        st.upsert_events(SESSION, rows, source_line=1, capture=True)
+        st.close()
+        raw = sqlite3.connect(path)
+        assert not [r for r in raw.execute("SELECT 1 FROM event LIMIT 1")], \
+            "capture rows are magnitudes, never events"
         raw.close()
 
 
@@ -442,6 +505,30 @@ def test_has_magnitudes_separates_no_record_from_no_edits():
         # Half-open and window-scoped, like every other query here.
         assert st.has_magnitudes(SESSION, T0 - 1, T0 + 5) is False
         assert st.has_magnitudes(OTHER, T0 - 1, T0 + 60) is False
+        st.close()
+
+
+def test_has_magnitudes_ignores_non_cost_kinds():
+    """`has_magnitudes` gates `magnitude.authored`'s "no record" answer, which reaches the
+    published `authored_status`. It must answer for COST kinds only.
+
+    ⚠️ Without the kind filter, storing any other magnitude — a character count, a token split,
+    a tool-error count — would flip a window from "we never looked" to "we looked and it was
+    zero", on windows where nothing was ever costed. That is a published field changing because
+    an unrelated table gained rows.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        capture = (round(T0 + 5, 1), SESSION, None, None, False, "mag",
+                   magnitude.SAY_ASST, "", 1873.0)
+        st.upsert_events(SESSION, [capture], source_line=1)
+        assert st.has_magnitudes(SESSION, T0 - 1, T0 + 3600) is False, \
+            "a non-cost magnitude must not answer the authored-record question"
+        cost = (round(T0 + 6, 1), SESSION, None, None, False, "mag",
+                magnitude.EDIT_BYTES, "", 42.0)
+        st.upsert_events(SESSION, [cost], source_line=2)
+        assert st.has_magnitudes(SESSION, T0 - 1, T0 + 3600) is True, \
+            "a cost magnitude must still answer it"
         st.close()
 
 
@@ -667,6 +754,49 @@ def test_a_transaction_is_scoped_to_ITS_thread_not_to_the_store():
 
 def test_bins_are_five_minutes():
     assert BIN_SECONDS == 300
+
+
+def test_bin_offset_keeps_the_smallest_and_survives_replay():
+    """The offset's only purpose is to be seeked to, so it is the FIRST line of the bin. A
+    replayed batch -- which incremental ingest is designed to tolerate -- must not raise it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        st.upsert_bin_offsets(SESSION, {1000: 500, 1300: 900})
+        st.upsert_bin_offsets(SESSION, {1000: 700})
+        assert st.bin_offset(SESSION, 1000) == 500, "a later offset must not win"
+        st.upsert_bin_offsets(SESSION, {1000: 120})
+        assert st.bin_offset(SESSION, 1000) == 120, "an earlier offset must win"
+        assert st.bin_offset(SESSION, 9999) is None
+        assert st.all_bin_offsets(SESSION) == {1000: 120, 1300: 900}
+        st.close()
+
+
+def test_bin_offset_does_not_clamp_a_later_bin_to_an_earlier_ones_offset():
+    """A NON-MONOTONE pair survives storage, because the transcript itself is non-monotone.
+
+    ⚠️ This test exists to fail the "obvious" repair. Real transcripts carry records whose
+    timestamp precedes their file position -- measured, 7 adjacent bin pairs across the 40
+    largest local transcripts, one of them anchoring a bin 4.84 MB above its successor (a
+    `queue-operation` record at line 39 carrying a timestamp from hours later). Seeing that, the
+    natural instinct is to refuse an offset below the previous bin's and call the map monotone.
+
+    That is strictly worse than the defect. Clamping moves the anchor PAST the line it names, so
+    a bounded read starting there silently DROPS the bin's first messages -- an over-read that
+    costs time becomes an under-read that loses data, and nothing reports it. The store's
+    standing contract is that a tail parse equals a full parse; a clamp breaks it invisibly.
+
+    The right bound is a span cap in the CONSUMER, which is the only code that knows what "too
+    much" means for what it is doing. See the `bin_offset` DDL comment.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        st = open_store(os.path.join(tmp, "s.db"))
+        # Bin 2000 is LATER in time and EARLIER in the file than bin 1000 -- the shape measured
+        # above, in miniature.
+        st.upsert_bin_offsets(SESSION, {1000: 5_307_336, 2000: 471_652})
+        assert st.bin_offset(SESSION, 2000) == 471_652, \
+            "a later bin's own offset must be stored as measured, never raised to its predecessor's"
+        assert st.bin_offset(SESSION, 1000) == 5_307_336, "and the earlier bin must not be lowered"
+        st.close()
 
 
 if __name__ == "__main__":

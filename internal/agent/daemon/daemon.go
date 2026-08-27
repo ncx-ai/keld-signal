@@ -819,6 +819,15 @@ func Run(ctx context.Context) error {
 		// Atlas stores blocks now but nothing reads them yet. Returns nil when
 		// off, which setBlockAdvance takes as "no observer".
 		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter))
+		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
+		// future-work prediction. svc.Features is non-nil ONLY under
+		// ml_backend "deterministic" (see deterministicBackend), so this is
+		// also the registration condition that keeps the subsystem absent
+		// under "auto". Both toggles default OFF and both are read live, so
+		// the goroutines start and take nothing until something switches them
+		// on — which is what lets an org enable it without a restart.
+		setFeatureAdvance(startFeatureEmitter(ctx, svc.Features, cfg.Endpoint, tok.Get,
+			actor, installID, live.FeaturesEnabled, live.FeaturesPublishEnabled, emitter))
 		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 
@@ -898,7 +907,22 @@ func Run(ctx context.Context) error {
 		go txw.Run(ctx)
 	}
 
-	return serve(ctx, ln, handler, q, emitter)
+	err = serve(ctx, ln, handler, q, emitter)
+
+	// ⚠️ SHUTDOWN IS NOT DONE WHEN serve() RETURNS, and pretending otherwise is
+	// what made the supervisor's kill path unreachable. serve returns as soon
+	// as ctx is cancelled and the listener closes — microseconds — while the
+	// supervisor goroutine is still SIGTERMing the sidecar and waiting for its
+	// ~2.9 GB GLiNER2 worker and ~1.7-2.3 GB encoder child to exit. Returning
+	// here exits the process mid-reap and leaves precisely the orphans this
+	// whole path exists to prevent. So the daemon holds itself open for the
+	// stop, and only for the stop: the wait is bounded by the supervisor's own
+	// grace plus a second of slack, and expiring it just means we hand the
+	// remainder to the service manager rather than hanging.
+	if svc.AwaitSidecarStop != nil {
+		svc.AwaitSidecarStop()
+	}
+	return err
 }
 
 // drainEnrichSpool drains queued spool pointers into q, offering each as an
@@ -1189,8 +1213,16 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 
 	sup := NewSupervisor(
 		func(p int) (*exec.Cmd, error) {
-			cmd := exec.CommandContext(ctx, binPath, fmt.Sprintf("--port=%d", p))
-			cmd.Env = sidecarEnv(os.Environ(), modelDir, watch.AnalyzeRoots())
+			// ⚠️ exec.Command, NOT exec.CommandContext, and that is the point.
+			// CommandContext installs a cancel hook that SIGKILLs the child's
+			// PID the instant ctx is done — pid-only, uncatchable, and racing
+			// the supervisor's own stop. It would pre-empt the SIGTERM that
+			// lets the sidecar's lifespan teardown run, which is exactly the
+			// bug being fixed. The supervisor owns termination on every path it
+			// can return from (see stopChild), so there is nothing left for the
+			// context hook to do except get in the way.
+			cmd := exec.Command(binPath, fmt.Sprintf("--port=%d", p))
+			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(), watch.AnalyzeRoots())
 			return cmd, nil
 		},
 		scPort,
@@ -1254,7 +1286,16 @@ func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, re
 	// mechanism "auto" uses for warmth: Worker reads it per job and waitWarm
 	// re-reads it every ~20ms, so sidecarService's raw healthFn — a live
 	// loopback GET per call — is the wrong shape for a gate.
-	return facetsFor(scClient, regions), serviceHealthGate(ctx, scClient)
+	svc := facetsFor(scClient, regions)
+	// THE SIGNAL-EMBEDDINGS PATH is attached HERE and only here. facetsFor runs
+	// in "auto" too, and the design scopes this subsystem to "deterministic"
+	// ONLY: under "auto" it must be ABSENT — never registered, so it appears in
+	// neither facets_skipped nor extractor_versions, the existing distinction
+	// between a pass that was skipped and one that was never wired. Lifting
+	// that later is this one line moving into facetsFor. See features.go.
+	svc.Features = featureSourceFor(scClient)
+	svc.AwaitSidecarStop = awaitSidecarStop(sup)
+	return svc, serviceHealthGate(ctx, scClient)
 }
 
 // noAnalysisService is deterministic mode's "no service this run, and no path
@@ -1406,7 +1447,9 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, s
 	// facetsFor(opts.client), not facetsFor-of-the-Model at the call site: the
 	// non-inference routes are properties of the service client and must
 	// survive any later change to what "the Model" is.
-	return opts.client, facetsFor(opts.client, opts.regions), wg.Warm,
+	svc := facetsFor(opts.client, opts.regions)
+	svc.AwaitSidecarStop = awaitSidecarStop(opts.sup)
+	return opts.client, svc, wg.Warm,
 		provisioningWarmup(prov, warmupFunc(opts.client))
 }
 
