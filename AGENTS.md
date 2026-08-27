@@ -69,7 +69,23 @@ flowchart LR
 `ingress` (loopback HTTP intake, per-user secret, bounded `queue`) → `resolve`
 (read prompt text + tail recent prompts from the transcript) → `enrich`
 (the pipeline) → `mask` → `publish` (Atlas). Panic-isolated per job; a readiness
-gate holds work until the backend is up. Delivery is durable: the hook writes a
+gate holds work until the backend is up.
+
+⚠️ **A DEDUP IS NOT BACKPRESSURE, and collapsing the two cost work twice.**
+`queue.Offer` returns an `Outcome` — `Accepted` / `Duplicate` / `Full` / `Closed`
+— because it used to return a bare `false` for all four and both callers read
+that as overload. The ingress answered **429**, and since the hook treats any
+`>=400` as failure and durably SPOOLS the pointer, a prompt the daemon had
+already published came back as "try again later" and was written to disk;
+`drainEnrichSpool` then kept that row and re-offered it on **every sweep
+forever**, because a row is deleted only when its offer succeeds and a duplicate
+never can — unbounded spool growth. Observed live: a POST for a prompt finished
+one second earlier returned 429 while the 1024-slot queue held single digits.
+`Outcome.TakenOn()` (Accepted or Duplicate) is the predicate both callers want —
+the daemon has assumed responsibility, so a caller holding a durable copy may
+drop it. Only `Full`/`Closed` are backpressure. The hook↔watcher overlap that
+produces duplicates is **designed** (`queue.Complete` exists for it) and must
+never read as overload. Delivery is durable: the hook writes a
 prompt *pointer* (never text) to the on-disk `spool` when the daemon is
 unreachable, and the daemon drains it on startup + a periodic sweep.
 
@@ -1204,7 +1220,23 @@ selects one of three modes:
 `settings.WriteInstallDefaults`, which MERGES, so an operator's `pii_regions`,
 `include_entity_text` and feature toggles survive an installer run. That is v2: the
 model-free facet set plus the block emitter, and **no multi-gigabyte model download,
-ever**. It is written FIRST in `runInstall`, before login, because `ml_backend` is
+ever**.
+
+⚠️ **FIRST SIGHT BACKFILLS, and that default is a REVERSAL.** The block emitter
+used to seed its cursor at the transcript's watermark and emit nothing on first
+sight — so on a fresh install every block that already existed was unreachable
+(measured on this repo's corpus: **24 closed blocks in one transcript, none of
+which ever reached Atlas**), plus, permanently, the block each transcript was
+mid-way through when first seen. The reasoning was an analogy to
+`KELD_WATCH_BACKFILL` — a restart must not "emit a herd of history" — and the
+analogy does not hold: the watcher's backfill re-reads whole transcripts from
+disk and is unbounded in FILE SIZE, while a block backfill is a query against a
+store that already holds the answer, bounded to `maxPerSweep` (24, the sidecar's
+own `DEFAULT_MAX_BLOCKS`) per transcript per sweep and drained across sweeps by
+the cursor. The pacing that makes it safe was already there. `KELD_BLOCKS_BACKFILL=0`
+restores forward-only, and that branch keeps its tests rather than being deleted.
+Re-emission is free either way: a block's identity is `(session, block.start)`
+and Atlas upserts, so a re-delivered block is not a duplicate. It is written FIRST in `runInstall`, before login, because `ml_backend` is
 read at daemon startup and never re-read — the restart inside `installService`
 (`launchctl bootout`+`bootstrap` / `systemctl --user restart` / `schtasks /End`+`/Run`)
 is what makes the new mode take effect in the same run. On macOS that is not
@@ -1642,6 +1674,8 @@ internal/
     provision/       model provisioning (weights → ~/.keld/models); GLiNER2 and
                      the Qwen3 text encoder, both on demand, neither at startup
     blocks/          the v2 block emitter + its per-transcript cursor
+                     (KELD_BLOCKS enables it; KELD_BLOCKS_BACKFILL, default ON,
+                      decides what FIRST SIGHT of a transcript does)
     features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
     publish/         build + POST masked enrichments to Atlas; block, window and
                      feature rows each under their own corr_scheme
