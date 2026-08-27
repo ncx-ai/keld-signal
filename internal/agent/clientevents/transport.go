@@ -75,6 +75,11 @@ func IsAuthRejection(err error) bool {
 	return false
 }
 
+// SetPolicy overrides the retry cadence. Exported for callers that need a
+// different one and for cross-package tests, which would otherwise pay the full
+// default backoff to assert what happens AFTER the retries are exhausted.
+func (t *Transport) SetPolicy(p retry.Policy) { t.policy = p }
+
 // OnAuthRejection registers the callback fired when a drain hits a rejection.
 // Not safe for concurrent use with a running drain; set it at construction.
 func (t *Transport) OnAuthRejection(fn func()) { t.onAuthRejection = fn }
