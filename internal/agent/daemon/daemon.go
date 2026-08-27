@@ -735,6 +735,23 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	log.Printf("keld-agent: listening on %s", ln.Addr().String())
+
+	// THE TELEMETRY PROXY. AI tools POST OTLP here instead of to Atlas, so none
+	// of them holds an Atlas credential and a token rotation strands nobody. A
+	// rejection routes into the SAME reauther the publish path uses, whose
+	// single-flight cooldown is what stops a burst of 401s becoming a burst of
+	// re-onboards. A bind failure is fatal to the proxy but not to the daemon:
+	// enrichment and publishing are unaffected, and the operator is told which
+	// port and which override.
+	if tp, tpErr := startTelemetryProxy(ctx, emitter, cfg.Endpoint, tok.Get, func() {
+		go func() { _ = ra.refresh(context.WithoutCancel(ctx)) }()
+	}); tpErr != nil {
+		log.Printf("keld-agent: telemetry proxy NOT running: %v", tpErr)
+		emitter.EmitExempt("telemetry.proxy_unavailable", clientevents.SevWarn,
+			map[string]any{"error": tpErr.Error()})
+	} else {
+		setTelemetryProxy(tp)
+	}
 	// EmitExempt: daemon.start is SevInfo but must surface even under the
 	// default warn floor (lifecycle narrative), and it fires once here before
 	// any poll could lower the floor — a plain Emit would always drop it.

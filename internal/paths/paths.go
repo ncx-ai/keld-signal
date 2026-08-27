@@ -82,6 +82,11 @@ func WatchDir() string { return filepath.Join(KeldHome(), "watch") }
 // failed to POST to Atlas (e.g. Atlas unreachable), for a later drain sweep.
 func ClientEventsSpoolDir() string { return filepath.Join(SpoolDir(), "clientevents") }
 
+// TelemetrySpoolDir is where the loopback telemetry proxy spools OTLP batches
+// that could not reach Atlas. Its OWN directory: a shared one would cross-post
+// bodies between routes, which the features path already documents as a trap.
+func TelemetrySpoolDir() string { return filepath.Join(SpoolDir(), "telemetry") }
+
 // FeaturesSpoolDir is where THE SIGNAL-EMBEDDINGS PATH's reporter spools
 // batches that failed to POST, for a later drain sweep.
 //

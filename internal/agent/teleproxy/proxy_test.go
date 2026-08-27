@@ -223,3 +223,15 @@ func TestPortDefaultsTo14318AndIsOverridable(t *testing.T) {
 		t.Fatalf("a junk override should fall back to the default, got %d", Port())
 	}
 }
+
+// ⚠️ FAIL CLOSED. subtle.ConstantTimeCompare("", "") returns 1, so a proxy built
+// with no secret would authenticate every local caller — a fail-open default on
+// the one route that injects billable usage into the org.
+func TestAnEmptySecretRejectsEverything(t *testing.T) {
+	p := New("http://a/v1/logs", "http://a/v1/metrics", func() string { return "t" }, "", t.TempDir())
+	for _, sent := range []string{"", "anything"} {
+		if rr := post(t, p, "/v1/logs", sent, `{"resourceLogs":[]}`); rr.Code != http.StatusUnauthorized {
+			t.Fatalf("empty configured secret accepted %q: code = %d, want 401", sent, rr.Code)
+		}
+	}
+}

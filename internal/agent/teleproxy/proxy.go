@@ -107,6 +107,14 @@ func (p *Proxy) LastForward() time.Time {
 	return p.lastForward
 }
 
+// DrainSpools retries everything spooled for both routes. Metrics first is
+// arbitrary; the two are independent by construction (separate directories), so
+// neither can block the other.
+func (p *Proxy) DrainSpools(ctx context.Context) {
+	_ = p.logs.DrainSpool(ctx)
+	_ = p.metric.DrainSpool(ctx)
+}
+
 // WaitIdle blocks until in-flight forwards finish. For shutdown and for tests;
 // never call it on the request path.
 func (p *Proxy) WaitIdle() { p.wg.Wait() }
@@ -132,7 +140,12 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("x-keld-telemetry-secret")), []byte(p.secret)) != 1 {
+		// ⚠️ An EMPTY configured secret rejects everything rather than accepting
+		// everything. ConstantTimeCompare("", "") is 1, so without this an
+		// unconfigured proxy would authenticate any local caller — a fail-open
+		// default on the one route that injects billable usage into the org.
+		if p.secret == "" ||
+			subtle.ConstantTimeCompare([]byte(r.Header.Get("x-keld-telemetry-secret")), []byte(p.secret)) != 1 {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
