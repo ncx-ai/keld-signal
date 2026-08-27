@@ -124,12 +124,32 @@ written; a hand-rolled one here is the thing to refuse.
 A batch that fails on a permanent, non-auth status is spooled once and dropped by the
 bounded spool's own eviction, never retried forever.
 
-⚠️ **The drain STOPS on the first auth failure**, re-onboards once, and resumes. It must not
-walk the rest of the spool learning the same thing: a laptop that was offline for a week
-comes back with hundreds of batches and, if its token was revoked while it slept, a per-batch
-401 becomes a per-batch re-onboard — a self-inflicted burst against Atlas at the exact moment
-an org least wants one. Single-flighting inside `reauther` is necessary but not sufficient
-here; the drain loop itself has to yield.
+⚠️ **THREE FAILURE CLASSES, THREE DIFFERENT ANSWERS, AND CONFLATING THEM IS THE BUG.**
+"Stop trying" is the right response to being REJECTED and the wrong response to a condition
+that will clear on its own. They must not share a code path.
+
+| failure | drain | re-onboard | the batch |
+|---|---|---|---|
+| **Rejected** — 401/403 | **STOP immediately** | yes, once (single-flighted, cooldown) | kept; retried after the re-onboard |
+| **Unavailable** — no network, DNS, timeout, 5xx | end this sweep | **never** | kept; normal retry schedule |
+| **Refused** — 400/404/422 on the payload | **continue to the next batch** | no | dropped after one attempt |
+
+- **Rejected is terminal for that credential.** The server looked at the token and said no, so
+  every remaining batch would be told the same thing. A laptop offline for a week returns with
+  hundreds of batches and, if its token was revoked while it slept, a per-batch 401 becomes a
+  per-batch re-onboard — a self-inflicted burst at the exact moment an org least wants one.
+  Single-flighting inside `reauther` is necessary but **not sufficient**: the drain loop itself
+  has to yield, or it spends the cooldown discovering the same rejection hundreds of times.
+  It must never re-send a batch with a token already known to be rejected.
+- **Unavailable is not a rejection and must not trigger re-onboarding.** Nothing is wrong with
+  the credential; the laptop is on a train. Re-onboarding here would burn the CLI token's
+  endpoint on a condition it cannot fix. The sweep ends because the same condition would meet
+  every remaining batch, and the next sweep retries on the ordinary backoff — this costs one
+  failed attempt, not one per spooled batch.
+- **Refused is specific to that payload**, not to the connection, so the drain CONTINUES. Stopping
+  would let one malformed batch block every good batch behind it — a head-of-line stall that
+  would look exactly like "telemetry silently stopped", which is the class of failure this whole
+  document exists to remove.
 
 ⚠️ **Delivery is confirmed from the RESPONSE, not the status code alone.** Hotel and airport
 captive portals answer every request with **200 and an HTML login page**. A forwarder that
@@ -202,9 +222,15 @@ below is a test, and each names the wrong behaviour it exists to catch.
   is least likely to want one. The drain must stop on the first auth failure, re-onboard
   once through `reauther`'s cooldown, and resume; it must not walk the whole spool learning
   the same thing hundreds of times.
-- **A permanently-failing Atlas must not become a hot loop.** 400/404/422 is spooled once and
-  evicted by the bounded spool, never retried forever. Asserted by counting requests over a
-  simulated hour, not by inspecting code.
+- **Each failure class gets its own test, because the point is that they DIFFER.** A rejection
+  (401) stops the drain and re-onboards once; an unavailable Atlas (connection refused, then
+  503) ends the sweep and re-onboards **zero** times; a refused payload (422) leaves the drain
+  running and the batches behind it deliver. The zero-re-onboards-on-5xx assertion is the one
+  most likely to regress, because 401 and 503 arrive on the same code path.
+- **A permanently-failing Atlas must not become a hot loop.** Asserted by counting requests over
+  a simulated hour, not by inspecting code.
+- **One malformed batch must not stall the queue behind it** — head-of-line blocking here is
+  indistinguishable from "telemetry silently stopped".
 - **A token rotated MID-DRAIN** is picked up by the remaining batches without restarting the
   drain, because the forwarder reads `tok.Get` per request rather than capturing it.
 
