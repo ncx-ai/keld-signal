@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,6 +49,21 @@ type SetupOpts struct {
 // runSetup applies keld telemetry configuration to each adapter, writes the
 // manifest, and returns the resulting Manifest.
 func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client, ob *api.Onboarding, opts SetupOpts) (*config.Manifest, error) {
+	// ⚠️ THE ORG INGEST TOKEN MUST NEVER REACH A TOOL CONFIG. This is the one
+	// place the two credentials are both in scope, so it is the only place the
+	// rule can be enforced rather than merely intended. A tool holding an Atlas
+	// credential goes stale the moment that credential rotates and only
+	// restarting the tool recovers it — measured, 40 minutes of dead telemetry
+	// while `keld signal doctor` correctly reported no problems, because the
+	// stale copy lives inside a process it cannot inspect.
+	//
+	// A refactor that reconnects p.IngestToken to ob.IngestToken would silently
+	// restore that bug; this fails loudly instead.
+	if ob != nil && ob.IngestToken != "" && p.IngestToken == ob.IngestToken {
+		return nil, errors.New("refusing to write the Atlas ingest token into a tool config: " +
+			"tools must point at the daemon's telemetry proxy and hold only the local secret " +
+			"(see docs/superpowers/specs/2026-08-27-telemetry-loopback-proxy-design.md)")
+	}
 	quiet := opts.Emit != nil
 	emit := func(e SetupEvent) {
 		if opts.Emit != nil {
@@ -298,9 +314,13 @@ func newSetupCmd() *cobra.Command {
 				return nil
 			}
 
+			tp, err := telemetryTarget()
+			if err != nil {
+				return err
+			}
 			p := tools.SetupParams{
-				Endpoint:    ob.Endpoint,
-				IngestToken: ob.IngestToken,
+				Endpoint:    tp.Endpoint,
+				IngestToken: tp.Secret,
 				BinPath:     keldBinaryPath(),
 			}
 

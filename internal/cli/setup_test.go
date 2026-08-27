@@ -74,7 +74,9 @@ func TestRunSetupEmitsEventsWhenEmitSet(t *testing.T) {
 
 	var events []SetupEvent
 	ob := &api.Onboarding{Endpoint: "https://ep", IngestToken: "tok", Actor: "actor"}
-	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken}
+	// Tools get the daemon's loopback address and the LOCAL secret — never the
+	// org ingest token, which runSetup now refuses. See telemetryTarget.
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
 	opts := SetupOpts{Yes: true, Emit: func(e SetupEvent) { events = append(events, e) }}
 
 	if _, err := runSetup([]tools.Adapter{changed, nochange}, p, &api.Client{}, ob, opts); err != nil {
@@ -126,7 +128,9 @@ func TestRunSetupDryRunWritesNothing(t *testing.T) {
 
 	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
 	client := &api.Client{}
-	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken}
+	// Tools get the daemon's loopback address and the LOCAL secret — never the
+	// org ingest token, which runSetup now refuses. See telemetryTarget.
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
 
 	opts := SetupOpts{
 		DryRun:          true,
@@ -176,7 +180,9 @@ func TestRunSetupConfirmedApplyWritesExtraFile(t *testing.T) {
 
 	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
 	client := &api.Client{}
-	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken}
+	// Tools get the daemon's loopback address and the LOCAL secret — never the
+	// org ingest token, which runSetup now refuses. See telemetryTarget.
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
 
 	opts := SetupOpts{
 		DryRun:  false,
@@ -226,7 +232,9 @@ func TestRunSetupNormalApply(t *testing.T) {
 
 	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
 	client := &api.Client{}
-	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken}
+	// Tools get the daemon's loopback address and the LOCAL secret — never the
+	// org ingest token, which runSetup now refuses. See telemetryTarget.
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
 
 	opts := SetupOpts{
 		DryRun:          false,
@@ -270,7 +278,9 @@ func TestRunSetupConflictSkip(t *testing.T) {
 
 	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
 	client := &api.Client{}
-	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken}
+	// Tools get the daemon's loopback address and the LOCAL secret — never the
+	// org ingest token, which runSetup now refuses. See telemetryTarget.
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
 
 	opts := SetupOpts{
 		DryRun:          false,
@@ -313,7 +323,9 @@ func TestRunSetupAbortReturnsSilentExit(t *testing.T) {
 
 	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
 	client := &api.Client{}
-	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken}
+	// Tools get the daemon's loopback address and the LOCAL secret — never the
+	// org ingest token, which runSetup now refuses. See telemetryTarget.
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
 
 	opts := SetupOpts{
 		DryRun:          false,
@@ -360,7 +372,9 @@ func TestRunSetupHumanOutputFormat(t *testing.T) {
 
 	ob := &api.Onboarding{Endpoint: "https://ep", IngestToken: "tok", Actor: "actor"}
 	client := &api.Client{}
-	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken}
+	// Tools get the daemon's loopback address and the LOCAL secret — never the
+	// org ingest token, which runSetup now refuses. See telemetryTarget.
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
 	opts := SetupOpts{
 		Yes:             true,
 		Confirm:         func(string) bool { return true },
@@ -416,7 +430,9 @@ func TestRunSetupConflictHumanOutputFormat(t *testing.T) {
 
 	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
 	client := &api.Client{}
-	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken}
+	// Tools get the daemon's loopback address and the LOCAL secret — never the
+	// org ingest token, which runSetup now refuses. See telemetryTarget.
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
 	opts := SetupOpts{
 		Yes:             true, // --yes auto-skips conflicts
 		Confirm:         func(string) bool { return true },
@@ -452,7 +468,9 @@ func TestRunSetupConflictYes(t *testing.T) {
 
 	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
 	client := &api.Client{}
-	p := tools.SetupParams{Endpoint: ob.Endpoint, IngestToken: ob.IngestToken}
+	// Tools get the daemon's loopback address and the LOCAL secret — never the
+	// org ingest token, which runSetup now refuses. See telemetryTarget.
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
 
 	opts := SetupOpts{
 		DryRun:          false,
