@@ -46,3 +46,17 @@ regex==2026.6.28
 # cap (then move to the newest release); do NOT bump to 2.2.363+ while numpy is
 # 2.5.x without re-running the torch/GLiNER2 check.
 presidio-analyzer==2.2.362
+
+# ⚠️ psutil is a RUNTIME dependency and was satisfied only by ACCIDENT until now.
+# worker_manager._default_rss / _default_parent_rss / _default_ram read process
+# and system memory through it, and those are what the whole memory guard rests
+# on — the RSS ceiling, the parent reserve, the pressure eviction (AGENTS.md,
+# "Resource safety"). It was never declared here; it arrived transitively via
+# accelerate/peft, which come in behind gliner2[local]'s torch stack.
+#
+# That is fragile in the one direction that matters. The imports sit OUTSIDE their
+# try/except, so a build where accelerate or peft stops depending on psutil would
+# not degrade the guard — it would raise ModuleNotFoundError from inside it. CI
+# found this: the sidecar-tests job installs deliberately without torch/gliner2,
+# so it has no accelerate, so it had no psutil.
+psutil==7.2.2

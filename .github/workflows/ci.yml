@@ -51,16 +51,41 @@ jobs:
   # obfuscated — which is what a non-recursive glob in build-freeze.sh silently
   # broke for a whole subpackage (sidecar/app/analysis/) without either make
   # target catching it, since both only check that the frozen binary runs.
+  # ⚠️ THIS GATE IS INAPPLICABLE WHILE RELEASES SHIP UNOBFUSCATED, and it is
+  # SKIPPED rather than left failing. It asserts "every shipped app module comes
+  # out PyArmor-processed" — a claim about artifacts we are not currently
+  # producing.
+  #
+  # PyArmor's free tier caps each script at ~32KB and 7 of the 42 shipped sidecar
+  # files exceed it, so `pyarmor gen` answers "out of license" and this job cannot
+  # pass by any means available to it. It had been red since at least 2026-08-25
+  # and nobody acted on it — which is the cost of a permanently-failing gate:
+  # people stop reading it, and it stops protecting anything.
+  #
+  # KEEP THIS IN STEP WITH installers.yml's KELD_OBFUSCATE. Flip that back to "1"
+  # when a paid licence exists and flip SHIP_OBFUSCATED here in the same commit.
+  # The check itself is unchanged and still runs locally via
+  # `make obfuscation-coverage-check`, so the capability does not rot while off.
   obfuscation-coverage:
     runs-on: ubuntu-latest
+    env:
+      SHIP_OBFUSCATED: "0"
     steps:
       - uses: actions/checkout@v4
+      - name: gate skipped (releases currently ship unobfuscated)
+        if: env.SHIP_OBFUSCATED != '1'
+        run: |
+          echo "::notice title=Obfuscation coverage skipped::Releases ship unobfuscated (PyArmor free-tier ~32KB per-file cap; 7 shipped files exceed it). Re-enable together with KELD_OBFUSCATE in installers.yml once a paid licence exists."
+          echo "⚠️ Obfuscation coverage gate **skipped** — releases currently ship unobfuscated." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-python@v5
+        if: env.SHIP_OBFUSCATED == '1'
         with:
           python-version: "3.12"
       - name: install obfuscation tools (no torch)
+        if: env.SHIP_OBFUSCATED == '1'
         run: pip install --quiet python-minifier pyarmor
       - name: obfuscation coverage gate
+        if: env.SHIP_OBFUSCATED == '1'
         run: make obfuscation-coverage-check
 
   # The real app.analysis identity gate (scripts/check_identity.py against the frozen corpus
@@ -116,7 +141,12 @@ jobs:
           python-version: "3.12"
       - name: install sidecar test deps (no torch, no gliner2, no spaCy model)
         run: |
-          pip install --quiet pandas pyarrow bashlex wordfreq pyyaml \
+          # psutil is a sidecar RUNTIME dependency (worker_manager's RSS guard).
+          # It is listed explicitly because this job deliberately installs no
+          # torch/gliner2, and psutil only ever arrived transitively behind them
+          # via accelerate/peft — which is how this job caught that it was never
+          # declared. See sidecar/requirements.txt.
+          pip install --quiet pandas pyarrow bashlex wordfreq pyyaml psutil \
             fastapi==0.141.1 presidio-analyzer==2.2.362
       - name: sidecar unit tests (standalone scripts, not pytest)
         working-directory: sidecar

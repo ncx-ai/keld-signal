@@ -1,6 +1,6 @@
 {
- "rows": 225,
- "sha256": "f7c573532fefb7949ef5fc89727dfe13ee8fafb8fb7c412a0955f378207834e9",
+ "rows": 224,
+ "sha256": "b26c149d201e93ae91a9e57932a404eed1719b1a5ea2d6e6a90df68ae6ac7060",
  "levels": {
   "mag/edit_bytes": {
    "rows": 4,
@@ -75,10 +75,10 @@
    "sha256": "52f1147e4e9511f22278433f8c747fee0fe3e2fa900e95e4bff9b36e09c54588"
   },
   "ref/lang": {
-   "rows": 9,
-   "total": 9.0,
-   "distinct": 4,
-   "sha256": "d2bdf17cce347463ee7e5e33e74c5234fcdd33a7441fb1ad97b9bb4544aa3a43"
+   "rows": 6,
+   "total": 6.0,
+   "distinct": 2,
+   "sha256": "881dea017bfea51f3e1789487c524c7284853e073a444783464ae1a76438f5bd"
   },
   "ref/mcp_server": {
    "rows": 1,
@@ -175,6 +175,12 @@
    "total": 0.0,
    "distinct": 1,
    "sha256": "69adf9100b5edb5dd2a47e2b5906a3545baa2f15aaffd1ca703a602650750075"
+  },
+  "say/asst_think_blocks": {
+   "rows": 2,
+   "total": 2.0,
+   "distinct": 1,
+   "sha256": "a1401e155a31ebc608ca20d83ab4e319f96911e5c2d84e65ac9453f2d4435e95"
   },
   "say/user": {
    "rows": 4,
