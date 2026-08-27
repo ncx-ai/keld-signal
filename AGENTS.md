@@ -1236,7 +1236,32 @@ own `DEFAULT_MAX_BLOCKS`) per transcript per sweep and drained across sweeps by
 the cursor. The pacing that makes it safe was already there. `KELD_BLOCKS_BACKFILL=0`
 restores forward-only, and that branch keeps its tests rather than being deleted.
 Re-emission is free either way: a block's identity is `(session, block.start)`
-and Atlas upserts, so a re-delivered block is not a duplicate. It is written FIRST in `runInstall`, before login, because `ml_backend` is
+and Atlas upserts, so a re-delivered block is not a duplicate.
+
+⚠️ **BACKFILL NEEDED TWO MORE THINGS, AND EACH FAILED SILENTLY WITHOUT THE NEXT.**
+The emitter can only cut blocks for a transcript the STORE has ingested, and it
+only sees transcripts in its active set, which the watcher's advance signal
+fills. So:
+1. **First sight has to signal at all.** Under forward-only `scanFile` set a
+   first-sighting cursor to EOF and returned EARLY, so `advanced` never fired and
+   a transcript entered the active set only when it next GREW — a session that
+   ended yesterday could never be backfilled, whatever the toggle said. The two
+   paths are now separated at that sighting: the PROMPT path stays forward-only
+   (offering every historical prompt for enrichment is a real herd, and the EOF
+   cursor is what prevents it — measured, 2 enrichments rather than 2,152 across
+   a full fresh-install simulation), while the ingest/blocks signal fires,
+   because it carries coordinates only and does not depend on the cursor.
+2. **Those signals have to be PACED.** The ingest signal rides a 64-slot,
+   path-coalescing queue whose policy is DROP rather than retry — safe for a
+   growing transcript because the next signal catches up, and unsafe for a first
+   sighting, which has no next signal. Firing all of them at once on a machine
+   with **2,152 known transcripts filled the 64 slots and dropped ~2,088
+   permanently**, and the dropped ones were exactly the dormant transcripts the
+   change existed to reach. First sightings now drain `firstSightPerPoll` (4) per
+   poll; four because the real limit is downstream — one serial sender, and a
+   first whole-file ingest measured 5.1s on a 90 MB transcript. Measured end to
+   end: `parse_state` 8 → 109 in two minutes (~51 transcripts/min, ~13 minutes
+   for 683), with system load FALLING (2.41 → 1.13) rather than spiking. It is written FIRST in `runInstall`, before login, because `ml_backend` is
 read at daemon startup and never re-read — the restart inside `installService`
 (`launchctl bootout`+`bootstrap` / `systemctl --user restart` / `schtasks /End`+`/Run`)
 is what makes the new mode take effect in the same run. On macOS that is not
