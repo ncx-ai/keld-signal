@@ -75,6 +75,14 @@ flowchart LR
   never rotated — unlike `Info.Secret`, regenerated every daemon start, which
   would rebuild the bug one layer down and fire it daily). The token the daemon
   attaches is read **per request**, so a rotation mid-flight is picked up.
+  ⚠️ **The proxy accepts that secret in THREE shapes, because the tools do not
+  agree on one**: `x-keld-ingest-token` (Claude Code, Codex), `?token=` in the
+  URL (Gemini — its OTLP SDK cannot send a custom header at all), and
+  `x-keld-telemetry-secret`. Assuming a single shape 401'd all three tools live
+  while the entire Go suite passed, because the tests used the name the proxy
+  chose rather than the ones `telemetry.ClaudeEnv`/`CodexBlockBody`/
+  `GeminiTelemetry` emit. Widening where the credential may appear does not
+  widen what is accepted.
   ⚠️ **Telemetry now depends on the daemon**, where it did not before. Paid for
   with a bounded spool under `spool/telemetry` and not hoped away; a machine
   whose daemon never starts collects nothing, and `keld signal doctor` is the
