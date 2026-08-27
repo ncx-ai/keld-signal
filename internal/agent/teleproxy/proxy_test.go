@@ -1,6 +1,8 @@
 package teleproxy
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -393,5 +395,68 @@ func TestPortHonoursTheConfigKeyNotJustTheEnv(t *testing.T) {
 	}
 	if Addr() != "127.0.0.1:15123" {
 		t.Fatalf("Addr() = %q", Addr())
+	}
+}
+
+// ⚠️ A COMPRESSED BATCH MUST NOT BE FORWARDED AS PLAIN JSON.
+//
+// The forwarder hardcodes Content-Type: application/json and sets nothing else,
+// and the listener discarded every inbound header. All three tools are currently
+// configured for uncompressed JSON — but OTEL_EXPORTER_OTLP_COMPRESSION=gzip is a
+// one-line org change, and the result would be gzip bytes labelled application/
+// json with no Content-Encoding. Atlas 400s, that classifies as REFUSED, and the
+// batch is dropped: silent total telemetry loss, one setting away.
+//
+// Decoding it here is the right call rather than rejecting: the tool is
+// configured correctly and it is our transport that cannot carry it.
+func TestGzippedBatchIsDecodedNotForwardedAsPlainJSON(t *testing.T) {
+	var got []byte
+	var enc string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enc = r.Header.Get("Content-Encoding")
+		got, _ = io.ReadAll(r.Body)
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL, srv.URL, func() string { return "t" }, "s", t.TempDir())
+
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(`{"resourceLogs":[{"marker":"PLAINTEXT-AFTER-DECODE"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	zw.Close()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/logs", bytes.NewReader(buf.Bytes()))
+	req.Header.Set("x-keld-telemetry-secret", "s")
+	req.Header.Set("Content-Encoding", "gzip")
+	p.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("gzipped batch rejected at the listener: %d", rr.Code)
+	}
+	p.WaitIdle()
+
+	if enc != "" {
+		t.Errorf("forwarded with Content-Encoding %q; the body was decoded, so it must not claim to be encoded", enc)
+	}
+	if !bytes.Contains(got, []byte("PLAINTEXT-AFTER-DECODE")) {
+		t.Fatalf("Atlas did not receive decodable JSON: %q", got)
+	}
+}
+
+// An encoding we cannot decode must be REFUSED at the listener, loudly, rather
+// than forwarded as if it were JSON — the tool sees an error it can report
+// instead of telemetry vanishing.
+func TestAnUnsupportedContentEncodingIsRefusedAtTheListener(t *testing.T) {
+	p := New("http://a/v1/logs", "http://a/v1/metrics", func() string { return "t" }, "s", t.TempDir())
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/logs", strings.NewReader("whatever"))
+	req.Header.Set("x-keld-telemetry-secret", "s")
+	req.Header.Set("Content-Encoding", "br")
+	p.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("code = %d, want 415 for an encoding we cannot decode", rr.Code)
 	}
 }

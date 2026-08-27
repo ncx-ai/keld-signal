@@ -17,6 +17,7 @@ package teleproxy
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -194,6 +195,35 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 		if err != nil {
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		// ⚠️ DECODE BEFORE FORWARDING. The forwarder sends
+		// `Content-Type: application/json` and no Content-Encoding, so a
+		// compressed body passed through would reach Atlas as gzip bytes labelled
+		// JSON: Atlas 400s, that classifies as REFUSED, and the batch is DROPPED.
+		// Total silent telemetry loss, one `OTEL_EXPORTER_OTLP_COMPRESSION=gzip`
+		// away. Decoding rather than refusing is right for an encoding we
+		// understand — the tool is configured correctly and it is our transport
+		// that cannot carry it — and StripText needs the plaintext anyway.
+		switch enc := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))); enc {
+		case "", "identity":
+		case "gzip":
+			zr, zerr := gzip.NewReader(bytes.NewReader(body))
+			if zerr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			plain, zerr := io.ReadAll(io.LimitReader(zr, maxBody))
+			zr.Close()
+			if zerr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			body = plain
+		default:
+			// Refused LOUDLY: the tool sees an error it can report, rather than
+			// telemetry vanishing after a 202 we could not honour.
+			w.WriteHeader(http.StatusUnsupportedMediaType)
 			return
 		}
 		body = StripText(body)
