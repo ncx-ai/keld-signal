@@ -1937,6 +1937,26 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   broken payload, which waiting won't fix. The submission id is written to
   `<pkg>.notarization-id` + the run summary so a later staple needs no log
   archaeology. `KELD_NOTARY_REQUIRED=1` restores fail-on-timeout.
+- ⚠️ **OBFUSCATION IS CURRENTLY OFF IN CI, AND THE RELEASE WAS BROKEN FOR A WEEK
+  BEFORE ANYONE NOTICED.** PyArmor's free tier caps each script at **~32 KB**, and
+  7 of the 42 shipped sidecar files now exceed it — `analysis/store.py` (89 KB),
+  `main.py` (80 KB), `analysis/features.py` (63 KB), `textembed.py` (47 KB),
+  `dynamics.py` (47 KB), `ingest.py` (39 KB), `analyze.py` (36 KB). `pyarmor gen`
+  answers **`ERROR out of license`** and fails the freeze on all three OSes.
+  Measured: the largest file it obfuscated successfully was `worker_manager.py` at
+  22 KB. The last green `installers` run was **2026-08-19**; `store.py` crossed the
+  cap on **08-23**, so the pipeline was unbuildable for ~a week and nothing
+  surfaced it, because nothing ran the workflow in between — the argument for
+  dry-running a release rather than trusting a green unit suite.
+  `installers.yml` therefore sets `KELD_OBFUSCATE: "0"` and emits a run-level
+  warning saying so. **Revert it to `"1"` the day a paid licence exists**; nothing
+  else changes, since `build-freeze.sh` and the `.spec` both branch on the
+  variable and the local gates still exercise the obfuscated path. A separate,
+  kept fix: the freeze no longer feeds `test_*.py` to PyArmor (42 of the 84 files
+  were tests, they never reach the bundle, and the `.spec` and the coverage gate
+  already excluded them).
+  What is lost is source-level opacity, not a security control — obfuscation
+  protects code logic only and never hid the model (see the non-goal below).
 - **Obfuscation (`KELD_OBFUSCATE=1`, CI-set, default off).** The installer/release
   freeze obfuscates the shipped sidecar — python-minifier **locals-only** rename
   (globals/Pydantic-fields/spawn-targets preserved; annotations kept so Pydantic
