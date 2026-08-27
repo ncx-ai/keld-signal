@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/enrichtest"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
@@ -128,3 +129,89 @@ type customStub struct{}
 func (customStub) Name() string                                   { return "s" }
 func (customStub) Version() string                                { return "s" }
 func (customStub) Run(*enrich.JobContext) (map[string]any, error) { return nil, nil }
+
+// --- Reject reporting is CHANGE-driven, not poll-driven. An unbuildable pass is a static
+// --- org-config fact, but onRemote runs on every settings poll (5m), so emitting per poll
+// --- turned one bad pass into ~288 client events per machine per day, indefinitely, and
+// --- pinned every device to "Needs attention" in Atlas.
+
+func collect(r *rejectReporter, rejects []enrich.CustomReject) []enrich.CustomReject {
+	var got []enrich.CustomReject
+	r.report(rejects, func(rj enrich.CustomReject) { got = append(got, rj) })
+	return got
+}
+
+func TestRejectReporterStaysQuietWhileTheSetIsUnchanged(t *testing.T) {
+	r := &rejectReporter{}
+	set := []enrich.CustomReject{{Key: "deploy", Reason: "unsupported_kind"}}
+	if got := collect(r, set); len(got) != 1 {
+		t.Fatalf("first sighting emitted %d, want 1", len(got))
+	}
+	for i := 0; i < 10; i++ {
+		if got := collect(r, set); len(got) != 0 {
+			t.Fatalf("poll %d re-emitted %+v, want silence", i+2, got)
+		}
+	}
+}
+
+func TestRejectReporterEmitsAgainWhenTheSetChanges(t *testing.T) {
+	r := &rejectReporter{}
+	collect(r, []enrich.CustomReject{{Key: "deploy", Reason: "unsupported_kind"}})
+	got := collect(r, []enrich.CustomReject{
+		{Key: "deploy", Reason: "unsupported_kind"},
+		{Key: "tier", Reason: "missing_labels_by_cond"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("a changed set emitted %+v, want both rejects re-stated", got)
+	}
+}
+
+// passesFromSchema ranges over a map, so BuildCustomExtractors returns rejects in random
+// order. Without an order-independent digest the set looks different on most polls and the
+// change-detection buys nothing.
+func TestRejectReporterIgnoresIterationOrder(t *testing.T) {
+	r := &rejectReporter{}
+	collect(r, []enrich.CustomReject{
+		{Key: "a", Reason: "no_labels"}, {Key: "b", Reason: "unsupported_kind"}})
+	got := collect(r, []enrich.CustomReject{
+		{Key: "b", Reason: "unsupported_kind"}, {Key: "a", Reason: "no_labels"}})
+	if len(got) != 0 {
+		t.Fatalf("reordered identical set emitted %+v, want silence", got)
+	}
+}
+
+func TestRejectReporterEmitsAgainAfterTheSetClearsAndReturns(t *testing.T) {
+	r := &rejectReporter{}
+	bad := []enrich.CustomReject{{Key: "deploy", Reason: "unsupported_kind"}}
+	collect(r, bad)
+	if got := collect(r, nil); len(got) != 0 {
+		t.Fatalf("a cleared set emitted %+v, want silence", got)
+	}
+	if got := collect(r, bad); len(got) != 1 {
+		t.Fatalf("a returning reject emitted %d, want 1 (admin must hear about a regression)", len(got))
+	}
+}
+
+// The reporter only helps if the daemon's poll path actually goes through it. onRemote is a
+// closure inside Run and can't be reached from a test, so the sync it performs lives in
+// syncCustomPasses — this pins the wiring, not just the reporter in isolation.
+func TestSyncCustomPassesReportsAnUnbuildablePassOnlyOnce(t *testing.T) {
+	schema := &settings.EnrichmentSchema{Passes: map[string]settings.RemotePass{
+		"deploy": {Key: "deploy", Kind: "structure", Title: "Deploy"},
+		"nsfw":   {Key: "nsfw", Kind: "single_label", Title: "NSFW", Labels: []settings.RemoteLabel{{ID: "safe", Text: "safe"}}},
+	}}
+	custom, rejects := newCustomHolder(), &rejectReporter{}
+	var codes []string
+	emit := func(code string, _ clientevents.Severity, _ map[string]any) { codes = append(codes, code) }
+
+	for i := 0; i < 5; i++ { // five settings polls, unchanged org config
+		syncCustomPasses(schema, custom, rejects, emit)
+	}
+	if len(codes) != 1 || codes[0] != "enrich.custom.rejected" {
+		t.Fatalf("five polls emitted %v, want exactly one enrich.custom.rejected", codes)
+	}
+	// The buildable pass must still be compiled and hot-swapped in on every poll.
+	if w1, _ := custom.load(); len(w1) != 1 {
+		t.Fatalf("wave1 has %d extractors, want 1 (nsfw still built)", len(w1))
+	}
+}

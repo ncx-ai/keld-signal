@@ -1,11 +1,71 @@
 package daemon
 
 import (
+	"sort"
+	"strings"
 	"sync/atomic"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
+
+// rejectReporter reports a pass we could not build ONCE per distinct reject set, not once per
+// settings poll.
+//
+// A reject is a static fact about the org's configuration: the same pass fails identically on
+// every poll, on every machine, until an admin edits it. onRemote runs on every successful poll
+// (5m default), so emitting from there directly turned one bad pass into ~288 client events per
+// machine per day, indefinitely — enough to clear Atlas's attention threshold and pin every
+// device in the fleet to "Needs attention" over what is really one org-level config problem.
+//
+// Change-driven instead: emit the whole set when it first appears and whenever it differs from
+// last time — including when a reject RETURNS after being fixed, which is a regression an admin
+// needs to hear about. A daemon restart re-emits once, which is the floor we want: the platform
+// still learns the current state from a cold start.
+type rejectReporter struct{ last string }
+
+// report calls emit for each reject, but only when the set differs from the last call.
+func (r *rejectReporter) report(rejects []enrich.CustomReject, emit func(enrich.CustomReject)) {
+	d := rejectDigest(rejects)
+	if d == r.last {
+		return
+	}
+	r.last = d
+	for _, rj := range rejects {
+		emit(rj)
+	}
+}
+
+// syncCustomPasses rebuilds the org's custom extractors from a polled schema, hot-swaps them in,
+// and reports any pass that could not be built. Named rather than inlined in Run's onRemote
+// closure so the "report a static reject once, not once per poll" contract is testable without
+// standing up a daemon. emit matches clientevents.Emitter.Emit.
+func syncCustomPasses(s *settings.EnrichmentSchema, custom *customHolder, rejects *rejectReporter,
+	emit func(string, clientevents.Severity, map[string]any)) {
+	w1, w2, rejected := enrich.BuildCustomExtractors(passesFromSchema(s))
+	custom.store(w1, w2)
+	rejects.report(rejected, func(rj enrich.CustomReject) {
+		emit("enrich.custom.rejected", clientevents.SevWarn,
+			map[string]any{"key": rj.Key, "reason": rj.Reason})
+	})
+}
+
+// rejectDigest is an ORDER-INDEPENDENT fingerprint of a reject set. passesFromSchema ranges over
+// settings.EnrichmentSchema.Passes, a map, so Go's randomized iteration order means an unchanged
+// org config yields the same rejects in a different order on most polls. Sorting is what makes
+// the comparison above mean "the set changed" rather than "the map iterated differently".
+func rejectDigest(rejects []enrich.CustomReject) string {
+	if len(rejects) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(rejects))
+	for _, rj := range rejects {
+		parts = append(parts, rj.Key+"="+rj.Reason)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
 
 // customSet is a compiled snapshot of the org's custom passes, split into the
 // two pipeline waves.
