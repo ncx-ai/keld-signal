@@ -533,9 +533,20 @@ def _rollup_at(store, path, session, lo, hi):
 
 def _prompt_time(path, prompt_id):
     """The target prompt's own timestamp, by a pass over the transcript. The oracle's half of
-    what the `prompt` index now answers from the store."""
+    what the `prompt` index now answers from the store.
+
+    ⚠️ Matches EITHER id, and must keep matching whatever `ingest.py` indexes. A user line
+    carries `uuid` (unique per line) and `promptId` (the human turn's identity, shared by its
+    follow-on lines); the daemon asks by `promptId`. If this oracle and that index resolve
+    different ids, the equality test that guards the whole store is comparing two different
+    windows and proves nothing -- which is exactly how indexing uuid alone survived every test
+    while failing every real call.
+
+    FIRST match in file order, mirroring `upsert_prompts`' ON CONFLICT DO NOTHING: a shared
+    promptId resolves to the human prompt's own instant, never a continuation's.
+    """
     for o in iter_turns(path):
-        if o.get("uuid") == prompt_id:
+        if o.get("uuid") == prompt_id or o.get("promptId") == prompt_id:
             return o["timestamp"]
     raise PromptNotFound(prompt_id)
 

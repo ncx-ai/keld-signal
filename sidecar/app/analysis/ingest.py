@@ -115,7 +115,7 @@ HEAD_BYTES = 4096
 #           member of its own batch and no upsert can collapse it. So this bump is what REPAIRS
 #           an existing store -- it forces one reparse, `clear_session` drops the magnitudes, and
 #           the whole history is re-derived with the set carried. Exact by definition.
-STATE_VERSION = 4
+STATE_VERSION = 5
 
 
 def terms_mode(nlp):
@@ -637,7 +637,34 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
         # could not detect. `iter_turns`/`turns_in` is the filter `analyze.py`'s old scan used,
         # so indexing every turn it yields keeps resolution semantics identical -- an assistant
         # turn's uuid resolved then and must resolve now.
-        store.upsert_prompts(session, [(o.get("uuid"), o.get("timestamp")) for o in turns])
+        #
+        # ⚠️ BOTH IDS, and indexing only `uuid` was a silent, total failure of the workstreams
+        # facet. A Claude Code user line carries TWO: `uuid` (unique per line) and `promptId`
+        # (the identity of the human TURN, shared by every follow-on line of it). The daemon
+        # names a prompt by `promptId` everywhere -- watch/filter.go REJECTS a line without one,
+        # the spool pointer carries it, and it is published to Atlas as `corr_id`, which Atlas
+        # joins against ToolEvent.prompt_id. So `promptId` is the id this index is ASKED about,
+        # and while it held only uuids every /analyze call 404'd, failing the pass and publishing
+        # `pipeline_status:"partial"` with no workstreams, no dynamics and no prior. Measured on a
+        # live machine: 8 of 8 prompts, 0 of 1,627 enrichments ever carrying a workstream.
+        #
+        # Nothing caught it because BOTH halves of the sidecar agreed on uuid -- this index and
+        # `analyze.py`'s oracle scan -- so the equality test that guards the store compared two
+        # identical wrong answers, and every sidecar fixture built a user turn with no `promptId`
+        # at all. See app/test_prompt_id_seam.py; do not remove `promptId` from those fixtures.
+        #
+        # Order matters: rows go in FILE order and `upsert_prompts` is DO NOTHING, so a promptId
+        # shared by several lines resolves to the FIRST -- the human prompt's own instant, not a
+        # continuation's. Measured on a real transcript, one promptId spanned 7 user lines across
+        # 8 minutes; resolving to the last would run every window minutes long.
+        prompt_rows = []
+        for o in turns:
+            o_ts = o.get("timestamp")
+            prompt_rows.append((o.get("uuid"), o_ts))
+            o_pid = o.get("promptId")
+            if o_pid:
+                prompt_rows.append((o_pid, o_ts))
+        store.upsert_prompts(session, prompt_rows)
         recon_rows, _stats = reconcile(pending, COMPONENT_DEPTH)
         store.replace_events(session, RECONCILE_SLOT, recon_rows)
         store.set_parse_state(path,

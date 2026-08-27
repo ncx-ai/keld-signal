@@ -27,7 +27,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.analysis import window
-from app.analysis.ingest import COMPONENT_DEPTH, ingest_file, new_evidence, session_of
+from app.analysis.ingest import COMPONENT_DEPTH, STATE_VERSION, ingest_file, new_evidence, session_of
 from app.analysis.levels import events_for_turns
 from app.analysis.reconcile import reconcile
 from app.analysis.store import open_store
@@ -377,8 +377,11 @@ def test_a_state_from_an_older_layout_reparses_and_clears_stale_magnitudes():
         c.execute("INSERT INTO turn_magnitude(session, source_line, ts, kind, value) "
                   "VALUES (?,?,?,?,?)", (session_of(p), 999, ts + 5.0, kind, val))
         raw = st.parse_state(p)
-        assert raw["v"] == 4, raw["v"]
-        raw["v"] = 3
+        # Against the CONSTANT, not a literal: this test is about the reparse a
+        # below-current state forces, and hardcoding the number made every future
+        # STATE_VERSION bump fail here for a reason that has nothing to do with it.
+        assert raw["v"] == STATE_VERSION, raw["v"]
+        raw["v"] = STATE_VERSION - 1
         st.set_parse_state(p, raw)
         assert _dump(st, p)[2] != good, "the planted duplicate did not land"
 
