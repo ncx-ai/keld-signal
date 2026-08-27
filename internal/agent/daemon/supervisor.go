@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -15,7 +16,42 @@ import (
 const (
 	maxRestarts        = 3
 	healthPollInterval = 200 * time.Millisecond
+
+	// DefaultStopGrace is how long stopChild lets the sidecar shut itself down
+	// after SIGTERM before the process group is SIGKILLed.
+	//
+	// ⚠️ It is a BOUND, not a budget to be spent. Both ends are measured against
+	// a real sidecar on this branch:
+	//   - idle, the whole teardown takes 110.6 ms from SIGTERM to the process
+	//     being gone — so the common case never comes near 5s.
+	//   - with the text encoder mid-weights-load, the parent did NOT exit inside
+	//     5s and the group SIGKILL reaped it and both children (a 550 MB encoder
+	//     child and the multiprocessing resource tracker) with nothing left over.
+	// The second is why the bound must NOT track the teardown's worst case:
+	// featuretext.TextSource.shutdown drains an in-flight encode with a 30s
+	// timeout and one real batch costs ~92s, so a supervisor that waited it out
+	// would hang the daemon's whole shutdown on work about to be discarded —
+	// and, under launchd, would be SIGKILLed at 20s before it could reap
+	// anything at all. 5s is ~45x the measured clean stop; anything slower than
+	// that is a wedge, and a wedge gets SIGKILLed.
+	//
+	// It also has to fit inside the service managers' own stop grace — launchd
+	// SIGKILLs at 20s, and a daemon killed there cannot reap anything.
+	// Override with KELD_SIDECAR_STOP_GRACE.
+	DefaultStopGrace = 5 * time.Second
 )
+
+// stopGraceFromEnv resolves the post-SIGTERM grace period (KELD_SIDECAR_STOP_GRACE,
+// a Go duration). A non-positive or unparseable value falls back to the default:
+// a zero grace would skip the graceful path this fix exists to make reachable.
+func stopGraceFromEnv() time.Duration {
+	if v := os.Getenv("KELD_SIDECAR_STOP_GRACE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return DefaultStopGrace
+}
 
 // Supervisor spawns and supervises a sidecar child process. It polls a health
 // function until the process becomes ready (or a readyTimeout elapses). On
@@ -34,6 +70,17 @@ type Supervisor struct {
 
 	ready    atomic.Bool
 	fellBack atomic.Bool
+
+	// stopGrace is how long the graceful half of stopChild waits before the
+	// forceful half runs. A field rather than a constant so tests can shorten
+	// it; production reads it from the environment in NewSupervisor.
+	stopGrace time.Duration
+
+	// stopped closes when Start returns, so a shutting-down daemon can wait for
+	// the child to actually be reaped instead of racing its own process exit.
+	// See AwaitStopped.
+	stopped     chan struct{}
+	stoppedOnce sync.Once
 
 	mu  sync.Mutex
 	cmd *exec.Cmd
@@ -64,6 +111,55 @@ func NewSupervisor(
 		port:         port,
 		health:       health,
 		readyTimeout: readyTimeout,
+		stopGrace:    stopGraceFromEnv(),
+		stopped:      make(chan struct{}),
+	}
+}
+
+// AwaitStopped blocks until Start has returned — i.e. the child and its process
+// group have actually been signalled and reaped — or until d elapses. It
+// reports whether the supervisor stopped within d.
+//
+// ⚠️ Without this the whole graceful path is DEAD CODE on the one shutdown that
+// matters. Run's serve() returns as soon as ctx is cancelled and the listener
+// closes, so the daemon process used to exit within microseconds of cancelling
+// the context the supervisor is still reacting to: the SIGTERM was frequently
+// never sent, and even the old SIGKILL was a race. A supervisor's kill only
+// reaps a tree if the daemon is still alive to do the reaping.
+//
+// Bounded, because a supervisor that cannot finish must not hold the daemon
+// open either — the whole stop path has a hard ceiling of stopGrace plus the
+// small change around it.
+func (s *Supervisor) AwaitStopped(d time.Duration) bool {
+	select {
+	case <-s.stopped:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// StopGrace is the supervisor's post-SIGTERM grace period. Exposed so callers
+// bounding their own wait on AwaitStopped can size it from the same number
+// rather than restating it.
+func (s *Supervisor) StopGrace() time.Duration { return s.stopGrace }
+
+// awaitSidecarStop builds serviceFacets.AwaitSidecarStop for a supervisor,
+// sizing the bound off that supervisor's own grace rather than a second
+// constant that could drift from it. The extra second is slack for the SIGTERM,
+// the group sweep and the reap either side of the grace — not more waiting: if
+// the supervisor cannot finish in stopGrace+1s it is wedged, and the daemon
+// exits anyway rather than hang. nil sup ⇒ nil func, so a run with no
+// supervised sidecar waits for nothing.
+func awaitSidecarStop(sup *Supervisor) func() {
+	if sup == nil {
+		return nil
+	}
+	return func() {
+		if !sup.AwaitStopped(sup.StopGrace() + time.Second) {
+			log.Printf("supervisor: sidecar stop did not complete within %s; exiting anyway",
+				sup.StopGrace()+time.Second)
+		}
 	}
 }
 
@@ -99,6 +195,10 @@ func (s *Supervisor) FellBack() bool { return s.fellBack.Load() }
 // Start spawns the sidecar and supervises it. It blocks until ctx is Done.
 // Callers should run it in a goroutine.
 func (s *Supervisor) Start(ctx context.Context) {
+	// Latched via Once because the channel is closed from every return path and
+	// the documented contract ("Start must be called once") is not enforced.
+	defer s.stoppedOnce.Do(func() { close(s.stopped) })
+
 	restarts := 0
 	backoff := 250 * time.Millisecond
 
@@ -111,6 +211,12 @@ func (s *Supervisor) Start(ctx context.Context) {
 			s.fellBack.Store(true)
 			return
 		}
+		// ⚠️ Set here, not in each spawn func, so no caller can forget it: the
+		// group is what stopChild signals, and a child spawned without one
+		// silently degrades back to the pid-only kill that leaks gigabytes.
+		// Must precede cmd.Start — SysProcAttr is read by the fork.
+		setProcessGroup(cmd)
+
 		if err := cmd.Start(); err != nil {
 			log.Printf("supervisor: cmd.Start error: %v", err)
 			s.emit("sidecar.unavailable", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
@@ -138,8 +244,7 @@ func (s *Supervisor) Start(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				ticker.Stop()
-				s.killChild()
-				<-waitCh // reap to avoid goroutine leak
+				s.stopChild(waitCh) // also reaps, so no goroutine leak
 				return
 
 			case exitErr := <-waitCh:
@@ -157,9 +262,8 @@ func (s *Supervisor) Start(ctx context.Context) {
 				}
 				if time.Now().After(readyDeadline) {
 					ticker.Stop()
-					// readyTimeout elapsed — kill child and fall back.
-					s.killChild()
-					<-waitCh
+					// readyTimeout elapsed — stop child and fall back.
+					s.stopChild(waitCh)
 					s.fellBack.Store(true)
 					return
 				}
@@ -170,8 +274,7 @@ func (s *Supervisor) Start(ctx context.Context) {
 			// Sidecar is healthy; supervise indefinitely.
 			select {
 			case <-ctx.Done():
-				s.killChild()
-				<-waitCh
+				s.stopChild(waitCh)
 				return
 			case <-waitCh:
 				// Child died after becoming ready.
@@ -216,14 +319,68 @@ func (s *Supervisor) emit(code string, sev clientevents.Severity, fields map[str
 	}
 }
 
-// killChild sends SIGKILL to the current child if it exists.
-// Called from the supervisor goroutine while holding no locks, or while
-// ctx.Done fires — always safe because we hold mu.
-func (s *Supervisor) killChild() {
+// stopChild terminates the current child AND every descendant it spawned, then
+// drains waitCh so the Wait goroutine never leaks. Called only from the
+// supervisor goroutine, which is the sole reader of waitCh.
+//
+// ⚠️ THE OLD VERSION OF THIS FUNCTION WAS THE LEAK. It called
+// cmd.Process.Kill() — SIGKILL, to the sidecar's PID and nothing else. SIGKILL
+// cannot be caught, so the sidecar's lifespan teardown (which does call
+// wm.shutdown() and _TEXT_SOURCE.shutdown(), correctly) never ran, and its
+// multiprocessing children — the ~2.9 GB GLiNER2 worker and the ~1.7-2.3 GB
+// text encoder — were reparented to init/systemd and held that memory until
+// the machine was rebooted. Observed live on a dev machine: encoder children
+// and GLiNER2 workers sitting at ppid 1.
+//
+// Two halves, and BOTH are load-bearing:
+//
+//  1. GRACEFUL. SIGTERM the sidecar alone. This is the only way its existing,
+//     already-correct teardown ever executes, and it is what makes the children
+//     exit cleanly rather than being shot. Not sent to the group — see
+//     terminateChild for why killing the children out from under the teardown
+//     is worse than letting it do its job.
+//  2. FORCEFUL, and UNCONDITIONAL. SIGKILL the whole process group afterwards,
+//     whether the graceful path succeeded, timed out, or was never available
+//     (Windows). A parent that exited cleanly but left a straggler is still
+//     swept; against an empty group this is a no-op ESRCH. Running it even on
+//     the happy path is the difference between "we asked nicely" and "no
+//     survivors", and the latter is the actual requirement.
+//
+// The grace period is HARD-BOUNDED (stopGrace, default 5s): a wedged child is
+// killed, never waited on. A supervisor that hangs is its own failure.
+func (s *Supervisor) stopChild(waitCh <-chan error) {
 	s.mu.Lock()
 	cmd := s.cmd
 	s.mu.Unlock()
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+	if cmd == nil || cmd.Process == nil {
+		// Nothing was ever started; there is no waitCh producer to drain
+		// either, so returning here preserves the old no-child behaviour.
+		return
+	}
+	pid := cmd.Process.Pid
+
+	// Resolve the group BEFORE signalling, while the child is certainly alive:
+	// once cmd.Wait() reaps it the pid is no longer a reliable handle, and
+	// childGroup's pgid == pid guard is what stops us signalling the daemon's
+	// own group by mistake.
+	pgid, group := childGroup(pid)
+
+	drained := false
+	if gracefulStopSupported() {
+		if err := terminateChild(pid); err == nil {
+			select {
+			case <-waitCh:
+				drained = true
+			case <-time.After(s.stopGrace):
+				log.Printf("supervisor: sidecar pid %d did not exit %s after SIGTERM; killing its process group",
+					pid, s.stopGrace)
+			}
+		}
+	}
+
+	_ = killProcessTree(pid, pgid, group)
+
+	if !drained {
+		<-waitCh
 	}
 }

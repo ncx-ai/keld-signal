@@ -109,6 +109,13 @@ type serviceFacets struct {
 	// so it appears in neither facets_skipped nor extractor_versions. See
 	// featureSourceFor.
 	Features features.Source
+	// AwaitSidecarStop blocks (bounded) until the supervisor has finished
+	// stopping the sidecar and reaping its process group. It is consumed by no
+	// job at all — Run calls it once, after serve() returns, so the daemon does
+	// not exit out from under its own kill path. Nil whenever there is no
+	// supervised sidecar this run (no binary, no port, a test double), which is
+	// exactly when there is nothing to wait for.
+	AwaitSidecarStop func()
 }
 
 // facetsFor returns the service facets of the client it is handed, leaving any
