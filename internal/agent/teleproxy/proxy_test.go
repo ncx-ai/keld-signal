@@ -376,3 +376,22 @@ func TestMarkRunningPreservesAnExistingForward(t *testing.T) {
 		t.Fatalf("a restart erased the recorded forward: %v -> %v", before, after)
 	}
 }
+
+// The config key must move the port too, or the documented remedy for a
+// collision is unreachable on an installed daemon — no service definition on any
+// OS carries an environment block.
+func TestPortHonoursTheConfigKeyNotJustTheEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+	t.Setenv(EnvPort, "")
+	if err := os.WriteFile(filepath.Join(home, "agent-config.json"),
+		[]byte(`{"telemetry_port": 15123}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := Port(); got != 15123 {
+		t.Fatalf("Port() = %d, want 15123 from agent-config.json", got)
+	}
+	if Addr() != "127.0.0.1:15123" {
+		t.Fatalf("Addr() = %q", Addr())
+	}
+}

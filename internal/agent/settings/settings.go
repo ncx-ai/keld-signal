@@ -7,6 +7,7 @@ package settings
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/ncx-ai/keld-signal/internal/paths"
@@ -89,6 +90,45 @@ type Settings struct {
 	// knowing: an org can turn feature rows off fleet-wide and cannot turn
 	// blocks off.
 	Blocks bool `json:"blocks"`
+
+	// TelemetryPort is the loopback port AI tools POST OTLP to.
+	//
+	// ⚠️ IT HAS A CONFIG KEY FOR THE REASON `Blocks` DOES: an env-only knob is
+	// unreachable from an installed daemon. No service definition on any OS
+	// carries an environment block — LaunchAgentPlist and SystemdUnit have none,
+	// the Windows task is a bare /TR "<exe>" run — so an operator told to "set
+	// KELD_TELEMETRY_PORT" by a bind-failure message would have nowhere to set it.
+	//
+	// It must also be readable by the CLI: `keld signal setup` writes this address
+	// into tool configs, and the two halves must agree on the number. Zero means
+	// unset; KELD_TELEMETRY_PORT still wins.
+	TelemetryPort int `json:"telemetry_port,omitempty"`
+}
+
+// TelemetryPortEnv overrides the configured telemetry port.
+const TelemetryPortEnv = "KELD_TELEMETRY_PORT"
+
+// TelemetryPortOrDefault resolves env > agent-config.json > def.
+//
+// An out-of-range value is REFUSED rather than clamped: binding 0 would hand the
+// daemon an ephemeral port, which is exactly the staleness a fixed port exists to
+// prevent — tool configs are written once and must stay valid.
+func (s Settings) TelemetryPortOrDefault(def int) int {
+	if n, ok := validPort(os.Getenv(TelemetryPortEnv)); ok {
+		return n
+	}
+	if s.TelemetryPort > 0 && s.TelemetryPort < 65536 {
+		return s.TelemetryPort
+	}
+	return def
+}
+
+func validPort(v string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 || n >= 65536 {
+		return 0, false
+	}
+	return n, true
 }
 
 // PIIRegionsEnv overrides the config file's pii_regions. Comma-separated

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
 // DefaultPort is the daemon's loopback OTLP port.
@@ -43,22 +44,24 @@ import (
 // telemetry to a port collision would be silent.
 const DefaultPort = 14318
 
-// EnvPort overrides DefaultPort.
-const EnvPort = "KELD_TELEMETRY_PORT"
+// EnvPort overrides DefaultPort. Named here as well as in settings so the
+// precedence chain is stated where the port is resolved.
+const EnvPort = settings.TelemetryPortEnv
 
 // maxBody caps one OTLP batch. Generous for real payloads, bounded so a runaway
 // exporter cannot turn the daemon into a memory-pressure problem.
 const maxBody = 4 << 20
 
-// Port returns the configured loopback telemetry port.
-func Port() int {
-	if v := strings.TrimSpace(os.Getenv(EnvPort)); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n < 65536 {
-			return n
-		}
-	}
-	return DefaultPort
-}
+// Port returns the loopback telemetry port: KELD_TELEMETRY_PORT, else
+// agent-config.json's `telemetry_port`, else DefaultPort.
+//
+// ⚠️ ONE RESOLVER FOR BOTH HALVES. The daemon binds this and `keld signal setup`
+// writes it into every tool config; if they disagreed the tools would post into a
+// socket nobody holds. Routing both through settings is also what makes the
+// documented remedy for a port collision actually reachable — no service
+// definition on any OS carries an environment block, so an env-only knob could
+// not be applied to an installed daemon at all.
+func Port() int { return settings.Load().TelemetryPortOrDefault(DefaultPort) }
 
 // Addr is the host:port tools are configured to POST to.
 func Addr() string { return net.JoinHostPort("127.0.0.1", strconv.Itoa(Port())) }
