@@ -1132,17 +1132,27 @@ Expected: PASS.
 
 - [ ] **Prove the two keys actually land, end to end**
 
+⚠️ **DO NOT run `keld-agent install` on a development machine to check this.**
+`KELD_HOME` isolates `~/.keld` but NOT the service path: `service.Install` resolves
+the systemd unit / launchd plist from `os.UserHomeDir()`, so it rewrites the
+developer's REAL unit to point at the `go run` temp binary and restarts it. Done
+once during this plan's own execution, it left `keld-agent.service` pointing at
+`/tmp/go-build.../exe/keld-agent` in state `failed`, and the unit had to be
+hand-restored. `--backend` does not change that; nothing about the flag is at
+fault. Fixing this properly means teaching `service.Install` to honour a home
+override, which is out of scope here.
+
+Verify the composition without running the installer:
+
 ```bash
-KELD_HOME=$(mktemp -d) go run ./cmd/keld-agent install --backend deterministic 2>&1 | head -20
+go test ./internal/agent/settings/ -run TestWriteInstallDefaults -v
+go test ./internal/agentcli/ -run 'TestRunInstall(WritesV2Config|DefaultsToDeterministic|WritesConfigBeforeInstallingService)' -v
 ```
 
-This will attempt login/service install and may fail after the config write — that is fine and expected outside a real machine. What matters:
-
-```bash
-cat "$KELD_HOME/agent-config.json"
-```
-
-Expected: `{"blocks": true, "ml_backend": "deterministic"}` (indented, keys sorted). Paste it.
+The first proves the file content and mode; the second proves `runInstall` passes
+`deterministic`/`true` and does it before `installService`. Together they cover the
+end-to-end claim, and the flag-to-`installConfig` wiring is one line visible in
+`installCmd`'s `RunE`. Paste both outputs.
 
 - [ ] **Confirm the shell installers still parse**
 
