@@ -22,6 +22,41 @@ type Info struct {
 	// the sidecar isn't up yet. Lets `keld-agent metrics` reach the sidecar's
 	// /metrics.
 	SidecarPort int `json:"sidecar_port,omitempty"`
+	// TelemetrySecret authenticates AI tools to the daemon's loopback telemetry
+	// listener.
+	//
+	// ⚠️ STABLE AND NEVER ROTATED, which is its entire job. It is written into
+	// every tool's config by `keld signal setup`, and tools read their config
+	// once at startup — so a secret that changed would strand every running tool
+	// exactly as a rotated Atlas ingest token does. Contrast Secret above, which
+	// is regenerated on EVERY daemon start and must never reach a tool config.
+	// Write preserves this field when a caller omits it, for the same reason.
+	TelemetrySecret string `json:"telemetry_secret,omitempty"`
+}
+
+// EnsureTelemetrySecret returns the machine's stable telemetry secret,
+// generating and persisting one on first use.
+func EnsureTelemetrySecret() (string, error) {
+	info, err := Read()
+	if err != nil {
+		return "", err
+	}
+	if info != nil && info.TelemetrySecret != "" {
+		return info.TelemetrySecret, nil
+	}
+	sec, err := NewSecret()
+	if err != nil {
+		return "", err
+	}
+	next := Info{}
+	if info != nil {
+		next = *info
+	}
+	next.TelemetrySecret = sec
+	if err := Write(next); err != nil {
+		return "", err
+	}
+	return sec, nil
 }
 
 // NewSecret returns a 32-byte random secret as a 64-char hex string.
@@ -34,7 +69,21 @@ func NewSecret() (string, error) {
 }
 
 // Write persists info to ~/.keld/agent.json (mode 0600).
+//
+// ⚠️ A CALLER THAT OMITS TelemetrySecret DOES NOT ERASE IT. The daemon rewrites
+// this file on every start with a freshly generated ingress secret and no
+// telemetry secret in hand (daemon.go's Write(Info{Port, Secret})); without this
+// rule that write would destroy the stable secret sitting in every AI tool's
+// config, and the tools would go stale on the next daemon restart — the very bug
+// the telemetry proxy exists to remove, rebuilt one layer down and firing daily
+// instead of rarely. An explicit non-empty value still wins, so a deliberate
+// rotation remains possible.
 func Write(info Info) error {
+	if info.TelemetrySecret == "" {
+		if prev, err := Read(); err == nil && prev != nil {
+			info.TelemetrySecret = prev.TelemetrySecret
+		}
+	}
 	if err := os.MkdirAll(paths.KeldHome(), 0o755); err != nil {
 		return err
 	}
