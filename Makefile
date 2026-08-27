@@ -7,7 +7,7 @@ SIDECAR_VENV ?= $(HOME)/.keld/sidecar-venv
 # sidecar needs Python 3.12 (host default 3.14 has no torch/gliner2 wheels)
 PYTHON ?= python3.12
 # scripts/refseries.py's study venv (pandas/pyarrow/bashlex/wordfreq/pyyaml) — separate from
-# PYTHON above, which is the ML sidecar's own 3.12 venv with none of those deps. See
+# PYTHON above, which is the analysis sidecar's own 3.12 venv with none of those deps. See
 # scripts/check-fixture-identity.sh's own header for the full derived dependency list.
 # NOTE: pass an already-expanded path (STUDY_PYTHON=$(HOME)/.keld/study-venv/bin/python), not a
 # literal `~/...` — Make does not shell-expand `~` in its own VAR=value arguments the way a plain
@@ -70,8 +70,11 @@ install-service:
 .PHONY: install-linux
 install-linux: build-binaries sidecar install-service
 	@echo ""
-	@echo "keld-agent installed WITH sidecar (deterministic works instantly; the first ML"
-	@echo "enrichment provisions the model ~1.9GB into ~/.keld/models, then the sidecar takes over)."
+	@echo "keld-agent installed WITH the analysis sidecar."
+	@echo "NOTE: 'keld-agent install' configured this machine for v2:"
+	@echo "  ml_backend=deterministic, blocks=true  (~/.keld/agent-config.json)"
+	@echo "  No model is downloaded. For the GLiNER2 pipeline instead:"
+	@echo "    keld-agent install --backend auto"
 	@echo "If not yet configured, run:  keld login && keld signal setup"
 	@echo "Visualize enrichments:      make enrichments-sink   (see README / the notes printed by this session)"
 
@@ -87,8 +90,10 @@ signal-dev-artifacts:
 	tar -C .dev-dl/_pkg -czf .dev-dl/local/keld_linux_amd64.tar.gz keld keld-agent
 	cp scripts/install.sh .dev-dl/install.sh
 	@rm -rf .dev-dl/_pkg
-	@# Frozen ML sidecar (always ML — never deterministic). Reuses dist/keld-agent-sidecar
-	@# if already frozen; otherwise builds it once (heavy: PyInstaller + torch/GLiNER2).
+	@# The frozen analysis sidecar. It is ONE binary either way — the same tarball serves
+	@# ml_backend deterministic and auto; only whether GLiNER2 is ever loaded differs, and
+	@# a v2 install never loads it. Reuses dist/keld-agent-sidecar if already frozen;
+	@# otherwise builds it once (heavy: PyInstaller + torch/GLiNER2).
 	@if [ ! -x dist/keld-agent-sidecar/keld-agent-sidecar ]; then \
 	  echo "freezing sidecar (one-time; heavy)…"; \
 	  KELD_OBFUSCATE=0 PYTHON="$(HOME)/.keld/sidecar-venv/bin/python" bash sidecar/build-freeze.sh; \
@@ -99,7 +104,7 @@ signal-dev-artifacts:
 	@# separately-built sidecar) so the dev path is verified too, not just warned about.
 	@cd .dev-dl/local && sha256sum keld_linux_amd64.tar.gz > checksums.txt \
 	  && sha256sum keld-agent-sidecar_linux_amd64.tar.gz > keld-agent-sidecar_linux_amd64.tar.gz.sha256
-	@echo "built .dev-dl (keld + keld-agent + ML sidecar + install.sh)"
+	@echo "built .dev-dl (keld + keld-agent + analysis sidecar + install.sh)"
 	@echo "test the install workflow with:  curl -fsSL http://localhost:3000/signal/install.sh | sh"
 
 .PHONY: uninstall-linux

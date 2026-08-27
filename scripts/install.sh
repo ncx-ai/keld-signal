@@ -195,18 +195,27 @@ fi
 
 echo "  ✓ $(printf '%-26s' 'keld + keld-agent') → ${DEST}"
 
-# Fetch the frozen GLiNER2 ML sidecar — REQUIRED on Linux AND macOS. Keld Signal runs on-device
-# ML; there is no deterministic alternative, so a failed sidecar install aborts the whole install
-# rather than degrading. The macOS .pkg no longer bundles the sidecar either (Apple notarization
-# scans all ~15k of its files) — onboard.command fetches it the same way this does. Published
-# per-OS/arch as
-# keld-agent-sidecar_<os>_<arch>.tar.gz (macOS: darwin/arm64, Apple Silicon only).
+# Fetch the frozen analysis sidecar — REQUIRED on Linux AND macOS.
+#
+# This is not "the ML sidecar" any more and the distinction now matters. It is the
+# client-side ANALYSIS service: /analyze, /ingest, /blocks and /pii, which is what
+# turns transcripts into workstreams, dynamics and v2 blocks. GLiNER2 is one
+# capability it loads lazily, and a v2 install (ml_backend:"deterministic") never
+# asks for it — so no multi-gigabyte model is ever downloaded.
+#
+# The abort below is therefore MORE justified than when it was written for ML, not
+# less: without this binary a Keld install collects credential detection and nothing
+# else. The macOS .pkg does not bundle it either (Apple notarization scans all ~15k
+# of its files) — onboard.command fetches it exactly as this does. Published
+# per-OS/arch as keld-agent-sidecar_<os>_<arch>.tar.gz (macOS: darwin/arm64, Apple
+# Silicon only).
 if { [ "$os" = "linux" ] || [ "$os" = "darwin" ]; } && [ -f "${DEST}/keld-agent" ]; then
   sc_archive="keld-agent-sidecar_${os}_${arch}.tar.gz"
   sc_url="${dl_base}/${tag}/${sc_archive}"
   sc_fail() {
-    echo "keld: ML sidecar install failed — Keld Signal requires on-device ML and has no" >&2
-    echo "  deterministic fallback. Aborting. URL: ${sc_url}" >&2
+    echo "keld: analysis sidecar install failed — without it Keld can derive nothing from" >&2
+    echo "  your transcripts (no workstreams, no blocks, no PII scan). Aborting." >&2
+    echo "  URL: ${sc_url}" >&2
     exit 1
   }
   curl -fsSL "$sc_url" -o "${work}/${sc_archive}" || sc_fail
@@ -229,7 +238,7 @@ if { [ "$os" = "linux" ] || [ "$os" = "darwin" ]; } && [ -f "${DEST}/keld-agent"
     sc_fail
   }
   rm -rf "${DEST}/keld-agent-sidecar.prev"
-  echo "  ✓ $(printf '%-26s' 'ML sidecar (GLiNER2)') → ${DEST}/keld-agent-sidecar"
+  echo "  ✓ $(printf '%-26s' 'analysis sidecar') → ${DEST}/keld-agent-sidecar"
 fi
 
 agent_ok=1
@@ -339,6 +348,8 @@ elif [ "$agent_ok" != "1" ]; then
   exit 1
 elif [ "$onboarded" = "1" ]; then
   echo "Done — Keld is set up and running."
+  echo "  Enrichment runs on-device with no model download — nothing multi-gigabyte"
+  echo "  is fetched, now or later."
 elif [ -n "$CODE" ]; then
   # A setup code was supplied, so onboarding was meant to complete without a
   # human. No token means it genuinely failed — that IS an error.
