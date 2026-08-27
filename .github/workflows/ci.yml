@@ -66,6 +66,24 @@ jobs:
   # when a paid licence exists and flip SHIP_OBFUSCATED here in the same commit.
   # The check itself is unchanged and still runs locally via
   # `make obfuscation-coverage-check`, so the capability does not rot while off.
+  # ⚠️ THE INSTALLER GUARDS WERE NEVER RUN BY ANYTHING, and both had rotted.
+  # onboard_command_test.sh was still asserting a `$KELD login` shape that
+  # onboard.command stopped using when `keld-agent install` took ownership of
+  # login -> setup -> service; it had been failing silently for however long.
+  # keld_agent_iss_test.sh is new. Neither needs a runner beyond bash, and
+  # neither can be checked by `iscc` compiling the .iss — that proves files are
+  # staged and syntax parses, not that the sole [Run] entry is behind a checkbox
+  # nobody has to tick, or hidden where no human can complete a login. Both of
+  # those shipped.
+  installer-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: macOS onboarding contract
+        run: bash installers/macos/onboard_command_test.sh
+      - name: Windows installer contract
+        run: bash installers/windows/keld_agent_iss_test.sh
+
   obfuscation-coverage:
     runs-on: ubuntu-latest
     env:
