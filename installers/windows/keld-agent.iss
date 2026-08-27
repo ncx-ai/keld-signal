@@ -30,19 +30,41 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
   ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath('{app}')
 
 [Run]
-; Onboarding runs in a VISIBLE console in the user's session and registers the
-; scheduled task itself (keld-agent install does login -> signal setup -> service,
-; in that order, and writes the v2 agent-config.json before any of it).
+; TWO ENTRIES, AND BOTH ARE LOAD-BEARING. The first ALWAYS runs; the second is the
+; human's onboarding and may legitimately not run at all.
 ;
-; This used to be `keld-agent.exe install` with `runhidden nowait`, which meant the
-; interactive login ran where nobody could see or complete it, on a step Inno did
-; not wait for and could not report. Every Windows machine registered its logon
-; task and then idled on awaitConfig forever, collecting nothing and saying
-; nothing. DO NOT RE-ADD runhidden HERE.
+; 1. REGISTER THE AGENT UNCONDITIONALLY. With no console attached, keld-agent
+;    install takes its headless branch: it writes the v2 agent-config.json,
+;    registers the logon task, starts the daemon, and prompts for nothing. The
+;    daemon then IDLES on awaitConfig until someone completes setup, which is a
+;    documented, supported state — not a crash.
 ;
-; skipifsilent matters: a /SILENT install (an MDM push) must not block on a console
-; waiting for a human to paste a code. Such a machine is finished by
-; `keld-agent install --code <CODE>` from the management tool instead.
+;    ⚠️ This entry exists because putting registration behind the postinstall
+;    checkbox was a REGRESSION. `postinstall` renders a tickbox the user can
+;    untick, and `skipifsilent` skips it entirely — so an MDM /SILENT push
+;    installed the files and registered NOTHING, where even the previous broken
+;    hidden step at least created the logon task. A silent-install fleet would
+;    have gone dark with no error anywhere.
+;
+;    It waits (no `nowait`) so registration is finished before onboarding can run
+;    `keld-agent install` again; two concurrent service installs would race on
+;    schtasks. The headless branch runs no interactive step, so there is nothing
+;    for it to block on.
+Filename: "{app}\keld-agent.exe"; Parameters: "install"; \
+  StatusMsg: "Registering the Keld agent..."; Flags: runhidden
+
+; 2. ONBOARD THE HUMAN, in a VISIBLE console in their session: prompt for the
+;    one-time code, redeem it, configure the tools.
+;
+;    ⚠️ DO NOT ADD runhidden TO THIS LINE. It used to be `keld-agent.exe install`
+;    with `runhidden nowait`, which meant the interactive login ran where nobody
+;    could see or complete it, on a step Inno neither waited for nor could report.
+;    Every Windows machine registered its task and then idled forever, collecting
+;    nothing and saying nothing.
+;
+;    skipifsilent is correct HERE and only here: a /SILENT push must not block on a
+;    console waiting for a human. Such a machine is registered by entry 1 and
+;    finished with `keld-agent install --code <CODE>` from the management tool.
 Filename: "{app}\onboard.cmd"; Description: "Set up Keld"; \
   Flags: postinstall shellexec skipifsilent
 
