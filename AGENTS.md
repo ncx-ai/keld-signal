@@ -1325,6 +1325,38 @@ until headroom returns), **idle** (`KELD_SIDECAR_IDLE_UNLOAD_S`, `<=0` disables)
 a **hung-job timeout** (`KELD_SIDECAR_JOB_DEADLINE_S`), or a crash; it respawns
 lazily on the next request.
 
+⚠️ **A SUPERVISOR KILL REAPS THE PROCESS GROUP, NOT THE PID IT CAN SEE — and until
+`e40dd53` it did not.** Every mechanism above assumes killing the sidecar reclaims
+what the sidecar was holding, and that assumption was false for the whole life of
+the worker child. `Supervisor.killChild` sent `cmd.Process.Kill()` — SIGKILL, to the
+sidecar's pid alone. SIGKILL cannot be caught, so `main.py`'s `lifespan` teardown
+(`wm.shutdown`, `_TEXT_SOURCE.shutdown`) never ran, and the `multiprocessing`
+children were reparented to init and held their memory indefinitely. Measured on a
+real machine: an inference worker at **2.9 GB** and encoder children at **0.55-1.9 GB**
+surviving their parent, reparented to `systemd --user`.
+
+The fix is `Setpgid` at spawn plus `stopChild`: **SIGTERM to the sidecar ALONE**, so
+the `lifespan` teardown that already existed can finally run and exit the children
+cleanly, then **SIGKILL to the GROUP unconditionally**, because a tidy parent exit can
+still leave a straggler. `Setpgid` is set in the supervisor rather than in each spawn
+func so no caller can forget it, and `childGroup` refuses to signal a group whose
+`pgid != pid` — that would be the daemon's own group — falling back to a pid-only kill,
+never worse than the old behaviour. A process group over `Pdeathsig` because the latter
+is Linux-only. Multiprocessing spawn inherits the group, so the frozen binary's
+`freeze_support()` re-exec lands inside it.
+`KELD_SIDECAR_STOP_GRACE` (default **5s**) is a BOUND, not a budget: idle teardown
+measures **110.6 ms**, while an encoder mid-weights-load does *not* finish in 5s and is
+reaped by the group kill. It must not track the worst case — `TextSource.shutdown` can
+drain a ~92s encode, and launchd SIGKILLs the daemon itself at 20s.
+⚠️ Two changes elsewhere are what make this work at all, and removing either makes the
+fix silently inert while every test still passes: `sidecarService` uses `exec.Command`
+rather than `CommandContext` (whose cancel hook SIGKILLs the pid immediately and
+pre-empts the SIGTERM), and `Run` waits on `AwaitSidecarStop` (because `serve()`
+returned microseconds after ctx cancel and the daemon exited mid-reap).
+**Windows is PARTIAL:** `taskkill /T` reaps the tree, but no SIGTERM is reachable from
+a console-less service, so `lifespan` still does not run there; the job object that
+would be the real answer is not implemented. Stated in `procgroup_windows.go`'s header.
+
 **The guard must not sample under the inference lock.** `poll()` used to read the
 worker's RSS while holding the same lock `call()` holds for an entire inference,
 so it could only ever sample *between* jobs — right after the worker returned its
