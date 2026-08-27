@@ -235,3 +235,30 @@ func TestAnEmptySecretRejectsEverything(t *testing.T) {
 		}
 	}
 }
+
+// The record must be readable with the daemon STOPPED — that is the whole reason
+// it goes to disk rather than living in memory. A fact only reachable from a
+// running daemon would make daemon-down look like telemetry-broken, which is the
+// confusion this check exists to end.
+func TestLastForwardIsReadableFromDisk(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	if _, known := LastForwardOnDisk(); known {
+		t.Fatal("an absent record reported as known — that would be a finding on a machine with no proxy")
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	p := New(srv.URL, srv.URL, func() string { return "t" }, "s", t.TempDir())
+	post(t, p, "/v1/logs", "s", `{"resourceLogs":[]}`)
+	p.WaitIdle()
+
+	got, known := LastForwardOnDisk()
+	if !known {
+		t.Fatal("a successful forward left no on-disk record")
+	}
+	if got.IsZero() {
+		t.Fatal("recorded a zero instant")
+	}
+}

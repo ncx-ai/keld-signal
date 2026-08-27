@@ -215,6 +215,14 @@ func newDoctorCmd() *cobra.Command {
 				problems = append(problems, p)
 			}
 
+			// Telemetry configured but not flowing. Read from DISK, like the model
+			// states above, so a stopped daemon can never look like broken
+			// telemetry — and reported only when the check is conclusive: an
+			// unknown record, a fresh install, or a skewed clock yield nothing.
+			if p := telemetryState(manifest).ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+
 			// Multiple keld binaries on PATH → a stale one can shadow the
 			// release for anything invoked by name (the CLI, and any hook not
 			// pinned to an absolute path). This caused a real bug (an old keld

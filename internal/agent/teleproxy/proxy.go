@@ -71,6 +71,10 @@ type Proxy struct {
 
 	mu          sync.Mutex
 	lastForward time.Time
+	// lastPersisted throttles the on-disk record: doctor needs a coarse "when did
+	// telemetry last arrive", not a write per OTLP batch.
+	lastPersisted time.Time
+	statePath     string
 
 	wg sync.WaitGroup
 }
@@ -84,9 +88,10 @@ type Proxy struct {
 // must not be able to block logs behind it.
 func New(logsEndpoint, metricsEndpoint string, token func() string, secret, spoolDir string) *Proxy {
 	return &Proxy{
-		secret: secret,
-		logs:   clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
-		metric: clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")),
+		secret:    secret,
+		logs:      clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
+		metric:    clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")),
+		statePath: StatePath(),
 	}
 }
 
@@ -105,6 +110,45 @@ func (p *Proxy) LastForward() time.Time {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.lastForward
+}
+
+// persistEvery throttles the on-disk record of the last forward.
+const persistEvery = time.Minute
+
+// noteForward records a successful delivery, persisting it at most once per
+// persistEvery.
+//
+// ⚠️ IT GOES TO DISK, not just to memory, and that is the same choice
+// localagent.ModelState makes and for the same reason: `keld signal doctor` must
+// be able to answer "is telemetry flowing" with the daemon STOPPED. A fact only
+// reachable from a running daemon would make daemon-down look like
+// telemetry-broken, which is precisely the confusion this check exists to end.
+func (p *Proxy) noteForward(now time.Time) {
+	p.mu.Lock()
+	p.lastForward = now
+	due := now.Sub(p.lastPersisted) >= persistEvery
+	if due {
+		p.lastPersisted = now
+	}
+	path := p.statePath
+	p.mu.Unlock()
+	if !due || path == "" {
+		return
+	}
+	buf, err := json.Marshal(state{LastForward: now.UTC()})
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	// Best effort: a failed write costs a stale diagnostic, never telemetry.
+	_ = os.WriteFile(path, buf, 0o600)
+}
+
+// state is the on-disk shape of the telemetry record.
+type state struct {
+	LastForward time.Time `json:"last_forward"`
 }
 
 // DrainSpools retries everything spooled for both routes. Metrics first is
@@ -160,9 +204,7 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 		go func() {
 			defer p.wg.Done()
 			if err := tr.Deliver(context.Background(), body); err == nil {
-				p.mu.Lock()
-				p.lastForward = time.Now()
-				p.mu.Unlock()
+				p.noteForward(time.Now())
 			}
 		}()
 		w.WriteHeader(http.StatusAccepted)
