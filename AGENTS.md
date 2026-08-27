@@ -379,6 +379,42 @@ could raise.
   levels that bypasses `reconcile()`. Note they are coding-heavy: a
   non-engineering session yields **3 distinct paths in total**, so an empty list
   here is a real answer, not a gap.
+⚠️ **THE PROMPT INDEX HOLDS BOTH IDS, AND HOLDING ONLY `uuid` SILENTLY EMPTIED
+EVERY ENRICHMENT.** A Claude Code user line carries two: `uuid`, unique per line,
+and `promptId`, the identity of the human TURN — shared by every follow-on line of
+it (measured on a real transcript: one `promptId` spanned **7 user lines across 8
+minutes**). The daemon names a prompt by `promptId` and only by it:
+`watch/filter.go` REJECTS a line without one, the spool pointer carries it, the
+queue dedups on it, and it is published as `corr_id`, which Atlas joins against
+`ToolEvent.prompt_id`. So `promptId` is the id `/analyze` and `/tick` are ASKED
+about. While the index held only `uuid`, every lookup 404'd, the workstreams pass
+**failed** (not skipped — a failed pass is what sets `partial`), and every prompt
+published `pipeline_status:"partial"` with no workstreams, no dynamics and no
+prior. Under `ml_backend:"deterministic"` that is the whole payload. Measured on a
+live v2 machine: **8 of 8 prompts partial, and 0 of 1,627 stored enrichments had
+ever carried a workstream.**
+**Why no test caught it, which is the part to keep:** both halves of the sidecar
+agreed on `uuid` — the index AND `analyze.py`'s oracle scan — so
+`analyze_window_by_parse`, the equality test that guards the entire store,
+compared two identical wrong answers; and every sidecar fixture built a user turn
+as `{"type":"user","uuid":…}` with **no `promptId` at all**, so the sidecar's own
+corpus did not look like a real transcript. The Go tests use fakes and never
+crossed the seam either. An oracle that shares the bug proves nothing, and a
+fixture that does not resemble production is why it could.
+Both ids are now indexed, in FILE order under `upsert_prompts`' existing
+`ON CONFLICT DO NOTHING`, so a shared `promptId` resolves to the FIRST line
+carrying it — the human prompt's own instant, never a continuation's, which would
+run every window minutes long. `analyze.py`'s oracle matches either id and **must
+change in the same commit as the index**, or the equality test goes back to
+proving nothing. `resolve/claude.go` already accepted either id when reading
+prompt TEXT; this made the sidecar consistent with a rule the Go side already had.
+Pinned from both ends by `sidecar/app/test_prompt_id_seam.py` and
+`watch/filter_test.go`'s `TestHumanPromptIDIsThePromptIdFieldNotTheUUID`, which
+name each other — **do not remove `promptId` from those fixtures.**
+`ingest.STATE_VERSION` 4 → 5 is the repair: existing stores hold uuid-only
+indexes and nothing recomputes them, so **expect one reparse per transcript on
+upgrade.**
+
 - **The watcher signals ingest; the sidecar never polls.** `/analyze` answers out
   of a persistent reference-series store, and the parse that fills it is driven by
   the transcript watcher: a file that advanced in a poll is signalled once (per
