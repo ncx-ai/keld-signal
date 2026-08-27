@@ -48,7 +48,8 @@ flowchart LR
   Atlas["Keld Atlas"]
   CLI -->|configures| Tools
   Tools --> Hook
-  Hook -->|OTLP telemetry| Atlas
+  Tools -->|OTLP| Agent
+  Agent -->|forwarded OTLP| Atlas
   Hook -->|"/enrich pointer (never text)"| Agent
   Agent <-->|127.0.0.1| Sidecar
   Agent -->|masked enrichments| Atlas
@@ -1299,7 +1300,12 @@ fills. So:
    poll; four because the real limit is downstream — one serial sender, and a
    first whole-file ingest measured 5.1s on a 90 MB transcript. Measured end to
    end: `parse_state` 8 → 109 in two minutes (~51 transcripts/min, ~13 minutes
-   for 683), with system load FALLING (2.41 → 1.13) rather than spiking. It is written FIRST in `runInstall`, before login, because `ml_backend` is
+   for 683), with system load FALLING (2.41 → 1.13) rather than spiking.
+   ⚠️ A refused signal is RETRIED, not dropped: `drainFirstSight` pops an entry
+   only when the hook reports it was taken on, so the pacing rate is real
+   backpressure rather than a constant guessed against the sidecar's throughput.
+
+The two-key config write is written FIRST in `runInstall`, before login, because `ml_backend` is
 read at daemon startup and never re-read — the restart inside `installService`
 (`launchctl bootout`+`bootstrap` / `systemctl --user restart` / `schtasks /End`+`/Run`)
 is what makes the new mode take effect in the same run. On macOS that is not

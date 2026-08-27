@@ -91,12 +91,17 @@ type Proxy struct {
 // Logs and metrics get separate spool subdirectories: a poison metrics batch
 // must not be able to block logs behind it.
 func New(logsEndpoint, metricsEndpoint string, token func() string, secret, spoolDir string) *Proxy {
-	return &Proxy{
+	p := &Proxy{
 		secret:    secret,
 		logs:      clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
 		metric:    clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")),
 		statePath: StatePath(),
 	}
+	// Stamp every forward so a proxied machine stays distinguishable from a
+	// direct-push one while both populations exist. See PathHeader.
+	p.logs.SetHeader(PathHeader, "proxy")
+	p.metric.SetHeader(PathHeader, "proxy")
+	return p
 }
 
 // OnAuthRejection registers the re-onboard hook on both transports. The daemon
@@ -154,6 +159,15 @@ func (p *Proxy) noteForward(now time.Time) {
 type state struct {
 	LastForward time.Time `json:"last_forward"`
 }
+
+// PathHeader marks a batch as having come through the daemon rather than
+// straight from a tool.
+//
+// ⚠️ Required by the spec's Migration section: during the rollout BOTH
+// populations exist — machines that re-ran setup post through here, machines
+// that have not still post direct — and a debugging session that cannot tell
+// them apart cannot reason about either.
+const PathHeader = "x-keld-telemetry-path"
 
 // DrainSpools retries everything spooled for both routes. Metrics first is
 // arbitrary; the two are independent by construction (separate directories), so

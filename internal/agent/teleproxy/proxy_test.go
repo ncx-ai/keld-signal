@@ -460,3 +460,24 @@ func TestAnUnsupportedContentEncodingIsRefusedAtTheListener(t *testing.T) {
 		t.Fatalf("code = %d, want 415 for an encoding we cannot decode", rr.Code)
 	}
 }
+
+// ⚠️ Both populations exist during the migration — machines that re-ran setup
+// post through the daemon, machines that have not still post direct. A debugging
+// session that cannot tell them apart cannot reason about either. Required by
+// the spec's Migration section and named in the plan.
+func TestForwardedBatchesAreStampedAsProxied(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get(PathHeader)
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL, srv.URL, func() string { return "t" }, "s", t.TempDir())
+	post(t, p, "/v1/logs", "s", `{"resourceLogs":[]}`)
+	p.WaitIdle()
+
+	if got != "proxy" {
+		t.Fatalf("%s = %q, want \"proxy\"", PathHeader, got)
+	}
+}

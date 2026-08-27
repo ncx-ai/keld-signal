@@ -55,6 +55,11 @@ type Transport struct {
 	// credential. It is how the daemon's reauther learns to refresh without this
 	// package importing it.
 	onAuthRejection func()
+
+	// extraHeaders are set on every POST. Used by the telemetry proxy to stamp
+	// forwarded batches so a proxied machine stays distinguishable from a
+	// direct-push one during the migration.
+	extraHeaders map[string]string
 }
 
 // IsAuthRejection reports whether err is Atlas REJECTING the credential
@@ -79,6 +84,15 @@ func IsAuthRejection(err error) bool {
 // different one and for cross-package tests, which would otherwise pay the full
 // default backoff to assert what happens AFTER the retries are exhausted.
 func (t *Transport) SetPolicy(p retry.Policy) { t.policy = p }
+
+// SetHeader adds a header sent on every POST. Set it at construction; not safe
+// for concurrent use with an in-flight send.
+func (t *Transport) SetHeader(k, v string) {
+	if t.extraHeaders == nil {
+		t.extraHeaders = map[string]string{}
+	}
+	t.extraHeaders[k] = v
+}
 
 // OnAuthRejection registers the callback fired when a drain hits a rejection.
 // Not safe for concurrent use with a running drain; set it at construction.
@@ -128,6 +142,9 @@ func (t *Transport) doPost(ctx context.Context, body []byte) (int, []byte, error
 	}
 	req.Header.Set("x-keld-ingest-token", t.token())
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range t.extraHeaders {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := t.httpClient.Do(req)
 	if err != nil {

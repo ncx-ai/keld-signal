@@ -294,6 +294,13 @@ func (e *Emitter) Sweep(ctx context.Context, now time.Time) int {
 
 // sweepOne handles one transcript.
 //
+// ⚠️ FIRST SIGHT NOW BACKFILLS BY DEFAULT; what follows describes the
+// KELD_BLOCKS_BACKFILL=0 branch. The paragraph below was written when
+// forward-only was the default and is kept because that branch still exists and
+// its reasoning still governs it — but the "STATED COST" it names (the block a
+// transcript was mid-way through at first sight, never emitted) does NOT apply
+// under the default any more. See BackfillEnabled for why the default reversed.
+//
 // FIRST SIGHT IS FORWARD-ONLY, and it costs one call that emits nothing. The
 // sidecar reads a nil `since_ts` as "from the beginning of the session", i.e.
 // BACKFILL — so on a transcript with no cursor the emitter asks for the
