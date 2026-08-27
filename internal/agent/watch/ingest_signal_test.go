@@ -152,3 +152,61 @@ func TestWithIngestSignalWires(t *testing.T) {
 		t.Fatalf("hook not called through: %+v", got)
 	}
 }
+
+// FIRST SIGHT MUST STILL SIGNAL WHEN HISTORY IS WANTED.
+//
+// ⚠️ Under forward-only (the KELD_WATCH_BACKFILL default) a first sighting sets
+// the cursor to EOF and returns EARLY, so `advanced` was never called. That is
+// right for the PROMPT path — re-offering every historical prompt for enrichment
+// would be a genuine herd — but it also meant a transcript never entered the
+// block emitter's active set until it grew again. A session that ended
+// yesterday could therefore never have its blocks backfilled: the emitter's
+// backfill only ever reached files that were still being written.
+//
+// The two paths want different things from the same sighting, so they are
+// separated: the cursor still jumps to EOF (no historical prompts are offered),
+// and the ingest/blocks signal still fires (the sidecar can ingest the file and
+// the emitter can cut its history). The signal carries coordinates only, so
+// nothing about it depends on where the cursor sits.
+func TestFirstSightSignalsIngestWhenHistoryIsWanted(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "cccccccc-0000.jsonl")
+	if err := os.WriteFile(p, []byte(genuineSaying("P1", "already here before the daemon started")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var offered []spool.Pointer
+	var rec []advance
+	w := testWatcher(t, Root{SourceID: "claude_code", Dir: dir}, func(pt spool.Pointer) {
+		offered = append(offered, pt)
+	}, false)
+	w.advanced = func(source, path string) { rec = append(rec, advance{source, path}) }
+	w.signalFirstSight = true
+
+	w.scanFile("claude_code", p)
+
+	if len(rec) != 1 || rec[0].path != p {
+		t.Fatalf("first sight signalled %v, want exactly one signal for %s", rec, p)
+	}
+	// The prompt path stays forward-only: no historical prompt is re-offered.
+	if len(offered) != 0 {
+		t.Fatalf("first sight offered %d historical prompts, want 0 — that is the herd "+
+			"forward-only exists to prevent", len(offered))
+	}
+}
+
+// With the flag off, first sight is silent exactly as before.
+func TestFirstSightIsSilentWhenHistoryIsNotWanted(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "dddddddd-0000.jsonl")
+	if err := os.WriteFile(p, []byte(genuineSaying("P1", "pre-existing")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var rec []advance
+	w := signalWatcher(t, Root{SourceID: "claude_code", Dir: dir}, false, &rec)
+	w.signalFirstSight = false
+
+	w.scanFile("claude_code", p)
+	if len(rec) != 0 {
+		t.Fatalf("first sight signalled %v with signalFirstSight off, want silence", rec)
+	}
+}

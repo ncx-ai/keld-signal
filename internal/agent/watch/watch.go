@@ -19,15 +19,19 @@ import (
 // and Claude Code launch surfaces where hooks may not run). It never reads or
 // forwards prompt TEXT — only pointers.
 type Watcher struct {
-	offer      func(spool.Pointer)
-	observe    func(source, transcriptPath string, line []byte)
-	advanced   func(source, transcriptPath string)
-	cursors    *CursorStore
-	discover   func() []Root
-	version    string
-	poll       time.Duration
-	backfill   bool
-	extractors map[string]promptExtractor
+	offer    func(spool.Pointer)
+	observe  func(source, transcriptPath string, line []byte)
+	advanced func(source, transcriptPath string)
+	// signalFirstSight makes a FIRST SIGHTING fire the ingest/blocks signal even
+	// under forward-only, without offering any of the file's historical prompts.
+	// See scanFile and WithFirstSightSignal.
+	signalFirstSight bool
+	cursors          *CursorStore
+	discover         func() []Root
+	version          string
+	poll             time.Duration
+	backfill         bool
+	extractors       map[string]promptExtractor
 }
 
 // promptExtractor detects a genuine user prompt within a single transcript
@@ -99,6 +103,15 @@ func New(offer func(spool.Pointer), observe func(source, transcriptPath string, 
 // keeps an unreachable sidecar off this loop (internal/agent/daemon/
 // ingestsignal.go). Chainable rather than a sixth positional argument to New,
 // which every existing construction and test would otherwise have to pass.
+// WithFirstSightSignal makes a first sighting fire the ingest signal even under
+// forward-only. The daemon turns this on when block backfill is on: that is the
+// feature that needs a transcript to be ingestable before it next grows. It
+// never offers historical prompts — see scanFile.
+func (w *Watcher) WithFirstSightSignal(on bool) *Watcher {
+	w.signalFirstSight = on
+	return w
+}
+
 func (w *Watcher) WithIngestSignal(fn func(source, transcriptPath string)) *Watcher {
 	w.advanced = fn
 	return w
@@ -158,6 +171,19 @@ func (w *Watcher) scanFile(source, path string) bool {
 		if !w.backfill {
 			if st, err := os.Stat(path); err == nil {
 				w.cursors.Set(path, st.Size())
+				// ⚠️ THE TWO PATHS WANT DIFFERENT THINGS FROM THIS SIGHTING.
+				// The PROMPT path must stay forward-only: offering every
+				// historical prompt for enrichment is the herd this branch
+				// exists to prevent, and the cursor jumping to EOF is what
+				// prevents it. But the INGEST/BLOCKS path needs to know the file
+				// exists, or the block emitter never sees a transcript that is
+				// not still being written — a session that ended yesterday could
+				// never have its history backfilled. The signal carries
+				// coordinates only, so it is independent of where the cursor
+				// sits.
+				if w.signalFirstSight && w.advanced != nil {
+					w.advanced(source, path)
+				}
 				return true
 			}
 			return false

@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents/resource"
 	"github.com/ncx-ai/keld-signal/internal/agent/creds"
@@ -903,6 +904,13 @@ func Run(ctx context.Context) error {
 		// ingest as the backstop, so a dropped signal costs latency only.
 		if svc.SignalIngest != nil {
 			txw = txw.WithIngestSignal(ingestSignalHook(ctx, svc.SignalIngest))
+			// Block backfill needs a transcript to be ingestable BEFORE it next
+			// grows, or the emitter only ever sees files still being written and
+			// a session that ended yesterday can never have its history cut. The
+			// prompt path stays forward-only either way — no historical prompt
+			// is offered for enrichment. Scoped to blocks being on AND set to
+			// backfill, so a machine that wants neither pays nothing.
+			txw = txw.WithFirstSightSignal(blocks.Enabled(set.Blocks) && blocks.BackfillEnabled())
 		}
 		go txw.Run(ctx)
 	}
