@@ -10,14 +10,26 @@ machine. It has two jobs, and the second is the core of the project:
    Atlas only the derived, masked signal. **Raw prompt text never leaves the
    machine.** This is the privacy-preserving intelligence the CLI installs.
 
-⚠️ **One qualification, added at schema v18.** `inventory.named_terms` publishes
-proper nouns lifted from message TEXT — the only signal that does not derive from
-tool-call inputs, and one in which real person names have been observed. It is
-still not raw text, a span, or an offset: it is a term and a count. But "nothing
-derived from the prompt's own words crosses" stopped being true, and the honest
-statement is narrower than it used to be. See the `named_terms` note in the
-workstreams bullet under *The enrichment agent* for the decision and the
-alternative that was not taken.
+⚠️ **Two qualifications, and this said "One" until the second arrived.**
+
+1. **Schema v18.** `inventory.named_terms` publishes proper nouns lifted from
+   message TEXT, and real person names have been observed in it. It is still not
+   raw text, a span, or an offset: it is a term and a count. See the
+   `named_terms` note in the workstreams bullet under *The enrichment agent* for
+   the decision and the alternative that was not taken.
+2. **`KELD_TEXTEMBED`, off by default.** Message text is encoded ON DEVICE and a
+   256-d vector is published — MRL-truncated, then multiplied by a fixed
+   orthogonal projection that preserves cosine and inner products exactly, so
+   training is unaffected while off-the-shelf inversion tooling needs a matrix
+   the client did not choose. See *Text vectors* in
+   `docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`.
+
+So **"nothing derived from the prompt's own words crosses" is not the invariant**
+and has not been since v18; the honest statement is narrower and is the one at
+the top of this file: **raw prompt text never leaves the machine.** Text, spans
+and offsets do not cross. Things MEASURED from text — a count, a length, a
+vector — may, each on its own argument and its own evidence, never by analogy to
+one already here.
 
 Go single static binaries (`keld`, `keld-agent`) + an optional Python ML sidecar.
 No runtime dependencies for the CLI itself.
@@ -1273,6 +1285,56 @@ before extending enrichment to agentic sources.
 (`KELD_SETTINGS_POLL`). Remote overrides local; non-fatal if Atlas is unreachable.
 See `docs/enrichment-settings.md`.
 
+**The signal-embeddings publish half (`internal/agent/features/`).** The daemon
+side of `POST /features`: an emitter with a per-transcript cursor, the sibling of
+`internal/agent/blocks/` and built the same way — it asks the sidecar which rows
+exist past its cursor and publishes them. Rows ride `publish.FeatureRow` under
+their **own `corr_scheme`**, never `Enrichment` or `BlockEnrichment`, because
+Atlas keys enrichments `UNIQUE(org_id, source_id, corr_scheme, corr_id)` and
+upserts `ON CONFLICT DO UPDATE` over every column — sharing a scheme OVERWRITES
+rather than dedups, the same trap `publish/window.go` documents at length. The
+corr id is `session@feature@anchor@key`: four segments against a block id's two
+and a prompt id's zero, so the id spaces are disjoint by SHAPE as well as by
+scheme. Transport is `clientevents`' batch path (extracted in `a00a1e1` so a
+second route could reuse it), with its own spool dir — a shared one would
+cross-post bodies between routes.
+⚠️ **The cursor advances on BUFFERING, not on delivery**, because a batching path
+cannot observe delivery. That is made safe by backpressure rather than by hope: a
+sweep never takes more rows than the buffer has room for, so a full buffer HOLDS
+the cursor instead of dropping rows the sidecar would never re-offer.
+
+**Four toggles, all OFF by default, and they are not interchangeable.**
+`KELD_CAPTURE` (the extra ingest rows + `bin_offset`) ⚠️ is fingerprinted into
+`parse_state`, so flipping it forces one reparse — that is why it is separate,
+and why turning publishing off must never cost a reparse to turn back on.
+`KELD_TEXTEMBED` gates the encoder child. `KELD_FEATURES` computes and stores
+rows locally; `KELD_FEATURES_PUBLISH` sends them to Atlas. The last two carry an
+Atlas per-org override riding the existing settings poll (`Remote.Features`,
+`Remote.FeaturesPublish`) — the `client_telemetry` precedent, remote overrides
+local, and an OMITTED key leaves the local base rather than defaulting on, so a
+silent fleet-wide enable is not reachable from the server.
+The whole subsystem registers only under `ml_backend:"deterministic"`. Under
+`"auto"` it is ABSENT — never registered, so it appears in neither
+`facets_skipped` nor `extractor_versions`, which is this codebase's existing
+distinction between a pass that was skipped and one that was never wired.
+
+**`keld signal doctor` / `status` report on-device model state**
+(`internal/localagent/models.go`). ⚠️ **Presence is a filesystem stat, never a
+daemon probe**, and that is what makes it correct rather than merely cheap: no
+endpoint exposes GLiNER2 weight-presence at all, the encoder's `/metrics` field
+only answers while the sidecar is up, and a CLI that cannot reach the daemon does
+not thereby know a model is missing. Reading disk makes daemon reachability
+irrelevant, so "unreachable" can never render as "absent" — the same
+`thin`/`absent` discipline the rest of this codebase runs on. ⚠️ **A model that
+is absent but NOT NEEDED is not a problem and must not be reported as one**, or
+every v2 user is nagged forever about a 1.9 GB model they will never load:
+GLiNER2 is needed only under `"auto"`, the encoder only when `KELD_TEXTEMBED` and
+the local `features` toggle are both on. When one IS needed and absent, the line
+states the reason and that the work defers rather than fails. Neither command may
+trigger a download or a model load. Known limit: `Needed` resolves from
+local-only config, so it is blind to an org remote override — the same limitation
+`ml_backend` already has.
+
 **Auth & self-heal.** Both client tokens are long-lived and revoke-only (no
 TTL) — the CLI token (`~/.keld/auth.json`) and the org ingest token
 (`~/.keld/hook.json`) — so normal background operation needs no re-auth. The
@@ -1493,11 +1555,16 @@ internal/
       lenstat/           adaptive input truncation (mu+2sigma prompt-length stats)
       creddetect/        deterministic credential detection (vendored gitleaks rules)
       eval/              enrichment quality eval harness
-    provision/       model provisioning (weights → ~/.keld/models)
-    publish/         build + POST masked enrichments to Atlas
+    provision/       model provisioning (weights → ~/.keld/models); GLiNER2 and
+                     the Qwen3 text encoder, both on demand, neither at startup
+    blocks/          the v2 block emitter + its per-transcript cursor
+    features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
+    publish/         build + POST masked enrichments to Atlas; block, window and
+                     feature rows each under their own corr_scheme
     settings/ agentcfg/  per-org control-plane polling
     service/         OS service install (darwin/linux/windows)
     daemon/          wires it all together; spawns/superwises the sidecar
+                     procgroup_*.go: a kill reaps the GROUP, not the bare pid
   spool/             durable on-disk pointer queue (hook fallback + re-spool/quarantine)
   auth/ cli/ tools/ diffview/ hook/ paths/ telemetry/ config/ console/ ...
 sidecar/
@@ -1519,6 +1586,11 @@ sidecar/
       analyze.py       window digest; analyze_window_by_parse is the ORACLE
       dynamics.py      what MOVED in the window + the EWMA slice sizer
       blocks.py        the block cutter: 20m cap + 15m idle, no merge rule
+      blockdigest.py   characterise ONE block -> the v2 payload (POST /blocks)
+      capture.py       raw-line pass: tool outcomes + bin offsets, no json.loads
+      features.py      S(t), the 1,534-dim shell ladder (POST /features)
+      featuretext.py   the text half's cache, background pass and FRONTIER
+      textembed.py     per-message text vectors, in their own encoder child
       window.py        rollup / attribution / dominant; MIN_EVIDENCE
       levels.py        level vocabulary + 0.1s timestamp quantization
       workstreams.py   ALLOCATION + INVENTORY payload (the published shape)
@@ -1564,12 +1636,26 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   be transmitted; the daemon publishes only masked labels + masked spans. Masking
   is enforced Go-side (`enrich/mask.go`) before publish; the sidecar returns raw
   spans and never publishes.
-  ⚠️ **`named_terms` is the one exception and it is deliberate** (schema v18):
-  proper nouns lifted from message text, published as term + count, with no
-  person-name filter because none measured reliable enough to be honest (~1%
-  precision — see the workstreams bullet). Still no raw text, no spans, no
-  offsets. This is the ONLY published signal not derived from tool-call inputs;
-  do not add a second one by analogy to it.
+  ⚠️ **`named_terms` was the one exception** (schema v18): proper nouns lifted
+  from message text, published as term + count, with no person-name filter
+  because none measured reliable enough to be honest (~1% precision — see the
+  workstreams bullet). Still no raw text, no spans, no offsets.
+  ⚠️ **IT IS NO LONGER THE ONLY ONE, AND THIS BULLET USED TO SAY IT WAS** — "the
+  ONLY published signal not derived from tool-call inputs; do not add a second
+  one by analogy to it." The second arrived deliberately, not by analogy:
+  `KELD_TEXTEMBED` (off by default) encodes message text ON DEVICE and publishes
+  a 256-d vector, MRL-truncated and then multiplied by a fixed orthogonal
+  projection — cosine and inner products preserved exactly, so training is
+  unaffected, while off-the-shelf inversion tooling (vec2text, ALGEN) needs a
+  matrix the client does not choose and an attacker does not have. The encoder
+  never leaves the machine; only its output does.
+  **So "derived from text" stopped being the test.** The test is whether TEXT, a
+  SPAN, or an OFFSET crosses — and it never does. That is the stronger rule and
+  it is the one to enforce. A sentence embedding is invertible in principle
+  (measured elsewhere at up to 92% exact recovery on 32-token inputs), which is
+  precisely why the projection exists, why the toggle ships off, and why a THIRD
+  text-derived signal is a decision needing its own evidence rather than an
+  analogy to these two.
 - **Config via env (`KELD_*`)**, resolved through `internal/config` /
   `internal/paths`; credentials/tokens/hook/manifest under `~/.keld` with
   user-only permissions.
@@ -1732,6 +1818,13 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
 
 Specs in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`; control
 plane in `docs/enrichment-settings.md`; sidecar resource safety + load testing in
-`sidecar/loadtest/README.md`; macOS Developer ID signing + the **unresolved**
+`sidecar/loadtest/README.md` (including the `embed` arm, which is what found the
+encoder's real peak and the two defects behind it); the signal-embeddings training
+corpus — what `S(t)` holds, why the digest is never serialised into the encoder,
+the cursor contract, and the corrections its own measurements forced — in
+`docs/superpowers/specs/2026-08-26-signal-embeddings-design.md`, with the
+three-approach comparison behind it (and its three superseded conclusions marked
+rather than deleted) in `2026-08-26-joint-embeddings-design.md`;
+macOS Developer ID signing + the **unresolved**
 notarization problem (zero verdicts on this account; the account-provisioning check
 that still needs doing) in `docs/macos-signing-and-notarization.md`.
