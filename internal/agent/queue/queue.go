@@ -155,6 +155,12 @@ func (q *Queue) Close() {
 	}
 }
 
+// Depth returns the number of jobs waiting to be picked up. Read by the
+// auto-update quiesce wait, which prefers to restart the daemon when nothing is
+// mid-flight. Advisory only: the spool makes a restart survivable either way,
+// so no caller may treat a non-zero depth as a reason not to proceed.
+func (q *Queue) Depth() int { return len(q.ch) }
+
 // Dropped returns the number of shed jobs (full-queue drops).
 func (q *Queue) Dropped() int {
 	q.mu.Lock()

@@ -429,3 +429,68 @@ func TestASidecarArchiveOfTheWrongShapeRollsBack(t *testing.T) {
 		t.Fatal("must not restart")
 	}
 }
+
+// A migration must repoint the service BEFORE restarting. Without it,
+// launchd/systemd brings the old path straight back up and the confirm pass
+// rolls the whole update back — correctly, and uselessly.
+func TestMigrationRepointsTheServiceBeforeRestarting(t *testing.T) {
+	orig := installed(t, "v1")
+	newDir := t.TempDir()
+	base, _ := buildRelease(t, "v2")
+	r := &fakeRestart{}
+	rec := &recorded{}
+	u := newTestUpdater(t, newDir, base, "v1", r, rec)
+	u.Dest = Dest{
+		BinDir: newDir, SidecarDir: newDir, SidecarNested: true, HasSidecar: true,
+		Writable: true, Migrated: true, OrigBinDir: orig,
+	}
+	var got string
+	var order []string
+	u.OnMigrate = func(p string) error { got = p; order = append(order, "migrate"); return nil }
+	inner := u.Restarter
+	u.Restarter = restartFunc(func() error { order = append(order, "restart"); return inner.Restart() })
+
+	u.Maybe(context.Background(), Target{Version: "v2", Enabled: true})
+	u.Wait()
+
+	if got != filepath.Join(newDir, "keld-agent") {
+		t.Fatalf("service repointed at %q", got)
+	}
+	if len(order) != 2 || order[0] != "migrate" || order[1] != "restart" {
+		t.Fatalf("order = %v", order)
+	}
+	if read(t, filepath.Join(newDir, "keld-agent")) != "agent-v2" {
+		t.Fatal("new install not written")
+	}
+	// The old, root-owned install is left completely alone: it is not ours.
+	if read(t, filepath.Join(orig, "keld-agent")) != "agent-v1" {
+		t.Fatal("the unwritable install was modified")
+	}
+	if !rec.has("update.migrated") {
+		t.Fatalf("a migration must be reported: %v", rec.events)
+	}
+}
+
+// If the service cannot be repointed, the update is rolled back rather than
+// restarted into a machine that would come up as the old version anyway.
+func TestAFailedServiceRepointRollsBack(t *testing.T) {
+	newDir := t.TempDir()
+	write(t, filepath.Join(newDir, "keld"), "keld-v1")
+	write(t, filepath.Join(newDir, "keld-agent"), "agent-v1")
+	base, _ := buildRelease(t, "v2")
+	r := &fakeRestart{}
+	rec := &recorded{}
+	u := newTestUpdater(t, newDir, base, "v1", r, rec)
+	u.Dest = Dest{BinDir: newDir, Writable: true, Migrated: true, OrigBinDir: "/usr/local/keld"}
+	u.OnMigrate = func(string) error { return errors.New("launchctl: permission denied") }
+
+	u.Maybe(context.Background(), Target{Version: "v2", Enabled: true})
+	u.Wait()
+
+	if read(t, filepath.Join(newDir, "keld-agent")) != "agent-v1" {
+		t.Fatal("swap was not rolled back")
+	}
+	if r.count() != 0 {
+		t.Fatal("must not restart")
+	}
+}

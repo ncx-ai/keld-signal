@@ -19,6 +19,14 @@ func Install() error {
 	if err != nil {
 		return err
 	}
+	return InstallAt(exe)
+}
+
+// InstallAt registers the service to run execPath, rather than whatever binary
+// happens to be running now. See the darwin implementation's comment: the two
+// differ only for an auto-update that had to migrate to a writable directory,
+// where os.Executable() is still the OLD path.
+func InstallAt(exe string) error {
 	p := unitPath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err

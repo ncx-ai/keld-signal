@@ -22,15 +22,20 @@ type Restarter interface{ Restart() error }
 // errors — reachable from a test rather than only from the platform that
 // exhibits them.
 type Updater struct {
-	Current     string    // version.CLI
-	StatePath   string    // ~/.keld/update/state.json
-	Dest        Dest      // where the artifacts live
-	Fetch       *Fetcher  // download + verify
-	Restarter   Restarter // the OS service
-	Probe       func(bin string) error
-	Now         func() time.Time
-	Emit        func(code, sev string, fields map[string]any)
-	Quiesce     func(ctx context.Context) // wait for the enrichment queue to drain
+	Current   string    // version.CLI
+	StatePath string    // ~/.keld/update/state.json
+	Dest      Dest      // where the artifacts live
+	Fetch     *Fetcher  // download + verify
+	Restarter Restarter // the OS service
+	Probe     func(bin string) error
+	Now       func() time.Time
+	Emit      func(code, sev string, fields map[string]any)
+	Quiesce   func(ctx context.Context) // wait for the enrichment queue to drain
+	// OnMigrate repoints the OS service at execPath. It is called ONLY when
+	// the update had to install somewhere other than where it was running —
+	// the macOS pkg case. Without it, launchd/systemd would go on starting the
+	// old path forever while the update reported success.
+	OnMigrate   func(execPath string) error
 	MinInterval time.Duration
 	GOOS        string
 	GOARCH      string
@@ -208,6 +213,22 @@ func (u *Updater) apply(ctx context.Context, t Target, version string) error {
 		return fail("state", err)
 	}
 	u.emit("update.staged", "info", map[string]any{"from": u.Current, "to": version, "install_dir": u.Dest.BinDir})
+
+	// ── repoint the service, if we had to move ────────────────────────────
+	// Only on a migration. The service definition names an absolute path, and
+	// after a migration that path is the OLD, unwritable install — so a
+	// restart without this brings the stale binary straight back up and the
+	// confirm pass then rolls the whole update back, correctly and uselessly.
+	if u.Dest.Migrated && u.OnMigrate != nil {
+		newExe := filepath.Join(u.Dest.BinDir, exeNameFor(u.GOOS, "keld-agent"))
+		if err := u.OnMigrate(newExe); err != nil {
+			return fail("migrate_service", err)
+		}
+		u.emit("update.migrated", "warn", map[string]any{
+			"from": u.Dest.OrigBinDir, "to": u.Dest.BinDir,
+			"note": "the previous install directory was not writable; the service now runs from the new path",
+		})
+	}
 
 	// ── restart ───────────────────────────────────────────────────────────
 	if u.Quiesce != nil {

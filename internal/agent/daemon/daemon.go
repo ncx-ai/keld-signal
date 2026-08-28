@@ -645,6 +645,15 @@ func wellKnownSidecarDirs() []string {
 // waits for hook.json and starts the moment onboarding writes it. See
 // awaitConfig for why exiting here was wrong.
 func Run(ctx context.Context) error {
+	// Resolve any update left in flight by a previous process, BEFORE
+	// awaitConfig — which blocks indefinitely on a machine that has not been
+	// onboarded. A daemon idling there still needs a bad update undone, and it
+	// is exactly the machine where nobody is watching. The emitter does not
+	// exist yet (it is built from the config awaitConfig is waiting for), so
+	// the events are buffered and replayed once it does.
+	updateEvents := &bufferedEvents{}
+	confirmPendingUpdate(updateEvents.emit)
+
 	cfg, err := awaitConfig(ctx, hook.LoadConfig, configPollInterval(), func() {
 		log.Printf("keld-agent: not configured yet — idling until `keld login` + `keld signal setup` "+
 			"write %s; no restart needed once they do", paths.HookConfigPath())
@@ -808,6 +817,15 @@ func Run(ctx context.Context) error {
 	// from being restated on each one. Owned out here (not per-call) so it remembers across
 	// polls; pollSettings drives onRemote from a single goroutine, so no lock is needed.
 	rejects := &rejectReporter{}
+	updateEvents.replay(emitter)
+	updater, hasUpdater := newUpdater(func(code, sev string, fields map[string]any) {
+		emitter.EmitExempt(code, clientevents.Severity(sev), fields)
+	})
+	if hasUpdater {
+		updater.Quiesce = quiesceFn(q.Depth)
+	} else {
+		log.Printf("keld-agent: auto-update unavailable on this install (no writable destination); updates must be applied by re-running the installer")
+	}
 	onRemote := func(r *settings.Remote) {
 		re := r.ClientTelemetry.WithDefaults()
 		emitter.SetGate(gateFrom(re))
@@ -819,6 +837,15 @@ func Run(ctx context.Context) error {
 		// client-telemetry warning without leaking prompt content — once per
 		// distinct reject set, not once per poll (see rejectReporter).
 		syncCustomPasses(r.EnrichmentSchema, custom, rejects, emitter.Emit)
+
+		// Auto-update. The settings poll is the trigger and the updater has no
+		// clock of its own: Maybe takes the decision inline (a pure function
+		// over already-loaded state) and hands only the work to a goroutine,
+		// single-flighted — this loop carries per-org config to every other
+		// subsystem and must never block on a download.
+		if updater != nil {
+			updater.Maybe(ctx, updateTargetFrom(r))
+		}
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {

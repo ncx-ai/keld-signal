@@ -21,6 +21,19 @@ func Install() error {
 	if err != nil {
 		return err
 	}
+	return InstallAt(exe)
+}
+
+// InstallAt registers the service to run execPath, rather than whatever binary
+// happens to be running now.
+//
+// The two differ exactly once: an auto-update that could not write to its own
+// install directory (the macOS pkg's root-owned /usr/local/keld) installs the
+// new release into ~/.local/bin and must repoint the job there. Install()
+// reads os.Executable(), which in that moment is still the OLD path — using it
+// would leave launchd starting the stale binary forever while the update
+// reported success.
+func InstallAt(exe string) error {
 	p := plistPath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
