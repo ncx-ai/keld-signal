@@ -22,4 +22,8 @@ type Remote struct {
 	// it later is a server change alone, rather than a second client migration
 	// — the same reason PIIRegions above is already modelled.
 	Features *Features `json:"features"`
+	// Release is the org's control over WHICH RELEASE this machine runs — the
+	// auto-update target. A nil block means NO UPDATES; see release.go for why
+	// that is the strictest reading of the omitted-key rule in this file.
+	Release *Release `json:"agent_release"`
 }
