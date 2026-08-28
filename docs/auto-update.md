@@ -1,7 +1,17 @@
 # Auto-update
 
 The daemon moves itself, the `keld` CLI and the analysis sidecar to the release
-Atlas names. Off until Atlas serves the key.
+Atlas names.
+
+> **Status — 2026-08-27: client shipped, INERT.** Atlas does not serve
+> `agent_release`, so no machine updates. Two Atlas-side decisions are owed
+> before it can be switched on (see *Who sets the target*), one of them a
+> security question.
+>
+> **This status is dated and does not update itself.** To re-check: does the
+> `/v1/enrichment-settings` response carry an `agent_release` key? If it does,
+> this block is stale — replace it with the date it went live and the decisions
+> that were taken.
 
 Spec: `docs/superpowers/specs/2026-08-27-signal-auto-update-design.md`.
 Rationale and traps: AGENTS.md → *Auto-update*.
@@ -27,14 +37,16 @@ one control plane that reaches an installed machine.
 
 ## Who sets the target
 
-**Nothing does yet.** `agent_release` rides the same per-org settings document
-that already carries `include_entity_text`, `client_telemetry` and
-`enrichment_schema`, so mechanically it is set wherever those are set — an Atlas
-org settings record. Atlas does not serve the key today and there is no producer
-for it.
+**As of 2026-08-27, nothing does.** `agent_release` rides the same per-org
+settings document that already carries `include_entity_text`,
+`client_telemetry` and `enrichment_schema`, so mechanically it is set wherever
+those are set — an Atlas org settings record. On that date Atlas served no such
+key and had no producer for one.
 
-Two decisions are owed on the Atlas side before this is switched on, and neither
-belongs to this repo:
+Two decisions were owed on the Atlas side as of that date, and neither belongs
+to this repo. **If you are reading this later, check whether they were taken
+before trusting the paragraph below** — an unresolved-question note that nobody
+dates is indistinguishable from one nobody revisited:
 
 1. **Who may write it** — Keld operators only, or org admins for their own fleet.
    Pinning a version is the power to decide which code runs on every machine in
@@ -53,8 +65,10 @@ belongs to this repo:
    **(c)** sign release assets and verify against a public key compiled into the
    binary, which is the only option that makes the host untrusted.
 
-   Until one is chosen, treat write access to `agent_release` as equivalent to
-   root on every machine in the org.
+   **None of the three was implemented as of 2026-08-27** — the choice is
+   Atlas's, not this repo's. Until one is chosen and recorded here with the date
+   it was taken, treat write access to `agent_release` as equivalent to root on
+   every machine in the org.
 
 ## Sequence
 
@@ -147,7 +161,9 @@ internal/agent/settings/release.go  the agent_release block
 
 ## Before first rollout
 
-- Atlas does not serve `agent_release` yet; the client is inert until it does.
+*Open as of 2026-08-27. Strike each item with the date it was closed.*
+
+- Atlas does not serve `agent_release`; the client is inert until it does.
 - **Decide the `base_url` trust question above first.** It is the one thing here
   that cannot be safely deferred past the first real rollout.
 - Nothing has run against a real release. Start with one pinned machine and watch
