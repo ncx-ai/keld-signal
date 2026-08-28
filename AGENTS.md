@@ -1530,6 +1530,84 @@ before extending enrichment to agentic sources.
 (`KELD_SETTINGS_POLL`). Remote overrides local; non-fatal if Atlas is unreachable.
 See `docs/enrichment-settings.md`.
 
+**Auto-update (`internal/agent/update/`).** The daemon moves itself, the `keld`
+CLI and the frozen sidecar to the release **Atlas names** — fetch, verify,
+swap, restart, confirm, roll back. Two seams and **no new clock**: the trigger
+is the settings poll's existing `onRemote` hook, and the confirm pass runs at
+the top of `Run`.
+
+⚠️ **The version source is ATLAS, NOT `releases/latest`, and that is the whole
+point rather than a preference.** This file already states the problem for
+`ml_backend`: "an existing fleet's Atlas Context column therefore empties
+machine-by-machine at whatever pace people upgrade, **with no server-side
+brake**. If that pace ever needs controlling, the control is a staged rollout
+of the installer itself." A client that resolves `releases/latest` itself
+converges the entire fleet the moment a tag is pushed — that is the same defect
+with a faster fuse, not a smaller version of it. So `settings.Remote.Release`
+(`agent_release`) carries `{enabled, version, base_url}`, pointer-fielded like
+`PIIRegions`/`Features`, and **an absent block means NO UPDATE** — the
+strictest reading of the omitted-key rule, because unattended binary
+replacement is the last thing that should be reachable from the server by
+omission. `KELD_AUTOUPDATE=0` refuses locally; **local refusal wins, local
+permission never does.** Atlas does not serve the key yet, so the seam exists
+and nothing moves until it does.
+⚠️ **`version` is a PIN, not a floor**, and the daemon moves to it in EITHER
+direction. A control plane that can only move a fleet forward is not a brake,
+and the brake is the entire reason for choosing Atlas — so a downgrade is a
+first-class supported operation, not an error case. Comparison is identity
+after normalizing one leading `v`, never semver ordering: ordering is what a
+floor needs, and it has parsing edge cases a pin does not.
+⚠️ **A MISSING PUBLISHED SHA-256 IS FATAL HERE, and `install.sh` warns and
+continues.** The divergence is deliberate and is the one asymmetry worth
+remembering: the installer has a human reading its output who can abort, and an
+unattended swap does not. So the single case where the installer degrades
+gracefully is the case this must refuse. Staging lives **inside** the
+destination (no `/tmp` fallback) for the reason `install.sh` gives — the commit
+must be a same-filesystem rename, not a cross-device copy of the sidecar's
+~15,000 files.
+⚠️ **THE macOS `.pkg` CANNOT BE UPDATED IN PLACE, AND ITS SYMLINKS ARE THE
+TRAP.** The pkg stages to a root-owned `/usr/local/keld`, so an unprivileged
+daemon migrates: it installs to `~/.local/bin` and repoints the LaunchAgent via
+**`service.InstallAt`** — new, because `service.Install` reads
+`os.Executable()`, which at that moment is still the OLD path, and using it
+would leave launchd starting the stale binary forever while the update reported
+success. Two more consequences, each implemented rather than hoped away.
+`installers/macos/scripts/postinstall` **repoints `~/.local/bin/keld` to a
+root-owned SYMLINK back at `/usr/local/keld/keld`**, so `Swap.Replace` uses
+`os.Lstat`, never `os.Stat` — following the link would displace the pkg's own
+binary, which we do not own, while the link itself sits in a user-owned
+directory and is ours to replace. And `/usr/local/bin/keld` (root-owned,
+usually ahead of `~/.local/bin` on PATH) **cannot be rewritten at all**: the
+daemon converges and the CLI a human types does not, so
+`keld signal doctor` names that link with the exact `ln -sf` rather than
+letting the install quietly disagree with itself about its own version.
+⚠️ **AUTO-ROLLBACK ALONE IS UNSTABLE — `failed_versions` is what closes the
+loop.** `~/.keld/update/state.json` is written **before** the restart, and
+cleared only by a daemon that came up as the new version. Three outcomes, and
+the third is the one that makes a bad release self-healing rather than a
+bricked fleet: past `KELD_UPDATE_CONFIRM_DEADLINE` (15m) the swap is undone
+**whichever version is running**, because a binary that crashed on startup
+never got far enough to clear its own marker — the stale marker IS the crash
+report. Then, since Atlas still pins the bad version, without a memory of the
+failure the next poll re-applies it: swap, crash, roll back, swap. A
+rolled-back version is therefore never retried **until the pin moves** — the
+update-loop equivalent of `KELD_ENRICH_MAX_ATTEMPTS` quarantining a job rather
+than retrying it forever. Two refusals keep the recovery honest: a **failed
+restart leaves the marker PENDING** on purpose (the swap already happened, so
+the next start must still be able to undo it), and a **rollback that cannot
+restore does NOT restart** — the machine is in an unknown state and bouncing
+the service can only obscure it, so it reports at error severity and stops.
+A pre-flight `keld-agent --version` runs on the staged binary **before** any
+swap: a wrong-architecture build hashes correctly and cannot run, and catching
+that costs milliseconds rather than a restart, a rollback and a second restart.
+`Maybe` takes its decision **inline** (a pure function over already-loaded
+state) and hands only the work to a single-flighted goroutine — the settings
+poll carries per-org config to every other subsystem and must never block on a
+190 MB download. Reporting is disk-only in `internal/localagent/update.go`,
+the same rule `models.go` follows: a CLI that cannot reach the daemon does not
+thereby know an update failed. Spec:
+`docs/superpowers/specs/2026-08-27-signal-auto-update-design.md`.
+
 **The signal-embeddings publish half (`internal/agent/features/`).** The daemon
 side of `POST /features`: an emitter with a per-transcript cursor, the sibling of
 `internal/agent/blocks/` and built the same way — it asks the sidecar which rows
@@ -1806,6 +1884,9 @@ internal/
                      (KELD_BLOCKS enables it; KELD_BLOCKS_BACKFILL, default ON,
                       decides what FIRST SIGHT of a transcript does)
     features/        the signal-embeddings emitter + its cursor (KELD_FEATURES)
+    update/          auto-update: Atlas pins a release; fetch, verify, swap by
+                     displacement, restart, confirm — or restore .prev and
+                     never retry that version until the pin moves
     teleproxy/       loopback OTLP receiver: tools post here, the daemon forwards
                      with its own token so no tool ever holds an Atlas credential
     publish/         build + POST masked enrichments to Atlas; block, window and

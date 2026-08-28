@@ -121,6 +121,12 @@ func newStatusCmd() *cobra.Command {
 				}
 			}
 
+			// Auto-update, read from DISK like the model states above: a CLI
+			// that cannot reach the daemon does not thereby know an update
+			// failed, and this command never contacts a release host.
+			console.Print("Auto-update:")
+			console.Print(localagent.ReadUpdateState().StatusLine())
+
 			if required, _ := paths.ReauthRequired(); required {
 				console.Print(reauthRequiredLine)
 			}
@@ -212,6 +218,12 @@ func newDoctorCmd() *cobra.Command {
 				problems = append(problems, p)
 			}
 			if p := encoder.ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+
+			// An update that was applied and did not come up, or one that could
+			// not be rolled back. Disk-only, same rule as the model states.
+			if p := localagent.ReadUpdateState().ProblemLine(); p != "" {
 				problems = append(problems, p)
 			}
 
