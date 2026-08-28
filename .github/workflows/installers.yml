@@ -338,6 +338,10 @@ jobs:
         if: startsWith(matrix.os, 'macos') && env.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit, because this action otherwise infers the tag from github.ref — a TAG
+          # ref for a release/tag-push run but a BRANCH ref for a workflow_dispatch repair
+          # run, where it fails with "GitHub Releases requires a tag".
+          tag_name: ${{ env.TAG }}
           files: |
             keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz
             keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz.sha256
@@ -371,6 +375,10 @@ jobs:
         if: env.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit, because this action otherwise infers the tag from github.ref — a TAG
+          # ref for a release/tag-push run but a BRANCH ref for a workflow_dispatch repair
+          # run, where it fails with "GitHub Releases requires a tag".
+          tag_name: ${{ env.TAG }}
           files: |
             keld-*-*.pkg
             installers/windows/Output/keld-setup.exe
@@ -488,6 +496,10 @@ jobs:
         if: env.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit, because this action otherwise infers the tag from github.ref — a TAG
+          # ref for a release/tag-push run but a BRANCH ref for a workflow_dispatch repair
+          # run, where it fails with "GitHub Releases requires a tag".
+          tag_name: ${{ env.TAG }}
           files: |
             keld-agent-sidecar_linux_amd64.tar.gz
             keld-agent-sidecar_linux_amd64.tar.gz.sha256
