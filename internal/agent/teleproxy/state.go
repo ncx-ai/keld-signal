@@ -56,3 +56,34 @@ func LastForwardOnDisk() (t time.Time, known bool) {
 	}
 	return s.LastForward, true
 }
+
+// SessionsOnDisk reads the per-session record: tool session id → when telemetry
+// for it last reached Atlas. Empty (not nil-with-error) when nothing is
+// recorded, so a caller cannot mistake "no proxy" for "no sessions" — that
+// distinction is LastForwardOnDisk's `known`.
+func SessionsOnDisk() map[string]time.Time {
+	data, err := os.ReadFile(StatePath())
+	if err != nil {
+		return map[string]time.Time{}
+	}
+	var s state
+	if json.Unmarshal(data, &s) != nil || s.Sessions == nil {
+		return map[string]time.Time{}
+	}
+	return s.Sessions
+}
+
+// evictOldest trims m to at most max entries, dropping the oldest first.
+func evictOldest(m map[string]time.Time, max int) {
+	for len(m) > max {
+		var oldestKey string
+		var oldest time.Time
+		first := true
+		for k, v := range m {
+			if first || v.Before(oldest) {
+				oldestKey, oldest, first = k, v, false
+			}
+		}
+		delete(m, oldestKey)
+	}
+}

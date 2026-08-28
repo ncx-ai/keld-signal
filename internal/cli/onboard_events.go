@@ -36,6 +36,10 @@ type doneEvent struct {
 	Event      string `json:"event"`
 	Configured int    `json:"configured"`
 	Endpoint   string `json:"endpoint,omitempty"`
+	// RestartRequired tells the caller (an installer's UI, typically) that a
+	// tool config CHANGED and any already-running tool is still using the
+	// previous one. See the note on SetupEvent.RestartRequired.
+	RestartRequired bool `json:"restart_required,omitempty"`
 }
 
 type errorEvent struct {
@@ -54,6 +58,19 @@ type SetupEvent struct {
 	Backup     string
 	Configured int
 	Endpoint   string
+	// RestartRequired is set on the "done" event when at least one tool config
+	// was rewritten.
+	//
+	// ⚠️ THE REMEDY HAS ALWAYS BEEN "RESTART THE TOOL" AND WE NEVER SAID SO.
+	// A tool reads its telemetry configuration ONCE, at startup; setup rewrites
+	// that file; a tool already running keeps posting to wherever it was
+	// pointed when it launched. Nothing on this machine can detect or fix that
+	// from the outside — the reasoning was written down twice in this package
+	// and printed to the user zero times. Measured on a real machine: one
+	// session started before setup ran emitted 0 telemetry events over 11
+	// hours while its blocks published normally, because blocks are read from
+	// the transcript by the daemon and never depend on the tool's config.
+	RestartRequired bool
 }
 
 // emitEvent marshals v and writes it as one NDJSON line to console.Out.

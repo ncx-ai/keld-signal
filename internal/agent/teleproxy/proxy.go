@@ -75,6 +75,7 @@ type Proxy struct {
 
 	mu          sync.Mutex
 	lastForward time.Time
+	sessions    map[string]time.Time
 	// lastPersisted throttles the on-disk record: doctor needs a coarse "when did
 	// telemetry last arrive", not a write per OTLP batch.
 	lastPersisted time.Time
@@ -132,19 +133,39 @@ const persistEvery = time.Minute
 // be able to answer "is telemetry flowing" with the daemon STOPPED. A fact only
 // reachable from a running daemon would make daemon-down look like
 // telemetry-broken, which is precisely the confusion this check exists to end.
-func (p *Proxy) noteForward(now time.Time) {
+func (p *Proxy) noteForward(now time.Time, sessions []string) {
 	p.mu.Lock()
 	p.lastForward = now
-	due := now.Sub(p.lastPersisted) >= persistEvery
+	if p.sessions == nil {
+		p.sessions = map[string]time.Time{}
+	}
+	// ⚠️ A SESSION SEEN FOR THE FIRST TIME FORCES THE WRITE, throttle or not. The
+	// throttle exists so a busy machine does not write per batch; applied to a
+	// new id it would lose the very fact the per-session check needs, since a
+	// tool that emits one batch and stops is indistinguishable from one that
+	// never emitted at all.
+	fresh := false
+	for _, id := range sessions {
+		if _, ok := p.sessions[id]; !ok {
+			fresh = true
+		}
+		p.sessions[id] = now
+	}
+	evictOldest(p.sessions, maxTrackedSessions)
+	due := fresh || now.Sub(p.lastPersisted) >= persistEvery
 	if due {
 		p.lastPersisted = now
+	}
+	snapshot := make(map[string]time.Time, len(p.sessions))
+	for k, v := range p.sessions {
+		snapshot[k] = v.UTC()
 	}
 	path := p.statePath
 	p.mu.Unlock()
 	if !due || path == "" {
 		return
 	}
-	buf, err := json.Marshal(state{LastForward: now.UTC()})
+	buf, err := json.Marshal(state{LastForward: now.UTC(), Sessions: snapshot})
 	if err != nil {
 		return
 	}
@@ -158,7 +179,16 @@ func (p *Proxy) noteForward(now time.Time) {
 // state is the on-disk shape of the telemetry record.
 type state struct {
 	LastForward time.Time `json:"last_forward"`
+	// Sessions maps a tool session id to when telemetry for it last reached
+	// Atlas. Bounded by maxTrackedSessions; `omitempty` so a machine that has
+	// forwarded nothing writes exactly what it wrote before.
+	Sessions map[string]time.Time `json:"sessions,omitempty"`
 }
+
+// maxTrackedSessions bounds the on-disk per-session record. Oldest-first
+// eviction: the check this feeds only ever asks about sessions whose transcript
+// is still being written, so an old id has no reader.
+const maxTrackedSessions = 64
 
 // PathHeader marks a batch as having come through the daemon rather than
 // straight from a tool.
@@ -241,12 +271,15 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 			return
 		}
 		body = StripText(body)
+		// Read on THIS goroutine: body is handed to the forwarder below and must
+		// not be walked concurrently with it.
+		ids := SessionIDs(body)
 
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
 			if err := tr.Deliver(context.Background(), body); err == nil {
-				p.noteForward(time.Now())
+				p.noteForward(time.Now(), ids)
 			}
 		}()
 		w.WriteHeader(http.StatusAccepted)
@@ -296,12 +329,52 @@ func (p *Proxy) authorized(r *http.Request) bool {
 // is now a conduit for OTLP it did not author, so the invariant — raw prompt
 // text never leaves the machine — must be enforced here rather than trusted from
 // three separate tools' defaults staying as they are. A key this misses is a
-// leak; a key it over-matches costs one dropped attribute.
+// leak.
+//
+// ⚠️ BUT OVER-MATCHING IS NOT FREE, AND THIS COMMENT USED TO SAY IT WAS: "a key
+// it over-matches costs one dropped attribute." That was wrong, and it was wrong
+// about the most important attribute on the wire. Claude Code sends `prompt.id`
+// on every record; `strings.Contains(k, "prompt")` matched it and blanked it, and
+// Atlas joins `Enrichment.corr_id` to `ToolEvent.prompt_id`. So every enrichment
+// — every block, every facet — stopped joining to the telemetry it describes, and
+// the failure was silent in exactly the way a dropped attribute is not: the rows
+// arrived, attributed and counted, with the one field that relates them emptied.
+// Measured on the dev Atlas: of one proxied session's 244 `tool_result` and 19
+// `user_prompt` rows, ZERO had a non-empty prompt_id, while unproxied seed rows
+// kept theirs. The symptom reported was "blocks show up but the activity panel is
+// empty", which is that join returning nothing.
+//
+// The rule is therefore two-sided: match a text WORD, then subtract the shapes
+// that carry an identifier or a measurement rather than prose. Both halves are
+// needed — dropping the first leaks text, dropping the second breaks correlation.
 func textKey(k string) bool {
 	k = strings.ToLower(k)
+	matched := false
 	for _, s := range []string{"prompt", "completion", "message.content", "response.text",
 		"input.text", "output.text", "user_text", "assistant_text"} {
 		if strings.Contains(k, s) {
+			matched = true
+			break
+		}
+	}
+	return matched && !identifierOrMeasure(k)
+}
+
+// identifierOrMeasure reports whether a key that named a text word in fact ends
+// in an identifier or a quantity — `prompt.id`, `prompt_length`, `prompt_tokens`.
+//
+// Suffixes, not substrings: `prompt.id` is an id, while `user_prompt_text` merely
+// contains one of these words and is prose. Anything not listed here stays
+// stripped, so a shape nobody anticipated fails CLOSED — toward privacy, and at
+// worst toward the one dropped attribute the original comment assumed.
+func identifierOrMeasure(k string) bool {
+	for _, s := range []string{
+		".id", "_id", ".ids", "_ids", ".uuid", "_uuid",
+		".length", "_length", ".len", "_len",
+		".count", "_count", ".size", "_size",
+		".tokens", "_tokens", ".hash", "_hash",
+	} {
+		if strings.HasSuffix(k, s) {
 			return true
 		}
 	}

@@ -211,7 +211,17 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 	if err := manifest.Save(); err != nil {
 		return nil, err
 	}
-	emit(SetupEvent{Kind: "done", Configured: len(manifest.Tools), Endpoint: ob.Endpoint})
+	// A tool that is ALREADY RUNNING read its configuration at startup and will
+	// go on posting to the previous destination until it is restarted. Say so:
+	// this is the one part of setup a human has to do, and it is invisible —
+	// telemetry simply never arrives, while enrichment (read from the transcript
+	// by the daemon) keeps working and makes the machine look healthy.
+	say("")
+	say("  ⚠ Restart any running AI tools to finish.")
+	say("    They read this configuration once at startup, so a tool that is")
+	say("    already open keeps sending to the previous destination.")
+	emit(SetupEvent{Kind: "done", Configured: len(manifest.Tools), Endpoint: ob.Endpoint,
+		RestartRequired: true})
 	return manifest, nil
 }
 
@@ -338,7 +348,8 @@ func newSetupCmd() *cobra.Command {
 					case "tool":
 						emitEvent(toolEvent{Event: "tool", Name: e.Name, Display: e.Display, Action: e.Action, Path: e.Path, Backup: e.Backup})
 					case "done":
-						emitEvent(doneEvent{Event: "done", Configured: e.Configured, Endpoint: e.Endpoint})
+						emitEvent(doneEvent{Event: "done", Configured: e.Configured, Endpoint: e.Endpoint,
+							RestartRequired: e.RestartRequired})
 					}
 				}
 			}

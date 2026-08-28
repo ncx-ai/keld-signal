@@ -84,6 +84,55 @@ flowchart LR
   chose rather than the ones `telemetry.ClaudeEnv`/`CodexBlockBody`/
   `GeminiTelemetry` emit. Widening where the credential may appear does not
   widen what is accepted.
+  ⚠️ **THE TEXT GATE OVER-MATCHED `prompt.id` AND SILENTLY BROKE EVERY
+  CORRELATION.** `teleproxy.textKey` matched an attribute key by SHAPE —
+  `strings.Contains(k, "prompt")` and seven siblings — and its comment said "a
+  key it over-matches costs one dropped attribute". That was wrong about the
+  most important attribute on the wire: Claude Code sends `prompt.id` on every
+  record, and Atlas joins `Enrichment.corr_id` to `ToolEvent.prompt_id`. So the
+  proxy blanked the one field relating a block to the telemetry it describes,
+  and the failure was invisible in the way a dropped attribute is not — rows
+  arrived, attributed, counted, and joined to nothing. Measured on the dev
+  Atlas: of one proxied session's 1,107 events, **0** had a non-empty
+  `prompt_id`, while unproxied seed rows kept theirs; after the fix, 10 of 10.
+  Reported as "blocks show up but the activity panel is empty", which is that
+  join returning nothing. The rule is now two-sided — match a text word, then
+  subtract the identifier/measurement SUFFIXES (`.id`, `_id`, `_length`,
+  `_tokens`, …) — and both halves are load-bearing: drop the first and text
+  leaks, drop the second and correlation dies. An unanticipated shape still
+  fails CLOSED, toward privacy. Pinned by `striptext_identity_test.go` against a
+  **real captured Claude Code payload**, because the original gate shipped
+  green: `prompt.id` was in no fixture, so nothing could see the cost.
+  ⚠️ **`keld signal setup` now SAYS to restart the tools, and never used to.**
+  The reasoning was written in that package twice and printed zero times. A tool
+  reads its telemetry config once at startup, so one already running keeps
+  posting wherever it was pointed when it launched; nothing on the machine can
+  detect or fix that from outside. Measured: a session started before setup ran
+  emitted **0** telemetry events over 11 hours while its blocks published
+  normally — blocks are read from the transcript by the daemon and never depend
+  on the tool's config, so the visible half of the product stayed healthy and
+  hid the silent half. The `done` event carries `restart_required` so an
+  installer's UI can say it too.
+  ⚠️ **And doctor now asks PER SESSION, because the machine-wide check cannot.**
+  `localagent.TelemetryState` asks whether telemetry has arrived AT ALL since the
+  credential was written, so on a machine running two editors — one started
+  before setup, one after — the second vouches for the first and doctor reports
+  "No problems found", correctly and uselessly. `SessionTelemetryState` compares
+  the sessions whose transcripts are being written NOW against
+  `teleproxy.SessionsOnDisk()`, a bounded (64, oldest-evicted) record of which
+  tool session ids the proxy has forwarded for. Session ids are IDENTIFIERS —
+  the same class already published as `corr_id`; no text, span or offset is read.
+  Three refusals keep it from lying: an **empty record is "not tracked yet"**,
+  never "nothing is arriving" (on upgrade the state file has a `last_forward` and
+  no sessions, and reporting then would call every running tool broken the day it
+  shipped); `agent-*.jsonl` **subagent transcripts are excluded** (they share
+  their parent's OTEL session id and are **620 of 671** files here, so including
+  them means hundreds of false findings); and the session's start instant is read
+  by DECODING lines for a top-level `timestamp`, never by pattern-matching the
+  first one — Claude Code opens a transcript with untimestamped `custom-title` /
+  `mode` / `file-history-snapshot` records, the same trap `capture.scan`
+  documents. Scoped to `claude_code`: Cowork's egress is blocked by design and
+  Codex/Gemini transcript names are not their OTLP session ids.
   ⚠️ **Telemetry now depends on the daemon**, where it did not before. Paid for
   with a bounded spool under `spool/telemetry` and not hoped away; a machine
   whose daemon never starts collects nothing, and `keld signal doctor` is the

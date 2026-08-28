@@ -222,6 +222,13 @@ func newDoctorCmd() *cobra.Command {
 			if p := telemetryState(manifest).ProblemLine(); p != "" {
 				problems = append(problems, p)
 			}
+			// Per-session: the machine-wide check above is satisfied by ANY
+			// telemetry arriving, so one tool started after setup vouches for
+			// every tool started before it. This asks the question per running
+			// session instead. See localagent.SessionTelemetryState.
+			if p := sessionTelemetryState(manifest).ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
 
 			// Multiple keld binaries on PATH → a stale one can shadow the
 			// release for anything invoked by name (the CLI, and any hook not
