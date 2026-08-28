@@ -7,13 +7,24 @@ import (
 	"runtime"
 )
 
-// binaryNames are the two Go artifacts an update replaces.
-func binaryNames() []string {
-	if runtime.GOOS == "windows" {
-		return []string{"keld.exe", "keld-agent.exe"}
-	}
-	return []string{"keld", "keld-agent"}
+// binaryNamesFor are the two Go artifacts an update replaces, named for the
+// target platform rather than the host: the caller already knows which release
+// it is installing, and reading runtime.GOOS here would make the Windows path
+// unreachable from any test that is not running on Windows.
+func binaryNamesFor(goos string) []string {
+	return []string{exeNameFor(goos, "keld"), exeNameFor(goos, "keld-agent")}
 }
+
+func exeNameFor(goos, base string) string {
+	if goos == "windows" {
+		return base + ".exe"
+	}
+	return base
+}
+
+// binaryNames uses the host platform — correct for StaleLinks, which inspects
+// this machine's own PATH.
+func binaryNames() []string { return binaryNamesFor(runtime.GOOS) }
 
 // MigrationTarget is where an update installs when the original destination is
 // not writable — the macOS pkg case, whose payload lands in a root-owned
