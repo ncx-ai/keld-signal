@@ -14,8 +14,40 @@ semantic-ish versioning during `0.x`.
   when a release shipped, so a surface that moves takes its coverage with it until
   the next build; this is the escape hatch. Malformed entries and paths that don't
   exist are skipped, never fatal.
+- **Release asset completeness gate** — `scripts/verify-release-assets.sh` checks a
+  published release against the full 10-asset manifest (presence *and* non-zero
+  size) and demotes an incomplete release to prerelease. Since GitHub's
+  `releases/latest` API excludes prereleases and `install.sh` resolves its tag from
+  that API, demotion makes `latest` fall back to the last complete release rather
+  than serving one that cannot install — self-healing, not merely loud. Wired as an
+  `installers.yml` `verify-release` job running with `if: always()`, because the
+  default `needs` semantics *skip* a job when a dependency fails, which is precisely
+  the case worth checking. Offline-testable via `KELD_VERIFY_ASSETS_JSON`; demotion
+  is opt-in via `KELD_VERIFY_DEMOTE`, so a local run cannot mutate a release.
 
 ### Fixed
+- **A release could publish without its Linux sidecar tarball, and every Linux
+  `curl | sh` install then aborted.** v0.20.0 shipped 9 of 10 assets because GitHub
+  never acquired a runner for the `linux-sidecar` job — `runner_name` empty, zero
+  steps executed, cancelled after 15m with "The job was not acquired by Runner of
+  type hosted". `install.sh` treats the sidecar as mandatory (on-device ML has no
+  deterministic fallback) and so exited 1 for every Linux install until the job was
+  re-run four days later. `linux-sidecar` is no longer a `container:` job — the only
+  one in the repo, and container jobs are what hit that acquisition failure; it now
+  invokes the same `manylinux_2_28` image via `docker run`, preserving the identical
+  glibc 2.28 baseline (a property of the image the freeze runs in, not of how it is
+  invoked). The completeness gate above covers the general case.
+- **The notarization staple sweep ran 4x/day forever against an already-stapled
+  release.** Every run since the ticket landed was a ~13s no-op. Stapling only adds
+  *offline* Gatekeeper validation — an unstapled pkg validates online as soon as
+  Apple's ticket exists — so sweeping sooner wins nothing; now daily, and the
+  workflow is named `staple-macos-notarization` rather than a bare `staple`.
+- **The repo's shell tests ran in neither CI nor `make`,** so they could rot
+  unnoticed — and one had: `onboard_command_test.sh` asserted a command shape
+  `onboard.command` abandoned when it moved to delegating login/setup/service to
+  `keld-agent install`, while its one *passing* assertion matched a **comment**
+  rather than any code. All four suites now run in a `ci.yml` `shell-tests` job, and
+  the stale assertions match the current delegation with comments stripped.
 - **Cowork going VM-backed silently ended all Cowork capture, with nothing in the
   log to say so.** Newer Claude desktop builds run Cowork inside a VM whose
   transcripts stay in the VM's disk image rather than under

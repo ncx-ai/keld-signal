@@ -47,6 +47,12 @@ permissions:
 
 jobs:
   build:
+    # Named for what it produces, not just "build". This job freezes the SIDECAR as well as
+    # packaging the installer, and with the default name the Actions graph showed a
+    # `linux-sidecar` node next to an opaque `build (macos-14, arm64)` — so the macOS sidecar
+    # tarball (~200MB, and since the pkg stopped bundling it, the ONLY way macOS users get the
+    # sidecar) was invisible at a glance. The job ID stays `build`, so `needs:` is unaffected.
+    name: sidecar + installer (${{ matrix.os }}, ${{ matrix.goarch }})
     # `IS_RELEASE`: attach to a GitHub release when triggered by a `release` event OR chained
     # from release.yml (`inputs.publish_release`). `TAG`: the release tag in either mode.
     # (github.event_name inside a workflow_call reflects the CALLER's event — `push` — not
@@ -111,8 +117,16 @@ jobs:
             echo "⚠️ **Sidecar is UNOBFUSCATED** — PyArmor free-tier per-file cap. See installers.yml." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Cache HuggingFace model
-        uses: actions/cache@v4
+      # RESTORE-ONLY, deliberately. The cache is written by exactly one job
+      # (linux-sidecar, and only on main) — see the note there. This job must not save:
+      # the matrix runs on 2 OSes, so with a plain `actions/cache` the two legs plus
+      # linux-sidecar all raced to save the SAME key, each seeing a miss and each
+      # writing its own ~1.79 GB copy. That is how three duplicates of one key ended up
+      # on refs/heads/main, and how six copies (10.02 GB) consumed the repo's entire
+      # 10 GB budget until they evicted each other and every run downloaded cold.
+      # The model weights are platform-independent, so one cache serves all three jobs.
+      - name: Restore HuggingFace model cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/hf-cache
           key: hf-gliner2-large-v1-b122b11eeaee4dabd32bed80412f3234c0d0e943
@@ -135,7 +149,12 @@ jobs:
           # bundle. /health alone never spawns a worker, so this is the ONLY CI
           # coverage for frozen-distribution worker spawn (freeze_support, pyarmor
           # runtime bundling, multiprocessing under PyInstaller).
-          resp=$(curl -sf -m 120 -X POST http://127.0.0.1:8399/classify \
+          # Generous timeout: this first /classify also pays for the ~1.8 GB model
+          # download on a cache miss, so a tight cap bounds the DOWNLOAD rather than the
+          # inference it exists to check. At -m 120 the equivalent Linux step was a coin
+          # flip — 100s (pass) vs 116s (fail) on identical cold downloads — which is how
+          # v0.21.0 published without its Linux sidecar tarball.
+          resp=$(curl -sf -m 900 -X POST http://127.0.0.1:8399/classify \
             -H 'Content-Type: application/json' \
             -d '{"text":"debug the login bug","tasks":{"task_type":["debug","other"]}}') \
             || { echo "frozen worker /classify failed — spawn/import/bundle broke"; exit 1; }
@@ -234,6 +253,13 @@ jobs:
           APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+          # Notarization is a HARD GATE whenever we have creds: build-pkg.sh fails unless
+          # Apple returns Accepted, because an un-notarized pkg has no ticket and so is
+          # blocked by Gatekeeper outright — "ships unstapled" is only safe once a ticket
+          # exists. Explicitly relaxed ONLY for the documented no-secrets path (forks, and
+          # dry runs on a repo without the Apple secrets), which is meant to produce
+          # unsigned, non-distributable output rather than fail.
+          KELD_NOTARY_REQUIRED: ${{ secrets.APPLE_NOTARY_KEY != '' && '1' || '0' }}
         run: |
           # Flatten sidecar one-dir beside keld-agent in the payload.
           VER="$TAG"
@@ -335,99 +361,82 @@ jobs:
   # target's glibc be >= the BUILD glibc; ubuntu-latest (glibc 2.39) would only run on the very
   # newest distros. Freezing against the manylinux 2.28 baseline makes the sidecar run on any
   # distro with glibc >= 2.28 — RHEL/Alma/Rocky 8+, Debian 10+, Ubuntu 18.04+, Arch, Fedora,
-  # Amazon Linux 2023. (manylinux_2_28 is also the oldest baseline whose glibc still satisfies
-  # GitHub Actions' bundled node20, so the JS actions below run inside the container.)
+  # Amazon Linux 2023. The 2.28 baseline is now purely about the glibc floor we target: the
+  # JS actions run natively on the host, not inside the image, so the image's own glibc no
+  # longer has to satisfy the Actions node runtime.
   # macOS/Windows bundle the sidecar inside their native installers, so only Linux ships it as a
   # standalone tarball — which install.sh downloads.
+  #
+  # This is deliberately NOT a `container:` job. Container jobs must be matched to a
+  # container-type hosted runner, and when GitHub couldn't ("The job was not acquired by
+  # Runner of type hosted even after multiple attempts" — runner_name empty, zero steps,
+  # cancelled after 15m) v0.20.0 published without this tarball and every Linux curl|sh
+  # install hard-failed. Invoking the same image via `docker run` keeps the identical build
+  # baseline without that acquisition path; checkout/cache/tar/upload run natively.
   linux-sidecar:
     runs-on: ubuntu-latest
-    container: quay.io/pypa/manylinux_2_28_x86_64
     env:
       IS_RELEASE: ${{ github.event_name == 'release' || inputs.publish_release }}
       TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
 
-      # manylinux's /opt/python CPython is built statically (no libpython.so), which PyInstaller
-      # cannot freeze against. manylinux_2_28 is AlmaLinux 8, whose python3.12 RPM IS built
-      # --enable-shared and links glibc 2.28 — exactly the shared interpreter + old baseline we
-      # need. Install and freeze against that instead.
-      # Reference /usr/bin/python3.12 by absolute path throughout: the manylinux image keeps its
-      # static /opt/python/cp312-cp312/bin first on PATH, so bare `python3.12` would resolve to
-      # the static interpreter we can't freeze against.
-      - name: Install shared CPython 3.12 (glibc 2.28)
-        run: |
-          dnf install -y python3.12 python3.12-devel
-          /usr/bin/python3.12 -m ensurepip --upgrade
-          /usr/bin/python3.12 -m pip install --upgrade pip
-
-      - name: Freeze sidecar (obfuscated, glibc 2.28 baseline)
-        shell: bash
-        env:
-          # ⚠️ OBFUSCATION IS OFF, DELIBERATELY AND TEMPORARILY. PyArmor's free
-          # tier caps each script at ~32KB and 7 of the 42 shipped sidecar files
-          # now exceed it (store.py 89KB, main.py 80KB, features.py 63KB,
-          # textembed.py 47KB, dynamics.py 47KB, ingest.py 39KB, analyze.py
-          # 36KB), so `pyarmor gen` fails with "out of license" and the freeze
-          # takes every OS down with it. The last green installers run was
-          # 2026-08-19; store.py crossed the cap on 08-23, so the release has
-          # been unbuildable for about a week without anyone noticing, because
-          # nothing ran this workflow in between.
-          #
-          # Shipping plain is a real downgrade and is chosen over the two
-          # alternatives on purpose: splitting seven files under 32KB means
-          # refactoring store.py/main.py/analyze.py — the highest-risk code in
-          # the repo — and re-breaking every time one grows.
-          #
-          # REVERT THIS TO "1" THE DAY A PAID PYARMOR LICENCE EXISTS. Nothing
-          # else needs to change: build-freeze.sh and the .spec both already
-          # branch on this variable, and the local gates (`make obfuscate-check`,
-          # scripts/check-obfuscation-coverage.sh) still exercise the obfuscated
-          # path. Obfuscation protects code logic only — it was never hiding the
-          # model (see AGENTS.md), so what is lost is source-level opacity, not
-          # a security control.
-          KELD_OBFUSCATE: "0"
-          PYTHON: /usr/bin/python3.12
-          # torch's default Linux wheel hard-depends on the CUDA 13 stack (cuda-toolkit,
-          # nvidia-*), so the frozen bundle needs libcudart.so.13 at runtime and won't load on
-          # CPU-only machines — which is every device the sidecar runs on (GLiNER2 runs on CPU;
-          # macOS/Windows already ship CPU torch). Pin the CPU build: pre-install it from the
-          # CPU index, and expose that index to build-freeze.sh's own requirements install (the
-          # `+cpu` local version outranks the plain PyPI wheel, so gliner2's torch dep stays CPU).
-          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
-        run: |
-          /usr/bin/python3.12 -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-          /usr/bin/python3.12 -m pip install --quiet python-minifier pyarmor
-          bash sidecar/build-freeze.sh
-
-      - name: Cache HuggingFace model
-        uses: actions/cache@v4
+      # Restore BEFORE the freeze step: the smoke run inside the container resolves the
+      # real model through HF_HOME, which is this directory bind-mounted into
+      # /work/hf-cache.
+      - name: Restore HuggingFace model cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/hf-cache
           key: hf-gliner2-large-v1-b122b11eeaee4dabd32bed80412f3234c0d0e943
 
-      - name: Smoke the frozen sidecar
+      # The container-side half lives in sidecar/ci-freeze-linux.sh rather than inline here:
+      # quoting a ~40-line bash program through `docker run bash -c '...'` needs an escape on
+      # every quote it contains, which is how this kind of step rots.
+      - name: Freeze + smoke sidecar in manylinux_2_28 (glibc 2.28 baseline)
         shell: bash
-        env:
-          HF_HOME: ${{ github.workspace }}/hf-cache
         run: |
-          BIN="dist/keld-agent-sidecar/keld-agent-sidecar"
-          "$BIN" --port 8399 --host 127.0.0.1 &
-          for i in $(seq 1 180); do
-            if curl -sf http://127.0.0.1:8399/health | grep -q '"ok"'; then ok=1; break; fi
-            sleep 2
-          done
-          [ -n "${ok:-}" ] || { echo "sidecar did not become healthy"; exit 1; }
-          # Real /classify spawns the inference worker child, which must import the (obfuscated)
-          # modules from the frozen bundle — the only CI coverage for frozen worker spawn. It
-          # also proves the glibc-2.28-linked binary actually runs (here, inside the 2.28 image).
-          resp=$(curl -sf -m 120 -X POST http://127.0.0.1:8399/classify \
-            -H 'Content-Type: application/json' \
-            -d '{"text":"debug the login bug","tasks":{"task_type":["debug","other"]}}') \
-            || { echo "frozen worker /classify failed — spawn/import/bundle broke"; exit 1; }
-          echo "$resp" | grep -q '"task_type"' \
-            || { echo "frozen worker returned no result: $resp"; exit 1; }
-          echo "frozen worker spawn + inference OK (glibc 2.28 baseline)"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work" -w /work \
+            # ⚠️ **0, NOT 1, and taking main's side of this merge wholesale would have re-broken
+            # the release.** Main rewrote this job into a containerised freeze and carried its own
+            # `KELD_OBFUSCATE=1` with it; this branch had already turned obfuscation OFF because
+            # PyArmor's free tier caps each script at ~32KB and 7 of the 42 shipped sidecar files
+            # now exceed it (store.py 89KB, main.py 80KB, features.py 63KB, textembed.py 47KB,
+            # dynamics.py 47KB, ingest.py 39KB, analyze.py 36KB) — `pyarmor gen` then answers
+            # "ERROR out of license" and FAILS THE FREEZE on all three OSes. Measured cost of not
+            # noticing: the last green `installers` run was 2026-08-19, store.py crossed the cap on
+            # 08-23, and the pipeline was unbuildable for about a week with nothing surfacing it.
+            # Revert to 1 the day a paid licence exists; nothing else changes. See AGENTS.md.
+            -e KELD_OBFUSCATE=0 \
+            -e HF_HOME=/work/hf-cache \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            bash sidecar/ci-freeze-linux.sh
+
+      # THE ONLY JOB THAT WRITES THIS CACHE, AND ONLY ON main. Two rules, both learned
+      # the hard way:
+      #   1. One writer. Three jobs sharing one key all raced to save it, each writing
+      #      its own ~1.79 GB copy of identical platform-independent weights.
+      #   2. main only. Every branch that ran this workflow saved its own copy too, so
+      #      copies accumulated per-ref as well as per-job — six in total, 10.02 GB
+      #      against a 10 GB repo budget. They then evicted each other, so the cache
+      #      consumed the entire quota while delivering nothing: every run downloaded
+      #      cold anyway.
+      # MEASURED, not assumed: a tag-ref run does NOT restore this main-scoped cache.
+      # v0.21.0's re-run (refs/tags/v0.21.0) reported "Cache not found" while main held
+      # exactly one healthy copy with ~8 GB of headroom, so eviction was not the cause.
+      # Releases therefore always download the model cold, and the cache only ever helps
+      # workflow_dispatch runs on main. That is tolerable purely because the smoke
+      # timeout no longer bounds the download (-m 900); if this cache is ever dropped
+      # entirely to reclaim its 1.79 GB, nothing breaks — builds just get ~2 min slower.
+      - name: Save HuggingFace model cache (main only)
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/hf-cache
+          key: hf-gliner2-large-v1-b122b11eeaee4dabd32bed80412f3234c0d0e943
 
       - name: Package Linux sidecar tarball
         shell: bash
@@ -450,6 +459,28 @@ jobs:
         with:
           name: installers-linux-amd64
           if-no-files-found: ignore
-          path: |
-            keld-agent-sidecar_linux_amd64.tar.gz
-            keld-agent-sidecar_linux_amd64.tar.gz.sha256
+          path: keld-agent-sidecar_linux_amd64.tar.gz
+
+  # Gate: a release must not serve `latest` while missing installer assets.
+  #
+  # `always()` is load-bearing. Default `needs` semantics SKIP a job when a
+  # dependency fails — which is exactly the case this exists to catch (v0.20.0's
+  # linux-sidecar was never acquired by a runner, so its asset never uploaded and
+  # the release published incomplete). Without always() the gate would be silent
+  # on the only runs that matter.
+  #
+  # The condition inlines the release test rather than using env.IS_RELEASE like
+  # the sibling jobs do: job-level `if` cannot see job-level `env`. The siblings
+  # get away with it because they use it in STEP-level ifs, where it resolves.
+  verify-release:
+    needs: [build, linux-sidecar]
+    if: always() && (github.event_name == 'release' || inputs.publish_release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify release asset completeness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KELD_VERIFY_DEMOTE: "1"
+          TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: bash scripts/verify-release-assets.sh "$TAG"

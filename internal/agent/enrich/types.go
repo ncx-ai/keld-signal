@@ -126,6 +126,13 @@ type HealthFunc func() bool
 
 // Profile is the full enrichment result for one prompt.
 type Profile struct {
+	// ⚠️ **`SpeechAct`/`SpeechActAlt` are ABSENT on purpose, and main still had them.** This merge
+	// brings main forward, not this struct back: the facet was dropped at schema v9 on a
+	// pre-registered study over 2,015 live inferences — accuracy 0.695 against a 0.713 majority
+	// baseline, i.e. worth less than always answering `command`, and it predicted `statement` 22
+	// times and was right ZERO times at up to full confidence. Re-adding it by taking main's side
+	// of a merge conflict would have reverted that silently and un-bumped a published vocabulary.
+	// See AGENTS.md and eval/gold.jsonl, which keeps the labels for a re-bakeoff.
 	TaskType         Labeled   `json:"task_type"`
 	TaskTypeAlt      []Labeled `json:"task_type_alt,omitempty"`
 	Domain           Labeled   `json:"domain"`

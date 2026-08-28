@@ -1,4 +1,4 @@
-name: staple
+name: staple-macos-notarization
 
 # Attach notarization tickets to already-published macOS installers.
 #
@@ -24,16 +24,21 @@ on:
         description: "How long to wait for a pending verdict (notarytool duration)."
         type: string
         default: "2h"
-  # Catch releases whose ticket landed after the build gave up. No-ops cheaply
-  # when the assets are already stapled, so a quiet schedule costs one download.
+  # Catch releases whose ticket landed after the build gave up. Daily, not 6-hourly:
+  # the only thing stapling adds is OFFLINE Gatekeeper validation (an unstapled pkg
+  # still validates online against Apple's service the moment the ticket lands), so
+  # there is nothing to win by sweeping sooner. Once a release IS stapled every run
+  # is a ~13s no-op that just downloads the pkg to check, which the 6-hourly schedule
+  # then repeated forever. Use workflow_dispatch when a specific release needs it now.
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "17 7 * * *"
 
 permissions:
   contents: write
 
 jobs:
   staple:
+    name: staple pending notarization tickets
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
