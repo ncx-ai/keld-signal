@@ -1605,7 +1605,20 @@ state) and hands only the work to a single-flighted goroutine — the settings
 poll carries per-org config to every other subsystem and must never block on a
 190 MB download. Reporting is disk-only in `internal/localagent/update.go`,
 the same rule `models.go` follows: a CLI that cannot reach the daemon does not
-thereby know an update failed. Spec:
+thereby know an update failed.
+⚠️ **WHO SETS THE PIN IS AN OPEN ATLAS-SIDE QUESTION, AND `base_url` IS THE
+SHARP EDGE.** Nothing serves `agent_release` today and there is no producer for
+it, so the client is inert. Before one exists: `version` + `base_url` together
+say "fetch this binary from this host and run it", and the checksum gate does
+NOT constrain that — `checksums.txt` is fetched from the SAME `base_url`, so it
+proves the transfer was not corrupted, never that the bytes came from Keld.
+Write access to `agent_release` is therefore equivalent to root on every machine
+in the org. Three ways out, cheapest first: Atlas never serves `base_url` and
+the client ignores it (mirrors configured locally); a server-supplied
+`base_url` is honoured only when a local env var permits that host; or release
+assets are signed and verified against a key compiled into the binary — the only
+one that makes the host untrusted. Choose before the first real rollout, not
+after. Reference: `docs/auto-update.md`. Spec:
 `docs/superpowers/specs/2026-08-27-signal-auto-update-design.md`.
 
 **The signal-embeddings publish half (`internal/agent/features/`).** The daemon
