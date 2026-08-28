@@ -72,19 +72,6 @@ func NewFake() enrich.Model {
 			taskKW[d.Text] = kws
 		}
 	}
-	// speech_act keyword priors keyed by canonical id, aliased to the A6-style
-	// description texts so this double works for both id and description label sets.
-	speechKW := map[string][]string{
-		"command":   {"add", "write", "fix", "implement", "create", "refactor", "build", "make", "set up", "update"},
-		"question":  {"?", "how", "why", "what", "should", "which", "can you", "do i"},
-		"statement": {"is broken", "keeps", "fails", "failing", "doubled", "the build", "there is", "we have"},
-		"fragment":  {"ok", "ship it", "also", "same", "too", "and the", "ditto", "yes"},
-	}
-	for _, d := range enrich.SpeechActDefs {
-		if kws, ok := speechKW[d.ID]; ok && d.Text != d.ID {
-			speechKW[d.Text] = kws
-		}
-	}
 	// domain keyword priors keyed by canonical id, aliased to the readable domain
 	// DESCRIPTIONS (the extractor now classifies domain against DomainDefs texts).
 	domainKW := map[string][]string{
@@ -112,9 +99,8 @@ func NewFake() enrich.Model {
 			"secret":      regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token)\s*[:=]\s*\S+`),
 		},
 		keywords: map[string]map[string][]string{
-			"task_type":  taskKW,
-			"speech_act": speechKW,
-			"domain":     domainKW,
+			"task_type": taskKW,
+			"domain":    domainKW,
 		},
 	}
 }
@@ -223,4 +209,51 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// piiTypes are the entity types the sidecar's presidio layer produces. api_key
+// and secret are deliberately absent: credentials are the gitleaks layer's, not
+// the PII scan's, and a double that blurred that would hide a real regression.
+var piiTypes = []string{"email", "ssn", "credit_card", "phone", "person"}
+
+// NewScan returns a test-only enrich.PIIScanner standing in for the sidecar's
+// /pii route: the same regex detection this package's fake Model uses, reported
+// as OFFSETS ONLY, exactly as the real endpoint does (the matched value never
+// crosses that wire).
+//
+// It exists because SensitivityExtractor now treats the scan as the gated
+// authority on the pattern types — a pipeline test with no scanner wired
+// exercises the "no PII backend" path, not the normal one.
+func NewScan() enrich.PIIScanner {
+	f := NewFake().(*fake)
+	return func(text string) (enrich.PIIResult, bool) {
+		labels := make(map[string]string, len(piiTypes))
+		for _, t := range piiTypes {
+			labels[t] = t
+		}
+		ents := f.Entities(text, labels)
+		spans := make([]enrich.Entity, 0, len(ents))
+		for _, e := range ents {
+			spans = append(spans, enrich.Entity{Label: e.Label, Start: e.Start, End: e.End, Confidence: e.Confidence})
+		}
+		return enrich.PIIResult{Spans: spans}, true
+	}
+}
+
+// NewFailingScan returns a scanner that reports the service as unreachable —
+// the case where PII detection is genuinely absent and the facet must say so.
+func NewFailingScan() enrich.PIIScanner {
+	return func(string) (enrich.PIIResult, bool) { return enrich.PIIResult{}, false }
+}
+
+// NewTruncatedScan returns a scanner that answers with real spans but reports
+// that it could not read the whole input — a partial scan, whose clean-looking
+// tail was never examined.
+func NewTruncatedScan() enrich.PIIScanner {
+	inner := NewScan()
+	return func(text string) (enrich.PIIResult, bool) {
+		r, ok := inner(text)
+		r.Truncated = true
+		return r, ok
+	}
 }

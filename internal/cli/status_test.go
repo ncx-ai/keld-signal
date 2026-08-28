@@ -114,6 +114,15 @@ func TestDoctorNoHookProblemWhenHookJsonExists(t *testing.T) {
 		t.Fatalf("saving manifest: %v", err)
 	}
 
+	// This test is about the hook-config problem only. Without an
+	// agent-config.json, ml_backend defaults to "auto", which needs GLiNER2 —
+	// absent in this fresh KELD_HOME, and doctor would (correctly) also flag
+	// that. Pin ml_backend to "deterministic" so the model check stays silent
+	// and doesn't interfere with what this test asserts.
+	if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"ml_backend":"deterministic"}`), 0o600); err != nil {
+		t.Fatalf("write agent-config.json: %v", err)
+	}
+
 	var buf bytes.Buffer
 	orig := console.Out
 	console.Out = &buf
@@ -233,6 +242,12 @@ func TestDoctorOkWithoutReauthMarker(t *testing.T) {
 	manifest := &config.Manifest{Tools: map[string]config.ToolManifest{}}
 	if err := manifest.Save(); err != nil {
 		t.Fatalf("saving manifest: %v", err)
+	}
+
+	// See TestDoctorNoHookProblemWhenHookJsonExists: pin ml_backend so the new
+	// model-state check (this test predates it) stays silent.
+	if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"ml_backend":"deterministic"}`), 0o600); err != nil {
+		t.Fatalf("write agent-config.json: %v", err)
 	}
 
 	var buf bytes.Buffer
@@ -363,6 +378,9 @@ func TestDoctorReportsPATHShadowing(t *testing.T) {
 	if err := manifest.Save(); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"ml_backend":"deterministic"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	// Two distinct keld binaries on PATH → shadowing.
 	d1 := t.TempDir()
@@ -389,6 +407,185 @@ func TestDoctorReportsPATHShadowing(t *testing.T) {
 	}
 }
 
+// baseDoctorFixture writes the config that keeps every OTHER doctor check
+// quiet (hook.json present, empty manifest, no reauth marker, isolated PATH),
+// so a test can isolate the on-device-model check.
+func baseDoctorFixture(t *testing.T, agentConfigJSON string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	hookPath := paths.HookConfigPath()
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hookPath, []byte(`{"endpoint":"http://e","ingest_token":"t"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := &config.Manifest{Tools: map[string]config.ToolManifest{}, Hook: &config.HookRecord{Version: "x"}}
+	if err := manifest.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if agentConfigJSON != "" {
+		if err := os.WriteFile(paths.AgentConfigPath(), []byte(agentConfigJSON), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestDoctorModelState_NotNeededStaysSilent covers the design's central
+// constraint: an absent model that the current configuration doesn't need
+// must never become a problem line, for each way a model can be "not needed".
+func TestDoctorModelState_NotNeededStaysSilent(t *testing.T) {
+	cases := []struct {
+		name       string
+		agentCfg   string
+		envTextEmb string
+	}{
+		{"ml_backend deterministic: GLiNER2 not needed", `{"ml_backend":"deterministic"}`, ""},
+		{"ml_backend off: GLiNER2 not needed", `{"ml_backend":"off"}`, ""},
+		{"KELD_TEXTEMBED unset: encoder not needed even with features on", `{"ml_backend":"deterministic","features":true}`, ""},
+		{"features toggle off: encoder not needed even with KELD_TEXTEMBED=1", `{"ml_backend":"deterministic","features":false}`, "1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			baseDoctorFixture(t, c.agentCfg)
+			if c.envTextEmb != "" {
+				t.Setenv("KELD_TEXTEMBED", c.envTextEmb)
+			}
+
+			var buf bytes.Buffer
+			orig := console.Out
+			console.Out = &buf
+			defer func() { console.Out = orig }()
+
+			cmd := newDoctorCmd()
+			if err := cmd.RunE(cmd, nil); err != nil {
+				t.Fatalf("doctor should report no problems (not-needed absent model must stay silent); got err=%v, output:\n%s", err, buf.String())
+			}
+			out := buf.String()
+			if bytes.Contains([]byte(out), []byte("GLiNER2")) || bytes.Contains([]byte(out), []byte("text encoder")) || bytes.Contains([]byte(out), []byte("text-encoder")) {
+				t.Fatalf("expected no model mention when not needed; got:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestDoctorModelState_NeededAndAbsentIsAProblem is the flip side: a model
+// the current configuration DOES need, and whose weights are confirmed
+// absent, must produce a problem line naming the reason, without changing
+// doctor's non-model behavior otherwise.
+func TestDoctorModelState_NeededAndAbsentIsAProblem(t *testing.T) {
+	t.Run("GLiNER2 under auto (default)", func(t *testing.T) {
+		baseDoctorFixture(t, "") // no agent-config.json -> ml_backend defaults to auto
+		var buf bytes.Buffer
+		orig := console.Out
+		console.Out = &buf
+		defer func() { console.Out = orig }()
+
+		cmd := newDoctorCmd()
+		err := cmd.RunE(cmd, nil)
+		if !errors.Is(err, errs.ErrSilentExit) {
+			t.Fatalf("doctor should report the missing-and-needed GLiNER2 model as a problem; err=%v", err)
+		}
+		if !bytes.Contains(buf.Bytes(), []byte("GLiNER2")) {
+			t.Fatalf("expected a GLiNER2 problem line; got:\n%s", buf.String())
+		}
+		if !bytes.Contains(buf.Bytes(), []byte("ml_backend")) {
+			t.Fatalf("expected the reason (ml_backend) stated; got:\n%s", buf.String())
+		}
+	})
+
+	t.Run("text encoder with both toggles on", func(t *testing.T) {
+		baseDoctorFixture(t, `{"ml_backend":"deterministic","features":true}`)
+		t.Setenv("KELD_TEXTEMBED", "1")
+		var buf bytes.Buffer
+		orig := console.Out
+		console.Out = &buf
+		defer func() { console.Out = orig }()
+
+		cmd := newDoctorCmd()
+		err := cmd.RunE(cmd, nil)
+		if !errors.Is(err, errs.ErrSilentExit) {
+			t.Fatalf("doctor should report the missing-and-needed encoder as a problem; err=%v", err)
+		}
+		if !bytes.Contains(buf.Bytes(), []byte("text encoder")) {
+			t.Fatalf("expected a text-encoder problem line; got:\n%s", buf.String())
+		}
+		if !bytes.Contains(buf.Bytes(), []byte("KELD_TEXTEMBED")) {
+			t.Fatalf("expected the reason (KELD_TEXTEMBED) stated; got:\n%s", buf.String())
+		}
+	})
+}
+
+// TestDoctorModelState_PresentIsNeverAProblem confirms that when the weights
+// ARE on disk, doctor stays quiet regardless of need.
+func TestDoctorModelState_PresentIsNeverAProblem(t *testing.T) {
+	baseDoctorFixture(t, "") // ml_backend defaults to auto -> GLiNER2 needed
+	dir := paths.ModelsDir("gliner2-large-v1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "model.safetensors"), []byte("not empty"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newDoctorCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("doctor should report no problems when the needed model is present; got err=%v, output:\n%s", err, buf.String())
+	}
+	if bytes.Contains(buf.Bytes(), []byte("GLiNER2")) {
+		t.Fatalf("expected no GLiNER2 mention when its weights are present; got:\n%s", buf.String())
+	}
+}
+
+// TestStatusModelState_ShowsWhatItCanDetermine exercises the informational
+// surface (`keld signal status`): a needed-and-absent model gets a line, and
+// an absent-and-not-needed model produces no on-device-models section at all.
+func TestStatusModelState_ShowsWhatItCanDetermine(t *testing.T) {
+	t.Run("needed and absent is shown", func(t *testing.T) {
+		baseDoctorFixture(t, "") // auto -> GLiNER2 needed, absent in this fresh KELD_HOME
+		var buf bytes.Buffer
+		orig := console.Out
+		console.Out = &buf
+		defer func() { console.Out = orig }()
+
+		cmd := newStatusCmd()
+		if err := cmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("status should not error; got %v", err)
+		}
+		out := buf.String()
+		if !bytes.Contains([]byte(out), []byte("On-device models:")) {
+			t.Fatalf("expected an on-device-models section; got:\n%s", out)
+		}
+		if !bytes.Contains([]byte(out), []byte("gliner2")) {
+			t.Fatalf("expected a gliner2 line; got:\n%s", out)
+		}
+	})
+
+	t.Run("not needed and absent stays out of the section entirely", func(t *testing.T) {
+		baseDoctorFixture(t, `{"ml_backend":"deterministic"}`)
+		var buf bytes.Buffer
+		orig := console.Out
+		console.Out = &buf
+		defer func() { console.Out = orig }()
+
+		cmd := newStatusCmd()
+		if err := cmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("status should not error; got %v", err)
+		}
+		out := buf.String()
+		if bytes.Contains([]byte(out), []byte("On-device models:")) {
+			t.Fatalf("expected no on-device-models section when nothing is needed or present; got:\n%s", out)
+		}
+	})
+}
+
 // doctor is what a user runs to answer "is my install actually working?", but it
 // only ever checked CONFIG. On a real machine it printed "No problems found."
 // while the spool held five abandoned legacy writes, the oldest a month old —
@@ -398,6 +595,12 @@ func TestDoctorReportsPATHShadowing(t *testing.T) {
 func TestDoctorReportsStaleSpoolBacklog(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
+	// Pin ml_backend so this test isolates the SPOOL check. Without it the backend
+	// defaults to "auto", whose model check correctly reports GLiNER2 absent — a real
+	// finding, but not the one this test is about.
+	if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"ml_backend":"deterministic"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := (&config.Manifest{Tools: map[string]config.ToolManifest{}}).Save(); err != nil {
 		t.Fatalf("saving manifest: %v", err)
 	}
@@ -431,6 +634,12 @@ func TestDoctorReportsStaleSpoolBacklog(t *testing.T) {
 func TestDoctorSilentOnHealthySpool(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
+	// Pin ml_backend so this test isolates the SPOOL check. Without it the backend
+	// defaults to "auto", whose model check correctly reports GLiNER2 absent — a real
+	// finding, but not the one this test is about.
+	if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"ml_backend":"deterministic"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := (&config.Manifest{Tools: map[string]config.ToolManifest{}}).Save(); err != nil {
 		t.Fatalf("saving manifest: %v", err)
 	}

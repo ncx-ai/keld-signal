@@ -8,7 +8,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/features"
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/console"
@@ -22,6 +24,20 @@ import (
 type statusRow struct {
 	displayName string
 	status      tools.ToolStatus
+}
+
+// modelStates resolves the on-device model states from local, read-only
+// sources only: settings.Load() (~/.keld/agent-config.json) and
+// features.TextEmbedEnabled() (the KELD_TEXTEMBED env var), plus a filesystem
+// stat of each model's weights directory. No daemon round-trip, so it can
+// never block and is unaffected by whether keld-agent is even running — see
+// localagent.ModelState's doc for why that is the right design rather than a
+// shortcut.
+func modelStates() (gliner2, encoder localagent.ModelState) {
+	set := settings.Load()
+	gliner2 = localagent.GLiNER2State(set.MLBackend)
+	encoder = localagent.EncoderState(features.TextEmbedEnabled(), set.FeaturesLocalEnabled())
+	return gliner2, encoder
 }
 
 // collectStatus mirrors Python's _collect_status: for every adapter it ALWAYS
@@ -89,6 +105,27 @@ func newStatusCmd() *cobra.Command {
 			for _, line := range renderLocalService(health) {
 				console.Print(line)
 			}
+
+			gliner2, encoder := modelStates()
+			var modelLines []string
+			if l := gliner2.StatusLine("gliner2"); l != "" {
+				modelLines = append(modelLines, l)
+			}
+			if l := encoder.StatusLine("encoder"); l != "" {
+				modelLines = append(modelLines, l)
+			}
+			if len(modelLines) > 0 {
+				console.Print("On-device models:")
+				for _, l := range modelLines {
+					console.Print(l)
+				}
+			}
+
+			// Auto-update, read from DISK like the model states above: a CLI
+			// that cannot reach the daemon does not thereby know an update
+			// failed, and this command never contacts a release host.
+			console.Print("Auto-update:")
+			console.Print(localagent.ReadUpdateState().StatusLine())
 
 			if required, _ := paths.ReauthRequired(); required {
 				console.Print(reauthRequiredLine)
@@ -161,7 +198,7 @@ func newDoctorCmd() *cobra.Command {
 				st := adapter.Status(current, tm.Managed)
 				if !st.Configured {
 					problems = append(problems,
-						fmt.Sprintf("%s: manifest records setup but config is not configured (drift). Re-run `keld setup`.", adapter.DisplayName()),
+						fmt.Sprintf("%s: manifest records setup but config is not configured (drift). Re-run `keld signal setup`.", adapter.DisplayName()),
 					)
 				}
 			}
@@ -172,6 +209,39 @@ func newDoctorCmd() *cobra.Command {
 				}
 			}
 
+			// On-device model state: a problem only when the current local
+			// configuration actually needs the model and its weights are
+			// confidently (not merely "could not tell") absent. See
+			// localagent.ModelState.ProblemLine.
+			gliner2, encoder := modelStates()
+			if p := gliner2.ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+			if p := encoder.ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+
+			// An update that was applied and did not come up, or one that could
+			// not be rolled back. Disk-only, same rule as the model states.
+			if p := localagent.ReadUpdateState().ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+
+			// Telemetry configured but not flowing. Read from DISK, like the model
+			// states above, so a stopped daemon can never look like broken
+			// telemetry — and reported only when the check is conclusive: an
+			// unknown record, a fresh install, or a skewed clock yield nothing.
+			if p := telemetryState(manifest).ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+			// Per-session: the machine-wide check above is satisfied by ANY
+			// telemetry arriving, so one tool started after setup vouches for
+			// every tool started before it. This asks the question per running
+			// session instead. See localagent.SessionTelemetryState.
+			if p := sessionTelemetryState(manifest).ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+
 			// Multiple keld binaries on PATH → a stale one can shadow the
 			// release for anything invoked by name (the CLI, and any hook not
 			// pinned to an absolute path). This caused a real bug (an old keld
@@ -180,7 +250,7 @@ func newDoctorCmd() *cobra.Command {
 			if bins := keldPATHBinaries(); len(bins) > 1 {
 				problems = append(problems, fmt.Sprintf(
 					"multiple keld binaries on PATH — %s will run, shadowing %v. "+
-						"Repoint or remove the extras (e.g. `ln -sf %s <stray>`), then re-run `keld setup`.",
+						"Repoint or remove the extras (e.g. `ln -sf %s <stray>`), then re-run `keld signal setup`.",
 					bins[0], bins[1:], bins[0]))
 			}
 

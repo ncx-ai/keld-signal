@@ -67,21 +67,31 @@ func prefilterContentFree(text string) bool {
 
 // alwaysRunner is an OPTIONAL Extractor capability (mirrors ContextModel /
 // MultiLabelModel): a pass that must run on EVERY turn regardless of the gate.
-// Only governance (sensitivity) + the gate signal (speech_act) implement it;
-// every other pass is gated. Absence ⇒ gated.
+// Only governance (sensitivity) implements it; every other pass is gated.
+// Absence ⇒ gated.
 type alwaysRunner interface {
 	AlwaysRun() bool
 }
 
-// speechActFragment reports whether the committed speech_act result is
-// "fragment" (a short follow-up/acknowledgement) — the model half of the gate.
-func speechActFragment(ctx *JobContext) bool {
-	out := ctx.Get("speech_act")
-	if out == nil {
-		return false
-	}
-	if l, ok := out["speech_act"].(Labeled); ok {
-		return l.Value == "fragment"
-	}
-	return false
-}
+// THE GATE IS MODEL-FREE, and prefilterContentFree above is the whole of it.
+//
+// It used to have a second branch, speechActFragment — the committed
+// speech_act result being "fragment". That facet was dropped at schema v9
+// (docs/superpowers/specs/2026-08-24-facet-value-results.md: accuracy 0.695
+// against a 0.713 majority baseline, worth less than the constant `command`),
+// and the branch went with it.
+//
+// Losing it costs nothing measured. The gating design's own validation
+// (docs/superpowers/specs/2026-08-05-enrichment-gating-design.md) put the
+// pre-filter alone at precision 100% / recall 100% on-corpus and the fragment
+// branch at recall 56% — a strict subset of what the lexicon already caught, so
+// the combined gate's 0/24-dangerous result survives the removal intact.
+//
+// It is also compute-positive, which is the reason not to keep the pass purely
+// as a gate signal: speech_act cost one inference on EVERY turn to gate out the
+// small share of content-free turns that fall outside the lexicon (fragment was
+// 4 of 164 gold rows, and the lexicon already catches most of those). Paying 1
+// inference always to save 6 rarely is a loss.
+//
+// The residual risk direction is SAFE: a missed gate-off means a content-free
+// turn gets fully enriched — wasted compute, never a wrong published answer.

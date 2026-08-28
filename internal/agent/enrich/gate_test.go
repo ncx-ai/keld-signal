@@ -60,9 +60,6 @@ func TestAlwaysRunMarkers(t *testing.T) {
 	if !always(SensitivityExtractor{}) {
 		t.Error("sensitivity must be always-run")
 	}
-	if !always(SpeechActExtractor{}) {
-		t.Error("speech_act must be always-run")
-	}
 	for _, ex := range []Extractor{TaskTypeExtractor{}, DomainEntitiesExtractor{},
 		passExtractor{Pass{Name: "activity_type", Labels: Activities}}, funcGuessExtractor{}} {
 		if always(ex) {

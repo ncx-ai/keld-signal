@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -234,5 +235,208 @@ func TestHFFetcherPermanentFailsFast(t *testing.T) {
 	}
 	if hits != 1 {
 		t.Fatalf("404 must not retry, hits=%d", hits)
+	}
+}
+
+// recordingHFStub is hfStub plus a record of every resolve path requested: the
+// filter's contract is that a non-model file is never REQUESTED, not merely
+// deleted after the fact.
+func recordingHFStub(t *testing.T, repo, rev string, files map[string][]byte, requested *[]string, mu *sync.Mutex) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc(fmt.Sprintf("/api/models/%s/revision/%s", repo, rev),
+		func(w http.ResponseWriter, r *http.Request) {
+			type sibling struct {
+				Rfilename string `json:"rfilename"`
+			}
+			var siblings []sibling
+			for name := range files {
+				siblings = append(siblings, sibling{Rfilename: name})
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"siblings": siblings})
+		})
+	prefix := fmt.Sprintf("/%s/resolve/%s/", repo, rev)
+	mux.HandleFunc(prefix, func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, prefix)
+		mu.Lock()
+		*requested = append(*requested, name)
+		mu.Unlock()
+		body, ok := files[name]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write(body)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestHFFetcherSkipsDocsAndMediaButKeepsEverythingALoaderOpens pins the
+// manifest filter. A HF repo snapshot carries files no loader ever opens --
+// fastino/gliner2-large-v1 ships README.md (8 KB), .gitattributes (1.5 KB) and
+// image/GitHub.png (4.4 MB) -- so fetching "every sibling" downloads and
+// installs documentation and a screenshot alongside the weights.
+//
+// The filter is a DENYLIST by shape (docs, git metadata, images), never an
+// allowlist: gliner2's from_pretrained opens config.json,
+// encoder_config/config.json and model.safetensors (falling back to
+// pytorch_model.bin), and hands the whole dir to AutoTokenizer, which reads
+// tokenizer.json / tokenizer_config.json / special_tokens_map.json /
+// added_tokens.json / spm.model. An allowlist would silently break the day the
+// repo adds a file it did not anticipate -- and a missing tokenizer or config
+// is a runtime failure no unit test here would catch.
+func TestHFFetcherSkipsDocsAndMediaButKeepsEverythingALoaderOpens(t *testing.T) {
+	const repo = "fastino/gliner2-large-v1"
+	const rev = "b122b11eeaee4dabd32bed80412f3234c0d0e943"
+
+	// Exactly the real repo's file list.
+	keep := []string{
+		"config.json", "encoder_config/config.json", "model.safetensors",
+		"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
+		"added_tokens.json", "spm.model",
+	}
+	skip := []string{"README.md", ".gitattributes", "image/GitHub.png"}
+
+	files := map[string][]byte{}
+	for _, n := range append(append([]string{}, keep...), skip...) {
+		files[n] = []byte("body-of-" + n)
+	}
+
+	var mu sync.Mutex
+	var requested []string
+	srv := recordingHFStub(t, repo, rev, files, &requested, &mu)
+
+	f := NewHFFetcher(repo, rev)
+	f.baseURL = srv.URL
+
+	dest := t.TempDir()
+	if err := f.Fetch(context.Background(), dest); err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+
+	for _, n := range keep {
+		if _, err := os.Stat(filepath.Join(dest, n)); err != nil {
+			t.Fatalf("%s is opened by the loader and must still be fetched: %v", n, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	asked := map[string]bool{}
+	for _, n := range requested {
+		asked[n] = true
+	}
+	for _, n := range skip {
+		if asked[n] {
+			t.Fatalf("%s is not a model file and must never be requested", n)
+		}
+		if _, err := os.Stat(filepath.Join(dest, n)); err == nil {
+			t.Fatalf("%s must not be installed into the model dir", n)
+		}
+	}
+}
+
+// THE TEXT ENCODER'S SNAPSHOT — the second repo this fetcher installs
+// (provision.EncoderRepo, fetched by daemon/encoder_on_demand.go).
+//
+// It exists because nonModelFile's own warning applies here with a new file
+// list: the denylist judges SHAPE, so a file the loader opens and the denylist
+// happens to reject is a runtime load failure at from_pretrained time, which no
+// unit test upstream of this one catches. The list below is the real revision's
+// siblings manifest verbatim (twelve entries, verified against
+// huggingface.co/api/models/Qwen/Qwen3-Embedding-0.6B/revision/97b0c614...),
+// and the keep/skip split is the one the known-good local weights directory
+// shows.
+//
+// merges.txt is the load-bearing entry: this is a BPE tokenizer, so the obvious
+// "skip the docs" extension list — which would have included .txt — deletes a
+// tokenizer file and breaks AutoTokenizer.
+func TestHFFetcherInstallsEverythingTheTextEncoderLoaderOpens(t *testing.T) {
+	const repo = "Qwen/Qwen3-Embedding-0.6B"
+	const rev = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
+
+	keep := []string{
+		"config.json", "model.safetensors", "generation_config.json",
+		"tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt",
+		"modules.json", "config_sentence_transformers.json", "1_Pooling/config.json",
+	}
+	skip := []string{"README.md", ".gitattributes"}
+
+	files := map[string][]byte{}
+	for _, n := range append(append([]string{}, keep...), skip...) {
+		files[n] = []byte("body-of-" + n)
+	}
+
+	var mu sync.Mutex
+	var requested []string
+	srv := recordingHFStub(t, repo, rev, files, &requested, &mu)
+
+	f := NewHFFetcher(repo, rev)
+	f.baseURL = srv.URL
+
+	dest := t.TempDir()
+	if err := f.Fetch(context.Background(), dest); err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+	for _, n := range keep {
+		if _, err := os.Stat(filepath.Join(dest, n)); err != nil {
+			t.Fatalf("%s is part of the encoder snapshot and must be fetched: %v", n, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	asked := map[string]bool{}
+	for _, n := range requested {
+		asked[n] = true
+	}
+	for _, n := range skip {
+		if asked[n] {
+			t.Errorf("%s is repository furniture and must never be requested", n)
+		}
+	}
+}
+
+// TestHFFetcherRetryClassificationHoldsForBothRepos pins that the encoder's
+// fetch inherits internal/retry's classifier rather than a hand-rolled loop of
+// its own: a transient fault is retried, an unknown/permanent one is not
+// (internal/retry's stated default — never hammer). Table-driven over both
+// pinned repos because the encoder was added second and the property must be
+// true of it, not merely true of the fetcher in general.
+func TestHFFetcherRetryClassificationHoldsForBothRepos(t *testing.T) {
+	for _, repo := range []string{
+		"fastino/gliner2-large-v1",
+		"Qwen/Qwen3-Embedding-0.6B",
+	} {
+		for _, tc := range []struct {
+			name        string
+			status      int
+			wantMinHits int32
+			wantMaxHits int32
+		}{
+			{"transient 503 retries", http.StatusServiceUnavailable, 2, 1 << 20},
+			{"permanent 404 does not", http.StatusNotFound, 1, 1},
+			{"permanent 403 does not", http.StatusForbidden, 1, 1},
+		} {
+			t.Run(repo+"/"+tc.name, func(t *testing.T) {
+				var hits int32
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					atomic.AddInt32(&hits, 1)
+					w.WriteHeader(tc.status)
+				}))
+				t.Cleanup(srv.Close)
+
+				f := NewHFFetcher(repo, "rev1")
+				f.baseURL = srv.URL
+				f.Policy = fastPolicy()
+				if err := f.Fetch(context.Background(), t.TempDir()); err == nil {
+					t.Fatalf("want an error for status %d", tc.status)
+				}
+				if got := atomic.LoadInt32(&hits); got < tc.wantMinHits || got > tc.wantMaxHits {
+					t.Fatalf("hits = %d, want in [%d,%d]", got, tc.wantMinHits, tc.wantMaxHits)
+				}
+			})
+		}
 	}
 }

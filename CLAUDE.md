@@ -12,7 +12,27 @@ source of truth:
 - **This repo is the on-device half of Keld.** The enrichment agent
   (`keld-agent` + sidecar) is the core, not the CLI. Keep the privacy invariant
   front of mind: **raw prompt text is read locally and must never be transmitted**
-  — only masked labels + masked spans are published.
+  — only masked labels + masked spans are published. ⚠️ **One deliberate
+  exception since schema v18:** `named_terms` publishes proper nouns lifted from
+  message text (term + count, never a span or offset), and real person names have
+  been observed in it. See AGENTS.md for the decision, why no person-name filter
+  accompanies it, and the `/match` alternative that was not taken.
+  ⚠️ **A SECOND text-derived signal now exists, and this bullet used to end
+  "don't add a second text-derived signal by analogy."** That sentence is
+  retired because it was overtaken deliberately, not because it was wrong to
+  write: `KELD_TEXTEMBED` (off by default) encodes message text on device and
+  publishes a 256-d VECTOR. The line it does not cross is the same one:
+  no raw text, no span, no offset ever leaves the machine, the encoder runs
+  locally, and a fixed orthogonal projection is applied before publish — cosine
+  and inner products preserved exactly, so training is unaffected while
+  off-the-shelf inversion tooling needs a matrix it does not have. What it is
+  NOT is free of judgement: a sentence embedding is invertible in principle
+  (vec2text recovers up to 92% exact text at 32 tokens), which is why the
+  projection exists and why the toggle ships off. So the rule this bullet was
+  reaching for still stands in its stronger form — **raw prompt text never
+  leaves the machine** — and "is it derived from text?" is no longer the test.
+  The test is whether text, a span, or an offset crosses. A third such signal is
+  a deliberate decision with its own evidence, never an analogy to these two.
 - **Do work, then verify with real output.** Run `go test ./...` for Go and the
   standalone sidecar test scripts before claiming something passes; paste results.
 - **Go → host toolchain; sidecar → the venv.** Run sidecar code/tests with
@@ -23,12 +43,37 @@ source of truth:
   `sidecar/loadtest/README.md`.
 - **Don't fan out inference.** Single-flight in the sidecar is deliberate load
   protection; RAM is bounded by eviction, CPU by the governor + thread scaler.
-- **ML is mandatory — there is no deterministic backend.** Enrichment always
-  runs on GLiNER2; a reloading/evicted/not-yet-provisioned sidecar is waited
-  out (jobs queue/spool until it's ready), never degraded to a fallback model.
-  `ml_backend:"off"` means enrichment is **disabled entirely** (no enrichment
-  worker, `/enrich` accepts-and-discards) — not "use a lower-fidelity backend."
-  Bound per-job work with a cancellable deadline + re-spool cap (see AGENTS.md
+- **No health-gated fallback — but a third, model-free `ml_backend` mode is not
+  that.** `ml_backend:"auto"` (default) always runs on GLiNER2; a
+  reloading/evicted/not-yet-provisioned sidecar is waited out (jobs
+  queue/spool until it's ready), **never** silently swapped for a
+  lower-fidelity substitute of the same facets — that substitution is what's
+  forbidden. `ml_backend:"deterministic"` is a different thing: it runs a
+  different, smaller set of facets that need no model (credential detection,
+  and the workstream dimensions `/analyze` derives from coordinates). It still
+  **starts the analysis service** — the sidecar serves `/analyze` and friends
+  without GLiNER2, which it only loads on a first inference this mode never
+  issues — and, **when a sidecar is installed**, its readiness gate polls that
+  service's `/health`. That is a *readiness* gate, not the forbidden thing:
+  nothing is ever swapped for a lower-fidelity substitute; a present-but-unhealthy
+  service just keeps jobs queued/spooled. When **no sidecar binary is installed**
+  (or its port cannot be allocated) that gate is trivially true and the analyzer
+  nil, because no service can arrive this daemon lifetime and waiting would wedge
+  the mode forever; enrichment runs its other model-free facets and the
+  workstreams pass never registers — a dropped facet, not a substitute.
+  **A pass skipped for want of a model is not a failure:** deterministic runs
+  report `pipeline_status:"enriched"` and name what they dropped in
+  `facets_skipped`; `"partial"` still means something that should have worked
+  did not. **A pass that ran on half its evidence says so:** `sensitivity` has
+  no NER half any more (presidio + gitleaks, neither of them GLiNER2), so it
+  runs WHOLE in this mode; what degrades it is a missing/failed/truncated
+  **PII scan**, which leaves only the credential layer. It then declares
+  `Degraded` and is named in the sibling `facets_degraded` — never let a check
+  that did not run publish a confident negative. `ml_backend:"off"` means
+  enrichment is **disabled entirely** (no enrichment worker, `/enrich`
+  accepts-and-discards). Don't reintroduce a *substitute* for the model's
+  facets; a *different* facet set that needs no model is fine and already
+  exists. Bound per-job work with a cancellable deadline + re-spool cap (see AGENTS.md
   → Delivery reliability); don't reintroduce a deterministic fallback or a
   health-gated substitute.
 - **Use the superpowers workflow** (brainstorm → plan → TDD → systematic

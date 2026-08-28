@@ -17,7 +17,14 @@ type Span struct {
 // (when >0) is dropped. Overlapping spans are de-duplicated (first match wins).
 func Detect(text string) []Span {
 	lower := strings.ToLower(text)
-	var out []Span
+	// Structural detectors run FIRST, so that when a structural span and a
+	// pattern rule cover the same secret, the de-duplication below keeps the
+	// structural one. That is the right precedence: a parser knows exactly
+	// where the secret begins and ends, whereas generic-api-key infers it from
+	// a nearby keyword and can span the delimiter, the filler words or a slice
+	// of the surrounding URI. The span is what gets masked, so the more precise
+	// one must win.
+	out := structuralSpans(text)
 	for _, r := range Rules() {
 		// Path-only gitleaks rules (e.g. pkcs12-file) are filtered out by the
 		// loader in rules.go, so every rule here has real regex semantics.

@@ -1,6 +1,9 @@
 package daemon
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 // sidecarEnv builds the environment for the spawned GLiNER2 sidecar. It always
 // sets KELD_GLINER2_DIR (authoritative), then applies resource-tenancy caps as
@@ -17,10 +20,34 @@ import "strings"
 // MALLOC_ARENA_MAX in particular MUST be set by the parent: glibc reads it when
 // the child's allocator initializes, long before the Python process could set
 // it for itself.
-func sidecarEnv(base []string, modelDir string) []string {
-	env := make([]string, 0, len(base)+7)
+//
+// analyzeRoots is the allowlist of transcript directories the sidecar's
+// /analyze may read (watch.AnalyzeRoots). The sidecar has no auth — serve.py
+// binds 127.0.0.1 and that is all — and /analyze is its only endpoint that
+// opens an arbitrary path as this user and returns content derived from it, so
+// on a multi-user host an unconfined /analyze hands any local user the
+// workspaces, branches and named terms out of anyone else's transcripts.
+// Passed set-if-absent like the caps, but ALWAYS assigned even when empty: the
+// sidecar reads an absent variable as "use your built-in defaults" and an empty
+// one as "deny everything", and a daemon that resolved no roots means the
+// latter.
+// encoderDir is the text encoder's weights directory, or "" to leave
+// KELD_TEXTEMBED_DIR unset. Unlike KELD_GLINER2_DIR it is NOT always assigned:
+// see encoderDirForSpawn for why an eager assignment would be a claim rather
+// than a configuration. Recomputed per spawn by the caller, so a respawn after
+// the fetch landed adopts the weights.
+func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []string) []string {
+	env := make([]string, 0, len(base)+9)
 	env = append(env, base...)
 	env = append(env, "KELD_GLINER2_DIR="+modelDir)
+	if encoderDir != "" {
+		env = append(env, "KELD_TEXTEMBED_DIR="+encoderDir)
+	}
+
+	if !hasEnvKey(base, "KELD_ANALYZE_ROOTS") {
+		env = append(env, "KELD_ANALYZE_ROOTS="+
+			strings.Join(analyzeRoots, string(os.PathListSeparator)))
+	}
 
 	// Set-if-absent: an operator-provided value in `base` wins.
 	for _, kv := range [...][2]string{

@@ -12,22 +12,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 )
 
-// Absolute gold-set thresholds for the sidecar backend — regression FLOORS, not
-// targets. Calibrated against a live gliner2-large-v1 run on 2026-07-14 (73-row
-// gold set, no-context RunModel), which measured: sensitive_recall 0.565,
-// sensitivity_acc 0.811, task_type_acc 0.580, domain_acc 0.449. Floors sit ~0.05
-// below those so genuine regressions fail the gate while run-to-run noise doesn't.
-// Raise them if the sidecar/model improves; don't lower them without a fresh run.
+// Absolute gold-set thresholds for the CLASSIFICATION facets — regression
+// FLOORS, not targets. Calibrated against a live gliner2-large-v1 run on
+// 2026-07-14 (73-row gold set, no-context RunModel), which measured:
+// task_type_acc 0.580, domain_acc 0.449. Floors sit ~0.05 below those so genuine
+// regressions fail the gate while run-to-run noise doesn't. Raise them if the
+// sidecar/model improves; don't lower them without a fresh run.
 // (These no-context scores understate production, which feeds Meta.Preamble; the
 // facet augmentation check below exercises the context path.)
+//
+// The two SENSITIVITY floors moved to floors_test.go (untagged) and were
+// re-derived on 2026-08-23: that facet is detection-only and needs no GLiNER2,
+// so its gate runs under `-tags pii` without this one. Both runs share the
+// constants.
 const (
-	minSensitiveRecall = 0.50
-	minSensitivityAcc  = 0.75
-	minTaskTypeAcc     = 0.50
-	minDomainAcc       = 0.40
+	minTaskTypeAcc = 0.50
+	minDomainAcc   = 0.40
 )
 
 func TestSidecarMeetsGoldThresholds(t *testing.T) {
@@ -45,7 +49,11 @@ func TestSidecarMeetsGoldThresholds(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := []string{"task_type", "domain", "sensitivity"}
-	side := Score(gold, RunModel(sc, gold), fields)
+	// sensitivity draws on the sidecar's presidio /pii route, not on GLiNER2;
+	// without the scanner wired the recall gate below would score the
+	// credential layer alone and fail for the wrong reason.
+	pii := enrich.WithPIIScanner(sc.DetectPII)
+	side := Score(gold, RunModel(sc, gold, pii), fields)
 
 	t.Logf("gold rows: %d", len(gold))
 	t.Logf("sidecar: %+v", side)
@@ -74,8 +82,8 @@ func TestSidecarMeetsGoldThresholds(t *testing.T) {
 	// eval previously never took — GoldRow.Meta was built but never wired
 	// into a model run.
 	facets := []string{"function_guess", "subcategory"}
-	fBase := Score(gold, RunModel(sc, gold), facets)
-	fAug := Score(gold, RunModelWithContext(sc, gold), facets)
+	fBase := Score(gold, RunModel(sc, gold, pii), facets)
+	fAug := Score(gold, RunModelWithContext(sc, gold, pii), facets)
 	t.Logf("facets baseline:  %+v", fBase)
 	t.Logf("facets augmented: %+v", fAug)
 	for _, f := range facets {

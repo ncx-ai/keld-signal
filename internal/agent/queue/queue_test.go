@@ -9,21 +9,23 @@ func job(id string) Job { return Job{Source: "claude_code", Scheme: "prompt_id",
 
 func TestOfferDedupBySameKey(t *testing.T) {
 	q := New(10)
-	if !q.Offer(job("A")) {
-		t.Fatal("first offer should accept")
+	if got := q.Offer(job("A")); got != Accepted {
+		t.Fatalf("first offer = %v, want Accepted", got)
 	}
-	if q.Offer(job("A")) {
-		t.Fatal("duplicate key should be shed")
+	// Duplicate, NOT Full: the caller must be able to tell "already taken on"
+	// from "retry later", or a dedup reads as backpressure.
+	if got := q.Offer(job("A")); got != Duplicate {
+		t.Fatalf("duplicate key = %v, want Duplicate", got)
 	}
 }
 
 func TestOfferShedsWhenFull(t *testing.T) {
 	q := New(1)
-	if !q.Offer(job("A")) {
-		t.Fatal("first should accept")
+	if got := q.Offer(job("A")); got != Accepted {
+		t.Fatalf("first = %v, want Accepted", got)
 	}
-	if q.Offer(job("B")) {
-		t.Fatal("over-capacity offer should be shed")
+	if got := q.Offer(job("B")); got != Full {
+		t.Fatalf("over-capacity offer = %v, want Full", got)
 	}
 	if q.Dropped() != 1 {
 		t.Fatalf("Dropped = %d, want 1", q.Dropped())
@@ -70,11 +72,11 @@ func TestNextBlockedThenClose(t *testing.T) {
 func TestCompletedKeyIsDeduped(t *testing.T) {
 	q := New(4)
 	j := Job{Source: "claude_code", Scheme: "prompt_id", ID: "X"}
-	if !q.Offer(j) {
-		t.Fatal("first offer should enqueue")
+	if got := q.Offer(j); got != Accepted {
+		t.Fatalf("first offer = %v, want Accepted", got)
 	}
-	if q.Offer(j) {
-		t.Fatal("duplicate while in-flight should be dropped")
+	if got := q.Offer(j); got != Duplicate {
+		t.Fatalf("duplicate while in-flight = %v, want Duplicate", got)
 	}
 	if _, ok := q.Next(); !ok {
 		t.Fatal("dequeue")
@@ -82,16 +84,16 @@ func TestCompletedKeyIsDeduped(t *testing.T) {
 	// Dequeued but NOT completed: a re-offer (e.g. re-spool retry, or a hook that
 	// failed to resolve text) MUST be allowed — completion, not dequeue, is what
 	// suppresses duplicates.
-	if !q.Offer(j) {
-		t.Fatal("re-offer after dequeue but before completion must be allowed (retry path)")
+	if got := q.Offer(j); got != Accepted {
+		t.Fatalf("re-offer after dequeue but before completion = %v, want Accepted (retry path)", got)
 	}
 	if _, ok := q.Next(); !ok {
 		t.Fatal("dequeue 2")
 	}
 	// Mark completed: now duplicates (the hook↔watcher overlap) are dropped.
 	q.Complete(j)
-	if q.Offer(j) {
-		t.Fatal("offer after completion should be dropped by recent buffer")
+	if got := q.Offer(j); got != Duplicate {
+		t.Fatalf("offer after completion = %v, want Duplicate (recent buffer)", got)
 	}
 }
 
@@ -102,11 +104,35 @@ func TestRecentEvictionReallowsOffer(t *testing.T) {
 		q.Complete(Job{Source: "s", Scheme: "p", ID: id})
 	}
 	// cap=2 now holds {B,C}; A was evicted, so re-offering A is allowed again.
-	if !q.Offer(Job{Source: "s", Scheme: "p", ID: "A"}) {
-		t.Fatal("A should be re-allowed after eviction from the recent buffer")
+	if got := q.Offer(Job{Source: "s", Scheme: "p", ID: "A"}); got != Accepted {
+		t.Fatalf("A after eviction = %v, want Accepted", got)
 	}
 	// C is still in the recent buffer, so it stays deduped.
-	if q.Offer(Job{Source: "s", Scheme: "p", ID: "C"}) {
-		t.Fatal("C should still be deduped (not yet evicted)")
+	if got := q.Offer(Job{Source: "s", Scheme: "p", ID: "C"}); got != Duplicate {
+		t.Fatalf("C = %v, want Duplicate (not yet evicted)", got)
+	}
+}
+
+// TakenOn is the predicate both callers key on, so pin it directly: a caller
+// holding a durable copy (a spool row) may drop it for Accepted and Duplicate,
+// and must keep it for Full and Closed.
+func TestTakenOnSeparatesProgressFromBackpressure(t *testing.T) {
+	for _, c := range []struct {
+		o    Outcome
+		want bool
+	}{{Accepted, true}, {Duplicate, true}, {Full, false}, {Closed, false}} {
+		if got := c.o.TakenOn(); got != c.want {
+			t.Errorf("%v.TakenOn() = %v, want %v", c.o, got, c.want)
+		}
+	}
+}
+
+// A closed queue reports Closed, not Full: nothing will ever drain it, so a
+// caller retrying against backpressure would spin forever.
+func TestClosedQueueReportsClosed(t *testing.T) {
+	q := New(4)
+	q.Close()
+	if got := q.Offer(job("A")); got != Closed {
+		t.Fatalf("offer to a closed queue = %v, want Closed", got)
 	}
 }

@@ -42,8 +42,21 @@ type GoldRow struct {
 	Sensitivity   string   `json:"sensitivity"`
 	Activity      string   `json:"activity_type"`
 	FunctionGuess string   `json:"function_guess"`
-	SpeechAct     string   `json:"speech_act"`
-	Subcategory   string   `json:"subcategory"`
+	// SpeechAct is RETAINED gold data for a facet that no longer ships. The
+	// pass was dropped at schema v9 for scoring below a constant, but the
+	// labels cost nothing to keep and they are the only evidence a
+	// re-introduction could be judged against — the study named the label
+	// WORDING as the suspect, and a re-bakeoff needs a corpus to bake off
+	// against. Nothing predicts the facet, so nothing scores it: there is no
+	// `speech_act` case in fieldOf and no Pred field, which is what stops the
+	// harness reporting a number for a facet with no producer.
+	SpeechAct   string `json:"speech_act"`
+	Subcategory string `json:"subcategory"`
+	// Personal is the work-vs-personal facet's gold label. NO gold row carries
+	// one today (the field exists so the facet is scoreable the day labels are
+	// written); until then Score reports the facet with considered==0 and NO
+	// accuracy at all, so it reads as unscoreable rather than perfect.
+	Personal string `json:"personal"`
 
 	// Agentic-corpus fields (agentic.jsonl): shape ∈ {clean, raw}; the rest are
 	// the agentic Meta augmentation.
@@ -89,8 +102,8 @@ type Pred struct {
 	Sensitivity   string
 	Activity      string
 	FunctionGuess string
-	SpeechAct     string
 	Subcategory   string
+	Personal      string
 	Conf          map[string]float64 // facet name -> top-label confidence (for calibration)
 }
 
@@ -103,8 +116,8 @@ func predConf(p enrich.Profile) map[string]float64 {
 		"sensitivity":    p.Sensitivity.Confidence,
 		"activity_type":  p.Activity.Confidence,
 		"function_guess": p.FunctionGuess.Confidence,
-		"speech_act":     p.SpeechAct.Confidence,
 		"subcategory":    p.Subcategory.Confidence,
+		"personal":       p.Personal.Confidence,
 	}
 }
 
@@ -128,14 +141,36 @@ func parseRows(s string) ([]GoldRow, error) {
 }
 
 // LoadGold parses the embedded gold set.
-func LoadGold() ([]GoldRow, error) { return parseRows(goldJSONL) }
+//
+// Like LoadCreds, it expands any {{SHAPE}} placeholder into a freshly generated
+// synthetic credential (credsgen.go). Four of the gold set's sensitive rows are
+// provider tokens, and a committed provider literal is a blocked push whichever
+// fixture it sits in -- one of these four was surviving only behind a GitHub
+// push-protection allowlist entry.
+func LoadGold() ([]GoldRow, error) {
+	rows, err := parseRows(goldJSONL)
+	if err != nil {
+		return nil, err
+	}
+	return expandCredRows(rows, GoldSeed)
+}
 
 // LoadConfound parses the embedded confound eval set (classes c1/c2/c3).
 func LoadConfound() ([]GoldRow, error) { return parseRows(confoundJSONL) }
 
 // LoadCreds parses the embedded credential-detection corpus (class "cred" =
 // contains a real credential; class "decoy" = high-entropy/placeholder non-secret).
-func LoadCreds() ([]GoldRow, error) { return parseRows(credsJSONL) }
+//
+// The cred rows carry {{SHAPE}} placeholders rather than credential literals;
+// they are expanded here into freshly generated, realistically shaped synthetic
+// values from a fixed seed. See credsgen.go for why the shapes are not committed.
+func LoadCreds() ([]GoldRow, error) {
+	rows, err := parseRows(credsJSONL)
+	if err != nil {
+		return nil, err
+	}
+	return expandCredRows(rows, CredsSeed)
+}
 
 // LoadAgentic parses the embedded agentic-framework corpus (rows carry a Shape
 // ∈ {clean, raw} and agentic Meta fields).
@@ -183,10 +218,10 @@ func fieldOf(x any, f string) string {
 			return v.Activity
 		case "function_guess":
 			return v.FunctionGuess
-		case "speech_act":
-			return v.SpeechAct
 		case "subcategory":
 			return v.Subcategory
+		case "personal":
+			return v.Personal
 		}
 	case Pred:
 		switch f {
@@ -200,24 +235,52 @@ func fieldOf(x any, f string) string {
 			return v.Activity
 		case "function_guess":
 			return v.FunctionGuess
-		case "speech_act":
-			return v.SpeechAct
 		case "subcategory":
 			return v.Subcategory
+		case "personal":
+			return v.Personal
 		}
 	}
 	return ""
 }
 
 // Score computes per-field accuracy and, for "sensitivity", sensitive_recall
-// (recall over rows whose gold sensitivity != "none"; 1.0 when there are none).
+// (recall over rows whose gold sensitivity != "none").
 //
 // A blank gold value for a field is treated as "no label" and excluded from
 // that field's accuracy denominator — this lets optional facets (e.g.
 // activity_type, subcategory) coexist with older gold rows that predate them,
-// without those rows counting as misses. If a field has no labeled rows at
-// all, its accuracy is reported as 1.0 (vacuous), mirroring the
-// sensitive_recall convention below.
+// without those rows counting as misses.
+//
+// EVERY METRIC RIDES WITH ITS DENOMINATOR, AND A METRIC WITH AN EMPTY
+// DENOMINATOR IS OMITTED, NOT INVENTED. Each entry always carries
+// "considered" (accuracy's denominator) and, for sensitivity,
+// "sensitive_considered" (recall's); "accuracy" / "sensitive_recall" are
+// present only when the matching denominator is non-zero.
+//
+// Score used to report accuracy 1.0 for a field with NO labelled rows, and
+// sensitive_recall 1.0 for a gold set with no sensitive rows — a vacuous truth
+// published as a measurement. Every caller in this repo reads these maps
+// directly and compares against a floor, so a facet whose labels were missing
+// or misnamed passed every floor forever and a floor check would sleep through
+// it. Found for real: gold.jsonl carries no `personal` label at all (0 of 165
+// rows), and scoring that facet returned a silent perfect.
+//
+// Omitting the key is what makes the failure direction SAFE: a Go map read of
+// an absent key yields 0.0, which fails any lower-bound floor, so an
+// unscoreable facet now reads as a failure rather than a pass. A caller that
+// wants to tell "unscoreable" from "scored badly" reads the denominator — that
+// is what it is for.
+//
+// The sibling helpers in this file (SecretRecall, SecretFPR, LeakageRate,
+// FalseEngRate, S1DownstreamBaseline) return a bare float64 and answer 0 on an
+// empty denominator. For the recall-shaped ones 0 fails a lower-bound gate, so
+// they are already fail-safe; for the RATE-shaped ones (SecretFPR,
+// LeakageRate, FalseEngRate — all checked as upper bounds) 0 is the same
+// vacuous pass in a different costume. They are left alone here because their
+// single-float signature has no room for a denominator; the fixtures they read
+// are embedded and non-empty, and TestCredDetectCorpusRecall pins the decoy
+// count. Changing their shape is its own decision.
 func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]float64 {
 	metrics := map[string]map[string]float64{}
 	n := len(gold)
@@ -236,11 +299,10 @@ func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]f
 				correct++
 			}
 		}
-		acc := 1.0
+		entry := map[string]float64{"considered": float64(considered)}
 		if considered > 0 {
-			acc = float64(correct) / float64(considered)
+			entry["accuracy"] = float64(correct) / float64(considered)
 		}
-		entry := map[string]float64{"accuracy": acc}
 		if f == "sensitivity" {
 			sens, hit := 0, 0
 			for i := 0; i < n; i++ {
@@ -253,10 +315,9 @@ func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]f
 					}
 				}
 			}
+			entry["sensitive_considered"] = float64(sens)
 			if sens > 0 {
 				entry["sensitive_recall"] = float64(hit) / float64(sens)
-			} else {
-				entry["sensitive_recall"] = 1.0
 			}
 		}
 		metrics[f] = entry
@@ -266,18 +327,22 @@ func Score(gold []GoldRow, pred []Pred, fields []string) map[string]map[string]f
 
 // RunModel scores a backend by running the enrichment pipeline over each gold
 // row and extracting the classified fields.
-func RunModel(m enrich.Model, gold []GoldRow) []Pred {
+// opts are passed through to enrich.Run. The sensitivity facet takes NO
+// evidence from the Model — it reads the gitleaks credential layer and the
+// PII scan (enrich.WithPIIScanner) — so a caller that scores sensitivity and
+// wires no scanner is measuring credentials alone, not the facet.
+func RunModel(m enrich.Model, gold []GoldRow, opts ...enrich.Option) []Pred {
 	pred := make([]Pred, 0, len(gold))
 	for _, g := range gold {
-		p := enrich.Run(g.Text, "eval", enrich.Meta{}, m)
+		p := enrich.Run(g.Text, "eval", enrich.Meta{}, m, opts...)
 		pred = append(pred, Pred{
 			TaskType:      p.TaskType.Value,
 			Domain:        p.Domain.Value,
 			Sensitivity:   p.Sensitivity.Value,
 			Activity:      p.Activity.Value,
 			FunctionGuess: p.FunctionGuess.Value,
-			SpeechAct:     p.SpeechAct.Value,
 			Subcategory:   p.Subcategory.Value,
+			Personal:      p.Personal.Value,
 			Conf:          predConf(p),
 		})
 	}
@@ -287,15 +352,16 @@ func RunModel(m enrich.Model, gold []GoldRow) []Pred {
 // RunModelWithContext is RunModel but feeds each gold row's session context
 // (recent prompts, branch, project) into the classifier via GoldRow.Meta, so
 // augmented classification can be scored against the no-context baseline.
-func RunModelWithContext(m enrich.Model, gold []GoldRow) []Pred {
+func RunModelWithContext(m enrich.Model, gold []GoldRow, opts ...enrich.Option) []Pred {
 	pred := make([]Pred, 0, len(gold))
 	for _, g := range gold {
 		src := g.srcOr()
-		p := enrich.Run(g.Text, src, g.Meta(src), m)
+		p := enrich.Run(g.Text, src, g.Meta(src), m, opts...)
 		pred = append(pred, Pred{
 			TaskType: p.TaskType.Value, Domain: p.Domain.Value, Sensitivity: p.Sensitivity.Value,
-			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, SpeechAct: p.SpeechAct.Value, Subcategory: p.Subcategory.Value,
-			Conf: predConf(p),
+			Activity: p.Activity.Value, FunctionGuess: p.FunctionGuess.Value, Subcategory: p.Subcategory.Value,
+			Personal: p.Personal.Value,
+			Conf:     predConf(p),
 		})
 	}
 	return pred
@@ -430,30 +496,6 @@ func SecretFPR(gold []GoldRow, pred []Pred) float64 {
 		return 0
 	}
 	return float64(wrong) / float64(tot)
-}
-
-// SpeechActPerMood returns, per gold speech_act id, [correct, total] over rows
-// carrying a gold speech_act. Surfaces which moods (typically fragment/statement)
-// the facet handles worst.
-func SpeechActPerMood(gold []GoldRow, pred []Pred) map[string][2]int {
-	n := len(gold)
-	if len(pred) < n {
-		n = len(pred)
-	}
-	out := map[string][2]int{}
-	for i := 0; i < n; i++ {
-		g := gold[i].SpeechAct
-		if g == "" {
-			continue
-		}
-		c := out[g]
-		c[1]++
-		if pred[i].SpeechAct == g {
-			c[0]++
-		}
-		out[g] = c
-	}
-	return out
 }
 
 // Bin is one confidence band's reliability stats.

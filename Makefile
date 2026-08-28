@@ -6,6 +6,14 @@ DEST ?= $(HOME)/.local/bin
 SIDECAR_VENV ?= $(HOME)/.keld/sidecar-venv
 # sidecar needs Python 3.12 (host default 3.14 has no torch/gliner2 wheels)
 PYTHON ?= python3.12
+# scripts/refseries.py's study venv (pandas/pyarrow/bashlex/wordfreq/pyyaml) — separate from
+# PYTHON above, which is the analysis sidecar's own 3.12 venv with none of those deps. See
+# scripts/check-fixture-identity.sh's own header for the full derived dependency list.
+# NOTE: pass an already-expanded path (STUDY_PYTHON=$(HOME)/.keld/study-venv/bin/python), not a
+# literal `~/...` — Make does not shell-expand `~` in its own VAR=value arguments the way a plain
+# shell `VAR=~/x cmd` does, so a literal tilde here is handed to the check as-is and fails to
+# resolve.
+STUDY_PYTHON ?= python3
 SINK_PORT ?= 8710
 
 .DEFAULT_GOAL := help
@@ -27,7 +35,7 @@ help:
 	@echo "  make scaleway-down      delete it (YES=1 skips confirm; still bills the 24h minimum)"
 	@echo "  make scaleway-status    show the current Mac + connection details"
 	@echo ""
-	@echo "Vars: DEST=$(DEST)  SIDECAR_VENV=$(SIDECAR_VENV)  PYTHON=$(PYTHON)  SINK_PORT=$(SINK_PORT)"
+	@echo "Vars: DEST=$(DEST)  SIDECAR_VENV=$(SIDECAR_VENV)  PYTHON=$(PYTHON)  STUDY_PYTHON=$(STUDY_PYTHON)  SINK_PORT=$(SINK_PORT)"
 	@echo "      VERSION=<X.Y.Z> (release, optional)  YES=1 (release/scaleway-down, skip confirm)"
 	@echo "      SCALEWAY_ZONE=$(SCALEWAY_ZONE)  SCALEWAY_UP_TIMEOUT=$(SCALEWAY_UP_TIMEOUT) (seconds)"
 
@@ -62,8 +70,11 @@ install-service:
 .PHONY: install-linux
 install-linux: build-binaries sidecar install-service
 	@echo ""
-	@echo "keld-agent installed WITH sidecar (deterministic works instantly; the first ML"
-	@echo "enrichment provisions the model ~1.9GB into ~/.keld/models, then the sidecar takes over)."
+	@echo "keld-agent installed WITH the analysis sidecar."
+	@echo "NOTE: 'keld-agent install' configured this machine for v2:"
+	@echo "  ml_backend=deterministic, blocks=true  (~/.keld/agent-config.json)"
+	@echo "  No model is downloaded. For the GLiNER2 pipeline instead:"
+	@echo "    keld-agent install --backend auto"
 	@echo "If not yet configured, run:  keld login && keld signal setup"
 	@echo "Visualize enrichments:      make enrichments-sink   (see README / the notes printed by this session)"
 
@@ -79,14 +90,21 @@ signal-dev-artifacts:
 	tar -C .dev-dl/_pkg -czf .dev-dl/local/keld_linux_amd64.tar.gz keld keld-agent
 	cp scripts/install.sh .dev-dl/install.sh
 	@rm -rf .dev-dl/_pkg
-	@# Frozen ML sidecar (always ML — never deterministic). Reuses dist/keld-agent-sidecar
-	@# if already frozen; otherwise builds it once (heavy: PyInstaller + torch/GLiNER2).
+	@# The frozen analysis sidecar. It is ONE binary either way — the same tarball serves
+	@# ml_backend deterministic and auto; only whether GLiNER2 is ever loaded differs, and
+	@# a v2 install never loads it. Reuses dist/keld-agent-sidecar if already frozen;
+	@# otherwise builds it once (heavy: PyInstaller + torch/GLiNER2).
 	@if [ ! -x dist/keld-agent-sidecar/keld-agent-sidecar ]; then \
 	  echo "freezing sidecar (one-time; heavy)…"; \
 	  KELD_OBFUSCATE=0 PYTHON="$(HOME)/.keld/sidecar-venv/bin/python" bash sidecar/build-freeze.sh; \
 	fi
 	tar -C dist -czf .dev-dl/local/keld-agent-sidecar_linux_amd64.tar.gz keld-agent-sidecar
-	@echo "built .dev-dl (keld + keld-agent + ML sidecar + install.sh)"
+	@# install.sh verifies every archive against a published hash — mirror the real
+	@# release layout (checksums.txt for the CLI archive, a .sha256 companion for the
+	@# separately-built sidecar) so the dev path is verified too, not just warned about.
+	@cd .dev-dl/local && sha256sum keld_linux_amd64.tar.gz > checksums.txt \
+	  && sha256sum keld-agent-sidecar_linux_amd64.tar.gz > keld-agent-sidecar_linux_amd64.tar.gz.sha256
+	@echo "built .dev-dl (keld + keld-agent + analysis sidecar + install.sh)"
 	@echo "test the install workflow with:  curl -fsSL http://localhost:3000/signal/install.sh | sh"
 
 .PHONY: uninstall-linux
@@ -97,6 +115,12 @@ uninstall-linux:
 .PHONY: enrichments-sink
 enrichments-sink:
 	python3 scripts/enrichments-sink.py $(SINK_PORT)
+
+.PHONY: test-install
+# Hermetic install.sh tests: a fake release on disk, served over curl's file://
+# protocol. No network, no service install, no writes outside a temp dir.
+test-install:
+	sh scripts/test-install.sh
 
 .PHONY: send-test-prompt
 send-test-prompt:
@@ -163,6 +187,18 @@ freeze-check: ## run the PLAIN freeze + worker-spawn acceptance gate locally (Li
 .PHONY: obfuscate-check
 obfuscate-check: ## run the OBFUSCATED freeze + worker-spawn acceptance gate locally (Linux)
 	KELD_OBFUSCATE=1 bash scripts/freeze-check-local.sh
+
+.PHONY: obfuscation-coverage-check
+obfuscation-coverage-check: ## fast: assert every sidecar/app/**/*.py is actually obfuscated (no torch/model/freeze needed; CI-safe)
+	bash scripts/check-obfuscation-coverage.sh
+
+.PHONY: fixture-identity-check
+fixture-identity-check: ## fast: extract the committed synthetic fixture corpus and verify it matches its baseline fingerprint (CI-safe substitute for the frozen-corpus identity gate; see sidecar/app/analysis/testdata/build_fixture_corpus.py)
+	PYTHON="$(STUDY_PYTHON)" bash scripts/check-fixture-identity.sh
+
+.PHONY: dependency-staleness-check
+dependency-staleness-check: ## fast: warn (fail past a 1yr bar) when a sidecar/requirements.txt exact pin has sat unrevisited (no torch, one PyPI GET per pin, no pip install)
+	python3 scripts/check_dependency_staleness.py sidecar/requirements.txt
 
 .PHONY: crosscheck
 crosscheck:  ## verify all release targets build pure-Go (CGO_ENABLED=0)

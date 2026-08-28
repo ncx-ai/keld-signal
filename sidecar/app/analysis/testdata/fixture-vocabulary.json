@@ -1,0 +1,16 @@
+{
+  "_comment": "Synthetic fixture for POST /vocabulary, exercising app.analysis.match end to end without Atlas. EVERY name below is invented for this fixture — Wrenfield Holdings, Talus Freight, Loomwork, Cobalt Loop and Nightjar Analytics name no real company, product or supplier; any resemblance is coincidental. Deliberately distinct from the names already used in app/analysis/testdata/build_fixture_corpus.py (aurora-ledger, beacon-api, SettleFast.io, RiskGuard, northfield-labs, anders, priya) so this fixture cannot be misread as describing the same fictional org. Wire shape matches compile_vocabulary's `raw` parameter exactly: {key: [{id, match?, regex?}, ...]}.",
+  "vocabulary": {
+    "customer": [
+      {"id": "wrenfield", "match": ["Wrenfield Holdings", "Wrenfield"]},
+      {"id": "talus_freight", "match": ["Talus Freight"]}
+    ],
+    "product": [
+      {"id": "loomwork", "match": ["Loomwork"]},
+      {"id": "cobalt_loop", "match": ["Cobalt Loop"]}
+    ],
+    "supplier": [
+      {"id": "nightjar", "regex": "Nightjar Analytics|Nightjar Inc\\.?"}
+    ]
+  }
+}

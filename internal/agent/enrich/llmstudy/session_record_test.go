@@ -1,0 +1,483 @@
+package llmstudy
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"unicode"
+)
+
+func TestSessionRecordAccumulatesAcrossWindows(t *testing.T) {
+	// "Meridian" and "Larkin" are short capitalised names, so they reach Subjects by the
+	// weakProperNoun route — which now also requires corpus rarity. The fixture table supplies
+	// it; in cold start neither is admitted, which is the conservative direction by design.
+	installTestDocFreq(t)
+	var r SessionRecord
+	w1 := Window{Turns: []Turn{{RoleUser, "reconcile the Meridian ledger"}, {RoleTool, "Read bank-mar.csv"}}}
+	w2 := Window{Turns: []Turn{{RoleUser, "now post the Larkin accrual"}, {RoleTool, "Write journals/mar-adj-04.csv"}}}
+	r = r.Observe(w1, Extract(w1)).WithProject("meridian")
+	r = r.Observe(w2, Extract(w2)).WithProject("meridian")
+
+	if r.Turns != 4 {
+		t.Errorf("turns must span the session, got %d", r.Turns)
+	}
+	if len(r.Projects) != 1 || r.Projects[0] != "meridian" {
+		t.Errorf("projects must dedupe, got %v", r.Projects)
+	}
+	subs := strings.Join(r.Subjects, " ")
+	if !strings.Contains(subs, "Meridian") || !strings.Contains(subs, "Larkin") {
+		t.Errorf("subjects from BOTH windows must accumulate, got %v", r.Subjects)
+	}
+}
+
+// A term may only enter by appearing verbatim in the transcript. Plausibility is how a
+// fabricated specific would get in.
+func TestSessionRecordSubjectsAreVerbatimOnly(t *testing.T) {
+	w := Window{Turns: []Turn{{RoleUser, "reconcile the Meridian ledger"}}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	for _, s := range r.Subjects {
+		if !strings.Contains("reconcile the Meridian ledger", s) {
+			t.Errorf("subject %q is not a substring of the source", s)
+		}
+	}
+}
+
+// Bounded, or "minimal" stops being true.
+func TestSessionRecordIsBounded(t *testing.T) {
+	r := SessionRecord{}
+	for i := 0; i < 40; i++ {
+		w := Window{Turns: []Turn{{RoleUser, "touching ComponentNumber" + string(rune('A'+i%26)) + " today"}}}
+		r = r.Observe(w, Extract(w)).WithProject("proj" + string(rune('a'+i%9)))
+	}
+	if len(r.Subjects) > MaxRecordSubjects {
+		t.Errorf("subjects unbounded: %d", len(r.Subjects))
+	}
+	if len(r.Projects) > MaxRecordProjects {
+		t.Errorf("projects unbounded: %d", len(r.Projects))
+	}
+}
+
+// blobToken is a base64url/JWT-shaped run of the kind a real transcript dumps into a turn
+// (a pasted token, a data-URI fragment, a long trace id). subjectTokens preserves
+// [A-Za-z0-9._/-] deliberately — that is what keeps a path in one piece — so the whole
+// thing arrives as ONE candidate subject term.
+func blobToken() string {
+	return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + strings.Repeat("aB3dE7fG9hJ2kL4mN6pQ8rS0tU", 38)
+}
+
+// TestSessionRecordSubjectsBoundEachTermsLength pins maxSubjectTermLen on the record side.
+// MaxRecordSubjects caps how many terms Block() joins; before this cap nothing capped how
+// long one of them could be. Measured through this exact turn before the fix: a single
+// Subjects entry of 1,025 runes and a Block() of 1,102 — one dimension able to exceed the
+// whole prompt budget by itself, which the backstop then has to fail the prompt over.
+//
+// The second half is the over-correction guard: a genuine path-shaped subject must still be
+// admitted, or the cap has bought safety by deleting exactly the specifics the record exists
+// to hold. The 54-rune path below is a real one, but ⚠️ it is NOT "the longest source path in
+// this package" as this docstring used to claim — the longest tracked .go path is 57 runes
+// (internal/agent/enrich/llmstudy/digest_consistency_test.go) and the longest tracked path of
+// any kind is 83 (a docs/superpowers/specs design doc). The 83-rune one IS silently dropped
+// by maxSubjectTermLen, which is precisely the harm this guard exists to rule out — so the
+// guard is real but narrower than it read. See maxSubjectTermLen's doc for why the cap cannot
+// simply be raised (measured: at 96 the create-path worst case breaches the window floor).
+func TestSessionRecordSubjectsBoundEachTermsLength(t *testing.T) {
+	const realPath = "internal/agent/enrich/llmstudy/capability_eval_test.go"
+	w := Window{Turns: []Turn{
+		{RoleUser, "please decode the token " + blobToken() + " and check " + realPath + " for details"},
+	}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	for _, s := range r.Subjects {
+		if n := len([]rune(s)); n > maxSubjectTermLen {
+			t.Errorf("subject term is %d runes, over the %d-rune cap: %.40q...", n, maxSubjectTermLen, s)
+		}
+	}
+	if !strings.Contains(strings.Join(r.Subjects, " "), realPath) {
+		t.Errorf("a genuine %d-rune path-shaped subject must still be admitted, got %v",
+			len([]rune(realPath)), r.Subjects)
+	}
+}
+
+// Observe's frequency map keyed on the UNTRIMMED token, so the same subject appearing once
+// before a period and once mid-sentence became two entries. Third site of a bug already fixed
+// in distinctiveTerms and RecentSubjects, and the one site the design calls verbatim-verified
+// and tells the model to trust — Block() rendered "DigestSchema., DigestSchema" under an
+// "authoritative" heading, and the duplicate also consumed one of only MaxRecordSubjects
+// slots. Reverting r.freq[trimTermPunct(tok)]++ to r.freq[tok]++ makes this fail.
+func TestSessionRecordSubjectsAreNotDuplicatedByPunctuation(t *testing.T) {
+	w := Window{Turns: []Turn{
+		{RoleUser, "The DigestSchema. And again DigestSchema is the DigestSchema."},
+	}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	seen := map[string]bool{}
+	for _, s := range r.Subjects {
+		if strings.HasSuffix(s, ".") {
+			t.Errorf("subject kept its terminal punctuation: %q in %v", s, r.Subjects)
+		}
+		if seen[strings.Trim(s, ".-_/")] {
+			t.Errorf("the same subject appears twice modulo punctuation: %v", r.Subjects)
+		}
+		seen[strings.Trim(s, ".-_/")] = true
+	}
+	if !seen["DigestSchema"] {
+		t.Fatalf("the subject itself was lost: %v", r.Subjects)
+	}
+}
+
+// Populated() and Block() must key off the SAME predicate for counts. They did not: a record
+// holding only a project was non-empty by Populated()'s test, and Block() then asserted
+// "counts: turns=0 ... corrections=0" under DigestUpdatePromptFrom's
+// "SESSION RECORD (measured — authoritative)" heading — the fabricated zero-correction record
+// task 5's Critical was raised for, and digestRules tells the model corrections are a measured
+// fact its prose must be consistent with, so it inverts anti-rubberstamping. Unreachable via
+// today's callers; a trap for the wiring task, and silent when it springs.
+func TestBlockOmitsCountsWhenNothingWasCounted(t *testing.T) {
+	r := SessionRecord{}.WithProject("keld-signal")
+	if got := r.Populated(); len(got) == 0 {
+		t.Fatalf("a record with a project must be populated, got %v", got)
+	}
+	block := r.Block()
+	if strings.Contains(block, "counts:") {
+		t.Errorf("an uncounted record asserted counts as measured truth:\n%s", block)
+	}
+	if !strings.Contains(block, "projects: keld-signal") {
+		t.Errorf("the field that IS measured was omitted:\n%s", block)
+	}
+	// And the positive direction: a real record must still state its counts.
+	w := Window{Turns: []Turn{{RoleUser, "reconcile the ledger"}}}
+	got := SessionRecord{}.Observe(w, Extract(w)).Block()
+	if !strings.Contains(got, "counts:") {
+		t.Errorf("a counted record must state its counts:\n%s", got)
+	}
+}
+
+// Turning points are facts, so a shift is recoverable rather than inferred from prose.
+func TestSessionRecordRecordsTurningPoints(t *testing.T) {
+	r := SessionRecord{}.
+		NoteTurningPoint(2, TriggerFocusShift).
+		NoteTurningPoint(3, TriggerVolume).
+		NoteTurningPoint(5, TriggerFriction)
+	if len(r.TurningPoints) != 2 {
+		t.Fatalf("only shift and friction are turning points, got %v", r.TurningPoints)
+	}
+	if r.TurningPoints[0].Seq != 2 || r.TurningPoints[1].Seq != 5 {
+		t.Errorf("wrong points recorded: %v", r.TurningPoints)
+	}
+}
+
+// TestTurningPointsAreCappedAtTheirBound pins MaxRecordTurningPoints, which was unpinned:
+// the pre-existing turning-point test only checks WHICH reasons qualify, so deleting the cap
+// from NoteTurningPoint broke nothing. Every other list on this record caps itself at
+// accumulation time; this one appended forever until fix round 3, and an unbounded
+// direction-change history is the realistic shape of exactly the long, friction-heavy
+// session the record exists to describe (measured by the review: 60 turning points starved
+// the window to 1,313 runes).
+//
+// Both halves matter: the count is bounded, and what survives is the RECENT history, the
+// same recency-over-history preference tailN applies to insights and open items. Confirmed
+// by deleting the cap from NoteTurningPoint: "noted 36 turning points, want 12 kept, got 36".
+func TestTurningPointsAreCappedAtTheirBound(t *testing.T) {
+	r := SessionRecord{}
+	const noted = MaxRecordTurningPoints * 3
+	for i := 1; i <= noted; i++ {
+		r = r.NoteTurningPoint(i, TriggerFocusShift)
+	}
+	if len(r.TurningPoints) != MaxRecordTurningPoints {
+		t.Fatalf("noted %d turning points, want %d kept, got %d",
+			noted, MaxRecordTurningPoints, len(r.TurningPoints))
+	}
+	if got := r.TurningPoints[len(r.TurningPoints)-1].Seq; got != noted {
+		t.Errorf("the newest turning point must survive: last seq %d, want %d", got, noted)
+	}
+	if got := r.TurningPoints[0].Seq; got != noted-MaxRecordTurningPoints+1 {
+		t.Errorf("the cap must drop the OLDEST points: first seq %d, want %d",
+			got, noted-MaxRecordTurningPoints+1)
+	}
+}
+
+// weakProperNoun's job is to catch a short capitalised NAME that distinctiveToken's own
+// length floor would drop — not any capitalised word. A line-leading capital carries no
+// information (it is just how a new line or bullet opens, same as a new sentence), and a
+// review of round 1 found exactly that: sentenceInitial's newline-as-whitespace handling
+// (right for LLM-authored digest prose, its only other caller) let a line-leading capital
+// in raw turn text read as "mid-sentence" and get admitted. Each case here was verified
+// against the pre-fix Observe to actually reach Subjects before the fix landed.
+func TestSessionRecordSubjectsIgnoreLineLeadingCapitals(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"newline then verb", "Reading file\nFound 3 matches for the query"},
+		{"bullet list", "Fix the auth bug\nUpdate the README\nActivity type is wrong"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := Window{Turns: []Turn{{RoleUser, c.text}}}
+			r := SessionRecord{}.Observe(w, Extract(w))
+			for _, bad := range []string{"Found", "Update"} {
+				for _, s := range r.Subjects {
+					if s == bad {
+						t.Errorf("%q is a line-leading verb, not a name; got subjects %v", bad, r.Subjects)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A capitalised common word mid-sentence, with no adjacent newline at all, is the case a
+// pure line-boundary fix cannot touch — this is the length floor's job, not the position
+// check's. "Read" here has nothing else marking it a name: no internal caps, no digit, no
+// separator, and it is short (4 chars, under weakProperNounMinLen).
+func TestSessionRecordSubjectsRejectMidSentenceCommonWord(t *testing.T) {
+	w := Window{Turns: []Turn{{RoleUser, "Please check the Read Me file for details"}}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	for _, s := range r.Subjects {
+		if s == "Read" {
+			t.Errorf("%q is an ordinary word capitalised mid-sentence, not a name; got subjects %v", "Read", r.Subjects)
+		}
+	}
+}
+
+// The fix must not overcorrect: a genuine short proper noun — capitalised, mid-turn, no
+// other marker, at or above weakProperNounMinLen — must still reach Subjects on a single
+// occurrence. This is the exact shape TestSessionRecordAccumulatesAcrossWindows depends on
+// ("Larkin"), isolated here so a future change to the position/length rule fails fast and
+// specifically, rather than only via the accumulation test's broader assertion.
+func TestSessionRecordSubjectsKeepGenuineShortProperNoun(t *testing.T) {
+	installTestDocFreq(t)
+	w := Window{Turns: []Turn{{RoleUser, "now post the Larkin accrual"}}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	if !strings.Contains(strings.Join(r.Subjects, " "), "Larkin") {
+		t.Errorf("genuine mid-turn proper noun must still be admitted, got %v", r.Subjects)
+	}
+}
+
+// The recency fixtures below use snake_case tokens deliberately: strongIdentifier claims them
+// unconditionally, so these tests exercise the RANKING and nothing else — no DF table, no
+// position rule, no length floor in the way. What is being pinned is which admitted terms get the
+// twelve slots, never which terms are admitted.
+func recencyTurn(prefix string, n int) Window {
+	var b strings.Builder
+	b.WriteString("touching")
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, " %s_%02d", prefix, i)
+	}
+	return Window{Turns: []Turn{{RoleUser, b.String()}}}
+}
+
+func observeN(r SessionRecord, w Window, times int) SessionRecord {
+	for i := 0; i < times; i++ {
+		r = r.Observe(w, Extract(w))
+	}
+	return r
+}
+
+func subjectsWithPrefix(subjects []string, prefix string) int {
+	n := 0
+	for _, s := range subjects {
+		if strings.HasPrefix(s, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSubjectsDoNotGoStaleWhenTheWorkMoves is the defect, and it is the one the series review
+// measured rather than a synthetic edge case: Subjects was ranked by CUMULATIVE frequency alone,
+// so early vocabulary took an insurmountable lead and later work could never enter — inside a
+// block labelled "measured — authoritative" that the prompt leans on to place the work. A
+// reviewer failed a real timeline's `recognisable_week` because 10 of 14 beats used vocabulary
+// absent from the record, and two reviewers split between `dropped_middle` and
+// `cross_session_contamination` on another because the record held no evidence either way.
+//
+// The fixture is the same shape: thirteen early terms mentioned in ten windows, then five windows
+// — exactly one beat stride — about six new ones. Reverting rankSubjects to
+// topByFrequency(r.freq, MaxRecordSubjects) reproduces the failure exactly: "the record never
+// mentions the work of the last 5 windows: [alpha_01 ... alpha_12]".
+func TestSubjectsDoNotGoStaleWhenTheWorkMoves(t *testing.T) {
+	r := observeN(SessionRecord{}, recencyTurn("alpha", 13), 10)
+	r = observeN(r, recencyTurn("omega", 6), recentRecordWindows)
+
+	if got := subjectsWithPrefix(r.Subjects, "omega"); got != recentRecordSubjects {
+		t.Errorf("the record never mentions the work of the last %d windows: got %d recent "+
+			"terms of a reserved %d, subjects %v", recentRecordWindows, got,
+			recentRecordSubjects, r.Subjects)
+	}
+	// And the other direction, or the record has stopped being session-spanning: the cumulative
+	// half keeps the majority of the slots.
+	if got := subjectsWithPrefix(r.Subjects, "alpha"); got != MaxRecordSubjects-recentRecordSubjects {
+		t.Errorf("the session-spanning spine lost its slots: got %d of %d, subjects %v",
+			got, MaxRecordSubjects-recentRecordSubjects, r.Subjects)
+	}
+	if len(r.Subjects) != MaxRecordSubjects {
+		t.Errorf("subjects must still fill their bound: %d of %d", len(r.Subjects), MaxRecordSubjects)
+	}
+}
+
+// A reserved slot that nothing claims must go back to the session ranking. Otherwise the fix
+// would SHORTEN the record on a thin recent stretch, which is a second way to lose specifics.
+func TestUnusedRecentSlotsReturnToTheSessionRanking(t *testing.T) {
+	r := observeN(SessionRecord{}, recencyTurn("alpha", 13), 10)
+	r = observeN(r, recencyTurn("omega", 1), recentRecordWindows)
+	if len(r.Subjects) != MaxRecordSubjects {
+		t.Fatalf("a thin recent stretch shortened the record: %v", r.Subjects)
+	}
+	if got := subjectsWithPrefix(r.Subjects, "omega"); got != 1 {
+		t.Errorf("the one recent term must be held, got %d: %v", got, r.Subjects)
+	}
+	if got := subjectsWithPrefix(r.Subjects, "alpha"); got != MaxRecordSubjects-1 {
+		t.Errorf("the four unclaimed slots must return to the session ranking, got %d alphas: %v",
+			got, r.Subjects)
+	}
+}
+
+// TestATurningPointRestartsTheRecentStretch is the record USING the movement it already detects.
+// TurningPoints and the EWMA focus were both being recorded while Subjects — the field that
+// actually places the work — ignored them entirely.
+//
+// Without the ring reset the pre-shift vocabulary is still inside the recency window and still
+// outranks the post-shift work (three windows against one), so the reserved slots go back to the
+// terms the shift moved away from. Deleting `r.recent = nil` from NoteTurningPoint reproduces
+// that: zero omega terms.
+func TestATurningPointRestartsTheRecentStretch(t *testing.T) {
+	r := observeN(SessionRecord{}, recencyTurn("alpha", 13), 3)
+	r = r.NoteTurningPoint(4, TriggerFocusShift)
+	w := recencyTurn("omega", 6)
+	r = r.Observe(w, Extract(w))
+	if got := subjectsWithPrefix(r.Subjects, "omega"); got != recentRecordSubjects {
+		t.Errorf("after a turning point the recent slots must hold the new direction's terms: "+
+			"got %d of %d, subjects %v", got, recentRecordSubjects, r.Subjects)
+	}
+	// A turning point does not itself re-rank: ranking happens in Observe where the counts are
+	// built. A record whose Subjects were set directly (the prompt-budget worst cases do exactly
+	// that, then note twelve turning points) must keep the list it was given.
+	given := SessionRecord{Subjects: []string{"handed_in_directly"}}
+	if got := given.NoteTurningPoint(1, TriggerFocusShift).Subjects; len(got) != 1 {
+		t.Errorf("a directly-set subject list was rewritten by a turning point: %v", got)
+	}
+}
+
+// Two records derived from the same ancestor must not share accumulation state. SessionRecord is
+// passed and returned by value, so this reads as safe and is not: both the cumulative map and the
+// recency ring are references, and a fork silently merges two sessions inside the one input the
+// prompt calls authoritative. No caller forks a record today — this is the trap, found by writing
+// the test rather than by reasoning about it.
+//
+// It asserts on the two accumulators directly rather than on Subjects, and that is not
+// convenience — it is the only version that catches both reverts. Subjects is computed during the
+// Observe that builds each fork, i.e. BEFORE the other fork writes, so a Subjects-only assertion
+// passes on a corrupt ring and on a merged map alike. Exactly one Observe per fork, because that
+// is the case where the ring's shared backing array is still the base's: a second Observe would
+// reallocate it and hide the defect.
+func TestAForkedRecordDoesNotShareAccumulationState(t *testing.T) {
+	base := observeN(SessionRecord{}, recencyTurn("alpha", 13), 3)
+	omega, sigma := recencyTurn("omega", 6), recencyTurn("sigma", 6)
+	a := base.Observe(omega, Extract(omega))
+	_ = base.Observe(sigma, Extract(sigma))
+
+	for term := range a.freq {
+		if strings.HasPrefix(term, "sigma") {
+			t.Errorf("the other fork's terms are in this record's cumulative counts: %q", term)
+			break
+		}
+	}
+	for term := range a.recentFreq() {
+		if strings.HasPrefix(term, "sigma") {
+			t.Errorf("the other fork's window overwrote this record's recency ring: %v",
+				a.recentFreq())
+			break
+		}
+	}
+}
+
+// An absent field must read as absent. Topics read empty for months because nothing said a
+// pass had never run.
+func TestSessionRecordReportsWhichFieldsArePopulated(t *testing.T) {
+	w := Window{Turns: []Turn{{RoleUser, "reconcile the Meridian ledger"}}}
+	r := SessionRecord{}.Observe(w, Extract(w))
+	if got := strings.Join(r.Populated(), ","); strings.Contains(got, "focus") {
+		t.Errorf("focus must not report as populated before classification: %s", got)
+	}
+	r = r.WithFocus("finance", "accounting", 0.8)
+	if got := strings.Join(r.Populated(), ","); !strings.Contains(got, "focus") {
+		t.Errorf("focus must report as populated once set: %s", got)
+	}
+	if !strings.Contains(r.Block(), "focus:") {
+		t.Error("Block must render a populated focus")
+	}
+	if strings.Contains(SessionRecord{}.Block(), "focus:") {
+		t.Error("Block must omit an unpopulated focus rather than showing it empty")
+	}
+}
+
+// TestRecordSubjectsHoldWholeAmountsNotThousandsFragments is the revert-and-fail check for the
+// comma split, and it runs on REAL fixture text rather than a construction built to fail.
+//
+// Before the fix, subjectTokens split on every ',', so the amounts written in
+// testdata/nontech/finance-close.jsonl arrived as their last group of digits and THAT is what the
+// record stored. Measured, the whole twelve-slot list read
+//
+//	900.00 INV-2340 fa-register.csv 100.00 180.00 200.00 400.00 148.00 gl-mar.csv 31st 629.60 640.00
+//
+// — seven of twelve slots holding numbers nobody wrote (400.00 for 1,400.00, 200.00 for 1,200.00,
+// 629.60 for 412,629.60, ...), under a heading the prompt calls "measured — authoritative".
+//
+// The verbatim gate cannot catch this and it is worth saying why: it is a SUBSTRING test, and
+// "400.00" is a substring of "1,400.00". So the fragment passes every check the record has, and a
+// beat anchoring against the record inherits a wrong figure with the record's own authority
+// behind it.
+//
+// The general property is asserted first (no numeric subject may be the tail of a longer number
+// in the source) and the named case second, so this keeps failing on a fragment the corpus grows
+// later that the named case would miss.
+func TestRecordSubjectsHoldWholeAmountsNotThousandsFragments(t *testing.T) {
+	deltas, err := sessionDeltas("testdata/nontech/finance-close.jsonl", DefaultMineOpts())
+	if err != nil || len(deltas) == 0 {
+		t.Fatalf("finance-close fixture: %v (%d deltas)", err, len(deltas))
+	}
+	var r SessionRecord
+	var src strings.Builder
+	for _, d := range deltas {
+		r = r.Observe(d, Extract(d))
+		src.WriteString(Render(d))
+	}
+	text := src.String()
+	if len(r.Subjects) == 0 {
+		t.Fatal("the fixture produced no subjects; it is not exercising the record")
+	}
+	t.Logf("subjects: %v", r.Subjects)
+
+	for _, s := range r.Subjects {
+		if strings.ContainsFunc(s, unicode.IsLetter) {
+			continue
+		}
+		// Every occurrence, not just the first: a fragment like "400.00" occurs only inside
+		// larger amounts, so "some occurrence stands alone" is the property that separates a
+		// real figure from a fractured one.
+		whole := false
+		for i := 0; i < len(text); {
+			j := strings.Index(text[i:], s)
+			if j < 0 {
+				break
+			}
+			at := i + j
+			if at == 0 || text[at-1] != ',' {
+				whole = true
+				break
+			}
+			i = at + 1
+		}
+		if !whole {
+			t.Errorf("subject %q never appears in the transcript except after a comma — it is the "+
+				"tail of a longer number, and the record calls itself authoritative", s)
+		}
+	}
+
+	joined := " " + strings.Join(r.Subjects, " ") + " "
+	if !strings.Contains(joined, " 1,400.00 ") {
+		t.Errorf("the amount the session turns on is missing from the record: %v", r.Subjects)
+	}
+	if strings.Contains(joined, " 400.00 ") {
+		t.Errorf("the record still holds the fractured amount 400.00: %v", r.Subjects)
+	}
+}

@@ -20,21 +20,40 @@ See the design spec:
 cd sidecar
 PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest smoke        # ~2-3 min
 PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --live
+PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest embed       # ~6-7 min, OPT-IN
 ```
+
+⚠️ **`embed` is opt-in and is NOT part of `smoke`.** It loads the real Qwen3-Embedding-0.6B text
+encoder into a ~1.7-2.3 GB child; `smoke` is unaffected in both cost and behaviour. With no weights
+at `~/.keld/models/qwen3-embedding-0.6b` it **SKIPs** — it never downloads and never fails for their
+absence. It runs against a **temp `KELD_HOME`**, so the machine's own `refseries.db` (which a live
+`keld-agent` holds open) is never touched; only the weights are read, read-only.
 
 Unit tests (fast, no model):
 ```bash
 cd sidecar
 for f in app/test_worker.py app/test_worker_manager.py app/test_metrics.py app/test_runner.py \
          app/test_main.py app/test_cpuscale.py app/test_governor.py \
-         loadtest/test_corpus.py loadtest/test_analysis.py; do
+         app/test_guard_visibility.py \
+         loadtest/test_corpus.py loadtest/test_analysis.py loadtest/test_embed.py; do
   PYTHONPATH=. ~/.keld/sidecar-venv/bin/python "$f"; done
 ```
 
 ## Tunable env
 
 Load-test thresholds: `KELD_LOADTEST_PEAK_RSS_MB` (6144),
-`KELD_LOADTEST_LEAK_GROWTH_MB` (300), `KELD_LOADTEST_CONCURRENCY` (4).
+`KELD_LOADTEST_LEAK_GROWTH_MB` (300, shared by smoke's S1 and embed's E1),
+`KELD_LOADTEST_CONCURRENCY` (4).
+
+**embed** tier: `KELD_LOADTEST_EMBED_PEAK_RSS_MB` (2560 — the ENCODER child's own cap, deliberately
+not the 6144 above, which is the inference worker's), `KELD_LOADTEST_EMBED_SECONDS` (180, the
+sustained-encode window), `KELD_LOADTEST_EMBED_LATENCY_FACTOR` (4.0, how much slower a structured
+endpoint may be with a pass in flight), `KELD_LOADTEST_EMBED_IDLE_S` (10, the E3 sidecar's
+`KELD_TEXTEMBED_IDLE_UNLOAD_S` — the policy is production's, only the constant is shortened),
+`KELD_LOADTEST_EMBED_MAX_MB` (16, the fixture-transcript size cap — the file is re-read whole on
+every `/features` call, so a 90 MB one would make the READ the thing being measured),
+`KELD_LOADTEST_EMBED_MAX_ENCODE` (8), `KELD_LOADTEST_EMBED_BASELINE_ROUNDS` (3),
+`KELD_LOADTEST_TRANSCRIPT` (an explicit fixture path).
 
 Worker-recycle knobs (`app/worker_manager.py`): `KELD_SIDECAR_RSS_MARGIN_MB` (1024,
 headroom above `model_cost_mb` before an RSS-ceiling recycle),
@@ -63,6 +82,18 @@ baseline (never drives the true host to 5%) — asserts the worker goes `held`
 (and requests 503) then recovers to serving on demand once headroom returns.
 Deterministic recycle transitions (K3, incl. idle/ceiling/pressure/timeout) are
 covered by `app/test_worker_manager.py`.
+
+**embed** — the TEXT ENCODER child (`app/analysis/textembed.py`, gated on `KELD_TEXTEMBED`), under
+SUSTAINED load rather than the single-shot scripts its numbers used to come from. E1 no-leak
+(second-half vs first-half mean child RSS, smoke's S1 method); E2 peak bounded **and observed** —
+that `/metrics`' own `embed.peak_rss_mb` is not below what a live sample saw; E3 idle-unload really
+kills the child, really returns the memory to the OS (measured on the process TREE, since
+`embed.rss_mb` reads 0.0 for a leaked child too) and the next request really respawns it; E4 no
+starvation — `/analyze`, `/blocks` and `/features`' structured half keep answering DURING an encode
+pass, against their own idle latency; E5 per-message cost over many messages.
+
+Unit cover for the arm's own logic is `loadtest/test_embed.py` (fast, no model); the encoder's
+guard-visibility properties are `app/test_guard_visibility.py`'s encoder block.
 
 ## What the load test simulates — the production enrichment sweeps
 
@@ -222,6 +253,40 @@ i.e. the parent never restarts, only the worker child is replaced — and
 Net: **no memory leak, no runaway CPU**, both CPU good-citizen levers work, and
 the worker-recycle model genuinely bounds the model's footprint without
 restarting the service.
+
+### embed tier — the text encoder child
+
+Measured **2026-08-26** on the same 20-core box, `python -m loadtest embed` at its defaults
+(180 s sustained encode, real Qwen3-Embedding-0.6B at bf16, 2 threads, a real 14.4 MB Claude Code
+transcript). ⚠️ The host was **also running a live production sidecar**, so every latency here is an
+upper bound; the RSS figures are not affected.
+
+| Property | Result |
+|---|---|
+| **No memory leak** | Child RSS flat over 180 s / 112 messages / 25 batches — second-half minus first-half mean **+32 MB** over 352 samples (−4 / +59 MB on the two preceding runs), against a ±350 MB per-batch oscillation. |
+| **Peak RSS bounded** | **2,389 MB** peak, 2,058 MB median in-flight, **1,711 MB** resident idle. ⚠️ Not a stable number: 2,072 / 2,345 / 2,414 / 2,432 / 2,389 MB across five runs, which is why the cap sits at 3,072 rather than just over one reading. |
+| **Peak is OBSERVABLE** | `/metrics` `embed.peak_rss_mb` = **99.3–100.0%** of the live max (the shortfall is the guard's 1 Hz poll against the sampler's 2 Hz, hence the 95% floor). Before the `maybe_unload` fix it read **82.9%** (1,717 against 2,072) — every sample a post-trim trough. |
+| **Idle-unload fires and releases** | `state: ready → down`, `kills_idle` 1, and **1,711 MB returned to the OS** (process-tree RSS 1,899 → 189 MB) after ~10 s idle. |
+| **Respawn on demand** | The next `/features` call brings the child back: `state: ready`, `spawns: 2`. |
+| **No starvation** | p50 idle → under an encode pass: `/analyze` **17 → 20 ms**, `/blocks` **117 → 165 ms**, `/features` **54 → 77 ms**; p90 26 / 243 / 109 ms; **0 errors in 145 samples each**. Across runs the under-load p50 lands anywhere from 0.45x to 1.4x idle — i.e. inside the run-to-run spread of the idle figure itself, on a box that is also running a live sidecar. Nothing queues: the encoder is a separate process capped at 2 threads, and nothing on the request path waits on it. |
+| **Per-message cost** | **1,509 ms/message** while encoding (1,609 ms/message wall incl. the arm's own polling gap), 0.66 msg/s. ⚠️ **This corrects `textembed._load`'s 766.2 ms/message**, which came from a single-shot script on shorter inputs; across runs the sustained figure is **1,119–1,635 ms**, corroborating `featuretext`'s independent ~1.44 s/message. Size any duty-cycle estimate off ~1.2–1.6 s. |
+| **First model load** | **2.8–6.6 s** with a warm page cache, ~20 s cold (`E0`) — `featuretext.py` said ~90 s, which was one cold contended reading. |
+
+⚠️ **What the arm found on its first run.** `embed.peak_rss_mb` was pinned to the trough:
+`Encoder.observe_rss` is lock-free, but its only caller ran `maybe_unload()` immediately after it
+under a **blocking** acquire of the lock `encode` holds for a whole batch, so the 1 s poll loop
+reached the lock-free sample once per BATCH — right after `_release_memory()`. That is the
+2026-07-02 RSS-oscillation incident's exact shape one child over. Fixed by taking the lock
+non-blocking (`worker_manager.poll`'s own idiom, for the same reason) and pinned by
+`app/test_guard_visibility.py`'s encoder block. **A lock-free sampler behind a blocking caller is
+not a lock-free sampler.**
+
+⚠️ **And it found a harness leak that was never specific to this arm.** `SidecarProcess.stop()`
+terminated only the parent; the sidecar's `lifespan` teardown does kill its children, but that path
+drains an in-flight encode batch and joins the inference worker, so a short wait followed by SIGKILL
+cut it off and the children reparented to init. A session of load tests left **five orphans of
+1.0–2.9 GB each** — three encoder children from `embed` and **two GLiNER2 workers from `smoke`**.
+`stop()` now snapshots the descendants before signalling the parent and kills the tree.
 
 **Scope — CPU + RAM only.** GPU/VRAM is explicitly out of scope (see design spec
 §2). The sidecar runs on CPU by default (`SIDECAR_QUANTIZE`/`SIDECAR_COMPILE` off),

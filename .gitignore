@@ -18,3 +18,4 @@ __pycache__/
 /.dev-dl/
 
 /build
+/windows

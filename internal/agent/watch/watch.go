@@ -19,8 +19,18 @@ import (
 // and Claude Code launch surfaces where hooks may not run). It never reads or
 // forwards prompt TEXT — only pointers.
 type Watcher struct {
-	offer      func(spool.Pointer)
-	observe    func(source, transcriptPath string, line []byte)
+	offer   func(spool.Pointer)
+	observe func(source, transcriptPath string, line []byte)
+	// advanced reports whether the signal was TAKEN ON. A refused one must not be
+	// dropped — see drainFirstSight.
+	advanced func(source, transcriptPath string) bool
+	// signalFirstSight makes a FIRST SIGHTING fire the ingest/blocks signal even
+	// under forward-only, without offering any of the file's historical prompts.
+	// See scanFile and WithFirstSightSignal.
+	signalFirstSight bool
+	// firstSight is the backlog of transcripts sighted for the first time and
+	// not yet signalled. Drained a few per poll — see pollOnce.
+	firstSight []advanceRef
 	cursors    *CursorStore
 	discover   func() []Root
 	version    string
@@ -80,6 +90,38 @@ func New(offer func(spool.Pointer), observe func(source, transcriptPath string, 
 	}
 }
 
+// WithIngestSignal installs the hook called once per transcript that ADVANCED in
+// a poll — the coarse sibling of observe. Where observe fires per line (each one
+// is a telemetry event), this fires per file per poll: its consumer is the
+// sidecar's reference-series ingest, which resumes from its own byte-offset
+// checkpoint and catches up on everything appended since it last ran. One signal
+// per line would ask for the same whole-tail parse once per line of it.
+//
+// It carries COORDINATES ONLY — a source and a path, never a line, never text.
+// The bytes are the thing the consumer re-reads on its own side; sending them
+// would both duplicate the read and put prompt text on a wire.
+//
+// It is the same seam observe is (a nil-able func supplied by the daemon at
+// wiring time), for the same reason: the watcher decides WHAT happened, the
+// daemon decides what to do about it. The daemon's hook is where the policy
+// lives — which sources are worth ingesting, and the non-blocking handoff that
+// keeps an unreachable sidecar off this loop (internal/agent/daemon/
+// ingestsignal.go). Chainable rather than a sixth positional argument to New,
+// which every existing construction and test would otherwise have to pass.
+// WithFirstSightSignal makes a first sighting fire the ingest signal even under
+// forward-only. The daemon turns this on when block backfill is on: that is the
+// feature that needs a transcript to be ingestable before it next grows. It
+// never offers historical prompts — see scanFile.
+func (w *Watcher) WithFirstSightSignal(on bool) *Watcher {
+	w.signalFirstSight = on
+	return w
+}
+
+func (w *Watcher) WithIngestSignal(fn func(source, transcriptPath string) bool) *Watcher {
+	w.advanced = fn
+	return w
+}
+
 // Run polls until ctx is cancelled. Each poll is panic-isolated so a malformed
 // transcript or unexpected filesystem state can never crash the daemon (and with
 // it the hook capture path and enrichment worker).
@@ -122,7 +164,56 @@ func (w *Watcher) pollOnce() {
 			debuglog.Append("watch: cursor save failed: %v", err)
 		}
 	}
+	w.drainFirstSight()
 }
+
+// drainFirstSight signals up to firstSightPerPoll backlogged first sightings.
+// See the constant for why this is paced rather than fired in one burst.
+func (w *Watcher) drainFirstSight() {
+	if w.advanced == nil {
+		w.firstSight = nil
+		return
+	}
+	n := len(w.firstSight)
+	if n > firstSightPerPoll {
+		n = firstSightPerPoll
+	}
+	// ⚠️ POP ONLY WHAT WAS TAKEN ON. The hook behind `advanced` drops when the
+	// bounded ingest queue is full; popping regardless made the pacing rate a
+	// GUESS against the sidecar's real drain throughput, and an overrun lost the
+	// sighting permanently — a first sighting has no next signal, which is the
+	// entire reason this backlog exists. Reporting acceptance turns the guess
+	// into backpressure: a refused entry stays at the head for the next poll.
+	taken := 0
+	for _, a := range w.firstSight[:n] {
+		if !w.advanced(a.source, a.path) {
+			break
+		}
+		taken++
+	}
+	w.firstSight = append(w.firstSight[:0], w.firstSight[taken:]...)
+}
+
+// advanceRef is one backlogged first sighting: coordinates only.
+type advanceRef struct{ source, path string }
+
+// firstSightPerPoll bounds how many backlogged first sightings are signalled per
+// poll.
+//
+// ⚠️ THE BOUND IS THE WHOLE POINT. The ingest signal rides a 64-slot,
+// path-coalescing queue whose policy is DROP rather than retry — which is safe
+// for a growing transcript because the next signal catches up, and unsafe for a
+// first sighting, which has no next signal: the cursor is at EOF and a dormant
+// transcript never grows again. Firing every sighting at once on a machine with
+// 2,152 known transcripts filled the 64 slots and dropped ~2,088 PERMANENTLY.
+// A few per poll never overflows it, and the backlog drains across polls; the
+// work is one-time per transcript.
+//
+// Four rather than a larger number because the real limit is downstream: the
+// signal queue has ONE serial sender and a first whole-file ingest measured 5.1s
+// on a 90 MB transcript. Handing it work faster than it can drain would only
+// refill the queue it is meant to keep clear.
+const firstSightPerPoll = 4
 
 // scanFile reads new complete lines from path's cursor, offers each genuine
 // prompt, and advances the cursor. Returns true if the cursor moved.
@@ -134,6 +225,19 @@ func (w *Watcher) scanFile(source, path string) bool {
 		if !w.backfill {
 			if st, err := os.Stat(path); err == nil {
 				w.cursors.Set(path, st.Size())
+				// ⚠️ THE TWO PATHS WANT DIFFERENT THINGS FROM THIS SIGHTING.
+				// The PROMPT path must stay forward-only: offering every
+				// historical prompt for enrichment is the herd this branch
+				// exists to prevent, and the cursor jumping to EOF is what
+				// prevents it. But the INGEST/BLOCKS path needs to know the file
+				// exists, or the block emitter never sees a transcript that is
+				// not still being written — a session that ended yesterday could
+				// never have its history backfilled. The signal carries
+				// coordinates only, so it is independent of where the cursor
+				// sits.
+				if w.signalFirstSight && w.advanced != nil {
+					w.firstSight = append(w.firstSight, advanceRef{source, path})
+				}
 				return true
 			}
 			return false
@@ -164,6 +268,24 @@ func (w *Watcher) scanFile(source, path string) bool {
 	}
 	if consumed > 0 {
 		w.cursors.Set(path, off+consumed)
+		// Signal AFTER the cursor moves and exactly once, on the same condition
+		// the cursor advances on: complete lines were consumed. Deliberately
+		// keyed on bytes rather than on len(recs) — the reference series ingests
+		// TURNS, not only genuine user prompts, and a tail of assistant or
+		// tool_result lines changes what a window means (workspace evidence and
+		// reconcile are whole-file pre-passes). A prompt-keyed signal would
+		// leave those appends unindexed.
+		//
+		// A first sighting under forward-only (the KELD_WATCH_BACKFILL default)
+		// consumes nothing — the cursor jumps to EOF above and returns early —
+		// so a daemon restart signals nothing at all and cannot become a
+		// thundering herd of whole-file ingests. Only a file that grows after
+		// the daemon came up is signalled. With backfill ON, the first sighting
+		// does read from 0 and does signal, which is precisely what that mode
+		// asks for.
+		if w.advanced != nil {
+			w.advanced(source, path)
+		}
 		return true
 	}
 	return false

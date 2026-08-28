@@ -15,6 +15,13 @@ func Install() error {
 	if err != nil {
 		return err
 	}
+	return InstallAt(exe)
+}
+
+// InstallAt registers the task to run execPath, rather than whatever binary
+// happens to be running now. See the darwin implementation's comment: the two
+// differ only for an auto-update that had to migrate to a writable directory.
+func InstallAt(exe string) error {
 	// Per-user logon task running `keld-agent run`.
 	if err := exec.Command("schtasks", "/Create", "/F",
 		"/SC", "ONLOGON",

@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents/resource"
 	"github.com/ncx-ai/keld-signal/internal/agent/creds"
@@ -69,7 +70,7 @@ type Sender interface {
 // Worker drains the enrichment queue. The trailing variadic customHolder is an
 // optional, backward-compatible hook: the daemon passes the live custom-pass
 // holder (hot-swapped by the settings poll); existing callers/tests omit it.
-func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, ready func() bool, warmup func(context.Context) error, emitter *clientevents.Emitter, ra *reauther, custom ...*customHolder) {
+func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, svc serviceFacets, pub Sender, actor string, includeEntityText func() bool, ready func() bool, warmup func(context.Context) error, emitter *clientevents.Emitter, ra *reauther, custom ...*customHolder) {
 	ledger := newRetryLedger()
 	var holder *customHolder
 	if len(custom) > 0 {
@@ -127,7 +128,7 @@ func Worker(ctx context.Context, q *queue.Queue, m enrich.Model, pub Sender, act
 			copts = []enrich.Option{enrich.WithCustomExtractors(w1, w2)}
 		}
 		finished := runWithTimeout(to, func() {
-			published = process(jobCtx, j, jobModel, pub, actor, includeEntityText, emitter, ra, lens, copts...)
+			published = process(jobCtx, j, jobModel, svc, pub, actor, includeEntityText, emitter, ra, lens, copts...)
 		})
 		cancel() // always: on timeout this reclaims the abandoned attempt; on success it just releases resources.
 
@@ -439,7 +440,7 @@ func isAuthError(err error) bool {
 // to mark the job's key deduped. A skip (unresolved text), a deadline-cancelled
 // attempt, a publish failure, or a panic all return false so the job stays
 // re-offerable (retry / watcher fallback).
-func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther, lens *lenstat.Tracker, customOpts ...enrich.Option) bool {
+func process(ctx context.Context, j queue.Job, m enrich.Model, svc serviceFacets, pub Sender, actor string, includeEntityText func() bool, emitter *clientevents.Emitter, ra *reauther, lens *lenstat.Tracker, customOpts ...enrich.Option) bool {
 	je := newJobEmit(emitter, j)
 	defer func() {
 		if r := recover(); r != nil {
@@ -455,6 +456,11 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	if !ok {
 		return false // could not resolve prompt text; skip silently
 	}
+	// This prompt's own hour is characterised by THIS job, so the tick must not
+	// characterise it again — spend inside an overlap would be counted twice.
+	// Recorded after the resolve so an unresolvable prompt leaves its hour to the
+	// tick; a no-op unless window characterisation is switched on (see tick.go).
+	noteTickPrompt(j)
 	// Size this job's input truncation from the machine's own prompt-length
 	// distribution: record this prompt's length (a count, never its text) and
 	// bind the resulting cap for the job's inferences. Without a cap, gliner2
@@ -476,7 +482,38 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, pub Sender, actor
 	// A pass that exceeds its deadline costs only its own facet: the profile
 	// comes back "partial" and is still published, so a slow pass never
 	// discards the work the other passes already completed.
-	profile := enrich.Run(text, j.Source, meta, m, append([]enrich.Option{enrich.WithJobContext(ctx)}, customOpts...)...)
+	opts := append([]enrich.Option{
+		enrich.WithJobContext(ctx),
+		// Coordinates (never text) for the model-free passes that characterise
+		// the window around this prompt rather than its text.
+		enrich.WithCoordinates(j.TranscriptPath, j.PromptID),
+		// The facts about this job's CHECKOUT that only the daemon can resolve,
+		// travelling INTO the analysis rather than into a prompt preamble. This
+		// path resolves FRESH per job rather than through the ticker's cache,
+		// because it has the real cwd (`j.Cwd`) and because `git_branch` is the
+		// field that goes stale — a branch changes often, and a prompt's window
+		// is exactly where that matters. Every field is best-effort and an empty
+		// result is normal: a project directory is not necessarily a repository.
+		// See enrich.ResolvedFacts.
+		enrich.WithResolvedFacts(resolvedFacts(j.Cwd)),
+	}, customOpts...)
+	// Wire the deterministic workstream pass only when this run actually has a
+	// window-analysis backend; without one the pass stays unregistered rather
+	// than running and failing every job (see facetsFor). The service facets are
+	// threaded in rather than derived from m, because ml_backend
+	// "deterministic" has an analysis service and no Model at all.
+	if svc.Analyze != nil {
+		opts = append(opts, enrich.WithWorkstreams(svc.Analyze))
+	}
+	// The personal-data scan is threaded the same way and for the same reason.
+	// Unlike the analyzer its absence does not unregister a pass: sensitivity
+	// still runs on its credential layer, and reports itself in facets_degraded
+	// so a reader never mistakes "we could not look" for "we looked and it is
+	// clean" (see enrich.WithPIIScanner).
+	if svc.ScanPII != nil {
+		opts = append(opts, enrich.WithPIIScanner(svc.ScanPII))
+	}
+	profile := enrich.Run(text, j.Source, meta, m, opts...)
 	// The job-level backstop only fires for a wedge outside the passes; if it
 	// did, the profile is untrustworthy — don't publish it. The worker re-spools
 	// (bounded) so it retries on a healthy sidecar.
@@ -602,13 +639,27 @@ func wellKnownSidecarDirs() []string {
 }
 
 // Run starts the daemon: ingress on loopback, worker, agent.json discovery file.
+//
+// An unconfigured agent IDLES rather than failing: the service is routinely
+// registered before onboarding runs (the documented macOS pkg order), so this
+// waits for hook.json and starts the moment onboarding writes it. See
+// awaitConfig for why exiting here was wrong.
 func Run(ctx context.Context) error {
-	cfg, err := hook.LoadConfig()
+	// Resolve any update left in flight by a previous process, BEFORE
+	// awaitConfig — which blocks indefinitely on a machine that has not been
+	// onboarded. A daemon idling there still needs a bad update undone, and it
+	// is exactly the machine where nobody is watching. The emitter does not
+	// exist yet (it is built from the config awaitConfig is waiting for), so
+	// the events are buffered and replayed once it does.
+	updateEvents := &bufferedEvents{}
+	confirmPendingUpdate(updateEvents.emit)
+
+	cfg, err := awaitConfig(ctx, hook.LoadConfig, configPollInterval(), func() {
+		log.Printf("keld-agent: not configured yet — idling until `keld login` + `keld signal setup` "+
+			"write %s; no restart needed once they do", paths.HookConfigPath())
+	})
 	if err != nil {
-		log.Printf("keld-agent: hook config read error: %v", err)
-	}
-	if cfg.Endpoint == "" || cfg.IngestToken == "" {
-		return fmt.Errorf("keld-agent: not configured (run `keld login` / setup first)")
+		return nil // context cancelled while idling: a clean shutdown, not a failure
 	}
 
 	secret, err := agentcfg.NewSecret()
@@ -693,6 +744,23 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	log.Printf("keld-agent: listening on %s", ln.Addr().String())
+
+	// THE TELEMETRY PROXY. AI tools POST OTLP here instead of to Atlas, so none
+	// of them holds an Atlas credential and a token rotation strands nobody. A
+	// rejection routes into the SAME reauther the publish path uses, whose
+	// single-flight cooldown is what stops a burst of 401s becoming a burst of
+	// re-onboards. A bind failure is fatal to the proxy but not to the daemon:
+	// enrichment and publishing are unaffected, and the operator is told which
+	// port and which override.
+	if tp, tpErr := startTelemetryProxy(ctx, emitter, cfg.Endpoint, tok.Get, func() {
+		go func() { _ = ra.refresh(context.WithoutCancel(ctx)) }()
+	}); tpErr != nil {
+		log.Printf("keld-agent: telemetry proxy NOT running: %v", tpErr)
+		emitter.EmitExempt("telemetry.proxy_unavailable", clientevents.SevWarn,
+			map[string]any{"error": tpErr.Error()})
+	} else {
+		setTelemetryProxy(tp)
+	}
 	// EmitExempt: daemon.start is SevInfo but must surface even under the
 	// default warn floor (lifecycle narrative), and it fires once here before
 	// any poll could lower the floor — a plain Emit would always drop it.
@@ -705,9 +773,13 @@ func Run(ctx context.Context) error {
 	// start at all. When enabled, mlBackend provisions+supervises the sidecar
 	// (never a deterministic fallback — see mlBackend's doc comment) and
 	// handler is the normal ingress.Handler bound to q.
-	handler, model, gate, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter)
-
+	// live is built BEFORE wireEnrichment so the PII region tier the enrichment
+	// facets resolve is the LIVE one — local base now, org override from the
+	// first successful settings poll onwards. Binding it after would freeze the
+	// facets on the startup value.
 	live := settings.NewLive(set)
+
+	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions)
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -745,6 +817,15 @@ func Run(ctx context.Context) error {
 	// from being restated on each one. Owned out here (not per-call) so it remembers across
 	// polls; pollSettings drives onRemote from a single goroutine, so no lock is needed.
 	rejects := &rejectReporter{}
+	updateEvents.replay(emitter)
+	updater, hasUpdater := newUpdater(func(code, sev string, fields map[string]any) {
+		emitter.EmitExempt(code, clientevents.Severity(sev), fields)
+	})
+	if hasUpdater {
+		updater.Quiesce = quiesceFn(q.Depth)
+	} else {
+		log.Printf("keld-agent: auto-update unavailable on this install (no writable destination); updates must be applied by re-running the installer")
+	}
 	onRemote := func(r *settings.Remote) {
 		re := r.ClientTelemetry.WithDefaults()
 		emitter.SetGate(gateFrom(re))
@@ -756,10 +837,43 @@ func Run(ctx context.Context) error {
 		// client-telemetry warning without leaking prompt content — once per
 		// distinct reject set, not once per poll (see rejectReporter).
 		syncCustomPasses(r.EnrichmentSchema, custom, rejects, emitter.Emit)
+
+		// Auto-update. The settings poll is the trigger and the updater has no
+		// clock of its own: Maybe takes the decision inline (a pure function
+		// over already-loaded state) and hands only the work to a goroutine,
+		// single-flighted — this loop carries per-org config to every other
+		// subsystem and must never block on a download.
+		if updater != nil {
+			updater.Maybe(ctx, updateTargetFrom(r))
+		}
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
-		go Worker(ctx, q, model, pub, actor, live.IncludeEntityText, gate, warmupFunc(model), emitter, ra, custom)
+		// warmup comes from wireEnrichment, not from warmupFunc(model): it is
+		// the composition of on-demand provisioning with the model load, and
+		// only the backend that owns the weights can build it.
+		// The tick characterises the work no prompt's look-back reaches — measured,
+		// 43-45 points of it. OFF by default because such a row joins to nothing at
+		// Atlas yet; see tick.go's envTick for the whole of that reasoning. Started
+		// BEFORE the worker so the observer is in place for the first job.
+		setTickObserver(startTicker(ctx, svc.Tick, pub, actor, emitter))
+		// v2's block emitter, and the reason it sits beside the tick rather than
+		// inside it: a block reaches nowhere, so it needs none of the tick's
+		// frontier reasoning about which future prompts might sweep over a
+		// moment. OFF by default (KELD_BLOCKS) for the same reason the tick is —
+		// Atlas stores blocks now but nothing reads them yet. Returns nil when
+		// off, which setBlockAdvance takes as "no observer".
+		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks))
+		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
+		// future-work prediction. svc.Features is non-nil ONLY under
+		// ml_backend "deterministic" (see deterministicBackend), so this is
+		// also the registration condition that keeps the subsystem absent
+		// under "auto". Both toggles default OFF and both are read live, so
+		// the goroutines start and take nothing until something switches them
+		// on — which is what lets an org enable it without a restart.
+		setFeatureAdvance(startFeatureEmitter(ctx, svc.Features, cfg.Endpoint, tok.Get,
+			actor, installID, live.FeaturesEnabled, live.FeaturesPublishEnabled, emitter))
+		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
@@ -822,10 +936,45 @@ func Run(ctx context.Context) error {
 		offer := func(p spool.Pointer) { q.Offer(ingress.JobFrom(p)) }
 		observe := func(source, path string, line []byte) { tel.Observe(source, path, line) }
 		txw := watch.New(offer, observe, version.CLI, watch.PollFromEnv(), watch.BackfillFromEnv())
+		// Third use of the same detection: the watcher already knows when a
+		// transcript grew, so it tells the sidecar, which brings its
+		// reference-series store up to date from its own byte offset. That is
+		// what keeps /analyze a query instead of a parse — and, more to the
+		// point, keeps the parse off an enrichment job's per-pass deadline: a
+		// first whole-file ingest measured 5.1s inside an /analyze request.
+		// Fire-and-forget and never on this loop's critical path; the sidecar
+		// deliberately does not poll for growth. See ingestSignalHook for the
+		// scoping and the drop policy, and note /analyze keeps its own on-demand
+		// ingest as the backstop, so a dropped signal costs latency only.
+		if svc.SignalIngest != nil {
+			txw = txw.WithIngestSignal(ingestSignalHook(ctx, svc.SignalIngest))
+			// Block backfill needs a transcript to be ingestable BEFORE it next
+			// grows, or the emitter only ever sees files still being written and
+			// a session that ended yesterday can never have its history cut. The
+			// prompt path stays forward-only either way — no historical prompt
+			// is offered for enrichment. Scoped to blocks being on AND set to
+			// backfill, so a machine that wants neither pays nothing.
+			txw = txw.WithFirstSightSignal(blocks.Enabled(set.Blocks) && blocks.BackfillEnabled())
+		}
 		go txw.Run(ctx)
 	}
 
-	return serve(ctx, ln, handler, q, emitter)
+	err = serve(ctx, ln, handler, q, emitter)
+
+	// ⚠️ SHUTDOWN IS NOT DONE WHEN serve() RETURNS, and pretending otherwise is
+	// what made the supervisor's kill path unreachable. serve returns as soon
+	// as ctx is cancelled and the listener closes — microseconds — while the
+	// supervisor goroutine is still SIGTERMing the sidecar and waiting for its
+	// ~2.9 GB GLiNER2 worker and ~1.7-2.3 GB encoder child to exit. Returning
+	// here exits the process mid-reap and leaves precisely the orphans this
+	// whole path exists to prevent. So the daemon holds itself open for the
+	// stop, and only for the stop: the wait is bounded by the supervisor's own
+	// grace plus a second of slack, and expiring it just means we hand the
+	// remainder to the service manager rather than hanging.
+	if svc.AwaitSidecarStop != nil {
+		svc.AwaitSidecarStop()
+	}
+	return err
 }
 
 // drainEnrichSpool drains queued spool pointers into q, offering each as an
@@ -834,7 +983,12 @@ func Run(ctx context.Context) error {
 // a full queue leaves the row in place for the next call to retry.
 func drainEnrichSpool(q *queue.Queue, emitter *clientevents.Emitter) {
 	if _, err := spool.Drain(func(p spool.Pointer) error {
-		if q.Offer(ingress.JobFrom(p)) {
+		// TakenOn, not "accepted": a DUPLICATE row must be deleted too. The
+		// prompt is already queued or already published, so keeping the file
+		// would re-offer it on every sweep forever — it can never become
+		// acceptable — and the spool would grow without bound. Only real
+		// backpressure (Full/Closed) keeps the row.
+		if q.Offer(ingress.JobFrom(p)).TakenOn() {
 			return nil
 		}
 		return errQueueFull // queue full: keep the file, retry next sweep
@@ -941,16 +1095,36 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     bound to q when enabled, or ingress.DiscardHandler (202, never
 //     enqueues) when disabled, so the hook stops spooling pointers that would
 //     never be processed.
-//   - model, gate: the enrichment Model + Worker readiness gate when enabled
-//     (nil, nil otherwise — Run must not start Worker in that case).
-//   - enabled: whether Run should start the enrich Worker.
-func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter) (handler http.Handler, model enrich.Model, gate func() bool, enabled bool) {
-	if !set.MLEnabled() {
+//   - model: the enrichment Model, nil when ml_backend="deterministic" (that
+//     mode asks the service for no inference) or when enrichment is disabled
+//     entirely.
+//   - svc: the service facets (the non-inference sidecar routes — /analyze
+//     for workstreams, /pii for sensitivity). Wired in BOTH "auto" and
+//     "deterministic", because neither needs a model — they are derived from
+//     the service client, not from the Model, which is why they are returned
+//     separately rather than left to facetsFor(model).
+//   - gate: the Worker readiness gate. nil ONLY when enrichment is disabled
+//     (Run must not start Worker in that case). "auto" gates on model warmth;
+//     "deterministic" gates on service health when a service exists, and is
+//     trivially true when none does (see deterministicBackend).
+//   - enabled: whether Run should start the enrich Worker — true for both
+//     "auto" (or "") and "deterministic"; only "off" disables it.
+func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
+	if !set.EnrichmentEnabled() {
 		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
-		return ingress.DiscardHandler(secret), nil, nil, false
+		return ingress.DiscardHandler(secret), nil, serviceFacets{}, nil, nil, false
 	}
-	model, gate = mlBackend(ctx, emitter)
-	return ingress.Handler(q, secret), model, gate, true
+	if !set.MLEnabled() {
+		// deterministic: the Worker still runs, and so does the analysis
+		// service — it is only the GLiNER2 model that is never asked for. No
+		// model to load means no warmup and, since provisioning now hangs off
+		// warmup, no download either.
+		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the analysis service runs, the model is never loaded", set.MLBackend)
+		svc, gate := deterministicBackend(ctx, emitter, regions)
+		return ingress.Handler(q, secret), nil, svc, gate, nil, true
+	}
+	model, svc, gate, warmup = mlBackend(ctx, emitter, regions)
+	return ingress.Handler(q, secret), model, svc, gate, warmup, true
 }
 
 // newRunID generates a per-run correlation id (16 random bytes, hex-encoded),
@@ -1030,23 +1204,44 @@ type mlBackendOpts struct {
 	fetcher  provision.Fetcher
 	healthFn func() bool
 	emitter  *clientevents.Emitter
+	// regions resolves the org's PII country tiers at CALL time (see
+	// facetsFor). nil means "no opinion" — the sidecar's own default.
+	regions func() []string
 }
 
-// mlBackend returns the enrichment model and the worker readiness gate. It is
-// only called when ML enrichment is enabled (see wireEnrichment) — ml_backend
-// off is handled entirely by the caller and never reaches here.
+// gliner2ModelDir is the on-disk home of the GLiNER2 weights. It is named in
+// exactly two places — the spawned service's KELD_GLINER2_DIR (where the
+// service looks when it lazily loads that capability) and provisioning (where
+// the weights are fetched to) — so it lives here rather than being recomputed
+// by either caller.
+func gliner2ModelDir() string { return paths.ModelsDir("gliner2-large-v1") }
+
+// sidecarService builds the plumbing for the local analysis service: it
+// resolves the sidecar binary, reaps any orphan left by a prior daemon,
+// allocates the ephemeral loopback port (recording it in agent.json for
+// `keld-agent metrics`), and constructs the HTTP client, the health probe and
+// the (unstarted) Supervisor that will spawn it.
 //
-// It provisions the model, spawns and supervises the sidecar, and returns the
-// sidecar client with a gate that opens once the sidecar has reported healthy
-// at least once. There is no lower-fidelity fallback: when the sidecar binary
-// is missing, or its port cannot be allocated, this returns
-// sidecarUnavailable's permanently-closed gate (jobs queue/spool until the
-// daemon is restarted) rather than a synthetic/degraded model.
-func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model, func() bool) {
+// It deliberately stops short of both provisioning a model and starting the
+// supervisor. The sidecar is the analysis-and-enrichment service in general —
+// /analyze, /match, /vocabulary, /classify, /extract — and GLiNER2 is one
+// capability it loads lazily, not a precondition for serving. Callers that
+// need the model provisioned do that themselves (see mlBackend).
+//
+// ok is false when there is no service this run, and the reason is carried by
+// err so the caller can tell the two apart:
+//
+//	err == nil — no sidecar binary is installed.
+//	err != nil — the ephemeral port could not be allocated. Returned raw and
+//	             unwrapped, so a caller's clientevents.RedactError summary
+//	             (which includes the error's concrete type) is unchanged.
+//
+// It logs only mechanical detail and never emits a client event: what a
+// missing service *means* is policy, and each caller answers that differently.
+func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sidecar.Client, *Supervisor, func() bool, bool, error) {
 	binPath, hasBin := sidecarBinPath()
 	if !hasBin {
-		log.Printf("keld-agent: no sidecar binary found; enrichment jobs will queue/spool until one is installed")
-		return sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"})
+		return nil, nil, nil, false, nil
 	}
 
 	// Reap any orphaned sidecar from a prior daemon before spawning ours, so a
@@ -1056,8 +1251,7 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 	// Pick an ephemeral port for the sidecar.
 	scLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		log.Printf("keld-agent: sidecar port alloc failed: %v", err)
-		return sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)})
+		return nil, nil, nil, false, err
 	}
 	scPort := scLn.Addr().(*net.TCPAddr).Port
 	scLn.Close() // Release; sidecar will bind it.
@@ -1072,12 +1266,20 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 	scClient := sidecar.NewCtx(ctx, scBaseURL, 5*time.Second)
 	healthFn := func() bool { return scClient.Healthy(ctx) }
 
-	modelDir := paths.ModelsDir("gliner2-large-v1")
+	modelDir := gliner2ModelDir()
 
 	sup := NewSupervisor(
 		func(p int) (*exec.Cmd, error) {
-			cmd := exec.CommandContext(ctx, binPath, fmt.Sprintf("--port=%d", p))
-			cmd.Env = sidecarEnv(os.Environ(), modelDir)
+			// ⚠️ exec.Command, NOT exec.CommandContext, and that is the point.
+			// CommandContext installs a cancel hook that SIGKILLs the child's
+			// PID the instant ctx is done — pid-only, uncatchable, and racing
+			// the supervisor's own stop. It would pre-empt the SIGTERM that
+			// lets the sidecar's lifespan teardown run, which is exactly the
+			// bug being fixed. The supervisor owns termination on every path it
+			// can return from (see stopChild), so there is nothing left for the
+			// context hook to do except get in the way.
+			cmd := exec.Command(binPath, fmt.Sprintf("--port=%d", p))
+			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(), watch.AnalyzeRoots())
 			return cmd, nil
 		},
 		scPort,
@@ -1086,50 +1288,201 @@ func mlBackend(ctx context.Context, emitter *clientevents.Emitter) (enrich.Model
 	)
 	sup.SetEmitter(emitter)
 
+	return scClient, sup, healthFn, true, nil
+}
+
+// deterministicBackend wires ml_backend "deterministic": the analysis service
+// runs, the GLiNER2 model is never loaded, and the Worker gates on the
+// service being up.
+//
+// The sidecar is the client-side analysis-and-enrichment service in general
+// (/analyze, /match, /vocabulary, /classify, /extract); GLiNER2 is one
+// capability it loads lazily on its first inference. Deterministic mode issues
+// no inference, so nothing ever triggers that load — but /analyze still needs
+// a process to answer it. Not starting the service is what made this mode a
+// trap: it produced no workstreams at all and published a single
+// credential-derived facet.
+//
+// When a service EXISTS, the gate is SERVICE HEALTH, deliberately, and
+// neither alternative is acceptable: model warmth never arrives here (the
+// model never loads), so it would hold every job forever; and a trivially-true
+// gate would publish workstream-less profiles for every job that landed before
+// the service finished starting, silently dropping their dimensions. Waiting
+// is right there because the work becomes doable shortly — the supervisor is
+// bringing the service up.
+//
+// When there is NO service this run, that reasoning does not apply and the
+// gate must not be used: sidecarService reports !ok when no sidecar binary is
+// installed (err == nil) or when the loopback port could not be allocated
+// (err != nil), and neither resolves without a daemon restart. A closed gate
+// would then wedge the mode forever — every job queueing and spooling, nothing
+// ever published — on what is the state of every machine before the sidecar
+// tarball is fetched. So that case takes noAnalysisService: a trivially-true
+// gate and zero service facets, leaving enrichment to run its other model-free
+// facets (credential detection) with the workstreams pass unregistered.
+//
+// That is not the degradation AGENTS.md forbids. Nothing lower-fidelity stands
+// in for window analysis; the facet is dropped entirely and reported dropped
+// via the pipeline's ordinary pipeline_status "partial" path.
+func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (serviceFacets, func() bool) {
+	scClient, sup, _, ok, err := sidecarService(ctx, emitter)
+	if !ok {
+		// No service this run and no path to one before a restart, so waiting
+		// is pointless: run without window analysis rather than wedge.
+		if err != nil {
+			log.Printf("keld-agent: sidecar port alloc failed: %v; enrichment will run WITHOUT window analysis (no service this run) until the daemon is restarted", err)
+			return serviceFacets{}, noAnalysisService(emitter, map[string]any{"error": clientevents.RedactError(err)})
+		}
+		log.Printf("keld-agent: no sidecar binary installed; enrichment will run WITHOUT window analysis (credential detection only) until one is installed and the daemon restarts")
+		return serviceFacets{}, noAnalysisService(emitter, map[string]any{"reason": "no_sidecar_binary"})
+	}
+	go sup.Start(ctx)
+	// facetsFor is the same capability probe "auto" uses — /analyze and /pii are
+	// properties of the service client, not of the Model (there is none here).
+	// The gate is health, but polled and CACHED (serviceHealthGate), the same
+	// mechanism "auto" uses for warmth: Worker reads it per job and waitWarm
+	// re-reads it every ~20ms, so sidecarService's raw healthFn — a live
+	// loopback GET per call — is the wrong shape for a gate.
+	svc := facetsFor(scClient, regions)
+	// THE SIGNAL-EMBEDDINGS PATH is attached HERE and only here. facetsFor runs
+	// in "auto" too, and the design scopes this subsystem to "deterministic"
+	// ONLY: under "auto" it must be ABSENT — never registered, so it appears in
+	// neither facets_skipped nor extractor_versions, the existing distinction
+	// between a pass that was skipped and one that was never wired. Lifting
+	// that later is this one line moving into facetsFor. See features.go.
+	svc.Features = featureSourceFor(scClient)
+	svc.AwaitSidecarStop = awaitSidecarStop(sup)
+	return svc, serviceHealthGate(ctx, scClient)
+}
+
+// noAnalysisService is deterministic mode's "no service this run, and no path
+// to one without a restart" path: no sidecar binary is installed, or its
+// loopback port could not be allocated. It reports the absence exactly as
+// mlBackend does — one sidecar.unavailable (SevWarn) carrying the caller's
+// diagnostic fields, which keep the two causes apart ("reason" vs "error") —
+// but returns a trivially-true gate rather than mlBackend's permanently-closed
+// one.
+//
+// The difference is what waiting would buy. A closed gate is right for a
+// service that is present but not yet ready, and for "auto", where every facet
+// the mode produces needs the model. Here it buys nothing: no service will
+// appear this daemon lifetime, so jobs would queue and spool forever. The
+// caller pairs this gate with zero service facets, so the workstreams pass
+// never registers, sensitivity names itself in facets_degraded, and enrichment
+// runs its remaining model-free work, publishing pipeline_status "partial".
+// Those are dropped facets, reported dropped — not lower-fidelity substitutes
+// for them, which is what never-degrade forbids.
+func noAnalysisService(emitter *clientevents.Emitter, fields map[string]any) func() bool {
+	emitSidecarUnavailable(emitter, fields)
+	return func() bool { return true }
+}
+
+// mlBackend returns the enrichment model and the worker readiness gate. It is
+// only called when ML enrichment is enabled (see wireEnrichment) — ml_backend
+// off is handled entirely by the caller and never reaches here.
+//
+// It spawns and supervises the sidecar and returns the sidecar client, a gate
+// that opens once the model is resident, and the warmup that PROVISIONS the
+// weights on demand and then loads them. Provisioning is no longer started
+// here: the download is owed to an attempted inference (see
+// modelProvisioner), and Worker's warmup call is that signal. There is no lower-fidelity fallback: when the sidecar binary
+// is missing, or its port cannot be allocated, this returns
+// sidecarUnavailable's permanently-closed gate (jobs queue/spool until the
+// daemon is restarted) rather than a synthetic/degraded model.
+//
+// The service facets are returned alongside the Model — symmetric with
+// deterministicBackend — because they belong to the SERVICE, not the model:
+// both modes derive them the same way, and returning them here means
+// wireEnrichment only passes them through instead of rederiving them.
+func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
+	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
+	if !ok {
+		// The consequence of having no service is this caller's to state: an
+		// enrichment job queues/spools, which is not what a future non-ML
+		// caller of sidecarService would say.
+		//
+		// No service also means no warmup: there is nothing to load and
+		// nothing to provision FOR. The permanently-closed gate holds every
+		// job, so a warmup would never be consulted anyway — returning nil
+		// keeps "we never fetch weights we cannot use" true by construction.
+		if err != nil {
+			log.Printf("keld-agent: sidecar port alloc failed: %v", err)
+			return nil, serviceFacets{}, sidecarUnavailable(emitter, map[string]any{"error": clientevents.RedactError(err)}), nil
+		}
+		log.Printf("keld-agent: no sidecar binary found; enrichment jobs will queue/spool until one is installed")
+		return nil, serviceFacets{}, sidecarUnavailable(emitter, map[string]any{"reason": "no_sidecar_binary"}), nil
+	}
+
 	return mlBackendWithOpts(ctx, mlBackendOpts{
 		sup:      sup,
 		client:   scClient,
-		modelDir: modelDir,
+		modelDir: gliner2ModelDir(),
 		modelSHA: provision.ModelSHA256,
 		fetcher:  sidecar.NewHFFetcher(provision.ModelRepo, provision.ModelRevision),
 		healthFn: healthFn,
 		emitter:  emitter,
+		regions:  regions,
 	})
 }
 
-// sidecarUnavailable is mlBackend's shared "no sidecar this run" path: the
-// sidecar binary is missing, or its ephemeral port could not be allocated.
-// Enrichment never degrades to a lower-fidelity backend in this case either —
-// it emits sidecar.unavailable (SevWarn) with the given diagnostic fields and
-// returns a permanently-closed gate, so jobs simply queue/spool until the
-// daemon is restarted (matching the supervisor-give-up path in
-// mlBackendWithOpts). The returned Model is nil: the gate never opens, so
-// Worker never invokes it.
-func sidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) (enrich.Model, func() bool) {
-	emitter.Emit("sidecar.unavailable", clientevents.SevWarn, fields)
-	return nil, func() bool { return false }
+// sidecarUnavailable is the shared "no analysis service this run" path for
+// both backends: the sidecar binary is missing, or its ephemeral port could
+// not be allocated. Enrichment never degrades to a lower-fidelity backend in
+// this case — it emits sidecar.unavailable (SevWarn) with the given diagnostic
+// fields and returns a permanently-closed readiness gate, so jobs simply
+// queue/spool until the daemon is restarted (matching the supervisor-give-up
+// path in mlBackendWithOpts). The gate never opens, so whatever Model or
+// service facets the caller pairs it with are never invoked.
+func sidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) func() bool {
+	emitSidecarUnavailable(emitter, fields)
+	return func() bool { return false }
+}
+
+// emitSidecarUnavailable reports "no analysis service this run" to Atlas. It
+// is shared by both no-service paths (sidecarUnavailable and
+// noAnalysisService) because the observation is identical — only the readiness
+// policy the caller pairs with it differs.
+func emitSidecarUnavailable(emitter *clientevents.Emitter, fields map[string]any) {
+	if emitter != nil {
+		emitter.Emit("sidecar.unavailable", clientevents.SevWarn, fields)
+	}
 }
 
 // mlBackendWithOpts is the testable core of mlBackend. It accepts all
 // dependencies explicitly so tests can inject stubs without touching the
 // real filesystem or spawning real processes.
-func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, func() bool) {
-	var provisionFailed atomic.Bool
+func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
+	// Start the service NOW, alongside provisioning rather than behind it. The
+	// sidecar is the client-side analysis-and-enrichment service in general —
+	// /analyze, /match, /vocabulary, /classify, /extract — and GLiNER2 is one
+	// capability it loads lazily on its first inference, not a precondition
+	// for serving. Gating the spawn on a ~1.9 GB download meant a machine that
+	// had not yet provisioned had no service at all, so nothing could answer
+	// /analyze either.
+	//
+	// Spawning against an unprovisioned model dir is safe because nothing
+	// attempts inference until the model is resident: the gate below polls
+	// /metrics (WorkerReady never spawns a worker) and opens only on
+	// worker.state=="ready", and Worker's warmup — the one call that would
+	// trigger a load — is bounded by warmWait per job, after which the job is
+	// deferred and re-spooled. With the weights absent that warmup fails, the
+	// gate stays shut, and jobs queue/spool: the same outcome as not spawning
+	// at all, minus the loss of every non-model route.
+	go opts.sup.Start(ctx)
 
-	// Provision the model BEFORE spawning the sidecar; on success start the
-	// supervisor; on failure leave the gate closed (see below) rather than
-	// starting a sidecar against an unprovisioned model dir.
-	go func() {
-		if err := provision.EnsureModel(ctx, opts.modelDir, opts.modelSHA, opts.fetcher); err != nil {
-			log.Printf("keld-agent: model provisioning failed: %v", err)
-			if opts.emitter != nil {
-				opts.emitter.Emit("model.load_failed", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
-			}
-			provisionFailed.Store(true)
-			return
-		}
-		go opts.sup.Start(ctx)
-	}()
+	// Provisioning is NOT started here. The weights are needed by exactly one
+	// thing — an inference — so they are fetched by the warmup below, which
+	// Worker calls when a job finds the readiness gate shut. Kicking the
+	// ~1.9 GB download off at startup instead charged it to every machine
+	// running the default mode, including ones that never enriched a prompt.
+	// See modelProvisioner.
+	prov := &modelProvisioner{
+		dir:     opts.modelDir,
+		sha:     opts.modelSHA,
+		fetcher: opts.fetcher,
+		emitter: opts.emitter,
+		bg:      ctx,
+	}
 
 	// Enrichment never degrades to a lower-fidelity backend: the worker waits
 	// until the sidecar has loaded at least once, then the client itself
@@ -1148,7 +1501,13 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, f
 	// the gate stays closed — same durable queue/spool behaviour as before.
 	wg := newWarmGate()
 	go wg.run(ctx, opts.client.WorkerReady, warmPollInterval)
-	return opts.client, wg.Warm
+	// facetsFor(opts.client), not facetsFor-of-the-Model at the call site: the
+	// non-inference routes are properties of the service client and must
+	// survive any later change to what "the Model" is.
+	svc := facetsFor(opts.client, opts.regions)
+	svc.AwaitSidecarStop = awaitSidecarStop(opts.sup)
+	return opts.client, svc, wg.Warm,
+		provisioningWarmup(prov, warmupFunc(opts.client))
 }
 
 // enrichEndpoint derives the enrichments URL from the configured ingest endpoint

@@ -8,7 +8,8 @@ import (
 )
 
 func TestRunProducesEnrichedProfile(t *testing.T) {
-	p := enrich.Run("write a go function; email jane@acme.com", "claude_code", enrich.Meta{}, enrichtest.NewFake())
+	p := enrich.Run("write a go function; email jane@acme.com", "claude_code", enrich.Meta{}, enrichtest.NewFake(),
+		enrich.WithPIIScanner(enrichtest.NewScan()))
 	if p.PipelineStatus != "enriched" {
 		t.Fatalf("status = %q, want enriched", p.PipelineStatus)
 	}
@@ -21,8 +22,14 @@ func TestRunProducesEnrichedProfile(t *testing.T) {
 	if p.SchemaVersion != enrich.SchemaVersion {
 		t.Fatalf("schema version not set")
 	}
-	if len(p.ExtractorVersions) != 8 {
-		t.Fatalf("want 8 extractor versions, got %d", len(p.ExtractorVersions))
+	// Seven passes since schema v9 dropped speech_act (was eight). The count is
+	// the point: a pass that stops running must stop appearing in
+	// extractor_versions, or the payload claims work it did not do.
+	if len(p.ExtractorVersions) != 7 {
+		t.Fatalf("want 7 extractor versions, got %d: %v", len(p.ExtractorVersions), p.ExtractorVersions)
+	}
+	if _, ok := p.ExtractorVersions["speech_act"]; ok {
+		t.Errorf("extractor_versions still names speech_act: %v", p.ExtractorVersions)
 	}
 	if p.EnrichedAt.IsZero() {
 		t.Fatal("EnrichedAt must be set")
@@ -68,6 +75,43 @@ func (panicModel) Extract(string, map[string]string, map[string][]string) enrich
 	panic("boom")
 }
 
+// TestRunToleratesNilModelAndStillDetectsCredentials pins deterministic-mode
+// behavior: the daemon's wireEnrichment hands the pipeline a genuinely nil
+// Model (settings.MLBackend == "deterministic"). Every model-dependent pass
+// must be skipped cleanly (no panic escaping Run) rather than crash the
+// enrichment worker, while SensitivityExtractor's deterministic credential
+// layer (pure Go, no model — see CredentialSpans) must still run and produce a
+// real signal, since that is the entire point of a deterministic mode.
+//
+// The status is "enriched", not "partial": a skipped model pass is a pass this
+// mode does not have, not a pass that failed. The thinner facet set is stated
+// in FacetsSkipped instead — see facets_skipped_test.go.
+func TestRunToleratesNilModelAndStillDetectsCredentials(t *testing.T) {
+	p := enrich.Run(`export GITHUB_TOKEN="ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"`, "claude_code", enrich.Meta{}, nil)
+
+	if p.PipelineStatus != "enriched" {
+		t.Fatalf("status = %q, want enriched (nothing failed; the model passes are absent by design)", p.PipelineStatus)
+	}
+	if len(p.FacetsSkipped) == 0 {
+		t.Fatal("a thinner profile must name what it dropped: FacetsSkipped is empty")
+	}
+	if p.Sensitivity.Value != "secrets" {
+		t.Fatalf("sensitivity = %+v, want secrets from the deterministic credential layer", p.Sensitivity)
+	}
+	if len(p.SensitivitySpans) == 0 {
+		t.Fatal("expected a masked credential span even with a nil Model")
+	}
+	for _, s := range p.SensitivitySpans {
+		if s.Text != "" {
+			t.Errorf("raw text must never survive: %q", s.Text)
+		}
+	}
+	// task_type has no model-free path: with a nil Model it must abstain, not panic.
+	if p.TaskType.Value != "" || p.TaskType.Confidence != 0 {
+		t.Fatalf("task_type needs a model and must abstain, got %+v", p.TaskType)
+	}
+}
+
 func TestRunIsolatesPanicAsPartial(t *testing.T) {
 	// task_type uses Classify (works via embedded Model); sensitivity+domain use
 	// Extract (panics). Pipeline must survive and mark partial.
@@ -81,19 +125,24 @@ func TestRunIsolatesPanicAsPartial(t *testing.T) {
 	}
 }
 
-// countingModel records which passes hit the model and lets a test force the
-// speech_act label. Method-per-pass (confirmed against extractors.go, pass.go,
-// speechact.go, a4_compositional.go): task_type/activity_type/personal/
-// speech_act/subcategory all go through classifyPass/classifyLabeled →
-// Model.Classify; function_guess also calls Classify EXCEPT for a coding-tool
-// source ("claude_code" among them) under the default-on A4 compositional
-// override, where it's set structurally with no model call at all — gated
-// either way, so the tests below (which only assert gated tasks are NOT hit)
-// are unaffected. sensitivity (governance, AlwaysRun) and domain_entities
-// (gated) both call Model.Extract; no built-in pass calls Model.Entities (only
-// custom extractors do), so entityHits stays 0 in these tests by design.
+// countingModel records which passes hit the model. Method-per-pass (confirmed
+// against extractors.go, pass.go, a4_compositional.go):
+// task_type/activity_type/personal/subcategory all go through
+// classifyPass/classifyLabeled → Model.Classify; function_guess also calls
+// Classify EXCEPT for a coding-tool source ("claude_code" among them) under the
+// default-on A4 compositional override, where it's set structurally with no
+// model call at all — gated either way, so the tests below (which only assert
+// gated tasks are NOT hit) are unaffected. domain_entities (gated) calls
+// Model.Extract. sensitivity (governance, AlwaysRun) calls the model NOT AT ALL
+// — its evidence is the gitleaks layer and the PII scan — so it is asserted from
+// its output instead. No built-in pass calls Model.Entities any more, so
+// entityHits stays 0 by design; the field is kept as the tripwire for one coming
+// back.
+//
+// It used to carry a `speechAct` field so a test could force the gate's model
+// half. There is no model half any more: speech_act was dropped at schema v9
+// and the gate is the approval lexicon alone (gate.go).
 type countingModel struct {
-	speechAct    string   // label returned for the "speech_act" task
 	classifyHits []string // task names passed to Classify
 	entityHits   int
 	extractHits  int
@@ -107,31 +156,11 @@ func (m *countingModel) Classify(text string, tasks map[string][]string) map[str
 		if len(labels) > 0 {
 			lab = labels[0]
 		}
-		if task == "speech_act" && m.speechAct != "" {
-			// classifyLabeled classifies over the READABLE label text (e.g. "a
-			// short follow-up or acknowledgement") and maps the winning text
-			// back to its dotted id via SpeechActDefs — it never sees the id
-			// itself. So the fake must return that id's readable text, not the
-			// bare id, or the round trip drops the label to "".
-			lab = speechActText(m.speechAct)
-		}
 		out[task] = []enrich.Ranked{{Label: lab, Confidence: 0.9}}
 	}
 	return out
 }
 
-// speechActText maps a speech_act id (e.g. "fragment") back to the readable
-// label text enrich.SpeechActDefs classifies against, so countingModel can
-// force a speech_act outcome through the real id->text->id round trip in
-// classifyLabeled (see Classify above).
-func speechActText(id string) string {
-	for _, d := range enrich.SpeechActDefs {
-		if d.ID == id {
-			return d.Text
-		}
-	}
-	return id
-}
 func (m *countingModel) Entities(text string, labels map[string]string) []enrich.Entity {
 	m.entityHits++
 	return nil
@@ -162,12 +191,20 @@ func TestGateSkipsSemanticPassesOnPrefilteredTurn(t *testing.T) {
 			t.Errorf("gated pass %q must not hit the model", gated)
 		}
 	}
-	// governance + gate signal BOTH ran (asserted independently, not as an OR)
-	if m.entityHits == 0 && m.extractHits == 0 {
-		t.Error("sensitivity (governance) must always run")
+	// Governance ran. sensitivity is proved from its OUTPUT, not from a model
+	// call: the facet consults no model at all, so a hit counter can no longer
+	// witness it. A pass that was skipped commits nothing, so a Producer is the
+	// evidence. It is now the ONLY always-run pass — speech_act was the other
+	// one, as the gate's model signal, and both the facet and that role are gone
+	// at schema v9.
+	if p.Sensitivity.Producer == "" {
+		t.Errorf("sensitivity (governance) must always run; got %+v", p.Sensitivity)
 	}
-	if !hit(m.classifyHits, "speech_act") {
-		t.Error("speech_act (gate signal) must always run")
+	// A gated turn must cost NO inference at all now: the pre-filter decides it
+	// before any pass that calls the model, and no always-run pass calls one.
+	if len(m.classifyHits) != 0 || m.extractHits != 0 || m.entityHits != 0 {
+		t.Errorf("gated turn hit the model: classify=%v extract=%d entities=%d",
+			m.classifyHits, m.extractHits, m.entityHits)
 	}
 	// gated semantic fields are empty
 	if p.TaskType.Value != "" || p.Activity.Value != "" {
@@ -175,22 +212,29 @@ func TestGateSkipsSemanticPassesOnPrefilteredTurn(t *testing.T) {
 	}
 }
 
-func TestGateSkipsOnSpeechActFragment(t *testing.T) {
+// The gate lost its model branch at schema v9. An input the lexicon does not
+// recognise is enriched no matter what the model would have called it — see
+// TestGateIsModelFree (speechact_removed_test.go) for the same invariant driven
+// from a model that answers "fragment" to everything.
+func TestGateDoesNotFireOnANonLexiconTurn(t *testing.T) {
 	t.Setenv("KELD_ENRICH_GATE_ENABLED", "1")
-	m := &countingModel{speechAct: "fragment"}
-	// A non-prefiltered input so ONLY the speech_act==fragment branch can gate it.
+	m := &countingModel{}
+	// Content-free to a human, but outside the approval lexicon: this is exactly
+	// the case the dropped speech_act==fragment branch used to catch. It now
+	// costs a full enrichment — wasted compute, never a wrong answer, which is
+	// the safe direction for the gate to fail in.
 	p := enrich.Run("well, alright then I suppose", "claude_code", enrich.Meta{}, m)
-	if p.PipelineStatus != "gated" {
-		t.Fatalf("status = %q, want gated (speech_act fragment)", p.PipelineStatus)
+	if p.PipelineStatus == "gated" {
+		t.Fatalf("status = %q: the gate must consult no model output", p.PipelineStatus)
 	}
-	if hit(m.classifyHits, "task_type") {
-		t.Error("task_type must be skipped when gated on fragment")
+	if !hit(m.classifyHits, "task_type") {
+		t.Error("task_type must run on an ungated turn")
 	}
 }
 
 func TestGateRunsAllPassesOnSubstantiveTurn(t *testing.T) {
 	t.Setenv("KELD_ENRICH_GATE_ENABLED", "1")
-	m := &countingModel{speechAct: "command"}
+	m := &countingModel{}
 	p := enrich.Run("Add a rate limiter to the login endpoint", "claude_code", enrich.Meta{}, m)
 	if p.PipelineStatus == "gated" {
 		t.Fatal("substantive turn must not be gated")

@@ -49,6 +49,37 @@ try {
     exit 1
 }
 
+# ── Integrity check ───────────────────────────────────────────────────────────
+# Verify the zip against the release's checksums.txt before unpacking anything.
+# A MISSING checksums.txt is a warning, not an error: it is served by the same
+# host as the archive, so it guards against corrupt/truncated transfers rather
+# than a compromised release host (TLS covers that), and hard-failing would
+# break installs of releases published before it existed.
+$expected = $null
+try {
+    $sumsUrl = "https://github.com/$REPO/releases/download/$tag/checksums.txt"
+    $sums = (Invoke-WebRequest -Uri $sumsUrl -UseBasicParsing).Content
+    foreach ($line in ($sums -split "`n")) {
+        $parts = ($line.Trim() -split '\s+')
+        if ($parts.Count -ge 2 -and ($parts[-1].TrimStart('*')) -eq $archive) {
+            $expected = $parts[0]
+            break
+        }
+    }
+} catch {
+    $expected = $null
+}
+if ($expected) {
+    $actual = (Get-FileHash -Path $tmpZip -Algorithm SHA256).Hash.ToLower()
+    if ($actual -ne $expected.ToLower()) {
+        Remove-Item $tmpZip -ErrorAction SilentlyContinue
+        Write-Error "keld installer: CHECKSUM MISMATCH for $archive - refusing to install.`n  expected $expected`n  actual   $actual`n  The download is corrupt or was truncated. Nothing was installed; re-run the installer."
+        exit 1
+    }
+} else {
+    Write-Warning "keld installer: no published SHA-256 for $archive; skipping integrity check."
+}
+
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
@@ -78,13 +109,25 @@ if (Test-Path $agent) {
 Write-Host ""
 Write-Host "keld $tag installed to $InstallDir\keld.exe"
 Write-Host ""
+Write-Host "This machine is configured for v2: ml_backend=deterministic, blocks=true."
+Write-Host "  No model is downloaded. For the GLiNER2 pipeline: keld-agent install --backend auto"
+Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Add $InstallDir to your PATH (if not already)."
 Write-Host "     Run this once in an elevated PowerShell to add it permanently:"
 Write-Host "       [Environment]::SetEnvironmentVariable('PATH', `$env:PATH + ';$InstallDir', 'User')"
-if (-not (Test-Path $agent)) {
+# Report observed state, not the exit code of `keld-agent install` (which
+# succeeds after merely registering the task when it has no terminal). Setup is
+# done once an ingest token exists in hook.json - the same file the daemon reads.
+$keldHome = if ($env:KELD_HOME) { $env:KELD_HOME } else { Join-Path $env:USERPROFILE '.keld' }
+$hookJson = Join-Path $keldHome 'hook.json'
+$onboarded = (Test-Path $hookJson) -and ((Get-Content -Raw $hookJson) -match '"ingest_token"\s*:\s*"[^"]')
+if (-not $onboarded) {
     Write-Host "  2. Open a new terminal, then run:  keld login"
     Write-Host "  3. Run:  keld signal setup"
+    Write-Host ""
+    Write-Host "Keld is NOT set up yet (nothing is being collected) - finish steps 2-3."
+    Write-Host "The agent picks the configuration up on its own once you do."
 }
 Write-Host ""
 Write-Host "Note: Windows SmartScreen may warn on first run — unsigned binaries"

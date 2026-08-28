@@ -39,6 +39,36 @@ type tomlConfig struct {
 	} `toml:"rules"`
 }
 
+// localSecretGroup pins secretGroup for vendored rules that omit the key but
+// whose regex DOES capture the secret in a group. It is applied after parsing,
+// so gitleaks.toml stays byte-for-byte upstream (see NOTICE) and a future
+// refresh of the vendored file cannot silently clobber the fix.
+//
+// generic-api-key matches "<keyword><words><delimiter><value>" and carries a
+// 3.5-bit entropy floor. Without a secretGroup that floor was measured over the
+// whole match -- keyword, filler words, delimiter and all -- which is exactly
+// the high-variety context the floor is supposed to exclude. Ordinary prose
+// ("...key obligations, termination rights...") scored 3.788 bits and reported
+// as a leaked credential, while its captured value ("termination") scores
+// 2.914. Group 1 is the captured value.
+//
+// Upstream's own config proves group 1 is the intended secret: the rule's first
+// allowlist is regex '^[a-zA-Z_.-]+$' against the default target (the secret).
+// Every whole match necessarily contains one of "=", ">", ":", "|", "?", ","
+// or "=>", none of which are in that character class, so that allowlist is
+// unreachable unless the secret is the capture group rather than the match.
+//
+// Deliberately a per-rule pin and NOT a blanket "use group 1 when secretGroup
+// is unset": 164 of the 221 vendored rules have a capture group, and group 1 is
+// not the secret in all of them -- jwt-base64 captures 34 header-prefix markers
+// and curl-auth-header 8 alternation branches, so a blanket fallback would mask
+// a fragment instead of the token and would measure the entropy floor on the
+// wrong text. Pin only rules whose group 1 is verified to be the secret;
+// TestLocalSecretGroupOverridesAreValid enforces the preconditions.
+var localSecretGroup = map[string]int{
+	"generic-api-key": 1,
+}
+
 var (
 	once    sync.Once
 	rules   []Rule
@@ -69,7 +99,11 @@ func load() {
 		for i, k := range r.Keywords {
 			kws[i] = k // keywords are already lowercase in gitleaks config
 		}
-		rules = append(rules, Rule{ID: r.ID, Regex: re, Keywords: kws, Entropy: r.Entropy, SecretGroup: r.SecretGroup})
+		sg := r.SecretGroup
+		if sg == 0 {
+			sg = localSecretGroup[r.ID] // local pin; 0 (absent) leaves upstream behaviour
+		}
+		rules = append(rules, Rule{ID: r.ID, Regex: re, Keywords: kws, Entropy: r.Entropy, SecretGroup: sg})
 	}
 }
 

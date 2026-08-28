@@ -55,3 +55,162 @@ jobs:
           go-version-file: go.mod
       - name: cross-platform pure-Go build gate
         run: make crosscheck
+
+  # `make freeze-check` / `make obfuscate-check` are NOT run here: they need a
+  # provisioned sidecar venv (torch/gliner2, ~5GB) plus the ~1.9GB GLiNER2 model
+  # and take minutes (PyInstaller bundling torch, then a real model load) — that
+  # cost is already paid once per release in installers.yml, not per push/PR.
+  # This job instead runs the cheap half every push/PR: it needs only
+  # python-minifier + pyarmor (no torch, no model, no PyInstaller freeze) and
+  # asserts *coverage* — every sidecar/app/**/*.py actually comes out
+  # obfuscated — which is what a non-recursive glob in build-freeze.sh silently
+  # broke for a whole subpackage (sidecar/app/analysis/) without either make
+  # target catching it, since both only check that the frozen binary runs.
+  # ⚠️ THIS GATE IS INAPPLICABLE WHILE RELEASES SHIP UNOBFUSCATED, and it is
+  # SKIPPED rather than left failing. It asserts "every shipped app module comes
+  # out PyArmor-processed" — a claim about artifacts we are not currently
+  # producing.
+  #
+  # PyArmor's free tier caps each script at ~32KB and 7 of the 42 shipped sidecar
+  # files exceed it, so `pyarmor gen` answers "out of license" and this job cannot
+  # pass by any means available to it. It had been red since at least 2026-08-25
+  # and nobody acted on it — which is the cost of a permanently-failing gate:
+  # people stop reading it, and it stops protecting anything.
+  #
+  # KEEP THIS IN STEP WITH installers.yml's KELD_OBFUSCATE. Flip that back to "1"
+  # when a paid licence exists and flip SHIP_OBFUSCATED here in the same commit.
+  # The check itself is unchanged and still runs locally via
+  # `make obfuscation-coverage-check`, so the capability does not rot while off.
+  # ⚠️ THE INSTALLER GUARDS WERE NEVER RUN BY ANYTHING, and both had rotted.
+  # onboard_command_test.sh was still asserting a `$KELD login` shape that
+  # onboard.command stopped using when `keld-agent install` took ownership of
+  # login -> setup -> service; it had been failing silently for however long.
+  # keld_agent_iss_test.sh is new. Neither needs a runner beyond bash, and
+  # neither can be checked by `iscc` compiling the .iss — that proves files are
+  # staged and syntax parses, not that the sole [Run] entry is behind a checkbox
+  # nobody has to tick, or hidden where no human can complete a login. Both of
+  # those shipped.
+  installer-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: macOS onboarding contract
+        run: bash installers/macos/onboard_command_test.sh
+      - name: Windows installer contract
+        run: bash installers/windows/keld_agent_iss_test.sh
+
+  obfuscation-coverage:
+    runs-on: ubuntu-latest
+    env:
+      SHIP_OBFUSCATED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: gate skipped (releases currently ship unobfuscated)
+        if: env.SHIP_OBFUSCATED != '1'
+        run: |
+          echo "::notice title=Obfuscation coverage skipped::Releases ship unobfuscated (PyArmor free-tier ~32KB per-file cap; 7 shipped files exceed it). Re-enable together with KELD_OBFUSCATE in installers.yml once a paid licence exists."
+          echo "⚠️ Obfuscation coverage gate **skipped** — releases currently ship unobfuscated." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v5
+        if: env.SHIP_OBFUSCATED == '1'
+        with:
+          python-version: "3.12"
+      - name: install obfuscation tools (no torch)
+        if: env.SHIP_OBFUSCATED == '1'
+        run: pip install --quiet python-minifier pyarmor
+      - name: obfuscation coverage gate
+        if: env.SHIP_OBFUSCATED == '1'
+        run: make obfuscation-coverage-check
+
+  # The real app.analysis identity gate (scripts/check_identity.py against the frozen corpus
+  # at ~/keld/refseries-context/frozen-corpus/) can't run here: 736MB of real AI-coding-session
+  # transcripts on one laptop, outside the repo, unshareable by the project's own privacy
+  # invariant. This is the floor everyone else gets instead — a small, wholly-synthetic fixture
+  # corpus (sidecar/app/analysis/testdata/) committed alongside its own baseline fingerprint.
+  # No torch, no spaCy model (KELD_TERMS=0 — see the fixture's own docstring for why): only
+  # pandas/pyarrow/bashlex/wordfreq, so this stays cheap enough to run every push/PR.
+  fixture-identity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install analysis deps (no torch, no spaCy model)
+        run: pip install --quiet pandas pyarrow bashlex wordfreq pyyaml
+      - name: fixture identity gate
+        run: make fixture-identity-check STUDY_PYTHON=python
+
+  # The sidecar's own unit tests (sidecar/app/test_*.py + sidecar/loadtest/test_*.py,
+  # 37 files, ~12.7k lines) were previously ungated: the Go half has three
+  # enforcement points above (gofmt/vet/test, crosscheck, goreleaser check) and the
+  # Python half had zero, despite covering the reference store, incremental ingest,
+  # dynamics, the session prior, retention, PII, the well-known-value gate and the
+  # block cutter. These are standalone scripts, not pytest (AGENTS.md → Testing) —
+  # each ends in a `__main__` runner that calls every `test_*` function in the file
+  # and lets an uncaught `AssertionError` propagate, which exits the interpreter
+  # non-zero; this was verified by breaking one assertion, confirming the loop below
+  # failed, and restoring it, rather than assumed.
+  #
+  # No torch, no gliner2, no uvicorn, no spaCy model download. Empirically (not
+  # merely by grepping top-level imports, since `app.worker`/`app.main` pull heavy
+  # deps only *inside* functions this job never calls — model loading happens in a
+  # spawned worker child, and this job starts no server), every one of the 37 files
+  # runs clean under exactly: the fixture-identity job's light deps
+  # (pandas/pyarrow/bashlex/wordfreq/pyyaml) plus `fastapi` (imported at module level
+  # by app/main.py, transitively by app/test_main.py and app/test_maxlen.py — no
+  # TestClient/httpx anywhere in these tests, so plain `import fastapi` is enough)
+  # and `presidio-analyzer` (app/pii.py's `scan()`, exercised by app/test_pii.py and
+  # app/test_pii_regions.py, builds its AnalyzerEngine over `spacy.blank("en")` — see
+  # `_nlp_engine()`'s docstring — so presidio pulls in spaCy's *tokenizer* only, ~5MB,
+  # never `en_core_web_sm`). Versions pinned to sidecar/requirements.txt so this job
+  # tracks the same exact pins the frozen sidecar ships, rather than drifting on its
+  # own schedule. Nothing needs skipping: all 37 files run and are asserted below.
+  sidecar-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install sidecar test deps (no torch, no gliner2, no spaCy model)
+        run: |
+          # psutil is a sidecar RUNTIME dependency (worker_manager's RSS guard).
+          # It is listed explicitly because this job deliberately installs no
+          # torch/gliner2, and psutil only ever arrived transitively behind them
+          # via accelerate/peft — which is how this job caught that it was never
+          # declared. See sidecar/requirements.txt.
+          pip install --quiet pandas pyarrow bashlex wordfreq pyyaml psutil \
+            fastapi==0.141.1 presidio-analyzer==2.2.362
+      - name: sidecar unit tests (standalone scripts, not pytest)
+        working-directory: sidecar
+        run: |
+          set -euo pipefail
+          for f in app/test_*.py loadtest/test_*.py; do
+            echo "::group::$f"
+            PYTHONPATH=. python "$f"
+            echo "::endgroup::"
+          done
+
+  # fastapi==0.115.* and uvicorn[standard]==0.32.* sat 26 / 20 minor releases
+  # behind for over a year with nothing anywhere checking — a trailing-wildcard
+  # pin silently freezes once upstream abandons that series, and there was no
+  # signal until someone looked by hand. This job is that signal, every
+  # push/PR, for free: it reads sidecar/requirements.txt's exact `name==X.Y.Z`
+  # pins and asks PyPI how old each one is — one JSON GET per pin, no pip
+  # install, no torch. It does NOT fail on "a newer version exists" (true on
+  # nearly every run for a fast-moving package like fastapi, which is exactly
+  # the kind of check that gets disabled for crying wolf); it fails only once a
+  # pin's own release is materially old (default: >365 days) AND a newer
+  # release is actually available — see scripts/check_dependency_staleness.py
+  # for the full reasoning. gliner2/torch/transformers/numpy (the ML stack) and
+  # the spacy/wordfreq wildcard pins are out of scope for this check: bumping
+  # them needs enrich/eval revalidation, not just a version check.
+  dependency-staleness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: dependency staleness check (sidecar/requirements.txt)
+        run: make dependency-staleness-check

@@ -252,7 +252,7 @@ func TestDrainSpoolRepostsAndDeletes(t *testing.T) {
 	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return nil }, dir)
 	r.policy = fastPolicy()
 
-	if err := r.drainSpool(t.Context()); err != nil {
+	if err := r.DrainSpool(t.Context()); err != nil {
 		t.Fatalf("drainSpool: %v", err)
 	}
 
@@ -281,7 +281,7 @@ func TestDrainSpoolStopsOnTransientFailure(t *testing.T) {
 	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return nil }, dir)
 	r.policy = fastPolicy()
 
-	_ = r.drainSpool(t.Context())
+	_ = r.DrainSpool(t.Context())
 
 	if _, statErr := os.Stat(spoolPath); statErr != nil {
 		t.Fatalf("expected spool file to remain after transient failure, stat err: %v", statErr)
@@ -305,7 +305,7 @@ func TestDrainSpoolDropsPoisonFile(t *testing.T) {
 	r := NewReporter(srv.URL, func() string { return "tok" }, "install-1", func() []Event { return nil }, dir)
 	r.policy = fastPolicy()
 
-	_ = r.drainSpool(t.Context())
+	_ = r.DrainSpool(t.Context())
 
 	if _, statErr := os.Stat(spoolPath); !os.IsNotExist(statErr) {
 		t.Fatalf("expected poison spool file to be removed, stat err: %v", statErr)
@@ -317,7 +317,7 @@ func TestDrainSpoolMissingDirIsNoop(t *testing.T) {
 	r := NewReporter("http://example.invalid", func() string { return "tok" }, "install-1", func() []Event { return nil }, dir)
 	r.policy = fastPolicy()
 
-	if err := r.drainSpool(t.Context()); err != nil {
+	if err := r.DrainSpool(t.Context()); err != nil {
 		t.Fatalf("expected nil error for missing spool dir, got %v", err)
 	}
 }

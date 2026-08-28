@@ -1,0 +1,204 @@
+# Hand labels — six-way `activity_type`, attempt FOUR. 150 windows, seed 0.
+#
+# THIS HEADER — the rubric — IS COMMITTED BEFORE A SINGLE LABEL IS WRITTEN, and the labels are
+# committed before `activity_rerun.py score` is ever run. Both orderings are provable from git,
+# which is the only thing that makes the number falsifiable.
+#
+# Source: `activity-rerun-views.txt` — each window's TEXT ONLY. User prompts + assistant prose,
+# fenced code elided, and every `tool_use` / `tool_result` / `thinking` block dropped by
+# `text.text_of` (asserted by `activity_rerun.assert_blind`, and by a test that proves the exact-
+# equality half of that assertion bites). No tool name, no program, no action, no count, no
+# volume ever reached the labeller. The blind is enforced by tooling, not promised.
+#
+# OVERLAP with the 100-window activity sample and the 120-window observable sample is ZERO,
+# asserted in `sample` over 217 prior `(prefix, stamp)` keys.
+#
+# VOCABULARY — the production `Activities` set (internal/agent/enrich/labels.go), unchanged:
+#   generate    generating new content from scratch: draft, write, code, ideate
+#   transform   transforming existing content: rewrite, summarize, translate, reformat
+#   analyze     analyzing and reasoning over inputs: compute, evaluate, decide
+#   retrieve    gathering and researching information, looking things up
+#   converse    interactive question answering or brainstorming
+#   review      reviewing, critiquing, or checking existing work for errors
+#
+# RUBRIC, fixed here before labelling:
+#
+# 1. The question is what the AI+user system SPENT THE HOUR DOING, judged from what was said.
+#
+# 2. HIERARCHY OF DEMAND, not volume. If the hour sustained authoring it is `generate` however
+#    much reading preceded it. (`prose-activity` Amendment 1 measured the volume trap: a
+#    dominant-class rollup produced a 95.4% majority baseline, unbeatable by construction.)
+#
+# 3. THE ONE CONTENTIOUS CALL, resolved exactly as attempt one resolved it, and stated here so it
+#    is not a post-hoc choice: editing code to IMPLEMENT a feature, a fix, or a refactor with new
+#    behaviour is `generate` — the gloss names "code" explicitly. `transform` is reserved for
+#    changing the FORM of existing content while preserving its substance: reformat, rewrite,
+#    translate, convert, summarize. Attempt one's post-hoc collapse A bounded how much this call
+#    can matter (+0.013 conceding it entirely) and it is scored again here as a declared
+#    diagnostic, so the verdict does not rest on it either way.
+#
+# 4. `review` is checking EXISTING work for errors: code review, verifying a claim someone made,
+#    running a suite to find out whether something is broken, auditing.
+#
+# 5. `analyze` is reasoning over inputs to reach a conclusion: measuring, evaluating options,
+#    computing a number, deciding. The output is a judgement, not an artifact.
+#
+# 6. `retrieve` is looking things up — where does X live, what does Y do, gather the facts.
+#
+# 7. `converse` is discussion, brainstorming, or question-answering that produces no artifact.
+#
+# 8. When two readings apply, pick what the hour was FOR — the demand the user made — not the
+#    incidental supporting work. Every window gets exactly one label; there is no abstention,
+#    matching attempt one (which had none).
+#
+# Format: `<wid> <activity>`, one per line.
+agent-a5#t0209-20260804T1923 retrieve
+agent-a6#t0365-20260812T1850 review
+16c69396#t0303-20260810T1802 generate
+aa59ef4c#t0172-20260805T1401 review
+agent-aa#t0402-20260813T2008 review
+agent-a9#t0392-20260812T0258 review
+agent-a6#t0137-20260813T1727 generate
+agent-a1#t0236-20260802T2358 generate
+agent-a9#t0267-20260804T1621 review
+agent-a4#t0248-20260804T1549 review
+agent-ad#t0297-20260728T1513 review
+79a2c5e3#t0159-20260730T1308 generate
+agent-aa#t0276-20260804T2049 generate
+43492104#t0451-20260811T1231 generate
+agent-a0#t0453-20260811T0617 review
+43492104#t0451-20260811T1411 converse
+2927f65b#t0011-20260724T1641 retrieve
+agent-af#t0096-20260811T1544 generate
+9ac2ecfc#t0171-20260807T1834 generate
+agent-ab#t0408-20260813T2016 review
+agent-ae#t0125-20260725T2307 review
+453451c2#t0493-20260724T1807 analyze
+agent-a1#t0457-20260810T2300 generate
+32b52295#t0019-20260806T1927 generate
+16c69396#t0303-20260820T1712 analyze
+agent-a3#t0168-20260801T1848 retrieve
+agent-a9#t0068-20260810T1916 generate
+agent-ac#t0478-20260811T1909 generate
+32b52295#t0019-20260806T2107 retrieve
+agent-a4#t0045-20260811T1900 review
+agent-a7#t0139-20260812T2006 review
+agent-a2#t0167-20260802T1738 retrieve
+agent-ae#t0432-20260812T0300 review
+c2019c5e#t0211-20260805T2107 review
+72d3e8b1#t0129-20260811T1431 generate
+agent-ac#t0302-20260812T0009 analyze
+f745121b#t0290-20260729T2325 generate
+agent-a7#t0373-20260812T0114 generate
+agent-ab#t0149-20260812T0031 generate
+aa59ef4c#t0172-20260805T1451 converse
+16c69396#t0303-20260813T2012 generate
+agent-ac#t0221-20260806T0023 review
+129e9a80#t0301-20260810T1712 converse
+2927f65b#t0011-20260723T1631 generate
+agent-a6#t0049-20260810T2004 review
+agent-af#t0288-20260804T1958 generate
+0ac739ad#t0299-20260805T1751 generate
+agent-ae#t0433-20260812T1854 review
+agent-aa#t0074-20260810T1949 review
+agent-a3#t0226-20260726T1656 retrieve
+9aaa379a#t0166-20260802T2215 generate
+agent-a2#t0458-20260810T2247 review
+16c69396#t0303-20260813T2102 generate
+6e2a58f9#t0106-20260726T0055 generate
+agent-ad#t0008-20260724T1423 retrieve
+79a2c5e3#t0159-20260731T1728 generate
+9a1c9df2#t0494-20260822T1801 converse
+43492104#t0451-20260811T1551 analyze
+agent-ac#t0151-20260811T2044 generate
+agent-a7#t0472-20260811T0619 review
+2927f65b#t0011-20260722T1441 generate
+1a3aa6d2#t0010-20260721T2351 generate
+agent-a2#t0319-20260813T2004 review
+agent-aa#t0399-20260813T2008 review
+agent-a9#t0474-20260810T1904 generate
+36821116#t0021-20260727T1909 generate
+agent-a1#t0234-20260803T0110 generate
+agent-ac#t0302-20260811T1909 generate
+agent-a1#t0034-20260810T2229 generate
+43492104#t0451-20260808T0021 analyze
+agent-ac#t0197-20260805T1351 generate
+agent-a3#t0213-20260805T2347 review
+agent-ac#t0082-20260810T2229 retrieve
+72d3e8b1#t0129-20260811T0251 retrieve
+agent-ae#t0156-20260812T0101 retrieve
+agent-af#t0100-20260811T1606 generate
+agent-ad#t0426-20260813T1910 generate
+agent-a1#t0032-20260810T2023 review
+agent-a7#t0376-20260812T1851 review
+agent-af#t0444-20260813T1835 generate
+agent-ad#t0489-20260810T1908 generate
+fff01ac3#t0298-20260720T1709 generate
+agent-a2#t0177-20260804T2125 transform
+agent-ad#t0154-20260812T0043 transform
+9aaa379a#t0166-20260802T1715 generate
+agent-a1#t0034-20260810T2139 generate
+5dcc6b3a#t0105-20260820T1430 converse
+6e2a58f9#t0106-20260725T2315 generate
+6e2a58f9#t0106-20260725T1905 generate
+139be731#t0003-20260724T1558 converse
+d46a1e76#t0224-20260726T1807 generate
+agent-a9#t0217-20260806T0101 review
+16c69396#t0303-20260814T2022 analyze
+2927f65b#t0011-20260722T0031 analyze
+43492104#t0451-20260809T2351 analyze
+4658e5d5#t0024-20260813T2053 analyze
+16c69396#t0303-20260810T1442 generate
+agent-af#t0443-20260813T2004 review
+agent-af#t0098-20260811T1701 review
+agent-a5#t0345-20260813T2005 review
+agent-ab#t0220-20260805T1930 retrieve
+agent-a0#t0308-20260813T2008 review
+agent-ab#t0150-20260812T1922 generate
+9a1c9df2#t0494-20260822T1531 analyze
+72d3e8b1#t0129-20260813T1901 generate
+agent-a6#t0364-20260812T1851 review
+agent-ad#t0284-20260804T1329 generate
+agent-a0#t0307-20260812T0302 review
+agent-a8#t0062-20260811T1803 generate
+agent-aa#t0073-20260811T1609 review
+agent-a4#t0215-20260806T0315 retrieve
+1a3aa6d2#t0010-20260722T0131 generate
+agent-a2#t0325-20260813T2008 review
+3bc7bb39#t0448-20260822T2011 analyze
+agent-a9#t0393-20260813T2009 review
+agent-a3#t0243-20260802T2357 generate
+6e2a58f9#t0106-20260726T0005 generate
+9aaa379a#t0166-20260802T2125 generate
+129e9a80#t0301-20260811T1132 analyze
+agent-a0#t0231-20260804T2044 review
+3bc7bb39#t0448-20260822T2101 analyze
+79a2c5e3#t0159-20260731T1458 generate
+agent-a4#t0462-20260810T2333 review
+5a36f1d7#t0102-20260723T1747 converse
+agent-af#t0099-20260810T2006 transform
+agent-a7#t0054-20260810T1905 review
+d46a1e76#t0224-20260726T1717 generate
+f36553d1#t0229-20260803T0113 converse
+43492104#t0451-20260812T0011 converse
+79a2c5e3#t0159-20260731T1408 generate
+16c69396#t0303-20260811T1722 analyze
+agent-ab#t0410-20260813T2008 review
+f36553d1#t0229-20260804T1943 review
+12c80ab4#t0002-20260720T1622 generate
+agent-af#t0157-20260811T2026 review
+agent-ae#t0202-20260804T2052 generate
+3bc7bb39#t0448-20260823T0021 generate
+agent-ad#t0487-20260810T2209 generate
+agent-ae#t0435-20260812T0300 review
+agent-a4#t0449-20260823T0047 review
+agent-ad#t0285-20260804T1442 review
+16c69396#t0303-20260810T1122 generate
+129e9a80#t0301-20260811T1902 converse
+71d70b51#t0128-20260806T1028 review
+6e2a58f9#t0106-20260724T1945 generate
+43492104#t0451-20260807T2331 analyze
+agent-a9#t0270-20260803T0014 review
+72d3e8b1#t0129-20260812T1941 generate
+16c69396#t0303-20260813T1922 review
+129e9a80#t0301-20260811T2042 converse

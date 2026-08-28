@@ -105,3 +105,61 @@ func TestJobFromMapsAllFields(t *testing.T) {
 		t.Fatalf("JobFrom mismapped: %+v", j)
 	}
 }
+
+// TestDuplicateIsAcceptedNot429 pins the distinction the ingress used to lose.
+//
+// ⚠️ `Offer` returns false for FOUR different reasons — already in flight,
+// recently completed (dedup), queue genuinely full, queue closed — and the
+// ingress collapsed all of them into 429. Only the last two are backpressure.
+//
+// A dedup is the opposite of "try again later": the prompt is already queued or
+// already published, so there is nothing for the caller to retry and nothing
+// wrong. Returning 429 made the hook (internal/hook/forward.go treats any >=400
+// as failure) durably SPOOL a pointer for a prompt the daemon had already
+// finished, which is then drained on the next start and offered again. Observed
+// live: a POST for a prompt published one second earlier came back 429 while the
+// 1024-slot queue held single digits.
+//
+// 202 is the honest answer, and it is what makes /enrich idempotent: the hook
+// and the transcript watcher legitimately see the same prompt, and that overlap
+// is DESIGNED (queue.Complete exists for it). It must not read as overload.
+func TestDuplicateIsAcceptedNot429(t *testing.T) {
+	q := queue.New(10)
+	h := Handler(q, "s3cret")
+
+	if rr := post(t, h, "s3cret", pointerBody); rr.Code != http.StatusAccepted {
+		t.Fatalf("first offer: code = %d, want 202", rr.Code)
+	}
+	// Same key again while still queued: in flight, not overloaded.
+	if rr := post(t, h, "s3cret", pointerBody); rr.Code != http.StatusAccepted {
+		t.Fatalf("in-flight duplicate: code = %d, want 202 (429 makes the hook spool a "+
+			"redundant pointer for work already taken on)", rr.Code)
+	}
+
+	// And after it has been fully processed, the recent-completion dedup must
+	// answer the same way. This is the exact shape that failed live.
+	j, ok := q.Next()
+	if !ok {
+		t.Fatal("queue drained unexpectedly")
+	}
+	q.Complete(j)
+	if rr := post(t, h, "s3cret", pointerBody); rr.Code != http.StatusAccepted {
+		t.Fatalf("completed duplicate: code = %d, want 202", rr.Code)
+	}
+}
+
+// A genuinely full queue is still 429 — that is real backpressure and the hook
+// SHOULD spool it, because the work has not been taken on.
+func TestFullQueueIsStill429(t *testing.T) {
+	q := queue.New(1)
+	h := Handler(q, "s3cret")
+	// Fill the single slot with a DIFFERENT key, so the rejection below is
+	// capacity and not dedup.
+	other := `{"source":{"id":"claude_code","origin":"hook"},"correlation":{"scheme":"prompt_id","id":"OTHER"},"pointer":{"transcript_path":"/t","prompt_id":"OTHER"}}`
+	if rr := post(t, h, "s3cret", other); rr.Code != http.StatusAccepted {
+		t.Fatalf("seed offer: code = %d, want 202", rr.Code)
+	}
+	if rr := post(t, h, "s3cret", pointerBody); rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("full queue: code = %d, want 429", rr.Code)
+	}
+}

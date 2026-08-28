@@ -43,3 +43,19 @@ resp=$(curl -sf -m 90 -X POST "http://127.0.0.1:$PORT/classify" -H 'Content-Type
 echo "$resp" | grep -q '"task_type"' \
   || { echo "FAIL [$LABEL]: classify returned no result: $resp"; exit 1; }
 echo "PASS [$LABEL]: frozen sidecar spawns a worker and returns: $resp"
+
+# /pii is the second import path this gate has to cover, and /classify cannot
+# stand in for it: presidio and phonenumbers are pulled in lazily from inside
+# app/pii.py's engine builder, so they are invisible to PyInstaller's analysis
+# and only a REAL scan through the frozen bundle proves the spec collected them.
+# Same failure class as the worker spawn above — green everywhere except the
+# thing we ship. The fixtures are synthetic: an SSN valid under every SSA rule
+# and on no published example list (a documentation constant would be
+# suppressed by app/wellknown.py and prove nothing).
+echo "== [$LABEL] frozen /pii gate: presidio + phonenumbers must import from the bundle =="
+pii=$(curl -sf -m 120 -X POST "http://127.0.0.1:$PORT/pii" -H 'Content-Type: application/json' \
+  -d '{"text":"update the record, ssn 321-54-9876, and call (415) 682-4470"}') \
+  || { echo "FAIL [$LABEL]: frozen /pii failed (presidio/phonenumbers not collected?)"; echo "--- sidecar log ---"; tail -30 /tmp/freeze-check-sidecar.log; exit 1; }
+echo "$pii" | grep -q '"ssn"' \
+  || { echo "FAIL [$LABEL]: /pii answered but found no ssn — the analyzer built without its recognizers: $pii"; exit 1; }
+echo "PASS [$LABEL]: frozen sidecar scans for PII and returns: $pii"

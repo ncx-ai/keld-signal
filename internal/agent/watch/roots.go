@@ -74,6 +74,57 @@ func discoverRoots(home, goos string) []Root {
 	return roots
 }
 
+// AnalyzeRoots returns the directories the sidecar's /analyze endpoint is
+// allowed to read transcripts from. The daemon passes them at sidecar spawn
+// (see internal/agent/daemon/sidecarenv.go); /analyze refuses any path that
+// does not resolve inside one, because it is the sidecar's only endpoint that
+// opens an arbitrary filesystem path as this user and returns content derived
+// from it — unauthenticated, over loopback, on a possibly multi-user host.
+//
+// This is deliberately NOT DiscoverRoots(). Two differences, both load-bearing:
+//
+//   - The entries are the stable ANCESTORS of each layout (~/.gemini/tmp, not
+//     ~/.gemini/tmp/*/chats), because session directories are created as
+//     sessions start. The sidecar is spawned once, at daemon startup, so an
+//     allowlist of today's globbed leaves would refuse every transcript written
+//     afterwards.
+//   - Existence is not required. Discovery skips missing directories because
+//     there is nothing to watch; an allowlist that did the same would shrink to
+//     whatever was on disk at spawn time and quietly stop covering a tool the
+//     user installs later.
+//
+// Operator-configured roots (KELD_WATCH_ROOTS) are included: the two settings
+// describe the same files, and a machine whose layout has moved must not have
+// capture working while analysis 403s.
+func AnalyzeRoots() []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	return analyzeRoots(home, runtime.GOOS)
+}
+
+// analyzeRoots is the testable core (home + GOOS explicit).
+func analyzeRoots(home, goos string) []string {
+	codexHome := os.Getenv("CODEX_HOME")
+	if codexHome == "" {
+		codexHome = filepath.Join(home, ".codex")
+	}
+	roots := []string{
+		filepath.Join(home, ".claude", "projects"),
+		filepath.Join(codexHome, "sessions"),
+		filepath.Join(home, ".gemini", "tmp"),
+	}
+	if goos == "darwin" {
+		roots = append(roots, filepath.Join(home, "Library", "Application Support", "Claude",
+			"local-agent-mode-sessions"))
+	}
+	for _, r := range ExtraRootsFromEnv() {
+		roots = append(roots, r.Dir)
+	}
+	return roots
+}
+
 // extraRoots parses the envExtraRoots spec. Entries that are malformed, name no
 // source, or point at a path that doesn't exist are skipped rather than
 // failing discovery — a typo in one entry must not cost the built-in roots.

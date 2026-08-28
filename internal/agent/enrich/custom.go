@@ -3,9 +3,16 @@ package enrich
 // BuiltinPassKeys are the compiled, hand-tuned built-in passes (see
 // extractors.go Wave1/Wave2). Remote custom passes with these keys are skipped:
 // built-in vocab is authoritative and never overridden.
+//
+// `speech_act` is deliberately NOT here any more: the built-in pass was dropped
+// at schema v9 for scoring below a constant, so there is no authoritative vocab
+// left to protect. An org may now define its own — it publishes under
+// `custom.speech_act`, a separate namespace from the removed top-level field,
+// and a vocabulary the org tuned itself is exactly the alternative the study
+// named to dropping ours.
 var BuiltinPassKeys = map[string]bool{
 	"task_type": true, "sensitivity": true, "domain": true, "activity_type": true,
-	"personal": true, "function_guess": true, "speech_act": true, "subcategory": true,
+	"personal": true, "function_guess": true, "subcategory": true,
 }
 
 // DefaultClsThreshold is used for a multi_label pass that leaves it unset.

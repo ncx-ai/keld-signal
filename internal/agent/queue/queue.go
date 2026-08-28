@@ -58,27 +58,65 @@ func New(capacity int) *Queue {
 // poll loop).
 func (q *Queue) Done() <-chan struct{} { return q.done }
 
-// Offer enqueues a job. It returns false (and counts a drop) when the queue is
-// full; it returns false WITHOUT counting a drop when the key is already queued.
-// It never blocks. The closed-check and send are done under the lock so Offer is
-// mutually exclusive with Close (no send-on-closed-channel panic).
-func (q *Queue) Offer(j Job) bool {
+// Outcome is why an Offer did or did not enqueue.
+//
+// ⚠️ IT IS A FOUR-WAY ANSWER AND COLLAPSING IT TO A BOOL CAUSED TWO BUGS. Offer
+// used to return false for all of "already in flight", "recently completed",
+// "queue full" and "closed", and both callers read that false as backpressure:
+//
+//   - the ingress answered 429, so the hook (which treats any >=400 as failure)
+//     durably SPOOLED a pointer for a prompt the daemon had already published.
+//     Observed live: a POST for a prompt finished one second earlier came back
+//     429 while the 1024-slot queue held single digits.
+//   - drainEnrichSpool kept the spool row and retried it on every sweep FOREVER,
+//     because a row is deleted only when its offer "succeeds" — so a duplicate
+//     could never drain.
+//
+// Only Full and Closed are backpressure. Duplicate is the opposite: the work has
+// been taken on, and the hook/watcher overlap that produces it is DESIGNED (see
+// Complete).
+type Outcome int
+
+const (
+	// Accepted: the job is now queued.
+	Accepted Outcome = iota
+	// Duplicate: this key is already queued or was recently completed. The work
+	// is taken on; there is nothing to retry.
+	Duplicate
+	// Full: real backpressure. The caller should keep the work and retry.
+	Full
+	// Closed: the queue is shut down.
+	Closed
+)
+
+// TakenOn reports whether the daemon has assumed responsibility for this job, so
+// a caller holding a durable copy (a spool row) may drop it. True for Accepted
+// and Duplicate; false for the two that mean "still yours".
+func (o Outcome) TakenOn() bool { return o == Accepted || o == Duplicate }
+
+// Offer enqueues a job and reports what happened. It never blocks. The
+// closed-check and send are done under the lock so Offer is mutually exclusive
+// with Close (no send-on-closed-channel panic). Only Full counts a drop.
+func (q *Queue) Offer(j Job) Outcome {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	k := j.Key()
-	if q.closed || q.inflight[k] {
-		return false
+	if q.closed {
+		return Closed
+	}
+	if q.inflight[k] {
+		return Duplicate
 	}
 	if _, seen := q.recent[k]; seen {
-		return false
+		return Duplicate
 	}
 	select {
 	case q.ch <- j:
 		q.inflight[k] = true
-		return true
+		return Accepted
 	default:
 		q.dropped++
-		return false
+		return Full
 	}
 }
 
@@ -116,6 +154,12 @@ func (q *Queue) Close() {
 		close(q.done)
 	}
 }
+
+// Depth returns the number of jobs waiting to be picked up. Read by the
+// auto-update quiesce wait, which prefers to restart the daemon when nothing is
+// mid-flight. Advisory only: the spool makes a restart survivable either way,
+// so no caller may treat a non-zero depth as a reason not to proceed.
+func (q *Queue) Depth() int { return len(q.ch) }
 
 // Dropped returns the number of shed jobs (full-queue drops).
 func (q *Queue) Dropped() int {

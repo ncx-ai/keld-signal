@@ -20,10 +20,15 @@ const DefaultPassTimeout = 30 * time.Second
 type Option func(*runCfg)
 
 type runCfg struct {
-	passTimeout time.Duration
-	parent      context.Context
-	customW1    []Extractor
-	customW2    []Extractor
+	passTimeout    time.Duration
+	parent         context.Context
+	customW1       []Extractor
+	customW2       []Extractor
+	analyze        WorkstreamAnalyzer
+	piiScan        PIIScanner
+	transcriptPath string
+	promptID       string
+	resolved       ResolvedFacts
 }
 
 // WithPassTimeout sets the per-pass deadline. <= 0 disables it (no deadline).
@@ -46,6 +51,52 @@ func WithCustomExtractors(wave1, wave2 []Extractor) Option {
 	return func(c *runCfg) { c.customW1, c.customW2 = wave1, wave2 }
 }
 
+// WithCoordinates threads the job's COORDINATES (transcript path + prompt id,
+// never text) into the JobContext, for passes that characterise the window
+// around a prompt rather than the prompt's own text. Callers without a
+// transcript (eval harness, inline text) omit it.
+func WithCoordinates(transcriptPath, promptID string) Option {
+	return func(c *runCfg) { c.transcriptPath, c.promptID = transcriptPath, promptID }
+}
+
+// WithResolvedFacts threads the facts about the job's CHECKOUT that only the
+// daemon can resolve — the normalised remote, the branch, the .keld.toml project
+// name (see ResolvedFacts). The daemon resolves them once per job from
+// queue.Job.Cwd and they travel to the sidecar's /analyze, where the analysis
+// writes the repository identity as a series level.
+//
+// Deliberately an Option and not something a pass resolves for itself: the
+// sidecar client must do no filesystem IO, and neither must an extractor. Callers
+// with no cwd (the eval harness, inline text, localagent) omit it, and the zero
+// value is a normal answer rather than a failure.
+func WithResolvedFacts(r ResolvedFacts) Option {
+	return func(c *runCfg) { c.resolved = r }
+}
+
+// WithWorkstreams enables the deterministic workstream pass, backed by fn (the
+// daemon wires sidecar.Client.AnalyzeLabeled). Without it the pass does not run
+// at all — rather than run and fail — so callers with no analysis backend
+// (eval harness, localagent, tests) keep their previous facet set and are not
+// downgraded to pipeline_status "partial" by a facet they never asked for. It
+// is likewise ignored for sources the analysis cannot read (WorkstreamsEligible).
+func WithWorkstreams(fn WorkstreamAnalyzer) Option {
+	return func(c *runCfg) { c.analyze = fn }
+}
+
+// WithPIIScanner wires the personal-data backend the sensitivity facet detects
+// with (the daemon wires sidecar.Client.DetectPII — presidio behind /pii, no
+// GLiNER2, off the inference single-flight, so it is wired in ml_backend
+// "deterministic" too).
+//
+// Unlike WithWorkstreams, its absence does NOT unregister a pass: sensitivity
+// still runs on its credential layer. What absence changes is honesty — the
+// pass reports itself in facets_degraded, because ssn/credit_card/email/phone/
+// person/address then have no source at all and sensitivity:"none" would
+// otherwise read as "we looked" (see SensitivityExtractor.Degraded).
+func WithPIIScanner(fn PIIScanner) Option {
+	return func(c *runCfg) { c.piiScan = fn }
+}
+
 // passTimeoutFromEnv resolves the default per-pass deadline.
 func passTimeoutFromEnv() time.Duration {
 	if v := os.Getenv("KELD_ENRICH_PASS_TIMEOUT"); v != "" {
@@ -56,25 +107,93 @@ func passTimeoutFromEnv() time.Duration {
 	return DefaultPassTimeout
 }
 
-// runStage executes one extractor with panic isolation; ok=false on panic/error.
-func runStage(ex Extractor, ctx *JobContext) (out map[string]any, ok bool) {
+// modelFreeExtractor is an OPTIONAL Extractor capability (mirrors
+// alwaysRunner): a pass that has its own internal nil-Model branch and must
+// still be invoked when ctx.Model is nil (deterministic mode — see
+// settings.Settings.MLEnabled). Absence ⇒ the pass needs a Model and is
+// skipped rather than run, so it fails cleanly instead of nil-panicking
+// through ctx.Model.
+type modelFreeExtractor interface {
+	ModelFree() bool
+}
+
+// degradedExtractor is an OPTIONAL Extractor capability (mirrors
+// modelFreeExtractor): a pass that CAN run with only part of its evidence
+// available reports, per job, whether this run was one of those. It is a
+// capability rather than a sensitivity special case because the situation is
+// general — any pass that unions two evidence sources (a model half and a
+// deterministic half, two backends, a transcript that resolved and one that
+// did not) can lose one of them and still produce a value.
+//
+// A degraded pass is NOT a failed pass (it produced a real result) and NOT a
+// skipped pass (it ran). It is named in Profile.FacetsDegraded so the value it
+// produced is read as "from the checks that ran", never as a complete answer.
+//
+// Consulted only after a successful Run, with the same JobContext Run saw AND
+// the output Run returned. The output is passed because "was this run
+// degraded?" is a fact about what happened DURING the run — which backends
+// answered — and a pass whose evidence sources are network calls cannot
+// recompute that from ctx without making them again. Extractors must stay
+// read-only w.r.t. ctx, so the run's own output is the only honest channel.
+type degradedExtractor interface {
+	Degraded(ctx *JobContext, out map[string]any) bool
+}
+
+// passOutcome is what became of one pass. The SKIPPED case is distinct from
+// FAILED on purpose: "partial" must keep meaning "something that should have
+// worked did not". A pass that needs a Model under ml_backend "deterministic"
+// is not a degraded pass, it is a pass this mode structurally does not have —
+// the same distinction WithWorkstreams already draws one level up, where an
+// unwired analysis backend means the pass does not run at all rather than runs
+// and fails. Conflating the two made every deterministic-mode job report
+// "partial", which left an operator unable to tell a healthy deterministic
+// profile from a badly degraded auto-mode one.
+type passOutcome int
+
+const (
+	passOK passOutcome = iota
+	passFailed
+	passSkipped
+	// passDegraded: the pass RAN and produced a committable result, but with
+	// part of its evidence unavailable (see degradedExtractor). It commits
+	// exactly like passOK — the difference is only that the loss is named.
+	passDegraded
+)
+
+// runStage executes one extractor with panic isolation. A nil ctx.Model is a
+// deliberate, permanent state (deterministic mode has no model, not a transient
+// outage), so passes that need a Model and don't declare themselves
+// modelFreeExtractor are skipped BEFORE calling Run — reported as passSkipped
+// rather than relying on the recover below to catch the resulting
+// nil-interface-method panic. Passes that do declare ModelFree (e.g.
+// sensitivity's deterministic credential layer) still run, and must guard their
+// own ctx.Model use internally; if such a pass errors, that IS a failure.
+func runStage(ex Extractor, ctx *JobContext) (out map[string]any, res passOutcome) {
 	defer func() {
 		if r := recover(); r != nil {
-			out, ok = nil, false
+			out, res = nil, passFailed
 		}
 	}()
+	if ctx.Model == nil {
+		if mf, isModelFree := ex.(modelFreeExtractor); !isModelFree || !mf.ModelFree() {
+			return nil, passSkipped
+		}
+	}
 	o, err := ex.Run(ctx)
 	if err != nil {
-		return nil, false
+		return nil, passFailed
 	}
-	return o, true
+	if d, ok := ex.(degradedExtractor); ok && d.Degraded(ctx, o) {
+		return o, passDegraded
+	}
+	return o, passOK
 }
 
 // runStageBounded runs one extractor under its own deadline. On expiry the pass
 // is reported failed and abandoned: the stage's context is cancelled so a
 // ContextModel aborts its in-flight inference (reclaiming the sidecar's
 // single-flight slot) rather than leaving an orphan attempt running.
-func runStageBounded(ex Extractor, jc *JobContext, cfg runCfg) (map[string]any, bool) {
+func runStageBounded(ex Extractor, jc *JobContext, cfg runCfg) (map[string]any, passOutcome) {
 	if cfg.passTimeout <= 0 {
 		return runStage(ex, jc)
 	}
@@ -92,18 +211,18 @@ func runStageBounded(ex Extractor, jc *JobContext, cfg runCfg) (map[string]any, 
 
 	type outcome struct {
 		out map[string]any
-		ok  bool
+		res passOutcome
 	}
 	done := make(chan outcome, 1) // buffered: an abandoned pass must not block on send
 	go func() {
-		o, ok := runStage(ex, stage)
-		done <- outcome{o, ok}
+		o, res := runStage(ex, stage)
+		done <- outcome{o, res}
 	}()
 	select {
 	case r := <-done:
-		return r.out, r.ok
+		return r.out, r.res
 	case <-sctx.Done():
-		return nil, false
+		return nil, passFailed // a deadline is a failure, not a structural absence
 	}
 }
 
@@ -124,7 +243,16 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		o(&cfg)
 	}
 	ctx := NewJobContext(text, source, meta, m)
-	exs := append(Wave1(), cfg.customW1...)
+	ctx.TranscriptPath, ctx.PromptID = cfg.transcriptPath, cfg.promptID
+	ctx.Resolved = cfg.resolved
+	exs := append(Wave1(cfg.piiScan), cfg.customW1...)
+	// Registered only when an analysis backend exists AND the analysis can read
+	// this source's transcripts: an ineligible source would fail the pass on
+	// every job and downgrade the profile to "partial" for a facet that was
+	// never obtainable (see WorkstreamsEligible).
+	if cfg.analyze != nil && WorkstreamsEligible(source) {
+		exs = append(exs, WorkstreamsExtractor{Analyze: cfg.analyze})
+	}
 
 	// Partition Wave1 into always-run (governance + gate signal) and gated
 	// (semantic). Wave1 passes are mutually independent, so committing them in
@@ -139,42 +267,59 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 	}
 
 	anyFailed := false
+	var skipped, degraded []string
 	commit := func(group []Extractor) {
 		type res struct {
 			name string
 			out  map[string]any
-			ok   bool
+			res  passOutcome
 		}
 		results := make([]res, len(group))
 		for i, ex := range group {
-			out, ok := runStageBounded(ex, ctx, cfg)
-			results[i] = res{ex.Name(), out, ok}
+			out, o := runStageBounded(ex, ctx, cfg)
+			results[i] = res{ex.Name(), out, o}
 		}
 		for _, r := range results {
-			if !r.ok {
+			switch r.res {
+			case passSkipped:
+				skipped = append(skipped, r.name)
+			case passFailed:
 				anyFailed = true
-				continue
+			default:
+				if r.res == passDegraded {
+					degraded = append(degraded, r.name)
+				}
+				ctx.Set(r.name, r.out)
 			}
-			ctx.Set(r.name, r.out)
 		}
 	}
 
-	// Always-run first, so speech_act is committed before the gate decision.
+	// Always-run first: governance (sensitivity) commits before the gate decides.
 	commit(always)
 
-	// Gate: only when enabled AND the turn is content-free (no-model pre-filter
-	// OR speech_act==fragment). Governance/gate passes above already ran.
-	gateOff := gateEnabled() && (prefilterContentFree(text) || speechActFragment(ctx))
+	// Gate: only when enabled AND the turn is content-free. The decision is now
+	// MODEL-FREE — the approval lexicon is the whole of it. The second branch
+	// used to be speech_act=="fragment"; that facet was dropped at schema v9 for
+	// scoring below a constant, and its own validation measured the pre-filter at
+	// recall 100% on-corpus with the fragment branch adding 0 gate-offs the
+	// lexicon did not already catch (see the removal note in gate.go).
+	gateOff := gateEnabled() && prefilterContentFree(text)
 
 	ran := append([]Extractor{}, always...)
 	wave2 := append(Wave2(), cfg.customW2...)
 	if !gateOff {
 		commit(gated)
 		for _, ex := range wave2 {
-			if out, ok := runStageBounded(ex, ctx, cfg); ok {
-				ctx.Set(ex.Name(), out)
-			} else {
+			switch out, o := runStageBounded(ex, ctx, cfg); o {
+			case passSkipped:
+				skipped = append(skipped, ex.Name())
+			case passFailed:
 				anyFailed = true
+			default:
+				if o == passDegraded {
+					degraded = append(degraded, ex.Name())
+				}
+				ctx.Set(ex.Name(), out)
 			}
 		}
 		ran = append(append(ran, gated...), wave2...)
@@ -205,11 +350,29 @@ func Run(text, source string, meta Meta, m Model, opts ...Option) Profile {
 		Activity:          labeledFrom(ctx.Get("activity_type"), "activity_type", "activity_type"),
 		Personal:          labeledFrom(ctx.Get("personal"), "personal", "personal"),
 		FunctionGuess:     labeledFrom(ctx.Get("function_guess"), "function_guess", "function_guess"),
-		SpeechAct:         labeledFrom(ctx.Get("speech_act"), "speech_act", "speech_act"),
-		SpeechActAlt:      altsNamed(ctx.Get("speech_act"), "speech_act_alt"),
 		Subcategory:       labeledFrom(ctx.Get("subcategory"), "subcategory", "subcategory"),
 		SubcategoryAlt:    altsNamed(ctx.Get("subcategory"), "subcategory_alt"),
+		Workstreams:       workstreamsFrom(ctx.Get("workstreams")),
+		Dynamics:          dynamicsFrom(ctx.Get("workstreams")),
+		Effort:            effortFrom(ctx.Get("workstreams")),
+		PhysicalActs:      actsFrom(ctx.Get("workstreams")),
+		Files:             pathsFrom(ctx.Get("workstreams"), "files"),
+		Directories:       pathsFrom(ctx.Get("workstreams"), "directories"),
+		Components:        pathsFrom(ctx.Get("workstreams"), "components"),
+		HarnessTools:      identsFrom(ctx.Get("workstreams"), "harness_tools"),
+		Programs:          identsFrom(ctx.Get("workstreams"), "programs"),
+		ExternalSystems:   identsFrom(ctx.Get("workstreams"), "external_systems"),
+		Integrations:      identsFrom(ctx.Get("workstreams"), "integrations"),
+		NamedTerms:        identsFrom(ctx.Get("workstreams"), "named_terms"),
+		FileTypes:         identsFrom(ctx.Get("workstreams"), "file_types"),
+		ShellVerbs:        identsFrom(ctx.Get("workstreams"), "shell_verbs"),
+		Subagents:         identsFrom(ctx.Get("workstreams"), "subagents"),
+		McpServers:        identsFrom(ctx.Get("workstreams"), "mcp_servers"),
+		InventoryOmitted:  inventoryOmittedFrom(ctx.Get("workstreams")),
+		Prior:             priorFrom(ctx.Get("workstreams")),
 		PipelineStatus:    status,
+		FacetsSkipped:     skipped,
+		FacetsDegraded:    degraded,
 		ExtractorVersions: versions,
 		SchemaVersion:     SchemaVersion,
 		Custom:            custom,
@@ -265,6 +428,112 @@ func labeledFrom(out map[string]any, key, producer string) Labeled {
 		}
 	}
 	return Labeled{Value: "", Confidence: 0, Producer: producer}
+}
+
+// workstreamsFrom reads the committed workstream pass output. An empty set
+// (the analysis ran and found no dominant value anywhere) yields nil, so the
+// facet is omitted from the wire rather than published as an empty object.
+func workstreamsFrom(out map[string]any) map[string]Labeled {
+	if out != nil {
+		if ws, ok := out["workstreams"].(map[string]Labeled); ok && len(ws) > 0 {
+			return ws
+		}
+	}
+	return nil
+}
+
+// dynamicsFrom reads the dynamics half of the same committed pass output. Empty
+// yields nil, so a window the analysis could not compare publishes no key rather
+// than an empty object that would read as "we compared and found nothing".
+func dynamicsFrom(out map[string]any) map[string]Dynamic {
+	if out != nil {
+		if d, ok := out["dynamics"].(map[string]Dynamic); ok && len(d) > 0 {
+			return d
+		}
+	}
+	return nil
+}
+
+// effortFrom reads the effort half of the same committed pass output. A nil
+// block contributes nothing rather than a zeroed struct: every count would read 0
+// and every status "", which is a real-looking answer nobody measured.
+func effortFrom(out map[string]any) *Effort {
+	if out != nil {
+		if e, ok := out["effort"].(*Effort); ok {
+			return e
+		}
+	}
+	return nil
+}
+
+// actsFrom reads the physical-acts half of the same committed pass output. Empty
+// yields nil, so a window that recorded no act publishes no key rather than an
+// empty list that would read as "we looked and the hour did nothing".
+func actsFrom(out map[string]any) []Act {
+	if out != nil {
+		if a, ok := out["physical_acts"].([]Act); ok && len(a) > 0 {
+			return a
+		}
+	}
+	return nil
+}
+
+// pathsFrom reads one of the three file-path inventory halves of the same
+// committed pass output (key is "files", "directories" or "components"). Same
+// emptiness rule as actsFrom: nil rather than an empty list, so a window that
+// touched no path in that dimension publishes no key rather than one that reads
+// as "we looked and the hour touched nothing".
+func pathsFrom(out map[string]any, key string) []PathCount {
+	if out != nil {
+		if p, ok := out[key].([]PathCount); ok && len(p) > 0 {
+			return p
+		}
+	}
+	return nil
+}
+
+// identsFrom reads one of the four identifier-shaped inventory halves of the
+// same committed pass output (key is "harness_tools", "programs",
+// "external_systems" or "integrations") — the same emptiness rule pathsFrom
+// applies to the three path inventories, for the same reason: nil rather than
+// an empty list, so a window that used nothing at that dimension publishes no
+// key rather than one that reads as "we looked and the hour used nothing".
+func identsFrom(out map[string]any, key string) []NameCount {
+	if out != nil {
+		if p, ok := out[key].([]NameCount); ok && len(p) > 0 {
+			return p
+		}
+	}
+	return nil
+}
+
+// inventoryOmittedFrom reads the cut-visibility map beside the four inventories
+// above. Nil rather than an empty map when nothing was cut, so an untruncated
+// set of inventories publishes no key rather than one that reads as "we
+// checked and nothing was ever cut" — a fact this pass has no way to assert for
+// a sidecar too old to report it at all.
+func inventoryOmittedFrom(out map[string]any) map[string]int {
+	if out != nil {
+		if m, ok := out["inventory_omitted"].(map[string]int); ok && len(m) > 0 {
+			return m
+		}
+	}
+	return nil
+}
+
+// priorFrom reads the SESSION PRIOR half of the same committed pass output. It
+// reads its OWN key and never `workstreams`, which is the structural half of
+// "contrast, never fallback": there is no code path by which a session value can
+// arrive in the window's dimension map. Empty yields nil, so a window whose
+// session said nothing publishes no key rather than an empty object that would
+// read as "we looked at the session and it said nothing".
+func priorFrom(out map[string]any) map[string]Prior {
+	if out != nil {
+		if p, ok := out["prior"].(map[string]Prior); ok && len(p) > 0 {
+			return p
+		}
+	}
+	return nil
 }
 
 func altsFrom(out map[string]any) []Labeled {

@@ -28,6 +28,99 @@ func TestGitBranch(t *testing.T) {
 	}
 }
 
+// The cases production actually hits: 43.1% of recorded lines have a cwd that is NOT the git
+// root (measured over 62,920 lines of local transcripts — 17,036 of them in
+// keld-atlas/services/web alone), and every git worktree is in that set. Reading only
+// <cwd>/.git/HEAD returned no branch and no project for all of them.
+func TestGitBranchFromSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600)
+	sub := filepath.Join(root, "services", "web", "components")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitBranch(sub); got != "main" {
+		t.Fatalf("branch from a subdirectory: got %q, want main", got)
+	}
+	if got := repoRoot(sub); got != root {
+		t.Fatalf("repoRoot from a subdirectory: got %q, want %q", got, root)
+	}
+}
+
+// A worktree's .git is a FILE holding `gitdir: <path>`, and its HEAD lives at that path — so a
+// worktree checked out on a feature branch reported no branch at all, which is precisely where a
+// branch carries the most information.
+func TestGitBranchInWorktree(t *testing.T) {
+	base := t.TempDir()
+	main := filepath.Join(base, "repo")
+	wt := filepath.Join(main, ".claude", "worktrees", "feat-x")
+	gitdir := filepath.Join(main, ".git", "worktrees", "feat-x")
+	for _, d := range []string{filepath.Join(main, ".git"), gitdir, wt} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(main, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600)
+	os.WriteFile(filepath.Join(gitdir, "HEAD"), []byte("ref: refs/heads/feat/x\n"), 0o600)
+	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o600)
+	if got := gitBranch(wt); got != "feat/x" {
+		t.Fatalf("worktree branch: got %q, want feat/x", got)
+	}
+	sub := filepath.Join(wt, "services", "api")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitBranch(sub); got != "feat/x" {
+		t.Fatalf("worktree branch from a subdirectory: got %q, want feat/x", got)
+	}
+}
+
+// The walk must not escape the repository: a cwd outside any checkout stays empty rather than
+// inheriting a branch from an unrelated ancestor.
+func TestGitBranchStopsOutsideARepo(t *testing.T) {
+	dir := t.TempDir()
+	if got := gitBranch(dir); got != "" {
+		t.Fatalf("no .git anywhere above: got %q, want empty", got)
+	}
+	if got := repoRoot(dir); got != "" {
+		t.Fatalf("repoRoot with no .git: got %q, want empty", got)
+	}
+}
+
+// A removed worktree must not inherit the parent checkout's branch.
+func TestGitBranchDoesNotEscapeADeletedWorktree(t *testing.T) {
+	main := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(main, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(main, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600)
+	gone := filepath.Join(main, ".claude", "worktrees", "removed")
+	if got := gitBranch(gone); got != "" {
+		t.Fatalf("deleted worktree resolved to %q, want empty", got)
+	}
+	if got := repoRoot(gone); got != "" {
+		t.Fatalf("deleted worktree repoRoot: got %q, want empty", got)
+	}
+}
+
+func TestProjectNameFromSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, ".keld.toml"), []byte("name = \"Keld Atlas\"\n"), 0o600)
+	sub := filepath.Join(root, "services", "web")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := projectName(sub); got != "Keld Atlas" {
+		t.Fatalf("project from a subdirectory: got %q, want Keld Atlas", got)
+	}
+}
+
 func TestProjectName(t *testing.T) {
 	dir := t.TempDir()
 	if got := projectName(dir); got != "" {

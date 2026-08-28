@@ -1,16 +1,22 @@
-# Pinned because these are frozen into a shipped binary. An unpinned dependency here
-# does not fail at review time or at merge time — it changes what PyInstaller bundles on
-# whatever day the release is cut, so the first sign of a bad upgrade is a release whose
-# sidecar cannot load its model, on a runner nobody can attach a debugger to.
-fastapi==0.115.*
-uvicorn[standard]==0.32.*
-
-# gliner2 declares `torch` and `transformers` with NO version bounds under its `local`
-# extra, so pinning gliner2 alone constrains neither. transformers is pinned separately
-# below for that reason; it also transitively pins tokenizers, which is why that is not
-# listed here as well.
+# Exact pins, not a trailing-wildcard series (e.g. the old `fastapi==0.115.*`):
+# a wildcard on the minor component only floats within a series upstream has
+# already abandoned, so it silently freezes forever once the series ends —
+# these two sat 26 (fastapi) and 20 (uvicorn) minor versions behind for over a
+# year with nothing failing. Reproducibility for a PyInstaller-frozen binary
+# matters more than auto-drift here; scripts/check_dependency_staleness.py
+# (wired into CI, see .github/workflows/ci.yml) is the process that keeps an
+# exact pin from rotting silently the same way again.
+#
+# spacy/wordfreq/gliner2 carried the same risk (a `3.8.*`/`3.1.*` wildcard series, or no
+# constraint at all) until pinned exactly here — they feed the ML backend and the analysis
+# package's `term` level, so a silent resolver drift there is exactly as unreproducible as the
+# fastapi/uvicorn incident above.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
 gliner2[local]==1.3.2
 
+# gliner2 declares `torch` and `transformers` with NO version bounds under its `local`
+# extra, so pinning gliner2 alone constrains neither.
 # The model-loading half of the bundle, and the pair most likely to break it: a
 # transformers major that changes checkpoint handling turns the frozen sidecar into a
 # binary that starts, answers /health, and then fails every /classify. Pinned to the set
@@ -23,3 +29,49 @@ transformers==5.15.1
 # make the two installs interact in a way that differs per platform — the Linux job would
 # be resolving against a different index than macOS and Windows. Constraining torch
 # belongs with that script, not here; see the follow-up note in sidecar/README.md.
+bashlex==0.18
+spacy==3.8.15
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+wordfreq==3.1.1
+
+# Was already present transitively (transformers>=... and wordfreq both require it), but
+# app/analysis/match.py now `import regex` directly for its timeout= support on finditer/search —
+# a real interrupt point stdlib re lacks. Pinning it explicitly here is what turns "arrives
+# because something else happens to need it" into a declared dependency of this codebase; relying
+# on the transitive pull for a module we import by name is the exact trap numpy-via-pandas is
+# (AGENTS.md) — it works until an upstream drops it.
+regex==2026.6.28
+
+# PII detection for the sensitivity facet (app/pii.py): US_SSN, CREDIT_CARD (Luhn),
+# EMAIL_ADDRESS, PHONE_NUMBER (libphonenumber) + PERSON/LOCATION off the spaCy NER
+# already vendored above. Replaces a hand-rolled Go regex detector.
+#
+# PINNED ONE BEHIND LATEST, DELIBERATELY. presidio-analyzer 2.2.363 added a direct
+# `numpy>=1.19.0,<2.5.0` dependency, and this venv runs numpy 2.5.0 under
+# torch 2.12.1+cu130 — so 2.2.363/2.2.364 SILENTLY DOWNGRADE numpy to 2.4.6
+# underneath torch, which breaks at runtime rather than at install. 2.2.362 is the
+# last release with no numpy constraint; it installs additively (phonenumbers,
+# tldextract, requests-file) and leaves numpy and torch untouched.
+#
+# The cap is not a real incompatibility for us: upstream added it to unblock their
+# own CI (data-privacy-stack/presidio#2090), where numpy 2.5.0 broke spacy's
+# parser_model import under a torch+gliner+stanza+CUDA extras stack. That failure
+# does NOT reproduce here — spacy 3.8.15, parser_model and en_core_web_sm NER were
+# all verified working on numpy 2.5.0 in this venv. Revisit when upstream lifts the
+# cap (then move to the newest release); do NOT bump to 2.2.363+ while numpy is
+# 2.5.x without re-running the torch/GLiNER2 check.
+presidio-analyzer==2.2.362
+
+# ⚠️ psutil is a RUNTIME dependency and was satisfied only by ACCIDENT until now.
+# worker_manager._default_rss / _default_parent_rss / _default_ram read process
+# and system memory through it, and those are what the whole memory guard rests
+# on — the RSS ceiling, the parent reserve, the pressure eviction (AGENTS.md,
+# "Resource safety"). It was never declared here; it arrived transitively via
+# accelerate/peft, which come in behind gliner2[local]'s torch stack.
+#
+# That is fragile in the one direction that matters. The imports sit OUTSIDE their
+# try/except, so a build where accelerate or peft stops depending on psutil would
+# not degrade the guard — it would raise ModuleNotFoundError from inside it. CI
+# found this: the sidecar-tests job installs deliberately without torch/gliner2,
+# so it has no accelerate, so it had no psutil.
+psutil==7.2.2

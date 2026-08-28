@@ -6,6 +6,16 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
+// sensitiveLabels drives the fake's entity regexes. It is local to this test:
+// enrich no longer carries a sensitive-entity label vocabulary, because the
+// sensitivity facet no longer asks a model for entities at all. What the fake's
+// detection still backs in production is enrichtest.NewScan (the /pii stand-in),
+// which selects its own subset.
+var sensitiveLabels = map[string]string{
+	"email": "e", "phone": "p", "ssn": "s", "credit_card": "c",
+	"api_key": "k", "secret": "x", "person": "n", "address": "a",
+}
+
 func findEntity(es []enrich.Entity, label string) (enrich.Entity, bool) {
 	for _, e := range es {
 		if e.Label == label {
@@ -18,7 +28,7 @@ func findEntity(es []enrich.Entity, label string) (enrich.Entity, bool) {
 func TestFakeDetectsEmailAndKey(t *testing.T) {
 	m := NewFake()
 	text := "email me at jane@acme.com with key sk-live-ABCDEF0123456789"
-	es := m.Entities(text, enrich.SensitiveEntityLabels)
+	es := m.Entities(text, sensitiveLabels)
 	em, ok := findEntity(es, "email")
 	if !ok || text[em.Start:em.End] != "jane@acme.com" {
 		t.Fatalf("email span wrong: %+v", em)
@@ -48,7 +58,7 @@ func TestFakeClassifyFallsBackToGeneral(t *testing.T) {
 func TestFakeCreditCardLuhnTruePositive(t *testing.T) {
 	m := NewFake()
 	text := "please charge 4111 1111 1111 1111 for this order"
-	es := m.Entities(text, enrich.SensitiveEntityLabels)
+	es := m.Entities(text, sensitiveLabels)
 	if _, ok := findEntity(es, "credit_card"); !ok {
 		t.Fatalf("expected credit_card entity for valid Luhn number in %q, got %+v", text, es)
 	}
@@ -57,7 +67,7 @@ func TestFakeCreditCardLuhnTruePositive(t *testing.T) {
 func TestFakeCreditCardRejectsNonCardDigits(t *testing.T) {
 	m := NewFake()
 	text := "timestamp 20240101120000 logged"
-	es := m.Entities(text, enrich.SensitiveEntityLabels)
+	es := m.Entities(text, sensitiveLabels)
 	if e, ok := findEntity(es, "credit_card"); ok {
 		t.Fatalf("expected no credit_card entity for timestamp, got %+v", e)
 	}
@@ -66,7 +76,7 @@ func TestFakeCreditCardRejectsNonCardDigits(t *testing.T) {
 func TestFakePhoneMatchesRealNumber(t *testing.T) {
 	m := NewFake()
 	text := "call 555-123-4567 for details"
-	es := m.Entities(text, enrich.SensitiveEntityLabels)
+	es := m.Entities(text, sensitiveLabels)
 	if _, ok := findEntity(es, "phone"); !ok {
 		t.Fatalf("expected phone entity in %q, got %+v", text, es)
 	}
@@ -90,7 +100,7 @@ func TestFakeAbstainsOnUnknownTask(t *testing.T) {
 func TestFakePhoneIgnoresStreetAddress(t *testing.T) {
 	m := NewFake()
 	text := "123 Main St Apt 4"
-	es := m.Entities(text, enrich.SensitiveEntityLabels)
+	es := m.Entities(text, sensitiveLabels)
 	if e, ok := findEntity(es, "phone"); ok {
 		t.Fatalf("expected no phone entity for street address, got %+v", e)
 	}

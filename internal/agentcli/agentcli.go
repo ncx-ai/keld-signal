@@ -17,6 +17,7 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/daemon"
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/paths"
@@ -102,13 +103,44 @@ type installConfig struct {
 	apiURL  string // --api-url passthrough for local dev
 	yes     bool   // pass --yes to signal setup (implied when code is set)
 	jsonOut bool   // --json passthrough for installer UIs
+	// backend is the ml_backend a v2 install lands on. Default "deterministic"
+	// (resolved in runInstall, so a zero-value installConfig in a test lands
+	// where a real install does); "auto" restores the pre-v2 ML pipeline and
+	// "off" disables enrichment. It is written to agent-config.json because
+	// ml_backend has NO REMOTE OVERRIDE — the installer is the only lever that
+	// will ever exist for it.
+	backend string
 }
 
-// runInstall sets the user up, then registers the service. Order matters: the daemon
-// refuses to run until signal setup has written ~/.keld/hook.json, and installService
-// starts it immediately — so service install runs last. With a setup code the login+setup
-// run non-interactively regardless of TTY; without a code they run only in a real terminal.
-func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string, error), run stepRunner, installService func() error) error {
+// runInstall writes the v2 settings, sets the user up, then registers the service.
+//
+// ORDER MATTERS TWICE. The daemon refuses to run until signal setup has written
+// ~/.keld/hook.json and installService starts it immediately, so service install
+// runs LAST. And ml_backend is read at daemon STARTUP and never re-read, so the
+// config write runs FIRST — the restart inside installService (launchctl
+// bootout+bootstrap / systemctl restart / schtasks /End+/Run) is what makes the
+// new mode take effect in this same run. On macOS that is not academic: the pkg's
+// postinstall kickstarts the agent BEFORE opening onboard.command, so a daemon is
+// already running on the old settings when this is called.
+//
+// The config write happens in EVERY branch, the headless one included: a machine
+// that only registers the service still has to be configured, or a GUI-installer
+// install runs v1 behaviour until someone notices.
+//
+// With a setup code the login+setup run non-interactively regardless of TTY;
+// without a code they run only in a real terminal.
+func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string, error),
+	run stepRunner, writeConfig func(backend string, blocks bool) error, installService func() error) error {
+	backend := cfg.backend
+	if backend == "" {
+		backend = "deterministic"
+	}
+	// blocks is always true: it is what v2 IS. An operator who wants it off sets
+	// KELD_BLOCKS=0, which wins over the config file in both directions.
+	if err := writeConfig(backend, true); err != nil {
+		return fmt.Errorf("write agent-config.json: %w", err)
+	}
+
 	// A setup code may carry the host that minted it. Resolve it HERE rather than
 	// leaving it to `keld login`: cfg.apiURL is what puts --api-url on BOTH child
 	// commands, and `signal setup` has to target the same host as the login or it
@@ -124,6 +156,7 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 			cfg.apiURL = host
 		}
 	}
+
 	login := []string{"login"}
 	setup := []string{"signal", "setup"}
 	if cfg.apiURL != "" {
@@ -219,14 +252,18 @@ func NewRootCmd() *cobra.Command {
 			yes, _ := cmd.Flags().GetBool("yes")
 			apiURL, _ := cmd.Flags().GetString("api-url")
 			jsonOut, _ := cmd.Flags().GetBool("json")
-			cfg := installConfig{code: code, apiURL: apiURL, yes: yes, jsonOut: jsonOut}
-			return runInstall(cfg, stdoutIsTTY, resolveKeld, runStep, service.Install)
+			backend, _ := cmd.Flags().GetString("backend")
+			cfg := installConfig{code: code, apiURL: apiURL, yes: yes, jsonOut: jsonOut, backend: backend}
+			return runInstall(cfg, stdoutIsTTY, resolveKeld, runStep,
+				settings.WriteInstallDefaults, service.Install)
 		},
 	}
 	installCmd.Flags().String("code", "", "Redeem a one-time setup code for a non-interactive login (defaults to $KELD_SETUP_CODE).")
 	installCmd.Flags().Bool("yes", false, "Skip confirmation prompts during setup.")
 	installCmd.Flags().String("api-url", "", "Target a different Keld API base URL (e.g. http://localhost:8000) for local dev.")
 	installCmd.Flags().Bool("json", false, "Emit machine-readable NDJSON from login/setup (for installer UIs).")
+	installCmd.Flags().String("backend", "deterministic",
+		"Enrichment backend to configure: deterministic (v2 default — no model download), auto (the GLiNER2 pipeline), or off.")
 	root.AddCommand(installCmd)
 	root.AddCommand(&cobra.Command{
 		Use:   "uninstall",
@@ -236,6 +273,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newMetricsCmd())
 	root.AddCommand(newEnrichCmd())
 	root.AddCommand(newEvalCmd())
+	root.AddCommand(newStudyCmd())
 	root.AddCommand(&cobra.Command{
 		Use:   "status",
 		Short: "Show keld-agent service status.",
@@ -283,8 +321,9 @@ func serviceControlCmds() []*cobra.Command {
 // executeCmd runs root and, on error, prints it to stderr (once) before
 // returning exit code 1. The root command keeps SilenceErrors/SilenceUsage so
 // cobra prints neither the error nor usage; printing here is the single place a
-// returned error becomes visible. Without this, a daemon.Run failure (e.g. an
-// unconfigured agent) exits 1 with completely empty output.
+// returned error becomes visible. Without this, a daemon.Run failure exits 1
+// with completely empty output. (An unconfigured agent is no longer such a
+// failure: daemon.Run idles and waits for hook.json — see daemon.awaitConfig.)
 func executeCmd(root *cobra.Command, stderr io.Writer) int {
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(stderr, err)
