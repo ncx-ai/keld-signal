@@ -98,6 +98,11 @@ jobs:
         run: bash installers/macos/onboard_command_test.sh
       - name: Windows installer contract
         run: bash installers/windows/keld_agent_iss_test.sh
+      # A `#` between two backslash-continued arguments truncates the command. That
+      # shipped in installers.yml and cost v2.0.0 its Linux sidecar; valid YAML and
+      # every other gate stayed green.
+      - name: Workflow line-continuation guard
+        run: bash scripts/workflow_continuation_test.sh
 
   obfuscation-coverage:
     runs-on: ubuntu-latest

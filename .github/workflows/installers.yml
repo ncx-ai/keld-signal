@@ -40,7 +40,20 @@ on:
   # artifacts, no release needed. Works with no secrets at all (unsigned output), and
   # signs+notarizes when the Apple secrets ARE configured — workflow_dispatch runs do
   # receive secrets, which makes this the way to exercise signing without cutting a release.
+  # The same two inputs workflow_call takes, so a release whose installers job failed can be
+  # REPAIRED. Re-running the failed job re-runs the TAG's copy of this file, so a fix landed on
+  # main can never reach it — which is exactly the hole v2.0.0 fell through. Left empty (the
+  # default) this is still the plain unsigned dry run.
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Attach the built installers to the release tagged `release_tag`."
+        type: boolean
+        default: false
+      release_tag:
+        description: "Existing release tag to attach assets to (repair path). Empty = dry run."
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -414,19 +427,26 @@ jobs:
       # every quote it contains, which is how this kind of step rots.
       - name: Freeze + smoke sidecar in manylinux_2_28 (glibc 2.28 baseline)
         shell: bash
+        # ⚠️ KELD_OBFUSCATE is 0, NOT 1, and taking main's side of that merge wholesale would
+        # have re-broken the release. Main rewrote this job into a containerised freeze and
+        # carried its own `KELD_OBFUSCATE=1`; this branch had already turned obfuscation OFF
+        # because PyArmor's free tier caps each script at ~32KB and 7 of the 42 shipped sidecar
+        # files now exceed it (store.py 89KB, main.py 80KB, features.py 63KB, textembed.py 47KB,
+        # dynamics.py 47KB, ingest.py 39KB, analyze.py 36KB) — `pyarmor gen` then answers
+        # "ERROR out of license" and FAILS THE FREEZE on all three OSes. Measured cost of not
+        # noticing: the last green `installers` run was 2026-08-19, store.py crossed the cap on
+        # 08-23, and the pipeline was unbuildable for about a week with nothing surfacing it.
+        # Revert to 1 the day a paid licence exists; nothing else changes. See AGENTS.md.
+        #
+        # ⚠️ AND THIS COMMENT LIVES HERE, ABOVE `run:`, NOT INSIDE THE COMMAND. It was written
+        # between two backslash-continued `docker run` arguments, where bash ENDS the command at
+        # the `#` — so docker received no image and answered "requires at least 1 argument". That
+        # shipped: it is valid YAML and every unit gate passed, so nothing caught it until
+        # v2.0.0's release build failed and left the release without its Linux sidecar. A comment
+        # inside a line-continuation is not a comment; it is a truncation.
         run: |
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/work" -w /work \
-            # ⚠️ **0, NOT 1, and taking main's side of this merge wholesale would have re-broken
-            # the release.** Main rewrote this job into a containerised freeze and carried its own
-            # `KELD_OBFUSCATE=1` with it; this branch had already turned obfuscation OFF because
-            # PyArmor's free tier caps each script at ~32KB and 7 of the 42 shipped sidecar files
-            # now exceed it (store.py 89KB, main.py 80KB, features.py 63KB, textembed.py 47KB,
-            # dynamics.py 47KB, ingest.py 39KB, analyze.py 36KB) — `pyarmor gen` then answers
-            # "ERROR out of license" and FAILS THE FREEZE on all three OSes. Measured cost of not
-            # noticing: the last green `installers` run was 2026-08-19, store.py crossed the cap on
-            # 08-23, and the pipeline was unbuildable for about a week with nothing surfacing it.
-            # Revert to 1 the day a paid licence exists; nothing else changes. See AGENTS.md.
             -e KELD_OBFUSCATE=0 \
             -e HF_HOME=/work/hf-cache \
             -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
