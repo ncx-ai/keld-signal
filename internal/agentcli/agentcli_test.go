@@ -464,3 +464,52 @@ func TestRunInstallDefaultsToDeterministic(t *testing.T) {
 		t.Errorf("backend = %q with none given, want deterministic", cfgw.backend)
 	}
 }
+
+// A pairing code must set --api-url on BOTH child commands. If only login learned
+// the host, `signal setup` would re-resolve on its own and write the previous
+// endpoint into hook.json — a split-brain install that looks like it worked.
+func TestRunInstallPairingCodeSetsAPIURLOnBothSteps(t *testing.T) {
+	calls, run := recorder()
+	err := runInstall(installConfig{code: "atlas.keld.co/abcd-efgh"}, func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	want := []string{
+		"/fake/keld login --api-url https://atlas.keld.co --code ABCD-EFGH",
+		"/fake/keld signal setup --api-url https://atlas.keld.co --yes",
+	}
+	if strings.Join(*calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("steps = %v, want %v", *calls, want)
+	}
+}
+
+// An explicit --api-url outranks the host carried by the code.
+func TestRunInstallFlagBeatsPairingCodeHost(t *testing.T) {
+	calls, run := recorder()
+	err := runInstall(installConfig{code: "atlas.keld.co/ABCD-EFGH", apiURL: "http://localhost:8000"},
+		func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	for _, c := range *calls {
+		if !strings.Contains(c, "--api-url http://localhost:8000") {
+			t.Fatalf("explicit flag should win in every step, got %v", *calls)
+		}
+	}
+}
+
+// A bare code still works exactly as before — no host, no --api-url.
+func TestRunInstallBareCodeUnchanged(t *testing.T) {
+	calls, run := recorder()
+	err := runInstall(installConfig{code: "ABCD-EFGH"}, func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	want := []string{"/fake/keld login --code ABCD-EFGH", "/fake/keld signal setup --yes"}
+	if strings.Join(*calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("steps = %v, want %v", *calls, want)
+	}
+}

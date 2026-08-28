@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ncx-ai/keld-signal/internal/config"
@@ -583,4 +584,76 @@ func TestStatusModelState_ShowsWhatItCanDetermine(t *testing.T) {
 			t.Fatalf("expected no on-device-models section when nothing is needed or present; got:\n%s", out)
 		}
 	})
+}
+
+// doctor is what a user runs to answer "is my install actually working?", but it
+// only ever checked CONFIG. On a real machine it printed "No problems found."
+// while the spool held five abandoned legacy writes, the oldest a month old —
+// i.e. while enrichment had not delivered anything for weeks. Config validity is
+// not health, and reporting clean through a stuck spool is the failure mode that
+// makes a broken install look fine.
+func TestDoctorReportsStaleSpoolBacklog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+	// Pin ml_backend so this test isolates the SPOOL check. Without it the backend
+	// defaults to "auto", whose model check correctly reports GLiNER2 absent — a real
+	// finding, but not the one this test is about.
+	if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"ml_backend":"deterministic"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&config.Manifest{Tools: map[string]config.ToolManifest{}}).Save(); err != nil {
+		t.Fatalf("saving manifest: %v", err)
+	}
+	spoolDir := filepath.Join(home, "spool")
+	if err := os.MkdirAll(spoolDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"a.json.tmp", "b.json.tmp"} {
+		if err := os.WriteFile(filepath.Join(spoolDir, n), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newDoctorCmd()
+	err := cmd.RunE(cmd, nil)
+	if !errors.Is(err, errs.ErrSilentExit) {
+		t.Fatalf("doctor must FAIL on a stale spool backlog, got %v", err)
+	}
+	if out := buf.String(); !strings.Contains(out, "spool") {
+		t.Errorf("expected the spool backlog to be named in the output; got: %s", out)
+	}
+}
+
+// The clean case must stay clean: an empty spool directory is not a problem, and
+// neither is a spool directory that does not exist yet.
+func TestDoctorSilentOnHealthySpool(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+	// Pin ml_backend so this test isolates the SPOOL check. Without it the backend
+	// defaults to "auto", whose model check correctly reports GLiNER2 absent — a real
+	// finding, but not the one this test is about.
+	if err := os.WriteFile(paths.AgentConfigPath(), []byte(`{"ml_backend":"deterministic"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&config.Manifest{Tools: map[string]config.ToolManifest{}}).Save(); err != nil {
+		t.Fatalf("saving manifest: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "spool"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	orig := console.Out
+	console.Out = &buf
+	defer func() { console.Out = orig }()
+
+	cmd := newDoctorCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("doctor should pass on an empty spool; got %v", err)
+	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/daemon"
 	"github.com/ncx-ai/keld-signal/internal/agent/service"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/version"
@@ -138,6 +139,22 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 	// KELD_BLOCKS=0, which wins over the config file in both directions.
 	if err := writeConfig(backend, true); err != nil {
 		return fmt.Errorf("write agent-config.json: %w", err)
+	}
+
+	// A setup code may carry the host that minted it. Resolve it HERE rather than
+	// leaving it to `keld login`: cfg.apiURL is what puts --api-url on BOTH child
+	// commands, and `signal setup` has to target the same host as the login or it
+	// writes the previous endpoint into hook.json — a split-brain install where
+	// auth and telemetry point at different deploys and nothing reports an error.
+	if cfg.code != "" {
+		host, bare, err := auth.ParsePairingCode(cfg.code)
+		if err != nil {
+			return err
+		}
+		cfg.code = bare
+		if host != "" && cfg.apiURL == "" {
+			cfg.apiURL = host
+		}
 	}
 
 	login := []string{"login"}

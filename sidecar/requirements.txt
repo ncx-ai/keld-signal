@@ -14,6 +14,21 @@
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
 gliner2[local]==1.3.2
+
+# gliner2 declares `torch` and `transformers` with NO version bounds under its `local`
+# extra, so pinning gliner2 alone constrains neither.
+# The model-loading half of the bundle, and the pair most likely to break it: a
+# transformers major that changes checkpoint handling turns the frozen sidecar into a
+# binary that starts, answers /health, and then fails every /classify. Pinned to the set
+# that built and passed the frozen-worker smoke gate in v0.24.0.
+transformers==5.15.1
+
+# torch is deliberately NOT pinned here. ci-freeze-linux.sh installs it first from the
+# PyTorch CPU index (`--index-url .../whl/cpu`) to avoid dragging in the CUDA build, and
+# that wheel carries a local version label. Pinning the same version in this file would
+# make the two installs interact in a way that differs per platform — the Linux job would
+# be resolving against a different index than macOS and Windows. Constraining torch
+# belongs with that script, not here; see the follow-up note in sidecar/README.md.
 bashlex==0.18
 spacy==3.8.15
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl

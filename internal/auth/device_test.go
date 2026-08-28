@@ -351,3 +351,51 @@ func TestRequireAuthFlagOverrideBeatsStoredAPIURL(t *testing.T) {
 		t.Fatalf("explicit flag override should win, got %q", paths.APIBase())
 	}
 }
+
+// A forced `keld login` is exactly when the user may be moving this machine to a
+// different deploy, so it must NOT inherit the stored token's host. Regression for
+// a reinstall aimed at prod silently re-pairing to a stored localhost.
+//
+// KELD_API_URL points at a stub that rejects the device start, so the login fails
+// immediately: without it a forced login resolves to DefaultAPIURL and this test
+// would start a real device flow against prod and poll it for 15s.
+func TestRequireAuthForcedLoginIgnoresStoredAPIURL(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	t.Setenv("KELD_API_URL", srv.URL)
+	paths.SetAPIBaseOverride("")
+	defer paths.SetAPIBaseOverride("")
+	if err := Save(AuthData{AccessToken: "T", Principal: "p", Org: "o", APIURL: "http://localhost:8000"}); err != nil {
+		t.Fatal(err)
+	}
+	// force=true, noLogin=false. The login itself fails against the stub; all we assert
+	// is which host it was aimed at.
+	if _, err := RequireAuth(false, false, true); err == nil {
+		t.Fatal("expected the stubbed device start to fail")
+	}
+	if paths.APIBase() == "http://localhost:8000" {
+		t.Fatal("forced login must not pin to the stored token's host")
+	}
+	if paths.APIBase() != srv.URL {
+		t.Fatalf("forced login should target %q, got %q", srv.URL, paths.APIBase())
+	}
+}
+
+// The reuse path (force=false) still pins to the stored host, and with no stored
+// creds and nothing else set, resolution falls through to the built-in default.
+func TestAPIBaseFallsBackToDefaultWithNoStoredCreds(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	t.Setenv("KELD_API_URL", "")
+	paths.SetAPIBaseOverride("")
+	defer paths.SetAPIBaseOverride("")
+	// noLogin=true keeps this off the network: the lazy path reports absence instead.
+	if _, err := RequireAuth(true, false, false); err == nil {
+		t.Fatal("expected a not-logged-in error")
+	}
+	if paths.APIBase() != paths.DefaultAPIURL {
+		t.Fatalf("APIBase = %q, want %q", paths.APIBase(), paths.DefaultAPIURL)
+	}
+}

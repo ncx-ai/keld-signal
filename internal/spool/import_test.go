@@ -265,3 +265,56 @@ func TestImportLegacyEvictsWhenPageExceedsBudget(t *testing.T) {
 		}
 	}
 }
+
+// The pre-SQLite writer wrote "<id>.json.tmp" then renamed it to "<id>.json".
+// A crash between those two steps leaves the .tmp behind, and ImportLegacy's
+// ".json" suffix filter skipped it — so nothing in the system ever touched it
+// again. Found in the field: five such files, the oldest a month old, three of
+// them zero bytes.
+//
+// A COMPLETE .tmp is a real record whose rename never happened, so it must be
+// imported, not discarded — dropping it would lose queued work.
+func TestImportLegacyCompletesInterruptedRename(t *testing.T) {
+	dir := setHome(t)
+	os.MkdirAll(filepath.Join(dir, "spool"), 0o700)
+	b, _ := json.Marshal(inlinePtr("TMP1", "interrupted rename"))
+	if err := os.WriteFile(filepath.Join(dir, "spool", "TMP1.json.tmp"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := ImportLegacy()
+	if err != nil || n != 1 {
+		t.Fatalf("import: n=%d err=%v", n, err)
+	}
+	var got []string
+	Drain(func(p Pointer) error { got = append(got, p.Correlation.ID); return nil })
+	if len(got) != 1 || got[0] != "TMP1" {
+		t.Fatalf("interrupted-rename record lost: drained %v", got)
+	}
+	leftover, _ := filepath.Glob(filepath.Join(dir, "spool", "*.json*"))
+	for _, f := range leftover {
+		if filepath.Base(f) != "spool.db" {
+			t.Fatalf("temp file not cleaned up: %v", leftover)
+		}
+	}
+}
+
+// A truncated or zero-byte .tmp is an abandoned partial write with nothing
+// recoverable in it. It must be removed rather than accumulate forever.
+func TestImportLegacyRemovesUnusableTempFiles(t *testing.T) {
+	dir := setHome(t)
+	os.MkdirAll(filepath.Join(dir, "spool"), 0o700)
+	empty := filepath.Join(dir, "spool", "EMPTY.json.tmp")
+	partial := filepath.Join(dir, "spool", "PARTIAL.json.tmp")
+	os.WriteFile(empty, nil, 0o600)
+	os.WriteFile(partial, []byte(`{"source":{"id":"claude_c`), 0o600)
+
+	if _, err := ImportLegacy(); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	for _, f := range []string{empty, partial} {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Fatalf("unusable temp file %s should have been removed", filepath.Base(f))
+		}
+	}
+}
