@@ -132,7 +132,18 @@ flowchart LR
   first one — Claude Code opens a transcript with untimestamped `custom-title` /
   `mode` / `file-history-snapshot` records, the same trap `capture.scan`
   documents. Scoped to `claude_code`: Cowork's egress is blocked by design and
-  Codex/Gemini transcript names are not their OTLP session ids.
+  Codex/Gemini transcript names are not their OTLP session ids. The record is
+  LOADED at proxy construction, not started empty — otherwise a daemon restart
+  makes every session look untracked, and the first forward then writes that
+  empty map back, erasing the history rather than merely not reading it.
+  ⚠️ **And `teleproxy`'s tests now isolate `KELD_HOME` in a `TestMain`, because
+  they were writing the developer's real `~/.keld`.** `New()` resolves
+  `StatePath()` at construction and every successful forward persists, while most
+  tests there pass `t.TempDir()` only for the SPOOL — so the spool was isolated
+  and the state file was not. Running `go test ./...` on a live machine
+  overwrote its telemetry record, erased the per-session history, and silently
+  turned this very check inconclusive. A test that mutates the machine it runs on
+  is a worse defect than the one it checks for.
   ⚠️ **Telemetry now depends on the daemon**, where it did not before. Paid for
   with a bounded spool under `spool/telemetry` and not hoped away; a machine
   whose daemon never starts collects nothing, and `keld signal doctor` is the

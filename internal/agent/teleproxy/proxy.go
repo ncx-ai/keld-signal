@@ -97,6 +97,12 @@ func New(logsEndpoint, metricsEndpoint string, token func() string, secret, spoo
 		logs:      clientevents.NewTransport(logsEndpoint, token, filepath.Join(spoolDir, "logs")),
 		metric:    clientevents.NewTransport(metricsEndpoint, token, filepath.Join(spoolDir, "metrics")),
 		statePath: StatePath(),
+		// ⚠️ LOAD, don't start empty. The record is what tells doctor which
+		// running tools have never reached Atlas; a daemon restart that dropped
+		// it would make every session look untracked until each one forwarded
+		// again — and the first forward would then WRITE that empty map back,
+		// erasing the history rather than merely not reading it.
+		sessions: SessionsOnDisk(),
 	}
 	// Stamp every forward so a proxied machine stays distinguishable from a
 	// direct-push one while both populations exist. See PathHeader.
