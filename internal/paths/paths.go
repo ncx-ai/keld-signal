@@ -74,6 +74,13 @@ func ReauthRequired() (bool, string) {
 // daemon drains). Sibling of models/ under KELD_HOME.
 func SpoolDir() string { return filepath.Join(KeldHome(), "spool") }
 
+// UpdateDir holds the auto-update marker and any staged-but-uncommitted work.
+func UpdateDir() string { return filepath.Join(KeldHome(), "update") }
+
+// UpdateStatePath is the auto-update marker: which version was applied, what
+// it displaced, and whether it has been confirmed. Read at every daemon start.
+func UpdateStatePath() string { return filepath.Join(UpdateDir(), "state.json") }
+
 // WatchDir holds the transcript watcher's persisted per-file byte cursors.
 // Sibling of spool/ and models/ under KELD_HOME.
 func WatchDir() string { return filepath.Join(KeldHome(), "watch") }
