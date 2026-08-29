@@ -3,8 +3,11 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
+	"strings"
 )
 
 // taskName is the Windows Scheduled Task name.
@@ -22,13 +25,28 @@ func Install() error {
 // happens to be running now. See the darwin implementation's comment: the two
 // differ only for an auto-update that had to migrate to a writable directory.
 func InstallAt(exe string) error {
-	// Per-user logon task running `keld-agent run`.
-	if err := exec.Command("schtasks", "/Create", "/F",
-		"/SC", "ONLOGON",
-		"/TN", taskName,
-		"/TR", `"`+exe+`" run`,
-	).Run(); err != nil {
+	// Per-user logon task running `keld-agent run`, registered from a task
+	// document rather than `/SC ONLOGON` — see taskxml.go for why that flag
+	// cannot work in an unelevated installer.
+	xmlPath, cleanup, err := writeTaskXML(exe)
+	if err != nil {
 		return err
+	}
+	defer cleanup()
+
+	// ⚠️ CAPTURE schtasks' OWN MESSAGE. This used to be a bare .Run(), which
+	// discards stderr, so the registration failure above surfaced as the single
+	// word "exit status 1" — and the installer runs this hidden, so that word
+	// went nowhere either. The only evidence anywhere was `schtasks /Query`
+	// reporting no such task. schtasks explains itself perfectly well
+	// ("ERROR: Access is denied."); the defect was never asking it.
+	if out, err := exec.Command("schtasks", "/Create", "/F",
+		"/TN", taskName, "/XML", xmlPath,
+	).CombinedOutput(); err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("schtasks /Create %s: %w: %s", taskName, err, msg)
+		}
+		return fmt.Errorf("schtasks /Create %s: %w", taskName, err)
 	}
 	// Run it now (don't wait for next logon), restarting any running instance so a
 	// REINSTALL picks up the newly-installed binary.
@@ -36,17 +54,42 @@ func InstallAt(exe string) error {
 	return exec.Command("schtasks", "/Run", "/TN", taskName).Run()
 }
 
-// Uninstall ENDS the task before deleting it. `/Delete /F` removes the
-// registration but does not terminate an instance that is already running, and
-// the daemon is running by definition on any machine that installed it — so a
-// delete-only uninstall left keld-agent.exe alive holding its own binary open.
-// The installer's uninstaller then could not delete the files it was uninstalling.
-// `Restart` above has always done End-then-Run for the same reason; this is that
-// pairing applied to the one path that was missing it.
-//
-// The `/End` is best-effort: a task that is registered but not running makes it a
-// no-op, and its failure must not stop the delete — the delete is what uninstall
-// actually promises.
+// writeTaskXML writes the registration document to a temp file and returns its
+// path plus a cleanup func. UTF-16 because the document says it is; see
+// utf16LEWithBOM.
+func writeTaskXML(exe string) (string, func(), error) {
+	f, err := os.CreateTemp("", "keld-task-*.xml")
+	if err != nil {
+		return "", func() {}, err
+	}
+	name := f.Name()
+	cleanup := func() { _ = os.Remove(name) }
+	if _, err := f.Write(utf16LEWithBOM(taskXMLFor(taskUser(), exe))); err != nil {
+		f.Close()
+		cleanup()
+		return "", func() {}, err
+	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return name, cleanup, nil
+}
+
+// taskUser names the account the trigger is scoped to. USERNAME first because
+// that is the exact form verified against schtasks on the affected machine;
+// user.Current() is the fallback and returns the qualified DOMAIN\user form,
+// which Task Scheduler also accepts.
+func taskUser() string {
+	if u := os.Getenv("USERNAME"); u != "" {
+		return u
+	}
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return ""
+}
+
 func Uninstall() error {
 	_ = exec.Command("schtasks", "/End", "/TN", taskName).Run() // no-op if not running
 	return exec.Command("schtasks", "/Delete", "/F", "/TN", taskName).Run()
