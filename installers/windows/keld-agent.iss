@@ -99,6 +99,47 @@ Filename: "{app}\keld-agent.exe"; Parameters: "install --headless"; \
 Filename: "{app}\onboard.cmd"; Description: "Set up Keld"; \
   Flags: postinstall shellexec skipifsilent
 
+[UninstallRun]
+; UNINSTALL USED TO REMOVE THE FILES AND NOTHING ELSE, which left three things
+; behind on every machine — each of them silent, and the first two actively broken.
+;
+; 1. THE TOOL CONFIGS. `keld signal setup` points Claude Code / Codex / Gemini at
+;    the daemon's loopback OTLP proxy (127.0.0.1:14318). Delete the daemon and
+;    that config survives, so the tools go on posting telemetry at a port nothing
+;    answers — for as long as the machine lives. Restoring them is what
+;    `keld signal uninstall` is FOR, and nothing was calling it.
+;
+; 2. THE SCHEDULED TASK. `keld-agent install` registers a KeldAgent logon task;
+;    with no [UninstallRun] it outlived the uninstall, pointing at a deleted exe.
+;    Add/Remove Programs then said Keld was gone while Task Scheduler still had a
+;    KeldAgent entry failing at every logon.
+;
+; 3. A RUNNING DAEMON HOLDING ITS OWN FILES OPEN. Windows will not delete a
+;    running exe, and the frozen sidecar is ~15,000 files under {app} — so a live
+;    keld-agent.exe or keld-agent-sidecar.exe could make the uninstall fail
+;    halfway and leave a half-removed directory.
+;
+; ORDER IS LOAD-BEARING AND IS THE ORDER OF THESE LINES. Entry 1 needs the
+; manifest under ~/.keld, which the [Code] step below may remove; both need their
+; binaries, which Inno deletes only AFTER this section runs.
+;
+; `skipifdoesntexist` on the two Keld entries: a partially-completed earlier
+; uninstall leaves no binary, and Inno reports a hard error when it cannot START a
+; command. Missing binaries must be a no-op, never a failed uninstall.
+Filename: "{app}\keld.exe"; Parameters: "signal uninstall --yes"; \
+  Flags: runhidden skipifdoesntexist; RunOnceId: "restoretools"
+Filename: "{app}\keld-agent.exe"; Parameters: "uninstall"; \
+  Flags: runhidden skipifdoesntexist; RunOnceId: "deregister"
+; The backstop, and deliberately by IMAGE NAME. The entry above ends the scheduled
+; task, which covers the daemon it started — but not a sidecar child orphaned by
+; that kill (Windows has no SIGTERM path to the daemon's own group-reaping
+; teardown), and not a keld-agent someone launched by hand. taskkill exits non-zero
+; when nothing matches, which Inno ignores for this section, so "already gone" is a
+; normal outcome rather than an error.
+Filename: "{sys}\taskkill.exe"; \
+  Parameters: "/F /T /IM keld-agent-sidecar.exe /IM keld-agent.exe"; \
+  Flags: runhidden; RunOnceId: "killstragglers"
+
 [Code]
 // HIDE THE PER-FILE LABEL ON THE INSTALLING PAGE.
 //
@@ -125,4 +166,57 @@ begin
   if not RegQueryStringValue(HKCU, 'Environment', 'Path', O) then
     O := '';
   Result := Pos(';' + P + ';', ';' + O + ';') = 0;
+end;
+
+// REMOVE {app} FROM PATH ON UNINSTALL — the mirror of the [Registry] entry above.
+//
+// Inno can append to PATH declaratively but cannot subtract from it: the value is
+// shared, so `uninsdeletevalue` would delete the user's WHOLE Path rather than our
+// segment of it. Hence string surgery, and hence it is scoped as tightly as it can
+// be: HKCU only (never the system PATH), and an exact `;{app};` match.
+//
+// The sentinel idiom is the same one NeedsAddPath uses to decide whether to add,
+// so add and remove agree by construction about what "already present" means.
+// A value that does not contain our segment is left completely untouched — no
+// write at all, so a PATH we never modified cannot be rewritten by an uninstall.
+procedure RemoveFromPath(P: string);
+var
+  Cur, Stripped: string;
+begin
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', Cur) then
+    exit;
+  Stripped := ';' + Cur + ';';
+  StringChangeEx(Stripped, ';' + P + ';', ';', True);
+  Stripped := Copy(Stripped, 2, Length(Stripped) - 2); // strip the sentinels back off
+  if Stripped <> Cur then
+    RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Stripped);
+end;
+
+// OFFER to remove ~/.keld, defaulting to NO.
+//
+// It holds credentials (auth.json, hook.json), the spool, and the reference-series
+// store. Deleting it silently would destroy a login the user may not be able to
+// re-obtain unattended, so this ASKS — and MB_DEFBUTTON2 makes "No" the default, so
+// an uninstall driven by someone hitting Enter keeps the data.
+//
+// KELD_HOME is honoured, because that is where the daemon actually reads and writes;
+// assuming %USERPROFILE%\.keld would prompt about a directory that is not the one in
+// use and leave the real one behind.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Home: string;
+begin
+  if CurUninstallStep <> usPostUninstall then
+    exit;
+  RemoveFromPath(ExpandConstant('{app}'));
+  Home := GetEnv('KELD_HOME');
+  if Home = '' then
+    Home := ExpandConstant('{%USERPROFILE}\.keld');
+  if not DirExists(Home) then
+    exit;
+  if MsgBox('Also remove your Keld settings and credentials?' #13#10#13#10
+            + Home + #13#10#13#10
+            + 'Choose No to keep them, so re-installing will not ask you to log in again.',
+            mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+    DelTree(Home, True, True, True);
 end;

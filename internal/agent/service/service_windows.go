@@ -36,7 +36,19 @@ func InstallAt(exe string) error {
 	return exec.Command("schtasks", "/Run", "/TN", taskName).Run()
 }
 
+// Uninstall ENDS the task before deleting it. `/Delete /F` removes the
+// registration but does not terminate an instance that is already running, and
+// the daemon is running by definition on any machine that installed it — so a
+// delete-only uninstall left keld-agent.exe alive holding its own binary open.
+// The installer's uninstaller then could not delete the files it was uninstalling.
+// `Restart` above has always done End-then-Run for the same reason; this is that
+// pairing applied to the one path that was missing it.
+//
+// The `/End` is best-effort: a task that is registered but not running makes it a
+// no-op, and its failure must not stop the delete — the delete is what uninstall
+// actually promises.
 func Uninstall() error {
+	_ = exec.Command("schtasks", "/End", "/TN", taskName).Run() // no-op if not running
 	return exec.Command("schtasks", "/Delete", "/F", "/TN", taskName).Run()
 }
 
