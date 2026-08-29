@@ -22,12 +22,23 @@ Source: "keld-agent.exe";       DestDir: "{app}"; Flags: ignoreversion
 Source: "keld-agent-sidecar\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "onboard.cmd";          DestDir: "{app}"; Flags: ignoreversion
 
-[Tasks]
-Name: "addtopath"; Description: "Add Keld to my PATH"; Flags: checkedonce
-
 [Registry]
+; PATH IS ADDED UNCONDITIONALLY — there is deliberately no [Tasks] checkbox for it.
+; It used to be `Name: "addtopath"; Description: "Add Keld to my PATH"`, opt-out via
+; a tickbox on a "Select Additional Tasks" page. That page asked the user to make a
+; decision they have no way to evaluate, and getting it wrong is silent: `keld` and
+; `keld-agent` are then not on PATH, so every instruction this installer prints —
+; `keld login`, `keld signal setup`, `keld signal doctor` — fails with "not
+; recognized" and the machine looks broken rather than unconfigured.
+;
+; Removing the only [Tasks] entry also removes the wizard page it lived on, which is
+; the point: one fewer question between the user and a working install.
+;
+; `Check: NeedsAddPath` still guards it, and that is the part that must not be
+; dropped — it is what makes a RE-INSTALL idempotent. Without it {app} is appended
+; again on every run and PATH grows without bound.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
-  ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath('{app}')
+  ValueData: "{olddata};{app}"; Check: NeedsAddPath('{app}')
 
 [Run]
 ; TWO ENTRIES, AND BOTH ARE LOAD-BEARING. The first ALWAYS runs; the second is the
@@ -89,6 +100,24 @@ Filename: "{app}\onboard.cmd"; Description: "Set up Keld"; \
   Flags: postinstall shellexec skipifsilent
 
 [Code]
+// HIDE THE PER-FILE LABEL ON THE INSTALLING PAGE.
+//
+// Inno writes the full path of each file it extracts into WizardForm.FilenameLabel,
+// under the progress bar. For a normal installer that is a handful of lines; this
+// payload is the FROZEN SIDECAR — roughly 15,000 files of torch and transformers —
+// so it becomes a blur of unfamiliar deep paths (`_internal\torch\_vendor\quack\
+// _compile_worker.py` and thousands like it) scrolling past for minutes. It reads
+// like something rummaging through the machine, which is precisely the impression an
+// on-device privacy product must not give.
+//
+// Only the LABEL is hidden. The progress bar still moves and the status line above it
+// still says what is happening ("Extracting files..."), so nothing about progress or
+// duration is concealed — what goes is a firehose of filenames nobody can act on.
+procedure InitializeWizard();
+begin
+  WizardForm.FilenameLabel.Visible := False;
+end;
+
 function NeedsAddPath(P: string): Boolean;
 var
   O: string;

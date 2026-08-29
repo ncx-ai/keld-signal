@@ -59,10 +59,36 @@ printf '%s\n' "$onb_line" | grep -q 'skipifsilent' || \
 # 3. onboard.cmd must be staged, or iscc fails late and opaquely.
 grep -qF 'Source: "onboard.cmd"' "$iss" || fail "onboard.cmd is not staged in [Files]"
 
+# 3b. PATH must be added WITHOUT asking. A [Tasks] checkbox for it is opt-out, and
+#     getting it wrong fails silently: every command this installer tells the user to
+#     run ("keld login", "keld signal setup") is then "not recognized", which reads as
+#     a broken install rather than an unconfigured one.
+#     Unfold continuations first — the [Registry] entry wraps, same trap as [Run].
+unfolded="$(sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*//;ba}' "$iss")"
+path_line="$(printf '%s\n' "$unfolded" | grep '^Root: HKCU' | grep -F 'Path' || true)"
+[ -n "$path_line" ] || fail "no [Registry] entry adds {app} to PATH"
+printf '%s\n' "$path_line" | grep -q 'Tasks:' && \
+  fail "PATH is behind a [Tasks] checkbox — a user can untick it and every printed command then fails"
+grep -q '^Name: "addtopath"' "$iss" && \
+  fail "the addtopath task is back; PATH must be unconditional"
+
+# 3c. ...but it must still be GUARDED, or a re-install appends {app} again every run
+#     and PATH grows without bound. Unconditional is not the same as unchecked.
+printf '%s\n' "$path_line" | grep -q 'Check: NeedsAddPath' || \
+  fail "PATH entry lost its NeedsAddPath check — re-installs would append {app} forever"
+grep -q 'function NeedsAddPath' "$iss" || fail "NeedsAddPath is referenced but not defined"
+
+# 3d. The per-file label must stay hidden. The payload is the frozen sidecar (~15,000
+#     torch/transformers files), so Inno's FilenameLabel becomes minutes of unfamiliar
+#     deep paths scrolling past — an on-device privacy product must not look like it is
+#     rummaging through the machine. The progress bar and status line are untouched.
+grep -q 'WizardForm.FilenameLabel.Visible := False' "$iss" || \
+  fail "the per-file extraction label is not hidden; ~15,000 sidecar paths would scroll past the user"
+
 # 4. onboard.cmd's own contract: redeem a code, fall back to a browser login, and
 #    report from OBSERVED STATE rather than an exit code.
 grep -qF 'install --code' "$cmd" || fail "onboard.cmd never redeems a setup code"
 grep -qF 'install --yes'  "$cmd" || fail "onboard.cmd has no browser-login fallback"
 grep -qF 'ingest_token'   "$cmd" || fail "onboard.cmd claims success without checking hook.json"
 
-echo "PASS: windows installer registers unconditionally, onboards visibly, and claims success from observed state"
+echo "PASS: windows installer registers unconditionally, onboards visibly, adds PATH without asking, hides the file firehose, and claims success from observed state"
