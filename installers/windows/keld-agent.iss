@@ -33,11 +33,11 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
 ; TWO ENTRIES, AND BOTH ARE LOAD-BEARING. The first ALWAYS runs; the second is the
 ; human's onboarding and may legitimately not run at all.
 ;
-; 1. REGISTER THE AGENT UNCONDITIONALLY. With no console attached, keld-agent
-;    install takes its headless branch: it writes the v2 agent-config.json,
-;    registers the logon task, starts the daemon, and prompts for nothing. The
-;    daemon then IDLES on awaitConfig until someone completes setup, which is a
-;    documented, supported state — not a crash.
+; 1. REGISTER THE AGENT UNCONDITIONALLY. Told explicitly that no human is
+;    reachable (--headless, see below), keld-agent install writes the v2
+;    agent-config.json, registers the logon task, starts the daemon, and prompts
+;    for nothing. The daemon then IDLES on awaitConfig until someone completes
+;    setup, which is a documented, supported state — not a crash.
 ;
 ;    ⚠️ This entry exists because putting registration behind the postinstall
 ;    checkbox was a REGRESSION. `postinstall` renders a tickbox the user can
@@ -50,7 +50,27 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
 ;    `keld-agent install` again; two concurrent service installs would race on
 ;    schtasks. The headless branch runs no interactive step, so there is nothing
 ;    for it to block on.
-Filename: "{app}\keld-agent.exe"; Parameters: "install"; \
+;
+;    ⚠️ `--headless` IS LOAD-BEARING AND MUST NOT BE DROPPED. This entry used to
+;    read `Parameters: "install"` and rely on keld-agent detecting the absence of
+;    a terminal by itself. IT CANNOT, HERE: `runhidden` hides the WINDOW, it does
+;    not take the console away, so the child still owns a real console, stdout is
+;    still a console handle, and term.IsTerminal answers TRUE. install therefore
+;    took its INTERACTIVE branch inside an invisible window — it ran `keld login`
+;    where nobody could see it, then `keld signal setup`, which blocked forever on
+;    a [Y/n] prompt reading a stdin no human could type into.
+;
+;    Measured on a real machine: the installer sat at "Registering the Keld
+;    agent..." indefinitely, with `keld.exe signal setup` alive as a child of
+;    keld-agent.exe; killing that process by hand was the only way to advance the
+;    install, and onboarding then asked for a login a SECOND time, because the
+;    first had already been consumed by the hidden console.
+;
+;    So the intent is stated rather than inferred: --headless writes the config,
+;    registers the task, starts the daemon, and prompts for NOTHING. macOS and
+;    Linux are unaffected — they never pass it, and their launchers really do
+;    detach stdio.
+Filename: "{app}\keld-agent.exe"; Parameters: "install --headless"; \
   StatusMsg: "Registering the Keld agent..."; Flags: runhidden
 
 ; 2. ONBOARD THE HUMAN, in a VISIBLE console in their session: prompt for the

@@ -103,6 +103,20 @@ type installConfig struct {
 	apiURL  string // --api-url passthrough for local dev
 	yes     bool   // pass --yes to signal setup (implied when code is set)
 	jsonOut bool   // --json passthrough for installer UIs
+	// headless forces the non-interactive branch regardless of what isTTY says.
+	// It exists because TTY DETECTION IS NOT A RELIABLE PROXY FOR "a human can
+	// answer this" ON WINDOWS: Inno Setup's `runhidden` launches a console app
+	// with STARTF_USESHOWWINDOW/SW_HIDE and does not redirect stdio, so the child
+	// still owns a real console — just one nobody can see. stdout is a console
+	// handle, term.IsTerminal answers true, and install took the INTERACTIVE
+	// branch inside an invisible window. Observed on a real machine: the .iss's
+	// registration entry spawned `keld.exe signal setup`, which blocked forever
+	// on stdinConfirm's Fscanln (internal/cli/setup.go), Inno waited on it, and
+	// the installer sat at "Registering the Keld agent..." until that process was
+	// killed by hand — after which onboarding asked for a login a SECOND time,
+	// because the first one had already happened where nobody could see it.
+	// A caller that knows there is no reachable human says so; nothing is inferred.
+	headless bool
 	// backend is the ml_backend a v2 install lands on. Default "deterministic"
 	// (resolved in runInstall, so a zero-value installConfig in a test lands
 	// where a real install does); "auto" restores the pre-v2 ML pipeline and
@@ -128,7 +142,8 @@ type installConfig struct {
 // install runs v1 behaviour until someone notices.
 //
 // With a setup code the login+setup run non-interactively regardless of TTY;
-// without a code they run only in a real terminal.
+// without a code they run only in a real terminal — or not at all when the caller
+// passed --headless, which overrides the TTY probe outright.
 func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string, error),
 	run stepRunner, writeConfig func(backend string, blocks bool) error, installService func() error) error {
 	backend := cfg.backend
@@ -182,7 +197,7 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 		if err := run(keld, setup...); err != nil {
 			return fmt.Errorf("keld signal setup: %w", err)
 		}
-	case isTTY():
+	case !cfg.headless && isTTY():
 		keld, err := resolveKeld()
 		if err != nil {
 			return err
@@ -217,8 +232,14 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 // stdout, NOT stdin: under `curl | sh` the installer — and the keld-agent it spawns —
 // inherit the pipe as stdin, so a stdin check misreads a human in a real terminal as
 // headless. Interactive device-flow login needs no stdin (it prints a URL and polls),
-// so a piped stdin never blocks it. A GUI installer (launchd/runhidden) has no terminal
-// on stdout either, so the headless branch is still selected there.
+// so a piped stdin never blocks it. A GUI installer that redirects or detaches stdio
+// (launchd) has no terminal on stdout either, so the headless branch is selected there.
+//
+// ⚠️ IT IS NOT SELECTED UNDER INNO SETUP'S `runhidden`, and this comment used to name
+// runhidden as a case it handled. `runhidden` hides the WINDOW; it does not take the
+// console away, so stdout is still a console handle and this returns true inside a
+// window no human can reach. That is why installConfig.headless exists: on Windows the
+// installer states its intent explicitly rather than relying on this probe.
 func stdoutIsTTY() bool {
 	return term.IsTerminal(int(os.Stdout.Fd()))
 }
@@ -253,7 +274,9 @@ func NewRootCmd() *cobra.Command {
 			apiURL, _ := cmd.Flags().GetString("api-url")
 			jsonOut, _ := cmd.Flags().GetBool("json")
 			backend, _ := cmd.Flags().GetString("backend")
-			cfg := installConfig{code: code, apiURL: apiURL, yes: yes, jsonOut: jsonOut, backend: backend}
+			headless, _ := cmd.Flags().GetBool("headless")
+			cfg := installConfig{code: code, apiURL: apiURL, yes: yes, jsonOut: jsonOut,
+				backend: backend, headless: headless}
 			return runInstall(cfg, stdoutIsTTY, resolveKeld, runStep,
 				settings.WriteInstallDefaults, service.Install)
 		},
@@ -262,6 +285,8 @@ func NewRootCmd() *cobra.Command {
 	installCmd.Flags().Bool("yes", false, "Skip confirmation prompts during setup.")
 	installCmd.Flags().String("api-url", "", "Target a different Keld API base URL (e.g. http://localhost:8000) for local dev.")
 	installCmd.Flags().Bool("json", false, "Emit machine-readable NDJSON from login/setup (for installer UIs).")
+	installCmd.Flags().Bool("headless", false,
+		"Never prompt: register the service and skip login/setup even if stdout looks like a terminal. For GUI installers that run this with no console a human can reach.")
 	installCmd.Flags().String("backend", "deterministic",
 		"Enrichment backend to configure: deterministic (v2 default — no model download), auto (the GLiNER2 pipeline), or off.")
 	root.AddCommand(installCmd)

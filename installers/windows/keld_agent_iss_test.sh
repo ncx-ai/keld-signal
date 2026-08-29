@@ -38,6 +38,15 @@ printf '%s\n' "$reg_line" | grep -q 'postinstall' && \
 printf '%s\n' "$reg_line" | grep -q 'skipifsilent' && \
   fail "agent registration is 'skipifsilent' — MDM pushes would register nothing"
 
+# 1b. Registration must say --headless OUT LOUD. `runhidden` hides the window but
+#     leaves the child a real console, so stdout is a terminal and keld-agent's TTY
+#     probe answers TRUE here — it ran `keld login` invisibly and then blocked
+#     forever on `keld signal setup`'s [Y/n], wedging the installer until someone
+#     killed the process by hand. Inferring "no human" from the absence of a
+#     terminal does not work on Windows; the intent has to be stated.
+printf '%s\n' "$reg_line" | grep -q -- '--headless' || \
+  fail "agent registration omits --headless — install would prompt inside a hidden console and hang"
+
 # 2. Onboarding must be VISIBLE. runhidden here is what made every Windows
 #    machine idle forever: an interactive login in a window nobody could see.
 onb_line="$(printf '%s\n' "$entries" | grep -F 'onboard.cmd' || true)"
