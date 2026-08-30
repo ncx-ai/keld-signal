@@ -233,6 +233,77 @@ func TestRunInstallNoTTYSkipsLoginAndSetup(t *testing.T) {
 	}
 }
 
+// TestRunInstallHeadlessBeatsATrueTTY is the regression guard for the Windows
+// installer hang. Inno Setup's `runhidden` hides the WINDOW but leaves the child
+// with a real console, so stdout IS a terminal there and stdoutIsTTY answers true
+// — the isTTY seam below stands in for that. Without --headless the install then
+// ran `keld login` in an invisible window and `keld signal setup` blocked forever
+// on its [Y/n] prompt, wedging the installer until the process was killed by hand.
+// --headless must therefore win over isTTY, not merely agree with it.
+func TestRunInstallHeadlessBeatsATrueTTY(t *testing.T) {
+	var calls []string
+	resolve := func() (string, error) { return "/fake/keld", nil }
+	run := func(name string, args ...string) error {
+		calls = append(calls, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}
+	installed := false
+	install := func() error { installed = true; return nil }
+
+	err := runInstall(installConfig{headless: true}, func() bool { return true },
+		resolve, run, noopConfig, install)
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("--headless must run no interactive step even on a TTY, got %v", calls)
+	}
+	if !installed {
+		t.Fatal("--headless must still register the service")
+	}
+}
+
+// A setup code carries its own non-interactive login, so --headless must not
+// suppress it: onboard.cmd re-runs `keld-agent install --code`, and a machine
+// pushed by MDM is finished the same way. Headless means "do not PROMPT", never
+// "do not onboard".
+func TestRunInstallHeadlessStillRedeemsACode(t *testing.T) {
+	calls, run := recorder()
+	installed := false
+	err := runInstall(installConfig{headless: true, code: "AB12-CD34"}, func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig,
+		func() error { installed = true; return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	want := []string{"/fake/keld login --code AB12-CD34", "/fake/keld signal setup --yes"}
+	if strings.Join(*calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("steps = %v, want %v", *calls, want)
+	}
+	if !installed {
+		t.Fatal("service install must run after code onboarding")
+	}
+}
+
+// The flag has to be REACHABLE from the command line, or the .iss passes an
+// unknown flag and `keld-agent install --headless` fails outright — a worse
+// failure than the hang it replaces, and one no runInstall-level test can see.
+func TestInstallCmdAcceptsHeadlessFlag(t *testing.T) {
+	root := NewRootCmd()
+	var install *cobra.Command
+	for _, c := range root.Commands() {
+		if c.Name() == "install" {
+			install = c
+		}
+	}
+	if install == nil {
+		t.Fatal("no install command")
+	}
+	if install.Flags().Lookup("headless") == nil {
+		t.Fatal("install has no --headless flag; installers/windows/keld-agent.iss passes it")
+	}
+}
+
 // printStatus is the testable core of `keld-agent status`: statusFn/reauthFn
 // are seams standing in for service.Status (OS-specific, not easily driven in
 // a unit test) and paths.ReauthRequired.
