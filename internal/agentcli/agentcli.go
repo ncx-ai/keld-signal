@@ -257,6 +257,11 @@ func NewRootCmd() *cobra.Command {
 		Use:   "run",
 		Short: "Run the enrichment daemon in the foreground.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Windows only, and only when this process owns the console — a
+			// scheduled-task launch at logon must not put a black window full of
+			// daemon logs on the user's screen. A terminal the user opened is
+			// left alone; see console_windows.go.
+			hideOwnConsole()
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return daemon.Run(ctx)
