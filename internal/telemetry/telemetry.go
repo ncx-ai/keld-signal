@@ -11,7 +11,33 @@ import (
 
 // HookCommandSubstr is the identifying substring present in every hook command
 // keld emits. Used by setup/teardown logic to recognise keld-owned hooks.
-const HookCommandSubstr = "keld __hook"
+//
+// ⚠️ IT WAS "keld __hook", AND THAT IS UNIX-ONLY. The pinned command is
+// `<binPath> __hook --source <tool>`, and on Windows binPath ends in `keld.exe`
+// — so the command reads `...\keld.exe __hook --source claude_code`, in which
+// "keld __hook" DOES NOT APPEAR. Every question of the form "is this hook mine?"
+// therefore answered NO on Windows, in all three places that ask:
+//
+//   - Status  -> `keld signal doctor` reported `manifest records setup but config
+//     is not configured (drift)` on a HEALTHY install, and told the user to re-run
+//     `keld signal setup` — which reports "already configured", because
+//     AddClaudeHook is idempotent and finds nothing to change. Unfollowable advice
+//     and an unclearable finding. Observed on a real machine whose telemetry was
+//     reaching Atlas at that very moment.
+//   - Teardown -> `keld signal uninstall` stripped the env vars and LEFT the hooks
+//     in settings.json, so every Windows uninstall was partial.
+//   - Apply -> RemoveHooksByCommand could not strip a stale hook, so a keld binary
+//     that moved would leave the old command behind and add a second: duplicate
+//     hooks, which is the exact failure that comment in HookCommand warns about.
+//
+// The substring is now the part that is invariant across every form: the flag and
+// its argument. Backward-compatible by construction — commands written by every
+// previous version contain it too, so nothing on disk needs rewriting.
+//
+//	keld __hook --source claude_code                     (bare, PATH-resolved)
+//	/home/u/.local/bin/keld __hook --source claude_code  (pinned, Unix)
+//	C:\...\keld.exe __hook --source claude_code          (pinned, Windows)
+const HookCommandSubstr = "__hook --source "
 
 // SetupParams carries the telemetry endpoint and credentials needed to build
 // env vars and config snippets for each tool integration.
@@ -51,8 +77,8 @@ var CodexHookEvents = []string{"SessionStart", "PreToolUse"}
 // absolute path of the keld binary to invoke (from os.Executable at setup time),
 // so the hook can't be hijacked by a different keld earlier on PATH; when
 // binPath is empty it falls back to bare "keld" (PATH-resolved). The recognizer
-// HookCommandSubstr ("keld __hook") matches both forms, since a pinned command
-// ends in ".../keld __hook".
+// HookCommandSubstr matches every form — see the ⚠️ on that constant for why it
+// is no longer "keld __hook", which held only while binPath ended in "keld".
 func HookCommand(binPath, source string) string {
 	bin := "keld"
 	if binPath != "" {

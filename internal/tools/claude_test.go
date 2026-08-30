@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"github.com/ncx-ai/keld-signal/internal/telemetry"
 	"strings"
 	"testing"
 
@@ -120,10 +121,12 @@ func TestClaudeApplyStructural(t *testing.T) {
 		t.Fatalf("expected 6 env keys in managed, got %d: %v", len(envKeys), envKeys)
 	}
 
-	// hook_substr must be present
+	// hook_substr must be present, and must be whatever the CURRENT recognizer is
+	// rather than a literal — pinning the literal is what made this test fail when
+	// the recognizer was corrected for Windows, where "keld __hook" never matched.
 	hookSubstr, ok := plan.Managed["hook_substr"].(string)
-	if !ok || hookSubstr != "keld __hook" {
-		t.Fatalf("expected managed['hook_substr'] == 'keld __hook', got %v", plan.Managed["hook_substr"])
+	if !ok || hookSubstr != telemetry.HookCommandSubstr {
+		t.Fatalf("expected managed['hook_substr'] == %q, got %v", telemetry.HookCommandSubstr, plan.Managed["hook_substr"])
 	}
 }
 

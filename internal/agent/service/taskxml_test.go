@@ -86,3 +86,14 @@ func TestBytesMatchTheDeclaredEncoding(t *testing.T) {
 		t.Fatalf("round-trip = %q, want %q", got, "<Task/>")
 	}
 }
+
+// The daemon detaches from its console only when told to, so the task must tell
+// it. v2.0.1 shipped without this: the trigger was inferred from the console's
+// process count, that inference declined on a real machine, and every logon
+// opened a window of logs.
+func TestTheTaskTellsTheDaemonToDetachFromItsConsole(t *testing.T) {
+	got := taskXMLFor("u", `C:\keld-agent.exe`)
+	if !strings.Contains(got, "<Arguments>run --hide-console</Arguments>") {
+		t.Fatalf("the task does not pass --hide-console; a console window would open at every logon:\n%s", got)
+	}
+}

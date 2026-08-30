@@ -34,12 +34,19 @@ import (
 //
 // ExecutionTimeLimit=PT0S means no limit: the default is 72 hours, which would
 // otherwise terminate a healthy long-running daemon.
+//
+// ⚠️ `--hide-console` IS PART OF THE CONTRACT, NOT A CONVENIENCE. Task Scheduler
+// gives a console binary a console, and without this the daemon opens a black
+// window of logs at every logon. The daemon detaches ONLY when told to, so the
+// flag has to be here — the previous version inferred it from the console's
+// process count and got it wrong on a real machine. A human running
+// `keld-agent run` passes no flag and keeps their terminal.
 const taskXMLTemplate = `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>%[1]s</UserId></LogonTrigger></Triggers>
   <Principals><Principal id="Author"><UserId>%[1]s</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><Enabled>true</Enabled><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries></Settings>
-  <Actions Context="Author"><Exec><Command>%[2]s</Command><Arguments>run</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>%[2]s</Command><Arguments>run --hide-console</Arguments></Exec></Actions>
 </Task>
 `
 

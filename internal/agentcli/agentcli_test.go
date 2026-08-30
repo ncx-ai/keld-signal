@@ -584,3 +584,26 @@ func TestRunInstallBareCodeUnchanged(t *testing.T) {
 		t.Fatalf("steps = %v, want %v", *calls, want)
 	}
 }
+
+// The flag the scheduled task passes must EXIST on `run`, or the task's action
+// fails outright at every logon — a worse outcome than the window it removes.
+// internal/agent/service/taskxml.go hard-codes `run --hide-console`; this is the
+// other end of that contract.
+func TestRunAcceptsTheHideConsoleFlagTheTaskPasses(t *testing.T) {
+	root := NewRootCmd()
+	var run *cobra.Command
+	for _, c := range root.Commands() {
+		if c.Name() == "run" {
+			run = c
+		}
+	}
+	if run == nil {
+		t.Fatal("no run command")
+	}
+	if run.Flags().Lookup("hide-console") == nil {
+		t.Fatal("run has no --hide-console flag; the scheduled task passes it and would fail to start")
+	}
+	if err := run.Flags().Parse([]string{"--hide-console"}); err != nil {
+		t.Fatalf("the exact argument the task passes is rejected: %v", err)
+	}
+}
