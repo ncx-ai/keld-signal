@@ -7,29 +7,39 @@ import (
 	"unsafe"
 )
 
-// Hiding the daemon's console window.
+// Detaching the daemon from the console Task Scheduler gives it.
 //
 // `keld-agent run` is a CONSOLE binary — it has to be, because the same
 // executable is the CLI (`install`, `status`, `uninstall`) whose output the
-// installer's onboarding reads. So when Task Scheduler launches it at logon,
-// Windows gives it a console and the user gets a black window full of daemon
-// logs, at every single logon. That is what a background agent must not do.
+// installer's onboarding reads, so -H=windowsgui is not available. When Task
+// Scheduler launches it at logon, Windows gives it a console and the user gets a
+// black window full of daemon logs at every single logon.
 //
-// ⚠️ IT MUST NOT HIDE A CONSOLE IT DOES NOT OWN. A developer running
-// `keld-agent run` in their own terminal is attached to THAT terminal, and
-// hiding it would make the user's own window vanish mid-session — a far worse
-// bug than the one being fixed. GetConsoleProcessList is the discriminator:
-// a console created FOR this process has exactly one process attached (us),
-// while a shared one also has cmd.exe or the shell. Anything ambiguous (an
-// error, no console at all) declines to hide, so the failure direction is a
-// visible window rather than a vanished one.
+// ⚠️ THE FIRST ATTEMPT AT THIS GUESSED, AND GUESSED WRONG ON A REAL MACHINE. It
+// called ShowWindow(SW_HIDE) only when GetConsoleProcessList reported exactly one
+// attached process — the idea being that a console created FOR this process has
+// only this process on it, while a developer's own terminal also has the shell.
+// That guard has a SILENT DECLINE: any answer other than 1, including an error,
+// skips the hide. Shipped in v2.0.1, the window still appeared, and nothing on
+// the machine could say which branch had been taken.
 //
-// The window is HIDDEN, not freed. FreeConsole would detach the process from it
-// and every subsequent log write would fail; hiding leaves the console object
-// intact, so logging keeps working exactly as before and only the window is
-// gone. That matters because there is no file sink: the way to watch this
-// daemon's logs on Windows is to run `keld-agent run` in a terminal yourself,
-// which the ownership check above deliberately leaves visible.
+// So the trigger is no longer inferred: the scheduled task passes --hide-console
+// (see internal/agent/service/taskxml.go) and a human typing `keld-agent run`
+// does not. And the mechanism no longer depends on the count being right:
+//
+//   - FreeConsole runs UNCONDITIONALLY, and is safe by construction. It detaches
+//     THIS process. If nothing else is attached, Windows destroys the console and
+//     its window goes with it — which is the scheduled-task case. If a shell IS
+//     attached, the console survives and the user's terminal is untouched. There
+//     is no input under which it can close a window someone is using.
+//   - ShowWindow is now only an OPTIMISATION, taken when the count says we are
+//     alone, to kill the window immediately rather than let it flash. If that
+//     count is wrong we simply skip it, and FreeConsole still does the real work.
+//
+// Logs: after detaching, writes to stdout/stderr go nowhere. The Go log package
+// discards write errors, so nothing fails. There is no file sink on Windows, so
+// the way to watch this daemon is to run it in a terminal yourself WITHOUT the
+// flag — which is exactly the path that never detaches.
 const swHide = 0
 
 func hideOwnConsole() {
@@ -38,22 +48,17 @@ func hideOwnConsole() {
 
 	getConsoleWindow := kernel32.NewProc("GetConsoleWindow")
 	getConsoleProcessList := kernel32.NewProc("GetConsoleProcessList")
+	freeConsole := kernel32.NewProc("FreeConsole")
 	showWindow := user32.NewProc("ShowWindow")
 
-	hwnd, _, _ := getConsoleWindow.Call()
-	if hwnd == 0 {
-		return // no console attached: nothing to hide
+	if hwnd, _, _ := getConsoleWindow.Call(); hwnd != 0 {
+		var pids [8]uint32
+		if n, _, _ := getConsoleProcessList.Call(
+			uintptr(unsafe.Pointer(&pids[0])), uintptr(len(pids)),
+		); n == 1 {
+			showWindow.Call(hwnd, swHide)
+		}
 	}
-
-	// Room for more than one pid: the count is what matters, and asking for a
-	// single slot on a shared console returns the REQUIRED size rather than 1,
-	// which reads identically to "we are alone" if the buffer is too small to
-	// tell them apart.
-	var pids [8]uint32
-	n, _, _ := getConsoleProcessList.Call(uintptr(unsafe.Pointer(&pids[0])), uintptr(len(pids)))
-	if n != 1 {
-		// 0 == the call failed; >1 == somebody else's console. Both decline.
-		return
-	}
-	showWindow.Call(hwnd, swHide)
+	// Unconditional, and the part that actually guarantees the outcome.
+	freeConsole.Call()
 }

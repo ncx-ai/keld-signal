@@ -253,20 +253,27 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(&cobra.Command{
+	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run the enrichment daemon in the foreground.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Windows only, and only when this process owns the console — a
-			// scheduled-task launch at logon must not put a black window full of
-			// daemon logs on the user's screen. A terminal the user opened is
-			// left alone; see console_windows.go.
-			hideOwnConsole()
+			// Windows only, and only when the CALLER says so. The scheduled task
+			// passes --hide-console so a logon does not put a black window full of
+			// daemon logs on the user's screen; a human running `keld-agent run`
+			// passes nothing and keeps their terminal. The previous version
+			// INFERRED this from the console's process count and got it wrong on a
+			// real machine — see console_windows.go.
+			if hide, _ := cmd.Flags().GetBool("hide-console"); hide {
+				hideOwnConsole()
+			}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return daemon.Run(ctx)
 		},
-	})
+	}
+	runCmd.Flags().Bool("hide-console", false,
+		"Detach from the console at startup (Windows). Set by the scheduled task so a logon shows no window; omit it to watch the daemon's logs in your own terminal.")
+	root.AddCommand(runCmd)
 	installCmd := &cobra.Command{
 		Use:   "install",
 		Short: "Log in, set up telemetry, and install keld-agent as a per-user autostart service.",

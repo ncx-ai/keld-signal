@@ -120,16 +120,8 @@ func (a *ClaudeAdapter) Remove(currentText *string, managed map[string]any) Plan
 		}
 	}
 
-	// Extract hook_substr from managed, fall back to constant
-	hookSubstr := telemetry.HookCommandSubstr
-	if v, ok := managed["hook_substr"]; ok {
-		if s, ok := v.(string); ok && s != "" {
-			hookSubstr = s
-		}
-	}
-
 	config.RemoveSectionKeys(obj, "env", envKeys)
-	config.RemoveHooksByCommand(obj, hookSubstr)
+	removeKeldHooks(obj, managed)
 
 	var after string
 	if len(obj.Keys()) > 0 {

@@ -183,13 +183,7 @@ func (a *GeminiAdapter) Remove(currentText *string, managed map[string]any) Plan
 		obj.Delete(k)
 	}
 
-	hookSubstr := telemetry.HookCommandSubstr
-	if v, ok := managed["hook_substr"]; ok {
-		if s, ok := v.(string); ok && s != "" {
-			hookSubstr = s
-		}
-	}
-	config.RemoveHooksByCommand(obj, hookSubstr)
+	removeKeldHooks(obj, managed)
 
 	var after string
 	if len(obj.Keys()) > 0 {

@@ -5,6 +5,9 @@ package tools
 import (
 	"os"
 
+	"github.com/iancoleman/orderedmap"
+
+	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/telemetry"
 )
 
@@ -78,4 +81,34 @@ type Adapter interface {
 	// Status returns the current installation and configuration status of the tool.
 	// currentText is nil if the config file is absent.
 	Status(currentText *string, managed map[string]any) ToolStatus
+}
+
+// removeKeldHooks strips keld-owned hook entries from obj during teardown.
+//
+// ⚠️ IT REMOVES BY TWO RECOGNIZERS, AND THE SECOND IS THE REPAIR. Teardown
+// prefers the `hook_substr` RECORDED IN THE MANIFEST at setup time, so that a
+// config written by an older keld is torn down by that keld's own recognizer.
+// Every manifest written before the HookCommandSubstr fix records the Unix-only
+// "keld __hook" — which matches nothing on Windows (see the ⚠️ on that constant)
+// — so honouring the manifest ALONE would leave those machines' hooks in place
+// forever, uninstall after uninstall. Correcting the constant does not reach
+// them; this does.
+//
+// Removing by both is safe rather than merely convenient: RemoveHooksByCommand
+// deletes only entries whose command contains the substring, and both
+// recognizers are keld-specific, so a second pass can only remove keld's own
+// hooks. The order is irrelevant and a no-match pass is a no-op.
+func removeKeldHooks(obj *orderedmap.OrderedMap, managed map[string]any) {
+	recorded := ""
+	if v, ok := managed["hook_substr"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			recorded = s
+		}
+	}
+	if recorded != "" {
+		config.RemoveHooksByCommand(obj, recorded)
+	}
+	if recorded != telemetry.HookCommandSubstr {
+		config.RemoveHooksByCommand(obj, telemetry.HookCommandSubstr)
+	}
 }
