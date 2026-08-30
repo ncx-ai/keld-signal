@@ -65,6 +65,14 @@ grep -qF 'Source: "onboard.cmd"' "$iss" || fail "onboard.cmd is not staged in [F
 #     a broken install rather than an unconfigured one.
 #     Unfold continuations first — the [Registry] entry wraps, same trap as [Run].
 unfolded="$(sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*//;ba}' "$iss")"
+# ⚠️ A CODE-ONLY VIEW, because these comments EXPLAIN the very identifiers being
+# asserted on. Mutation-testing this script caught two vacuous guards: deleting
+# `MB_DEFBUTTON2` from the code still passed, because the comment above it names
+# MB_DEFBUTTON2; and commenting OUT the RemoveFromPath call still passed, because a
+# commented line still contains the call. Both would have shipped a guard that can
+# never fail. Inno comments are `;` outside [Code] and `//` inside it.
+code="$(printf '%s\n' "$unfolded" | grep -vE '^[[:space:]]*(;|//)')"
+
 path_line="$(printf '%s\n' "$unfolded" | grep '^Root: HKCU' | grep -F 'Path' || true)"
 [ -n "$path_line" ] || fail "no [Registry] entry adds {app} to PATH"
 printf '%s\n' "$path_line" | grep -q 'Tasks:' && \
@@ -76,13 +84,13 @@ grep -q '^Name: "addtopath"' "$iss" && \
 #     and PATH grows without bound. Unconditional is not the same as unchecked.
 printf '%s\n' "$path_line" | grep -q 'Check: NeedsAddPath' || \
   fail "PATH entry lost its NeedsAddPath check — re-installs would append {app} forever"
-grep -q 'function NeedsAddPath' "$iss" || fail "NeedsAddPath is referenced but not defined"
+printf '%s\n' "$code" | grep -q 'function NeedsAddPath' || fail "NeedsAddPath is referenced but not defined"
 
 # 3d. The per-file label must stay hidden. The payload is the frozen sidecar (~15,000
 #     torch/transformers files), so Inno's FilenameLabel becomes minutes of unfamiliar
 #     deep paths scrolling past — an on-device privacy product must not look like it is
 #     rummaging through the machine. The progress bar and status line are untouched.
-grep -q 'WizardForm.FilenameLabel.Visible := False' "$iss" || \
+printf '%s\n' "$code" | grep -q 'WizardForm.FilenameLabel.Visible := False' || \
   fail "the per-file extraction label is not hidden; ~15,000 sidecar paths would scroll past the user"
 
 # 3e. UNINSTALL MUST UNDO WHAT INSTALL DID. Every item here shipped as a leftover:
@@ -91,39 +99,56 @@ grep -q 'WizardForm.FilenameLabel.Visible := False' "$iss" || \
 #     OTLP port nothing answers any more. Neither surfaced as an error anywhere.
 grep -q '^\[UninstallRun\]' "$iss" || fail "no [UninstallRun]; uninstall would leave the scheduled task and tool configs behind"
 unrun="$(printf '%s\n' "$unfolded" | sed -n '/^\[UninstallRun\]/,/^\[Code\]/p' | grep '^Filename:' || true)"
-printf '%s\n' "$unrun" | grep -qF 'signal uninstall' || \
+
+# ⚠️ MATCH THE Filename FIELD, NOT THE LINE. The taskkill entry names
+# keld-agent.exe inside its /IM arguments, so an unscoped `grep -F keld-agent.exe`
+# matches TWO entries — and the ordering test then compared against "2\n3" and died
+# with `[: 2\n3: integer expression expected`. That is exactly what happened on this
+# guard's first real CI run: it failed on its own bug rather than on the file it
+# guards, which is worse than not existing, because it reads as the file being wrong.
+tools_line="$(printf '%s\n' "$unrun" | grep -nF 'Filename: "{app}\keld.exe"' || true)"
+dereg_line="$(printf '%s\n' "$unrun" | grep -nF 'Filename: "{app}\keld-agent.exe"' || true)"
+
+[ -n "$tools_line" ] || \
   fail "uninstall never restores the tool configs — the tools keep posting to a dead loopback port forever"
-printf '%s\n' "$unrun" | grep -F 'keld-agent.exe' | grep -q 'uninstall' || \
+printf '%s\n' "$tools_line" | grep -q 'signal uninstall' || \
+  fail "the keld.exe uninstall entry does not run 'signal uninstall'"
+[ -n "$dereg_line" ] || \
   fail "uninstall never deregisters the agent — the KeldAgent task outlives it, pointing at a deleted exe"
+printf '%s\n' "$dereg_line" | grep -q 'Parameters: "uninstall"' || \
+  fail "the keld-agent.exe uninstall entry does not run 'uninstall'"
 
 #     ORDER: restoring the tool configs reads the manifest under ~/.keld, so it must
 #     come before anything that can remove it.
-tools_at="$(printf '%s\n' "$unrun" | grep -nF 'signal uninstall' | cut -d: -f1)"
-dereg_at="$(printf '%s\n' "$unrun" | grep -nF 'keld-agent.exe' | cut -d: -f1)"
-[ -n "$tools_at" ] && [ -n "$dereg_at" ] && [ "$tools_at" -lt "$dereg_at" ] || \
+tools_at="${tools_line%%:*}"
+dereg_at="${dereg_line%%:*}"
+[ "$tools_at" -lt "$dereg_at" ] || \
   fail "tool-config restore must run before deregistration (it needs the manifest under ~/.keld)"
 
 #     A partially-completed earlier uninstall leaves no binaries, and Inno reports a
 #     HARD ERROR when it cannot start a command. Missing binaries must be a no-op.
-printf '%s\n' "$unrun" | grep -F 'keld.exe' | grep -q 'skipifdoesntexist' || \
-  fail "uninstall entries lack skipifdoesntexist — a re-run after a partial uninstall would error"
+#     BOTH Keld entries, checked separately — one grep over both would pass on either.
+printf '%s\n' "$tools_line" | grep -q 'skipifdoesntexist' || \
+  fail "the keld.exe uninstall entry lacks skipifdoesntexist — a re-run after a partial uninstall would error"
+printf '%s\n' "$dereg_line" | grep -q 'skipifdoesntexist' || \
+  fail "the keld-agent.exe uninstall entry lacks skipifdoesntexist — a re-run after a partial uninstall would error"
 
 # 3f. PATH must be removed on uninstall, and REMOVAL MUST BE SURGICAL. Inno cannot
 #     subtract from a shared value declaratively (uninsdeletevalue would delete the
 #     user's WHOLE Path), so it is done in [Code] — and the guard is that the code
 #     exists and is actually called, since a defined-but-uncalled procedure leaves the
 #     stale entry behind exactly as before while looking fixed.
-grep -q 'procedure RemoveFromPath' "$iss" || fail "PATH is added on install but never removed on uninstall"
-grep -q 'RemoveFromPath(ExpandConstant' "$iss" || fail "RemoveFromPath is defined but never called"
-grep -q 'procedure CurUninstallStepChanged' "$iss" || fail "no uninstall-step hook to run the cleanup from"
+printf '%s\n' "$code" | grep -q 'procedure RemoveFromPath' || fail "PATH is added on install but never removed on uninstall"
+printf '%s\n' "$code" | grep -q 'RemoveFromPath(ExpandConstant' || fail "RemoveFromPath is defined but never called"
+printf '%s\n' "$code" | grep -q 'procedure CurUninstallStepChanged' || fail "no uninstall-step hook to run the cleanup from"
 
 # 3g. Removing ~/.keld must ASK, and must default to NO. It holds auth.json and
 #     hook.json: destroying a login silently is not a cleanup, and an uninstall driven
 #     by someone pressing Enter must keep the data.
-grep -q 'DelTree' "$iss" || fail "no option to remove ~/.keld"
-grep -q 'MB_DEFBUTTON2' "$iss" || \
+printf '%s\n' "$code" | grep -q 'DelTree' || fail "no option to remove ~/.keld"
+printf '%s\n' "$code" | grep -q 'MB_DEFBUTTON2' || \
   fail "the ~/.keld removal prompt does not default to No — Enter would destroy the user's credentials"
-grep -q "GetEnv('KELD_HOME')" "$iss" || \
+printf '%s\n' "$code" | grep -q "GetEnv('KELD_HOME')" || \
   fail "the ~/.keld prompt ignores KELD_HOME and would offer to delete a directory that is not in use"
 
 # 4. onboard.cmd's own contract: redeem a code, fall back to a browser login, and
