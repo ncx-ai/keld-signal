@@ -457,7 +457,8 @@ score_block(texts: list[str], dims: dict, encoder | None)
     -> (scores: dict[id, float], borderline: list[id], assigned: list[id], encoder_used: bool)
 ```
 
-- `dims` is the block's workstream dimensions map (`repo`, `branch` values as strings) as the daemon sends them; `texts` are the block's user-turn texts (Task 5 reads them). With `encoder=None` (weights absent), scores are boost-only — metadata still attributes (AC-4).
+- `dims` is the block's workstream dimensions map (`repo`, `branch` values as strings) as the daemon sends them; `texts` are the block's user-turn texts (Task 5 reads them).
+- **⚠️ AMENDED 2026-09-01 (supersedes the original AC-4 wording and the `test_metadata_boost_model_free` assertion below).** With `encoder=None` NOTHING is assigned: `assigned` is empty and `encoder_used` is False, whatever the boost. Exact-match evidence caps at `BOOST_CAP` 0.35, below `THRESHOLD` 0.49, so a boost-only assignment could only exist under a second, unmeasured rule — and there is exactly one attribution path, the benchmarked one. The caller publishes `degraded:weights_unavailable` with no projects and the durable job retries once weights arrive.
 - Embedding side reuses `textembed.sentence_chunks` and mean-pooling: embed each text, max-sim per project across texts (per-message max, matching the benchmark's chunked strategy).
 
 - [ ] **Step 1: Write the failing test**
@@ -487,14 +488,17 @@ class PayEncoder:
             else: out.append([0.3, 0.3])
         return out
 
-def test_metadata_boost_model_free():          # AC-4
+def test_metadata_boost_model_free():          # AC-4 (AMENDED 2026-09-01)
     attribution.set_projects(PROJECTS)
     dims = {"repo": "acme-billing", "branch": "fix/PAY-12-retry"}
     b = attribution.metadata_boost(PROJECTS[0], dims, ["fix the dunning email"])
     assert b >= attribution.W_REPO + attribution.W_TICKET, f"boost {b}"
+    # The boost is computed and reported, but with no encoder NOTHING is assigned:
+    # one attribution path only, and exact matches alone never cross the threshold.
     scores, borderline, assigned, used = attribution.score_block(
         ["fix the dunning email"], dims, encoder=None)
-    assert not used and "proj_pay" in assigned, (scores, assigned)
+    assert not used and assigned == [] and borderline == [], (scores, assigned, borderline)
+    assert scores["proj_pay"] == round(b, 4), "boost must still be visible in the scores"
 
 def test_embedding_plus_threshold():           # AC-3
     attribution.set_projects(PROJECTS)
@@ -810,13 +814,14 @@ def test_attributed_full_path():               # AC-3
     meta = out["attribution"]
     assert meta["encoder_state"] == "warm" and meta["embed_ms"] >= 0
 
-def test_weights_absent_is_degraded():         # AC-4/AC-6 statuses
+def test_weights_absent_is_degraded():         # AC-4 (AMENDED 2026-09-01)
     attribution.set_projects(PROJECTS)
     out = attribution.attribute_block(
         ["fix PAY-12 dunning"], {"repo": "acme-billing"}, encoder=None, verifier_obj=None)
     assert out["status"] == "degraded:weights_unavailable"
-    assert [p["id"] for p in out["projects"]] == ["proj_pay"]      # metadata still attributes
-    assert out["projects"][0]["source"] == "metadata"
+    # No guessing without the model: the caller retries this block once weights land.
+    assert out["projects"] == []
+    assert out["attribution"]["encoder_state"] == "absent"
 
 def test_no_projects_is_skipped():             # AC-1 status
     attribution.set_projects([])
@@ -931,6 +936,8 @@ func (a *Attributor) Schedule(b publish.BlockEnrichment, path string)  // Put + 
 func (a *Attributor) Run(ctx context.Context, interval time.Duration)  // drain on start, sweep
 const MaxAttempts = 4                               // then Quarantine — the death-spiral lesson
 ```
+
+- **⚠️ AMENDED 2026-09-01 — `pending` does not consume an attempt.** `MaxAttempts` bounds ERRORS only. A `pending` answer (encoder cold, weights not provisioned yet) leaves `Attempts` untouched and re-spools the job unchanged. A multi-gigabyte download outlives any small attempt count, so counting waiting as failing would permanently abandon every block of the provisioning window — precisely what this durable job exists to prevent. Job records therefore track `Attempts` (errors) separately from simply being re-queued.
 
 - Emitter hook: `Emitter` gains an optional `OnPublished func(rows []publish.BlockEnrichment, path string)` field, called after a successful `SendBlocks`. Nil-safe. The daemon sets it to `attributor.Schedule` when the attribution gate is on.
 - Re-publish: the attributor rebuilds the row via `Digester.BlocksCharacterised` re-fetch? No — simpler and already idempotent: it holds the published `BlockEnrichment` value in the Job? **No: keep jobs small and durable.** The attributor re-fetches the single block through the same `Digester` the emitter used (blocks are deterministic from the store), applies `publish.WithProjects`, and `SendBlocks([...])` upserts. Job carries only coordinates.

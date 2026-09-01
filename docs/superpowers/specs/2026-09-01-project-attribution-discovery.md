@@ -24,7 +24,7 @@
 | AC-1 | `settings.Remote` decodes a `projects` key; absent key leaves attribution reporting `skipped:no_projects`. | `internal/agent/settings/remote.go` | Go test `TestRemoteProjectsDecode` |
 | AC-2 | `KELD_PROJECTS_FILE` loads mock project definitions when Atlas serves none. | daemon startup log + sidecar `/projects` | Go test + pytest `test_projects_file_override` |
 | AC-3 | Sidecar `POST /attribute` returns multi-label `[{id, confidence, source}]` for a block span. Deterministic under a fake encoder. | sidecar HTTP | pytest `test_attribution_end_to_end` |
-| AC-4 | A block whose `repo`/`branch`/files match a project's `repos`/`ticket_key` gets a metadata boost. Boost works with the model absent. | attribution scores | pytest `test_metadata_boost_model_free` |
+| AC-4 | A block whose `repo`/`branch`/files match a project's `repos`/`ticket_key` gets a metadata boost added to its embedding score. With the encoder ABSENT no attribution is published at all: `projects: []`, status `degraded:weights_unavailable`, and the job is retried once weights arrive. | attribution scores + block status | sidecar `test_attribution_scoring.py`, `test_attribution_endpoint.py` |
 | AC-5 | Verifier runs only on pairs within the borderline band. Its verdict overrides the score. | attribution result `source: verifier` | pytest `test_verifier_band_only` |
 | AC-6 | `KELD_ATTRIBUTION_VERIFIER=0` (or config `attribution_verifier: false`) skips the verifier. Result says `facets_degraded: [projects_verifier]`, never silently. | wire payload | pytest + Go test |
 | AC-7 | `BlockEnrichment` carries `projects` + `projects_status` + an `attribution` meta object: `{embed_ms, verify_ms, pairs_verified, encoder_state, verifier, model_versions}`. Numbers and enums only — no field can carry message text or vectors. | `internal/agent/publish/block.go` | Go test extending `TestEnrichmentWireShapeCannotCarryAnalysisInternals` pattern |
@@ -79,6 +79,8 @@
 * **Hardware telemetry:** one `agent.hardware` client-event at startup (`cpu_model`, `logical_cores`, `mem_total_gb`, `os_version` where available). Coarse by design — enough to answer "is the verifier viable on this class of machine", not enough to fingerprint. The client-events envelope already carries os, arch, and Signal `version` on every event; Atlas joins timings (blocks) to hardware (client-events) via `install_id`/`actor`.
 * **Flow:** block closes → emitter publishes immediately (unchanged) → daemon schedules attribution → on completion, emitter re-publishes the block with `projects`. Upsert on `(session, start)` makes this free.
 * **Durability:** each pending attribution is a spooled job on disk (`internal/spool` pattern, like enrich pointers). Written at first publish, deleted after the attributed re-publish lands. Drained on startup and swept periodically. A laptop closed mid-attribution resumes a day later: the transcript file still holds the span (`TextSource` reads the file, not the pruned store), so the job completes late rather than never.
+* **⚠️ Retry policy — `pending` is not a failure.** "Weights not provisioned yet" and "encoder still warming" are transient STATES and must NOT consume the attempt budget; only genuine errors do. A 4 GB model download outlives any small attempt count, so counting pending as a failure would permanently abandon every block of the provisioning window — the exact outcome this durable job exists to prevent. Attempts bound errors, never waiting.
+* **The no-model window publishes nothing rather than guessing.** Exact-match evidence alone (repo, ticket key, keywords) caps below the assignment threshold by construction, so there is ONE attribution path — the benchmarked one — and no second, unmeasured rule. A block whose encoder is absent publishes `projects: []` with `degraded:weights_unavailable` and is attributed later. A partial check must never publish a confident answer, positive or negative.
 * **Projects source precedence:** `KELD_PROJECTS_FILE` (tests, smoke) → `Remote.Projects` (Atlas, later) → absent = `skipped:no_projects`.
 * **Verifier:** Gemma 4 E2B Q4_K_M via llama-cpp-python. Runs in the recycled worker child under the runner's single-flight. ON when attribution is on; `KELD_ATTRIBUTION_VERIFIER=0` opts out (slow machines). Skipping degrades, never blocks.
 * **Feature gate:** `attribution` config key + `KELD_ATTRIBUTION` env, same shape as `blocks` (`emitter.go:489`). Models provision on demand only when the gate is on.
@@ -144,11 +146,13 @@ Feature: Block-level project attribution
     When attribution completes
     Then the block is re-published with that project id and projects_status "attributed"
 
-  # Covers: AC-4
-  Scenario: Metadata-only machine (no models)
+  # Covers: AC-4 (amended 2026-09-01)
+  Scenario: Machine without models yet
     Given attribution is on but the encoder weights are absent
-    When a block's repo matches a project's repos
-    Then that project is attributed with source "metadata" and status "degraded:weights_unavailable"
+    When a block closes, even one whose repo matches a project's repos
+    Then the block publishes with no projects and status "degraded:weights_unavailable"
+    And the attribution job remains spooled without consuming an attempt
+    And once the weights are provisioned the next sweep attributes and re-publishes it
 
   # Covers: AC-5, AC-6
   Scenario: Verifier opt-out
@@ -176,7 +180,7 @@ Feature: Block-level project attribution
 | 1 | ready | yes | clear above | not called | attributed, source embedding+metadata | AC-3 |
 | 2 | ready | no | borderline | says YES | attributed, source verifier | AC-5 |
 | 3 | ready | no | borderline | opted out | threshold decides; degraded | AC-6 |
-| 4 | absent | yes | n/a | n/a | attributed via metadata; degraded | AC-4 |
+| 4 | absent | yes | n/a | n/a | NO attribution: projects [], degraded:weights_unavailable, job retried (amended 2026-09-01) | AC-4 |
 | 5 | ready | no | clear below (all) | not called | projects: [], status attributed | AC-3 |
 | 6 | busy | any | n/a | n/a | pending; re-tried next sweep | AC-8 |
 | 7 | daemon restarted mid-job | any | n/a | n/a | spooled job drained on startup; attributed re-publish still lands | AC-8 |
