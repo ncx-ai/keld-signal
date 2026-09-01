@@ -217,6 +217,13 @@ async def lifespan(app: FastAPI):
             pass
     await runner.stop()
     await asyncio.get_running_loop().run_in_executor(None, wm.shutdown)
+    verifier_wm = _state.get("verifier_wm")
+    if verifier_wm is not None:
+        # Only ever set if /attribute actually needed a verdict during this process's life —
+        # see _verifier_manager(). Shutting it down here (rather than leaving it to process
+        # exit) matches wm.shutdown() above: the child gets a chance to unwind before the
+        # daemon's SIGTERM/SIGKILL reaps the process group.
+        await asyncio.get_running_loop().run_in_executor(None, verifier_wm.shutdown)
     if _TEXT_SOURCE is not None:
         await asyncio.get_running_loop().run_in_executor(None, _TEXT_SOURCE.shutdown)
     _state.clear()
@@ -1373,66 +1380,105 @@ class _EncoderAdapter:
         return vectors
 
 
-# The verifier is built AT MOST ONCE per process, lazily, and on the runner's own thread — see
-# `_verify_call`. `_VERIFIER_FAILED` latches a build that failed so a broken GGUF costs one
-# load attempt rather than one per borderline pair.
-_VERIFIER = None
-_VERIFIER_FAILED = False
-_VERIFIER_LOCK = threading.Lock()
-
 # The background warm-up: one thread at a time, so a burst of `/attribute` calls on a cold child
 # cannot spawn a queue of them. Module-level so a test can join it.
 _WARM_THREAD = None
 _WARM_LOCK = threading.Lock()
 
+# The verifier's own drift margin over its measured model_cost_mb (WorkerManager.ceiling_mb()).
+# Deliberately its OWN env var and its OWN default rather than reusing
+# KELD_SIDECAR_RSS_MARGIN_MB (1024): that number was measured for GLiNER2, a torch transformer
+# whose transient activation memory scales with input length and batch size. The verifier is a
+# llama.cpp Q4_K_M GGUF loaded with a fixed n_ctx (4096, see app/verifier.py) and no batching —
+# its resident cost is dominated by the (mostly mmap'd) quantized weights plus one bounded KV
+# cache, so it has much less headroom to grow between spawn and drift-recycle than a transformer
+# whose worst case is an unbounded-length input. Half of GLiNER2's measured margin is a
+# defensible starting point pending a real measurement on this model; env-overridable in the
+# same style as the shared ceiling so an operator can tighten or loosen it without a code change.
+_VERIFIER_RSS_MARGIN_MB = float(os.environ.get("KELD_VERIFIER_RSS_MARGIN_MB", "512"))
 
-def _verifier_model():
-    """The process's one `verifier.Verifier`, loaded on first real use.
+# The verifier's own WorkerManager, distinct from `_state["wm"]` (GLiNER2's). Built lazily by
+# `_verifier_manager()`; guarded so two racing `/attribute` calls build at most one.
+_VERIFIER_WM_LOCK = threading.Lock()
 
-    Called only from the runner's single-flight thread, never the event loop: the load is a
-    ~1.5 GB GGUF and a lazy build on the request path would stall `/health` and `/metrics` for
-    the length of it. Nothing is loaded at import, nothing is loaded when no pair is borderline,
-    and nothing is loaded twice."""
-    global _VERIFIER, _VERIFIER_FAILED
-    with _VERIFIER_LOCK:
-        if _VERIFIER is not None:
-            return _VERIFIER
-        if _VERIFIER_FAILED:
-            raise _VerifierUnavailable()
-        from app import verifier as _verifier_mod
-        try:
-            _VERIFIER = _verifier_mod.Verifier()
-        except Exception:              # noqa: BLE001 — an absent/broken model is a stated state
-            _VERIFIER_FAILED = True
-            raise _VerifierUnavailable() from None
-        return _VERIFIER
+
+def _verifier_model_factory():
+    """Load the verifier's GGUF model in the worker CHILD, never here. Mirrors `_model_factory`
+    above: llama_cpp is imported only inside `verifier.Verifier.__init__`, which this calls only
+    from inside the spawned child process (see `_verifier_spawn`) — so the FastAPI parent never
+    imports it, matching the invariant `_model_factory` already keeps for torch/gliner2."""
+    from app import verifier as verifier_mod
+    return verifier_mod.Verifier()
+
+
+def _verifier_spawn():
+    """spawn_fn for the verifier's WorkerManager — the sibling of worker_manager.py's own
+    `_default_spawn`, reusing the same child entry point (`worker.serve`) with a different
+    model_factory. A second, independent Process/Queue pair: the verifier's child is recycled
+    on its own schedule and never shares a process with the GLiNER2 worker."""
+    import multiprocessing as mp
+    from app.worker import serve
+    ctx = mp.get_context("spawn")
+    req_q, resp_q = ctx.Queue(), ctx.Queue()
+    proc = ctx.Process(target=serve, args=(req_q, resp_q, _verifier_model_factory), daemon=True)
+    proc.start()
+    return proc, req_q, resp_q
+
+
+def _verifier_manager():
+    """The process's one verifier WorkerManager — a SECOND, independent instance beside
+    `_state["wm"]` (GLiNER2's), reusing WorkerManager's spawn/recycle/RSS-ceiling machinery
+    unmodified rather than inventing any. Built lazily here, on first genuine need: `/attribute`
+    only ever reaches this function when a borderline pair actually needs a verdict, which is
+    itself gated (see the route) on attribution having projects to score, the opt-out flag being
+    off, and the weights being present on disk — so a machine with attribution off, the verifier
+    opted out, or no weights provisioned never spawns this child at all."""
+    wm = _state.get("verifier_wm")
+    if wm is not None:
+        return wm
+    with _VERIFIER_WM_LOCK:
+        wm = _state.get("verifier_wm")
+        if wm is None:
+            wm = WorkerManager(spawn_fn=_verifier_spawn, margin_mb=_VERIFIER_RSS_MARGIN_MB)
+            _state["verifier_wm"] = wm
+        return wm
 
 
 def _verify_call(block_text, dims, project):
-    """One verdict, on the runner's thread. The model is loaded here on first use."""
-    return _verifier_model().verify(block_text, dims, project)
+    """One verdict, via the dedicated verifier WorkerManager. The worker child is spawned
+    lazily, on first call, by `_verifier_manager()`.
+
+    A dead/unspawnable child (WorkerTimeout/WorkerUnavailable/WorkerError — the child failed to
+    start, crashed mid-job, or returned an error) degrades to "the verifier could not answer"
+    rather than crashing the request: translated to `_VerifierUnavailable`, which
+    `_attribute_blocking` catches and re-runs the decision on the threshold alone, with the
+    verifier reported `unavailable` — never a silent narrowing that looks like the full
+    decision (AC-6)."""
+    try:
+        result = _verifier_manager().call({
+            "op": "verify", "block_text": block_text, "dims": dims or {}, "project": project,
+        })
+    except (WorkerTimeout, WorkerUnavailable, WorkerError):
+        raise _VerifierUnavailable() from None
+    return result["verdict"], result["seconds"]
 
 
-class _RunnerVerifier:
-    """A verifier whose every verdict rides the single-flight runner.
+class _WorkerVerifier:
+    """A verifier whose every verdict rides its OWN dedicated WorkerManager
+    (`_verifier_manager`) — a second, recycled worker child holding the GGUF model, never the
+    FastAPI parent and never the GLiNER2 worker.
 
-    ⚠️ This is genuine INFERENCE, so it must not fan out: the sidecar's whole load-protection
-    story is one inference at a time, and the verifier is a second model beside the GLiNER2
-    worker. It goes through `_state["runner"]` — the same queue+governor `_dispatch` submits to
-    — rather than through `_dispatch` itself, because `_dispatch` calls `WorkerManager.call`,
-    which would route a llama.cpp prompt to the GLiNER2 child. Single-flight is what is shared;
-    the worker is not.
-
-    `verify` is called from an executor thread (inside `attribute_block`), so it bridges back to
-    the loop with `run_coroutine_threadsafe` and blocks that thread — never the loop."""
-
-    def __init__(self, loop):
-        self._loop = loop
+    Replaces the old `_RunnerVerifier`, which piggybacked on `_state["runner"]` — the shared
+    single-flight GLiNER2 dispatch went through — because that shared the wrong resource: what
+    the verifier needs is its own worker with its own recycling, not a slot in someone else's
+    queue. `WorkerManager.call()` already blocks its caller until the worker answers or the job
+    deadline trips, so no bridging back to the event loop is needed here (unlike the old class,
+    which had to `run_coroutine_threadsafe` onto the runner's thread). `verify()` runs on an
+    executor thread already (called from `_attribute_blocking`), so blocking here blocks that
+    thread, never the loop."""
 
     def verify(self, block_text, dims, project):
-        fut = asyncio.run_coroutine_threadsafe(
-            _state["runner"].submit(_verify_call, block_text, dims, project), self._loop)
-        return fut.result()
+        return _verify_call(block_text, dims, project)
 
 
 def _span_texts(path, start, end):
@@ -1603,13 +1649,13 @@ async def attribute(body: AttributeIn):
 
     verifier_obj, verifier_absent = None, "opted_out"
     if verifier_mod.enabled():
-        runner = _state.get("runner")
-        if verifier_mod.weights_path() is None or runner is None or not runner.ready:
+        if verifier_mod.weights_path() is None:
             # Wanted and not runnable: "unavailable", never "opted_out". The threshold decides
-            # alone and the meta says so.
+            # alone and the meta says so. No manager is built and no child is spawned for this —
+            # `_verifier_manager()` is reached only through `_WorkerVerifier.verify()`, below.
             verifier_absent = "unavailable"
         else:
-            verifier_obj = _RunnerVerifier(loop)
+            verifier_obj = _WorkerVerifier()
     return await loop.run_in_executor(
         None, _attribute_blocking, texts, body.dims, _EncoderAdapter(child),
         verifier_obj, verifier_absent)

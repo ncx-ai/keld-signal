@@ -53,6 +53,14 @@ def handle(req: dict, model) -> dict:
     normalized dict. Pure w.r.t. the model object, so it is unit-testable with a
     stub."""
     op = req["op"]
+    if op == "verify":
+        # A different request shape for a different model (app/verifier.py's Verifier):
+        # block_text/dims/project, not text/tasks/labels. Dispatched from the same handle()
+        # so both models share worker.py's serve() loop and worker_manager.py's
+        # spawn/recycle/RSS machinery unmodified — not because they share a request shape.
+        # Checked before `text = req["text"]` below, which a verify request never sends.
+        verdict, seconds = model.verify(req.get("block_text", ""), req.get("dims"), req.get("project"))
+        return {"verdict": bool(verdict), "seconds": float(seconds)}
     text = req["text"]
     max_len = _max_len(req)
     if op == "classify":
@@ -82,10 +90,22 @@ def serve(req_q, resp_q, model_factory) -> None:
     request at a time until a None sentinel. Each response is
     {"ok": True, "result": {...}} or {"ok": False, "error": "..."}."""
     model = model_factory()
-    try:
-        model.classify_text("warm up the model", {"_warmup": ["a", "b"]})
-    except Exception:
-        pass
+    # Model-agnostic warm-up: call the product's own warm() when it has one, so a worker child
+    # hosting a model that isn't GLiNER2 (e.g. app/verifier.py's Verifier, which has no
+    # classify_text) still reaches {"ready": True} via an actual warm-up rather than an
+    # AttributeError swallowed by the fallback's bare except. GLiNER2's warm-up path (below) is
+    # unchanged and untouched for models exposing no warm() of their own.
+    warm = getattr(model, "warm", None)
+    if callable(warm):
+        try:
+            warm()
+        except Exception:
+            pass
+    else:
+        try:
+            model.classify_text("warm up the model", {"_warmup": ["a", "b"]})
+        except Exception:
+            pass
     resp_q.put({"ready": True})
     while True:
         req = req_q.get()
