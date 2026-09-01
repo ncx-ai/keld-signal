@@ -192,7 +192,15 @@ def apply_verifier(texts, dims, scores, borderline, verifier_obj):
     `borderline` is empty whenever the encoder didn't run (score_block's own
     rule), so this does nothing at all in that case: no model load, no work.
     A `None` verifier — the caller opted out, or weights aren't provisioned —
-    is handled the same way."""
+    is handled the same way.
+
+    Privacy: `texts` and the borderline projects' descriptions are formatted
+    into a prompt and held in memory only for the `verify()` call this
+    function makes — same rule as `score_block` above, and more load-bearing
+    here, since this is the function that actually hands block text to a
+    language model. Nothing here logs or persists block text or project
+    text; `Verifier.verify()` (`app/verifier.py`) runs the model locally and
+    the text never leaves the machine."""
     if not borderline or verifier_obj is None:
         return {}, 0, 0
     projects, _ = current_projects()
