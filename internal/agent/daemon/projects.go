@@ -82,3 +82,72 @@ func (p *projectsState) set(v []settings.RemoteProject) {
 	defer p.mu.Unlock()
 	p.value = v
 }
+
+// maybePostProjectsAtStartup is the startup half of the C4 async-POST fix,
+// and it exists to close the race that fix itself reopened (NB1, round-2
+// review).
+//
+// ⚠️ THE RACE: pollSettings runs its first poll (and so onRemote's own
+// PostProjects call) essentially immediately, concurrently with THIS
+// goroutine — both retrying against the same cold, just-spawned sidecar with
+// independent backoff. Before this fix, the startup call posted
+// resolveProjects(nil), which is an EMPTY list on any machine without
+// KELD_PROJECTS_FILE (today, that is every machine — Atlas does not serve
+// `projects` yet, so remote.Projects is always nil and onRemote's own
+// resolveProjects(r) is ALSO empty in practice; env-file-set machines resolve
+// identically at both call sites since the env always wins regardless of
+// r). If the startup call's older, longer-backing-off attempt happened to
+// land AFTER onRemote's had already told the sidecar about a real list, the
+// sidecar would end up holding NO projects — every subsequent /attribute
+// answers skipped:no_projects, which the attributor's switch treats as
+// TERMINAL: publish and delete. Those blocks are permanently attributed to
+// nothing, and by the time the next poll (5 minutes later) could correct it,
+// the blocks are already gone from the store.
+//
+// TWO GUARDS, matching the review's suggested shape:
+//  1. An EMPTY resolved list is never posted at startup at all. The sidecar's
+//     own un-POSTed-to state already reads as "no projects", so skipping costs
+//     nothing when there is genuinely nothing to say yet, and it structurally
+//     cannot be the empty list that clobbers a real one, because it is never
+//     sent.
+//  2. Immediately before posting a NON-empty list, state.changed(p) is
+//     re-checked — if onRemote's own poll has already landed with the same
+//     (or a different) resolved value, this call is now redundant and skips.
+//     This does not fully serialize the two goroutines (a genuine race window
+//     remains between the check and the network call completing), but
+//     combined with guard 1 it closes every failure mode reachable under the
+//     CURRENT Atlas contract, where the two call sites can only ever disagree
+//     via a resolveProjects(nil) that resolves empty — which guard 1 already
+//     refuses to send.
+func maybePostProjectsAtStartup(post func([]settings.RemoteProject) error, state *projectsState, p []settings.RemoteProject) {
+	if len(p) == 0 {
+		return // NB1 guard 1: never let an empty startup resolution race a real list
+	}
+	if !state.changed(p) {
+		return // NB1 guard 2: a concurrent update (the settings poll) already landed
+	}
+	if err := post(p); err != nil {
+		log.Printf("keld-agent: initial /projects post failed: %v", err)
+		return
+	}
+	state.set(p)
+}
+
+// postProjectsOnChange is onRemote's half of the same gate
+// maybePostProjectsAtStartup implements for the startup half: resolve r's
+// project list and post it only if it differs from state's currently held
+// value. Extracted alongside maybePostProjectsAtStartup so both halves of the
+// NB1 fix are exercised by the same kind of direct, deterministic unit test
+// rather than only through daemon.Run (which nothing in this codebase
+// exercises end to end).
+func postProjectsOnChange(post func([]settings.RemoteProject) error, state *projectsState, r *settings.Remote) {
+	p := resolveProjects(r)
+	if !state.changed(p) {
+		return
+	}
+	if err := post(p); err != nil {
+		log.Printf("keld-agent: /projects update failed: %v", err)
+		return
+	}
+	state.set(p)
+}

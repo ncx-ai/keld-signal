@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -348,16 +349,58 @@ func TestDegradedWeightsUnavailablePublishesAndHoldsWithoutConsumingAnAttempt(t 
 	if jobs[0].Attempts != 0 {
 		t.Fatalf("degraded:weights_unavailable must not consume an attempt, got Attempts=%d", jobs[0].Attempts)
 	}
+	if !jobs[0].DegradedPublished {
+		t.Fatal("DegradedPublished must be set once the degraded row has been sent")
+	}
 	if bad, _ := NewStore(dir + "/bad").List(); len(bad) != 0 {
 		t.Fatalf("degraded:weights_unavailable must never quarantine, got %d in bad/", len(bad))
 	}
-	if len(sender.sent) == 0 {
-		t.Fatal("the degraded row must be published so it states its own degradation, unlike pending")
+	// NB2 (round 2): publish exactly ONCE, then hold silently — NOT once per
+	// sweep for the whole provisioning window (Atlas upserts, so re-sending
+	// loses nothing, but MaxAttempts*3 = 12 drains publishing 12 identical
+	// rows is needless write amplification for the entire download).
+	if len(sender.sent) != 1 {
+		t.Fatalf("published %d times across %d drains, want exactly 1 (publish once, then hold silently)",
+			len(sender.sent), MaxAttempts*3)
 	}
-	for _, batch := range sender.sent {
-		if batch[0].ProjectsStatus != enrich.ProjectsDegradedWeights {
-			t.Fatalf("published status = %q, want %q", batch[0].ProjectsStatus, enrich.ProjectsDegradedWeights)
-		}
+	if sender.sent[0][0].ProjectsStatus != enrich.ProjectsDegradedWeights {
+		t.Fatalf("published status = %q, want %q", sender.sent[0][0].ProjectsStatus, enrich.ProjectsDegradedWeights)
+	}
+}
+
+// NB2 regression: once weights finish provisioning and the sidecar starts
+// answering a TERMINAL status, the job must still publish and delete
+// normally — DegradedPublished must not suppress the terminal publish.
+func TestDegradedThenAttributedStillPublishesTheTerminalRow(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	if err := st.Put(Job{SessionID: "s1", Path: "/tmp/x.jsonl", Start: 1, End: 2}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	sender := &fakeSender{}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsDegradedWeights}}
+	dig := digesterFor("s1", 1, 2)
+	a := New(st, cl, sender, nil, "actor@x", dig)
+	ctx := context.Background()
+
+	a.drainOnce(ctx) // degraded: publishes once, holds
+	if len(sender.sent) != 1 {
+		t.Fatalf("expected the one degraded publish, got %d", len(sender.sent))
+	}
+
+	// Weights finish provisioning: the sidecar now answers attributed.
+	cl.res = sidecar.AttributeResult{Status: enrich.ProjectsAttributed,
+		Projects: []enrich.ProjectAttribution{{ID: "proj_pay", Confidence: 0.9, Source: "embedding"}}}
+	a.drainOnce(ctx)
+
+	if len(sender.sent) != 2 {
+		t.Fatalf("expected a second publish for the terminal answer, got %d total", len(sender.sent))
+	}
+	if sender.sent[1][0].ProjectsStatus != enrich.ProjectsAttributed {
+		t.Fatalf("second publish status = %q, want %q", sender.sent[1][0].ProjectsStatus, enrich.ProjectsAttributed)
+	}
+	if left, _ := st.List(); len(left) != 0 {
+		t.Fatalf("job should be deleted once attributed, %d left", len(left))
 	}
 }
 
@@ -524,6 +567,57 @@ func (d *multiBlockDigester) BlocksCharacterised(path, source, sessionID string,
 		StartTS: start,
 		EndTS:   start + 1,
 	}}, nil, true
+}
+
+// recordingPendingClient always answers pending (so every job it sees stays
+// held forever, never terminating and never freeing its sweep slot) and
+// records which job STARTs it was ever asked to attribute — used to prove
+// every job in a backlog eventually gets a turn rather than only the first
+// maxPerSweep.
+type recordingPendingClient struct {
+	mu   sync.Mutex
+	seen map[float64]bool
+}
+
+func (c *recordingPendingClient) Attribute(path, sessionID string, start, end float64, dims map[string]string) (sidecar.AttributeResult, bool) {
+	c.mu.Lock()
+	c.seen[start] = true
+	c.mu.Unlock()
+	return sidecar.AttributeResult{Status: enrich.ProjectsPending}, true
+}
+
+// NB3 (round 2 review): a job held indefinitely (pending, or degraded before
+// its one publish) must not permanently occupy a sweep slot and starve the
+// rest of the backlog. This seeds more than maxPerSweep jobs, all of which
+// stay held forever (always pending), and asserts every one of them is
+// eventually attributed at least once across a bounded number of sweeps —
+// which only holds if the drain window ROTATES rather than always taking
+// the same jobs[:maxPerSweep].
+func TestDrainRotatesSoAHeldHeadDoesNotStarveTheTail(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	total := maxPerSweep + 3
+	for i := 0; i < total; i++ {
+		if err := st.Put(Job{SessionID: "s1", Path: "/tmp/x.jsonl", Start: float64(i), End: float64(i) + 1}); err != nil {
+			t.Fatalf("Put %d: %v", i, err)
+		}
+	}
+	cl := &recordingPendingClient{seen: map[float64]bool{}}
+	dig := &multiBlockDigester{sessionID: "s1"}
+	a := New(st, cl, &fakeSender{}, nil, "actor@x", dig)
+	ctx := context.Background()
+
+	// ceil(total/maxPerSweep) = 2 sweeps is the minimum needed for full
+	// coverage under exact round-robin; a few extra sweeps of margin.
+	for i := 0; i < 4; i++ {
+		a.drainOnce(ctx)
+	}
+
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if len(cl.seen) != total {
+		t.Fatalf("only %d of %d jobs were ever attributed across sweeps — the tail is starved by a held head", len(cl.seen), total)
+	}
 }
 
 func TestEnabledMirrorsBlocksEnabledShape(t *testing.T) {

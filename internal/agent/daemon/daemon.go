@@ -866,14 +866,12 @@ func Run(ctx context.Context) error {
 		// with KELD_ATTRIBUTION=0 — attribution being "off" must mean
 		// nothing about it happens, not merely that the daemon's own loop
 		// doesn't run.
+		//
+		// postProjectsOnChange is the poll half of the NB1 fix (round 2):
+		// see maybePostProjectsAtStartup's doc comment (projects.go) for the
+		// startup-vs-poll race this and its sibling close together.
 		if attrib.Enabled(set.Attribution) && svc.PostProjects != nil {
-			if p := resolveProjects(r); lastProjects.changed(p) {
-				if err := svc.PostProjects(p); err != nil {
-					log.Printf("keld-agent: /projects update failed: %v", err)
-				} else {
-					lastProjects.set(p)
-				}
-			}
+			postProjectsOnChange(svc.PostProjects, lastProjects, r)
 		}
 	}
 	// PROJECT ATTRIBUTION: resolve the declared project list ONCE at startup
@@ -890,22 +888,26 @@ func Run(ctx context.Context) error {
 	// essentially every cold start — BEFORE go pollSettings, the enrichment
 	// Worker, and the /enrich listener, so the whole daemon's startup stalled
 	// behind it. resolveProjects itself is cheap (env/remote lookup, no I/O
-	// beyond an optional local file read) and stays inline; only
-	// svc.PostProjects — the actual HTTP call — is deferred. lastProjects is
-	// now mutex-guarded (projectsState) precisely because this goroutine and
-	// onRemote's poll goroutine can both reach it — seeing this comment is
-	// the reason `var lastProjects` became `lastProjects := &projectsState{}`
-	// above; do not revert to a bare var without re-adding the lock.
+	// beyond an optional local file read) and stays inline; only the actual
+	// HTTP call is deferred, inside maybePostProjectsAtStartup.
+	//
+	// ⚠️ NB1 (round 2): making this call asynchronous REOPENED a race with
+	// onRemote's own poll-driven call above — pollSettings fires its first
+	// poll essentially immediately, so both goroutines can retry against the
+	// same cold sidecar concurrently, and lastProjects being mutex-guarded
+	// (projectsState) only prevents a DATA race, not an ORDERING one: whichever
+	// POST physically lands last at the sidecar wins, independent of which
+	// goroutine's Go-side bookkeeping "wins" the mutex. maybePostProjectsAtStartup
+	// (projects.go) is what actually closes that: it never posts an EMPTY
+	// resolved list (which — before Atlas serves `projects` — is what every
+	// machine without KELD_PROJECTS_FILE resolves to, so it can never be the
+	// stale write that clobbers a real one) and re-checks lastProjects.changed
+	// immediately before posting a non-empty one, so a POST that raced a
+	// concurrent update becomes a no-op instead of overwriting it.
 	if attrib.Enabled(set.Attribution) && svc.PostProjects != nil {
 		p := resolveProjects(nil)
 		postProjects := svc.PostProjects
-		go func() {
-			if err := postProjects(p); err != nil {
-				log.Printf("keld-agent: initial /projects post failed: %v", err)
-				return
-			}
-			lastProjects.set(p)
-		}()
+		go maybePostProjectsAtStartup(postProjects, lastProjects, p)
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {

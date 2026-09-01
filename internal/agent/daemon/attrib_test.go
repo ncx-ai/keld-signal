@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,5 +187,119 @@ func TestProjectsStateSetOnlyOnSuccess(t *testing.T) {
 	ps.set(p)
 	if ps.changed(p) {
 		t.Fatal("after a successful set, the identical list must read as unchanged")
+	}
+}
+
+// NB1 (round 2 review): the startup POST must NEVER send an empty resolved
+// list — that emptiness is precisely what could clobber a real list the
+// concurrent settings poll already told the sidecar about.
+func TestMaybePostProjectsAtStartupSkipsAnEmptyList(t *testing.T) {
+	ps := &projectsState{}
+	var calls int
+	post := func(p []settings.RemoteProject) error {
+		calls++
+		return nil
+	}
+	maybePostProjectsAtStartup(post, ps, nil)
+	maybePostProjectsAtStartup(post, ps, []settings.RemoteProject{})
+	if calls != 0 {
+		t.Fatalf("post called %d times for an empty/nil list, want 0", calls)
+	}
+}
+
+// NB1: when the settings poll has already told the sidecar about a list
+// (matching what the startup goroutine itself resolved), the startup
+// goroutine's own POST must be skipped as redundant rather than re-sending
+// it — the re-check-before-POST guard.
+func TestMaybePostProjectsAtStartupSkipsWhenAlreadyPosted(t *testing.T) {
+	ps := &projectsState{}
+	p := []settings.RemoteProject{{ID: "proj_env"}}
+	ps.set(p) // simulate: the poll goroutine already posted this exact list
+	var calls int
+	post := func(got []settings.RemoteProject) error {
+		calls++
+		return nil
+	}
+	maybePostProjectsAtStartup(post, ps, p)
+	if calls != 0 {
+		t.Fatalf("post called %d times for an already-current list, want 0 (redundant POST)", calls)
+	}
+}
+
+func TestMaybePostProjectsAtStartupPostsAndRecordsOnSuccess(t *testing.T) {
+	ps := &projectsState{}
+	p := []settings.RemoteProject{{ID: "proj_env"}}
+	var got []settings.RemoteProject
+	post := func(v []settings.RemoteProject) error {
+		got = v
+		return nil
+	}
+	maybePostProjectsAtStartup(post, ps, p)
+	if len(got) != 1 || got[0].ID != "proj_env" {
+		t.Fatalf("post received %+v, want %+v", got, p)
+	}
+	if ps.changed(p) {
+		t.Fatal("state must be recorded as current after a successful post")
+	}
+}
+
+func TestMaybePostProjectsAtStartupDoesNotRecordOnFailure(t *testing.T) {
+	ps := &projectsState{}
+	p := []settings.RemoteProject{{ID: "proj_env"}}
+	post := func(v []settings.RemoteProject) error { return errors.New("sidecar unreachable") }
+	maybePostProjectsAtStartup(post, ps, p)
+	if !ps.changed(p) {
+		t.Fatal("a failed post must not be recorded as current — a later attempt must still see it as changed")
+	}
+}
+
+// NB1's actual regression guard: run the startup helper and the poll helper
+// CONCURRENTLY, as real goroutines, with the startup side resolving an EMPTY
+// list (resolveProjects(nil) — what every machine without KELD_PROJECTS_FILE
+// resolves to today, since Atlas does not yet serve `projects`) and the poll
+// side resolving a REAL one. Regardless of goroutine scheduling, the sidecar
+// (the fake `post` sink here) must never end up holding the empty list.
+//
+// This is deliberately not a timing-based test (no sleeps, no artificial
+// delays) — maybePostProjectsAtStartup's guard against posting an empty list
+// makes the race structurally impossible to lose, rather than merely unlikely
+// to lose, so plain concurrent execution is enough to catch a reintroduction
+// (e.g. someone removing the len(p)==0 check) deterministically.
+func TestNB1StartupNeverClobbersAConcurrentPollWithAnEmptyList(t *testing.T) {
+	t.Setenv(settings.EnvProjectsFile, "") // resolveProjects(nil) must resolve empty, not to a leftover env file
+	for iter := 0; iter < 50; iter++ {
+		state := &projectsState{}
+		var mu sync.Mutex
+		var posted []settings.RemoteProject
+		post := func(p []settings.RemoteProject) error {
+			mu.Lock()
+			posted = p
+			mu.Unlock()
+			return nil
+		}
+		real := []settings.RemoteProject{{ID: "proj_real"}}
+		remote := &settings.Remote{Projects: &real}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			maybePostProjectsAtStartup(post, state, resolveProjects(nil)) // empty: no KELD_PROJECTS_FILE
+		}()
+		go func() {
+			defer wg.Done()
+			postProjectsOnChange(post, state, remote)
+		}()
+		wg.Wait()
+
+		mu.Lock()
+		got := posted
+		mu.Unlock()
+		if len(got) == 0 {
+			t.Fatalf("iter %d: the sidecar ended up with no projects even though a real list was available", iter)
+		}
+		if got[0].ID != "proj_real" {
+			t.Fatalf("iter %d: posted = %+v, want the real list", iter, got)
+		}
 	}
 }

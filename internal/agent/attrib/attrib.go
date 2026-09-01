@@ -70,6 +70,16 @@ type Job struct {
 	Start     float64 `json:"start"`
 	End       float64 `json:"end"`
 	Attempts  int     `json:"attempts"`
+	// DegradedPublished records whether a degraded:weights_unavailable row has
+	// already been published for this job (NB2, round-2 review). Without this
+	// marker every sweep that still answers degraded republishes the SAME row
+	// — Atlas upserts, so nothing is lost, but a job sitting in
+	// degraded:weights_unavailable for the whole of a multi-gigabyte weights
+	// download would otherwise rewrite it once per sweep (60s default) for
+	// the entire download, and indefinitely if provisioning never completes.
+	// Publish once, set this, then hold SILENTLY on every subsequent sweep
+	// until a pending or terminal answer supersedes the degraded one.
+	DegradedPublished bool `json:"degraded_published,omitempty"`
 }
 
 // Store is one JSON file per job under dir, keyed by a hash of (session,
@@ -239,6 +249,12 @@ type Attributor struct {
 	// redundant, not lost — the pending one will drain everything Schedule
 	// just wrote.
 	nudge chan struct{}
+	// sweepOffset rotates drainOnce's starting point among held jobs each
+	// sweep (NB3, round-2 review). Accessed only from the goroutine that
+	// calls drainOnce — Run's own loop is single-goroutine by construction,
+	// and a test driving drainOnce directly is likewise single-goroutine —
+	// so it needs no lock.
+	sweepOffset int
 }
 
 // New builds an Attributor. facts may be nil (empty resolved facts are sent
@@ -295,26 +311,61 @@ func (a *Attributor) Run(ctx context.Context, interval time.Duration) {
 // job's own sidecar call can run up to attributeCallTimeout, so an unbounded
 // drain over a large backlog would park a single sweep for hours. A backlog
 // beyond this drains over successive sweeps (interval, default 60s) or
-// Schedule nudges — never lost, only paced.
+// Schedule nudges — never lost, only paced FAIRLY (see sweepSlice/NB3).
 const maxPerSweep = 24
 
-// drainOnce is one pass over up to maxPerSweep jobs currently in the store.
-// Split out from Run so a test can drive it directly without a ticker.
+// drainOnce is one pass over up to maxPerSweep jobs currently in the store,
+// chosen fairly by sweepSlice. Split out from Run so a test can drive it
+// directly without a ticker.
 func (a *Attributor) drainOnce(ctx context.Context) {
 	jobs, err := a.st.List()
 	if err != nil {
 		log.Printf("keld-agent: attribution store list failed: %v", err)
 		return
 	}
-	if len(jobs) > maxPerSweep {
-		jobs = jobs[:maxPerSweep]
-	}
-	for _, j := range jobs {
+	for _, j := range a.sweepSlice(jobs) {
 		if ctx.Err() != nil {
 			return
 		}
 		a.drainJob(j)
 	}
+}
+
+// sweepSlice returns up to maxPerSweep jobs from all, starting at a
+// ROTATING offset that advances every call (NB3, round-2 review).
+//
+// ⚠️ A FIXED jobs[:maxPerSweep] STARVES THE TAIL. List's order comes from
+// os.ReadDir over hash-named files — stable for a given file set, but
+// arbitrary relative to a job's age — and pending/degraded jobs are HELD
+// (never removed) across many sweeps by design. Once more than maxPerSweep
+// jobs are simultaneously held — the concrete scenario is a
+// degraded-weights backlog during the encoder's provisioning window — a
+// fixed slice reprocesses the SAME first maxPerSweep jobs every sweep and
+// the rest wait behind them for as long as the head stays unresolved,
+// arbitrarily long. Nothing is ever lost (a held job stays on disk), but a
+// starved tail job's attribution is delayed for no reason tied to ITS own
+// state.
+//
+// Rotating the start point by exactly how many jobs the previous sweep
+// visited guarantees every job is revisited within
+// ceil(len(all)/maxPerSweep) sweeps regardless of how many heads are stuck,
+// because the window advances past a stuck job the same as past a healthy
+// one — being held doesn't exempt a job from being rotated over.
+func (a *Attributor) sweepSlice(all []Job) []Job {
+	if len(all) == 0 {
+		return nil
+	}
+	n := len(all)
+	if n > maxPerSweep {
+		n = maxPerSweep
+	}
+	start := a.sweepOffset % len(all)
+	out := make([]Job, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, all[(start+i)%len(all)])
+	}
+	a.sweepOffset = (start + n) % len(all)
+	return out
 }
 
 // drainJob resolves one job's block, asks the sidecar to attribute it, and
@@ -325,10 +376,12 @@ func (a *Attributor) drainOnce(ctx context.Context) {
 //   - ProjectsDegradedWeights: the sidecar answered, but with its embedding
 //     weights unavailable — the SAME condition pending exists to protect
 //     against (weights mid-download), reached through a different status.
-//     Publish the degraded row (it states its own degradation), then
-//     re-spool UNCHANGED so a later sweep can supersede it once the weights
-//     finish provisioning — an attempt is consumed only if THIS publish
-//     itself fails, matching every other publish failure (see I2 below).
+//     Publish the degraded row EXACTLY ONCE (it states its own degradation;
+//     Job.DegradedPublished is the marker — see NB2), then hold SILENTLY on
+//     every subsequent sweep so a later sweep can still supersede it once the
+//     weights finish provisioning, without re-sending an identical row every
+//     interval for the whole download. An attempt is consumed only if the
+//     ONE publish itself fails, matching every other publish failure (I2).
 //   - ProjectsAttributed / ProjectsSkippedDisabled / ProjectsSkippedNoProjects:
 //     terminal. Publish, then delete the job.
 //   - anything else: a status this side cannot recognise is a GENUINE ERROR,
@@ -372,16 +425,22 @@ func (a *Attributor) drainJob(j Job) {
 		// retryOrQuarantine would write.
 		a.hold(j, "pending")
 	case enrich.ProjectsDegradedWeights:
-		if err := a.republish(j, b, res); err != nil {
-			// I2: a publish failure holds the job rather than spending an
-			// attempt — see the drainJob doc comment.
-			a.hold(j, "publish failed (degraded)")
-			return
+		// NB2: publish ONCE, marked by DegradedPublished, then hold
+		// silently on every later sweep — never re-send the identical row
+		// for the whole provisioning window.
+		if !j.DegradedPublished {
+			if err := a.republish(j, b, res); err != nil {
+				// I2: a publish failure holds the job rather than spending
+				// an attempt — see the drainJob doc comment.
+				a.hold(j, "publish failed (degraded)")
+				return
+			}
+			j.DegradedPublished = true
 		}
-		// Published the degraded row; re-spool UNCHANGED — same rule as
-		// pending, because this is the identical provisioning-window
-		// condition the amendment protects, reached through a different
-		// status.
+		// Re-spool UNCHANGED apart from the marker just set — same
+		// no-attempt rule as pending, because this is the identical
+		// provisioning-window condition the amendment protects, reached
+		// through a different status.
 		a.hold(j, "degraded:weights_unavailable")
 	case enrich.ProjectsAttributed, enrich.ProjectsSkippedDisabled, enrich.ProjectsSkippedNoProjects:
 		if err := a.republish(j, b, res); err != nil {
