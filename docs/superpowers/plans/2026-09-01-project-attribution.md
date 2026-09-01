@@ -892,6 +892,38 @@ def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state):
 
 ---
 
+### Task 6b: Verifier runs in a recycled worker child (ADDED 2026-09-01)
+
+**Why this task exists.** Task 6 shipped the verifier loading its ~3 GB model into the long-lived
+FastAPI parent, because `_dispatch`/`WorkerManager` routes to the GLiNER2 child. That contradicts
+the documented invariant — "the long-lived sidecar service holds no model (its RSS stays flat)" —
+and puts the model where the RSS watchdog cannot reclaim it. **User decision: GLiNER will never
+run again, and Gemma E2B is on by default with a flag to switch it off.** So the verifier gets its
+OWN recycled worker child, reusing the existing supervision machinery; GLiNER's path is left
+untouched (its sunset is explicitly deferred to a later iteration).
+
+**Files:**
+- Modify: `sidecar/app/worker.py` (a `verify` op + model-agnostic warm-up), `sidecar/app/main.py` (build and route through a second manager)
+- Create: `sidecar/app/test_verifier_worker.py`
+
+**Interfaces:**
+- Consumes: `verifier.Verifier` (Task 5), `WorkerManager` (`sidecar/app/worker_manager.py`), the child entry point `worker.serve(req_q, resp_q, model_factory)`.
+- Produces: a second `WorkerManager` instance dedicated to the verifier, its model factory building `verifier.Verifier()` inside the CHILD; `handle()` gains a `verify` op returning `{"verdict": bool, "seconds": float}`; `_RunnerVerifier` (Task 6) is replaced by a `_WorkerVerifier` whose `verify()` calls through that manager.
+
+- [ ] **Step 1: Write the failing test** — `sidecar/app/test_verifier_worker.py`, using fakes only (no real model, no real process): assert (a) `worker.handle({"op": "verify", ...}, fake_model)` routes to the model's `verify` and returns the `{"verdict", "seconds"}` shape; (b) `worker.serve`'s warm-up does not require a `classify_text` method — a model exposing only `verify` must still reach `{"ready": True}`; (c) the verifier manager is constructed with its own spawn function and its own RSS ceiling, distinct from the GLiNER manager's. Run it; it must fail.
+
+- [ ] **Step 2: Model-agnostic warm-up** — `worker.serve` currently warms with `model.classify_text("warm up the model", {"_warmup": [...]})` inside a bare `try/except`. Give the model factory's product an optional `warm()` method and call that when present, falling back to today's behavior otherwise. Do not delete the GLiNER warm-up path.
+
+- [ ] **Step 3: The `verify` op** — extend `worker.handle` with `verify`, taking `block_text`, `dims`, `project` and returning `{"verdict": bool, "seconds": float}`. Keep every existing op untouched.
+
+- [ ] **Step 4: The dedicated manager** — in `main.py`, build a second `WorkerManager` whose factory constructs `verifier.Verifier()` in the child. It must be created lazily (first verify request), only when `verifier.enabled()` and `verifier.weights_path()` are both true, and it must NOT be created when attribution is off. Replace `_RunnerVerifier` with a `_WorkerVerifier` calling through it. Delete the in-parent model construction — the parent must import `llama_cpp` nowhere.
+
+- [ ] **Step 5: Prove the parent stays clean** — add an assertion to the new test file that `llama_cpp` is absent from `sys.modules` after importing `app.main` and after an `attribute_block` run with a stubbed verifier. That is the regression guard for the invariant this task restores.
+
+- [ ] **Step 6: Verify + commit** — the new test file passes, the whole sidecar suite passes, then `git commit -m "fix(sidecar): verifier runs in a recycled worker child, parent holds no model"`.
+
+---
+
 ### Task 7: Go — sidecar client methods + durable attribution jobs + re-publish
 
 **Files:**
