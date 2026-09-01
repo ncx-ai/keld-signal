@@ -29,6 +29,8 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/lenstat"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
+	"github.com/ncx-ai/keld-signal/internal/agent/features"
+	"github.com/ncx-ai/keld-signal/internal/agent/hardware"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
 	"github.com/ncx-ai/keld-signal/internal/agent/provision"
@@ -668,6 +670,19 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	set := settings.Load()
+	// attribOn is resolved once, here, and reused everywhere this run needs
+	// it (project-list posting below, the attributor's own construction, and
+	// the shared text encoder's existence/spawn-env gate) — attrib.Enabled has
+	// no remote override of its own, so recomputing it per use would be a
+	// second read of the same env+config for the same static answer.
+	attribOn := attrib.Enabled(set.Attribution)
+	// encoderNeeded is THE PROJECT ATTRIBUTION PATH's /attribute (which needs
+	// the shared text encoder to embed a block's own words) OR'd with THE
+	// SIGNAL-EMBEDDINGS PATH's KELD_TEXTEMBED. See sidecarEnv's doc comment
+	// for why turning attribution on must reach the sidecar's own copy of
+	// KELD_TEXTEMBED, and encoder_on_demand.go's package comment for why
+	// enabling attribution alone must never start the features/publish path.
+	encoderNeeded := attribOn || features.TextEmbedEnabled()
 	actor := ""
 	if m, err := config.LoadManifest(); err == nil && m != nil && m.Actor != nil {
 		actor = *m.Actor
@@ -767,6 +782,20 @@ func Run(ctx context.Context) error {
 	// any poll could lower the floor — a plain Emit would always drop it.
 	emitter.EmitExempt("daemon.start", clientevents.SevInfo, map[string]any{"port": port})
 
+	// agent.hardware: ONCE per daemon run, unconditional — fleet hardware is
+	// useful whether or not attribution (or anything else) is on, and it
+	// carries no feature-specific data, only cpu/mem/os. hardware.Collect is
+	// best-effort by construction (missing fields are empty, never an error),
+	// and the event envelope already stamps os/arch/version on every event
+	// (clientevents.Corr, above), so this adds only what the envelope lacks.
+	hw := hardware.Collect()
+	emitter.EmitExempt("agent.hardware", clientevents.SevInfo, map[string]any{
+		"cpu_model":     hw.CPUModel,
+		"logical_cores": hw.LogicalCores,
+		"mem_total_gb":  hw.MemTotalGB,
+		"os_version":    hw.OSVersion,
+	})
+
 	// Decide once, at startup, whether enrichment runs at all (ml_backend is a
 	// local, startup-only setting — never re-read at runtime, see
 	// settings.Settings.MLEnabled). When disabled, handler is the
@@ -780,7 +809,7 @@ func Run(ctx context.Context) error {
 	// facets on the startup value.
 	live := settings.NewLive(set)
 
-	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions)
+	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded)
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -870,7 +899,7 @@ func Run(ctx context.Context) error {
 		// postProjectsOnChange is the poll half of the NB1 fix (round 2):
 		// see maybePostProjectsAtStartup's doc comment (projects.go) for the
 		// startup-vs-poll race this and its sibling close together.
-		if attrib.Enabled(set.Attribution) && svc.PostProjects != nil {
+		if attribOn && svc.PostProjects != nil {
 			postProjectsOnChange(svc.PostProjects, lastProjects, r)
 		}
 	}
@@ -904,7 +933,7 @@ func Run(ctx context.Context) error {
 	// stale write that clobbers a real one) and re-checks lastProjects.changed
 	// immediately before posting a non-empty one, so a POST that raced a
 	// concurrent update becomes a no-op instead of overwriting it.
-	if attrib.Enabled(set.Attribution) && svc.PostProjects != nil {
+	if attribOn && svc.PostProjects != nil {
 		p := resolveProjects(nil)
 		postProjects := svc.PostProjects
 		go maybePostProjectsAtStartup(postProjects, lastProjects, p)
@@ -919,12 +948,42 @@ func Run(ctx context.Context) error {
 		// Atlas yet; see tick.go's envTick for the whole of that reasoning. Started
 		// BEFORE the worker so the observer is in place for the first job.
 		setTickObserver(startTicker(ctx, svc.Tick, pub, actor, emitter))
+		// THE SHARED TEXT ENCODER's on-demand provisioner — ONE instance for
+		// both callers that can want it (attribution and the signal-embeddings
+		// path), never two independently fetching the same ~1.2 GB into the
+		// same directory. gate is demand()'s LIVE re-check: attribution
+		// contributes a constant (it has no remote override of its own), the
+		// org's `features` toggle is read live so a mid-run flip is adopted
+		// with no restart — exactly as before this instance was shared.
+		enc := newEncoderProvisioner(ctx, encoderNeeded, func() bool { return attribOn || live.FeaturesEnabled() }, emitter)
+		// THE ATTRIBUTION VERIFIER's own GGUF, on the identical on-demand
+		// seam. Unlike enc, both conditions that decide whether this exists
+		// are static for the run (attribution has no remote override, neither
+		// does its own KELD_ATTRIBUTION_VERIFIER opt-out), so there is no live
+		// gate to re-check at demand time.
+		verifierEnc := newVerifierProvisioner(ctx, attribOn, emitter)
 		// Now build the attributor itself, which returns the OnPublished hook
 		// the block emitter calls after every successful publish — nil when
 		// the gate is off, so startBlockEmitter's own nil-check makes wiring
 		// it in cost nothing on a machine that never turned attribution on.
 		onBlockPublished := startAttributor(ctx, svc.Blocks, svc.Attribution,
 			cfg.Endpoint, tok.Get, actor, emitter, set.Attribution)
+		// A scheduled attribution job is "something wants an embedding (and,
+		// for a borderline pair, the verifier)" — the same demand-signal shape
+		// the signal-embeddings path uses its own advance hook for. Both
+		// demand() calls are nil-receiver-safe (see encoderProvisioner.demand
+		// and verifierProvisioner.demand), so this wrap costs nothing on a
+		// machine where attribution is off (onBlockPublished is nil there and
+		// the wrap never happens) or where nothing was provisioned (enc/
+		// verifierEnc nil, demand() a no-op).
+		if onBlockPublished != nil {
+			next := onBlockPublished
+			onBlockPublished = func(rows []publish.BlockEnrichment, path string) {
+				enc.demand()
+				verifierEnc.demand()
+				next(rows, path)
+			}
+		}
 		// v2's block emitter, and the reason it sits beside the tick rather than
 		// inside it: a block reaches nowhere, so it needs none of the tick's
 		// frontier reasoning about which future prompts might sweep over a
@@ -941,7 +1000,7 @@ func Run(ctx context.Context) error {
 		// the goroutines start and take nothing until something switches them
 		// on — which is what lets an org enable it without a restart.
 		setFeatureAdvance(startFeatureEmitter(ctx, svc.Features, cfg.Endpoint, tok.Get,
-			actor, installID, live.FeaturesEnabled, live.FeaturesPublishEnabled, emitter))
+			actor, installID, live.FeaturesEnabled, live.FeaturesPublishEnabled, emitter, enc))
 		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 
@@ -1178,7 +1237,7 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     trivially true when none does (see deterministicBackend).
 //   - enabled: whether Run should start the enrich Worker — true for both
 //     "auto" (or "") and "deterministic"; only "off" disables it.
-func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
+func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
 	if !set.EnrichmentEnabled() {
 		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
 		return ingress.DiscardHandler(secret), nil, serviceFacets{}, nil, nil, false
@@ -1189,10 +1248,10 @@ func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q
 		// model to load means no warmup and, since provisioning now hangs off
 		// warmup, no download either.
 		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the analysis service runs, the model is never loaded", set.MLBackend)
-		svc, gate := deterministicBackend(ctx, emitter, regions)
+		svc, gate := deterministicBackend(ctx, emitter, regions, encoderNeeded)
 		return ingress.Handler(q, secret), nil, svc, gate, nil, true
 	}
-	model, svc, gate, warmup = mlBackend(ctx, emitter, regions)
+	model, svc, gate, warmup = mlBackend(ctx, emitter, regions, encoderNeeded)
 	return ingress.Handler(q, secret), model, svc, gate, warmup, true
 }
 
@@ -1307,7 +1366,14 @@ func gliner2ModelDir() string { return paths.ModelsDir("gliner2-large-v1") }
 //
 // It logs only mechanical detail and never emits a client event: what a
 // missing service *means* is policy, and each caller answers that differently.
-func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sidecar.Client, *Supervisor, func() bool, bool, error) {
+// encoderNeeded is the resolved "does anything running this daemon want the
+// shared text encoder" — THE SIGNAL-EMBEDDINGS PATH's KELD_TEXTEMBED, OR'd
+// with THE PROJECT ATTRIBUTION PATH's own gate (see newEncoderProvisioner's
+// doc comment). It is threaded through as an explicit parameter, rather than
+// read fresh here via settings.Load(), specifically so this function and its
+// callers never touch disk on every sidecar spawn/respawn — the caller in Run
+// resolves it once, from the settings already loaded there.
+func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderNeeded bool) (*sidecar.Client, *Supervisor, func() bool, bool, error) {
 	binPath, hasBin := sidecarBinPath()
 	if !hasBin {
 		return nil, nil, nil, false, nil
@@ -1348,7 +1414,7 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 			// can return from (see stopChild), so there is nothing left for the
 			// context hook to do except get in the way.
 			cmd := exec.Command(binPath, fmt.Sprintf("--port=%d", p))
-			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(), watch.AnalyzeRoots())
+			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(encoderNeeded), watch.AnalyzeRoots(), encoderNeeded)
 			return cmd, nil
 		},
 		scPort,
@@ -1393,8 +1459,8 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 // That is not the degradation AGENTS.md forbids. Nothing lower-fidelity stands
 // in for window analysis; the facet is dropped entirely and reported dropped
 // via the pipeline's ordinary pipeline_status "partial" path.
-func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (serviceFacets, func() bool) {
-	scClient, sup, _, ok, err := sidecarService(ctx, emitter)
+func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (serviceFacets, func() bool) {
+	scClient, sup, _, ok, err := sidecarService(ctx, emitter, encoderNeeded)
 	if !ok {
 		// No service this run and no path to one before a restart, so waiting
 		// is pointless: run without window analysis rather than wedge.
@@ -1463,8 +1529,8 @@ func noAnalysisService(emitter *clientevents.Emitter, fields map[string]any) fun
 // deterministicBackend — because they belong to the SERVICE, not the model:
 // both modes derive them the same way, and returning them here means
 // wireEnrichment only passes them through instead of rederiving them.
-func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
-	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
+func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
+	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter, encoderNeeded)
 	if !ok {
 		// The consequence of having no service is this caller's to state: an
 		// enrichment job queues/spools, which is not what a future non-ML

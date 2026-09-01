@@ -36,11 +36,19 @@ func fileSHA(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// EnsureModel makes dir contain a verified model. If already present and its
-// sentinel matches wantSHA, it's a no-op. Otherwise it fetches into a temp dir,
-// verifies, and atomically renames into place. On mismatch nothing is installed.
-func EnsureModel(ctx context.Context, dir, wantSHA string, f Fetcher) error {
-	if got, err := fileSHA(filepath.Join(dir, sentinel)); err == nil && got == wantSHA {
+// EnsureFile makes dir contain a verified file at sentinelName. If already
+// present and it matches wantSHA, it's a no-op. Otherwise it fetches into a
+// temp dir, verifies, and atomically renames into place. On mismatch nothing
+// is installed.
+//
+// This is EnsureModel's body with the sentinel threaded through as a
+// parameter rather than the hardcoded "model.safetensors" — EnsureModel is
+// now a two-line wrapper over this, and a third caller whose sentinel isn't a
+// safetensors file at all (the attribution verifier's GGUF: "model.gguf")
+// gets the same staging/atomicity/SHA-verification logic instead of a forked
+// copy of it.
+func EnsureFile(ctx context.Context, dir, sentinelName, wantSHA string, f Fetcher) error {
+	if got, err := fileSHA(filepath.Join(dir, sentinelName)); err == nil && got == wantSHA {
 		return nil
 	}
 	// The staging temp dir is created next to the final dir; os.MkdirTemp requires
@@ -61,13 +69,20 @@ func EnsureModel(ctx context.Context, dir, wantSHA string, f Fetcher) error {
 	if err := f.Fetch(ctx, tmp); err != nil {
 		return err
 	}
-	got, err := fileSHA(filepath.Join(tmp, sentinel))
+	got, err := fileSHA(filepath.Join(tmp, sentinelName))
 	if err != nil {
-		return fmt.Errorf("fetched model missing %s: %w", sentinel, err)
+		return fmt.Errorf("fetched model missing %s: %w", sentinelName, err)
 	}
 	if got != wantSHA {
 		return fmt.Errorf("model sha mismatch: got %s want %s", got, wantSHA)
 	}
 	_ = os.RemoveAll(dir)
 	return os.Rename(tmp, dir)
+}
+
+// EnsureModel is EnsureFile specialised to the model.safetensors sentinel —
+// the shape every Hugging-Face-snapshot caller (GLiNER2, the text encoder)
+// uses.
+func EnsureModel(ctx context.Context, dir, wantSHA string, f Fetcher) error {
+	return EnsureFile(ctx, dir, sentinel, wantSHA, f)
 }

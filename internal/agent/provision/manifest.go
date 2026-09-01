@@ -51,3 +51,33 @@ const (
 	// without a respawn or a KELD_TEXTEMBED_DIR to point it there.
 	EncoderDirName = "qwen3-embedding-0.6b"
 )
+
+// THE ATTRIBUTION VERIFIER — a small local LLM (Gemma 4 E2B, Q4_K_M GGUF) that
+// gives YES/NO on borderline (block, project) pairs. See sidecar/app/verifier.py.
+//
+// Unlike the other two models this is a SINGLE FILE, not a snapshot of
+// config/tokenizer siblings — hf.go's WithFiles restricts the fetch to just
+// VerifierFile rather than walking the whole revision manifest.
+//
+// ⚠️ VerifierRevision is "main", not a pinned commit sha, because none was
+// supplied for this file — unlike ModelRevision/EncoderRevision. That is a
+// real (if narrow) gap: the file at "main" could move. It is not a silent
+// one — VerifierSHA256 is still checked before any fetched copy is accepted,
+// so a moved file fails closed (a SHA mismatch) rather than silently loading
+// something else. Revisit if a pinned commit for this repo becomes available.
+const (
+	VerifierRepo     = "unsloth/gemma-4-E2B-it-GGUF"
+	VerifierRevision = "main"
+	VerifierFile     = "gemma-4-E2B-it-Q4_K_M.gguf"
+	// VerifierSHA256 is the sha256 of VerifierFile, confirmed against a
+	// verified local copy already fetched on this machine.
+	VerifierSHA256 = "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8"
+	// VerifierDirName is the directory under ~/.keld/models the GGUF lands
+	// in. It MUST match verifier.weights_path()'s default (both resolve
+	// through KELD_HOME) — the same agreement EncoderDirName documents one
+	// model over — so the sidecar finds it with no extra wiring.
+	VerifierDirName = "gemma-4-e2b"
+	// VerifierSentinel is the filename EnsureFile verifies and the sidecar's
+	// own default (KELD_HOME)/models/gemma-4-e2b/model.gguf) expects.
+	VerifierSentinel = "model.gguf"
+)

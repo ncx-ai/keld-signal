@@ -624,3 +624,22 @@ func IntervalFromEnv() time.Duration {
 	}
 	return DefaultInterval
 }
+
+// EnvVerifierEnabled is the verifier's own opt-out, mirrored from
+// sidecar/app/verifier.py's identically-named constant/enabled() pair. ON by
+// default WITHIN the attribution gate — ATTRIBUTION being on is what makes
+// this relevant at all; this variable only lets a slow machine opt back out.
+const EnvVerifierEnabled = "KELD_ATTRIBUTION_VERIFIER"
+
+// VerifierEnabled mirrors verifier.enabled() exactly: default ON, and only
+// the same explicit-off vocabulary opts out. No config-file fallback and no
+// remote override — this is a narrower, local-only switch than Enabled above,
+// matching the sidecar's own (env-only) implementation so the two sides can
+// never disagree about what "verifier off" means.
+func VerifierEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvVerifierEnabled))) {
+	case "0", "false", "off", "no":
+		return false
+	}
+	return true
+}

@@ -36,12 +36,31 @@ import (
 // see encoderDirForSpawn for why an eager assignment would be a claim rather
 // than a configuration. Recomputed per spawn by the caller, so a respawn after
 // the fetch landed adopts the weights.
-func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []string) []string {
-	env := make([]string, 0, len(base)+9)
+//
+// encoderNeeded is set-if-absent onto KELD_TEXTEMBED itself, not just the
+// dir. THE PROJECT ATTRIBUTION PATH's /attribute needs the same text encoder
+// THE SIGNAL-EMBEDDINGS PATH does, but the sidecar's textembed.enabled() reads
+// its OWN KELD_TEXTEMBED strictly ("== 1") out of the environment it was
+// spawned with — the daemon turning attribution on and fetching the weights
+// is not enough on its own if the sidecar process never sees the flag that
+// makes it look for them. So a caller that wants the encoder available for
+// ANY reason (attribution, KELD_TEXTEMBED, or both) passes encoderNeeded
+// true, and this sets KELD_TEXTEMBED=1 only when the operator hasn't already
+// set it — an explicit KELD_TEXTEMBED=0 in `base` still wins, matching every
+// other set-if-absent default in this function. ⚠️ It does NOT touch
+// KELD_FEATURES / KELD_FEATURES_PUBLISH — those gate a wholly separate
+// Go-side subsystem (computing and publishing message-derived feature rows)
+// that reads its own toggles live, per sweep; making the encoder reachable
+// here must never be read as switching that path on.
+func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []string, encoderNeeded bool) []string {
+	env := make([]string, 0, len(base)+10)
 	env = append(env, base...)
 	env = append(env, "KELD_GLINER2_DIR="+modelDir)
 	if encoderDir != "" {
 		env = append(env, "KELD_TEXTEMBED_DIR="+encoderDir)
+	}
+	if encoderNeeded && !hasEnvKey(base, "KELD_TEXTEMBED") {
+		env = append(env, "KELD_TEXTEMBED=1")
 	}
 
 	if !hasEnvKey(base, "KELD_ANALYZE_ROOTS") {

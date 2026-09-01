@@ -28,6 +28,25 @@ type HFFetcher struct {
 	// Policy governs retry/backoff for the revision-manifest fetch and each
 	// per-file download. Exported so tests can inject a fast policy.
 	Policy retry.Policy
+	// only restricts Fetch to exactly these rfilenames when non-nil (see
+	// WithFiles). nil means "every sibling nonModelFile doesn't deny" — the
+	// snapshot behaviour every existing caller (GLiNER2, the text encoder)
+	// relies on.
+	only map[string]bool
+}
+
+// WithFiles restricts Fetch to only the named files, skipping every other
+// sibling in the revision manifest — including ones nonModelFile would have
+// kept. It exists for a repo that ships a single file this fetcher wants (the
+// attribution verifier's GGUF) rather than a whole snapshot of
+// config/tokenizer siblings the way GLiNER2 and the text encoder are fetched.
+// Returns f for chaining at the construction site.
+func (f *HFFetcher) WithFiles(names ...string) *HFFetcher {
+	f.only = make(map[string]bool, len(names))
+	for _, n := range names {
+		f.only[n] = true
+	}
+	return f
 }
 
 // NewHFFetcher returns an HFFetcher targeting the given repo and revision.
@@ -92,7 +111,10 @@ func (f *HFFetcher) Fetch(ctx context.Context, destDir string) error {
 	}
 
 	// 2. Download each file a loader could open, skipping the repo's docs and
-	// media (see nonModelFile).
+	// media (see nonModelFile) — or, when WithFiles restricted this fetcher,
+	// only the named files, regardless of what nonModelFile would say about
+	// them.
+	found := make(map[string]bool, len(f.only))
 	for _, s := range rev.Siblings {
 		// Path safety is judged BEFORE the content filter, so a hostile
 		// manifest entry is REPORTED rather than quietly skipped because it
@@ -101,11 +123,23 @@ func (f *HFFetcher) Fetch(ctx context.Context, destDir string) error {
 		if !filepath.IsLocal(s.Rfilename) {
 			return fmt.Errorf("refusing unsafe model file path %q", s.Rfilename)
 		}
-		if nonModelFile(s.Rfilename) {
+		if f.only != nil {
+			if !f.only[s.Rfilename] {
+				continue
+			}
+			found[s.Rfilename] = true
+		} else if nonModelFile(s.Rfilename) {
 			continue
 		}
 		if err := f.fetchFile(ctx, destDir, s.Rfilename); err != nil {
 			return err
+		}
+	}
+	if f.only != nil {
+		for name := range f.only {
+			if !found[name] {
+				return fmt.Errorf("hf: %s not found in %s revision %s siblings manifest", name, f.repo, f.rev)
+			}
 		}
 	}
 	return nil
