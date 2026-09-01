@@ -1702,9 +1702,18 @@ timings — no text, no span, no offset, in either direction.
   libraries are both invisible, and a spec missing them ships a binary that starts, is
   healthy, classifies, scans for PII and fails EVERY verdict. Exactly the freeze_support()
   and presidio failure class. `make freeze-check` / `make obfuscate-check` now spawn the
-  verifier child and demand a real verdict (`keld-agent-sidecar --selftest verifier`);
-  that arm is what keeps the defect from returning, and it FAILS rather than skips when no
-  GGUF is present.
+  verifier child and demand a real verdict (`keld-agent-sidecar --selftest verifier`), and
+  that arm FAILS rather than skips when no GGUF is present — a gate that passes quietly on
+  the machines lacking the model is the same as no gate.
+  ⚠️ **BUT IT IS DEVELOPER-MANUAL TODAY, NOT CI.** Nothing under `.github/` invokes
+  `scripts/freeze-check-local.sh` or `--selftest`: `ci.yml` excludes both targets
+  deliberately (they need the ~5 GB sidecar venv and the GLiNER2 weights, and take
+  minutes), and `installers.yml` runs its own inline `/classify` smoke, which by
+  construction cannot reach the verifier's import path. So the arm exists and must be run
+  by hand before a release; **nothing automatically stops this defect returning.** Wiring
+  it into `installers.yml`'s per-release smoke — where the freeze already happens — is the
+  follow-up, and it needs a GGUF on that runner or an explicit
+  `KELD_FREEZE_CHECK_VERIFIER=0` waiver.
 - **⚠️ TURNING ATTRIBUTION ON STARTS ENCODING MESSAGE TEXT ON DEVICE.**
   `daemon/sidecarenv.go` sets `KELD_TEXTEMBED=1` (set-if-absent) whenever attribution is
   on, because `/attribute` needs the same encoder. Nothing derived from it is PUBLISHED by

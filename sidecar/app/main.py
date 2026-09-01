@@ -1741,9 +1741,29 @@ async def attribute(body: AttributeIn):
     except OSError:
         # The transcript is gone or unreadable. Unlike /blocks and /features there is no series
         # to fall back on — the span's words ARE the input — so this is a refusal rather than a
-        # narrower answer. 404 and not 503: nothing about retrying makes an absent file readable,
-        # and the daemon's job store bounds the retries of a genuine error.
-        raise HTTPException(status_code=404,
+        # narrower answer. Not 503: nothing about retrying makes an absent file readable, and the
+        # daemon's job store bounds the retries of a genuine error.
+        #
+        # ⚠️ 410, AND EMPHATICALLY NOT 404. THE DAEMON NOW READS 404 AS "THIS SIDECAR HAS NO
+        # /attribute ROUTE AT ALL" — version skew during a staged rollout — and HOLDS the job
+        # forever with no attempt consumed, because the work becomes doable once the other half
+        # updates. That is right for a missing route and catastrophic here: a deleted, rotated or
+        # moved transcript would leave its job in the store permanently, re-POSTed every sweep,
+        # one leaked job per affected block, competing for the 24-job sweep budget with no bound.
+        # The comment this replaces justified 404 by leaning on exactly the bound that reading
+        # made unreachable.
+        #
+        # 410 keeps the two facts apart at the status line rather than in a body string, and it
+        # is the precedent this route already has one endpoint over: /analyze answers 410 for a
+        # window whose evidence was pruned — permanently gone, do not keep asking — instead of
+        # overloading 404. A 404 from this path can now only mean the route itself is absent,
+        # which is the one thing a router can answer without any of our code running.
+        #
+        # ⚠️ Pinned across the language boundary by
+        # TestTheAttributeRouteNeverAnswers404ForAnythingButAMissingRoute
+        # (internal/agent/enrich/sidecar), which reads THIS function's source and drives every
+        # status it raises through the real Go client. Change one half and that test fails.
+        raise HTTPException(status_code=410,
                             detail="the transcript could not be read") from None
 
     source = _text_source()

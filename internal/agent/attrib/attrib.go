@@ -264,6 +264,16 @@ type Attributor struct {
 	// emitter is optional (see WithEmitter). A quarantine emits through it,
 	// because a debuglog line on one machine is invisible to the fleet.
 	emitter *clientevents.Emitter
+	// repostedThisSweep collapses the re-post to AT MOST ONE per drainOnce.
+	// Every held `skipped:no_projects` job in a sweep has the same cause — one
+	// sidecar that lost one list — so N of them asked for N identical POSTs,
+	// each a synchronous call with a 30s timeout inside the drain loop, up to
+	// maxPerSweep (24) of them. Bounded and self-clearing, since the first
+	// success stops the status recurring, but "up to 24 identical 30s calls
+	// serialised inside one sweep" is a stall the sweep does not need. Reset at
+	// the top of drainOnce, and unlocked for sweepOffset's reason: drainOnce is
+	// single-goroutine by construction.
+	repostedThisSweep bool
 }
 
 // New builds an Attributor. facts may be nil (empty resolved facts are sent
@@ -367,6 +377,9 @@ func (a *Attributor) drainOnce(ctx context.Context) {
 		log.Printf("keld-agent: attribution store list failed: %v", err)
 		return
 	}
+	// One re-post per sweep at most, however many jobs report the same missing
+	// project list — see repostedThisSweep.
+	a.repostedThisSweep = false
 	for _, j := range a.sweepSlice(jobs) {
 		if ctx.Err() != nil {
 			return
@@ -483,7 +496,8 @@ func (a *Attributor) drainJob(j Job) {
 		// because the startup POST is still in flight) — never about the org.
 		// Hold and re-assert, rather than publish-and-delete, which is
 		// irreversible.
-		if a.repostProjects != nil {
+		if a.repostProjects != nil && !a.repostedThisSweep {
+			a.repostedThisSweep = true
 			a.repostProjects()
 		}
 		a.hold(j, "skipped:no_projects while the daemon holds a project list")

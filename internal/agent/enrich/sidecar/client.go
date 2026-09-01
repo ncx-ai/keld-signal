@@ -932,6 +932,22 @@ func (c *Client) Attribute(path, sessionID string, start, end float64,
 		// /attribute route. Surfaced as its own fact so the attributor can hold
 		// the job instead of spending an attempt on a component that updates
 		// independently — see AttributeResult.RouteUnsupported (I5).
+		//
+		// ⚠️ THAT READING IS ONLY SAFE BECAUSE THE ROUTE ITSELF NEVER RAISES
+		// 404. It briefly did, for an unreadable transcript, and the two facts
+		// silently merged: a deleted or rotated transcript inherited "hold
+		// forever, no attempt consumed", leaking one unbounded job per affected
+		// block into a 24-job sweep budget. The route now answers 410 there
+		// (main.py's OSError branch, and /analyze's pruned-window precedent),
+		// so a 404 can only come from a router with no such path — the one
+		// answer that needs none of the sidecar's own code to run. Every other
+		// non-retryable status, 410 included, stays a genuine error that
+		// consumes an attempt and can eventually quarantine.
+		//
+		// Pinned across the language boundary by
+		// TestTheAttributeRouteNeverAnswers404ForAnythingButAMissingRoute,
+		// which reads the route's Python source and drives every status it
+		// raises through this function. Neither half can re-merge them alone.
 		if status == http.StatusNotFound {
 			return AttributeResult{RouteUnsupported: true}, false
 		}

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -766,5 +768,69 @@ func TestDimsFromIsNilWhenNothingIsAttributed(t *testing.T) {
 	}}
 	if got := dimsFrom(an); got != nil {
 		t.Fatalf("got %v, want nil", got)
+	}
+}
+
+// ⚠️ THE OTHER SIDE OF THE 404 FIX, AND THE REASON IT NEEDED ONE. `RouteUnsupported`
+// is unbounded-hold semantics, so it must attach to version skew and to nothing else.
+// An unreadable transcript — deleted, rotated, moved — is a GENUINE error: no retry
+// makes an absent file readable, so it consumes an attempt and eventually quarantines,
+// which is what bounds it. Under the first cut of the I5 fix the sidecar answered 404
+// for both, the two merged, and each affected block leaked one permanently-resident job
+// into a 24-job sweep budget. The route now answers 410 there; this pins the daemon half
+// of that split, and the client half is pinned across the language boundary by
+// TestTheAttributeRouteNeverAnswers404ForAnythingButAMissingRoute.
+func TestAnUnreadableTranscriptConsumesAnAttemptAndEventuallyQuarantines(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	if err := st.Put(Job{SessionID: "s1", Path: "/tmp/gone.jsonl", Start: 1, End: 2}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	sender := &fakeSender{}
+	// What the client returns for a 410: a failed call with NO RouteUnsupported.
+	cl := &fakeClient{ok: false}
+	a := New(st, cl, sender, nil, "actor@x", digesterFor("s1", 1, 2))
+	for i := 0; i < MaxAttempts; i++ {
+		a.drainOnce(context.Background())
+	}
+	if left, _ := st.List(); len(left) != 0 {
+		t.Fatalf("an unreadable transcript must be bounded, not held forever: %d still live", len(left))
+	}
+	bad, _ := os.ReadDir(filepath.Join(dir, "bad"))
+	if len(bad) != 1 {
+		t.Fatalf("expected the job to quarantine after %d attempts, got %d in bad/", MaxAttempts, len(bad))
+	}
+}
+
+// Secondary: every held `skipped:no_projects` job in a sweep has ONE cause — one
+// sidecar that lost one list — so the re-post is collapsed to at most one per
+// sweep. Ungated, a backlog produced up to maxPerSweep (24) identical POSTs,
+// each a synchronous 30-second-budgeted call serialised inside the drain loop.
+func TestTheProjectListIsRePostedAtMostOncePerSweep(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	for i := 0; i < 5; i++ {
+		if err := st.Put(Job{SessionID: "s1", Path: "/tmp/x.jsonl",
+			Start: float64(i + 1), End: float64(i + 2)}); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsSkippedNoProjects}}
+	reposts := 0
+	a := New(st, cl, &fakeSender{}, nil, "actor@x", &multiBlockDigester{sessionID: "s1"}).
+		WithProjects(func() bool { return true }, func() { reposts++ })
+
+	a.drainOnce(context.Background())
+	if cl.calls != 5 {
+		t.Fatalf("expected all 5 jobs drained, got %d /attribute calls", cl.calls)
+	}
+	if reposts != 1 {
+		t.Fatalf("5 jobs with one shared cause must produce ONE re-post, got %d", reposts)
+	}
+	// The next sweep may ask again — the flag is per sweep, not a latch, or a
+	// re-post that failed would never be retried.
+	a.drainOnce(context.Background())
+	if reposts != 2 {
+		t.Fatalf("the dedup must reset each sweep, got %d re-posts over two sweeps", reposts)
 	}
 }

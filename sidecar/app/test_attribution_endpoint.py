@@ -400,7 +400,21 @@ def test_an_unreadable_transcript_is_refused_rather_than_answered():
               start=T0, end=T0 + 600, dims={})
         raise AssertionError("an unreadable transcript must not answer with an attribution")
     except m.HTTPException as exc:
-        assert exc.status_code == 404, exc.status_code
+        # ⚠️ 410, AND THE EXACT CODE IS LOAD-BEARING — this assertion said 404 and that
+        # was half of a two-sided defect. The Go client reads 404 from this route as
+        # "this sidecar has no /attribute route" (version skew) and HOLDS the job
+        # forever with no attempt consumed. Under 404 a deleted or rotated transcript
+        # inherited that: one permanently-resident job per affected block, re-POSTed
+        # every sweep, competing for the 24-job sweep budget with no bound.
+        #
+        # Note how it hid: this test asserted the sidecar's status against a fake
+        # daemon, attrib_test.go asserted the daemon's behaviour against a fake
+        # sidecar, and nothing compared the two. The cross-language pin is
+        # TestTheAttributeRouteNeverAnswers404ForAnythingButAMissingRoute
+        # (internal/agent/enrich/sidecar) — it reads this route's source and drives
+        # every status it raises through the real client. Change this number and that
+        # test is where it is caught.
+        assert exc.status_code == 410, exc.status_code
     finally:
         m._text_source = was
 

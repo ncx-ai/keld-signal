@@ -70,6 +70,13 @@ echo "PASS [$LABEL]: frozen sidecar scans for PII and returns: $pii"
 # tests never freeze, and /classify and /pii above do not touch this path: the binary
 # starts, is healthy, classifies, scans, and fails every verifier verdict.
 #
+# ⚠️ THIS ARM IS DEVELOPER-MANUAL, NOT CI. Nothing under .github/ invokes this script:
+# ci.yml excludes freeze-check/obfuscate-check deliberately (they need the ~5 GB sidecar
+# venv plus the GLiNER2 weights and take minutes), and installers.yml runs its own inline
+# /classify smoke, which cannot reach the verifier's import path. So run this by hand
+# before a release. Wiring it into installers.yml — where a freeze already happens — is
+# the follow-up; it needs a GGUF on that runner, or an explicit waiver below.
+#
 # `--selftest verifier` (serve.py) spawns the real verifier worker child through
 # multiprocessing-spawn — i.e. by re-execing THIS frozen binary — and takes one real
 # verdict. Nothing is stubbed.
