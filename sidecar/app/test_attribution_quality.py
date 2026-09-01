@@ -260,18 +260,43 @@ def main():
     verifier_obj = verifier_mod.Verifier()
 
     predictions = []
+    # THE VERIFIER A/B, from the same single pass. The embedding-only decision
+    # already exists inside every run — it is `assigned` before the verdicts
+    # are applied — so both arms cost one set of model calls. This is the
+    # instrument for "is Gemma E2B worth its runtime": if the two arms score
+    # the same, the verifier's minutes buy nothing and it should be skipped.
+    cut_only_predictions = []
+    flips_good = flips_bad = 0
     embed_ms_total = verify_ms_total = 0
     t0 = time.time()
     for conv in conversations:
         texts = _user_texts(conv)
-        out = attribution.attribute_block(texts, conv["metadata"], encoder, verifier_obj)
-        predictions.append({p["id"] for p in out["projects"]})
-        meta = out.get("attribution") or {}
-        embed_ms_total += meta.get("embed_ms", 0)
-        verify_ms_total += meta.get("verify_ms", 0)
+        t_embed = time.time()
+        scores, borderline, assigned, used = attribution.score_block(
+            texts, conv["metadata"], encoder)
+        embed_ms_total += int((time.time() - t_embed) * 1000)
+        cut_only = set(assigned)
+        cut_only_predictions.append(cut_only)
+        t_verify = time.time()
+        overrides, pairs, _ms = attribution.apply_verifier(
+            texts, conv["metadata"], scores, borderline, verifier_obj)
+        verify_ms_total += int((time.time() - t_verify) * 1000)
+        # Mirror attribute_block's assembly: a verdict wins in both directions.
+        final = {pid for pid in scores
+                 if overrides.get(pid, pid in cut_only)}
+        predictions.append(final)
+        gold = set(conv["gold_projects"])
+        for pid, verdict in overrides.items():
+            if verdict == (pid in cut_only):
+                continue  # the verdict agreed with the cut: no flip
+            if (pid in gold) == verdict:
+                flips_good += 1
+            else:
+                flips_bad += 1
     wall_s = time.time() - t0
 
     result = evaluate_assignments(predictions, conversations)
+    cut_only_result = evaluate_assignments(cut_only_predictions, conversations)
 
     print(f"{'conv_id':<12} {'difficulty':<8} {'gold':<28} {'predicted':<28} match")
     for conv, pred in zip(conversations, predictions):
@@ -287,6 +312,19 @@ def main():
         f"{k}={v:.3f}" for k, v in sorted(result["per_difficulty"].items())))
     print(f"wall={wall_s:.1f}s embed={embed_ms_total}ms verify={verify_ms_total}ms "
           f"failures={len(result['failures'])}/{len(conversations)}")
+
+    # ---- Verifier A/B: what did Gemma E2B's minutes actually buy? ----
+    print()
+    print("verifier A/B (same pass, embedding-only vs after-verdicts):")
+    print(f"  embedding-only: f1={cut_only_result['f1']:.3f} "
+          f"p={cut_only_result['precision']:.3f} r={cut_only_result['recall']:.3f}   "
+          f"cost {embed_ms_total / 1000:.0f}s")
+    print(f"  with verifier:  f1={result['f1']:.3f} "
+          f"p={result['precision']:.3f} r={result['recall']:.3f}   "
+          f"cost +{verify_ms_total / 1000:.0f}s")
+    print(f"  verdicts that changed the decision: {flips_good} corrected it, "
+          f"{flips_bad} broke it "
+          f"(delta f1 {result['f1'] - cut_only_result['f1']:+.3f})")
 
     # ---- The customer-facing layer: the SAME measurements, re-sliced. ----
     # Micro P/R/F1 above is the internal instrument (it sees every missed
