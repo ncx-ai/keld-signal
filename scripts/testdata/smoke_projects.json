@@ -1,0 +1,38 @@
+[
+  {
+    "id": "proj_signal",
+    "title": "Keld Signal Client",
+    "team": "Engineering",
+    "description": "The keld-signal client: the keld CLI, the keld-agent on-device enrichment daemon, and its GLiNER2/embedding sidecar. On-device privacy-preserving classification, masking, block cutting and project attribution.",
+    "repos": ["keld-signal"],
+    "keywords": ["enrichment", "sidecar", "gliner2", "attribution", "block", "keld-agent"],
+    "ticket_key": "SIG"
+  },
+  {
+    "id": "proj_atlas",
+    "title": "Keld Atlas Platform",
+    "team": "Engineering",
+    "description": "The Keld Atlas server: OTLP telemetry ingest, enrichment storage, the admin console and the web app that renders blocks, dynamics and cost attribution for an org.",
+    "repos": ["keld-atlas"],
+    "keywords": ["atlas", "ingest", "fastapi", "otlp", "rail"],
+    "ticket_key": "ATL"
+  },
+  {
+    "id": "proj_sdks",
+    "title": "Keld SDKs & CLI Tooling",
+    "team": "Engineering",
+    "description": "Client SDKs and CLI helpers that wrap Keld's telemetry and enrichment APIs for other languages and tools — keld-cli, keld-python and the OTLP telemetry bindings.",
+    "repos": ["keld-cli", "keld-python", "atlas-telemetry-python", "atlas-telemetry-typescript"],
+    "keywords": ["sdk", "cli", "telemetry", "otlp bindings"],
+    "ticket_key": "SDK"
+  },
+  {
+    "id": "proj_attribution_bench",
+    "title": "Attribution Benchmark",
+    "team": "Engineering",
+    "description": "The offline benchmark that measured project-attribution quality (embeddings + metadata boost + local LLM verifier) before it was ported into keld-signal's on-device pipeline.",
+    "repos": ["embedding-experiment"],
+    "keywords": ["benchmark", "qwen3-embedding", "verifier", "f1"],
+    "ticket_key": "BENCH"
+  }
+]

@@ -8,6 +8,32 @@ semantic-ish versioning during `0.x`.
 ## [Unreleased]
 
 ### Added
+- **On-device block-to-project attribution.** Each closed block is scored against
+  an org's declared projects (`settings.RemoteProject`: id, title, description,
+  team, repos, keywords, ticket key) using a hybrid of on-device
+  Qwen3-Embedding-0.6B similarity and a deterministic metadata boost (repo/ticket
+  key/keyword matches), with a local Gemma-4-E2B verifier (llama.cpp, CPU-only)
+  adjudicating only the borderline band around the threshold — no attribution
+  without the encoder, however strong the metadata evidence, and no attribution
+  ever runs on message text leaving the machine. Gated behind two independent
+  toggles, both off by default: `KELD_ATTRIBUTION` (the daemon's own switch —
+  without it, nothing about attribution runs, not merely the daemon's loop) and
+  `KELD_ATTRIBUTION_VERIFIER` (verifier opt-out within the gate; a machine that
+  opts out states `verifier: opted_out` rather than silently narrowing). Projects
+  are declared via `KELD_PROJECTS_FILE` or an org's remote settings; only project
+  ids and confidences ever publish — never a project's description or a span of
+  message text. Attributed blocks publish `projects` / `projects_status` /
+  `attribution` (schema v22): `attributed`, `pending` (encoder busy — the
+  daemon's own sweep is the retry loop, no second queue), `skipped:disabled`,
+  `skipped:no_projects`, or `degraded:weights_unavailable`. Ported from an
+  external benchmark that measured micro-F1 0.929 on a 100-conversation labeled
+  corpus with this exact pipeline; `sidecar/app/test_attribution_quality.py`
+  re-runs it against the real models (opt-in, `KELD_ATTRIBUTION_EVAL=1`) and
+  asserts a 0.85 floor. The daemon also emits a one-time `agent.hardware`
+  client-event (CPU/memory/OS) per run, unconditionally, alongside this —
+  fleet-hardware context for judging what attribution's local models cost on
+  real machines. See `docs/attribution-smoke.md` for the end-to-end runbook
+  against a local Atlas.
 - **`KELD_WATCH_ROOTS`** — comma-separated `source:dir` transcript roots to watch
   in addition to the built-in ones (e.g. `cowork:/path/to/.claude/projects`).
   Discovery is otherwise pinned to the directory layout each launch surface used

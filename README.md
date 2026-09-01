@@ -149,6 +149,23 @@ cheap that used to be impossible:
 Every one of these is derived from tool-call metadata and coordinates. `/analyze`
 answers in **2.3 ms** where a whole-file re-parse took 0.79 s.
 
+### Project attribution *(off by default)*
+
+Each closed block can be scored against an org's declared projects — which
+customer, initiative or repo it belongs to — entirely on device. A hybrid of
+on-device Qwen3-Embedding-0.6B similarity and a deterministic metadata boost
+(exact repo/ticket-key/keyword matches) decides most blocks; a small local LLM
+(Gemma-4-E2B, CPU-only via llama.cpp) adjudicates only the **borderline band**
+around the threshold. There is exactly one attribution path — no model, no
+attribution, however strong the metadata evidence — and nothing about it changes
+the privacy invariant: only project ids and confidences ever publish, never a
+project's description or a span of message text. `KELD_ATTRIBUTION` gates the
+whole thing; `KELD_PROJECTS_FILE` (or an org's remote settings) declares the
+project list. See [`docs/attribution-smoke.md`](docs/attribution-smoke.md) for a
+step-by-step runbook against a local Atlas, and
+`sidecar/app/test_attribution_quality.py` for the opt-in quality eval (micro-F1
+against a 100-conversation labeled benchmark).
+
 ### Two capture triggers, one pipeline
 
 1. The **command hook** (`keld __hook`, wired by `keld signal setup`).
@@ -468,6 +485,11 @@ Served today: `include_entity_text`, `client_telemetry`, `enrichment_schema`
   (off) · `KELD_WATCH_ROOTS` — the transcript watcher.
 - `KELD_BLOCKS` · `KELD_BLOCKS_BACKFILL` (default **on** — a fresh install
   reaches blocks that already existed).
+- `KELD_ATTRIBUTION` (off) — on-device block-to-project matching.
+  `KELD_ATTRIBUTION_VERIFIER` (default **on** within the gate) opts a slow
+  machine out of the local LLM verifier step; `KELD_PROJECTS_FILE` declares the
+  project list (wins over an org's remote settings); `KELD_VERIFIER_GGUF` points
+  at the verifier's GGUF weights.
 - `KELD_TICK` (off) — characterises work no prompt's look-back reaches. Ships
   inert: such a row joins to nothing at Atlas yet.
 - `KELD_CAPTURE` (off) — extra ingest rows; ⚠️ fingerprinted into the parse
