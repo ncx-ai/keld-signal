@@ -21,14 +21,17 @@ class PayEncoder:
             else: out.append([0.3, 0.3])
         return out
 
-def test_metadata_boost_model_free():          # AC-4
+def test_metadata_boost_model_free():          # AC-4 (AMENDED 2026-09-01)
     attribution.set_projects(PROJECTS)
     dims = {"repo": "acme-billing", "branch": "fix/PAY-12-retry"}
     b = attribution.metadata_boost(PROJECTS[0], dims, ["fix the dunning email"])
     assert b >= attribution.W_REPO + attribution.W_TICKET, f"boost {b}"
+    # The boost is computed and reported, but with no encoder NOTHING is assigned:
+    # one attribution path only, and exact matches alone never cross the threshold.
     scores, borderline, assigned, used = attribution.score_block(
         ["fix the dunning email"], dims, encoder=None)
-    assert not used and "proj_pay" in assigned, (scores, assigned)
+    assert not used and assigned == [] and borderline == [], (scores, assigned, borderline)
+    assert scores["proj_pay"] == round(b, 4), "boost must still be visible in the scores"
 
 def test_embedding_plus_threshold():           # AC-3
     attribution.set_projects(PROJECTS)
@@ -41,9 +44,12 @@ def test_borderline_band():                    # AC-5 groundwork
     attribution.set_projects(PROJECTS)
     class MidEncoder(PayEncoder):
         def encode(self, texts):
+            # [0.5, 0.866] is already a unit vector (cos 60 deg), so its cosine
+            # against proj_pay's [1, 0] is exactly 0.5 whether or not score_block
+            # re-normalises it -- landing just inside the band around THRESHOLD.
             return [[1.0, 0.0] if "Payments" in t else
                     [0.0, 1.0] if "Design System" in t else
-                    [0.47, 0.2] for t in texts]  # cosine vs proj_pay ≈ threshold
+                    [0.5, 0.866] for t in texts]  # cosine vs proj_pay ≈ threshold
     scores, borderline, assigned, used = attribution.score_block(
         ["ambiguous work"], {}, encoder=MidEncoder())
     assert "proj_pay" in borderline, (scores, borderline)

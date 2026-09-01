@@ -140,24 +140,25 @@ def score_block(texts, dims, encoder):
     Similarity is per-text MAX (not mean) across a block's texts against each
     project's vector: a block's several messages may each concern a different
     project, and averaging would wash out the one that matters. Text vectors
-    are used as the encoder returns them, never re-normalised here: the real
-    encoder (`textembed._encode_batch`) already L2-normalises before it hands
-    a vector back, matching the already-normalised project vectors from
-    `project_vectors`; a second normalisation would only ever be a no-op
-    against that contract.
+    are L2-normalised here before the dot product (`_l2`, the same helper
+    `project_vectors` uses): the real encoder (`textembed._encode_batch`)
+    already returns unit vectors, so this is a no-op in production, but the
+    function does not trust an arbitrary `encoder` argument to have normalised
+    its own output — a caller wiring in a different encoder gets a correct
+    cosine rather than a silently wrong one.
 
-    Returns (scores, borderline, assigned, encoder_used). encoder=None is the
-    weights-absent path: boost-only, degraded but never silent — the CALLER
-    states degraded:weights_unavailable. In that path assignment is an
-    EXACT-MATCH COUNT rather than a threshold crossing: any metadata match
-    (boost > 0) attributes, because `THRESHOLD`/`BAND` are tuned for a
-    similarity-plus-boost score and `BOOST_CAP` (0.35) sits below
-    `THRESHOLD - BAND` (0.41) by construction — a boost-only score can never
-    cross the continuous threshold, so gating model-free attribution on it
-    would silently defeat AC-4. `borderline` is only ever populated when the
-    encoder actually ran, for the same reason in reverse: a boost-only score
-    near the threshold is an exact-match count, not semantic uncertainty a
-    verifier could help resolve.
+    Returns (scores, borderline, assigned, encoder_used). `scores` is always
+    fully populated, including the metadata boost alone when `encoder is
+    None` — a human debugging an unattributed block needs to see that boost
+    as telemetry. But **with no encoder, NOTHING is assigned and nothing is
+    borderline, however large the boost.** `THRESHOLD`/`BAND` are tuned for a
+    similarity-plus-boost score, and `BOOST_CAP` (0.35) sits below
+    `THRESHOLD - BAND` (0.41) by construction, so a boost-only score can never
+    cross them — that is not a bug to route around with a second, unmeasured
+    assignment rule. There is exactly one attribution path, the benchmarked
+    one: a machine with no model has no answer yet, not a weaker answer. The
+    caller publishes `degraded:weights_unavailable` with no projects, and a
+    durable job re-attributes the block once weights are provisioned.
 
     Privacy: `texts` and project descriptions are held in memory only for this
     call; nothing here logs or persists block text or project text."""
@@ -166,7 +167,7 @@ def score_block(texts, dims, encoder):
     sims = {p["id"]: 0.0 for p in projects}
     if encoder is not None and texts:
         pvecs = project_vectors(encoder)
-        tvecs = encoder.encode(texts)
+        tvecs = [_l2(v) for v in encoder.encode(texts)]
         for pid, pv in pvecs.items():
             sims[pid] = max((_cos(tv, pv) for tv in tvecs), default=0.0)
         encoder_used = True
@@ -180,6 +181,4 @@ def score_block(texts, dims, encoder):
                 borderline.append(p["id"])
             if s >= THRESHOLD:
                 assigned.append(p["id"])
-        elif boost > 0:
-            assigned.append(p["id"])
     return scores, borderline, assigned, encoder_used
