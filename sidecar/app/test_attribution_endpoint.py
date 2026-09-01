@@ -326,10 +326,12 @@ class BandChild(FakeChild):
         return [[1.0, 0.0] if "Borderline" in t else [0.52, 0.85416] for t in texts], "ok"
 
 
-def test_the_verifier_rides_the_single_flight_runner():   # AC-5
-    """The one genuine inference on this route. It must not fan out: the sidecar's whole load
-    story is one inference at a time, so a verdict goes through the runner rather than being
-    called inline on the executor thread that is scoring the block."""
+def test_the_verifier_is_called_once_per_borderline_project():   # AC-5
+    """The one genuine inference on this route. `_verify_call` is the seam through which every
+    verdict rides its own dedicated worker child (`_WorkerVerifier` -> `_verifier_manager()` ->
+    a `WorkerManager` distinct from GLiNER2's — see `worker.py`/`worker_manager.py`); stubbing
+    it here pins the CALL CONTRACT (one call per borderline project, verdict wins the
+    threshold) without spawning a real child or loading a real model."""
     m = _main()
     path = _transcript()
     _with_roots(path)
@@ -342,20 +344,8 @@ def test_the_verifier_rides_the_single_flight_runner():   # AC-5
     # thing that would ever open it — is stubbed, so nothing loads a model here.
     os.environ["KELD_VERIFIER_GGUF"] = path
 
-    async def run():
-        from app.governor import Governor
-        from app.runner import InferenceRunner
-        runner = InferenceRunner(Governor(), 8)
-        runner.start()
-        m._state["runner"] = runner
-        try:
-            return await m.attribute(m.AttributeIn(path=path, start=T0, end=T0 + 600, dims={}))
-        finally:
-            await runner.stop()
-            m._state.pop("runner", None)
-
     try:
-        out = asyncio.run(run())
+        out = asyncio.run(m.attribute(m.AttributeIn(path=path, start=T0, end=T0 + 600, dims={})))
     finally:
         m._text_source, m._verify_call = was_source, was_verify
         os.environ.pop("KELD_VERIFIER_GGUF", None)
@@ -370,7 +360,10 @@ def test_the_verifier_rides_the_single_flight_runner():   # AC-5
 def test_a_verifier_that_cannot_load_degrades_and_says_so():   # AC-6
     """A borderline pair the verifier cannot judge falls back to the threshold — and the meta
     names it `unavailable`, never `opted_out`. A narrower decision must not look like the full
-    one."""
+    one. `_verify_call` stands in for the worker-child call here too — a `_VerifierUnavailable`
+    is exactly what it raises for real when the child fails to start or dies mid-job (see
+    `_verify_call`'s docstring in main.py), so this pins the degrade path without needing a
+    child that actually crashes."""
     m = _main()
     path = _transcript()
     _with_roots(path)
@@ -384,20 +377,8 @@ def test_a_verifier_that_cannot_load_degrades_and_says_so():   # AC-6
 
     m._verify_call = boom
 
-    async def run():
-        from app.governor import Governor
-        from app.runner import InferenceRunner
-        runner = InferenceRunner(Governor(), 8)
-        runner.start()
-        m._state["runner"] = runner
-        try:
-            return await m.attribute(m.AttributeIn(path=path, start=T0, end=T0 + 600, dims={}))
-        finally:
-            await runner.stop()
-            m._state.pop("runner", None)
-
     try:
-        out = asyncio.run(run())
+        out = asyncio.run(m.attribute(m.AttributeIn(path=path, start=T0, end=T0 + 600, dims={})))
     finally:
         m._text_source, m._verify_call = was_source, was_verify
         os.environ.pop("KELD_VERIFIER_GGUF", None)

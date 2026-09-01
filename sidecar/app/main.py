@@ -1595,8 +1595,11 @@ async def attribute(body: AttributeIn):
 
     Execution follows `/blocks`: the span read and the scoring run in the DEFAULT EXECUTOR so a
     long block cannot stall the event loop out from under `/health` and `/metrics`, while the
-    verifier — the one genuine inference here — goes through the single-flight runner
-    (`_RunnerVerifier`), because this sidecar never fans out inference.
+    verifier — the one genuine inference here — goes through its OWN dedicated worker child
+    (`_WorkerVerifier`, backed by its own `WorkerManager`; see `_verifier_manager`), never the
+    FastAPI parent and never the GLiNER2 worker's queue. This sidecar still never fans out
+    inference — each model has its own single-flight, via its own manager — it just no longer
+    shares the GLiNER2 dispatch's runner to get it.
     """
     # Confinement BEFORE anything else, the SAME allowlist /analyze, /ingest, /tick, /blocks and
     # /features use — the sidecar has no auth, and this OPENS A TRANSCRIPT as the daemon's user
