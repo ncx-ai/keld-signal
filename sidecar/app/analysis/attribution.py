@@ -33,6 +33,7 @@ import json
 import os
 import re
 import threading
+import time
 
 _lock = threading.Lock()
 _encode_lock = threading.Lock()
@@ -212,3 +213,138 @@ def apply_verifier(texts, dims, scores, borderline, verifier_obj):
         overrides[pid] = bool(verdict)
         total += secs
     return overrides, len(borderline), int(total * 1000)
+
+
+# --- The block's answer ------------------------------------------------------
+#
+# The CLOSED status vocabulary, mirrored Go-side as `enrich.Projects*`
+# (internal/agent/enrich/attribution.go) and published as `projects_status` on
+# a block row. Named here rather than typed as literals at each site for the
+# reason `dynamics.REASONS` is: the Go side DROPS a value it does not
+# recognise, so a drift between the two halves would silently stop publishing
+# an attribution instead of failing.
+STATUS_ATTRIBUTED = "attributed"
+STATUS_PENDING = "pending"
+STATUS_SKIPPED_DISABLED = "skipped:disabled"
+STATUS_SKIPPED_NO_PROJECTS = "skipped:no_projects"
+STATUS_DEGRADED_WEIGHTS = "degraded:weights_unavailable"
+STATUSES = (STATUS_ATTRIBUTED, STATUS_PENDING, STATUS_SKIPPED_DISABLED,
+            STATUS_SKIPPED_NO_PROJECTS, STATUS_DEGRADED_WEIGHTS)
+
+# The models this attribution path runs on, reported with every answer. Two
+# corpora scored under different models are not comparable and nothing about
+# the numbers says so — `featuretext.encoder_ref`'s argument, one facet along.
+MODEL_VERSIONS = {"encoder": "qwen3-embedding-0.6b", "verifier": "gemma-4-e2b-q4km"}
+
+
+def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state):
+    """The pass's report on ITSELF: integer timings, counts and closed enums.
+
+    ⚠️ Nothing here may ever hold text, a span or an offset — see
+    `enrich.AttributionMeta` and the reflection tripwire beside it. A project's
+    name is exactly the class of string `named_terms` has already shown can
+    hold a real person's."""
+    return {"embed_ms": embed_ms, "verify_ms": verify_ms, "pairs_verified": pairs,
+            "encoder_state": encoder_state, "verifier": verifier_state,
+            "model_versions": dict(MODEL_VERSIONS)}
+
+
+def stated(status, encoder_state="absent"):
+    """A terminal answer that RAN NOTHING, with the reason named.
+
+    The caller owns the environment facts this module deliberately knows
+    nothing about — whether the encoder is switched off on this machine, for
+    instance — so it needs a way to answer in the same shape. A skip is always
+    stated, never a silently empty `projects` list."""
+    return {"status": status, "projects": [],
+            "attribution": _meta(0, 0, 0, encoder_state, "not_needed")}
+
+
+def pending():
+    """`{"status": "pending", "projects": [], "attribution": null}`.
+
+    The one answer this module cannot produce from a decision: it means the
+    ENCODER could not answer promptly (a cold child, a backlog), which only the
+    caller can see. `attribution` is null rather than a zeroed meta because
+    nothing was measured — a zero timing beside an `encoder_state` reads as a
+    pass that ran instantly, which is the confident-number-over-nothing failure
+    this codebase names everywhere else. The daemon's sweep is the retry loop;
+    there is deliberately no second queue inside this process."""
+    return {"status": STATUS_PENDING, "projects": [], "attribution": None}
+
+
+def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_out"):
+    """ONE block's attribution answer: `{status, projects, attribution}`.
+
+    The whole decision and nothing else — no HTTP, no file, no environment.
+    The caller supplies the block's user-turn texts, its deterministic dims, an
+    encoder (or `None`) and a verifier (or `None`); it gets back ids,
+    confidences, closed enums and integer timings. That split is what makes the
+    decision testable against plain fakes and the route a thin adapter over it.
+
+    Four terminal shapes, each of which STATES itself:
+
+      * `skipped:no_projects` — nothing was declared to match against, so there
+        was structurally nothing to attribute to. Checked FIRST, before the
+        encoder is looked at: a machine with no projects must never be told to
+        come back later.
+      * `attributed` — the benchmarked path RAN. `projects` may still be empty,
+        and that is a real answer ("none of these projects"), not a failure —
+        the discovery's decision table row 5.
+      * `degraded:weights_unavailable` — no encoder. ⚠️ **NOTHING is
+        attributed, however strong the exact-match evidence** (AC-4 as amended
+        2026-09-01). `BOOST_CAP` (0.35) sits below `THRESHOLD - BAND` (0.41) by
+        construction, so a boost-only assignment could exist only under a
+        second, unmeasured rule; there is exactly one attribution path, the
+        benchmarked one. A machine with no model has no answer YET, not a
+        weaker answer, and the daemon's durable job re-attributes the block
+        once weights are provisioned. The boost is still computed — it rides
+        `scores` as telemetry inside this process, and reaches the wire only as
+        the confidence of a project the encoder assigned.
+      * a block with NO user-turn text — the encoder has nothing to embed and
+        no later sweep can change that, so it is the empty `attributed` answer
+        rather than `pending`, which would have the daemon retry a block that
+        can never move.
+
+    `verifier_absent` names WHY there is no verifier when `verifier_obj is
+    None`: `opted_out` (the operator switched it off) or `unavailable` (it was
+    needed and could not run). Two different facts, and reporting the first
+    when the second happened is the silent narrowing AC-6 forbids.
+
+    Privacy: `texts` and the project documents live in this process for the
+    duration of this call and nowhere else. The returned dict is the response
+    body verbatim, and holds no text, no span and no offset.
+    """
+    projects, _ = current_projects()
+    encoder_state = "absent" if encoder is None else "warm"
+    if not projects:
+        return stated(STATUS_SKIPPED_NO_PROJECTS, encoder_state)
+    if not texts:
+        return {"status": STATUS_ATTRIBUTED, "projects": [],
+                "attribution": _meta(0, 0, 0, encoder_state, "not_needed")}
+
+    t0 = time.time()
+    scores, borderline, assigned, encoder_used = score_block(texts, dims, encoder)
+    embed_ms = int((time.time() - t0) * 1000)
+    overrides, pairs, verify_ms = apply_verifier(texts, dims, scores, borderline, verifier_obj)
+
+    final = []
+    for pid in scores:
+        # The verdict WINS over the threshold in BOTH directions — that is the
+        # verifier's whole job (see apply_verifier).
+        inside = overrides[pid] if pid in overrides else pid in assigned
+        if inside:
+            # "metadata" stays in the published `source` vocabulary because the
+            # boost is still part of every confidence, but it can no longer be
+            # a source on its own: nothing is assigned without the encoder.
+            final.append({"id": pid, "confidence": scores[pid],
+                          "source": "verifier" if pid in overrides else "embedding"})
+
+    if verifier_obj is not None:
+        verifier_state = "used" if pairs else "not_needed"
+    else:
+        verifier_state = verifier_absent if borderline else "not_needed"
+    status = STATUS_ATTRIBUTED if encoder_used else STATUS_DEGRADED_WEIGHTS
+    return {"status": status, "projects": final,
+            "attribution": _meta(embed_ms, verify_ms, pairs,
+                                 "warm" if encoder_used else "absent", verifier_state)}

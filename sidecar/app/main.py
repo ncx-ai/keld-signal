@@ -1294,6 +1294,327 @@ async def projects(body: ProjectsIn):
     return {"count": len(body.projects), "hash": h}
 
 
+class AttributeIn(BaseModel):
+    """WHICH DECLARED PROJECTS does this closed block belong to. Coordinates in, ids out.
+
+    `start`/`end` are the block's span in epoch seconds — the unit `/blocks` answers in and the
+    daemon's attribution job stores — and the span is read HALF-OPEN, `[start, end)`, so two
+    abutting blocks can never both claim a turn on the boundary.
+
+    `session_id` is the daemon's own key for the job (`(session, block.start)`) and is accepted
+    so a request is self-describing in a log the daemon writes; the sidecar resolves the session
+    from `path`, which is the only thing it can actually open. It is deliberately not checked
+    against `ingest.session_of(path)`: a disagreement there would be a daemon bug, and refusing
+    the block would turn it into a permanently unattributable one.
+
+    `dims` are the block's own deterministic dimensions as `/blocks` already published them —
+    repo, branch and friends. They feed the exact-match metadata boost, and they are the
+    caller's facts rather than something re-derived here.
+    """
+    path: str
+    session_id: str | None = None
+    start: float
+    end: float
+    dims: dict = {}
+
+
+class _EncoderNotReady(Exception):
+    """The encoder child could not answer this call, carrying textembed's own status."""
+
+    def __init__(self, status):
+        super().__init__(status)
+        self.status = status
+
+
+class _VerifierUnavailable(Exception):
+    """The verifier was needed and could not be loaded."""
+
+
+class _EncoderAdapter:
+    """`textembed.Encoder` in the shape `attribution.score_block` takes.
+
+    ⚠️ **The two shapes differ and the difference is silent.** `score_block` wants
+    `.encode(texts) -> [vec, ...]`; the production encoder returns `(vectors, status)` and
+    NEVER raises — absent weights, a failed spawn and a hung child are all "no vectors, and
+    here is why" (see `textembed.Encoder.encode`). Handed the raw encoder, `score_block` would
+    zip a two-element tuple against the projects and silently score the block against the
+    string `"ok"`. So the adaptation is here, and so is the decision about what each status
+    MEANS to a block:
+
+      * `ok`                            -> the vectors.
+      * `skipped:disabled`              -> `skipped:disabled`: the text encoder is switched off
+                                           on this machine, so no sweep will ever answer.
+      * `degraded:weights_unavailable`  -> `degraded:weights_unavailable` (AC-4 as amended):
+                                           no attribution at all, re-attributed once the
+                                           daemon has provisioned the weights.
+      * anything else                   -> `pending`. `degraded:encoder_unavailable` is retried
+                                           on a cooldown by the encoder itself and
+                                           `pending:encoding` is a backlog, so both are
+                                           transient STATES — and `pending` is the one answer
+                                           that costs the daemon's job no attempt. Never a
+                                           confident answer produced without the encoder.
+
+    Raising rather than returning `[]` is deliberate: an empty vector list would flow into the
+    cosine as "similar to nothing" and publish a confident negative from a check that did not
+    run."""
+
+    def __init__(self, child):
+        self._child = child
+
+    def encode(self, texts):
+        # The status is compared against textembed's own constant rather than a literal here:
+        # that vocabulary is closed and a second spelling of "ok" in this file is exactly how
+        # two halves drift. The import is deferred like every other analysis import in main.
+        from app.analysis import textembed
+
+        vectors, status = self._child.encode(texts)
+        if status != textembed.STATUS_OK or len(vectors) != len(texts):
+            raise _EncoderNotReady(status)
+        return vectors
+
+
+# The verifier is built AT MOST ONCE per process, lazily, and on the runner's own thread — see
+# `_verify_call`. `_VERIFIER_FAILED` latches a build that failed so a broken GGUF costs one
+# load attempt rather than one per borderline pair.
+_VERIFIER = None
+_VERIFIER_FAILED = False
+_VERIFIER_LOCK = threading.Lock()
+
+# The background warm-up: one thread at a time, so a burst of `/attribute` calls on a cold child
+# cannot spawn a queue of them. Module-level so a test can join it.
+_WARM_THREAD = None
+_WARM_LOCK = threading.Lock()
+
+
+def _verifier_model():
+    """The process's one `verifier.Verifier`, loaded on first real use.
+
+    Called only from the runner's single-flight thread, never the event loop: the load is a
+    ~1.5 GB GGUF and a lazy build on the request path would stall `/health` and `/metrics` for
+    the length of it. Nothing is loaded at import, nothing is loaded when no pair is borderline,
+    and nothing is loaded twice."""
+    global _VERIFIER, _VERIFIER_FAILED
+    with _VERIFIER_LOCK:
+        if _VERIFIER is not None:
+            return _VERIFIER
+        if _VERIFIER_FAILED:
+            raise _VerifierUnavailable()
+        from app import verifier as _verifier_mod
+        try:
+            _VERIFIER = _verifier_mod.Verifier()
+        except Exception:              # noqa: BLE001 — an absent/broken model is a stated state
+            _VERIFIER_FAILED = True
+            raise _VerifierUnavailable() from None
+        return _VERIFIER
+
+
+def _verify_call(block_text, dims, project):
+    """One verdict, on the runner's thread. The model is loaded here on first use."""
+    return _verifier_model().verify(block_text, dims, project)
+
+
+class _RunnerVerifier:
+    """A verifier whose every verdict rides the single-flight runner.
+
+    ⚠️ This is genuine INFERENCE, so it must not fan out: the sidecar's whole load-protection
+    story is one inference at a time, and the verifier is a second model beside the GLiNER2
+    worker. It goes through `_state["runner"]` — the same queue+governor `_dispatch` submits to
+    — rather than through `_dispatch` itself, because `_dispatch` calls `WorkerManager.call`,
+    which would route a llama.cpp prompt to the GLiNER2 child. Single-flight is what is shared;
+    the worker is not.
+
+    `verify` is called from an executor thread (inside `attribute_block`), so it bridges back to
+    the loop with `run_coroutine_threadsafe` and blocks that thread — never the loop."""
+
+    def __init__(self, loop):
+        self._loop = loop
+
+    def verify(self, block_text, dims, project):
+        fut = asyncio.run_coroutine_threadsafe(
+            _state["runner"].submit(_verify_call, block_text, dims, project), self._loop)
+        return fut.result()
+
+
+def _span_texts(path, start, end):
+    """The block span's USER-turn texts, read through the ONE sanctioned door.
+
+    `transcript.iter_turns` is the only function in this package that opens a transcript, and
+    `textembed.messages_in` is the only one that lifts message text off a parsed turn — the same
+    pair the text half uses (`featuretext.TextSource.vectors`). Reusing them is not tidiness:
+    `turns_in` skips `tool_result` lines unparsed (which is what keeps a parse seconds long
+    rather than minutes long), `messages_in` reads only `text` content blocks, and it drops
+    command echoes and injected skill files, which are the harness talking to itself and not a
+    person describing work.
+
+    USER stream only. An assistant turn is this machine's own words about the block, and
+    scoring a project against the model's own prose would attribute work to whatever the
+    assistant happened to name.
+
+    Half-open `[start, end)`: blocks abut inside an active segment, so a closed interval would
+    let two of them claim the same turn.
+
+    ⚠️ Text lives on this stack and in the encoder child, and nowhere else. Nothing here logs,
+    persists or returns it upward — the route answers with ids."""
+    from app.analysis import textembed
+    from app.analysis.capture import epoch
+    from app.analysis.transcript import iter_turns
+
+    return [m.text for m in textembed.messages_in(iter_turns(path), epoch)
+            if m.stream == textembed.USER and start <= m.t < end]
+
+
+def _warm_encoder_async(child):
+    """Bring the encoder child up OFF the request path, and embed the project docs while it is.
+
+    The daemon's sweep is the retry loop, so a cold child answers `pending` immediately — but
+    something has to actually warm it or every sweep answers `pending` forever. This is that
+    something, and it is not a second queue: it holds no block, no backlog and no state, and one
+    thread runs at a time however many blocks arrive. The work it does is the work the next call
+    would otherwise pay first — `project_vectors` is memoised per project-list hash — so the
+    spawn (~2.8 s warm, ~20 s cold) and the project embedding are both behind the caller."""
+    from app.analysis import attribution
+
+    def run():
+        try:
+            attribution.project_vectors(_EncoderAdapter(child))
+        except Exception:      # noqa: BLE001 — a warm-up that failed is retried by the next sweep
+            pass
+
+    global _WARM_THREAD
+    with _WARM_LOCK:
+        if _WARM_THREAD is not None and _WARM_THREAD.is_alive():
+            return _WARM_THREAD
+        _WARM_THREAD = threading.Thread(target=run, name="keld-attribute-warm", daemon=True)
+        _WARM_THREAD.start()
+        return _WARM_THREAD
+
+
+def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent):
+    """The whole of /attribute's decision, on an executor thread.
+
+    Both failure modes it translates are ones the decision itself cannot see: whether the
+    encoder child answered, and whether the verifier could load. Everything else is
+    `attribution.attribute_block`."""
+    from app.analysis import attribution
+
+    try:
+        try:
+            return attribution.attribute_block(texts, dims, encoder, verifier_obj,
+                                               verifier_absent)
+        except _VerifierUnavailable:
+            # The threshold still answers, and the meta NAMES the verifier's absence rather
+            # than letting a narrower decision look like the full one (AC-6). Re-run rather
+            # than patch the meta: `verifier_absent` is an input to the decision, not a label
+            # on it, and the re-run costs one re-encode of a block on a path that fires once
+            # per process (the failed load is latched).
+            return attribution.attribute_block(texts, dims, encoder, None, "unavailable")
+    except _EncoderNotReady as exc:
+        # Outside both, so the re-run's own encode is covered too.
+        return _encoder_status_answer(exc.status)
+
+
+def _encoder_status_answer(status):
+    """One of `textembed.STATUSES` -> this block's answer. See `_EncoderAdapter`."""
+    from app.analysis import attribution, textembed
+
+    if status == textembed.STATUS_DISABLED:
+        return attribution.stated(attribution.STATUS_SKIPPED_DISABLED)
+    if status == textembed.STATUS_NO_WEIGHTS:
+        return attribution.stated(attribution.STATUS_DEGRADED_WEIGHTS)
+    return attribution.pending()
+
+
+@app.post("/attribute")
+async def attribute(body: AttributeIn):
+    """WHICH DECLARED PROJECTS one closed block belongs to.
+
+        a block span -> the user's own words -> scored against the declared projects -> ids
+
+    Returns `{"status", "projects": [{"id", "confidence", "source"}], "attribution": {...}}`.
+    `status` is `attribution.STATUSES`, the closed vocabulary mirrored Go-side as
+    `enrich.Projects*`. **Coordinates in, ids out**: the request carries a path and two instants,
+    the response carries ids, confidences, closed enums and integer millisecond timings. No text,
+    no span, no offset, in either direction — `attribution.attribute_block` is where that is
+    enforced and `test_attribution_endpoint.py` pins it.
+
+    NOTHING IS PUBLISHED BY THIS ROUTE. The daemon's attribution job (internal/agent/attrib) owns
+    the retry, the durability and the re-publish; this answers one question once.
+
+    ⚠️ **`pending` is a STATE, not a failure, and the daemon's sweep is the retry loop.** A cold
+    encoder child costs ~2.8 s warm / ~20 s cold to bring up and ~1.6 s per message to run, so a
+    synchronous encode could not land inside any sane client timeout. This route therefore never
+    waits for a model: it answers `pending` immediately, warms the child on one background thread
+    (`_warm_encoder_async`) and lets the next sweep collect the answer. There is deliberately no
+    second queue in this process — the durable job store already is one.
+
+    Execution follows `/blocks`: the span read and the scoring run in the DEFAULT EXECUTOR so a
+    long block cannot stall the event loop out from under `/health` and `/metrics`, while the
+    verifier — the one genuine inference here — goes through the single-flight runner
+    (`_RunnerVerifier`), because this sidecar never fans out inference.
+    """
+    # Confinement BEFORE anything else, the SAME allowlist /analyze, /ingest, /tick, /blocks and
+    # /features use — the sidecar has no auth, and this OPENS A TRANSCRIPT as the daemon's user
+    # and answers from what it says. 403, not 404: a rejected path and an unresolvable one are
+    # different facts. Counted as analyze_rejected for /blocks' reason: it is literally the same
+    # allowlist, and an attribute_rejected field would mean editing app/metrics.py.
+    if not _within_roots(body.path, _analyze_roots()):
+        _count("analyze_rejected")
+        raise HTTPException(status_code=403,
+                            detail="path is outside the configured transcript roots")
+    from app.analysis import attribution, textembed
+
+    projects, _ = attribution.current_projects()
+    if not projects:
+        # Answered without opening anything: with nothing declared to match against, reading a
+        # person's words would be reading them for no purpose.
+        return attribution.stated(attribution.STATUS_SKIPPED_NO_PROJECTS)
+
+    loop = asyncio.get_running_loop()
+    try:
+        texts = await loop.run_in_executor(None, _span_texts, body.path, body.start, body.end)
+    except OSError:
+        # The transcript is gone or unreadable. Unlike /blocks and /features there is no series
+        # to fall back on — the span's words ARE the input — so this is a refusal rather than a
+        # narrower answer. 404 and not 503: nothing about retrying makes an absent file readable,
+        # and the daemon's job store bounds the retries of a genuine error.
+        raise HTTPException(status_code=404,
+                            detail="the transcript could not be read") from None
+
+    source = _text_source()
+    if source is None:
+        # KELD_TEXTEMBED is off, so there is no encoder child on this machine and there will not
+        # be one this daemon lifetime — a terminal, stated skip rather than an endless `pending`.
+        return attribution.stated(attribution.STATUS_SKIPPED_DISABLED)
+    child = source.encoder
+    if textembed.weights_dir() is None:
+        # AC-4 as amended: no model, no attribution — not a weaker one. attribute_block states it.
+        return attribution.attribute_block(texts, body.dims, None, None)
+    ready = child.state == textembed.READY
+    if not texts:
+        # A block with no human words in it. Terminal — no later sweep can change it — so it is
+        # answered here rather than deferred behind a cold child.
+        return attribution.attribute_block(
+            [], body.dims, _EncoderAdapter(child) if ready else None, None)
+    if not ready:
+        _warm_encoder_async(child)
+        return attribution.pending()
+
+    from app import verifier as verifier_mod
+
+    verifier_obj, verifier_absent = None, "opted_out"
+    if verifier_mod.enabled():
+        runner = _state.get("runner")
+        if verifier_mod.weights_path() is None or runner is None or not runner.ready:
+            # Wanted and not runnable: "unavailable", never "opted_out". The threshold decides
+            # alone and the meta says so.
+            verifier_absent = "unavailable"
+        else:
+            verifier_obj = _RunnerVerifier(loop)
+    return await loop.run_in_executor(
+        None, _attribute_blocking, texts, body.dims, _EncoderAdapter(child),
+        verifier_obj, verifier_absent)
+
+
 @app.post("/match")
 async def match(body: MatchIn):
     """Match text against the currently-installed vocabulary. Deliberately does
