@@ -1280,6 +1280,20 @@ def install_vocabulary(body: VocabularyIn):
     return {"rejects": rejects}
 
 
+class ProjectsIn(BaseModel):
+    projects: list[dict]
+
+
+@app.post("/projects")
+async def projects(body: ProjectsIn):
+    """Org project definitions for block attribution. A cache write, not
+    inference — bypasses _dispatch for the same reason /vocabulary does.
+    Embedding happens lazily on the first /attribute that needs vectors."""
+    from app.analysis import attribution
+    h = attribution.set_projects(body.projects)
+    return {"count": len(body.projects), "hash": h}
+
+
 @app.post("/match")
 async def match(body: MatchIn):
     """Match text against the currently-installed vocabulary. Deliberately does
