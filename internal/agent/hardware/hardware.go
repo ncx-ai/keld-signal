@@ -11,12 +11,23 @@ package hardware
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// execTimeout bounds every shell-out this package makes. Collect runs
+// synchronously in daemon.Run, before wireEnrichment — i.e. before the
+// sidecar even spawns — so a hung sysctl/sw_vers (stuck filesystem, a
+// corrupted binary) must not be able to wedge the whole daemon's startup.
+// 2s is generous for a command that normally returns in single-digit
+// milliseconds; a timeout degrades to the zero value exactly like every
+// other failure in this file, never an error that propagates.
+const execTimeout = 2 * time.Second
 
 // Info is the coarse hardware snapshot. Every field is best-effort: an
 // unavailable value is the zero value, never an error.
@@ -43,15 +54,26 @@ func Collect() Info {
 	return info
 }
 
-// sysctlOutput runs `sysctl -n <key>` and returns its trimmed stdout, or ""
-// on any failure (binary absent, key unknown, non-zero exit).
-func sysctlOutput(key string) string {
-	out, err := exec.Command("sysctl", "-n", key).Output()
+// commandOutput runs name(args...) bounded by execTimeout and returns its
+// trimmed stdout, or "" on any failure — binary absent, non-zero exit, or a
+// timeout. The ONE seam every shell-out in this package goes through, so
+// there is exactly one place that can forget the bound. A killed/hung
+// command looks like any other failure here, on purpose: Collect must never
+// block or error, and exec.CommandContext kills the process when ctx expires
+// so a hung child is not merely ignored, it is reaped.
+func commandOutput(name string, args ...string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// sysctlOutput runs `sysctl -n <key>`, or "" on any failure (binary absent,
+// key unknown, non-zero exit, or a timeout — see commandOutput).
+func sysctlOutput(key string) string { return commandOutput("sysctl", "-n", key) }
 
 func collectDarwin(info *Info) {
 	info.CPUModel = sysctlOutput("machdep.cpu.brand_string")
@@ -62,9 +84,7 @@ func collectDarwin(info *Info) {
 		}
 	}
 
-	if out, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
-		info.OSVersion = strings.TrimSpace(string(out))
-	}
+	info.OSVersion = commandOutput("sw_vers", "-productVersion")
 }
 
 func collectLinux(info *Info) {
