@@ -150,3 +150,40 @@ func TestProjectsChanged(t *testing.T) {
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
+
+// C4: lastProjects moved from a bare var to projectsState because it is now
+// written by TWO goroutines — the initial startup POST (moved off the
+// synchronous path) and onRemote on the poll goroutine. This pins its two
+// contracts directly: concurrent access must not race, and a FAILED post
+// must leave the held value stale (never latch a failure as success).
+func TestProjectsStateIsConcurrencySafe(t *testing.T) {
+	ps := &projectsState{}
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 200; i++ {
+			ps.set([]settings.RemoteProject{{ID: "from-goroutine-a"}})
+		}
+		close(done)
+	}()
+	for i := 0; i < 200; i++ {
+		ps.changed([]settings.RemoteProject{{ID: "from-main"}})
+	}
+	<-done
+}
+
+func TestProjectsStateSetOnlyOnSuccess(t *testing.T) {
+	ps := &projectsState{}
+	p := []settings.RemoteProject{{ID: "proj_a"}}
+	if !ps.changed(p) {
+		t.Fatal("an empty state must read a non-nil list as changed")
+	}
+	// Simulate a failed post: never call set. The value must still read as
+	// changed on the next attempt, not silently accepted as already-current.
+	if !ps.changed(p) {
+		t.Fatal("a failed post must not be remembered as success — the same list must still read as changed")
+	}
+	ps.set(p)
+	if ps.changed(p) {
+		t.Fatal("after a successful set, the identical list must read as unchanged")
+	}
+}

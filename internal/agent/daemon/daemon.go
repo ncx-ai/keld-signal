@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/attrib"
 	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents/resource"
@@ -817,12 +818,12 @@ func Run(ctx context.Context) error {
 	// from being restated on each one. Owned out here (not per-call) so it remembers across
 	// polls; pollSettings drives onRemote from a single goroutine, so no lock is needed.
 	rejects := &rejectReporter{}
-	// lastProjects is the last project list this daemon POSTed to the sidecar
-	// (nil until the first successful post). Owned out here for the same
-	// reason rejects is: pollSettings drives onRemote from a single goroutine,
-	// so no lock is needed, and it lets a poll skip PostProjects when nothing
-	// actually changed.
-	var lastProjects []settings.RemoteProject
+	// lastProjects is the last project list this daemon successfully POSTed
+	// to the sidecar. Mutex-guarded (projectsState), NOT owned by a single
+	// goroutine like rejects/custom are — see projectsState's doc comment for
+	// why: the initial POST runs on its own goroutine (C4), so both it and
+	// onRemote's poll goroutine can touch this value.
+	lastProjects := &projectsState{}
 	updateEvents.replay(emitter)
 	updater, hasUpdater := newUpdater(func(code, sev string, fields map[string]any) {
 		emitter.EmitExempt(code, clientevents.Severity(sev), fields)
@@ -856,15 +857,21 @@ func Run(ctx context.Context) error {
 		// PROJECT ATTRIBUTION: KELD_PROJECTS_FILE wins over the org's remote
 		// list (resolveProjects), and the sidecar is only re-told when the
 		// resolved list actually changed — an org editing unrelated settings
-		// must not re-POST the same projects on every 5-minute poll. Skipped
-		// entirely when there is no attribution client this run (the gate is
-		// off, or ml_backend has no service at all).
-		if svc.PostProjects != nil {
-			if p := resolveProjects(r); projectsChanged(lastProjects, p) {
+		// must not re-POST the same projects on every 5-minute poll.
+		//
+		// ⚠️ C4: gated on attrib.Enabled(set.Attribution), NOT merely on
+		// svc.PostProjects != nil. svc.PostProjects is set whenever a sidecar
+		// client exists AT ALL (ml_backend "auto" or "deterministic"), so
+		// gating on it alone POSTed the org's project list even on a machine
+		// with KELD_ATTRIBUTION=0 — attribution being "off" must mean
+		// nothing about it happens, not merely that the daemon's own loop
+		// doesn't run.
+		if attrib.Enabled(set.Attribution) && svc.PostProjects != nil {
+			if p := resolveProjects(r); lastProjects.changed(p) {
 				if err := svc.PostProjects(p); err != nil {
 					log.Printf("keld-agent: /projects update failed: %v", err)
 				} else {
-					lastProjects = p
+					lastProjects.set(p)
 				}
 			}
 		}
@@ -872,21 +879,33 @@ func Run(ctx context.Context) error {
 	// PROJECT ATTRIBUTION: resolve the declared project list ONCE at startup
 	// (KELD_PROJECTS_FILE wins over the remote key — see resolveProjects) and
 	// tell the sidecar before anything can ask it to attribute a block; later
-	// changes are picked up by onRemote (above) on the settings poll.
+	// changes are picked up by onRemote (above) on the settings poll. Gated
+	// the same way onRemote's own call is — see the C4 note above.
 	//
-	// ⚠️ THIS MUST RUN BEFORE `go pollSettings` STARTS, not merely before it in
-	// program order. lastProjects is read/written by onRemote on the poll
-	// goroutine with no lock (the same "single goroutine drives it" contract
-	// rejects/custom already rely on) — the ONLY thing that makes this
-	// data-race-free is Go's happens-before guarantee that everything before a
-	// `go` statement is visible to the goroutine it starts. Writing
-	// lastProjects after pollSettings is already running would be a real race
-	// between this line and onRemote's own write.
-	if svc.PostProjects != nil {
-		lastProjects = resolveProjects(nil)
-		if err := svc.PostProjects(lastProjects); err != nil {
-			log.Printf("keld-agent: initial /projects post failed: %v", err)
-		}
+	// ⚠️ C4: THE NETWORK CALL RUNS ON ITS OWN GOROUTINE, NOT INLINE. A
+	// cold-started sidecar (the supervisor only launched it a moment ago at
+	// this point in Run, and the frozen Python needs real seconds to start
+	// listening) is not accepting connections yet, so a synchronous call here
+	// retried connection-refused for up to postProjectsCallTimeout (30s) on
+	// essentially every cold start — BEFORE go pollSettings, the enrichment
+	// Worker, and the /enrich listener, so the whole daemon's startup stalled
+	// behind it. resolveProjects itself is cheap (env/remote lookup, no I/O
+	// beyond an optional local file read) and stays inline; only
+	// svc.PostProjects — the actual HTTP call — is deferred. lastProjects is
+	// now mutex-guarded (projectsState) precisely because this goroutine and
+	// onRemote's poll goroutine can both reach it — seeing this comment is
+	// the reason `var lastProjects` became `lastProjects := &projectsState{}`
+	// above; do not revert to a bare var without re-adding the lock.
+	if attrib.Enabled(set.Attribution) && svc.PostProjects != nil {
+		p := resolveProjects(nil)
+		postProjects := svc.PostProjects
+		go func() {
+			if err := postProjects(p); err != nil {
+				log.Printf("keld-agent: initial /projects post failed: %v", err)
+				return
+			}
+			lastProjects.set(p)
+		}()
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {

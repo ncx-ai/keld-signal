@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +113,43 @@ func TestAttributeFailsOnTransportError(t *testing.T) {
 	c := New("http://127.0.0.1:1", 200*time.Millisecond) // nothing listening
 	if _, ok := c.Attribute("/tmp/x.jsonl", "sess-1", 1, 2, nil); ok {
 		t.Fatal("want ok=false against an unreachable sidecar")
+	}
+}
+
+// TestAttributeSurvivesAResponseSlowerThanTheSharedClientTimeout is the C3
+// regression guard. New(url, 5*time.Second) matches production exactly
+// (daemon.go builds its single sidecar client with a 5s timeout) — that 5s
+// governs every OTHER route on this Client. A verifier-backed /attribute call
+// can legitimately run longer (several seconds per pair, no cap on the pair
+// loop), and before the fix Attribute shared that 5s http.Client: each
+// attempt was cut at 5s, classified as a retryable transport error, and
+// post() re-issued the SAME request — re-running the whole verification
+// repeatedly inside the 2-minute window. Asserting exactly ONE request
+// reached the handler is what catches that regression; asserting ok==true
+// proves a single attempt is now given the room to finish rather than being
+// cut short.
+func TestAttributeSurvivesAResponseSlowerThanTheSharedClientTimeout(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		time.Sleep(5300 * time.Millisecond) // longer than the shared hc's 5s Timeout
+		json.NewEncoder(w).Encode(map[string]any{"status": "attributed",
+			"projects": []map[string]any{{"id": "proj_pay", "confidence": 0.9, "source": "verifier"}}})
+	}))
+	defer srv.Close()
+
+	// Exactly production's shape: a 5s client Timeout, the same one every
+	// other route on this Client shares.
+	c := New(srv.URL, 5*time.Second)
+	res, ok := c.Attribute("/tmp/x.jsonl", "sess-1", 1, 2, nil)
+	if !ok {
+		t.Fatal("a slow-but-legitimate attribute call must not fail just because it outran the shared client's 5s timeout")
+	}
+	if res.Status != "attributed" || len(res.Projects) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("handler was hit %d times — a slow response must not be retried into a storm", n)
 	}
 }
 

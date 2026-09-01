@@ -43,6 +43,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -91,22 +92,60 @@ func filenameFor(j Job) string {
 	return hex.EncodeToString(h[:8]) + ".json"
 }
 
-// Put writes j, creating dir if needed. Atomic (write-then-rename) so a crash
-// mid-write can never leave a half-written job file for List to choke on.
-func (s *Store) Put(j Job) error {
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+// atomicWrite writes b to dir/name via a UNIQUE temp file (os.CreateTemp,
+// never dir/name+".tmp") followed by a rename, and is shared by Put and
+// Quarantine.
+//
+// ⚠️ THE TEMP NAME MUST BE UNIQUE PER CALL, not merely per destination file —
+// a shared `final + ".tmp"` name gives two concurrent writers of the SAME job
+// (Schedule racing a sweep's re-spool, both plausible: the emitter goroutine
+// and the Attributor's own drain loop) one path to fight over. Last-writer-
+// wins silently reverts whichever Attempts increment lost the race, and a
+// reader (List) that catches the file mid-write between the two writers'
+// truncate-and-write sees a torn/invalid JSON body and SKIPS it — the job
+// vanishes with no log line, no quarantine, nothing. os.CreateTemp gives each
+// call its own file (a random suffix), so two concurrent Puts of the same job
+// each complete their own write-then-rename without ever sharing a path; the
+// rename is atomic, so a reader sees either the old content or the new, never
+// a partial write, whichever writer's rename lands last.
+func atomicWrite(dir, name string, b []byte) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	tmp, err := os.CreateTemp(dir, name+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, filepath.Join(dir, name)); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+// Put writes j, creating dir if needed. Atomic (unique-temp-then-rename, see
+// atomicWrite) so a crash — or a concurrent writer of the SAME job — can
+// never leave a half-written or lost job file.
+func (s *Store) Put(j Job) error {
 	b, err := json.Marshal(j)
 	if err != nil {
 		return err
 	}
-	final := filepath.Join(s.dir, filenameFor(j))
-	tmp := final + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, final)
+	return atomicWrite(s.dir, filenameFor(j), b)
 }
 
 // List returns every job currently in the store. A missing directory (no job
@@ -150,25 +189,18 @@ func (s *Store) Delete(j Job) error {
 	return err
 }
 
-// Quarantine moves j to dir/bad/ (its own file there, atomically written)
-// and removes it from the live store — mirroring spool.Quarantine's shape
-// one package over. Only reached after MaxAttempts GENUINE ERRORS; a pending
-// answer never calls this.
+// Quarantine moves j to dir/bad/ (its own file there, atomically written via
+// atomicWrite) and removes it from the live store — mirroring
+// spool.Quarantine's shape one package over. Only reached after MaxAttempts
+// GENUINE ERRORS; a pending or degraded:weights_unavailable answer never
+// calls this.
 func (s *Store) Quarantine(j Job) error {
-	bad := filepath.Join(s.dir, "bad")
-	if err := os.MkdirAll(bad, 0o700); err != nil {
-		return err
-	}
 	b, err := json.Marshal(j)
 	if err != nil {
 		return err
 	}
-	final := filepath.Join(bad, filenameFor(j))
-	tmp := final + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, final); err != nil {
+	bad := filepath.Join(s.dir, "bad")
+	if err := atomicWrite(bad, filenameFor(j), b); err != nil {
 		return err
 	}
 	return s.Delete(j)
@@ -258,13 +290,24 @@ func (a *Attributor) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// drainOnce is one pass over every job currently in the store. Split out from
-// Run so a test can drive it directly without a ticker.
+// maxPerSweep bounds how many jobs ONE drainOnce processes, mirroring
+// blocks.maxPerSweep (24) and for the identical reason stated there: each
+// job's own sidecar call can run up to attributeCallTimeout, so an unbounded
+// drain over a large backlog would park a single sweep for hours. A backlog
+// beyond this drains over successive sweeps (interval, default 60s) or
+// Schedule nudges — never lost, only paced.
+const maxPerSweep = 24
+
+// drainOnce is one pass over up to maxPerSweep jobs currently in the store.
+// Split out from Run so a test can drive it directly without a ticker.
 func (a *Attributor) drainOnce(ctx context.Context) {
 	jobs, err := a.st.List()
 	if err != nil {
 		log.Printf("keld-agent: attribution store list failed: %v", err)
 		return
+	}
+	if len(jobs) > maxPerSweep {
+		jobs = jobs[:maxPerSweep]
 	}
 	for _, j := range jobs {
 		if ctx.Err() != nil {
@@ -275,8 +318,33 @@ func (a *Attributor) drainOnce(ctx context.Context) {
 }
 
 // drainJob resolves one job's block, asks the sidecar to attribute it, and
-// either re-spools (pending, no attempt consumed; or a genuine error, one
-// attempt consumed) or re-publishes and deletes (any terminal status).
+// acts on the CLOSED vocabulary of statuses enrich/attribution.go declares:
+//
+//   - ProjectsPending: re-spool UNCHANGED, no attempt consumed (the amended
+//     rule — see the package comment).
+//   - ProjectsDegradedWeights: the sidecar answered, but with its embedding
+//     weights unavailable — the SAME condition pending exists to protect
+//     against (weights mid-download), reached through a different status.
+//     Publish the degraded row (it states its own degradation), then
+//     re-spool UNCHANGED so a later sweep can supersede it once the weights
+//     finish provisioning — an attempt is consumed only if THIS publish
+//     itself fails, matching every other publish failure (see I2 below).
+//   - ProjectsAttributed / ProjectsSkippedDisabled / ProjectsSkippedNoProjects:
+//     terminal. Publish, then delete the job.
+//   - anything else: a status this side cannot recognise is a GENUINE ERROR,
+//     not a silent success — the sidecar is frozen and shipped separately, so
+//     version skew is real (the same rule DynamicStatuses/DynamicReadings
+//     apply at the Go decode boundary elsewhere in this codebase). It
+//     consumes an attempt and never reaches the wire: an unvalidated string
+//     must not ride into projects_status.
+//
+// A publish (SendBlocks) failure NEVER consumes an attempt, on any status
+// that reaches one. The block emitter one package over already makes this
+// argument for its own publish path and it applies unchanged here: a block's
+// identity is deterministic and Atlas upserts, so re-publishing after a
+// transient Atlas outage is free, while spending an attempt on it would let
+// four sweeps of Atlas being unreachable quarantine every in-flight job —
+// punishing Atlas's downtime as if it were the job's own fault.
 func (a *Attributor) drainJob(j Job) {
 	var resolved enrich.ResolvedFacts
 	if a.facts != nil {
@@ -297,24 +365,55 @@ func (a *Attributor) drainJob(j Job) {
 		a.retryOrQuarantine(j, "sidecar /attribute call failed")
 		return
 	}
-	if res.Status == enrich.ProjectsPending {
+	switch res.Status {
+	case enrich.ProjectsPending:
 		// ⚠️ AMENDED RULE: pending does NOT consume an attempt. Re-spool j
 		// UNCHANGED (Attempts untouched) rather than the incremented copy
 		// retryOrQuarantine would write.
-		if err := a.st.Put(j); err != nil {
-			log.Printf("keld-agent: attribution job re-spool (pending) failed for session=%s start=%v: %v",
+		a.hold(j, "pending")
+	case enrich.ProjectsDegradedWeights:
+		if err := a.republish(j, b, res); err != nil {
+			// I2: a publish failure holds the job rather than spending an
+			// attempt — see the drainJob doc comment.
+			a.hold(j, "publish failed (degraded)")
+			return
+		}
+		// Published the degraded row; re-spool UNCHANGED — same rule as
+		// pending, because this is the identical provisioning-window
+		// condition the amendment protects, reached through a different
+		// status.
+		a.hold(j, "degraded:weights_unavailable")
+	case enrich.ProjectsAttributed, enrich.ProjectsSkippedDisabled, enrich.ProjectsSkippedNoProjects:
+		if err := a.republish(j, b, res); err != nil {
+			a.hold(j, "publish failed")
+			return
+		}
+		if err := a.st.Delete(j); err != nil {
+			log.Printf("keld-agent: attribution job not deleted after publish for session=%s start=%v: %v",
 				j.SessionID, j.Start, err)
 		}
-		return
+	default:
+		// Out-of-vocabulary status: a genuine error, never a silent success.
+		a.retryOrQuarantine(j, fmt.Sprintf("unrecognised attribution status %q", res.Status))
 	}
+}
+
+// republish rebuilds b's wire row with res's attribution and sends it as a
+// one-row batch. Shared by every branch of drainJob that has a terminal (or
+// degraded-but-statable) answer to publish.
+func (a *Attributor) republish(j Job, b enrich.BlockCharacterisation, res sidecar.AttributeResult) error {
 	row := publish.WithProjects(publish.BuildBlock(b, a.actor, time.Now()), res.Projects, res.Status, res.Attribution)
-	if err := a.pub.SendBlocks([]publish.BlockEnrichment{row}); err != nil {
-		a.retryOrQuarantine(j, "publish failed")
-		return
-	}
-	if err := a.st.Delete(j); err != nil {
-		log.Printf("keld-agent: attribution job not deleted after publish for session=%s start=%v: %v",
-			j.SessionID, j.Start, err)
+	return a.pub.SendBlocks([]publish.BlockEnrichment{row})
+}
+
+// hold re-spools j UNCHANGED — Attempts untouched — logging reason only if
+// the write itself fails. Used for pending, for degraded:weights_unavailable
+// (whether or not its own publish succeeded), and for any publish failure:
+// none of these are the job's own fault, so none may cost it a retry.
+func (a *Attributor) hold(j Job, reason string) {
+	if err := a.st.Put(j); err != nil {
+		log.Printf("keld-agent: attribution job re-spool (%s) failed for session=%s start=%v: %v",
+			reason, j.SessionID, j.Start, err)
 	}
 }
 
@@ -347,15 +446,41 @@ func (a *Attributor) retryOrQuarantine(j Job, reason string) {
 // is either the block itself or nothing this job can use.
 const refetchMaxBlocks = 1
 
+// blockFetchTimeout bounds ONE re-fetch call through the Digester (I1). The
+// block emitter's own Digester call has no per-call bound because it goes
+// through the same client the daemon binds to its OWN lifetime context, and a
+// wedged sidecar there just means the next sweep asks the same question
+// again (see blocks.Emitter's cursor-hold design). The attributor's re-fetch
+// is different: drainOnce (see maxPerSweep) is a serial loop over several
+// jobs, so a single job wedged inside an unbounded /blocks call would park
+// the WHOLE sweep — every other job behind it — until daemon shutdown. 30s
+// is generous for what this call actually does (a store query the sidecar
+// itself measures in single-digit milliseconds; the budget is for
+// retry/backoff through a temporarily-unavailable sidecar, not for real
+// work). A var, not a const, so a test can shrink it rather than waiting out
+// the real bound — mirrors sidecar.attributeCallTimeout.
+var blockFetchTimeout = 30 * time.Second
+
 // blockFor re-fetches the one block a job refers to, through the SAME
 // Digester the block emitter uses (see the package comment on why the job
-// does not carry the row itself).
+// does not carry the row itself). Bound to blockFetchTimeout when the
+// Digester supports binding a context (the production *sidecar.Client does);
+// a test fake that implements no such method is called unbounded, which is
+// safe because a fake's BlocksCharacterised does no real I/O.
 func (a *Attributor) blockFor(j Job, resolved enrich.ResolvedFacts) (enrich.BlockCharacterisation, bool) {
 	if a.dig == nil {
 		return enrich.BlockCharacterisation{}, false
 	}
+	dig := a.dig
+	if bindable, ok := dig.(interface {
+		WithContext(context.Context) *sidecar.Client
+	}); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), blockFetchTimeout)
+		defer cancel()
+		dig = bindable.WithContext(ctx)
+	}
 	since := j.Start
-	got, _, ok := a.dig.BlocksCharacterised(j.Path, j.Source, j.SessionID, &since, time.Now(), refetchMaxBlocks, resolved)
+	got, _, ok := dig.BlocksCharacterised(j.Path, j.Source, j.SessionID, &since, time.Now(), refetchMaxBlocks, resolved)
 	if !ok {
 		return enrich.BlockCharacterisation{}, false
 	}

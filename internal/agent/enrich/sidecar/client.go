@@ -864,9 +864,31 @@ var attributeCallTimeout = 2 * time.Minute
 // Status=="pending" is a NORMAL terminal HTTP answer, not a failure — the
 // caller (attrib.Attributor) is what decides a pending answer must not
 // consume a retry attempt; this method has no opinion on that.
+//
+// ⚠️ IT USES ITS OWN http.Client, NOT c.hc, AND THAT IS LOAD-BEARING. c.hc is
+// shared with every other route on this Client and its Timeout is sized for
+// an ordinary inference round-trip (the daemon constructs it with a 5s
+// timeout — see daemon.go's scClient). /attribute is not that shape: a warm
+// encoder with borderline pairs runs verifier verdicts SYNCHRONOUSLY inside
+// one call, measured at several seconds per pair with no cap on the pair
+// loop, so a real call routinely exceeds 5s. Sharing c.hc would mean every
+// individual attempt gets cut at 5s, postOnce classifies that timeout as a
+// retryable transport error, and post() would re-issue the SAME request —
+// re-running the whole verification from scratch — a dozen or more times
+// inside the 2-minute window: the self-amplifying-retry shape AGENTS.md
+// documents for /features, reached here through the shared client's timeout
+// rather than through this route's own design. Giving the call its own
+// *http.Client, timed to attributeCallTimeout (the same bound as the
+// context), lets ONE attempt run the full window: a genuinely slow verifier
+// call gets the time it needs and is not retried into a storm, while a fast
+// failure (connection refused, an immediate 503) still leaves room in the
+// budget for post()'s backoff to retry it — exactly the SignalIngest pattern
+// of giving a differently-shaped call its own transport rather than
+// inheriting one sized for something else.
 func (c *Client) Attribute(path, sessionID string, start, end float64,
 	dims map[string]string) (AttributeResult, bool) {
 	cp := *c
+	cp.hc = &http.Client{Timeout: attributeCallTimeout}
 	ctx, cancel := context.WithTimeout(c.ctx, attributeCallTimeout)
 	defer cancel()
 	cp.ctx = ctx

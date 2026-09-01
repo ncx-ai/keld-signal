@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
@@ -42,4 +43,42 @@ func projectsChanged(a, b []settings.RemoteProject) bool {
 	ab, _ := json.Marshal(a)
 	bb, _ := json.Marshal(b)
 	return string(ab) != string(bb)
+}
+
+// projectsState is a mutex-guarded box for the last project list this daemon
+// successfully told the sidecar about.
+//
+// ⚠️ C4 FIX: it exists BECAUSE the initial POST moved off the synchronous
+// startup path onto its own goroutine (see Run — a cold-starting sidecar is
+// not listening yet, and a synchronous call there stalled the whole daemon
+// behind postProjectsCallTimeout). That startup goroutine and onRemote's own
+// goroutine (the settings poll) can therefore both attempt to update this
+// value. The daemon used to rely on a bare `var lastProjects` plus "the
+// startup write happens-before `go pollSettings` starts" — correct for
+// exactly one writer, and it stopped being exactly one writer the moment the
+// startup POST became asynchronous. A mutex is simpler to get right here than
+// re-deriving a second happens-before argument for a second goroutine, and it
+// is cheap: this is updated at most once per settings poll (default 5m) plus
+// once at startup.
+type projectsState struct {
+	mu    sync.Mutex
+	value []settings.RemoteProject
+}
+
+// changed reports whether next differs from the currently held value.
+func (p *projectsState) changed(next []settings.RemoteProject) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return projectsChanged(p.value, next)
+}
+
+// set records v as the last list successfully POSTed. Called ONLY after
+// svc.PostProjects itself succeeded, so a failed post leaves the held value
+// stale on purpose — a later poll (or the failed call itself, retried) will
+// see it as still "changed" and try again, rather than a failure being
+// silently remembered as success.
+func (p *projectsState) set(v []settings.RemoteProject) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.value = v
 }
