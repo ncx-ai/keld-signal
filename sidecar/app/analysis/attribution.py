@@ -182,3 +182,25 @@ def score_block(texts, dims, encoder):
             if s >= THRESHOLD:
                 assigned.append(p["id"])
     return scores, borderline, assigned, encoder_used
+
+
+def apply_verifier(texts, dims, scores, borderline, verifier_obj):
+    """Verdicts for borderline pairs only. The verdict WINS over the threshold
+    — that is the verifier's whole job (benchmark: fixes exactly the cases the
+    threshold cannot call).
+
+    `borderline` is empty whenever the encoder didn't run (score_block's own
+    rule), so this does nothing at all in that case: no model load, no work.
+    A `None` verifier — the caller opted out, or weights aren't provisioned —
+    is handled the same way."""
+    if not borderline or verifier_obj is None:
+        return {}, 0, 0
+    projects, _ = current_projects()
+    by_id = {p["id"]: p for p in projects}
+    block_text = "\n".join(texts)
+    overrides, total = {}, 0.0
+    for pid in borderline:
+        verdict, secs = verifier_obj.verify(block_text, dims, by_id[pid])
+        overrides[pid] = bool(verdict)
+        total += secs
+    return overrides, len(borderline), int(total * 1000)

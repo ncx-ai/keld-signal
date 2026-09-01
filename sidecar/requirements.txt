@@ -75,3 +75,10 @@ presidio-analyzer==2.2.362
 # found this: the sidecar-tests job installs deliberately without torch/gliner2,
 # so it has no accelerate, so it had no psutil.
 psutil==7.2.2
+
+# The attribution verifier (app/verifier.py): a small local LLM (Gemma 4 E2B
+# Q4_K_M, CPU only) giving YES/NO on borderline (block, project) pairs the
+# score_block threshold can't call. Imported lazily inside Verifier.__init__
+# only — never at module scope — so importing app/verifier.py or
+# app/analysis/attribution.py loads nothing and pulls in no llama_cpp.
+llama-cpp-python==0.3.*
