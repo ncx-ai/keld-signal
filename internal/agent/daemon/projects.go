@@ -9,6 +9,35 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
+// projectsResolution is resolveProjects's answer: the resolved list PLUS
+// whether the resolution itself is TRUSTWORTHY.
+//
+// ⚠️ ROUND 3 FIX (Finding 1): a bare []RemoteProject collapses two different
+// facts into one nil — "the file/remote key genuinely declares zero
+// projects" and "I could not tell, because KELD_PROJECTS_FILE could not be
+// read" — and only the first of those may ever reach a PostProjects call.
+// Before this type existed, a TRANSIENT failure to read the env file at poll
+// time (a momentary permission glitch, the file mid-rewrite, a flaky mount —
+// anything that clears on the next poll) resolved to nil exactly like an
+// honest "nothing declared", and posting that nil over a sidecar that
+// already held a real list produced the identical permanent-mis-attribution
+// outcome NB1 fixed on the startup side: the sidecar ends up with no
+// projects, every /attribute answers skipped:no_projects, and the
+// attributor's own (correct) switch treats that as TERMINAL — publish and
+// delete. A read error must instead leave whatever the daemon already
+// believes in place.
+type projectsResolution struct {
+	list []settings.RemoteProject
+	// ok is false ONLY when the source that would have answered
+	// authoritatively (KELD_PROJECTS_FILE, when the env var is set) could not
+	// be read. It is true for every other case, including "nothing is
+	// declared anywhere" — that is an honest, actionable "empty" the daemon
+	// may safely act on (though see the empty-skip guard in
+	// postProjectsIfKnownNonEmpty for why even a trustworthy empty is never
+	// itself POSTed).
+	ok bool
+}
+
 // resolveProjects is the daemon's project-definition precedence:
 // KELD_PROJECTS_FILE wins if set (the mock path for tests/smoke, reproducible
 // regardless of org state), else the remote settings doc's `projects` key,
@@ -16,24 +45,23 @@ import (
 // lands) — that is exactly "not known yet", the same reading a nil
 // Remote.Projects gets once polling has started.
 //
-// A KELD_PROJECTS_FILE that fails to load is reported and treated as "no
-// projects" rather than crashing the daemon or silently falling through to
-// the remote key — an operator who set the env var deliberately wants THAT
-// file honoured, and a stale remote list is worse than an honest empty one.
-func resolveProjects(remote *settings.Remote) []settings.RemoteProject {
+// A KELD_PROJECTS_FILE that fails to load returns ok=false — see
+// projectsResolution's doc comment for why that must NOT collapse into the
+// same answer as "the file says there are no projects".
+func resolveProjects(remote *settings.Remote) projectsResolution {
 	if p := os.Getenv(settings.EnvProjectsFile); p != "" {
 		list, err := settings.LoadProjectsFile(p)
 		if err != nil {
-			log.Printf("keld-agent: %s=%s could not be read: %v — attribution runs with no declared projects",
+			log.Printf("keld-agent: %s=%s could not be read: %v — leaving the previously known project list in place",
 				settings.EnvProjectsFile, p, err)
-			return nil
+			return projectsResolution{ok: false}
 		}
-		return list
+		return projectsResolution{list: list, ok: true}
 	}
 	if remote != nil && remote.Projects != nil {
-		return *remote.Projects
+		return projectsResolution{list: *remote.Projects, ok: true}
 	}
-	return nil
+	return projectsResolution{ok: true} // genuinely nothing declared anywhere — a trustworthy empty
 }
 
 // projectsChanged reports whether two resolved project lists differ, so the
@@ -83,71 +111,83 @@ func (p *projectsState) set(v []settings.RemoteProject) {
 	p.value = v
 }
 
+// postProjectsIfKnownNonEmpty is the ONE gate both maybePostProjectsAtStartup
+// and postProjectsOnChange apply — extracted in round 3 (Finding 1) so the
+// startup half's hardening and the poll half's are structurally the SAME
+// code rather than two hand-kept-in-sync copies. A resolution may only ever
+// reach `post` when it is:
+//
+//  1. TRUSTWORTHY (r.ok). An untrustworthy resolution (a transient
+//     KELD_PROJECTS_FILE read error) must leave state — and so the
+//     sidecar — exactly as it was; see projectsResolution's doc comment.
+//  2. NON-EMPTY. An empty resolution is never itself posted, from EITHER
+//     call site — the sidecar's own never-been-told-anything state already
+//     reads as "no projects" (skipped:no_projects either way), so skipping
+//     costs nothing when there is genuinely nothing to say, and it
+//     structurally cannot be the write that clobbers a real list, because it
+//     is never sent. (This means an operator cannot use an explicit `[]` in
+//     KELD_PROJECTS_FILE to CLEAR a previously-declared list via this path —
+//     an accepted, deliberate limitation of the simplest fix for the
+//     permanent-mis-attribution failure mode; see the NB1/round-2 report.)
+//  3. CHANGED. Re-checked immediately before posting, so a resolution that a
+//     concurrent update already made redundant is skipped rather than
+//     re-sent.
+func postProjectsIfKnownNonEmpty(post func([]settings.RemoteProject) error, state *projectsState, r projectsResolution, failLogFmt string) {
+	if !r.ok {
+		return // Finding 1: never let a read error clobber a known-good list
+	}
+	if len(r.list) == 0 {
+		return // NB1 guard: never let an empty resolution race a real list
+	}
+	if !state.changed(r.list) {
+		return // a concurrent update already landed
+	}
+	if err := post(r.list); err != nil {
+		log.Printf(failLogFmt, err)
+		return
+	}
+	state.set(r.list)
+}
+
 // maybePostProjectsAtStartup is the startup half of the C4 async-POST fix,
-// and it exists to close the race that fix itself reopened (NB1, round-2
-// review).
+// closing the race that fix itself reopened (NB1, round 2) via
+// postProjectsIfKnownNonEmpty's three guards above.
 //
 // ⚠️ THE RACE: pollSettings runs its first poll (and so onRemote's own
 // PostProjects call) essentially immediately, concurrently with THIS
 // goroutine — both retrying against the same cold, just-spawned sidecar with
-// independent backoff. Before this fix, the startup call posted
-// resolveProjects(nil), which is an EMPTY list on any machine without
-// KELD_PROJECTS_FILE (today, that is every machine — Atlas does not serve
-// `projects` yet, so remote.Projects is always nil and onRemote's own
-// resolveProjects(r) is ALSO empty in practice; env-file-set machines resolve
-// identically at both call sites since the env always wins regardless of
-// r). If the startup call's older, longer-backing-off attempt happened to
-// land AFTER onRemote's had already told the sidecar about a real list, the
-// sidecar would end up holding NO projects — every subsequent /attribute
-// answers skipped:no_projects, which the attributor's switch treats as
-// TERMINAL: publish and delete. Those blocks are permanently attributed to
-// nothing, and by the time the next poll (5 minutes later) could correct it,
-// the blocks are already gone from the store.
-//
-// TWO GUARDS, matching the review's suggested shape:
-//  1. An EMPTY resolved list is never posted at startup at all. The sidecar's
-//     own un-POSTed-to state already reads as "no projects", so skipping costs
-//     nothing when there is genuinely nothing to say yet, and it structurally
-//     cannot be the empty list that clobbers a real one, because it is never
-//     sent.
-//  2. Immediately before posting a NON-empty list, state.changed(p) is
-//     re-checked — if onRemote's own poll has already landed with the same
-//     (or a different) resolved value, this call is now redundant and skips.
-//     This does not fully serialize the two goroutines (a genuine race window
-//     remains between the check and the network call completing), but
-//     combined with guard 1 it closes every failure mode reachable under the
-//     CURRENT Atlas contract, where the two call sites can only ever disagree
-//     via a resolveProjects(nil) that resolves empty — which guard 1 already
-//     refuses to send.
-func maybePostProjectsAtStartup(post func([]settings.RemoteProject) error, state *projectsState, p []settings.RemoteProject) {
-	if len(p) == 0 {
-		return // NB1 guard 1: never let an empty startup resolution race a real list
-	}
-	if !state.changed(p) {
-		return // NB1 guard 2: a concurrent update (the settings poll) already landed
-	}
-	if err := post(p); err != nil {
-		log.Printf("keld-agent: initial /projects post failed: %v", err)
-		return
-	}
-	state.set(p)
+// independent backoff. Before the guards existed, the startup call posted
+// resolveProjects(nil) unconditionally, which is an EMPTY list on any
+// machine without KELD_PROJECTS_FILE (today, that is every machine — Atlas
+// does not serve `projects` yet). If the startup call's older,
+// longer-backing-off attempt happened to land AFTER onRemote's had already
+// told the sidecar about a real list, the sidecar would end up holding NO
+// projects — every subsequent /attribute answers skipped:no_projects, which
+// the attributor's switch treats as TERMINAL: publish and delete. Those
+// blocks are permanently attributed to nothing, and by the time the next
+// poll (5 minutes later) could correct it, the blocks are already gone from
+// the store.
+func maybePostProjectsAtStartup(post func([]settings.RemoteProject) error, state *projectsState, r projectsResolution) {
+	postProjectsIfKnownNonEmpty(post, state, r, "keld-agent: initial /projects post failed: %v")
 }
 
 // postProjectsOnChange is onRemote's half of the same gate
 // maybePostProjectsAtStartup implements for the startup half: resolve r's
-// project list and post it only if it differs from state's currently held
-// value. Extracted alongside maybePostProjectsAtStartup so both halves of the
-// NB1 fix are exercised by the same kind of direct, deterministic unit test
-// rather than only through daemon.Run (which nothing in this codebase
-// exercises end to end).
+// project list and post it only if postProjectsIfKnownNonEmpty's three
+// guards all pass.
+//
+// ⚠️ ROUND 3 (Finding 1): before this shared gate existed, this half had NO
+// empty-list guard of its own — round 2 hardened only the startup path, and
+// this poll path posted resolveProjects's result unconditionally, byte-
+// identical to the pre-NB1 inline code. That reopened the SAME
+// permanent-mis-attribution failure mode through a different door: a
+// transient KELD_PROJECTS_FILE read error at POLL time (not just at
+// startup) resolved to nil exactly like an honest "nothing declared", and
+// nothing stopped that nil from being posted over a sidecar that already
+// held a real list. projectsResolution.ok is what closes that specific hole
+// (a read error is no longer indistinguishable from a real empty), and the
+// shared empty-skip guard closes the rest, exactly as it does for the
+// startup half.
 func postProjectsOnChange(post func([]settings.RemoteProject) error, state *projectsState, r *settings.Remote) {
-	p := resolveProjects(r)
-	if !state.changed(p) {
-		return
-	}
-	if err := post(p); err != nil {
-		log.Printf("keld-agent: /projects update failed: %v", err)
-		return
-	}
-	state.set(p)
+	postProjectsIfKnownNonEmpty(post, state, resolveProjects(r), "keld-agent: /projects update failed: %v")
 }

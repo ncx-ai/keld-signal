@@ -101,7 +101,7 @@ func TestResolveProjectsPrecedence(t *testing.T) {
 		t.Setenv(settings.EnvProjectsFile, p)
 		remote := &settings.Remote{Projects: &[]settings.RemoteProject{{ID: "proj_remote"}}}
 		got := resolveProjects(remote)
-		if len(got) != 1 || got[0].ID != "proj_env" {
+		if !got.ok || len(got.list) != 1 || got.list[0].ID != "proj_env" {
 			t.Fatalf("got %+v, want the env file's project", got)
 		}
 	})
@@ -109,24 +109,32 @@ func TestResolveProjectsPrecedence(t *testing.T) {
 		t.Setenv(settings.EnvProjectsFile, "")
 		remote := &settings.Remote{Projects: &[]settings.RemoteProject{{ID: "proj_remote"}}}
 		got := resolveProjects(remote)
-		if len(got) != 1 || got[0].ID != "proj_remote" {
+		if !got.ok || len(got.list) != 1 || got.list[0].ID != "proj_remote" {
 			t.Fatalf("got %+v, want the remote project", got)
 		}
 	})
 	t.Run("none when neither is set", func(t *testing.T) {
 		t.Setenv(settings.EnvProjectsFile, "")
-		if got := resolveProjects(nil); got != nil {
-			t.Fatalf("got %+v, want nil", got)
+		if got := resolveProjects(nil); !got.ok || got.list != nil {
+			t.Fatalf("got %+v, want ok=true, list=nil", got)
 		}
-		if got := resolveProjects(&settings.Remote{}); got != nil {
-			t.Fatalf("got %+v, want nil (remote.Projects unset)", got)
+		if got := resolveProjects(&settings.Remote{}); !got.ok || got.list != nil {
+			t.Fatalf("got %+v, want ok=true, list=nil (remote.Projects unset)", got)
 		}
 	})
-	t.Run("unreadable env file yields no projects, not the remote list", func(t *testing.T) {
+	// Finding 1 (round 3): a read error is a DIFFERENT fact from "the file
+	// says there are no projects" — ok must be false, not merely list==nil,
+	// or a transient failure reads identically to a trustworthy empty and a
+	// caller has no way to refuse posting it.
+	t.Run("unreadable env file yields ok=false, not an empty-but-trustworthy list", func(t *testing.T) {
 		t.Setenv(settings.EnvProjectsFile, "/does/not/exist.json")
 		remote := &settings.Remote{Projects: &[]settings.RemoteProject{{ID: "proj_remote"}}}
-		if got := resolveProjects(remote); got != nil {
-			t.Fatalf("got %+v, want nil rather than falling through to the remote list", got)
+		got := resolveProjects(remote)
+		if got.ok {
+			t.Fatalf("got %+v, want ok=false — a read error is not a trustworthy answer", got)
+		}
+		if got.list != nil {
+			t.Fatalf("got %+v, want a nil list alongside ok=false", got)
 		}
 	})
 }
@@ -200,10 +208,30 @@ func TestMaybePostProjectsAtStartupSkipsAnEmptyList(t *testing.T) {
 		calls++
 		return nil
 	}
-	maybePostProjectsAtStartup(post, ps, nil)
-	maybePostProjectsAtStartup(post, ps, []settings.RemoteProject{})
+	maybePostProjectsAtStartup(post, ps, projectsResolution{ok: true})
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: []settings.RemoteProject{}, ok: true})
 	if calls != 0 {
 		t.Fatalf("post called %d times for an empty/nil list, want 0", calls)
+	}
+}
+
+// Finding 1 (round 3 review): an UNTRUSTWORTHY resolution (ok=false — a
+// transient KELD_PROJECTS_FILE read error) must never be posted either, even
+// though a resolution can name a non-empty list — ok is checked before
+// content, not instead of the empty-list guard.
+func TestMaybePostProjectsAtStartupSkipsAReadError(t *testing.T) {
+	ps := &projectsState{}
+	var calls int
+	post := func(p []settings.RemoteProject) error {
+		calls++
+		return nil
+	}
+	// ok=false with a non-nil list would be a malformed resolution in
+	// practice (resolveProjects never constructs one), but the gate must not
+	// rely on that — it checks ok first, unconditionally.
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: []settings.RemoteProject{{ID: "should-never-post"}}, ok: false})
+	if calls != 0 {
+		t.Fatalf("post called %d times for an untrustworthy resolution, want 0", calls)
 	}
 }
 
@@ -220,7 +248,7 @@ func TestMaybePostProjectsAtStartupSkipsWhenAlreadyPosted(t *testing.T) {
 		calls++
 		return nil
 	}
-	maybePostProjectsAtStartup(post, ps, p)
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: p, ok: true})
 	if calls != 0 {
 		t.Fatalf("post called %d times for an already-current list, want 0 (redundant POST)", calls)
 	}
@@ -234,7 +262,7 @@ func TestMaybePostProjectsAtStartupPostsAndRecordsOnSuccess(t *testing.T) {
 		got = v
 		return nil
 	}
-	maybePostProjectsAtStartup(post, ps, p)
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: p, ok: true})
 	if len(got) != 1 || got[0].ID != "proj_env" {
 		t.Fatalf("post received %+v, want %+v", got, p)
 	}
@@ -247,24 +275,36 @@ func TestMaybePostProjectsAtStartupDoesNotRecordOnFailure(t *testing.T) {
 	ps := &projectsState{}
 	p := []settings.RemoteProject{{ID: "proj_env"}}
 	post := func(v []settings.RemoteProject) error { return errors.New("sidecar unreachable") }
-	maybePostProjectsAtStartup(post, ps, p)
+	maybePostProjectsAtStartup(post, ps, projectsResolution{list: p, ok: true})
 	if !ps.changed(p) {
 		t.Fatal("a failed post must not be recorded as current — a later attempt must still see it as changed")
 	}
 }
 
-// NB1's actual regression guard: run the startup helper and the poll helper
+// NB1's regression guard: run the startup helper and the poll helper
 // CONCURRENTLY, as real goroutines, with the startup side resolving an EMPTY
 // list (resolveProjects(nil) — what every machine without KELD_PROJECTS_FILE
 // resolves to today, since Atlas does not yet serve `projects`) and the poll
 // side resolving a REAL one. Regardless of goroutine scheduling, the sidecar
 // (the fake `post` sink here) must never end up holding the empty list.
 //
-// This is deliberately not a timing-based test (no sleeps, no artificial
-// delays) — maybePostProjectsAtStartup's guard against posting an empty list
-// makes the race structurally impossible to lose, rather than merely unlikely
-// to lose, so plain concurrent execution is enough to catch a reintroduction
-// (e.g. someone removing the len(p)==0 check) deterministically.
+// ⚠️ CORRECTED (Finding 2, round 3): this comment used to claim the race is
+// "structurally impossible to lose" — that overclaims what THIS test proves.
+// For THIS specific construction (one side always empty, the other always
+// real), guard 1 alone (never post an empty list — pinned deterministically,
+// on its own, by TestMaybePostProjectsAtStartupSkipsAnEmptyList) is what
+// makes the outcome deterministic: the startup goroutine never calls `post`
+// at all, so there is nothing left to race. Guard 2 (the changed()
+// re-check immediately before posting) is a separate, PROBABILISTIC
+// defense-in-depth for a narrower scenario this construction does not
+// exercise — two goroutines both resolving genuinely different NON-EMPTY
+// values (not reachable today, since resolveProjects's env-file-wins
+// precedence makes the two call sites agree whenever KELD_PROJECTS_FILE is
+// set — see postProjectsIfKnownNonEmpty's doc comment). Running many
+// concurrent iterations here is a real (not sleep-based) exercise of
+// goroutine scheduling and is worth keeping, but it does not itself prove
+// guard 2 is race-free; it corroborates guard 1's determinism repeatedly
+// rather than adding a second deterministic proof.
 func TestNB1StartupNeverClobbersAConcurrentPollWithAnEmptyList(t *testing.T) {
 	t.Setenv(settings.EnvProjectsFile, "") // resolveProjects(nil) must resolve empty, not to a leftover env file
 	for iter := 0; iter < 50; iter++ {
@@ -301,5 +341,56 @@ func TestNB1StartupNeverClobbersAConcurrentPollWithAnEmptyList(t *testing.T) {
 		if got[0].ID != "proj_real" {
 			t.Fatalf("iter %d: posted = %+v, want the real list", iter, got)
 		}
+	}
+}
+
+// Finding 1 (round 3 review): the poll path had no empty-list guard at all
+// before this fix — byte-identical to the pre-NB1 inline code, which is
+// exactly why the reviewer asked for it anyway even though it isn't new
+// breakage. Mirrors TestMaybePostProjectsAtStartupSkipsAnEmptyList for the
+// poll half.
+func TestPostProjectsOnChangeSkipsAnEmptyList(t *testing.T) {
+	t.Setenv(settings.EnvProjectsFile, "")
+	ps := &projectsState{}
+	var calls int
+	post := func(p []settings.RemoteProject) error {
+		calls++
+		return nil
+	}
+	postProjectsOnChange(post, ps, nil)
+	postProjectsOnChange(post, ps, &settings.Remote{})
+	if calls != 0 {
+		t.Fatalf("post called %d times for an empty/nil resolution, want 0", calls)
+	}
+}
+
+// Finding 1's named covering test: a TRANSIENT KELD_PROJECTS_FILE read
+// failure at POLL time must NOT clear a previously-known-good list — that is
+// precisely NB1's permanent-mis-attribution outcome, arriving through the
+// poll door instead of the startup door. Before projectsResolution.ok
+// existed, a read error and "the file legitimately declares zero projects"
+// were the same value (nil) and this test would have failed: the read error
+// would have posted an empty list right over the good one.
+func TestPostProjectsOnChangeDoesNotClearAGoodListOnAReadError(t *testing.T) {
+	ps := &projectsState{}
+	good := []settings.RemoteProject{{ID: "proj_good"}}
+	ps.set(good) // simulate: a prior successful post already told the sidecar about a real list
+
+	t.Setenv(settings.EnvProjectsFile, "/does/not/exist.json") // set but unreadable: a transient failure
+	var calls int
+	post := func(p []settings.RemoteProject) error {
+		calls++
+		return nil
+	}
+	postProjectsOnChange(post, ps, &settings.Remote{Projects: &[]settings.RemoteProject{{ID: "proj_would_be_wrong_anyway"}}})
+
+	if calls != 0 {
+		t.Fatalf("post called %d times on a read error, want 0 — a transient failure must never reach the sidecar", calls)
+	}
+	// state must still read as "changed" against the good list — i.e. it was
+	// never touched — so a later successful poll still tries to reconcile,
+	// rather than the read-error silently being treated as "nothing to do".
+	if ps.changed(good) {
+		t.Fatal("projectsState must be untouched by a read error — it still holds the previously-known-good list")
 	}
 }
