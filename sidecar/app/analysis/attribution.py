@@ -1,5 +1,6 @@
 """Block-level project attribution: org project definitions, their vectors, and
-(the scoring half, added by the next change) the hybrid score over a block span.
+the hybrid score (embedding similarity + deterministic metadata boost) over a
+block span.
 
 Definitions flow DOWN from the daemon (POST /projects). Only project IDs are
 ever returned upward. Vectors are embedded once per content hash and held in
@@ -29,6 +30,8 @@ vector set that does not match `current_projects()`'s hash at the moment it
 was produced."""
 import hashlib
 import json
+import os
+import re
 import threading
 
 _lock = threading.Lock()
@@ -95,3 +98,88 @@ def project_vectors(encoder):
 def _l2(v):
     n = sum(x * x for x in v) ** 0.5 or 1.0
     return [x / n for x in v]
+
+
+# --- Scoring: embedding similarity + deterministic metadata boost ----------
+#
+# THRESHOLD/BAND/W_*/BOOST_CAP are benchmark-derived (measured against a
+# labeled corpus in embedding-experiment/), not tuned by feel. Do not "tidy"
+# these values without re-running that benchmark.
+THRESHOLD = float(os.environ.get("KELD_ATTRIBUTION_THRESHOLD", "0.49"))
+BAND = float(os.environ.get("KELD_ATTRIBUTION_BAND", "0.08"))
+W_REPO, W_TICKET, W_KEYWORD, BOOST_CAP = 0.15, 0.20, 0.05, 0.35
+
+
+def metadata_boost(project, dims, texts):
+    """Deterministic boost from exact matches — repo, ticket key, keywords.
+
+    Works with no model resident; that is the point (spec AC-4): a machine
+    whose encoder weights were never provisioned still attributes work by
+    repo, ticket key and keyword matching alone."""
+    blob = " ".join(str(v) for v in (dims or {}).values()).lower()
+    text = "\n".join(texts).lower()
+    boost = 0.0
+    for repo in project.get("repos") or []:
+        if repo.lower() in blob or repo.lower() in text:
+            boost += W_REPO
+    tk = project.get("ticket_key")
+    if tk and re.search(rf"\b{re.escape(tk)}-\d+", text + " " + blob, re.I):
+        boost += W_TICKET
+    boost += W_KEYWORD * sum(1 for kw in project.get("keywords") or []
+                             if kw.lower() in text)
+    return min(boost, BOOST_CAP)
+
+
+def _cos(a, b):
+    return sum(x * y for x, y in zip(a, b))
+
+
+def score_block(texts, dims, encoder):
+    """Hybrid score per project over one block's user-turn texts.
+
+    Similarity is per-text MAX (not mean) across a block's texts against each
+    project's vector: a block's several messages may each concern a different
+    project, and averaging would wash out the one that matters. Text vectors
+    are used as the encoder returns them, never re-normalised here: the real
+    encoder (`textembed._encode_batch`) already L2-normalises before it hands
+    a vector back, matching the already-normalised project vectors from
+    `project_vectors`; a second normalisation would only ever be a no-op
+    against that contract.
+
+    Returns (scores, borderline, assigned, encoder_used). encoder=None is the
+    weights-absent path: boost-only, degraded but never silent — the CALLER
+    states degraded:weights_unavailable. In that path assignment is an
+    EXACT-MATCH COUNT rather than a threshold crossing: any metadata match
+    (boost > 0) attributes, because `THRESHOLD`/`BAND` are tuned for a
+    similarity-plus-boost score and `BOOST_CAP` (0.35) sits below
+    `THRESHOLD - BAND` (0.41) by construction — a boost-only score can never
+    cross the continuous threshold, so gating model-free attribution on it
+    would silently defeat AC-4. `borderline` is only ever populated when the
+    encoder actually ran, for the same reason in reverse: a boost-only score
+    near the threshold is an exact-match count, not semantic uncertainty a
+    verifier could help resolve.
+
+    Privacy: `texts` and project descriptions are held in memory only for this
+    call; nothing here logs or persists block text or project text."""
+    projects, _ = current_projects()
+    encoder_used = False
+    sims = {p["id"]: 0.0 for p in projects}
+    if encoder is not None and texts:
+        pvecs = project_vectors(encoder)
+        tvecs = encoder.encode(texts)
+        for pid, pv in pvecs.items():
+            sims[pid] = max((_cos(tv, pv) for tv in tvecs), default=0.0)
+        encoder_used = True
+    scores, borderline, assigned = {}, [], []
+    for p in projects:
+        boost = metadata_boost(p, dims, texts)
+        s = sims[p["id"]] + boost
+        scores[p["id"]] = round(s, 4)
+        if encoder_used:
+            if abs(s - THRESHOLD) < BAND:
+                borderline.append(p["id"])
+            if s >= THRESHOLD:
+                assigned.append(p["id"])
+        elif boost > 0:
+            assigned.append(p["id"])
+    return scores, borderline, assigned, encoder_used
