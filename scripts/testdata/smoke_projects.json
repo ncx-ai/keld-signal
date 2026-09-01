@@ -1,38 +1,56 @@
 [
   {
-    "id": "proj_signal",
-    "title": "Keld Signal Client",
+    "id": "proj_attribution",
+    "title": "Block Project Attribution",
     "team": "Engineering",
-    "description": "The keld-signal client: the keld CLI, the keld-agent on-device enrichment daemon, and its GLiNER2/embedding sidecar. On-device privacy-preserving classification, masking, block cutting and project attribution.",
+    "description": "Attribute each closed block of coding work to the org project it served, decided entirely on the engineer's own machine. A local embedding model scores the block's text against the org's declared project descriptions, exact repo and ticket-key matches add a deterministic boost, and a small local LLM adjudicates the borderline pairs. Only project ids, confidences and timings are published; no prompt text, span or offset leaves the device. Includes the benchmark harness that measured the pipeline and the durable job store that re-attributes a block once its models finish provisioning.",
+    "repos": ["keld-signal", "embedding-experiment"],
+    "keywords": ["attribution", "embedding", "verifier", "qwen3", "gemma", "threshold", "borderline", "projects"],
+    "ticket_key": "ATTR"
+  },
+  {
+    "id": "proj_enrichment",
+    "title": "On-Device Enrichment & Privacy",
+    "team": "Engineering",
+    "description": "The privacy-preserving classification pipeline that runs on the engineer's machine: prompt facets, sensitivity detection via credential rules and PII recognizers, masking enforced before publish, the block cutter, and the workstream dimensions derived from tool-call metadata. The governing invariant is that raw prompt text, character spans and byte offsets never cross the wire. Also covers sidecar resource safety — the recycled inference worker, the RSS ceiling and the memory budget shared between model children.",
     "repos": ["keld-signal"],
-    "keywords": ["enrichment", "sidecar", "gliner2", "attribution", "block", "keld-agent"],
-    "ticket_key": "SIG"
+    "keywords": ["enrichment", "sensitivity", "masking", "pii", "gliner2", "sidecar", "worker recycle", "privacy invariant", "blocks"],
+    "ticket_key": "ENR"
   },
   {
     "id": "proj_atlas",
-    "title": "Keld Atlas Platform",
+    "title": "Atlas Platform & Reporting",
     "team": "Engineering",
-    "description": "The Keld Atlas server: OTLP telemetry ingest, enrichment storage, the admin console and the web app that renders blocks, dynamics and cost attribution for an org.",
+    "description": "The Keld Atlas server and web app: OTLP telemetry ingest, enrichment and block storage in Postgres, the org admin console, and the read side that renders the blocks rail, per-person activity, workstream dimensions and cost attribution. Includes the ingest routes the on-device client publishes to, the alembic migration history, and the seeded local development environment.",
     "repos": ["keld-atlas"],
-    "keywords": ["atlas", "ingest", "fastapi", "otlp", "rail"],
+    "keywords": ["atlas", "ingest", "postgres", "alembic", "rail", "admin console", "cost attribution", "fastapi"],
     "ticket_key": "ATL"
   },
   {
     "id": "proj_sdks",
-    "title": "Keld SDKs & CLI Tooling",
+    "title": "Telemetry SDKs & Testbench",
     "team": "Engineering",
-    "description": "Client SDKs and CLI helpers that wrap Keld's telemetry and enrichment APIs for other languages and tools — keld-cli, keld-python and the OTLP telemetry bindings.",
-    "repos": ["keld-cli", "keld-python", "atlas-telemetry-python", "atlas-telemetry-typescript"],
-    "keywords": ["sdk", "cli", "telemetry", "otlp bindings"],
+    "description": "Drop-in OTLP telemetry libraries for applications calling OpenAI, Anthropic or Bedrock clients directly, published for Python and TypeScript, plus the interactive testbench used to exercise them and watch telemetry reach Atlas in real time. Covers instrumentation coverage for new providers, span and metric shape, and keeping the two language bindings behaviourally identical.",
+    "repos": ["atlas-telemetry-python", "atlas-telemetry-typescript", "sdk-testbench"],
+    "keywords": ["otlp", "instrumentation", "sdk", "typescript", "python", "bedrock", "spans", "testbench"],
     "ticket_key": "SDK"
   },
   {
-    "id": "proj_attribution_bench",
-    "title": "Attribution Benchmark",
+    "id": "proj_inference",
+    "title": "Inference Exchange & Trusted Routing",
     "team": "Engineering",
-    "description": "The offline benchmark that measured project-attribution quality (embeddings + metadata boost + local LLM verifier) before it was ported into keld-signal's on-device pipeline.",
-    "repos": ["embedding-experiment"],
-    "keywords": ["benchmark", "qwen3-embedding", "verifier", "f1"],
-    "ticket_key": "BENCH"
+    "description": "Routing LLM inference through Keld: the Python SDK that wraps an async OpenAI-compatible client with deadline-based scheduling over durable events, and the trusted service that holds the upstream provider credential so a client never sees it while measuring every request. Concerns model selection, deadline and retry semantics, credential custody and request attestation.",
+    "repos": ["keld-python", "keld-tee-interactive-poc"],
+    "keywords": ["inference", "deadline", "routing", "inngest", "tee", "attestation", "credential custody"],
+    "ticket_key": "INF"
+  },
+  {
+    "id": "proj_devex",
+    "title": "Developer Workflow & Agent Tooling",
+    "team": "Engineering",
+    "description": "How the team itself works with AI coding agents: the superpowers skill workflow of discovery documents, implementation plans and subagent-driven execution with review gates; repository guides and conventions; and the review practices that decide whether a branch is ready to merge. Cross-cutting and owned by no single repository — the work shows up as writing specs, planning changes, reviewing diffs and tuning the process rather than as code in one place.",
+    "repos": [],
+    "keywords": ["discovery document", "implementation plan", "code review", "subagent", "skill", "workflow", "conventions", "merge readiness"],
+    "ticket_key": "DEVEX"
   }
 ]
