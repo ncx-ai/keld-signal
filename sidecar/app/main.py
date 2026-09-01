@@ -199,6 +199,26 @@ async def lifespan(app: FastAPI):
                     await loop.run_in_executor(None, src.poll)
             except Exception:
                 pass
+            # ⚠️ THE ATTRIBUTION VERIFIER'S CHILD RIDES THIS LOOP TOO, AND FOR A WHOLE
+            # BRANCH IT DID NOT. `_verifier_manager()` reuses WorkerManager's spawn half
+            # and nothing else: `poll()` is the SOLE driver of kills_hard, kills_pressure,
+            # kills_idle and recycles, so an unpolled manager has no RSS ceiling, no
+            # recycling, no idle unload and no pressure eviction. After the first
+            # borderline pair a llama.cpp child held its quantized weights and its 4096-token
+            # KV cache for the entire life of the sidecar, unbounded and unmeasured, on a
+            # budget AGENTS.md already documents as oversubscribed with two children on it.
+            #
+            # Looked up per tick rather than captured like `wm` above, because this one is
+            # built LAZILY — the manager does not exist until a borderline pair actually
+            # needs a verdict, which is the whole reason a machine that never attributes
+            # never spawns the child. A closure over the value at lifespan time would
+            # capture None forever.
+            try:
+                vwm = _state.get("verifier_wm")
+                if vwm is not None:
+                    await loop.run_in_executor(None, vwm.poll)
+            except Exception:
+                pass
             await asyncio.sleep(interval)
 
     # 1s: poll() both samples RSS (for the peak high-water) and enforces the
@@ -1219,6 +1239,7 @@ def metrics():
         hard_limit_mb=wm.hard_limit_mb(), parent_reserve_mb=wm.parent_reserve_mb(),
         budget_shortfall_mb=wm.budget_shortfall_mb() if wm.ceiling_mb() is not None else None,
         store_stats=_store_stats(), embed_stats=_embed_stats(),
+        verifier_stats=_verifier_stats(),
     )
 
 
@@ -1425,10 +1446,105 @@ def _verifier_spawn():
     return proc, req_q, resp_q
 
 
+def _verifier_reserve_rss():
+    """What the verifier's WorkerManager must subtract from the shared memory budget before
+    it decides its own hard limit: everything in this process tree that is NOT its own child.
+
+    ⚠️ THREE CHILDREN NOW DRAW ON ONE BUDGET AND ONLY ONE OF THEM USED TO EXIST.
+    `KELD_SIDECAR_MEM_BUDGET_MB` (4096) is a claim about the whole sidecar, and
+    `WorkerManager.hard_limit_mb()` spends it as `budget - parent_reserve_mb()`. Two
+    independent managers each reading `parent_reserve_mb()` as "the FastAPI parent" would
+    each hand their own child the whole remainder — the budget promised twice, and the
+    verifier's limit at its most generous exactly when the GLiNER2 worker and the encoder
+    are both resident. That is the same shape as the constant `KELD_SIDECAR_PARENT_RESERVE_MB`
+    the parent-reserve work replaced: a number asserting a configuration the service no
+    longer has, wrong in the direction that under-protects.
+
+    So this reports parent RSS PLUS the GLiNER2 worker's and the encoder child's high-water
+    peaks. Three properties are deliberate:
+
+      * PEAKS, not live samples, for `observe_parent_rss`'s own reason one manager over: a
+        limit that tracked live siblings would relax the moment the GLiNER2 worker was
+        recycled, with nothing about the risk having changed. High-water composes with
+        `observe_parent_rss`'s own high-water latch to stay monotone.
+      * The verifier's own child is excluded, since that is what the limit bounds.
+      * The overrun is REPORTED, not absorbed: `budget_shortfall_mb()` is already computed
+        from this reserve and appears in /metrics under `verifier`, so an oversubscribed
+        machine says so rather than quietly exceeding the budget it promises.
+    """
+    total = _parent_rss_mb() or 0.0
+    wm = _state.get("wm")
+    if wm is not None:
+        try:
+            total += wm.peak_rss_mb or 0.0
+        except Exception:
+            pass
+    src = _TEXT_SOURCE
+    if src is not None:
+        try:
+            total += src.encoder.peak_rss_mb or 0.0
+        except Exception:
+            pass
+    return total
+
+
+def _verifier_stats():
+    """The `verifier` block of /metrics — the same fields `worker` reports, for the same
+    reason, about the other recycled child.
+
+    ⚠️ It exists because this child shipped INVISIBLE. Its manager was never polled, so
+    `recycles`/`kills` were structurally always zero and there was no RSS reading of any
+    kind: a llama.cpp child holding its weights and a 4096-token KV cache for the sidecar's
+    whole life looked exactly like a machine that had never spawned one. `peak_rss_mb` is
+    reported beside the live sample for the measured reason `worker` and `embed` both are.
+
+    Pure reads, like `_embed_stats`: it must never BUILD the manager (that would spawn a
+    3 GB child off a metrics poll), so it reads `_state` directly and answers
+    `built: false` when nothing has needed a verdict yet — which is an answer, not a gap.
+    """
+    wm = _state.get("verifier_wm")
+    if wm is None:
+        return {"built": False, "state": None}
+    try:
+        return {
+            "built": True,
+            "state": wm.state,
+            "rss_mb": round(wm.worker_rss_mb(), 1),
+            "peak_rss_mb": round(wm.peak_rss_mb, 1),
+            "model_cost_mb": round(wm.model_cost_mb, 1) if wm.model_cost_mb else None,
+            "ceiling_mb": round(wm.ceiling_mb(), 1) if wm.ceiling_mb() is not None else None,
+            "hard_limit_mb": round(wm.hard_limit_mb(), 1) if wm.hard_limit_mb() is not None else None,
+            # What the shared budget already owes the parent and the other two children —
+            # see _verifier_reserve_rss. The number that says whether this child has any
+            # headroom left at all.
+            "siblings_reserve_mb": round(wm.parent_reserve_mb(), 1),
+            "budget_shortfall_mb": (round(wm.budget_shortfall_mb(), 1)
+                                    if wm.ceiling_mb() is not None else None),
+            "recycles": wm.counts["recycles"],
+            "kills": {"timeout": wm.counts["kills_timeout"],
+                      "pressure": wm.counts["kills_pressure"],
+                      "idle": wm.counts["kills_idle"],
+                      "hard": wm.counts["kills_hard"],
+                      "crash": wm.counts["crashes"]},
+        }
+    except Exception as exc:                     # noqa: BLE001 - /metrics must always answer
+        return {"built": True, "error": type(exc).__name__}
+
+
 def _verifier_manager():
     """The process's one verifier WorkerManager — a SECOND, independent instance beside
     `_state["wm"]` (GLiNER2's), reusing WorkerManager's spawn/recycle/RSS-ceiling machinery
-    unmodified rather than inventing any. Built lazily here, on first genuine need: `/attribute`
+    unmodified rather than inventing any.
+
+    ⚠️ "REUSING THE MACHINERY" USED TO MEAN THE SPAWN HALF ALONE, and this docstring said
+    otherwise. `WorkerManager.poll()` is the sole driver of the RSS ceiling, the recycle, the
+    idle unload and the pressure eviction; nothing polled this instance, so the child held its
+    weights and KV cache for the sidecar's whole life. `lifespan`'s `_poll_loop` now polls it
+    (looked up lazily there, since this manager may not exist yet), `/metrics` reports it under
+    `verifier`, and `_verifier_reserve_rss` is what keeps its share of the ONE memory budget
+    honest now that three children draw on it.
+
+    Built lazily here, on first genuine need: `/attribute`
     only ever reaches this function when a borderline pair actually needs a verdict, which is
     itself gated (see the route) on attribution having projects to score, the opt-out flag being
     off, and the weights being present on disk — so a machine with attribution off, the verifier
@@ -1439,7 +1555,8 @@ def _verifier_manager():
     with _VERIFIER_WM_LOCK:
         wm = _state.get("verifier_wm")
         if wm is None:
-            wm = WorkerManager(spawn_fn=_verifier_spawn, margin_mb=_VERIFIER_RSS_MARGIN_MB)
+            wm = WorkerManager(spawn_fn=_verifier_spawn, margin_mb=_VERIFIER_RSS_MARGIN_MB,
+                               parent_rss_fn=_verifier_reserve_rss)
             _state["verifier_wm"] = wm
         return wm
 

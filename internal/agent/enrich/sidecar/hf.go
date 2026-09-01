@@ -32,7 +32,12 @@ type HFFetcher struct {
 	// WithFiles). nil means "every sibling nonModelFile doesn't deny" — the
 	// snapshot behaviour every existing caller (GLiNER2, the text encoder)
 	// relies on.
-	only map[string]bool
+	//
+	// The VALUE is the LOCAL basename the file is written under, which is
+	// almost always the remote rfilename itself (WithFiles) but need not be
+	// (WithFileAs) — see WithFileAs for why that seam exists here rather than
+	// as a rename in the caller.
+	only map[string]string
 }
 
 // WithFiles restricts Fetch to only the named files, skipping every other
@@ -40,18 +45,63 @@ type HFFetcher struct {
 // kept. It exists for a repo that ships a single file this fetcher wants (the
 // attribution verifier's GGUF) rather than a whole snapshot of
 // config/tokenizer siblings the way GLiNER2 and the text encoder are fetched.
+// Each file keeps its remote name on disk; use WithFileAs to rename one.
 // Returns f for chaining at the construction site.
 func (f *HFFetcher) WithFiles(names ...string) *HFFetcher {
-	f.only = make(map[string]bool, len(names))
+	if f.only == nil {
+		f.only = make(map[string]string, len(names))
+	}
 	for _, n := range names {
-		f.only[n] = true
+		f.only[n] = n
 	}
 	return f
 }
 
+// WithFileAs restricts Fetch to one remote file and writes it under localName
+// instead of its remote rfilename.
+//
+// ⚠️ THIS SEAM EXISTS BECAUSE ITS ABSENCE SHIPPED A THREE-GIGABYTE INFINITE
+// LOOP. The attribution verifier's GGUF is fetched as
+// `gemma-4-E2B-it-Q4_K_M.gguf` while provision.EnsureFile SHA-checks a
+// sentinel named `model.gguf` — the name verifier.weights_path() looks for.
+// Nothing bridged the two: EnsureFile's staging dir held the real, complete,
+// correct download under the remote name, failed "fetched model missing
+// model.gguf", and `defer os.RemoveAll(tmp)` threw ~3 GB away. A five-minute
+// cooldown then armed and the next published block re-downloaded it, forever.
+//
+// The naming lives HERE, on the fetcher, rather than as a rename in the
+// provisioner, for one reason: the destination name is a property of how this
+// fetcher was constructed, so it is decided once, at the construction site,
+// beside the repo and revision it belongs with — and it is exercised by this
+// package's own tests. A rename in the caller is a step every future
+// single-file caller has to remember, which is exactly the seam that was
+// missed. Fetch writes atomically to the final name directly, so there is
+// never a moment where a multi-gigabyte file exists under the wrong one.
+//
+// Returns f for chaining at the construction site.
+func (f *HFFetcher) WithFileAs(remoteName, localName string) *HFFetcher {
+	if f.only == nil {
+		f.only = make(map[string]string, 1)
+	}
+	f.only[remoteName] = localName
+	return f
+}
+
+// WithBaseURL repoints this fetcher at another origin, for the same reason
+// Policy is an exported field: a test must be able to drive the REAL fetcher —
+// the one a production constructor built, with its real repo, revision and
+// file naming — against a stub server. The C1 defect (see WithFileAs) survived
+// because the two halves of the seam were each tested with a fake standing in
+// for the other, so the fetcher's naming and the sentinel check never met.
+// Returns f for chaining.
+func (f *HFFetcher) WithBaseURL(u string) *HFFetcher {
+	f.baseURL = strings.TrimRight(u, "/")
+	return f
+}
+
 // NewHFFetcher returns an HFFetcher targeting the given repo and revision.
-// baseURL defaults to https://huggingface.co; it is exported as a field so
-// tests can point it at an httptest server.
+// baseURL defaults to https://huggingface.co; WithBaseURL repoints it so tests
+// can aim it at an httptest server.
 func NewHFFetcher(repo, rev string) *HFFetcher {
 	return &HFFetcher{
 		repo:    repo,
@@ -123,15 +173,18 @@ func (f *HFFetcher) Fetch(ctx context.Context, destDir string) error {
 		if !filepath.IsLocal(s.Rfilename) {
 			return fmt.Errorf("refusing unsafe model file path %q", s.Rfilename)
 		}
+		local := s.Rfilename
 		if f.only != nil {
-			if !f.only[s.Rfilename] {
+			name, want := f.only[s.Rfilename]
+			if !want {
 				continue
 			}
+			local = name
 			found[s.Rfilename] = true
 		} else if nonModelFile(s.Rfilename) {
 			continue
 		}
-		if err := f.fetchFile(ctx, destDir, s.Rfilename); err != nil {
+		if err := f.fetchFile(ctx, destDir, s.Rfilename, local); err != nil {
 			return err
 		}
 	}
@@ -180,15 +233,22 @@ func nonModelFile(rfilename string) bool {
 }
 
 // fetchFile downloads a single rfilename from the resolve endpoint into
-// destDir/{rfilename}, writing atomically via a temp file.
-func (f *HFFetcher) fetchFile(ctx context.Context, destDir, rfilename string) error {
+// destDir/{localName}, writing atomically via a temp file. localName is
+// rfilename for every caller but WithFileAs's (see there).
+func (f *HFFetcher) fetchFile(ctx context.Context, destDir, rfilename, localName string) error {
 	// Guard against path traversal attacks. Kept outside the retry closure:
-	// it's a static judgment about rfilename, not a network fault to retry.
+	// it's a static judgment about the names, not a network fault to retry.
+	// BOTH are checked: rfilename comes from the remote manifest, and
+	// localName from a WithFileAs call site — a rename must not become a way
+	// to write outside destDir either.
 	if !filepath.IsLocal(rfilename) {
 		return fmt.Errorf("refusing unsafe model file path %q", rfilename)
 	}
+	if !filepath.IsLocal(localName) {
+		return fmt.Errorf("refusing unsafe local model file path %q", localName)
+	}
 
-	destPath := filepath.Join(destDir, rfilename)
+	destPath := filepath.Join(destDir, localName)
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return fmt.Errorf("hf: mkdirall for %s: %w", rfilename, err)
 	}

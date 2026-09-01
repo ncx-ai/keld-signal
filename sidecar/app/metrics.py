@@ -96,7 +96,8 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
                   governor, runner, counts, recycles, kills, uptime_s,
                   cpu_threads=None, peak_rss_mb=None, ceiling_mb=None,
                   hard_limit_mb=None, parent_reserve_mb=None, budget_shortfall_mb=None,
-                  store_stats=None, embed_stats=None, clock=time.monotonic):
+                  store_stats=None, embed_stats=None, verifier_stats=None,
+                  clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     return {
         "worker": {
@@ -159,5 +160,16 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
         # ⚠️ It reports `peak_rss_mb` for the same measured reason `worker` does: a ~1.7-2.3 GB child
         # observed only through an instantaneous sample is the RSS-oscillation incident again.
         "embed": embed_stats,
+        # The ATTRIBUTION VERIFIER's child (app/main.py's _verifier_stats). A third block for
+        # a third process, beside `worker` and `embed` and never folded into either: it is a
+        # llama.cpp GGUF child with its own manager, its own RSS margin and its own recycle
+        # schedule, and merging it would make one `peak_rss_mb` mean two processes — the same
+        # reason `embed` is separate.
+        #
+        # ⚠️ It exists because this child was UNOBSERVABLE for a whole branch. Its manager was
+        # never polled, so it had no RSS ceiling, no recycling, no idle unload and no pressure
+        # eviction, and nothing in /metrics said so: an unbounded child and a child that had
+        # never spawned looked identical. `built: false` is now the answer for the latter.
+        "verifier": verifier_stats,
         "uptime_s": round(uptime_s, 1),
     }

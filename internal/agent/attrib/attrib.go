@@ -52,6 +52,7 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
+	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
@@ -255,12 +256,55 @@ type Attributor struct {
 	// and a test driving drainOnce directly is likewise single-goroutine —
 	// so it needs no lock.
 	sweepOffset int
+	// projectsKnown / repostProjects are the daemon's belief about the declared
+	// project list and the way to re-assert it — see WithProjects. Both nil in
+	// tests and in any caller that cannot answer.
+	projectsKnown  func() bool
+	repostProjects func()
+	// emitter is optional (see WithEmitter). A quarantine emits through it,
+	// because a debuglog line on one machine is invisible to the fleet.
+	emitter *clientevents.Emitter
 }
 
 // New builds an Attributor. facts may be nil (empty resolved facts are sent
 // on re-fetch); dig may be nil in tests that never reach the re-fetch path.
 func New(st *Store, cl AttributeClient, pub blocks.Sender, facts blocks.Facts, actor string, dig blocks.Digester) *Attributor {
 	return &Attributor{st: st, cl: cl, pub: pub, facts: facts, actor: actor, dig: dig, nudge: make(chan struct{}, 1)}
+}
+
+// WithProjects wires the daemon's own belief about the declared project list
+// into the loop. Optional — an Attributor without it treats
+// `skipped:no_projects` as terminal, which is correct only for a caller that
+// genuinely cannot tell.
+//
+// ⚠️ THIS IS WHAT MAKES `skipped:no_projects` NON-TERMINAL, AND ITS ABSENCE WAS
+// C4's SECOND HALF. The status means "the SIDECAR has no projects", which is
+// not the same fact as "this machine declares none": the sidecar holds the
+// list in its parent process's module state, so any restart loses it, and the
+// daemon's change-gated POST then has nothing new to say. Treating that as
+// terminal published every subsequent block attributed to nothing AND DELETED
+// THE JOB, so nothing could ever repair it. Held instead, the job survives the
+// gap the same way `degraded:weights_unavailable` already does. It also closes
+// the startup race (I8): the first drain runs concurrently with the first
+// POST, and the answer in that window is exactly this status.
+//
+// known reports whether the daemon believes projects are declared; repost asks
+// it to tell the sidecar again. Both may be nil independently.
+func (a *Attributor) WithProjects(known func() bool, repost func()) *Attributor {
+	a.projectsKnown, a.repostProjects = known, repost
+	return a
+}
+
+// WithEmitter wires client-events. Optional; every emit site is nil-guarded.
+func (a *Attributor) WithEmitter(e *clientevents.Emitter) *Attributor {
+	a.emitter = e
+	return a
+}
+
+func (a *Attributor) emit(code string, sev clientevents.Severity, fields map[string]any) {
+	if a.emitter != nil {
+		a.emitter.EmitExempt(code, sev, fields)
+	}
 }
 
 // Schedule persists a job for b's block and returns. It NEVER calls the
@@ -414,8 +458,35 @@ func (a *Attributor) drainJob(j Job) {
 		return
 	}
 	res, ok := a.cl.Attribute(j.Path, j.SessionID, j.Start, j.End, dimsFrom(b.Analysis))
+	if res.RouteUnsupported {
+		// I5: VERSION SKEW IS NOT THE JOB'S FAULT. An older frozen sidecar has
+		// no /attribute route at all and 404s; the client classes that
+		// non-retryable, so four sweeps used to quarantine every in-flight job
+		// — and Store.List skips subdirectories, so spool/attrib/bad/ is never
+		// re-read even after the sidecar updates. That is silent, permanent
+		// data loss caused by a component that updates INDEPENDENTLY of this
+		// one, on its own release cadence. It is the same shape as
+		// pending/degraded: the work becomes doable when the other half
+		// catches up, so the job is HELD, not spent. Reported once per sweep
+		// per job through the log rather than a client-event, because a fleet
+		// mid-rollout would emit one per block per minute.
+		a.hold(j, "sidecar has no /attribute route (version skew)")
+		return
+	}
 	if !ok {
 		a.retryOrQuarantine(j, "sidecar /attribute call failed")
+		return
+	}
+	if res.Status == enrich.ProjectsSkippedNoProjects && a.projectsKnown != nil && a.projectsKnown() {
+		// C4/I8: the daemon holds a project list, so this is a statement about
+		// the SIDECAR (restarted and lost its module state, or not told yet
+		// because the startup POST is still in flight) — never about the org.
+		// Hold and re-assert, rather than publish-and-delete, which is
+		// irreversible.
+		if a.repostProjects != nil {
+			a.repostProjects()
+		}
+		a.hold(j, "skipped:no_projects while the daemon holds a project list")
 		return
 	}
 	switch res.Status {
@@ -491,6 +562,20 @@ func (a *Attributor) retryOrQuarantine(j Job, reason string) {
 		}
 		debuglog.Append("attrib: quarantined job session=%s start=%v after %d attempts (%s)",
 			j.SessionID, j.Start, j.Attempts, reason)
+		// I5: A QUARANTINE HAS TO BE VISIBLE OFF THE MACHINE. debuglog is a
+		// local file nobody reads unless they already suspect a problem, and
+		// spool/attrib/bad/ is never re-read (Store.List skips subdirectories),
+		// so a quarantined job is permanent loss with no trace anywhere the
+		// fleet can see it: a machine attributing nothing looks exactly like a
+		// machine with nothing to attribute. `reason` is this package's own
+		// short constant string, never an error message and never anything
+		// derived from a block — the redaction gate would strip a path, but
+		// nothing here can carry one in the first place.
+		a.emit("attribution.job_quarantined", clientevents.SevError, map[string]any{
+			"attempts": j.Attempts,
+			"reason":   reason,
+			"source":   j.Source,
+		})
 		return
 	}
 	if err := a.st.Put(j); err != nil {
@@ -564,6 +649,23 @@ func closeEnough(a, b float64) bool {
 // dimsFrom builds the /attribute call's dims argument from a block's own
 // already-computed workstream dimensions (repo, branch, ...) — the caller's
 // own facts, passed through rather than re-derived, per the sidecar contract.
+//
+// ⚠️ THE STATUS IS PART OF THE VALUE AND READING ONE WITHOUT THE OTHER IS I6.
+// A workstream dimension publishes `value` alongside a `status` from
+// enrich.WorkstreamStatuses, and only "attributed" may be read as the window's
+// answer — enrich/types.go states that contract in as many words, and says a
+// consumer rendering `thin` identically to `attributed` is misreporting. This
+// was such a consumer: it copied every Value regardless, so a `thin` (below
+// the 5-observation evidence floor), `tie` or `no_majority` dimension's merely
+// LEADING value was handed to the sidecar as though it were the block's repo.
+// It is not a cosmetic misreport there: attribution.metadata_boost adds W_REPO
+// (0.15) on an exact repo match against a THRESHOLD of 0.49, so one wrong repo
+// is nearly a third of the bar, applied to the wrong project.
+//
+// An empty Status is deliberately KEPT: a pre-16 sidecar sent an object only
+// when it had attributed, so no status there means attributed. Any other
+// non-"attributed" status is dropped — including one this binary does not
+// recognise, which is version skew and must not be read as the answer.
 func dimsFrom(an enrich.WindowAnalysis) map[string]string {
 	if len(an.Workstreams) == 0 {
 		return nil
@@ -571,6 +673,9 @@ func dimsFrom(an enrich.WindowAnalysis) map[string]string {
 	out := make(map[string]string, len(an.Workstreams))
 	for dim, l := range an.Workstreams {
 		if l.Value == "" {
+			continue
+		}
+		if l.Status != "" && l.Status != enrich.WorkstreamAttributed {
 			continue
 		}
 		out[dim] = l.Value

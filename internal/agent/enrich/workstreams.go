@@ -46,6 +46,13 @@ func WorkstreamsEligible(source string) bool { return workstreamAnalyzableSource
 // nothing, 198 of them one observation short of the floor.
 var WorkstreamStatuses = PriorStatuses
 
+// WorkstreamAttributed is the ONE member of WorkstreamStatuses a consumer may
+// read as the window's answer. Named rather than spelled as a literal at each
+// site because a consumer that forgets to check it does not fail — it silently
+// reports a `thin`/`tie`/`no_majority` leader as the answer, which is exactly
+// what internal/agent/attrib's dims builder did (I6).
+const WorkstreamAttributed = "attributed"
+
 // KnownWorkstreamStatus gates a status against the published set. A value this
 // binary does not recognise is sidecar version skew — the sidecar is frozen and
 // shipped separately from keld-agent — and forwarding it would publish a label

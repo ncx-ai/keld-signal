@@ -102,8 +102,19 @@ func newVerifierProvisioner(ctx context.Context, attribOn bool, emitter *cliente
 // newVerifierFetcher builds the Hugging Face fetcher for the pinned verifier
 // file. A var so a test can substitute one that never reaches the network —
 // mirroring newEncoderFetcher exactly.
+//
+// ⚠️ WithFileAs, NOT WithFiles, AND THAT ONE WORD IS THE WHOLE OF C1. The repo
+// ships the GGUF as VerifierFile ("gemma-4-E2B-it-Q4_K_M.gguf"); EnsureFile
+// below SHA-checks VerifierSentinel ("model.gguf"), which is the name
+// verifier.weights_path() looks for. With WithFiles the fetched file landed
+// under the remote name, the sentinel check found nothing, EnsureFile's
+// `defer os.RemoveAll(tmp)` discarded a complete ~3 GB download, and the
+// 5-minute cooldown re-armed it on the next published block — forever, with
+// the GGUF never once provisioned. The two names are now bridged at the one
+// place that knows both.
 var newVerifierFetcher = func() provision.Fetcher {
-	return sidecar.NewHFFetcher(provision.VerifierRepo, provision.VerifierRevision).WithFiles(provision.VerifierFile)
+	return sidecar.NewHFFetcher(provision.VerifierRepo, provision.VerifierRevision).
+		WithFileAs(provision.VerifierFile, provision.VerifierSentinel)
 }
 
 // demand is the trigger: an attribution job was scheduled, so a block wants

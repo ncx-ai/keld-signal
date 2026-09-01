@@ -1658,6 +1658,91 @@ The whole subsystem registers only under `ml_backend:"deterministic"`. Under
 `facets_skipped` nor `extractor_versions`, which is this codebase's existing
 distinction between a pass that was skipped and one that was never wired.
 
+**PROJECT ATTRIBUTION (`internal/agent/attrib/`, `daemon/attrib.go`,
+`sidecar/app/analysis/attribution.py`, `sidecar/app/verifier.py`) — which declared
+project a closed BLOCK belongs to, decided on device.** OFF by default
+(`KELD_ATTRIBUTION`, or `attribution` in `~/.keld/agent-config.json`). An org declares
+projects (`settings.RemoteProject`: id/title/description/team/repos/keywords/ticket key)
+via `KELD_PROJECTS_FILE` or the settings poll's `projects` key; the daemon pushes them
+down with `POST /projects` and the block emitter's `OnPublished` hook schedules a durable
+job per published block. `POST /attribute` takes COORDINATES and the block's own
+already-computed dims and answers with project IDS, confidences, closed enums and integer
+timings — no text, no span, no offset, in either direction.
+- **The score is embedding + a deterministic boost, and NOTHING is assigned without the
+  encoder.** `BOOST_CAP` (0.35) sits below `THRESHOLD - BAND` (0.41) by construction, so a
+  boost-only score cannot cross the bar; a machine with no weights answers
+  `degraded:weights_unavailable` and the durable job re-attributes it later. There is
+  exactly one attribution path, the benchmarked one. `source` is therefore
+  `embedding|verifier` — **"metadata" is not producible** — and `encoder_state` is
+  `warm|absent`, never `cold`: the route never loads the encoder inside a request, it
+  answers `pending` and warms on a background thread.
+- **⚠️ TWO NEW MODEL CHILDREN AND A NEW NATIVE DEPENDENCY, ON THE SAME BUDGET.** The
+  **text encoder** (Qwen3-Embedding-0.6B, ~1.2 GB of weights, 1.70 GB resident /
+  2.35-2.43 GB peak) is the SAME child the signal-embeddings path uses — one provisioner,
+  never two fetching into one directory. The **verifier** (Gemma 4 E2B Q4_K_M GGUF, ~3 GB,
+  `llama-cpp-python` — the repo's first **compiled native** runtime dependency, pinned
+  exactly for that reason) runs in its OWN recycled worker child with its own
+  `WorkerManager`, its own `KELD_VERIFIER_RSS_MARGIN_MB` (512, half GLiNER2's, because a
+  fixed-`n_ctx` GGUF has less room to drift than a transformer on unbounded input), and
+  `KELD_ATTRIBUTION_VERIFIER=0` as its opt-out. So `KELD_SIDECAR_MEM_BUDGET_MB` is now
+  spent by **three** children, not one: the verifier's manager subtracts the parent's RSS
+  plus the other two children's high-water peaks before computing its own hard limit
+  (`_verifier_reserve_rss`), and reports the overrun rather than absorbing it — `/metrics`
+  gained a `verifier` block beside `worker` and `embed`. ⚠️ **Both children are polled by
+  `lifespan`'s one poll loop.** The verifier's manager shipped UNPOLLED for a whole branch,
+  and `poll()` is the sole driver of the RSS ceiling, the recycle, the idle unload and the
+  pressure eviction — so a llama.cpp child held its weights and a 4096-token KV cache for
+  the sidecar's entire life, unbounded and unmeasured. A manager that is constructed is not
+  a manager that is guarded.
+- **⚠️ `llama_cpp` must be in the PyInstaller spec, and its absence is invisible.** It is a
+  ctypes binding: `libllama` plus ~10 ggml shared objects are opened by a path computed at
+  import time (PyInstaller's binary analysis cannot follow that), and the one
+  `from llama_cpp import Llama` lives inside `Verifier.__init__` — PyArmor-encrypted
+  bytecode under `KELD_OBFUSCATE=1`, which CI sets for releases. So the module AND its
+  libraries are both invisible, and a spec missing them ships a binary that starts, is
+  healthy, classifies, scans for PII and fails EVERY verdict. Exactly the freeze_support()
+  and presidio failure class. `make freeze-check` / `make obfuscate-check` now spawn the
+  verifier child and demand a real verdict (`keld-agent-sidecar --selftest verifier`);
+  that arm is what keeps the defect from returning, and it FAILS rather than skips when no
+  GGUF is present.
+- **⚠️ TURNING ATTRIBUTION ON STARTS ENCODING MESSAGE TEXT ON DEVICE.**
+  `daemon/sidecarenv.go` sets `KELD_TEXTEMBED=1` (set-if-absent) whenever attribution is
+  on, because `/attribute` needs the same encoder. Nothing derived from it is PUBLISHED by
+  that — feature rows stay gated on `KELD_FEATURES`/`KELD_FEATURES_PUBLISH` and the org's
+  `features` toggle, and `/attribute` answers with ids — but the encoder does read message
+  text locally, which is new behaviour on a machine that had the toggle off, and it is the
+  toggle this file describes as the one deciding whether text is read to keep something
+  derived from it. `KELD_TEXTEMBED=0` explicitly still wins; `/attribute` then answers
+  `skipped:disabled` for every block.
+- **The two model downloads are gated on a KNOWN NON-EMPTY project list.** 4.2 GB fetched
+  for an org that has declared nothing buys nothing — every `/attribute` answers
+  `skipped:no_projects` without loading a model — and Atlas does not serve `projects` yet,
+  so that is currently every machine without `KELD_PROJECTS_FILE`. The gate is read live per
+  published block, so a list arriving on a later poll starts the fetch with no restart.
+- **⚠️ `skipped:no_projects` is NON-TERMINAL while the daemon holds a list, and the daemon
+  re-posts after a sidecar respawn.** `attribution._projects` is module state in the sidecar
+  PARENT, so the supervisor's crash-restart takes it, while the daemon's change-gated POST
+  concludes there is nothing new to say: every subsequent block was published attributed to
+  nothing AND THE JOB DELETED, permanently, until the daemon itself restarted. Both halves
+  are fixed — `Supervisor.SetOnRespawn` re-posts the list, and the attributor HOLDS the job
+  (the shape `degraded:weights_unavailable` already uses) whenever it believes projects are
+  declared. The second half also closes the startup race, where the first sweep runs
+  concurrently with the first POST. Anything else the daemon pushes DOWN once, rather than
+  riding each request the way `PIIRegions` does, has the same shape and belongs on that hook.
+- **Version skew HOLDS rather than quarantines.** An older frozen sidecar 404s `/attribute`;
+  that is surfaced as `AttributeResult.RouteUnsupported` and holds the job, because the
+  sidecar updates on its own cadence and the work becomes doable when it catches up. A
+  genuine quarantine (4 real errors) now emits `attribution.job_quarantined` — `Store.List`
+  skips subdirectories, so `spool/attrib/bad/` is never re-read and the loss is otherwise
+  invisible to the fleet.
+- **Quality: measured 0.823 micro-F1, against a design gate of 0.85.** The external
+  benchmark measured 0.929 with assistant text included; production scores USER-turn text
+  only (`_span_texts`), deliberately. `sidecar/app/test_attribution_quality.py` is opt-in
+  (`KELD_ATTRIBUTION_EVAL=1`) and asserts **0.80**, a regression tripwire just under the
+  measurement — not the design gate, which this pipeline does not currently meet.
+  `THRESHOLD` (0.49) was fitted to a prototype's score distribution and wants recalibrating
+  on real blocks. Runbook: `docs/attribution-smoke.md`.
+
 **`keld signal doctor` / `status` report on-device model state**
 (`internal/localagent/models.go`). ⚠️ **Presence is a filesystem stat, never a
 daemon probe**, and that is what makes it correct rather than merely cheap: no

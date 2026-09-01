@@ -89,6 +89,42 @@ type Supervisor struct {
 	// site below guards it nil so the many existing tests that never call
 	// SetEmitter are unaffected.
 	emitter *clientevents.Emitter
+
+	// onRespawn is called (on its own goroutine) each time a REPLACEMENT child
+	// becomes healthy — never for the first one. Optional; see SetOnRespawn.
+	// Guarded by mu because, unlike emitter, it is legitimately set AFTER
+	// Start's goroutine is running: deterministicBackend starts the supervisor
+	// before Run has resolved the project list it would re-post.
+	onRespawn func()
+}
+
+// SetOnRespawn registers a callback fired after a RESTARTED sidecar becomes
+// healthy. Call before Start, like SetEmitter.
+//
+// ⚠️ IT EXISTS BECAUSE A SIDECAR RESTART SILENTLY DESTROYS PARENT-PROCESS
+// STATE THE DAEMON THINKS IT STILL HAS. The concrete case is the project
+// attribution list: `attribution._projects` lives in the sidecar parent's
+// module namespace, so a crash-restart takes it, while the daemon's own
+// bookkeeping still records the sidecar as told — and its POST is gated on
+// having something NEW to say. The result was permanent: every /attribute
+// answered `skipped:no_projects` until the daemon itself restarted. Anything
+// else the daemon pushes DOWN to the sidecar once (rather than on every
+// request) has the same shape and belongs on this hook.
+//
+// NOT fired for the first ready: that is startup, which every such pusher
+// already handles on its own path. Fired on its own goroutine so a slow
+// re-push cannot stall supervision of the child it is re-pushing to.
+func (s *Supervisor) SetOnRespawn(f func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRespawn = f
+}
+
+// respawnHook reads the callback under the lock; nil when none is registered.
+func (s *Supervisor) respawnHook() func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.onRespawn
 }
 
 // SetEmitter wires an Emitter so Start's anomaly sites (spawn/start failure,
@@ -270,6 +306,15 @@ func (s *Supervisor) Start(ctx context.Context) {
 			}
 		}
 
+		if becameReady && restarts > 0 {
+			// A REPLACEMENT child is healthy. Whatever the daemon pushed down
+			// to the previous process's memory went with it — see
+			// SetOnRespawn. Own goroutine: this does network I/O against the
+			// child we are supervising.
+			if hook := s.respawnHook(); hook != nil {
+				go hook()
+			}
+		}
 		if becameReady {
 			// Sidecar is healthy; supervise indefinitely.
 			select {

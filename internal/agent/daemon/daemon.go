@@ -936,7 +936,26 @@ func Run(ctx context.Context) error {
 	if attribOn && svc.PostProjects != nil {
 		p := resolveProjects(nil)
 		postProjects := svc.PostProjects
+		// ⚠️ OBSERVED SYNCHRONOUSLY, POSTED ASYNCHRONOUSLY (I8). The attributor's
+		// first drainOnce runs the moment its goroutine starts, concurrently with
+		// the POST above, so the sidecar can legitimately answer
+		// `skipped:no_projects` before it has been told anything. What must NOT
+		// happen is the daemon reading that as "this machine declares nothing" and
+		// publishing the block attributed to nothing — which is terminal, and the
+		// block is deleted before the 5-minute poll could correct it. Recording the
+		// BELIEF here, inline and before anything else starts, is what makes
+		// `projectsKnownNonEmpty` true for the whole of that window, so the
+		// attributor holds the job instead. The ordering is now enforced rather
+		// than incidental.
+		lastProjects.observe(p)
 		go maybePostProjectsAtStartup(postProjects, lastProjects, p)
+		// C4: a crash-restarted sidecar comes back with attribution._projects
+		// empty (module state in the parent process it lost), while lastProjects
+		// still records it as told — so the change-gated POST would never speak
+		// again. Re-post on every respawn.
+		if svc.OnSidecarRespawn != nil {
+			svc.OnSidecarRespawn(func() { repostProjectsAfterRespawn(postProjects, lastProjects) })
+		}
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
@@ -967,7 +986,9 @@ func Run(ctx context.Context) error {
 		// the gate is off, so startBlockEmitter's own nil-check makes wiring
 		// it in cost nothing on a machine that never turned attribution on.
 		onBlockPublished := startAttributor(ctx, svc.Blocks, svc.Attribution,
-			cfg.Endpoint, tok.Get, actor, emitter, set.Attribution)
+			cfg.Endpoint, tok.Get, actor, emitter, set.Attribution,
+			lastProjects.knownNonEmpty,
+			func() { repostProjectsAfterRespawn(svc.PostProjects, lastProjects) })
 		// A scheduled attribution job is "something wants an embedding (and,
 		// for a borderline pair, the verifier)" — the same demand-signal shape
 		// the signal-embeddings path uses its own advance hook for. Both
@@ -976,14 +997,21 @@ func Run(ctx context.Context) error {
 		// machine where attribution is off (onBlockPublished is nil there and
 		// the wrap never happens) or where nothing was provisioned (enc/
 		// verifierEnc nil, demand() a no-op).
-		if onBlockPublished != nil {
-			next := onBlockPublished
-			onBlockPublished = func(rows []publish.BlockEnrichment, path string) {
-				enc.demand()
-				verifierEnc.demand()
-				next(rows, path)
-			}
-		}
+		//
+		// ⚠️ GATED ON A KNOWN NON-EMPTY PROJECT LIST (I7). Attribution's two
+		// models are ~1.2 GB (encoder) + ~3 GB (verifier), and with nothing
+		// declared to match against every /attribute answers
+		// skipped:no_projects without opening a transcript — the models are
+		// never loaded, so fetching them buys literally nothing. Atlas does not
+		// serve `projects` yet, so TODAY that is every machine without
+		// KELD_PROJECTS_FILE: an org switching attribution on early would pull
+		// 4.2 GB onto every machine in the fleet for an answer that needs no
+		// model at all. The gate is read LIVE, per published block, not captured
+		// — a list arriving on a later settings poll starts the download with no
+		// restart, which is the same live-re-check shape enc's own `gate`
+		// argument uses for the org's `features` toggle.
+		onBlockPublished = demandModelsForAttribution(onBlockPublished,
+			lastProjects.knownNonEmpty, enc.demand, verifierEnc.demand)
 		// v2's block emitter, and the reason it sits beside the tick rather than
 		// inside it: a block reaches nowhere, so it needs none of the tick's
 		// frontier reasoning about which future prompts might sweep over a
@@ -1487,6 +1515,7 @@ func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, re
 	// that later is this one line moving into facetsFor. See features.go.
 	svc.Features = featureSourceFor(scClient)
 	svc.AwaitSidecarStop = awaitSidecarStop(sup)
+	svc.OnSidecarRespawn = sup.SetOnRespawn
 	return svc, serviceHealthGate(ctx, scClient)
 }
 
@@ -1641,6 +1670,9 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, s
 	// survive any later change to what "the Model" is.
 	svc := facetsFor(opts.client, opts.regions)
 	svc.AwaitSidecarStop = awaitSidecarStop(opts.sup)
+	if opts.sup != nil {
+		svc.OnSidecarRespawn = opts.sup.SetOnRespawn
+	}
 	return opts.client, svc, wg.Warm,
 		provisioningWarmup(prov, warmupFunc(opts.client))
 }

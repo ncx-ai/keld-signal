@@ -147,6 +147,18 @@ type serviceFacets struct {
 	// supervised sidecar this run (no binary, no port, a test double), which is
 	// exactly when there is nothing to wait for.
 	AwaitSidecarStop func()
+	// OnSidecarRespawn registers a callback the supervisor fires each time a
+	// RESTARTED sidecar becomes healthy. Nil whenever there is no supervised
+	// sidecar this run (no binary, no port, a test double).
+	//
+	// ⚠️ IT EXISTS FOR STATE THE DAEMON PUSHES DOWN ONCE. A restart wipes the
+	// sidecar parent's module state, and the daemon's own record of having
+	// pushed survives it — so a pusher gated on "has anything changed?" never
+	// speaks again. The concrete case is PostProjects: after a respawn every
+	// /attribute answered `skipped:no_projects` until the DAEMON restarted.
+	// Anything else pushed down out-of-band (rather than riding each request,
+	// the way PIIRegions does) belongs on this hook too.
+	OnSidecarRespawn func(func())
 }
 
 // facetsFor returns the service facets of the client it is handed, leaving any

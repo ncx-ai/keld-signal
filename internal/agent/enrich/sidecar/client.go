@@ -81,9 +81,18 @@ func (c *Client) WithModelContext(ctx context.Context) enrich.Model {
 // retryable=true means the sidecar is temporarily unavailable (transport error
 // or 503) and the caller should wait and try again rather than degrade.
 func (c *Client) postOnce(path string, body any, out any) (ok bool, retryable bool) {
+	ok, retryable, _ = c.postOnceStatus(path, body, out)
+	return ok, retryable
+}
+
+// postOnceStatus is postOnce plus the HTTP status the attempt saw (0 for a
+// transport error). Only /attribute reads it, and only to tell a 404 — an
+// older frozen sidecar with no such route — apart from every other
+// non-retryable answer; see AttributeResult.RouteUnsupported.
+func (c *Client) postOnceStatus(path string, body any, out any) (ok bool, retryable bool, status int) {
 	b, err := json.Marshal(body)
 	if err != nil {
-		return false, false
+		return false, false, 0
 	}
 	// Bind the request to c.ctx so cancelling the per-job context aborts the
 	// call in flight — not just the retry backoff. Without this the request ran
@@ -92,42 +101,51 @@ func (c *Client) postOnce(path string, body any, out any) (ok bool, retryable bo
 	// retry loop's own ctx.Done() check turns that into a clean stop.
 	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.base+path, bytes.NewReader(b))
 	if err != nil {
-		return false, false
+		return false, false, 0
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return false, true // transport error: sidecar down/restarting — wait+retry
+		return false, true, 0 // transport error: sidecar down/restarting — wait+retry
 	}
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusOK:
-		return json.NewDecoder(resp.Body).Decode(out) == nil, false
+		return json.NewDecoder(resp.Body).Decode(out) == nil, false, resp.StatusCode
 	case resp.StatusCode == http.StatusServiceUnavailable:
-		return false, true // evicted / overloaded — the request woke it; wait+retry
+		return false, true, resp.StatusCode // evicted / overloaded — the request woke it; wait+retry
 	default:
-		return false, false // genuine error — do not spin forever
+		return false, false, resp.StatusCode // genuine error — do not spin forever
 	}
 }
 
 // post waits + retries through temporary unavailability (never degrades). It
 // returns false only on a non-retryable error or ctx cancellation.
 func (c *Client) post(path string, body any, out any) bool {
+	ok, _ := c.postStatus(path, body, out)
+	return ok
+}
+
+// postStatus is post plus the HTTP status of the LAST attempt (0 when none
+// completed). See postOnceStatus for the one caller and why.
+func (c *Client) postStatus(path string, body any, out any) (bool, int) {
 	backoff := 200 * time.Millisecond
+	last := 0
 	for {
 		if c.ctx.Err() != nil {
-			return false // per-job deadline/shutdown — stop immediately, don't degrade
+			return false, last // per-job deadline/shutdown — stop immediately, don't degrade
 		}
-		ok, retryable := c.postOnce(path, body, out)
+		ok, retryable, status := c.postOnceStatus(path, body, out)
+		last = status
 		if ok {
-			return true
+			return true, status
 		}
 		if !retryable {
-			return false
+			return false, status
 		}
 		select {
 		case <-c.ctx.Done():
-			return false
+			return false, last
 		case <-time.After(backoff):
 		}
 		if backoff < 5*time.Second {
@@ -835,6 +853,19 @@ type AttributeResult struct {
 	Status      string                      `json:"status"`
 	Projects    []enrich.ProjectAttribution `json:"projects"`
 	Attribution *enrich.AttributionMeta     `json:"attribution"`
+	// RouteUnsupported means the sidecar answered 404: it has no /attribute
+	// route at all. `json:"-"` deliberately — it is this client's OWN reading
+	// of the transport, never something a response body could set.
+	//
+	// ⚠️ IT IS SEPARATE FROM Status BECAUSE IT IS A DIFFERENT KIND OF FACT
+	// (I5). Status is what the attribution pass concluded; this is that no
+	// pass exists on the other side. The sidecar is frozen and shipped
+	// separately, so an older one during a staged rollout 404s every call —
+	// classed non-retryable, which quarantined the job after four sweeps, into
+	// a subdirectory Store.List never re-reads. The work is not impossible,
+	// only not yet possible, which is the pending/degraded shape rather than
+	// the error one.
+	RouteUnsupported bool `json:"-"`
 }
 
 // attributeCallTimeout bounds ONE /attribute call, including whatever
@@ -893,9 +924,17 @@ func (c *Client) Attribute(path, sessionID string, start, end float64,
 	defer cancel()
 	cp.ctx = ctx
 	var r AttributeResult
-	if !cp.post("/attribute", attributeReq{
+	ok, status := cp.postStatus("/attribute", attributeReq{
 		Path: path, SessionID: sessionID, Start: start, End: end, Dims: dims,
-	}, &r) {
+	}, &r)
+	if !ok {
+		// A 404 is VERSION SKEW, not a failed call: this sidecar has no
+		// /attribute route. Surfaced as its own fact so the attributor can hold
+		// the job instead of spending an attempt on a component that updates
+		// independently — see AttributeResult.RouteUnsupported (I5).
+		if status == http.StatusNotFound {
+			return AttributeResult{RouteUnsupported: true}, false
+		}
 		return AttributeResult{}, false
 	}
 	return r, true

@@ -637,3 +637,134 @@ func TestEnabledMirrorsBlocksEnabledShape(t *testing.T) {
 		t.Fatal("env=0 must win over a true config")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// C4 / I5 / I6 — the final-review fixes.
+// ---------------------------------------------------------------------------
+
+// C4 (second half): `skipped:no_projects` is a statement about the SIDECAR, not
+// about the org, and treating it as terminal is irreversible — the row publishes
+// attributed to nothing and the job is DELETED, so nothing can ever repair it.
+// While the daemon believes projects are declared, the job must be HELD and the
+// list re-asserted instead.
+func TestSkippedNoProjectsIsHeldWhileTheDaemonBelievesProjectsExist(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	if err := st.Put(Job{SessionID: "s1", Path: "/tmp/x.jsonl", Start: 1, End: 2}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	sender := &fakeSender{}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsSkippedNoProjects}}
+	reposts := 0
+	a := New(st, cl, sender, nil, "actor@x", digesterFor("s1", 1, 2)).
+		WithProjects(func() bool { return true }, func() { reposts++ })
+
+	// Driven well past MaxAttempts: a held job must never age into a quarantine.
+	for i := 0; i < MaxAttempts+2; i++ {
+		a.drainOnce(context.Background())
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("nothing may be published while the daemon holds a project list, got %+v", sender.sent)
+	}
+	jobs, _ := st.List()
+	if len(jobs) != 1 {
+		t.Fatalf("the job must be held, got %d in the store", len(jobs))
+	}
+	if jobs[0].Attempts != 0 {
+		t.Fatalf("a sidecar that lost its project list is not the job's fault; Attempts=%d", jobs[0].Attempts)
+	}
+	if bad, _ := NewStore(dir + "/bad").List(); len(bad) != 0 {
+		t.Fatal("a held job must never quarantine")
+	}
+	if reposts == 0 {
+		t.Fatal("the daemon must be asked to re-tell the sidecar its project list")
+	}
+}
+
+// The other side of the same switch: with NO project list known, the status is
+// the honest terminal answer it always was. Pins that the fix did not turn a
+// machine that genuinely declares nothing into one that spins forever.
+func TestSkippedNoProjectsStaysTerminalWhenNoProjectsAreKnown(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	if err := st.Put(Job{SessionID: "s1", Path: "/tmp/x.jsonl", Start: 1, End: 2}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	sender := &fakeSender{}
+	cl := &fakeClient{ok: true, res: sidecar.AttributeResult{Status: enrich.ProjectsSkippedNoProjects}}
+	a := New(st, cl, sender, nil, "actor@x", digesterFor("s1", 1, 2)).
+		WithProjects(func() bool { return false }, func() { t.Fatal("nothing to re-post") })
+	a.drainOnce(context.Background())
+
+	if len(sender.sent) != 1 {
+		t.Fatalf("expected one terminal publish, got %+v", sender.sent)
+	}
+	if left, _ := st.List(); len(left) != 0 {
+		t.Fatalf("terminal status must delete the job, %d left", len(left))
+	}
+}
+
+// I5: an older frozen sidecar 404s /attribute. That is version skew in a
+// component that updates on its own cadence — the job is HELD, not spent, and
+// never quarantined into a subdirectory Store.List will not re-read.
+func TestA404FromAnOlderSidecarHoldsTheJobRatherThanConsumingAttempts(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	if err := st.Put(Job{SessionID: "s1", Path: "/tmp/x.jsonl", Start: 1, End: 2}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	sender := &fakeSender{}
+	cl := &fakeClient{ok: false, res: sidecar.AttributeResult{RouteUnsupported: true}}
+	a := New(st, cl, sender, nil, "actor@x", digesterFor("s1", 1, 2))
+	for i := 0; i < MaxAttempts+2; i++ {
+		a.drainOnce(context.Background())
+	}
+	jobs, _ := st.List()
+	if len(jobs) != 1 || jobs[0].Attempts != 0 {
+		t.Fatalf("a 404 must hold the job unchanged, got %+v", jobs)
+	}
+	if bad, _ := NewStore(dir + "/bad").List(); len(bad) != 0 {
+		t.Fatal("version skew must never quarantine: spool/attrib/bad/ is never re-read")
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("nothing may publish off a 404, got %+v", sender.sent)
+	}
+}
+
+// I6: only an `attributed` dimension may be read as the block's answer. A
+// `thin`/`tie`/`no_majority` leader fed to the sidecar as a repo is worth 0.15
+// of the 0.49 assignment threshold against the WRONG project.
+func TestDimsFromDropsEveryDimensionThatIsNotAttributed(t *testing.T) {
+	an := enrich.WindowAnalysis{Workstreams: map[string]enrich.Labeled{
+		"project":  {Value: "acme-billing", Status: enrich.WorkstreamAttributed},
+		"branch":   {Value: "fix/rounding"}, // pre-16 sidecar: no status means attributed
+		"language": {Value: "python", Status: "thin"},
+		"skill":    {Value: "review", Status: "tie"},
+		"model":    {Value: "sonnet", Status: "no_majority"},
+		"tooling":  {Value: "pytest", Status: "absent"},
+		"output":   {Value: "docs", Status: "some_future_status"},
+		"empty":    {Value: "", Status: enrich.WorkstreamAttributed},
+	}}
+	got := dimsFrom(an)
+	want := map[string]string{"project": "acme-billing", "branch": "fix/rounding"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+// And the whole-map case: every dimension sub-floor means NO dims at all, not
+// an empty-but-present map — the sidecar's metadata boost must see nothing
+// rather than something wrong.
+func TestDimsFromIsNilWhenNothingIsAttributed(t *testing.T) {
+	an := enrich.WindowAnalysis{Workstreams: map[string]enrich.Labeled{
+		"project": {Value: "acme-billing", Status: "thin"},
+	}}
+	if got := dimsFrom(an); got != nil {
+		t.Fatalf("got %v, want nil", got)
+	}
+}

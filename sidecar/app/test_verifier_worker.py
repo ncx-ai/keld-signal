@@ -4,6 +4,7 @@ FastAPI parent. Run:
 
 Fakes only — no real model, no real 3 GB spawn, no real llama_cpp anywhere in this process.
 """
+import os
 import queue
 import sys
 
@@ -255,6 +256,112 @@ def test_attribute_block_with_a_stubbed_verifier_never_imports_llama_cpp():
     assert out["status"] == "attributed", out
     assert "llama_cpp" not in sys.modules, (
         "an attribution run with a stubbed verifier must not import llama_cpp")
+
+
+# --- C3: the verifier's manager must be POLLED, not merely constructed -------------------------
+#
+# ⚠️ CONSTRUCTED IS NOT ENOUGH, AND THE TEST ABOVE ONLY EVER PROVED CONSTRUCTED.
+# WorkerManager.poll() is the SOLE driver of the RSS ceiling, the recycle, the idle unload
+# and the pressure eviction. A manager nobody polls has none of them: the llama.cpp child
+# holds its quantized weights and its 4096-token KV cache for the entire life of the sidecar,
+# unbounded and unmeasured, on a budget already carrying two other children. So these tests
+# assert the CALL, through the real lifespan poll loop.
+
+def test_the_lifespan_poll_loop_polls_the_verifier_manager():
+    """Drive the REAL `lifespan` and assert the real poll loop reaches a lazily-built verifier
+    manager. A fake manager here is the point: it records that poll() was CALLED."""
+    import asyncio
+
+    import app.main as m
+
+    class _RecordingWM:
+        def __init__(self):
+            self.polls = 0
+            self.state = "down"
+
+        def poll(self):
+            self.polls += 1
+
+        def shutdown(self):
+            pass
+
+    os.environ["KELD_SIDECAR_MEM_POLL_S"] = "0.01"
+    m._state.pop("verifier_wm", None)
+    rec = _RecordingWM()
+
+    async def run():
+        async with m.lifespan(m.app):
+            # Built LAZILY: it does not exist when the loop starts, which is exactly the case
+            # a closure over the value at lifespan time would get wrong forever.
+            await asyncio.sleep(0.05)
+            m._state["verifier_wm"] = rec
+            for _ in range(200):
+                if rec.polls > 0:
+                    return
+                await asyncio.sleep(0.01)
+
+    try:
+        asyncio.run(run())
+    finally:
+        os.environ.pop("KELD_SIDECAR_MEM_POLL_S", None)
+        m._state.pop("verifier_wm", None)
+
+    assert rec.polls > 0, (
+        "the verifier's WorkerManager was never polled — it therefore has no RSS ceiling, "
+        "no recycling, no idle unload and no pressure eviction")
+
+
+def test_the_verifier_reserve_subtracts_the_other_children_from_the_shared_budget():
+    """Three children, one KELD_SIDECAR_MEM_BUDGET_MB. The verifier's manager must not read
+    the budget as though only the FastAPI parent were spending it, or its hard limit is at its
+    most generous exactly when the GLiNER2 worker and the encoder are both resident."""
+    import app.main as m
+
+    class _Peak:
+        def __init__(self, peak):
+            self.peak_rss_mb = peak
+
+    class _Src:
+        def __init__(self, peak):
+            self.encoder = _Peak(peak)
+
+    real_parent, real_wm, real_src = m._parent_rss_mb, m._state.get("wm"), m._TEXT_SOURCE
+    try:
+        m._parent_rss_mb = lambda: 600.0
+        m._state["wm"] = _Peak(2400.0)
+        m._TEXT_SOURCE = _Src(1700.0)
+        assert m._verifier_reserve_rss() == 4700.0, m._verifier_reserve_rss()
+    finally:
+        m._parent_rss_mb = real_parent
+        m._TEXT_SOURCE = real_src
+        if real_wm is None:
+            m._state.pop("wm", None)
+        else:
+            m._state["wm"] = real_wm
+
+
+def test_metrics_reports_the_verifier_child_and_says_when_it_was_never_built():
+    """An unobserved child and a child that never spawned looked identical in /metrics, which
+    is how an unbounded llama.cpp process stayed invisible. `built: false` is the answer for
+    the second, and it must never BUILD the manager to produce it."""
+    import app.main as m
+
+    m._state.pop("verifier_wm", None)
+    assert m._verifier_stats() == {"built": False, "state": None}
+    assert m._state.get("verifier_wm") is None, "/metrics must never build (let alone spawn) the verifier"
+
+    from app.worker_manager import WorkerManager
+
+    wm = WorkerManager(spawn_fn=lambda: (_ for _ in ()).throw(AssertionError("must not spawn")),
+                       rss_fn=lambda pid: 0.0, parent_rss_fn=lambda: 10.0)
+    m._state["verifier_wm"] = wm
+    try:
+        stats = m._verifier_stats()
+        assert stats["built"] is True and stats["state"] == "down", stats
+        for key in ("rss_mb", "peak_rss_mb", "recycles", "kills", "siblings_reserve_mb"):
+            assert key in stats, (key, stats)
+    finally:
+        m._state.pop("verifier_wm", None)
 
 
 if __name__ == "__main__":

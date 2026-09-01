@@ -93,13 +93,22 @@ signal available system-wide" rather than one localized defect.
 the spec's 0.85 quality gate on this benchmark**, a real gap between what was
 benchmarked (richer, assistant-text-inclusive input) and what `attribute_block`
 actually runs on (user-only text, an earlier task's deliberate privacy
-decision). The `assert` below is left as spec'd (§6: micro-F1 ≥ 0.85) because
-weakening it here would hide a genuine, measured quality shortfall rather than
-report it — this is a finding for whoever owns the attribution design to weigh
+decision).
+
+⚠️ **THE ASSERT BELOW IS `F1_FLOOR = 0.80`, NOT THE SPEC'S 0.85, AND THIS
+PARAGRAPH USED TO CLAIM OTHERWISE.** It read "left as spec'd (§6: micro-F1 ≥
+0.85)" while the constant beside it was already 0.80 — a doc asserting a gate
+the code does not enforce, which is worse than either number on its own,
+because a reader takes the prose as the contract and never looks. The 0.85 gate
+is NOT met by the ported production pipeline: it measures 0.823 here, and the
+0.80 floor is a regression tripwire sitting just below that measurement, not a
+quality target (see F1_FLOOR's own comment). The shortfall is real and
+unresolved — it is a finding for whoever owns the attribution design to weigh
 (recalibrate THRESHOLD/BAND for the user-only-text regime, widen the input, or
-accept a lower bar for this narrower contract), not something to route around
-in a docs-and-glue task. A future re-run after such a change should update the
-numbers above rather than silently drift.
+accept a lower bar for this narrower contract). Reporting it accurately is the
+point; the previous wording hid it behind a bar nothing checked. A future
+re-run after such a change should update the numbers above rather than silently
+drift.
 """
 import glob
 import json

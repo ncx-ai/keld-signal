@@ -19,7 +19,7 @@ func TestTheAttributorIsOffByDefault(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	t.Setenv(attrib.EnvEnabled, "")
 	if got := startAttributor(context.Background(), stubDigester{}, &fakeAttribClient{},
-		"https://a/v1/x", func() string { return "tok" }, "actor", nil, false); got != nil {
+		"https://a/v1/x", func() string { return "tok" }, "actor", nil, false, nil, nil); got != nil {
 		t.Fatal("the attributor started with KELD_ATTRIBUTION unset and no config key")
 	}
 }
@@ -34,7 +34,7 @@ func TestTheAttributorStartsFromTheConfigKeyAlone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if got := startAttributor(ctx, stubDigester{}, &fakeAttribClient{},
-		"https://a/v1/x", func() string { return "tok" }, "actor", nil, true); got == nil {
+		"https://a/v1/x", func() string { return "tok" }, "actor", nil, true, nil, nil); got == nil {
 		t.Fatal("the attributor stayed off with attribution:true in agent-config.json")
 	}
 }
@@ -44,7 +44,7 @@ func TestKeldAttributionZeroOverridesTheConfigKey(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	t.Setenv(attrib.EnvEnabled, "0")
 	if got := startAttributor(context.Background(), stubDigester{}, &fakeAttribClient{},
-		"https://a/v1/x", func() string { return "tok" }, "actor", nil, true); got != nil {
+		"https://a/v1/x", func() string { return "tok" }, "actor", nil, true, nil, nil); got != nil {
 		t.Fatal("KELD_ATTRIBUTION=0 did not override attribution:true in agent-config.json")
 	}
 }
@@ -56,11 +56,11 @@ func TestTheAttributorNeedsADigesterAndClient(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	t.Setenv(attrib.EnvEnabled, "1")
 	if got := startAttributor(context.Background(), nil, &fakeAttribClient{},
-		"https://a/v1/x", func() string { return "tok" }, "actor", nil, false); got != nil {
+		"https://a/v1/x", func() string { return "tok" }, "actor", nil, false, nil, nil); got != nil {
 		t.Fatal("the attributor started with no digester")
 	}
 	if got := startAttributor(context.Background(), stubDigester{}, nil,
-		"https://a/v1/x", func() string { return "tok" }, "actor", nil, false); got != nil {
+		"https://a/v1/x", func() string { return "tok" }, "actor", nil, false, nil, nil); got != nil {
 		t.Fatal("the attributor started with no attribute client")
 	}
 }

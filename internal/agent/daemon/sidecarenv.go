@@ -52,6 +52,28 @@ import (
 // Go-side subsystem (computing and publishing message-derived feature rows)
 // that reads its own toggles live, per sweep; making the encoder reachable
 // here must never be read as switching that path on.
+//
+// ⚠️ SO TURNING ATTRIBUTION ON STARTS ENCODING MESSAGE TEXT ON DEVICE, AND
+// THAT DESERVES SAYING OUT LOUD RATHER THAN BEING INFERRED FROM THIS FUNCTION.
+// `KELD_TEXTEMBED` ships OFF by default and is described everywhere in this
+// repo as the toggle that decides whether text is read in order to keep
+// something derived from it; `attribution` is a different-sounding switch, and
+// it silently implies this one. What is and is NOT true, precisely:
+//
+//   - The encoder runs LOCALLY and reads message text on device. That is new
+//     behaviour on a machine that had the toggle off.
+//   - NOTHING derived from it is PUBLISHED by this. Feature-row publication is
+//     gated Go-side by KELD_FEATURES / KELD_FEATURES_PUBLISH and the org's
+//     `features` toggles, none of which this touches, and /attribute itself
+//     answers with project IDS only — no text, no span, no offset, no vector.
+//   - The cost is real and local: ~1.2 GB of weights fetched on demand and a
+//     child measured at 1.70 GB resident / 2.35-2.43 GB peak, on a memory
+//     budget AGENTS.md already documents as oversubscribed.
+//
+// An operator who wants attribution WITHOUT on-device encoding sets
+// KELD_TEXTEMBED=0 explicitly — set-if-absent means that wins — and accepts
+// that /attribute then answers `skipped:disabled` for every block, which is a
+// stated skip rather than a silent narrowing.
 func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []string, encoderNeeded bool) []string {
 	env := make([]string, 0, len(base)+10)
 	env = append(env, base...)

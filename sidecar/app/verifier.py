@@ -44,6 +44,30 @@ class Verifier:
                           n_gpu_layers=0, n_threads=n_threads or max(2, os.cpu_count() // 2),
                           verbose=False)
 
+    def warm(self):
+        """One throwaway single-token generation, so the child signals ready only once the
+        model can actually produce a token.
+
+        ⚠️ `worker.serve` prefers a model's own `warm()` and falls back to a GLiNER2-shaped
+        `classify_text` call inside a bare `except`. This class had no `warm()`, so it took
+        that fallback, the AttributeError was swallowed, and the child answered
+        `{"ready": True}` having done nothing beyond `Llama(...)` — a contract
+        `test_verifier_worker.py` pinned against a fake that no production class implemented.
+        Constructing a Llama is not the same as it working: `create_chat_completion` is what
+        allocates the KV cache and first touches the mmap'd weights, so without this the
+        first REAL verdict pays that cost inside a caller's budget and any failure in it
+        surfaces as a mid-request error rather than a failed spawn. It is also what makes
+        `WorkerManager._spawn`'s post-ready `model_cost_mb` measurement mean something: taken
+        before any generation, it measures a process that has barely mapped the file.
+
+        Deliberately max_tokens=1 and a fixed trivial prompt — the cheapest work that is
+        still real. Failures propagate to serve()'s own try/except, which already treats a
+        failed warm-up as non-fatal.
+        """
+        self._llm.create_chat_completion(
+            messages=[{"role": "user", "content": "Answer with exactly one word: YES"}],
+            max_tokens=1, temperature=0)
+
     def verify(self, block_text, dims, project):
         d = dims or {}
         prompt = VERIFY_PROMPT.format(

@@ -81,4 +81,15 @@ psutil==7.2.2
 # score_block threshold can't call. Imported lazily inside Verifier.__init__
 # only — never at module scope — so importing app/verifier.py or
 # app/analysis/attribution.py loads nothing and pulls in no llama_cpp.
-llama-cpp-python==0.3.*
+#
+# ⚠️ EXACT, like everything else here, and this was the ONE trailing-wildcard left —
+# on the single package in the file that ships COMPILED NATIVE LIBRARIES. The header
+# above already argues wildcards rot silently; the cost is strictly worse here. A
+# `0.3.*` resolver pick moves libllama and ~10 ggml shared objects underneath a
+# PyInstaller freeze whose spec collects them by path, so a bad float breaks the
+# FROZEN binary's verifier while every unit test (which never freezes and never
+# imports llama_cpp) stays green — and llama.cpp's own GGUF/quantisation handling
+# moves fast enough that a silent point bump can also change what a Q4_K_M file even
+# loads as. 0.3.35 is what is installed here, what the verifier's verdicts were
+# measured on, and what `make freeze-check`'s verifier arm exercises.
+llama-cpp-python==0.3.35

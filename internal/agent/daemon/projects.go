@@ -91,6 +91,20 @@ func projectsChanged(a, b []settings.RemoteProject) bool {
 type projectsState struct {
 	mu    sync.Mutex
 	value []settings.RemoteProject
+	// declared is the last TRUSTWORTHY NON-EMPTY resolution this daemon saw,
+	// whether or not the POST that followed it succeeded — i.e. what the
+	// daemon BELIEVES is declared, as opposed to `value`, what it believes it
+	// successfully told the sidecar.
+	//
+	// ⚠️ THE TWO ARE DIFFERENT AND CONFLATING THEM IS C4. `value` answers "do
+	// I need to send anything?"; `declared` answers "should the sidecar have
+	// projects at all?". The second question is the one the attributor asks
+	// when /attribute comes back `skipped:no_projects`, and it has to be
+	// answerable BEFORE the first POST has landed — otherwise the startup race
+	// (I8) reads a not-yet-posted list as "this machine genuinely declares
+	// nothing" and every block drained in that window is published attributed
+	// to nothing and deleted.
+	declared []settings.RemoteProject
 }
 
 // changed reports whether next differs from the currently held value.
@@ -98,6 +112,54 @@ func (p *projectsState) changed(next []settings.RemoteProject) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return projectsChanged(p.value, next)
+}
+
+// observe records a trustworthy, non-empty resolution as what the daemon
+// believes is declared — independent of whether the sidecar has been told yet.
+// A resolution that is untrustworthy (a KELD_PROJECTS_FILE read error) or
+// empty leaves the previous belief alone, for exactly the reasons
+// projectsResolution and postProjectsIfKnownNonEmpty already give.
+func (p *projectsState) observe(r projectsResolution) {
+	if !r.ok || len(r.list) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.declared = r.list
+}
+
+// knownNonEmpty reports whether the daemon believes projects are declared on
+// this machine. This is the predicate that makes `skipped:no_projects`
+// non-terminal: if the daemon holds a list, an answer of "no projects" is a
+// statement about the SIDECAR's state, not about the org's.
+func (p *projectsState) knownNonEmpty() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.declared) > 0
+}
+
+// forget clears the record of what the sidecar has been told — never what the
+// daemon believes is declared. Called when the sidecar is known to have
+// restarted: `attribution._projects` is module state in the sidecar PARENT, so
+// a respawn takes the list with it, and without this the daemon's
+// `!state.changed(next)` guard concludes there is nothing to say and the
+// sidecar answers `skipped:no_projects` forever.
+func (p *projectsState) forget() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.value = nil
+}
+
+// declaredList returns a copy of what the daemon believes is declared.
+func (p *projectsState) declaredList() []settings.RemoteProject {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.declared) == 0 {
+		return nil
+	}
+	out := make([]settings.RemoteProject, len(p.declared))
+	copy(out, p.declared)
+	return out
 }
 
 // set records v as the last list successfully POSTed. Called ONLY after
@@ -139,6 +201,11 @@ func postProjectsIfKnownNonEmpty(post func([]settings.RemoteProject) error, stat
 	if len(r.list) == 0 {
 		return // NB1 guard: never let an empty resolution race a real list
 	}
+	// Record the BELIEF before the changed-check can short-circuit: whether
+	// the sidecar has to be told is a different question from whether this
+	// machine declares projects at all, and only the second one makes
+	// `skipped:no_projects` non-terminal. See projectsState.declared.
+	state.observe(r)
 	if !state.changed(r.list) {
 		return // a concurrent update already landed
 	}
@@ -190,4 +257,37 @@ func maybePostProjectsAtStartup(post func([]settings.RemoteProject) error, state
 // startup half.
 func postProjectsOnChange(post func([]settings.RemoteProject) error, state *projectsState, r *settings.Remote) {
 	postProjectsIfKnownNonEmpty(post, state, resolveProjects(r), "keld-agent: /projects update failed: %v")
+}
+
+// repostProjectsAfterRespawn re-tells a freshly-restarted sidecar the project
+// list, unconditionally with respect to `changed`.
+//
+// ⚠️ C4, THE HALF THE DAEMON OWNS. `attribution._projects` is module state in
+// the sidecar PARENT process, and the supervisor restarts that process on
+// crash — so a respawned sidecar holds NO projects while the daemon's
+// projectsState still records that it was told. Both PostProjects call sites
+// route through postProjectsIfKnownNonEmpty, which returns early when
+// `!state.changed(next)`, so nothing would ever say it again: every
+// /attribute answers `skipped:no_projects`, and (before the attributor's own
+// half of this fix) that was TERMINAL — publish and delete. Every block after
+// the crash was permanently attributed to nothing until the DAEMON itself
+// restarted.
+//
+// forget() first, then the ordinary gate, rather than a second POST path: the
+// gate's other two refusals (trustworthy, non-empty) still apply and stay in
+// one place; only the "we already said this" memory is what a respawn
+// invalidates, and it is invalidated by clearing it rather than by adding a
+// force flag every future caller could pass by mistake.
+func repostProjectsAfterRespawn(post func([]settings.RemoteProject) error, state *projectsState) {
+	if post == nil {
+		return // no /projects channel this run (no sidecar, or a test double)
+	}
+	list := state.declaredList()
+	if len(list) == 0 {
+		return // nothing was ever declared: a respawned sidecar holding nothing is correct
+	}
+	state.forget()
+	log.Printf("keld-agent: sidecar restarted — re-posting %d project definition(s) it lost with the process", len(list))
+	postProjectsIfKnownNonEmpty(post, state, projectsResolution{list: list, ok: true},
+		"keld-agent: /projects re-post after a sidecar restart failed: %v")
 }

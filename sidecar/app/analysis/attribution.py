@@ -207,12 +207,27 @@ def apply_verifier(texts, dims, scores, borderline, verifier_obj):
     projects, _ = current_projects()
     by_id = {p["id"]: p for p in projects}
     block_text = "\n".join(texts)
-    overrides, total = {}, 0.0
+    overrides, total, verified = {}, 0.0, 0
     for pid in borderline:
-        verdict, secs = verifier_obj.verify(block_text, dims, by_id[pid])
+        # ⚠️ `by_id.get`, NOT `by_id[pid]`. `borderline` was computed by score_block against
+        # a snapshot of current_projects(); this re-reads it, and a POST /projects landing
+        # between the two calls (a settings poll, or the daemon re-posting after a sidecar
+        # restart) can retire a project id. An unguarded index raised KeyError, which is an
+        # uncaught 500 — and the daemon classes a 500 as non-retryable, so it spent one of
+        # the job's four attempts on a race that has nothing to do with the block. The
+        # project is simply gone: dropping the pair leaves that id un-overridden, so the
+        # threshold's own verdict stands, which is the honest answer for a project the org
+        # no longer declares.
+        project = by_id.get(pid)
+        if project is None:
+            continue
+        verdict, secs = verifier_obj.verify(block_text, dims, project)
         overrides[pid] = bool(verdict)
+        verified += 1
         total += secs
-    return overrides, len(borderline), int(total * 1000)
+    # The COUNT is what was actually adjudicated, not what was queued — pairs_verified
+    # riding len(borderline) would report work that a retired project meant never happened.
+    return overrides, verified, int(total * 1000)
 
 
 # --- The block's answer ------------------------------------------------------
@@ -239,6 +254,12 @@ MODEL_VERSIONS = {"encoder": "qwen3-embedding-0.6b", "verifier": "gemma-4-e2b-q4
 
 def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state):
     """The pass's report on ITSELF: integer timings, counts and closed enums.
+
+    `encoder_state` is `warm` or `absent`, and there is deliberately no `cold`: this module
+    never loads the encoder, so there is no pass that could report having done so. A cold
+    child is reported as `status: "pending"` by the route — see
+    `enrich.AttributionMeta.EncoderState` for the whole of that reasoning, which these two
+    halves must change together.
 
     ⚠️ Nothing here may ever hold text, a span or an offset — see
     `enrich.AttributionMeta` and the reflection tripwire beside it. A project's
@@ -334,9 +355,11 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
         # verifier's whole job (see apply_verifier).
         inside = overrides[pid] if pid in overrides else pid in assigned
         if inside:
-            # "metadata" stays in the published `source` vocabulary because the
-            # boost is still part of every confidence, but it can no longer be
-            # a source on its own: nothing is assigned without the encoder.
+            # ⚠️ TWO SOURCES, NOT THREE. "metadata" is GONE from the published
+            # vocabulary (see enrich.ProjectAttribution.Source): the boost is
+            # still part of every confidence, but AC-4 as amended means nothing
+            # is ever assigned without the encoder, so no answer can carry it.
+            # A value no producer can emit is worse than an absent one.
             final.append({"id": pid, "confidence": scores[pid],
                           "source": "verifier" if pid in overrides else "embedding"})
 
