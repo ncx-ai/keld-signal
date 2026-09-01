@@ -16,10 +16,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
 type Client struct {
@@ -760,4 +762,119 @@ func (c *Client) DetectPIIIn(text string, regions []string) (enrich.PIIResult, b
 		spans = append(spans, enrich.Entity{Label: s.Type, Start: s.Start, End: s.End, Confidence: s.Score})
 	}
 	return enrich.PIIResult{Spans: spans, Truncated: r.Truncated}, true
+}
+
+// PROJECT ATTRIBUTION — which declared project a closed block belongs to,
+// decided on-device by the sidecar's own embedding/verifier matcher against
+// the org's declared settings.RemoteProject list (never by sending message
+// text). See enrich/attribution.go for the wire shapes these two methods
+// exchange.
+
+// projectsReq is the whole of POST /projects: the org's declared project
+// list, unchanged from settings.RemoteProject. Descriptions flow DOWN to the
+// device for the sidecar to embed; nothing here is derived from a prompt.
+type projectsReq struct {
+	Projects []settings.RemoteProject `json:"projects"`
+}
+
+// projectsResp is decoded but its fields are not read further than error
+// reporting: Count/Hash are the sidecar's own bookkeeping (how many projects
+// it now holds, and a fingerprint of the set), useful for a log line, not for
+// a caller decision.
+type projectsResp struct {
+	Count int    `json:"count"`
+	Hash  string `json:"hash"`
+}
+
+// postProjectsCallTimeout bounds ONE /projects call the same way
+// attributeCallTimeout bounds one /attribute call — see that var's comment.
+// The daemon's caller (startup, and the settings poll loop) has no per-call
+// deadline of its own, so without a bound here an unreachable sidecar would
+// retry forever and could wedge the settings poll goroutine. A var, not a
+// const, so a test can shrink it.
+var postProjectsCallTimeout = 30 * time.Second
+
+// PostProjects tells the sidecar which projects are currently declared, so
+// /attribute has something to match a block against. The daemon calls this
+// once at startup (after resolving KELD_PROJECTS_FILE / the remote settings
+// key) and again whenever the resolved list changes on a later settings poll
+// — never per block, since the declared set does not change per block.
+func (c *Client) PostProjects(projects []settings.RemoteProject) error {
+	cp := *c
+	ctx, cancel := context.WithTimeout(c.ctx, postProjectsCallTimeout)
+	defer cancel()
+	cp.ctx = ctx
+	var r projectsResp
+	if !cp.post("/projects", projectsReq{Projects: projects}, &r) {
+		return fmt.Errorf("sidecar: POST /projects failed")
+	}
+	return nil
+}
+
+// attributeReq is the whole of POST /attribute: coordinates, the block's own
+// span (half-open [start, end)), and the block's ALREADY-COMPUTED dimensions
+// (repo, branch, ...) as /blocks published them. Dims are the caller's own
+// facts, passed through — never re-derived here, and never message text.
+type attributeReq struct {
+	Path      string            `json:"path"`
+	SessionID string            `json:"session_id"`
+	Start     float64           `json:"start"`
+	End       float64           `json:"end"`
+	Dims      map[string]string `json:"dims"`
+}
+
+// AttributeResult is the Go-side view of POST /attribute's response.
+//
+// Status is one of the closed vocabulary in enrich/attribution.go
+// (ProjectsAttributed, ProjectsPending, ProjectsSkippedDisabled,
+// ProjectsSkippedNoProjects, ProjectsDegradedWeights). Projects/Attribution
+// are populated only when Status is a terminal answer that named something —
+// an empty Projects with a terminal Status is a real "no project matched",
+// not an absence.
+type AttributeResult struct {
+	Status      string                      `json:"status"`
+	Projects    []enrich.ProjectAttribution `json:"projects"`
+	Attribution *enrich.AttributionMeta     `json:"attribution"`
+}
+
+// attributeCallTimeout bounds ONE /attribute call, including whatever
+// retrying post() does through a transient 503/transport error. It is a var
+// (not a const) so a test can shrink it rather than waiting out the real
+// production bound.
+//
+// ⚠️ THIS IS THE PER-CALL DEADLINE THE PLAN CALLS FOR, and it is bound HERE
+// rather than left to the caller's ctx for the same reason SignalIngest binds
+// its own timeout below: the attributor's driving context (Run's ctx) is the
+// DAEMON's lifetime context, which has no deadline at all, and post() retries
+// a retryable failure until its context ends. Without a bound of its own, one
+// stuck attribute call would retry forever against a wedged sidecar — the
+// exact death-spiral shape client.go's package comment and WithContext already
+// describe one level up (there, a per-JOB deadline; here, a per-CALL one,
+// because the attributor's jobs are not the enrichment pipeline's jobs and
+// have no per-job context of their own to bind).
+var attributeCallTimeout = 2 * time.Minute
+
+// Attribute asks the sidecar to match one closed block against the declared
+// project list (POST /attribute). It sends COORDINATES and the block's own
+// already-computed dimensions — never text.
+//
+// ok=false means this call did not land (transport failure, or the per-call
+// deadline above expired mid-retry) and is retryable by the caller's sweep,
+// exactly like every other post()-backed method here. ok=true with
+// Status=="pending" is a NORMAL terminal HTTP answer, not a failure — the
+// caller (attrib.Attributor) is what decides a pending answer must not
+// consume a retry attempt; this method has no opinion on that.
+func (c *Client) Attribute(path, sessionID string, start, end float64,
+	dims map[string]string) (AttributeResult, bool) {
+	cp := *c
+	ctx, cancel := context.WithTimeout(c.ctx, attributeCallTimeout)
+	defer cancel()
+	cp.ctx = ctx
+	var r AttributeResult
+	if !cp.post("/attribute", attributeReq{
+		Path: path, SessionID: sessionID, Start: start, End: end, Dims: dims,
+	}, &r) {
+		return AttributeResult{}, false
+	}
+	return r, true
 }

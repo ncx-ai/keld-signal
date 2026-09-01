@@ -47,7 +47,8 @@ func signalBlocksEndpoint(ingest string) string {
 // publisher would post blocks at /v1/enrichments, where the envelope is not
 // even the same shape.
 func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint string,
-	token func() string, actor string, emitter *clientevents.Emitter, blocksConfigured bool) func(source, path string) {
+	token func() string, actor string, emitter *clientevents.Emitter, blocksConfigured bool,
+	onPublished func(rows []publish.BlockEnrichment, path string)) func(source, path string) {
 	if !blocks.Enabled(blocksConfigured) || dig == nil || token == nil {
 		return nil
 	}
@@ -64,6 +65,10 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	em := blocks.New(dig, pub,
 		func(path string) enrich.ResolvedFacts { return facts.forTranscript(path).resolved() },
 		actor, blocks.StatePath())
+	// The project-attribution path (internal/agent/attrib) hangs off this seam
+	// — the block emitter itself knows nothing about attribution. nil when the
+	// attribution gate is off, which leaves OnPublished nil (cost-free).
+	em.OnPublished = onPublished
 	interval := blocks.IntervalFromEnv()
 	log.Printf("keld-agent: v2 block emission ON (sweeping every %s). Blocks post to "+
 		"/v1/signal/blocks; Atlas STORES them but nothing reads them yet.", interval)

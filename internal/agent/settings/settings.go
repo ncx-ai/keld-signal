@@ -91,6 +91,14 @@ type Settings struct {
 	// blocks off.
 	Blocks bool `json:"blocks"`
 
+	// Attribution is THE PROJECT ATTRIBUTION PATH's toggle: whether the
+	// daemon schedules/drives on-device block-to-project matching at all.
+	// Local, read at startup, default OFF — the zero value is the default,
+	// same shape as Blocks (and for the same reason: an env-only knob is
+	// unreachable from an installer). KELD_ATTRIBUTION still overrides it
+	// either way — see attrib.Enabled.
+	Attribution bool `json:"attribution"`
+
 	// TelemetryPort is the loopback port AI tools POST OTLP to.
 	//
 	// ⚠️ IT HAS A CONFIG KEY FOR THE REASON `Blocks` DOES: an env-only knob is

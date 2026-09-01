@@ -817,6 +817,12 @@ func Run(ctx context.Context) error {
 	// from being restated on each one. Owned out here (not per-call) so it remembers across
 	// polls; pollSettings drives onRemote from a single goroutine, so no lock is needed.
 	rejects := &rejectReporter{}
+	// lastProjects is the last project list this daemon POSTed to the sidecar
+	// (nil until the first successful post). Owned out here for the same
+	// reason rejects is: pollSettings drives onRemote from a single goroutine,
+	// so no lock is needed, and it lets a poll skip PostProjects when nothing
+	// actually changed.
+	var lastProjects []settings.RemoteProject
 	updateEvents.replay(emitter)
 	updater, hasUpdater := newUpdater(func(code, sev string, fields map[string]any) {
 		emitter.EmitExempt(code, clientevents.Severity(sev), fields)
@@ -846,6 +852,41 @@ func Run(ctx context.Context) error {
 		if updater != nil {
 			updater.Maybe(ctx, updateTargetFrom(r))
 		}
+
+		// PROJECT ATTRIBUTION: KELD_PROJECTS_FILE wins over the org's remote
+		// list (resolveProjects), and the sidecar is only re-told when the
+		// resolved list actually changed — an org editing unrelated settings
+		// must not re-POST the same projects on every 5-minute poll. Skipped
+		// entirely when there is no attribution client this run (the gate is
+		// off, or ml_backend has no service at all).
+		if svc.PostProjects != nil {
+			if p := resolveProjects(r); projectsChanged(lastProjects, p) {
+				if err := svc.PostProjects(p); err != nil {
+					log.Printf("keld-agent: /projects update failed: %v", err)
+				} else {
+					lastProjects = p
+				}
+			}
+		}
+	}
+	// PROJECT ATTRIBUTION: resolve the declared project list ONCE at startup
+	// (KELD_PROJECTS_FILE wins over the remote key — see resolveProjects) and
+	// tell the sidecar before anything can ask it to attribute a block; later
+	// changes are picked up by onRemote (above) on the settings poll.
+	//
+	// ⚠️ THIS MUST RUN BEFORE `go pollSettings` STARTS, not merely before it in
+	// program order. lastProjects is read/written by onRemote on the poll
+	// goroutine with no lock (the same "single goroutine drives it" contract
+	// rejects/custom already rely on) — the ONLY thing that makes this
+	// data-race-free is Go's happens-before guarantee that everything before a
+	// `go` statement is visible to the goroutine it starts. Writing
+	// lastProjects after pollSettings is already running would be a real race
+	// between this line and onRemote's own write.
+	if svc.PostProjects != nil {
+		lastProjects = resolveProjects(nil)
+		if err := svc.PostProjects(lastProjects); err != nil {
+			log.Printf("keld-agent: initial /projects post failed: %v", err)
+		}
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
@@ -857,13 +898,20 @@ func Run(ctx context.Context) error {
 		// Atlas yet; see tick.go's envTick for the whole of that reasoning. Started
 		// BEFORE the worker so the observer is in place for the first job.
 		setTickObserver(startTicker(ctx, svc.Tick, pub, actor, emitter))
+		// Now build the attributor itself, which returns the OnPublished hook
+		// the block emitter calls after every successful publish — nil when
+		// the gate is off, so startBlockEmitter's own nil-check makes wiring
+		// it in cost nothing on a machine that never turned attribution on.
+		onBlockPublished := startAttributor(ctx, svc.Blocks, svc.Attribution,
+			cfg.Endpoint, tok.Get, actor, emitter, set.Attribution)
 		// v2's block emitter, and the reason it sits beside the tick rather than
 		// inside it: a block reaches nowhere, so it needs none of the tick's
 		// frontier reasoning about which future prompts might sweep over a
 		// moment. OFF by default (KELD_BLOCKS) for the same reason the tick is —
 		// Atlas stores blocks now but nothing reads them yet. Returns nil when
 		// off, which setBlockAdvance takes as "no observer".
-		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks))
+		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks,
+			onBlockPublished))
 		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
 		// future-work prediction. svc.Features is non-nil ONLY under
 		// ml_backend "deterministic" (see deterministicBackend), so this is

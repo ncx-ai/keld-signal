@@ -3,9 +3,12 @@ package daemon
 import (
 	"time"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/attrib"
 	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
 	"github.com/ncx-ai/keld-signal/internal/agent/features"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
 // windowAnalyzer is the OPTIONAL capability a backend advertises when it can
@@ -55,6 +58,24 @@ type blockDigesterCap interface {
 	BlocksCharacterised(path, source, sessionID string,
 		since *float64, now time.Time, maxBlocks int,
 		resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool)
+}
+
+// attributionClient is the capability behind THE PROJECT ATTRIBUTION PATH's
+// sidecar calls (POST /attribute, POST /projects). Declared here in the exact
+// shape attrib.AttributeClient wants and *sidecar.Client provides, so
+// facetsFor resolves it the same way it resolves the three service routes
+// above — a structural check against the client, not a type assertion on the
+// Model (which is nil under ml_backend "deterministic").
+type attributionClient interface {
+	Attribute(path, sessionID string, start, end float64, dims map[string]string) (sidecar.AttributeResult, bool)
+}
+
+// projectsPoster is the capability behind POST /projects — telling the
+// sidecar which projects are currently declared. Separate from
+// attributionClient because it is called by the daemon directly (at startup
+// and on a settings-poll change), never by the attribution loop itself.
+type projectsPoster interface {
+	PostProjects(projects []settings.RemoteProject) error
 }
 
 // transcriptIngester is the capability behind the watcher's ingest signal (the
@@ -109,6 +130,16 @@ type serviceFacets struct {
 	// so it appears in neither facets_skipped nor extractor_versions. See
 	// featureSourceFor.
 	Features features.Source
+	// Attribution is THE PROJECT ATTRIBUTION PATH's client capability (POST
+	// /attribute), consumed by no job either: it is driven by the attributor's
+	// own timer off the block emitter's OnPublished hook (see daemon/attrib.go).
+	// Nil when the service cannot provide it, which switches the attribution
+	// loop off rather than degrading it — the same rule Blocks/Tick follow.
+	Attribution attrib.AttributeClient
+	// PostProjects tells the sidecar which projects are currently declared
+	// (POST /projects). Consumed by the daemon directly at startup and on a
+	// settings-poll change, never per job or per block.
+	PostProjects func(projects []settings.RemoteProject) error
 	// AwaitSidecarStop blocks (bounded) until the supervisor has finished
 	// stopping the sidecar and reaping its process group. It is consumed by no
 	// job at all — Run calls it once, after serve() returns, so the daemon does
@@ -159,6 +190,12 @@ func facetsFor(m enrich.Model, regions func() []string) serviceFacets {
 	}
 	if b, ok := m.(blockDigesterCap); ok {
 		f.Blocks = b
+	}
+	if at, ok := m.(attributionClient); ok {
+		f.Attribution = at
+	}
+	if pp, ok := m.(projectsPoster); ok {
+		f.PostProjects = pp.PostProjects
 	}
 	return f
 }
