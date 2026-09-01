@@ -288,6 +288,34 @@ def main():
     print(f"wall={wall_s:.1f}s embed={embed_ms_total}ms verify={verify_ms_total}ms "
           f"failures={len(result['failures'])}/{len(conversations)}")
 
+    # ---- The customer-facing layer: the SAME measurements, re-sliced. ----
+    # Micro P/R/F1 above is the internal instrument (it sees every missed
+    # second label). A customer experiences exactly two things: an unlabeled
+    # block (COVERAGE) or a label they can check (TRUST). Both derive from the
+    # identical predictions — this is a re-slicing, never a softer measurement,
+    # and if the two layers ever disagree in spirit, the internal one is the
+    # one that is right.
+    #   coverage        — share of blocks given at least one label. Gold plays
+    #                     no part: it is what a user SEES.
+    #   trust           — of the labels shown, how many were correct (micro
+    #                     precision restated per shown label).
+    #   clean blocks    — of the blocks we labeled, how many carried no wrong
+    #                     label at all (a block showing one right + one wrong
+    #                     label reads as wrong to the person billed by it).
+    labeled = [(c, p) for c, p in zip(conversations, predictions) if p]
+    coverage = len(labeled) / len(conversations)
+    shown = sum(len(p) for _, p in labeled)
+    shown_right = sum(len(p & set(c["gold_projects"])) for c, p in labeled)
+    clean = sum(1 for c, p in labeled if p <= set(c["gold_projects"]))
+    print()
+    print("customer layer (same data, re-sliced):")
+    print(f"  coverage: {coverage:.0%} of blocks auto-attributed "
+          f"({len(labeled)}/{len(conversations)}; the rest stated as unassigned)")
+    print(f"  trust: {shown_right}/{shown} shown labels correct "
+          f"({shown_right / shown:.0%})" if shown else "  trust: n/a (nothing labeled)")
+    print(f"  clean blocks: {clean}/{len(labeled)} labeled blocks carry no wrong label "
+          f"({clean / len(labeled):.0%})" if labeled else "")
+
     assert result["f1"] >= F1_FLOOR, (
         f"micro-F1 {result['f1']:.3f} below the {F1_FLOOR} floor (benchmark measured "
         "0.929 with this exact pipeline — a shortfall this large means something is "
