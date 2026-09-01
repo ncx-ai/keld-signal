@@ -68,7 +68,10 @@ def project_doc(p):
 
 
 def project_vectors(encoder):
-    """id -> L2-normalised vector, embedded once per content hash.
+    """id -> L2-normalised vector, embedded once per content hash — INCLUDING
+    the reserved `NULL_ID` entry for `NULL_DOC`, the "belongs to nothing"
+    competitor `score_block` ranks against. It rides the same encode call and
+    the same memo as the projects, so it can never be stale relative to them.
 
     Single-flighted: `_encode_lock` ensures only one `encoder.encode()` call
     is ever in flight, and the write back is refused if `_hash` moved while
@@ -85,8 +88,9 @@ def project_vectors(encoder):
                 if _vectors is not None and _vectors_hash == _hash:
                     return _vectors
                 projects, target_hash = list(_projects), _hash
-            vecs = encoder.encode([project_doc(p) for p in projects])
+            vecs = encoder.encode([project_doc(p) for p in projects] + [NULL_DOC])
             out = {p["id"]: _l2(v) for p, v in zip(projects, vecs)}
+            out[NULL_ID] = _l2(vecs[-1])
             with _lock:
                 if _hash == target_hash:
                     _vectors, _vectors_hash = out, target_hash
@@ -102,13 +106,45 @@ def _l2(v):
 
 
 # --- Scoring: embedding similarity + deterministic metadata boost ----------
+# ⚠️ THE DECISION IS RELATIVE, NOT AN ABSOLUTE BAR — `cut = max(null, top - MARGIN)`.
 #
-# THRESHOLD/BAND/W_*/BOOST_CAP are benchmark-derived (measured against a
-# labeled corpus in embedding-experiment/), not tuned by feel. Do not "tidy"
-# these values without re-running that benchmark.
-THRESHOLD = float(os.environ.get("KELD_ATTRIBUTION_THRESHOLD", "0.49"))
-BAND = float(os.environ.get("KELD_ATTRIBUTION_BAND", "0.08"))
+# An absolute threshold conflates two different questions, and real-transcript
+# evaluation showed it (2026-09-02, 21 real blocks: the best absolute threshold
+# still mixed 0.4x false positives in with 0.6+ true ones, because a block's
+# scores carry a per-block offset — a chatty block scores mid against
+# EVERYTHING, a terse one low against everything). The two questions are:
+#
+#   LEVEL — does this block belong to anything at all? Answered by a
+#   competitor: NULL_DOC below is embedded beside the projects and its
+#   similarity is the score "nothing" gets. A project attributes only by
+#   BEATING nothing, on the same scale, in the same ranking. No boost applies
+#   to it — exact repo/ticket evidence argues for a project, never for "none".
+#
+#   SHAPE — among things that beat nothing, is there a clear winner? Answered
+#   by MARGIN: everything within MARGIN of the top score is assigned (a block
+#   can genuinely serve two projects), anything further behind is not.
+#
+# `cut = max(null_score, top - MARGIN)` is both gates in one expression, and
+# VERIFY_HALO around that cut is where the verifier adjudicates — the pairs
+# whose distance from the cut is smaller than the score's own noise.
+#
+# MARGIN/VERIFY_HALO are starting points pending calibration on labeled real
+# blocks (see test_attribution_quality.py's docstring); the boost weights are
+# benchmark-derived — do not "tidy" any of them without re-measuring.
+MARGIN = float(os.environ.get("KELD_ATTRIBUTION_MARGIN", "0.08"))
+VERIFY_HALO = float(os.environ.get("KELD_ATTRIBUTION_VERIFY_HALO", "0.04"))
 W_REPO, W_TICKET, W_KEYWORD, BOOST_CAP = 0.15, 0.20, 0.05, 0.35
+
+# The reserved competitor. Never a project id (double underscore is not a
+# valid declared id), never boosted, never published — it exists only inside
+# the ranking, so "none of the above" competes instead of being a threshold.
+NULL_ID = "__none__"
+NULL_DOC = (
+    "General conversation that belongs to no declared project: personal "
+    "matters, casual chat, greetings, generic technical questions asked out "
+    "of curiosity or for learning, help using a tool, or administrative talk "
+    "that serves no specific project or initiative."
+)
 
 
 def metadata_boost(project, dims, texts):
@@ -152,36 +188,51 @@ def score_block(texts, dims, encoder):
     fully populated, including the metadata boost alone when `encoder is
     None` — a human debugging an unattributed block needs to see that boost
     as telemetry. But **with no encoder, NOTHING is assigned and nothing is
-    borderline, however large the boost.** `THRESHOLD`/`BAND` are tuned for a
-    similarity-plus-boost score, and `BOOST_CAP` (0.35) sits below
-    `THRESHOLD - BAND` (0.41) by construction, so a boost-only score can never
-    cross them — that is not a bug to route around with a second, unmeasured
-    assignment rule. There is exactly one attribution path, the benchmarked
-    one: a machine with no model has no answer yet, not a weaker answer. The
-    caller publishes `degraded:weights_unavailable` with no projects, and a
-    durable job re-attributes the block once weights are provisioned.
+    borderline, however large the boost.** The ranking below is over
+    similarities the boost only ADJUSTS; with no similarities there is no
+    ranking to adjust, and inventing a boost-only rule would be a second,
+    unmeasured assignment path. A machine with no model has no answer yet,
+    not a weaker answer: the caller publishes `degraded:weights_unavailable`
+    with no projects, and a durable job re-attributes the block once weights
+    are provisioned.
+
+    The decision (see the MARGIN comment above): `cut = max(null, top - MARGIN)`.
+    A project is assigned when its score reaches the cut — i.e. it BEATS the
+    "belongs to nothing" competitor AND sits within MARGIN of the winner.
+    `borderline` is every project within VERIFY_HALO of the cut, in either
+    direction: the pairs whose distance from the decision is smaller than the
+    score's own noise, which is exactly where a verifier verdict is worth its
+    cost. Note one deliberate consequence: a strong exact-match boost (repo +
+    ticket) CAN now carry a project past the null on its own — an exact repo
+    and ticket reference is strong evidence regardless of how the prose reads.
 
     Privacy: `texts` and project descriptions are held in memory only for this
     call; nothing here logs or persists block text or project text."""
     projects, _ = current_projects()
     encoder_used = False
+    null_sim = 0.0
     sims = {p["id"]: 0.0 for p in projects}
     if encoder is not None and texts:
         pvecs = project_vectors(encoder)
         tvecs = [_l2(v) for v in encoder.encode(texts)]
-        for pid, pv in pvecs.items():
-            sims[pid] = max((_cos(tv, pv) for tv in tvecs), default=0.0)
+        for p in projects:
+            pv = pvecs[p["id"]]
+            sims[p["id"]] = max((_cos(tv, pv) for tv in tvecs), default=0.0)
+        null_sim = max((_cos(tv, pvecs[NULL_ID]) for tv in tvecs), default=0.0)
         encoder_used = True
-    scores, borderline, assigned = {}, [], []
+    scores = {}
     for p in projects:
         boost = metadata_boost(p, dims, texts)
-        s = sims[p["id"]] + boost
-        scores[p["id"]] = round(s, 4)
-        if encoder_used:
-            if abs(s - THRESHOLD) < BAND:
-                borderline.append(p["id"])
-            if s >= THRESHOLD:
-                assigned.append(p["id"])
+        scores[p["id"]] = round(sims[p["id"]] + boost, 4)
+    borderline, assigned = [], []
+    if encoder_used and scores:
+        top = max(scores.values())
+        cut = max(null_sim, top - MARGIN)
+        for pid, s in scores.items():
+            if abs(s - cut) < VERIFY_HALO:
+                borderline.append(pid)
+            if s >= cut and top > null_sim:
+                assigned.append(pid)
     return scores, borderline, assigned, encoder_used
 
 
@@ -314,8 +365,8 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
         the discovery's decision table row 5.
       * `degraded:weights_unavailable` — no encoder. ⚠️ **NOTHING is
         attributed, however strong the exact-match evidence** (AC-4 as amended
-        2026-09-01). `BOOST_CAP` (0.35) sits below `THRESHOLD - BAND` (0.41) by
-        construction, so a boost-only assignment could exist only under a
+        2026-09-01). The ranking is over similarities the boost only adjusts;
+        with no similarities a boost-only assignment could exist only under a
         second, unmeasured rule; there is exactly one attribution path, the
         benchmarked one. A machine with no model has no answer YET, not a
         weaker answer, and the daemon's durable job re-attributes the block

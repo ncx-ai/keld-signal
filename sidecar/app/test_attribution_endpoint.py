@@ -90,11 +90,17 @@ MID_PROJECTS = [{"id": "proj_mid", "title": "Ambiguity", "team": "Eng",
 
 
 class MidEncoder:
-    """Cosine 0.49 between a block text and the project doc — exactly `THRESHOLD`, so the pair
-    is inside the borderline band and the verifier is the thing that decides."""
+    """Block text at 0.52 vs the project and 0.50 vs NULL_DOC: the cut is
+    max(null, top - MARGIN) = 0.50 and the pair sits 0.02 above it — inside VERIFY_HALO, so
+    it is borderline and the verifier is the thing that decides."""
 
     def encode(self, texts):
-        return [[1.0, 0.0] if "Ambiguity" in t else [0.49, 0.8718] for t in texts]
+        out = []
+        for t in texts:
+            if "Ambiguity" in t: out.append([1.0, 0.0, 0.0])
+            elif "General conversation" in t: out.append([0.0, 1.0, 0.0])
+            else: out.append([0.52, 0.50, 0.6926])
+        return out
 
 
 def test_verifier_absent_states_which_absence():   # AC-6
@@ -316,14 +322,20 @@ BAND_PROJECTS = [{"id": "proj_band", "title": "Borderline", "team": "Eng",
 
 
 class BandChild(FakeChild):
-    """Production shape, scoring every block text at cosine ~0.52: inside the borderline BAND
-    (0.08 either side of THRESHOLD 0.49) and just above the threshold, so the verifier decides
-    and the threshold alone would still say yes. That pair is what separates a verdict from a
-    fallback."""
+    """Production shape, engineered onto the rank-and-margin rule's halo: the block text
+    scores 0.52 against the project and 0.50 against NULL_DOC, so the cut is
+    max(null, top - MARGIN) = 0.50 and the pair sits 0.02 above it — inside VERIFY_HALO
+    (0.04), so the verifier decides, while the cut alone would still say yes. That pair is
+    what separates a verdict from a fallback."""
 
     def encode(self, texts):
         self.seen.append(list(texts))
-        return [[1.0, 0.0] if "Borderline" in t else [0.52, 0.85416] for t in texts], "ok"
+        out = []
+        for t in texts:
+            if "Borderline" in t: out.append([1.0, 0.0, 0.0])
+            elif "General conversation" in t: out.append([0.0, 1.0, 0.0])
+            else: out.append([0.52, 0.50, 0.6926])
+        return out, "ok"
 
 
 def test_the_verifier_is_called_once_per_borderline_project():   # AC-5

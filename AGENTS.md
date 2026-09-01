@@ -1744,13 +1744,26 @@ timings — no text, no span, no offset, in either direction.
   genuine quarantine (4 real errors) now emits `attribution.job_quarantined` — `Store.List`
   skips subdirectories, so `spool/attrib/bad/` is never re-read and the loss is otherwise
   invisible to the fleet.
-- **Quality: measured 0.823 micro-F1, against a design gate of 0.85.** The external
-  benchmark measured 0.929 with assistant text included; production scores USER-turn text
-  only (`_span_texts`), deliberately. `sidecar/app/test_attribution_quality.py` is opt-in
-  (`KELD_ATTRIBUTION_EVAL=1`) and asserts **0.80**, a regression tripwire just under the
-  measurement — not the design gate, which this pipeline does not currently meet.
-  `THRESHOLD` (0.49) was fitted to a prototype's score distribution and wants recalibrating
-  on real blocks. Runbook: `docs/attribution-smoke.md`.
+- **The decision is RELATIVE, not an absolute bar: `cut = max(null, top - MARGIN)`.**
+  An absolute threshold conflated two questions and real-transcript evaluation showed it
+  (2026-09-02, 21 real blocks: every block carries a per-block score offset, so one bar
+  admits 0.4x false positives beside 0.6+ true ones). LEVEL — does the block belong to
+  anything? — is answered by a competitor: `NULL_DOC` is embedded beside the projects and
+  a project attributes only by BEATING "nothing" in the same ranking (the null gets no
+  boost). SHAPE — is there a clear winner? — is `MARGIN` (0.08, `KELD_ATTRIBUTION_MARGIN`):
+  everything within MARGIN of the top is assigned, and `VERIFY_HALO` (0.04,
+  `KELD_ATTRIBUTION_VERIFY_HALO`) around the cut is where the verifier adjudicates. One
+  deliberate consequence: a strong exact-match boost (repo + ticket) CAN carry a project
+  past the null on its own — with an encoder present; with none, nothing is ever assigned
+  (AC-4 as amended).
+- **Quality: measured 0.823 micro-F1 under the OLD absolute threshold, against a design
+  gate of 0.85.** The external benchmark measured 0.929 with assistant text included;
+  production scores USER-turn text only (`_span_texts`), deliberately.
+  `sidecar/app/test_attribution_quality.py` is opt-in (`KELD_ATTRIBUTION_EVAL=1`) and its
+  floor is a regression tripwire under the current measurement, not the design gate.
+  MARGIN/VERIFY_HALO are starting points awaiting calibration on LABELED REAL blocks —
+  the correction flywheel, not another synthetic sweep. Runbook:
+  `docs/attribution-smoke.md`.
 
 **`keld signal doctor` / `status` report on-device model state**
 (`internal/localagent/models.go`). ⚠️ **Presence is a filesystem stat, never a
