@@ -81,6 +81,43 @@ def test_mmr_reaches_for_a_second_idea_rather_than_a_third_spelling_of_the_first
     assert "cutter" in joined and "attribution" in joined, got
 
 
+def test_a_pasted_PATH_can_never_become_a_concept():
+    """⚠️ REGRESSION, FOUND ON REAL DATA. A slash was in the identifier set, so one pasted
+    screenshot path became a single "word" and published verbatim —
+    `Image source var/folders/6w/.../Screenshot`. The word BOUND could not catch it: a path is
+    one word however long it is. Paths publish workspace-relative as `directories` and have no
+    second door here."""
+    text = ("Image source /var/folders/6w/xx74jjqd2hnd17yv6cwl79_w0000gn/T/TemporaryItems/"
+            "NSIRD_screencaptureui_VTuoi0/Screenshot 2026-09-02 at 02.51.16.png")
+    for phrase in concepts.candidates([text]):
+        assert "/" not in phrase and "\\" not in phrase, phrase
+        for token in phrase.split():
+            assert len(token) <= concepts.MAX_TOKEN_CHARS, phrase
+
+
+def test_a_contractions_orphan_letter_never_reaches_a_phrase():
+    """⚠️ REGRESSION, FOUND ON REAL DATA. `don't` tokenises to `don` + `t`, so real blocks
+    published `columns don t`, `metadata it s` and `blocks That s` — three slots on punctuation."""
+    got = concepts.candidates(["the columns don't make sense and that's the whole problem"])
+    for phrase in got:
+        assert all(len(w) >= 2 for w in phrase.split()), phrase
+
+
+def test_a_phrase_that_merely_restates_a_chosen_one_is_not_a_second_slot():
+    """⚠️ REGRESSION, FOUND ON REAL DATA: six of eight slots went to `about metadata`,
+    `talking about metadata`, `metadata increased`, `metadata it s`, `block metadata`,
+    `metadata using usage`. MMR alone cannot fix it — those are genuinely different POINTS, just
+    near ones. Containment is lexical and decides before any vector opinion."""
+
+    class Flat:
+        def encode(self, texts):
+            return [[1.0, 0.0] for _ in texts]     # everything equally relevant: MMR is helpless
+
+    phrases = ["metadata", "about metadata", "block metadata"]
+    picked, _rel = concepts._mmr(phrases, Flat().encode(phrases), [1.0, 0.0], 8, 0.5)
+    assert len(picked) == 1, [phrases[i] for i in picked]
+
+
 def test_no_encoder_and_no_vectors_answer_EMPTY_rather_than_raising():
     # A degraded machine must publish an honest blank, never a 500 on the attribution path.
     assert concepts.extract(["some words here"], [], Geom()) == ([], 0)

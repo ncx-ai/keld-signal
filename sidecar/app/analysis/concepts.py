@@ -55,15 +55,24 @@ MAX_WORDS = 3
 #: eighth is a different fact rather than the eighth spelling of the first.
 TOP_K = 8
 
-#: The relevance/diversity trade in MMR. 0.7 keeps relevance dominant — a diverse list of
-#: irrelevant phrases is worse than a slightly repetitive relevant one.
-LAMBDA = 0.7
+#: The relevance/diversity trade in MMR. ⚠️ **0.5, MEASURED, not the 0.7 this shipped with for
+#: an hour.** At 0.7 a real block returned `about metadata`, `metadata using usage`, `talking
+#: about metadata`, `metadata increased`, `metadata it s` and `block metadata` — six of eight
+#: slots on one idea. Relevance still leads at 0.5; what changed is that the second slot has to
+#: earn itself against the first.
+LAMBDA = 0.5
 
-#: How many candidates reach the encoder. THIS IS THE COST KNOB: everything else in this module
-#: is string work measured in microseconds, and the encode is one batch of this many short
-#: strings. Candidates are ranked by occurrence before the cut, so the cut removes the long tail
-#: of phrases said once, never a phrase the block keeps returning to.
-MAX_CANDIDATES = 160
+#: How many candidates reach the encoder. ⚠️ **THIS IS THE COST KNOB AND IT IS THE WHOLE COST.**
+#: Everything else here is string work measured in microseconds (0.3-0.9 ms per block, measured
+#: on real transcripts); the encode is one batch of this many short strings, and the encoder's
+#: per-item cost is dominated by a FIXED overhead rather than by phrase length — measured at
+#: 53-170 ms per candidate, so 160 candidates cost 8.5-27 s. That is not a rounding error beside
+#: the message encode it rides on; it is comparable to it.
+#:
+#: 64 is where the cost lands in the low seconds while still covering every repeated phrase:
+#: candidates are ranked by OCCURRENCE before the cut, so what the cut removes is the tail of
+#: phrases said exactly once, never one the block keeps returning to.
+MAX_CANDIDATES = 64
 
 #: A phrase may CONTAIN these; it may not START or END with one. "the block cutter" is a concept
 #: and "of the" is not, and that rule needs no frequency list to apply. Deliberately short for
@@ -81,8 +90,22 @@ like get got make made made take taken use used using see saw seen say said says
 """.split())
 
 #: A candidate is words and the punctuation that lives INSIDE an identifier — a hyphen, a dot, an
-#: underscore, a slash. Everything else is a boundary, so a sentence cannot become a candidate.
-_WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-_./][A-Za-z0-9]+)*")
+#: underscore. Everything else is a boundary, so a sentence cannot become a candidate.
+#:
+#: ⚠️ **A SLASH IS NOT IN THAT SET, and it was.** With `/` admitted, one pasted screenshot path
+#: became a single "word" and rode into a published concept verbatim:
+#: `Image source var/folders/6w/.../NSIRD_screencaptureui_VTuoi0/Screenshot`. That is a user's
+#: directory layout on the wire, which is the exact defect `terms.in_path` and
+#: `clientevents/redact.go` both exist to prevent, and it is worse here because the phrase bound
+#: counts WORDS — a path is one word however long it is, so the bound could not catch it.
+#: Paths already publish, workspace-relative and separately checked, as the `directories`
+#: inventory; they have no business arriving through this door as well.
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-_.][A-Za-z0-9]+)*")
+
+#: Longest token a concept may contain. A real word or identifier is not 40 characters; something
+#: that is, is a path, a base64 blob or a stack frame — none of them a concept, all of them more
+#: text than this publishes.
+MAX_TOKEN_CHARS = 32
 
 
 def _words(text):
@@ -100,6 +123,14 @@ def _ok(phrase_words):
         return False
     if phrase_words[0].lower() in EDGE_WORDS or phrase_words[-1].lower() in EDGE_WORDS:
         return False
+    for w in phrase_words:
+        # ⚠️ A ONE-CHARACTER TOKEN IS ALWAYS AN APOSTROPHE'S ORPHAN. `don't` tokenises to `don`
+        # + `t` and `That's` to `That` + `s`, so real blocks published `columns don t`,
+        # `metadata it s` and `blocks That s` — three slots spent on a contraction. Admitting
+        # the apostrophe into _WORD instead would publish `don't` itself, which is a word about
+        # the conversation rather than the work; dropping the phrase is the honest answer.
+        if len(w) < 2 or len(w) > MAX_TOKEN_CHARS:
+            return False
     # A single word must be substantial: two characters is an initialism a name-detector should
     # be finding, not a concept.
     return not (len(phrase_words) == 1 and len(phrase_words[0]) < 4)
@@ -152,19 +183,38 @@ def _centroid(vecs):
     return _l2([sum(v[i] for v in vecs) / len(vecs) for i in range(dims)])
 
 
-def _mmr(cand_vecs, doc, k, lam):
-    """Maximal Marginal Relevance over already-embedded candidates. Returns indices."""
+def _subsumed(phrase, chosen_phrases):
+    """Is this phrase one already-chosen phrase with a word added or removed?
+
+    ⚠️ **MMR CANNOT CATCH THIS AND THE MEASUREMENT SAID SO.** MMR penalises VECTOR redundancy,
+    and `metadata` / `about metadata` / `block metadata` are genuinely different points — near
+    each other, but not near enough to lose against a much less relevant alternative. A real
+    block spent six of eight slots on that family. Containment is a lexical fact, decided before
+    any vector opinion, and it is what makes the eight slots eight ideas.
+    """
+    low = phrase.lower()
+    return any(low in c.lower() or c.lower() in low for c in chosen_phrases)
+
+
+def _mmr(phrases, cand_vecs, doc, k, lam):
+    """Maximal Marginal Relevance over already-embedded candidates, plus the containment rule
+    above. Returns indices, and the relevance scores everything was ranked by."""
     rel = [_cos(v, doc) for v in cand_vecs]
-    chosen = []
+    chosen, chosen_phrases = [], []
     remaining = list(range(len(cand_vecs)))
     while remaining and len(chosen) < k:
         best, best_score = None, None
         for i in remaining:
+            if _subsumed(phrases[i], chosen_phrases):
+                continue
             redundancy = max((_cos(cand_vecs[i], cand_vecs[j]) for j in chosen), default=0.0)
             score = lam * rel[i] - (1 - lam) * redundancy
             if best_score is None or score > best_score:
                 best, best_score = i, score
+        if best is None:
+            break      # every survivor restates something already chosen — stop short, honestly
         chosen.append(best)
+        chosen_phrases.append(phrases[best])
         remaining.remove(best)
     return chosen, rel
 
@@ -189,7 +239,7 @@ def extract(texts, text_vectors, encoder, top_k=TOP_K):
     if not phrases:
         return [], int((time.time() - t0) * 1000)
     vecs = [_l2(v) for v in encoder.encode(phrases)]
-    picked, rel = _mmr(vecs, doc, top_k, LAMBDA)
+    picked, rel = _mmr(phrases, vecs, doc, top_k, LAMBDA)
     out = [{"value": phrases[i], "score": round(rel[i], 4)} for i in picked]
     # Reported best-first by RELEVANCE, not in MMR's own pick order: MMR's order is an artifact
     # of the diversity walk, and a reader scanning a row reads the first pill as the strongest.
