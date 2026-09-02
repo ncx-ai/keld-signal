@@ -96,6 +96,16 @@ type BlockEnrichment struct {
 	Projects       []enrich.ProjectAttribution `json:"projects,omitempty"`
 	ProjectsStatus string                      `json:"projects_status,omitempty"`
 	Attribution    *enrich.AttributionMeta     `json:"attribution,omitempty"`
+	// Concepts is what this block was ABOUT — see enrich.Concept, which carries
+	// the privacy argument, since this is the one field on a block row derived
+	// from message text that is not already covered by the named_terms decision.
+	//
+	// It rides the attribution republish (set by WithProjects) because the pass
+	// that produces it IS the attribution pass: the encoder and the block's
+	// message vectors are both already resident there. A block published before
+	// attribution runs carries no concepts and is byte-identical to the payload
+	// before this field existed, exactly as Projects is.
+	Concepts []enrich.Concept `json:"concepts,omitempty"`
 	// AnalysisFacets is the deterministic analysis of this block: workstreams,
 	// dynamics, effort, the thirteen inventories, the cut-visibility map and
 	// the session prior. Embedded and SHARED with WindowEnrichment — see
@@ -146,7 +156,8 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) Blo
 }
 
 // WithProjects returns a copy of b with its project attribution set —
-// Projects, ProjectsStatus and the pass's own AttributionMeta.
+// Projects, ProjectsStatus, the pass's own AttributionMeta, and the Concepts
+// the same pass extracted.
 //
 // A SEPARATE function from BuildBlock, deliberately, rather than three more
 // BuildBlock parameters: attribution runs AFTER a block is built (it needs the
@@ -156,10 +167,12 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) Blo
 // existing BuildBlock caller must stay untouched. b is passed by value and
 // returned, not mutated, so a caller holding the original (e.g. to retry a
 // failed publish) is unaffected by a later WithProjects call on the copy.
-func WithProjects(b BlockEnrichment, ps []enrich.ProjectAttribution, status string, meta *enrich.AttributionMeta) BlockEnrichment {
+func WithProjects(b BlockEnrichment, ps []enrich.ProjectAttribution, status string,
+	meta *enrich.AttributionMeta, concepts []enrich.Concept) BlockEnrichment {
 	b.Projects = ps
 	b.ProjectsStatus = status
 	b.Attribution = meta
+	b.Concepts = concepts
 	return b
 }
 

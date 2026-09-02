@@ -35,6 +35,8 @@ import re
 import threading
 import time
 
+from app.analysis import concepts
+
 _lock = threading.Lock()
 _encode_lock = threading.Lock()
 _projects: list[dict] = []
@@ -184,7 +186,11 @@ def score_block(texts, dims, encoder):
     its own output — a caller wiring in a different encoder gets a correct
     cosine rather than a silently wrong one.
 
-    Returns (scores, borderline, assigned, encoder_used). `scores` is always
+    Returns (scores, borderline, assigned, encoder_used, text_vectors).
+    `text_vectors` is the block's own message vectors — the expensive artifact
+    of this call, handed back rather than recomputed because `concepts.extract`
+    needs the same vectors and a message costs ~1.1-1.6 s to encode. It is `[]`
+    whenever the encoder did not run. `scores` is always
     fully populated, including the metadata boost alone when `encoder is
     None` — a human debugging an unattributed block needs to see that boost
     as telemetry. But **with no encoder, NOTHING is assigned and nothing is
@@ -211,6 +217,7 @@ def score_block(texts, dims, encoder):
     projects, _ = current_projects()
     encoder_used = False
     null_sim = 0.0
+    tvecs = []
     sims = {p["id"]: 0.0 for p in projects}
     if encoder is not None and texts:
         pvecs = project_vectors(encoder)
@@ -233,7 +240,7 @@ def score_block(texts, dims, encoder):
                 borderline.append(pid)
             if s >= cut and top > null_sim:
                 assigned.append(pid)
-    return scores, borderline, assigned, encoder_used
+    return scores, borderline, assigned, encoder_used, tvecs
 
 
 def apply_verifier(texts, dims, scores, borderline, verifier_obj):
@@ -303,7 +310,7 @@ STATUSES = (STATUS_ATTRIBUTED, STATUS_PENDING, STATUS_SKIPPED_DISABLED,
 MODEL_VERSIONS = {"encoder": "qwen3-embedding-0.6b", "verifier": "gemma-4-e2b-q4km"}
 
 
-def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state):
+def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state, concept_ms=0):
     """The pass's report on ITSELF: integer timings, counts and closed enums.
 
     `encoder_state` is `warm` or `absent`, and there is deliberately no `cold`: this module
@@ -316,7 +323,8 @@ def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state):
     `enrich.AttributionMeta` and the reflection tripwire beside it. A project's
     name is exactly the class of string `named_terms` has already shown can
     hold a real person's."""
-    return {"embed_ms": embed_ms, "verify_ms": verify_ms, "pairs_verified": pairs,
+    return {"embed_ms": embed_ms, "verify_ms": verify_ms, "concept_ms": concept_ms,
+            "pairs_verified": pairs,
             "encoder_state": encoder_state, "verifier": verifier_state,
             "model_versions": dict(MODEL_VERSIONS)}
 
@@ -328,7 +336,7 @@ def stated(status, encoder_state="absent"):
     nothing about — whether the encoder is switched off on this machine, for
     instance — so it needs a way to answer in the same shape. A skip is always
     stated, never a silently empty `projects` list."""
-    return {"status": status, "projects": [],
+    return {"status": status, "projects": [], "concepts": [],
             "attribution": _meta(0, 0, 0, encoder_state, "not_needed")}
 
 
@@ -342,7 +350,7 @@ def pending():
     pass that ran instantly, which is the confident-number-over-nothing failure
     this codebase names everywhere else. The daemon's sweep is the retry loop;
     there is deliberately no second queue inside this process."""
-    return {"status": STATUS_PENDING, "projects": [], "attribution": None}
+    return {"status": STATUS_PENDING, "projects": [], "concepts": [], "attribution": None}
 
 
 def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_out"):
@@ -353,6 +361,15 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
     encoder (or `None`) and a verifier (or `None`); it gets back ids,
     confidences, closed enums and integer timings. That split is what makes the
     decision testable against plain fakes and the route a thin adapter over it.
+
+    ⚠️ **`concepts` is the one key here that is NOT an id** — phrases lifted
+    from the block's own words and ranked against its own centroid (see
+    `concepts.py`, which carries the privacy argument this docstring's
+    "no text in either direction" rule is otherwise absolute about). It rides
+    THIS answer rather than the block digest because the encoder and the
+    message vectors are both already here: computing it in `/blocks` would
+    make block emission depend on a model it does not otherwise need, and
+    would encode every message a second time.
 
     Four terminal shapes, each of which STATES itself:
 
@@ -392,12 +409,13 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
     if not projects:
         return stated(STATUS_SKIPPED_NO_PROJECTS, encoder_state)
     if not texts:
-        return {"status": STATUS_ATTRIBUTED, "projects": [],
+        return {"status": STATUS_ATTRIBUTED, "projects": [], "concepts": [],
                 "attribution": _meta(0, 0, 0, encoder_state, "not_needed")}
 
     t0 = time.time()
-    scores, borderline, assigned, encoder_used = score_block(texts, dims, encoder)
+    scores, borderline, assigned, encoder_used, tvecs = score_block(texts, dims, encoder)
     embed_ms = int((time.time() - t0) * 1000)
+    found, concept_ms = concepts.extract(texts, tvecs, encoder if encoder_used else None)
     overrides, pairs, verify_ms = apply_verifier(texts, dims, scores, borderline, verifier_obj)
 
     final = []
@@ -419,6 +437,7 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
     else:
         verifier_state = verifier_absent if borderline else "not_needed"
     status = STATUS_ATTRIBUTED if encoder_used else STATUS_DEGRADED_WEIGHTS
-    return {"status": status, "projects": final,
+    return {"status": status, "projects": final, "concepts": found,
             "attribution": _meta(embed_ms, verify_ms, pairs,
-                                 "warm" if encoder_used else "absent", verifier_state)}
+                                 "warm" if encoder_used else "absent", verifier_state,
+                                 concept_ms)}

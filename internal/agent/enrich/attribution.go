@@ -50,6 +50,13 @@ type AttributionMeta struct {
 	// VerifyMS is how long the verifier step took, in whole milliseconds. Zero
 	// when Verifier is not "used".
 	VerifyMS int `json:"verify_ms"`
+	// ConceptMS is how long concept extraction took, in whole milliseconds —
+	// candidate enumeration plus ONE encode of the candidate phrases. It
+	// excludes the block's own message encode, which EmbedMS already covers
+	// and which concept extraction reuses rather than repeating; reporting the
+	// shared cost under both would make the two look additive when they are
+	// not. Zero when there was no encoder or no prose.
+	ConceptMS int `json:"concept_ms"`
 	// PairsVerified is how many candidate (block, project) pairs the verifier
 	// adjudicated. Zero when Verifier is not "used".
 	PairsVerified int `json:"pairs_verified"`
@@ -105,4 +112,51 @@ const (
 	// pass that produced an answer from less evidence than usual, rather than
 	// no answer at all.
 	ProjectsDegradedWeights = "degraded:weights_unavailable"
+)
+
+// Concept is one phrase describing what a block was ABOUT, lifted from the
+// block's own words and ranked by the on-device encoder against the block's own
+// centroid (sidecar `analysis/concepts.py`).
+//
+// ⚠️ **THIS IS THE THIRD PUBLISHED SIGNAL DERIVED FROM MESSAGE TEXT, AND
+// AGENTS.md REQUIRES THAT TO BE A DECISION RATHER THAN AN ANALOGY.** The first
+// two are `inventory.named_terms` (schema v18, proper nouns and a count) and
+// `KELD_TEXTEMBED`'s projected vector. The rule those two established is not
+// "nothing derived from text crosses" — it is that RAW PROMPT TEXT never
+// crosses, that text, spans and offsets do not, and that each new text-derived
+// signal stands on its own evidence.
+//
+// What this one rests on:
+//
+//   - It is bounded by SHAPE: at most MaxConceptWords words per phrase, and a
+//     longer candidate is dropped WHOLE rather than cut (a cut phrase is a
+//     false phrase). No sentence can cross.
+//   - It is bounded by COUNT: at most MaxConcepts per block.
+//   - It carries no span, no offset and no position — a phrase and a score, the
+//     same shape named_terms crosses in.
+//   - Both bounds are re-checked at the decode boundary
+//     (sidecar.keepWellShapedConcepts) rather than trusted from a sidecar that
+//     ships on its own cadence.
+//
+// What it does NOT do is reduce exposure to zero: a three-word phrase can hold
+// a person's name plus a word of context, where named_terms holds the name
+// alone. That is a real widening and it is stated here rather than argued away.
+// Whoever ships this to a fleet owes it an explicit decision, exactly as the two
+// before it got one.
+type Concept struct {
+	// Value is the phrase as the block's own words spelled it.
+	Value string `json:"value"`
+	// Score is its cosine against the block's centroid, in [0,1] — how central
+	// the phrase is to the block, NOT how often it was said. That ordering is
+	// the whole reason this exists beside named_terms, which can only count.
+	Score float64 `json:"score"`
+}
+
+// The publish bounds for Concept, mirrored from the sidecar's `concepts.py`
+// (MAX_WORDS / TOP_K). Stated here as constants rather than inlined at the one
+// call site because they ARE the privacy argument above, and a reader checking
+// that argument must find them named.
+const (
+	MaxConceptWords = 3
+	MaxConcepts     = 8
 )

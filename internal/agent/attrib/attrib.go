@@ -546,7 +546,8 @@ func (a *Attributor) drainJob(j Job) {
 // one-row batch. Shared by every branch of drainJob that has a terminal (or
 // degraded-but-statable) answer to publish.
 func (a *Attributor) republish(j Job, b enrich.BlockCharacterisation, res sidecar.AttributeResult) error {
-	row := publish.WithProjects(publish.BuildBlock(b, a.actor, time.Now()), res.Projects, res.Status, res.Attribution)
+	row := publish.WithProjects(publish.BuildBlock(b, a.actor, time.Now()),
+		res.Projects, res.Status, res.Attribution, res.Concepts)
 	return a.pub.SendBlocks([]publish.BlockEnrichment{row})
 }
 

@@ -272,7 +272,7 @@ def main():
     for conv in conversations:
         texts = _user_texts(conv)
         t_embed = time.time()
-        scores, borderline, assigned, used = attribution.score_block(
+        scores, borderline, assigned, used, _tv = attribution.score_block(
             texts, conv["metadata"], encoder)
         embed_ms_total += int((time.time() - t_embed) * 1000)
         cut_only = set(assigned)

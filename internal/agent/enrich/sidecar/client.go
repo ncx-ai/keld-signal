@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -850,9 +851,24 @@ type attributeReq struct {
 // an empty Projects with a terminal Status is a real "no project matched",
 // not an absence.
 type AttributeResult struct {
-	Status      string                      `json:"status"`
-	Projects    []enrich.ProjectAttribution `json:"projects"`
-	Attribution *enrich.AttributionMeta     `json:"attribution"`
+	Status   string                      `json:"status"`
+	Projects []enrich.ProjectAttribution `json:"projects"`
+	// Concepts is what the block was ABOUT — phrases lifted from its own words
+	// and ranked by the same encoder the attribution ran on (sidecar
+	// `analysis/concepts.py`). It rides THIS response rather than the block
+	// digest because both the encoder and the block's message vectors are
+	// already here; computing it in /blocks would make block emission depend on
+	// a model it does not otherwise need and re-encode every message.
+	//
+	// ⚠️ ALONE ON THIS STRUCT IT CARRIES BLOCK TEXT, and that is why it is not
+	// a field of AttributionMeta: the meta is the pass's report on ITSELF and
+	// is held structurally text-free by publish.TestAttributionShapeHoldsNoText.
+	// Bounded by the sidecar to at most concepts.MAX_WORDS words per phrase and
+	// concepts.TOP_K phrases, with no span and no offset; conceptShapeOK
+	// re-checks both at this boundary rather than trusting a separately-shipped
+	// sidecar, the same discipline notWorkspaceRelative applies to paths.
+	Concepts    []enrich.Concept        `json:"concepts"`
+	Attribution *enrich.AttributionMeta `json:"attribution"`
 	// RouteUnsupported means the sidecar answered 404: it has no /attribute
 	// route at all. `json:"-"` deliberately — it is this client's OWN reading
 	// of the transport, never something a response body could set.
@@ -953,5 +969,32 @@ func (c *Client) Attribute(path, sessionID string, start, end float64,
 		}
 		return AttributeResult{}, false
 	}
+	r.Concepts = keepWellShapedConcepts(r.Concepts)
 	return r, true
+}
+
+// keepWellShapedConcepts re-checks the sidecar's own bounds at the decode
+// boundary, dropping a bad entry without losing the rest of the list.
+//
+// ⚠️ THE SIDECAR SHIPS AND UPDATES INDEPENDENTLY OF THIS BINARY, so its bounds
+// are a promise from a component that may be older or newer than this one —
+// exactly the position `sidecar.notWorkspaceRelative` is in for path
+// inventories, and it re-checks for the same reason. The vocabulary here is
+// OPEN (any phrase a person typed), so there is no closed table to validate
+// against; what CAN be checked is shape, and shape is the whole of the publish
+// argument: a bounded phrase is publishable, an unbounded one is message text.
+// Dropping the entry rather than truncating it is AGENTS.md's rule — a cut
+// phrase is a false phrase.
+func keepWellShapedConcepts(in []enrich.Concept) []enrich.Concept {
+	if len(in) > enrich.MaxConcepts {
+		in = in[:enrich.MaxConcepts]
+	}
+	out := in[:0]
+	for _, c := range in {
+		if c.Value == "" || len(strings.Fields(c.Value)) > enrich.MaxConceptWords {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }

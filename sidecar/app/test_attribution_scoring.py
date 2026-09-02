@@ -28,14 +28,14 @@ def test_metadata_boost_model_free():          # AC-4 (AMENDED 2026-09-01)
     assert b >= attribution.W_REPO + attribution.W_TICKET, f"boost {b}"
     # The boost is computed and reported, but with no encoder NOTHING is assigned:
     # one attribution path only, and exact matches alone never cross the threshold.
-    scores, borderline, assigned, used = attribution.score_block(
+    scores, borderline, assigned, used, _tv = attribution.score_block(
         ["fix the dunning email"], dims, encoder=None)
     assert not used and assigned == [] and borderline == [], (scores, assigned, borderline)
     assert scores["proj_pay"] == round(b, 4), "boost must still be visible in the scores"
 
 def test_embedding_ranking_assigns_the_winner():   # AC-3
     attribution.set_projects(PROJECTS)
-    scores, borderline, assigned, used = attribution.score_block(
+    scores, borderline, assigned, used, _tv = attribution.score_block(
         ["we migrated stripe webhooks today"], {}, encoder=PayEncoder())
     assert used and scores["proj_pay"] > scores["proj_ui"]
     assert "proj_pay" in assigned and "proj_ui" not in assigned
@@ -74,7 +74,7 @@ def test_runner_up_near_the_cut_is_borderline():   # AC-5 groundwork
     # and NOT assigned; pay is clear of the halo and assigned.
     attribution.set_projects(_geom_projects("runner-up"))
     enc = GeomEncoder([0.60, 0.49, 0.0, 0.6324])
-    scores, borderline, assigned, used = attribution.score_block(
+    scores, borderline, assigned, used, _tv = attribution.score_block(
         ["ambiguous work"], {}, encoder=enc)
     assert assigned == ["proj_pay"], (scores, assigned)
     assert borderline == ["proj_ui"], (scores, borderline)
@@ -86,7 +86,7 @@ def test_the_null_competitor_blocks_a_topical_lookalike():   # the LEVEL gate
     # "belongs to nothing" won the same ranking the projects competed in.
     attribution.set_projects(_geom_projects("null-gate"))
     enc = GeomEncoder([0.30, 0.10, 0.90, 0.2915])
-    scores, borderline, assigned, used = attribution.score_block(
+    scores, borderline, assigned, used, _tv = attribution.score_block(
         ["hey, how was your weekend?"], {}, encoder=enc)
     assert used and assigned == [] and borderline == [], (scores, assigned, borderline)
 
@@ -96,7 +96,7 @@ def test_two_close_winners_are_both_assigned():   # the SHAPE gate, multi-label
     # above null -> both assigned. A block can genuinely serve two projects.
     attribution.set_projects(_geom_projects("two-winners"))
     enc = GeomEncoder([0.70, 0.66, 0.0, 0.2728])
-    scores, borderline, assigned, used = attribution.score_block(
+    scores, borderline, assigned, used, _tv = attribution.score_block(
         ["work spanning both"], {}, encoder=enc)
     assert set(assigned) == {"proj_pay", "proj_ui"}, (scores, assigned)
 

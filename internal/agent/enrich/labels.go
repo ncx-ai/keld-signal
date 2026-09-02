@@ -380,7 +380,7 @@ package enrich
 // ProjectAttribution and AttributionMeta. All three are omitempty, so this
 // bump is not a vocabulary change for the eval to re-score: a machine with
 // attribution off still publishes byte-identical to v21.
-const SchemaVersion = 22
+const SchemaVersion = 23
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

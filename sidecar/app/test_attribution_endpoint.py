@@ -12,6 +12,7 @@ import os
 import tempfile
 
 from app.analysis import attribution
+from app.analysis import concepts as concepts_mod
 
 PROJECTS = [
     {"id": "proj_pay", "title": "Payments", "team": "Eng",
@@ -116,15 +117,41 @@ def test_verifier_absent_states_which_absence():   # AC-6
     assert gone["attribution"]["verifier"] == "unavailable", gone["attribution"]
 
 
-def test_the_answer_carries_no_text():
-    """Ids, confidences, closed enums and integer timings — never a word of the block, never a
-    project's description. The route returns this dict verbatim."""
+def test_the_answer_carries_no_text_OUTSIDE_concepts():
+    """Ids, confidences, closed enums and integer timings — never a project's description, never
+    the caller's dims, and outside `concepts` never a word of the block. The route returns this
+    dict verbatim.
+
+    ⚠️ **THIS TEST WAS `test_the_answer_carries_no_text` AND ITS CLAIM HAS NARROWED.** `concepts`
+    (2026-09-02) publishes phrases lifted from the block's own words, so the absolute form of
+    this assertion is no longer true and pretending otherwise by quietly dropping the test would
+    be the worst available outcome. What still holds, and is what the checks below now pin, is
+    everything the narrowing does NOT touch:
+
+      * the PROJECT side is unchanged — a description, a title and a team are still incapable of
+        crossing, which is the half `named_terms` showed can hold a real person's name;
+      * the caller's `dims` still cannot echo back;
+      * `attribution` — the pass's report on itself — is still structurally text-free, which is
+        the invariant `enrich.AttributionMeta`'s reflection tripwire enforces from the Go side;
+      * block text reaches the wire ONLY through `concepts`, bounded to `MAX_WORDS` words and
+        `TOP_K` entries, never as a span and never as an offset.
+
+    The third of those is why `concepts` sits beside `attribution` rather than inside it."""
     attribution.set_projects(PROJECTS)
     out = attribution.attribute_block(["stripe webhook retries again"], {"repo": "acme-billing"},
                                       encoder=PayEncoder(), verifier_obj=StubVerifier())
-    blob = json.dumps(out)
-    for forbidden in ("stripe webhook", "acme-billing", "Stripe billing migration", "Payments"):
-        assert forbidden not in blob, forbidden
+    # The project side and the caller's dims: absolute, unchanged.
+    for forbidden in ("acme-billing", "Stripe billing migration", "Payments"):
+        assert forbidden not in json.dumps(out), forbidden
+    # The meta stays structurally free of block text even though the answer beside it is not.
+    assert "stripe" not in json.dumps(out["attribution"]).lower(), out["attribution"]
+    # Block text crosses through `concepts` and nowhere else, within its two declared bounds.
+    without_concepts = {k: v for k, v in out.items() if k != "concepts"}
+    assert "stripe webhook" not in json.dumps(without_concepts), without_concepts
+    assert len(out["concepts"]) <= concepts_mod.TOP_K
+    for c in out["concepts"]:
+        assert len(c["value"].split()) <= concepts_mod.MAX_WORDS, c
+        assert set(c) == {"value", "score"}, c   # no span, no offset, no position
 
 
 # --- the route ------------------------------------------------------------------------------
@@ -263,7 +290,10 @@ def test_a_cold_encoder_answers_pending_and_warms_off_the_request():
         warm = m._WARM_THREAD
     finally:
         m._text_source = was
-    assert out == {"status": "pending", "projects": [], "attribution": None}, out
+    # `concepts` is present-and-empty rather than absent, for the same reason `projects` is: a
+    # consumer must never have to tell "no concepts" apart from "this answer shape predates them".
+    assert out == {"status": "pending", "projects": [], "concepts": [],
+                   "attribution": None}, out
     assert warm is not None
     warm.join(10)
     assert child.seen, "the cold path must bring the encoder up off the request"
