@@ -87,7 +87,15 @@ not no nor only just very much more most less least also too even still yet
 what which who whom whose when where why how there here all any both each few other some such
 one two three now new old good bad thing things way ways lot lots kind sort
 like get got make made made take taken use used using see saw seen say said says
+about before after again really actually maybe probably basically quite pretty
 """.split())
+# ⚠️ THE LAST LINE IS MEASURED, NOT GUESSED. The first real run returned `about noncoding work`,
+# `actually improve scoring` and `apply even before` — each one a good concept with a filler word
+# welded to its front, spending a slot and reading as noise. They are the same class as every
+# other entry here (a word that carries no subject), and adding them yields the phrase that was
+# wanted: `noncoding work`, `improve scoring`. This list is still short on purpose — what keeps a
+# common word like `Atlas` out of the answer is the RANKING, and a stoplist that starts doing
+# that job is hiding a bad extractor.
 
 #: A candidate is words and the punctuation that lives INSIDE an identifier — a hyphen, a dot, an
 #: underscore. Everything else is a boundary, so a sentence cannot become a candidate.
@@ -106,6 +114,14 @@ _WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-_.][A-Za-z0-9]+)*")
 #: that is, is a path, a base64 blob or a stack frame — none of them a concept, all of them more
 #: text than this publishes.
 MAX_TOKEN_CHARS = 32
+
+#: ⚠️ WHAT IS LEFT OF A CONTRACTION AFTER THE APOSTROPHE SPLITS IT, and rejected ANYWHERE in a
+#: phrase rather than at its edges. The one-character rule below catches `don't` -> `don` + `t`;
+#: it cannot catch `we're` -> `we` + `re`, which published `discovery we re` on real data. These
+#: are the complete set of English contraction tails of two or more letters, and none of them is
+#: a word that can carry a concept on its own — `re` and `ll` are not homographs of anything a
+#: person types deliberately in prose.
+CONTRACTION_TAILS = frozenset({"re", "ve", "ll", "nt"})
 
 
 def _words(text):
@@ -129,7 +145,7 @@ def _ok(phrase_words):
         # `metadata it s` and `blocks That s` — three slots spent on a contraction. Admitting
         # the apostrophe into _WORD instead would publish `don't` itself, which is a word about
         # the conversation rather than the work; dropping the phrase is the honest answer.
-        if len(w) < 2 or len(w) > MAX_TOKEN_CHARS:
+        if len(w) < 2 or len(w) > MAX_TOKEN_CHARS or w.lower() in CONTRACTION_TAILS:
             return False
     # A single word must be substantial: two characters is an initialism a name-detector should
     # be finding, not a concept.
