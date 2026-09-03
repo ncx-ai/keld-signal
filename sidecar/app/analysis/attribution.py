@@ -222,23 +222,163 @@ def _cos(a, b):
     return sum(x * y for x, y in zip(a, b))
 
 
-def score_block(texts, dims, encoder):
-    """Hybrid score per project over one block's user-turn texts.
+# --- Pooling and centring: the two changes measured on 2026-09-03 --------------
+#
+# ⚠️ BOTH ARE MEASURED, AND NEITHER IS ENOUGH ALONE. Over 61 real, labelled blocks
+# on the machine that built this (docs/notes/whats-next-attribution.md §9):
+#
+#   user text only, per-message MAX, centred ........  28% of blocks right (shipped input)
+#   whole block (user + assistant), MEAN, NOT centred   59%
+#   whole block (user + assistant), MEAN, centred ....  92%   <- this
+#   whole block, MAX, centred ........................  82%
+#
+# The user's own words are often "continue" or "why is it so slow?"; the reply is
+# the paragraph that names the sidecar, the encoder and the eval. Reading the whole
+# block is what reaches the 24-of-25 blocks with NO user text at all. MEAN beats
+# MAX over a block of ~12 messages for the reason the session-window study found —
+# the best of N draws is high for anything — and mean is also what lets the
+# assistant's many turns be read without one tangent deciding the block.
+#
+# CENTRING subtracts each document's mean similarity over the messages this machine
+# has scored so far. It exists because the null document is written as SPEECH and
+# every project document as an ARTIFACT, so the null out-scored every project on 66%
+# of individual messages regardless of topic; and because the projects' own baselines
+# spanned 0.093 against a MARGIN of 0.08, i.e. one project could beat another on
+# register alone. Removing the per-document baseline is what turns 59% into 92%.
+# It is a running mean of SCALARS — never a stored vector, which `featuretext`'s
+# header explains this codebase does not persist — and it is GATED: below
+# MIN_BACKGROUND messages the offsets are all zero and the decision is exactly the
+# pre-centring one, because an offset from ten messages measured non-monotone
+# (decision agreement with the settled offsets 77% at n=5, 74% at n=10, 93% at
+# n=50, 97% at n=100), and a half-fitted offset is not a gentler correction but a
+# different one.
+POOLING = "mean"
+MIN_BACKGROUND = int(os.environ.get("KELD_ATTRIBUTION_MIN_BACKGROUND", "50"))
 
-    Similarity is per-text MAX (not mean) across a block's texts against each
-    project's vector: a block's several messages may each concern a different
-    project, and averaging would wash out the one that matters. Text vectors
-    are L2-normalised here before the dot product (`_l2`, the same helper
-    `project_vectors` uses): the real encoder (`textembed._encode_batch`)
-    already returns unit vectors, so this is a no-op in production, but the
-    function does not trust an arbitrary `encoder` argument to have normalised
-    its own output — a caller wiring in a different encoder gets a correct
-    cosine rather than a silently wrong one.
 
-    Returns (scores, borderline, assigned, encoder_used, text_vectors).
-    `text_vectors` is the block's own message vectors — the expensive artifact
-    of this call, handed back rather than recomputed because `concepts.extract`
-    needs the same vectors and a message costs ~1.1-1.6 s to encode. It is `[]`
+def _pool(values):
+    values = list(values)
+    if not values:
+        return 0.0
+    return max(values) if POOLING == "max" else sum(values) / len(values)
+
+
+class Offsets:
+    """Per-document centring state: for each document (every project, and the
+    null), the running mean of cos(message, document) over the messages this
+    machine has scored. Held as (sum, count) pairs keyed by a hash of the
+    document's TEXT, so a reworded project or null starts a fresh baseline
+    rather than inheriting one measured against different words.
+
+    Persisted as a small JSON of scalars under KELD_HOME/state, written
+    atomically, so a restart does not reset the gate. A vector is never
+    written: two floats per document is the whole file.
+
+    ⚠️ ALL-OR-NOTHING GATE. `for_docs` returns offsets only when EVERY current
+    document has at least MIN_BACKGROUND observations; otherwise None, and the
+    caller scores uncentred. A newly declared project therefore switches
+    centring OFF for everyone until it has its own baseline — deliberately.
+    Centring some documents and not others would hand the uncentred one its
+    raw register bias against corrected competitors, which is the failure this
+    class exists to remove, applied to one column."""
+
+    def __init__(self, path=None):
+        self.path = path
+        self._stats = {}
+        self._lock = threading.Lock()
+        if path and os.path.exists(path):
+            try:
+                with open(path) as fh:
+                    raw = json.load(fh)
+                self._stats = {k: [float(v[0]), int(v[1])] for k, v in raw.items()
+                               if isinstance(v, list) and len(v) == 2}
+            except (OSError, ValueError, TypeError):
+                self._stats = {}
+
+    @staticmethod
+    def key(doc_text, stream="user"):
+        """One baseline per (stream, document). The two streams are different registers —
+        a person's terse prompts and a model's polished prose — and centring assistant text
+        against a baseline diluted with user messages under-corrects it: on the 23 real
+        blocks with no user text, per-stream centring scored F1 0.717 against 0.606 for a
+        single mixed baseline, and it was also better on the with-input blocks (0.782 vs
+        0.772; 0.806 vs 0.781 on the text-only judge)."""
+        return hashlib.sha256(f"{stream}\x1f{doc_text}".encode()).hexdigest()[:16]
+
+    def count(self, keys):
+        with self._lock:
+            return min((self._stats.get(k, [0.0, 0])[1] for k in keys), default=0)
+
+    def for_docs(self, keys):
+        with self._lock:
+            if any(self._stats.get(k, [0.0, 0])[1] < MIN_BACKGROUND for k in keys):
+                return None
+            return {k: self._stats[k][0] / self._stats[k][1] for k in keys}
+
+    def observe(self, doc_vectors, message_vectors):
+        """Fold one block's message vectors into every document's running mean.
+        Called AFTER the block is scored, so a block never centres on itself."""
+        if not message_vectors:
+            return
+        with self._lock:
+            for k, dv in doc_vectors.items():
+                s, n = self._stats.get(k, [0.0, 0])
+                for mv in message_vectors:
+                    s += _cos(mv, dv)
+                    n += 1
+                self._stats[k] = [s, n]
+            self._save()
+
+    def _save(self):
+        if not self.path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(self._stats, fh)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
+        except OSError:
+            pass     # a baseline that could not be saved is re-learned; never fatal
+
+
+def default_offsets_path():
+    """`~/.keld/state/attribution-offsets.json`, beside `refseries.db` and
+    `prompt-lengths.json`, honouring KELD_HOME the way `store.default_path` does."""
+    home = os.environ.get("KELD_HOME") or os.path.join(os.path.expanduser("~"), ".keld")
+    return os.path.join(home, "state", "attribution-offsets.json")
+
+
+USER_STREAM, ASST_STREAM = "user", "asst"
+
+
+def score_block(texts, dims, encoder, offsets=None, n_user=None):
+    """Hybrid score per project over one block's texts — the WHOLE block, user
+    and assistant turns alike, as the caller hands them.
+
+    Similarity is per-message cosine, pooled by `POOLING` (MEAN — see the
+    measurement above `POOLING` for why not MAX), then centred by subtracting
+    each document's running baseline when `offsets` is given and its gate is
+    met. Text vectors are L2-normalised here before the dot product (`_l2`,
+    the same helper `project_vectors` uses): the real encoder
+    (`textembed._encode_batch`) already returns unit vectors, so this is a
+    no-op in production, but the function does not trust an arbitrary
+    `encoder` argument to have normalised its own output — a caller wiring in
+    a different encoder gets a correct cosine rather than a silently wrong one.
+
+    `n_user` is how many leading entries of `texts` are the user's own turns; the rest are
+    assistant turns. It decides which stream's baseline each message is centred against
+    (see `Offsets.key`). `None` means every text is the user's — the shape every pre-2026-09-03
+    caller and test has.
+
+    Returns (scores, borderline, assigned, encoder_used, text_vectors, centring).
+    `centring` is `{"applied": bool, "background_n": int}` — what the meta
+    publishes so a row centred on 300 messages is distinguishable from one that
+    was not centred at all. `text_vectors` is the block's own message vectors,
+    in the order of `texts` — the expensive artifact of this call, handed back
+    rather than recomputed because `concepts.extract` needs the USER subset of
+    them and a message costs ~1.1-1.6 s to encode. It is `[]`
     whenever the encoder did not run. `scores` is always
     fully populated, including the metadata boost alone when `encoder is
     None` — a human debugging an unattributed block needs to see that boost
@@ -268,14 +408,41 @@ def score_block(texts, dims, encoder):
     null_sim = 0.0
     tvecs = []
     sims = {p["id"]: 0.0 for p in projects}
+    centring = {"applied": False, "background_n": 0}
     if encoder is not None and texts:
         pvecs = project_vectors(encoder)
         tvecs = [_l2(v) for v in encoder.encode(texts)]
+        n_u = len(texts) if n_user is None else max(0, min(n_user, len(texts)))
+        streams = [USER_STREAM] * n_u + [ASST_STREAM] * (len(texts) - n_u)
+        docs = {p["id"]: pvecs[p["id"]] for p in projects}
+        docs[NULL_ID] = pvecs[NULL_ID]
+        doc_text = {p["id"]: project_doc(p) for p in projects}
+        doc_text[NULL_ID] = NULL_DOC
+
+        # One offset per (stream, document), keyed by document TEXT so a reworded
+        # project starts a fresh baseline. Gated on the streams THIS block uses.
+        off = None
+        used_streams = sorted(set(streams))
+        if offsets is not None:
+            keys = {(st, did): Offsets.key(doc_text[did], st)
+                    for st in used_streams for did in docs}
+            off = offsets.for_docs(keys.values())
+            centring["background_n"] = offsets.count(keys.values())
+            centring["applied"] = off is not None
+
+        def centred_sims(did):
+            for st, tv in zip(streams, tvecs):
+                yield _cos(tv, docs[did]) - (off[keys[(st, did)]] if off else 0.0)
+
         for p in projects:
-            pv = pvecs[p["id"]]
-            sims[p["id"]] = max((_cos(tv, pv) for tv in tvecs), default=0.0)
-        null_sim = max((_cos(tv, pvecs[NULL_ID]) for tv in tvecs), default=0.0)
+            sims[p["id"]] = _pool(centred_sims(p["id"]))
+        null_sim = _pool(centred_sims(NULL_ID))
         encoder_used = True
+        if offsets is not None:
+            # Observe AFTER deciding, so no block centres on itself — per stream.
+            for st in used_streams:
+                offsets.observe({Offsets.key(doc_text[did], st): docs[did] for did in docs},
+                                [tv for s_, tv in zip(streams, tvecs) if s_ == st])
     scores = {}
     for p in projects:
         boost = metadata_boost(p, dims, texts)
@@ -289,7 +456,7 @@ def score_block(texts, dims, encoder):
                 borderline.append(pid)
             if s >= cut and top > null_sim:
                 assigned.append(pid)
-    return scores, borderline, assigned, encoder_used, tvecs
+    return scores, borderline, assigned, encoder_used, tvecs, centring
 
 
 def apply_verifier(texts, dims, scores, borderline, verifier_obj):
@@ -371,10 +538,15 @@ STATUSES = (STATUS_ATTRIBUTED, STATUS_PENDING, STATUS_SKIPPED_DISABLED,
 # raw body, so both halves carry a new key unchanged and no schema bump is owed —
 # this is an identifier, not a vocabulary.
 MODEL_VERSIONS = {"encoder": "qwen3-embedding-0.6b", "verifier": "gemma-4-e2b-q4km",
-                  "null_doc": hashlib.sha256(NULL_DOC.encode()).hexdigest()[:8]}
+                  "null_doc": hashlib.sha256(NULL_DOC.encode()).hexdigest()[:8],
+                  # The scoring RULE, for the same reason as null_doc: rows scored
+                  # user-only/max/uncentred and rows scored whole-block/mean/centred
+                  # are not comparable, and nothing else on the row would say so.
+                  "scoring": f"block-{POOLING}-centred-perstream-v1"}
 
 
-def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state, concept_ms=0):
+def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state, concept_ms=0,
+          centring=None):
     """The pass's report on ITSELF: integer timings, counts and closed enums.
 
     `encoder_state` is `warm` or `absent`, and there is deliberately no `cold`: this module
@@ -387,9 +559,15 @@ def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state, concept_ms=
     `enrich.AttributionMeta` and the reflection tripwire beside it. A project's
     name is exactly the class of string `named_terms` has already shown can
     hold a real person's."""
+    c = centring or {"applied": False, "background_n": 0}
     return {"embed_ms": embed_ms, "verify_ms": verify_ms, "concept_ms": concept_ms,
             "pairs_verified": pairs,
             "encoder_state": encoder_state, "verifier": verifier_state,
+            # Whether the per-document baseline was subtracted, and over how many
+            # messages it had been measured. A count and a flag: a consumer can tell
+            # a row centred on 300 messages from one scored before the gate opened,
+            # which matters because the two decisions differ on ~40% of blocks.
+            "centred": bool(c.get("applied")), "background_n": int(c.get("background_n", 0)),
             "model_versions": dict(MODEL_VERSIONS)}
 
 
@@ -417,7 +595,8 @@ def pending():
     return {"status": STATUS_PENDING, "projects": [], "concepts": [], "attribution": None}
 
 
-def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_out"):
+def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_out",
+                    asst_texts=(), offsets=None):
     """ONE block's attribution answer: `{status, projects, attribution}`.
 
     The whole decision and nothing else — no HTTP, no file, no environment.
@@ -454,10 +633,13 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
         once weights are provisioned. The boost is still computed — it rides
         `scores` as telemetry inside this process, and reaches the wire only as
         the confidence of a project the encoder assigned.
-      * a block with NO user-turn text — the encoder has nothing to embed and
-        no later sweep can change that, so it is the empty `attributed` answer
-        rather than `pending`, which would have the daemon retry a block that
-        can never move.
+      * a block with NO text in EITHER stream — the encoder has nothing to
+        embed and no later sweep can change that, so it is the empty
+        `attributed` answer rather than `pending`, which would have the daemon
+        retry a block that can never move. ⚠️ This used to say "no USER-turn
+        text", and that made 24 of 25 agent-only blocks on a real machine
+        permanently unattributable while their assistant turns said exactly
+        what the work was. A block is now empty only when both streams are.
 
     `verifier_absent` names WHY there is no verifier when `verifier_obj is
     None`: `opted_out` (the operator switched it off) or `unavailable` (it was
@@ -472,14 +654,28 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
     encoder_state = "absent" if encoder is None else "warm"
     if not projects:
         return stated(STATUS_SKIPPED_NO_PROJECTS, encoder_state)
-    if not texts:
+    texts = list(texts)
+    asst_texts = list(asst_texts)
+    if not texts and not asst_texts:
         return {"status": STATUS_ATTRIBUTED, "projects": [], "concepts": [],
                 "attribution": _meta(0, 0, 0, encoder_state, "not_needed")}
 
+    # ⚠️ THE WHOLE BLOCK IS SCORED; ONLY THE USER'S WORDS FEED CONCEPTS AND THE
+    # VERIFIER. Scoring reads user and assistant turns together (see POOLING for
+    # the measurement — 28% right on user text alone, 92% on the whole block,
+    # and the assistant's reply is the only text a block with no prompt has).
+    # `concepts` stays on USER text: it PUBLISHES phrases, and the privacy
+    # argument in concepts.py was made for a person's own words, not for prose a
+    # model generated about them. The verifier prompt likewise keeps the user's
+    # words — it is off by default and its prompt is capped at 2,500 chars, so
+    # widening it is a separate, measured decision. The user texts come FIRST in
+    # the scored list so their vectors are the leading slice of `tvecs`.
     t0 = time.time()
-    scores, borderline, assigned, encoder_used, tvecs = score_block(texts, dims, encoder)
+    scores, borderline, assigned, encoder_used, tvecs, centring = score_block(
+        texts + asst_texts, dims, encoder, offsets, n_user=len(texts))
     embed_ms = int((time.time() - t0) * 1000)
-    found, concept_ms = concepts.extract(texts, tvecs, encoder if encoder_used else None)
+    user_vecs = tvecs[:len(texts)] if tvecs else []
+    found, concept_ms = concepts.extract(texts, user_vecs, encoder if encoder_used else None)
     overrides, pairs, verify_ms = apply_verifier(texts, dims, scores, borderline, verifier_obj)
 
     final = []
@@ -504,4 +700,4 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
     return {"status": status, "projects": final, "concepts": found,
             "attribution": _meta(embed_ms, verify_ms, pairs,
                                  "warm" if encoder_used else "absent", verifier_state,
-                                 concept_ms)}
+                                 concept_ms, centring)}

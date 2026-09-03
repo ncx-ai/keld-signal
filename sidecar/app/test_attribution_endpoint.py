@@ -71,17 +71,31 @@ def test_source_labels():
     assert out["projects"][0]["source"] in ("embedding", "metadata", "verifier")
 
 
-def test_a_span_with_no_user_text_is_terminal_not_pending():
-    """A closed block can hold no human words at all (a long autonomous run). The encoder has
-    nothing to embed and no later sweep can change that, so the answer is the benchmarked
-    path's own empty answer — never `pending`, which would have the daemon retry a block that
-    can never move."""
+def test_a_span_with_no_text_in_either_stream_is_terminal_not_pending():
+    """A closed block can hold no words at all. The encoder has nothing to embed and no later
+    sweep can change that, so the answer is the benchmarked path's own empty answer — never
+    `pending`, which would have the daemon retry a block that can never move."""
     attribution.set_projects(PROJECTS)
     out = attribution.attribute_block([], {"repo": "acme-billing"},
                                       encoder=PayEncoder(), verifier_obj=None)
     assert out["status"] == "attributed" and out["projects"] == []
     assert out["attribution"]["encoder_state"] == "warm"
     assert out["attribution"]["verifier"] == "not_needed"
+
+
+def test_a_span_with_only_assistant_text_is_scored_not_terminal():
+    """The agent-only block: a prompt in an EARLIER block triggered work that ran on into this
+    one, so it has no user turn but several assistant turns describing the work. Until
+    2026-09-03 this was terminal-empty by construction — 24 of 25 such blocks on a real machine
+    had assistant text and none could be attributed. Now the assistant stream is scored, and
+    `concepts` receives NO vectors (there are no user words to lift phrases from)."""
+    attribution.set_projects(PROJECTS)
+    out = attribution.attribute_block([], {}, encoder=PayEncoder(), verifier_obj=None,
+                                      asst_texts=["I migrated the stripe webhooks for you"])
+    assert out["status"] == "attributed", out
+    assert [p["id"] for p in out["projects"]] == ["proj_pay"], out
+    assert out["concepts"] == [], out["concepts"]
+    assert out["attribution"]["centred"] is False and out["attribution"]["background_n"] == 0
 
 
 # Its own project list so the vector cache is COLD here: `project_vectors` memoises per content
@@ -247,9 +261,15 @@ def test_no_projects_answers_without_opening_the_transcript():
     assert out["status"] == "skipped:no_projects" and out["projects"] == []
 
 
-def test_the_route_reads_user_turns_inside_the_span_and_adapts_the_real_encoder_shape():
-    """AC-3 end to end without a model: user stream only, `[start, end)` only, and the
-    production `(vectors, status)` encoder adapted to what `score_block` takes."""
+def test_the_route_reads_both_streams_inside_the_span_and_adapts_the_real_encoder_shape():
+    """AC-3 end to end without a model: BOTH streams, user first, `[start, end)` only, and the
+    production `(vectors, status)` encoder adapted to what `score_block` takes.
+
+    ⚠️ Until 2026-09-03 this test asserted the encoder saw the USER turn ALONE, pinning the rule
+    `_span_texts` has since reversed on measurement (28% of real blocks right on user text,
+    92% on the whole block — see its docstring). What is pinned now: the assistant turn IS
+    encoded, it comes AFTER the user turn (so `tvecs[:len(user)]` is the user slice that
+    `concepts` reads), and nothing outside the span is read from either stream."""
     m = _main()
     path = _transcript()
     _with_roots(path)
@@ -265,11 +285,11 @@ def test_the_route_reads_user_turns_inside_the_span_and_adapts_the_real_encoder_
     assert out["status"] == "attributed", out
     assert [p["id"] for p in out["projects"]] == ["proj_pay"], out
     assert out["attribution"]["encoder_state"] == "warm"
-    # The block batch is exactly the in-span USER text: no assistant turn, nothing outside.
-    assert [IN_SPAN] in child.seen, child.seen
+    # The block batch is the in-span text of BOTH streams, user first; nothing outside the span.
+    assert [IN_SPAN, ASSISTANT] in child.seen, child.seen
     for batch in child.seen:
         for text in batch:
-            assert ASSISTANT not in text and OUT_OF_SPAN not in text, batch
+            assert OUT_OF_SPAN not in text, batch
     # Coordinates in, ids out.
     blob = json.dumps(out)
     for forbidden in (IN_SPAN, ASSISTANT, OUT_OF_SPAN, "acme-billing", path):

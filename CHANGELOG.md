@@ -72,6 +72,35 @@ semantic-ish versioning during `0.x`.
   the case worth checking. Offline-testable via `KELD_VERIFY_ASSETS_JSON`; demotion
   is opt-in via `KELD_VERIFY_DEMOTE`, so a local run cannot mutate a release.
 
+### Changed
+- **Attribution scores the WHOLE block — user and assistant turns — mean-pooled and centred
+  per stream.** Until 2026-09-03 `/attribute` read the user stream only, on an argument that
+  was plausible and unmeasured ("the model's own prose would attribute work to whatever the
+  assistant happened to name"); the eval recorded the cost the day it shipped (benchmark
+  0.929 with assistant text, ported pipeline 0.823 without) and kept the rule. Measured on 61
+  real, labelled blocks: user text alone put 28% of blocks on the right project; the whole
+  block, mean-pooled and centred, 92%; micro-F1 on the text-only judge 0.508 → 0.806. Two
+  facts drive it — a real block's prompts are often "continue" while the reply names the
+  work, and **24 of 25 blocks with no user text at all** (agent continuations) have
+  assistant text, so the structurally-silent third of a machine's work now attributes
+  (F1 0.717 on those blocks, from 0.000). MEAN beats MAX (0.782 vs 0.713) because the best
+  of ~12 messages is high for anything. The feared failure occurred on 4 of 61 blocks.
+  Only the USER's words still feed `concepts` (which publishes phrases) and the verifier
+  prompt. **Centring** (`attribution.Offsets`) subtracts each document's running mean
+  similarity, kept PER STREAM (a person's prompts and a model's prose are different
+  registers — 0.717 vs 0.606 on agent-only blocks), as two floats per (stream, document)
+  in `~/.keld/state/attribution-offsets.json`, never a vector; keyed by the document's
+  text so a reworded project starts fresh; gated all-or-nothing at
+  `KELD_ATTRIBUTION_MIN_BACKGROUND` (50) messages, below which the decision is exactly
+  the uncentred one. Whole-block without centring measured 59%. The attribution meta
+  gains `centred` and `background_n`, and `model_versions.scoring` names the rule, so rows
+  scored under different rules are never mistaken for comparable.
+- **`test_attribution_quality.py` now measures the shipped configuration** — whole block,
+  mean, centred (baseline primed over the fixtures), verifier only with
+  `KELD_ATTRIBUTION_EVAL_VERIFIER=1` — and its floor is re-baselined under that
+  measurement. The 0.823 it used to cite described a pipeline that no longer exists in
+  three ways (absolute threshold, user-only text, verifier on).
+
 ### Fixed
 - **The `NULL_DOC` competitor described an engineer asking about their own
   project, so real work read as idle chat.** Its clause "generic technical

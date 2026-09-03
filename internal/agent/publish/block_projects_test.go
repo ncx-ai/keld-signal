@@ -75,9 +75,16 @@ func TestAttributionShapeHoldsNoText(t *testing.T) {
 	// of either struct — they are text, and they ride BlockEnrichment.Concepts
 	// with their own bounds (see TestConceptBoundsAreTheOnesTheArgumentRestsOn),
 	// precisely so this tripwire keeps meaning what it says.
+	// ⚠️ Centred (bool) and BackgroundN (int) were admitted 2026-09-03 with the
+	// per-document centring change: a flag for whether the baseline was subtracted
+	// and a count of the messages it was measured over. Neither can hold text, a
+	// span or an offset, and both are needed because centred and uncentred
+	// decisions differ on ~40% of real blocks and the gate is per-machine state
+	// Atlas cannot otherwise see.
 	allowed := map[string]bool{"ID": true, "Confidence": true, "Source": true, "ConceptMS": true,
 		"EmbedMS": true, "VerifyMS": true, "PairsVerified": true,
-		"EncoderState": true, "Verifier": true, "ModelVersions": true}
+		"EncoderState": true, "Verifier": true, "ModelVersions": true,
+		"Centred": true, "BackgroundN": true}
 	for _, name := range structFieldNames(enrich.ProjectAttribution{}) {
 		if !allowed[name] {
 			t.Fatalf("new field %q on ProjectAttribution — extend the allowlist only after a privacy review", name)

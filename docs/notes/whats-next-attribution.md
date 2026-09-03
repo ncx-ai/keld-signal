@@ -94,6 +94,42 @@ learned Coding-tier tag with provenance, never customer-authored.
 Harnesses: this session's scratchpad (`validate.py`, `arms_stable.py`, `score_vs_norepo.py`);
 port beside `scripts/null_hubness_experiment.py` when the centring work starts.
 
+### 9. The whole block, mean-pooled, centred per stream — measured and shipped (2026-09-03)
+
+The owner asked the question the code never had: what if the embedding read the assistant's
+replies too, and the block's metadata? 762 texts encoded (~9 s each on this thrashing machine;
+assistant messages are twice the length of prompts), then every arm scored against both judges.
+
+| arm (4 projects, no repos, centred) | with-input F1 ctx / no-repo | no-input F1 (23) |
+|---|---|---|
+| user text only, MAX (shipped until today) | 0.367 / 0.508 | 0.000 — unreachable |
+| assistant only, MAX | 0.718 / 0.756 | 0.667 |
+| whole block, MAX | 0.713 / 0.746 | 0.615 |
+| whole block, MEAN, one mixed baseline | 0.772 / 0.781 | 0.606 |
+| **whole block, MEAN, per-stream baselines** | **0.782 / 0.806** | **0.717** |
+| metadata digest only (paths, terms, concepts) | 0.586 / 0.647 | 0.490 |
+
+Per-block: 28% of 61 labelled blocks right on user text, 92% on the whole block. Whole block
+WITHOUT centring: 59% — neither half is enough alone. The production objection ("whatever the
+assistant happened to name") was real on 4 of 61 — a reply about a task queue put a block on
+the wrong project — and is the minority mode; MEAN is what keeps one tangent from deciding.
+The digest scoring 0.586 on its own says paths and terms carry the project too; unused today,
+recorded for the anchoring work.
+
+**Shipped:** `_span_texts` returns both streams; `score_block` pools by MEAN and centres each
+message against its own stream's (document) baseline; `attribution.Offsets` persists two
+floats per (stream, document), gated at 50; `concepts` and the verifier keep the user's words;
+`centred`/`background_n` on the meta and `scoring` in `model_versions`. The eval now measures
+this configuration with the baseline primed. This closes §6 (agent-only blocks) by a route that
+needs no episode machinery, and §5's centring decision, in one change.
+
+**Cost:** ~3x the encoding per block (12 messages instead of 4, twice the length); ~100 s on
+this machine, likely 30-45 s on an idle laptop; still inside the 20-minute block cadence and
+off the request path. Memory unchanged: messages are chunked before encoding.
+
+**Still true:** one person, three days, four engineering projects, LLM-labelled. The non-dev
+five were not in these arms and still need a gate before they score coding blocks.
+
 ## Smaller carried items
 
 - Threshold/MARGIN/VERIFY_HALO calibration on real anchored labels once voting exists

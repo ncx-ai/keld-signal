@@ -84,8 +84,25 @@ type AttributionMeta struct {
 	// ModelVersions names the embedding/verifier model identifiers this pass
 	// ran with, keyed by role. Omitted when empty rather than publishing an
 	// empty object — the same "nobody looked" vs "looked and found nothing"
-	// distinction BlockEnrichment's header comment already draws.
+	// distinction BlockEnrichment's header comment already draws. Since
+	// 2026-09-03 it also carries `null_doc` (a hash of the null document's text)
+	// and `scoring` (the pooling/centring rule, e.g. "block-mean-centred-v1"),
+	// because rows scored under different rules are not comparable and nothing
+	// else on the row would say so.
 	ModelVersions map[string]string `json:"model_versions,omitempty"`
+	// Centred is whether the per-document baseline was subtracted from this
+	// block's scores (attribution.Offsets in the sidecar), and BackgroundN is how
+	// many messages that baseline had been measured over at decision time. Both
+	// omitempty: a pre-2026-09-03 sidecar sends neither, and "not reported" must
+	// not render as "not centred over zero messages".
+	//
+	// Why a consumer needs them: centred and uncentred decisions differ on ~40%
+	// of blocks (measured on 76 real blocks), and the gate that decides which a
+	// machine applied is a per-machine count that Atlas cannot otherwise see. A
+	// count and a flag — no text, no span, no offset — admitted to the shape
+	// tripwire on that footing.
+	Centred     bool `json:"centred,omitempty"`
+	BackgroundN int  `json:"background_n,omitempty"`
 }
 
 // Project attribution statuses — the closed vocabulary ProjectsStatus

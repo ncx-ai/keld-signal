@@ -1599,7 +1599,8 @@ class _WorkerVerifier:
 
 
 def _span_texts(path, start, end):
-    """The block span's USER-turn texts, read through the ONE sanctioned door.
+    """The block span's texts, BOTH streams, read through the ONE sanctioned door:
+    `(user_texts, assistant_texts)`.
 
     `transcript.iter_turns` is the only function in this package that opens a transcript, and
     `textembed.messages_in` is the only one that lifts message text off a parsed turn — the same
@@ -1609,9 +1610,24 @@ def _span_texts(path, start, end):
     command echoes and injected skill files, which are the harness talking to itself and not a
     person describing work.
 
-    USER stream only. An assistant turn is this machine's own words about the block, and
-    scoring a project against the model's own prose would attribute work to whatever the
-    assistant happened to name.
+    ⚠️ THIS RETURNED THE USER STREAM ONLY UNTIL 2026-09-03, ON AN ARGUMENT THAT WAS PLAUSIBLE
+    AND UNMEASURED: "an assistant turn is this machine's own words about the block, and scoring
+    a project against the model's own prose would attribute work to whatever the assistant
+    happened to name." The eval recorded the cost the day it shipped — the external benchmark
+    scored 0.929 with assistant text and the ported pipeline 0.823 without — and kept the rule.
+    Measured on 61 real, labelled blocks (docs/notes/whats-next-attribution.md §9): user text
+    alone put 28% of blocks on the right project; the whole block, mean-pooled and centred, put
+    92% there. The user's words on a real block are often "continue" or "why is it so slow?";
+    the reply is the paragraph that names the work. And 24 of the 25 blocks with NO user text
+    at all — agent continuations of an earlier prompt — have assistant text, so this is also
+    how the structurally-silent third of a machine's work becomes attributable. The feared
+    failure ("whatever the assistant happened to name") did occur, on 4 of 61: a reply about a
+    task queue landed a block on the wrong project. It is the minority mode, and MEAN pooling
+    (attribution.POOLING) is what keeps one tangent from deciding a block.
+
+    The two streams are returned SEPARATELY because they are not used alike downstream: both
+    are scored, but only the user's words feed `concepts` (which publishes phrases) and the
+    verifier prompt — see `attribution.attribute_block`.
 
     Half-open `[start, end)`: blocks abut inside an active segment, so a closed interval would
     let two of them claim the same turn.
@@ -1622,8 +1638,27 @@ def _span_texts(path, start, end):
     from app.analysis.capture import epoch
     from app.analysis.transcript import iter_turns
 
-    return [m.text for m in textembed.messages_in(iter_turns(path), epoch)
-            if m.stream == textembed.USER and start <= m.t < end]
+    user, asst = [], []
+    for m in textembed.messages_in(iter_turns(path), epoch):
+        if not (start <= m.t < end):
+            continue
+        (user if m.stream == textembed.USER else asst).append(m.text)
+    return user, asst
+
+
+_OFFSETS = None
+_OFFSETS_LOCK = threading.Lock()
+
+
+def _offsets():
+    """The process's centring state (attribution.Offsets), built once. Scalars on disk under
+    KELD_HOME/state; see the class for the gate and why it is all-or-nothing."""
+    global _OFFSETS
+    with _OFFSETS_LOCK:
+        if _OFFSETS is None:
+            from app.analysis import attribution
+            _OFFSETS = attribution.Offsets(attribution.default_offsets_path())
+        return _OFFSETS
 
 
 def _warm_encoder_async(child):
@@ -1652,7 +1687,7 @@ def _warm_encoder_async(child):
         return _WARM_THREAD
 
 
-def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent):
+def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent, asst_texts=()):
     """The whole of /attribute's decision, on an executor thread.
 
     Both failure modes it translates are ones the decision itself cannot see: whether the
@@ -1660,17 +1695,20 @@ def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent):
     `attribution.attribute_block`."""
     from app.analysis import attribution
 
+    offsets = _offsets()
     try:
         try:
             return attribution.attribute_block(texts, dims, encoder, verifier_obj,
-                                               verifier_absent)
+                                               verifier_absent, asst_texts=asst_texts,
+                                               offsets=offsets)
         except _VerifierUnavailable:
             # The threshold still answers, and the meta NAMES the verifier's absence rather
             # than letting a narrower decision look like the full one (AC-6). Re-run rather
             # than patch the meta: `verifier_absent` is an input to the decision, not a label
             # on it, and the re-run costs one re-encode of a block on a path that fires once
             # per process (the failed load is latched).
-            return attribution.attribute_block(texts, dims, encoder, None, "unavailable")
+            return attribution.attribute_block(texts, dims, encoder, None, "unavailable",
+                                               asst_texts=asst_texts, offsets=offsets)
     except _EncoderNotReady as exc:
         # Outside both, so the re-run's own encode is covered too.
         return _encoder_status_answer(exc.status)
@@ -1737,7 +1775,8 @@ async def attribute(body: AttributeIn):
 
     loop = asyncio.get_running_loop()
     try:
-        texts = await loop.run_in_executor(None, _span_texts, body.path, body.start, body.end)
+        texts, asst_texts = await loop.run_in_executor(
+            None, _span_texts, body.path, body.start, body.end)
     except OSError:
         # The transcript is gone or unreadable. Unlike /blocks and /features there is no series
         # to fall back on — the span's words ARE the input — so this is a refusal rather than a
@@ -1774,11 +1813,13 @@ async def attribute(body: AttributeIn):
     child = source.encoder
     if textembed.weights_dir() is None:
         # AC-4 as amended: no model, no attribution — not a weaker one. attribute_block states it.
-        return attribution.attribute_block(texts, body.dims, None, None)
+        return attribution.attribute_block(texts, body.dims, None, None, asst_texts=asst_texts)
     ready = child.state == textembed.READY
-    if not texts:
-        # A block with no human words in it. Terminal — no later sweep can change it — so it is
-        # answered here rather than deferred behind a cold child.
+    if not texts and not asst_texts:
+        # A block with no words in EITHER stream. Terminal — no later sweep can change it — so
+        # it is answered here rather than deferred behind a cold child. (Until 2026-09-03 this
+        # tested the user stream alone, which made every agent-only block terminal-empty while
+        # its assistant turns described the work; see _span_texts.)
         return attribution.attribute_block(
             [], body.dims, _EncoderAdapter(child) if ready else None, None)
     if not ready:
@@ -1798,7 +1839,7 @@ async def attribute(body: AttributeIn):
             verifier_obj = _WorkerVerifier()
     return await loop.run_in_executor(
         None, _attribute_blocking, texts, body.dims, _EncoderAdapter(child),
-        verifier_obj, verifier_absent)
+        verifier_obj, verifier_absent, asst_texts)
 
 
 @app.post("/match")

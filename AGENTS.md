@@ -1763,14 +1763,39 @@ timings — no text, no span, no offset, in either direction.
   deliberate consequence: a strong exact-match boost (repo + ticket) CAN carry a project
   past the null on its own — with an encoder present; with none, nothing is ever assigned
   (AC-4 as amended).
-- **Quality: measured 0.823 micro-F1 under the OLD absolute threshold, against a design
-  gate of 0.85.** The external benchmark measured 0.929 with assistant text included;
-  production scores USER-turn text only (`_span_texts`), deliberately.
-  `sidecar/app/test_attribution_quality.py` is opt-in (`KELD_ATTRIBUTION_EVAL=1`) and its
-  floor is a regression tripwire under the current measurement, not the design gate.
-  MARGIN/VERIFY_HALO are starting points awaiting calibration on LABELED REAL blocks —
-  the correction flywheel, not another synthetic sweep. Runbook:
-  `docs/attribution-smoke.md`.
+- ⚠️ **WHAT IS SCORED CHANGED ON 2026-09-03, AND THE CHANGE IS MEASURED: THE WHOLE BLOCK,
+  MEAN-POOLED, CENTRED.** Until then `_span_texts` returned the USER stream only, on the
+  argument that "scoring a project against the model's own prose would attribute work to
+  whatever the assistant happened to name" — plausible, written at implementation time, and
+  never measured; the eval recorded the cost the day it shipped (benchmark 0.929 with
+  assistant text, ported pipeline 0.823 without) and kept the rule. On 61 real, labelled
+  blocks (`docs/notes/whats-next-attribution.md` §9): user text alone put **28%** of blocks
+  on the right project; the whole block, mean-pooled and centred, put **92%** there. Three
+  facts behind that: a real block's user words are often "continue" while the reply names
+  the work; **24 of 25 blocks with no user text at all** — agent continuations — have
+  assistant text, so this is also how the structurally-silent third of a machine's work
+  attributes; and MEAN beats MAX (92% vs 82%) because the best of ~12 messages is high for
+  anything. The feared failure did occur, on 4 of 61. Only the USER's words still feed
+  `concepts` (which publishes phrases) and the verifier prompt.
+  **Centring** (`attribution.Offsets`) subtracts each document's running mean similarity
+  over the messages the machine has scored — because the null is written as speech and the
+  projects as artifacts, the null out-scored every project on 66% of individual messages
+  regardless of topic, and the projects' own baselines spanned 0.093 against a MARGIN of
+  0.08. It is a running mean of SCALARS persisted at `~/.keld/state/attribution-offsets.json`
+  (two floats per document, never a vector), keyed by the document's TEXT so a reworded
+  project starts fresh, and GATED all-or-nothing at `KELD_ATTRIBUTION_MIN_BACKGROUND` (50)
+  messages: below it the decision is exactly the uncentred one, because a ten-message
+  offset measured non-monotone. Whole-block without centring measured 59%. The attribution
+  meta carries `centred` and `background_n`, and `model_versions.scoring` names the rule,
+  because centred and uncentred rows differ on ~40% of blocks and nothing else would say so.
+- **Quality.** The 0.823 recorded before this was measured under the OLD absolute threshold
+  with user-only text and the verifier on — a pipeline that no longer exists in three ways.
+  `sidecar/app/test_attribution_quality.py` (opt-in, `KELD_ATTRIBUTION_EVAL=1`) now scores
+  the shipped configuration — whole-block, mean, centred (primed over the fixtures), no
+  verifier unless `KELD_ATTRIBUTION_EVAL_VERIFIER=1` — and its floor is a regression tripwire
+  under THAT measurement, not the design gate. MARGIN/VERIFY_HALO are starting points
+  awaiting calibration on LABELED REAL blocks — the correction flywheel, not another
+  synthetic sweep. Runbook: `docs/attribution-smoke.md`.
 
 **`keld signal doctor` / `status` report on-device model state**
 (`internal/localagent/models.go`). ⚠️ **Presence is a filesystem stat, never a
