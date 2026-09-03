@@ -73,15 +73,16 @@ ABSENT = "absent"
 class Job:
     """One block waiting to be attributed. Coordinates and counters only — never text."""
 
-    __slots__ = ("key", "path", "start", "end", "dims", "session_id", "attempts")
+    __slots__ = ("key", "path", "start", "end", "dims", "attempts")
 
-    def __init__(self, key, path, start, end, dims=None, session_id=""):
+    def __init__(self, key, path, start, end, dims=None):
+        # `key` is the block's identity, `session@start` — the session is not held separately
+        # because nothing here needs it apart from the key it is already inside.
         self.key = key
         self.path = path
         self.start = start
         self.end = end
         self.dims = dims or {}
-        self.session_id = session_id
         self.attempts = 0
 
 

@@ -1748,8 +1748,6 @@ def _attrib_worker_run():
     Every block that reaches here has already been checked for the things that need no encoder
     (declared projects, the toggle, the weights, an empty span), so the only outcomes are a real
     answer, an encoder status, or a kill by the watchdog."""
-    import time
-
     while True:
         # Resolved per iteration rather than captured once. In this process the queue is a
         # singleton built at first use, so the two are the same thing — but a captured reference
@@ -1770,8 +1768,7 @@ def _attrib_worker_run():
             # would be refused anyway, and calling `fail` here would spend a SECOND attempt on
             # one kill.
             continue
-        if not q.finish(job.key, result):
-            continue
+        q.finish(job.key, result)
 
 
 def _attribute_job(job, q):
@@ -1780,7 +1777,7 @@ def _attribute_job(job, q):
     The heartbeat is wired here and nowhere else: `beat` is handed to the encoder adapter, which
     threads it into `Encoder.encode`, which calls it as each batch returns. That is the only
     reason the watchdog can tell this thread apart from a wedged one."""
-    from app.analysis import attribution, textembed
+    from app.analysis import attribution
     from app import verifier as verifier_mod
 
     source = _text_source()
@@ -1807,26 +1804,20 @@ def _attribute_job(job, q):
     def beat(_i, _n, _ms):
         q.beat(job.key)
 
-    result = _attribute_blocking(texts, job.dims, _EncoderAdapter(child, on_batch=beat),
-                                 verifier_obj, verifier_absent, asst_texts, job.key)
-    if child.state != textembed.READY and result.get("status") == attribution.STATUS_PENDING:
-        # The child is gone and the answer is the encoder's status rather than a decision —
-        # which is what a watchdog kill looks like from in here. Let the kill's own `fail` own
-        # the bookkeeping; storing this `pending` would hand the daemon a non-answer AND leave
-        # the re-queued copy to be encoded again.
-        if q.stalled() == job.key or q.state(job.key) != "running":
-            return None
-    return result
+    # A job the watchdog killed mid-encode still returns an answer here — the encoder's status
+    # rather than a decision. It is discarded by `Queue.finish`, which refuses any answer for a
+    # job that is no longer the running one; there is deliberately no second check for it here.
+    return _attribute_blocking(texts, job.dims, _EncoderAdapter(child, on_batch=beat),
+                               verifier_obj, verifier_absent, asst_texts, job.key)
 
 
-def _attrib_watchdog(q=None):
+def _attrib_watchdog(q):
     """Kill the encoder child if the running job has gone silent. Returns whether it fired.
 
     Called from `lifespan`'s 1 s poll loop, beside the two `WorkerManager.poll()`s — the same
     place, and for the same reason: a guard that is constructed but never driven is not a guard.
     The kill is lock-free (`Encoder.kill_child`) because the thread it is rescuing holds the
     encoder lock by definition."""
-    q = q or _attrib_queue()
     key = q.stalled()
     if key is None:
         return False
@@ -2022,7 +2013,7 @@ async def attribute(body: AttributeIn):
     # The block's identity is (session, start) — what Atlas upserts on and what the daemon's
     # durable job is keyed by — so it is also the dedupe key here, and a re-POSTed job is
     # folded into the centring baseline once rather than once per sweep.
-    q.submit(attribqueue.Job(key, body.path, body.start, body.end, body.dims, body.session_id))
+    q.submit(attribqueue.Job(key, body.path, body.start, body.end, body.dims))
     _ensure_attrib_worker()
     return attribution.pending()
 

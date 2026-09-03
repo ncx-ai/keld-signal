@@ -249,7 +249,7 @@ def _reset_queue(m):
     return m._ATTRIB_QUEUE
 
 
-def _drain(m, expect=1):
+def _drain(m):
     """Run the queued jobs the way the worker thread would, synchronously.
 
     Deliberately drives `_attribute_job` rather than starting the real thread: the ordering and
@@ -265,7 +265,7 @@ def _drain(m, expect=1):
         if result is not None:
             q.finish(job.key, result)
         ran += 1
-    assert ran == expect, f"drained {ran} jobs, expected {expect}"
+    assert ran == 1, f"drained {ran} jobs, expected exactly one"
     return q
 
 

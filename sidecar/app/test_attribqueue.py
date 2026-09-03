@@ -29,7 +29,7 @@ def _q(clock=None, **kw):
 
 
 def _job(key, path="/t.jsonl", start=1.0, end=2.0):
-    return attribqueue.Job(key, path, start, end, {}, key.split("@")[0])
+    return attribqueue.Job(key, path, start, end, {})
 
 
 # -- T1/T2: one block is encoded once, however many times it is asked for --------------------
