@@ -923,10 +923,19 @@ func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
 	go Worker(context.Background(), q, enrichtest.NewFake(), serviceFacets{}, fs, "t@keld.co",
 		func() bool { return false }, func() bool { return false }, nil, nil, nil)
 
-	// Give it time to defer: the job is deferred exactly once (re-spooled to
-	// disk), then the loop pulls from the now-empty queue and blocks until
-	// Close — there's no spool sweeper here to re-offer it and defer again.
-	time.Sleep(200 * time.Millisecond)
+	// The job is deferred exactly once (re-spooled to disk), then the loop pulls
+	// from the now-empty queue and blocks until Close — there's no spool sweeper
+	// here to re-offer it and defer again.
+	//
+	// ⚠️ WAIT FOR THE SPOOL WRITE, DO NOT SLEEP FOR IT. This used to be a fixed
+	// `time.Sleep(200ms)` followed by the spool assertion, and it flaked in CI on
+	// 2026-09-03: the log showed "never-warm-1 deferred — model not ready after
+	// 20ms, re-spooled" — the deferral happened — but on a loaded runner the
+	// re-spool landed after the 200 ms elapsed, and the same commit passed on the
+	// other OS in the same run. A fixed sleep is a race with a timeout; `waitFor`
+	// (already what the test above uses for the warm-then-publish case) is the
+	// condition itself.
+	waitFor(t, 2*time.Second, func() bool { return spoolCount(t, home) > 0 })
 	q.Close()
 
 	if fs.count() != 0 {
@@ -934,10 +943,6 @@ func TestWorkerDefersWhenNeverWarmNeverQuarantines(t *testing.T) {
 	}
 	if n := quarantineCount(t, home); n != 0 {
 		t.Fatalf("model-not-ready must never quarantine; found %d quarantined", n)
-	}
-	// A spooled (deferred) pointer should exist — the job was preserved.
-	if n := spoolCount(t, home); n == 0 {
-		t.Fatal("expected the deferred job to be re-spooled, not lost")
 	}
 }
 
