@@ -240,7 +240,15 @@ class TextSource:
             "encoding": bool(w is not None and w.is_alive()),
             "cached_sessions": sessions,
             "cached_messages": cached,
-            "counts": dict(self.counts, **e.counts),
+            # `batch_ms_total` is a running sum, kept in `counts` so it accumulates with the
+            # count it is divided by; it is dropped from the published block because a total in
+            # milliseconds is not a number anyone reads — the mean beside the count is.
+            "counts": {k: v for k, v in dict(self.counts, **e.counts).items()
+                       if k != "batch_ms_total"},
+            "last_batch_ms": round(e.last_batch_ms, 1),
+            "mean_batch_ms": round(e.counts["batch_ms_total"] / e.counts["batches"], 1)
+            if e.counts.get("batches") else 0.0,
+            "last_encode_ms": round(e.last_encode_ms, 1),
         })
         return block
 
@@ -427,7 +435,19 @@ def embed_stats(source):
         "cached_sessions": 0,
         "cached_messages": 0,
         "counts": {"encoded": 0, "reused": 0, "reads": 0, "passes": 0,
-                   "spawns": 0, "batches": 0, "failures": 0, "kills_idle": 0},
+                   "spawns": 0, "batches": 0, "failures": 0, "kills_idle": 0,
+                   "kills_stalled": 0},
+        # ⚠️ **THE COST OF A BATCH IS THE NUMBER THIS SUBSYSTEM IS ACTUALLY TUNED BY, and it was
+        # not reported until 2026-09-03.** Everything sized against this child — the thread
+        # ceiling, the attribution heartbeat window, whether a block can be attributed at all —
+        # rests on "~1.1-1.6 s per message", a figure from a load test on one machine. A batch is
+        # 8 chunks, so `mean_batch_ms` is that figure times eight on THIS machine, measured
+        # continuously and for free: the count was already kept, so the total is one addition.
+        # `last_encode_ms` is the whole-block cost beside it, which is what the daemon's deadline
+        # used to be compared against.
+        "last_batch_ms": 0.0,
+        "mean_batch_ms": 0.0,
+        "last_encode_ms": 0.0,
     }
     if source is None:
         return block

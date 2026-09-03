@@ -151,7 +151,14 @@ class StubEncoder:
         self.state = te.DOWN
         self.status = te.STATUS_OK
         self.peak_rss_mb = 0.0
-        self.counts = {"spawns": 0, "kills_idle": 0, "failures": 0, "batches": 0}
+        self.counts = {"spawns": 0, "kills_idle": 0, "kills_stalled": 0, "failures": 0,
+                       "batches": 0, "batch_ms_total": 0.0}
+        # ⚠️ The batch timings are part of that surface as of 2026-09-03, and a stub missing
+        # them fails `stats()` rather than degrading — deliberately. They are what the encoder's
+        # thread ceiling and the attribution heartbeat window are sized from, so a fake that
+        # silently reported zeros would make a regression in either invisible.
+        self.last_batch_ms = 0.0
+        self.last_encode_ms = 0.0
 
     def rss_mb(self):
         return 0.0
@@ -594,8 +601,16 @@ def test_embed_stats_with_no_source_states_not_running():
     # The identity is stated even with nothing running: `width` is the PUBLISHED width, which is
     # the one parameter a collected corpus cannot revise retroactively.
     assert b["encoder"]["width"] == te.DIM_PUBLISH and b["encode_width"] == te.DIM_ENCODE
-    assert set(b["counts"]) == {"encoded", "reused", "reads", "passes",
-                                "spawns", "batches", "failures", "kills_idle"}
+    # ⚠️ The key set is asserted EXACTLY, and `batch_ms_total` is deliberately not in it: the
+    # encoder keeps a running total so the mean is free, and `stats()` drops it on the way out
+    # because a total in milliseconds is not a figure anyone reads. Asserting the set is what
+    # keeps the with-source and without-source blocks one shape — a /metrics consumer must never
+    # have to handle two.
+    assert set(b["counts"]) == {"encoded", "reused", "reads", "passes", "spawns", "batches",
+                                "failures", "kills_idle", "kills_stalled"}
+    # The batch timings, stated at rest for the same reason the identity is.
+    assert b["last_batch_ms"] == 0.0 and b["mean_batch_ms"] == 0.0
+    assert b["last_encode_ms"] == 0.0
 
 
 def test_embed_stats_reports_the_child_after_an_encode():

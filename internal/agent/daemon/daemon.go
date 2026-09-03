@@ -1443,6 +1443,28 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 			// context hook to do except get in the way.
 			cmd := exec.Command(binPath, fmt.Sprintf("--port=%d", p))
 			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(encoderNeeded), watch.AnalyzeRoots(), encoderNeeded)
+			// ⚠️ **THE SIDECAR'S STDERR WENT TO /dev/null FOR THE WHOLE LIFE OF THIS DAEMON,
+			// AND THAT MADE EVERY log.warning IN THE SIDECAR DEAD CODE.** Go connects a child's
+			// Stdout/Stderr to the null device when the fields are nil, so `app/main.py`'s
+			// warnings — a failed transcript ingest, a failed PII scan, an unopenable
+			// reference-series store, and now a killed encoder child — were written and
+			// discarded. The cost is not the missing lines themselves but that they read as
+			// observability while providing none: someone adds a warning to diagnose a live
+			// problem, tails the log, sees nothing, and concludes the branch never ran.
+			//
+			// Stderr ONLY. The sidecar's stdout is uvicorn's access log, which is one line per
+			// request against a daemon that polls /health every second — that is not
+			// diagnostics, it is a way to lose the diagnostics in the noise. `serve.py` already
+			// runs uvicorn at log_level="warning" for the same reason, so what arrives here is
+			// the level someone actually wants woken up for.
+			//
+			// os.Stderr rather than a file of the sidecar's own: the daemon's own log is where
+			// an operator already looks, and a sidecar warning is most useful INTERLEAVED with
+			// the daemon line that provoked it — "attribution: encoder silent for 60s" reads
+			// very differently next to the sweep that scheduled the block. It inherits whatever
+			// the service manager points the daemon's stderr at, so no new file, no rotation
+			// policy and no second thing to configure.
+			cmd.Stderr = os.Stderr
 			return cmd, nil
 		},
 		scPort,

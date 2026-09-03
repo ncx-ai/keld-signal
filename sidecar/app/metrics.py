@@ -97,7 +97,7 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
                   cpu_threads=None, peak_rss_mb=None, ceiling_mb=None,
                   hard_limit_mb=None, parent_reserve_mb=None, budget_shortfall_mb=None,
                   store_stats=None, embed_stats=None, verifier_stats=None,
-                  clock=time.monotonic):
+                  attribution_stats=None, clock=time.monotonic):
     interval_ms = round(governor.interval_for(governor.ewma) * 1000.0, 1) if governor else 0.0
     return {
         "worker": {
@@ -171,5 +171,20 @@ def build_metrics(*, worker_state, worker_rss_mb, parent_rss_mb, model_cost_mb,
         # eviction, and nothing in /metrics said so: an unbounded child and a child that had
         # never spawned looked identical. `built: false` is now the answer for the latter.
         "verifier": verifier_stats,
+        # The ATTRIBUTION QUEUE (app/analysis/attribqueue.py). Not a process — a depth, a
+        # heartbeat window and a set of counters — but it belongs beside the three children
+        # because it is the thing that decides what they are asked to do and when one of them
+        # is killed.
+        #
+        # ⚠️ **`waiting` and `counts.completed` are what make a drain observable at all.** The
+        # failure this queue replaced looked healthy from every angle /metrics had: the encoder
+        # was busy, its RSS was fine, no worker had been recycled, and blocks simply never
+        # became attributed. A depth that does not fall and a `completed` that does not rise are
+        # the two numbers that say so. `heartbeat_kills` separates "the encoder is slow" from
+        # "the encoder is dying", which no timing alone can.
+        #
+        # None when this process has never attributed anything — the same "built: false"
+        # distinction `verifier` makes, so an idle machine and a broken one are not one shape.
+        "attribution": attribution_stats,
         "uptime_s": round(uptime_s, 1),
     }

@@ -585,7 +585,13 @@ class Encoder:
         # (worker_manager.py's own account). Reset on `_kill` because a new child is a new
         # generation and a peak carried across one would describe a process that no longer exists.
         self._peak_rss = 0.0
-        self.counts = {"spawns": 0, "kills_idle": 0, "failures": 0, "batches": 0}
+        self.counts = {"spawns": 0, "kills_idle": 0, "kills_stalled": 0, "failures": 0,
+                       "batches": 0, "batch_ms_total": 0.0}
+        # The last batch's and the last whole encode's wall cost. Held as plain attributes rather
+        # than in `counts` because they are readings, not counters — summing them would be
+        # meaningless, and `/metrics` reports them beside the totals.
+        self.last_batch_ms = 0.0
+        self.last_encode_ms = 0.0
 
     # -- lifecycle --
     def _mark_unavailable(self, status):
@@ -725,12 +731,47 @@ class Encoder:
         return rss
 
     # -- dispatch --
-    def encode(self, texts):
+    def kill_child(self):
+        """Signal the current child to die, WITHOUT taking the encoder lock. Returns whether one
+        was signalled.
+
+        ⚠️ **Lock-free, for the same reason `observe_rss` is, and here it is load-bearing rather
+        than merely nice.** The only caller is the attribution watchdog, and it runs precisely
+        when a child has stopped answering — which is exactly when the worker thread is sitting
+        inside `encode` HOLDING `_lock`. A watchdog that waited for that lock would wait on the
+        thing it exists to free, forever. Reading or signalling the process needs no lock; only
+        mutating this object's own bookkeeping does.
+
+        So this touches nothing but the OS process. `_proc`/`_req`/`_resp` are left exactly as
+        they are and the cleanup is left to `encode`'s own error path, which is already written
+        for a child that died mid-batch: its `get` fails, it calls `_kill()`, marks the encoder
+        unavailable and returns a stated status. Nulling them here would race that path for no
+        benefit — and a `_kill()` from this thread would `join(5)` on a process the worker is
+        still reading from."""
+        proc = self._proc
+        if proc is None:
+            return False
+        try:
+            proc.kill()
+        except Exception:      # noqa: BLE001 — an already-dead child is the outcome we wanted
+            return False
+        self.counts["kills_stalled"] += 1
+        return True
+
+    def encode(self, texts, on_batch=None):
         """`(vectors, status)` at the ENCODE width, or `([], status)` with the reason stated.
 
         Never raises for an unavailable encoder: absent weights, a failed spawn and a failed batch
         are all "no vectors, and here is why". This is the degrade the module contract requires —
-        a missing model must cost the text half of the row, never the row and never the daemon."""
+        a missing model must cost the text half of the row, never the row and never the daemon.
+
+        ⚠️ **`on_batch(i, n, ms)` IS A LIVENESS SIGNAL, NOT A PROGRESS BAR.** It fires as each
+        batch comes back from the child, and it is the only evidence anything outside this lock
+        can have that the encode is moving: a caller holding `_lock` for minutes is
+        indistinguishable from a caller holding it forever, and that ambiguity is what made the
+        attribution watchdog impossible to write safely before it existed (see
+        `analysis/attribqueue.py`, which consumes it). Exceptions from the callback are swallowed
+        — a telemetry hook must never be able to fail an encode."""
         if not enabled():
             return [], STATUS_DISABLED
         if not texts:
@@ -739,7 +780,10 @@ class Encoder:
             if not self._ensure_up():
                 return [], self.status
             out = []
+            batches = (len(texts) + _BATCH - 1) // _BATCH
+            block_started = self._clock()
             for i in range(0, len(texts), _BATCH):
+                started = self._clock()
                 self._req.put({"texts": list(texts[i:i + _BATCH]), "max_tokens": _MAX_TOKENS})
                 try:
                     resp = self._resp.get(timeout=self._spawn_timeout)
@@ -753,6 +797,19 @@ class Encoder:
                     return [], self.status
                 out.extend(resp["vectors"])
                 self.counts["batches"] += 1
+                # Per-batch cost, kept as a running total plus the last reading. The count is
+                # already here, so a mean is free and neither needs a histogram: what a reader
+                # actually asks is "is a batch still costing what it used to", and the pair
+                # answers it. Rounded at the edge (`/metrics`), never here.
+                ms = (self._clock() - started) * 1000.0
+                self.counts["batch_ms_total"] += ms
+                self.last_batch_ms = ms
+                if on_batch is not None:
+                    try:
+                        on_batch(i // _BATCH + 1, batches, ms)
+                    except Exception:  # noqa: BLE001 — see the docstring: never fail an encode
+                        pass
+            self.last_encode_ms = (self._clock() - block_started) * 1000.0
             self._last_activity = self._clock()
             return out, STATUS_OK
 

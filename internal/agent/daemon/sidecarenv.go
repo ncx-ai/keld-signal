@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -92,18 +94,56 @@ func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []strin
 
 	// Set-if-absent: an operator-provided value in `base` wins.
 	for _, kv := range [...][2]string{
-		{"MALLOC_ARENA_MAX", "2"},         // bound glibc arena fragmentation
-		{"OMP_NUM_THREADS", "2"},          // cap OpenMP pool -> <=2 cores
-		{"MKL_NUM_THREADS", "2"},          // cap MKL pool
-		{"OPENBLAS_NUM_THREADS", "2"},     // cap OpenBLAS pool
-		{"NUMEXPR_NUM_THREADS", "2"},      // cap numexpr pool
-		{"KELD_SIDECAR_MAX_THREADS", "2"}, // cap torch intra-op scaler ceiling
+		{"MALLOC_ARENA_MAX", "2"},     // bound glibc arena fragmentation
+		{"OMP_NUM_THREADS", "2"},      // cap OpenMP pool -> <=2 cores
+		{"MKL_NUM_THREADS", "2"},      // cap MKL pool
+		{"OPENBLAS_NUM_THREADS", "2"}, // cap OpenBLAS pool
+		{"NUMEXPR_NUM_THREADS", "2"},  // cap numexpr pool
+		{"KELD_SIDECAR_MAX_THREADS", strconv.Itoa(encoderThreads(runtime.NumCPU()))},
 	} {
 		if !hasEnvKey(base, kv[0]) {
 			env = append(env, kv[0]+"="+kv[1])
 		}
 	}
 	return env
+}
+
+// encoderThreadCeiling bounds what encoderThreads may return however many cores a host has.
+// Six because this is a background process on somebody's laptop and the machine's own work has
+// to stay responsive; also because the fast cores are what is worth having (an Apple M-series
+// host counts its efficiency cores in NumCPU, and a thread landing on one is slower than no
+// extra thread at all).
+const encoderThreadCeiling = 6
+
+// encoderThreads is the torch intra-op ceiling handed to the sidecar: half the host's cores,
+// bounded to [2, encoderThreadCeiling].
+//
+// ⚠️ **THIS WAS A HARD-CODED 2 AND IT WAS THE ATTRIBUTION BOTTLENECK.** The sidecar has a CPU
+// SCALER (app/cpuscale.py) whose whole job is exactly this decision — half the cores on an idle
+// host, ramping down to a floor under load — and its own default when the variable is absent is
+// `cores // 2`. The daemon then set the variable unconditionally to 2, which is not a cap on
+// that policy but a replacement for it: on a 10-core machine the scaler's ceiling became 2 and
+// the ramp had nowhere to ramp. Measured cost on an M1 Pro: 194% CPU (two cores flat out) and
+// 65-110 s to encode ONE block, against a 120 s deadline the daemon then failed the job on.
+//
+// The constant was defensible when it was written — an encode was a few short user messages,
+// and the value sits beside four allocator/BLAS caps that ARE flat 2s for a different reason
+// (bounding thread-pool footprint, not throughput). What changed underneath it is that
+// attribution encodes whole blocks, user and assistant turns alike, ~15 chunks at a time.
+//
+// Deriving from NumCPU rather than deleting the variable keeps the daemon in charge of the
+// ceiling — a fleet machine must not be able to take every core because torch defaulted to all
+// of them — while letting a capable host actually use what it has. Still set-if-absent, so
+// KELD_SIDECAR_MAX_THREADS in the environment continues to win.
+func encoderThreads(cores int) int {
+	n := cores / 2
+	if n < 2 {
+		return 2
+	}
+	if n > encoderThreadCeiling {
+		return encoderThreadCeiling
+	}
+	return n
 }
 
 // hasEnvKey reports whether env contains an assignment for key.

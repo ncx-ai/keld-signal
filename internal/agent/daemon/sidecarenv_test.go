@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -24,15 +26,24 @@ func TestSidecarEnvAppliesTenancyCaps(t *testing.T) {
 	if m["KELD_GLINER2_DIR"] != "/models/gliner2" {
 		t.Errorf("KELD_GLINER2_DIR = %q, want /models/gliner2", m["KELD_GLINER2_DIR"])
 	}
-	// Allocator-arena + thread-pool caps keep the sidecar a good tenant:
-	// bounded RSS (no per-thread arena fragmentation) and <=2 CPU cores.
+	// Allocator-arena + thread-pool caps keep the sidecar a good tenant: bounded RSS (no
+	// per-thread arena fragmentation) and a bounded share of the CPU.
+	//
+	// ⚠️ KELD_SIDECAR_MAX_THREADS is deliberately NOT in this table any more. It used to be a
+	// flat "2" beside the four allocator caps and was asserted here as if it were one of them,
+	// which is how it stayed at 2 while the work behind it grew from a few short messages to
+	// whole blocks. The four below bound a thread POOL's footprint; that one bounds encoder
+	// THROUGHPUT, and it is host-derived — see TestEncoderThreadsScalesWithTheHost.
 	want := map[string]string{
-		"MALLOC_ARENA_MAX":         "2",
-		"OMP_NUM_THREADS":          "2",
-		"MKL_NUM_THREADS":          "2",
-		"OPENBLAS_NUM_THREADS":     "2",
-		"NUMEXPR_NUM_THREADS":      "2",
-		"KELD_SIDECAR_MAX_THREADS": "2",
+		"MALLOC_ARENA_MAX":     "2",
+		"OMP_NUM_THREADS":      "2",
+		"MKL_NUM_THREADS":      "2",
+		"OPENBLAS_NUM_THREADS": "2",
+		"NUMEXPR_NUM_THREADS":  "2",
+	}
+	if got, want := m["KELD_SIDECAR_MAX_THREADS"], strconv.Itoa(encoderThreads(runtime.NumCPU())); got != want {
+		t.Errorf("KELD_SIDECAR_MAX_THREADS = %q, want %q (derived from %d cores)",
+			got, want, runtime.NumCPU())
 	}
 	for k, v := range want {
 		if m[k] != v {
@@ -138,4 +149,44 @@ func TestSidecarEnvSetsKeldTextembedWhenTheEncoderIsNeeded(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestEncoderThreadsScalesWithTheHost pins the ceiling the text encoder actually runs at.
+//
+// ⚠️ **THIS WAS A HARD-CODED 2 AND IT WAS THE ATTRIBUTION BOTTLENECK.** The sidecar owns a CPU
+// scaler (app/cpuscale.py) whose entire job is this decision — half the cores when the host is
+// idle, ramping down under load — and whose own default when the variable is unset is
+// `cores // 2`. Setting the variable to 2 unconditionally did not cap that policy, it REPLACED
+// it: on a 10-core machine the ramp's ceiling became 2 and there was nothing to ramp. Measured
+// cost on an M1 Pro: two cores flat out and 65-110s to encode ONE block, against a 120s deadline
+// the daemon then counted as a failed attempt.
+//
+// Half the cores, floored at 2 and capped at 6. The cap is not arithmetic shyness: this is a
+// background process on somebody's laptop and their own work has to stay responsive, and on an
+// Apple M-series host NumCPU counts efficiency cores that a torch worker gains little from.
+func TestEncoderThreadsScalesWithTheHost(t *testing.T) {
+	for _, tc := range []struct{ cores, want int }{
+		{1, 2}, // a single-core host still gets the floor; below it torch is serial
+		{2, 2},
+		{4, 2},
+		{8, 4},
+		{10, 5}, // the M1 Pro this was measured on: 5, not 2
+		{12, 6},
+		{20, 6}, // the ceiling holds however large the host
+		{128, 6},
+	} {
+		if got := encoderThreads(tc.cores); got != tc.want {
+			t.Errorf("encoderThreads(%d) = %d, want %d", tc.cores, got, tc.want)
+		}
+	}
+}
+
+// TestEncoderThreadsStillYieldsToTheOperator: the value is set-if-absent like every other
+// tunable here, so a machine that needs a different answer says so and is obeyed. That is what
+// makes deriving it safe — it is a better default, not a policy the operator cannot escape.
+func TestEncoderThreadsStillYieldsToTheOperator(t *testing.T) {
+	m := envMap(sidecarEnv([]string{"KELD_SIDECAR_MAX_THREADS=1"}, "/m", "", nil, false))
+	if m["KELD_SIDECAR_MAX_THREADS"] != "1" {
+		t.Errorf("operator override lost: got %q", m["KELD_SIDECAR_MAX_THREADS"])
+	}
 }
