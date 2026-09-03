@@ -1,0 +1,186 @@
+[
+  {
+    "id": "proj_atlas",
+    "title": "Atlas Platform",
+    "team": "Platform",
+    "description": "The Keld Atlas server and web application: an OTLP receiver accepting telemetry from coding tools, instrumented applications and the on-device agent; importers for provider billing and Bedrock invocation logs; Postgres storage with an Alembic migration history; and the read side that renders per-person activity, workstream dimensions, and cost and usage facts, alongside the org admin console. Includes seats, pricing plans and entitlement checks, the background worker and ingest consumer, and the Helm charts that deploy it.",
+    "repos": [],
+    "keywords": [
+      "otlp receiver",
+      "alembic",
+      "postgres",
+      "fastapi",
+      "admin console",
+      "seats",
+      "pricing plan",
+      "entitlement",
+      "worker",
+      "helm",
+      "cost facts",
+      "usage facts",
+      "migration"
+    ],
+    "ticket_key": ""
+  },
+  {
+    "id": "proj_signal",
+    "title": "Signal On-Device Client",
+    "team": "Client",
+    "description": "The Keld client running on an engineer's own machine: the CLI that configures local coding tools to emit telemetry, and the keld-agent daemon with its Python sidecar that reads transcripts on device, cuts a session's active time into spans of work, derives workstream dimensions from tool-call metadata, detects credentials and personal data, masks anything sensitive before publishing, and scores each span against the org's declared projects using local embedding and verifier models. The governing invariant is that raw prompt text, character spans and byte offsets never leave the machine.",
+    "repos": [],
+    "keywords": [
+      "keld-agent",
+      "sidecar",
+      "daemon",
+      "transcript",
+      "on-device",
+      "masking",
+      "credential detection",
+      "gliner2",
+      "qwen3",
+      "verifier",
+      "reference series",
+      "loopback proxy",
+      "spool"
+    ],
+    "ticket_key": ""
+  },
+  {
+    "id": "proj_integrations",
+    "title": "Telemetry SDKs and Testbench",
+    "team": "Integrations",
+    "description": "Drop-in libraries that instrument applications already calling OpenAI, Anthropic or Bedrock clients, so their requests report to Atlas with no call-site changes, published for both Python and TypeScript and kept behaviourally identical across the two. Includes the interactive testbench used to exercise them against a running Atlas, the span and metric shape emitted for each provider, and the vendored upstream provider SDKs kept as reference for wrapper compatibility.",
+    "repos": [],
+    "keywords": [
+      "instrumentation",
+      "drop-in",
+      "wrapper",
+      "span shape",
+      "provider client",
+      "testbench",
+      "vitest",
+      "tsup",
+      "openai sdk",
+      "anthropic sdk",
+      "call-site"
+    ],
+    "ticket_key": ""
+  },
+  {
+    "id": "proj_exchange",
+    "title": "Inference Exchange",
+    "team": "Exchange",
+    "description": "Routing inference through Keld rather than only measuring it: a Python SDK wrapping an OpenAI-compatible asynchronous client so a call carries a deadline and a price constraint over durable events, and a trusted measuring proxy that holds the upstream provider credential so a caller never sees it while every request is measured. Concerns model selection under a deadline, retry and fallback semantics, credential custody, and the attestation tiers a later confidential-compute deployment would add.",
+    "repos": [],
+    "keywords": [
+      "deadline",
+      "durable event",
+      "inngest",
+      "openai-compatible",
+      "credential custody",
+      "attestation",
+      "routing",
+      "price constraint",
+      "supplier"
+    ],
+    "ticket_key": ""
+  },
+  {
+    "id": "proj_gtm",
+    "title": "Go-to-Market and Launch",
+    "team": "Growth",
+    "description": "Taking Keld public: the website and its copy, the announcement that exits stealth, content marketing posts, social accounts, and the positioning that decides how the product is described to a buyer — currently moving from passive spend tracking toward outcomes. Includes the public announcement checklist, launch sequencing against product readiness, and the messaging that distinguishes mapping what an org already spends from routing its work through an exchange.",
+    "repos": [],
+    "keywords": [
+      "website copy",
+      "announcement",
+      "exit stealth",
+      "blog post",
+      "content marketing",
+      "social accounts",
+      "positioning",
+      "messaging",
+      "launch checklist"
+    ],
+    "ticket_key": ""
+  },
+  {
+    "id": "proj_demand",
+    "title": "Demand Pipeline and Customer Development",
+    "team": "Revenue",
+    "description": "Finding and qualifying the enterprises that buy: prospect research, the CRM of demand-side organizations, qualification calls, product demos, and the meeting notes and follow-up actions that come out of them. Includes moving a qualified prospect into an active Atlas account, recruiting private-beta testers, and the partner conversations that decide who commits to sending a real workload through the exchange.",
+    "repos": [],
+    "keywords": [
+      "prospect",
+      "qualified pipeline",
+      "crm",
+      "demo",
+      "discovery call",
+      "meeting notes",
+      "follow-up",
+      "beta tester",
+      "design partner",
+      "account"
+    ],
+    "ticket_key": ""
+  },
+  {
+    "id": "proj_supply",
+    "title": "Supply Partnerships",
+    "team": "Revenue",
+    "description": "The provider side of the exchange: sourcing and onboarding inference suppliers, negotiating the commercial terms of their capacity, getting their ask prices flowing so savings quotes come from live prices rather than static estimates, and the scorecards that compare one supplier against another. Includes the sell side of the book, where a provider offers spare capacity, and the relationship management that keeps a signed supplier integrating.",
+    "repos": [],
+    "keywords": [
+      "supply partner",
+      "provider onboarding",
+      "ask price",
+      "capacity",
+      "commercial terms",
+      "supplier scorecard",
+      "sell order",
+      "unity predict"
+    ],
+    "ticket_key": ""
+  },
+  {
+    "id": "proj_trust",
+    "title": "Trust, Security and Compliance",
+    "team": "Trust",
+    "description": "Making Keld safe to buy: proving zero data retention, obtaining SOC 2 attestation and running its observation window, GDPR and data-residency posture, single sign-on and role-based access for enterprise tenants, and the audit trail an assessor asks for. Includes answering customer security questionnaires, engaging an external auditor, and the written control descriptions a procurement review reads before an enterprise signs.",
+    "repos": [],
+    "keywords": [
+      "zero data retention",
+      "soc 2",
+      "gdpr",
+      "sso",
+      "saml",
+      "rbac",
+      "audit trail",
+      "security questionnaire",
+      "auditor",
+      "control",
+      "procurement"
+    ],
+    "ticket_key": ""
+  },
+  {
+    "id": "proj_capital",
+    "title": "Fundraising and Investor Relations",
+    "team": "Founders",
+    "description": "Raising money and keeping investors current: conversations with funds, the narrative and deck that carry the company's story, the metrics and proof points a diligence process asks for, monthly updates to existing backers, and the terms of a round. Includes tracking which introductions came from whom and preparing the evidence that a beta customer converted a real workload at a real saving.",
+    "repos": [],
+    "keywords": [
+      "investor",
+      "fund",
+      "raise",
+      "deck",
+      "diligence",
+      "cap table",
+      "term sheet",
+      "investor update",
+      "introduction",
+      "narrative"
+    ],
+    "ticket_key": ""
+  }
+]
