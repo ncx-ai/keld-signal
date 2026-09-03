@@ -152,6 +152,10 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 	}
 	// blocks is always true: it is what v2 IS. An operator who wants it off sets
 	// KELD_BLOCKS=0, which wins over the config file in both directions.
+	//
+	// It also carries `attribution`, which WriteInstallDefaults derives from it —
+	// an install that cuts blocks attributes them. KELD_ATTRIBUTION=0 opts out,
+	// the same way KELD_BLOCKS=0 does.
 	if err := writeConfig(backend, true); err != nil {
 		return fmt.Errorf("write agent-config.json: %w", err)
 	}

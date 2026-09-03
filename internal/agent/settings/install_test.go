@@ -38,6 +38,9 @@ func TestWriteInstallDefaultsCreatesBothKeys(t *testing.T) {
 	if m["blocks"] != true {
 		t.Errorf("blocks = %v, want true", m["blocks"])
 	}
+	if m["attribution"] != true {
+		t.Errorf("attribution = %v, want true", m["attribution"])
+	}
 
 	// And it round-trips through the real loader, which is what the daemon uses.
 	s := Load()
@@ -47,8 +50,33 @@ func TestWriteInstallDefaultsCreatesBothKeys(t *testing.T) {
 	if !s.Blocks {
 		t.Error("Load().Blocks = false, want true")
 	}
+	if !s.Attribution {
+		t.Error("Load().Attribution = false, want true")
+	}
 	if s.MLEnabled() {
 		t.Error("MLEnabled() = true; deterministic must not enable the model")
+	}
+}
+
+// The invariant WriteInstallDefaults expresses: attribution rides on blocks,
+// because the attribution loop is driven off the block emitter's publish hook.
+// A blocks=false, attribution=true config would read as "on" and attribute
+// nothing, so it must not be writable.
+func TestWriteInstallDefaultsTiesAttributionToBlocks(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+
+	if err := WriteInstallDefaults("deterministic", false); err != nil {
+		t.Fatalf("WriteInstallDefaults: %v", err)
+	}
+	m := readConfig(t)
+	if m["blocks"] != false {
+		t.Errorf("blocks = %v, want false", m["blocks"])
+	}
+	if m["attribution"] != false {
+		t.Errorf("attribution = %v, want false; it must never outlive blocks", m["attribution"])
+	}
+	if s := Load(); s.Attribution {
+		t.Error("Load().Attribution = true with blocks off")
 	}
 }
 
