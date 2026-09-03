@@ -59,17 +59,52 @@ agent.
 unconfigured; once there is an endpoint and a token, that pair is fixed for the life of the
 process. Editing the file changes nothing until the agent restarts.
 
+## An environment lives in two places
+
+⚠️ **This is the part that costs people an afternoon.** Pointing the daemon somewhere new moves
+half your data, and the half that stays behind does not look broken.
+
+| written by | holds | covers |
+| --- | --- | --- |
+| `keld signal setup` | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.gemini/settings.json` | the tools' own OTLP telemetry, and the `KELD_CTX_ENDPOINT` on the SessionStart/PreToolUse hooks |
+| `keld login && keld signal setup` (or this script) | `$KELD_HOME/hook.json` | the daemon: enrichments, blocks, client-events, org settings, and the telemetry it proxies |
+
+Each tool config carries a **baked endpoint and ingest token** written at setup time. They know
+nothing about `hook.json` and are not re-read from it. So a daemon moved to dev while the tools
+still point at local gives you one session whose blocks are in dev and whose telemetry and tool
+context are in local — joined by nothing, with every piece individually healthy.
+
+Run `scripts/keld-endpoint.sh` with no arguments to see both halves at once. A real example from
+a working machine, where three of four were local and nobody had noticed:
+
+```
+AI tools (written by `keld signal setup`)
+  claude_code · telemetry      http://localhost:8000
+  claude_code · tool-context   http://localhost:8000/v1/tool-context
+  codex · telemetry            http://localhost:8000/v1/logs
+  gemini · telemetry           https://atlas.keld.co        <- still prod
+```
+
 ## Switching between local, dev and prod
 
 `scripts/keld-endpoint.sh` keeps one saved profile per environment — endpoint *and* token
 together, for the reason above — and swaps them.
 
 ```sh
-scripts/keld-endpoint.sh                  # where every agent on this machine points
+scripts/keld-endpoint.sh                  # both halves: the tools and every agent
 scripts/keld-endpoint.sh save local       # save the current hook.json as "local"
-scripts/keld-endpoint.sh use dev          # switch, and restart the agent
+scripts/keld-endpoint.sh use dev          # daemon + tools, then restart the agent
 scripts/keld-endpoint.sh list
 ```
+
+`use` writes `hook.json`, restarts the agent, and then re-runs `keld signal setup --api-url
+<endpoint>` so the tools move with it. `--daemon-only` skips the tool half and says plainly that
+your data is now split. **Restart any open AI tool session afterwards** — those configs are read
+at process start, so a running Claude Code or Codex keeps posting to the old environment until
+it is restarted.
+
+If the tool half fails, it is almost always that you have no stored credentials for that Atlas
+yet: `keld login --api-url <endpoint> && keld signal setup --api-url <endpoint> -y`.
 
 To create a profile for an environment you have never signed into, log into it once and save
 the result:
@@ -130,3 +165,6 @@ In the order that finds it fastest:
    outlived its sidecar.
 4. **Is Atlas rejecting the token?** A token from another environment fails as authentication,
    not as a connection, so the daemon looks healthy in every log you check first.
+5. **Is only *some* of it missing?** Blocks present and telemetry absent (or the reverse) is the
+   two-halves problem above, not a bug — check the tool row and the daemon row against each
+   other.
