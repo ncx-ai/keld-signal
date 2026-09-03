@@ -32,8 +32,18 @@ semantic-ish versioning during `0.x`.
   scores USER-turn text only while the benchmark saw assistant text too.
   `sidecar/app/test_attribution_quality.py` re-runs it against the real models
   (opt-in, `KELD_ATTRIBUTION_EVAL=1`) and asserts a **0.80 regression
-  tripwire** just below that measurement — **not** the design's 0.85 quality
-  gate, which this pipeline does not currently meet. Enabling attribution also
+  tripwire** — **not** the design's 0.85 quality gate, which this pipeline does
+  not currently meet. ⚠️ **That 0.823 was measured under the ABSOLUTE-threshold
+  rule and the rank-and-margin rule replaced it the next day without the eval
+  being re-run, so the tripwire is currently RED**: re-measured 2026-09-03 at
+  **0.779** (precision 0.854, recall 0.717). The move is the rule change showing
+  up on a multi-label-recall metric, not a regression — precision rose sharply
+  and the customer slice improved (trust 77% → 85%, clean blocks 83%), matching
+  the 21-real-block evaluation that motivated the new rule (trust 53% → 74%,
+  coverage 86% → 76%). The floor is deliberately left failing rather than
+  lowered to fit: re-baselining it needs the same eval run under the previous
+  null wording, which is one measurement, not a paperwork edit. See the re-run
+  block in that file's docstring. Enabling attribution also
   turns on **on-device text encoding** (`KELD_TEXTEMBED=1` is set for the
   sidecar; publishing feature rows still needs the separate `features`
   toggles). The daemon also emits a one-time `agent.hardware`
@@ -59,6 +69,37 @@ semantic-ish versioning during `0.x`.
   is opt-in via `KELD_VERIFY_DEMOTE`, so a local run cannot mutate a release.
 
 ### Fixed
+- **The `NULL_DOC` competitor described an engineer asking about their own
+  project, so real work read as idle chat.** Its clause "generic technical
+  questions asked out of curiosity or for learning" is a fair description of
+  project-directed questioning; measured over the 100 fixtures with a five-way
+  wording sweep (only the null string differing, shared cached vectors), removing
+  it fixed a genuine design-system question that had attributed to nothing and
+  broke nothing, at **no cost in trap coverage** (11 of 19 no-project fixtures
+  held, unchanged — those traps are earned by the "work that belongs elsewhere"
+  clause). Embedding-only arm f1 0.724 → 0.740, precision 0.774 → 0.787. An
+  abstract-study clause was tried twice and lost both times (precision 0.681,
+  trust 77% → 68%), and the longest, most complete wording scored worst of all
+  five arms — adding a category dilutes the ones already present. `model_versions`
+  now also carries a **`null_doc` fingerprint** (truncated sha256 of the document),
+  because that map exists to declare when two corpora are not comparable and a
+  reworded null has exactly that property; it rides the existing open map, so no
+  schema bump is owed. ⚠️ This does **not** fix the null also winning at whole-
+  session scale — that is per-document hubness (the null describes speech while
+  project documents compose an artifact), measured and recorded, and its fix is
+  score normalisation rather than prose.
+- **`go test ./...` was red on macOS, and the same bug silently cost real
+  checkouts their repo identity.** `decodeProjectDir` filtered candidate entries
+  with `os.DirEntry.IsDir()`, which reports the directory entry's own type without
+  following the link and is therefore false for a symlink to a directory. `/var` is
+  a symlink to `private/var` on macOS, so the walk died at the first level and
+  returned "" for every path beneath it — including every `t.TempDir()`, hence four
+  failing tests on every macOS machine. Not only a test artifact: the watcher's
+  ingest signal and the tick both resolve a checkout through `transcriptCwd` and
+  both read "" as "no reading can be confirmed", so a checkout behind a symlinked
+  path component lost its repo and branch in the reference series. Following the
+  link is safe because the traversal is already bounded by `projectDirMaxDepth`
+  and `projectDirMaxNodes`.
 - **A release could publish without its Linux sidecar tarball, and every Linux
   `curl | sh` install then aborted.** v0.20.0 shipped 9 of 10 assets because GitHub
   never acquired a runner for the `linux-sidecar` job — `runner_name` empty, zero
