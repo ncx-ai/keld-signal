@@ -1748,6 +1748,8 @@ def _attrib_worker_run():
     Every block that reaches here has already been checked for the things that need no encoder
     (declared projects, the toggle, the weights, an empty span), so the only outcomes are a real
     answer, an encoder status, or a kill by the watchdog."""
+    from app.analysis import attribqueue
+
     while True:
         # Resolved per iteration rather than captured once. In this process the queue is a
         # singleton built at first use, so the two are the same thing — but a captured reference
@@ -1760,7 +1762,14 @@ def _attrib_worker_run():
             continue
         try:
             result = _attribute_job(job, q)
-        except Exception:      # noqa: BLE001 — a worker that dies stops every future block
+        except Exception as exc:   # noqa: BLE001 — a worker that dies stops every future block
+            # The CLASS, never the message: an exception string from this path can carry a
+            # filesystem path, and the same redaction rule the client-events gate applies
+            # (`clientevents/redact.go`) holds for a line written on device. The attempt count
+            # says how close this block is to being retired, which is what turns one line into
+            # a pattern a reader can act on.
+            log.warning("attribution job failed: %s (attempt %d/%d)",
+                        type(exc).__name__, job.attempts + 1, attribqueue.MAX_ATTEMPTS)
             q.fail(job.key, "error")
             continue
         if result is None:
@@ -1814,17 +1823,31 @@ def _attribute_job(job, q):
 def _attrib_watchdog(q):
     """Kill the encoder child if the running job has gone silent. Returns whether it fired.
 
+    Imports `attribqueue` for the window it reports; the module is already resident by the time
+    a queue exists to be watched.
+
     Called from `lifespan`'s 1 s poll loop, beside the two `WorkerManager.poll()`s — the same
     place, and for the same reason: a guard that is constructed but never driven is not a guard.
     The kill is lock-free (`Encoder.kill_child`) because the thread it is rescuing holds the
     encoder lock by definition."""
+    from app.analysis import attribqueue
+
     key = q.stalled()
     if key is None:
         return False
     source = _text_source()
     if source is not None:
         source.encoder.kill_child()
-    q.fail(key, "heartbeat")
+    outcome = q.fail(key, "heartbeat")
+    # ⚠️ **KILLING A MODEL CHILD IS THE LOUDEST THING THIS SUBSYSTEM DOES AND IT WAS SILENT.**
+    # The counters said it had happened; nothing in the log an operator tails said so, which is
+    # the one shape this repo's standing rule forbids — a skip is stated, never inferred. It
+    # names the WINDOW as well as the event, because "the encoder went quiet for 60s" and "the
+    # encoder is slow" are the two readings a reader has to choose between, and only the first
+    # is what fired. No key and no path: the block's identity is `session@start` and the path is
+    # under someone's home, so both stay out of the line for `clientevents/redact.go`'s reason.
+    log.warning("attribution: encoder silent for %.0fs, child killed; block %s",
+                attribqueue.HEARTBEAT_TIMEOUT_S, outcome)
     return True
 
 

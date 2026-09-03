@@ -746,6 +746,48 @@ def test_the_metrics_block_appears_only_once_a_queue_exists():
     assert "heartbeat_timeout_s" in stats and "counts" in stats, stats
 
 
+def test_a_heartbeat_kill_is_logged_and_not_merely_counted():
+    """⚠️ Killing a model child is the loudest thing this subsystem does, and it was silent —
+    the counters moved and the log an operator tails said nothing. This also covers
+    `_attrib_watchdog` itself, which had no test of its own: stalled -> kill the child -> fail
+    the job, in one call.
+
+    The line must carry the WINDOW and must NOT carry the block key or the transcript path: the
+    key is `session@start` and the path sits under somebody's home directory."""
+    import logging
+    m = _main()
+    path = _transcript()
+    _with_roots(path)
+    from app.analysis import attribqueue
+
+    clock = [1000.0]
+    q = attribqueue.Queue(clock=lambda: clock[0], heartbeat_timeout_s=60)
+    m._ATTRIB_QUEUE = q
+    q.submit(attribqueue.Job("sess-secret@1.0", "/Users/someone/private.jsonl", 1.0, 2.0))
+    q.take()
+
+    child = FakeChild()
+    was = m._text_source
+    m._text_source = lambda: FakeSource(child)
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    m.log.addHandler(handler)
+    try:
+        assert m._attrib_watchdog(q) is False, "fired while the job was still beating"
+        clock[0] += 61
+        assert m._attrib_watchdog(q) is True
+    finally:
+        m.log.removeHandler(handler)
+        m._text_source = was
+
+    assert q.stats()["counts"]["heartbeat_kills"] == 1, q.stats()
+    assert q.state("sess-secret@1.0") == attribqueue.QUEUED, "the job was not re-queued"
+    line = " ".join(r.getMessage() for r in records)
+    assert "silent" in line and "60" in line, line
+    assert "sess-secret" not in line and "someone" not in line and ".jsonl" not in line, line
+
+
 if __name__ == "__main__":
     fns = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     for name, fn in fns:
