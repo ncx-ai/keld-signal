@@ -7,6 +7,41 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-09-03
+
+### Changed
+- **An install now attributes by default.** `keld install` writes an
+  `attribution` key into `~/.keld/agent-config.json` alongside `ml_backend` and
+  `blocks`, so a machine that cuts blocks attributes them. ⚠️ **This is the
+  correction of a gap, not a policy reversal.** 2.1.0 shipped attribution behind
+  `KELD_ATTRIBUTION` and nothing else, and **no service definition on any OS
+  carries an environment block** — `LaunchAgentPlist` and `SystemdUnit` have
+  none, the Windows task is a bare `/TR "<exe>"` run. An installed daemon
+  therefore could not be told to attribute at all, and every machine that ever
+  did was one someone had started by hand with the variable set. That is the
+  same reason `blocks` has had a config key since v2. `KELD_ATTRIBUTION=0` opts
+  out, in both directions, exactly as `KELD_BLOCKS=0` does.
+  ⚠️ **The key is DERIVED from `blocks`, never written as a literal and never
+  given a parameter of its own**: the attribution loop is driven off the block
+  emitter's `OnPublished` hook, so `attribution: true` with `blocks: false` is a
+  key an operator reads as "on" while nothing is ever attributed. There is no
+  such install worth having, so the invariant lives in `WriteInstallDefaults`
+  rather than in a caller's discipline, and a test pins it.
+  **What it costs a machine:** attribution demands the Qwen3-Embedding-0.6B
+  weights, ~1.1 GB, fetched on demand at the first block rather than at install
+  — a machine that never cuts a block never pays it. **Not** the Gemma verifier,
+  which remains behind its own `KELD_ATTRIBUTION_VERIFIER` and default OFF as of
+  2026-09-03, and is still the configuration every quality figure was measured
+  under.
+
+### Notes
+- No remote override is added here. `settings.Remote` still carries no `blocks`
+  or `attribution` field, so an org cannot switch either on or off fleet-wide.
+  The asymmetry is pre-existing and documented in `settings.go`; closing it is a
+  separate decision with Atlas-side work.
+- Existing installs are unaffected until they re-run `keld install`. The write
+  merges, so a re-install adds the key and leaves every operator-set key intact.
+
 ## [2.1.0] — 2026-09-03
 
 ### Added
