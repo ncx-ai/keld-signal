@@ -306,6 +306,116 @@ def test_an_unavailable_encoder_is_retried_on_a_cooldown_not_latched_and_not_per
     assert len(attempts) == 2, "latched instead of retried on the cooldown"
 
 
+# ---- 4b. warming: the child comes up because it was ASKED to ---------------------------------
+
+def _ready_spawn():
+    """A `spawn_fn` whose child completes the handshake, plus the request queue it was handed.
+
+    The request queue is returned so a test can assert that warming put NOTHING on it: a warm-up
+    that only works when it has texts to encode is the bug this section exists for."""
+
+    class Q:
+        def __init__(self, answers=None):
+            self.items, self._answers = [], answers or []
+
+        def put(self, item):
+            self.items.append(item)
+
+        def get(self, timeout=None):
+            return self._answers.pop(0) if self._answers else {"ok": True, "vectors": [[0.0]]}
+
+    class P:
+        pid = 4242
+
+        def kill(self):
+            pass
+
+        def join(self, timeout=None):
+            return None
+
+    req, resp = Q(), Q([{"ready": True}] * 8)
+    return (lambda spec: (P(), req, resp)), req
+
+
+def test_warm_brings_a_down_child_up_with_nothing_to_encode():
+    """⚠️ THE REGRESSION, AT ITS OWN LEVEL. The only warm path used to be
+    `attribution.project_vectors`, which spawns the child as a side effect of an encode it
+    memoises per project list — so once every project doc was embedded, nothing ever started the
+    child again and every block answered `pending` forever (smoke agent, 2026-09-03: `spawns: 1`,
+    `kills_idle: 1`, nine blocks held for two and a half hours). `warm` exists so the spawn is
+    asked for rather than inferred, which means it must work with no texts at all."""
+    _on()
+    spawn, req = _ready_spawn()
+    enc = te.Encoder(spawn_fn=spawn, weights="/tmp")
+    assert enc.state == te.DOWN
+    assert enc.warm() is True
+    assert enc.state == te.READY
+    assert enc.counts["spawns"] == 1
+    assert req.items == [], "warming must not need an encode to have something to spawn for"
+
+
+def test_warm_does_not_respawn_a_child_that_is_already_up():
+    """Every sweep of a busy day calls this. A second child would be ~1.7 GB of the one thing the
+    lazy spawn exists to avoid."""
+    _on()
+    spawn, _ = _ready_spawn()
+    enc = te.Encoder(spawn_fn=spawn, weights="/tmp")
+    enc.warm()
+    assert enc.warm() is True
+    assert enc.counts["spawns"] == 1
+
+
+def test_warm_says_no_rather_than_raising_when_the_spawn_fails():
+    """The caller is a background thread with no one to report to, and `/attribute` has already
+    answered `pending`. A failed warm-up is a `False` and a cooldown, never an exception."""
+    _on()
+
+    def spawn(spec):
+        raise OSError("no")
+
+    enc = te.Encoder(spawn_fn=spawn, weights="/tmp", clock=lambda: 0.0, retry_s=300)
+    assert enc.warm() is False
+    assert enc.state == te.UNAVAILABLE
+
+
+def test_warm_honours_the_retry_cooldown_it_shares_with_encode():
+    """A spawn costs seconds and the daemon sweeps every 45 s, so warming must not become a
+    per-sweep spawn attempt on a machine whose weights are still downloading. Same cooldown
+    `encode` obeys — one policy, not two."""
+    _on()
+    now = [0.0]
+    attempts = []
+
+    def spawn(spec):
+        attempts.append(now[0])
+        raise OSError("no")
+
+    enc = te.Encoder(spawn_fn=spawn, weights="/tmp", clock=lambda: now[0], retry_s=300)
+    enc.warm()
+    assert len(attempts) == 1
+    now[0] = 10.0
+    enc.warm()
+    assert len(attempts) == 1, "warming retried the spawn per call"
+    now[0] = 400.0
+    enc.warm()
+    assert len(attempts) == 2, "warming latched instead of retrying on the cooldown"
+
+
+def test_a_warmed_child_can_be_idle_killed_and_warmed_again():
+    """The exact production cycle: up, idle-killed to give the memory back, then up again when a
+    block arrives. `warm` after `maybe_unload` is what was missing, so it is pinned."""
+    _on()
+    now = [0.0]
+    spawn, _ = _ready_spawn()
+    enc = te.Encoder(spawn_fn=spawn, weights="/tmp", clock=lambda: now[0], idle_timeout_s=300)
+    assert enc.warm() is True
+    now[0] = 400.0
+    assert enc.maybe_unload() is True
+    assert enc.state == te.DOWN and enc.counts["kills_idle"] == 1
+    assert enc.warm() is True, "a child killed for being idle must be startable again"
+    assert enc.state == te.READY and enc.counts["spawns"] == 2
+
+
 def test_embed_reports_the_encoders_reason_per_stream():
     """When the encoder cannot serve, every stream that HAD messages says why. A silent empty list
     reads as 'the engineer said nothing', which is a different and false claim."""
