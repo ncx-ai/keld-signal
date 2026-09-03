@@ -7,6 +7,8 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-09-03
+
 ### Added
 - **On-device block-to-project attribution.** Each closed block is scored against
   an org's declared projects (`settings.RemoteProject`: id, title, description,
