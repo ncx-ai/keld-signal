@@ -7,6 +7,51 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-09-04
+
+### Fixed
+- **An idle-killed encoder could never be revived, so attribution stopped for the
+  life of the daemon.** `/attribute` answers `pending` when the encoder child is
+  down and starts a background warm-up to bring it up. That warm-up's only work
+  was embedding the project docs — which spawns the child as a SIDE EFFECT of an
+  encode that is memoised per project-list hash, so it spawns exactly once per
+  project list. Once the child was killed for being idle (~5 minutes; the duty
+  cycle is ~100 messages a day) the warm-up hit the memo, encoded nothing,
+  spawned nothing, and every later block answered `pending` on a child nothing
+  would ever start again. ⚠️ **Nothing reported it.** The daemon was correctly
+  holding a `pending` job without spending an attempt (2.2.1's rule), and the
+  sidecar was correctly reporting a child that was down; only a daemon restart
+  cleared it, by resetting the memo. Measured on the smoke agent 2026-09-03:
+  `spawns: 1`, `kills_idle: 1`, nine blocks held for two and a half hours with
+  the encoder idle throughout.
+  `textembed.Encoder.warm()` is the fix — `_ensure_up` under the encoder's lock,
+  no texts required, sharing `encode`'s unavailable-cooldown so a machine still
+  provisioning weights does not attempt a spawn on every 45 s sweep. **The spawn
+  is asked for, never inferred from an encode.**
+
+## [2.2.1] — 2026-09-03
+
+### Changed
+- **The encode is queued inside the sidecar instead of being timed from outside
+  it.** `/attribute` used to run the encode inside the request the daemon bounds
+  at 120 s, against a single encoder holding one request at a time — and a block
+  measured 65–110 s. When the deadline fired it freed nothing: the sidecar
+  encoded on to the end and discarded the answer, the daemon counted an attempt
+  and re-queued the block, and the next request queued behind the abandoned one.
+  Four calls, four encodes, zero blocks published, and quarantine after four
+  attempts on work that was succeeding.
+  The route now answers in under a second — the stored result if it is ready,
+  otherwise `pending` — and a single worker drains a deduplicated queue keyed on
+  `(session, block.start)`, so a block is encoded exactly once however often it
+  is re-asked for. ⚠️ **Liveness is judged by PROGRESS, not elapsed time**: the
+  encoder heartbeats after every 8-chunk batch and the watchdog kills only a
+  child that has gone silent for 60 s, so a genuinely slow block is never
+  mistaken for a wedged one. A killed job goes to the BACK of the queue and
+  spends one of its four attempts.
+- **`pending` never consumes a daemon attempt.** The attributor holds such a job
+  unchanged rather than counting a failure, which is what makes the queue above
+  safe: a block waiting on the encoder can no longer be quarantined for waiting.
+
 ## [2.2.0] — 2026-09-03
 
 ### Changed
