@@ -1,0 +1,3445 @@
+[
+  {
+    "id": "conv_001",
+    "difficulty": "easy",
+    "difficulty_reason": "Branch and cwd name the billing repo and the user cites a PAY ticket.",
+    "gold_projects": [
+      "proj_payments"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-billing",
+      "git_branch": "fix/PAY-231-webhook-retry",
+      "repo": "acme-billing"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Stripe webhooks for invoice.payment_failed are getting dropped when our worker restarts. PAY-231. Can you look at services/webhooks/consumer.py and add retry with backoff?"
+      },
+      {
+        "role": "assistant",
+        "content": "Looking at consumer.py \u2014 the handler acks the SQS message before processing completes, so a restart loses in-flight events. I'll move the ack after the DB write and add exponential backoff with a DLQ after 5 attempts."
+      },
+      {
+        "role": "user",
+        "content": "good, also make sure the dunning email doesn't double-send on retry"
+      },
+      {
+        "role": "assistant",
+        "content": "Added an idempotency key on invoice_id+event_type in the dunning sender; retries now no-op if the email record exists. Tests: 4 passed."
+      }
+    ]
+  },
+  {
+    "id": "conv_002",
+    "difficulty": "easy",
+    "difficulty_reason": "cwd is the mobile repo and the user talks about the Expo build and a MOB ticket.",
+    "gold_projects": [
+      "proj_mobile"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-mobile",
+      "git_branch": "feat/MOB-88-offline-queue",
+      "repo": "acme-mobile"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "MOB-88: when the app goes offline mid-sync, queued mutations get lost after a force quit. The queue lives in src/sync/queue.ts."
+      },
+      {
+        "role": "assistant",
+        "content": "The queue is only held in memory. I'll persist it to AsyncStorage on every enqueue and rehydrate in the sync provider on app start. Also adding a version field so old queue formats get migrated instead of crashing."
+      },
+      {
+        "role": "user",
+        "content": "will that survive an expo OTA update?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes \u2014 AsyncStorage persists across OTA updates; only a full reinstall clears it. Added a test simulating rehydration after restart: 6 tests pass."
+      }
+    ]
+  },
+  {
+    "id": "conv_003",
+    "difficulty": "easy",
+    "difficulty_reason": "cwd names acme-www and the conversation is about the pricing page rebuild.",
+    "gold_projects": [
+      "proj_website"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "feat/pricing-page",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The new pricing page needs the plan comparison table from the CMS. Can you wire up the Astro component to pull from the pricing collection?"
+      },
+      {
+        "role": "assistant",
+        "content": "Created src/components/PricingTable.astro reading from the content collection, with the three plan tiers and the enterprise contact card. Feature rows render from CMS entries so marketing can edit them without a deploy."
+      },
+      {
+        "role": "user",
+        "content": "the annual/monthly toggle should update prices without a page reload"
+      },
+      {
+        "role": "assistant",
+        "content": "Added a small island for the toggle \u2014 prices swap client-side from data attributes, no framework needed beyond the existing setup. Lighthouse still 100 on performance."
+      }
+    ]
+  },
+  {
+    "id": "conv_004",
+    "difficulty": "easy",
+    "difficulty_reason": "Long dbt/Snowflake session in the acme-dwh repo with DWH tickets named.",
+    "gold_projects": [
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "feat/DWH-142-finance-marts",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "DWH-142. The finance mart parallel-run is showing drift: fct_mrr in Snowflake disagrees with the old Redshift number by ~2% for March. Models are in models/marts/finance/."
+      },
+      {
+        "role": "assistant",
+        "content": "Comparing fct_mrr.sql against the legacy transform. The Redshift version filters test accounts with a hardcoded list; the dbt model joins dim_accounts.is_test which was backfilled differently. Checking which accounts differ."
+      },
+      {
+        "role": "user",
+        "content": "run the comparison, you can use `uv run python scripts/compare_marts.py --model fct_mrr --month 2026-03`"
+      },
+      {
+        "role": "assistant",
+        "content": "Ran it. 14 accounts differ; 12 are sandbox accounts flagged is_test in the new dim but present in legacy MRR. The other 2 are annual contracts where proration start dates differ by one day \u2014 timezone truncation. Legacy used account local time, dbt uses UTC."
+      },
+      {
+        "role": "user",
+        "content": "finance signed off that UTC is correct going forward. so the 12 sandbox accounts are the real bug?"
+      },
+      {
+        "role": "assistant",
+        "content": "Inverse, actually \u2014 the new model is right to exclude them; legacy was overcounting MRR by including sandboxes. I'll document both deltas in the parallel-run log so the cutover review has it in writing."
+      },
+      {
+        "role": "user",
+        "content": "ok update the validation doc and add a test so is_test filtering never regresses"
+      },
+      {
+        "role": "assistant",
+        "content": "Added a dbt test asserting fct_mrr has zero rows where dim_accounts.is_test, and wrote the March delta explanation into docs/parallel-run/2026-03.md. `dbt test --select fct_mrr` passes 9/9."
+      },
+      {
+        "role": "user",
+        "content": "while you're in there, the airflow dag for the nightly build timed out yesterday"
+      },
+      {
+        "role": "assistant",
+        "content": "The dag log shows the full-refresh of int_events ran because someone changed its materialization to table. Reverted to incremental with a lookback window; nightly run should drop from 96 to ~15 minutes."
+      },
+      {
+        "role": "user",
+        "content": "great, commit it all"
+      },
+      {
+        "role": "assistant",
+        "content": "Committed: fct_mrr regression test, parallel-run doc, and the int_events incremental fix. Three commits on feat/DWH-142-finance-marts."
+      }
+    ]
+  },
+  {
+    "id": "conv_005",
+    "difficulty": "easy",
+    "difficulty_reason": "Support bot repo, RAG retrieval tuning discussed with a BOT ticket.",
+    "gold_projects": [
+      "proj_chatbot"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-support-bot",
+      "git_branch": "feat/BOT-51-reranking",
+      "repo": "acme-support-bot"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "BOT-51: retrieval keeps pulling the wrong help-center article for refund questions \u2014 it returns the billing FAQ instead of the refund policy. Chunking is in ingest/chunker.py."
+      },
+      {
+        "role": "assistant",
+        "content": "The refund policy article is one 3,000-token chunk, so its embedding is diluted. I'll split on h2 sections with 200-token overlap and prepend the article title to each chunk. That usually fixes exactly this."
+      },
+      {
+        "role": "user",
+        "content": "try it against the eval set"
+      },
+      {
+        "role": "assistant",
+        "content": "Re-ingested and ran evals/retrieval_eval.py: recall@3 went from 0.71 to 0.86, refund questions now hit the right article 9/10. The remaining miss needs the article itself rewritten \u2014 flagged it for the KB team."
+      }
+    ]
+  },
+  {
+    "id": "conv_006",
+    "difficulty": "easy",
+    "difficulty_reason": "acme-admin repo, audit log feature, ADM ticket named.",
+    "gold_projects": [
+      "proj_admin"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-admin",
+      "git_branch": "feat/ADM-33-audit-filters",
+      "repo": "acme-admin"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "ADM-33: the audit log page needs filtering by actor and action type. The table component is in src/pages/AuditLog.tsx."
+      },
+      {
+        "role": "assistant",
+        "content": "Added actor and action-type filter dropdowns backed by query params so filtered views are shareable. The API already supports both filters, so this is frontend-only. Also added an empty state for zero results."
+      },
+      {
+        "role": "user",
+        "content": "support wants to filter by target account too"
+      },
+      {
+        "role": "assistant",
+        "content": "That needs the API \u2014 added target_account_id to the audit query endpoint and the third dropdown. Both repos' tests pass; the gateway change is one line since the column is already indexed."
+      }
+    ]
+  },
+  {
+    "id": "conv_007",
+    "difficulty": "easy",
+    "difficulty_reason": "acme-ui repo, Storybook and design tokens discussed directly.",
+    "gold_projects": [
+      "proj_design"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-ui",
+      "git_branch": "feat/DS-27-date-picker",
+      "repo": "acme-ui"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Starting the date picker component, DS-27. It needs to use our spacing and color tokens and support range selection."
+      },
+      {
+        "role": "assistant",
+        "content": "Scaffolded DatePicker in src/components/DatePicker/ with tokens from @acme/tokens, single and range modes, and keyboard navigation (arrows + Enter, Escape closes). Storybook stories cover both modes and dark mode."
+      },
+      {
+        "role": "user",
+        "content": "check the contrast on the selected-range background in dark mode"
+      },
+      {
+        "role": "assistant",
+        "content": "Selected-range on dark was 3.2:1 against the day labels \u2014 below AA. Switched to color.primary.700 with white text: 7.1:1. Updated the token mapping and the a11y story assertion."
+      }
+    ]
+  },
+  {
+    "id": "conv_008",
+    "difficulty": "easy",
+    "difficulty_reason": "acme-hire repo, Greenhouse-to-Slack sync named outright.",
+    "gold_projects": [
+      "proj_hiring"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-hire",
+      "git_branch": "fix/HIRE-19-webhook-dedupe",
+      "repo": "acme-hire"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "HIRE-19: Greenhouse sends the interview_scheduled webhook twice sometimes and we ping the interviewer's Slack twice. Handler is in src/webhooks/greenhouse.ts."
+      },
+      {
+        "role": "assistant",
+        "content": "Greenhouse retries on slow responses \u2014 our handler waits for the Slack API before responding. I'll ack immediately, queue the notification, and dedupe on the webhook delivery id with a 24h TTL in Redis."
+      },
+      {
+        "role": "user",
+        "content": "we don't have redis in this service"
+      },
+      {
+        "role": "assistant",
+        "content": "Then I'll use a unique constraint on delivery_id in the existing Postgres notifications table \u2014 insert-or-ignore, same effect, no new infra. Done with a migration and 3 new tests."
+      }
+    ]
+  },
+  {
+    "id": "conv_009",
+    "difficulty": "easy",
+    "difficulty_reason": "General chat with no metadata, but SOC 2 and the vendor questionnaire are named explicitly.",
+    "gold_projects": [
+      "proj_soc2"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "I need to answer a customer's security questionnaire before our SOC 2 report is ready. Draft answers for the encryption-at-rest and access-review questions based on: we use AWS RDS with encryption enabled, KMS-managed keys, and we do quarterly access reviews tracked in Vanta."
+      },
+      {
+        "role": "assistant",
+        "content": "Here are draft answers. Encryption at rest: 'All customer data is stored in AWS RDS with encryption at rest enabled, using AES-256 with keys managed through AWS KMS. Key rotation follows AWS managed rotation policies.' Access reviews: 'Access to production systems is reviewed quarterly. Reviews are tracked and evidenced in our compliance platform (Vanta), covering all systems that process customer data, with revocations completed within the review cycle.'"
+      },
+      {
+        "role": "user",
+        "content": "add a line saying Type II audit is in progress with expected completion Q2"
+      },
+      {
+        "role": "assistant",
+        "content": "Added: 'Acme is currently undergoing a SOC 2 Type II audit with an expected report date in Q2 2026. Our Type I controls have been in operation since 2025, and we are happy to share the report under NDA upon completion.'"
+      }
+    ]
+  },
+  {
+    "id": "conv_010",
+    "difficulty": "easy",
+    "difficulty_reason": "No metadata, but the content calendar and target keywords make the SEO project unmistakable.",
+    "gold_projects": [
+      "proj_seo"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Help me plan next month's content calendar for the SEO push. We're targeting 'acme vs competitor' comparison keywords and 'how to' terms for the workflows feature. Four posts, one per week."
+      },
+      {
+        "role": "assistant",
+        "content": "Week 1: 'Acme vs Flowbase: which fits mid-size teams' \u2014 bottom-of-funnel comparison, target the 'flowbase alternative' cluster. Week 2: 'How to automate approval workflows' \u2014 targets the how-to cluster, links to the feature page. Week 3: 'Acme vs Pipeworks: pricing and migration compared'. Week 4: 'How to build an audit-ready workflow' \u2014 bridges the how-to cluster with compliance intent. Each post gets a comparison table and an internal link to pricing."
+      },
+      {
+        "role": "user",
+        "content": "which of those can realistically rank on page one this quarter?"
+      },
+      {
+        "role": "assistant",
+        "content": "The two comparison posts \u2014 competitor comparison terms are low volume but low difficulty, and we already rank page two for the Flowbase term. The how-to terms are dominated by established blogs; treat those as quarter-two compounding bets, not quick wins."
+      }
+    ]
+  },
+  {
+    "id": "conv_011",
+    "difficulty": "medium",
+    "difficulty_reason": "Billing repo metadata, but the conversation is a long debugging session that never names the project or a ticket.",
+    "gold_projects": [
+      "proj_payments"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-billing",
+      "git_branch": "debug/subscription-drift",
+      "repo": "acme-billing"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Some accounts show active in our DB but canceled in the dashboard on the provider side. Started after last Tuesday's deploy. Can you dig in?"
+      },
+      {
+        "role": "assistant",
+        "content": "Checking the deploy diff first. Last Tuesday changed the event consumer to batch-process. Suspicion: customer.subscription.deleted events failing mid-batch and the batch being marked done anyway. Reading services/events/batch.py."
+      },
+      {
+        "role": "user",
+        "content": "here's a failing account: acct_9f2k. logs say `KeyError: 'canceled_at'` around 02:14"
+      },
+      {
+        "role": "assistant",
+        "content": "Found it. batch.py:87 does event['data']['canceled_at'] but immediate cancellations put canceled_at at the top level, not under data. The KeyError kills that item, the except clause logs and continues, and the batch commits \u2014 so the cancellation is silently dropped."
+      },
+      {
+        "role": "user",
+        "content": "how many accounts are affected?"
+      },
+      {
+        "role": "assistant",
+        "content": "Query against the events table: 41 deleted events since Tuesday hit the KeyError path. 38 accounts are still marked active locally but canceled upstream. I'll write a reconciliation script before fixing the parser so we can heal these first."
+      },
+      {
+        "role": "user",
+        "content": "do it, but dry-run first"
+      },
+      {
+        "role": "assistant",
+        "content": "scripts/reconcile_cancellations.py --dry-run output: 38 accounts would flip to canceled, 3 of them have invoices generated after cancellation that need voiding. Dry-run report saved to reconcile_2026-08-30.txt."
+      },
+      {
+        "role": "user",
+        "content": "the 3 with invoices \u2014 void them too but list them for finance"
+      },
+      {
+        "role": "assistant",
+        "content": "Ran for real: 38 accounts reconciled, 3 invoices voided (ids in the report, flagged for finance). The parser fix handles both canceled_at locations with a test for each shape. 11 tests pass."
+      },
+      {
+        "role": "user",
+        "content": "add an alert so silent drops like this page us next time"
+      },
+      {
+        "role": "assistant",
+        "content": "Added a metric on the exception path \u2014 event_processing_failures with event_type label \u2014 and an alert rule: more than 5 failures in 10 minutes pages on-call. Also removed the bare except so unknown shapes fail the batch loudly instead of committing."
+      }
+    ]
+  },
+  {
+    "id": "conv_012",
+    "difficulty": "medium",
+    "difficulty_reason": "Mobile repo metadata but a generic-sounding crash investigation; project never named.",
+    "gold_projects": [
+      "proj_mobile"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-mobile",
+      "git_branch": "fix/android-crash-startup",
+      "repo": "acme-mobile"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Crash reports spiking on Android after the last release: `java.lang.IllegalStateException: Module NotificationsModule tried to access UIManager before initialization`. Only on cold start."
+      },
+      {
+        "role": "assistant",
+        "content": "That's the notifications native module racing React Native init \u2014 likely from moving the push token registration earlier in the last release. I'll check where registerForPushTokens is called."
+      },
+      {
+        "role": "user",
+        "content": "it's in index.js now, someone moved it out of the App component"
+      },
+      {
+        "role": "assistant",
+        "content": "That's the bug \u2014 at index.js time the bridge isn't up on cold start. Moving registration into a useEffect in the root component after the navigation container mounts, with a guard so it still runs once. Repro'd the crash in the emulator with a cold start before the fix; after the fix, 20 cold starts clean."
+      },
+      {
+        "role": "user",
+        "content": "ship it in a hotfix, and can we OTA this or does it need a store build?"
+      },
+      {
+        "role": "assistant",
+        "content": "It's JS-only, so OTA works \u2014 no native change. Publishing to the hotfix channel; store build not needed."
+      }
+    ]
+  },
+  {
+    "id": "conv_013",
+    "difficulty": "medium",
+    "difficulty_reason": "Warehouse repo metadata; content is an Airflow/dbt performance question without project or ticket names.",
+    "gold_projects": [
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "perf/slow-incremental",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The incremental build of int_sessions takes 40 minutes even for a day of data. Warehouse is X-Small. Model is in models/intermediate/int_sessions.sql."
+      },
+      {
+        "role": "assistant",
+        "content": "The incremental predicate is `where event_time > (select max(event_time) from {{ this }})` \u2014 that subquery forces a full scan of the target on every run. Switching to a static lookback (`event_time >= dateadd(day, -3, current_date)`) with a merge key lets pruning kick in."
+      },
+      {
+        "role": "user",
+        "content": "won't we miss late events older than 3 days?"
+      },
+      {
+        "role": "assistant",
+        "content": "Events later than 3 days would be missed, yes. Your ingestion SLA doc says 99.9% of events land within 6 hours, so 3 days is generous; I'll also add a weekly full-refresh job as a backstop. Build time in staging: 40min \u2192 4min."
+      }
+    ]
+  },
+  {
+    "id": "conv_014",
+    "difficulty": "medium",
+    "difficulty_reason": "Website repo metadata; the CMS migration content matches the relaunch but nothing is named.",
+    "gold_projects": [
+      "proj_website"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "chore/wp-import",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "I exported 120 posts from the old WordPress site as XML. Write a script to convert them into content-collection entries \u2014 frontmatter with title, date, author, and the body as MDX."
+      },
+      {
+        "role": "assistant",
+        "content": "Wrote scripts/import-wp.ts: parses the WXR XML, maps categories to our tag taxonomy, downloads inline images into public/images/blog/ and rewrites the URLs, and converts shortcodes ([caption], [gallery]) to MDX components. 120 posts \u2192 118 clean, 2 flagged with unconvertible embeds listed in import-report.txt."
+      },
+      {
+        "role": "user",
+        "content": "keep the old URLs working"
+      },
+      {
+        "role": "assistant",
+        "content": "The old site used /blog/YYYY/MM/slug; new is /blog/slug. Generated a redirects file with all 120 mappings wired into the proxy config, plus a canonical tag on each post pointing at the new URL."
+      }
+    ]
+  },
+  {
+    "id": "conv_015",
+    "difficulty": "medium",
+    "difficulty_reason": "Long session in the bot repo about escalation UX; the project is implied by content, not named.",
+    "gold_projects": [
+      "proj_chatbot"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-support-bot",
+      "git_branch": "feat/escalation-flow",
+      "repo": "acme-support-bot"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "When the bot doesn't know an answer it just says 'I'm not sure'. It should hand off to a human with context. The conversation state machine is in src/flow/state.ts."
+      },
+      {
+        "role": "assistant",
+        "content": "I'll add an ESCALATE state: triggered when retrieval confidence is below threshold twice in a row, or on explicit user request ('talk to a human'). On escalation we post the transcript summary and the top retrieved articles into the agent's view so they don't start cold."
+      },
+      {
+        "role": "user",
+        "content": "what does the user see while they wait?"
+      },
+      {
+        "role": "assistant",
+        "content": "The bot says a human is joining, shows expected wait from the live queue endpoint, and offers to collect details meanwhile \u2014 account email and what they already tried \u2014 appended to the agent summary."
+      },
+      {
+        "role": "user",
+        "content": "confidence threshold \u2014 where does that come from today?"
+      },
+      {
+        "role": "assistant",
+        "content": "Currently a hardcoded 0.55 cosine floor in src/rag/retrieve.ts against the top hit. For escalation I'm tracking 'low-confidence turns' instead: a turn where top-1 is under 0.55 or where the answer model returns its uncertainty token. Two consecutive low turns \u2192 escalate."
+      },
+      {
+        "role": "user",
+        "content": "make the summary format match what agents see from the email channel"
+      },
+      {
+        "role": "assistant",
+        "content": "Matched the email handoff format: subject line, customer, plan tier, one-paragraph summary, bullet list of attempted answers with article links. Renders through the same Intercom note API. Added fixtures and 5 tests for the state transitions."
+      },
+      {
+        "role": "user",
+        "content": "run the whole suite"
+      },
+      {
+        "role": "assistant",
+        "content": "`npm test`: 74 passed, 0 failed. Also ran the staging bot against the 20-conversation eval script \u2014 3 conversations escalated, all with correct summaries attached."
+      }
+    ]
+  },
+  {
+    "id": "conv_016",
+    "difficulty": "easy",
+    "difficulty_reason": "Personal cooking question, obviously unrelated to any project.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "I have chicken thighs, a lemon, capers, and too much parsley. What should I make tonight?"
+      },
+      {
+        "role": "assistant",
+        "content": "Chicken piccata-style thighs. Dredge in flour, pan-fry until golden, then a sauce from the fond: lemon juice, capers, butter, splash of stock. Finish with a shower of that parsley. 25 minutes, one pan. Serve over pasta or with bread for the sauce."
+      },
+      {
+        "role": "user",
+        "content": "no flour, gluten free household"
+      },
+      {
+        "role": "assistant",
+        "content": "Skip the dredge entirely \u2014 sear the thighs well for browning, or dust with rice flour or cornstarch if you have either. The sauce works the same; add a knob of butter at the end to thicken since you lose the flour's body."
+      }
+    ]
+  },
+  {
+    "id": "conv_017",
+    "difficulty": "easy",
+    "difficulty_reason": "Personal travel planning, no connection to any project.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Planning 5 days in Lisbon in October with my partner. We like food, walking, not much for museums. Rough itinerary?"
+      },
+      {
+        "role": "assistant",
+        "content": "Day 1: Alfama on foot \u2014 miradouros, lunch at a tasca, evening fado. Day 2: Mouraria and Gra\u00e7a, dinner around Intendente. Day 3: day trip to Sintra early, back for dinner in Bairro Alto. Day 4: Bel\u00e9m for past\u00e9is and the riverside walk, then LX Factory. Day 5: markets \u2014 Feira da Ladra if it's Tuesday/Saturday, Time Out Market lunch, last wander through Chiado. October is ideal: warm days, thin crowds."
+      },
+      {
+        "role": "user",
+        "content": "is the time out market actually good or a tourist trap?"
+      },
+      {
+        "role": "assistant",
+        "content": "Both \u2014 quality is real (good chefs run stalls) but prices run ~30% above equivalent tascas and seating is chaotic at peak. Go for lunch at 11:45 or skip it for Mercado de Arroios if you want the local version."
+      }
+    ]
+  },
+  {
+    "id": "conv_018",
+    "difficulty": "medium",
+    "difficulty_reason": "Admin repo metadata; impersonation feature matches the project but nothing is named.",
+    "gold_projects": [
+      "proj_admin"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-admin",
+      "git_branch": "feat/impersonation-guard",
+      "repo": "acme-admin"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Security review asked for two changes to impersonation before it ships: a visible banner during the session, and auto-expiry after 30 minutes. Session logic is in src/auth/impersonate.ts."
+      },
+      {
+        "role": "assistant",
+        "content": "Added expiry: impersonation tokens now carry exp 30 minutes out, and the API gateway rejects expired ones with a 401 that the frontend turns into a 'session ended' modal. Banner: persistent top bar showing 'Viewing as {user} \u2014 ends in {mm:ss}' with an End Session button."
+      },
+      {
+        "role": "user",
+        "content": "make sure every action taken while impersonating is attributed to the admin, not the user"
+      },
+      {
+        "role": "assistant",
+        "content": "The audit middleware now writes actor=admin_id, on_behalf_of=user_id for impersonated requests \u2014 previously it logged the impersonated user as actor, which would have been a real problem. Backfilled nothing since the feature hasn't shipped. 8 tests cover expiry, banner state, and attribution."
+      }
+    ]
+  },
+  {
+    "id": "conv_019",
+    "difficulty": "medium",
+    "difficulty_reason": "Design system repo; token pipeline discussed without naming the project.",
+    "gold_projects": [
+      "proj_design"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-ui",
+      "git_branch": "feat/token-sync",
+      "repo": "acme-ui"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Designers keep changing color values in Figma and the code tokens drift. Can we pull from the Figma variables API into our tokens package automatically?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes. I'll add scripts/sync-figma-tokens.ts using the variables REST endpoint: fetch the published variable collections, map them to our token JSON schema, and open a PR when values differ. Running it in CI weekly plus on-demand."
+      },
+      {
+        "role": "user",
+        "content": "it should fail loudly if a token was deleted in figma but is still used in code"
+      },
+      {
+        "role": "assistant",
+        "content": "Added a usage check: the script greps the component source for each token that would be removed and fails with the list of files still referencing it. Deletions then require a human to migrate usages first. Dry-run against current Figma found 3 drifted values and no deletions."
+      }
+    ]
+  },
+  {
+    "id": "conv_020",
+    "difficulty": "medium",
+    "difficulty_reason": "No metadata; interview scorecards match the hiring project by topic only.",
+    "gold_projects": [
+      "proj_hiring"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "We're standardizing interview scorecards per role family. Draft the scorecard for backend engineers \u2014 4 competencies, behaviorally anchored ratings, works as a Greenhouse template."
+      },
+      {
+        "role": "assistant",
+        "content": "Backend Engineer scorecard, 4 competencies with 1\u20134 anchors. 1) Technical problem solving: 1=needs prompting through the approach, 4=explores trade-offs unprompted and picks with justification. 2) Systems design: 1=single-service thinking, 4=reasons about failure modes, scaling and data consistency. 3) Code quality in the pairing exercise: 1=works but unstructured, 4=tested, readable, names invariants. 4) Collaboration & communication: 1=hard to follow, 4=adjusts explanation to interviewer, asks clarifying questions. Each anchor phrased as observable behavior so two interviewers score the same evidence the same way."
+      },
+      {
+        "role": "user",
+        "content": "add a 'don't assess' guidance line so interviewers stop grading culture fit vibes"
+      },
+      {
+        "role": "assistant",
+        "content": "Added at the top: 'Do not assess: likeability, culture fit, pedigree, or communication style differences that don't impede collaboration. If it isn't evidence against one of the four competencies, it doesn't go on the scorecard.'"
+      }
+    ]
+  },
+  {
+    "id": "conv_021",
+    "difficulty": "medium",
+    "difficulty_reason": "No metadata; internal-linking audit is SEO work described without the project name.",
+    "gold_projects": [
+      "proj_seo"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Our blog has ~200 posts and internal linking is a mess \u2014 orphan posts, and money pages get almost no links. How do I audit and fix this systematically?"
+      },
+      {
+        "role": "assistant",
+        "content": "Three passes. 1) Crawl the blog with Screaming Frog, export the internal link graph, and list orphans (zero inlinks) and money pages sorted by inlink count. 2) Build a topic map: cluster posts by target keyword, designate a hub post per cluster, and require every cluster member to link to the hub and to the relevant product page. 3) Fix in priority order \u2014 links into money pages first, orphans second, hub structure third. Track in a sheet with anchor text so you vary it."
+      },
+      {
+        "role": "user",
+        "content": "how many internal links per post is sensible?"
+      },
+      {
+        "role": "assistant",
+        "content": "3\u20138 contextual links for a typical 1,200-word post. Below 3 you're leaving equity unrouted; past 10 the individual links dilute and reader experience drops. Prioritize first-half-of-post placement \u2014 links there get crawled and clicked more."
+      }
+    ]
+  },
+  {
+    "id": "conv_022",
+    "difficulty": "medium",
+    "difficulty_reason": "No metadata; access-review process is SOC 2 work but the audit is only implied.",
+    "gold_projects": [
+      "proj_soc2"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Our quarterly access review is a spreadsheet nightmare \u2014 14 systems, screenshots pasted into a doc. How do other companies make this not terrible before the auditor asks for evidence?"
+      },
+      {
+        "role": "assistant",
+        "content": "The usual maturity path: 1) pipe every system's user list into one place automatically \u2014 your compliance platform likely has integrations for most of the 14, and a CSV upload for the rest; 2) review by diff, not by full list \u2014 approve only changes since last quarter plus a sampled full check; 3) evidence is then generated, not assembled: reviewer, timestamp, and disposition per row, exportable when the auditor asks. The win is making revocations a ticket with a due date instead of a comment in a doc."
+      },
+      {
+        "role": "user",
+        "content": "what do auditors actually check in the evidence?"
+      },
+      {
+        "role": "assistant",
+        "content": "That the review covers all in-scope systems, happened within the stated frequency, has a named reviewer with authority, and that flagged access was actually revoked \u2014 they'll sample a few revocations and ask for proof of removal with dates. Gaps auditors flag most: contractors missed, service accounts unreviewed, and revocations that took 60+ days."
+      }
+    ]
+  },
+  {
+    "id": "conv_023",
+    "difficulty": "medium",
+    "difficulty_reason": "Revenue reporting spans the billing and warehouse projects; both repos touched.",
+    "gold_projects": [
+      "proj_payments",
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-billing",
+      "git_branch": "feat/stripe-events-export",
+      "repo": "acme-billing"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Finance wants revenue dashboards fed from Stripe events instead of the legacy invoice table. That means the billing service needs to export events, and the warehouse needs models on top. Let's start on the export side."
+      },
+      {
+        "role": "assistant",
+        "content": "Adding an events export in acme-billing: a nightly job writes normalized Stripe events (invoice finalized/paid/voided, subscription lifecycle) to the warehouse landing bucket as parquet, partitioned by event date. Schema doc going into docs/events-export.md so the data team can build against it."
+      },
+      {
+        "role": "user",
+        "content": "on the warehouse side, what models do we need for the MRR dashboard?"
+      },
+      {
+        "role": "assistant",
+        "content": "Three layers in acme-dwh: staging model stg_stripe_events on the landing files; int_subscription_periods reconstructing period boundaries from lifecycle events; fct_mrr_daily rolling up recognized MRR by day, plan, and segment. The tricky part is proration credits \u2014 they arrive as negative invoice items and need to net against the same period."
+      },
+      {
+        "role": "user",
+        "content": "write the staging model and the export job first, we'll do the marts with the data team next week"
+      },
+      {
+        "role": "assistant",
+        "content": "Done. Export job: services/export/stripe_events.py with a backfill flag, writes to s3://acme-dwh-landing/stripe_events/. Staging model drafted in the dwh repo as stg_stripe_events.sql with column tests on event_id uniqueness and type enums. Backfill dry-run covers 14 months of events, ~2.1M rows."
+      },
+      {
+        "role": "user",
+        "content": "does the export include the legacy-billed accounts or only stripe ones?"
+      },
+      {
+        "role": "assistant",
+        "content": "Only Stripe \u2014 legacy accounts have no Stripe events until their migration batch runs. I've noted in the schema doc that fct_mrr_daily must union legacy invoice data until the backfill completes, otherwise the dashboard undercounts MRR by whatever remains unmigrated (~35% today)."
+      }
+    ]
+  },
+  {
+    "id": "conv_024",
+    "difficulty": "medium",
+    "difficulty_reason": "Rebrand components span the website and design-system projects explicitly.",
+    "gold_projects": [
+      "proj_website",
+      "proj_design"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "feat/rebrand-components",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The new marketing site should consume the design-system tokens instead of its own CSS variables, so the rebrand colors stay in sync. Can we pull @acme/tokens into the Astro build?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes \u2014 @acme/tokens ships a CSS custom-properties build. I'll add it as a dependency, import the generated tokens.css in the base layout, and migrate the site's local variables to the token names. Where marketing needs values that aren't tokens (hero gradients), they stay local with a comment."
+      },
+      {
+        "role": "user",
+        "content": "the buttons on the site look different from the app buttons, marketing wants them identical now"
+      },
+      {
+        "role": "assistant",
+        "content": "The app Button lives in the acme-ui React library, but this site is mostly static Astro. Rather than shipping React for buttons, I ported the Button styles into an Astro component consuming the same tokens \u2014 visually identical, verified against the Storybook reference at all three sizes and both variants."
+      },
+      {
+        "role": "user",
+        "content": "flag that to the design system folks so they know there's a copy"
+      },
+      {
+        "role": "assistant",
+        "content": "Opened an issue in acme-ui documenting the ported Astro Button, which token contracts it relies on, and a checklist item for the DS team to include marketing-site verification when Button styles change."
+      }
+    ]
+  },
+  {
+    "id": "conv_025",
+    "difficulty": "easy",
+    "difficulty_reason": "Personal finance question, unrelated to work.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Is it dumb to pay off my 3.2% mortgage early instead of investing? I have about \u20ac800/month spare."
+      },
+      {
+        "role": "assistant",
+        "content": "Not dumb, but it's a guaranteed 3.2% return versus an expected ~7% nominal from diversified equities \u2014 mathematically investing wins over long horizons. The real considerations: your risk tolerance (the mortgage payoff is risk-free), whether you'd actually invest the money or spend it, tax treatment of mortgage interest where you live, and the psychological value of owning your home outright. A common middle path: split it, or invest until the balance equals your remaining principal and decide then."
+      },
+      {
+        "role": "user",
+        "content": "I'd definitely invest it, I already auto-invest monthly"
+      },
+      {
+        "role": "assistant",
+        "content": "Then the math favors adding the \u20ac800 to the existing auto-investment. At 3.2% fixed, your mortgage is cheap leverage; you're unlikely to see rates that low again soon, which also argues against retiring it early."
+      }
+    ]
+  },
+  {
+    "id": "conv_026",
+    "difficulty": "easy",
+    "difficulty_reason": "Mobile repo, MOB ticket, push notifications named.",
+    "gold_projects": [
+      "proj_mobile"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-mobile",
+      "git_branch": "feat/MOB-102-notification-prefs",
+      "repo": "acme-mobile"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "MOB-102: users need per-category push notification preferences (mentions, digests, billing alerts). Backend already exposes the prefs endpoint."
+      },
+      {
+        "role": "assistant",
+        "content": "Built the preferences screen in src/screens/NotificationPrefs.tsx with a toggle per category, optimistic updates, and offline queueing through the existing sync layer. The FCM/APNs topic subscription updates when a toggle changes."
+      },
+      {
+        "role": "user",
+        "content": "what happens if the API call fails after the optimistic toggle?"
+      },
+      {
+        "role": "assistant",
+        "content": "The toggle reverts with a toast, and if the device is offline the change queues and replays on reconnect \u2014 same pattern as the other settings. Added tests for both paths."
+      }
+    ]
+  },
+  {
+    "id": "conv_027",
+    "difficulty": "easy",
+    "difficulty_reason": "Billing repo, proration and PAY ticket named outright.",
+    "gold_projects": [
+      "proj_payments"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-billing",
+      "git_branch": "feat/PAY-310-proration-preview",
+      "repo": "acme-billing"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "PAY-310: before a user confirms an upgrade we should show the prorated charge. Stripe has a preview API for this, right?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes \u2014 upcoming invoice preview with the subscription items swapped. Added GET /billing/preview-change that calls it and returns the immediate charge, credit applied, and next renewal amount. Cached 60s per (subscription, target_plan) since the checkout UI polls."
+      },
+      {
+        "role": "user",
+        "content": "make sure it handles accounts still on legacy billing"
+      },
+      {
+        "role": "assistant",
+        "content": "Legacy accounts get a 409 with code LEGACY_BILLING and the frontend shows the old static estimate \u2014 same behavior as the change endpoint itself. Test added for the legacy path."
+      }
+    ]
+  },
+  {
+    "id": "conv_028",
+    "difficulty": "easy",
+    "difficulty_reason": "Long session in acme-admin on feature-flag tooling with ADM tickets.",
+    "gold_projects": [
+      "proj_admin"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-admin",
+      "git_branch": "feat/ADM-41-flag-controls",
+      "repo": "acme-admin"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "ADM-41: support needs to toggle feature flags per account from the dashboard instead of asking engineers. Flags live in LaunchDarkly, we have an API key with account-target permissions."
+      },
+      {
+        "role": "assistant",
+        "content": "Plan: a Flags tab on the account page listing flags tagged 'support-adjustable' in LD, with current variation and a toggle. Writes go through our gateway (never LD directly from the browser), each change writes an audit row, and role support_lead is required. Starting with the gateway endpoint."
+      },
+      {
+        "role": "user",
+        "content": "why only 'support-adjustable' tagged flags?"
+      },
+      {
+        "role": "assistant",
+        "content": "Untagged flags include kill switches and infra migrations \u2014 letting support toggle those per-account is how outages happen. The tag makes exposure an explicit engineering decision. I've added the filter server-side so the UI can't even see the rest."
+      },
+      {
+        "role": "user",
+        "content": "ok. what does the audit row capture?"
+      },
+      {
+        "role": "assistant",
+        "content": "actor, account, flag key, old variation, new variation, timestamp, and a required free-text reason field the UI enforces. It reuses the existing audit_events table so the log page picks these up with no extra work."
+      },
+      {
+        "role": "user",
+        "content": "build it and add a test where LD returns a 429"
+      },
+      {
+        "role": "assistant",
+        "content": "Done. Gateway endpoint with LD client retry on 429 (3 attempts, backoff, then a clean error to the UI), the Flags tab with toggle + reason modal, and audit wiring. 12 new tests including the 429 path and a role-denial test. All green."
+      },
+      {
+        "role": "user",
+        "content": "demo data for the staging walkthrough tomorrow?"
+      },
+      {
+        "role": "assistant",
+        "content": "Seeded staging with 4 support-adjustable flags on the demo account, one of each variation type we support, and two audit entries so the history view isn't empty."
+      }
+    ]
+  },
+  {
+    "id": "conv_029",
+    "difficulty": "medium",
+    "difficulty_reason": "Warehouse repo; a permissions question that matches the migration only by context.",
+    "gold_projects": [
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "chore/bi-cutover-grants",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The BI tool's service account can query the new marts in dev but gets 'object does not exist' in prod, same SQL. Grants are managed in permissions/grants.sql."
+      },
+      {
+        "role": "assistant",
+        "content": "'Object does not exist' in Snowflake usually means no USAGE on the schema, not a missing table \u2014 the error masks unauthorized objects. grants.sql grants SELECT on marts tables but I don't see USAGE on the marts schema for the BI role in prod; dev has it from a blanket dev-role grant."
+      },
+      {
+        "role": "user",
+        "content": "add it, and future tables should be covered automatically"
+      },
+      {
+        "role": "assistant",
+        "content": "Added USAGE on database and schema plus SELECT with FUTURE TABLES IN SCHEMA for the BI role, in grants.sql and applied to prod. Verified the failing dashboard query now returns."
+      }
+    ]
+  },
+  {
+    "id": "conv_030",
+    "difficulty": "medium",
+    "difficulty_reason": "No metadata; a planning chat about deflection metrics that matches the chatbot project topically.",
+    "gold_projects": [
+      "proj_chatbot"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "We're debating how to count 'deflection' for the support bot. If a user talks to the bot and never opens a ticket, is that deflected? Feels gameable."
+      },
+      {
+        "role": "assistant",
+        "content": "Pure 'no ticket within X hours' overcounts \u2014 it credits the bot for users who gave up or found the answer elsewhere. More honest definition: bot conversation ended with a resolution signal (user confirmed, or clicked 'that solved it') AND no ticket on the same topic within 72 hours. Track both numbers; the gap between them is your 'silent abandonment' rate, which is itself worth watching."
+      },
+      {
+        "role": "user",
+        "content": "the CSAT prompt after bot chats gets like 8% response rate, can we trust it?"
+      },
+      {
+        "role": "assistant",
+        "content": "At 8% it's directionally useful but biased \u2014 angry and delighted users respond more. Weight it as a secondary signal and lean on the behavioral definition for the headline metric. You can improve the rate by asking a single thumbs up/down in-thread instead of a separate survey; teams typically see 25\u201340% on that."
+      }
+    ]
+  },
+  {
+    "id": "conv_031",
+    "difficulty": "easy",
+    "difficulty_reason": "acme-ui repo, Storybook accessibility work, DS ticket named.",
+    "gold_projects": [
+      "proj_design"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-ui",
+      "git_branch": "feat/DS-35-a11y-ci",
+      "repo": "acme-ui"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "DS-35: run axe against every Storybook story in CI and fail the build on violations."
+      },
+      {
+        "role": "assistant",
+        "content": "Added @storybook/test-runner with axe-playwright: every story gets an a11y scan in CI. Current state: 137 stories, 11 violations across 4 components \u2014 mostly missing accessible names on icon buttons and one contrast failure in Badge."
+      },
+      {
+        "role": "user",
+        "content": "fix the violations too then"
+      },
+      {
+        "role": "assistant",
+        "content": "Fixed: aria-labels added to icon buttons (with a required prop so consumers can't omit them), Badge warning variant darkened to pass 4.5:1, and two form stories got proper label associations. CI now green with the a11y gate enforced."
+      }
+    ]
+  },
+  {
+    "id": "conv_032",
+    "difficulty": "medium",
+    "difficulty_reason": "Long session in acme-www on conversion tracking \u2014 matches the relaunch by content only.",
+    "gold_projects": [
+      "proj_website"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "feat/signup-funnel-tracking",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "We can't tell which pages drive signups. Wire conversion tracking through the funnel: landing \u2192 pricing \u2192 signup start \u2192 signup complete."
+      },
+      {
+        "role": "assistant",
+        "content": "Plan: first-party event tracking with a lightweight client (no GTM), events landing in our analytics endpoint with page, referrer, and a first-touch UTM stored in a cookie. The four funnel steps get explicit events; signup completion is stamped server-side to avoid ad-blocker undercounting."
+      },
+      {
+        "role": "user",
+        "content": "legal says no tracking before cookie consent in EU"
+      },
+      {
+        "role": "assistant",
+        "content": "Then: consent-gated client events, and the pre-consent funnel reconstructed from server logs (page, referrer, no cookie) which is legitimate-interest territory. First-touch attribution only populates post-consent. I'll mark the EU pre-consent rows as modeled so the dashboard is honest about it."
+      },
+      {
+        "role": "user",
+        "content": "how do we tie signup completion back to the landing page?"
+      },
+      {
+        "role": "assistant",
+        "content": "The consent cookie carries a session id; signup start posts it to the API, and completion (server-side) joins on it. For no-consent sessions we only get aggregate step counts, no path joins \u2014 that's the trade-off legal chose."
+      },
+      {
+        "role": "user",
+        "content": "ok build the client and the two page events, I'll take the API side"
+      },
+      {
+        "role": "assistant",
+        "content": "Done: src/lib/track.ts (1.1kb, consent-aware, batches events), pricing and landing views emit view + CTA-click events, and the signup form posts session id on start. Events verified in staging with consent on and off. Docs in docs/tracking.md including the event schema for your API side."
+      },
+      {
+        "role": "user",
+        "content": "add the case study pages to tracking too, marketing asked"
+      },
+      {
+        "role": "assistant",
+        "content": "Added view and CTA events to the case-study layout \u2014 they flow through the same client so no new schema. Also added the case-study slug as an event property so marketing can rank them by assisted signups."
+      }
+    ]
+  },
+  {
+    "id": "conv_033",
+    "difficulty": "hard",
+    "difficulty_reason": "Misleading metadata: cwd is the website repo, but the work is keyword research and Search Console \u2014 SEO project.",
+    "gold_projects": [
+      "proj_seo"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "main",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Pull the Search Console export in ~/Downloads/gsc-aug.csv and tell me which queries we rank 5-15 for with decent impressions \u2014 those are the ones worth targeting with content updates."
+      },
+      {
+        "role": "assistant",
+        "content": "Parsed 2,340 queries. 41 sit in positions 5\u201315 with >500 monthly impressions. Top opportunities: 'workflow approval software' (pos 7, 4.2k impressions), 'acme vs flowbase' (pos 11, 2.9k), 'automate purchase approvals' (pos 9, 2.1k), 'audit trail software' (pos 13, 1.8k). Full list written to gsc-opportunities.csv sorted by impressions \u00d7 position-gap."
+      },
+      {
+        "role": "user",
+        "content": "for the top 4, what's on page one that we'd need to beat?"
+      },
+      {
+        "role": "assistant",
+        "content": "Characterizing the SERPs: 'workflow approval software' \u2014 listicles from review sites, so we need to win featured placement on those plus strengthen our comparison hub. 'acme vs flowbase' \u2014 Flowbase's own comparison page ranks 1; ours is thinner and older, refresh with current pricing and a migration section. 'automate purchase approvals' \u2014 how-to content, beatable with a genuinely better guide. 'audit trail software' \u2014 high-authority security vendors; hardest of the four, deprioritize."
+      },
+      {
+        "role": "user",
+        "content": "draft briefs for the two easiest"
+      },
+      {
+        "role": "assistant",
+        "content": "Two briefs drafted: the Flowbase comparison refresh (target 1,800 words, sections: pricing table, migration path, feature deltas with screenshots, FAQ from People-Also-Ask) and the purchase-approvals guide (2,200 words, step-by-step with template download as the link magnet). Both include target keyword, secondary terms, internal links to add, and title/meta variants."
+      }
+    ]
+  },
+  {
+    "id": "conv_034",
+    "difficulty": "hard",
+    "difficulty_reason": "No-project trap: a generic Stripe integration question for a personal side project \u2014 sounds like the payments project but is not Acme work.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "For my side project (a little booking app for my brother's barbershop) \u2014 is Stripe Checkout enough or do I need Payment Intents? Just one-off payments, no subscriptions."
+      },
+      {
+        "role": "assistant",
+        "content": "Checkout is enough and strongly preferable for a solo project: hosted page, SCA handled, Apple/Google Pay for free, and you only write one webhook (checkout.session.completed). Payment Intents is for when you need custom payment UI, which you don't. Use Checkout in payment mode with a webhook to mark the booking paid."
+      },
+      {
+        "role": "user",
+        "content": "do I need to handle refunds in code or can he just use the dashboard?"
+      },
+      {
+        "role": "assistant",
+        "content": "Dashboard is fine at his volume \u2014 refunds there work without any code. Only add a refund endpoint if you later want the booking cancellation flow to trigger it automatically. If you do, listen for charge.refunded so the booking state stays in sync either way."
+      }
+    ]
+  },
+  {
+    "id": "conv_035",
+    "difficulty": "hard",
+    "difficulty_reason": "No-project trap: generic React Native question with no Acme context \u2014 resembles the mobile project.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "In React Native, why does my FlatList jump to the top when I prepend items? I'm building an infinite-scroll chat for a tutorial I'm writing."
+      },
+      {
+        "role": "assistant",
+        "content": "Prepending changes the indices of every existing item, so the list re-renders anchored to index 0. Fixes: use maintainVisibleContentPosition (works on both platforms in new RN versions), or use an inverted FlatList for chat \u2014 that's the standard pattern: newest at index 0, visually at the bottom, and 'prepending history' becomes appending, which doesn't jump."
+      },
+      {
+        "role": "user",
+        "content": "inverted flips my scroll direction for the reader though?"
+      },
+      {
+        "role": "assistant",
+        "content": "Visually it behaves like every chat app \u2014 content sticks to the bottom, scroll up for history. If the tutorial's mental model needs a non-inverted list, go with maintainVisibleContentPosition={minIndexForVisible: 0} and keyExtractor on stable message ids; mention the trade-off in the article since older RN versions only supported it on iOS."
+      }
+    ]
+  },
+  {
+    "id": "conv_036",
+    "difficulty": "medium",
+    "difficulty_reason": "Hiring repo; referral data model matches the project without naming it.",
+    "gold_projects": [
+      "proj_hiring"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-hire",
+      "git_branch": "feat/referral-schema",
+      "repo": "acme-hire"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Design the schema for the referral portal: employees submit candidates, track status through the pipeline, payout after 90 days of employment."
+      },
+      {
+        "role": "assistant",
+        "content": "Tables: referrals (id, referrer_employee_id, candidate_email, role_family, greenhouse_candidate_id nullable until matched, status, created_at), referral_status_events (referral_id, status, source, occurred_at) as an append-only history, and payouts (referral_id, amount, eligible_at, paid_at). Status syncs from Greenhouse webhooks; eligible_at = hire start date + 90 days computed when the hired event lands."
+      },
+      {
+        "role": "user",
+        "content": "what stops someone referring a candidate already in the pipeline?"
+      },
+      {
+        "role": "assistant",
+        "content": "On submission we search Greenhouse by email; if the candidate exists with activity in the last 12 months, the referral is created with status duplicate and the UI says so immediately \u2014 policy question for People Ops is whether stale candidates (>12 months) count as fresh. I've made the window a config value."
+      }
+    ]
+  },
+  {
+    "id": "conv_037",
+    "difficulty": "medium",
+    "difficulty_reason": "No metadata; MFA rollout is a SOC 2 remediation item, identifiable by topic only.",
+    "gold_projects": [
+      "proj_soc2"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "We need to enforce MFA for everyone before the audit window. 30% of staff still don't have it on Google Workspace. Draft the rollout comms and the enforcement plan."
+      },
+      {
+        "role": "assistant",
+        "content": "Plan: announce today with a 2-week runway, self-enroll link and a lunch-and-learn; week 2, targeted reminders to holdouts via managers; day 14, org-level enforcement flips on \u2014 Google then forces enrollment at next login rather than locking anyone out. Draft announcement: 'As part of our security commitments to customers, MFA becomes mandatory on {date}. It takes 2 minutes \u2014 here's the link. After {date}, you'll be prompted to enroll at your next sign-in.' Keep it to passkeys or authenticator app; SMS only as fallback."
+      },
+      {
+        "role": "user",
+        "content": "any gotchas with enforcement and shared accounts?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes \u2014 shared/service accounts (frontdesk@, billing@) break under per-user MFA. Inventory them first: convert real humans to individual accounts, move automation to service credentials with their own controls, and for the genuinely shared ones use a group-based exception with hardware keys stored per policy. Auditors will ask specifically how shared accounts are handled, so document each exception."
+      }
+    ]
+  },
+  {
+    "id": "conv_038",
+    "difficulty": "medium",
+    "difficulty_reason": "Mobile app adopting design-system tokens \u2014 spans both projects, discussed concretely.",
+    "gold_projects": [
+      "proj_mobile",
+      "proj_design"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-mobile",
+      "git_branch": "feat/adopt-ds-tokens",
+      "repo": "acme-mobile"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The rewrite is still using ad-hoc colors. Design wants the app on @acme/tokens before the beta. How do we consume the tokens in React Native \u2014 they ship as CSS variables?"
+      },
+      {
+        "role": "assistant",
+        "content": "The package also ships a JSON build (tokens.json) \u2014 I'll generate a typed TS module from it at build time: colors, spacing, and typography as plain objects, with a theme provider switching light/dark sets. CSS variables are web-only so we bypass that build entirely."
+      },
+      {
+        "role": "user",
+        "content": "typography too? we use custom fonts loaded through expo-font"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes \u2014 the token typography defines family, size, lineHeight, weight; I map families to the expo-font names in one lookup. Two gaps found: the tokens assume rem units (converted to dp at a 16 base) and the mono variant isn't in our font bundle \u2014 flagged to the DS team to either add the font file or mark that token web-only."
+      },
+      {
+        "role": "user",
+        "content": "migrate the auth and dashboard screens first as the proof"
+      },
+      {
+        "role": "assistant",
+        "content": "Migrated both: 61 hardcoded color values replaced with token references, spacing normalized to the 4pt scale, and dark mode now comes free from the theme provider \u2014 the old screens had a hand-rolled dark palette that drifted from design. Screenshots attached to the PR for design review."
+      },
+      {
+        "role": "user",
+        "content": "any visual diffs I should warn design about?"
+      },
+      {
+        "role": "assistant",
+        "content": "Three: the dashboard card background is one step lighter in dark mode (token vs old hand-picked value), body text moves from 15px to the 16px token, and the primary button hue shifts subtly \u2014 the old value predated the rebrand. All arguably fixes, but design should sign off; noted in the PR."
+      }
+    ]
+  },
+  {
+    "id": "conv_039",
+    "difficulty": "medium",
+    "difficulty_reason": "Support tooling for subscription overrides \u2014 admin dashboard work that reaches into billing; both projects.",
+    "gold_projects": [
+      "proj_payments",
+      "proj_admin"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-admin",
+      "git_branch": "feat/subscription-overrides",
+      "repo": "acme-admin"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Support needs to extend trials and apply one-off credits from the admin dashboard. Both operations ultimately hit the billing service. What's the safe way to expose this?"
+      },
+      {
+        "role": "assistant",
+        "content": "The billing service gets two narrow internal endpoints \u2014 extend-trial (max 30 days, once per account per quarter, enforced server-side) and apply-credit (capped amount by role tier). The admin UI calls those through the gateway; limits live in billing, not the UI, so nobody can bypass them with curl. Every call writes to the audit log with a required reason."
+      },
+      {
+        "role": "user",
+        "content": "the credit needs to show up on the customer's next invoice correctly"
+      },
+      {
+        "role": "assistant",
+        "content": "Credits go in as customer balance transactions on the Stripe customer, which the next invoice consumes automatically \u2014 no invoice math on our side. For legacy-billing accounts the endpoint returns LEGACY_BILLING and support follows the old manual process; that limitation is displayed in the UI upfront."
+      },
+      {
+        "role": "user",
+        "content": "build the billing endpoints first with the caps"
+      },
+      {
+        "role": "assistant",
+        "content": "Done in acme-billing: both endpoints with role-tier caps in config, idempotency keys, the quarterly trial-extension guard backed by a new trial_extensions table, and audit events. 14 tests including cap violations and idempotent replays. The admin UI side is next."
+      }
+    ]
+  },
+  {
+    "id": "conv_040",
+    "difficulty": "hard",
+    "difficulty_reason": "Revenue reconciliation between Stripe and the warehouse \u2014 payments and dwh overlap with neither project named.",
+    "gold_projects": [
+      "proj_payments",
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "debug/revenue-recon",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Finance says the July revenue number in the new dashboard is \u20ac18k above what the payment provider's own reporting shows. Which side is wrong?"
+      },
+      {
+        "role": "assistant",
+        "content": "Let me reconcile at the invoice level. Pulling both sides for July: our fct_revenue rows vs the provider's balance transactions export. Joining on invoice id... 61 invoices in our marts aren't in the provider's paid set: 44 are voided invoices our staging model still counts as revenue (the void event isn't handled in stg_stripe_events), 17 are timezone edge cases \u2014 paid Aug 1 UTC but July in the dashboard's account-local rendering."
+      },
+      {
+        "role": "user",
+        "content": "so our side is wrong on both counts?"
+      },
+      {
+        "role": "assistant",
+        "content": "The voids, yes \u2014 that's a real bug worth ~\u20ac14k: the staging model needs to process invoice.voided and null out the revenue. The timezone \u20ac4k is a definition mismatch, not a bug: our marts use UTC consistently; the provider report uses account-local. Finance needs to pick one definition; if they want local time, that's a mart change, but I'd argue for UTC and a footnote."
+      },
+      {
+        "role": "user",
+        "content": "fix the voids, and I'll take the timezone question to finance"
+      },
+      {
+        "role": "assistant",
+        "content": "Void handling added to the staging model with a dbt test asserting voided invoices carry zero recognized revenue, plus a backfill of July. New July total is \u20ac13.9k lower, within \u20ac4k of the provider \u2014 exactly the timezone remainder. Also filed a note in the billing service repo: their export omits the void reason field, which would let us distinguish fraud voids from correction voids in reporting."
+      }
+    ]
+  },
+  {
+    "id": "conv_041",
+    "difficulty": "medium",
+    "difficulty_reason": "Content pages built for keyword targets \u2014 website and SEO projects jointly, both indicated.",
+    "gold_projects": [
+      "proj_website",
+      "proj_seo"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "feat/comparison-pages",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "SEO wants programmatic comparison pages \u2014 /compare/acme-vs-{competitor} for 8 competitors \u2014 on the new site. Build the template so content comes from the CMS."
+      },
+      {
+        "role": "assistant",
+        "content": "Built src/pages/compare/[slug].astro reading a comparisons collection: per-competitor pricing table, feature matrix, migration section, and FAQ. Static-generated at build, one CMS entry per competitor so marketing edits without deploys. Added JSON-LD FAQ schema per page since the SEO brief asked for it."
+      },
+      {
+        "role": "user",
+        "content": "the SEO brief also says each page needs unique intro copy, not templated"
+      },
+      {
+        "role": "assistant",
+        "content": "The intro is a required rich-text field in the CMS entry with a 120-word minimum enforced by the collection schema, so templated boilerplate can't ship. I seeded the Flowbase and Pipeworks entries from the existing briefs; the other six show as drafts blocked on copy."
+      },
+      {
+        "role": "user",
+        "content": "add them to the sitemap with the right priority and get the internal links in"
+      },
+      {
+        "role": "assistant",
+        "content": "Sitemap includes the two live pages (priority 0.8, weekly changefreq), drafts excluded. Internal links: added the comparison hub to the pricing page footer nav and cross-links from the two blog comparison posts. Draft pages 404 until published so no thin content goes live."
+      }
+    ]
+  },
+  {
+    "id": "conv_042",
+    "difficulty": "hard",
+    "difficulty_reason": "Vendor security review of the AI bot \u2014 chatbot and SOC 2 overlap, no repos or tickets, general chat.",
+    "gold_projects": [
+      "proj_chatbot",
+      "proj_soc2"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "The auditors flagged our new AI support assistant as an in-scope system. What do we need documented about it before the audit window?"
+      },
+      {
+        "role": "assistant",
+        "content": "They'll want: a data-flow diagram (what customer data reaches the model API, retention on both sides), the vendor risk assessment for the model provider including their SOC 2 report and DPA, access controls around the bot's admin and its knowledge-base pipeline, logging of conversations and who can read them, and the escalation path when it handles something sensitive. The subprocessor list on your privacy page needs the model provider added if it isn't there."
+      },
+      {
+        "role": "user",
+        "content": "conversations include customer emails and sometimes invoice amounts. is that a problem?"
+      },
+      {
+        "role": "assistant",
+        "content": "Not inherently, but it must be documented and controlled: classify bot transcripts as customer data, apply your standard retention (and the provider's zero-retention or capped-retention API tier if available), restrict transcript access to support leads, and mention transcripts in your privacy notice. The thing auditors actually fail people on is undocumented flows \u2014 a transcript store nobody listed, readable by everyone."
+      },
+      {
+        "role": "user",
+        "content": "write the data-flow description I can paste into the system inventory"
+      },
+      {
+        "role": "assistant",
+        "content": "Draft: 'The support assistant receives customer messages via the in-product messenger. Messages and retrieved help-center passages are sent to {provider} over TLS for response generation; the provider retains API inputs for at most {X} days per their DPA and does not train on them. Transcripts are stored in {store} with 24-month retention, access restricted to Support Leads and Security via SSO group. Escalations transfer the transcript into the ticketing system under its existing controls. No payment credentials or authentication secrets are processed; invoice metadata may appear in customer-provided text.'"
+      }
+    ]
+  },
+  {
+    "id": "conv_043",
+    "difficulty": "easy",
+    "difficulty_reason": "Movie recommendations, plainly personal.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Three films like Arrival \u2014 slow, smart sci-fi, more ideas than action?"
+      },
+      {
+        "role": "assistant",
+        "content": "Annihilation (2018) \u2014 dreamlike, unsettling, about comprehension at the edge of the human; Contact (1997) \u2014 Arrival's closest ancestor, first contact as science and faith; and Coherence (2013) \u2014 micro-budget, one dinner party, quantum dread that rewards attention. If you want a fourth that leans melancholic: Never Let Me Go."
+      },
+      {
+        "role": "user",
+        "content": "seen contact. something non-english?"
+      },
+      {
+        "role": "assistant",
+        "content": "Solaris (1972, Tarkovsky) \u2014 the slow-smart-sci-fi ur-text, grief in orbit; or if that pace is too glacial, On Body and Soul (2017, Hungarian) isn't sci-fi but shares Arrival's dream-logic intimacy. For something newer: The Wandering Earth is the opposite of what you want \u2014 skip it; try Jonathan Glazer's Under the Skin instead if UK counts."
+      }
+    ]
+  },
+  {
+    "id": "conv_044",
+    "difficulty": "medium",
+    "difficulty_reason": "Mobile repo; app-store release process matches the rewrite contextually.",
+    "gold_projects": [
+      "proj_mobile"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-mobile",
+      "git_branch": "chore/beta-track",
+      "repo": "acme-mobile"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Set up the phased rollout: TestFlight for internal, then a public beta track, then staged production at 10/50/100%."
+      },
+      {
+        "role": "assistant",
+        "content": "Configured EAS: internal channel auto-builds from main to TestFlight internal group; beta channel builds from release/* tags to TestFlight external + Play open testing; production submissions use staged rollout on Play (10\u219250\u2192100 with 24h gates) and phased release on the App Store (automatic 7-day curve, pausable). Rollout halts automatically if crash-free sessions drop below 99.5% via the monitoring webhook."
+      },
+      {
+        "role": "user",
+        "content": "who can promote from beta to production?"
+      },
+      {
+        "role": "assistant",
+        "content": "The submit step requires a manual approval in the pipeline restricted to the release-managers group \u2014 currently you and Priya. Promotion is a tag push plus that approval; docs written into RELEASING.md."
+      }
+    ]
+  },
+  {
+    "id": "conv_045",
+    "difficulty": "hard",
+    "difficulty_reason": "Misleading metadata: work happens in the billing repo, but the deliverable is admin-dashboard tooling; topical overlap with payments is strong.",
+    "gold_projects": [
+      "proj_admin"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-billing",
+      "git_branch": "feat/admin-readonly-api",
+      "repo": "acme-billing"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The back-office dashboard needs a read-only view of an account's invoices and subscription state. I'm adding the internal endpoint here in billing \u2014 the dashboard team consumes it."
+      },
+      {
+        "role": "assistant",
+        "content": "Added GET /internal/accounts/{id}/billing-summary: subscription status, plan, renewal date, last 12 invoices with status and amounts, and open balance. Gated to the internal-gateway mTLS identity with the support-viewer role claim, matching the other internal reads the dashboard uses."
+      },
+      {
+        "role": "user",
+        "content": "they asked for the raw provider customer id too, for deep links"
+      },
+      {
+        "role": "assistant",
+        "content": "Included as provider_customer_id with a deep-link URL template in the response docs. One caution passed to the dashboard team: the deep link lands in the live provider dashboard, so it should render only for roles that already have provider access \u2014 the endpoint response itself is safe either way."
+      },
+      {
+        "role": "user",
+        "content": "their PM also wants totals by year for the account history page"
+      },
+      {
+        "role": "assistant",
+        "content": "Added a yearly_totals array (year, invoiced, paid, credited) computed from the invoice ledger. Response documented in the internal API catalog under the dashboard integration section; 9 tests, all passing."
+      }
+    ]
+  },
+  {
+    "id": "conv_046",
+    "difficulty": "hard",
+    "difficulty_reason": "General accessibility question with no metadata; maps to the design system only through the component-library context.",
+    "gold_projects": [
+      "proj_design"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "For our component library \u2014 should focus styles use outline or box-shadow? Designers hate the default ring and keep asking to remove it."
+      },
+      {
+        "role": "assistant",
+        "content": "Never remove it; restyle it. Use outline with outline-offset \u2014 unlike box-shadow it survives high-contrast/forced-colors mode, which is an accessibility requirement worth having in a shared library. A 2px outline in your focus token color, offset 2px, only on :focus-visible so mouse clicks don't show it. That last part usually resolves the designers' actual complaint."
+      },
+      {
+        "role": "user",
+        "content": "does focus-visible cover keyboard users on all our targets?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes for anything evergreen \u2014 all modern browsers treat keyboard focus as focus-visible. The edge to test: components that move focus programmatically (dialogs, menus) \u2014 programmatic focus follows the input modality heuristic, so after a keyboard interaction the ring shows, after mouse it may not. For dialogs, that's correct behavior; document it so it isn't reported as a bug every quarter."
+      }
+    ]
+  },
+  {
+    "id": "conv_047",
+    "difficulty": "easy",
+    "difficulty_reason": "Hiring repo, Greenhouse and HIRE ticket named.",
+    "gold_projects": [
+      "proj_hiring"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-hire",
+      "git_branch": "feat/HIRE-27-scheduler-reminders",
+      "repo": "acme-hire"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "HIRE-27: interviewers want a Slack reminder 10 minutes before each interview with the candidate's resume link and scorecard link."
+      },
+      {
+        "role": "assistant",
+        "content": "Added a scheduler job reading upcoming interviews from the Greenhouse sync table, sending DMs at T-10 with candidate name, role, resume, scorecard deep link, and the video call link. Reminders dedupe on interview id and skip if the interview was cancelled after scheduling."
+      },
+      {
+        "role": "user",
+        "content": "respect people's slack DND?"
+      },
+      {
+        "role": "assistant",
+        "content": "DMs deliver silently under DND by Slack's own rules; I also skip reminders entirely outside the interviewer's working hours (from their Slack profile timezone) since a T-10 reminder implies the interview is imminent anyway. Flagged in the rollout note."
+      }
+    ]
+  },
+  {
+    "id": "conv_048",
+    "difficulty": "easy",
+    "difficulty_reason": "dwh repo, dbt model ported from Redshift, DWH ticket.",
+    "gold_projects": [
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "feat/DWH-155-port-churn-model",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "DWH-155: port the legacy churn_monthly transform from the Redshift scripts into dbt. Legacy SQL is in legacy/redshift/churn_monthly.sql."
+      },
+      {
+        "role": "assistant",
+        "content": "Ported as models/marts/growth/fct_churn_monthly.sql. Changes from legacy: DISTKEY/SORTKEY hints dropped (Snowflake clusters on its own), the temp-table chain became CTEs, and LISTAGG's Redshift-specific delimiter syntax converted. Added schema tests: unique on (month, segment), accepted_values on churn_type."
+      },
+      {
+        "role": "user",
+        "content": "does it match legacy output?"
+      },
+      {
+        "role": "assistant",
+        "content": "Ran the comparison harness on 24 months: exact match on 23, one month off by a single account \u2014 a customer whose cancellation was backdated in the source after the legacy run cached it. New model is correct; noted in the parallel-run log."
+      }
+    ]
+  },
+  {
+    "id": "conv_049",
+    "difficulty": "hard",
+    "difficulty_reason": "No-project trap: generic dbt/Snowflake interview-prep question \u2014 resembles the warehouse migration but is personal.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "I have a data engineering interview Friday and they use dbt on Snowflake. Quiz me on incremental models \u2014 what are the strategies and when do you pick each?"
+      },
+      {
+        "role": "assistant",
+        "content": "Core strategies: append (insert only \u2014 event logs where updates never happen), merge (upsert on a unique key \u2014 the default for mutable sources, needs the key or you get duplicates), delete+insert (replaces whole partitions \u2014 good when late data rewrites a day), and insert_overwrite (partition-swap semantics \u2014 cheapest for date-partitioned facts on warehouses that support it). Interview follow-ups they'll likely ask: how you handle late-arriving data (lookback windows), why `is_incremental()` guards matter, and when a full refresh is unavoidable (schema change, backfilled logic)."
+      },
+      {
+        "role": "user",
+        "content": "what's the gotcha with merge on snowflake specifically?"
+      },
+      {
+        "role": "assistant",
+        "content": "Cost and duplicates. Merge scans the target for matches, so without clustering or a tight incremental predicate you pay near-full-table costs anyway. And if the unique_key isn't actually unique in the batch, Snowflake's MERGE errors on multi-row matches \u2014 classic interview trap: they want to hear 'dedupe the batch in the model with qualify row_number() = 1 before the merge'."
+      }
+    ]
+  },
+  {
+    "id": "conv_050",
+    "difficulty": "medium",
+    "difficulty_reason": "No metadata; backlink outreach is SEO-project work identified by topic alone.",
+    "gold_projects": [
+      "proj_seo"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Draft a backlink outreach email for our workflow-automation statistics roundup. Target: writers who cited outdated 2022 stats in similar articles."
+      },
+      {
+        "role": "assistant",
+        "content": "Subject: 'The 2022 workflow stats in your {article} piece'. Body: 'Hi {name} \u2014 your piece on {topic} cites the 2022 automation adoption survey; most of those numbers moved a lot in the 2025 edition (adoption in mid-size companies nearly doubled). We compiled the current figures with sources here: {link}. If it's useful, feel free to update your reference \u2014 happy to send the raw data either way. Either way, enjoyed the piece, especially {specific detail}.' Short, gives before it asks, and the 'raw data' offer is the actual link magnet."
+      },
+      {
+        "role": "user",
+        "content": "we have 60 targets, how many variants do we need to not look like spam?"
+      },
+      {
+        "role": "assistant",
+        "content": "Three structural variants (stat-correction angle, 'new data' angle, and a shorter two-line version), each with the {specific detail} line genuinely personalized \u2014 that line is what keeps it out of spam folders and Twitter screenshots. Send 10\u201315/day from a real person's address, and stop a variant if replies drop under 5%."
+      }
+    ]
+  },
+  {
+    "id": "conv_051",
+    "difficulty": "hard",
+    "difficulty_reason": "Long dunning-analytics session spanning billing and warehouse work; projects implied, never named, metadata points only at billing.",
+    "gold_projects": [
+      "proj_payments",
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-billing",
+      "git_branch": "feat/dunning-analytics",
+      "repo": "acme-billing"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "We have no idea if the dunning emails work. I want recovery-rate reporting: of failed payments, how many recover after each email in the sequence."
+      },
+      {
+        "role": "assistant",
+        "content": "Two pieces. Here in the billing service: emit structured events for each dunning step (email_sent with sequence position, payment_retried, payment_recovered with attribution to the last touch). Then the reporting itself belongs in the warehouse marts, not in this service \u2014 the events flow through the existing export to the landing bucket."
+      },
+      {
+        "role": "user",
+        "content": "attribution to 'last touch' seems wrong if someone pays two days after email 1 but before email 2"
+      },
+      {
+        "role": "assistant",
+        "content": "That IS last touch \u2014 email 1 gets credit. The ambiguous case is recovery with no email in the window (card retry succeeded on its own): those should attribute to 'auto-retry', not to any email, or the sequence looks better than it is. I'm adding recovery_source with values auto_retry, email_1..4, manual, so the model downstream can't conflate them."
+      },
+      {
+        "role": "user",
+        "content": "ok. what does the mart look like?"
+      },
+      {
+        "role": "assistant",
+        "content": "fct_dunning_funnel: one row per failed-payment episode with the sequence of touches, recovery flag, recovery_source, days_to_recovery, and amount. From it: recovery rate by email position, incremental lift per email, and revenue recovered per month. I'll draft the model SQL and hand it to the data team since the mart repo conventions are theirs."
+      },
+      {
+        "role": "user",
+        "content": "draft it, and also backfill the events for the last 6 months if we can"
+      },
+      {
+        "role": "assistant",
+        "content": "Events backfill is possible from the email log table plus the payment attempts ledger \u2014 wrote scripts/backfill_dunning_events.py, dry-run shows 3,900 episodes reconstructed, 12 with ambiguous ordering flagged to skip. Mart SQL drafted in drafts/fct_dunning_funnel.sql with the grain and tests described in comments for the data team's review."
+      },
+      {
+        "role": "user",
+        "content": "what's our recovery rate looking like in the dry-run data, roughly?"
+      },
+      {
+        "role": "assistant",
+        "content": "From the reconstructed episodes: 58% recover overall \u2014 31% by auto-retry before any email, 19% attributed to emails 1\u20132, 5% to emails 3\u20134, 3% manual. If that holds, emails 3\u20134 barely earn their send volume, which is exactly the kind of decision this reporting should drive."
+      }
+    ]
+  },
+  {
+    "id": "conv_052",
+    "difficulty": "easy",
+    "difficulty_reason": "Mobile repo, offline sync feature named with MOB ticket.",
+    "gold_projects": [
+      "proj_mobile"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-mobile",
+      "git_branch": "feat/MOB-95-conflict-resolution",
+      "repo": "acme-mobile"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "MOB-95: when the same record is edited offline on two devices, last-write-wins is losing data. We need field-level merge for the notes object."
+      },
+      {
+        "role": "assistant",
+        "content": "Implemented per-field timestamps on the notes object: sync merges field-by-field, newest wins per field, and a conflict marker is set when both sides changed the same field within the sync window \u2014 the UI then shows both versions for the user to pick. Server change is additive (fields_updated_at map), old clients keep working."
+      },
+      {
+        "role": "user",
+        "content": "test with the flaky-network simulator?"
+      },
+      {
+        "role": "assistant",
+        "content": "Ran the sync suite under the network chaos profile: 200 randomized dual-edit scenarios, zero silent data loss (was 14 losses under last-write-wins), 9 conflicts surfaced for manual pick, all correctly. Suite added to CI as a nightly job since it takes 4 minutes."
+      }
+    ]
+  },
+  {
+    "id": "conv_053",
+    "difficulty": "medium",
+    "difficulty_reason": "Case-study page templates using design-system patterns \u2014 website and design projects together.",
+    "gold_projects": [
+      "proj_website",
+      "proj_design"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "feat/case-study-template",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Build the case-study template for the new site. Design shipped the layout in Figma using the new card and quote components from the design system."
+      },
+      {
+        "role": "assistant",
+        "content": "Template built: hero with customer logo and key metrics, body from CMS rich text, pull quotes using the ported Quote component styles from acme-ui, and the related-cases grid on the Card pattern. Metrics render from structured CMS fields so the '3x faster' style numbers stay consistent."
+      },
+      {
+        "role": "user",
+        "content": "design flagged that our quote styling drifted from the DS version last time \u2014 avoid that"
+      },
+      {
+        "role": "assistant",
+        "content": "This time the Quote and Card styles are generated from @acme/tokens directly rather than copied values, and I added a visual regression test comparing our rendering against the Storybook reference screenshots \u2014 the drift would fail CI now instead of being discovered in a design review."
+      },
+      {
+        "role": "user",
+        "content": "publish the two case studies marketing already wrote"
+      },
+      {
+        "role": "assistant",
+        "content": "Published both to staging: /customers/northwind and /customers/atlas-freight. Both pass Lighthouse (98/100/100/100) and the metrics blocks render from structured fields. Production publish is one merge away pending marketing's final read."
+      }
+    ]
+  },
+  {
+    "id": "conv_054",
+    "difficulty": "easy",
+    "difficulty_reason": "Personal fitness question, no project relation.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "I can train 3 days a week, 45 minutes each. Best split for general strength as a beginner?"
+      },
+      {
+        "role": "assistant",
+        "content": "Full-body all three days beats any split at that volume. Each session: one squat pattern, one hinge, one push, one pull, one carry or core \u2014 3 sets each, leave 1\u20132 reps in reserve. Rotate variations across the days (e.g., back squat / front squat / goblet) so you're not repeating identically. Progress by adding small weight weekly until that stalls, then add reps."
+      },
+      {
+        "role": "user",
+        "content": "do I need deload weeks?"
+      },
+      {
+        "role": "assistant",
+        "content": "Not for the first several months \u2014 beginner loads don't accumulate enough fatigue. Take an easy week when sleep, joints, or motivation tell you to, or roughly every 8\u201310 weeks once the weights get meaningful. Scheduled deloads matter later; showing up 3x/week matters now."
+      }
+    ]
+  },
+  {
+    "id": "conv_055",
+    "difficulty": "medium",
+    "difficulty_reason": "Long bot-repo session on knowledge-base ingestion; project evident from content, not named.",
+    "gold_projects": [
+      "proj_chatbot"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-support-bot",
+      "git_branch": "feat/kb-freshness",
+      "repo": "acme-support-bot"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The bot answered with a deprecated pricing detail yesterday \u2014 the KB article was updated 3 weeks ago but our index still has the old chunk. Ingestion is a manual script right now."
+      },
+      {
+        "role": "assistant",
+        "content": "Making ingestion incremental and automatic: the help-center API exposes updated_at, so a scheduled job diffs against our index metadata, re-chunks and re-embeds only changed articles, and hard-deletes chunks of removed ones. The pricing article failure mode \u2014 stale chunks surviving an update \u2014 gets fixed by delete-then-insert per article, atomically."
+      },
+      {
+        "role": "user",
+        "content": "how do we know it's working, beyond waiting for the next wrong answer?"
+      },
+      {
+        "role": "assistant",
+        "content": "Adding a freshness metric: max age of index vs source per article, exported to the dashboard, alert if any article is >24h stale. Plus a canary: the ingestion run ends by querying the index for a sentinel string embedded in the most recently updated article and fails loudly if it's missing."
+      },
+      {
+        "role": "user",
+        "content": "what triggered the manual runs before \u2014 do we know how stale we actually were?"
+      },
+      {
+        "role": "assistant",
+        "content": "Git history of the script's log file shows runs roughly every 9 days on average, worst gap 23 days. Comparing article update timestamps against run dates: 31% of article updates took more than 5 days to reach the index. That's the number to put in the rollout note as the before picture."
+      },
+      {
+        "role": "user",
+        "content": "schedule it hourly then, and backfill everything now"
+      },
+      {
+        "role": "assistant",
+        "content": "Scheduled hourly with a lock so runs don't overlap. Full re-ingest ran: 412 articles, 4,830 chunks, 96 articles had drifted from the index. The retrieval eval still passes (recall@3 0.86) so the re-chunk didn't regress anything."
+      }
+    ]
+  },
+  {
+    "id": "conv_056",
+    "difficulty": "medium",
+    "difficulty_reason": "Audit-log requirements driven by the compliance program, built in the admin dashboard \u2014 both projects.",
+    "gold_projects": [
+      "proj_admin",
+      "proj_soc2"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-admin",
+      "git_branch": "feat/audit-retention",
+      "repo": "acme-admin"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The compliance readiness assessment says our admin audit log needs 12-month retention, tamper-evidence, and an export the auditors can consume. Current state: rows in Postgres, no retention policy."
+      },
+      {
+        "role": "assistant",
+        "content": "Three changes. Retention: partition audit_events monthly, drop partitions past 12 months via a scheduled job (keeps deletes cheap and provable). Tamper-evidence: append a hash chain \u2014 each row stores sha256(prev_hash + row_content), with the head hash exported daily to the WORM bucket so rewrites are detectable. Export: CSV per month, generated on demand, matching the evidence format the compliance platform ingests."
+      },
+      {
+        "role": "user",
+        "content": "is a hash chain overkill? auditor just asked for 'integrity controls'"
+      },
+      {
+        "role": "assistant",
+        "content": "A hash chain is the cheap version \u2014 20 lines and no new infra, versus real WORM storage for the events themselves. It answers the integrity question concretely instead of hand-waving 'database permissions'. If you want minimal: restricted write path + daily row-count/hash snapshot also passes typically, but the chain costs barely more and ends the conversation."
+      },
+      {
+        "role": "user",
+        "content": "go with the chain. make sure dropping old partitions doesn't break it"
+      },
+      {
+        "role": "assistant",
+        "content": "Handled: each month's partition closes with a terminal hash stored in the audit_manifest table (which is never dropped), so the chain verifies per month and manifests chain to each other. Dropping a partition leaves its manifest entry as the verifiable stub. 10 tests including a tamper-detection test that flips one historical row and catches it."
+      }
+    ]
+  },
+  {
+    "id": "conv_057",
+    "difficulty": "hard",
+    "difficulty_reason": "General chat, no metadata: launch-sequencing question entangling the site relaunch and the SEO push.",
+    "gold_projects": [
+      "proj_website",
+      "proj_seo"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "We're relaunching the site page by page while also running a big organic-traffic push. I'm worried the relaunch tanks the rankings the content team is building. How do teams sequence this?"
+      },
+      {
+        "role": "assistant",
+        "content": "The risks are separable. Rankings live mostly on URLs and content, not design \u2014 so a relaunch that preserves URLs, content, and internal links is near-safe; one that changes URL structure mid-push is how you lose a quarter of organic growth. Sequence: freeze URL structure now (relaunch adopts current URLs or ships redirects before anything else), relaunch the low-organic pages first (homepage, pricing), and migrate the blog \u2014 where the push is accruing value \u2014 last, with a crawl comparison before/after each batch."
+      },
+      {
+        "role": "user",
+        "content": "the new site does change blog URLs, from /blog/YYYY/MM/slug to /blog/slug"
+      },
+      {
+        "role": "assistant",
+        "content": "Then redirects are the critical path: 301s for every old URL shipped the same deploy, internal links updated to the new form (not bouncing through redirects), canonicals correct, and the sitemap swapped atomically. Expect a small multi-week wobble even done right; do it in one batch rather than trickling, so the wobble happens once, and don't do it the same week a big content piece launches."
+      },
+      {
+        "role": "user",
+        "content": "content team wants to keep publishing during the migration week \u2014 allow it?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes, but new posts go straight to the new URL format on the new stack (they have no rankings to protect), and hold any updates to existing high-ranking posts until after the crawl comparison confirms the redirects settled. That keeps the push's momentum without mixing two risk sources on the same URLs."
+      }
+    ]
+  },
+  {
+    "id": "conv_058",
+    "difficulty": "medium",
+    "difficulty_reason": "Warehouse repo; event-pipeline replacement matches the migration scope without naming it.",
+    "gold_projects": [
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "feat/managed-ingestion",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Moving event ingestion off the custom scripts to the managed pipeline. The scripts do light transformation (user-agent parsing, geo lookup) \u2014 where does that logic go?"
+      },
+      {
+        "role": "assistant",
+        "content": "Managed pipeline lands raw, transforms move into dbt staging \u2014 that's the ELT split this migration wants anyway. stg_events gets the UA parse (via a seeded lookup for the common 95%, a parsing UDF for the tail) and the geo lookup joins the IP-range seed table. The custom scripts then retire instead of being half-migrated."
+      },
+      {
+        "role": "user",
+        "content": "the geo table the scripts use is licensed \u2014 can we load it into the warehouse?"
+      },
+      {
+        "role": "assistant",
+        "content": "Check the license class: most geo-IP licenses allow internal analytical use in a warehouse but forbid redistribution \u2014 loading it is typically fine, exposing it through a data share is not. I've put it in a separate schema with access restricted to the transform role and noted the license constraint in the schema comment so it doesn't wander into a share later."
+      }
+    ]
+  },
+  {
+    "id": "conv_059",
+    "difficulty": "hard",
+    "difficulty_reason": "No-project trap: SOC 2 advice for a friend's startup \u2014 the topic matches Acme's compliance project but the context is external.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "A friend's 8-person startup got asked for SOC 2 by their first enterprise prospect. Is that worth doing at their size or should they push back?"
+      },
+      {
+        "role": "assistant",
+        "content": "At 8 people, usually push back first: many enterprise security teams accept a completed security questionnaire plus a pentest report and a roadmap commitment ('Type I within 9 months') for early vendors. If the deal is transformative and the prospect won't budge, Type I with a compliance-automation platform is 2\u20133 months and mid-five-figures all-in \u2014 survivable but a real tax on a team that size. The mistake is starting a Type II audit window before product-market fit; controls calcify early workflows."
+      },
+      {
+        "role": "user",
+        "content": "what should they absolutely have regardless, questionnaire or not?"
+      },
+      {
+        "role": "assistant",
+        "content": "The basics that every questionnaire asks and that are cheap at 8 people: SSO+MFA everywhere, offboarding checklist, encrypted laptops with screen lock, least-privilege on prod access, daily backups they've actually restored once, and a one-page incident-response doc. Those six answer 70% of any questionnaire honestly and are worth having even if no enterprise deal ever lands."
+      }
+    ]
+  },
+  {
+    "id": "conv_060",
+    "difficulty": "medium",
+    "difficulty_reason": "Hiring funnel data flowing into the warehouse \u2014 hiring tooling and dwh both involved by content.",
+    "gold_projects": [
+      "proj_hiring",
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-hire",
+      "git_branch": "feat/funnel-export",
+      "repo": "acme-hire"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "People Ops wants funnel reporting \u2014 pass-through rates per stage per role family \u2014 in the main BI tool, not in Greenhouse's reports. That means our sync service needs to land the data in the warehouse."
+      },
+      {
+        "role": "assistant",
+        "content": "The sync service already consumes Greenhouse webhooks; I'll add a warehouse export: candidate stage transitions as events (candidate id hashed, role family, stage from/to, timestamp) written to the landing bucket in the standard parquet layout the data team ingests. No PII beyond the hash \u2014 names and emails stay in Greenhouse."
+      },
+      {
+        "role": "user",
+        "content": "recruiters will ask to drill through to the actual candidate though"
+      },
+      {
+        "role": "assistant",
+        "content": "The BI row carries the Greenhouse candidate URL built from the id \u2014 drill-through lands them in Greenhouse where its own permissions apply. The warehouse stays PII-light and access-review-friendly, which the data team's conventions require for new sources anyway."
+      },
+      {
+        "role": "user",
+        "content": "and the dbt model side?"
+      },
+      {
+        "role": "assistant",
+        "content": "Drafted stg_greenhouse_transitions and fct_hiring_funnel (grain: candidate \u00d7 stage entry) with pass-through and time-in-stage measures, following the marts conventions. PR opened against the warehouse repo tagged for the data team's review; the export side here is merged and backfilling 18 months of history."
+      }
+    ]
+  },
+  {
+    "id": "conv_061",
+    "difficulty": "medium",
+    "difficulty_reason": "Long admin-repo session on account search; matches the dashboard project by content.",
+    "gold_projects": [
+      "proj_admin"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-admin",
+      "git_branch": "perf/account-search",
+      "repo": "acme-admin"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Account search takes 4+ seconds for common names and support is complaining. It's an ILIKE over three columns right now."
+      },
+      {
+        "role": "assistant",
+        "content": "ILIKE '%term%' over name, email, company can't use btree indexes. Options: pg_trgm GIN indexes on the three columns (keeps the SQL, ~10-50ms for these table sizes) or a tsvector column if we want word-boundary semantics. Trigram fits 'support types a fragment' behavior better \u2014 going with that."
+      },
+      {
+        "role": "user",
+        "content": "table is 2.1M accounts, will the index build lock it?"
+      },
+      {
+        "role": "assistant",
+        "content": "CREATE INDEX CONCURRENTLY avoids the write lock \u2014 takes longer but the dashboard keeps working. Three indexes built concurrently in staging: 40s each, sizes 60-90MB. Query plan flips to bitmap index scan; the 4.2s worst-case query drops to 38ms."
+      },
+      {
+        "role": "user",
+        "content": "roll it to prod and add whatever guardrail stops this regressing"
+      },
+      {
+        "role": "assistant",
+        "content": "Prod indexes built (during the low-traffic window, concurrently, verified no lock waits in pg_stat_activity). Guardrail: a pg_stat_statements check in the weekly perf report flags any dashboard query with mean > 500ms, and I added a query test asserting the search plan uses the trigram index so an ORM change can't silently revert to seq scan."
+      },
+      {
+        "role": "user",
+        "content": "nice. support also asked for search by the internal account id prefix"
+      },
+      {
+        "role": "assistant",
+        "content": "id prefix search added as a separate fast path \u2014 anchored LIKE 'prefix%' uses the existing pkey btree via text_pattern_ops, no trigram needed. Detects when the query looks like an id (acct_ prefix) and routes accordingly. 6 tests on the router logic."
+      }
+    ]
+  },
+  {
+    "id": "conv_062",
+    "difficulty": "easy",
+    "difficulty_reason": "Design-system repo, dark mode tokens, DS ticket named.",
+    "gold_projects": [
+      "proj_design"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-ui",
+      "git_branch": "feat/DS-44-dark-elevation",
+      "repo": "acme-ui"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "DS-44: dark mode needs an elevation system \u2014 shadows are invisible on dark surfaces, designers want surface-tint levels instead."
+      },
+      {
+        "role": "assistant",
+        "content": "Added elevation tokens 0\u20134 that resolve differently per scheme: light mode keeps the shadow ramp, dark mode maps to surface tint overlays (4%, 8%, 12%, 16% of the primary on the surface color) with shadows dropped to a subtle ambient at level 3+. Card, Modal, Menu, and Tooltip migrated to the tokens."
+      },
+      {
+        "role": "user",
+        "content": "does that match what the Figma library shows?"
+      },
+      {
+        "role": "assistant",
+        "content": "Matched against the Figma elevation page \u2014 values came from its variable collection via the sync script, so they're identical by construction. One mismatch found and fixed the other way: Figma's Tooltip used elevation 2 while code used 3; design confirmed 2, code updated."
+      }
+    ]
+  },
+  {
+    "id": "conv_063",
+    "difficulty": "easy",
+    "difficulty_reason": "Personal translation request, unrelated to work.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Translate this for my landlady in Vienna, politely: the bathroom faucet has been dripping for a week and I'd like it fixed. Also ask when the chimney sweep is coming."
+      },
+      {
+        "role": "assistant",
+        "content": "Sehr geehrte Frau {Name}, ich hoffe, es geht Ihnen gut. Ich wollte Sie darauf aufmerksam machen, dass der Wasserhahn im Badezimmer seit etwa einer Woche tropft. Ich w\u00e4re Ihnen sehr dankbar, wenn Sie eine Reparatur veranlassen k\u00f6nnten. Au\u00dferdem wollte ich fragen, wann der Rauchfangkehrer voraussichtlich kommt. Vielen Dank im Voraus und freundliche Gr\u00fc\u00dfe, {dein Name}. \u2014 Note: 'Rauchfangkehrer' is the Austrian term; in Germany it would be 'Schornsteinfeger'."
+      },
+      {
+        "role": "user",
+        "content": "make it a bit less formal, she's friendly"
+      },
+      {
+        "role": "assistant",
+        "content": "Liebe Frau {Name}, kurze Frage: der Wasserhahn im Bad tropft seit einer Woche \u2014 k\u00f6nnten Sie jemanden zur Reparatur schicken? Und wissen Sie schon, wann der Rauchfangkehrer kommt? Vielen Dank und liebe Gr\u00fc\u00dfe, {dein Name}."
+      }
+    ]
+  },
+  {
+    "id": "conv_064",
+    "difficulty": "hard",
+    "difficulty_reason": "No metadata, general chat: dunning email copywriting \u2014 payments project work in marketing clothing.",
+    "gold_projects": [
+      "proj_payments"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Rewrite our failed-payment email sequence \u2014 4 emails over 14 days. Current ones are robotic and recovery is poor. Tone: helpful, not threatening, we're a B2B tool their team relies on."
+      },
+      {
+        "role": "assistant",
+        "content": "Email 1 (day 0, subject 'Payment didn't go through \u2014 no action lost'): assume innocence, card expired is the usual cause, one-click update link, note that service continues. Email 2 (day 3, 'Quick nudge on your billing'): add the specific card ending and amount, offer to switch payment method, mention a human can help. Email 3 (day 8, 'Your workspace needs attention'): first mention of consequences \u2014 read-only mode on day 14 \u2014 with the date explicit, still one click to fix. Email 4 (day 12, 'Read-only in 2 days'): short, factual, consequence and remedy only, plus a reply-to-a-human escape hatch. Every email: same CTA link, no guilt language, sent to billing contact with CC option."
+      },
+      {
+        "role": "user",
+        "content": "legal wants us to avoid promising 'service continues' if we might actually suspend"
+      },
+      {
+        "role": "assistant",
+        "content": "Fair \u2014 email 1 becomes 'your workspace remains active today' (true, time-scoped) instead of an open-ended promise, and I've added the suspension date to email 2 as well so the first mention of consequences isn't a surprise at email 3. The sequence stays helpful-first but every claim is now literally accurate against the 14-day policy."
+      },
+      {
+        "role": "user",
+        "content": "give me subject line variants for A/B on email 1"
+      },
+      {
+        "role": "assistant",
+        "content": "A: 'Payment didn't go through \u2014 no action lost' (reassurance-first). B: 'Card issue on your Acme account' (specific, neutral). C: '{Company}'s Acme payment needs a quick update' (company-name personalization). Prediction: B or C wins on opens, A on click-through; measure recovery within 72h of send, not opens, since that's the metric that matters."
+      }
+    ]
+  },
+  {
+    "id": "conv_065",
+    "difficulty": "hard",
+    "difficulty_reason": "Embedding the support bot inside the mobile app \u2014 chatbot and mobile projects intersect; neither named.",
+    "gold_projects": [
+      "proj_mobile",
+      "proj_chatbot"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-mobile",
+      "git_branch": "feat/in-app-support-chat",
+      "repo": "acme-mobile"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Product wants the support assistant inside the app, not just the web messenger. The messenger SDK is heavy \u2014 4MB \u2014 and we're trying to keep the app lean."
+      },
+      {
+        "role": "assistant",
+        "content": "Alternative: skip the vendor SDK and talk to the assistant's backend directly \u2014 it already exposes the conversation API the web widget uses. A native chat screen (we have the message-list components from the design system port) against that API is maybe 40KB of our own code, and we control the UX."
+      },
+      {
+        "role": "user",
+        "content": "does that break the human-handoff path? agents live in the vendor's inbox"
+      },
+      {
+        "role": "assistant",
+        "content": "No \u2014 escalation happens server-side: the bot backend opens the vendor conversation on handoff, and our app keeps polling the same conversation endpoint which proxies agent replies. The user never leaves our chat screen. One real gap: agent typing indicators and read receipts don't come through the proxy today; the backend team would need to forward those webhooks."
+      },
+      {
+        "role": "user",
+        "content": "ok, spike it \u2014 auth especially, the web widget uses its own identity tokens"
+      },
+      {
+        "role": "assistant",
+        "content": "Spike done on a branch: app auth exchanges our session JWT for a bot-scoped token at the backend (new endpoint needed, drafted in their repo as a PR), chat screen renders bot responses with citation links into the help center in a webview. Round-trip latency in staging: 1.8s median for bot replies. Wrote up the SDK-vs-direct comparison in the spike doc: 4MB and vendor lock versus 3 endpoints we own."
+      }
+    ]
+  },
+  {
+    "id": "conv_066",
+    "difficulty": "easy",
+    "difficulty_reason": "Website repo, rebrand rollout named with WEB ticket.",
+    "gold_projects": [
+      "proj_website"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "feat/WEB-71-og-images",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "WEB-71: every page on the relaunched site needs branded OG images \u2014 the old site had one generic image and marketing hates it in link previews."
+      },
+      {
+        "role": "assistant",
+        "content": "Added build-time OG image generation: a template with the new brand type and colors, page title composited in, output per route to /og/{slug}.png. Blog posts pull the hero accent color from their category. Meta tags wired in the base layout; validated with the social preview debuggers for the top 10 pages."
+      },
+      {
+        "role": "user",
+        "content": "case studies should show the customer logo too"
+      },
+      {
+        "role": "assistant",
+        "content": "Case-study OG template variant adds the customer logo (from the CMS entry) alongside the brand mark with a divider. Two live case studies regenerated; previews verified."
+      }
+    ]
+  },
+  {
+    "id": "conv_067",
+    "difficulty": "hard",
+    "difficulty_reason": "No-project trap: generic Astro question for a personal blog \u2014 superficially resembles the website relaunch stack.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "For my personal blog I'm on Astro. View transitions between posts flash white in dark mode for a split second. Any fix?"
+      },
+      {
+        "role": "assistant",
+        "content": "Classic FOUC-on-navigation: the new document paints before your theme class applies. Fixes, best first: 1) set color-scheme and a dark background on :root in a blocking inline style in the head so the first paint is already dark; 2) make the theme script inline and synchronous (not type=module) so it runs before paint; 3) if you use the ClientRouter, keep theme state in localStorage read by that inline script \u2014 the transition then never sees a light frame."
+      },
+      {
+        "role": "user",
+        "content": "I'm setting the class in an astro:page-load listener"
+      },
+      {
+        "role": "assistant",
+        "content": "That's the problem \u2014 astro:page-load fires after the new page is visible. Move the class-setting into an inline script in the head (runs during document parse, before first paint) and keep the listener only for updating toggles or syncing UI state. One inline script, no flash."
+      }
+    ]
+  },
+  {
+    "id": "conv_068",
+    "difficulty": "easy",
+    "difficulty_reason": "No metadata but Vanta, evidence collection, and the Type II window are named \u2014 unmistakably the compliance project.",
+    "gold_projects": [
+      "proj_soc2"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Vanta shows 9 failing controls a month before our Type II window opens. Help me triage: which of these typically take longest to remediate? List: log retention 90d, endpoint encryption 2 laptops, offboarding SLA breaches, missing vendor reviews x3, backup restore test overdue, incident response tabletop overdue, access review overdue."
+      },
+      {
+        "role": "assistant",
+        "content": "Longest-lead first: 1) Log retention \u2014 if logs weren't being retained, you can't backfill time; fix the config today because the Type II window needs it operating throughout. 2) Offboarding SLA breaches \u2014 historical breaches stay in the record; fix the process now and document the exceptions with remediation notes. 3) Vendor reviews \u00d73 \u2014 need vendor cooperation (their reports), start requests today. Quick wins this week: the 2 laptops, backup restore test (schedule it, save the evidence), access review (run it), tabletop (2-hour session, write the minutes). Everything historical, annotate rather than hide \u2014 auditors respond better to documented exceptions than gaps discovered late."
+      },
+      {
+        "role": "user",
+        "content": "the offboarding breaches were contractors missed for ~45 days. how bad is that for the report?"
+      },
+      {
+        "role": "assistant",
+        "content": "It'll likely surface as an exception in the Type II report if it happened inside the window \u2014 not a failed report, but a noted deviation. Mitigate the writeup: show root cause (contractors weren't in the HRIS trigger), the fix (contractor offboarding now tickets automatically), and evidence the fix operates. One remediated exception with a clean story reads fine to customers; a pattern without remediation doesn't."
+      }
+    ]
+  },
+  {
+    "id": "conv_069",
+    "difficulty": "hard",
+    "difficulty_reason": "Log retention for audit evidence implemented in the warehouse \u2014 compliance requirement meets dwh implementation; both projects, neither named.",
+    "gold_projects": [
+      "proj_dwh",
+      "proj_soc2"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "feat/audit-log-retention",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Security needs application logs queryable for 12 months for the audit, but our log platform only keeps 30 days on our plan. Cheapest path: bump the plan or route them into the warehouse?"
+      },
+      {
+        "role": "assistant",
+        "content": "Warehouse, comfortably: the log platform's 12-month tier is ~\u20ac2k/month; landing the same volume as parquet and querying through the existing warehouse is ~\u20ac150/month at your volume. The platform export-to-bucket integration handles shipping. Trade-off: warehouse queries are minutes-not-seconds and no live tailing \u2014 fine for audit evidence, wrong for debugging, so keep the 30-day hot tier as-is."
+      },
+      {
+        "role": "user",
+        "content": "set it up \u2014 what does the warehouse side need?"
+      },
+      {
+        "role": "assistant",
+        "content": "Done on this branch: external stage on the log bucket, a stg_app_logs model with the fields security cares about (actor, action, resource, timestamp, source ip) parsed out, clustering on log date, and a retention sweep dropping partitions past 12 months so we hold exactly the required window \u2014 holding more creates its own compliance surface. Access: a security_reader role sees the log schema, nobody else; that grant is itself in the access-review scope."
+      },
+      {
+        "role": "user",
+        "content": "can security self-serve the queries the auditor asks for?"
+      },
+      {
+        "role": "assistant",
+        "content": "Added a queries/audit-evidence.md cookbook: admin-action lookups by actor and date range, access-change history for a user, and export-to-CSV syntax \u2014 the three asks auditors repeat. Security ran two of them in a walkthrough without help, so I'd call that yes."
+      }
+    ]
+  },
+  {
+    "id": "conv_070",
+    "difficulty": "medium",
+    "difficulty_reason": "Hiring repo; offer-approval routing matches the project by content.",
+    "gold_projects": [
+      "proj_hiring"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-hire",
+      "git_branch": "feat/offer-approvals",
+      "repo": "acme-hire"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Offer approvals currently happen over email and take 4 days average. We want them routed in Slack with the comp band check automated."
+      },
+      {
+        "role": "assistant",
+        "content": "Flow built: when an offer moves to approval stage, the service posts to the approvers' channel with role, level, comp vs band (from the bands sheet), and equity \u2014 approve/reject buttons, two approvals required, out-of-band offers require a third approver from finance automatically. Everything writes back to the offer's activity feed for the audit trail."
+      },
+      {
+        "role": "user",
+        "content": "comp data in a slack message worries me"
+      },
+      {
+        "role": "assistant",
+        "content": "Valid \u2014 changed it: the Slack message shows role, level, and in-band/out-of-band status only; actual numbers live behind a link to the ATS page which enforces its own permissions. Approvers see figures where access is already controlled, Slack only carries the workflow."
+      },
+      {
+        "role": "user",
+        "content": "what's the fallback if slack is down or an approver ignores it?"
+      },
+      {
+        "role": "assistant",
+        "content": "Reminders at 24h and 48h, escalation to the backup approver at 72h, and the ATS-side approval page always works as the manual path \u2014 Slack is an accelerant, not the system of record. All four paths tested."
+      }
+    ]
+  },
+  {
+    "id": "conv_071",
+    "difficulty": "easy",
+    "difficulty_reason": "Personal email drafting, no project relation.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a short email to my landlord giving notice that I'm moving out at the end of November. Lease requires 90 days, I'm giving 92. Keep it friendly, we've been on good terms."
+      },
+      {
+        "role": "assistant",
+        "content": "Subject: Notice of moving out \u2014 end of November. Hi {Name}, I hope you're doing well. I'm writing to give formal notice that I'll be moving out of {address} on November 30th \u2014 92 days from today, per the 90-day notice in the lease. It's been a genuinely good three years and I've appreciated how quickly you've handled everything. Happy to coordinate viewings for prospective tenants and to schedule the final walkthrough whenever suits you. Best, {your name}."
+      },
+      {
+        "role": "user",
+        "content": "add that I'd like my deposit details confirmed"
+      },
+      {
+        "role": "assistant",
+        "content": "Added before the closing: 'Could you also confirm the deposit amount on file and how it will be returned after the walkthrough? Just so we're aligned on the process ahead of time.' Keeps it light while getting it in writing."
+      }
+    ]
+  },
+  {
+    "id": "conv_072",
+    "difficulty": "medium",
+    "difficulty_reason": "Long session building the chat widget UI from design-system components \u2014 chatbot and design projects together.",
+    "gold_projects": [
+      "proj_chatbot",
+      "proj_design"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-support-bot",
+      "git_branch": "feat/widget-ds-refresh",
+      "repo": "acme-support-bot"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The bot's web widget still looks like the vendor default. Rebuild the widget UI on our component library so it matches the product."
+      },
+      {
+        "role": "assistant",
+        "content": "Auditing what the widget needs vs what acme-ui provides: message bubbles (new), typing indicator (new), input bar (compose from Input + IconButton), citation chips (Badge variant), header (exists). Plan: build the two new components in the widget package styled entirely from @acme/tokens, and propose bubble + typing indicator upstream to the library afterward since the mobile app will want them too."
+      },
+      {
+        "role": "user",
+        "content": "why not build them in acme-ui directly from the start?"
+      },
+      {
+        "role": "assistant",
+        "content": "Speed and API stability \u2014 the library has a review bar and versioning ceremony, and we don't know the right bubble API until the widget has used it for a few weeks. Building locally on tokens keeps visual consistency now; upstreaming later transfers a proven API. I've noted the upstream intent in both repos so it doesn't silently become permanent."
+      },
+      {
+        "role": "user",
+        "content": "fine. make sure dark mode and the citation links work"
+      },
+      {
+        "role": "assistant",
+        "content": "Widget rebuilt: bubbles, typing indicator, tokenized input bar, citation chips linking into the help center with the article title on hover. Dark mode follows the host page's scheme via the token custom properties \u2014 verified on our site's dark mode and a forced-dark test page. Bundle grew 6KB total since tokens were already loaded."
+      },
+      {
+        "role": "user",
+        "content": "screenshot set for the design review?"
+      },
+      {
+        "role": "assistant",
+        "content": "Captured: light/dark \u00d7 idle/conversation/escalation states, plus mobile viewport. Posted to the design channel with the Figma reference frames side by side \u2014 two spacing deltas from the mock flagged proactively (input padding, chip gap), both intentional per token scale."
+      }
+    ]
+  },
+  {
+    "id": "conv_073",
+    "difficulty": "easy",
+    "difficulty_reason": "No metadata, but Search Console and the target-keyword program are named \u2014 clearly the SEO push.",
+    "gold_projects": [
+      "proj_seo"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Search Console shows our 'workflow approval software' page dropped from position 6 to 14 last week. Diagnose?"
+      },
+      {
+        "role": "assistant",
+        "content": "Check in order: 1) Did the page change? \u2014 a deploy or CMS edit that thinned content or broke structured data around the drop date. 2) SERP shift \u2014 search the term in a clean session; if the page-one results changed character (e.g., listicles displaced product pages), that's an intent shift, not a penalty. 3) Lost links \u2014 check whether a strong referring page dropped. 4) Cannibalization \u2014 did a newer post start ranking for the same term? Search Console's page report for the query will show if a second URL splits impressions."
+      },
+      {
+        "role": "user",
+        "content": "it's cannibalization \u2014 the new comparison post ranks 15 for it now"
+      },
+      {
+        "role": "assistant",
+        "content": "Then consolidate intent: the comparison post should target its comparison keyword only \u2014 retitle it away from the generic term, and add a prominent link from it to the money page with the target term as anchor. If the post has earned links for the generic term, keep those but canonical stays self; the goal is separation, not deletion. Expect 2\u20134 weeks to settle; watch both URLs' impressions for the query."
+      }
+    ]
+  },
+  {
+    "id": "conv_074",
+    "difficulty": "hard",
+    "difficulty_reason": "No-project trap: generic RAG/embeddings tutoring \u2014 closest neighbor is the chatbot project but this is conceptual learning.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain like I'm a backend dev: why does RAG use two different models \u2014 one for embeddings and one for generation? Couldn't the LLM just do both?"
+      },
+      {
+        "role": "assistant",
+        "content": "They optimize different objectives. An embedding model is trained so that similar meanings land close together in vector space \u2014 it's a compression function you can run over millions of documents once, cheaply, and compare with dot products. The LLM is trained to generate; using it to 'compare' a query against every document would mean running full inference per pair \u2014 thousands of times more compute for each query. So you use the cheap similarity function to shortlist, and the expensive generator only reads the shortlist. Same reason databases use indexes instead of table-scanning with the application code."
+      },
+      {
+        "role": "user",
+        "content": "why not embed with the LLM itself since it clearly 'understands' text?"
+      },
+      {
+        "role": "assistant",
+        "content": "You can extract embeddings from an LLM's hidden states, but they're mediocre at retrieval out of the box \u2014 its training never optimized 'similar things nearby'. Dedicated embedding models are trained contrastively on query-document pairs exactly for that geometry, which is why a 100M-parameter embedder beats a 70B LLM's raw hidden states at search. The LLM's understanding shows up at the generation step, where it reads the retrieved text directly."
+      }
+    ]
+  },
+  {
+    "id": "conv_075",
+    "difficulty": "easy",
+    "difficulty_reason": "Billing repo, subscription migration batch named with PAY ticket.",
+    "gold_projects": [
+      "proj_payments"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-billing",
+      "git_branch": "feat/PAY-402-batch-migration",
+      "repo": "acme-billing"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "PAY-402: this week's migration batch is 300 legacy accounts. Two failed last week with 'customer already exists' \u2014 dig into that before we run."
+      },
+      {
+        "role": "assistant",
+        "content": "Found it: both failures are accounts whose emails were used for one-off invoices in the provider dashboard years ago, so a customer object already exists outside our mapping table. Fix: the migration now searches by email first, links the existing customer if found (after verifying no active subscriptions on it), and records the link with source=adopted for auditability."
+      },
+      {
+        "role": "user",
+        "content": "run the batch"
+      },
+      {
+        "role": "assistant",
+        "content": "Batch ran: 297 migrated clean, 2 adopted existing customers via the new path, 1 held back \u2014 it has a disputed invoice open and the runbook says wait for resolution. Migration log written, finance summary posted. Remaining legacy population: 2,140 accounts."
+      }
+    ]
+  },
+  {
+    "id": "conv_076",
+    "difficulty": "medium",
+    "difficulty_reason": "Long mobile-repo session on the reports screen; project inferred from repo and content, not named.",
+    "gold_projects": [
+      "proj_mobile"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-mobile",
+      "git_branch": "feat/reports-screen",
+      "repo": "acme-mobile"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Starting the reports screen \u2014 last big screen before parity. It renders the same charts as web but the charting lib we use there is web-only."
+      },
+      {
+        "role": "assistant",
+        "content": "Options: victory-native (closest API to web's victory usage, SVG-based, fine for our data sizes), react-native-skia charts (fastest, most work), or webview-embedding the web charts (parity by definition, but offline and gesture issues). Given the offline-first requirement, webview is out; starting with victory-native and we escalate to skia only if the pan/zoom on the 12-month view stutters."
+      },
+      {
+        "role": "user",
+        "content": "data comes from the sync store, but reports aggregate across thousands of rows \u2014 on-device aggregation ok?"
+      },
+      {
+        "role": "assistant",
+        "content": "Measured it: aggregating 8k rows into monthly buckets takes 11ms on a mid-tier Android device \u2014 fine. The screen computes aggregates in a memoized selector off the sync store, so offline works automatically and the numbers match whatever the device has synced, with a 'data as of {sync time}' label to make staleness honest."
+      },
+      {
+        "role": "user",
+        "content": "the 12-month pan/zoom \u2014 test it before we commit"
+      },
+      {
+        "role": "assistant",
+        "content": "Tested on the two reference devices: iPhone 12 smooth, the Android mid-tier drops to ~40fps while panning with tooltips active. Fixed by throttling tooltip updates to 30hz and memoizing the axis label layer \u2014 back to 55-60fps. Skia escalation not needed."
+      },
+      {
+        "role": "user",
+        "content": "screenshots to design, then wire the export button"
+      },
+      {
+        "role": "assistant",
+        "content": "Screenshots posted (light/dark, phone/tablet). Export: share-sheet PDF of the current view using the existing share util, rendered off-screen at 2x \u2014 matches what web's export produces closely enough that support won't get 'why do these differ' tickets. Screen is behind the reports feature flag, e2e test added to the parity checklist."
+      }
+    ]
+  },
+  {
+    "id": "conv_077",
+    "difficulty": "medium",
+    "difficulty_reason": "Admin dashboard adopting the component library \u2014 admin and design projects both, evident from content.",
+    "gold_projects": [
+      "proj_admin",
+      "proj_design"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-admin",
+      "git_branch": "feat/ds-migration",
+      "repo": "acme-admin"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The admin dashboard predates the component library and looks it. Migrate the account page to acme-ui components as the pilot."
+      },
+      {
+        "role": "assistant",
+        "content": "Account page audit: 14 custom components, 9 have direct acme-ui equivalents (Button, Input, Badge, Table, Tabs...), 3 are compositions (the entitlements editor maps to Table + Select + Button), 2 have no equivalent \u2014 the impersonation banner and the flag-toggle row, which stay custom but restyled on tokens. Migrating the 9 now."
+      },
+      {
+        "role": "user",
+        "content": "the table is the risky one, ours has column filters the DS table might not"
+      },
+      {
+        "role": "assistant",
+        "content": "DS Table supports sorting and custom header cells but not filter rows \u2014 checked with the DS changelog and Storybook. Two options: keep our filter row as a composition above the DS Table (works today), or request filters upstream. Did the first, filed the second \u2014 the DS team says data-table filtering is on their roadmap this quarter, so our composition is a bridge, not a fork."
+      },
+      {
+        "role": "user",
+        "content": "ship it and note the bundle impact"
+      },
+      {
+        "role": "assistant",
+        "content": "Merged behind a one-week visual bake on staging. Bundle: +38KB for acme-ui tree-shaken, -12KB of deleted custom components, net +26KB \u2014 acceptable for an internal tool. Support's two most-used flows click-tested; migration notes written for the remaining pages."
+      }
+    ]
+  },
+  {
+    "id": "conv_078",
+    "difficulty": "easy",
+    "difficulty_reason": "Personal event planning, no project relation.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "My kid turns 6 next month. Ideas for a party for 10 kids that doesn't destroy our apartment or my sanity?"
+      },
+      {
+        "role": "assistant",
+        "content": "Take it out of the apartment if at all possible: park with a scavenger hunt (10 items, teams of two, dollar-store prizes), a fire station or animal shelter visit (many do free group tours), or an indoor playground where the venue handles the chaos. If it must be home: one structured craft station (decorate cookies or paper crowns), one movement game (balloon-keepy-uppy tournament), pizza, cake, 2 hours hard limit stated on the invitation. The stated end time is the sanity-saver."
+      },
+      {
+        "role": "user",
+        "content": "park idea is good but what's the rain plan?"
+      },
+      {
+        "role": "assistant",
+        "content": "Book the indoor playground as the backup for the same time slot \u2014 most take free cancellations 48h out, so you decide at the 2-day forecast. Put 'rain location' on the invitation from the start so you're not messaging 10 parents the night before."
+      }
+    ]
+  },
+  {
+    "id": "conv_079",
+    "difficulty": "easy",
+    "difficulty_reason": "Warehouse repo, dashboard cutover with DWH ticket named.",
+    "gold_projects": [
+      "proj_dwh"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "feat/DWH-171-dashboard-cutover",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "DWH-171: cut the exec KPI dashboard over to the new warehouse. Parallel-run for it closed clean last week."
+      },
+      {
+        "role": "assistant",
+        "content": "Repointed the dashboard's data source to the new connection, queries updated for the two syntax differences (date_trunc arg order, division semantics guarded with nullif), and row-level results verified against the old version on yesterday's snapshot \u2014 identical. Old datasource marked deprecated, not deleted, per the cutover runbook."
+      },
+      {
+        "role": "user",
+        "content": "refresh schedule?"
+      },
+      {
+        "role": "assistant",
+        "content": "Set to 7:00 after the nightly dbt run's 6:30 SLA, with the freshness check wired so a late pipeline shows a stale-data banner on the dashboard instead of silently showing yesterday. That banner behavior is new \u2014 mentioned it in the cutover announcement."
+      }
+    ]
+  },
+  {
+    "id": "conv_080",
+    "difficulty": "hard",
+    "difficulty_reason": "Access controls in the billing service driven by audit requirements \u2014 payments and SOC 2 overlap; neither project named.",
+    "gold_projects": [
+      "proj_payments",
+      "proj_soc2"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-billing",
+      "git_branch": "feat/prod-access-controls",
+      "repo": "acme-billing"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The readiness assessment flagged that four engineers have standing write access to the production payment database. We need to fix this before the audit window without breaking on-call."
+      },
+      {
+        "role": "assistant",
+        "content": "Standard pattern: revoke standing write, add break-glass \u2014 on-call assumes a time-boxed elevated role via the access tool (auto-expires in 4h, Slack-audited, reason required), and routine changes go through migrations only. Read access can stay broader since the flagged risk is write. I'll inventory what those four actually did with write access in the last 90 days first, so we don't break a real workflow."
+      },
+      {
+        "role": "user",
+        "content": "do the inventory"
+      },
+      {
+        "role": "assistant",
+        "content": "Query log analysis: 61 write statements in 90 days \u2014 54 are one engineer running manual refund corrections (that's a missing admin-tool feature, filing it), 5 are migration hotfixes during incidents (break-glass covers these), 2 are a scheduled script running under a personal account (moving it to a service account, that's its own finding). So nothing blocks the revoke once the refund-correction tool gap is closed."
+      },
+      {
+        "role": "user",
+        "content": "refund corrections can't wait for a tool build though"
+      },
+      {
+        "role": "assistant",
+        "content": "Interim: a reviewed-script path \u2014 corrections run via a checked-in script requiring a second engineer's approval in the deploy pipeline, executing under the service role with full logging. Auditable, no standing access, live this week; the proper tooling replaces it next quarter. Revoke scheduled for Friday with on-call briefed on break-glass."
+      }
+    ]
+  },
+  {
+    "id": "conv_081",
+    "difficulty": "medium",
+    "difficulty_reason": "Website repo; CMS workflow for the marketing team matches the relaunch by content.",
+    "gold_projects": [
+      "proj_website"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "feat/cms-preview",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Marketing can't preview CMS drafts before publishing \u2014 they keep publishing to check how it looks, then un-publishing. Fix that."
+      },
+      {
+        "role": "assistant",
+        "content": "Added a preview deployment: draft content renders on preview.acme-www behind SSO, using the CMS preview API so drafts show in place of published entries. The CMS entry sidebar gets a 'Preview' button deep-linking to the right page. Publishing stays an explicit separate action."
+      },
+      {
+        "role": "user",
+        "content": "how fresh is the preview after an edit?"
+      },
+      {
+        "role": "assistant",
+        "content": "Preview renders server-side per request against the draft API \u2014 edits show on refresh, no rebuild wait. The trade-off is preview pages render ~400ms slower than production's static output, which is fine for its purpose; noted on the preview banner so nobody benchmarks the wrong environment."
+      }
+    ]
+  },
+  {
+    "id": "conv_082",
+    "difficulty": "medium",
+    "difficulty_reason": "No metadata, general chat: content brief for a keyword targeting the new site's pages \u2014 SEO and website work intertwined.",
+    "gold_projects": [
+      "proj_seo",
+      "proj_website"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "The 'automate purchase approvals' guide is written and it's good. Where should it live \u2014 the blog or as a page in the new site's solutions section? SEO team and web team each claim it."
+      },
+      {
+        "role": "assistant",
+        "content": "Solutions section, with the blog cross-linking to it. Reasoning: the keyword has commercial intent (searchers evaluating tools), and solution pages convert that intent \u2014 blogs rank for it too but bleed clicks into 'read more posts' instead of the signup CTA. The new site's solutions template also carries product schema and sits one hop from pricing, both of which the blog layout lacks. The SEO team keeps ownership of the content and its keyword tracking; it just renders in the site's template."
+      },
+      {
+        "role": "user",
+        "content": "does moving it later hurt if we start on the blog now?"
+      },
+      {
+        "role": "assistant",
+        "content": "A later move costs a redirect and 2\u20134 weeks of ranking wobble exactly when the page is gaining \u2014 avoidable by choosing now. If the solutions template isn't ready, better to hold the piece a week than launch on the blog and move it mid-climb."
+      },
+      {
+        "role": "user",
+        "content": "template's ready. what does the page need beyond the article text?"
+      },
+      {
+        "role": "assistant",
+        "content": "From the template's required fields: hero with the value proposition rewritten as a claim (not the article's intro), the how-to steps restructured into the template's numbered blocks, a mid-page product screenshot with the approval flow, FAQ block (reuse the article's People-Also-Ask answers \u2014 the template emits FAQ schema from it), and the CTA banner pointing at the trial with the keyword in the button's aria-label left alone \u2014 plain 'Start free trial' converts better."
+      }
+    ]
+  },
+  {
+    "id": "conv_083",
+    "difficulty": "easy",
+    "difficulty_reason": "Bot repo, Intercom rollout named with BOT ticket.",
+    "gold_projects": [
+      "proj_chatbot"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-support-bot",
+      "git_branch": "feat/BOT-77-intercom-rollout",
+      "repo": "acme-support-bot"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "BOT-77: production rollout to the Intercom messenger \u2014 start at 10% of conversations, business hours only, with the kill switch support leads asked for."
+      },
+      {
+        "role": "assistant",
+        "content": "Rollout config shipped: 10% assignment via stable hash on conversation id, active window 8:00\u201318:00 in the workspace timezone (outside it, straight to the human queue), and the kill switch is a flag support leads can flip from the admin dashboard \u2014 takes effect on next message, mid-conversation sessions hand off gracefully with the standard escalation summary."
+      },
+      {
+        "role": "user",
+        "content": "monitoring for the first week?"
+      },
+      {
+        "role": "assistant",
+        "content": "Dashboard tracks per-cohort: deflection (behavioral definition), escalation rate, thumbs up/down, response latency, and 'bailed to human' explicit requests. Alerts on escalation rate >40% or latency p95 >5s. Daily digest posts to the support-bot channel during the ramp; review scheduled Friday to decide on 25%."
+      }
+    ]
+  },
+  {
+    "id": "conv_084",
+    "difficulty": "medium",
+    "difficulty_reason": "Long session on in-app plan upgrades \u2014 the mobile app rewrite consuming the new billing endpoints; both projects.",
+    "gold_projects": [
+      "proj_mobile",
+      "proj_payments"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-mobile",
+      "git_branch": "feat/in-app-upgrade",
+      "repo": "acme-mobile"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Product wants plan upgrades inside the app. Web checkout uses the new provider-hosted flow \u2014 what are our options in the app without the app-store tax?"
+      },
+      {
+        "role": "assistant",
+        "content": "Since these are B2B SaaS subscriptions used across platforms, external purchases are permissible under the reader/business exemptions in most regions, but the rules are jurisdiction- and category-specific. Practical options: 1) in-app webview to our checkout (rejection risk if it looks like circumventing IAP), 2) hand off to the system browser for checkout and deep-link back (safest, slight friction), 3) the upgrade only shows a 'manage billing on web' screen (zero risk, worst UX). Recommendation: option 2, with the plan-change preview rendered natively before handoff so the browser step is just payment."
+      },
+      {
+        "role": "user",
+        "content": "the native preview \u2014 that's the proration endpoint the billing team shipped?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes, the preview-change endpoint: immediate charge, credit, next renewal. I'll render that in the upgrade sheet with the legacy-billing 409 case showing the static estimate and a 'finish on web' path \u2014 same degradation the web UI uses. The deep link back carries a one-time token the app exchanges to refresh entitlements immediately instead of waiting for the webhook-driven sync."
+      },
+      {
+        "role": "user",
+        "content": "build the sheet and the browser handoff; entitlement refresh after"
+      },
+      {
+        "role": "assistant",
+        "content": "Built: upgrade sheet with native preview (plan cards, prorated amounts, renewal line), system-browser handoff with the return deep link, and the token-exchange entitlement refresh with a fallback to sync polling if the deep link never fires (user paid but closed the browser \u2014 the poll catches it within 60s). Tests cover preview render, 409 legacy path, deep-link return, and the abandoned-browser fallback."
+      },
+      {
+        "role": "user",
+        "content": "what analytics do we get on upgrade funnel drop-off?"
+      },
+      {
+        "role": "assistant",
+        "content": "Events at each step: sheet opened, preview loaded, checkout handed off, returned via deep link, entitlement confirmed. The handoff\u2192return gap is the number product will watch \u2014 browser-step abandonment. All flowing through the existing app analytics into the warehouse export."
+      }
+    ]
+  },
+  {
+    "id": "conv_085",
+    "difficulty": "hard",
+    "difficulty_reason": "No-project trap: generic Greenhouse API question for a consulting gig \u2014 resembles the hiring tooling project but is external work.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Freelance question \u2014 a client wants candidates from their Greenhouse pulled into a Notion database weekly. Does Greenhouse's API do this cleanly or am I scraping?"
+      },
+      {
+        "role": "assistant",
+        "content": "Clean API, no scraping: Harvest API (the read-heavy one) lists candidates with applications, stages, and custom fields \u2014 paginate with per_page=500, filter on updated_after for your weekly delta. Auth is a Harvest API key with candidates.view permission. Then upsert into Notion via their databases API keyed on the Greenhouse candidate id stored as a Notion property. The one gotcha: Harvest keys are per-user and inherit that user's visibility, so have the client create a dedicated service user or you'll silently miss confidential roles."
+      },
+      {
+        "role": "user",
+        "content": "rate limits for a weekly batch of ~2000 candidates?"
+      },
+      {
+        "role": "assistant",
+        "content": "Trivial: Harvest allows 50 requests per 10 seconds; 2,000 candidates at 500/page is 4 requests, plus application detail calls if you need them \u2014 worst case a few dozen. Notion's 3 requests/second is the actual constraint: 2,000 upserts take ~11 minutes sequentially. Batch the reads, respect a 350ms spacing on Notion writes, and the whole job stays under 15 minutes."
+      }
+    ]
+  },
+  {
+    "id": "conv_086",
+    "difficulty": "hard",
+    "difficulty_reason": "Hiring repo metadata, but the content is a generic-looking frontend build; only the referral-portal subject ties it to the project.",
+    "gold_projects": [
+      "proj_hiring"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-hire",
+      "git_branch": "feat/portal-frontend",
+      "repo": "acme-hire"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Build the submit form: name, email, LinkedIn URL, role dropdown, and a 'why them' textarea. Validation client and server side, and the duplicate warning needs to show inline before submit."
+      },
+      {
+        "role": "assistant",
+        "content": "Form built with the shared form components: email validated both sides (RFC-ish client check, MX-verified server-side), LinkedIn URL normalized to the canonical profile form, role dropdown fed from the open-roles endpoint grouped by family. The duplicate check fires on email blur against the check endpoint and renders the inline warning with the 12-month policy text, letting them submit anyway flagged or withdraw."
+      },
+      {
+        "role": "user",
+        "content": "people will paste linkedin urls with tracking garbage"
+      },
+      {
+        "role": "assistant",
+        "content": "Handled in the normalizer: strips query params and locale prefixes, resolves /pub/ legacy forms, rejects company-page URLs with a specific error ('this looks like a company page, we need a profile'). 14 URL fixture cases in the tests, including the mobile-app share format."
+      },
+      {
+        "role": "user",
+        "content": "submission confirmation \u2014 email or just the success screen?"
+      },
+      {
+        "role": "assistant",
+        "content": "Both: success screen with the status-tracking link, plus a confirmation email through the existing notification service so they have the link somewhere durable. The email also states the payout terms plainly \u2014 fewer questions to People Ops later."
+      }
+    ]
+  },
+  {
+    "id": "conv_087",
+    "difficulty": "medium",
+    "difficulty_reason": "Design tokens shipped for the app's dark mode \u2014 design system and mobile projects both, from content.",
+    "gold_projects": [
+      "proj_design",
+      "proj_mobile"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-ui",
+      "git_branch": "feat/rn-token-build",
+      "repo": "acme-ui"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The mobile team hand-rolled a TS module from our tokens.json \u2014 that'll drift. Ship a proper React Native build target from this repo instead."
+      },
+      {
+        "role": "assistant",
+        "content": "Added an rn build to the token pipeline: generates typed TS (colors, spacing as dp numbers converted at the 16px base, typography with the font-family mapping table the app provides), light/dark theme objects, and publishes as @acme/tokens/rn. Their hand-rolled module maps 1:1 except two names they invented \u2014 shipping an alias file marked deprecated so their migration is mechanical."
+      },
+      {
+        "role": "user",
+        "content": "who owns the font mapping \u2014 us or them?"
+      },
+      {
+        "role": "assistant",
+        "content": "Split: we own token \u2192 font-role mapping (heading, body, mono); the app owns role \u2192 loaded-font-file mapping since font loading is a platform concern. That boundary means we can change typography tokens without touching their font bundle, and they can swap font files without a token release. Documented in the package README with the contract table."
+      },
+      {
+        "role": "user",
+        "content": "cut the release and tell them"
+      },
+      {
+        "role": "assistant",
+        "content": "Released 2.4.0 with the rn target, changelog entry, and migration notes. Posted in the mobile channel with the alias-to-canonical rename table \u2014 their adoption PR should be find-and-replace plus deleting their generator script."
+      }
+    ]
+  },
+  {
+    "id": "conv_088",
+    "difficulty": "easy",
+    "difficulty_reason": "Book summary request, personal.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Summarize The Remains of the Day in a paragraph \u2014 book club is tomorrow and I only got halfway."
+      },
+      {
+        "role": "assistant",
+        "content": "Stevens, an aging English butler, takes a road trip to visit Miss Kenton, the former housekeeper he worked beside for decades \u2014 and, the novel gradually reveals, quietly loved and lost through his own emotional repression. As he drives, his memories reframe his life's devotion to Lord Darlington, whose 'greatness' curdled into Nazi sympathy Stevens refused to see, because seeing it would mean his decades of perfect service dignified something shameful. The ending lands softly and devastatingly: Miss Kenton chose her own life, Stevens returns to serve a new American owner, and he resolves to practice 'banter' \u2014 a small, heartbreaking attempt at the human warmth he spent a lifetime deferring. Themes to mention: dignity as self-erasure, unreliable narration through politeness, and wasted love."
+      },
+      {
+        "role": "user",
+        "content": "one discussion question I can ask that sounds smart?"
+      },
+      {
+        "role": "assistant",
+        "content": "'Stevens insists dignity means not removing one's clothing in public, emotionally speaking \u2014 does the novel ever show us a moment where he takes it off, and do we believe him in that moment?' It points the group at the two or three cracks in the narration (the sherry scene, the final bench conversation) which is where the book lives."
+      }
+    ]
+  },
+  {
+    "id": "conv_089",
+    "difficulty": "easy",
+    "difficulty_reason": "Admin repo, SSO and roles work with ADM ticket named.",
+    "gold_projects": [
+      "proj_admin"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-admin",
+      "git_branch": "feat/ADM-58-role-mapping",
+      "repo": "acme-admin"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "ADM-58: map dashboard roles from SSO groups instead of the local roles table \u2014 IT wants one place to manage access."
+      },
+      {
+        "role": "assistant",
+        "content": "Switched to group-claim mapping: the OIDC token's groups claim maps via config (admin-dashboard-support \u2192 support, admin-dashboard-lead \u2192 support_lead, security-team \u2192 security_viewer), evaluated at session start, local roles table retired to read-only for the audit history. Unknown groups get no access rather than a default role."
+      },
+      {
+        "role": "user",
+        "content": "what happens to people's sessions when IT moves them between groups?"
+      },
+      {
+        "role": "assistant",
+        "content": "Role changes apply on next session; sessions are capped at 8 hours so worst-case lag is one workday. For revocations that can't wait, the existing force-logout admin action ends a user's sessions immediately \u2014 noted in the IT runbook alongside the group names."
+      }
+    ]
+  },
+  {
+    "id": "conv_090",
+    "difficulty": "medium",
+    "difficulty_reason": "Long session: hiring funnel marts built in the warehouse repo \u2014 dwh conventions applied to hiring data; both projects.",
+    "gold_projects": [
+      "proj_dwh",
+      "proj_hiring"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "feat/hiring-marts",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The hiring-funnel PR from the People Ops service landed their staging model here. Build the marts on top \u2014 funnel by role family, time-in-stage, and offer-acceptance trends \u2014 following our marts conventions."
+      },
+      {
+        "role": "assistant",
+        "content": "Reviewed their stg_greenhouse_transitions first: grain is candidate \u00d7 stage entry, hashed candidate ids, looks clean. Marts plan: fct_hiring_funnel (their draft, adapted to our conventions \u2014 surrogate keys, standard audit columns), dim_role_family from the roles seed, and agg_funnel_monthly for the BI layer since the tool struggles with window functions over the raw fact."
+      },
+      {
+        "role": "user",
+        "content": "time-in-stage has a subtlety \u2014 candidates can bounce back to earlier stages"
+      },
+      {
+        "role": "assistant",
+        "content": "Right, re-entries. Modeling each stage visit as its own row (visit_number per candidate \u00d7 stage), with time-in-stage measured per visit and a separate total_time_in_stage aggregate. Funnel pass-through uses first entries only, so a bounce-back doesn't double-count conversion \u2014 that matches how People Ops described the metric in the requirements doc."
+      },
+      {
+        "role": "user",
+        "content": "acceptance trends need offer amounts eventually \u2014 but comp data in the warehouse worries people"
+      },
+      {
+        "role": "assistant",
+        "content": "Same posture as the service took with Slack: keep comp out. Acceptance trends work on offer extended/accepted/declined events and comp-band position (below/mid/above band as a category) without actual figures \u2014 the band category comes pre-computed from their export. If someone later needs amounts, that's a separate governance conversation, not a model change I'll smuggle in."
+      },
+      {
+        "role": "user",
+        "content": "build it, tests included, and get it into the nightly run"
+      },
+      {
+        "role": "assistant",
+        "content": "Built: three models, 14 schema tests (uniqueness on visit grain, accepted_values on stages and band categories, relationship tests to the dim), docs blocks on every model, and the nightly selector updated. Full build 78s. BI folder now has a certified 'Hiring Funnel' dataset pointing at agg_funnel_monthly."
+      }
+    ]
+  },
+  {
+    "id": "conv_091",
+    "difficulty": "hard",
+    "difficulty_reason": "General chat, no metadata: offboarding automation sits between the compliance program and the hiring tooling; both are the right answer.",
+    "gold_projects": [
+      "proj_soc2",
+      "proj_hiring"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Offboarding keeps failing our internal checks \u2014 access lingers for days after people leave. HR says they notify IT same-day. Where do we automate this and what's the audit-grade version?"
+      },
+      {
+        "role": "assistant",
+        "content": "The gap is almost always 'notify' being a human email. Audit-grade: the HRIS termination event is the single trigger \u2014 a webhook fires a deprovisioning workflow (SSO suspension immediately, group removals, device wipe ticket, forwarding rules per policy), each step writing evidence with timestamps. The people-tooling service you already run for hiring sync is the natural home since it speaks HRIS webhooks; offboarding is the same integration in reverse."
+      },
+      {
+        "role": "user",
+        "content": "contractors don't live in the HRIS though, that's how we got burned last time"
+      },
+      {
+        "role": "assistant",
+        "content": "Then contractors need a system of record before automation helps \u2014 the pragmatic fix is requiring every contractor in the HRIS (most support a contingent-worker type) or, failing that, the contract-end date recorded at access-grant time with auto-expiry. Time-boxed access at grant beats detection at exit: access that expires by default turns your worst failure mode into a renewal inconvenience."
+      },
+      {
+        "role": "user",
+        "content": "what evidence will the auditors want that this actually works?"
+      },
+      {
+        "role": "assistant",
+        "content": "Per departure: trigger timestamp (HRIS event), each deprovisioning action with completion time, and the delta \u2014 they'll sample departures and check SSO suspension happened within your stated SLA. Plus the quarterly access review catching anything the automation missed, with those catches feeding back as incidents. Keep one dashboard: departures vs. completed-within-SLA; that chart answers the audit question and tells you it's working, same artifact."
+      }
+    ]
+  },
+  {
+    "id": "conv_092",
+    "difficulty": "medium",
+    "difficulty_reason": "Billing repo; checkout abandonment work matches the payments project by content.",
+    "gold_projects": [
+      "proj_payments"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-billing",
+      "git_branch": "feat/checkout-recovery",
+      "repo": "acme-billing"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "12% of upgrade checkouts get abandoned at the payment page. Add a recovery flow \u2014 if they don't complete within an hour, one email with a resume link."
+      },
+      {
+        "role": "assistant",
+        "content": "The hosted checkout session already persists for 24h, so recovery = emailing the existing session URL. Implementation: on session creation, schedule a check at +1h; if the session is still open and unpaid, send the recovery email (one per session, respecting the account's notification prefs), with the session URL and the plan summary. Completed or expired sessions cancel the scheduled check."
+      },
+      {
+        "role": "user",
+        "content": "don't email people who abandoned because the price shocked them into downgrading their choice \u2014 they'll get a confusing link to the old plan"
+      },
+      {
+        "role": "assistant",
+        "content": "Good catch: the check now compares the session's plan against the account's current pending selection \u2014 if they've since started a different checkout or changed plans, the stale session is expired server-side and no email goes out. Also suppressing recovery when the account has an open billing-support ticket, since 'checkout failed' tickets plus a recovery email reads as spam."
+      },
+      {
+        "role": "user",
+        "content": "measure it properly from day one"
+      },
+      {
+        "role": "assistant",
+        "content": "Events added: recovery_scheduled, recovery_sent, recovery_completed (session paid after email), with the funnel visible in the analytics export. Baseline abandoned-checkout revenue is tagged from today so the recovered-revenue number has a denominator when someone asks in a month."
+      }
+    ]
+  },
+  {
+    "id": "conv_093",
+    "difficulty": "medium",
+    "difficulty_reason": "No-project case: a TypeScript error in someone's personal side project \u2014 plain coding chat with no Acme tie.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "TS is yelling at me in my hobby project: `Type 'string | undefined' is not assignable to type 'string'` on `const name: string = user?.profile?.name`. I know name exists at this point, the API guarantees it."
+      },
+      {
+        "role": "assistant",
+        "content": "TypeScript can't see your API's guarantee \u2014 the optional chain makes the whole expression possibly-undefined. Cleanest options: 1) if the guarantee is real, encode it in the type: make profile.name non-optional in the type definition and validate at the boundary (zod or a type guard when the API response lands); 2) local assertion with justification: `const name = user!.profile!.name` or `?? throw` pattern; 3) `if (!user?.profile?.name) throw new Error(...)` narrows it and gives you a runtime check for free. I'd do 1 \u2014 fixing the type at the source kills this error everywhere instead of per-use."
+      },
+      {
+        "role": "user",
+        "content": "the type comes from a codegen'd OpenAPI client, everything's optional in it"
+      },
+      {
+        "role": "assistant",
+        "content": "Ah, the codegen-makes-everything-optional classic. Best fix upstream: mark fields required in the OpenAPI spec so codegen emits them properly. If you don't control the spec: a parse layer \u2014 define your own domain types (name: string) and a mapper that validates the codegen type into it at the API boundary. One file of zod schemas, and the rest of your app never sees `| undefined` again."
+      }
+    ]
+  },
+  {
+    "id": "conv_094",
+    "difficulty": "hard",
+    "difficulty_reason": "Refund tooling touches admin-dashboard workflow and billing internals; both projects, discussed without names.",
+    "gold_projects": [
+      "proj_admin",
+      "proj_payments"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-admin",
+      "git_branch": "feat/refund-tool",
+      "repo": "acme-admin"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The reviewed-script path for refund corrections is a stopgap \u2014 build the proper tool: support requests a refund with reason, a lead approves, the refund executes with full audit."
+      },
+      {
+        "role": "assistant",
+        "content": "Two-step workflow in the dashboard: request (support role \u2014 amount capped at invoice total, reason from a taxonomy plus free text, invoice context shown inline) and approve/reject (support_lead, cannot approve own requests). Execution calls the billing service's refund endpoint, which owns the provider interaction and the invoice-state update; the dashboard owns workflow and audit. Pending requests expire after 7 days."
+      },
+      {
+        "role": "user",
+        "content": "partial refunds and already-refunded edge cases?"
+      },
+      {
+        "role": "assistant",
+        "content": "Partial: amount field defaults to full but is editable down, validated against remaining refundable (invoice total minus prior refunds \u2014 the billing endpoint exposes that). Already-refunded: the request form disables submission when remaining is zero, and the executor re-checks at approval time since state can change between request and approve \u2014 a stale approval gets a clean 'no longer refundable' failure with the audit trail intact rather than a double refund."
+      },
+      {
+        "role": "user",
+        "content": "the 54 manual corrections that engineer was running \u2014 does this cover all of them?"
+      },
+      {
+        "role": "assistant",
+        "content": "Reviewed the query-log inventory: 49 of 54 were straight refunds or partial refunds \u2014 covered. 3 were currency-adjustment writeoffs (needs a separate writeoff type \u2014 added to the taxonomy with its own lead-approval path since it touches revenue reporting), 2 were data corrections unrelated to refunds that belong in the reviewed-script path permanently. So the standing-access revoke can proceed; the tool plus writeoffs covers the real workflow."
+      }
+    ]
+  },
+  {
+    "id": "conv_095",
+    "difficulty": "medium",
+    "difficulty_reason": "No metadata; typography selection for the token system \u2014 design project identified by subject.",
+    "gold_projects": [
+      "proj_design"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "We're picking the type pairing for the component library's tokens. Current candidate: Inter for UI plus a serif for marketing headers. Talk me through whether one family everywhere is smarter."
+      },
+      {
+        "role": "assistant",
+        "content": "For a component library, one family (Inter, variable weight axis) is operationally smarter: one loading strategy, no pairing drift, and every weight/size combination in the tokens stays coherent. The serif's job \u2014 marketing warmth \u2014 is real but it belongs to the marketing site's layer, not the shared tokens: let the site alias the heading token to its serif locally. Shipping the serif in the shared tokens forces every consumer (app, dashboard, widget) to carry a font they'll never render."
+      },
+      {
+        "role": "user",
+        "content": "design worries Inter is becoming the 'default SaaS look'"
+      },
+      {
+        "role": "assistant",
+        "content": "True and mostly fine \u2014 distinctiveness in product UI comes from spacing, color, and motion more than typeface, and Inter's ubiquity is partly why it's safe across scripts and densities. If the sameness genuinely bothers design, the differentiated move inside one-family constraints: a custom variable axis configuration (slightly narrower width, distinct weight steps in the tokens) or licensing a lesser-used grotesque with similar metrics. Both keep the single-family operational win."
+      },
+      {
+        "role": "user",
+        "content": "if we ever swap the family later, how bad is it with tokens done right?"
+      },
+      {
+        "role": "assistant",
+        "content": "With typography tokens carrying role + size + weight (not family names sprinkled in components), a swap is: change the family token, re-verify metrics-sensitive components (dense tables, buttons at small sizes \u2014 line-height and x-height differences bite there), update the font-loading setup, release a minor version. Weeks including design QA, not months \u2014 the tokens are exactly the insurance policy for this."
+      }
+    ]
+  },
+  {
+    "id": "conv_096",
+    "difficulty": "hard",
+    "difficulty_reason": "No-project trap: generic component-library architecture question from an internet discussion \u2014 reads like the design system project but is abstract.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Settle an argument from a thread I'm in: should a component library ship CSS-in-JS, CSS modules, or vanilla CSS custom properties? Team of ~20 consuming it, mixed React and some legacy pages."
+      },
+      {
+        "role": "assistant",
+        "content": "For that shape \u2014 mixed React and legacy consumers \u2014 custom properties as the foundation, with a thin CSS (plain or modules) layer on top, is the defensible answer: custom properties are the only mechanism that works identically in React components and legacy pages, they theme at runtime without a JS runtime cost, and they survive framework churn. CSS-in-JS runtime libraries are the weakest option in 2026 \u2014 the runtime cost is real and the ecosystem moved to build-time extraction anyway. If the team wants colocation DX, zero-runtime options give it while still emitting plain CSS."
+      },
+      {
+        "role": "user",
+        "content": "the counterargument in the thread is that custom properties can't do variants cleanly"
+      },
+      {
+        "role": "assistant",
+        "content": "Half-true: custom properties handle theming (value substitution) elegantly and variants (structural rule switching) awkwardly \u2014 but variants don't need custom properties, they need classes: data-variant attributes with plain CSS selectors, which works in both worlds. The pattern that wins the thread: tokens as custom properties, variants as data-attributes + classes, and whatever authoring DX layer people like on top, as long as it compiles down to those two. The library's public contract stays CSS-native and consumer-agnostic."
+      }
+    ]
+  },
+  {
+    "id": "conv_097",
+    "difficulty": "hard",
+    "difficulty_reason": "Deflection dashboard marts for the bot built in the warehouse \u2014 chatbot and dwh both, from content alone.",
+    "gold_projects": [
+      "proj_dwh",
+      "proj_chatbot"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-dwh",
+      "git_branch": "feat/bot-metrics-marts",
+      "repo": "acme-dwh"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The assistant team's deflection dashboard computes metrics in their app with SQL against their prod replica. That's about to fall over \u2014 bring bot metrics into the warehouse properly."
+      },
+      {
+        "role": "assistant",
+        "content": "Their conversation events already flow to the landing bucket (checked \u2014 the export they set up for the ramp dashboards). Plan: stg_bot_conversations and stg_bot_turns staging models, then fct_bot_conversations with the deflection logic as the warehouse's canonical implementation \u2014 resolution signal, 72h no-ticket window (joins the support tickets source), escalation flags, and the cohort assignment from the ramp config."
+      },
+      {
+        "role": "user",
+        "content": "the 72h window means yesterday's number changes for three days \u2014 the exec dashboard people will hate that"
+      },
+      {
+        "role": "assistant",
+        "content": "Standard maturing-metric problem. Handle it explicitly: the mart carries both deflection_provisional (computable immediately) and deflection_final (only for conversations older than 72h), and the dashboard shows final with a shaded provisional tail. Number changes stop being surprises when the chart admits which region is still settling \u2014 I'll put that in the dataset description too."
+      },
+      {
+        "role": "user",
+        "content": "make sure their app's numbers and ours agree before anyone switches"
+      },
+      {
+        "role": "assistant",
+        "content": "Parallel-run harness extended to this source: 30 days of their app-computed dailies vs the mart, matching within 0.3% except one day where their replica lagged during an incident \u2014 documented, theirs was wrong, which is rather the point of the migration. Models merged with tests; their team switches the dashboard datasource next sprint and retires the replica queries."
+      }
+    ]
+  },
+  {
+    "id": "conv_098",
+    "difficulty": "easy",
+    "difficulty_reason": "No metadata but the SEO content calendar and rankings check-in are explicit.",
+    "gold_projects": [
+      "proj_seo"
+    ],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "Monthly SEO check-in prep: we published 4 posts, the Flowbase comparison refresh went live, and we got 6 backlinks from the outreach. Draft the update for the growth channel."
+      },
+      {
+        "role": "assistant",
+        "content": "Draft: '\ud83d\udcc8 SEO push \u2014 month 3 update. Published: 4/4 planned posts (comparison \u00d72, how-to \u00d72). Rankings: Flowbase comparison moved 11\u21926 after the refresh; \"workflow approval software\" recovered to 8 after the cannibalization fix; 14 of 20 target terms now top-20 (was 9). Links: 6 new referring domains from the stats-roundup outreach (22% reply rate \u2014 above the 15% bar, continuing). Organic signups: 41 this month, +32% MoM, now 12% of all signups. Next month: purchase-approvals guide ships to the solutions section, second outreach wave, and the how-to cluster interlinking pass.'"
+      },
+      {
+        "role": "user",
+        "content": "add the one risk worth flagging"
+      },
+      {
+        "role": "assistant",
+        "content": "Added: '\u26a0\ufe0f Risk: the blog URL migration (site relaunch) is scheduled mid-month \u2014 redirects are prepared, but expect a 2\u20133 week rankings wobble on migrated posts; we'll hold the how-to interlinking pass until the crawl comparison confirms redirects settled.'"
+      }
+    ]
+  },
+  {
+    "id": "conv_099",
+    "difficulty": "easy",
+    "difficulty_reason": "Personal tax question, unrelated to any project.",
+    "gold_projects": [],
+    "metadata": {},
+    "messages": [
+      {
+        "role": "user",
+        "content": "I freelanced for 3 months this year on top of my salary. Do I need to do anything about taxes now or just at filing time? Germany, if it matters."
+      },
+      {
+        "role": "assistant",
+        "content": "Germany matters a lot here. Now, not at filing: 1) you likely needed to register the freelance activity (Fragebogen zur steuerlichen Erfassung via ELSTER) \u2014 do it retroactively if you haven't; 2) check whether Kleinunternehmerregelung applies (under \u20ac25k revenue) or you should have been charging VAT; 3) set aside roughly 30\u201340% of the freelance profit for income tax, since nothing was withheld. At filing: Anlage S for freelance income alongside your employment income; the Finanzamt may then set quarterly prepayments for next year. If the three months earned more than a few thousand euros, an hour with a Steuerberater now is cheaper than the surprises."
+      },
+      {
+        "role": "user",
+        "content": "it was about \u20ac8k total"
+      },
+      {
+        "role": "assistant",
+        "content": "At \u20ac8k: registration definitely required, Kleinunternehmer status likely fine (assuming no other revenue), so no VAT retroactively \u2014 but confirm you didn't invoice with VAT by mistake. Expect roughly \u20ac2.5\u20133.5k additional income tax depending on your salary bracket, since the \u20ac8k stacks on top at your marginal rate. Put that aside now and file Anlage S; below ~\u20ac410/year there'd be an exemption, but \u20ac8k is well past it."
+      }
+    ]
+  },
+  {
+    "id": "conv_100",
+    "difficulty": "medium",
+    "difficulty_reason": "Embedding the assistant on the marketing site \u2014 chatbot and website projects cooperating; both identifiable.",
+    "gold_projects": [
+      "proj_chatbot",
+      "proj_website"
+    ],
+    "metadata": {
+      "cwd": "~/work/acme-www",
+      "git_branch": "feat/site-assistant-embed",
+      "repo": "acme-www"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Growth wants the support assistant on the marketing site's pricing and docs pages to answer pre-sales questions. Embed the widget here without wrecking our Lighthouse scores."
+      },
+      {
+        "role": "assistant",
+        "content": "The rebuilt widget is 46KB gzipped now, but loading it eagerly would still cost LCP. Embed plan: a static CSS-only launcher button ships with the page (zero JS), the widget bundle loads on first interaction (click or 3s idle after full load, whichever first), and it hydrates with a pre-sales persona flag so the assistant answers from the marketing knowledge set, not the customer-support one."
+      },
+      {
+        "role": "user",
+        "content": "the persona flag \u2014 does the bot behave differently or just retrieve differently?"
+      },
+      {
+        "role": "assistant",
+        "content": "Both, per the assistant team's config: retrieval scopes to the public knowledge set (pricing, features, comparisons \u2014 no customer-account procedures) and the system prompt variant offers a demo/trial CTA when intent looks evaluative, plus escalation goes to sales chat during business hours instead of the support queue. That's all their side; our embed just passes persona=presales in the boot config."
+      },
+      {
+        "role": "user",
+        "content": "verify the scores before merging"
+      },
+      {
+        "role": "assistant",
+        "content": "Lighthouse on pricing with the embed: performance 99 (was 100 \u2014 the launcher CSS is negligible, the 1-point dip is the idle-load in the lab trace), accessibility 100, the widget itself lazy-loads at 3.1s or on click. Real check: LCP unchanged at 1.1s since nothing renders above the fold. Merged behind the growth flag for pricing + docs only."
+      }
+    ]
+  }
+]

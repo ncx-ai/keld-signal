@@ -36,12 +36,53 @@ import (
 // see encoderDirForSpawn for why an eager assignment would be a claim rather
 // than a configuration. Recomputed per spawn by the caller, so a respawn after
 // the fetch landed adopts the weights.
-func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []string) []string {
-	env := make([]string, 0, len(base)+9)
+//
+// encoderNeeded is set-if-absent onto KELD_TEXTEMBED itself, not just the
+// dir. THE PROJECT ATTRIBUTION PATH's /attribute needs the same text encoder
+// THE SIGNAL-EMBEDDINGS PATH does, but the sidecar's textembed.enabled() reads
+// its OWN KELD_TEXTEMBED strictly ("== 1") out of the environment it was
+// spawned with — the daemon turning attribution on and fetching the weights
+// is not enough on its own if the sidecar process never sees the flag that
+// makes it look for them. So a caller that wants the encoder available for
+// ANY reason (attribution, KELD_TEXTEMBED, or both) passes encoderNeeded
+// true, and this sets KELD_TEXTEMBED=1 only when the operator hasn't already
+// set it — an explicit KELD_TEXTEMBED=0 in `base` still wins, matching every
+// other set-if-absent default in this function. ⚠️ It does NOT touch
+// KELD_FEATURES / KELD_FEATURES_PUBLISH — those gate a wholly separate
+// Go-side subsystem (computing and publishing message-derived feature rows)
+// that reads its own toggles live, per sweep; making the encoder reachable
+// here must never be read as switching that path on.
+//
+// ⚠️ SO TURNING ATTRIBUTION ON STARTS ENCODING MESSAGE TEXT ON DEVICE, AND
+// THAT DESERVES SAYING OUT LOUD RATHER THAN BEING INFERRED FROM THIS FUNCTION.
+// `KELD_TEXTEMBED` ships OFF by default and is described everywhere in this
+// repo as the toggle that decides whether text is read in order to keep
+// something derived from it; `attribution` is a different-sounding switch, and
+// it silently implies this one. What is and is NOT true, precisely:
+//
+//   - The encoder runs LOCALLY and reads message text on device. That is new
+//     behaviour on a machine that had the toggle off.
+//   - NOTHING derived from it is PUBLISHED by this. Feature-row publication is
+//     gated Go-side by KELD_FEATURES / KELD_FEATURES_PUBLISH and the org's
+//     `features` toggles, none of which this touches, and /attribute itself
+//     answers with project IDS only — no text, no span, no offset, no vector.
+//   - The cost is real and local: ~1.2 GB of weights fetched on demand and a
+//     child measured at 1.70 GB resident / 2.35-2.43 GB peak, on a memory
+//     budget AGENTS.md already documents as oversubscribed.
+//
+// An operator who wants attribution WITHOUT on-device encoding sets
+// KELD_TEXTEMBED=0 explicitly — set-if-absent means that wins — and accepts
+// that /attribute then answers `skipped:disabled` for every block, which is a
+// stated skip rather than a silent narrowing.
+func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []string, encoderNeeded bool) []string {
+	env := make([]string, 0, len(base)+10)
 	env = append(env, base...)
 	env = append(env, "KELD_GLINER2_DIR="+modelDir)
 	if encoderDir != "" {
 		env = append(env, "KELD_TEXTEMBED_DIR="+encoderDir)
+	}
+	if encoderNeeded && !hasEnvKey(base, "KELD_TEXTEMBED") {
+		env = append(env, "KELD_TEXTEMBED=1")
 	}
 
 	if !hasEnvKey(base, "KELD_ANALYZE_ROOTS") {

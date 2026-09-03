@@ -12,7 +12,6 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
-	"github.com/ncx-ai/keld-signal/internal/agent/features"
 	"github.com/ncx-ai/keld-signal/internal/agent/provision"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
@@ -113,11 +112,22 @@ type encoderProvisioner struct {
 	attempts int
 }
 
-// newEncoderProvisioner returns a provisioner, or nil when KELD_TEXTEMBED is
-// off — the toggle-off case is an absent object rather than an object that
-// declines, so there is structurally nothing to fetch from.
-func newEncoderProvisioner(ctx context.Context, gate func() bool, emitter *clientevents.Emitter) *encoderProvisioner {
-	if !features.TextEmbedEnabled() {
+// newEncoderProvisioner returns a provisioner, or nil when nothing running
+// this daemon wants the encoder — the toggle-off case is an absent object
+// rather than an object that declines, so there is structurally nothing to
+// fetch from.
+//
+// needed is the caller's already-resolved "does anything want this": THE
+// SIGNAL-EMBEDDINGS PATH's KELD_TEXTEMBED, OR'd with THE PROJECT ATTRIBUTION
+// PATH's own gate (which has no remote override of its own — see
+// attrib.Enabled — so it contributes a plain boolean rather than a second
+// live func). It is computed once, by Run, the same "read once at daemon
+// start" rule TextEmbedEnabled's own doc comment states and for the identical
+// reason: the sidecar reads its OWN copy of KELD_TEXTEMBED from the
+// environment it was spawned with, so nothing mid-run can change what an
+// already-running child sees regardless of how live this check is.
+func newEncoderProvisioner(ctx context.Context, needed bool, gate func() bool, emitter *clientevents.Emitter) *encoderProvisioner {
+	if !needed {
 		return nil
 	}
 	return &encoderProvisioner{
@@ -166,6 +176,12 @@ func encoderWeightsPresent(dir string) bool {
 // encoderDirForSpawn is the value sidecarEnv puts in KELD_TEXTEMBED_DIR, or ""
 // to leave the variable unset.
 //
+// encoderNeeded is the caller's resolved "does ANYTHING running this daemon
+// want the encoder" — attribution, KELD_TEXTEMBED, or both (see
+// sidecarEnv's doc comment) — rather than features.TextEmbedEnabled() alone,
+// so a machine that provisioned the weights for attribution's sake still gets
+// them adopted here.
+//
 // ⚠️ SET ONLY WHEN THE WEIGHTS ARE ACTUALLY THERE, and the reason is not
 // caution. The sidecar reads an explicit KELD_TEXTEMBED_DIR as authoritative
 // and, finding it absent on disk, answers None — the same answer it gives with
@@ -173,8 +189,8 @@ func encoderWeightsPresent(dir string) bool {
 // operator who reads the daemon's child environment that the weights are
 // installed. Unset means "the sidecar's own default path", which is the same
 // directory (see encoderModelDir), so the fetch is adopted either way.
-func encoderDirForSpawn() string {
-	if !features.TextEmbedEnabled() {
+func encoderDirForSpawn(encoderNeeded bool) string {
+	if !encoderNeeded {
 		return ""
 	}
 	dir := encoderModelDir()

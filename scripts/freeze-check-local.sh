@@ -59,3 +59,37 @@ pii=$(curl -sf -m 120 -X POST "http://127.0.0.1:$PORT/pii" -H 'Content-Type: app
 echo "$pii" | grep -q '"ssn"' \
   || { echo "FAIL [$LABEL]: /pii answered but found no ssn — the analyzer built without its recognizers: $pii"; exit 1; }
 echo "PASS [$LABEL]: frozen sidecar scans for PII and returns: $pii"
+
+# THE VERIFIER ARM. The third import path this gate has to cover, and the reason it
+# exists at all: the attribution verifier shipped for a whole branch with `llama_cpp`
+# absent from the PyInstaller spec, and nothing could see it. llama_cpp is a ctypes
+# binding — its ~10 native ggml/llama shared libraries are opened by a path computed at
+# import time, so PyInstaller's binary analysis cannot follow them — and the one import
+# statement that reaches it sits inside `Verifier.__init__`, which under KELD_OBFUSCATE=1
+# is PyArmor-encrypted bytecode. So the module and its libraries are BOTH invisible, unit
+# tests never freeze, and /classify and /pii above do not touch this path: the binary
+# starts, is healthy, classifies, scans, and fails every verifier verdict.
+#
+# ⚠️ THIS ARM IS DEVELOPER-MANUAL, NOT CI. Nothing under .github/ invokes this script:
+# ci.yml excludes freeze-check/obfuscate-check deliberately (they need the ~5 GB sidecar
+# venv plus the GLiNER2 weights and take minutes), and installers.yml runs its own inline
+# /classify smoke, which cannot reach the verifier's import path. So run this by hand
+# before a release. Wiring it into installers.yml — where a freeze already happens — is
+# the follow-up; it needs a GGUF on that runner, or an explicit waiver below.
+#
+# `--selftest verifier` (serve.py) spawns the real verifier worker child through
+# multiprocessing-spawn — i.e. by re-execing THIS frozen binary — and takes one real
+# verdict. Nothing is stubbed.
+#
+# It needs the GGUF, and it FAILS rather than skips without one: a gate that passes
+# quietly on the machines that lack the model is the same as no gate. Point
+# KELD_VERIFIER_GGUF at a copy, or provision ~/.keld/models/gemma-4-e2b/model.gguf.
+# KELD_FREEZE_CHECK_VERIFIER=0 waives it deliberately (and says so).
+if [ "${KELD_FREEZE_CHECK_VERIFIER:-1}" = "0" ]; then
+  echo "SKIP [$LABEL]: verifier arm waived by KELD_FREEZE_CHECK_VERIFIER=0 — this run does NOT prove llama_cpp was frozen"
+else
+  echo "== [$LABEL] frozen verifier gate: llama_cpp + its native libs must load in the worker child =="
+  "$BIN" --selftest verifier \
+    || { echo "FAIL [$LABEL]: the frozen verifier child could not return a verdict (llama_cpp/ggml libs not collected?)"; exit 1; }
+  echo "PASS [$LABEL]: frozen sidecar spawns the verifier child and returns a verdict"
+fi

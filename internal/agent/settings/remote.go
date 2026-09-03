@@ -26,4 +26,10 @@ type Remote struct {
 	// auto-update target. A nil block means NO UPDATES; see release.go for why
 	// that is the strictest reading of the omitted-key rule in this file.
 	Release *Release `json:"agent_release"`
+	// Projects is the org's project-definition list for on-device block
+	// attribution. A pointer so an absent key ("Atlas does not serve this
+	// yet") is distinct from an explicit empty list. Atlas does not serve
+	// this key yet; the client seam exists now so adopting it later is a
+	// server change alone — the same reason PIIRegions above is modelled.
+	Projects *[]RemoteProject `json:"projects"`
 }

@@ -8,6 +8,53 @@ semantic-ish versioning during `0.x`.
 ## [Unreleased]
 
 ### Added
+- **On-device block-to-project attribution.** Each closed block is scored against
+  an org's declared projects (`settings.RemoteProject`: id, title, description,
+  team, repos, keywords, ticket key) using a hybrid of on-device
+  Qwen3-Embedding-0.6B similarity and a deterministic metadata boost (repo/ticket
+  key/keyword matches), with a local Gemma-4-E2B verifier (llama.cpp, CPU-only)
+  adjudicating only the borderline band around the threshold — no attribution
+  without the encoder, however strong the metadata evidence, and no attribution
+  ever runs on message text leaving the machine. Gated behind two independent
+  toggles, both off by default: `KELD_ATTRIBUTION` (the daemon's own switch —
+  without it, nothing about attribution runs, not merely the daemon's loop) and
+  `KELD_ATTRIBUTION_VERIFIER` (the Gemma verifier's own switch — ⚠️ **default OFF as
+  of 2026-09-03**, having shipped default-on within the gate; `=1` opts in, and a
+  machine that has not states `verifier: opted_out` rather than silently narrowing.
+  Flipped because the one real-data A/B went 1-for-3 for minutes per block and ~3 GB
+  of weights, and because every quality figure recorded for this feature was measured
+  without it; the GGUF is no longer downloaded unless opted in). Projects
+  are declared via `KELD_PROJECTS_FILE` or an org's remote settings; only project
+  ids and confidences ever publish — never a project's description or a span of
+  message text. Attributed blocks publish `projects` / `projects_status` /
+  `attribution` (schema v22): `attributed`, `pending` (encoder busy — the
+  daemon's own sweep is the retry loop, no second queue), `skipped:disabled`,
+  `skipped:no_projects`, or `degraded:weights_unavailable`. Ported from an
+  external benchmark that measured micro-F1 0.929 on a 100-conversation labeled
+  corpus with this exact pipeline; the ported pipeline measures **0.823** on the
+  synthetic fixtures (precision 0.760, recall 0.896), lower because production
+  scores USER-turn text only while the benchmark saw assistant text too.
+  `sidecar/app/test_attribution_quality.py` re-runs it against the real models
+  (opt-in, `KELD_ATTRIBUTION_EVAL=1`) and asserts a **0.80 regression
+  tripwire** — **not** the design's 0.85 quality gate, which this pipeline does
+  not currently meet. ⚠️ **That 0.823 was measured under the ABSOLUTE-threshold
+  rule and the rank-and-margin rule replaced it the next day without the eval
+  being re-run, so the tripwire is currently RED**: re-measured 2026-09-03 at
+  **0.779** (precision 0.854, recall 0.717). The move is the rule change showing
+  up on a multi-label-recall metric, not a regression — precision rose sharply
+  and the customer slice improved (trust 77% → 85%, clean blocks 83%), matching
+  the 21-real-block evaluation that motivated the new rule (trust 53% → 74%,
+  coverage 86% → 76%). The floor is deliberately left failing rather than
+  lowered to fit: re-baselining it needs the same eval run under the previous
+  null wording, which is one measurement, not a paperwork edit. See the re-run
+  block in that file's docstring. Enabling attribution also
+  turns on **on-device text encoding** (`KELD_TEXTEMBED=1` is set for the
+  sidecar; publishing feature rows still needs the separate `features`
+  toggles). The daemon also emits a one-time `agent.hardware`
+  client-event (CPU/memory/OS) per run, unconditionally, alongside this —
+  fleet-hardware context for judging what attribution's local models cost on
+  real machines. See `docs/attribution-smoke.md` for the end-to-end runbook
+  against a local Atlas.
 - **`KELD_WATCH_ROOTS`** — comma-separated `source:dir` transcript roots to watch
   in addition to the built-in ones (e.g. `cowork:/path/to/.claude/projects`).
   Discovery is otherwise pinned to the directory layout each launch surface used
@@ -25,7 +72,70 @@ semantic-ish versioning during `0.x`.
   the case worth checking. Offline-testable via `KELD_VERIFY_ASSETS_JSON`; demotion
   is opt-in via `KELD_VERIFY_DEMOTE`, so a local run cannot mutate a release.
 
+### Changed
+- **Attribution scores the WHOLE block — user and assistant turns — mean-pooled and centred
+  per stream.** Until 2026-09-03 `/attribute` read the user stream only, on an argument that
+  was plausible and unmeasured ("the model's own prose would attribute work to whatever the
+  assistant happened to name"); the eval recorded the cost the day it shipped (benchmark
+  0.929 with assistant text, ported pipeline 0.823 without) and kept the rule. Measured on 61
+  real, labelled blocks: user text alone put 28% of blocks on the right project; the whole
+  block, mean-pooled and centred, 92%; micro-F1 on the text-only judge 0.508 → 0.806. Two
+  facts drive it — a real block's prompts are often "continue" while the reply names the
+  work, and **24 of 25 blocks with no user text at all** (agent continuations) have
+  assistant text, so the structurally-silent third of a machine's work now attributes
+  (F1 0.717 on those blocks, from 0.000). MEAN beats MAX (0.782 vs 0.713) because the best
+  of ~12 messages is high for anything. The feared failure occurred on 4 of 61 blocks.
+  Only the USER's words still feed `concepts` (which publishes phrases) and the verifier
+  prompt. **Centring** (`attribution.Offsets`) subtracts each document's running mean
+  similarity, kept PER STREAM (a person's prompts and a model's prose are different
+  registers — 0.717 vs 0.606 on agent-only blocks), as two floats per (stream, document)
+  in `~/.keld/state/attribution-offsets.json`, never a vector; keyed by the document's
+  text so a reworded project starts fresh; gated all-or-nothing at
+  `KELD_ATTRIBUTION_MIN_BACKGROUND` (50) messages, below which the decision is exactly
+  the uncentred one. Whole-block without centring measured 59%. The attribution meta
+  gains `centred` and `background_n`, and `model_versions.scoring` names the rule, so rows
+  scored under different rules are never mistaken for comparable.
+  `KELD_ATTRIBUTION_SCORING=user-max` is the one-step rollback to the previous decision. A
+  retried job is folded into the baseline once (block keys remembered, bounded at 2,000),
+  and a baseline that cannot be saved is warned about once per process rather than silently.
+- **`test_attribution_quality.py` now measures the shipped configuration** — whole block,
+  mean, centred (baseline primed over the fixtures), verifier only with
+  `KELD_ATTRIBUTION_EVAL_VERIFIER=1` — and its floor is re-baselined under that
+  measurement. The 0.823 it used to cite described a pipeline that no longer exists in
+  three ways (absolute threshold, user-only text, verifier on).
+
 ### Fixed
+- **The `NULL_DOC` competitor described an engineer asking about their own
+  project, so real work read as idle chat.** Its clause "generic technical
+  questions asked out of curiosity or for learning" is a fair description of
+  project-directed questioning; measured over the 100 fixtures with a five-way
+  wording sweep (only the null string differing, shared cached vectors), removing
+  it fixed a genuine design-system question that had attributed to nothing and
+  broke nothing, at **no cost in trap coverage** (11 of 19 no-project fixtures
+  held, unchanged — those traps are earned by the "work that belongs elsewhere"
+  clause). Embedding-only arm f1 0.724 → 0.740, precision 0.774 → 0.787. An
+  abstract-study clause was tried twice and lost both times (precision 0.681,
+  trust 77% → 68%), and the longest, most complete wording scored worst of all
+  five arms — adding a category dilutes the ones already present. `model_versions`
+  now also carries a **`null_doc` fingerprint** (truncated sha256 of the document),
+  because that map exists to declare when two corpora are not comparable and a
+  reworded null has exactly that property; it rides the existing open map, so no
+  schema bump is owed. ⚠️ This does **not** fix the null also winning at whole-
+  session scale — that is per-document hubness (the null describes speech while
+  project documents compose an artifact), measured and recorded, and its fix is
+  score normalisation rather than prose.
+- **`go test ./...` was red on macOS, and the same bug silently cost real
+  checkouts their repo identity.** `decodeProjectDir` filtered candidate entries
+  with `os.DirEntry.IsDir()`, which reports the directory entry's own type without
+  following the link and is therefore false for a symlink to a directory. `/var` is
+  a symlink to `private/var` on macOS, so the walk died at the first level and
+  returned "" for every path beneath it — including every `t.TempDir()`, hence four
+  failing tests on every macOS machine. Not only a test artifact: the watcher's
+  ingest signal and the tick both resolve a checkout through `transcriptCwd` and
+  both read "" as "no reading can be confirmed", so a checkout behind a symlinked
+  path component lost its repo and branch in the reference series. Following the
+  link is safe because the traversal is already bounded by `projectDirMaxDepth`
+  and `projectDirMaxNodes`.
 - **A release could publish without its Linux sidecar tarball, and every Linux
   `curl | sh` install then aborted.** v0.20.0 shipped 9 of 10 assets because GitHub
   never acquired a runner for the `linux-sidecar` job — `runner_name` empty, zero

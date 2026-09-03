@@ -375,7 +375,12 @@ package enrich
 //
 // Sidecar SCHEMA moves 15 -> 16 alongside it. Producer strings move `-v20` ->
 // `-v21`.
-const SchemaVersion = 21
+//
+// v22: block rows may carry projects/projects_status/attribution — see
+// ProjectAttribution and AttributionMeta. All three are omitempty, so this
+// bump is not a vocabulary change for the eval to re-score: a machine with
+// attribution off still publishes byte-identical to v21.
+const SchemaVersion = 23
 
 // DynamicStatuses is the closed set of values the dynamics facet may publish for
 // a dimension's COMPARISON OUTCOME, mirroring `STATUSES` in

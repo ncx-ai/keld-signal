@@ -190,6 +190,25 @@ class TextSource:
     def state(self):
         return self._encoder.state
 
+    @property
+    def encoder(self):
+        """The encoder child handle, for a SECOND consumer of the same child.
+
+        ⚠️ There is one encoder child per process and there must stay one: it is
+        1.7-2.4 GB resident (measured, bf16, real weights) against a budget
+        AGENTS.md already documents as oversubscribed, and it is idle-unloaded
+        and shut down through THIS object's `poll`/`shutdown` — which the app's
+        poll loop and lifespan already call. So a second consumer (`/attribute`,
+        which embeds a block span against the declared projects) takes this
+        handle rather than constructing an `Encoder` of its own, which would
+        double the memory and leave the second child with nothing to release it.
+
+        Exposed read-only and deliberately not an `encode()` passthrough: this
+        class's own contract is the per-message CACHE and the frontier, and a
+        block span is neither. A caller wanting raw vectors is asking the child,
+        not this source, and should say so."""
+        return self._encoder
+
     def stats(self, block):
         """Fill `block` (from `embed_stats`) with this source's live figures.
 

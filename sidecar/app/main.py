@@ -199,6 +199,26 @@ async def lifespan(app: FastAPI):
                     await loop.run_in_executor(None, src.poll)
             except Exception:
                 pass
+            # ⚠️ THE ATTRIBUTION VERIFIER'S CHILD RIDES THIS LOOP TOO, AND FOR A WHOLE
+            # BRANCH IT DID NOT. `_verifier_manager()` reuses WorkerManager's spawn half
+            # and nothing else: `poll()` is the SOLE driver of kills_hard, kills_pressure,
+            # kills_idle and recycles, so an unpolled manager has no RSS ceiling, no
+            # recycling, no idle unload and no pressure eviction. After the first
+            # borderline pair a llama.cpp child held its quantized weights and its 4096-token
+            # KV cache for the entire life of the sidecar, unbounded and unmeasured, on a
+            # budget AGENTS.md already documents as oversubscribed with two children on it.
+            #
+            # Looked up per tick rather than captured like `wm` above, because this one is
+            # built LAZILY — the manager does not exist until a borderline pair actually
+            # needs a verdict, which is the whole reason a machine that never attributes
+            # never spawns the child. A closure over the value at lifespan time would
+            # capture None forever.
+            try:
+                vwm = _state.get("verifier_wm")
+                if vwm is not None:
+                    await loop.run_in_executor(None, vwm.poll)
+            except Exception:
+                pass
             await asyncio.sleep(interval)
 
     # 1s: poll() both samples RSS (for the peak high-water) and enforces the
@@ -217,6 +237,13 @@ async def lifespan(app: FastAPI):
             pass
     await runner.stop()
     await asyncio.get_running_loop().run_in_executor(None, wm.shutdown)
+    verifier_wm = _state.get("verifier_wm")
+    if verifier_wm is not None:
+        # Only ever set if /attribute actually needed a verdict during this process's life —
+        # see _verifier_manager(). Shutting it down here (rather than leaving it to process
+        # exit) matches wm.shutdown() above: the child gets a chance to unwind before the
+        # daemon's SIGTERM/SIGKILL reaps the process group.
+        await asyncio.get_running_loop().run_in_executor(None, verifier_wm.shutdown)
     if _TEXT_SOURCE is not None:
         await asyncio.get_running_loop().run_in_executor(None, _TEXT_SOURCE.shutdown)
     _state.clear()
@@ -1212,6 +1239,7 @@ def metrics():
         hard_limit_mb=wm.hard_limit_mb(), parent_reserve_mb=wm.parent_reserve_mb(),
         budget_shortfall_mb=wm.budget_shortfall_mb() if wm.ceiling_mb() is not None else None,
         store_stats=_store_stats(), embed_stats=_embed_stats(),
+        verifier_stats=_verifier_stats(),
     )
 
 
@@ -1278,6 +1306,546 @@ def install_vocabulary(body: VocabularyIn):
     _state["vocab_raw_count"] = raw_count
     _count("vocab_installs")
     return {"rejects": rejects}
+
+
+class ProjectsIn(BaseModel):
+    projects: list[dict]
+
+
+@app.post("/projects")
+async def projects(body: ProjectsIn):
+    """Org project definitions for block attribution. A cache write, not
+    inference — bypasses _dispatch for the same reason /vocabulary does.
+    Embedding happens lazily on the first /attribute that needs vectors."""
+    from app.analysis import attribution
+    h = attribution.set_projects(body.projects)
+    return {"count": len(body.projects), "hash": h}
+
+
+class AttributeIn(BaseModel):
+    """WHICH DECLARED PROJECTS does this closed block belong to. Coordinates in, ids out.
+
+    `start`/`end` are the block's span in epoch seconds — the unit `/blocks` answers in and the
+    daemon's attribution job stores — and the span is read HALF-OPEN, `[start, end)`, so two
+    abutting blocks can never both claim a turn on the boundary.
+
+    `session_id` is the daemon's own key for the job (`(session, block.start)`) and is accepted
+    so a request is self-describing in a log the daemon writes; the sidecar resolves the session
+    from `path`, which is the only thing it can actually open. It is deliberately not checked
+    against `ingest.session_of(path)`: a disagreement there would be a daemon bug, and refusing
+    the block would turn it into a permanently unattributable one.
+
+    `dims` are the block's own deterministic dimensions as `/blocks` already published them —
+    repo, branch and friends. They feed the exact-match metadata boost, and they are the
+    caller's facts rather than something re-derived here.
+    """
+    path: str
+    session_id: str | None = None
+    start: float
+    end: float
+    dims: dict = {}
+
+
+class _EncoderNotReady(Exception):
+    """The encoder child could not answer this call, carrying textembed's own status."""
+
+    def __init__(self, status):
+        super().__init__(status)
+        self.status = status
+
+
+class _VerifierUnavailable(Exception):
+    """The verifier was needed and could not be loaded."""
+
+
+class _EncoderAdapter:
+    """`textembed.Encoder` in the shape `attribution.score_block` takes.
+
+    ⚠️ **The two shapes differ and the difference is silent.** `score_block` wants
+    `.encode(texts) -> [vec, ...]`; the production encoder returns `(vectors, status)` and
+    NEVER raises — absent weights, a failed spawn and a hung child are all "no vectors, and
+    here is why" (see `textembed.Encoder.encode`). Handed the raw encoder, `score_block` would
+    zip a two-element tuple against the projects and silently score the block against the
+    string `"ok"`. So the adaptation is here, and so is the decision about what each status
+    MEANS to a block:
+
+      * `ok`                            -> the vectors.
+      * `skipped:disabled`              -> `skipped:disabled`: the text encoder is switched off
+                                           on this machine, so no sweep will ever answer.
+      * `degraded:weights_unavailable`  -> `degraded:weights_unavailable` (AC-4 as amended):
+                                           no attribution at all, re-attributed once the
+                                           daemon has provisioned the weights.
+      * anything else                   -> `pending`. `degraded:encoder_unavailable` is retried
+                                           on a cooldown by the encoder itself and
+                                           `pending:encoding` is a backlog, so both are
+                                           transient STATES — and `pending` is the one answer
+                                           that costs the daemon's job no attempt. Never a
+                                           confident answer produced without the encoder.
+
+    Raising rather than returning `[]` is deliberate: an empty vector list would flow into the
+    cosine as "similar to nothing" and publish a confident negative from a check that did not
+    run."""
+
+    def __init__(self, child):
+        self._child = child
+
+    def encode(self, texts):
+        # The status is compared against textembed's own constant rather than a literal here:
+        # that vocabulary is closed and a second spelling of "ok" in this file is exactly how
+        # two halves drift. The import is deferred like every other analysis import in main.
+        from app.analysis import textembed
+
+        vectors, status = self._child.encode(texts)
+        if status != textembed.STATUS_OK or len(vectors) != len(texts):
+            raise _EncoderNotReady(status)
+        return vectors
+
+
+# The background warm-up: one thread at a time, so a burst of `/attribute` calls on a cold child
+# cannot spawn a queue of them. Module-level so a test can join it.
+_WARM_THREAD = None
+_WARM_LOCK = threading.Lock()
+
+# The verifier's own drift margin over its measured model_cost_mb (WorkerManager.ceiling_mb()).
+# Deliberately its OWN env var and its OWN default rather than reusing
+# KELD_SIDECAR_RSS_MARGIN_MB (1024): that number was measured for GLiNER2, a torch transformer
+# whose transient activation memory scales with input length and batch size. The verifier is a
+# llama.cpp Q4_K_M GGUF loaded with a fixed n_ctx (4096, see app/verifier.py) and no batching —
+# its resident cost is dominated by the (mostly mmap'd) quantized weights plus one bounded KV
+# cache, so it has much less headroom to grow between spawn and drift-recycle than a transformer
+# whose worst case is an unbounded-length input. Half of GLiNER2's measured margin is a
+# defensible starting point pending a real measurement on this model; env-overridable in the
+# same style as the shared ceiling so an operator can tighten or loosen it without a code change.
+_VERIFIER_RSS_MARGIN_MB = float(os.environ.get("KELD_VERIFIER_RSS_MARGIN_MB", "512"))
+
+# The verifier's own WorkerManager, distinct from `_state["wm"]` (GLiNER2's). Built lazily by
+# `_verifier_manager()`; guarded so two racing `/attribute` calls build at most one.
+_VERIFIER_WM_LOCK = threading.Lock()
+
+
+def _verifier_model_factory():
+    """Load the verifier's GGUF model in the worker CHILD, never here. Mirrors `_model_factory`
+    above: llama_cpp is imported only inside `verifier.Verifier.__init__`, which this calls only
+    from inside the spawned child process (see `_verifier_spawn`) — so the FastAPI parent never
+    imports it, matching the invariant `_model_factory` already keeps for torch/gliner2."""
+    from app import verifier as verifier_mod
+    return verifier_mod.Verifier()
+
+
+def _verifier_spawn():
+    """spawn_fn for the verifier's WorkerManager — the sibling of worker_manager.py's own
+    `_default_spawn`, reusing the same child entry point (`worker.serve`) with a different
+    model_factory. A second, independent Process/Queue pair: the verifier's child is recycled
+    on its own schedule and never shares a process with the GLiNER2 worker."""
+    import multiprocessing as mp
+    from app.worker import serve
+    ctx = mp.get_context("spawn")
+    req_q, resp_q = ctx.Queue(), ctx.Queue()
+    proc = ctx.Process(target=serve, args=(req_q, resp_q, _verifier_model_factory), daemon=True)
+    proc.start()
+    return proc, req_q, resp_q
+
+
+def _verifier_reserve_rss():
+    """What the verifier's WorkerManager must subtract from the shared memory budget before
+    it decides its own hard limit: everything in this process tree that is NOT its own child.
+
+    ⚠️ THREE CHILDREN NOW DRAW ON ONE BUDGET AND ONLY ONE OF THEM USED TO EXIST.
+    `KELD_SIDECAR_MEM_BUDGET_MB` (4096) is a claim about the whole sidecar, and
+    `WorkerManager.hard_limit_mb()` spends it as `budget - parent_reserve_mb()`. Two
+    independent managers each reading `parent_reserve_mb()` as "the FastAPI parent" would
+    each hand their own child the whole remainder — the budget promised twice, and the
+    verifier's limit at its most generous exactly when the GLiNER2 worker and the encoder
+    are both resident. That is the same shape as the constant `KELD_SIDECAR_PARENT_RESERVE_MB`
+    the parent-reserve work replaced: a number asserting a configuration the service no
+    longer has, wrong in the direction that under-protects.
+
+    So this reports parent RSS PLUS the GLiNER2 worker's and the encoder child's high-water
+    peaks. Three properties are deliberate:
+
+      * PEAKS, not live samples, for `observe_parent_rss`'s own reason one manager over: a
+        limit that tracked live siblings would relax the moment the GLiNER2 worker was
+        recycled, with nothing about the risk having changed. High-water composes with
+        `observe_parent_rss`'s own high-water latch to stay monotone.
+      * The verifier's own child is excluded, since that is what the limit bounds.
+      * The overrun is REPORTED, not absorbed: `budget_shortfall_mb()` is already computed
+        from this reserve and appears in /metrics under `verifier`, so an oversubscribed
+        machine says so rather than quietly exceeding the budget it promises.
+    """
+    total = _parent_rss_mb() or 0.0
+    wm = _state.get("wm")
+    if wm is not None:
+        try:
+            total += wm.peak_rss_mb or 0.0
+        except Exception:
+            pass
+    src = _TEXT_SOURCE
+    if src is not None:
+        try:
+            total += src.encoder.peak_rss_mb or 0.0
+        except Exception:
+            pass
+    return total
+
+
+def _verifier_stats():
+    """The `verifier` block of /metrics — the same fields `worker` reports, for the same
+    reason, about the other recycled child.
+
+    ⚠️ It exists because this child shipped INVISIBLE. Its manager was never polled, so
+    `recycles`/`kills` were structurally always zero and there was no RSS reading of any
+    kind: a llama.cpp child holding its weights and a 4096-token KV cache for the sidecar's
+    whole life looked exactly like a machine that had never spawned one. `peak_rss_mb` is
+    reported beside the live sample for the measured reason `worker` and `embed` both are.
+
+    Pure reads, like `_embed_stats`: it must never BUILD the manager (that would spawn a
+    3 GB child off a metrics poll), so it reads `_state` directly and answers
+    `built: false` when nothing has needed a verdict yet — which is an answer, not a gap.
+    """
+    wm = _state.get("verifier_wm")
+    if wm is None:
+        return {"built": False, "state": None}
+    try:
+        return {
+            "built": True,
+            "state": wm.state,
+            "rss_mb": round(wm.worker_rss_mb(), 1),
+            "peak_rss_mb": round(wm.peak_rss_mb, 1),
+            "model_cost_mb": round(wm.model_cost_mb, 1) if wm.model_cost_mb else None,
+            "ceiling_mb": round(wm.ceiling_mb(), 1) if wm.ceiling_mb() is not None else None,
+            "hard_limit_mb": round(wm.hard_limit_mb(), 1) if wm.hard_limit_mb() is not None else None,
+            # What the shared budget already owes the parent and the other two children —
+            # see _verifier_reserve_rss. The number that says whether this child has any
+            # headroom left at all.
+            "siblings_reserve_mb": round(wm.parent_reserve_mb(), 1),
+            "budget_shortfall_mb": (round(wm.budget_shortfall_mb(), 1)
+                                    if wm.ceiling_mb() is not None else None),
+            "recycles": wm.counts["recycles"],
+            "kills": {"timeout": wm.counts["kills_timeout"],
+                      "pressure": wm.counts["kills_pressure"],
+                      "idle": wm.counts["kills_idle"],
+                      "hard": wm.counts["kills_hard"],
+                      "crash": wm.counts["crashes"]},
+        }
+    except Exception as exc:                     # noqa: BLE001 - /metrics must always answer
+        return {"built": True, "error": type(exc).__name__}
+
+
+def _verifier_manager():
+    """The process's one verifier WorkerManager — a SECOND, independent instance beside
+    `_state["wm"]` (GLiNER2's), reusing WorkerManager's spawn/recycle/RSS-ceiling machinery
+    unmodified rather than inventing any.
+
+    ⚠️ "REUSING THE MACHINERY" USED TO MEAN THE SPAWN HALF ALONE, and this docstring said
+    otherwise. `WorkerManager.poll()` is the sole driver of the RSS ceiling, the recycle, the
+    idle unload and the pressure eviction; nothing polled this instance, so the child held its
+    weights and KV cache for the sidecar's whole life. `lifespan`'s `_poll_loop` now polls it
+    (looked up lazily there, since this manager may not exist yet), `/metrics` reports it under
+    `verifier`, and `_verifier_reserve_rss` is what keeps its share of the ONE memory budget
+    honest now that three children draw on it.
+
+    Built lazily here, on first genuine need: `/attribute`
+    only ever reaches this function when a borderline pair actually needs a verdict, which is
+    itself gated (see the route) on attribution having projects to score, the opt-out flag being
+    off, and the weights being present on disk — so a machine with attribution off, the verifier
+    opted out, or no weights provisioned never spawns this child at all."""
+    wm = _state.get("verifier_wm")
+    if wm is not None:
+        return wm
+    with _VERIFIER_WM_LOCK:
+        wm = _state.get("verifier_wm")
+        if wm is None:
+            wm = WorkerManager(spawn_fn=_verifier_spawn, margin_mb=_VERIFIER_RSS_MARGIN_MB,
+                               parent_rss_fn=_verifier_reserve_rss)
+            _state["verifier_wm"] = wm
+        return wm
+
+
+def _verify_call(block_text, dims, project):
+    """One verdict, via the dedicated verifier WorkerManager. The worker child is spawned
+    lazily, on first call, by `_verifier_manager()`.
+
+    A dead/unspawnable child (WorkerTimeout/WorkerUnavailable/WorkerError — the child failed to
+    start, crashed mid-job, or returned an error) degrades to "the verifier could not answer"
+    rather than crashing the request: translated to `_VerifierUnavailable`, which
+    `_attribute_blocking` catches and re-runs the decision on the threshold alone, with the
+    verifier reported `unavailable` — never a silent narrowing that looks like the full
+    decision (AC-6)."""
+    try:
+        result = _verifier_manager().call({
+            "op": "verify", "block_text": block_text, "dims": dims or {}, "project": project,
+        })
+    except (WorkerTimeout, WorkerUnavailable, WorkerError):
+        raise _VerifierUnavailable() from None
+    return result["verdict"], result["seconds"]
+
+
+class _WorkerVerifier:
+    """A verifier whose every verdict rides its OWN dedicated WorkerManager
+    (`_verifier_manager`) — a second, recycled worker child holding the GGUF model, never the
+    FastAPI parent and never the GLiNER2 worker.
+
+    Replaces the old `_RunnerVerifier`, which piggybacked on `_state["runner"]` — the shared
+    single-flight GLiNER2 dispatch went through — because that shared the wrong resource: what
+    the verifier needs is its own worker with its own recycling, not a slot in someone else's
+    queue. `WorkerManager.call()` already blocks its caller until the worker answers or the job
+    deadline trips, so no bridging back to the event loop is needed here (unlike the old class,
+    which had to `run_coroutine_threadsafe` onto the runner's thread). `verify()` runs on an
+    executor thread already (called from `_attribute_blocking`), so blocking here blocks that
+    thread, never the loop."""
+
+    def verify(self, block_text, dims, project):
+        return _verify_call(block_text, dims, project)
+
+
+def _span_texts(path, start, end):
+    """The block span's texts, BOTH streams, read through the ONE sanctioned door:
+    `(user_texts, assistant_texts)`.
+
+    `transcript.iter_turns` is the only function in this package that opens a transcript, and
+    `textembed.messages_in` is the only one that lifts message text off a parsed turn — the same
+    pair the text half uses (`featuretext.TextSource.vectors`). Reusing them is not tidiness:
+    `turns_in` skips `tool_result` lines unparsed (which is what keeps a parse seconds long
+    rather than minutes long), `messages_in` reads only `text` content blocks, and it drops
+    command echoes and injected skill files, which are the harness talking to itself and not a
+    person describing work.
+
+    ⚠️ THIS RETURNED THE USER STREAM ONLY UNTIL 2026-09-03, ON AN ARGUMENT THAT WAS PLAUSIBLE
+    AND UNMEASURED: "an assistant turn is this machine's own words about the block, and scoring
+    a project against the model's own prose would attribute work to whatever the assistant
+    happened to name." The eval recorded the cost the day it shipped — the external benchmark
+    scored 0.929 with assistant text and the ported pipeline 0.823 without — and kept the rule.
+    Measured on 61 real, labelled blocks (docs/notes/whats-next-attribution.md §9): user text
+    alone put 28% of blocks on the right project; the whole block, mean-pooled and centred, put
+    92% there. The user's words on a real block are often "continue" or "why is it so slow?";
+    the reply is the paragraph that names the work. And 24 of the 25 blocks with NO user text
+    at all — agent continuations of an earlier prompt — have assistant text, so this is also
+    how the structurally-silent third of a machine's work becomes attributable. The feared
+    failure ("whatever the assistant happened to name") did occur, on 4 of 61: a reply about a
+    task queue landed a block on the wrong project. It is the minority mode, and MEAN pooling
+    (mean, under attribution.SCORING) is what keeps one tangent from deciding a block.
+
+    The two streams are returned SEPARATELY because they are not used alike downstream: both
+    are scored, but only the user's words feed `concepts` (which publishes phrases) and the
+    verifier prompt — see `attribution.attribute_block`.
+
+    Half-open `[start, end)`: blocks abut inside an active segment, so a closed interval would
+    let two of them claim the same turn.
+
+    ⚠️ Text lives on this stack and in the encoder child, and nowhere else. Nothing here logs,
+    persists or returns it upward — the route answers with ids."""
+    from app.analysis import textembed
+    from app.analysis.capture import epoch
+    from app.analysis.transcript import iter_turns
+
+    user, asst = [], []
+    for m in textembed.messages_in(iter_turns(path), epoch):
+        if not (start <= m.t < end):
+            continue
+        (user if m.stream == textembed.USER else asst).append(m.text)
+    return user, asst
+
+
+_OFFSETS = None
+_OFFSETS_LOCK = threading.Lock()
+
+
+def _offsets():
+    """The process's centring state (attribution.Offsets), built once. Scalars on disk under
+    KELD_HOME/state; see the class for the gate and why it is all-or-nothing."""
+    global _OFFSETS
+    with _OFFSETS_LOCK:
+        if _OFFSETS is None:
+            from app.analysis import attribution
+            _OFFSETS = attribution.Offsets(attribution.default_offsets_path())
+        return _OFFSETS
+
+
+def _warm_encoder_async(child):
+    """Bring the encoder child up OFF the request path, and embed the project docs while it is.
+
+    The daemon's sweep is the retry loop, so a cold child answers `pending` immediately — but
+    something has to actually warm it or every sweep answers `pending` forever. This is that
+    something, and it is not a second queue: it holds no block, no backlog and no state, and one
+    thread runs at a time however many blocks arrive. The work it does is the work the next call
+    would otherwise pay first — `project_vectors` is memoised per project-list hash — so the
+    spawn (~2.8 s warm, ~20 s cold) and the project embedding are both behind the caller."""
+    from app.analysis import attribution
+
+    def run():
+        try:
+            attribution.project_vectors(_EncoderAdapter(child))
+        except Exception:      # noqa: BLE001 — a warm-up that failed is retried by the next sweep
+            pass
+
+    global _WARM_THREAD
+    with _WARM_LOCK:
+        if _WARM_THREAD is not None and _WARM_THREAD.is_alive():
+            return _WARM_THREAD
+        _WARM_THREAD = threading.Thread(target=run, name="keld-attribute-warm", daemon=True)
+        _WARM_THREAD.start()
+        return _WARM_THREAD
+
+
+def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent, asst_texts=(),
+                        block_key=None):
+    """The whole of /attribute's decision, on an executor thread.
+
+    Both failure modes it translates are ones the decision itself cannot see: whether the
+    encoder child answered, and whether the verifier could load. Everything else is
+    `attribution.attribute_block`."""
+    from app.analysis import attribution
+
+    offsets = _offsets()
+    try:
+        try:
+            return attribution.attribute_block(texts, dims, encoder, verifier_obj,
+                                               verifier_absent, asst_texts=asst_texts,
+                                               offsets=offsets, block_key=block_key)
+        except _VerifierUnavailable:
+            # The threshold still answers, and the meta NAMES the verifier's absence rather
+            # than letting a narrower decision look like the full one (AC-6). Re-run rather
+            # than patch the meta: `verifier_absent` is an input to the decision, not a label
+            # on it, and the re-run costs one re-encode of a block on a path that fires once
+            # per process (the failed load is latched).
+            return attribution.attribute_block(texts, dims, encoder, None, "unavailable",
+                                               asst_texts=asst_texts, offsets=offsets,
+                                               block_key=block_key)
+    except _EncoderNotReady as exc:
+        # Outside both, so the re-run's own encode is covered too.
+        return _encoder_status_answer(exc.status)
+
+
+def _encoder_status_answer(status):
+    """One of `textembed.STATUSES` -> this block's answer. See `_EncoderAdapter`."""
+    from app.analysis import attribution, textembed
+
+    if status == textembed.STATUS_DISABLED:
+        return attribution.stated(attribution.STATUS_SKIPPED_DISABLED)
+    if status == textembed.STATUS_NO_WEIGHTS:
+        return attribution.stated(attribution.STATUS_DEGRADED_WEIGHTS)
+    return attribution.pending()
+
+
+@app.post("/attribute")
+async def attribute(body: AttributeIn):
+    """WHICH DECLARED PROJECTS one closed block belongs to.
+
+        a block span -> the user's own words -> scored against the declared projects -> ids
+
+    Returns `{"status", "projects": [{"id", "confidence", "source"}], "attribution": {...}}`.
+    `status` is `attribution.STATUSES`, the closed vocabulary mirrored Go-side as
+    `enrich.Projects*`. **Coordinates in, ids out**: the request carries a path and two instants,
+    the response carries ids, confidences, closed enums and integer millisecond timings. No text,
+    no span, no offset, in either direction — `attribution.attribute_block` is where that is
+    enforced and `test_attribution_endpoint.py` pins it.
+
+    NOTHING IS PUBLISHED BY THIS ROUTE. The daemon's attribution job (internal/agent/attrib) owns
+    the retry, the durability and the re-publish; this answers one question once.
+
+    ⚠️ **`pending` is a STATE, not a failure, and the daemon's sweep is the retry loop.** A cold
+    encoder child costs ~2.8 s warm / ~20 s cold to bring up and ~1.6 s per message to run, so a
+    synchronous encode could not land inside any sane client timeout. This route therefore never
+    waits for a model: it answers `pending` immediately, warms the child on one background thread
+    (`_warm_encoder_async`) and lets the next sweep collect the answer. There is deliberately no
+    second queue in this process — the durable job store already is one.
+
+    Execution follows `/blocks`: the span read and the scoring run in the DEFAULT EXECUTOR so a
+    long block cannot stall the event loop out from under `/health` and `/metrics`, while the
+    verifier — the one genuine inference here — goes through its OWN dedicated worker child
+    (`_WorkerVerifier`, backed by its own `WorkerManager`; see `_verifier_manager`), never the
+    FastAPI parent and never the GLiNER2 worker's queue. This sidecar still never fans out
+    inference — each model has its own single-flight, via its own manager — it just no longer
+    shares the GLiNER2 dispatch's runner to get it.
+    """
+    # Confinement BEFORE anything else, the SAME allowlist /analyze, /ingest, /tick, /blocks and
+    # /features use — the sidecar has no auth, and this OPENS A TRANSCRIPT as the daemon's user
+    # and answers from what it says. 403, not 404: a rejected path and an unresolvable one are
+    # different facts. Counted as analyze_rejected for /blocks' reason: it is literally the same
+    # allowlist, and an attribute_rejected field would mean editing app/metrics.py.
+    if not _within_roots(body.path, _analyze_roots()):
+        _count("analyze_rejected")
+        raise HTTPException(status_code=403,
+                            detail="path is outside the configured transcript roots")
+    from app.analysis import attribution, textembed
+
+    projects, _ = attribution.current_projects()
+    if not projects:
+        # Answered without opening anything: with nothing declared to match against, reading a
+        # person's words would be reading them for no purpose.
+        return attribution.stated(attribution.STATUS_SKIPPED_NO_PROJECTS)
+
+    loop = asyncio.get_running_loop()
+    try:
+        texts, asst_texts = await loop.run_in_executor(
+            None, _span_texts, body.path, body.start, body.end)
+    except OSError:
+        # The transcript is gone or unreadable. Unlike /blocks and /features there is no series
+        # to fall back on — the span's words ARE the input — so this is a refusal rather than a
+        # narrower answer. Not 503: nothing about retrying makes an absent file readable, and the
+        # daemon's job store bounds the retries of a genuine error.
+        #
+        # ⚠️ 410, AND EMPHATICALLY NOT 404. THE DAEMON NOW READS 404 AS "THIS SIDECAR HAS NO
+        # /attribute ROUTE AT ALL" — version skew during a staged rollout — and HOLDS the job
+        # forever with no attempt consumed, because the work becomes doable once the other half
+        # updates. That is right for a missing route and catastrophic here: a deleted, rotated or
+        # moved transcript would leave its job in the store permanently, re-POSTed every sweep,
+        # one leaked job per affected block, competing for the 24-job sweep budget with no bound.
+        # The comment this replaces justified 404 by leaning on exactly the bound that reading
+        # made unreachable.
+        #
+        # 410 keeps the two facts apart at the status line rather than in a body string, and it
+        # is the precedent this route already has one endpoint over: /analyze answers 410 for a
+        # window whose evidence was pruned — permanently gone, do not keep asking — instead of
+        # overloading 404. A 404 from this path can now only mean the route itself is absent,
+        # which is the one thing a router can answer without any of our code running.
+        #
+        # ⚠️ Pinned across the language boundary by
+        # TestTheAttributeRouteNeverAnswers404ForAnythingButAMissingRoute
+        # (internal/agent/enrich/sidecar), which reads THIS function's source and drives every
+        # status it raises through the real Go client. Change one half and that test fails.
+        raise HTTPException(status_code=410,
+                            detail="the transcript could not be read") from None
+
+    source = _text_source()
+    if source is None:
+        # KELD_TEXTEMBED is off, so there is no encoder child on this machine and there will not
+        # be one this daemon lifetime — a terminal, stated skip rather than an endless `pending`.
+        return attribution.stated(attribution.STATUS_SKIPPED_DISABLED)
+    child = source.encoder
+    if textembed.weights_dir() is None:
+        # AC-4 as amended: no model, no attribution — not a weaker one. attribute_block states it.
+        return attribution.attribute_block(texts, body.dims, None, None, asst_texts=asst_texts)
+    ready = child.state == textembed.READY
+    if not texts and not asst_texts:
+        # A block with no words in EITHER stream. Terminal — no later sweep can change it — so
+        # it is answered here rather than deferred behind a cold child. (Until 2026-09-03 this
+        # tested the user stream alone, which made every agent-only block terminal-empty while
+        # its assistant turns described the work; see _span_texts.)
+        return attribution.attribute_block(
+            [], body.dims, _EncoderAdapter(child) if ready else None, None)
+    if not ready:
+        _warm_encoder_async(child)
+        return attribution.pending()
+
+    from app import verifier as verifier_mod
+
+    verifier_obj, verifier_absent = None, "opted_out"
+    if verifier_mod.enabled():
+        if verifier_mod.weights_path() is None:
+            # Wanted and not runnable: "unavailable", never "opted_out". The threshold decides
+            # alone and the meta says so. No manager is built and no child is spawned for this —
+            # `_verifier_manager()` is reached only through `_WorkerVerifier.verify()`, below.
+            verifier_absent = "unavailable"
+        else:
+            verifier_obj = _WorkerVerifier()
+    return await loop.run_in_executor(
+        None, _attribute_blocking, texts, body.dims, _EncoderAdapter(child),
+        verifier_obj, verifier_absent, asst_texts,
+        # The block's identity, (session, start) — what Atlas upserts on and what the
+        # daemon's durable job is keyed by — so a re-POSTed job is folded into the
+        # centring baseline once, not once per attempt.
+        f"{body.session_id}@{body.start}")
 
 
 @app.post("/match")

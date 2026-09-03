@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/agentcfg"
+	"github.com/ncx-ai/keld-signal/internal/agent/attrib"
 	"github.com/ncx-ai/keld-signal/internal/agent/blocks"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents/resource"
@@ -28,6 +29,8 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/lenstat"
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich/sidecar"
+	"github.com/ncx-ai/keld-signal/internal/agent/features"
+	"github.com/ncx-ai/keld-signal/internal/agent/hardware"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
 	"github.com/ncx-ai/keld-signal/internal/agent/provision"
@@ -667,6 +670,19 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	set := settings.Load()
+	// attribOn is resolved once, here, and reused everywhere this run needs
+	// it (project-list posting below, the attributor's own construction, and
+	// the shared text encoder's existence/spawn-env gate) — attrib.Enabled has
+	// no remote override of its own, so recomputing it per use would be a
+	// second read of the same env+config for the same static answer.
+	attribOn := attrib.Enabled(set.Attribution)
+	// encoderNeeded is THE PROJECT ATTRIBUTION PATH's /attribute (which needs
+	// the shared text encoder to embed a block's own words) OR'd with THE
+	// SIGNAL-EMBEDDINGS PATH's KELD_TEXTEMBED. See sidecarEnv's doc comment
+	// for why turning attribution on must reach the sidecar's own copy of
+	// KELD_TEXTEMBED, and encoder_on_demand.go's package comment for why
+	// enabling attribution alone must never start the features/publish path.
+	encoderNeeded := attribOn || features.TextEmbedEnabled()
 	actor := ""
 	if m, err := config.LoadManifest(); err == nil && m != nil && m.Actor != nil {
 		actor = *m.Actor
@@ -766,6 +782,20 @@ func Run(ctx context.Context) error {
 	// any poll could lower the floor — a plain Emit would always drop it.
 	emitter.EmitExempt("daemon.start", clientevents.SevInfo, map[string]any{"port": port})
 
+	// agent.hardware: ONCE per daemon run, unconditional — fleet hardware is
+	// useful whether or not attribution (or anything else) is on, and it
+	// carries no feature-specific data, only cpu/mem/os. hardware.Collect is
+	// best-effort by construction (missing fields are empty, never an error),
+	// and the event envelope already stamps os/arch/version on every event
+	// (clientevents.Corr, above), so this adds only what the envelope lacks.
+	hw := hardware.Collect()
+	emitter.EmitExempt("agent.hardware", clientevents.SevInfo, map[string]any{
+		"cpu_model":     hw.CPUModel,
+		"logical_cores": hw.LogicalCores,
+		"mem_total_gb":  hw.MemTotalGB,
+		"os_version":    hw.OSVersion,
+	})
+
 	// Decide once, at startup, whether enrichment runs at all (ml_backend is a
 	// local, startup-only setting — never re-read at runtime, see
 	// settings.Settings.MLEnabled). When disabled, handler is the
@@ -779,7 +809,7 @@ func Run(ctx context.Context) error {
 	// facets on the startup value.
 	live := settings.NewLive(set)
 
-	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions)
+	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded)
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -817,6 +847,12 @@ func Run(ctx context.Context) error {
 	// from being restated on each one. Owned out here (not per-call) so it remembers across
 	// polls; pollSettings drives onRemote from a single goroutine, so no lock is needed.
 	rejects := &rejectReporter{}
+	// lastProjects is the last project list this daemon successfully POSTed
+	// to the sidecar. Mutex-guarded (projectsState), NOT owned by a single
+	// goroutine like rejects/custom are — see projectsState's doc comment for
+	// why: the initial POST runs on its own goroutine (C4), so both it and
+	// onRemote's poll goroutine can touch this value.
+	lastProjects := &projectsState{}
 	updateEvents.replay(emitter)
 	updater, hasUpdater := newUpdater(func(code, sev string, fields map[string]any) {
 		emitter.EmitExempt(code, clientevents.Severity(sev), fields)
@@ -846,6 +882,80 @@ func Run(ctx context.Context) error {
 		if updater != nil {
 			updater.Maybe(ctx, updateTargetFrom(r))
 		}
+
+		// PROJECT ATTRIBUTION: KELD_PROJECTS_FILE wins over the org's remote
+		// list (resolveProjects), and the sidecar is only re-told when the
+		// resolved list actually changed — an org editing unrelated settings
+		// must not re-POST the same projects on every 5-minute poll.
+		//
+		// ⚠️ C4: gated on attrib.Enabled(set.Attribution), NOT merely on
+		// svc.PostProjects != nil. svc.PostProjects is set whenever a sidecar
+		// client exists AT ALL (ml_backend "auto" or "deterministic"), so
+		// gating on it alone POSTed the org's project list even on a machine
+		// with KELD_ATTRIBUTION=0 — attribution being "off" must mean
+		// nothing about it happens, not merely that the daemon's own loop
+		// doesn't run.
+		//
+		// postProjectsOnChange is the poll half of the NB1 fix (round 2):
+		// see maybePostProjectsAtStartup's doc comment (projects.go) for the
+		// startup-vs-poll race this and its sibling close together.
+		if attribOn && svc.PostProjects != nil {
+			postProjectsOnChange(svc.PostProjects, lastProjects, r)
+		}
+	}
+	// PROJECT ATTRIBUTION: resolve the declared project list ONCE at startup
+	// (KELD_PROJECTS_FILE wins over the remote key — see resolveProjects) and
+	// tell the sidecar before anything can ask it to attribute a block; later
+	// changes are picked up by onRemote (above) on the settings poll. Gated
+	// the same way onRemote's own call is — see the C4 note above.
+	//
+	// ⚠️ C4: THE NETWORK CALL RUNS ON ITS OWN GOROUTINE, NOT INLINE. A
+	// cold-started sidecar (the supervisor only launched it a moment ago at
+	// this point in Run, and the frozen Python needs real seconds to start
+	// listening) is not accepting connections yet, so a synchronous call here
+	// retried connection-refused for up to postProjectsCallTimeout (30s) on
+	// essentially every cold start — BEFORE go pollSettings, the enrichment
+	// Worker, and the /enrich listener, so the whole daemon's startup stalled
+	// behind it. resolveProjects itself is cheap (env/remote lookup, no I/O
+	// beyond an optional local file read) and stays inline; only the actual
+	// HTTP call is deferred, inside maybePostProjectsAtStartup.
+	//
+	// ⚠️ NB1 (round 2): making this call asynchronous REOPENED a race with
+	// onRemote's own poll-driven call above — pollSettings fires its first
+	// poll essentially immediately, so both goroutines can retry against the
+	// same cold sidecar concurrently, and lastProjects being mutex-guarded
+	// (projectsState) only prevents a DATA race, not an ORDERING one: whichever
+	// POST physically lands last at the sidecar wins, independent of which
+	// goroutine's Go-side bookkeeping "wins" the mutex. maybePostProjectsAtStartup
+	// (projects.go) is what actually closes that: it never posts an EMPTY
+	// resolved list (which — before Atlas serves `projects` — is what every
+	// machine without KELD_PROJECTS_FILE resolves to, so it can never be the
+	// stale write that clobbers a real one) and re-checks lastProjects.changed
+	// immediately before posting a non-empty one, so a POST that raced a
+	// concurrent update becomes a no-op instead of overwriting it.
+	if attribOn && svc.PostProjects != nil {
+		p := resolveProjects(nil)
+		postProjects := svc.PostProjects
+		// ⚠️ OBSERVED SYNCHRONOUSLY, POSTED ASYNCHRONOUSLY (I8). The attributor's
+		// first drainOnce runs the moment its goroutine starts, concurrently with
+		// the POST above, so the sidecar can legitimately answer
+		// `skipped:no_projects` before it has been told anything. What must NOT
+		// happen is the daemon reading that as "this machine declares nothing" and
+		// publishing the block attributed to nothing — which is terminal, and the
+		// block is deleted before the 5-minute poll could correct it. Recording the
+		// BELIEF here, inline and before anything else starts, is what makes
+		// `projectsKnownNonEmpty` true for the whole of that window, so the
+		// attributor holds the job instead. The ordering is now enforced rather
+		// than incidental.
+		lastProjects.observe(p)
+		go maybePostProjectsAtStartup(postProjects, lastProjects, p)
+		// C4: a crash-restarted sidecar comes back with attribution._projects
+		// empty (module state in the parent process it lost), while lastProjects
+		// still records it as told — so the change-gated POST would never speak
+		// again. Re-post on every respawn.
+		if svc.OnSidecarRespawn != nil {
+			svc.OnSidecarRespawn(func() { repostProjectsAfterRespawn(postProjects, lastProjects) })
+		}
 	}
 	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	if enrichmentEnabled {
@@ -857,13 +967,59 @@ func Run(ctx context.Context) error {
 		// Atlas yet; see tick.go's envTick for the whole of that reasoning. Started
 		// BEFORE the worker so the observer is in place for the first job.
 		setTickObserver(startTicker(ctx, svc.Tick, pub, actor, emitter))
+		// THE SHARED TEXT ENCODER's on-demand provisioner — ONE instance for
+		// both callers that can want it (attribution and the signal-embeddings
+		// path), never two independently fetching the same ~1.2 GB into the
+		// same directory. gate is demand()'s LIVE re-check: attribution
+		// contributes a constant (it has no remote override of its own), the
+		// org's `features` toggle is read live so a mid-run flip is adopted
+		// with no restart — exactly as before this instance was shared.
+		enc := newEncoderProvisioner(ctx, encoderNeeded, func() bool { return attribOn || live.FeaturesEnabled() }, emitter)
+		// THE ATTRIBUTION VERIFIER's own GGUF, on the identical on-demand
+		// seam. Unlike enc, both conditions that decide whether this exists
+		// are static for the run (attribution has no remote override, neither
+		// does its own KELD_ATTRIBUTION_VERIFIER opt-out), so there is no live
+		// gate to re-check at demand time.
+		verifierEnc := newVerifierProvisioner(ctx, attribOn, emitter)
+		// Now build the attributor itself, which returns the OnPublished hook
+		// the block emitter calls after every successful publish — nil when
+		// the gate is off, so startBlockEmitter's own nil-check makes wiring
+		// it in cost nothing on a machine that never turned attribution on.
+		onBlockPublished := startAttributor(ctx, svc.Blocks, svc.Attribution,
+			cfg.Endpoint, tok.Get, actor, emitter, set.Attribution,
+			lastProjects.knownNonEmpty,
+			func() { repostProjectsAfterRespawn(svc.PostProjects, lastProjects) })
+		// A scheduled attribution job is "something wants an embedding (and,
+		// for a borderline pair, the verifier)" — the same demand-signal shape
+		// the signal-embeddings path uses its own advance hook for. Both
+		// demand() calls are nil-receiver-safe (see encoderProvisioner.demand
+		// and verifierProvisioner.demand), so this wrap costs nothing on a
+		// machine where attribution is off (onBlockPublished is nil there and
+		// the wrap never happens) or where nothing was provisioned (enc/
+		// verifierEnc nil, demand() a no-op).
+		//
+		// ⚠️ GATED ON A KNOWN NON-EMPTY PROJECT LIST (I7). Attribution's two
+		// models are ~1.2 GB (encoder) + ~3 GB (verifier), and with nothing
+		// declared to match against every /attribute answers
+		// skipped:no_projects without opening a transcript — the models are
+		// never loaded, so fetching them buys literally nothing. Atlas does not
+		// serve `projects` yet, so TODAY that is every machine without
+		// KELD_PROJECTS_FILE: an org switching attribution on early would pull
+		// 4.2 GB onto every machine in the fleet for an answer that needs no
+		// model at all. The gate is read LIVE, per published block, not captured
+		// — a list arriving on a later settings poll starts the download with no
+		// restart, which is the same live-re-check shape enc's own `gate`
+		// argument uses for the org's `features` toggle.
+		onBlockPublished = demandModelsForAttribution(onBlockPublished,
+			lastProjects.knownNonEmpty, enc.demand, verifierEnc.demand)
 		// v2's block emitter, and the reason it sits beside the tick rather than
 		// inside it: a block reaches nowhere, so it needs none of the tick's
 		// frontier reasoning about which future prompts might sweep over a
 		// moment. OFF by default (KELD_BLOCKS) for the same reason the tick is —
 		// Atlas stores blocks now but nothing reads them yet. Returns nil when
 		// off, which setBlockAdvance takes as "no observer".
-		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks))
+		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks,
+			onBlockPublished))
 		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
 		// future-work prediction. svc.Features is non-nil ONLY under
 		// ml_backend "deterministic" (see deterministicBackend), so this is
@@ -872,7 +1028,7 @@ func Run(ctx context.Context) error {
 		// the goroutines start and take nothing until something switches them
 		// on — which is what lets an org enable it without a restart.
 		setFeatureAdvance(startFeatureEmitter(ctx, svc.Features, cfg.Endpoint, tok.Get,
-			actor, installID, live.FeaturesEnabled, live.FeaturesPublishEnabled, emitter))
+			actor, installID, live.FeaturesEnabled, live.FeaturesPublishEnabled, emitter, enc))
 		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 
@@ -1109,7 +1265,7 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     trivially true when none does (see deterministicBackend).
 //   - enabled: whether Run should start the enrich Worker — true for both
 //     "auto" (or "") and "deterministic"; only "off" disables it.
-func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
+func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
 	if !set.EnrichmentEnabled() {
 		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
 		return ingress.DiscardHandler(secret), nil, serviceFacets{}, nil, nil, false
@@ -1120,10 +1276,10 @@ func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q
 		// model to load means no warmup and, since provisioning now hangs off
 		// warmup, no download either.
 		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the analysis service runs, the model is never loaded", set.MLBackend)
-		svc, gate := deterministicBackend(ctx, emitter, regions)
+		svc, gate := deterministicBackend(ctx, emitter, regions, encoderNeeded)
 		return ingress.Handler(q, secret), nil, svc, gate, nil, true
 	}
-	model, svc, gate, warmup = mlBackend(ctx, emitter, regions)
+	model, svc, gate, warmup = mlBackend(ctx, emitter, regions, encoderNeeded)
 	return ingress.Handler(q, secret), model, svc, gate, warmup, true
 }
 
@@ -1238,7 +1394,14 @@ func gliner2ModelDir() string { return paths.ModelsDir("gliner2-large-v1") }
 //
 // It logs only mechanical detail and never emits a client event: what a
 // missing service *means* is policy, and each caller answers that differently.
-func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sidecar.Client, *Supervisor, func() bool, bool, error) {
+// encoderNeeded is the resolved "does anything running this daemon want the
+// shared text encoder" — THE SIGNAL-EMBEDDINGS PATH's KELD_TEXTEMBED, OR'd
+// with THE PROJECT ATTRIBUTION PATH's own gate (see newEncoderProvisioner's
+// doc comment). It is threaded through as an explicit parameter, rather than
+// read fresh here via settings.Load(), specifically so this function and its
+// callers never touch disk on every sidecar spawn/respawn — the caller in Run
+// resolves it once, from the settings already loaded there.
+func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderNeeded bool) (*sidecar.Client, *Supervisor, func() bool, bool, error) {
 	binPath, hasBin := sidecarBinPath()
 	if !hasBin {
 		return nil, nil, nil, false, nil
@@ -1279,7 +1442,7 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 			// can return from (see stopChild), so there is nothing left for the
 			// context hook to do except get in the way.
 			cmd := exec.Command(binPath, fmt.Sprintf("--port=%d", p))
-			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(), watch.AnalyzeRoots())
+			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(encoderNeeded), watch.AnalyzeRoots(), encoderNeeded)
 			return cmd, nil
 		},
 		scPort,
@@ -1324,8 +1487,8 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter) (*sideca
 // That is not the degradation AGENTS.md forbids. Nothing lower-fidelity stands
 // in for window analysis; the facet is dropped entirely and reported dropped
 // via the pipeline's ordinary pipeline_status "partial" path.
-func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (serviceFacets, func() bool) {
-	scClient, sup, _, ok, err := sidecarService(ctx, emitter)
+func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (serviceFacets, func() bool) {
+	scClient, sup, _, ok, err := sidecarService(ctx, emitter, encoderNeeded)
 	if !ok {
 		// No service this run and no path to one before a restart, so waiting
 		// is pointless: run without window analysis rather than wedge.
@@ -1352,6 +1515,7 @@ func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, re
 	// that later is this one line moving into facetsFor. See features.go.
 	svc.Features = featureSourceFor(scClient)
 	svc.AwaitSidecarStop = awaitSidecarStop(sup)
+	svc.OnSidecarRespawn = sup.SetOnRespawn
 	return svc, serviceHealthGate(ctx, scClient)
 }
 
@@ -1394,8 +1558,8 @@ func noAnalysisService(emitter *clientevents.Emitter, fields map[string]any) fun
 // deterministicBackend — because they belong to the SERVICE, not the model:
 // both modes derive them the same way, and returning them here means
 // wireEnrichment only passes them through instead of rederiving them.
-func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
-	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter)
+func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
+	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter, encoderNeeded)
 	if !ok {
 		// The consequence of having no service is this caller's to state: an
 		// enrichment job queues/spools, which is not what a future non-ML
@@ -1506,6 +1670,9 @@ func mlBackendWithOpts(ctx context.Context, opts mlBackendOpts) (enrich.Model, s
 	// survive any later change to what "the Model" is.
 	svc := facetsFor(opts.client, opts.regions)
 	svc.AwaitSidecarStop = awaitSidecarStop(opts.sup)
+	if opts.sup != nil {
+		svc.OnSidecarRespawn = opts.sup.SetOnRespawn
+	}
 	return opts.client, svc, wg.Warm,
 		provisioningWarmup(prov, warmupFunc(opts.client))
 }

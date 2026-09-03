@@ -82,6 +82,30 @@ type BlockEnrichment struct {
 	// reader finding the right nesting.
 	StartReason string `json:"start_reason"`
 	EndReason   string `json:"end_reason"`
+	// Projects, ProjectsStatus and Attribution are the on-device project
+	// attribution for this block (see enrich.ProjectAttribution). All three are
+	// omitempty so a block published by a machine with attribution switched off
+	// is byte-identical to the payload before this field existed — Atlas parses
+	// with extra="ignore" and stores the raw body, so a silent machine and an
+	// old client are indistinguishable on the wire, which is exactly what an
+	// opt-in facet must be. They are set together, after the fact, via
+	// WithProjects rather than as BuildBlock parameters: a block is characterised
+	// long before attribution can run (it needs the block's own analysis as
+	// input), so BuildBlock's callers must not have to thread three fields they
+	// don't yet have through every existing call site.
+	Projects       []enrich.ProjectAttribution `json:"projects,omitempty"`
+	ProjectsStatus string                      `json:"projects_status,omitempty"`
+	Attribution    *enrich.AttributionMeta     `json:"attribution,omitempty"`
+	// Concepts is what this block was ABOUT — see enrich.Concept, which carries
+	// the privacy argument, since this is the one field on a block row derived
+	// from message text that is not already covered by the named_terms decision.
+	//
+	// It rides the attribution republish (set by WithProjects) because the pass
+	// that produces it IS the attribution pass: the encoder and the block's
+	// message vectors are both already resident there. A block published before
+	// attribution runs carries no concepts and is byte-identical to the payload
+	// before this field existed, exactly as Projects is.
+	Concepts []enrich.Concept `json:"concepts,omitempty"`
 	// AnalysisFacets is the deterministic analysis of this block: workstreams,
 	// dynamics, effort, the thirteen inventories, the cut-visibility map and
 	// the session prior. Embedded and SHARED with WindowEnrichment — see
@@ -129,6 +153,27 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) Blo
 		SchemaVersion:     enrich.SchemaVersion,
 		TS:                now.UTC().Format(time.RFC3339),
 	}
+}
+
+// WithProjects returns a copy of b with its project attribution set —
+// Projects, ProjectsStatus, the pass's own AttributionMeta, and the Concepts
+// the same pass extracted.
+//
+// A SEPARATE function from BuildBlock, deliberately, rather than three more
+// BuildBlock parameters: attribution runs AFTER a block is built (it needs the
+// block's own analysis as input, and it may run again later on the same
+// block — an embedding match superseded by a verifier's pass, or a machine
+// that turns attribution on after the block already published once), so every
+// existing BuildBlock caller must stay untouched. b is passed by value and
+// returned, not mutated, so a caller holding the original (e.g. to retry a
+// failed publish) is unaffected by a later WithProjects call on the copy.
+func WithProjects(b BlockEnrichment, ps []enrich.ProjectAttribution, status string,
+	meta *enrich.AttributionMeta, concepts []enrich.Concept) BlockEnrichment {
+	b.Projects = ps
+	b.ProjectsStatus = status
+	b.Attribution = meta
+	b.Concepts = concepts
+	return b
 }
 
 // BlockCorrID is a block row's correlation id: the session and the block's own

@@ -353,6 +353,71 @@ func TestHFFetcherSkipsDocsAndMediaButKeepsEverythingALoaderOpens(t *testing.T) 
 // merges.txt is the load-bearing entry: this is a BPE tokenizer, so the obvious
 // "skip the docs" extension list — which would have included .txt — deletes a
 // tokenizer file and breaks AutoTokenizer.
+// THE ATTRIBUTION VERIFIER'S GGUF — a single-file repo, not a snapshot. Unlike
+// GLiNER2 and the text encoder, this fetcher must download exactly one named
+// file and nothing else the repo happens to ship alongside it, however
+// nonModelFile would classify them.
+func TestHFFetcherWithFilesDownloadsOnlyTheNamedFile(t *testing.T) {
+	const repo = "unsloth/gemma-4-E2B-it-GGUF"
+	const rev = "main"
+	const want = "gemma-4-E2B-it-Q4_K_M.gguf"
+
+	files := map[string][]byte{
+		want:                       []byte("fake-gguf-bytes"),
+		"gemma-4-E2B-it-Q8_0.gguf": []byte("a different quant this fetcher must not touch"),
+		"README.md":                []byte("docs"),
+	}
+
+	var mu sync.Mutex
+	var requested []string
+	srv := recordingHFStub(t, repo, rev, files, &requested, &mu)
+
+	f := NewHFFetcher(repo, rev).WithFiles(want)
+	f.baseURL = srv.URL
+
+	dest := t.TempDir()
+	if err := f.Fetch(context.Background(), dest); err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dest, want))
+	if err != nil {
+		t.Fatalf("%s not written: %v", want, err)
+	}
+	if string(got) != string(files[want]) {
+		t.Fatalf("%s contents = %q, want %q", want, got, files[want])
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requested) != 1 || requested[0] != want {
+		t.Fatalf("requested = %v, want exactly [%s]", requested, want)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "gemma-4-E2B-it-Q8_0.gguf")); err == nil {
+		t.Fatal("a sibling quant was installed; WithFiles must restrict to the named file only")
+	}
+	if _, err := os.Stat(filepath.Join(dest, "README.md")); err == nil {
+		t.Fatal("README.md was installed; WithFiles must restrict to the named file only")
+	}
+}
+
+// A named file absent from the manifest is a clear error, not a silent
+// zero-file success that only surfaces later as a SHA mismatch or a missing
+// sentinel.
+func TestHFFetcherWithFilesErrorsWhenTheNamedFileIsMissing(t *testing.T) {
+	const repo = "unsloth/gemma-4-E2B-it-GGUF"
+	const rev = "main"
+
+	srv := hfStub(t, repo, rev, map[string][]byte{"other-file.gguf": []byte("x")})
+
+	f := NewHFFetcher(repo, rev).WithFiles("gemma-4-E2B-it-Q4_K_M.gguf")
+	f.baseURL = srv.URL
+
+	if err := f.Fetch(context.Background(), t.TempDir()); err == nil {
+		t.Fatal("want an error when the requested file is not in the siblings manifest")
+	}
+}
+
 func TestHFFetcherInstallsEverythingTheTextEncoderLoaderOpens(t *testing.T) {
 	const repo = "Qwen/Qwen3-Embedding-0.6B"
 	const rev = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"

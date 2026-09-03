@@ -240,6 +240,61 @@ func TestTheCursorAdvancesAndResumesWithoutDuplicates(t *testing.T) {
 // A cursor must survive a restart, or every transcript becomes first-sight
 // again and the blocks between the old cursor and the current watermark are
 // never emitted.
+// OnPublished is the seam the project-attribution path hangs off. It must
+// fire once per successful chunk, with exactly the rows that chunk sent and
+// the transcript path, and must never fire for a batch that failed.
+func TestOnPublishedFiresAfterEachSuccessfulChunkOnly(t *testing.T) {
+	dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000), block(2200)}, watermark: f64(900)}
+	pub := &fakeSender{}
+	e := newTestEmitter(t, dig, pub)
+
+	var calls [][]publish.BlockEnrichment
+	var paths []string
+	e.OnPublished = func(rows []publish.BlockEnrichment, path string) {
+		calls = append(calls, rows)
+		paths = append(paths, path)
+	}
+
+	now := time.Unix(9000, 0)
+	e.advanceAt("claude_code", txPath, now)
+	e.Sweep(context.Background(), now) // seed at 900
+	if n := e.Sweep(context.Background(), now); n != 2 {
+		t.Fatalf("published %d, want both blocks", n)
+	}
+	if len(calls) != 1 || len(calls[0]) != 2 {
+		t.Fatalf("OnPublished calls = %+v, want one call with both rows", calls)
+	}
+	if paths[0] != txPath {
+		t.Fatalf("OnPublished path = %q, want %q", paths[0], txPath)
+	}
+
+	// A nil hook must not panic — every existing caller left it unset.
+	e2 := newTestEmitter(t, dig, pub)
+	dig.mu.Lock()
+	dig.all = append(dig.all, block(3400))
+	dig.mu.Unlock()
+	e2.advanceAt("claude_code", txPath, now)
+	e2.Sweep(context.Background(), now)
+	e2.Sweep(context.Background(), now) // should not panic with OnPublished nil
+}
+
+// A failed SendBlocks must never call OnPublished for the rows that failed.
+func TestOnPublishedDoesNotFireForAFailedBatch(t *testing.T) {
+	dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000)}, watermark: f64(900)}
+	pub := &fakeSender{failFrom: 1}
+	e := newTestEmitter(t, dig, pub)
+	var calls int
+	e.OnPublished = func(rows []publish.BlockEnrichment, path string) { calls++ }
+
+	now := time.Unix(9000, 0)
+	e.advanceAt("claude_code", txPath, now)
+	e.Sweep(context.Background(), now) // seed
+	e.Sweep(context.Background(), now) // fails
+	if calls != 0 {
+		t.Fatalf("OnPublished fired %d times on a failed batch", calls)
+	}
+}
+
 func TestTheCursorSurvivesARestart(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "blocks.json")
 	dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000)}, watermark: f64(900)}

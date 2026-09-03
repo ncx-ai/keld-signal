@@ -154,6 +154,16 @@ type Emitter struct {
 	// what happens next. See sweepOne.
 	backfill bool
 
+	// OnPublished, when non-nil, is called after a successful SendBlocks with
+	// the rows just published and the transcript path they came from. The
+	// project-attribution path (internal/agent/attrib) hangs off this seam —
+	// the emitter itself knows nothing about attribution, and this field is
+	// nil-safe so every existing caller is unaffected. Called synchronously
+	// from the publish loop, so a hook that blocks would delay the cursor
+	// advance for later chunks; attrib.Attributor.Schedule is built to return
+	// immediately for exactly that reason.
+	OnPublished func(rows []publish.BlockEnrichment, path string)
+
 	mu sync.Mutex
 	// active is the bounded set of transcripts that might still have an
 	// unsettled block. See the package comment: this is what keeps work
@@ -410,6 +420,11 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 		// Advance only after the batch is CONFIRMED, and to the last block of
 		// that batch — the contiguous frontier of what landed.
 		e.st.advance(tgt.Path, chunk[len(chunk)-1].EndTS)
+		// Nil-safe: the emitter itself has no opinion on what happens after a
+		// successful publish. See OnPublished's doc comment.
+		if e.OnPublished != nil {
+			e.OnPublished(rows, tgt.Path)
+		}
 	}
 	return sent
 }

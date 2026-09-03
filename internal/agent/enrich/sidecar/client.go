@@ -16,10 +16,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 )
 
 type Client struct {
@@ -79,9 +82,18 @@ func (c *Client) WithModelContext(ctx context.Context) enrich.Model {
 // retryable=true means the sidecar is temporarily unavailable (transport error
 // or 503) and the caller should wait and try again rather than degrade.
 func (c *Client) postOnce(path string, body any, out any) (ok bool, retryable bool) {
+	ok, retryable, _ = c.postOnceStatus(path, body, out)
+	return ok, retryable
+}
+
+// postOnceStatus is postOnce plus the HTTP status the attempt saw (0 for a
+// transport error). Only /attribute reads it, and only to tell a 404 — an
+// older frozen sidecar with no such route — apart from every other
+// non-retryable answer; see AttributeResult.RouteUnsupported.
+func (c *Client) postOnceStatus(path string, body any, out any) (ok bool, retryable bool, status int) {
 	b, err := json.Marshal(body)
 	if err != nil {
-		return false, false
+		return false, false, 0
 	}
 	// Bind the request to c.ctx so cancelling the per-job context aborts the
 	// call in flight — not just the retry backoff. Without this the request ran
@@ -90,42 +102,51 @@ func (c *Client) postOnce(path string, body any, out any) (ok bool, retryable bo
 	// retry loop's own ctx.Done() check turns that into a clean stop.
 	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.base+path, bytes.NewReader(b))
 	if err != nil {
-		return false, false
+		return false, false, 0
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return false, true // transport error: sidecar down/restarting — wait+retry
+		return false, true, 0 // transport error: sidecar down/restarting — wait+retry
 	}
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusOK:
-		return json.NewDecoder(resp.Body).Decode(out) == nil, false
+		return json.NewDecoder(resp.Body).Decode(out) == nil, false, resp.StatusCode
 	case resp.StatusCode == http.StatusServiceUnavailable:
-		return false, true // evicted / overloaded — the request woke it; wait+retry
+		return false, true, resp.StatusCode // evicted / overloaded — the request woke it; wait+retry
 	default:
-		return false, false // genuine error — do not spin forever
+		return false, false, resp.StatusCode // genuine error — do not spin forever
 	}
 }
 
 // post waits + retries through temporary unavailability (never degrades). It
 // returns false only on a non-retryable error or ctx cancellation.
 func (c *Client) post(path string, body any, out any) bool {
+	ok, _ := c.postStatus(path, body, out)
+	return ok
+}
+
+// postStatus is post plus the HTTP status of the LAST attempt (0 when none
+// completed). See postOnceStatus for the one caller and why.
+func (c *Client) postStatus(path string, body any, out any) (bool, int) {
 	backoff := 200 * time.Millisecond
+	last := 0
 	for {
 		if c.ctx.Err() != nil {
-			return false // per-job deadline/shutdown — stop immediately, don't degrade
+			return false, last // per-job deadline/shutdown — stop immediately, don't degrade
 		}
-		ok, retryable := c.postOnce(path, body, out)
+		ok, retryable, status := c.postOnceStatus(path, body, out)
+		last = status
 		if ok {
-			return true
+			return true, status
 		}
 		if !retryable {
-			return false
+			return false, status
 		}
 		select {
 		case <-c.ctx.Done():
-			return false
+			return false, last
 		case <-time.After(backoff):
 		}
 		if backoff < 5*time.Second {
@@ -760,4 +781,220 @@ func (c *Client) DetectPIIIn(text string, regions []string) (enrich.PIIResult, b
 		spans = append(spans, enrich.Entity{Label: s.Type, Start: s.Start, End: s.End, Confidence: s.Score})
 	}
 	return enrich.PIIResult{Spans: spans, Truncated: r.Truncated}, true
+}
+
+// PROJECT ATTRIBUTION — which declared project a closed block belongs to,
+// decided on-device by the sidecar's own embedding/verifier matcher against
+// the org's declared settings.RemoteProject list (never by sending message
+// text). See enrich/attribution.go for the wire shapes these two methods
+// exchange.
+
+// projectsReq is the whole of POST /projects: the org's declared project
+// list, unchanged from settings.RemoteProject. Descriptions flow DOWN to the
+// device for the sidecar to embed; nothing here is derived from a prompt.
+type projectsReq struct {
+	Projects []settings.RemoteProject `json:"projects"`
+}
+
+// projectsResp is decoded but its fields are not read further than error
+// reporting: Count/Hash are the sidecar's own bookkeeping (how many projects
+// it now holds, and a fingerprint of the set), useful for a log line, not for
+// a caller decision.
+type projectsResp struct {
+	Count int    `json:"count"`
+	Hash  string `json:"hash"`
+}
+
+// postProjectsCallTimeout bounds ONE /projects call the same way
+// attributeCallTimeout bounds one /attribute call — see that var's comment.
+// The daemon's caller (startup, and the settings poll loop) has no per-call
+// deadline of its own, so without a bound here an unreachable sidecar would
+// retry forever and could wedge the settings poll goroutine. A var, not a
+// const, so a test can shrink it.
+var postProjectsCallTimeout = 30 * time.Second
+
+// PostProjects tells the sidecar which projects are currently declared, so
+// /attribute has something to match a block against. The daemon calls this
+// once at startup (after resolving KELD_PROJECTS_FILE / the remote settings
+// key) and again whenever the resolved list changes on a later settings poll
+// — never per block, since the declared set does not change per block.
+func (c *Client) PostProjects(projects []settings.RemoteProject) error {
+	cp := *c
+	ctx, cancel := context.WithTimeout(c.ctx, postProjectsCallTimeout)
+	defer cancel()
+	cp.ctx = ctx
+	var r projectsResp
+	if !cp.post("/projects", projectsReq{Projects: projects}, &r) {
+		return fmt.Errorf("sidecar: POST /projects failed")
+	}
+	return nil
+}
+
+// attributeReq is the whole of POST /attribute: coordinates, the block's own
+// span (half-open [start, end)), and the block's ALREADY-COMPUTED dimensions
+// (repo, branch, ...) as /blocks published them. Dims are the caller's own
+// facts, passed through — never re-derived here, and never message text.
+type attributeReq struct {
+	Path      string            `json:"path"`
+	SessionID string            `json:"session_id"`
+	Start     float64           `json:"start"`
+	End       float64           `json:"end"`
+	Dims      map[string]string `json:"dims"`
+}
+
+// AttributeResult is the Go-side view of POST /attribute's response.
+//
+// Status is one of the closed vocabulary in enrich/attribution.go
+// (ProjectsAttributed, ProjectsPending, ProjectsSkippedDisabled,
+// ProjectsSkippedNoProjects, ProjectsDegradedWeights). Projects/Attribution
+// are populated only when Status is a terminal answer that named something —
+// an empty Projects with a terminal Status is a real "no project matched",
+// not an absence.
+type AttributeResult struct {
+	Status   string                      `json:"status"`
+	Projects []enrich.ProjectAttribution `json:"projects"`
+	// Concepts is what the block was ABOUT — phrases lifted from its own words
+	// and ranked by the same encoder the attribution ran on (sidecar
+	// `analysis/concepts.py`). It rides THIS response rather than the block
+	// digest because both the encoder and the block's message vectors are
+	// already here; computing it in /blocks would make block emission depend on
+	// a model it does not otherwise need and re-encode every message.
+	//
+	// ⚠️ ALONE ON THIS STRUCT IT CARRIES BLOCK TEXT, and that is why it is not
+	// a field of AttributionMeta: the meta is the pass's report on ITSELF and
+	// is held structurally text-free by publish.TestAttributionShapeHoldsNoText.
+	// Bounded by the sidecar to at most concepts.MAX_WORDS words per phrase and
+	// concepts.TOP_K phrases, with no span and no offset; conceptShapeOK
+	// re-checks both at this boundary rather than trusting a separately-shipped
+	// sidecar, the same discipline notWorkspaceRelative applies to paths.
+	Concepts    []enrich.Concept        `json:"concepts"`
+	Attribution *enrich.AttributionMeta `json:"attribution"`
+	// RouteUnsupported means the sidecar answered 404: it has no /attribute
+	// route at all. `json:"-"` deliberately — it is this client's OWN reading
+	// of the transport, never something a response body could set.
+	//
+	// ⚠️ IT IS SEPARATE FROM Status BECAUSE IT IS A DIFFERENT KIND OF FACT
+	// (I5). Status is what the attribution pass concluded; this is that no
+	// pass exists on the other side. The sidecar is frozen and shipped
+	// separately, so an older one during a staged rollout 404s every call —
+	// classed non-retryable, which quarantined the job after four sweeps, into
+	// a subdirectory Store.List never re-reads. The work is not impossible,
+	// only not yet possible, which is the pending/degraded shape rather than
+	// the error one.
+	RouteUnsupported bool `json:"-"`
+}
+
+// attributeCallTimeout bounds ONE /attribute call, including whatever
+// retrying post() does through a transient 503/transport error. It is a var
+// (not a const) so a test can shrink it rather than waiting out the real
+// production bound.
+//
+// ⚠️ THIS IS THE PER-CALL DEADLINE THE PLAN CALLS FOR, and it is bound HERE
+// rather than left to the caller's ctx for the same reason SignalIngest binds
+// its own timeout below: the attributor's driving context (Run's ctx) is the
+// DAEMON's lifetime context, which has no deadline at all, and post() retries
+// a retryable failure until its context ends. Without a bound of its own, one
+// stuck attribute call would retry forever against a wedged sidecar — the
+// exact death-spiral shape client.go's package comment and WithContext already
+// describe one level up (there, a per-JOB deadline; here, a per-CALL one,
+// because the attributor's jobs are not the enrichment pipeline's jobs and
+// have no per-job context of their own to bind).
+var attributeCallTimeout = 2 * time.Minute
+
+// Attribute asks the sidecar to match one closed block against the declared
+// project list (POST /attribute). It sends COORDINATES and the block's own
+// already-computed dimensions — never text.
+//
+// ok=false means this call did not land (transport failure, or the per-call
+// deadline above expired mid-retry) and is retryable by the caller's sweep,
+// exactly like every other post()-backed method here. ok=true with
+// Status=="pending" is a NORMAL terminal HTTP answer, not a failure — the
+// caller (attrib.Attributor) is what decides a pending answer must not
+// consume a retry attempt; this method has no opinion on that.
+//
+// ⚠️ IT USES ITS OWN http.Client, NOT c.hc, AND THAT IS LOAD-BEARING. c.hc is
+// shared with every other route on this Client and its Timeout is sized for
+// an ordinary inference round-trip (the daemon constructs it with a 5s
+// timeout — see daemon.go's scClient). /attribute is not that shape: a warm
+// encoder with borderline pairs runs verifier verdicts SYNCHRONOUSLY inside
+// one call, measured at several seconds per pair with no cap on the pair
+// loop, so a real call routinely exceeds 5s. Sharing c.hc would mean every
+// individual attempt gets cut at 5s, postOnce classifies that timeout as a
+// retryable transport error, and post() would re-issue the SAME request —
+// re-running the whole verification from scratch — a dozen or more times
+// inside the 2-minute window: the self-amplifying-retry shape AGENTS.md
+// documents for /features, reached here through the shared client's timeout
+// rather than through this route's own design. Giving the call its own
+// *http.Client, timed to attributeCallTimeout (the same bound as the
+// context), lets ONE attempt run the full window: a genuinely slow verifier
+// call gets the time it needs and is not retried into a storm, while a fast
+// failure (connection refused, an immediate 503) still leaves room in the
+// budget for post()'s backoff to retry it — exactly the SignalIngest pattern
+// of giving a differently-shaped call its own transport rather than
+// inheriting one sized for something else.
+func (c *Client) Attribute(path, sessionID string, start, end float64,
+	dims map[string]string) (AttributeResult, bool) {
+	cp := *c
+	cp.hc = &http.Client{Timeout: attributeCallTimeout}
+	ctx, cancel := context.WithTimeout(c.ctx, attributeCallTimeout)
+	defer cancel()
+	cp.ctx = ctx
+	var r AttributeResult
+	ok, status := cp.postStatus("/attribute", attributeReq{
+		Path: path, SessionID: sessionID, Start: start, End: end, Dims: dims,
+	}, &r)
+	if !ok {
+		// A 404 is VERSION SKEW, not a failed call: this sidecar has no
+		// /attribute route. Surfaced as its own fact so the attributor can hold
+		// the job instead of spending an attempt on a component that updates
+		// independently — see AttributeResult.RouteUnsupported (I5).
+		//
+		// ⚠️ THAT READING IS ONLY SAFE BECAUSE THE ROUTE ITSELF NEVER RAISES
+		// 404. It briefly did, for an unreadable transcript, and the two facts
+		// silently merged: a deleted or rotated transcript inherited "hold
+		// forever, no attempt consumed", leaking one unbounded job per affected
+		// block into a 24-job sweep budget. The route now answers 410 there
+		// (main.py's OSError branch, and /analyze's pruned-window precedent),
+		// so a 404 can only come from a router with no such path — the one
+		// answer that needs none of the sidecar's own code to run. Every other
+		// non-retryable status, 410 included, stays a genuine error that
+		// consumes an attempt and can eventually quarantine.
+		//
+		// Pinned across the language boundary by
+		// TestTheAttributeRouteNeverAnswers404ForAnythingButAMissingRoute,
+		// which reads the route's Python source and drives every status it
+		// raises through this function. Neither half can re-merge them alone.
+		if status == http.StatusNotFound {
+			return AttributeResult{RouteUnsupported: true}, false
+		}
+		return AttributeResult{}, false
+	}
+	r.Concepts = keepWellShapedConcepts(r.Concepts)
+	return r, true
+}
+
+// keepWellShapedConcepts re-checks the sidecar's own bounds at the decode
+// boundary, dropping a bad entry without losing the rest of the list.
+//
+// ⚠️ THE SIDECAR SHIPS AND UPDATES INDEPENDENTLY OF THIS BINARY, so its bounds
+// are a promise from a component that may be older or newer than this one —
+// exactly the position `sidecar.notWorkspaceRelative` is in for path
+// inventories, and it re-checks for the same reason. The vocabulary here is
+// OPEN (any phrase a person typed), so there is no closed table to validate
+// against; what CAN be checked is shape, and shape is the whole of the publish
+// argument: a bounded phrase is publishable, an unbounded one is message text.
+// Dropping the entry rather than truncating it is AGENTS.md's rule — a cut
+// phrase is a false phrase.
+func keepWellShapedConcepts(in []enrich.Concept) []enrich.Concept {
+	if len(in) > enrich.MaxConcepts {
+		in = in[:enrich.MaxConcepts]
+	}
+	out := in[:0]
+	for _, c := range in {
+		if c.Value == "" || len(strings.Fields(c.Value)) > enrich.MaxConceptWords {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }

@@ -71,7 +71,7 @@ func TestFeatureSourceForProbesTheCapability(t *testing.T) {
 func TestNoSourceMeansNoEmitterAndNoObserver(t *testing.T) {
 	on := func() bool { return true }
 	if fn := startFeatureEmitter(t.Context(), nil, "https://x/v1/enrichments",
-		func() string { return "tok" }, "actor", "inst", on, on, nil); fn != nil {
+		func() string { return "tok" }, "actor", "inst", on, on, nil, nil); fn != nil {
 		t.Fatal("a nil source still returned an advance observer")
 	}
 }

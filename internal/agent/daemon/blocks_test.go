@@ -34,7 +34,7 @@ func TestSignalBlocksEndpointDerivation(t *testing.T) {
 func TestTheBlockEmitterIsOffByDefault(t *testing.T) {
 	t.Setenv(blocks.EnvEnabled, "")
 	if got := startBlockEmitter(context.Background(), stubDigester{}, "https://a/v1/x",
-		func() string { return "tok" }, "actor", nil, false); got != nil {
+		func() string { return "tok" }, "actor", nil, false, nil); got != nil {
 		t.Fatal("the block emitter started with KELD_BLOCKS unset and no config key")
 	}
 }
@@ -48,7 +48,7 @@ func TestTheBlockEmitterStartsFromTheConfigKeyAlone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if got := startBlockEmitter(ctx, stubDigester{}, "https://a/v1/x",
-		func() string { return "tok" }, "actor", nil, true); got == nil {
+		func() string { return "tok" }, "actor", nil, true, nil); got == nil {
 		t.Fatal("the block emitter stayed off with blocks:true in agent-config.json")
 	}
 }
@@ -58,7 +58,7 @@ func TestTheBlockEmitterStartsFromTheConfigKeyAlone(t *testing.T) {
 func TestKeldBlocksZeroOverridesTheConfigKey(t *testing.T) {
 	t.Setenv(blocks.EnvEnabled, "0")
 	if got := startBlockEmitter(context.Background(), stubDigester{}, "https://a/v1/x",
-		func() string { return "tok" }, "actor", nil, true); got != nil {
+		func() string { return "tok" }, "actor", nil, true, nil); got != nil {
 		t.Fatal("KELD_BLOCKS=0 did not override blocks:true in agent-config.json")
 	}
 }
@@ -68,7 +68,7 @@ func TestKeldBlocksZeroOverridesTheConfigKey(t *testing.T) {
 func TestTheBlockEmitterNeedsADigester(t *testing.T) {
 	t.Setenv(blocks.EnvEnabled, "1")
 	if got := startBlockEmitter(context.Background(), nil, "https://a/v1/x",
-		func() string { return "tok" }, "actor", nil, false); got != nil {
+		func() string { return "tok" }, "actor", nil, false, nil); got != nil {
 		t.Fatal("the block emitter started with no digester")
 	}
 }

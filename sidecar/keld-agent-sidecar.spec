@@ -3,7 +3,7 @@
 # and is fragile with torch). Produces dist/keld-agent-sidecar/keld-agent-sidecar.
 import os
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs, collect_submodules
 
 # PyInstaller resolves relative paths in a spec against the spec's own directory,
 # so anchor to SPECPATH (…/sidecar) to stay correct regardless of the invoking CWD.
@@ -38,6 +38,40 @@ hiddenimports += collect_submodules("uvicorn")
 # exactly what collect_submodules brings.
 hiddenimports += collect_submodules("presidio_analyzer")
 hiddenimports += collect_submodules("phonenumbers")
+
+# llama_cpp (app/verifier.py, the attribution verifier) — a CTYPES BINDING, which is
+# the whole problem.
+#
+# It is invisible to PyInstaller for BOTH reasons the block above describes, at once:
+#
+#  1. Nothing imports it at module scope. `from llama_cpp import Llama` sits inside
+#     `Verifier.__init__` (deliberately — the FastAPI parent must never pull in the
+#     binding, and a test pins that), so no import statement PyInstaller can see
+#     mentions it. Under KELD_OBFUSCATE=1 — which CI sets for every release — that
+#     statement is inside PyArmor-encrypted bytecode, so it is not merely lazy but
+#     unreadable, exactly like pyarmor_runtime below.
+#  2. Its native libraries are opened BY PATH AT RUNTIME, not linked. `llama_cpp/_ggml.py`
+#     and `_internals` compute `llama_cpp/lib/` and `ctypes.CDLL` `libllama` plus ~10
+#     ggml shared objects out of it. PyInstaller's binary analysis follows an ELF/Mach-O
+#     NEEDED entry; it cannot follow a string built at import time.
+#
+# So the freeze needs all three lines, and dropping any one of them yields a binary that
+# starts, answers /health, serves /classify and /pii, and then fails EVERY verifier
+# verdict — the same "green everywhere except the thing we ship" class as freeze_support()
+# and presidio. collect_all brings the package's data files and the lib/ directory it can
+# see; collect_dynamic_libs is what guarantees the .so/.dylib/.dll set travels even when
+# collect_all's data sweep does not classify them as binaries; and the explicit
+# hiddenimports name the module tree the encrypted `from llama_cpp import Llama` hides.
+#
+# `make freeze-check` now spawns the verifier child and demands a verdict (see
+# scripts/freeze-check-local.sh) — without that arm this defect returns silently, because
+# no unit test freezes and no /classify touches this import path.
+_d, _b, _h = collect_all("llama_cpp")
+datas += _d
+binaries += _b
+hiddenimports += _h
+binaries += collect_dynamic_libs("llama_cpp")
+hiddenimports += collect_submodules("llama_cpp")
 
 # When KELD_OBFUSCATE=1, serve.py + app/* are PyArmor-obfuscated: their imports
 # live inside encrypted bytecode that PyInstaller's source analysis can't see, so

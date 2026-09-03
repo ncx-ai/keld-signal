@@ -1,0 +1,92 @@
+[
+  {
+    "id": "proj_mobile",
+    "title": "Mobile App Rewrite",
+    "team": "Engineering",
+    "repos": ["acme-mobile"],
+    "keywords": ["react native", "expo", "ios", "android", "push notifications", "offline sync", "app store"],
+    "jira_key": "MOB",
+    "description": "Rewrite the aging native iOS and Android apps as a single React Native (Expo) codebase. Scope covers feature parity with the current apps, offline-first data sync, push notification infrastructure, and a phased App Store / Play Store rollout behind a beta track. The old Swift and Kotlin codebases stay in maintenance mode until parity ships. Currently mid-build: authentication, dashboard, and notifications are done; offline sync and the reports screen are in progress in the acme-mobile repo."
+  },
+  {
+    "id": "proj_payments",
+    "title": "Payments & Billing Integration",
+    "team": "Engineering",
+    "repos": ["acme-billing"],
+    "keywords": ["stripe", "invoicing", "subscriptions", "webhooks", "dunning", "proration", "checkout"],
+    "jira_key": "PAY",
+    "description": "Replace the legacy homegrown invoicing system with Stripe Billing across all Acme plans. Covers subscription lifecycle (upgrades, downgrades, proration), webhook-driven invoice state sync, dunning emails for failed payments, and a migration path for roughly 4,000 existing subscriptions. Revenue reporting feeds from Stripe events into the finance dashboards. Currently mid-migration: new signups go through Stripe while legacy accounts are backfilled in weekly batches, mostly in the acme-billing service and the web checkout flow."
+  },
+  {
+    "id": "proj_website",
+    "title": "Marketing Website Relaunch",
+    "team": "Marketing",
+    "repos": ["acme-www"],
+    "keywords": ["landing pages", "astro", "cms", "rebrand", "case studies", "pricing page", "conversion"],
+    "jira_key": "WEB",
+    "description": "Relaunch acme.com on Astro with a headless CMS so marketing can ship pages without engineering. Includes the rebrand rollout (new logo, type, color system), rebuilt pricing and product pages, a case-study library, and conversion tracking wired into the signup funnel. Content is migrated from the old WordPress site section by section. The build lives in acme-www and launches page-by-page behind a reverse proxy, starting with the homepage and pricing."
+  },
+  {
+    "id": "proj_seo",
+    "title": "SEO Content Push",
+    "team": "Marketing",
+    "repos": [],
+    "keywords": ["keywords", "organic traffic", "backlinks", "content calendar", "search console", "blog", "rankings"],
+    "jira_key": "SEO",
+    "description": "A two-quarter push to grow organic signups by targeting bottom-of-funnel keywords in Acme's category. Deliverables are a keyword map, a weekly content calendar of comparison and how-to articles, internal linking cleanup across the blog, and a backlink outreach program. Success is measured in Search Console impressions, first-page rankings for 20 target terms, and organic-attributed signups. Editorial work happens in the CMS; there is no dedicated code repository."
+  },
+  {
+    "id": "proj_admin",
+    "title": "Internal Admin Dashboard",
+    "team": "Engineering",
+    "repos": ["acme-admin"],
+    "keywords": ["back office", "support tooling", "impersonation", "feature flags", "audit log", "retool replacement"],
+    "jira_key": "ADM",
+    "description": "Build a proper internal admin dashboard to replace a sprawl of Retool apps and one-off scripts. Support and ops staff get account search, safe user impersonation, subscription and entitlement overrides, feature-flag toggles, and a full audit log of every admin action. Built as a React app on the internal API gateway with SSO and role-based access. Lives in acme-admin; account search and the audit log are live, impersonation is under review."
+  },
+  {
+    "id": "proj_dwh",
+    "title": "Data Warehouse Migration",
+    "team": "Data",
+    "repos": ["acme-dwh"],
+    "keywords": ["snowflake", "dbt", "etl", "airflow", "revenue reporting", "data models", "redshift migration"],
+    "jira_key": "DWH",
+    "description": "Migrate analytics from an overloaded Redshift cluster to Snowflake with dbt-managed models and Airflow orchestration. Scope includes porting 200+ legacy SQL transforms into tested dbt models, rebuilding the revenue reporting marts finance relies on, and cutting over BI dashboards with a parallel-run validation period. Event ingestion moves from custom scripts to a managed pipeline. Work lives in acme-dwh; the raw layer and core marts are ported, finance marts are in parallel-run."
+  },
+  {
+    "id": "proj_chatbot",
+    "title": "Support Chatbot",
+    "team": "Support Engineering",
+    "repos": ["acme-support-bot"],
+    "keywords": ["rag", "claude api", "intercom", "deflection", "knowledge base", "escalation", "embeddings"],
+    "jira_key": "BOT",
+    "description": "Ship an AI support chatbot inside the Intercom messenger that answers from Acme's help-center articles using retrieval-augmented generation on the Claude API. Includes the ingestion pipeline that embeds and indexes the knowledge base, guardrails and escalation to human agents, and a deflection-rate dashboard. Target is deflecting 30% of tier-1 tickets. Code lives in acme-support-bot; the RAG pipeline works in staging and the team is tuning retrieval quality before the Intercom rollout."
+  },
+  {
+    "id": "proj_soc2",
+    "title": "SOC 2 Compliance",
+    "team": "Security",
+    "repos": [],
+    "keywords": ["soc 2 type ii", "vanta", "audit", "access reviews", "vendor questionnaire", "policies", "evidence collection"],
+    "jira_key": "SEC",
+    "description": "Achieve SOC 2 Type II attestation within the year to unblock enterprise deals. Workstreams: security policies and employee training, quarterly access reviews, vendor risk management, evidence collection automated through Vanta, and remediation of gaps the readiness assessment found (MFA enforcement, log retention, offboarding checklists). The audit window opens next quarter. Mostly process and documentation work coordinated by Security, with small engineering asks filed into other teams' backlogs."
+  },
+  {
+    "id": "proj_design",
+    "title": "Design System",
+    "team": "Design",
+    "repos": ["acme-ui"],
+    "keywords": ["component library", "storybook", "design tokens", "figma", "accessibility", "dark mode", "typography"],
+    "jira_key": "DS",
+    "description": "Build Acme's design system: design tokens (color, spacing, typography) shared between Figma and code, a React component library documented in Storybook, and accessibility standards (WCAG 2.1 AA) baked into every component. Includes dark mode support and migration guides for product teams adopting the components. The library ships from acme-ui as a versioned npm package. Tokens and core inputs are released; data tables and the date picker are in progress."
+  },
+  {
+    "id": "proj_hiring",
+    "title": "Hiring Pipeline Tooling",
+    "team": "People Ops",
+    "repos": ["acme-hire"],
+    "keywords": ["ats", "greenhouse", "interview scheduling", "scorecards", "referrals", "candidate experience", "slack integration"],
+    "jira_key": "HIRE",
+    "description": "Streamline hiring as Acme doubles headcount: integrate Greenhouse with Slack for interview scheduling and reminders, standardize scorecards per role family, build a referral portal, and automate offer-approval routing. A small internal service in acme-hire syncs Greenhouse webhooks into Slack and the data warehouse for funnel reporting. Scheduling automation is live for engineering roles; scorecard standardization and the referral portal are next."
+  }
+]

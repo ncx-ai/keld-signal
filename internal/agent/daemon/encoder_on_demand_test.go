@@ -33,7 +33,7 @@ func newTestEncoderProvisioner(t *testing.T, gate func() bool, f provision.Fetch
 	newEncoderFetcher = func() provision.Fetcher { return f }
 	t.Cleanup(func() { newEncoderFetcher = prev })
 
-	p := newEncoderProvisioner(t.Context(), gate, emitter)
+	p := newEncoderProvisioner(t.Context(), features.TextEmbedEnabled(), gate, emitter)
 	if p == nil {
 		t.Fatal("newEncoderProvisioner returned nil with the toggle on")
 	}
@@ -90,7 +90,7 @@ func TestEncoderProvisionerIsAbsentUnlessTheToggleIsExactlyOne(t *testing.T) {
 			t.Cleanup(func() { newEncoderFetcher = prev })
 
 			on := func() bool { return true }
-			p := newEncoderProvisioner(t.Context(), on, nil)
+			p := newEncoderProvisioner(t.Context(), features.TextEmbedEnabled(), on, nil)
 			if (p != nil) != tc.want {
 				t.Fatalf("provisioner non-nil = %v, want %v", p != nil, tc.want)
 			}
@@ -353,7 +353,8 @@ func TestSidecarEnvSetsTheEncoderDirOnlyWhenTheWeightsArePresent(t *testing.T) {
 				}
 			}
 
-			env := sidecarEnv([]string{"PATH=/bin"}, "/models/gliner2", encoderDirForSpawn(), nil)
+			needed := features.TextEmbedEnabled()
+			env := sidecarEnv([]string{"PATH=/bin"}, "/models/gliner2", encoderDirForSpawn(needed), nil, needed)
 			got := hasEnvKey(env, "KELD_TEXTEMBED_DIR")
 			if got != tc.wantSet {
 				t.Fatalf("KELD_TEXTEMBED_DIR set = %v, want %v (env %v)", got, tc.wantSet, env)
@@ -427,9 +428,10 @@ func TestFeatureAdvanceTriggersTheEncoderFetchOnlyWhenTheToggleIsOn(t *testing.T
 			t.Cleanup(func() { newEncoderFetcher = prev })
 
 			on := func() bool { return true }
+			enc := newEncoderProvisioner(t.Context(), features.TextEmbedEnabled(), on, nil)
 			adv := startFeatureEmitter(t.Context(), fakeFeatureClient{},
 				"https://x/v1/enrichments", func() string { return "tok" },
-				"actor", "inst", on, on, nil)
+				"actor", "inst", on, on, nil, enc)
 			if adv == nil {
 				t.Fatal("no advance observer")
 			}

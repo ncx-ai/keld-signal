@@ -28,4 +28,23 @@ func TestManifestConstants(t *testing.T) {
 	if ModelSHA256 != wantSHA {
 		t.Fatalf("ModelSHA256 = %q; want %q", ModelSHA256, wantSHA)
 	}
+
+	wantVerifierRepo := "unsloth/gemma-4-E2B-it-GGUF"
+	wantVerifierFile := "gemma-4-E2B-it-Q4_K_M.gguf"
+	wantVerifierSHA := "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8"
+	if VerifierRepo != wantVerifierRepo {
+		t.Fatalf("VerifierRepo = %q; want %q", VerifierRepo, wantVerifierRepo)
+	}
+	if VerifierFile != wantVerifierFile {
+		t.Fatalf("VerifierFile = %q; want %q", VerifierFile, wantVerifierFile)
+	}
+	if VerifierSHA256 != wantVerifierSHA {
+		t.Fatalf("VerifierSHA256 = %q; want %q", VerifierSHA256, wantVerifierSHA)
+	}
+	if len(VerifierSHA256) != 64 {
+		t.Fatalf("VerifierSHA256 length = %d, want 64 (a sha256 hex digest)", len(VerifierSHA256))
+	}
+	if VerifierDirName == "" || VerifierSentinel == "" || VerifierRevision == "" {
+		t.Fatal("VerifierDirName/VerifierSentinel/VerifierRevision must not be empty")
+	}
 }

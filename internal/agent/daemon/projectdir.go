@@ -102,8 +102,31 @@ func descend(dir, rest string, depth int, nodes *int) string {
 	}
 	var cands []cand
 	for _, e := range ents {
+		// ⚠️ A SYMLINKED DIRECTORY IS A DIRECTORY HERE, AND `e.IsDir()` ALONE SAYS IT
+		// IS NOT. `os.DirEntry.IsDir` reports the type recorded in the directory
+		// ENTRY, without following the link, so it is false for a symlink to a
+		// directory. On macOS `/var` is a symlink to `private/var` — so the walk died
+		// at the very first level and `decodeProjectDir` returned "" for every path
+		// under `/var`, which is exactly where `t.TempDir()` builds its directories:
+		// this package's own tests failed on every macOS machine, and the failure
+		// looked like a decoder bug rather than a filter one. It is not only a test
+		// artifact. `transcriptCwd`'s two callers — the watcher's ingest signal and
+		// the tick — both resolve a checkout's identity through here, and both take ""
+		// as "no reading can be confirmed", so a real checkout behind a symlinked
+		// component loses its repo and branch silently.
+		//
+		// Following the link is safe because the traversal is already bounded by
+		// `projectDirMaxDepth` and `projectDirMaxNodes`, so a symlink cycle is cut off
+		// by the same caps that bound an ordinary deep tree. A link to a NON-directory
+		// is still skipped, and an unresolvable one is skipped rather than guessed.
 		if !e.IsDir() {
-			continue
+			if e.Type()&os.ModeSymlink == 0 {
+				continue
+			}
+			fi, err := os.Stat(filepath.Join(dir, e.Name()))
+			if err != nil || !fi.IsDir() {
+				continue
+			}
 		}
 		// A real entry name encodes by replacing "." with "-"; "/" cannot occur
 		// in a single name, so that is the whole of the encoding at this level.

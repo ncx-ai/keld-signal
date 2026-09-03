@@ -89,7 +89,7 @@ func featureSourceFor(v any) features.Source {
 // it describes what this run WILL do.
 func startFeatureEmitter(ctx context.Context, src features.Source, ingestEndpoint string,
 	token func() string, actor, installID string,
-	enabled, publishing func() bool, emitter *clientevents.Emitter) func(source, path string) {
+	enabled, publishing func() bool, emitter *clientevents.Emitter, enc *encoderProvisioner) func(source, path string) {
 	if src == nil || token == nil || enabled == nil {
 		return nil
 	}
@@ -119,23 +119,31 @@ func startFeatureEmitter(ctx context.Context, src features.Source, ingestEndpoin
 	go em.Run(ctx, interval)
 	go rep.Run(ctx, flush)
 
-	// THE TEXT ENCODER'S WEIGHTS ARE OWED TO THIS HOOK, and to nothing else.
+	// THE TEXT ENCODER'S WEIGHTS ARE OWED TO THIS HOOK, among others — see
+	// encoder_on_demand.go's package comment for the other caller
+	// (attribution) that can also want it, and daemon.go's Run for why the
+	// two share ONE provisioner instance rather than each fetching the same
+	// ~1.2 GB independently. enc is built there, once, and handed in here
+	// rather than constructed by this function: this function's OWN
+	// existence condition (svc.Features non-nil, i.e. ml_backend
+	// "deterministic" only) must not gate whether the encoder gets built at
+	// all — attribution needs it under "auto" too.
 	//
 	// The emitter's own comment says Advance "is the emitter's ONLY trigger for
 	// adding work", which makes it the precise analogue of Worker's warmup call
 	// for GLiNER2: the one signal that means something actually wants what the
-	// weights produce. So the fetch hangs off it. A machine with KELD_TEXTEMBED
-	// off gets a nil provisioner and never fetches; a machine whose org has the
-	// `features` toggle off gets one that declines at demand time and can still
-	// be switched on later in the same run; a machine where no eligible
-	// transcript ever grows never fetches either, which is correct — no message
-	// wanted a vector.
+	// weights produce. So the fetch hangs off it here too. A machine where
+	// nothing wants the encoder gets a nil enc and never fetches; a machine
+	// whose org has the `features` toggle off (and attribution off) gets one
+	// that declines at demand time and can still be switched on later in the
+	// same run; a machine where no eligible transcript ever grows never
+	// fetches either, which is correct — no message wanted a vector.
 	//
 	// ⚠️ Wrapping Advance rather than sweeping is deliberate: NOTHING in the
 	// sweep, the flush or any sidecar request may wait on this download, and the
 	// only way to be sure of that is for the trigger to be fire-and-forget on a
 	// path that already forbids blocking. See encoder_on_demand.go.
-	if enc := newEncoderProvisioner(ctx, enabled, emitter); enc != nil {
+	if enc != nil {
 		return func(source, path string) {
 			em.Advance(source, path)
 			enc.demand()
