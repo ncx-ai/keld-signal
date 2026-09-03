@@ -96,6 +96,21 @@ curl -s localhost:8300/health
 First run downloads the model (~1.9 GB) into the HF cache; set
 `KELD_GLINER2_DIR` to use a pre-provisioned copy.
 
+## Watching attribution drain
+`scripts/watch-attribution-drain.sh` prints the sidecar's attribution queue once
+every five seconds — what is waiting, what has been encoded, what the daemon has
+collected, and the per-batch encode cost. It is the quickest way to answer "is
+attribution actually moving on this machine".
+
+```sh
+scripts/watch-attribution-drain.sh                  # the installed agent (~/.keld)
+KELD_HOME=~/.keld-smoke scripts/watch-attribution-drain.sh
+```
+
+`running=False` with `waiting=0` means an idle queue — everything done, or
+nothing arrived. `hb_kills` climbing is the number to chase: those are encoder
+children killed for going silent, which is a different fact from a slow one.
+
 ## Packaging (P2b T11 / P3)
 Frozen per-OS with PyInstaller into a self-contained `keld-agent-sidecar`
 binary (bundles Python + torch + gliner2) shipped beside `keld-agent`. See the
