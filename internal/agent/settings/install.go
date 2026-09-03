@@ -15,8 +15,8 @@ import (
 // fix it with.
 var KnownBackends = []string{"auto", "deterministic", "off"}
 
-// WriteInstallDefaults writes the two settings a v2 install lands on —
-// ml_backend and blocks — into ~/.keld/agent-config.json.
+// WriteInstallDefaults writes the three settings a v2 install lands on —
+// ml_backend, blocks and attribution — into ~/.keld/agent-config.json.
 //
 // ⚠️ IT MERGES. The file belongs to the operator, not to this struct: it may
 // hold pii_regions, include_entity_text, feature toggles, or a key no version of
@@ -36,6 +36,21 @@ var KnownBackends = []string{"auto", "deterministic", "off"}
 // An absent or unparseable file starts from empty rather than failing: that
 // mirrors Load(), which keeps zero-value defaults on invalid JSON, and an
 // install must not be abortable by a corrupt config.
+// ⚠️ ATTRIBUTION IS DERIVED FROM blocks, NOT WRITTEN AS A LITERAL, and never
+// given a parameter of its own. The attribution loop is driven off the block
+// emitter's OnPublished hook (see daemon/workstreams.go), so `attribution` with
+// `blocks` off is a key that can never do anything — a config an operator would
+// read as "on" while nothing was ever attributed. There is no blocks=false,
+// attribution=true install, so the invariant is expressed here rather than left
+// to a caller to honour.
+//
+// ⚠️ IT IS WRITTEN AT ALL because KELD_ATTRIBUTION is unreachable from an
+// installed service — the same reason `blocks` has a config key. No service
+// definition on any OS carries an environment block (LaunchAgentPlist and
+// SystemdUnit have none, the Windows task is a bare /TR "<exe>" run), so before
+// this key an installed daemon could not be told to attribute at all, and every
+// machine that did was one someone had started by hand with the env var set.
+// KELD_ATTRIBUTION still wins in both directions — see attrib.Enabled.
 func WriteInstallDefaults(backend string, blocks bool) error {
 	if !validBackend(backend) {
 		return fmt.Errorf("unknown ml_backend %q (want one of %v)", backend, KnownBackends)
@@ -55,8 +70,13 @@ func WriteInstallDefaults(backend string, blocks bool) error {
 	if err != nil {
 		return err
 	}
+	attributionJSON, err := json.Marshal(blocks)
+	if err != nil {
+		return err
+	}
 	cfg["ml_backend"] = backendJSON
 	cfg["blocks"] = blocksJSON
+	cfg["attribution"] = attributionJSON
 
 	// Indented + newline-terminated: this file is read and edited by humans, and
 	// MarshalIndent sorts map keys, which is what makes a re-install
