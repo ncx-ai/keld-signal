@@ -141,7 +141,19 @@ func TestVerifierProvisionerAbsentWhenAttributionIsOff(t *testing.T) {
 	p.demand() // must be nil-safe
 }
 
-func TestVerifierProvisionerAbsentWhenOptedOut(t *testing.T) {
+func TestVerifierProvisionerAbsentByDefault(t *testing.T) {
+	// The verifier is OFF by default (2026-09-03) even with attribution on, and the
+	// provisioner is what makes that cheap: no provisioner, no 3 GB GGUF fetch.
+	// This test deliberately sets NOTHING — the default is the thing under test.
+	encoderTestHome(t)
+	t.Setenv(attrib.EnvVerifierEnabled, "")
+	p := newVerifierProvisioner(t.Context(), true, nil)
+	if p != nil {
+		t.Fatal("verifier provisioner must be nil by default (KELD_ATTRIBUTION_VERIFIER unset)")
+	}
+}
+
+func TestVerifierProvisionerAbsentWhenExplicitlyOff(t *testing.T) {
 	encoderTestHome(t)
 	t.Setenv(attrib.EnvVerifierEnabled, "0")
 	p := newVerifierProvisioner(t.Context(), true, nil)
@@ -150,8 +162,9 @@ func TestVerifierProvisionerAbsentWhenOptedOut(t *testing.T) {
 	}
 }
 
-func TestVerifierProvisionerFetchesOnDemandWhenAttributionIsOnAndNotOptedOut(t *testing.T) {
+func TestVerifierProvisionerFetchesOnDemandWhenAttributionIsOnAndOptedIn(t *testing.T) {
 	encoderTestHome(t)
+	t.Setenv(attrib.EnvVerifierEnabled, "1")
 
 	var fetches atomic.Int32
 	prev := newVerifierFetcher
@@ -165,7 +178,7 @@ func TestVerifierProvisionerFetchesOnDemandWhenAttributionIsOnAndNotOptedOut(t *
 
 	p := newVerifierProvisioner(t.Context(), true, nil)
 	if p == nil {
-		t.Fatal("verifier provisioner must exist when attribution is on and not opted out")
+		t.Fatal("verifier provisioner must exist when attribution is on and KELD_ATTRIBUTION_VERIFIER=1")
 	}
 	p.sha = sha256Hex([]byte("w"))
 	p.demand()

@@ -1,9 +1,18 @@
 """The attribution verifier: a small local LLM giving YES/NO on borderline
 (block, project) pairs. Gemma 4 E2B Q4_K_M via llama-cpp-python, CPU only.
 
-ON by default WITHIN the attribution gate; KELD_ATTRIBUTION_VERIFIER=0 opts a
-slow machine out — the caller states degraded, never silently narrows. The
-model is lazy: importing this module loads nothing; a Verifier() loads once."""
+OFF by default, even within the attribution gate; KELD_ATTRIBUTION_VERIFIER=1
+opts a machine in. The caller states `opted_out` in the answer's meta, never
+silently narrows. The model is lazy: importing this module loads nothing; a
+Verifier() loads once.
+
+⚠️ Default-ON until 2026-09-03. Flipped because the one real-data A/B went
+1-for-3 for minutes of CPU per block and ~3 GB of weights beside the encoder's
+1.7 GB, and because every quality figure in the attribution note's §8 was
+measured without it — so the default now matches what was measured. `enabled()`
+is mirrored EXACTLY by `attrib.VerifierEnabled()` on the Go side, which also
+gates the GGUF download; change both or a daemon fetches weights the sidecar
+never loads (or the reverse, which reports `unavailable` forever)."""
 import os
 import time
 
@@ -25,7 +34,7 @@ Question: Is this work part of the project "{title}"? Work on the same general t
 
 def enabled():
     return os.environ.get("KELD_ATTRIBUTION_VERIFIER", "").strip().lower() \
-        not in ("0", "false", "off", "no")
+        in ("1", "true", "on", "yes")
 
 
 def weights_path():

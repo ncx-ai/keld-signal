@@ -745,21 +745,35 @@ func IntervalFromEnv() time.Duration {
 	return DefaultInterval
 }
 
-// EnvVerifierEnabled is the verifier's own opt-out, mirrored from
-// sidecar/app/verifier.py's identically-named constant/enabled() pair. ON by
-// default WITHIN the attribution gate — ATTRIBUTION being on is what makes
-// this relevant at all; this variable only lets a slow machine opt back out.
+// EnvVerifierEnabled is the verifier's own switch, mirrored from
+// sidecar/app/verifier.py's identically-named constant/enabled() pair. OFF by
+// default, even WITHIN the attribution gate: ATTRIBUTION being on makes the
+// embedding path run; this variable is what additionally turns on the Gemma
+// verifier and its ~3 GB GGUF.
+//
+// ⚠️ THIS WAS DEFAULT-ON UNTIL 2026-09-03, AND THE FLIP IS A DECISION, NOT A
+// TIDY-UP. The verifier adjudicates only the borderline band, and on the one
+// real-data A/B it went 1-for-3 while costing minutes per block and 3 GB of
+// weights beside the encoder's 1.7 GB — on the machine that ran every benchmark
+// this week, that pair exhausted swap. Every quality number in
+// docs/notes/whats-next-attribution.md §8 was measured WITHOUT it, so what ships
+// by default is now also what was measured. `KELD_ATTRIBUTION_VERIFIER=1` opts
+// back in; the provisioner (daemon/verifier_on_demand.go) reads this same
+// switch, so a machine that never opts in never downloads the GGUF either.
 const EnvVerifierEnabled = "KELD_ATTRIBUTION_VERIFIER"
 
-// VerifierEnabled mirrors verifier.enabled() exactly: default ON, and only
-// the same explicit-off vocabulary opts out. No config-file fallback and no
+// VerifierEnabled mirrors verifier.enabled() exactly: default OFF, and only
+// the same explicit-on vocabulary opts in. No config-file fallback and no
 // remote override — this is a narrower, local-only switch than Enabled above,
 // matching the sidecar's own (env-only) implementation so the two sides can
-// never disagree about what "verifier off" means.
+// never disagree about what "verifier on" means. Both halves MUST change
+// together: a daemon that provisions a GGUF the sidecar never loads wastes
+// 3 GB, and a sidecar that wants a GGUF the daemon never fetched reports
+// `unavailable` on every block forever.
 func VerifierEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvVerifierEnabled))) {
-	case "0", "false", "off", "no":
-		return false
+	case "1", "true", "on", "yes":
+		return true
 	}
-	return true
+	return false
 }

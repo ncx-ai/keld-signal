@@ -486,8 +486,9 @@ Served today: `include_entity_text`, `client_telemetry`, `enrichment_schema`
 - `KELD_BLOCKS` · `KELD_BLOCKS_BACKFILL` (default **on** — a fresh install
   reaches blocks that already existed).
 - `KELD_ATTRIBUTION` (off) — on-device block-to-project matching.
-  `KELD_ATTRIBUTION_VERIFIER` (default **on** within the gate) opts a slow
-  machine out of the local LLM verifier step; `KELD_PROJECTS_FILE` declares the
+  `KELD_ATTRIBUTION_VERIFIER=1` (default **off**, since 2026-09-03) opts a
+  machine INTO the local Gemma verifier step and its ~3 GB download — off, the
+  answer's meta says `verifier: opted_out` and the embedding decision stands; `KELD_PROJECTS_FILE` declares the
   project list (wins over an org's remote settings); `KELD_VERIFIER_GGUF` points
   at the verifier's GGUF weights.
 - `KELD_TICK` (off) — characterises work no prompt's look-back reaches. Ships

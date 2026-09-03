@@ -62,13 +62,23 @@ def test_mixed_borderline_verdicts_both_directions():  # AC-5
     finally:
         attribution.set_projects(PROJECTS)
 
-def test_opt_out_env():                        # AC-6
-    os.environ["KELD_ATTRIBUTION_VERIFIER"] = "0"
+def test_opt_in_env():                         # AC-6, default flipped 2026-09-03
+    """OFF by default, even within the attribution gate; only the explicit-on vocabulary
+    turns the Gemma verifier (and, Go-side, its 3 GB download) on. The Go mirror
+    `attrib.VerifierEnabled()` pins the same table in attribution_encoder_test.go."""
+    saved = os.environ.pop("KELD_ATTRIBUTION_VERIFIER", None)
     try:
-        assert verifier.enabled() is False
+        assert verifier.enabled() is False     # default OFF
+        for v in ("1", "true", "on", "yes"):
+            os.environ["KELD_ATTRIBUTION_VERIFIER"] = v
+            assert verifier.enabled() is True, v
+        for v in ("0", "false", "off", "no", "", "maybe"):
+            os.environ["KELD_ATTRIBUTION_VERIFIER"] = v
+            assert verifier.enabled() is False, v
     finally:
-        del os.environ["KELD_ATTRIBUTION_VERIFIER"]
-    assert verifier.enabled() is True          # default ON within the gate
+        os.environ.pop("KELD_ATTRIBUTION_VERIFIER", None)
+        if saved is not None:
+            os.environ["KELD_ATTRIBUTION_VERIFIER"] = saved
 
 def test_no_weights_is_stated_not_fatal():
     old = os.environ.pop("KELD_VERIFIER_GGUF", None)
@@ -84,6 +94,6 @@ if __name__ == "__main__":
     test_only_borderline_pairs_judged()
     test_no_verdict_rejects_a_borderline_pair()
     test_mixed_borderline_verdicts_both_directions()
-    test_opt_out_env()
+    test_opt_in_env()
     test_no_weights_is_stated_not_fatal()
     print("test_attribution_verifier: 6 passed")

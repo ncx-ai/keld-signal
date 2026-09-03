@@ -18,8 +18,12 @@ semantic-ish versioning during `0.x`.
   ever runs on message text leaving the machine. Gated behind two independent
   toggles, both off by default: `KELD_ATTRIBUTION` (the daemon's own switch —
   without it, nothing about attribution runs, not merely the daemon's loop) and
-  `KELD_ATTRIBUTION_VERIFIER` (verifier opt-out within the gate; a machine that
-  opts out states `verifier: opted_out` rather than silently narrowing). Projects
+  `KELD_ATTRIBUTION_VERIFIER` (the Gemma verifier's own switch — ⚠️ **default OFF as
+  of 2026-09-03**, having shipped default-on within the gate; `=1` opts in, and a
+  machine that has not states `verifier: opted_out` rather than silently narrowing.
+  Flipped because the one real-data A/B went 1-for-3 for minutes per block and ~3 GB
+  of weights, and because every quality figure recorded for this feature was measured
+  without it; the GGUF is no longer downloaded unless opted in). Projects
   are declared via `KELD_PROJECTS_FILE` or an org's remote settings; only project
   ids and confidences ever publish — never a project's description or a span of
   message text. Attributed blocks publish `projects` / `projects_status` /

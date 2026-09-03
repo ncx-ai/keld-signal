@@ -1684,7 +1684,14 @@ timings — no text, no span, no offset, in either direction.
   exactly for that reason) runs in its OWN recycled worker child with its own
   `WorkerManager`, its own `KELD_VERIFIER_RSS_MARGIN_MB` (512, half GLiNER2's, because a
   fixed-`n_ctx` GGUF has less room to drift than a transformer on unbounded input), and
-  `KELD_ATTRIBUTION_VERIFIER=0` as its opt-out. So `KELD_SIDECAR_MEM_BUDGET_MB` is now
+  `KELD_ATTRIBUTION_VERIFIER=1` as its opt-IN — ⚠️ **OFF by default since 2026-09-03**
+  (it was on within the gate until then): the one real-data A/B went 1-for-3 for minutes of
+  CPU per block, its 3 GB beside the encoder's 1.7 GB exhausted swap on the benchmark
+  machine, and every figure in `docs/notes/whats-next-attribution.md` §8 was measured
+  without it, so the default now matches what was measured. The provisioner reads the same
+  switch, so a machine that never opts in never fetches the GGUF. Both halves
+  (`attrib.VerifierEnabled`, `verifier.enabled`) mirror one table and change together.
+  So `KELD_SIDECAR_MEM_BUDGET_MB` is now
   spent by **three** children, not one: the verifier's manager subtracts the parent's RSS
   plus the other two children's high-water peaks before computing its own hard limit
   (`_verifier_reserve_rss`), and reports the overrun rather than absorbing it — `/metrics`

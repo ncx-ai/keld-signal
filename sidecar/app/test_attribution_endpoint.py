@@ -384,6 +384,10 @@ def test_the_verifier_is_called_once_per_borderline_project():   # AC-5
     path = _transcript()
     _with_roots(path)
     attribution.set_projects(BAND_PROJECTS)
+    # The verifier is OFF by default (2026-09-03); this test is ABOUT the verifier path, so it
+    # opts in the way an operator would. Without this the route answers `opted_out` and
+    # `_verify_call` is never reached — which would pass the "called once" check vacuously.
+    os.environ["KELD_ATTRIBUTION_VERIFIER"] = "1"
     calls = []
     was_source, was_verify = m._text_source, m._verify_call
     m._text_source = lambda: FakeSource(BandChild())
@@ -418,6 +422,7 @@ def test_a_verifier_that_cannot_load_degrades_and_says_so():   # AC-6
     attribution.set_projects(BAND_PROJECTS)
     was_source, was_verify = m._text_source, m._verify_call
     m._text_source = lambda: FakeSource(BandChild())
+    os.environ["KELD_ATTRIBUTION_VERIFIER"] = "1"   # default is OFF; this test needs it wanted
     os.environ["KELD_VERIFIER_GGUF"] = path
 
     def boom(text, dims, project):

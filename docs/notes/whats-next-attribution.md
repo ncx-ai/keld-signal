@@ -58,12 +58,52 @@ categories compose: an unattributed cluster can be suggested INTO a category's c
 first, and promoted to a named project later. Schema cost: one `parent` field on the project
 definition; report cost: a rollup view.
 
+### 8. Validation of the centring + taxonomy work (2026-09-03), and the decision it forced
+
+76 real blocks from this machine, labelled three ways — with full context, blind from text
+plus the repo line, and blind from text with the repo line explicitly ignored — then every
+arm scored against each. Nothing here is customer data: one person, three days, 96% one
+label, LLM-labelled. It RANKS options; it validates none of them against ground truth.
+
+**Held up.** Centring's gain is real: +0.219 F1 against the no-repo gold, 95% bootstrap
+[+0.110, +0.356], and leave-one-block-out offsets score identically to in-sample (0.730), so
+it is neither noise nor leakage. The four engineering projects' repo sets are disjoint and the
+repo dimension alone scores 0.969 precision against a gold that never saw a repo — genuine
+evidence the signal is right when present. The `project` (directory) dimension is the one to
+match on; the `repo` (git remote) dimension disagrees with it on most blocks and is polluted
+by remotes named in text.
+
+**Did not hold up, and this is the finding that matters.** Remove the repo boost — the
+condition a Jira/Notion-imported customer is in, since `repos` is never declared — and
+centring falls from **0.725 to 0.373 F1 at 0.297 precision**; the shipped rule falls to 0.160.
+Every good number rested on a hand-written repo mapping customers will not have. Without an
+anchor, centring + MARGIN sprays labels (a generic design brief drew capital, demand, gtm
+and trust at once), and the five non-dev projects hub on generic prose — the earlier hub test
+used engineering messages only and missed it. 38% of blocks are undecidable from words; 30%
+have none.
+
+**Decision.** Ship centring ON for Keld's own org (already gated behind `KELD_ATTRIBUTION`,
+tab internal-only): 50-message gate so cold machines behave as today, and a cap of two
+assignments per block. Keep the nine projects declared; read the five non-dev ones as
+data-gathering. Do NOT promise customer-facing attribution: the gap is a deterministic anchor
+customers actually have — ticket keys and imported labels (implemented, untested for want of
+data) — and later the learned repo tag via anchors, priced today at +0.22 F1. `repo-first`
+as a shipped rule is DEAD: it presumes declared repos, and the design already says repos are a
+learned Coding-tier tag with provenance, never customer-authored.
+
+Harnesses: this session's scratchpad (`validate.py`, `arms_stable.py`, `score_vs_norepo.py`);
+port beside `scripts/null_hubness_experiment.py` when the centring work starts.
+
 ## Smaller carried items
 
 - Threshold/MARGIN/VERIFY_HALO calibration on real anchored labels once voting exists
   (never re-tune on synthetic; the fixtures only guard regressions).
-- Gemma skip-by-default decision: take it when two or three more real A/Bs agree with
-  tonight's 1-for-3.
+- ~~Gemma skip-by-default decision: take it when two or three more real A/Bs agree with
+  tonight's 1-for-3.~~ **TAKEN 2026-09-03, on deploy pressure rather than more A/Bs:**
+  `KELD_ATTRIBUTION_VERIFIER` is now default OFF (`=1` opts in), both halves flipped
+  together, GGUF no longer fetched unless opted in. The verifier was never in any of §8's
+  measurements, so the default now matches what was measured. Re-enable per machine to
+  A/B it; the eval's verifier arm still reports what it buys.
 - Verifier freeze-check arm into `installers.yml` before any release (documented gap,
   AGENTS.md).
 - Prototype warts if the proto branch lives longer than planned: GIN index on
