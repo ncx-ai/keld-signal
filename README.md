@@ -486,6 +486,9 @@ Served today: `include_entity_text`, `client_telemetry`, `enrichment_schema`
 - `KELD_BLOCKS` · `KELD_BLOCKS_BACKFILL` (default **on** — a fresh install
   reaches blocks that already existed).
 - `KELD_ATTRIBUTION` (off) — on-device block-to-project matching.
+  `KELD_ATTRIBUTION_SCORING=user-max` is the one-step rollback to the pre-2026-09-03
+  decision (user turns only, per-message max, no centring); the default,
+  `block-mean-centred`, is what was measured and ships.
   `KELD_ATTRIBUTION_VERIFIER=1` (default **off**, since 2026-09-03) opts a
   machine INTO the local Gemma verifier step and its ~3 GB download — off, the
   answer's meta says `verifier: opted_out` and the embedding decision stands; `KELD_PROJECTS_FILE` declares the

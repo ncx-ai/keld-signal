@@ -95,6 +95,9 @@ semantic-ish versioning during `0.x`.
   the uncentred one. Whole-block without centring measured 59%. The attribution meta
   gains `centred` and `background_n`, and `model_versions.scoring` names the rule, so rows
   scored under different rules are never mistaken for comparable.
+  `KELD_ATTRIBUTION_SCORING=user-max` is the one-step rollback to the previous decision. A
+  retried job is folded into the baseline once (block keys remembered, bounded at 2,000),
+  and a baseline that cannot be saved is warned about once per process rather than silently.
 - **`test_attribution_quality.py` now measures the shipped configuration** — whole block,
   mean, centred (baseline primed over the fixtures), verifier only with
   `KELD_ATTRIBUTION_EVAL_VERIFIER=1` — and its floor is re-baselined under that

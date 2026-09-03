@@ -188,7 +188,7 @@ def test_the_gate_is_all_or_nothing_and_a_reworded_document_resets_it():
     attribution.MIN_BACKGROUND = 2
     try:
         ka, kb = attribution.Offsets.key("doc A"), attribution.Offsets.key("doc B")
-        off.observe({ka: [1.0, 0.0], kb: [0.0, 1.0]}, [[1.0, 0.0], [1.0, 0.0]])
+        off.observe({"user": ({ka: [1.0, 0.0], kb: [0.0, 1.0]}, [[1.0, 0.0], [1.0, 0.0]])})
         assert off.for_docs([ka, kb]) is not None            # both have 2
         kc = attribution.Offsets.key("doc B, reworded")
         assert kc != kb
@@ -227,6 +227,50 @@ def test_each_stream_is_centred_against_its_own_baseline():
     finally:
         attribution.MIN_BACKGROUND = saved
 
+
+def test_a_retried_block_is_folded_into_the_baseline_once():
+    """A held job (publish failure, sidecar respawn) is re-POSTed and re-scored. Without the
+    seen-set the same messages would enter the running mean on every attempt and tilt the
+    baseline toward whichever blocks happened to be retried. Same key -> skipped whole;
+    a different key -> folded; `None` (tests, the eval) -> always folded."""
+    off = attribution.Offsets(None)
+    ka = attribution.Offsets.key("doc A")
+    stream = {"user": ({ka: [1.0, 0.0]}, [[1.0, 0.0]])}
+    off.observe(stream, block_key="s1@100")
+    off.observe(stream, block_key="s1@100")          # the retry
+    assert off.count([ka]) == 1, off.count([ka])
+    off.observe(stream, block_key="s1@200")
+    assert off.count([ka]) == 2
+    off.observe(stream)                                # keyless: always counted
+    assert off.count([ka]) == 3
+
+
+def test_the_legacy_scoring_flag_restores_the_pre_change_decision_exactly():
+    """`KELD_ATTRIBUTION_SCORING=user-max` is the one-step rollback: user turns only,
+    per-message MAX, no centring applied and none observed, and the fingerprint says so.
+    The module reads the variable at import, so the test flips the resolved constant."""
+    attribution.set_projects(_geom_projects("legacy"))
+    saved = attribution.SCORING
+    attribution.SCORING = attribution.SCORING_LEGACY
+    try:
+        off = attribution.Offsets(None)
+        enc = TwoTextEncoder()
+        # A (Payments) + B (chat): MEAN would tie pay 0.5 / null 0.5 and assign nothing;
+        # MAX scores pay 1.0 and null 1.0 — also a tie. So use A, A, B: MEAN pay 0.667 /
+        # null 0.333 assigns; MAX pay 1.0 / null 1.0 does NOT. Legacy must NOT assign.
+        scores, _, assigned, _, _, c = attribution.score_block(["A", "A", "B"], {}, enc,
+                                                               offsets=off, n_user=3)
+        assert assigned == [], (scores, assigned)
+        assert c == {"applied": False, "background_n": 0}, c
+        assert off.count([attribution.Offsets.key(attribution.NULL_DOC)]) == 0, "legacy observes nothing"
+        # And attribute_block drops the assistant stream under legacy.
+        out = attribution.attribute_block([], {}, encoder=enc, verifier_obj=None,
+                                          asst_texts=["A"], offsets=off)
+        assert out["projects"] == [] and out["attribution"]["embed_ms"] == 0, out
+        assert attribution.MODEL_VERSIONS  # still importable; the fingerprint is computed at import
+    finally:
+        attribution.SCORING = saved
+
 if __name__ == "__main__":
     test_metadata_boost_model_free()
     test_embedding_ranking_assigns_the_winner()
@@ -237,4 +281,6 @@ if __name__ == "__main__":
     test_centring_waits_for_the_gate_then_subtracts_the_running_mean()
     test_the_gate_is_all_or_nothing_and_a_reworded_document_resets_it()
     test_each_stream_is_centred_against_its_own_baseline()
-    print("test_attribution_scoring: 9 passed")
+    test_a_retried_block_is_folded_into_the_baseline_once()
+    test_the_legacy_scoring_flag_restores_the_pre_change_decision_exactly()
+    print("test_attribution_scoring: 11 passed")

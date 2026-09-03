@@ -30,12 +30,15 @@ vector set that does not match `current_projects()`'s hash at the moment it
 was produced."""
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
 import time
 
 from app.analysis import concepts
+
+_log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _encode_lock = threading.Lock()
@@ -222,7 +225,7 @@ def _cos(a, b):
     return sum(x * y for x, y in zip(a, b))
 
 
-# --- Pooling and centring: the two changes measured on 2026-09-03 --------------
+# --- Scoring mode, pooling and centring: measured on 2026-09-03 -------------------
 #
 # ⚠️ BOTH ARE MEASURED, AND NEITHER IS ENOUGH ALONE. Over 61 real, labelled blocks
 # on the machine that built this (docs/notes/whats-next-attribution.md §9):
@@ -252,15 +255,29 @@ def _cos(a, b):
 # (decision agreement with the settled offsets 77% at n=5, 74% at n=10, 93% at
 # n=50, 97% at n=100), and a half-fitted offset is not a gentler correction but a
 # different one.
-POOLING = "mean"
+# The scoring rule, and its one-step rollback. `block-mean-centred` is what was measured
+# and ships. `KELD_ATTRIBUTION_SCORING=user-max` restores the pre-2026-09-03 decision
+# EXACTLY — user turns only, per-message MAX, no centring, no baseline observed — so a
+# machine that regresses can be put back with one environment variable and no code change.
+# The mode is stamped into `model_versions.scoring`, so rows from the two rules are never
+# mistaken for comparable. Read at import, like every other KELD_* knob in this module.
+SCORING_DEFAULT, SCORING_LEGACY = "block-mean-centred", "user-max"
+SCORING = os.environ.get("KELD_ATTRIBUTION_SCORING", SCORING_DEFAULT).strip().lower() \
+    or SCORING_DEFAULT
 MIN_BACKGROUND = int(os.environ.get("KELD_ATTRIBUTION_MIN_BACKGROUND", "50"))
 
 
-def _pool(values):
+def legacy_scoring():
+    return SCORING == SCORING_LEGACY
+
+
+def _pool(values, how):
+    """`how` is "mean" (the measured rule) or "max" (the legacy one) — a parameter chosen by
+    the scoring mode, never a module constant with a single value."""
     values = list(values)
     if not values:
         return 0.0
-    return max(values) if POOLING == "max" else sum(values) / len(values)
+    return max(values) if how == "max" else sum(values) / len(values)
 
 
 class Offsets:
@@ -282,18 +299,30 @@ class Offsets:
     raw register bias against corrected competitors, which is the failure this
     class exists to remove, applied to one column."""
 
+    #: Blocks remembered so a RETRIED job does not fold the same messages in twice. A held
+    #: job (publish failure, sidecar respawn) is re-POSTed and re-scored; without this the
+    #: baseline would tilt toward whichever blocks happened to be retried. Bounded, oldest
+    #: dropped: after this many blocks a repeat is both unlikely and harmless.
+    MAX_SEEN = 2000
+
     def __init__(self, path=None):
         self.path = path
         self._stats = {}
+        self._seen = []
         self._lock = threading.Lock()
+        self._save_failed = False
         if path and os.path.exists(path):
             try:
                 with open(path) as fh:
                     raw = json.load(fh)
-                self._stats = {k: [float(v[0]), int(v[1])] for k, v in raw.items()
+                # {"stats": {...}, "seen": [...]} — or the first-day flat shape, stats only.
+                stats = raw.get("stats", raw) if isinstance(raw, dict) else {}
+                self._stats = {k: [float(v[0]), int(v[1])] for k, v in stats.items()
                                if isinstance(v, list) and len(v) == 2}
-            except (OSError, ValueError, TypeError):
-                self._stats = {}
+                seen = raw.get("seen", []) if isinstance(raw, dict) else []
+                self._seen = [str(x) for x in seen][-self.MAX_SEEN:]
+            except (OSError, ValueError, TypeError, AttributeError):
+                self._stats, self._seen = {}, []
 
     @staticmethod
     def key(doc_text, stream="user"):
@@ -315,18 +344,30 @@ class Offsets:
                 return None
             return {k: self._stats[k][0] / self._stats[k][1] for k in keys}
 
-    def observe(self, doc_vectors, message_vectors):
-        """Fold one block's message vectors into every document's running mean.
-        Called AFTER the block is scored, so a block never centres on itself."""
-        if not message_vectors:
+    def observe(self, streams, block_key=None):
+        """Fold one block into every document's running mean, per stream.
+
+        `streams` is `{stream: (doc_vectors, message_vectors)}` — every stream of ONE block
+        in one call, so the block is remembered once whether it had one stream or two.
+        Called AFTER the block is scored, so a block never centres on itself. A `block_key`
+        already seen is a retried job and is skipped whole; `None` (tests, the eval's own
+        bookkeeping) is always folded."""
+        if not any(vecs for _, vecs in streams.values()):
             return
         with self._lock:
-            for k, dv in doc_vectors.items():
-                s, n = self._stats.get(k, [0.0, 0])
-                for mv in message_vectors:
-                    s += _cos(mv, dv)
-                    n += 1
-                self._stats[k] = [s, n]
+            if block_key is not None:
+                if block_key in self._seen:
+                    return
+                self._seen.append(block_key)
+                if len(self._seen) > self.MAX_SEEN:
+                    del self._seen[:len(self._seen) - self.MAX_SEEN]
+            for doc_vectors, message_vectors in streams.values():
+                for k, dv in doc_vectors.items():
+                    s, n = self._stats.get(k, [0.0, 0])
+                    for mv in message_vectors:
+                        s += _cos(mv, dv)
+                        n += 1
+                    self._stats[k] = [s, n]
             self._save()
 
     def _save(self):
@@ -336,11 +377,20 @@ class Offsets:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             tmp = self.path + ".tmp"
             with open(tmp, "w") as fh:
-                json.dump(self._stats, fh)
+                json.dump({"stats": self._stats, "seen": self._seen}, fh)
             os.chmod(tmp, 0o600)
             os.replace(tmp, self.path)
-        except OSError:
-            pass     # a baseline that could not be saved is re-learned; never fatal
+            self._save_failed = False
+        except OSError as exc:
+            # A baseline that cannot be saved is re-learned after a restart — never fatal.
+            # But silent is not the same as harmless: a machine that can never persist will
+            # re-learn from zero on EVERY restart and sit uncentred for its first 50 messages
+            # each time. Say so once per process, not once per block.
+            if not self._save_failed:
+                self._save_failed = True
+                _log.warning("attribution: centring baseline could not be saved to %s (%s); "
+                             "it will be re-learned after a restart", self.path,
+                             exc.__class__.__name__)
 
 
 def default_offsets_path():
@@ -353,12 +403,13 @@ def default_offsets_path():
 USER_STREAM, ASST_STREAM = "user", "asst"
 
 
-def score_block(texts, dims, encoder, offsets=None, n_user=None):
+def score_block(texts, dims, encoder, offsets=None, n_user=None, block_key=None):
     """Hybrid score per project over one block's texts — the WHOLE block, user
     and assistant turns alike, as the caller hands them.
 
-    Similarity is per-message cosine, pooled by `POOLING` (MEAN — see the
-    measurement above `POOLING` for why not MAX), then centred by subtracting
+    Similarity is per-message cosine, pooled by MEAN under the shipped scoring mode (see
+    the measurement above `SCORING` for why not MAX; `KELD_ATTRIBUTION_SCORING=user-max`
+    is the legacy rule), then centred by subtracting
     each document's running baseline when `offsets` is given and its gate is
     met. Text vectors are L2-normalised here before the dot product (`_l2`,
     the same helper `project_vectors` uses): the real encoder
@@ -419,11 +470,13 @@ def score_block(texts, dims, encoder, offsets=None, n_user=None):
         doc_text = {p["id"]: project_doc(p) for p in projects}
         doc_text[NULL_ID] = NULL_DOC
 
+        how = "max" if legacy_scoring() else "mean"
         # One offset per (stream, document), keyed by document TEXT so a reworded
         # project starts a fresh baseline. Gated on the streams THIS block uses.
+        # Under the legacy rule there is no centring and no baseline is observed.
         off = None
         used_streams = sorted(set(streams))
-        if offsets is not None:
+        if offsets is not None and not legacy_scoring():
             keys = {(st, did): Offsets.key(doc_text[did], st)
                     for st in used_streams for did in docs}
             off = offsets.for_docs(keys.values())
@@ -435,14 +488,15 @@ def score_block(texts, dims, encoder, offsets=None, n_user=None):
                 yield _cos(tv, docs[did]) - (off[keys[(st, did)]] if off else 0.0)
 
         for p in projects:
-            sims[p["id"]] = _pool(centred_sims(p["id"]))
-        null_sim = _pool(centred_sims(NULL_ID))
+            sims[p["id"]] = _pool(centred_sims(p["id"]), how)
+        null_sim = _pool(centred_sims(NULL_ID), how)
         encoder_used = True
-        if offsets is not None:
-            # Observe AFTER deciding, so no block centres on itself — per stream.
-            for st in used_streams:
-                offsets.observe({Offsets.key(doc_text[did], st): docs[did] for did in docs},
-                                [tv for s_, tv in zip(streams, tvecs) if s_ == st])
+        if offsets is not None and not legacy_scoring():
+            # Observe AFTER deciding, so no block centres on itself — every stream of the
+            # block in one call, so a retried block is skipped whole.
+            offsets.observe({st: ({Offsets.key(doc_text[did], st): docs[did] for did in docs},
+                                  [tv for s_, tv in zip(streams, tvecs) if s_ == st])
+                             for st in used_streams}, block_key)
     scores = {}
     for p in projects:
         boost = metadata_boost(p, dims, texts)
@@ -542,7 +596,8 @@ MODEL_VERSIONS = {"encoder": "qwen3-embedding-0.6b", "verifier": "gemma-4-e2b-q4
                   # The scoring RULE, for the same reason as null_doc: rows scored
                   # user-only/max/uncentred and rows scored whole-block/mean/centred
                   # are not comparable, and nothing else on the row would say so.
-                  "scoring": f"block-{POOLING}-centred-perstream-v1"}
+                  "scoring": ("user-max-uncentred-v0" if legacy_scoring()
+                              else "block-mean-centred-perstream-v1")}
 
 
 def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state, concept_ms=0,
@@ -596,7 +651,7 @@ def pending():
 
 
 def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_out",
-                    asst_texts=(), offsets=None):
+                    asst_texts=(), offsets=None, block_key=None):
     """ONE block's attribution answer: `{status, projects, attribution}`.
 
     The whole decision and nothing else — no HTTP, no file, no environment.
@@ -655,13 +710,15 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
     if not projects:
         return stated(STATUS_SKIPPED_NO_PROJECTS, encoder_state)
     texts = list(texts)
-    asst_texts = list(asst_texts)
+    # The legacy rule read the user stream alone; under it the assistant turns are dropped
+    # here so `score_block` sees exactly the pre-2026-09-03 input.
+    asst_texts = [] if legacy_scoring() else list(asst_texts)
     if not texts and not asst_texts:
         return {"status": STATUS_ATTRIBUTED, "projects": [], "concepts": [],
                 "attribution": _meta(0, 0, 0, encoder_state, "not_needed")}
 
     # ⚠️ THE WHOLE BLOCK IS SCORED; ONLY THE USER'S WORDS FEED CONCEPTS AND THE
-    # VERIFIER. Scoring reads user and assistant turns together (see POOLING for
+    # VERIFIER. Scoring reads user and assistant turns together (see SCORING for
     # the measurement — 28% right on user text alone, 92% on the whole block,
     # and the assistant's reply is the only text a block with no prompt has).
     # `concepts` stays on USER text: it PUBLISHES phrases, and the privacy
@@ -672,7 +729,7 @@ def attribute_block(texts, dims, encoder, verifier_obj, verifier_absent="opted_o
     # the scored list so their vectors are the leading slice of `tvecs`.
     t0 = time.time()
     scores, borderline, assigned, encoder_used, tvecs, centring = score_block(
-        texts + asst_texts, dims, encoder, offsets, n_user=len(texts))
+        texts + asst_texts, dims, encoder, offsets, n_user=len(texts), block_key=block_key)
     embed_ms = int((time.time() - t0) * 1000)
     user_vecs = tvecs[:len(texts)] if tvecs else []
     found, concept_ms = concepts.extract(texts, user_vecs, encoder if encoder_used else None)

@@ -368,7 +368,7 @@ def main():
     t_prime = time.time()
     for conv in conversations:
         attribution.score_block(_block_texts(conv), conv["metadata"], encoder, offsets,
-                                n_user=len(_user_texts(conv)))
+                                n_user=len(_user_texts(conv)), block_key=conv["id"])
     prime_s = time.time() - t_prime
     keys = [attribution.Offsets.key(attribution.project_doc(p), st) for p in projects
             for st in (attribution.USER_STREAM, attribution.ASST_STREAM)] + \
@@ -391,8 +391,11 @@ def main():
     for conv in conversations:
         texts = _block_texts(conv)
         t_embed = time.time()
+        # Same block_key as the priming pass, so the scored pass is a retry in the baseline's
+        # eyes and folds nothing in a second time.
         scores, borderline, assigned, used, _tv, centring = attribution.score_block(
-            texts, conv["metadata"], encoder, offsets, n_user=len(_user_texts(conv)))
+            texts, conv["metadata"], encoder, offsets, n_user=len(_user_texts(conv)),
+            block_key=conv["id"])
         centred_blocks += centring["applied"]
         embed_ms_total += int((time.time() - t_embed) * 1000)
         cut_only = set(assigned)

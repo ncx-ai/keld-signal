@@ -1623,7 +1623,7 @@ def _span_texts(path, start, end):
     how the structurally-silent third of a machine's work becomes attributable. The feared
     failure ("whatever the assistant happened to name") did occur, on 4 of 61: a reply about a
     task queue landed a block on the wrong project. It is the minority mode, and MEAN pooling
-    (attribution.POOLING) is what keeps one tangent from deciding a block.
+    (mean, under attribution.SCORING) is what keeps one tangent from deciding a block.
 
     The two streams are returned SEPARATELY because they are not used alike downstream: both
     are scored, but only the user's words feed `concepts` (which publishes phrases) and the
@@ -1687,7 +1687,8 @@ def _warm_encoder_async(child):
         return _WARM_THREAD
 
 
-def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent, asst_texts=()):
+def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent, asst_texts=(),
+                        block_key=None):
     """The whole of /attribute's decision, on an executor thread.
 
     Both failure modes it translates are ones the decision itself cannot see: whether the
@@ -1700,7 +1701,7 @@ def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent, ass
         try:
             return attribution.attribute_block(texts, dims, encoder, verifier_obj,
                                                verifier_absent, asst_texts=asst_texts,
-                                               offsets=offsets)
+                                               offsets=offsets, block_key=block_key)
         except _VerifierUnavailable:
             # The threshold still answers, and the meta NAMES the verifier's absence rather
             # than letting a narrower decision look like the full one (AC-6). Re-run rather
@@ -1708,7 +1709,8 @@ def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent, ass
             # on it, and the re-run costs one re-encode of a block on a path that fires once
             # per process (the failed load is latched).
             return attribution.attribute_block(texts, dims, encoder, None, "unavailable",
-                                               asst_texts=asst_texts, offsets=offsets)
+                                               asst_texts=asst_texts, offsets=offsets,
+                                               block_key=block_key)
     except _EncoderNotReady as exc:
         # Outside both, so the re-run's own encode is covered too.
         return _encoder_status_answer(exc.status)
@@ -1839,7 +1841,11 @@ async def attribute(body: AttributeIn):
             verifier_obj = _WorkerVerifier()
     return await loop.run_in_executor(
         None, _attribute_blocking, texts, body.dims, _EncoderAdapter(child),
-        verifier_obj, verifier_absent, asst_texts)
+        verifier_obj, verifier_absent, asst_texts,
+        # The block's identity, (session, start) — what Atlas upserts on and what the
+        # daemon's durable job is keyed by — so a re-POSTed job is folded into the
+        # centring baseline once, not once per attempt.
+        f"{body.session_id}@{body.start}")
 
 
 @app.post("/match")

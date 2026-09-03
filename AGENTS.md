@@ -1788,6 +1788,14 @@ timings — no text, no span, no offset, in either direction.
   offset measured non-monotone. Whole-block without centring measured 59%. The attribution
   meta carries `centred` and `background_n`, and `model_versions.scoring` names the rule,
   because centred and uncentred rows differ on ~40% of blocks and nothing else would say so.
+  **Rollback is one environment variable:** `KELD_ATTRIBUTION_SCORING=user-max` restores the
+  pre-2026-09-03 decision exactly (user turns only, MAX, no centring, no baseline observed)
+  and stamps `scoring: user-max-uncentred-v0`. The baseline file is `{"stats", "seen"}`:
+  `seen` is the last 2,000 block keys folded in, so a RETRIED job (held on publish failure,
+  re-POSTed after a sidecar respawn) enters the running mean once, not once per attempt. A
+  baseline that cannot be saved is re-learned after a restart and warned about ONCE per
+  process — never silently, because a machine that can never persist sits uncentred for its
+  first 50 messages after every restart.
 - **Quality.** The 0.823 recorded before this was measured under the OLD absolute threshold
   with user-only text and the verifier on — a pipeline that no longer exists in three ways.
   `sidecar/app/test_attribution_quality.py` (opt-in, `KELD_ATTRIBUTION_EVAL=1`) now scores

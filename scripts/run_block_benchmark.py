@@ -47,7 +47,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "sidecar"))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
-from block_benchmark import load_benchmark  # noqa: E402
+from block_benchmark import load_benchmark, pg_ts  # noqa: E402
 
 VEC_CACHE = os.path.expanduser(os.environ.get("KELD_BENCH_VECS", "~/.cache/keld-bench-vecs.pkl"))
 SEED_CACHE = os.environ.get("KELD_BENCH_SEED_VECS", "")   # an older cache to seed from
@@ -61,16 +61,6 @@ def prf(tp, fp, fn):
     p = tp / (tp + fp) if tp + fp else 1.0
     r = tp / (tp + fn) if tp + fn else 1.0
     return p, r, (2 * p * r / (p + r) if p + r else 0.0)
-
-
-def pg_ts(s):
-    t = s.strip().replace(" ", "T")
-    if re.search(r"[+-]\d{2}$", t):
-        t += ":00"
-    try:
-        return datetime.fromisoformat(t)
-    except ValueError:
-        return None
 
 
 def main():
