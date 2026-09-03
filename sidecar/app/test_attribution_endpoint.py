@@ -10,6 +10,7 @@ import datetime as _dt
 import json
 import os
 import tempfile
+import time
 
 from app.analysis import attribution
 from app.analysis import concepts as concepts_mod
@@ -206,19 +207,66 @@ class FakeChild:
     proves the adaptation exists."""
 
     def __init__(self, state="ready", status="ok"):
-        self.state, self._status, self.seen = state, status, []
+        self.state, self._status, self.seen, self.beats = state, status, [], 0
 
-    def encode(self, texts):
+    def encode(self, texts, on_batch=None):
+        # ⚠️ The `on_batch` parameter is not optional decoration on this fake: the production
+        # encoder grew it as the attribution watchdog's LIVENESS SIGNAL, and a fake without it
+        # raises TypeError inside the adapter — which the warm-up thread swallows, so the only
+        # symptom is an encoder that mysteriously never ran. Faithful fakes are what stopped that
+        # from being a five-minute mystery twice.
         self.seen.append(list(texts))
+        if on_batch is not None:
+            self.beats += 1
+            on_batch(1, 1, 0.0)
         if self._status != "ok":
             return [], self._status
         return [[1.0, 0.0] if ("Payments" in t or "stripe" in t) else [0.0, 1.0]
                 for t in texts], "ok"
 
+    def kill_child(self):
+        return False
+
 
 class FakeSource:
     def __init__(self, child):
         self.encoder = child
+
+
+def _reset_queue(m):
+    """A fresh attribution queue for one test, with the real drain thread disarmed.
+
+    Two things, both necessary. The queue is process state that deliberately survives a request —
+    that is its whole job — so tests have to reset it or one test's finished block is the next
+    test's `done`. And `_ensure_attrib_worker` starts a REAL background thread that would take
+    the job the instant the route submits it: the test would then be racing the worker for its
+    own fixture, which shows up as a drain that finds nothing (and, worse, sometimes finds it).
+    These tests drive `_attribute_job` directly for determinism; `test_attribqueue` is where the
+    queue's own concurrency rules are pinned."""
+    from app.analysis import attribqueue
+    m._ATTRIB_QUEUE = attribqueue.Queue()
+    m._ensure_attrib_worker = lambda: None
+    return m._ATTRIB_QUEUE
+
+
+def _drain(m, expect=1):
+    """Run the queued jobs the way the worker thread would, synchronously.
+
+    Deliberately drives `_attribute_job` rather than starting the real thread: the ordering and
+    watchdog rules are `test_attribqueue`'s subject, and what these tests need is a determinstic
+    "the encode happened" without a sleep loop in the middle of an assertion."""
+    q = m._ATTRIB_QUEUE
+    ran = 0
+    while True:
+        job = q.take()
+        if job is None:
+            break
+        result = m._attribute_job(job, q)
+        if result is not None:
+            q.finish(job.key, result)
+        ran += 1
+    assert ran == expect, f"drained {ran} jobs, expected {expect}"
+    return q
 
 
 def _main():
@@ -234,6 +282,7 @@ def _with_roots(path):
     os.environ["KELD_ANALYZE_ROOTS"] = os.path.dirname(path)
     os.environ["KELD_TEXTEMBED"] = "1"
     os.environ["KELD_TEXTEMBED_DIR"] = _TMP      # a real directory: "weights are provisioned"
+    _reset_queue(_main())
 
 
 def test_the_route_is_confined_to_the_analyze_roots():
@@ -278,6 +327,13 @@ def test_the_route_reads_both_streams_inside_the_span_and_adapts_the_real_encode
     was = m._text_source
     m._text_source = lambda: FakeSource(child)
     try:
+        # ⚠️ TWO CALLS, because the encode is no longer inside the request: the first hands the
+        # block to the queue and answers `pending`, the drain does the work, the second collects
+        # the answer. Everything this test pins about WHAT is encoded is unchanged by that.
+        queued = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600,
+                       dims={"repo": "acme-billing"})
+        assert queued["status"] == "pending", queued
+        _drain(m)
         out = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600,
                     dims={"repo": "acme-billing"})
     finally:
@@ -335,10 +391,15 @@ def test_an_encoder_that_cannot_answer_is_pending_not_a_wrong_answer():
     was = m._text_source
     m._text_source = lambda: FakeSource(child)
     try:
+        assert _call(m, path=path, start=T0, end=T0 + 600, dims={})["status"] == "pending"
+        _drain(m)
         out = _call(m, path=path, start=T0, end=T0 + 600, dims={})
     finally:
         m._text_source = was
+    # `pending` from the WORKER, not merely from the hand-over: the encode ran, the encoder could
+    # not answer, and the block is left for a later sweep rather than given a confident answer.
     assert out["status"] == "pending" and out["projects"] == [], out
+    assert child.seen, "the worker never reached the encoder"
 
 
 def test_absent_weights_state_degraded_and_attribute_nothing():   # AC-4, amended
@@ -384,8 +445,11 @@ class BandChild(FakeChild):
 
     ⚠️ Null matched by IDENTITY, not by a copied phrase — see `MidEncoder` above."""
 
-    def encode(self, texts):
+    def encode(self, texts, on_batch=None):
         self.seen.append(list(texts))
+        if on_batch is not None:
+            self.beats += 1
+            on_batch(1, 1, 0.0)
         out = []
         for t in texts:
             if t == attribution.NULL_DOC: out.append([0.0, 1.0, 0.0])
@@ -417,6 +481,9 @@ def test_the_verifier_is_called_once_per_borderline_project():   # AC-5
     os.environ["KELD_VERIFIER_GGUF"] = path
 
     try:
+        assert asyncio.run(m.attribute(m.AttributeIn(
+            path=path, start=T0, end=T0 + 600, dims={})))["status"] == "pending"
+        _drain(m)
         out = asyncio.run(m.attribute(m.AttributeIn(path=path, start=T0, end=T0 + 600, dims={})))
     finally:
         m._text_source, m._verify_call = was_source, was_verify
@@ -451,6 +518,9 @@ def test_a_verifier_that_cannot_load_degrades_and_says_so():   # AC-6
     m._verify_call = boom
 
     try:
+        assert asyncio.run(m.attribute(m.AttributeIn(
+            path=path, start=T0, end=T0 + 600, dims={})))["status"] == "pending"
+        _drain(m)
         out = asyncio.run(m.attribute(m.AttributeIn(path=path, start=T0, end=T0 + 600, dims={})))
     finally:
         m._text_source, m._verify_call = was_source, was_verify
@@ -490,6 +560,190 @@ def test_an_unreadable_transcript_is_refused_rather_than_answered():
         assert exc.status_code == 410, exc.status_code
     finally:
         m._text_source = was
+
+
+# --- the hand-over: the encode is no longer inside the request -------------------------------
+
+def test_the_route_answers_pending_immediately_while_the_encoder_is_busy():
+    """T15. THE test for this design.
+
+    The encode used to run inside the request, and the daemon bounds that request at two
+    minutes — so a block that took longer was abandoned mid-encode, its answer discarded, and
+    the job re-queued to be encoded from scratch behind the encode nobody had cancelled.
+    Measured on a real machine: 79 spooled jobs, an encoder pinned at 194% CPU for 1h48m, two
+    blocks attributed in fifteen minutes.
+
+    A child that would block for a very long time stands in for that here. If the route still
+    awaited the encode this test would hang rather than fail, which is the honest shape of the
+    bug: the caller waits, and waiting is exactly what it must never do."""
+    m = _main()
+    path = _transcript()
+    _with_roots(path)
+    attribution.set_projects(PROJECTS)
+
+    class NeverAnswers(FakeChild):
+        def encode(self, texts, on_batch=None):
+            raise AssertionError("the request path must not reach the encoder")
+
+    was = m._text_source
+    m._text_source = lambda: FakeSource(NeverAnswers())
+    try:
+        started = time.monotonic()
+        out = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600, dims={})
+        elapsed = time.monotonic() - started
+    finally:
+        m._text_source = was
+    assert out["status"] == "pending", out
+    assert elapsed < 1.0, f"the request path waited {elapsed:.1f}s"
+    assert m._ATTRIB_QUEUE.stats()["waiting"] == 1, m._ATTRIB_QUEUE.stats()
+
+
+def test_re_asking_for_a_queued_block_does_not_read_the_transcript_again():
+    """T18. The daemon re-POSTs every pending block on every 45s sweep, up to 24 of them. If
+    each of those re-read its transcript, a queued backlog would cost two dozen file scans a
+    minute to answer a question this process already knows the answer to — and on a 90 MB
+    transcript that is not free. The queue is therefore consulted BEFORE the span is read."""
+    m = _main()
+    path = _transcript()
+    _with_roots(path)
+    attribution.set_projects(PROJECTS)
+    was_source, was_span = m._text_source, m._span_texts
+    reads = []
+    m._text_source = lambda: FakeSource(FakeChild())
+    m._span_texts = lambda p, a, b: (reads.append(p), was_span(p, a, b))[1]
+    try:
+        assert _call(m, path=path, session_id="s1", start=T0, end=T0 + 600)["status"] == "pending"
+        assert len(reads) == 1, reads
+        for _ in range(10):          # ten sweeps' worth of re-asking
+            assert _call(m, path=path, session_id="s1", start=T0,
+                         end=T0 + 600)["status"] == "pending"
+        assert len(reads) == 1, f"the transcript was re-read {len(reads)} times"
+        assert m._ATTRIB_QUEUE.counts["submitted"] == 1, m._ATTRIB_QUEUE.counts
+    finally:
+        m._text_source, m._span_texts = was_source, was_span
+
+
+def test_the_stored_answer_is_returned_on_a_later_call_and_only_once():
+    """T17/T3 at the route. The daemon collects on its next sweep; a second collect must find
+    nothing, because the daemon has deleted its durable job by then and a re-delivery could only
+    ever belong to a block that no longer exists."""
+    m = _main()
+    path = _transcript()
+    _with_roots(path)
+    attribution.set_projects(PROJECTS)
+    was = m._text_source
+    m._text_source = lambda: FakeSource(FakeChild())
+    try:
+        _call(m, path=path, session_id="s1", start=T0, end=T0 + 600, dims={"repo": "acme-billing"})
+        _drain(m)
+        first = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600,
+                      dims={"repo": "acme-billing"})
+        assert first["status"] == "attributed", first
+        assert [p["id"] for p in first["projects"]] == ["proj_pay"], first
+        assert first["attribution"]["embed_ms"] >= 0, first["attribution"]
+        # Asking again re-queues it as a NEW block rather than replaying the old answer.
+        second = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600,
+                       dims={"repo": "acme-billing"})
+        assert second["status"] == "pending", second
+    finally:
+        m._text_source = was
+
+
+def test_the_worker_beats_once_per_batch_so_the_watchdog_can_see_it():
+    """The wiring between the two halves: the queue's heartbeat is only fed because the worker
+    hands `Encoder.encode` a callback. Nothing else connects them, and a silent worker would be
+    killed after one window however healthy it was."""
+    m = _main()
+    path = _transcript()
+    _with_roots(path)
+    attribution.set_projects(PROJECTS)
+    child = FakeChild()
+    was = m._text_source
+    m._text_source = lambda: FakeSource(child)
+    try:
+        _call(m, path=path, session_id="s1", start=T0, end=T0 + 600)
+        _drain(m)
+    finally:
+        m._text_source = was
+    assert child.beats >= 1, "the worker never fed the heartbeat"
+
+
+def test_the_terminal_statuses_are_still_answered_without_the_queue():
+    """T16. Every decision that needs no encoder must still be made on the request path. If the
+    queue swallowed one of these the daemon would be told `pending` about a block that can never
+    move, and would ask again forever."""
+    m = _main()
+    path = _transcript()
+
+    # no projects declared
+    _with_roots(path)
+    attribution.set_projects([])
+    out = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600)
+    assert out["status"] == "skipped:no_projects", out
+    assert m._ATTRIB_QUEUE.stats()["waiting"] == 0, "a decidable block was queued"
+
+    # the text encoder is switched off on this machine
+    _with_roots(path)
+    attribution.set_projects(PROJECTS)
+    was = m._text_source
+    m._text_source = lambda: None
+    try:
+        out = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600)
+    finally:
+        m._text_source = was
+    assert out["status"] == "skipped:disabled", out
+    assert m._ATTRIB_QUEUE.stats()["waiting"] == 0, "a decidable block was queued"
+
+    # the weights are not provisioned
+    _with_roots(path)
+    os.environ["KELD_TEXTEMBED_DIR"] = os.path.join(_TMP, "no-such-weights")
+    m._text_source = lambda: FakeSource(FakeChild())
+    try:
+        out = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600)
+    finally:
+        m._text_source = was
+        os.environ["KELD_TEXTEMBED_DIR"] = _TMP
+    assert out["status"] == "degraded:weights_unavailable", out
+    assert m._ATTRIB_QUEUE.stats()["waiting"] == 0, "a decidable block was queued"
+
+
+def test_a_quarantined_block_stops_being_pending():
+    """Four genuine failures retire a block. Answering `pending` after that would have the
+    daemon re-POST it on every sweep forever — a job that can never finish and can never be
+    given up on, which is the leak `pending` is otherwise safe from."""
+    m = _main()
+    path = _transcript()
+    _with_roots(path)
+    attribution.set_projects(PROJECTS)
+    q = m._ATTRIB_QUEUE
+    was = m._text_source
+    m._text_source = lambda: FakeSource(FakeChild())
+    try:
+        _call(m, path=path, session_id="s1", start=T0, end=T0 + 600)
+        for _ in range(4):                       # four heartbeat kills
+            job = q.take()
+            q.fail(job.key, "heartbeat")
+        out = _call(m, path=path, session_id="s1", start=T0, end=T0 + 600)
+    finally:
+        m._text_source = was
+    assert out["status"] == "degraded:weights_unavailable", out
+    assert q.stats()["quarantined"] == 1, q.stats()
+
+
+def test_the_metrics_block_appears_only_once_a_queue_exists():
+    """/metrics must describe this subsystem without CREATING it: a machine with attribution off
+    reports the absence, exactly as `verifier` reports `built: false`."""
+    m = _main()
+    was, m._ATTRIB_QUEUE = m._ATTRIB_QUEUE, None
+    try:
+        assert m._attribution_stats() is None
+    finally:
+        m._ATTRIB_QUEUE = was
+    q = _reset_queue(m)
+    q.submit(__import__("app.analysis.attribqueue", fromlist=["x"]).Job("s@1", "/t", 1.0, 2.0))
+    stats = m._attribution_stats()
+    assert stats["waiting"] == 1 and stats["running"] is False, stats
+    assert "heartbeat_timeout_s" in stats and "counts" in stats, stats
 
 
 if __name__ == "__main__":

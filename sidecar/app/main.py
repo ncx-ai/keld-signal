@@ -199,6 +199,20 @@ async def lifespan(app: FastAPI):
                     await loop.run_in_executor(None, src.poll)
             except Exception:
                 pass
+            # ⚠️ THE ATTRIBUTION WATCHDOG RIDES THIS LOOP, AND IT IS THE ONLY THING THAT CAN
+            # FREE A HUNG ENCODER. The drain thread sits inside `Encoder.encode` holding the
+            # encoder lock for the length of a block, so nothing that waits on that lock can
+            # ever rescue it — the kill has to come from a thread that is not participating,
+            # which is this one. It fires on SILENCE (no batch returned within the heartbeat
+            # window), never on elapsed time: a slow block keeps beating and is left alone,
+            # and killing one because it is slow is precisely the failure this whole change
+            # exists to remove. Built lazily like the verifier's manager, so a machine that
+            # never attributes never constructs a queue.
+            try:
+                if _ATTRIB_QUEUE is not None:
+                    await loop.run_in_executor(None, _attrib_watchdog, _ATTRIB_QUEUE)
+            except Exception:
+                pass
             # ⚠️ THE ATTRIBUTION VERIFIER'S CHILD RIDES THIS LOOP TOO, AND FOR A WHOLE
             # BRANCH IT DID NOT. `_verifier_manager()` reuses WorkerManager's spawn half
             # and nothing else: `poll()` is the SOLE driver of kills_hard, kills_pressure,
@@ -1239,8 +1253,23 @@ def metrics():
         hard_limit_mb=wm.hard_limit_mb(), parent_reserve_mb=wm.parent_reserve_mb(),
         budget_shortfall_mb=wm.budget_shortfall_mb() if wm.ceiling_mb() is not None else None,
         store_stats=_store_stats(), embed_stats=_embed_stats(),
-        verifier_stats=_verifier_stats(),
+        verifier_stats=_verifier_stats(), attribution_stats=_attribution_stats(),
     )
+
+
+def _attribution_stats():
+    """The attribution queue's block for /metrics, or None if this process has never built one.
+
+    Read WITHOUT constructing the queue: /metrics must never be the thing that creates state,
+    and a machine with attribution off should report the absence rather than manufacture an
+    empty queue to report zeros from."""
+    q = _ATTRIB_QUEUE
+    if q is None:
+        return None
+    try:
+        return q.stats()
+    except Exception:      # noqa: BLE001 — a metrics read must never fail the route
+        return None
 
 
 async def _dispatch(req: dict):
@@ -1386,8 +1415,12 @@ class _EncoderAdapter:
     cosine as "similar to nothing" and publish a confident negative from a check that did not
     run."""
 
-    def __init__(self, child):
+    def __init__(self, child, on_batch=None):
         self._child = child
+        # The liveness callback, threaded through to `Encoder.encode`. `None` for every caller
+        # that is not the attribution worker (the warm-up, the feature path), because nothing
+        # else is being watched — a heartbeat with no watchdog behind it is just overhead.
+        self._on_batch = on_batch
 
     def encode(self, texts):
         # The status is compared against textembed's own constant rather than a literal here:
@@ -1395,7 +1428,7 @@ class _EncoderAdapter:
         # two halves drift. The import is deferred like every other analysis import in main.
         from app.analysis import textembed
 
-        vectors, status = self._child.encode(texts)
+        vectors, status = self._child.encode(texts, on_batch=self._on_batch)
         if status != textembed.STATUS_OK or len(vectors) != len(texts):
             raise _EncoderNotReady(status)
         return vectors
@@ -1405,6 +1438,12 @@ class _EncoderAdapter:
 # cannot spawn a queue of them. Module-level so a test can join it.
 _WARM_THREAD = None
 _WARM_LOCK = threading.Lock()
+
+# The attribution work queue and the single thread that drains it. See analysis/attribqueue.py
+# for why the encode is off the request path at all; this is only the wiring.
+_ATTRIB_QUEUE = None
+_ATTRIB_WORKER = None
+_ATTRIB_LOCK = threading.Lock()
 
 # The verifier's own drift margin over its measured model_cost_mb (WorkerManager.ceiling_mb()).
 # Deliberately its OWN env var and its OWN default rather than reusing
@@ -1687,6 +1726,131 @@ def _warm_encoder_async(child):
         return _WARM_THREAD
 
 
+def _attrib_queue():
+    """The process's attribution queue, built once."""
+    global _ATTRIB_QUEUE
+    with _ATTRIB_LOCK:
+        if _ATTRIB_QUEUE is None:
+            from app.analysis import attribqueue
+            _ATTRIB_QUEUE = attribqueue.Queue()
+        return _ATTRIB_QUEUE
+
+
+def _attrib_worker_run():
+    """Drain the attribution queue, one block at a time, forever.
+
+    ⚠️ **One block at a time is a statement about the CAPACITY, not a simplification.** The
+    encoder is a single child holding ~1.7 GB of weights behind one lock, so a second concurrent
+    job could only ever block on the first — it would look like parallelism in the queue and be
+    strict serialisation in fact, while doubling the RAM if it were ever given its own child.
+    What was missing was never a second worker; it was a queue in front of the one that exists.
+
+    Every block that reaches here has already been checked for the things that need no encoder
+    (declared projects, the toggle, the weights, an empty span), so the only outcomes are a real
+    answer, an encoder status, or a kill by the watchdog."""
+    import time
+
+    while True:
+        # Resolved per iteration rather than captured once. In this process the queue is a
+        # singleton built at first use, so the two are the same thing — but a captured reference
+        # means a thread that outlives a rebuilt queue drains the dead one forever, silently and
+        # with every counter looking healthy. Re-reading a module global costs nothing.
+        q = _attrib_queue()
+        job = q.take()
+        if job is None:
+            time.sleep(0.25)
+            continue
+        try:
+            result = _attribute_job(job, q)
+        except Exception:      # noqa: BLE001 — a worker that dies stops every future block
+            q.fail(job.key, "error")
+            continue
+        if result is None:
+            # The watchdog killed this job mid-encode and has already re-queued it; `finish`
+            # would be refused anyway, and calling `fail` here would spend a SECOND attempt on
+            # one kill.
+            continue
+        if not q.finish(job.key, result):
+            continue
+
+
+def _attribute_job(job, q):
+    """Encode and score ONE queued block. Returns its answer, or None if it was killed.
+
+    The heartbeat is wired here and nowhere else: `beat` is handed to the encoder adapter, which
+    threads it into `Encoder.encode`, which calls it as each batch returns. That is the only
+    reason the watchdog can tell this thread apart from a wedged one."""
+    from app.analysis import attribution, textembed
+    from app import verifier as verifier_mod
+
+    source = _text_source()
+    if source is None:
+        return attribution.stated(attribution.STATUS_SKIPPED_DISABLED)
+    child = source.encoder
+
+    try:
+        texts, asst_texts = _span_texts(job.path, job.start, job.end)
+    except OSError:
+        # The transcript went away between the POST that queued this block and now. There is no
+        # answer to be had and no later sweep can produce one, so it is a genuine failure and
+        # spends an attempt — the bounded path, not an endless re-queue.
+        q.fail(job.key, "unreadable")
+        return None
+
+    verifier_obj, verifier_absent = None, "opted_out"
+    if verifier_mod.enabled():
+        if verifier_mod.weights_path() is None:
+            verifier_absent = "unavailable"
+        else:
+            verifier_obj = _WorkerVerifier()
+
+    def beat(_i, _n, _ms):
+        q.beat(job.key)
+
+    result = _attribute_blocking(texts, job.dims, _EncoderAdapter(child, on_batch=beat),
+                                 verifier_obj, verifier_absent, asst_texts, job.key)
+    if child.state != textembed.READY and result.get("status") == attribution.STATUS_PENDING:
+        # The child is gone and the answer is the encoder's status rather than a decision —
+        # which is what a watchdog kill looks like from in here. Let the kill's own `fail` own
+        # the bookkeeping; storing this `pending` would hand the daemon a non-answer AND leave
+        # the re-queued copy to be encoded again.
+        if q.stalled() == job.key or q.state(job.key) != "running":
+            return None
+    return result
+
+
+def _attrib_watchdog(q=None):
+    """Kill the encoder child if the running job has gone silent. Returns whether it fired.
+
+    Called from `lifespan`'s 1 s poll loop, beside the two `WorkerManager.poll()`s — the same
+    place, and for the same reason: a guard that is constructed but never driven is not a guard.
+    The kill is lock-free (`Encoder.kill_child`) because the thread it is rescuing holds the
+    encoder lock by definition."""
+    q = q or _attrib_queue()
+    key = q.stalled()
+    if key is None:
+        return False
+    source = _text_source()
+    if source is not None:
+        source.encoder.kill_child()
+    q.fail(key, "heartbeat")
+    return True
+
+
+def _ensure_attrib_worker():
+    """Start the drain thread if it is not already running. Idempotent, and safe to call from
+    every request — the check is a liveness test on the thread, so a worker that somehow died
+    is replaced rather than silently never restarted."""
+    global _ATTRIB_WORKER
+    with _ATTRIB_LOCK:
+        if _ATTRIB_WORKER is not None and _ATTRIB_WORKER.is_alive():
+            return _ATTRIB_WORKER
+        _ATTRIB_WORKER = threading.Thread(target=_attrib_worker_run,
+                                          name="keld-attribute-worker", daemon=True)
+        _ATTRIB_WORKER.start()
+        return _ATTRIB_WORKER
+
+
 def _attribute_blocking(texts, dims, encoder, verifier_obj, verifier_absent, asst_texts=(),
                         block_key=None):
     """The whole of /attribute's decision, on an executor thread.
@@ -1767,13 +1931,32 @@ async def attribute(body: AttributeIn):
         _count("analyze_rejected")
         raise HTTPException(status_code=403,
                             detail="path is outside the configured transcript roots")
-    from app.analysis import attribution, textembed
+    from app.analysis import attribqueue, attribution, textembed
 
     projects, _ = attribution.current_projects()
     if not projects:
         # Answered without opening anything: with nothing declared to match against, reading a
         # person's words would be reading them for no purpose.
         return attribution.stated(attribution.STATUS_SKIPPED_NO_PROJECTS)
+
+    # ⚠️ THE QUEUE IS CONSULTED BEFORE THE TRANSCRIPT IS OPENED, and the order is the point.
+    # The daemon re-POSTs a `pending` block on every 45 s sweep, up to 24 of them, so a route
+    # that read the span first would re-scan two dozen transcripts a minute to answer a question
+    # it already knows the answer to. Asking the queue first makes re-asking free, which is what
+    # lets `pending` be the normal case rather than an expensive one.
+    q = _attrib_queue()
+    key = f"{body.session_id}@{body.start}"
+    done = q.collect(key)
+    if done is not None:
+        return done
+    state = q.state(key)
+    if state in (attribqueue.QUEUED, attribqueue.RUNNING):
+        return attribution.pending()
+    if state == attribqueue.QUARANTINED:
+        # Four genuine failures on this block. `pending` would be a lie that costs the daemon a
+        # re-POST every sweep forever; the encoder is present and simply cannot finish this one,
+        # which is a degradation of the model half and is stated as such.
+        return attribution.stated(attribution.STATUS_DEGRADED_WEIGHTS)
 
     loop = asyncio.get_running_loop()
     try:
@@ -1828,24 +2011,20 @@ async def attribute(body: AttributeIn):
         _warm_encoder_async(child)
         return attribution.pending()
 
-    from app import verifier as verifier_mod
-
-    verifier_obj, verifier_absent = None, "opted_out"
-    if verifier_mod.enabled():
-        if verifier_mod.weights_path() is None:
-            # Wanted and not runnable: "unavailable", never "opted_out". The threshold decides
-            # alone and the meta says so. No manager is built and no child is spawned for this —
-            # `_verifier_manager()` is reached only through `_WorkerVerifier.verify()`, below.
-            verifier_absent = "unavailable"
-        else:
-            verifier_obj = _WorkerVerifier()
-    return await loop.run_in_executor(
-        None, _attribute_blocking, texts, body.dims, _EncoderAdapter(child),
-        verifier_obj, verifier_absent, asst_texts,
-        # The block's identity, (session, start) — what Atlas upserts on and what the
-        # daemon's durable job is keyed by — so a re-POSTed job is folded into the
-        # centring baseline once, not once per attempt.
-        f"{body.session_id}@{body.start}")
+    # ⚠️ **THE ENCODE IS HANDED OVER, NOT AWAITED, AND THAT IS THE WHOLE CHANGE.** This used to
+    # run `_attribute_blocking` in the default executor and return its answer — 65-110 s of
+    # encoding inside a call the daemon bounds at 2 minutes. When that bound fired it freed
+    # nothing: the executor thread encoded on to the end and discarded the answer, and the next
+    # request queued behind it on the encoder's lock. Handing the block to a queue makes the
+    # deadline unreachable rather than merely larger; `attribqueue`'s docstring carries the
+    # measurement and the reasoning.
+    #
+    # The block's identity is (session, start) — what Atlas upserts on and what the daemon's
+    # durable job is keyed by — so it is also the dedupe key here, and a re-POSTed job is
+    # folded into the centring baseline once rather than once per sweep.
+    q.submit(attribqueue.Job(key, body.path, body.start, body.end, body.dims, body.session_id))
+    _ensure_attrib_worker()
+    return attribution.pending()
 
 
 @app.post("/match")
