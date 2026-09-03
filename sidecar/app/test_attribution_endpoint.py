@@ -93,13 +93,17 @@ MID_PROJECTS = [{"id": "proj_mid", "title": "Ambiguity", "team": "Eng",
 class MidEncoder:
     """Block text at 0.52 vs the project and 0.50 vs NULL_DOC: the cut is
     max(null, top - MARGIN) = 0.50 and the pair sits 0.02 above it — inside VERIFY_HALO, so
-    it is borderline and the verifier is the thing that decides."""
+    it is borderline and the verifier is the thing that decides.
+
+    ⚠️ The null is matched by IDENTITY against `attribution.NULL_DOC`, never by a phrase
+    copied out of it — see `test_attribution_scoring.GeomEncoder` for the reword that broke
+    the copied-phrase version and why it failed as a logic bug rather than a fixture one."""
 
     def encode(self, texts):
         out = []
         for t in texts:
-            if "Ambiguity" in t: out.append([1.0, 0.0, 0.0])
-            elif "General conversation" in t: out.append([0.0, 1.0, 0.0])
+            if t == attribution.NULL_DOC: out.append([0.0, 1.0, 0.0])
+            elif "Ambiguity" in t: out.append([1.0, 0.0, 0.0])
             else: out.append([0.52, 0.50, 0.6926])
         return out
 
@@ -356,14 +360,16 @@ class BandChild(FakeChild):
     scores 0.52 against the project and 0.50 against NULL_DOC, so the cut is
     max(null, top - MARGIN) = 0.50 and the pair sits 0.02 above it — inside VERIFY_HALO
     (0.04), so the verifier decides, while the cut alone would still say yes. That pair is
-    what separates a verdict from a fallback."""
+    what separates a verdict from a fallback.
+
+    ⚠️ Null matched by IDENTITY, not by a copied phrase — see `MidEncoder` above."""
 
     def encode(self, texts):
         self.seen.append(list(texts))
         out = []
         for t in texts:
-            if "Borderline" in t: out.append([1.0, 0.0, 0.0])
-            elif "General conversation" in t: out.append([0.0, 1.0, 0.0])
+            if t == attribution.NULL_DOC: out.append([0.0, 1.0, 0.0])
+            elif "Borderline" in t: out.append([1.0, 0.0, 0.0])
             else: out.append([0.52, 0.50, 0.6926])
         return out, "ok"
 

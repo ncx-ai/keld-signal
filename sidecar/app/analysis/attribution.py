@@ -141,11 +141,60 @@ W_REPO, W_TICKET, W_KEYWORD, BOOST_CAP = 0.15, 0.20, 0.05, 0.35
 # valid declared id), never boosted, never published — it exists only inside
 # the ranking, so "none of the above" competes instead of being a threshold.
 NULL_ID = "__none__"
+
+# ⚠️ **THE WORDING IS MEASURED, AND ITS CATEGORIES ARE NOT INTERCHANGEABLE.**
+# This document is embedded beside the projects and every decision ranks against
+# it, so a clause here is a published-behaviour change: re-run
+# `test_attribution_quality.py` on any edit.
+#
+# Two clauses were REMOVED on 2026-09-02 after a five-way sweep over the 100
+# fixtures (each arm re-encodes only this string, so the conversation and project
+# vectors are shared and the arms differ in nothing else):
+#
+#   * "generic technical questions asked out of curiosity or for learning" —
+#     it described an engineer asking about THEIR OWN declared project, and
+#     conv_046 is the proof: "for our component library — should focus styles
+#     use outline or box-shadow?" attributed to nothing, because a real
+#     design-system question read as idle curiosity. Deleting it fixed that
+#     conversation and broke none, and cost NOTHING in trap coverage (11 of the
+#     19 no-project fixtures held, unchanged): the traps are earned by the
+#     "work that belongs elsewhere" clause below, never by this one. Measured
+#     f1 0.724 -> 0.740, precision 0.774 -> 0.787, embedding-only arm.
+#   * an abstract-study clause ("explanation of a concept in the abstract").
+#     Tried in two shapes and both LOST — the better of them took precision to
+#     0.681 and shown-label trust from 77% to 68% — because "a concept in the
+#     abstract" also describes a design discussion about work in progress. The
+#     two fixtures it exists for (conv_074's RAG tutoring, conv_096's
+#     internet-thread argument) are not worth that, and they are the only two.
+#
+# ⚠️ **AND A LONGER DOCUMENT IS A WEAKER ONE HERE.** The most complete wording
+# tried (every category enumerated, ~90 words) scored WORST of all five arms —
+# f1 0.698, breaking three conversations and fixing none. Adding a category
+# dilutes the ones already present; this is not a list to extend freely.
+#
+# ⚠️ **WHAT THIS WORDING DOES *NOT* FIX, SO NOBODY RE-LITIGATES IT HERE.** The
+# null also beat every project on a REAL 50-hour session at every window size,
+# and that symptom is NOT lexical: deleting the offending clause left the
+# block-scale null score identical (0.623) and the session-scale one slightly
+# worse. Measured cause — this document describes SPEECH while `project_doc`
+# composes an ARTIFACT ("Title (Team)", description, keywords), so it is the
+# only register-matched document in the set and collects a similarity bonus on
+# anything a person types: a project beat it on just 34% of that session's 182
+# individual messages (median margin -0.069). Reframing the project documents
+# into this register moves that to 72% (+0.049) and flips the session to
+# attributing — but it MOVES the hub rather than removing it (proj_devex, whose
+# own description is written in process register, then wins the whole session at
+# 0.797) and it trades trust for coverage on the fixtures. That is per-document
+# hubness, the column-wise twin of the per-block offset MARGIN already exists
+# for, and its fix is score normalisation, not prose. See
+# `docs/notes/whats-next-attribution.md`.
 NULL_DOC = (
-    "General conversation that belongs to no declared project: personal "
-    "matters, casual chat, greetings, generic technical questions asked out "
-    "of curiosity or for learning, help using a tool, or administrative talk "
-    "that serves no specific project or initiative."
+    "Conversation serving none of the declared projects: personal matters "
+    "(family, health, money, travel, food, fitness, films), casual chat and "
+    "greetings, administrative talk, help operating a tool, and work that "
+    "belongs elsewhere — a personal side project or hobby project, a friend's "
+    "or a client's company, freelance work, a tutorial being written, or "
+    "interview preparation."
 )
 
 
@@ -307,7 +356,22 @@ STATUSES = (STATUS_ATTRIBUTED, STATUS_PENDING, STATUS_SKIPPED_DISABLED,
 # The models this attribution path runs on, reported with every answer. Two
 # corpora scored under different models are not comparable and nothing about
 # the numbers says so — `featuretext.encoder_ref`'s argument, one facet along.
-MODEL_VERSIONS = {"encoder": "qwen3-embedding-0.6b", "verifier": "gemma-4-e2b-q4km"}
+#
+# ⚠️ `null_doc` IS IN HERE FOR EXACTLY THAT REASON, AND IT IS NOT A MODEL. Every
+# decision on this path ranks against `NULL_DOC` (see `score_block`), so its
+# wording is as load-bearing as the encoder's identity: rewording it makes two
+# corpora incomparable in precisely the way this map exists to declare. The
+# 2026-09-02 reword is what proved the need — blocks scored before and after it
+# sit side by side in Atlas with nothing on the row to separate them, which
+# defeats anyone measuring the pipeline against hand-labelled blocks. It is a
+# truncated sha256 of the document itself, so it cannot drift from the text the
+# way a hand-maintained version string would and nobody has to remember to bump
+# it. It rides the existing open map rather than a new field:
+# `enrich.AttributionMeta` models this as `map[string]string` and Atlas stores the
+# raw body, so both halves carry a new key unchanged and no schema bump is owed —
+# this is an identifier, not a vocabulary.
+MODEL_VERSIONS = {"encoder": "qwen3-embedding-0.6b", "verifier": "gemma-4-e2b-q4km",
+                  "null_doc": hashlib.sha256(NULL_DOC.encode()).hexdigest()[:8]}
 
 
 def _meta(embed_ms, verify_ms, pairs, encoder_state, verifier_state, concept_ms=0):

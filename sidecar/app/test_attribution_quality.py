@@ -95,6 +95,48 @@ benchmarked (richer, assistant-text-inclusive input) and what `attribute_block`
 actually runs on (user-only text, an earlier task's deliberate privacy
 decision).
 
+⚠️ **RE-RUN 2026-09-02: THE FLOOR NOW FAILS, AND THE 0.823 ABOVE DESCRIBES A
+PIPELINE THAT NO LONGER EXISTS.** Measured today, same machine, with the
+`NULL_DOC` reword of the same date: **f1 0.779 (precision 0.854, recall 0.717)**
+— easy 0.980, medium 0.796, hard 0.522, 36/100 mispredicted, wall 412.3s
+(embed 201.9s, verify 210.3s). That is BELOW `F1_FLOOR` and the assert trips.
+
+**The cause is not the reword.** `git` settles the ordering: 0.823 was measured
+by `f89a8ac` (2026-09-01) under the old ABSOLUTE-threshold rule, and
+`f472daa` (2026-09-02) replaced that rule with rank-and-margin
+(`cut = max(null, top - MARGIN)`) — **this eval was never re-run after it.** The
+rule change was validated on 21 REAL blocks instead (trust 53% → 74%, exact
+blocks 6/21 → 11/21, coverage 86% → 76%; see
+`docs/notes/whats-next-attribution.md`), so the fixture gate has been failing
+since that commit with nobody able to see it: the number it asserts against
+describes the superseded rule. The paragraph below still names
+`attribution.THRESHOLD` — a constant that has been DELETED — which is the same
+"doc asserting something the code does not do" failure the ⚠️ below it corrects
+one level up.
+Today's precision/recall confirm the mechanism rather than merely coexisting with
+it: **0.760/0.896 → 0.854/0.717**, fewer and better assignments, which is exactly
+the trade rank-and-margin was chosen for. Micro-F1 penalises it because these
+fixtures average over multi-label recall; the customer slice moved the other way
+(trust 77% → **85%**, clean blocks → **83%**).
+
+**The reword's own effect is separately measured and POSITIVE**, on a controlled
+comparison rather than on this noisy arm: re-encoding only the null string against
+shared, cached conversation and project vectors gives embedding-only
+**f1 0.724 → 0.740, precision 0.774 → 0.787**, fixing conv_046 and breaking
+nothing. Today's run reports 0.734 for that same embedding-only arm.
+
+⚠️ **`F1_FLOOR` IS DELIBERATELY LEFT AT 0.80 AND FAILING.** Re-baselining a
+quality gate is a measurement, not a paperwork edit, and the one measurement that
+would justify a new number — this eval WITH the verifier under the OLD wording,
+today — has not been taken: the machine's swap was exhausted (16.6 GB of 18.4 GB,
+~750 MB free) by the model loads of the runs above, and spawning another 1.7 GB
+encoder plus 3 GB verifier on it was refused rather than risked. Estimating it
+from the pieces (0.724 embedding-only + the verifier's measured +0.046) lands
+~0.77, i.e. also below the floor — an ESTIMATE, named as one, and not a basis for
+moving a gate. Run
+`app/test_attribution_quality.py` with `attribution.NULL_DOC` patched to the
+pre-2026-09-02 wording on an idle machine, then set the floor from the pair.
+
 ⚠️ **THE ASSERT BELOW IS `F1_FLOOR = 0.80`, NOT THE SPEC'S 0.85, AND THIS
 PARAGRAPH USED TO CLAIM OTHERWISE.** It read "left as spec'd (§6: micro-F1 ≥
 0.85)" while the constant beside it was already 0.80 — a doc asserting a gate
@@ -133,9 +175,16 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "evaldata", "attribution")
 # invented projects and invented conversations with hand-assigned gold labels, so a
 # passing run proves only that this pipeline still behaves as it did when last
 # measured. Real accuracy is answered by docs/attribution-smoke.md against real
-# projects — and the assignment threshold itself (attribution.THRESHOLD, 0.49) was
-# fitted to a prototype's score distribution and should be recalibrated on real
-# blocks before anyone reads much into either number.
+# projects — and the decision rule's own constants (attribution.MARGIN 0.08 and
+# VERIFY_HALO 0.04) are starting points fitted to a prototype's score distribution
+# and should be recalibrated on real blocks before anyone reads much into either
+# number.
+#
+# ⚠️ **THIS COMMENT NAMED `attribution.THRESHOLD, 0.49` UNTIL 2026-09-02, AND THAT
+# CONSTANT HAD ALREADY BEEN DELETED.** `f472daa` replaced the absolute threshold
+# with rank-and-margin and did not re-run this eval, so the floor below, the 0.823
+# it sits under, and this pointer all described the superseded rule at once — which
+# is why the gate could fail unnoticed. See the re-run block in the docstring.
 F1_FLOOR = 0.80
 
 

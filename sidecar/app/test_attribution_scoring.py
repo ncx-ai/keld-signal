@@ -45,15 +45,23 @@ class GeomEncoder:
     """Controlled geometry for the rank-and-margin rule, in 4 dimensions:
     proj_pay doc -> e1, proj_ui doc -> e2, NULL_DOC -> e3, and the block text
     a unit vector whose components ARE the similarities we want. All vectors
-    unit-length, so score_block's re-normalisation is a no-op."""
+    unit-length, so score_block's re-normalisation is a no-op.
+
+    ⚠️ The null document is recognised by IDENTITY against
+    `attribution.NULL_DOC`, never by a phrase copied out of it. This fake used
+    to match `"General conversation" in t` and the 2026-09-02 reword silently
+    broke it: the null fell through to the `else` branch, took the BLOCK's own
+    vector, scored 1.0 against itself, and nothing could ever be assigned. A
+    fake holding its own copy of a constant is a second source of truth for it,
+    and this one failed in the direction that looks like a logic bug."""
     def __init__(self, text_vec):
         self.text_vec = text_vec
     def encode(self, texts):
         out = []
         for t in texts:
-            if "Payments" in t: out.append([1.0, 0.0, 0.0, 0.0])
+            if t == attribution.NULL_DOC: out.append([0.0, 0.0, 1.0, 0.0])
+            elif "Payments" in t: out.append([1.0, 0.0, 0.0, 0.0])
             elif "Design System" in t: out.append([0.0, 1.0, 0.0, 0.0])
-            elif "General conversation" in t: out.append([0.0, 0.0, 1.0, 0.0])
             else: out.append(list(self.text_vec))
         return out
 
