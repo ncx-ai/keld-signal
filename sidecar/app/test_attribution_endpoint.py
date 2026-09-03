@@ -208,6 +208,19 @@ class FakeChild:
 
     def __init__(self, state="ready", status="ok"):
         self.state, self._status, self.seen, self.beats = state, status, [], 0
+        self.warms = 0
+
+    def warm(self):
+        """The production encoder's own `warm` — a spawn asked for directly, with no encode.
+
+        ⚠️ Faithful, for the same reason `encode` grew `on_batch` above: the warm-up thread
+        swallows exceptions, so a fake missing this method would raise `AttributeError` in a
+        place nothing reports, and the only symptom would be an encoder that never comes up —
+        which is the exact production bug these tests were added for."""
+        self.warms += 1
+        if self.state == "down":
+            self.state = "ready"
+        return self.state == "ready"
 
     def encode(self, texts, on_batch=None):
         # ⚠️ The `on_batch` parameter is not optional decoration on this fake: the production
@@ -377,6 +390,121 @@ def test_a_cold_encoder_answers_pending_and_warms_off_the_request():
     assert warm is not None
     warm.join(10)
     assert child.seen, "the cold path must bring the encoder up off the request"
+
+
+def test_a_down_child_is_warmed_even_when_every_project_doc_is_already_embedded():
+    """⚠️ **THE LIVELOCK.** The test above deliberately uses a project list nothing has embedded,
+    so the warm-up has real work to do — which means it never covered the state the sidecar spends
+    almost all of its life in: the project vectors ARE cached, because they were cached the first
+    time a block arrived, and `project_vectors` is memoised on the list's hash.
+
+    In that state the old warm-up encoded nothing, so it spawned nothing, so `/attribute` answered
+    `pending` on a child that nothing would ever start. The encoder had been killed for being idle
+    (which is correct — the duty cycle is ~100 messages a day) and the only thing that could have
+    revived it was an encode that only happens once the child is already up. Nine blocks sat in
+    that loop for two and a half hours in the smoke agent on 2026-09-03.
+
+    The claim pinned here: a warm-up brings the child up with NOTHING to embed."""
+    m = _main()
+    path = _transcript()
+    _with_roots(path)
+    attribution.set_projects(PROJECTS)
+    # Exactly the production state: the docs for THIS project list are already embedded — by an
+    # earlier child, now killed for being idle — so the memo answers and no encode is reachable
+    # through it.
+    attribution.project_vectors(m._EncoderAdapter(FakeChild()))
+    child = FakeChild(state="down")
+    was = m._text_source
+    m._text_source = lambda: FakeSource(child)
+    try:
+        out = _call(m, path=path, start=T0, end=T0 + 600, dims={})
+        warm = m._WARM_THREAD
+    finally:
+        m._text_source = was
+    assert out["status"] == "pending", out
+    assert warm is not None
+    warm.join(10)
+    assert child.warms == 1, "the warm-up must ASK for the child, not hope an encode spawns it"
+    assert child.state == "ready", "a cached vector memo left the encoder down forever"
+    assert child.seen == [], "nothing needed encoding — which is precisely why this used to hang"
+
+
+def test_the_pending_loop_ends_after_one_sweep_rather_than_never():
+    """The daemon's side of the same fact, end to end: sweep one answers `pending` and warms,
+    sweep two hands the block to the queue, and the answer is there for sweep three. Before the
+    fix every one of those sweeps was sweep one — `pending`, forever, with no error logged
+    anywhere and the encoder idle the whole time."""
+    m = _main()
+    path = _transcript()
+    _with_roots(path)
+    attribution.set_projects(PROJECTS)
+    # Embedded by the child that has since been idle-killed: same vectors, so the scoring below
+    # is the real comparison rather than two fakes talking past each other.
+    attribution.project_vectors(m._EncoderAdapter(FakeChild()))
+    child = FakeChild(state="down")
+    DIMS = {"repo": "acme-billing"}                    # what the daemon sends with a real block
+    was = m._text_source
+    m._text_source = lambda: FakeSource(child)
+    try:
+        first = _call(m, path=path, session_id="s_loop", start=T0, end=T0 + 600, dims=DIMS)
+        m._WARM_THREAD.join(10)
+        # Sweep 1 could not queue anything: there was no child to run it.
+        from app.analysis import attribqueue
+        assert m._ATTRIB_QUEUE.state(f"s_loop@{T0}") == attribqueue.ABSENT, \
+            "sweep one queued a block with no child to run it"
+        second = _call(m, path=path, session_id="s_loop", start=T0, end=T0 + 600, dims=DIMS)
+        queued = m._ATTRIB_QUEUE.state(f"s_loop@{T0}")
+        _drain(m)
+        third = _call(m, path=path, session_id="s_loop", start=T0, end=T0 + 600, dims=DIMS)
+    finally:
+        m._text_source = was
+    assert first["status"] == "pending" and second["status"] == "pending", (first, second)
+    assert queued == attribqueue.QUEUED, "sweep two must reach the queue now the child is ready"
+    assert third["status"] == "attributed", third
+    assert [p["id"] for p in third["projects"]] == ["proj_pay"], third
+
+
+def test_the_warm_up_spawns_through_the_REAL_encoder_not_only_the_fake():
+    """The same claim as the two tests above, but across the seam they cannot see.
+
+    ⚠️ `FakeChild.warm` is written by this file, so those tests would still pass if `main` called
+    a method `textembed.Encoder` does not have — the warm-up thread swallows the `AttributeError`
+    and the only symptom is, once again, an encoder that never comes up. So this one drives the
+    PRODUCTION `Encoder` (with a stub child process, no torch, no weights) through the real
+    `_warm_encoder_async` and asserts the spawn actually happened."""
+    from app.analysis import textembed as te
+
+    m = _main()
+    _with_roots(_transcript())
+    attribution.set_projects(PROJECTS)
+    attribution.project_vectors(m._EncoderAdapter(FakeChild()))     # the memo is warm
+
+    class Q:
+        def __init__(self, answers=None):
+            self.items, self._answers = [], list(answers or [])
+
+        def put(self, item):
+            self.items.append(item)
+
+        def get(self, timeout=None):
+            return self._answers.pop(0) if self._answers else {"ok": True, "vectors": [[0.0]]}
+
+    class P:
+        pid = 4242
+
+        def kill(self):
+            pass
+
+        def join(self, timeout=None):
+            return None
+
+    req = Q()
+    enc = te.Encoder(spawn_fn=lambda spec: (P(), req, Q([{"ready": True}])), weights=_TMP)
+    assert enc.state == te.DOWN
+    m._warm_encoder_async(enc).join(10)
+    assert enc.state == te.READY, "main's warm-up did not reach the production encoder's spawn"
+    assert enc.counts["spawns"] == 1
+    assert req.items == [], "the child came up on an encode, not on being asked — the old bug"
 
 
 def test_an_encoder_that_cannot_answer_is_pending_not_a_wrong_answer():

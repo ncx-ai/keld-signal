@@ -1708,11 +1708,26 @@ def _warm_encoder_async(child):
     something, and it is not a second queue: it holds no block, no backlog and no state, and one
     thread runs at a time however many blocks arrive. The work it does is the work the next call
     would otherwise pay first — `project_vectors` is memoised per project-list hash — so the
-    spawn (~2.8 s warm, ~20 s cold) and the project embedding are both behind the caller."""
+    spawn (~2.8 s warm, ~20 s cold) and the project embedding are both behind the caller.
+
+    ⚠️ **THE SPAWN IS ASKED FOR, NEVER INFERRED FROM THE EMBEDDING.** `project_vectors` used to
+    be the whole of this function, and it brings the child up only as a SIDE EFFECT of having an
+    encode to run — which it has exactly once per project list, because it is memoised on that
+    list's hash. So the second time the child went down (`maybe_unload` kills it after ~5 idle
+    minutes) this thread had nothing to encode, spawned nothing, and `/attribute` answered
+    `pending` on a child that nothing would ever start again. Nine blocks sat in that loop for two
+    and a half hours in the smoke agent on 2026-09-03, with no error logged anywhere: the daemon
+    was correctly holding a `pending` job without spending an attempt, and the sidecar was
+    correctly reporting a child that was down. `warm()` is the missing sentence — up first, and
+    the vectors after, whether or not there is anything to embed.
+    """
     from app.analysis import attribution
 
     def run():
         try:
+            # Independent of the memo below, and FIRST: a ready child is what the next sweep
+            # needs, and it is needed even when every project doc is already embedded.
+            child.warm()
             attribution.project_vectors(_EncoderAdapter(child))
         except Exception:      # noqa: BLE001 — a warm-up that failed is retried by the next sweep
             pass

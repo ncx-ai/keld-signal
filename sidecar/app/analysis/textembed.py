@@ -641,6 +641,26 @@ class Encoder:
         self._last_activity = self._clock()
         return True
 
+    def warm(self):
+        """Bring the child up WITHOUT an encode. `True` when it is ready to take one.
+
+        ⚠️ **A WARM-UP MUST NOT DEPEND ON HAVING WORK TO DO, AND THAT IS THE WHOLE POINT OF THIS
+        METHOD.** The only warm path used to be `attribution.project_vectors`, whose encode is
+        memoised per project-list hash — so it spawns the child exactly once per project list and
+        never again. Pair that with `maybe_unload` killing an idle child (~5 min at this duty
+        cycle) and the sidecar reaches a state it cannot leave: the child is down, `/attribute`
+        answers `pending` because it is down, the warm-up hits the memo and does nothing, and the
+        next sweep repeats it. Observed in the smoke agent 2026-09-03: `spawns: 1`,
+        `kills_idle: 1`, then nine blocks held `pending` for two and a half hours with the encoder
+        idle the whole time and no error anywhere — every component behaving exactly as written.
+
+        The lock is taken BLOCKING, unlike `maybe_unload`'s: this runs on a background thread
+        with nothing waiting on it, and a warm-up that gave up because a batch was in flight would
+        be asking for a child that, by definition, is already up.
+        """
+        with self._lock:
+            return self._ensure_up()
+
     def _kill(self):
         proc = self._proc
         if proc is not None:
