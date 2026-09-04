@@ -128,11 +128,16 @@ func workstreamOffFunc() func(string) bool {
 // projects.FromRemoteProjects. A nil RemoteProjects getter contributes
 // nothing — an honest "not known yet", never an error.
 func candidatesFor(s *projects.Store, d projects.Document) []projects.Project {
-	out := append([]projects.Project(nil), d.Projects...)
-	if s.RemoteProjects != nil {
-		out = append(out, projects.FromRemoteProjects(s.RemoteProjects())...)
+	return projects.MergeCandidates(d.Projects, remoteCandidates(s))
+}
+
+// remoteCandidates is the org's values as attribution candidates, or nil when
+// the daemon wiring has supplied no getter (Atlas off, or never polled).
+func remoteCandidates(s *projects.Store) []projects.Project {
+	if s.RemoteProjects == nil {
+		return nil
 	}
-	return out
+	return projects.FromRemoteProjects(s.RemoteProjects())
 }
 
 // currentSuggestions recomputes the suggestion list exactly as GET
@@ -402,7 +407,9 @@ func handlePlace(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 	off := workstreamOffFunc()
 
 	_, err = s.Update(func(d projects.Document) (projects.Document, error) {
-		return projects.PlaceSameAs(d, body.Suggestion, body.SameAs, suggestions, off)
+		// An Atlas value may be the target: the merge lives in a local overlay
+		// and nothing is sent to Atlas (decided 2026-09-05).
+		return projects.PlaceSameAsWithRemote(d, remoteCandidates(s), body.Suggestion, body.SameAs, suggestions, off)
 	})
 	if err != nil {
 		switch {

@@ -455,3 +455,66 @@ func Attribute(dims map[string]enrich.Labeled, candidates []Project, workstreamO
 
 	return Result{Reason: ReasonNoRuleMatched}
 }
+
+// MergeCandidates is THE OVERLAY: the org's values from the settings poll with
+// this machine's local edits laid over them, one project per id.
+//
+// ⚠️ **Decided 2026-09-05: a project that exists in Atlas is never changed
+// from Signal.** "Same as" applies only to an UNATTRIBUTED local suggestion and
+// merges it into an already-attributed project ON THIS MACHINE. So the local
+// document may hold an entry whose id is an Atlas value's id — an overlay —
+// carrying the repository rules a person added here. This function unions the
+// overlay's rules onto the value and keeps everything the org authored (title,
+// description, team, keywords) exactly as the org authored it: the org's
+// vocabulary is read-only from here, and nothing in the overlay ever leaves the
+// machine. Without this merge the two entries would share an id, and Attribute
+// would report a block as CONFLICTING WITH ITSELF.
+//
+// Local-only projects (bundles, "new project") pass through unchanged; remote
+// values with no overlay pass through unchanged. Order: remote first, in poll
+// order, then local-only projects in document order — stable, so ids on the
+// page do not move between refreshes.
+func MergeCandidates(local, remote []Project) []Project {
+	overlay := map[string]Project{}
+	used := map[string]bool{}
+	for _, l := range local {
+		overlay[l.ID] = l
+	}
+	out := make([]Project, 0, len(remote)+len(local))
+	for _, r := range remote {
+		if o, ok := overlay[r.ID]; ok {
+			used[r.ID] = true
+			r.Repos = unionFold(r.Repos, o.Repos)
+			if o.TicketKey != "" {
+				r.TicketKey = o.TicketKey
+			}
+			r.Hidden = o.Hidden
+			if r.Workstream == "" {
+				r.Workstream = o.Workstream
+			}
+		}
+		out = append(out, r)
+	}
+	for _, l := range local {
+		if !used[l.ID] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func unionFold(a, b []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, v := range list {
+			k := strings.ToLower(strings.TrimSpace(v))
+			if k == "" || seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}

@@ -252,7 +252,16 @@ func Hide(d Document, projectID string, hidden bool) (Document, error) {
 // hidden, not in a workstream that is off. Mirrors Visible so the "place same
 // as" picker can never offer a target Attribute itself would ignore.
 func SameAsCandidates(d Document, workstreamOff func(key string) bool) []Project {
-	return Visible(d.Projects, workstreamOff)
+	return SameAsCandidatesWithRemote(d, nil, workstreamOff)
+}
+
+// SameAsCandidatesWithRemote is SameAsCandidates over the merged candidate set —
+// the org's values with local overlays applied — so an Atlas-origin project is
+// offered as a target. That is the decided scope of "same as" (2026-09-05): an
+// unattributed local suggestion merges into ANY attributed project, and when
+// that project is the org's the merge lives in a local overlay.
+func SameAsCandidatesWithRemote(d Document, remote []Project, workstreamOff func(key string) bool) []Project {
+	return Visible(MergeCandidates(d.Projects, remote), workstreamOff)
 }
 
 // PlaceSameAs adds the rule a suggestion represents to an existing project.
@@ -261,13 +270,53 @@ func SameAsCandidates(d Document, workstreamOff func(key string) bool) []Project
 // already excludes, so a caller that only offers those candidates cannot hit
 // either refusal by surprise.
 func PlaceSameAs(d Document, suggestionID, targetProjectID string, suggestions []Suggestion, workstreamOff func(key string) bool) (Document, error) {
+	return PlaceSameAsWithRemote(d, nil, suggestionID, targetProjectID, suggestions, workstreamOff)
+}
+
+// PlaceSameAsWithRemote is PlaceSameAs that can target one of the org's values.
+//
+// ⚠️ **When the target is an Atlas value that has no local entry yet, an OVERLAY
+// entry is created** — same id, origin atlas, the org's title and team copied so
+// the document reads sensibly on its own, and the suggestion's rule as its only
+// rule. Nothing about the org's value is changed and nothing is sent anywhere:
+// this is the local half of "same as", which is the only half there is (decided
+// 2026-09-05; a user-rights question deliberately deferred). MergeCandidates
+// unions the overlay onto the value at read time, so the next attribution pass
+// puts the suggestion's blocks under the Atlas value's id — which is what Atlas
+// already matches workstreams against.
+func PlaceSameAsWithRemote(d Document, remote []Project, suggestionID, targetProjectID string, suggestions []Suggestion, workstreamOff func(key string) bool) (Document, error) {
 	s, ok := findSuggestion(suggestions, suggestionID)
 	if !ok {
 		return d, fmt.Errorf("%w: %s", ErrUnknownSuggestion, suggestionID)
 	}
 	i, ok := findProject(d, targetProjectID)
 	if !ok {
-		return d, ErrProjectNotFound
+		// Not local. If it is one of the org's values, lay an overlay entry
+		// down for it; otherwise it genuinely does not exist.
+		var rv *Project
+		for k := range remote {
+			if remote[k].ID == targetProjectID {
+				rv = &remote[k]
+				break
+			}
+		}
+		if rv == nil {
+			return d, ErrProjectNotFound
+		}
+		if rv.Hidden {
+			return d, ErrProjectNotFound
+		}
+		if projectWorkstreamOff(*rv, workstreamOff) {
+			return d, ErrWorkstreamOff
+		}
+		d.Projects = append(append([]Project(nil), d.Projects...), Project{
+			ID:         rv.ID,
+			Title:      rv.Title,
+			Team:       rv.Team,
+			Workstream: rv.Workstream,
+			Origin:     OriginAtlas,
+		})
+		i = len(d.Projects) - 1
 	}
 	target := d.Projects[i]
 	if target.Hidden {

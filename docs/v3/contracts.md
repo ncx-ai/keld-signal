@@ -179,10 +179,14 @@ Read against `keld-atlas` on this machine, not assumed:
      this machine's blocks immediately and completely.
    - The page states plainly that the change is local, and offers the Atlas workstream editor
      link for the org-wide edit. It must not imply the org has been taught anything.
-   - The org-wide loop needs **one Atlas change**: a route under `/v1/signal/*` accepting the
-     ingest token that appends a tag to a value. That is D8's ask, and it is a server change,
-     not a client one. Until it exists, the "one person fixes it for the fleet" story in the
-     plan is aspirational and the page must not tell it.
+   - **DECIDED 2026-09-05: there will be NO Atlas write-back, by design.** "Same as" applies
+     only to an UNATTRIBUTED local suggestion and merges it into an already-attributed
+     project — as a LOCAL OVERLAY on this machine. A project that exists in Atlas is never
+     changed from Signal: that is a user-rights question deliberately deferred. So the
+     projects document may hold an entry whose `id` is an Atlas value id with `origin:
+     "atlas"` and its own `repos`; those rules are unioned with the value's own keywords at
+     read time, and they never leave the machine. The earlier "one Atlas route" ask is
+     withdrawn, not postponed.
 
 `repos` ARE the rules (one `repo:` rule per entry, full remote `host/org/name`, lowercase);
 `ticket_key` is the second rule kind (a Jira-style prefix, e.g. `KELD`). Everything else
