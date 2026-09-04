@@ -99,6 +99,38 @@ type Settings struct {
 	// either way — see attrib.Enabled.
 	Attribution bool `json:"attribution"`
 
+	// SendToAtlas is THE BOUNDARY between Signal and the Atlas connector
+	// (docs/v3/contracts.md, deliverable D4). nil/absent means ON — Atlas is
+	// the default for an installed daemon — and false means the connector
+	// package is never constructed: no publish, no settings poll, no
+	// workstreams sync, no code redemption; zero outbound connections.
+	// A pointer so an absent key stays distinguishable from an explicit false,
+	// the same idiom Remote.PIIRegions uses. KELD_ATLAS=0 overrides to off,
+	// KELD_ATLAS=1 to on. Written by the page's Settings pane.
+	SendToAtlas *bool `json:"send_to_atlas,omitempty"`
+
+	// DevBlocks is the DEVELOPER block granularity: "" (default, the cutter's
+	// 20-minute cap / 15-minute idle), "prompt" (one block per human prompt),
+	// "bin" (one block per non-empty 5-minute bin) or "minute" (60-second bins
+	// against a separate refseries-dev.db). Anything but "" is REFUSED while
+	// SendToAtlas is on — a minute-long block is not a fact about anyone's work
+	// and must never reach the org's numbers; the validation lives in
+	// DevBlocksMode, so a caller cannot read an unsafe value. KELD_DEV_BLOCKS
+	// overrides. Forwarded to the sidecar as KELD_DEV_BLOCKS at spawn.
+	DevBlocks string `json:"dev_blocks,omitempty"`
+
+	// ShowBreaks is a page preference: lay the gaps between focus blocks
+	// between the cards. Local, harmless, here because the page's Settings pane
+	// writes this file and a preference with no home is a preference that
+	// resets.
+	ShowBreaks bool `json:"show_breaks,omitempty"`
+
+	// WorkstreamsOff lists workstream keys whose values are EXCLUDED from
+	// attribution on this machine ("counts for my work" switched off). Local
+	// only; Atlas is never told. A developer's work can then never land in the
+	// Marketing bucket.
+	WorkstreamsOff []string `json:"workstreams_off,omitempty"`
+
 	// TelemetryPort is the loopback port AI tools POST OTLP to.
 	//
 	// ⚠️ IT HAS A CONFIG KEY FOR THE REASON `Blocks` DOES: an env-only knob is

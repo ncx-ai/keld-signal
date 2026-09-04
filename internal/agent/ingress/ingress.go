@@ -33,9 +33,12 @@ func JobFrom(p spool.Pointer) queue.Job {
 	return j
 }
 
-// Handler returns the daemon's HTTP handler.
-func Handler(q *queue.Queue, secret string) http.Handler {
+// Handler returns the daemon's HTTP handler. extras are the v3 loopback routes
+// (/v1/ledger, /v1/settings, /v1/projects, /v1/config, the page) — each lane
+// contributes its own Route from its own file, so nobody edits this one.
+func Handler(q *queue.Queue, secret string, extras ...Route) http.Handler {
 	mux := http.NewServeMux()
+	mount(mux, secret, extras)
 	mux.HandleFunc("/enrich", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -70,8 +73,9 @@ func Handler(q *queue.Queue, secret string) http.Handler {
 // disabled (ml_backend=off): it authenticates and validates the request body
 // exactly like Handler, but never enqueues — it accepts-and-discards (202) so
 // the hook does not spool pointers that would otherwise never be processed.
-func DiscardHandler(secret string) http.Handler {
+func DiscardHandler(secret string, extras ...Route) http.Handler {
 	mux := http.NewServeMux()
+	mount(mux, secret, extras)
 	mux.HandleFunc("/enrich", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
