@@ -27,12 +27,34 @@ echo; echo "==== Set up Keld ===="; echo
 # adds no new connectivity requirement. Non-fatal if it fails: the binaries are
 # already installed, enrichment jobs spool until a sidecar appears, and re-running
 # this script retries.
+# ⚠️ **PRESENCE IS NOT CURRENCY, AND SKIPPING ON PRESENCE COST ~3 WEEKS OF
+# BLOCKS.** This function used to return early whenever ANY sidecar directory
+# existed. The pkg upgrades keld/keld-agent in place, so an upgrade over an
+# earlier install kept whatever sidecar was already there — measured, a 2.3.0
+# daemon running against an Aug 11 sidecar that had no /blocks route at all. It
+# answered 404, the block emitter read that as "no blocks closed yet", and the
+# machine published telemetry and ZERO blocks while `keld signal doctor`
+# reported no problems. Nothing on either side compared the two halves.
+#
+# So the skip condition is now the VERSION the tarball carries at its root
+# (written by sidecar/build-freeze.sh) against the pkg's own staged VERSION. A
+# tree with no VERSION file predates that stamp and is therefore stale BY
+# DEFINITION — it is at best the last build before this change — so it is
+# replaced rather than trusted.
+#
+# ⚠️ THIS IS THE macOS-ONLY HALF OF THE FIX. Windows bundles the sidecar in the
+# Inno payload (`ignoreversion recursesubdirs`) and Linux's install.sh replaces
+# it unconditionally, so only the pkg — which cannot carry it past notarization
+# — can end up with two halves from different releases. The DETECTION half (the
+# daemon's sidecar.version_skew event and doctor's line) runs on all three.
+sidecar_installed_version() {
+  # Empty when absent or unreadable, which reads as "replace it".
+  [ -f "$1/VERSION" ] || return 0
+  tr -d ' \n' < "$1/VERSION" 2>/dev/null || true
+}
+
 fetch_sidecar() {
   dest="${HOME}/.local/bin"
-  if [ -x "${dest}/keld-agent-sidecar/keld-agent-sidecar" ]; then
-    echo "  ✓ analysis sidecar already present → ${dest}/keld-agent-sidecar"
-    return 0
-  fi
   # Apple Silicon only — there is no darwin/amd64 sidecar asset to fetch (PyTorch
   # dropped Intel-mac wheels after 2.2.2), so say so rather than 404 on a bad URL.
   arch=$(uname -m)
@@ -42,6 +64,9 @@ fetch_sidecar() {
        return 1 ;;
   esac
   # Pin to the tag this pkg was built from; fall back to latest for dry-run builds.
+  # ⚠️ RESOLVED BEFORE THE SKIP CHECK, NOT AFTER — it IS the skip check's
+  # right-hand side now. In the normal pkg case that is a local file read and no
+  # network, so an already-current sidecar still costs nothing.
   tag=""
   [ -f "${PREFIX}/VERSION" ] && tag=$(tr -d ' \n' < "${PREFIX}/VERSION")
   case "$tag" in ""|*dryrun*)
@@ -49,6 +74,14 @@ fetch_sidecar() {
           | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4) ;;
   esac
   [ -n "$tag" ] || { echo "  ! could not determine a release to fetch the analysis sidecar from" >&2; return 1; }
+  have=$(sidecar_installed_version "${dest}/keld-agent-sidecar")
+  if [ -x "${dest}/keld-agent-sidecar/keld-agent-sidecar" ] && [ "$have" = "$tag" ]; then
+    echo "  ✓ analysis sidecar already current (${tag}) → ${dest}/keld-agent-sidecar"
+    return 0
+  fi
+  if [ -x "${dest}/keld-agent-sidecar/keld-agent-sidecar" ]; then
+    echo "  … analysis sidecar is ${have:-unversioned}, this build wants ${tag} — replacing it"
+  fi
   asset="keld-agent-sidecar_darwin_${arch}.tar.gz"
   url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
   echo "  … downloading analysis sidecar (${tag}, ~190MB) → ${dest}"

@@ -639,11 +639,14 @@ func (a *Attributor) blockFor(j Job, resolved enrich.ResolvedFacts) (enrich.Bloc
 		dig = bindable.WithContext(ctx)
 	}
 	since := j.Start
-	got, _, ok := dig.BlocksCharacterised(j.Path, j.Source, j.SessionID, &since, time.Now(), refetchMaxBlocks, resolved)
-	if !ok {
+	ans := dig.BlocksCharacterised(j.Path, j.Source, j.SessionID, &since, time.Now(), refetchMaxBlocks, resolved)
+	if !ans.OK {
+		// RouteUnsupported lands here too, and holding is right for it: the job
+		// keeps its attempt and becomes doable when the sidecar catches up, the
+		// same call this path already makes for /attribute's own 404.
 		return enrich.BlockCharacterisation{}, false
 	}
-	for _, b := range got {
+	for _, b := range ans.Blocks {
 		if b.SessionID == j.SessionID && closeEnough(b.StartTS, j.Start) {
 			return b, true
 		}

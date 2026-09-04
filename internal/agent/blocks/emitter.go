@@ -71,6 +71,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -86,7 +87,7 @@ import (
 type Digester interface {
 	BlocksCharacterised(path, source, sessionID string,
 		since *float64, now time.Time, maxBlocks int,
-		resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool)
+		resolved enrich.ResolvedFacts) enrich.BlocksAnswer
 }
 
 // Sender publishes a batch of block rows. Separate from the enrichment
@@ -164,6 +165,13 @@ type Emitter struct {
 	// immediately for exactly that reason.
 	OnPublished func(rows []publish.BlockEnrichment, path string)
 
+	// routeGone latches the "this sidecar has no /blocks route" log to ONE line
+	// per daemon run. The sweep runs every interval against every active
+	// transcript, so an unlatched line is a once-every-five-minutes flood — the
+	// shape operators filter out, which is the same as never warning. Same
+	// reasoning as the budget-shortfall line's per-generation latch.
+	routeGone atomic.Bool
+
 	mu sync.Mutex
 	// active is the bounded set of transcripts that might still have an
 	// unsettled block. See the package comment: this is what keeps work
@@ -215,6 +223,31 @@ func BackfillEnabled() bool {
 // and deliberately NOT in it: the two paths have different cursors with
 // different meanings, and one file would couple v2's lifetime to v1's.
 func StatePath() string { return filepath.Join(paths.StateDir(), "blocks.json") }
+
+// noteRouteUnsupported says, once per run, that the analysis service predates
+// the /blocks route entirely.
+//
+// ⚠️ THIS LINE IS THE WHOLE POINT OF enrich.BlocksAnswer'S FOURTH FIELD. Without
+// it a sidecar with no /blocks route is indistinguishable from a quiet machine:
+// the sweep holds its cursor and says nothing, correctly for every OTHER
+// failure and catastrophically for this one, because no later sweep can succeed
+// either. Measured: an Aug 11 sidecar under a 2.3.0 daemon published ZERO blocks
+// for ~3 weeks with telemetry flowing and doctor green. The remedy names the
+// installer rather than the daemon, because restarting the daemon fixes nothing
+// — the wrong artifact is on disk.
+//
+// The cursor is deliberately NOT advanced and the transcript is NOT retired:
+// the work becomes doable the moment the sidecar catches up, and the held
+// cursor is what asks for the same ground again. Only what is SAID changes.
+func (e *Emitter) noteRouteUnsupported(ans enrich.BlocksAnswer) {
+	if !ans.RouteUnsupported || e.routeGone.Swap(true) {
+		return
+	}
+	log.Printf("keld-agent: the analysis sidecar has no /blocks route — it is older than " +
+		"this agent, so NO BLOCKS CAN BE EMITTED until it is updated. Re-run the Keld " +
+		"installer (macOS: /usr/local/keld/onboard.command). Blocks resume on the next " +
+		"sweep after that, with nothing lost: the cursor is held.")
+}
 
 // Advance is the watcher's per-file signal that a transcript grew, in the shape
 // watch.WithIngestSignal hands out. It is the emitter's ONLY trigger for adding
@@ -340,17 +373,20 @@ func (e *Emitter) sweepOne(tgt target, now time.Time) int {
 	// maxPerSweep and drained across sweeps by the cursor. With it off, seed the
 	// cursor at the watermark and emit nothing.
 	if tgt.Cursor == nil && !e.backfill {
-		_, watermark, ok := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
+		ans := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
 			nil, now, 0, resolved)
-		if ok && watermark != nil {
-			e.st.advance(tgt.Path, *watermark)
+		e.noteRouteUnsupported(ans)
+		if ans.OK && ans.Watermark != nil {
+			e.st.advance(tgt.Path, *ans.Watermark)
 		}
 		return 0
 	}
 
-	blocks, _, ok := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
+	ans := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
 		tgt.Cursor, now, maxPerSweep, resolved)
-	if !ok {
+	e.noteRouteUnsupported(ans)
+	blocks := ans.Blocks
+	if !ans.OK {
 		// The sidecar could not answer (not ready, restarting, store behind).
 		// Do not advance and do not retire: the next sweep asks for the same
 		// ground, which is exactly what a held cursor buys. Queue rather than

@@ -97,4 +97,24 @@ fi
 # `python -m PyInstaller` (not the bare console script) so it works whether $PY
 # is a venv off PATH (local) or the CI python.
 "$PY" -m PyInstaller --clean --noconfirm "$SPEC"
-echo "frozen -> dist/keld-agent-sidecar/ (obfuscated=$OBF)"
+
+# ⚠️ STAMP THE TREE WITH ITS VERSION. The two halves of an install — keld-agent
+# and this frozen sidecar — ship as separate artifacts on separate cadences, and
+# until this file neither half nor a human could see that they disagreed. A
+# 2.3.0 daemon ran ~3 weeks against an Aug 11 sidecar with no /blocks route,
+# which 404'd, which the emitter read as "no blocks closed": zero blocks
+# published, doctor green. See
+# docs/superpowers/specs/2026-09-04-sidecar-version-skew-discovery.md.
+#
+# Written HERE rather than handed to PyInstaller as `datas`, and it must stay
+# that way: `datas` land under _internal/, and the OTHER reader of this file is
+# installers/macos/onboard.command — a shell script, comparing against the pkg's
+# own VERSION to decide whether to re-fetch. Putting a PyInstaller layout detail
+# in that comparison means a future PyInstaller moving _internal/ silently turns
+# every comparison into "no version", which is the failure this ends.
+#
+# `dev` when nothing sets KELD_VERSION — a local freeze, `make freeze-check`, a
+# fork's dry run. Both readers treat `dev` as "cannot tell" rather than as skew,
+# so a developer machine is never nagged (internal/version.Skew, AC-9).
+printf '%s\n' "${KELD_VERSION:-dev}" > dist/keld-agent-sidecar/VERSION
+echo "frozen -> dist/keld-agent-sidecar/ (obfuscated=$OBF, version=${KELD_VERSION:-dev})"

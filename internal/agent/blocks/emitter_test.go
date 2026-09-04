@@ -1,10 +1,14 @@
 package blocks
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +27,9 @@ type fakeDig struct {
 	all       []enrich.BlockCharacterisation
 	watermark *float64
 	fail      bool
+	// routeGone: this sidecar has no /blocks route at all (404) — version skew,
+	// not "could not answer". The distinction the emitter must be able to state.
+	routeGone bool
 	calls     []digCall
 }
 
@@ -34,12 +41,15 @@ type digCall struct {
 
 func (f *fakeDig) BlocksCharacterised(path, source, sessionID string,
 	since *float64, now time.Time, maxBlocks int,
-	resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool) {
+	resolved enrich.ResolvedFacts) enrich.BlocksAnswer {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, digCall{Path: path, Since: since, MaxBlocks: maxBlocks})
+	if f.routeGone {
+		return enrich.BlocksAnswer{RouteUnsupported: true}
+	}
 	if f.fail {
-		return nil, nil, false
+		return enrich.BlocksAnswer{}
 	}
 	var out []enrich.BlockCharacterisation
 	for _, b := range f.all {
@@ -51,7 +61,7 @@ func (f *fakeDig) BlocksCharacterised(path, source, sessionID string,
 		}
 		out = append(out, b)
 	}
-	return out, f.watermark, true
+	return enrich.BlocksAnswer{Blocks: out, Watermark: f.watermark, OK: true}
 }
 
 func (f *fakeDig) callCount() int {
@@ -651,5 +661,53 @@ func TestBackfillOffKeepsForwardOnlySeeding(t *testing.T) {
 	e.advanceAt("claude_code", txPath, now)
 	if n := e.Sweep(context.Background(), now); n != 0 {
 		t.Fatalf("backfill off published %d rows on first sight, want 0", n)
+	}
+}
+
+// AC-8. A sidecar with no /blocks route is SAID ONCE, and the cursor is held.
+//
+// ⚠️ THE SILENCE IS THE DEFECT THIS PINS. Every other reason a sweep comes back
+// empty — the store behind, the sidecar restarting, nothing closed yet — is
+// correctly answered by holding the cursor and saying nothing, because the next
+// sweep can succeed. A missing route cannot: no sweep will ever succeed until a
+// different artifact is on disk. Measured, that read as a healthy quiet machine
+// for ~3 weeks while it published zero blocks.
+//
+// Held, not advanced and not retired, for the same reason /attribute holds on
+// its own 404: the work becomes doable the moment the sidecar catches up, and
+// the cursor is what asks for the same ground again. Only what is SAID changes.
+func TestSweepSaysARouteIsMissingOnceAndHoldsTheCursor(t *testing.T) {
+	dig := &fakeDig{routeGone: true, all: []enrich.BlockCharacterisation{block(1000)}}
+	e := newTestEmitter(t, dig, &fakeSender{})
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	now := time.Unix(9000, 0)
+	e.advanceAt("claude_code", txPath, now)
+	for i := 0; i < 4; i++ {
+		if n := e.Sweep(context.Background(), now); n != 0 {
+			t.Fatalf("sweep %d published %d rows off a sidecar with no route", i, n)
+		}
+	}
+
+	if got := strings.Count(buf.String(), "no /blocks route"); got != 1 {
+		t.Fatalf("logged the missing route %d times over 4 sweeps, want exactly 1 — a "+
+			"per-sweep line is a five-minute flood and gets filtered out, which is the "+
+			"same as never warning:\n%s", got, buf.String())
+	}
+	if !strings.Contains(buf.String(), "installer") {
+		t.Error("the line must name the INSTALLER as the remedy: restarting the daemon " +
+			"fixes nothing when the wrong artifact is on disk")
+	}
+	tgts := e.st.targets(e.activePaths())
+	if len(tgts) != 1 || tgts[0].Path != txPath {
+		t.Fatalf("the transcript must stay ACTIVE: it becomes servable the moment the "+
+			"sidecar is updated, with no restart and nothing lost. targets = %+v", tgts)
+	}
+	if tgts[0].Cursor != nil {
+		t.Errorf("cursor = %v, want nil — seeding it off a refused call would skip every "+
+			"block before it, permanently", *tgts[0].Cursor)
 	}
 }

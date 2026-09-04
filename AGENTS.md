@@ -2222,6 +2222,45 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   file (falls back to the latest-release API for dry-run builds), Apple-Silicon-only,
   and non-fatal on failure: telemetry still works, enrichment jobs spool, re-running
   the script retries.
+  ⚠️ **AND IT SKIPPED ON PRESENCE, WHICH COST ~3 WEEKS OF BLOCKS.** `fetch_sidecar`
+  used to return early whenever any sidecar directory existed, so a pkg upgrade over
+  an earlier install kept whatever sidecar was already there — measured on a real
+  machine, a **2.3.0 daemon against an Aug 11 sidecar**. That sidecar predates
+  `/blocks` entirely, so it answered **404**, which the emitter read as "no blocks
+  closed yet": telemetry flowed, **zero blocks published**, and `keld signal doctor`
+  reported no problems throughout, correctly — every fact either side could reach was
+  fine, because **neither half knew what the other was**. The two halves ship as
+  separate artifacts on separate cadences and nothing compared them.
+  The fix is one stamp and three readers. `sidecar/build-freeze.sh` writes
+  `dist/keld-agent-sidecar/VERSION` from `KELD_VERSION` (⚠️ at the tree ROOT, **not**
+  via PyInstaller `datas`, which land under `_internal/` — a shell script must read
+  it, so a PyInstaller layout change must not silently turn every comparison into
+  "no version"); `onboard.command` compares it against the pkg's own `VERSION` and
+  **replaces on mismatch, or when the tree carries no VERSION at all** (which predates
+  the stamp and is therefore stale by definition); the sidecar returns it on
+  `/health`; and the daemon compares it against `version.CLI` once per run, emitting
+  `sidecar.version_skew` (warn, floor-exempt) plus one log line, with `keld signal
+  doctor` saying the same thing on demand.
+  ⚠️ **`dev` ON EITHER HALF MEANS "CANNOT TELL", NEVER SKEW** (`version.Skew` returns
+  `known=false`): a source checkout, `make sidecar`'s venv wrapper and any local
+  freeze have no VERSION, and a check that fires on every developer machine is one
+  nobody reads on the machine that matters. Same refusal `localagent.ModelState` and
+  `TelemetryState` make. An **unreachable** sidecar is likewise silent here — that is
+  `sidecar.unavailable`'s job, and describing one failure twice under two names is how
+  a fleet view stops meaning anything.
+  ⚠️ **THE INSTALLER HALF IS macOS-ONLY; THE DETECTION HALF IS NOT.** Windows bundles
+  the sidecar in the Inno payload (`ignoreversion recursesubdirs`) and `install.sh`
+  replaces it unconditionally, so only the pkg — which cannot carry it past
+  notarization — produces skew by construction. The daemon/doctor check runs
+  everywhere anyway: a hand-placed sidecar, an interrupted update or a restored
+  `.prev` produces the same state without the known cause.
+  ⚠️ **`enrich.BlocksAnswer` EXISTS FOR THIS**, and a bare `ok` bool is what hid it:
+  `BlocksCharacterised` now answers with a struct carrying `RouteUnsupported`, so a
+  404 is distinguishable from "the store is behind". The emitter still **HOLDS the
+  cursor** either way — the work becomes doable when the sidecar catches up — so what
+  changed is what is SAID, not what is done. That generalizes the reading
+  `/attribute` already had. Spec:
+  `docs/superpowers/specs/2026-09-04-sidecar-version-skew-discovery.md`.
   ⚠️ **Notarization is a HARD GATE — a release cannot ship un-notarized.**
   `KELD_NOTARY_REQUIRED` defaults to **1**, so `build-pkg.sh` fails unless Apple
   returns `Accepted`; the workflow relaxes it to 0 only for the documented

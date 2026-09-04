@@ -29,6 +29,7 @@ jobs:
       - name: shell test suite
         run: |
           bash scripts/verify-release-assets_test.sh
+          bash scripts/check-sidecar-stamp_test.sh
           bash scripts/test-install-sh.sh
           bash sidecar/test_build_freeze.sh
           bash installers/macos/onboard_command_test.sh

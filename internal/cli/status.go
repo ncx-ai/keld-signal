@@ -183,6 +183,7 @@ func newDoctorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			agentInfo, _ := agentcfg.Read()
 
 			for name, tm := range manifest.Tools {
 				adapter, err := tools.Get(name)
@@ -224,6 +225,17 @@ func newDoctorCmd() *cobra.Command {
 			// An update that was applied and did not come up, or one that could
 			// not be rolled back. Disk-only, same rule as the model states.
 			if p := localagent.ReadUpdateState().ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+
+			// The two halves of the install disagreeing about their version.
+			// ⚠️ A LIVE PROBE, unlike everything around it, because a running
+			// sidecar's BUILD is not a filesystem fact the CLI can find — see
+			// localagent.SidecarVersionState. An unreachable sidecar therefore
+			// yields SILENCE rather than a finding: it is usually a stopped
+			// daemon, and reporting skew over that sends people to reinstall
+			// something that is perfectly current.
+			if p := localagent.SidecarVersion(agentInfo, localagent.FetchText).ProblemLine(); p != "" {
 				problems = append(problems, p)
 			}
 

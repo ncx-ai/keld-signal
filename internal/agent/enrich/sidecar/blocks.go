@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -100,6 +101,9 @@ type BlockResult struct {
 type BlocksResult struct {
 	Blocks    []BlockResult `json:"blocks"`
 	Watermark *float64      `json:"watermark"`
+	// RouteUnsupported is set by Blocks, never by the wire: the sidecar answered
+	// 404, so it has no /blocks route to decode a body from.
+	RouteUnsupported bool `json:"-"`
 }
 
 // Blocks asks the sidecar which CLOSED blocks of work this transcript has, and
@@ -118,8 +122,13 @@ func (c *Client) Blocks(path string, since *float64, now time.Time,
 		MaxBlocks: maxBlocks,
 		Resolved:  resolvedOrNil(resolved),
 	}
-	if !c.post("/blocks", req, &r) {
-		return BlocksResult{}, false
+	// postStatus rather than post, for the STATUS: a 404 here means this sidecar
+	// has no /blocks route at all — it predates the route — and that is a
+	// different fact from "could not answer". The same reading /attribute
+	// already makes. See enrich.BlocksAnswer.
+	ok, status := c.postStatus("/blocks", req, &r)
+	if !ok {
+		return BlocksResult{RouteUnsupported: status == http.StatusNotFound}, false
 	}
 	return r, true
 }
@@ -151,10 +160,10 @@ func (c *Client) Blocks(path string, since *float64, now time.Time,
 // a second call. nil means the transcript has never been ingested.
 func (c *Client) BlocksCharacterised(path, source, sessionID string,
 	since *float64, now time.Time, maxBlocks int,
-	resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool) {
+	resolved enrich.ResolvedFacts) enrich.BlocksAnswer {
 	res, ok := c.Blocks(path, since, now, maxBlocks, resolved)
 	if !ok {
-		return nil, nil, false
+		return enrich.BlocksAnswer{RouteUnsupported: res.RouteUnsupported}
 	}
 	out := make([]enrich.BlockCharacterisation, 0, len(res.Blocks))
 	for _, b := range res.Blocks {
@@ -181,7 +190,7 @@ func (c *Client) BlocksCharacterised(path, source, sessionID string,
 				b.Dynamics, b.Effort, b.Prior),
 		})
 	}
-	return out, res.Watermark, true
+	return enrich.BlocksAnswer{Blocks: out, Watermark: res.Watermark, OK: true}
 }
 
 // epochRFC3339 renders an epoch-second instant as a UTC RFC3339 string, the one

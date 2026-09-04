@@ -209,6 +209,68 @@ def test_health_not_ok_when_held():
     assert m.health()["ok"] is False
 
 
+def test_health_reports_version():
+    # AC-2. The daemon compares this against its OWN version to see that the two
+    # separately-shipped halves disagree; a /health without it is the state that
+    # let a 2.3.0 daemon run for weeks against an Aug 11 sidecar.
+    m = _reload_main(None)
+    _wire(m, wm=_FakeWM(state="down"))
+    assert m.health()["version"] == m.BUILD_VERSION
+
+
+def test_health_version_is_dev_when_not_frozen():
+    # "dev" is a real answer, not a failure: a source checkout and a venv wrapper
+    # have no VERSION file, and the Go side reads "dev" as "cannot tell" so a
+    # developer machine is never reported as skewed.
+    import app.buildversion as bv
+
+    assert bv._read() == "dev"
+
+
+def test_health_version_reads_the_file_beside_a_frozen_executable():
+    # The file sits at the ROOT of the frozen tree, beside the executable, NOT
+    # under _internal/ — onboard.command reads the same path from shell.
+    import sys
+
+    import app.buildversion as bv
+
+    with tempfile.TemporaryDirectory() as d:
+        exe = os.path.join(d, "keld-agent-sidecar")
+        open(exe, "w").close()
+        with open(os.path.join(d, "VERSION"), "w") as fh:
+            fh.write("v2.3.0\n")  # trailing newline is not skew
+        old_exe, old_frozen = sys.executable, getattr(sys, "frozen", None)
+        sys.executable, sys.frozen = exe, True
+        try:
+            assert bv._read() == "v2.3.0"
+        finally:
+            sys.executable = old_exe
+            if old_frozen is None:
+                del sys.frozen
+            else:
+                sys.frozen = old_frozen
+
+
+def test_health_version_is_dev_when_the_file_is_missing():
+    import sys
+
+    import app.buildversion as bv
+
+    with tempfile.TemporaryDirectory() as d:
+        exe = os.path.join(d, "keld-agent-sidecar")
+        open(exe, "w").close()
+        old_exe, old_frozen = sys.executable, getattr(sys, "frozen", None)
+        sys.executable, sys.frozen = exe, True
+        try:
+            assert bv._read() == "dev"
+        finally:
+            sys.executable = old_exe
+            if old_frozen is None:
+                del sys.frozen
+            else:
+                sys.frozen = old_frozen
+
+
 def test_dispatch_503_when_worker_held():
     # Memory pressure holds the worker; endpoints shed with 503 rather than block.
     m = _reload_main(None)

@@ -663,20 +663,46 @@ func (c *Client) Warmup(ctx context.Context) error {
 	return errors.New("sidecar warmup failed")
 }
 
-func (c *Client) Healthy(ctx context.Context) bool {
+// HealthReport is GET /health as the daemon reads it.
+//
+// Version is the SIDECAR'S OWN BUILD, not a schema and not the model's — the
+// one fact that lets the daemon see that the two separately-shipped halves of
+// an install disagree. "dev" (version.Unknown) means the sidecar cannot name
+// its build: a source checkout, `make sidecar`'s venv wrapper, a local freeze.
+// A sidecar older than the field answers without it, which decodes to "" and
+// is read as unknown for the same reason — skew is exactly the state in which
+// the other half is old, so the check must survive its own absence there.
+type HealthReport struct {
+	Ok      bool   `json:"ok"`
+	Version string `json:"version"`
+}
+
+// Health reports the sidecar's own view of itself. ok=false on any transport,
+// status or decode failure — a sidecar that cannot answer is not healthy, and
+// its version is not knowable either.
+func (c *Client) Health(ctx context.Context) (HealthReport, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/health", nil)
 	if err != nil {
-		return false
+		return HealthReport{}, false
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return false
+		return HealthReport{}, false
 	}
 	defer resp.Body.Close()
-	var h struct {
-		Ok bool `json:"ok"`
+	if resp.StatusCode != http.StatusOK {
+		return HealthReport{}, false
 	}
-	return resp.StatusCode == http.StatusOK && json.NewDecoder(resp.Body).Decode(&h) == nil && h.Ok
+	var h HealthReport
+	if json.NewDecoder(resp.Body).Decode(&h) != nil {
+		return HealthReport{}, false
+	}
+	return h, true
+}
+
+func (c *Client) Healthy(ctx context.Context) bool {
+	h, ok := c.Health(ctx)
+	return ok && h.Ok
 }
 
 // WorkerReady reports whether the sidecar's inference worker has the model

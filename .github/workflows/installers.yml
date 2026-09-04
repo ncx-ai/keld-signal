@@ -122,6 +122,11 @@ jobs:
           # model (see AGENTS.md), so what is lost is source-level opacity, not
           # a security control.
           KELD_OBFUSCATE: "0"
+          # Stamps dist/keld-agent-sidecar/VERSION, which is how the installer and
+          # the daemon can tell the two separately-shipped halves apart. Empty on a
+          # dry run, and build-freeze.sh then writes "dev" — read by both sides as
+          # "cannot tell", never as skew. See the discovery doc, AC-1.
+          KELD_VERSION: ${{ env.TAG }}
         run: |
           python -m pip install --quiet python-minifier pyarmor
           bash sidecar/build-freeze.sh
@@ -330,9 +335,18 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
-          tar -C dist -czf "keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz" keld-agent-sidecar
-          shasum -a 256 "keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz" \
-            > "keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz.sha256"
+          tarball="keld-agent-sidecar_darwin_${{ matrix.goarch }}.tar.gz"
+          tar -C dist -czf "$tarball" keld-agent-sidecar
+          shasum -a 256 "$tarball" > "$tarball.sha256"
+          # AC-1. The stamp is the ONLY thing the macOS installer and the daemon can
+          # compare, so a tree that lost it must fail the release rather than ship.
+          # ⚠️ CALLED, NOT RESTATED: nothing in this repo can execute a workflow
+          # file, so a gate written inline here is protected by nothing — the exact
+          # shape that let obfuscation break for a week (see the KELD_OBFUSCATE note
+          # above). scripts/check-sidecar-stamp_test.sh exercises it on every run of
+          # the shell gates. Not in verify-release-assets.sh either: that reads the
+          # release's asset LIST and would have to download ~300MB to look inside.
+          bash scripts/check-sidecar-stamp.sh "$tarball" "${TAG}"
 
       - name: Upload macOS sidecar to release
         if: startsWith(matrix.os, 'macos') && env.IS_RELEASE == 'true'
@@ -456,6 +470,7 @@ jobs:
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/work" -w /work \
             -e KELD_OBFUSCATE=0 \
+            -e KELD_VERSION="${TAG}" \
             -e HF_HOME=/work/hf-cache \
             -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
             quay.io/pypa/manylinux_2_28_x86_64 \
@@ -488,9 +503,18 @@ jobs:
       - name: Package Linux sidecar tarball
         shell: bash
         run: |
-          tar -C dist -czf "keld-agent-sidecar_linux_amd64.tar.gz" keld-agent-sidecar
-          sha256sum "keld-agent-sidecar_linux_amd64.tar.gz" \
-            > "keld-agent-sidecar_linux_amd64.tar.gz.sha256"
+          tarball="keld-agent-sidecar_linux_amd64.tar.gz"
+          tar -C dist -czf "$tarball" keld-agent-sidecar
+          sha256sum "$tarball" > "$tarball.sha256"
+          # AC-1. The stamp is the ONLY thing the macOS installer and the daemon can
+          # compare, so a tree that lost it must fail the release rather than ship.
+          # ⚠️ CALLED, NOT RESTATED: nothing in this repo can execute a workflow
+          # file, so a gate written inline here is protected by nothing — the exact
+          # shape that let obfuscation break for a week (see the KELD_OBFUSCATE note
+          # above). scripts/check-sidecar-stamp_test.sh exercises it on every run of
+          # the shell gates. Not in verify-release-assets.sh either: that reads the
+          # release's asset LIST and would have to download ~300MB to look inside.
+          bash scripts/check-sidecar-stamp.sh "$tarball" "${TAG}"
 
       - name: Upload sidecar to release
         if: env.IS_RELEASE == 'true'
