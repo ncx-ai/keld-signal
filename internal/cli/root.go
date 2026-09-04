@@ -33,6 +33,7 @@ func NewRootCmd() *cobra.Command {
 	}
 	signal.AddCommand(newSetupCmd())
 	signal.AddCommand(newStatusCmd())
+	signal.AddCommand(newSignalOpenCmd())
 	signal.AddCommand(newSignalMetricsCmd())
 	signal.AddCommand(newSignalEnrichCmd())
 	signal.AddCommand(newDoctorCmd())
