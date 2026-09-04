@@ -245,6 +245,9 @@ class TextSource:
             # milliseconds is not a number anyone reads — the mean beside the count is.
             "counts": {k: v for k, v in dict(self.counts, **e.counts).items()
                        if k != "batch_ms_total"},
+            # The child's own report, not a re-derivation: see `Encoder.dtype`. Absent until a
+            # child has come up, which is why the default block above states it as None.
+            "dtype": e.dtype,
             "last_batch_ms": round(e.last_batch_ms, 1),
             "mean_batch_ms": round(e.counts["batch_ms_total"] / e.counts["batches"], 1)
             if e.counts.get("batches") else 0.0,
@@ -425,6 +428,14 @@ def embed_stats(source):
         # down: `width` is the PUBLISHED width (256), which is the one parameter that cannot be
         # revised retroactively, and `projection` is the seed, so a fleet-wide rotation is visible.
         "encoder": encoder_ref(),
+        # ⚠️ **BESIDE `encoder`, DELIBERATELY NOT INSIDE IT.** `encoder_ref` is the POOLABILITY
+        # identity — model, published width, projection seed — and a field inside it reads as
+        # "two corpora under different values are not poolable". Measured, two dtypes are: the
+        # same three chunks encode to cosine 0.99983-0.99990 across bf16 and fp32 at both widths,
+        # against an attribution MARGIN of 0.08. So the dtype belongs in the operability block,
+        # where "which arm did THIS host pick" is the question, and not in the identity, where it
+        # would invent an incompatibility the numbers do not show.
+        "dtype": None,
         # The encode width (1024) beside it, because the two differ by 4x and conflating them puts
         # any volume estimate out by the same factor.
         "encode_width": te.DIM_ENCODE,

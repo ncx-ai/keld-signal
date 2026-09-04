@@ -98,9 +98,12 @@ client's**: it is generated deterministically from a seed held in configuration
 it does not choose. This is a hardening measure, not a claim of impossibility; it is recorded here
 so the reason survives someone later asking why the client multiplies by a constant.
 """
+import logging
 import math
 import os
 import re
+
+_log = logging.getLogger("keld.sidecar.textembed")
 
 # The stream tags. Kept separate, never concatenated — see the module docstring.
 USER, ASST, THINK = "user", "asst", "think"
@@ -462,6 +465,18 @@ def _default_dtype_name(torch):
         return "float32"
 
 
+def _resolve_dtype_name(torch):
+    """The dtype this child will load: `KELD_TEXTEMBED_DTYPE` if set, else the host's answer.
+
+    One function rather than an inline `or` so the PRECEDENCE is testable without weights, a
+    child, or torch. It is the half of this decision an operator actually touches: the capability
+    guess is what ships, and the variable is how anyone re-measures either arm on a host whose
+    answer they doubt (`_load`'s tables are both single-host numbers). An unknown value is left to
+    `_load`'s `getattr` fallback rather than validated here — a typo lands on fp32, which is the
+    safe arm, and the name still reaches `/metrics` so the typo is visible rather than silent."""
+    return os.environ.get("KELD_TEXTEMBED_DTYPE") or _default_dtype_name(torch)
+
+
 def _load(spec):
     """Load the encoder. CHILD SIDE ONLY — torch and transformers are imported here so the parent
     never pulls them in and the spawn re-import of this module stays cheap.
@@ -521,12 +536,12 @@ def _load(spec):
 
     torch.set_num_threads(int(spec.get("threads") or 2))
     d = spec["dir"]
-    name = os.environ.get("KELD_TEXTEMBED_DTYPE") or _default_dtype_name(torch)
+    name = _resolve_dtype_name(torch)
     dtype = getattr(torch, name, torch.float32)
     tok = AutoTokenizer.from_pretrained(d, padding_side="left")
     model = AutoModel.from_pretrained(d, dtype=dtype)
     model.eval()
-    return tok, model
+    return tok, model, name
 
 
 def _encode_batch(tok, model, texts, max_tokens):
@@ -572,11 +587,17 @@ def _serve(req_q, resp_q, spec):
     `worker.py` sends, and it is safe there because that worker's inputs are already the caller's
     own text; here the input is a transcript message, and a tokenizer error's repr can quote it."""
     try:
-        tok, model = _load(spec)
+        tok, model, dtype_name = _load(spec)
     except Exception as e:                 # noqa: BLE001 — absent weights are a normal state
         resp_q.put({"ready": False, "error": type(e).__name__})
         return
-    resp_q.put({"ready": True})
+    # ⚠️ **WARNING, NOT INFO, AND THAT IS THE ONLY LEVEL THAT REACHES ANYONE.** `serve.py` runs
+    # uvicorn at `log_level="warning"` and nothing calls `basicConfig`, so an INFO line from this
+    # child is written to no handler at all. The daemon already takes one `Loading weights`
+    # progress line per spawn on this same stream; this is the line that makes it interpretable.
+    _log.warning("text encoder loaded: dtype=%s threads=%s", dtype_name,
+                 spec.get("threads") or 2)
+    resp_q.put({"ready": True, "dtype": dtype_name})
     while True:
         req = req_q.get()
         if req is None:
@@ -632,6 +653,16 @@ class Encoder:
         self._proc = self._req = self._resp = None
         self.state = DOWN
         self.status = STATUS_OK
+        # The dtype the CURRENT (or most recent) child reported loading — the child's own answer,
+        # never re-derived here, because `_default_dtype_name` needs torch and the parent must not
+        # import it. `None` until a child has come up at least once.
+        #
+        # ⚠️ **NOT RESET ON `_kill`, unlike `_peak_rss`.** A peak describes one process and is
+        # meaningless carried across a generation; a dtype describes the HOST, and the moment an
+        # operator wants it is precisely when the child is down and they are asking why. It is
+        # overwritten on every ready handshake, so an env change cannot leave it stale for longer
+        # than one spawn.
+        self.dtype = None
         self._unavailable_at = None
         self._last_activity = self._clock()
         # High-water RSS for the CURRENT child generation, sampled lock-free by `observe_rss`.
@@ -692,6 +723,7 @@ class Encoder:
             return False
         self.state = READY
         self.status = STATUS_OK
+        self.dtype = msg.get("dtype")
         self._unavailable_at = None
         self._last_activity = self._clock()
         return True
