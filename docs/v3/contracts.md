@@ -109,6 +109,43 @@ fields the daemon ignores when it reads it as a project list:
 }
 ```
 
+### ⚠️ What Atlas actually offers today — VERIFIED 2026-09-04, and it is not what an
+### earlier draft of this file said
+
+Read against `keld-atlas` on this machine, not assumed:
+
+1. **The vocabulary already reaches the daemon, and needs no Atlas release.**
+   `GET /v1/enrichment-settings` already serves the org's **pooled workstream VALUES** under
+   the existing `projects` key (`services/workstream_attribution.wire_projects`), shaped
+   `{id, title, description, team, keywords}`. So "the org's workstream values are the
+   attribution vocabulary" is true **now**.
+   - `team` carries the **workstream's name** when a value has no owning team — that is how
+     the daemon can group values by bucket and honour `workstreams_off` without a new field.
+   - `keywords` are the value's authored **tags with their prefix STRIPPED**: an admin types
+     `repository: acme/web` in the Atlas editor and the daemon receives `acme/web`. So a
+     deterministic repo rule must recognise a repository **by shape**
+     (`host/org/name` or `org/name`), not by a prefix that does not survive the wire. Do not
+     wait for Atlas to stop stripping.
+   - The list is **pooled deliberately** — one flat competition across all workstreams — and
+     Atlas's own comment says four lists would need a Signal change. Do not ask for one.
+2. **Publishing an attribution already works.** Signal publishes `raw->'projects'` as a flat
+   array of `{id, confidence, source}`; Atlas matches a workstream to a block by containment
+   of any of its value ids (`attributed_to`) and writes the workstream key into
+   `blocks.dimensions` itself. **The daemon never sends a workstream key.**
+3. **⚠️ WRITING A VALUE BACK DOES NOT WORK, and an earlier draft of this file claimed it
+   did.** `PATCH /v1/workstreams/{key}` is really `PATCH /api/workstreams/{key}`, mounted
+   with `dependencies=[Depends(require_admin)]` behind a **user session** — not the daemon's
+   ingest token. There is no `/v1/signal/*` route that accepts a project or a tag from a
+   machine. Therefore, for this build:
+   - "same as" and "new project" are **LOCAL edits** to `projects.json`. They re-attribute
+     this machine's blocks immediately and completely.
+   - The page states plainly that the change is local, and offers the Atlas workstream editor
+     link for the org-wide edit. It must not imply the org has been taught anything.
+   - The org-wide loop needs **one Atlas change**: a route under `/v1/signal/*` accepting the
+     ingest token that appends a tag to a value. That is D8's ask, and it is a server change,
+     not a client one. Until it exists, the "one person fixes it for the fleet" story in the
+     plan is aspirational and the page must not tell it.
+
 `repos` ARE the rules (one `repo:` rule per entry, full remote `host/org/name`, lowercase);
 `ticket_key` is the second rule kind (a Jira-style prefix, e.g. `KELD`). Everything else
 the machine collects under a project (branches, languages, tools, workspaces) is
@@ -122,8 +159,12 @@ Routes (all behind the secret):
 | `POST /v1/projects/bundle` | `{"title","workstream","suggestions":[ids]}` | one project with those rules; re-attributes |
 | `POST /v1/projects/{id}/rules` | `{"add":[…],"remove":[…]}` | split/extend; a removed repo returns to suggestions with its stable id |
 | `POST /v1/projects/{id}/hide` | `{"hidden":true}` | local only |
-| `POST /v1/projects/place` | `{"suggestion":id,"same_as":projectId}` | adds the rule to an existing project |
+| `POST /v1/projects/place` | `{"suggestion":id,"same_as":projectId}` | adds the rule to an existing project (LOCAL — see the verified note above) |
 | `PUT /v1/workstreams/{key}/off` | `{"off":true}` | writes `workstreams_off` |
+
+Every one of these edits is local to this machine. The response carries
+`{"local_only": true, "atlas_editor_url": "<endpoint>/workstreams"}` so the page can say so
+and link to where the org-wide edit is actually made.
 
 Suggestion ids are **stable**: `sha1(kind + ":" + value)[:12]`, so a description written
 against a suggestion survives, and a split repo comes back with the id it had.
