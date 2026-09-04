@@ -19,3 +19,13 @@ __pycache__/
 
 /build
 /windows
+
+# Editor/agent state and macOS directory metadata. Neither belongs in the repo, and
+# both otherwise leave the working tree permanently "unclean" — which is precisely
+# what scripts/cut-release.sh refuses to tag from, so an ignored-but-present
+# `.claude/worktrees/` was enough to block every release from this checkout.
+# Scoped rather than a bare `/.claude/`: a shared `.claude/settings.json` is
+# something a team may well want tracked, and this must not foreclose that.
+.DS_Store
+/.claude/settings.local.json
+/.claude/worktrees/
