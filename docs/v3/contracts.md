@@ -61,8 +61,46 @@ Rules: a cell that never happened is **absent from `cells`**, never `{"status":"
 `estimate_usd` is 0 when no price applies; the page prints "est." on every dollar figure
 regardless. `pending` holds sessions for which blocks could not be asked for at all.
 
+Two additions from D2 (the ledger store), both narrow and both a direct consequence of the
+ordering rule above ("marking a stage twice never loses information"):
+- A cell that is currently `failed` but previously reached `ok` also carries `ok_at` (the
+  earlier success's timestamp) — so a re-send that broke stays visible instead of looking
+  like the stage never worked. Absent whenever the stage has never succeeded.
+- An `attributed` cell with `"reason":"conflict"` carries `conflict: [project_id, …]` — the
+  competing project ids — instead of `project_id`/`method` (which only appear on `"status":
+  "ok"`). This is `Attributed.Conflict` (recorder.go) reaching the wire; no other reason
+  publishes stage-specific detail.
+
 Breaks are NOT stored: the page derives them as the gap between consecutive blocks of
 one session when the gap ≥ 15 minutes (a cap-cut block abuts the next with gap 0).
+
+## The page's own conventions — settled 2026-09-05, after lane D asked
+
+Four things the page needs that the routes above do not specify. Each is answered here so a
+second implementation cannot answer it differently.
+
+1. **The one-time secret handoff is `?secret=`.** `keld signal open` builds
+   `http://127.0.0.1:<port>/?secret=<secret>`; the page reads it once, sets the `keld_secret`
+   cookie, and **replaces the URL** (`history.replaceState`) so the secret does not sit in the
+   address bar, the back stack or a screenshot. Static assets are unauthenticated (they carry
+   no data); every `/v1/*` fetch rides the cookie.
+2. **A card's headline "Tokens" is `input + output + cache_read + cache_creation`** — what was
+   actually consumed. It is **not** the price-weighted `request` figure, which exists to weight
+   a rollup and would read as a wrong token count. The estimate uses the four classes at their
+   own rates (`internal/agent/pricing`), so tokens and money are derived from the same numbers
+   and can be checked against each other.
+3. **"Show details on cards" is a per-viewer preference and lives in `localStorage`**, not in
+   `agent-config.json`: it changes nothing the daemon does, and a machine-wide file is the wrong
+   home for one person's view. `show_breaks` is deliberately the other way — it is in the file
+   because the block/break reading is what the app is *for* and should survive a reinstall.
+4. **"Start at login" is NOT a working toggle yet and must not pretend to be.** It is a
+   property of the desktop shell (Tauri's autostart plugin, D9) and the daemon's own service
+   registration already handles the collector. Until D9 the control renders **disabled** with
+   "in the desktop app"; a toggle that silently does nothing is the defect this whole plan
+   exists to remove.
+5. **A project "conflict" is DERIVED, not a stored field.** Two visible projects, in
+   workstreams that are on, sharing a repository rule or a ticket key. Nothing writes a
+   conflict flag, so nothing can leave a stale one behind.
 
 ## `GET|PUT /v1/settings`
 
