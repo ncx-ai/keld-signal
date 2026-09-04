@@ -1,0 +1,36 @@
+{
+  "generated_at": "2026-09-04T17:34:00Z",
+  "health": [
+    { "key": "daemon", "status": "ok", "detail": "2.5.0", "at": "2026-09-04T17:34:00Z" },
+    { "key": "sidecar", "status": "pending", "detail": "sidecar_outdated", "at": "2026-09-04T17:33:40Z" },
+    { "key": "telemetry", "status": "ok", "detail": "", "at": "2026-09-04T17:33:00Z" },
+    { "key": "atlas", "status": "ok", "detail": "", "at": "2026-09-04T09:30:00Z" },
+    { "key": "store", "status": "ok", "detail": "", "at": "2026-09-04T17:34:00Z" }
+  ],
+  "blocks": [
+    {
+      "key": { "session": "aa11bb22cc33dd44", "start": 1788513000 },
+      "end": 1788514140,
+      "source": "claude_code",
+      "start_reason": "session_start",
+      "end_reason": "budget",
+      "cells": {
+        "cut": { "status": "ok", "at": "2026-09-04T09:29:00Z" },
+        "measured": {
+          "status": "ok",
+          "at": "2026-09-04T09:29:02Z",
+          "tokens": { "input": 1, "output": 90, "cache_read": 500000, "cache_creation": 90000, "request": 12000 },
+          "requests": 5,
+          "model": "claude-sonnet-4-6",
+          "estimate_usd": 0.44
+        },
+        "attributed": { "status": "ok", "at": "2026-09-04T09:29:03Z", "project_id": "p_keld_signal", "method": "repo" },
+        "sent": { "status": "ok", "at": "2026-09-04T09:30:00Z" },
+        "received": { "status": "ok", "at": "2026-09-04T09:30:01Z" }
+      }
+    }
+  ],
+  "pending": [
+    { "session": "9eb2b3ff2c4a1d10", "reason": "sidecar_outdated", "at": "2026-09-04T17:20:00Z" }
+  ]
+}

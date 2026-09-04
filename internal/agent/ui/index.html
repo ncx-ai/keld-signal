@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keld Signal</title>
+<!-- Google Fonts is the one external request this page makes, per
+     docs/v3/contracts.md's D6 scope; every family below carries a real
+     fallback stack so the page still renders if it's unreachable. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app" class="shell">
+  <aside class="nav" aria-label="Keld Signal">
+    <div class="brand">Keld Signal</div>
+    <nav aria-label="Panes">
+      <a href="#/today" data-pane="today">Today</a>
+      <a href="#/projects" data-pane="projects">Projects</a>
+      <div class="navgroup">Machine</div>
+      <a href="#/settings" data-pane="settings">Settings</a>
+    </nav>
+    <div class="navfoot" id="navHealthDot" title="Signal status">
+      <span class="dot"></span><span id="navHealthText">checking…</span>
+    </div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div class="topbar-title" id="topbarTitle">Today</div>
+      <div class="topbar-right">
+        <div id="envPill" class="pill env" hidden></div>
+      </div>
+    </header>
+    <div id="offlineBanner" class="offline-banner" hidden>
+      <strong>Signal is not running on this machine.</strong>
+      <span>Start it with <code>keld-agent run</code>, then reload this page.</span>
+    </div>
+    <div id="paneRoot" class="pane-root" aria-live="polite">
+      <p class="loading">Loading…</p>
+    </div>
+  </main>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

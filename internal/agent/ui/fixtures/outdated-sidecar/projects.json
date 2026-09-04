@@ -1,0 +1,51 @@
+{
+  "workstreams": [
+    { "key": "development", "name": "Development · Projects", "question": "Which project is this work for?", "template_id": "project", "origin": "atlas", "off": false },
+    { "key": "marketing", "name": "Marketing · Campaigns", "question": "Which campaign is this work for?", "template_id": "project", "origin": "atlas", "off": true }
+  ],
+  "projects": [
+    {
+      "id": "p_keld_signal",
+      "title": "Keld Signal",
+      "description": "The on-device collector and enrichment agent.",
+      "team": "",
+      "repos": ["github.com/ncx-ai/keld-signal"],
+      "keywords": [],
+      "ticket_key": "KELD",
+      "workstream": "development",
+      "origin": "atlas",
+      "hidden": false,
+      "atlas_value_id": "val_keld_signal"
+    },
+    {
+      "id": "p_keld_atlas",
+      "title": "Keld Atlas",
+      "description": "The web app and ingest API.",
+      "team": "",
+      "repos": ["github.com/ncx-ai/keld-atlas"],
+      "keywords": [],
+      "ticket_key": "",
+      "workstream": "development",
+      "origin": "atlas",
+      "hidden": false,
+      "atlas_value_id": "val_keld_atlas"
+    },
+    {
+      "id": "p_marketing_launch",
+      "title": "Q3 launch campaign",
+      "description": "",
+      "team": "",
+      "repos": [],
+      "keywords": ["launch"],
+      "ticket_key": "",
+      "workstream": "marketing",
+      "origin": "atlas",
+      "hidden": false,
+      "atlas_value_id": "val_launch"
+    }
+  ],
+  "suggestions": [
+    { "id": "a1b2c3d4e5f6", "kind": "repo", "value": "github.com/ncx-ai/keld-cli", "blocks": 4, "minutes": 72, "tokens": 3100000 }
+  ],
+  "coverage": { "attributed": 23, "total": 28, "since": "2026-09-01T00:00:00Z" }
+}

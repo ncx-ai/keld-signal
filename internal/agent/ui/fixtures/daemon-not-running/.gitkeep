@@ -1,0 +1,4 @@
+Deliberately empty: pointing ui-dev --fixtures at this directory makes
+GET /v1/ledger, /v1/settings and /v1/projects all answer 503, exactly as an
+unreachable daemon would refuse the connection. See internal/agent/ui/embed.go
+(DevServer) and app.js's offline handling.

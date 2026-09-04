@@ -1,0 +1,12 @@
+{
+  "generated_at": "2026-09-04T09:00:05Z",
+  "health": [
+    { "key": "daemon", "status": "ok", "detail": "2.5.0", "at": "2026-09-04T09:00:00Z" },
+    { "key": "sidecar", "status": "ok", "detail": "2.5.0", "at": "2026-09-04T09:00:01Z" },
+    { "key": "telemetry", "status": "pending", "detail": "", "at": "2026-09-04T09:00:00Z" },
+    { "key": "atlas", "status": "pending", "detail": "", "at": "2026-09-04T09:00:00Z" },
+    { "key": "store", "status": "ok", "detail": "", "at": "2026-09-04T09:00:00Z" }
+  ],
+  "blocks": [],
+  "pending": []
+}
