@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -229,18 +231,36 @@ type blocksEnvelope struct {
 // 201 is the documented success; anything below 400 is accepted, so a later
 // 200/202 on the same route is not read as a failure and re-sent forever.
 func (p *Publisher) SendBlocks(blocks []BlockEnrichment) error {
+	_, err := p.SendBlocksResult(blocks)
+	return err
+}
+
+// SendBlocksResult is SendBlocks plus the HTTP status Atlas actually answered
+// with — 0 when no response was reached at all.
+//
+// ⚠️ **The status exists so the ledger can record `received` from the RESPONSE
+// rather than from the absence of an error** (docs/v3/contracts.md). It also
+// carries the captive-portal check this path did not have: the body used to be
+// copied straight to io.Discard, so a hotel wifi answering **200 with an HTML
+// login page** looked exactly like a successful publish — the emitter advanced
+// its cursor and those blocks were never sent again. The telemetry drain has
+// checked its response body for this reason since it was written; the block
+// route inherited the status-only test and the bug with it. A response whose
+// content-type is HTML, or whose body opens with `<`, is now a failure with
+// status 0 so a caller cannot mistake it for a rejection by Atlas.
+func (p *Publisher) SendBlocksResult(blocks []BlockEnrichment) (int, error) {
 	if len(blocks) == 0 {
-		return nil
+		return 0, nil
 	}
 	body, err := json.Marshal(blocksEnvelope{Blocks: blocks})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("x-keld-ingest-token", p.Token())
@@ -251,12 +271,33 @@ func (p *Publisher) SendBlocks(blocks []BlockEnrichment) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
+	head, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= 400 {
-		return &retry.StatusError{Code: resp.StatusCode}
+		return resp.StatusCode, &retry.StatusError{Code: resp.StatusCode}
 	}
-	return nil
+	if looksIntercepted(resp.Header.Get("content-type"), head) {
+		// Status 0, not the 200 we were handed: the 200 came from something
+		// that is not Atlas, and reporting it would let a caller record the
+		// batch as received.
+		return 0, ErrIntercepted
+	}
+	return resp.StatusCode, nil
+}
+
+// ErrIntercepted is a 2xx that did not come from Atlas — a captive portal or a
+// proxy's own page. Not a StatusError: nothing about the request was refused,
+// so retrying it later is exactly right.
+var ErrIntercepted = errors.New("publish: response body is not from Atlas (captive portal?)")
+
+func looksIntercepted(contentType string, head []byte) bool {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if strings.HasPrefix(ct, "text/html") {
+		return true
+	}
+	trimmed := bytes.TrimLeft(head, " \t\r\n\xef\xbb\xbf") // leading space or a UTF-8 BOM
+	return len(trimmed) > 0 && trimmed[0] == '<'
 }
