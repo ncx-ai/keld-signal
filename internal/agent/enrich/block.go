@@ -127,3 +127,32 @@ type BlockCharacterisation struct {
 	EndTS     float64
 	Analysis  WindowAnalysis
 }
+
+// BlocksAnswer is everything the analysis service said about one transcript's
+// closed blocks: the rows, the watermark, and whether it could answer at all.
+//
+// ⚠️ IT EXISTS FOR ITS FOURTH FIELD, and a bare `ok` bool is what let a real
+// defect run for three weeks. An Aug 11 sidecar has no `/blocks` route at all —
+// it predates it — so it answers 404. Under the old three-value return that
+// arrived at the emitter as `ok == false`, indistinguishable from "the store is
+// behind" or "nothing has closed yet", and the emitter's correct response to
+// those (hold the cursor, say nothing, try next sweep) is exactly wrong here:
+// the next sweep cannot succeed either, and the machine published zero blocks
+// while looking healthy from every angle. See
+// docs/superpowers/specs/2026-09-04-sidecar-version-skew-discovery.md.
+//
+// The HOLD is still right — a sidecar update makes the work doable, and the
+// cursor is what asks for the same ground again — so RouteUnsupported changes
+// what is SAID, not what is done. That is the same call `/attribute` already
+// makes with AttributeResult.RouteUnsupported, and this is that rule
+// generalized rather than a second one.
+type BlocksAnswer struct {
+	Blocks    []BlockCharacterisation
+	Watermark *float64
+	// OK is false for every failure, RouteUnsupported included: a caller that
+	// only wants "did I get rows" reads this one field and is unaffected.
+	OK bool
+	// RouteUnsupported: the service answered 404 — it has no /blocks route,
+	// which is version skew rather than an empty answer. Never true with OK.
+	RouteUnsupported bool
+}

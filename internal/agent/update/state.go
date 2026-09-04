@@ -14,8 +14,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
 // maxFailedVersions bounds the rolled-back-version memory. The file is read at
@@ -54,9 +55,13 @@ type State struct {
 
 // NormalizeVersion strips one leading "v" and surrounding space so a pin
 // written "0.4.2" and a build stamped "v0.4.2" compare equal.
-func NormalizeVersion(v string) string {
-	return strings.TrimPrefix(strings.TrimSpace(v), "v")
-}
+//
+// ⚠️ DELEGATES rather than reimplements. This was a byte-identical second copy
+// of version.Normalize until 2026-09-04. The sidecar version-skew check compares
+// the same shape of string for a different question, and two copies of one
+// comparison rule is exactly the drift that makes one caller quietly wrong.
+// Kept as a name here because five call sites read better with it.
+func NormalizeVersion(v string) string { return version.Normalize(v) }
 
 // HasFailed reports whether v has already been applied and rolled back.
 func (s State) HasFailed(v string) bool {

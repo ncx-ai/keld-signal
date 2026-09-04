@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from app.buildversion import BUILD_VERSION
 from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, analyze_window
 from app.analysis.blockdigest import DEFAULT_MAX_BLOCKS, digest_blocks
 from app.analysis.features import DEFAULT_MAX_FEATURE_ROWS
@@ -1228,9 +1229,16 @@ def health():
     # HELD (memory pressure) cannot. Reporting ok=False while lazily DOWN would
     # deadlock the daemon's supervisor + readiness gate (it waits for ok before
     # sending the request that would spawn the worker).
+    #
+    # `version` is this BUILD's version, not the model's and not a schema — it is
+    # what lets the daemon see that the two separately-shipped halves disagree.
+    # It rides /health rather than /metrics because /health is the one route the
+    # daemon already calls on every sidecar and answers with the worker down.
+    # "dev" means "cannot tell" (a source checkout or a local freeze); see
+    # app/buildversion.py.
     wm = _state.get("wm")
     return {"ok": bool(wm) and wm.state != HELD, "model": MODEL_NAME,
-            "state": wm.state if wm else "down"}
+            "state": wm.state if wm else "down", "version": BUILD_VERSION}
 
 
 @app.get("/metrics")

@@ -1473,6 +1473,13 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 	)
 	sup.SetEmitter(emitter)
 
+	// THE VERSION HANDSHAKE. Here rather than in either backend, so both get it
+	// from one place and a third can never be added without it. Its own
+	// goroutine because it waits for the sidecar to come up and nothing may
+	// block on that — sidecarService returns before the caller has even started
+	// the supervisor. See versionskew.go.
+	go reportSidecarVersionSkew(ctx, scClient, emitter)
+
 	return scClient, sup, healthFn, true, nil
 }
 

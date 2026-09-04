@@ -32,4 +32,66 @@ printf '%s' "$code_only" | grep -qF 'ingest_token' \
 grep -q 'KeldSetup' "$d/build-pkg.sh" && { echo "build-pkg still refs KeldSetup"; exit 1; } || true
 grep -q 'KeldSetup.app' "$d/scripts/postinstall" && { echo "postinstall still refs app"; exit 1; } || true
 grep -q 'onboard.command' "$d/scripts/postinstall" || { echo "postinstall does not open onboard.command"; exit 1; }
+
+# ── AC-3 / AC-4: the sidecar is replaced on VERSION MISMATCH, not merely fetched
+# when absent ─────────────────────────────────────────────────────────────────
+#
+# ⚠️ THESE ARE THE FIRST EXECUTABLE CASES IN THIS FILE, and the gap they close is
+# the reason the defect shipped: every assertion above is a grep over the script's
+# text, so a skip condition that was wrong in SUBSTANCE rather than in wording was
+# invisible to all of them. The presence-only skip kept an Aug 11 sidecar under a
+# 2.3.0 daemon for ~3 weeks; blocks stopped, doctor stayed green.
+#
+# The two functions are extracted rather than sourced because onboard.command IS
+# the onboarding flow — sourcing it would run a login. Both close on a column-0
+# brace, which is what makes the extraction exact.
+#
+# What is asserted is the DECISION (fetch, or skip), observed through a stubbed
+# curl. The swap that follows is unchanged by this work and is the same
+# download → verify → extract → swap install.sh already performs.
+sidecar_fns="$(awk '/^sidecar_installed_version\(\) \{/,/^\}/' "$cmd"
+               awk '/^fetch_sidecar\(\) \{/,/^\}/' "$cmd")"
+
+run_case() {
+  # $1 = installed VERSION content ("" = no VERSION file at all), $2 = pkg VERSION
+  ( set +e
+    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+    HOME="$tmp/home"; PREFIX="$tmp/prefix"; REPO="ncx-ai/keld-signal"
+    export HOME PREFIX REPO
+    mkdir -p "$HOME/.local/bin/keld-agent-sidecar" "$PREFIX"
+    : > "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar"
+    chmod +x "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar"
+    [ -n "$1" ] && printf '%s\n' "$1" > "$HOME/.local/bin/keld-agent-sidecar/VERSION"
+    printf '%s\n' "$2" > "$PREFIX/VERSION"
+    eval "$sidecar_fns"
+    # Apple-Silicon gate: stubbed so the case runs on any CI arch.
+    uname() { echo arm64; }
+    # Records the attempt and fails, so the decision is observable without a
+    # 190MB download or a stubbed tar/shasum/mv chain.
+    curl() { echo "FETCHED" >> "$tmp/calls"; return 1; }
+    fetch_sidecar > "$tmp/out" 2>&1
+    printf '%s|%s' "$(grep -c FETCHED "$tmp/calls" 2>/dev/null || echo 0)" "$(cat "$tmp/out")"
+  )
+}
+
+r="$(run_case "v2.3.0" "v2.3.0")"
+case "$r" in
+  0\|*already\ current*) ;;
+  *) echo "AC-3: a CURRENT sidecar was not skipped — got: $r"; exit 1 ;;
+esac
+
+r="$(run_case "v2.2.1" "v2.3.0")"
+case "$r" in
+  0\|*) echo "AC-3: a STALE sidecar was not replaced — got: $r"; exit 1 ;;
+  *replacing\ it*) ;;
+  *) echo "AC-3: a STALE sidecar was not replaced — got: $r"; exit 1 ;;
+esac
+
+r="$(run_case "" "v2.3.0")"
+case "$r" in
+  0\|*) echo "AC-4: an UNVERSIONED sidecar was not replaced — got: $r"; exit 1 ;;
+  *unversioned*) ;;
+  *) echo "AC-4: an UNVERSIONED sidecar was not replaced — got: $r"; exit 1 ;;
+esac
+
 echo "onboard checks passed"

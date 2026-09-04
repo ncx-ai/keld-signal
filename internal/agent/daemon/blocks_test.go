@@ -128,6 +128,6 @@ type stubDigester struct{}
 
 func (stubDigester) BlocksCharacterised(path, source, sessionID string,
 	since *float64, now time.Time, maxBlocks int,
-	resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool) {
-	return nil, nil, false
+	resolved enrich.ResolvedFacts) enrich.BlocksAnswer {
+	return enrich.BlocksAnswer{}
 }

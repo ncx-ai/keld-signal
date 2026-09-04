@@ -57,7 +57,7 @@ type windowTickerCap interface {
 type blockDigesterCap interface {
 	BlocksCharacterised(path, source, sessionID string,
 		since *float64, now time.Time, maxBlocks int,
-		resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool)
+		resolved enrich.ResolvedFacts) enrich.BlocksAnswer
 }
 
 // attributionClient is the capability behind THE PROJECT ATTRIBUTION PATH's

@@ -112,11 +112,11 @@ type fakeDigester struct {
 
 func (f *fakeDigester) BlocksCharacterised(path, source, sessionID string,
 	since *float64, now time.Time, maxBlocks int,
-	resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool) {
+	resolved enrich.ResolvedFacts) enrich.BlocksAnswer {
 	if !f.ok {
-		return nil, nil, false
+		return enrich.BlocksAnswer{}
 	}
-	return []enrich.BlockCharacterisation{f.block}, nil, true
+	return enrich.BlocksAnswer{Blocks: []enrich.BlockCharacterisation{f.block}, OK: true}
 }
 
 // digesterFor builds a fake Digester whose one block matches the coordinates
@@ -550,12 +550,12 @@ type multiBlockDigester struct{ sessionID string }
 
 func (d *multiBlockDigester) BlocksCharacterised(path, source, sessionID string,
 	since *float64, now time.Time, maxBlocks int,
-	resolved enrich.ResolvedFacts) ([]enrich.BlockCharacterisation, *float64, bool) {
+	resolved enrich.ResolvedFacts) enrich.BlocksAnswer {
 	if since == nil {
-		return nil, nil, true
+		return enrich.BlocksAnswer{OK: true}
 	}
 	start := *since
-	return []enrich.BlockCharacterisation{{
+	return enrich.BlocksAnswer{OK: true, Blocks: []enrich.BlockCharacterisation{{
 		SessionID: d.sessionID,
 		Source:    "claude_code",
 		Ref: enrich.BlockRef{
@@ -568,7 +568,7 @@ func (d *multiBlockDigester) BlocksCharacterised(path, source, sessionID string,
 		},
 		StartTS: start,
 		EndTS:   start + 1,
-	}}, nil, true
+	}}}
 }
 
 // recordingPendingClient always answers pending (so every job it sees stays
