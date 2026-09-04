@@ -424,6 +424,44 @@ def project(v, matrix=None):
 
 # ---- the encoder child --------------------------------------------------------------------------
 
+def _default_dtype_name(torch):
+    """`"bfloat16"` only on a host with hardware bf16 kernels; `"float32"` everywhere else.
+
+    ⚠️ **fp32 IS THE DEFAULT BECAUSE THE TWO WAYS OF BEING WRONG DO NOT COST THE SAME.**
+    Guessing fp32 on a host that had fast bf16 costs ~180 MB of peak RSS, inside a budget that
+    already holds it. Guessing bf16 on a host without the kernels costs 5x latency (measured in
+    `_load`) and turns every block encode into a heartbeat kill. An asymmetric penalty gets an
+    asymmetric default, so bf16 has to be EARNED by a positive capability signal rather than
+    assumed from the absence of a negative one.
+
+    ⚠️ **NOT KEYED ON ARCHITECTURE, though ARM is where this was found.** `GOARCH` would fix
+    Apple Silicon and leave every pre-AVX512 x86 laptop on the emulated path — and Intel dropped
+    AVX512 from its consumer parts at the 12th generation, so "x86" and "has bf16 kernels" are
+    not the same set and are drifting apart. The capability is the thing to ask about, and torch
+    will answer: oneDNN is what carries the bf16 kernels, and `get_cpu_capability()` names the
+    widest ISA that build was compiled for.
+
+    ⚠️ **`AVX512` HERE IS A PROXY, AND A LOOSER ONE THAN IT LOOKS.** `get_cpu_capability()`
+    does not report AVX512-BF16 specifically, so an AVX512 host without the bf16 extension still
+    selects bf16 and still emulates. It is the strongest signal torch exposes without probing,
+    and it is deliberately the narrow end of the guess: it keeps the fp32 default for ARM and for
+    everything below AVX512, which is most of a laptop fleet. **Unverified on x86** — the numbers
+    in `_load`'s second table come from one ARM host, and the bf16 arm of this branch is still
+    resting on the original 20-core measurement. One run of `scripts/block_benchmark.py` on an
+    AVX512-BF16 box settles whether bf16 keeps earning its 180 MB there.
+
+    Any failure to answer reads as "no fast path": a torch that raises on either of these is not
+    one to hand a bf16 model to.
+    """
+    try:
+        if not torch.backends.mkldnn.is_available():
+            return "float32"
+        return "bfloat16" if torch.backends.cpu.get_cpu_capability() in ("AVX512", "AMX") \
+            else "float32"
+    except Exception:          # noqa: BLE001 — an unanswerable capability is an absent one
+        return "float32"
+
+
 def _load(spec):
     """Load the encoder. CHILD SIDE ONLY — torch and transformers are imported here so the parent
     never pulls them in and the spawn re-import of this module stays cheap.
@@ -461,13 +499,30 @@ def _load(spec):
     1313 MB, which is the number that replicated.
 
     bf16 rather than fp16 because this runs on CPU: torch's CPU kernels cover bfloat16, and fp16
-    on CPU is emulated where it exists at all."""
+    on CPU is emulated where it exists at all.
+
+    ⚠️ **AND "torch's CPU kernels cover bfloat16" IS TRUE ONLY WHERE THE HARDWARE DOES.**
+    Every number above was measured on one 20-core x86 host, which is the CPU class that HAS bf16
+    kernels (AVX512-BF16 / AMX, reached through oneDNN). Where those are absent torch upconverts,
+    and the cost is not marginal. Measured on an M1 Pro, 5 threads, the same 8 x 512-token batch:
+
+        bfloat16  25.3 s,  482 MB after load, 1808 MB peak
+        float32    4.9 s,  801 MB after load, 1987 MB peak
+
+    **5x slower for 179 MB saved** — an inversion of the trade the table above describes, and the
+    reason a whole-block encode was blowing through the attribution heartbeat (see
+    `analysis/attribqueue.py`) on a machine that was working the entire time. The 1313 MB that
+    justified bf16 does not replicate here either: fp32 loads at 801 MB on ARM, not 3113 MB.
+
+    So the dtype is CHOSEN, not fixed — see `_default_dtype_name`. `KELD_TEXTEMBED_DTYPE` still
+    wins outright, which is what makes either arm re-measurable on any host."""
     import torch
     from transformers import AutoModel, AutoTokenizer
 
     torch.set_num_threads(int(spec.get("threads") or 2))
     d = spec["dir"]
-    dtype = getattr(torch, os.environ.get("KELD_TEXTEMBED_DTYPE", "bfloat16"), torch.bfloat16)
+    name = os.environ.get("KELD_TEXTEMBED_DTYPE") or _default_dtype_name(torch)
+    dtype = getattr(torch, name, torch.float32)
     tok = AutoTokenizer.from_pretrained(d, padding_side="left")
     model = AutoModel.from_pretrained(d, dtype=dtype)
     model.eval()
