@@ -7,6 +7,77 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-09-04
+
+### Fixed
+- **The two halves of an install had no version handshake, so a 2.3.0 daemon ran
+  ~3 weeks against an Aug 11 sidecar and published ZERO blocks in silence.**
+  `keld-agent` and the frozen analysis sidecar ship as separate artifacts on
+  separate cadences — the macOS pkg cannot carry the sidecar past Apple's
+  notarization, so `onboard.command` fetches it — and `fetch_sidecar` skipped
+  whenever ANY sidecar directory existed. An upgrade therefore kept whatever was
+  already on disk. That sidecar predates `/blocks` entirely, so it answered
+  **404**, which the block emitter read as "no blocks closed yet".
+  ⚠️ **Nothing reported it, and every layer was individually correct.** Telemetry
+  flowed, the emitter correctly held its cursor for what looked like a transient
+  failure, and `keld signal doctor` reported no problems throughout — because
+  every fact either side could reach was fine. Neither half knew what the other
+  was. Measured: 142 blocks in the local store, none after the upgrade, until the
+  sidecar was replaced by hand.
+  One stamp, three readers. `sidecar/build-freeze.sh` writes
+  `dist/keld-agent-sidecar/VERSION` from `KELD_VERSION` — at the tree ROOT, not
+  via PyInstaller `datas` (which land under `_internal/`), because
+  `onboard.command` reads it from shell and a future PyInstaller moving that
+  directory must not silently turn every comparison into "no version".
+  `onboard.command` compares it against the pkg's own `VERSION` and **replaces on
+  mismatch, or when the tree carries no VERSION at all** (which predates the stamp
+  and is stale by definition). The sidecar returns it on `/health`, and the daemon
+  compares it against `version.CLI` once per run.
+  ⚠️ **`dev` on either half means "cannot tell", NEVER skew** — a source checkout,
+  `make sidecar`'s venv wrapper and any local freeze have no VERSION, and a check
+  that fires on every developer machine is one nobody reads where it matters. An
+  unreachable sidecar is likewise silent; that is `sidecar.unavailable`'s job.
+  ⚠️ **The installer half is macOS-only; the detection half is not.** Windows
+  bundles the sidecar in the Inno payload (`ignoreversion recursesubdirs`) and
+  `install.sh` replaces it unconditionally, so only the pkg produces skew by
+  construction — but a hand-placed sidecar or an interrupted update produces the
+  same state anywhere.
+  Spec: `docs/superpowers/specs/2026-09-04-sidecar-version-skew-discovery.md`.
+- **A 404 from `/blocks` was indistinguishable from "nothing closed yet".**
+  `BlocksCharacterised` answered with a bare `ok` bool, so a sidecar with no
+  `/blocks` route arrived at the emitter identically to a store that is behind —
+  whose correct response (hold the cursor, say nothing, retry) is exactly wrong
+  here, because no later sweep can succeed either. `enrich.BlocksAnswer` carries
+  `RouteUnsupported`, and the emitter says it **once per run** and names the
+  installer as the remedy. The cursor is still HELD either way: the work becomes
+  doable when the sidecar catches up, so what changed is what is SAID, not what is
+  done. Generalizes the reading `/attribute` already had.
+
+### Added
+- **`sidecar.version_skew`** client event (warn, floor-exempt, once per daemon
+  run), carrying `daemon` and `sidecar` version strings. Catalogued in
+  `docs/signal-client-events.md`.
+- **`keld signal doctor` reports version skew**, naming both versions and the
+  installer as the remedy. ⚠️ A LIVE PROBE, unlike the model and telemetry states
+  that read disk — a running sidecar's build is not a filesystem fact the CLI can
+  find. So an unreachable sidecar yields SILENCE, never a finding.
+- **`scripts/check-sidecar-stamp.sh`** + tests: the release gate asserting a built
+  tarball carries `keld-agent-sidecar/VERSION` matching the tag. A script rather
+  than four lines inside `installers.yml`, because nothing in this repo can
+  execute a workflow file — the shape that let obfuscation break for a week
+  unnoticed. Wired into `ci.yml`'s shell suite.
+
+### Changed
+- **`version.Normalize` is the one home for the leading-`v` rule.**
+  `update.NormalizeVersion` was a byte-identical copy and now delegates: the
+  updater decides whether a machine is on its pin and the skew check decides
+  whether two halves agree, and a divergence would make one of them quietly wrong
+  about the same pair of strings.
+- `installers/macos/onboard_command_test.sh` gained its **first executable cases**
+  (stale / current / unversioned, with a stubbed curl). Every assertion before
+  them was a grep over the script's text, which is why a skip condition wrong in
+  substance rather than wording was invisible to all of them.
+
 ## [2.3.0] — 2026-09-04
 
 ### Fixed
