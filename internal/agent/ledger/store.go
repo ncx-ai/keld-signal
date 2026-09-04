@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS blocks (
   start_reason TEXT NOT NULL DEFAULT '',
   end_reason   TEXT NOT NULL DEFAULT '',
 
+  -- The three workstream dims the Projects pane groups unattributed work by.
+  -- Stored here because nothing else persists them and a suggestion must
+  -- survive a restart; see Dims in recorder.go for why only these three.
+  dim_repo      TEXT NOT NULL DEFAULT '',
+  dim_branch    TEXT NOT NULL DEFAULT '',
+  dim_workspace TEXT NOT NULL DEFAULT '',
+
   cut_status TEXT, cut_at TEXT, cut_reason TEXT, cut_http_status INTEGER, cut_ok_at TEXT,
 
   measured_status TEXT, measured_at TEXT, measured_reason TEXT, measured_http_status INTEGER, measured_ok_at TEXT,
@@ -173,6 +180,26 @@ func validSession(s string) (string, bool) {
 
 func validSource(s string) string {
 	if validSources[s] {
+		return s
+	}
+	return ""
+}
+
+// dimShape bounds a workstream dimension VALUE: a repository remote
+// ("github.com/ncx-ai/keld-signal"), a branch ("feat/KELD-214-proxy") or a
+// workspace name. All three legitimately contain "/", so the charset alone
+// cannot separate them from a path — which is exactly why validDimValue also
+// refuses a leading "/" and any "..", the same two checks validModelID makes
+// and for the same reason. No whitespace: a dimension value never has any, and
+// a value that does is prose that reached the wrong variable.
+var dimShape = regexp.MustCompile(`^[A-Za-z0-9._:@/+-]{1,200}$`)
+
+func validDimValue(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.HasPrefix(s, "/") || strings.Contains(s, "..") {
+		return ""
+	}
+	if dimShape.MatchString(s) {
 		return s
 	}
 	return ""
@@ -443,6 +470,40 @@ func (s *Store) CutPending(session string, r Reason, at time.Time) {
 		`INSERT INTO pending(session, reason, at) VALUES(?,?,?)
 		 ON CONFLICT(session) DO UPDATE SET reason=excluded.reason, at=excluded.at`,
 		session, string(r), at.UTC().Format(time.RFC3339))
+}
+
+// Observe records the block's repo/branch/workspace dims.
+//
+// ⚠️ **It sets no stage cell**, deliberately. The five stages are a delivery
+// record — did this block get cut, measured, attributed, sent, taken — and
+// "we know which repository it was on" is not one of them. Giving dims a cell
+// would put a sixth column on the page that no user asked a question about,
+// and would make a block with dims but no spend read as further along than one
+// with spend and no dims. Dims are a property of the row, not a step in it.
+func (s *Store) Observe(k BlockKey, d Dims, at time.Time) {
+	k, ok := s.sanitizeKey(k)
+	if !ok {
+		return
+	}
+	// Repo, branch and workspace are identifiers of the class already
+	// published to Atlas, and they go through the same shape gate every other
+	// identifier here does — a mis-wired hook point handing over a transcript
+	// path must be refused, not stored.
+	d.Repo = validDimValue(d.Repo)
+	d.Branch = validDimValue(d.Branch)
+	d.Workspace = validDimValue(d.Workspace)
+	if d.Repo == "" && d.Branch == "" && d.Workspace == "" {
+		return
+	}
+	s.tx("Observe", func(txn *sql.Tx) error {
+		if err := ensureRow(txn, k); err != nil {
+			return err
+		}
+		_, err := txn.Exec(
+			`UPDATE blocks SET dim_repo=?, dim_branch=?, dim_workspace=? WHERE session=? AND start=?`,
+			d.Repo, d.Branch, d.Workspace, k.Session, k.Start)
+		return err
+	})
 }
 
 func (s *Store) Measure(k BlockKey, m Measured, at time.Time) {

@@ -741,6 +741,12 @@ func Run(ctx context.Context) error {
 	q := queue.New(queueCap())
 	pub := publish.New(enrichEndpoint(cfg.Endpoint), tok.Get, actor)
 
+	// THE ATLAS BOUNDARY. Exactly one connector is constructed, here, from the
+	// send_to_atlas setting: the live one, or atlas.Off, which holds no
+	// transport, no credential and no address. See daemon/atlas.go.
+	atlasCl := atlasClient(set, pub,
+		settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), nil)
+
 	addr := bindAddr()
 	if svcSecret, err := serviceSecret(); err != nil {
 		return err
@@ -809,7 +815,14 @@ func Run(ctx context.Context) error {
 	// facets on the startup value.
 	live := settings.NewLive(set)
 
-	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded)
+	// The Keld Signal page and its routes. Built before the enrichment wiring
+	// because the loopback mux is assembled there, and deliberately never able
+	// to fail that call: see v3.go — the collector is the product and the
+	// window onto it must not be allowed to take it down.
+	sig := newV3(set, atlasCl)
+	sig.observeRemote(nil)
+
+	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded, sig.routes()...)
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -863,6 +876,11 @@ func Run(ctx context.Context) error {
 		log.Printf("keld-agent: auto-update unavailable on this install (no writable destination); updates must be applied by re-running the installer")
 	}
 	onRemote := func(r *settings.Remote) {
+		// The Projects pane's vocabulary is the org's pooled workstream values,
+		// which arrive here; observing them on every poll is what lets a value
+		// added in Atlas show up without a daemon restart.
+		sig.observeRemote(r)
+
 		re := r.ClientTelemetry.WithDefaults()
 		emitter.SetGate(gateFrom(re))
 		watcher.SetThresholds(thresholdsFrom(re))
@@ -1012,6 +1030,13 @@ func Run(ctx context.Context) error {
 		// argument uses for the org's `features` toggle.
 		onBlockPublished = demandModelsForAttribution(onBlockPublished,
 			lastProjects.knownNonEmpty, enc.demand, verifierEnc.demand)
+		// THE DELIVERY LEDGER hangs off the same hook, CHAINED rather than
+		// replacing: attribution's model-demand wrapper and the ledger both want
+		// to know a block published, and neither is the other's precondition.
+		// The ledger runs second so a panic in it cannot cost the attribution
+		// job, and its own writes are fire-and-forget — the window onto the
+		// collector must never be able to stop the collector.
+		onBlockPublished = chainOnPublished(onBlockPublished, sig.recordPublished)
 		// v2's block emitter, and the reason it sits beside the tick rather than
 		// inside it: a block reaches nowhere, so it needs none of the tick's
 		// frontier reasoning about which future prompts might sweep over a
@@ -1265,10 +1290,10 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     trivially true when none does (see deterministicBackend).
 //   - enabled: whether Run should start the enrich Worker — true for both
 //     "auto" (or "") and "deterministic"; only "off" disables it.
-func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
+func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool, extra ...ingress.Route) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
 	if !set.EnrichmentEnabled() {
 		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
-		return ingress.DiscardHandler(secret), nil, serviceFacets{}, nil, nil, false
+		return ingress.DiscardHandler(secret, extra...), nil, serviceFacets{}, nil, nil, false
 	}
 	if !set.MLEnabled() {
 		// deterministic: the Worker still runs, and so does the analysis
@@ -1277,10 +1302,10 @@ func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q
 		// warmup, no download either.
 		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the analysis service runs, the model is never loaded", set.MLBackend)
 		svc, gate := deterministicBackend(ctx, emitter, regions, encoderNeeded)
-		return ingress.Handler(q, secret), nil, svc, gate, nil, true
+		return ingress.Handler(q, secret, extra...), nil, svc, gate, nil, true
 	}
 	model, svc, gate, warmup = mlBackend(ctx, emitter, regions, encoderNeeded)
-	return ingress.Handler(q, secret), model, svc, gate, warmup, true
+	return ingress.Handler(q, secret, extra...), model, svc, gate, warmup, true
 }
 
 // newRunID generates a per-run correlation id (16 random bytes, hex-encoded),

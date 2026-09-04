@@ -89,6 +89,28 @@ type Measured struct {
 	EstimateUSD         float64 // 0 when no price table applies; the page shows "est." regardless
 }
 
+// Dims are the few workstream dimensions the PROJECTS pane needs to group
+// unattributed blocks into suggestions: which repository, branch and workspace
+// a block belonged to.
+//
+// ⚠️ **The ledger stores these because nothing else persists them, and a
+// suggestion has to survive a restart.** A block's dims are computed once, at
+// publish time, from the sidecar's payload; if only the daemon's memory held
+// them, every restart would empty the Projects pane until new work arrived —
+// which is exactly the "the app is broken" reading the ledger exists to
+// prevent. They are identifiers of the class already published to Atlas as
+// workstream values (`repo`, `branch`), never text, a span or an offset, and
+// they pass the same shape validation every other identifier here does.
+//
+// Only these three. The block payload carries eight allocation dimensions and
+// nine inventory ones; the rest are Atlas's business and storing them here
+// would make this file a second copy of the enrichment, which it must not be.
+type Dims struct {
+	Repo      string
+	Branch    string
+	Workspace string
+}
+
 // Attributed is the outcome of the attribution pass for one block.
 type Attributed struct {
 	ProjectID string
@@ -127,6 +149,12 @@ type Recorder interface {
 	// CutPending records that blocks COULD NOT be asked for (sidecar outdated /
 	// down / behind). Keyed by session because no block exists yet.
 	CutPending(session string, r Reason, at time.Time)
+	// Observe records the block's repo/branch/workspace dims — what the
+	// Projects pane groups unattributed work by. Separate from Measure
+	// because it answers a different question (where the work was, not what
+	// it cost) and because a block can have dims with no spend and spend with
+	// no dims, and conflating them would make either absence unreadable.
+	Observe(k BlockKey, d Dims, at time.Time)
 	Measure(k BlockKey, m Measured, at time.Time)
 	Attribute(k BlockKey, a Attributed, r Reason, at time.Time)
 	Sent(k BlockKey, at time.Time)
@@ -141,6 +169,7 @@ type Nop struct{}
 
 func (Nop) Cut(BlockKey, int64, string, string, string, time.Time) {}
 func (Nop) CutPending(string, Reason, time.Time)                   {}
+func (Nop) Observe(BlockKey, Dims, time.Time)                      {}
 func (Nop) Measure(BlockKey, Measured, time.Time)                  {}
 func (Nop) Attribute(BlockKey, Attributed, Reason, time.Time)      {}
 func (Nop) Sent(BlockKey, time.Time)                               {}

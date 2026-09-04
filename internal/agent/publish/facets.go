@@ -30,8 +30,16 @@ import "github.com/ncx-ai/keld-signal/internal/agent/enrich"
 // those checks here, and do not add a field that has not been through them.
 type AnalysisFacets struct {
 	Workstreams map[string]enrich.Labeled `json:"workstreams,omitempty"`
-	Dynamics    map[string]enrich.Dynamic `json:"dynamics,omitempty"`
-	Effort      *enrich.Effort            `json:"effort,omitempty"`
+	// Tokens is this block's own spend, by class, and Requests how many
+	// requests produced it. Both omitempty and both nil-able: a sidecar older
+	// than SCHEMA 18 sends neither, and a machine running one must publish a
+	// payload byte-identical to the one before this field existed. Counts, not
+	// money — the client's dollar figure is an estimate it computes locally and
+	// never sends.
+	Tokens   *enrich.BlockTokens       `json:"tokens,omitempty"`
+	Requests *int                      `json:"requests,omitempty"`
+	Dynamics map[string]enrich.Dynamic `json:"dynamics,omitempty"`
+	Effort   *enrich.Effort            `json:"effort,omitempty"`
 	// PhysicalActs is absent, never an empty list, when the span recorded no
 	// act — same rule as the prompt row's.
 	PhysicalActs []enrich.Act `json:"physical_acts,omitempty"`
@@ -106,4 +114,18 @@ func facetsOf(a enrich.WindowAnalysis) AnalysisFacets {
 		InventoryOmitted: a.InventoryOmitted,
 		Prior:            a.Prior,
 	}
+}
+
+// withSpend attaches a block's own token counts to its facets.
+//
+// A function rather than two more fields in BuildBlock's literal because the
+// embedded AnalysisFacets cannot be filled through promoted field names in a
+// composite literal under this module's Go language version — and because
+// naming the step makes the ABSENCE deliberate: nil tokens stay nil, so a
+// machine on a pre-SCHEMA-18 sidecar publishes exactly the bytes it did before
+// this field existed.
+func withSpend(f AnalysisFacets, tokens *enrich.BlockTokens, requests *int) AnalysisFacets {
+	f.Tokens = tokens
+	f.Requests = requests
+	return f
 }

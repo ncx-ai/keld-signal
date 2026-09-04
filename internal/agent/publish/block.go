@@ -149,7 +149,7 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) Blo
 		Window:            b.Ref,
 		StartReason:       b.Ref.StartReason,
 		EndReason:         b.Ref.EndReason,
-		AnalysisFacets:    facetsOf(b.Analysis),
+		AnalysisFacets:    withSpend(facetsOf(b.Analysis), b.Tokens, b.Requests),
 		PipelineStatus:    enrich.PipelineStatusBlock,
 		ExtractorVersions: blockExtractorVersions(),
 		SchemaVersion:     enrich.SchemaVersion,

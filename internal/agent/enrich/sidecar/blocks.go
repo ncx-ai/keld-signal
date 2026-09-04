@@ -89,6 +89,29 @@ type BlockResult struct {
 	Dynamics         DynamicsBlock          `json:"dynamics"`
 	Effort           *EffortBlock           `json:"effort"`
 	Prior            PriorBlock             `json:"prior"`
+	// Tokens and Requests are the block's own spend, added by sidecar SCHEMA
+	// 18. A POINTER because absent and zero are different facts: a sidecar
+	// older than 18 sends no `tokens` key at all, and reporting that machine's
+	// every block as costing nothing would be a confident number over evidence
+	// nobody has — the page says "no figure" instead. Counts only; no rate, no
+	// money. Pricing is the client's own, from a local table.
+	Tokens   *BlockTokens `json:"tokens"`
+	Requests *int         `json:"requests"`
+}
+
+// BlockTokens is one block's consumption, by the four classes a response
+// reports plus the price-weighted rollup weight.
+//
+// ⚠️ `Request` is NOT a token count a person should ever be shown. It is the
+// weight `turn_magnitude` uses to make a rollup comparable across models, and
+// rendering it as "tokens" would read as a wrong number. What a card shows is
+// input + output + cache_read + cache_creation (docs/v3/contracts.md).
+type BlockTokens struct {
+	Input         int64 `json:"input"`
+	Output        int64 `json:"output"`
+	CacheRead     int64 `json:"cache_read"`
+	CacheCreation int64 `json:"cache_creation"`
+	Request       int64 `json:"request"`
 }
 
 // BlocksResult is POST /blocks' whole answer.
@@ -188,9 +211,29 @@ func (c *Client) BlocksCharacterised(path, source, sessionID string,
 			EndTS:   b.End,
 			Analysis: analysisFrom(b.Workstreams, b.Inventory, b.InventoryOmitted,
 				b.Dynamics, b.Effort, b.Prior),
+			Tokens:   tokensFrom(b.Tokens),
+			Requests: b.Requests,
 		})
 	}
 	return enrich.BlocksAnswer{Blocks: out, Watermark: res.Watermark, OK: true}
+}
+
+// tokensFrom converts the sidecar's per-block spend, preserving ABSENCE: a
+// sidecar older than SCHEMA 18 sends no `tokens` key, and nil must survive all
+// the way to the page rather than becoming a zero that reads as "this block
+// cost nothing". The same distinction BlocksAnswer's fourth field exists for,
+// one level down.
+func tokensFrom(t *BlockTokens) *enrich.BlockTokens {
+	if t == nil {
+		return nil
+	}
+	return &enrich.BlockTokens{
+		Input:         t.Input,
+		Output:        t.Output,
+		CacheRead:     t.CacheRead,
+		CacheCreation: t.CacheCreation,
+		Request:       t.Request,
+	}
 }
 
 // epochRFC3339 renders an epoch-second instant as a UTC RFC3339 string, the one

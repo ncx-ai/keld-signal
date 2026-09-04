@@ -126,6 +126,13 @@ type BlockCharacterisation struct {
 	StartTS   float64
 	EndTS     float64
 	Analysis  WindowAnalysis
+	// Tokens and Requests are this block's own spend, from sidecar SCHEMA 18.
+	// POINTERS because absent and zero are different facts: a sidecar older
+	// than 18 sends no figure at all, and publishing zero for those machines
+	// would be a confident number over evidence nobody has. The page says "no
+	// figure" instead.
+	Tokens   *BlockTokens
+	Requests *int
 }
 
 // BlocksAnswer is everything the analysis service said about one transcript's
