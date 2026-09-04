@@ -40,6 +40,12 @@ from app.analysis.store import open_store                # noqa: E402
 
 TOLERANCE_S = 300.0   # "within one 5-minute bin" per the acceptance criterion
 
+# `--epoch` pins the fixed-base time mode: these tests check relative block spans/gaps, not
+# calendar dates, so they don't strictly need it — but pinning it keeps every run reproducible
+# rather than riding the real-time `--end="now"` default (blockgen.py's other mode) through a
+# test suite for no benefit.
+TEST_EPOCH = "2025-11-03T09:00:00Z"
+
 
 def _fresh_store():
     fd, path = tempfile.mkstemp(prefix="blockgen-refseries-", suffix=".db")
@@ -50,7 +56,7 @@ def _fresh_store():
 
 def _generate(seed, sessions=6, days=3, profile=None):
     prof = profile or blockgen.load_profile(None)
-    manifest, files = blockgen.generate(prof, sessions, days, seed)
+    manifest, files = blockgen.generate(prof, sessions, days, seed, epoch=TEST_EPOCH)
     out_dir = tempfile.mkdtemp(prefix="blockgen-out-")
     blockgen.write_batch(out_dir, manifest, files)
     return manifest, out_dir
@@ -190,6 +196,32 @@ def test_blocks_never_span_more_than_max_block_minutes():
         skey = _ingest_session(store, out_dir, session)
         for b in _blocks_for(store, skey):
             assert (b.end - b.start) <= blocks_mod.MAX_BLOCK_MINUTES * 60 + 1e-6
+
+
+def test_default_now_anchored_corpus_cuts_real_blocks_near_today():
+    """End-to-end version of the coordinator's D1 blocker: a corpus generated with blockgen's
+    DEFAULT time base (no --epoch, no --end — i.e. anchored to real 'now') must ingest and cut
+    into real blocks whose latest span lands within minutes of today, not eight months in the
+    past. Uses `blockgen.generate` directly rather than `_generate`'s epoch-pinned helper, since
+    the whole point here is to exercise the un-pinned default."""
+    import time as _time
+
+    profile = blockgen.load_profile(None)
+    manifest, files = blockgen.generate(profile, sessions=3, days=2, seed=77)
+    out_dir = tempfile.mkdtemp(prefix="blockgen-out-now-")
+    blockgen.write_batch(out_dir, manifest, files)
+
+    store = _fresh_store()
+    latest_block_end = None
+    for session in manifest["session_list"]:
+        skey = _ingest_session(store, out_dir, session)
+        for b in _blocks_for(store, skey):
+            if latest_block_end is None or b.end > latest_block_end:
+                latest_block_end = b.end
+    assert latest_block_end is not None, "no blocks were cut at all"
+    assert _time.time() - latest_block_end < 3600, (
+        f"the latest real block ends {(_time.time() - latest_block_end) / 3600:.1f}h in the "
+        "past — the default anchor is not landing near today")
 
 
 # --------------------------------------------------------------------------------- repo level

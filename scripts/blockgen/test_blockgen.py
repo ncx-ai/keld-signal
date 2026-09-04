@@ -8,17 +8,27 @@ standalone scripts"). Run with: `python3 scripts/blockgen/test_blockgen.py`.
 import filecmp
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blockgen  # noqa: E402
 
+# Every test that only cares about STRUCTURE (not "does this land on today") pins `--epoch`
+# rather than taking the `--end="now"` default: `epoch` mode promises byte-identical output for a
+# given seed, which is exactly what the reproducibility tests below need, and it is what keeps
+# every other test's assertions independent of the real calendar date the suite happens to run
+# on. Deliberately distinct from `blockgen.SYNTHETIC_EPOCH`'s literal value so a test relying on
+# one accidentally matching the other would be caught.
+TEST_EPOCH = "2025-11-03T09:00:00Z"
 
-def _gen(seed, sessions=8, days=3, profile=None):
+
+def _gen(seed, sessions=8, days=3, profile=None, epoch=TEST_EPOCH):
     prof = profile or blockgen.load_profile(None)
-    return blockgen.generate(prof, sessions, days, seed)
+    return blockgen.generate(prof, sessions, days, seed, epoch=epoch)
 
 
 # ---------------------------------------------------------------------- determinism / identity
@@ -54,6 +64,129 @@ def test_different_seeds_share_no_session_or_prompt_id():
     prompts1 = {p for s in m1["session_list"] for p in s["prompt_ids"]}
     prompts2 = {p for s in m2["session_list"] for p in s["prompt_ids"]}
     assert not (prompts1 & prompts2), f"shared prompt ids across seeds: {prompts1 & prompts2}"
+
+
+# --------------------------------------------------------------------------------- time base
+
+def _max_line_ts_epoch(files):
+    best = None
+    for lines in files.values():
+        for line in lines:
+            ts = line.get("timestamp")
+            if not ts:
+                continue
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            if best is None or t > best:
+                best = t
+    return best
+
+
+def test_default_anchors_last_event_to_now():
+    """Regression test: the coordinator's blocker. `SYNTHETIC_EPOCH` alone used to put every
+    generated block eight months in the past — a developer runs blockgen, opens the Keld Signal
+    page (whose main view is TODAY), and sees an empty day, which reads as "the app is broken".
+    The DEFAULT (no `--epoch`, no `--end`) must land the corpus's own latest event within a
+    couple of minutes of real now."""
+    profile = blockgen.load_profile(None)
+    before = datetime.now(timezone.utc).timestamp()
+    _m, files = blockgen.generate(profile, sessions=3, days=2, seed=42)
+    after = datetime.now(timezone.utc).timestamp()
+    last = _max_line_ts_epoch(files)
+    assert last is not None
+    assert before - 5 <= last <= after + 5, (
+        f"default anchor landed {after - last:.1f}s away from 'now' — blockgen is still "
+        "generating a fixed-past corpus")
+
+
+def test_explicit_end_anchors_last_event_exactly():
+    profile = blockgen.load_profile(None)
+    end = "2026-03-15T10:00:00Z"
+    _m, files = blockgen.generate(profile, sessions=4, days=3, seed=5, end=end)
+    last = _max_line_ts_epoch(files)
+    target = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
+    assert abs(last - target) < 1.0, f"last event {last} not aligned to --end {target}"
+
+
+def test_end_mode_with_a_fixed_instant_is_also_byte_identical():
+    """`--end` is real-time-dependent only through its `"now"` default; given the SAME explicit
+    instant twice, it must reproduce byte-identical output exactly like `--epoch` does — the
+    shift is one deterministic number, not a second source of entropy."""
+    profile = blockgen.load_profile(None)
+    end = "2026-05-01T00:00:00Z"
+    m1, f1 = blockgen.generate(profile, sessions=5, days=3, seed=9, end=end)
+    m2, f2 = blockgen.generate(profile, sessions=5, days=3, seed=9, end=end)
+    assert m1 == m2
+    assert f1 == f2
+
+
+def test_epoch_and_end_are_mutually_exclusive():
+    profile = blockgen.load_profile(None)
+    try:
+        blockgen.generate(profile, sessions=2, days=1, seed=0,
+                          epoch="2026-01-01T00:00:00Z", end="now")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("generate() accepted both epoch= and end=")
+
+
+def test_cli_default_end_lands_near_today():
+    with tempfile.TemporaryDirectory() as d:
+        subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "blockgen.py"),
+            "--out", d, "--sessions", "2", "--days", "1", "--seed", "1"],
+            check=True, capture_output=True, text=True)
+        manifest = json.load(open(os.path.join(d, "manifest.json")))
+        assert manifest["anchor"]["mode"] == "end"
+        end_ts = datetime.fromisoformat(
+            manifest["anchor"]["end"].replace("Z", "+00:00")).timestamp()
+        now = datetime.now(timezone.utc).timestamp()
+        assert abs(now - end_ts) < 120, "CLI default --end did not resolve to real 'now'"
+
+
+def test_cli_epoch_flag_pins_the_old_fixed_base():
+    with tempfile.TemporaryDirectory() as d:
+        subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "blockgen.py"),
+            "--out", d, "--sessions", "2", "--days", "1", "--seed", "1",
+            "--epoch", TEST_EPOCH],
+            check=True, capture_output=True, text=True)
+        manifest = json.load(open(os.path.join(d, "manifest.json")))
+        assert manifest["anchor"] == {"mode": "epoch", "epoch": "2025-11-03T09:00:00.000Z"}
+
+
+def test_cli_rejects_epoch_and_end_together():
+    with tempfile.TemporaryDirectory() as d:
+        result = subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "blockgen.py"),
+            "--out", d, "--sessions", "1", "--days", "1",
+            "--epoch", TEST_EPOCH, "--end", "now"],
+            capture_output=True, text=True)
+        assert result.returncode != 0
+
+
+# ------------------------------------------------------------------------------- branch/ticket
+
+def test_ticket_branches_get_distinct_numbers_at_realistic_session_count():
+    """Regression test: the coordinator's second defect. Every ticket used to be numbered "-100"
+    (ATLAS-100, KELD-100, SDK-100 — three distinct KEYS, but the NUMBER never moved), because the
+    old per-repo branch WRR made `main` the near-universal first pick and starved the ticket
+    category of enough draws to ever repeat a repository. `--sessions 8` must now produce at
+    least two ticket-carrying branches whose NUMBERS differ, proving the counter actually
+    advances rather than restarting at 100 for every repository."""
+    pat = re.compile(r"^feature/([A-Z]+)-(\d+)-")
+    for seed in (0, 1, 7, 123):
+        m, _f = _gen(seed=seed, sessions=8)
+        tickets = []
+        for s in m["session_list"]:
+            found = pat.match(s["branch"])
+            if found:
+                tickets.append((found.group(1), int(found.group(2))))
+        assert len(tickets) >= 2, f"seed={seed}: fewer than 2 ticket branches: {tickets}"
+        assert len(set(tickets)) == len(tickets), f"seed={seed}: duplicate ticket keys: {tickets}"
+        numbers = {n for _prefix, n in tickets}
+        assert len(numbers) >= 2, (
+            f"seed={seed}: every ticket still numbered the same: {tickets}")
 
 
 def test_uuid_and_prompt_id_are_never_equal_on_a_user_line():

@@ -21,10 +21,19 @@ session count, not a sampling outcome.
 
 Determinism: every random decision is drawn from one `random.Random(seed)` instance, in a fixed
 call order, and every id (session/prompt/message uuid) is derived from that same stream via
-`det_uuid` rather than `uuid.uuid4()`. Wall-clock time never enters the non-`--live` path — dates
-are offset from a fixed synthetic epoch (`SYNTHETIC_EPOCH`), never `time.time()` — so the same
-seed reproduces byte-identical output regardless of when or where it is run, and two different
-seeds practically never share an id.
+`det_uuid` rather than `uuid.uuid4()`. Two different seeds practically never share an id.
+
+Two time-base modes, because "deterministic" means two different things here and a caller must
+not have to guess which one it's getting (see `generate`'s `epoch=`/`end=` docstring and
+README.md):
+
+  - `--end` (default `"now"`) anchors the LAST generated event to a real or given instant, so the
+    default behaviour is "run this, then open today's Keld Signal page and see today's blocks" —
+    the whole point of the tool. The deterministic STRUCTURE (sessions, repos, branches, models,
+    run/break shape) is unchanged by seed; only where it sits on the calendar moves with `--end`.
+  - `--epoch <iso>` pins the OLD fixed-base behaviour: generation starts at `epoch` and moves
+    forward, with no realignment. Same seed/sessions/days/epoch -> byte-identical output, which
+    is what the test suite in this directory relies on.
 
 See `docs/v3/contracts.md`, section "The block generator (`scripts/blockgen/`)", for the binding
 contract this implements, and `README.md` in this directory for the measured numbers behind the
@@ -60,8 +69,9 @@ IDLE_BINS = 3                      # blocks.IDLE_BINS: 3 consecutive empty bins 
 
 VERSION_STRING = "2.5.0"
 
-# The one wall-clock-independent anchor every non-live transcript is built relative to, so the
-# same seed produces byte-identical output on any machine on any day.
+# The wall-clock-independent scaffold every corpus is FIRST built relative to, before `--end`
+# mode (the default) shifts the whole thing to land on a real instant. `--epoch` mode uses a
+# caller-given instant in this same role instead, with no shift, for byte-identical output.
 SYNTHETIC_EPOCH = datetime(2026, 1, 5, 13, 0, 0, tzinfo=timezone.utc).timestamp()
 
 
@@ -92,7 +102,8 @@ DEFAULT_PROFILE = {
     "workspace_root": "/home/keldsynth/workspaces",
     # Mostly opus, some sonnet — deterministic WRR mix, picked once per session.
     "models": [["claude-opus-4-8", 0.65], ["claude-sonnet-4-6", 0.35]],
-    # main / a ticket-carrying feature branch / a plain feature branch. WRR per repo.
+    # main / a ticket-carrying feature branch / a plain feature branch. One WRR shared across
+    # every session regardless of repository (see `generate`'s comment on why per-repo was wrong).
     "branch_mix": [["main", 0.40], ["ticket", 0.40], ["feature", 0.20]],
     # Bash/Read/Edit/Write/Grep mix for each assistant "turn" (== one API request).
     "tool_mix": [["Bash", 0.35], ["Read", 0.25], ["Edit", 0.20], ["Write", 0.10], ["Grep", 0.10]],
@@ -285,6 +296,62 @@ def ceil_bin(ts):
     return math.ceil(ts / BIN_SECONDS) * BIN_SECONDS
 
 
+def parse_instant(s):
+    """An ISO8601 string, or the literal `"now"` (case-insensitive), -> epoch seconds (UTC).
+    `now` is real wall-clock time — used only by the `--end` anchor, never by the `--epoch` one,
+    so it is the one place in this module that is allowed to call it."""
+    if s is None or str(s).strip().lower() == "now":
+        return datetime.now(timezone.utc).timestamp()
+    ss = str(s).strip()
+    if ss.endswith("Z"):
+        ss = ss[:-1] + "+00:00"
+    dt = datetime.fromisoformat(ss)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _shift_iso(ts_str, shift):
+    t = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+    return iso(t + shift)
+
+
+def _max_line_ts(files):
+    """The latest `timestamp` among every generated line, as epoch seconds — the corpus's own
+    "last generated event", which `--end` aligns to. `None` for an empty corpus."""
+    best = None
+    for lines in files.values():
+        for line in lines:
+            ts = line.get("timestamp")
+            if not ts:
+                continue
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            if best is None or t > best:
+                best = t
+    return best
+
+
+def _shift_corpus(manifest, files, shift):
+    """Add `shift` seconds to every timestamp in `manifest`/`files` IN PLACE. A uniform additive
+    shift, applied once after the whole deterministic structure is built — never re-run the
+    generator with a different base — so the same seed keeps producing the same sessions,
+    repos, branches, models, and run/break SHAPE; only where that shape sits on the calendar
+    moves. See `generate`'s `end=` parameter."""
+    if not shift:
+        return
+    for lines in files.values():
+        for line in lines:
+            if "timestamp" in line:
+                line["timestamp"] = _shift_iso(line["timestamp"], shift)
+    for session in manifest["session_list"]:
+        for run in session["runs"]:
+            run["start_ts"] += shift
+            run["end_ts"] += shift
+        for br in session["breaks"]:
+            br["start_ts"] += shift
+            br["end_ts"] += shift
+
+
 # ================================================================================ profile loading
 
 def deep_merge(base, overrides):
@@ -307,15 +374,28 @@ def load_profile(path=None):
 
 # =================================================================================== the builder
 
-def pick_branch(rng, repo, branch_wrr, ticket_counters):
+def pick_branch(rng, repo, branch_wrr, ticket_counter):
+    """`ticket_counter` is a ONE-ELEMENT list (a mutable box) shared across every repository, not
+    a per-prefix counter: neither `repo_wrr` nor `branch_wrr` consult the rng stream, so which
+    repository lands on which branch category is a fixed function of session index alone,
+    identical for every seed (each is deterministic BY DESIGN — see `WRR`'s docstring — so the
+    proportions the profile states are exact, not merely converged-in-expectation). At a small,
+    realistic session count that fixed interleaving visits every ticket-carrying repository at
+    most once before it repeats, which a PER-PREFIX counter would leave stuck reporting "-100"
+    for the whole corpus — every ticket key would still be distinct (`ATLAS-100` != `KELD-100`),
+    but the NUMBER portion would never move, which is indistinguishable from a hardcoded counter.
+    A single counter shared by every prefix increments on every ticket issued regardless of which
+    repository it belongs to, so two tickets almost always carry different numbers well within a
+    handful of sessions (`KELD-100`, `ATLAS-101`, ...), giving the ticket-key attribution rule
+    real numeric variety to exercise without waiting for a repeat repository."""
     kind = ["main", "ticket", "feature"][branch_wrr.next()]
     if kind == "main":
         return "main"
     slug = rng.choice(BRANCH_SLUGS)
     if kind == "ticket":
         prefix = repo["ticket_prefix"]
-        n = ticket_counters.get(prefix, 100)
-        ticket_counters[prefix] = n + 1
+        n = ticket_counter[0]
+        ticket_counter[0] = n + 1
         return f"feature/{prefix}-{n}-{slug}"
     return f"feature/{slug}"
 
@@ -439,11 +519,11 @@ def bookkeeping_lines(session_id, title):
     ]
 
 
-def build_session(rng, uid_fn, text_gen, repo, model_wrr, branch_wrr, ticket_counters,
+def build_session(rng, uid_fn, text_gen, repo, model_wrr, branch_wrr, ticket_counter,
                   profile, session_start_ts, tool_wrr):
     session_id = uid_fn(rng)
     cwd = f"{profile['workspace_root']}/{repo['workspace']}"
-    branch = pick_branch(rng, repo, branch_wrr, ticket_counters)
+    branch = pick_branch(rng, repo, branch_wrr, ticket_counter)
     model = profile["models"][model_wrr.next()][0]
     runs_s, break_bins = build_session_runs(rng, profile)
 
@@ -529,10 +609,33 @@ def build_session(rng, uid_fn, text_gen, repo, model_wrr, branch_wrr, ticket_cou
 
 # =================================================================================== top-level
 
-def generate(profile, sessions, days, seed):
+def generate(profile, sessions, days, seed, epoch=None, end=None):
     """Build the full deterministic corpus: `(manifest, files)` where `files` maps a path
     relative to the output directory -> the list of JSON-able line dicts for that transcript.
-    Pure — writes nothing to disk. `write_batch`/`write_live` below do the I/O."""
+    Pure — writes nothing to disk. `write_batch`/`write_live` below do the I/O.
+
+    `epoch`/`end` are mutually exclusive and give two DIFFERENT determinism guarantees — see the
+    module docstring and README for which is which:
+
+    - `epoch` (an ISO instant) pins the OLD fixed-base behaviour: generation starts at `epoch`
+      and moves forward across `days` days. Same seed/sessions/days/epoch -> byte-identical
+      output, full stop — this is what the test suite uses.
+    - `end` (an ISO instant, or the literal `"now"`) is the DEFAULT (`end="now"` when neither is
+      given), because the whole point of this generator is "run it, then look at today's blocks
+      in the app" — a generator that always lands eight months in the past reads as "the app is
+      broken", not as a demo. The deterministic STRUCTURE (sessions, repos, branches, models,
+      run/break shape, every relative offset) is built exactly as `epoch` mode would, anchored at
+      the internal `SYNTHETIC_EPOCH` scaffold, and then the WHOLE corpus is shifted by one
+      constant so the single latest generated event lands exactly at `end`. Two different `end`
+      values (including two different real "now"s) shift the same seed's structure to two
+      different places on the calendar — that is the intended, real-time-dependent behaviour,
+      not a determinism bug; only `epoch` mode promises byte-for-byte reproducibility.
+    """
+    if epoch is not None and end is not None:
+        raise ValueError("generate(): epoch and end are mutually exclusive")
+    base_ts = parse_instant(epoch) if epoch is not None else SYNTHETIC_EPOCH
+    align_to = None if epoch is not None else parse_instant(end if end is not None else "now")
+
     rng = random.Random(seed)
     uid_fn = det_uuid
     text_gen = PromptGenerator(rng, seed)
@@ -541,10 +644,22 @@ def generate(profile, sessions, days, seed):
     repo_wrr = WRR([r["weight"] for r in repos])
     model_wrr = WRR([w for _, w in profile["models"]])
     tool_wrr = WRR([w for _, w in profile["tool_mix"]])
-    # One branch-mix WRR and one ticket counter PER REPO, so each repo's own branch mix and
-    # ticket numbering is independent and reproducible on its own.
-    branch_wrrs = {r["remote"]: WRR([w for _, w in profile["branch_mix"]]) for r in repos}
-    ticket_counters = {}
+    # ONE branch-mix WRR shared across every session, regardless of repository. A per-repo WRR
+    # was tried first and is wrong: each repo's own WRR starts fresh at all-zero `current`, and a
+    # fresh smooth-WRR's first call always breaks a tie toward the lowest index (`main`, index 0,
+    # ties `ticket` at equal weight 0.4) — so at small session counts, where most repos are only
+    # ever visited once, EVERY repo's first (and often only) branch came out `main`. Measured:
+    # `--sessions 4` gave 4/4 `main`. One shared WRR advances on every session regardless of which
+    # repo it lands on, so the .40/.40/.20 mix is realised over the SESSION count, which is the
+    # population size the mix is actually about.
+    branch_wrr = WRR([w for _, w in profile["branch_mix"]])
+    # A single counter SHARED ACROSS EVERY REPOSITORY, not one per ticket prefix — see
+    # `pick_branch`'s docstring: with `repo_wrr` and `branch_wrr` both seed-independent, a small
+    # session count visits every ticket-carrying repository at most once before any of them
+    # repeats, so a per-prefix counter would report every ticket as "-100" forever. One counter
+    # numbers tickets sequentially in ISSUE order regardless of repository, so two tickets almost
+    # always carry different numbers well within a handful of sessions.
+    ticket_counter = [100]
 
     manifest = {"seed": seed, "sessions": sessions, "days": days,
                "generated_with": "blockgen", "schema": 1, "session_list": []}
@@ -554,13 +669,21 @@ def generate(profile, sessions, days, seed):
         repo = repos[repo_wrr.next()]
         day_idx = (i * days) // max(1, sessions)
         intraday = rng.uniform(7 * 3600, 21 * 3600)
-        session_start_ts = SYNTHETIC_EPOCH + day_idx * 86400 + intraday
+        session_start_ts = base_ts + day_idx * 86400 + intraday
         entry, body = build_session(rng, uid_fn, text_gen, repo, model_wrr,
-                                    branch_wrrs[repo["remote"]], ticket_counters, profile,
+                                    branch_wrr, ticket_counter, profile,
                                     session_start_ts, tool_wrr)
         entry["day"] = day_idx
         manifest["session_list"].append(entry)
         files[entry["rel_path"]] = body
+
+    if align_to is not None:
+        natural_last = _max_line_ts(files)
+        if natural_last is not None:
+            _shift_corpus(manifest, files, align_to - natural_last)
+        manifest["anchor"] = {"mode": "end", "end": iso(align_to)}
+    else:
+        manifest["anchor"] = {"mode": "epoch", "epoch": iso(base_ts)}
 
     return manifest, files
 
@@ -639,13 +762,29 @@ def parse_args(argv=None):
                    help="append lines in accelerated wall-clock instead of writing all at once")
     p.add_argument("--speed", type=float, default=60.0,
                    help="live mode: simulated seconds per real second (default 60x)")
+    anchor = p.add_mutually_exclusive_group()
+    anchor.add_argument("--end", default=None, metavar="INSTANT",
+                        help="ISO instant or 'now' (default): the last generated event lands "
+                             "here, --days is the span backward from it. Real-time-dependent, "
+                             "NOT byte-identical across runs unless the same literal instant is "
+                             "given both times.")
+    anchor.add_argument("--epoch", default=None, metavar="ISO",
+                        help="pin generation to start at this ISO instant and move forward "
+                             "across --days days, exactly like older blockgen versions. "
+                             "Byte-identical for a given seed/sessions/days/epoch — this is what "
+                             "the test suite pins for its reproducibility checks.")
     return p.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
     profile = load_profile(args.profile)
-    manifest, files = generate(profile, args.sessions, args.days, args.seed)
+    if args.epoch is not None:
+        manifest, files = generate(profile, args.sessions, args.days, args.seed,
+                                   epoch=args.epoch)
+    else:
+        manifest, files = generate(profile, args.sessions, args.days, args.seed,
+                                   end=args.end if args.end is not None else "now")
     os.makedirs(args.out, exist_ok=True)
     if args.live:
         write_live(args.out, manifest, files, args.speed)
@@ -653,7 +792,7 @@ def main(argv=None):
         write_batch(args.out, manifest, files)
     n_lines = sum(len(v) for v in files.values())
     print(f"blockgen: wrote {len(files)} transcript(s), {n_lines} lines, "
-         f"seed={args.seed} -> {args.out}", file=sys.stderr)
+         f"seed={args.seed}, anchor={manifest['anchor']} -> {args.out}", file=sys.stderr)
     return 0
 
 
