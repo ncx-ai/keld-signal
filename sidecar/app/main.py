@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from app.buildversion import BUILD_VERSION
 from app.analysis.analyze import PromptNotFound, StoreBehind, WindowExpired, analyze_window
 from app.analysis.blockdigest import DEFAULT_MAX_BLOCKS, digest_blocks
+from app.analysis import devblocks
 from app.analysis.features import DEFAULT_MAX_FEATURE_ROWS
 from app.analysis.features import feature_rows as feature_rows_for
 from app.analysis.features import features as features_for, manifest as feature_manifest
@@ -825,6 +826,34 @@ def _tick_blocking(path, prompt_ids, cursor_ts, now, span_minutes, max_windows, 
                             max_windows=max_windows, prior=True, resolved=resolved)
 
 
+def _dev_blocks_blocking(st, path, mode, since_ts, now, max_blocks, resolved):
+    """The `KELD_DEV_BLOCKS` branch of /blocks' work -- never on the `""` path, so
+    `_blocks_blocking`'s shipped behaviour is unaffected by this function existing at all. See
+    `app/analysis/devblocks.py` for what each mode cuts and why.
+
+    `minute` INGESTS, unlike every other /blocks path: it is the one mode whose store
+    (`refseries-dev.db`, 60-second bins) nothing else ever fills, so if this call does not read
+    the transcript into it, it never has anything to answer from. `nlp=None` — a debug view does
+    not warrant a multi-second spaCy load on a request thread; the dev store's `named_terms`
+    level runs regex-only, the same "no NER, still a real answer" mode `terms_mode(None)` already
+    is for a machine with terms switched off.
+    """
+    if mode == "minute":
+        dst = devblocks.open_dev_store()
+        try:
+            ingest_file(dst, path, None, resolved)
+        except FileNotFoundError:
+            return {"blocks": [], "watermark": None}
+        return devblocks.digest_dev_blocks(dst, path, mode, since_ts=since_ts, now=now,
+                                           max_blocks=max_blocks, current=True)
+    try:
+        current = is_current(st, path, None, resolved)
+    except OSError:
+        current = False
+    return devblocks.digest_dev_blocks(st, path, mode, since_ts=since_ts, now=now,
+                                       max_blocks=max_blocks, current=current)
+
+
 def _blocks_blocking(path, since_ts, now, max_blocks, resolved=None):
     """The whole of /blocks' work, on an executor thread.
 
@@ -846,19 +875,27 @@ def _blocks_blocking(path, since_ts, now, max_blocks, resolved=None):
     triggered by a read. It is passed to `is_current` as None, which is the honest question for a
     caller that will not ingest — the terms-mode fingerprint only matters to something about to
     write rows.
+
+    ⚠️ **`KELD_DEV_BLOCKS`, when set, replaces the cutter above with `_dev_blocks_blocking` and
+    nothing else** — the `""` branch below is exactly the code that ran before D5, untouched, so
+    its output stays byte-identical to the shipped cutter's regardless of this toggle existing.
     """
     st = _store()
     if st is None:
         raise StoreBehind("the reference-series store could not be opened")
-    try:
-        current = is_current(st, path, None, resolved)
-    except OSError:
-        # The transcript is gone or unreadable. Not fatal: the SERIES still holds everything that
-        # was ingested from it, and those blocks are as closed as they will ever be. Treated as
-        # "not current" so only the activity-after branch closes anything.
-        current = False
-    out = digest_blocks(st, path, since_ts=since_ts, now=now,
-                        max_blocks=max_blocks, current=current)
+    mode = devblocks.mode_from_env()
+    if mode:
+        out = _dev_blocks_blocking(st, path, mode, since_ts, now, max_blocks, resolved)
+    else:
+        try:
+            current = is_current(st, path, None, resolved)
+        except OSError:
+            # The transcript is gone or unreadable. Not fatal: the SERIES still holds everything
+            # that was ingested from it, and those blocks are as closed as they will ever be.
+            # Treated as "not current" so only the activity-after branch closes anything.
+            current = False
+        out = digest_blocks(st, path, since_ts=since_ts, now=now,
+                            max_blocks=max_blocks, current=current)
     # Switched off means not reported, exactly as on /analyze: the regex half of
     # terms.candidates() needs no model and still ran at INGEST time, so returning its output
     # would contradict the status beside it and make the switch look like a performance knob.
@@ -1238,7 +1275,12 @@ def health():
     # app/buildversion.py.
     wm = _state.get("wm")
     return {"ok": bool(wm) and wm.state != HELD, "model": MODEL_NAME,
-            "state": wm.state if wm else "down", "version": BUILD_VERSION}
+            "state": wm.state if wm else "down", "version": BUILD_VERSION,
+            # D5, `docs/v3/contracts.md`: `""` unless `KELD_DEV_BLOCKS` names a finer /blocks
+            # granularity for a LOCAL developer's own health page. So the daemon can REFUSE to
+            # publish anything but the default -- an env var it did not itself set (or a stale
+            # one from a prior run) must be visible here, not just in the /blocks response.
+            "dev_blocks": devblocks.mode_from_env()}
 
 
 @app.get("/metrics")

@@ -312,7 +312,25 @@ Nothing here may import from `scripts/`, and nothing here may import pandas.
 #           `KELD_TEXTEMBED` is on, because a width that depended on a machine's environment is
 #           the incoherent-corpus failure the frozen manifest exists to prevent; the flag beside
 #           them is what says they may be read.
-SCHEMA = 17
+#   17 -> 18: `POST /blocks` ONLY (not `/analyze`) gains `tokens` (`{input, output, cache_read,
+#           cache_creation, request}`) and `requests` on every block -- D5,
+#           `docs/v3/contracts.md`'s "Block dims from the sidecar". Summed over `turn_magnitude`
+#           kinds `blockdigest._tokens_at` names; `request` is `magnitude.REQUEST_TOKENS`, the
+#           same price-weighted spend series `effort.request_tokens` already sums, never
+#           `magnitude.TOKENS`. `None`/`None` together, never a zero-filled object, when the
+#           block recorded no request at all -- see `_tokens_at`'s own docstring.
+#
+#           `ingest.STATE_VERSION` moves 5 -> 6 alongside: the four raw token classes and the
+#           request count are new `turn_magnitude` KINDS (data, not DDL --
+#           `store.SCHEMA_VERSION` is untouched, still 6), but a store already fully ingested has
+#           none of these rows and nothing recomputes them from a file that never grows again, so
+#           the version bump forces one reparse to backfill the whole history -- the same
+#           argument 2 -> 3 and 3 -> 4 made for `repo` and `reqs`.
+#
+#           A window that answers with a key it did not answer with before is this number's
+#           trigger, exactly as at 13 -> 14, 14 -> 15 and 15 -> 16 -- except this one is scoped to
+#           the `/blocks` wire shape alone; `/analyze`'s payload is byte-unchanged.
+SCHEMA = 18
 
 # How deep the "component" level truncates a directory path (e.g. 3 ->
 # "internal/agent/daemon", not the full file path). Matches scripts/refseries.py's own

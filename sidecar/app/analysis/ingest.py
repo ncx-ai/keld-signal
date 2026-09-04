@@ -115,7 +115,20 @@ HEAD_BYTES = 4096
 #           member of its own batch and no upsert can collapse it. So this bump is what REPAIRS
 #           an existing store -- it forces one reparse, `clear_session` drops the magnitudes, and
 #           the whole history is re-derived with the set carried. Exact by definition.
-STATE_VERSION = 5
+#   4 -> 5: no change of its own -- this is the historical value at the time D5 (below) was
+#           written, kept as its own line so the 5 -> 6 note reads against the number it actually
+#           followed rather than one renumbered around it.
+#   5 -> 6: D5's per-block `tokens`/`requests` (`magnitude.INPUT_TOKENS` and its four siblings,
+#           `POST /blocks`). No new PARSE-STATE FIELD -- the four raw classes and the request
+#           count ride the identical `seen_req`/`if w:` gate `REQUEST_TOKENS` already uses, so
+#           nothing about what is CARRIED between batches changed. What forces the bump is that a
+#           store already fully ingested has none of these rows and nothing recomputes them after
+#           the fact (the same argument as 2 -> 3's `repo`): without a version bump, a machine
+#           whose transcripts are all dormant would report `tokens: None` on every block FOREVER,
+#           because the code that would have written the rows never runs again on a file that
+#           never grows. One forced reparse backfills the whole history, exactly as 2 -> 3 and
+#           3 -> 4 did for `repo` and `reqs`.
+STATE_VERSION = 6
 
 
 def terms_mode(nlp):

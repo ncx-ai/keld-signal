@@ -507,12 +507,12 @@ def _epoch(v):
     return v.timestamp()
 
 
-def _floor_bin(t):
-    return int(math.floor(t / BIN_SECONDS)) * BIN_SECONDS
+def _floor_bin(t, bin_seconds=BIN_SECONDS):
+    return int(math.floor(t / bin_seconds)) * bin_seconds
 
 
-def _ceil_bin(t):
-    return int(math.ceil(t / BIN_SECONDS)) * BIN_SECONDS
+def _ceil_bin(t, bin_seconds=BIN_SECONDS):
+    return int(math.ceil(t / bin_seconds)) * bin_seconds
 
 
 class Store:
@@ -548,9 +548,18 @@ class Store:
     `_Tx` for the failure that produced.
     """
 
-    def __init__(self, path, precomputed_levels=PRECOMPUTED_LEVELS):
+    def __init__(self, path, precomputed_levels=PRECOMPUTED_LEVELS, bin_seconds=BIN_SECONDS):
+        """`bin_seconds` is an instance width, not the module default, for exactly one reason:
+        `KELD_DEV_BLOCKS=minute` (`app/analysis/devblocks.py`) ingests the SAME transcript into a
+        SEPARATE store (`refseries-dev.db`) at 60-second granularity, and bin WIDTH is fixed in
+        the `bin` table at the moment a row is written -- there is no query-time way to re-bin an
+        already-rolled-up interval. Every OTHER caller passes nothing and gets the shipped
+        300-second width unchanged; nothing about the default path's behaviour or its `bin` rows
+        moves by this parameter existing.
+        """
         self.path = path
         self.levels = tuple(dict.fromkeys(precomputed_levels))
+        self.bin_seconds = int(bin_seconds)
         d = os.path.dirname(path)
         if d:
             os.makedirs(d, mode=0o700, exist_ok=True)
@@ -701,7 +710,7 @@ class Store:
             q = ",".join("?" * len(new))
             c.execute(f"""
                 INSERT INTO bin(session, bin_ts, level, ref, n)
-                SELECT session, CAST(ts / {BIN_SECONDS} AS INTEGER) * {BIN_SECONDS},
+                SELECT session, CAST(ts / {self.bin_seconds} AS INTEGER) * {self.bin_seconds},
                        level, ref, SUM(n)
                 FROM event WHERE level IN ({q})
                 GROUP BY 1, 2, 3, 4
@@ -745,7 +754,7 @@ class Store:
         mags = self._aggregate_mag(rows, source_line, capture=capture)
         if not agg and not mags:
             return 0
-        touched = {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
+        touched = {_floor_bin(ts, self.bin_seconds) for _line, ts, _lv, _ref in agg}
         with self.transaction():
             if agg:
                 self._insert(session, agg)
@@ -831,7 +840,7 @@ class Store:
                 WHERE session = ? AND ts >= ? AND ts < ?
                   AND level IN (SELECT level FROM bin_level)
                 GROUP BY level, ref""",
-                (session, b, session, float(b), float(b + BIN_SECONDS)))
+                (session, b, session, float(b), float(b + self.bin_seconds)))
 
     def replace_events(self, session, source_line, rows):
         """Make `(session, source_line)` hold exactly `rows` — inserting, revising AND DELETING.
@@ -855,8 +864,8 @@ class Store:
         with self.transaction():
             old = c.execute("SELECT ts FROM event WHERE session = ? AND source_line = ?",
                             (session, int(source_line))).fetchall()
-            touched = {_floor_bin(t[0]) for t in old}
-            touched |= {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
+            touched = {_floor_bin(t[0], self.bin_seconds) for t in old}
+            touched |= {_floor_bin(ts, self.bin_seconds) for _line, ts, _lv, _ref in agg}
             c.execute("DELETE FROM event WHERE session = ? AND source_line = ?",
                       (session, int(source_line)))
             # The slot's magnitudes go with its events, symmetrically. `reconcile` emits none
@@ -1146,7 +1155,7 @@ class Store:
         out["term_pruned"] = n
         with self.transaction():
             cur = self._conn().execute("DELETE FROM bin WHERE level = ? AND bin_ts < ?",
-                                       (TERM_LEVEL, _floor_bin(tcut)))
+                                       (TERM_LEVEL, _floor_bin(tcut, self.bin_seconds)))
             out["term_bins_pruned"] = cur.rowcount or 0
         if n or out["term_bins_pruned"]:
             self.note_pruned("term", newest if n else tcut, n, now)
@@ -1179,7 +1188,7 @@ class Store:
                 cur = self._conn().execute("DELETE FROM turn_magnitude WHERE ts <= ?", (floor,))
                 out["magnitude_pruned"] = cur.rowcount or 0
                 cur = self._conn().execute(
-                    "DELETE FROM bin_offset WHERE bin_ts + ? <= ?", (BIN_SECONDS, floor))
+                    "DELETE FROM bin_offset WHERE bin_ts + ? <= ?", (self.bin_seconds, floor))
                 out["bin_offset_pruned"] = cur.rowcount or 0
 
         with self.transaction():
@@ -1324,7 +1333,7 @@ class Store:
                 WHERE session = ? AND ts >= ? AND ts < ? AND source_line NOT IN ({ph})
                 GROUP BY level, ref""", (session, start, end) + slots)]
             return _pseudo_rows(session, parts)
-        first, last = _ceil_bin(start), _floor_bin(end)
+        first, last = _ceil_bin(start, self.bin_seconds), _floor_bin(end, self.bin_seconds)
         iv_start, iv_end = (first, last) if last > first else (start, start)
 
         parts = []

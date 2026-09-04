@@ -223,6 +223,45 @@ def _effort_at(store, session, lo, hi):
     }
 
 
+def _tokens_at(store, session, lo, hi):
+    """The `tokens`/`requests` pair D5 adds to a block's own span (`docs/v3/contracts.md`,
+    "Block dims from the sidecar").
+
+    Five kinds, each summed for real over `[lo, hi)`: `input`/`output`/`cache_read`/
+    `cache_creation` are the four RAW classes `message.usage` carries (`magnitude.raw_tokens`),
+    and `request` is `magnitude.REQUEST_TOKENS` -- the SAME price-weighted spend series
+    `_effort_at`'s `request_tokens` already sums, never `magnitude.TOKENS`, which repeats a
+    request's cost on every line of it (see `magnitude.py`'s own docstring). `requests` is
+    `magnitude.REQUESTS`, one row per costed API request under the identical `seen_req` dedup --
+    not derived from any of the four sums above, because an individual class landing at exactly
+    zero must not make the request vanish from the count (`_aggregate_mag` drops a zero
+    unconditionally, whichever kind it belongs to).
+
+    `None` for BOTH fields together, never a zero-filled `tokens` object, when the span recorded
+    no request at all -- the same abstention `magnitude.authored`/`effort.request_tokens` already
+    make: a v5 store upgraded in place (or reparsed under STATE_VERSION 6, see `ingest.py`) has
+    nothing to sum until its next ingest, and a span with no assistant turn genuinely never issued
+    a request. Reporting zeros in either case would be "we looked and it cost nothing" on the
+    strength of never having looked, or of there being nothing to look at.
+    """
+    n_requests = int(round(sum(
+        v for _ts, v in store.turn_magnitudes(session, lo, hi, kind=magnitude.REQUESTS))))
+    if not n_requests:
+        return None, None
+
+    def _sum(kind):
+        return int(round(sum(v for _ts, v in store.turn_magnitudes(session, lo, hi, kind=kind))))
+
+    tokens = {
+        "input": _sum(magnitude.INPUT_TOKENS),
+        "output": _sum(magnitude.OUTPUT_TOKENS),
+        "cache_read": _sum(magnitude.CACHE_READ_TOKENS),
+        "cache_creation": _sum(magnitude.CACHE_CREATION_TOKENS),
+        "request": _sum(magnitude.REQUEST_TOKENS),
+    }
+    return tokens, n_requests
+
+
 def _prior_at(store, path, session, block_rl, lo, floor):
     """The session as it stood BEFORE this block, contrasted with the block's own answer.
 
@@ -271,6 +310,7 @@ def digest(store, session, block, path, floor=None, sizer=None, prior=True):
     lo, hi = quantize(float(block.start)), quantize(float(block.end))
     rl = _rollup_at(store, path, session, lo, hi)
     minutes = max(0.0, (hi - lo) / 60.0)
+    tokens, requests = _tokens_at(store, session, lo, hi)
     out = workstreams.payload(rl)
     out.update(
         schema=SCHEMA,
@@ -282,6 +322,8 @@ def digest(store, session, block, path, floor=None, sizer=None, prior=True):
         block_minutes=round(minutes, 3),
         evidence=int(sum(n for items in rl.values() for _, n in items)),
         effort=_effort_at(store, session, lo, hi),
+        tokens=tokens,
+        requests=requests,
     )
     if minutes > 0:
         # The BLOCK is the budget. `dynamics_for` is the same call `/analyze` makes, so the seam
