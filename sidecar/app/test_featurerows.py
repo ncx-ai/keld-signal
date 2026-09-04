@@ -159,6 +159,10 @@ class StubEncoder:
         # silently reported zeros would make a regression in either invisible.
         self.last_batch_ms = 0.0
         self.last_encode_ms = 0.0
+        # Same contract, one field along (2026-09-04): the real `Encoder` learns its dtype from
+        # the child's ready handshake, so a stub that never came up reports None — which is
+        # exactly what the down-state block states too.
+        self.dtype = None
 
     def rss_mb(self):
         return 0.0
@@ -611,6 +615,16 @@ def test_embed_stats_with_no_source_states_not_running():
     # The batch timings, stated at rest for the same reason the identity is.
     assert b["last_batch_ms"] == 0.0 and b["mean_batch_ms"] == 0.0
     assert b["last_encode_ms"] == 0.0
+    # ⚠️ **`dtype` IS PRESENT AND None, NOT ABSENT.** It is the field that says what a host
+    # actually ran with, and the arms differ by ~5x on a CPU without hardware bf16 kernels — so
+    # the one question it exists to answer ("why is this machine slow?") is asked when nothing is
+    # running. A key that appears only once a child is up would be missing exactly then. It also
+    # makes an operator's `KELD_TEXTEMBED_DTYPE` visible, which is the only lever there now is.
+    assert "dtype" in b and b["dtype"] is None
+    # Beside the identity, never inside it: two dtypes ARE poolable (cosine 0.9998+ across the
+    # pair at both widths, against a 0.08 attribution margin), so `encoder` must not imply they
+    # are not.
+    assert "dtype" not in b["encoder"]
 
 
 def test_embed_stats_reports_the_child_after_an_encode():

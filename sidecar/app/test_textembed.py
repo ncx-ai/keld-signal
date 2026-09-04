@@ -565,6 +565,100 @@ def test_a_message_is_encoded_once_and_reused_by_every_shell_containing_it():
     assert len(enc.seen) == 1
 
 
+# ---- the dtype ----------------------------------------------------------------------------------
+#
+# One arm ships (`DTYPE_DEFAULT`), so what is left to test is the override and the reporting —
+# there is no host question any more. The capability-probe tests that were here went with the
+# probe: torch exposes no AVX512-BF16 signal, so the branch they covered was inferring a fast
+# path from the widest compiled ISA, which does not imply it.
+
+def _no_dtype_override():
+    os.environ.pop("KELD_TEXTEMBED_DTYPE", None)
+
+
+def test_fp32_is_the_default_and_no_host_is_asked():
+    """The measured arm, unconditionally. bf16 was 5x slower on the one host anyone has measured
+    (25.3 s against 4.9 s for an 8 x 512-token batch) and the memory it saved was 179 MB, not the
+    1313 MB it was chosen for."""
+    _no_dtype_override()
+    assert te.DTYPE_DEFAULT == "float32"
+    assert te._resolve_dtype_name() == "float32"
+
+
+def test_the_env_override_wins():
+    """The only lever, and the whole reason it survives: either arm has to be re-measurable on a
+    host without editing the source. bf16 is still reachable — it is not deleted, just not
+    guessed at."""
+    try:
+        os.environ["KELD_TEXTEMBED_DTYPE"] = "bfloat16"
+        assert te._resolve_dtype_name() == "bfloat16"
+    finally:
+        _no_dtype_override()
+    assert te._resolve_dtype_name() == "float32"
+
+
+def test_an_empty_override_means_absent():
+    """An exported-but-empty variable is a shell accident, not a request for a dtype named "",
+    which `_load`'s getattr would then miss and silently resolve to fp32 anyway — correct outcome,
+    but arrived at by accident and reported to /metrics as an empty string."""
+    try:
+        os.environ["KELD_TEXTEMBED_DTYPE"] = ""
+        assert te._resolve_dtype_name() == "float32"
+    finally:
+        _no_dtype_override()
+
+
+def test_an_unknown_dtype_name_is_carried_not_corrected():
+    """A typo reaches `_load`, whose `getattr(torch, name, torch.float32)` lands it on the shipped
+    arm — and the unrecognised NAME still travels to `/metrics`, so the typo is visible instead of
+    looking like a deliberate float32."""
+    try:
+        os.environ["KELD_TEXTEMBED_DTYPE"] = "bfloat" + "16 "     # trailing space, a real typo
+        assert te._resolve_dtype_name() == "bfloat16 "
+    finally:
+        _no_dtype_override()
+
+
+def test_the_parent_records_the_dtype_the_child_reports_and_keeps_it_across_a_kill():
+    """`Encoder.dtype` is the CHILD's report of what it actually built the model with, not a
+    re-reading of the environment here. Held across `_kill` deliberately: the moment anyone wants
+    to know which arm a host ran is when the child is down and they are asking why it was slow."""
+    _on()
+
+    class _Proc:
+        def __init__(self):
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+        def kill(self):
+            self.alive = False
+
+        def join(self, timeout=None):
+            pass
+
+    class _Q:
+        def __init__(self, msg=None):
+            self.msg = msg
+
+        def put(self, _):
+            pass
+
+        def get(self, timeout=None):
+            return self.msg
+
+    def spawn(spec):
+        return _Proc(), _Q(), _Q({"ready": True, "dtype": "float32"})
+
+    enc = te.Encoder(spawn_fn=spawn, rss_fn=lambda _: 0.0, weights="/nowhere")
+    assert enc.dtype is None, "nothing has come up yet, so there is nothing to report"
+    assert enc.warm() is True
+    assert enc.dtype == "float32"
+    enc._kill()
+    assert enc.dtype == "float32", "a dtype describes what ran, not the dead process"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

@@ -98,9 +98,12 @@ client's**: it is generated deterministically from a seed held in configuration
 it does not choose. This is a hardening measure, not a claim of impossibility; it is recorded here
 so the reason survives someone later asking why the client multiplies by a constant.
 """
+import logging
 import math
 import os
 import re
+
+_log = logging.getLogger("keld.sidecar.textembed")
 
 # The stream tags. Kept separate, never concatenated — see the module docstring.
 USER, ASST, THINK = "user", "asst", "think"
@@ -424,6 +427,44 @@ def project(v, matrix=None):
 
 # ---- the encoder child --------------------------------------------------------------------------
 
+DTYPE_DEFAULT = "float32"
+
+# ⚠️ **ONE DTYPE, AND THE HOST IS NOT ASKED.** This briefly selected bf16 behind a capability
+# probe (oneDNN present, an AVX512-class torch build) and that probe was deleted on purpose, not
+# for being wrong but for being unverifiable: torch exposes NO AVX512-BF16 signal at all — public
+# or private — so the widest ISA a build was compiled for was standing in for a sub-extension it
+# does not imply. Every AVX512 CPU without BF16 (Skylake-SP, Cascade Lake, Ice Lake-SP, Rocket
+# Lake — common server parts) would have been told it had a fast path it does not have.
+#
+# So the arm that ships is the one that was measured. M1 Pro, 5 threads, one 8 x 512-token batch:
+#
+#     bfloat16  25.3 s,  482 MB after load, 1808 MB peak
+#     float32    4.9 s,  801 MB after load, 1987 MB peak
+#
+# fp32 is 5x faster for 179 MB of peak, and the child has no RSS ceiling to breach (`observe_rss`
+# samples and never kills), so the cost is footprint on an oversubscribed budget rather than a
+# limit. The old default was bf16 UNCONDITIONALLY, so this can only move a host onto the faster
+# arm — no host goes the other way, and no machine that was fine becomes slow.
+#
+# ⚠️ **WHAT IS NOT CLAIMED: that fp32 wins everywhere.** It wins on every host without hardware
+# bf16 kernels, which is one host measured and an argument about the rest. bf16 may well still
+# earn its memory on a Sapphire Rapids or a Zen 4, and the way to find out is to MEASURE on the
+# machine rather than infer from its model number: one small batch each way at first spawn, keep
+# the winner, cache it. That is the optimisation this constant is holding the place for, and it
+# needs a calibration seam that does not exist yet — which is why the guess was not left in the
+# meantime. `KELD_TEXTEMBED_DTYPE` is how either arm gets re-measured on any host today.
+
+
+def _resolve_dtype_name():
+    """The dtype this child will load: `KELD_TEXTEMBED_DTYPE` if set, else `DTYPE_DEFAULT`.
+
+    A function rather than an inline `or` so the PRECEDENCE is testable without weights, a child
+    or torch. An unknown value is left to `_load`'s `getattr` fallback rather than validated here
+    — a typo lands on fp32, the measured arm, and the unrecognised name still reaches `/metrics`
+    so the typo is visible instead of looking like a deliberate choice."""
+    return os.environ.get("KELD_TEXTEMBED_DTYPE") or DTYPE_DEFAULT
+
+
 def _load(spec):
     """Load the encoder. CHILD SIDE ONLY — torch and transformers are imported here so the parent
     never pulls them in and the spawn re-import of this module stays cheap.
@@ -461,17 +502,25 @@ def _load(spec):
     1313 MB, which is the number that replicated.
 
     bf16 rather than fp16 because this runs on CPU: torch's CPU kernels cover bfloat16, and fp16
-    on CPU is emulated where it exists at all."""
+    on CPU is emulated where it exists at all.
+
+    ⚠️ **AND "torch's CPU kernels cover bfloat16" IS TRUE ONLY WHERE THE HARDWARE DOES.** Every
+    number above came off one 20-core x86 host, which is the CPU class that HAS those kernels;
+    where they are absent torch upconverts and the whole trade inverts. Re-measured on an M1 Pro,
+    bf16 was 5x SLOWER and saved 179 MB rather than 1313 MB, which is what took the attribution
+    heartbeat out on a machine that was working the entire time. `DTYPE_DEFAULT` carries those
+    numbers and the reason fp32 now ships unconditionally; `KELD_TEXTEMBED_DTYPE` overrides it."""
     import torch
     from transformers import AutoModel, AutoTokenizer
 
     torch.set_num_threads(int(spec.get("threads") or 2))
     d = spec["dir"]
-    dtype = getattr(torch, os.environ.get("KELD_TEXTEMBED_DTYPE", "bfloat16"), torch.bfloat16)
+    name = _resolve_dtype_name()
+    dtype = getattr(torch, name, torch.float32)
     tok = AutoTokenizer.from_pretrained(d, padding_side="left")
     model = AutoModel.from_pretrained(d, dtype=dtype)
     model.eval()
-    return tok, model
+    return tok, model, name
 
 
 def _encode_batch(tok, model, texts, max_tokens):
@@ -517,11 +566,17 @@ def _serve(req_q, resp_q, spec):
     `worker.py` sends, and it is safe there because that worker's inputs are already the caller's
     own text; here the input is a transcript message, and a tokenizer error's repr can quote it."""
     try:
-        tok, model = _load(spec)
+        tok, model, dtype_name = _load(spec)
     except Exception as e:                 # noqa: BLE001 — absent weights are a normal state
         resp_q.put({"ready": False, "error": type(e).__name__})
         return
-    resp_q.put({"ready": True})
+    # ⚠️ **WARNING, NOT INFO, AND THAT IS THE ONLY LEVEL THAT REACHES ANYONE.** `serve.py` runs
+    # uvicorn at `log_level="warning"` and nothing calls `basicConfig`, so an INFO line from this
+    # child is written to no handler at all. The daemon already takes one `Loading weights`
+    # progress line per spawn on this same stream; this is the line that makes it interpretable.
+    _log.warning("text encoder loaded: dtype=%s threads=%s", dtype_name,
+                 spec.get("threads") or 2)
+    resp_q.put({"ready": True, "dtype": dtype_name})
     while True:
         req = req_q.get()
         if req is None:
@@ -577,6 +632,17 @@ class Encoder:
         self._proc = self._req = self._resp = None
         self.state = DOWN
         self.status = STATUS_OK
+        # The dtype the CURRENT (or most recent) child reported loading — the child's own answer
+        # rather than a re-reading of `_resolve_dtype_name` here, so what `/metrics` states is
+        # what a model was actually built with and not what the environment said a moment ago.
+        # `None` until a child has come up at least once.
+        #
+        # ⚠️ **NOT RESET ON `_kill`, unlike `_peak_rss`.** A peak describes one process and is
+        # meaningless carried across a generation; a dtype describes the HOST, and the moment an
+        # operator wants it is precisely when the child is down and they are asking why. It is
+        # overwritten on every ready handshake, so an env change cannot leave it stale for longer
+        # than one spawn.
+        self.dtype = None
         self._unavailable_at = None
         self._last_activity = self._clock()
         # High-water RSS for the CURRENT child generation, sampled lock-free by `observe_rss`.
@@ -637,6 +703,7 @@ class Encoder:
             return False
         self.state = READY
         self.status = STATUS_OK
+        self.dtype = msg.get("dtype")
         self._unavailable_at = None
         self._last_activity = self._clock()
         return True
