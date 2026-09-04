@@ -11,12 +11,15 @@ import (
 // exercises every cell shape (ok and failed, every stage, a conflict, health,
 // pending) and asserts every string value in the marshalled JSON is one of:
 //   - a member of a closed vocabulary this package defines (Stage/Status/
-//     Reason/Method/HealthKey/the block-boundary reasons), checked exactly, or
-//   - an RFC3339 timestamp, checked exactly, or
-//   - an "identifier-shaped" free field (block/session id, source, model
-//     name, project id) — allowed to be free text, but bounded (no newlines,
-//     no spaces, reasonably short) so it cannot itself carry a smuggled
-//     message.
+//     Reason/Method/HealthKey/the block-boundary reasons), checked exactly;
+//   - an RFC3339 timestamp, checked exactly; or
+//   - an identifier field (session, source, model, project id) — checked
+//     against its OWN shape (the same regexes/closed set store.go enforces at
+//     the write seam), not merely "no whitespace". A length/newline bound
+//     alone does not separate an id from a sentence — "please summarise
+//     /Users/gabriel/projects/keld/secret-plan.md" has neither — which is
+//     exactly the gap the adversarial fixture below existed to find; this
+//     walk failing to catch it was the original defect.
 //
 // Any JSON key not in this file's allowlist fails the test outright. That is
 // the point: recorder.go says "there is deliberately no string parameter for
@@ -53,13 +56,68 @@ func TestNoFreeTextFieldInMarshalledLedger(t *testing.T) {
 	s.SetHealth(Health{Key: HealthAtlas, Status: StatusFailed, Detail: string(ReasonAtlasRejected), At: fail})
 	s.CutPending("9eb2b3ffdeadbeef", ReasonSidecarOutdated, ok)
 
+	// Block 3 (adversarial, path/prose in EVERY identifier field, session
+	// included): a mis-wired hook point handing a transcript path or a
+	// prompt fragment to session/source/model/project_id. Session also being
+	// attacked means the whole write must be refused (store.go's "a block
+	// whose session fails the shape is not written at all") — so this block
+	// must simply not exist afterward.
+	const attack = "please summarise /Users/gabriel/projects/keld/secret-plan.md"
+	kAttack := BlockKey{Session: attack, Start: 999000}
+	s.Cut(kAttack, 999060, "idle", "budget", attack, ok)
+	s.Measure(kAttack, Measured{Model: attack, Requests: 1}, ok)
+	s.Attribute(kAttack, Attributed{ProjectID: attack}, ReasonNone, ok)
+
+	// Block 4 (adversarial, VALID session): the same attack string in
+	// source/model/project_id only. The block DOES get written (its session
+	// is fine), so this is what proves those three fields clamp to "" one at
+	// a time rather than merely refusing the whole row.
+	k4 := BlockKey{Session: "s-attacked-fields", Start: 999500}
+	s.Cut(k4, 999560, "idle", "budget", attack, ok)
+	s.Measure(k4, Measured{Model: attack, Requests: 1}, ok)
+	s.Attribute(k4, Attributed{ProjectID: attack}, ReasonNone, ok)
+
 	snap, err := s.Read(time.Time{}, 100)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
+
+	for _, blk := range snap.Blocks {
+		if blk.Key.Session == attack {
+			t.Fatalf("a block keyed by a non-identifier session must never be written at all, got %#v", blk)
+		}
+	}
+	var b4 *BlockEntry
+	for i := range snap.Blocks {
+		if snap.Blocks[i].Key.Session == "s-attacked-fields" {
+			b4 = &snap.Blocks[i]
+		}
+	}
+	if b4 == nil {
+		t.Fatal("block 4 (valid session) should have been written")
+	}
+	if b4.Source != "" {
+		t.Fatalf("attacked source must clamp to empty, got %q", b4.Source)
+	}
+	if m := b4.Cells["measured"]["model"]; m != "" {
+		t.Fatalf("attacked model must clamp to empty, got %q", m)
+	}
+	if p := b4.Cells["attributed"]["project_id"]; p != "" {
+		t.Fatalf("attacked project_id must clamp to empty, got %q", p)
+	}
+
 	b, err := json.Marshal(snap)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
+	}
+
+	// Belt and suspenders on top of the shape walk below: the attack string
+	// (or any piece of it) must not appear anywhere in the wire body.
+	body := string(b)
+	for _, forbidden := range []string{attack, "/Users/", "secret-plan.md", "summarise"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("the ledger published %q — an identifier field leaked text/a path", forbidden)
+		}
 	}
 
 	var generic any
@@ -150,7 +208,27 @@ func walkNoFreeText(t *testing.T, key string, v any) {
 			if !isRFC3339(vv) {
 				t.Errorf("field %q is not RFC3339: %q", key, vv)
 			}
-		case "session", "source", "model", "project_id", "conflict", "detail":
+		case "session":
+			if !sessionShape.MatchString(vv) {
+				t.Errorf("field %q does not match the session identifier shape: %q", key, vv)
+			}
+		case "source":
+			if vv != "" && !validSources[vv] {
+				t.Errorf("field %q is not a known source: %q", key, vv)
+			}
+		case "model":
+			if vv != "" && validModelID(vv) != vv {
+				t.Errorf("field %q does not match the model identifier shape: %q", key, vv)
+			}
+		case "project_id", "conflict":
+			if vv != "" && !projectIDShape.MatchString(vv) {
+				t.Errorf("field %q does not match the project id shape: %q", key, vv)
+			}
+		case "detail":
+			// Not one of the four attacked identifier fields (session,
+			// source, model, project_id) — Health.Detail is documented as
+			// "a version string or a Reason", so it keeps the looser bound
+			// rather than one of the closed shapes above.
 			if !identifierShaped(vv) {
 				t.Errorf("field %q does not look like a bounded identifier: %q", key, vv)
 			}

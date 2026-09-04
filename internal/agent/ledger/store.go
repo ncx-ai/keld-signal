@@ -404,10 +404,13 @@ func setCell(txn *sql.Tx, k BlockKey, stage Stage, status Status, r Reason, http
 // --- Recorder -------------------------------------------------------------
 
 func (s *Store) Cut(k BlockKey, end int64, startReason, endReason string, source string, at time.Time) {
-	k = sanitizeKey(k)
+	k, ok := s.sanitizeKey(k)
+	if !ok {
+		return
+	}
 	startReason = clampBoundaryReason(startReason)
 	endReason = clampBoundaryReason(endReason)
-	source = safeID(source)
+	source = validSource(source)
 	s.tx("Cut", func(txn *sql.Tx) error {
 		if err := ensureRow(txn, k); err != nil {
 			return err
@@ -429,7 +432,12 @@ func (s *Store) Cut(k BlockKey, end int64, startReason, endReason string, source
 }
 
 func (s *Store) CutPending(session string, r Reason, at time.Time) {
-	session = safeID(session)
+	session, ok := validSession(session)
+	if !ok {
+		// Same rule as sanitizeKey: never log the raw value, only the fact.
+		s.logFailure("CutPending", fmt.Errorf("session failed the identifier shape check; pending entry dropped"))
+		return
+	}
 	r = validReason(r)
 	s.exec("CutPending",
 		`INSERT INTO pending(session, reason, at) VALUES(?,?,?)
@@ -438,8 +446,11 @@ func (s *Store) CutPending(session string, r Reason, at time.Time) {
 }
 
 func (s *Store) Measure(k BlockKey, m Measured, at time.Time) {
-	k = sanitizeKey(k)
-	m.Model = safeID(m.Model)
+	k, ok := s.sanitizeKey(k)
+	if !ok {
+		return
+	}
+	m.Model = validModelID(m.Model)
 	s.tx("Measure", func(txn *sql.Tx) error {
 		if err := ensureRow(txn, k); err != nil {
 			return err
@@ -457,13 +468,16 @@ func (s *Store) Measure(k BlockKey, m Measured, at time.Time) {
 }
 
 func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
-	k = sanitizeKey(k)
+	k, ok := s.sanitizeKey(k)
+	if !ok {
+		return
+	}
 	r = validReason(r)
-	a.ProjectID = safeID(a.ProjectID)
+	a.ProjectID = validProjectID(a.ProjectID)
 	a.Method = validMethod(a.Method)
 	var conflict []string
 	for _, c := range a.Conflict {
-		if c = safeID(c); c != "" {
+		if c = validProjectID(c); c != "" {
 			conflict = append(conflict, c)
 		}
 	}
@@ -501,7 +515,10 @@ func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 }
 
 func (s *Store) Sent(k BlockKey, at time.Time) {
-	k = sanitizeKey(k)
+	k, ok := s.sanitizeKey(k)
+	if !ok {
+		return
+	}
 	s.tx("Sent", func(txn *sql.Tx) error {
 		if err := ensureRow(txn, k); err != nil {
 			return err
@@ -511,7 +528,10 @@ func (s *Store) Sent(k BlockKey, at time.Time) {
 }
 
 func (s *Store) Received(k BlockKey, httpStatus int, at time.Time) {
-	k = sanitizeKey(k)
+	k, ok := s.sanitizeKey(k)
+	if !ok {
+		return
+	}
 	s.tx("Received", func(txn *sql.Tx) error {
 		if err := ensureRow(txn, k); err != nil {
 			return err
@@ -521,7 +541,10 @@ func (s *Store) Received(k BlockKey, httpStatus int, at time.Time) {
 }
 
 func (s *Store) Failed(k BlockKey, stage Stage, r Reason, httpStatus int, at time.Time) {
-	k = sanitizeKey(k)
+	k, ok := s.sanitizeKey(k)
+	if !ok {
+		return
+	}
 	r = validReason(r)
 	s.tx("Failed", func(txn *sql.Tx) error {
 		if err := ensureRow(txn, k); err != nil {
