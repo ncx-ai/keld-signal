@@ -546,7 +546,15 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, svc serviceFacets
 	// Log successes too (not just failures) so "are enrichments reaching Atlas"
 	// is answerable from the daemon log — silent success made this hard to tell
 	// apart from a broken pipeline.
-	log.Printf("keld-agent: published enrichment for %s", j.Key())
+	// ⚠️ Say what actually happened. With Send to Atlas off this same path runs
+	// and succeeds, and logging "published" there would be the log telling a
+	// developer the opposite of the truth — the precise failure this whole
+	// build exists to remove, reproduced in the one place people look first.
+	if _, local := pub.(*localOnlySender); local {
+		log.Printf("keld-agent: enriched %s (kept locally; Send to Atlas is off)", j.Key())
+	} else {
+		log.Printf("keld-agent: published enrichment for %s", j.Key())
+	}
 	return true
 }
 
@@ -746,6 +754,21 @@ func Run(ctx context.Context) error {
 	// transport, no credential and no address. See daemon/atlas.go.
 	atlasCl := atlasClient(set, pub,
 		settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), nil)
+	// ⚠️ **AND EVERY PATH THAT PREDATES THE BOUNDARY IS ROUTED THROUGH IT HERE.**
+	// atlas.Off makes the new connector incapable of reaching the network, but
+	// the enrichment worker, the tick, the settings poll and the reporter each
+	// hold their own endpoint and would happily keep dialling — measured, once
+	// every two seconds, on a machine that had asked for local-only. `sender`
+	// is what those paths publish through, so a path that forgets to consult a
+	// flag still cannot send. See localonly.go.
+	sender := senderFor(set, pub)
+	// The tick publishes window rows rather than enrichments, so it needs the
+	// same value under its own interface. One concrete sender satisfies both;
+	// `pub` does too, which is why the fallback is a plain type assertion.
+	windowSender, _ := sender.(WindowSender)
+	if windowSender == nil {
+		windowSender = pub
+	}
 
 	addr := bindAddr()
 	if svcSecret, err := serviceSecret(); err != nil {
@@ -821,6 +844,7 @@ func Run(ctx context.Context) error {
 	// window onto it must not be allowed to take it down.
 	sig := newV3(set, atlasCl)
 	sig.observeRemote(nil)
+	startHealth(ctx, sig, nil, set.AtlasEnabled())
 
 	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded, sig.routes()...)
 	pollInterval := 5 * time.Minute
@@ -836,7 +860,18 @@ func Run(ctx context.Context) error {
 			flushInterval = d
 		}
 	}
-	reporter := clientevents.NewReporter(signalClientEventsEndpoint(cfg.Endpoint), tok.Get, installID, emitter.Drain, paths.ClientEventsSpoolDir())
+	// ⚠️ The reporter is the THIRD path that predates the Atlas boundary, and it
+	// was still dialling after the worker, the tick and the settings poll were
+	// routed through it — found by an end-to-end run, not by a unit test. Same
+	// remedy, same reason: it is handed an endpoint it cannot reach rather than
+	// a flag it might forget to consult. Operational events about a machine
+	// nobody is collecting from have nowhere to go, and spooling them would
+	// grow a queue that can never drain.
+	clientEventsEndpoint := signalClientEventsEndpoint(cfg.Endpoint)
+	if !set.AtlasEnabled() {
+		clientEventsEndpoint = ""
+	}
+	reporter := clientevents.NewReporter(clientEventsEndpoint, tok.Get, installID, emitter.Drain, paths.ClientEventsSpoolDir())
 	go reporter.Run(ctx, flushInterval)
 
 	sampleInterval := 10 * time.Second
@@ -975,7 +1010,9 @@ func Run(ctx context.Context) error {
 			svc.OnSidecarRespawn(func() { repostProjectsAfterRespawn(postProjects, lastProjects) })
 		}
 	}
-	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
+	pollSettingsIfOnline(ctx, set.AtlasEnabled(), func(ctx context.Context) {
+		pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
+	})
 	if enrichmentEnabled {
 		// warmup comes from wireEnrichment, not from warmupFunc(model): it is
 		// the composition of on-demand provisioning with the model load, and
@@ -984,7 +1021,7 @@ func Run(ctx context.Context) error {
 		// 43-45 points of it. OFF by default because such a row joins to nothing at
 		// Atlas yet; see tick.go's envTick for the whole of that reasoning. Started
 		// BEFORE the worker so the observer is in place for the first job.
-		setTickObserver(startTicker(ctx, svc.Tick, pub, actor, emitter))
+		setTickObserver(startTicker(ctx, svc.Tick, windowSender, actor, emitter))
 		// THE SHARED TEXT ENCODER's on-demand provisioner — ONE instance for
 		// both callers that can want it (attribution and the signal-embeddings
 		// path), never two independently fetching the same ~1.2 GB into the
@@ -1036,7 +1073,7 @@ func Run(ctx context.Context) error {
 		// The ledger runs second so a panic in it cannot cost the attribution
 		// job, and its own writes are fire-and-forget — the window onto the
 		// collector must never be able to stop the collector.
-		onBlockPublished = chainOnPublished(onBlockPublished, sig.recordPublished)
+		onBlockPublished = chainOnPublished(onBlockPublished, sig.recordDelivered)
 		// v2's block emitter, and the reason it sits beside the tick rather than
 		// inside it: a block reaches nowhere, so it needs none of the tick's
 		// frontier reasoning about which future prompts might sweep over a
@@ -1044,7 +1081,7 @@ func Run(ctx context.Context) error {
 		// Atlas stores blocks now but nothing reads them yet. Returns nil when
 		// off, which setBlockAdvance takes as "no observer".
 		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks,
-			onBlockPublished))
+			set.AtlasEnabled(), onBlockPublished, sig.recordCut, sig.recordPublishFailed))
 		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
 		// future-work prediction. svc.Features is non-nil ONLY under
 		// ml_backend "deterministic" (see deterministicBackend), so this is
@@ -1054,7 +1091,7 @@ func Run(ctx context.Context) error {
 		// on — which is what lets an org enable it without a restart.
 		setFeatureAdvance(startFeatureEmitter(ctx, svc.Features, cfg.Endpoint, tok.Get,
 			actor, installID, live.FeaturesEnabled, live.FeaturesPublishEnabled, emitter, enc))
-		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
+		go Worker(ctx, q, model, svc, sender, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
@@ -1504,6 +1541,19 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 	// block on that — sidecarService returns before the caller has even started
 	// the supervisor. See versionskew.go.
 	go reportSidecarVersionSkew(ctx, scClient, emitter)
+
+	// The same two questions the skew report asks, published for the page's
+	// health strip. See v3health.go.
+	setSidecarProbe(&sidecarHealthProbe{
+		Healthy: healthFn,
+		Version: func() (string, bool) {
+			r, ok := scClient.Health(ctx)
+			if !ok || r.Version == "" {
+				return "", false
+			}
+			return r.Version, true
+		},
+	})
 
 	return scClient, sup, healthFn, true, nil
 }

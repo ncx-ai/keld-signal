@@ -601,6 +601,28 @@ func (s *Store) Received(k BlockKey, httpStatus int, at time.Time) {
 	})
 }
 
+// NotApplicable marks a stage as structurally impossible rather than failed.
+//
+// ⚠️ **The distinction is the whole point of the page.** With Send to Atlas off
+// nothing is published, and recording that as a FAILURE would fill the page
+// with red on a machine where the user got exactly what they asked for — while
+// recording it as a SUCCESS would be a green tick against something that never
+// happened. Neither is true; "not applicable, because Atlas is off" is, and the
+// page renders it as no column at all rather than a column of anything.
+func (s *Store) NotApplicable(k BlockKey, stage Stage, r Reason, at time.Time) {
+	k, ok := s.sanitizeKey(k)
+	if !ok {
+		return
+	}
+	r = validReason(r)
+	s.tx("NotApplicable", func(txn *sql.Tx) error {
+		if err := ensureRow(txn, k); err != nil {
+			return err
+		}
+		return setCell(txn, k, stage, StatusNA, r, 0, at)
+	})
+}
+
 func (s *Store) Failed(k BlockKey, stage Stage, r Reason, httpStatus int, at time.Time) {
 	k, ok := s.sanitizeKey(k)
 	if !ok {

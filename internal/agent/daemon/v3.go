@@ -36,6 +36,10 @@ type v3 struct {
 	// store treats the first as unknown and the second as an org that has
 	// declared nothing, and those are different answers on the page.
 	remote atomic.Pointer[settings.Remote]
+	// atlasOn is fixed at startup, like the setting it reflects. The ledger
+	// needs it to record sent/received as NOT APPLICABLE rather than as a
+	// success on a machine that deliberately publishes nothing.
+	atlasOn bool
 }
 
 func newV3(set settings.Settings, cl atlas.Client) *v3 {
@@ -47,7 +51,7 @@ func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	// functions so internal/agent/projects depends on neither the ledger nor
 	// the Atlas connector — it is a pure decision layer and must stay one.
 	p.Blocks = ledgerBlocks{l}
-	v := &v3{ledger: l, projects: p}
+	v := &v3{ledger: l, projects: p, atlasOn: cl.Enabled()}
 	p.RemoteProjects = func() []settings.RemoteProject {
 		r := v.remote.Load()
 		if r == nil || r.Projects == nil {

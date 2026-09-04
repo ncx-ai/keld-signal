@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"log"
 	"time"
 
@@ -10,25 +11,26 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/retry"
 )
 
-// recordPublished is the block emitter's OnPublished hook, teaching the ledger
-// what the daemon has always known and never written down: which blocks were
-// cut, what they cost, which project they belong to, and that they were sent.
+// recordCut is the emitter's OnCut hook: every block this sweep BUILT, before
+// any publish is attempted.
 //
-// ⚠️ **It runs AFTER a successful publish, so `sent` is a fact and `received`
-// is the status Atlas answered with.** The emitter only calls this hook when
-// SendBlocks returned no error, which is why there is no failure path here: a
-// batch that failed never reaches this function, and the ledger learns about it
-// from the publisher's own recording instead. Recording a success here and a
-// failure elsewhere would be two writers for one cell.
+// ⚠️ **This is where the ledger learns a block exists, and it deliberately does
+// not wait for a successful publish.** The first version hung everything off
+// OnPublished, which fires only on success — so with Send to Atlas off, or with
+// Atlas simply unreachable, no block ever reached the ledger and the page
+// showed an empty day on a machine that had worked all afternoon. A recorder
+// that only hears about successes cannot report a failure, which is the one
+// thing this page exists to do. Found by running it end to end, not by a test.
 //
 // ⚠️ **It must never be slow and must never panic into the emitter.** This runs
-// on the emitter's sweep goroutine, which is the one that gets blocks to Atlas;
-// a ledger write that blocked it would trade the product for the window onto
-// it. Every ledger write is already fire-and-forget, and the attribution pass
-// below is a pure function over a document the store keeps in memory.
-func (v *v3) recordPublished(rows []publish.BlockEnrichment, _ string) {
+// on the sweep goroutine that gets work to Atlas; a ledger write that blocked
+// it would trade the product for the window onto it. Every ledger write is
+// fire-and-forget and the attribution pass is a pure function over a document
+// the store holds in memory.
+func (v *v3) recordCut(rows []publish.BlockEnrichment, _ string) {
 	if v == nil || v.ledger == nil {
 		return
 	}
@@ -42,10 +44,91 @@ func (v *v3) recordPublished(rows []publish.BlockEnrichment, _ string) {
 		}
 		v.ledger.Cut(k, end, r.StartReason, r.EndReason, r.Source.ID, now)
 		v.ledger.Observe(k, dimsOf(r.Workstreams), now)
-		v.ledger.Measure(k, measuredOf(r), now)
+		// ⚠️ **NO FIGURE IS NOT A FIGURE OF ZERO.** A sidecar older than SCHEMA
+		// 18 sends no token counts, and writing zeros for those blocks would put
+		// "0 tokens · $0.00 est." on a page describing an afternoon of work —
+		// a confident number over evidence nobody has, which is the exact
+		// failure this ledger exists to prevent. Measured therefore stays
+		// UNKNOWN, stated as such, and the page renders a dash.
+		if m, known := measuredOf(r); known {
+			v.ledger.Measure(k, m, now)
+		} else {
+			v.ledger.NotApplicable(k, ledger.StageMeasured, ledger.ReasonNoTokens, now)
+		}
 		v.attributeAndRecord(k, r, now)
-		v.ledger.Sent(k, now)
 	}
+}
+
+// recordDelivered is the OnPublished hook: the batch reached Atlas.
+//
+// `received` is written from the same fact `sent` is, because the emitter only
+// calls this after SendBlocks returned no error — and SendBlocks now confirms
+// delivery from the RESPONSE, rejecting a captive portal's 2xx (see
+// publish.SendBlocksResult). With Send to Atlas off both cells are recorded as
+// NOT APPLICABLE rather than as success: nothing was sent, and a green tick
+// against a machine that published nothing is the confident lie this whole
+// build exists to remove.
+func (v *v3) recordDelivered(rows []publish.BlockEnrichment, _ string) {
+	if v == nil || v.ledger == nil {
+		return
+	}
+	now := time.Now().UTC()
+	for _, r := range rows {
+		start, ok := epochOf(r.Window.Start)
+		if !ok || r.SessionID == "" {
+			continue
+		}
+		k := ledger.BlockKey{Session: r.SessionID, Start: start}
+		if !v.atlasOn {
+			v.ledger.NotApplicable(k, ledger.StageSent, ledger.ReasonAtlasOff, now)
+			v.ledger.NotApplicable(k, ledger.StageReceived, ledger.ReasonAtlasOff, now)
+			continue
+		}
+		v.ledger.Sent(k, now)
+		v.ledger.Received(k, 200, now)
+	}
+}
+
+// recordPublishFailed is the OnPublishFailed hook: the batch did not land, and
+// the reason a person reads on the page is the reason the transport gave.
+func (v *v3) recordPublishFailed(rows []publish.BlockEnrichment, err error) {
+	if v == nil || v.ledger == nil {
+		return
+	}
+	now := time.Now().UTC()
+	reason, status := classifyPublishError(err)
+	for _, r := range rows {
+		start, ok := epochOf(r.Window.Start)
+		if !ok || r.SessionID == "" {
+			continue
+		}
+		v.ledger.Failed(ledger.BlockKey{Session: r.SessionID, Start: start},
+			ledger.StageSent, reason, status, now)
+	}
+}
+
+// classifyPublishError turns a transport error into the closed reason the page
+// renders as a sentence. The four cases are the ones a person can act on
+// differently: re-pair, wait, report, or check the network they are on.
+func classifyPublishError(err error) (ledger.Reason, int) {
+	if err == nil {
+		return ledger.ReasonNone, 0
+	}
+	if errors.Is(err, publish.ErrIntercepted) {
+		return ledger.ReasonCaptivePortal, 0
+	}
+	var se *retry.StatusError
+	if errors.As(err, &se) {
+		switch {
+		case se.Code == 401 || se.Code == 403:
+			return ledger.ReasonAtlasRejected, se.Code
+		case se.Code >= 500:
+			return ledger.ReasonAtlasUnavailable, se.Code
+		default:
+			return ledger.ReasonAtlasRefused, se.Code
+		}
+	}
+	return ledger.ReasonAtlasUnavailable, 0
 }
 
 // epochOf parses the RFC3339 instant a block's span is spelled in on the wire.
@@ -93,17 +176,22 @@ func dimsOf(ws map[string]enrich.Labeled) ledger.Dims {
 // is an estimate in the strict sense — the client does not know the org's
 // negotiated rates — and every surface says "est." for that reason. An unknown
 // model produces no estimate at all rather than zero; see internal/agent/pricing.
-func measuredOf(r publish.BlockEnrichment) ledger.Measured {
-	m := ledger.Measured{Model: dominantModel(r.Workstreams)}
+func measuredOf(r publish.BlockEnrichment) (ledger.Measured, bool) {
+	if r.Tokens == nil {
+		// The second return is what keeps "this sidecar does not report spend"
+		// distinguishable from "this block cost nothing".
+		return ledger.Measured{}, false
+	}
+	m := ledger.Measured{
+		Model:               dominantModel(r.Workstreams),
+		InputTokens:         r.Tokens.Input,
+		OutputTokens:        r.Tokens.Output,
+		CacheReadTokens:     r.Tokens.CacheRead,
+		CacheCreationTokens: r.Tokens.CacheCreation,
+		RequestTokens:       r.Tokens.Request,
+	}
 	if r.Requests != nil {
 		m.Requests = *r.Requests
-	}
-	if r.Tokens != nil {
-		m.InputTokens = r.Tokens.Input
-		m.OutputTokens = r.Tokens.Output
-		m.CacheReadTokens = r.Tokens.CacheRead
-		m.CacheCreationTokens = r.Tokens.CacheCreation
-		m.RequestTokens = r.Tokens.Request
 	}
 	if usd, ok := pricing.Estimate(m.Model, pricing.Tokens{
 		Input:         m.InputTokens,
@@ -113,7 +201,7 @@ func measuredOf(r publish.BlockEnrichment) ledger.Measured {
 	}); ok {
 		m.EstimateUSD = usd
 	}
-	return m
+	return m, true
 }
 
 func dominantModel(ws map[string]enrich.Labeled) string {

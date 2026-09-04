@@ -164,6 +164,15 @@ type Emitter struct {
 	// advance for later chunks; attrib.Attributor.Schedule is built to return
 	// immediately for exactly that reason.
 	OnPublished func(rows []publish.BlockEnrichment, path string)
+	// OnCut, when non-nil, is called with every block this sweep BUILT, before
+	// the publish is attempted — so a recorder learns that a block exists
+	// whether or not it reaches Atlas. See the call site for why OnPublished
+	// alone was not enough.
+	OnCut func(rows []publish.BlockEnrichment, path string)
+	// OnPublishFailed, when non-nil, is called with the batch that did not
+	// land and the error that stopped it, so the reason a person reads on the
+	// page is the reason the transport actually gave.
+	OnPublishFailed func(rows []publish.BlockEnrichment, err error)
 
 	// routeGone latches the "this sidecar has no /blocks route" log to ONE line
 	// per daemon run. The sweep runs every interval against every active
@@ -446,8 +455,20 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 		for _, b := range chunk {
 			rows = append(rows, publish.BuildBlock(b, e.actor, now))
 		}
+		// ⚠️ **FIRED BEFORE THE SEND, FOR EVERY BLOCK BUILT.** OnPublished fires
+		// only on success, which made a block whose publish FAILED invisible to
+		// anything downstream — including the delivery ledger, whose entire job
+		// is to say "this block was cut and did not reach Atlas". A recorder
+		// that only hears about successes cannot report a failure, and a page
+		// built on it would show a short day rather than a broken one.
+		if e.OnCut != nil {
+			e.OnCut(rows, tgt.Path)
+		}
 		if err := e.pub.SendBlocks(rows); err != nil {
 			log.Printf("keld-agent: block publish failed for %s: %v", tgt.Session, err)
+			if e.OnPublishFailed != nil {
+				e.OnPublishFailed(rows, err)
+			}
 			// Stop here. Everything before this chunk is banked by the advances
 			// below; everything from this chunk on is re-fetched next interval.
 			return sent
