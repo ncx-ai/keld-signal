@@ -565,123 +565,65 @@ def test_a_message_is_encoded_once_and_reused_by_every_shell_containing_it():
     assert len(enc.seen) == 1
 
 
-# ---- the dtype decision -------------------------------------------------------------------------
+# ---- the dtype ----------------------------------------------------------------------------------
 #
-# The one branch in this module whose WRONG answer is silent: both arms load, both produce
-# vectors, and the only symptom of picking bf16 on a host without hardware kernels is that every
-# encode is ~5x slower until the attribution heartbeat kills it. Measured on an M1 Pro, one
-# 8 x 512-token batch: bf16 25.3 s / 1808 MB peak against fp32 4.9 s / 1987 MB peak. Nothing
-# below needs torch, weights or a child — the decision is a pure function of what a host answers.
-
-class FakeTorch:
-    """Just the two capability questions `_default_dtype_name` asks, and nothing else.
-
-    `raises` makes either question throw, which is the case the real fallback exists for: a torch
-    build without `backends.cpu`, or one whose oneDNN probe fails. A stub that could only answer
-    would leave that arm untested."""
-
-    def __init__(self, mkldnn=True, capability="AVX512", raises=False):
-        outer = self
-
-        class _mkldnn:
-            @staticmethod
-            def is_available():
-                if outer.raises:
-                    raise RuntimeError("no oneDNN in this build")
-                return outer.mkldnn
-
-        class _cpu:
-            @staticmethod
-            def get_cpu_capability():
-                if outer.raises:
-                    raise AttributeError("no such backend")
-                return outer.capability
-
-        class _backends:
-            mkldnn = _mkldnn
-            cpu = _cpu
-
-        self.mkldnn, self.capability, self.raises = mkldnn, capability, raises
-        self.backends = _backends
-
+# One arm ships (`DTYPE_DEFAULT`), so what is left to test is the override and the reporting —
+# there is no host question any more. The capability-probe tests that were here went with the
+# probe: torch exposes no AVX512-BF16 signal, so the branch they covered was inferring a fast
+# path from the widest compiled ISA, which does not imply it.
 
 def _no_dtype_override():
     os.environ.pop("KELD_TEXTEMBED_DTYPE", None)
 
 
-def test_bf16_is_chosen_only_where_the_hardware_carries_it():
-    """The positive case, and the only one that selects bf16: oneDNN present AND a torch build
-    compiled for an ISA that has the kernels."""
+def test_fp32_is_the_default_and_no_host_is_asked():
+    """The measured arm, unconditionally. bf16 was 5x slower on the one host anyone has measured
+    (25.3 s against 4.9 s for an 8 x 512-token batch) and the memory it saved was 179 MB, not the
+    1313 MB it was chosen for."""
     _no_dtype_override()
-    for cap in ("AVX512", "AMX"):
-        assert te._default_dtype_name(FakeTorch(capability=cap)) == "bfloat16", cap
+    assert te.DTYPE_DEFAULT == "float32"
+    assert te._resolve_dtype_name() == "float32"
 
 
-def test_fp32_is_chosen_when_onednn_is_absent_however_wide_the_isa():
-    """oneDNN is what CARRIES the bf16 kernels, so its absence settles the question on its own —
-    an AVX512 host without it still emulates. This is the Apple Silicon case: `mkldnn.is_available()`
-    is False and `get_cpu_capability()` is "DEFAULT" on the M1 Pro this was measured on."""
-    _no_dtype_override()
-    assert te._default_dtype_name(FakeTorch(mkldnn=False, capability="AVX512")) == "float32"
-    assert te._default_dtype_name(FakeTorch(mkldnn=False, capability="DEFAULT")) == "float32"
-
-
-def test_fp32_is_chosen_below_avx512():
-    """AVX2 and the generic build are the pre-2020 x86 laptops. They were the reason this is not
-    keyed on GOARCH: they are x86 and they do not have the kernels."""
-    _no_dtype_override()
-    for cap in ("AVX2", "DEFAULT", "NO AVX", "VSX"):
-        assert te._default_dtype_name(FakeTorch(capability=cap)) == "float32", cap
-
-
-def test_a_torch_that_cannot_answer_gets_the_safe_arm():
-    """An unanswerable capability is an absent one. The alternative — letting the exception out —
-    would turn a missing torch attribute into a child that fails to spawn at all."""
-    _no_dtype_override()
-    assert te._default_dtype_name(FakeTorch(raises=True)) == "float32"
-
-
-def test_the_env_override_wins_in_both_directions():
-    """The whole point of keeping the variable: either arm must be re-measurable on a host whose
-    capability answer someone doubts. So it overrides a "no" AND a "yes"."""
+def test_the_env_override_wins():
+    """The only lever, and the whole reason it survives: either arm has to be re-measurable on a
+    host without editing the source. bf16 is still reachable — it is not deleted, just not
+    guessed at."""
     try:
         os.environ["KELD_TEXTEMBED_DTYPE"] = "bfloat16"
-        assert te._resolve_dtype_name(FakeTorch(mkldnn=False)) == "bfloat16"
-        os.environ["KELD_TEXTEMBED_DTYPE"] = "float32"
-        assert te._resolve_dtype_name(FakeTorch(capability="AMX")) == "float32"
+        assert te._resolve_dtype_name() == "bfloat16"
     finally:
         _no_dtype_override()
+    assert te._resolve_dtype_name() == "float32"
 
 
-def test_without_the_override_the_host_decides():
-    """Absent and empty both mean "ask the host" — an exported-but-empty variable is a shell
-    accident, not a request for a dtype named "" that `getattr` would then miss."""
-    _no_dtype_override()
-    assert te._resolve_dtype_name(FakeTorch(capability="AMX")) == "bfloat16"
+def test_an_empty_override_means_absent():
+    """An exported-but-empty variable is a shell accident, not a request for a dtype named "",
+    which `_load`'s getattr would then miss and silently resolve to fp32 anyway — correct outcome,
+    but arrived at by accident and reported to /metrics as an empty string."""
     try:
         os.environ["KELD_TEXTEMBED_DTYPE"] = ""
-        assert te._resolve_dtype_name(FakeTorch(capability="AMX")) == "bfloat16"
+        assert te._resolve_dtype_name() == "float32"
     finally:
         _no_dtype_override()
 
 
 def test_an_unknown_dtype_name_is_carried_not_corrected():
-    """A typo reaches `_load`, whose `getattr(torch, name, torch.float32)` lands it on the safe
+    """A typo reaches `_load`, whose `getattr(torch, name, torch.float32)` lands it on the shipped
     arm — and the unrecognised NAME still travels to `/metrics`, so the typo is visible instead of
-    looking like a deliberate fp32."""
+    looking like a deliberate float32."""
     try:
         os.environ["KELD_TEXTEMBED_DTYPE"] = "bfloat" + "16 "     # trailing space, a real typo
-        assert te._resolve_dtype_name(FakeTorch()) == "bfloat16 "
+        assert te._resolve_dtype_name() == "bfloat16 "
     finally:
         _no_dtype_override()
 
 
 def test_the_parent_records_the_dtype_the_child_reports_and_keeps_it_across_a_kill():
-    """`Encoder.dtype` is the CHILD's answer, because the parent must never import torch to
-    re-derive it. Held across `_kill` deliberately: the moment anyone wants to know which arm a
-    host picked is when the child is down and they are asking why it was slow."""
+    """`Encoder.dtype` is the CHILD's report of what it actually built the model with, not a
+    re-reading of the environment here. Held across `_kill` deliberately: the moment anyone wants
+    to know which arm a host ran is when the child is down and they are asking why it was slow."""
     _on()
-    spawned = []
 
     class _Proc:
         def __init__(self):
@@ -707,7 +649,6 @@ def test_the_parent_records_the_dtype_the_child_reports_and_keeps_it_across_a_ki
             return self.msg
 
     def spawn(spec):
-        spawned.append(spec)
         return _Proc(), _Q(), _Q({"ready": True, "dtype": "float32"})
 
     enc = te.Encoder(spawn_fn=spawn, rss_fn=lambda _: 0.0, weights="/nowhere")
@@ -715,7 +656,7 @@ def test_the_parent_records_the_dtype_the_child_reports_and_keeps_it_across_a_ki
     assert enc.warm() is True
     assert enc.dtype == "float32"
     enc._kill()
-    assert enc.dtype == "float32", "a dtype describes the host, not the dead process"
+    assert enc.dtype == "float32", "a dtype describes what ran, not the dead process"
 
 
 if __name__ == "__main__":

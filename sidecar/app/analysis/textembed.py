@@ -427,54 +427,42 @@ def project(v, matrix=None):
 
 # ---- the encoder child --------------------------------------------------------------------------
 
-def _default_dtype_name(torch):
-    """`"bfloat16"` only on a host with hardware bf16 kernels; `"float32"` everywhere else.
+DTYPE_DEFAULT = "float32"
 
-    ⚠️ **fp32 IS THE DEFAULT BECAUSE THE TWO WAYS OF BEING WRONG DO NOT COST THE SAME.**
-    Guessing fp32 on a host that had fast bf16 costs ~180 MB of peak RSS, inside a budget that
-    already holds it. Guessing bf16 on a host without the kernels costs 5x latency (measured in
-    `_load`) and turns every block encode into a heartbeat kill. An asymmetric penalty gets an
-    asymmetric default, so bf16 has to be EARNED by a positive capability signal rather than
-    assumed from the absence of a negative one.
-
-    ⚠️ **NOT KEYED ON ARCHITECTURE, though ARM is where this was found.** `GOARCH` would fix
-    Apple Silicon and leave every pre-AVX512 x86 laptop on the emulated path — and Intel dropped
-    AVX512 from its consumer parts at the 12th generation, so "x86" and "has bf16 kernels" are
-    not the same set and are drifting apart. The capability is the thing to ask about, and torch
-    will answer: oneDNN is what carries the bf16 kernels, and `get_cpu_capability()` names the
-    widest ISA that build was compiled for.
-
-    ⚠️ **`AVX512` HERE IS A PROXY, AND A LOOSER ONE THAN IT LOOKS.** `get_cpu_capability()`
-    does not report AVX512-BF16 specifically, so an AVX512 host without the bf16 extension still
-    selects bf16 and still emulates. It is the strongest signal torch exposes without probing,
-    and it is deliberately the narrow end of the guess: it keeps the fp32 default for ARM and for
-    everything below AVX512, which is most of a laptop fleet. **Unverified on x86** — the numbers
-    in `_load`'s second table come from one ARM host, and the bf16 arm of this branch is still
-    resting on the original 20-core measurement. One run of `scripts/block_benchmark.py` on an
-    AVX512-BF16 box settles whether bf16 keeps earning its 180 MB there.
-
-    Any failure to answer reads as "no fast path": a torch that raises on either of these is not
-    one to hand a bf16 model to.
-    """
-    try:
-        if not torch.backends.mkldnn.is_available():
-            return "float32"
-        return "bfloat16" if torch.backends.cpu.get_cpu_capability() in ("AVX512", "AMX") \
-            else "float32"
-    except Exception:          # noqa: BLE001 — an unanswerable capability is an absent one
-        return "float32"
+# ⚠️ **ONE DTYPE, AND THE HOST IS NOT ASKED.** This briefly selected bf16 behind a capability
+# probe (oneDNN present, an AVX512-class torch build) and that probe was deleted on purpose, not
+# for being wrong but for being unverifiable: torch exposes NO AVX512-BF16 signal at all — public
+# or private — so the widest ISA a build was compiled for was standing in for a sub-extension it
+# does not imply. Every AVX512 CPU without BF16 (Skylake-SP, Cascade Lake, Ice Lake-SP, Rocket
+# Lake — common server parts) would have been told it had a fast path it does not have.
+#
+# So the arm that ships is the one that was measured. M1 Pro, 5 threads, one 8 x 512-token batch:
+#
+#     bfloat16  25.3 s,  482 MB after load, 1808 MB peak
+#     float32    4.9 s,  801 MB after load, 1987 MB peak
+#
+# fp32 is 5x faster for 179 MB of peak, and the child has no RSS ceiling to breach (`observe_rss`
+# samples and never kills), so the cost is footprint on an oversubscribed budget rather than a
+# limit. The old default was bf16 UNCONDITIONALLY, so this can only move a host onto the faster
+# arm — no host goes the other way, and no machine that was fine becomes slow.
+#
+# ⚠️ **WHAT IS NOT CLAIMED: that fp32 wins everywhere.** It wins on every host without hardware
+# bf16 kernels, which is one host measured and an argument about the rest. bf16 may well still
+# earn its memory on a Sapphire Rapids or a Zen 4, and the way to find out is to MEASURE on the
+# machine rather than infer from its model number: one small batch each way at first spawn, keep
+# the winner, cache it. That is the optimisation this constant is holding the place for, and it
+# needs a calibration seam that does not exist yet — which is why the guess was not left in the
+# meantime. `KELD_TEXTEMBED_DTYPE` is how either arm gets re-measured on any host today.
 
 
-def _resolve_dtype_name(torch):
-    """The dtype this child will load: `KELD_TEXTEMBED_DTYPE` if set, else the host's answer.
+def _resolve_dtype_name():
+    """The dtype this child will load: `KELD_TEXTEMBED_DTYPE` if set, else `DTYPE_DEFAULT`.
 
-    One function rather than an inline `or` so the PRECEDENCE is testable without weights, a
-    child, or torch. It is the half of this decision an operator actually touches: the capability
-    guess is what ships, and the variable is how anyone re-measures either arm on a host whose
-    answer they doubt (`_load`'s tables are both single-host numbers). An unknown value is left to
-    `_load`'s `getattr` fallback rather than validated here — a typo lands on fp32, which is the
-    safe arm, and the name still reaches `/metrics` so the typo is visible rather than silent."""
-    return os.environ.get("KELD_TEXTEMBED_DTYPE") or _default_dtype_name(torch)
+    A function rather than an inline `or` so the PRECEDENCE is testable without weights, a child
+    or torch. An unknown value is left to `_load`'s `getattr` fallback rather than validated here
+    — a typo lands on fp32, the measured arm, and the unrecognised name still reaches `/metrics`
+    so the typo is visible instead of looking like a deliberate choice."""
+    return os.environ.get("KELD_TEXTEMBED_DTYPE") or DTYPE_DEFAULT
 
 
 def _load(spec):
@@ -516,27 +504,18 @@ def _load(spec):
     bf16 rather than fp16 because this runs on CPU: torch's CPU kernels cover bfloat16, and fp16
     on CPU is emulated where it exists at all.
 
-    ⚠️ **AND "torch's CPU kernels cover bfloat16" IS TRUE ONLY WHERE THE HARDWARE DOES.**
-    Every number above was measured on one 20-core x86 host, which is the CPU class that HAS bf16
-    kernels (AVX512-BF16 / AMX, reached through oneDNN). Where those are absent torch upconverts,
-    and the cost is not marginal. Measured on an M1 Pro, 5 threads, the same 8 x 512-token batch:
-
-        bfloat16  25.3 s,  482 MB after load, 1808 MB peak
-        float32    4.9 s,  801 MB after load, 1987 MB peak
-
-    **5x slower for 179 MB saved** — an inversion of the trade the table above describes, and the
-    reason a whole-block encode was blowing through the attribution heartbeat (see
-    `analysis/attribqueue.py`) on a machine that was working the entire time. The 1313 MB that
-    justified bf16 does not replicate here either: fp32 loads at 801 MB on ARM, not 3113 MB.
-
-    So the dtype is CHOSEN, not fixed — see `_default_dtype_name`. `KELD_TEXTEMBED_DTYPE` still
-    wins outright, which is what makes either arm re-measurable on any host."""
+    ⚠️ **AND "torch's CPU kernels cover bfloat16" IS TRUE ONLY WHERE THE HARDWARE DOES.** Every
+    number above came off one 20-core x86 host, which is the CPU class that HAS those kernels;
+    where they are absent torch upconverts and the whole trade inverts. Re-measured on an M1 Pro,
+    bf16 was 5x SLOWER and saved 179 MB rather than 1313 MB, which is what took the attribution
+    heartbeat out on a machine that was working the entire time. `DTYPE_DEFAULT` carries those
+    numbers and the reason fp32 now ships unconditionally; `KELD_TEXTEMBED_DTYPE` overrides it."""
     import torch
     from transformers import AutoModel, AutoTokenizer
 
     torch.set_num_threads(int(spec.get("threads") or 2))
     d = spec["dir"]
-    name = _resolve_dtype_name(torch)
+    name = _resolve_dtype_name()
     dtype = getattr(torch, name, torch.float32)
     tok = AutoTokenizer.from_pretrained(d, padding_side="left")
     model = AutoModel.from_pretrained(d, dtype=dtype)
@@ -653,9 +632,10 @@ class Encoder:
         self._proc = self._req = self._resp = None
         self.state = DOWN
         self.status = STATUS_OK
-        # The dtype the CURRENT (or most recent) child reported loading — the child's own answer,
-        # never re-derived here, because `_default_dtype_name` needs torch and the parent must not
-        # import it. `None` until a child has come up at least once.
+        # The dtype the CURRENT (or most recent) child reported loading — the child's own answer
+        # rather than a re-reading of `_resolve_dtype_name` here, so what `/metrics` states is
+        # what a model was actually built with and not what the environment said a moment ago.
+        # `None` until a child has come up at least once.
         #
         # ⚠️ **NOT RESET ON `_kill`, unlike `_peak_rss`.** A peak describes one process and is
         # meaningless carried across a generation; a dtype describes the HOST, and the moment an
