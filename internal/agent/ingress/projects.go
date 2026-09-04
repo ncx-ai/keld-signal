@@ -206,9 +206,20 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 		suggestions = projects.Suggest(unattributed)
 	}
 
+	// ⚠️ **THE ORG'S VALUES ARE PROJECTS ON THIS PAGE, NOT ONLY CANDIDATES.**
+	// This used to return d.Projects — the LOCAL document — while attributing
+	// against candidatesFor(), which merges the org's pooled workstream values
+	// from the settings poll. So a machine paired with an org that had declared
+	// eight projects showed "Your projects: none" while silently attributing
+	// blocks to them. Found by the D8 end-to-end against the real dev Atlas:
+	// projects=0 with eight values on the wire. The page's "Your projects · from
+	// Atlas" section exists to show exactly these, so they are returned, and the
+	// buckets they belong to (their `team`, which carries the workstream's name
+	// on the wire) are added to `workstreams` when the local document does not
+	// already name them.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"workstreams": workstreams,
-		"projects":    projectViews(d.Projects, observed),
+		"workstreams": withRemoteBuckets(workstreams, candidates, off),
+		"projects":    projectViews(candidates, observed),
 		"suggestions": suggestions,
 		"coverage": map[string]any{
 			"attributed": attributed,
@@ -427,4 +438,38 @@ func handleWorkstreamOff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, localOnly(nil))
+}
+
+// withRemoteBuckets appends a workstream entry for every bucket the org's
+// values belong to that the local document does not already declare, so the
+// page can group "Your projects · from Atlas" under the org's own names. A
+// remote project's bucket is its Team when its Workstream is empty — that is
+// where wire_projects puts the workstream's name (docs/v3/contracts.md).
+func withRemoteBuckets(local []projects.Workstream, candidates []projects.Project, off func(string) bool) []projects.Workstream {
+	seen := map[string]bool{}
+	for _, ws := range local {
+		seen[strings.ToLower(ws.Key)] = true
+		seen[strings.ToLower(ws.Name)] = true
+	}
+	out := append([]projects.Workstream(nil), local...)
+	for _, p := range candidates {
+		if p.Origin != projects.OriginAtlas {
+			continue
+		}
+		name := p.Workstream
+		if name == "" {
+			name = p.Team
+		}
+		if name == "" || seen[strings.ToLower(name)] {
+			continue
+		}
+		seen[strings.ToLower(name)] = true
+		out = append(out, projects.Workstream{
+			Key:    strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", "-")),
+			Name:   name,
+			Origin: "atlas",
+			Off:    off(name),
+		})
+	}
+	return out
 }
