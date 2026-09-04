@@ -7,6 +7,60 @@ semantic-ish versioning during `0.x`.
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-09-04
+
+### Fixed
+- **The text encoder loaded in bfloat16 on every host, and on a CPU without
+  hardware bf16 kernels that made it 5x slower — slow enough that the attribution
+  heartbeat killed whole-block encodes that were working the entire time.**
+  bf16 was chosen on measurement, on one 20-core x86 host, where it came out
+  1313 MB cheaper and marginally faster. That host is the CPU class that HAS the
+  kernels (AVX512-BF16 / AMX, reached through oneDNN); where they are absent torch
+  upconverts, and both halves of the trade invert. Re-measured on an M1 Pro,
+  5 threads, one 8 x 512-token batch:
+
+      bfloat16  25.3 s,  482 MB after load, 1808 MB peak
+      float32    4.9 s,  801 MB after load, 1987 MB peak
+
+  **5x faster for 179 MB of peak** — and the 1313 MB never appears, because fp32
+  loads at 801 MB here rather than 3113 MB. The encoder child has no RSS ceiling
+  (`observe_rss` samples and never kills), so the cost is footprint on a budget
+  AGENTS.md already calls oversubscribed, not a limit to breach.
+  On device the symptom was blocks retired after four attempts with
+  `spool/attrib/bad/` filling up, and a queue reporting `heartbeat_kills` climbing
+  against an encoder that was mid-batch. A single-batch encode gets ONE liveness
+  beat, at the end, so any batch slower than the 60 s window is indistinguishable
+  from a hung child.
+  ⚠️ **No host moves onto a slower arm.** The old default was bf16
+  unconditionally, so this can only move a machine onto the faster path — nothing
+  that was fine becomes slow. `KELD_TEXTEMBED_DTYPE` overrides in either
+  direction.
+  ⚠️ **THERE IS DELIBERATELY NO CAPABILITY PROBE.** One was written and deleted,
+  not for being wrong but for being unverifiable: torch exposes no AVX512-BF16
+  signal at all — public or private — so the widest ISA a build was compiled for
+  was standing in for a sub-extension it does not imply. Every AVX512 part without
+  BF16 (Skylake-SP, Cascade Lake, Ice Lake-SP, Rocket Lake — common server
+  silicon) would have been told it had a fast path it does not have. It also
+  tested for an `"AMX"` capability that function never returns.
+  ⚠️ **What is NOT claimed is that fp32 wins everywhere.** It wins on every host
+  without hardware bf16 kernels, which is one host measured and an argument about
+  the rest. bf16 may still earn its memory on a Sapphire Rapids or a Zen 4, and
+  the way to settle that is to MEASURE on the machine rather than infer from its
+  model number — one small batch each way at first spawn, cache the winner.
+  `DTYPE_DEFAULT`'s comment holds the place for it.
+
+### Added
+- **`/metrics` states which dtype the encoder actually ran with**, in the `embed`
+  block, whether or not a child is up — plus one line per spawn in the daemon log
+  (`text encoder loaded: dtype=… threads=…`). The child reports what it built the
+  model with across the ready handshake rather than the parent re-deriving it,
+  because importing torch in the parent is what that module exists to avoid.
+  It sits BESIDE `encoder`, not inside it: `encoder_ref` is the poolability
+  identity, and a dtype in there would read as "two corpora under different values
+  cannot be pooled". Measured, they can — the same three chunks encode to cosine
+  0.99983-0.99990 across bf16 and fp32 at both 1024 and the published 256, against
+  an attribution `MARGIN` of 0.08.
+
 ## [2.4.0] — 2026-09-04
 
 ### Fixed
