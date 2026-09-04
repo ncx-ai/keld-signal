@@ -130,13 +130,25 @@ def test_epoch_and_end_are_mutually_exclusive():
         raise AssertionError("generate() accepted both epoch= and end=")
 
 
+def _run_cli(root, *extra_args):
+    """Invoke the CLI with `--out`/`--workspaces` both nested inside `root` (a caller-owned
+    `tempfile.TemporaryDirectory()`), so a test never leaks a real git-checkout tree to the CLI's
+    own default `--workspaces` location BESIDE `--out` — i.e. outside whatever the test itself is
+    cleaning up. Returns `(out_dir, workspaces_dir, completed_process)`."""
+    out_dir = os.path.join(root, "out")
+    workspaces_dir = os.path.join(root, "workspaces")
+    result = subprocess.run(
+        [sys.executable, os.path.join(os.path.dirname(__file__), "blockgen.py"),
+        "--out", out_dir, "--workspaces", workspaces_dir, *extra_args],
+        capture_output=True, text=True)
+    return out_dir, workspaces_dir, result
+
+
 def test_cli_default_end_lands_near_today():
-    with tempfile.TemporaryDirectory() as d:
-        subprocess.run(
-            [sys.executable, os.path.join(os.path.dirname(__file__), "blockgen.py"),
-            "--out", d, "--sessions", "2", "--days", "1", "--seed", "1"],
-            check=True, capture_output=True, text=True)
-        manifest = json.load(open(os.path.join(d, "manifest.json")))
+    with tempfile.TemporaryDirectory() as root:
+        out_dir, _ws, result = _run_cli(root, "--sessions", "2", "--days", "1", "--seed", "1")
+        assert result.returncode == 0, result.stderr
+        manifest = json.load(open(os.path.join(out_dir, "manifest.json")))
         assert manifest["anchor"]["mode"] == "end"
         end_ts = datetime.fromisoformat(
             manifest["anchor"]["end"].replace("Z", "+00:00")).timestamp()
@@ -145,24 +157,39 @@ def test_cli_default_end_lands_near_today():
 
 
 def test_cli_epoch_flag_pins_the_old_fixed_base():
-    with tempfile.TemporaryDirectory() as d:
-        subprocess.run(
-            [sys.executable, os.path.join(os.path.dirname(__file__), "blockgen.py"),
-            "--out", d, "--sessions", "2", "--days", "1", "--seed", "1",
-            "--epoch", TEST_EPOCH],
-            check=True, capture_output=True, text=True)
-        manifest = json.load(open(os.path.join(d, "manifest.json")))
+    with tempfile.TemporaryDirectory() as root:
+        out_dir, _ws, result = _run_cli(root, "--sessions", "2", "--days", "1", "--seed", "1",
+                                        "--epoch", TEST_EPOCH)
+        assert result.returncode == 0, result.stderr
+        manifest = json.load(open(os.path.join(out_dir, "manifest.json")))
         assert manifest["anchor"] == {"mode": "epoch", "epoch": "2025-11-03T09:00:00.000Z"}
 
 
 def test_cli_rejects_epoch_and_end_together():
-    with tempfile.TemporaryDirectory() as d:
-        result = subprocess.run(
-            [sys.executable, os.path.join(os.path.dirname(__file__), "blockgen.py"),
-            "--out", d, "--sessions", "1", "--days", "1",
-            "--epoch", TEST_EPOCH, "--end", "now"],
-            capture_output=True, text=True)
+    with tempfile.TemporaryDirectory() as root:
+        _out, _ws, result = _run_cli(root, "--sessions", "1", "--days", "1",
+                                     "--epoch", TEST_EPOCH, "--end", "now")
         assert result.returncode != 0
+
+
+def test_cli_workspaces_flag_materialises_real_checkouts():
+    """The CLI plumbing for the coordinator's D1 fix: `--workspaces` actually reaches
+    `materialize_workspaces`, and every generated session's `cwd` points inside it rather than at
+    the CLI's own default location."""
+    with tempfile.TemporaryDirectory() as root:
+        out_dir, workspaces_dir, result = _run_cli(
+            root, "--sessions", "2", "--days", "1", "--seed", "1", "--epoch", TEST_EPOCH)
+        assert result.returncode == 0, result.stderr
+        manifest = json.load(open(os.path.join(out_dir, "manifest.json")))
+        for session in manifest["session_list"]:
+            assert session["cwd"].startswith(workspaces_dir + os.sep), (
+                f"cwd {session['cwd']} does not point inside --workspaces {workspaces_dir}")
+            git_config = os.path.join(session["cwd"], ".git", "config")
+            assert os.path.isfile(git_config), f"no real .git/config at {session['cwd']}"
+            with open(git_config) as f:
+                config_text = f.read()
+            assert f'url = https://{session["repo_remote"]}.git' in config_text, (
+                f"{git_config} does not carry the intended remote {session['repo_remote']!r}")
 
 
 # ------------------------------------------------------------------------------- branch/ticket
@@ -297,6 +324,32 @@ def test_workspace_evidence_is_planted():
         assert saw_remote_command, f"{session['session_id']}: no remote URL planted"
 
 
+def test_materialize_workspaces_writes_a_real_resolvable_checkout():
+    """Contract (coordinator's D1 gap): a materialised repository must be a REAL git checkout,
+    not merely a directory containing files that look like one. Confirms it end to end using
+    real `git` itself — the same tool any daemon-side reader could reasonably shell out to —
+    rather than re-parsing `.git/config` by hand a second time here."""
+    profile = blockgen.load_profile(None)
+    with tempfile.TemporaryDirectory() as workspaces_dir:
+        root = blockgen.materialize_workspaces(workspaces_dir, profile)
+        for repo in profile["repositories"]:
+            checkout = os.path.join(root, repo["workspace"])
+            assert os.path.isdir(os.path.join(checkout, ".git"))
+            marker = blockgen.PRIMARY_MARKER.get(repo["language"], "README.md")
+            assert os.path.exists(os.path.join(checkout, marker)), (
+                f"{checkout}: no {marker} package marker")
+            origin_url = blockgen.read_origin_url(checkout)
+            assert origin_url == f"https://{repo['remote']}.git", (
+                f"{checkout}: origin is {origin_url!r}, wanted the profile's own remote")
+            assert blockgen.normalise_remote(origin_url) == repo["remote"]
+
+        # Idempotent: materialising twice into the same directory must not fail or drift.
+        root2 = blockgen.materialize_workspaces(workspaces_dir, profile)
+        assert root2 == root
+        again = blockgen.read_origin_url(os.path.join(root, profile["repositories"][0]["workspace"]))
+        assert again == f"https://{profile['repositories'][0]['remote']}.git"
+
+
 def test_output_layout_matches_sanitised_cwd_convention():
     _m, files = _gen(seed=8, sessions=5)
     for session in _m["session_list"]:
@@ -401,17 +454,15 @@ def test_session_duration_within_contract_bounds():
         assert total <= 4.6 * 3600, f"session far exceeds 4.5h bound: {total/3600:.2f}h"
 
 
-def test_cli_smoke_produces_expected_layout(tmp_path=None):
-    with tempfile.TemporaryDirectory() as d:
-        subprocess.run(
-            [sys.executable, os.path.join(os.path.dirname(__file__), "blockgen.py"),
-            "--out", d, "--sessions", "3", "--days", "2", "--seed", "99"],
-            check=True, capture_output=True, text=True)
-        assert os.path.exists(os.path.join(d, "manifest.json"))
-        manifest = json.load(open(os.path.join(d, "manifest.json")))
+def test_cli_smoke_produces_expected_layout():
+    with tempfile.TemporaryDirectory() as root:
+        out_dir, _ws, result = _run_cli(root, "--sessions", "3", "--days", "2", "--seed", "99")
+        assert result.returncode == 0, result.stderr
+        assert os.path.exists(os.path.join(out_dir, "manifest.json"))
+        manifest = json.load(open(os.path.join(out_dir, "manifest.json")))
         assert len(manifest["session_list"]) == 3
         for s in manifest["session_list"]:
-            assert os.path.exists(os.path.join(d, s["rel_path"]))
+            assert os.path.exists(os.path.join(out_dir, s["rel_path"]))
 
 
 # -------------------------------------------------------------------------------- __main__

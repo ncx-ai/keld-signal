@@ -13,6 +13,7 @@ developer's real `~/.keld` (AGENTS.md's teleproxy `TestMain` note: a test that m
 machine it runs on is a worse defect than the one it checks for).
 """
 import os
+import shutil
 import sys
 import tempfile
 
@@ -46,25 +47,64 @@ TOLERANCE_S = 300.0   # "within one 5-minute bin" per the acceptance criterion
 # test suite for no benefit.
 TEST_EPOCH = "2025-11-03T09:00:00Z"
 
+# Every temp directory (and, for `_fresh_store`, standalone file) this run creates, cleaned up by
+# the __main__ runner at the bottom — see its own comment for why a standalone script (no pytest
+# fixtures) has to track this itself. Directories are `shutil.rmtree`'d; `_CLEANUP_FILES` are
+# `os.remove`'d individually, because `tempfile.mkstemp` creates its file directly inside the
+# SYSTEM temp directory rather than a fresh one of its own — recording its `dirname` here would
+# queue the whole system temp root for deletion.
+_CLEANUP_DIRS = [_TMP_KELD_HOME]
+_CLEANUP_FILES = []
+
+# REAL git checkouts for the default profile's five repositories, materialised ONCE for the whole
+# run (idempotent, and every test here uses the default profile's repository set — see
+# blockgen.materialize_workspaces). This is the fix for the coordinator's reported gap: a `cwd`
+# that does not exist on disk makes even a real daemon's OWN `.git/config` read come back empty,
+# so the sidecar correctly emits no `repo` event for a corpus that was never resolvable to begin
+# with. Nothing here stands in for the sidecar's own logic — `vcs_of`/`resolve_workspace` still
+# run unmodified against a REAL directory now, the same as they would against a developer's own
+# checkout.
+_TEST_WORKSPACES_DIR = tempfile.mkdtemp(prefix="blockgen-workspaces-")
+_CLEANUP_DIRS.append(_TEST_WORKSPACES_DIR)
+blockgen.materialize_workspaces(_TEST_WORKSPACES_DIR, blockgen.load_profile(None))
+
 
 def _fresh_store():
     fd, path = tempfile.mkstemp(prefix="blockgen-refseries-", suffix=".db")
     os.close(fd)
     os.remove(path)   # Store creates it itself, 0600, on first use
+    _CLEANUP_FILES.append(path)
     return open_store(path=path)
 
 
 def _generate(seed, sessions=6, days=3, profile=None):
-    prof = profile or blockgen.load_profile(None)
+    prof = dict(profile or blockgen.load_profile(None))
+    # Every test in this file uses the default profile's repository set, materialised once above
+    # into `_TEST_WORKSPACES_DIR` — a test that ever passes a custom `profile` with a DIFFERENT
+    # repository set would need to materialise its own workspaces first.
+    prof["workspace_root"] = _TEST_WORKSPACES_DIR
     manifest, files = blockgen.generate(prof, sessions, days, seed, epoch=TEST_EPOCH)
     out_dir = tempfile.mkdtemp(prefix="blockgen-out-")
+    _CLEANUP_DIRS.append(out_dir)
     blockgen.write_batch(out_dir, manifest, files)
     return manifest, out_dir
 
 
+def _resolved_from_real_checkout(session_entry):
+    """`resolved.repo` derived the same way a real daemon would derive it: read the checkout's
+    OWN `.git/config` (never blockgen's manifest metadata directly) and normalise it. This is
+    what makes ingestion here a genuine end-to-end check — hard-coding `resolved.repo` from the
+    manifest's `repo_remote` field, which every version of this test did until now, could not
+    have caught the coordinator's defect: a `cwd` pointing nowhere would still have produced a
+    "correct-looking" `resolved.repo` in the test even though the real daemon could never have
+    supplied one from that same, non-existent path."""
+    origin_url = blockgen.read_origin_url(session_entry["cwd"])
+    return {"repo": blockgen.normalise_remote(origin_url)}
+
+
 def _ingest_session(store, out_dir, session_entry):
     path = os.path.join(out_dir, session_entry["rel_path"])
-    resolved = {"repo": session_entry["repo_remote"]}
+    resolved = _resolved_from_real_checkout(session_entry)
     ingest_file(store, path, nlp=None, resolved=resolved)
     return session_of(path)
 
@@ -206,9 +246,11 @@ def test_default_now_anchored_corpus_cuts_real_blocks_near_today():
     the whole point here is to exercise the un-pinned default."""
     import time as _time
 
-    profile = blockgen.load_profile(None)
+    profile = dict(blockgen.load_profile(None))
+    profile["workspace_root"] = _TEST_WORKSPACES_DIR
     manifest, files = blockgen.generate(profile, sessions=3, days=2, seed=77)
     out_dir = tempfile.mkdtemp(prefix="blockgen-out-now-")
+    _CLEANUP_DIRS.append(out_dir)
     blockgen.write_batch(out_dir, manifest, files)
 
     store = _fresh_store()
@@ -239,6 +281,51 @@ def test_intended_repository_resolves_as_the_full_remote():
         assert refs == {session["repo_remote"]}, (
             f"{session['session_id']}: repo level resolved to {refs}, "
             f"wanted {{{session['repo_remote']!r}}}")
+        checked += 1
+    assert checked == len(manifest["session_list"])
+
+
+def test_repo_and_vcs_resolve_from_a_real_git_checkout():
+    """The coordinator's exact reported gap, end to end. A synthetic `cwd` that does not exist on
+    disk (this generator's behaviour before real workspace materialisation) makes even a REAL
+    daemon's own `.git/config` read come back empty — the sidecar was never wrong to emit no
+    `repo` event for a corpus that was never resolvable to begin with. Confirms three things
+    together, none of which the other repo-level tests in this file exercised on their own before
+    `_ingest_session` started reading a real checkout instead of trusting the manifest:
+
+    1. the materialised checkout's OWN `.git/config` (`git config --get remote.origin.url`, not
+       blockgen's manifest metadata) normalises to exactly the intended remote;
+    2. the resulting `repo` event in the store matches that same remote;
+    3. `vcs` reads plain `git` — never `"git (reported, unverifiable)"`, the fallback
+       `workspace.vcs_of` takes specifically because it refuses to trust `gitBranch` alone for a
+       `cwd` it cannot stat as a real directory.
+    """
+    manifest, out_dir = _generate(seed=42, sessions=5)
+    store = _fresh_store()
+    checked = 0
+    for session in manifest["session_list"]:
+        origin_url = blockgen.read_origin_url(session["cwd"])
+        assert origin_url, f"{session['cwd']} is not a real git checkout at all"
+        normalised = blockgen.normalise_remote(origin_url)
+        assert normalised == session["repo_remote"], (
+            f"materialised checkout's own remote ({normalised!r}) does not match the intended "
+            f"one ({session['repo_remote']!r})")
+
+        skey = _ingest_session(store, out_dir, session)
+
+        repo_rows = store._conn().execute(
+            "SELECT DISTINCT ref FROM event WHERE session=? AND level='repo'", (skey,)
+        ).fetchall()
+        assert {r[0] for r in repo_rows} == {session["repo_remote"]}, (
+            f"{session['session_id']}: repo level did not resolve from the real checkout")
+
+        vcs_rows = store._conn().execute(
+            "SELECT DISTINCT ref FROM event WHERE session=? AND level='vcs'", (skey,)
+        ).fetchall()
+        vcs_values = {r[0] for r in vcs_rows}
+        assert vcs_values == {"git"}, (
+            f"{session['session_id']}: vcs read {vcs_values}, wanted plain 'git' — cwd is not "
+            "resolving as a real, on-disk checkout")
         checked += 1
     assert checked == len(manifest["session_list"])
 
@@ -279,20 +366,38 @@ def test_different_repositories_never_cross_contaminate_a_session():
 
 # -------------------------------------------------------------------------------- __main__
 
+def _cleanup():
+    """Remove every temp directory/file this run created — a standalone script has no pytest
+    fixture teardown, so this is the only thing that will ever do it. Best-effort: a cleanup
+    failure must never turn a passing test run into a failing one."""
+    for path in _CLEANUP_FILES:
+        for candidate in (path, path + "-wal", path + "-shm"):   # SQLite WAL/SHM siblings
+            try:
+                os.remove(candidate)
+            except OSError:
+                pass
+    for d in _CLEANUP_DIRS:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     tests = [(name, fn) for name, fn in sorted(globals().items())
             if name.startswith("test_") and callable(fn)]
     failed = 0
-    for name, fn in tests:
-        try:
-            fn()
-        except Exception as exc:  # noqa: BLE001 - a test runner reports, never re-raises silently
-            failed += 1
-            import traceback
-            print(f"FAIL {name}: {type(exc).__name__}: {exc}")
-            traceback.print_exc()
-        else:
-            print(f"ok   {name}")
+    try:
+        for name, fn in tests:
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001 - report, never re-raise silently
+                failed += 1
+                import traceback
+                print(f"FAIL {name}: {type(exc).__name__}: {exc}")
+                traceback.print_exc()
+            else:
+                print(f"ok   {name}")
+    finally:
+        _cleanup()
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    print(f"(KELD_HOME was isolated at {_TMP_KELD_HOME})")
+    print(f"(KELD_HOME, workspaces and every generated corpus were isolated under temp "
+         f"directories and have been removed)")
     raise SystemExit(1 if failed else 0)

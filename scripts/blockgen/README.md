@@ -57,6 +57,37 @@ whichever time base you choose (`--end`/`--epoch`) for the embedded timestamps; 
 pacing is real-time-dependent, so it is not part of the byte-identity guarantee below — use it
 for manual daemon/watcher testing, not automated checks.
 
+## Real workspaces: `--workspaces DIR`
+
+**Every generated session's `cwd` points at a REAL, on-disk git checkout, not a fictional path.**
+This did not used to be true — `cwd` was a placeholder like `/home/keldsynth/workspaces/keld-
+signal`, which does not exist on the machine running the corpus — and it was a real defect, not a
+simplification: the `repo` level is not something the sidecar derives from the transcript at all.
+`sidecar/app/analysis/levels.py`'s own comment says why: `/analyze`/`/ingest` are confined to
+`KELD_ANALYZE_ROOTS` specifically so they can never open a checkout's `.git/config` themselves, so
+that fact arrives as `resolved.repo` — something only the DAEMON may read, from the REAL
+filesystem, at the transcript's own `cwd`. A `cwd` pointing nowhere makes even a real daemon's own
+`.git/config` read come back empty, and the sidecar was correctly emitting no `repo` event for a
+corpus that was never resolvable to begin with — measured: zero `repo` rows, `vcs` reading
+`"git (reported, unverifiable)"` (see `workspace.vcs_of`'s own comment on why it refuses to trust
+`gitBranch` alone), and the Projects pane falling back to grouping by `workspace` instead of by
+repository, which is the whole feature this corpus exists to exercise.
+
+`--workspaces DIR` (default: a `workspaces` directory BESIDE `--out`, not inside it — the
+transcripts and the checkouts they reference are two different things a cleanup script should be
+able to tell apart) materialises one real directory per repository in the profile, each a genuine
+`git init` checkout with `git remote add origin https://<remote>.git` and one on-disk package
+marker (`go.mod`/`pyproject.toml`/`package.json`) at its root. Real `git init` rather than a
+hand-rolled `.git/config` is deliberate: the result is unambiguously readable by whatever the
+daemon's own reader turns out to be (a shelled-out `git`, a Go git library, or a hand-rolled
+parser), which guessing at one specific file format is not. Every session's `cwd` then points
+inside `--workspaces` instead of at a placeholder.
+
+**Both `--out` and `--workspaces` are real directories this tool creates, and both are yours to
+remove** — `rm -rf ./out ./workspaces` (or whatever paths you gave) once you are done; blockgen
+does not clean up after itself between runs, and re-running it against the same `--workspaces`
+is safe (`git remote set-url` replaces an existing `origin` rather than failing).
+
 ## Time base: `--end` (default) vs. `--epoch`
 
 **`--end` is the default, and it did not used to be — this was a real defect, not a style
@@ -161,6 +192,12 @@ give only the keys you want to change. Shape:
 - `--sessions`/`--days` on the CLI drive the total session count and how they're spread across
   days directly; `sessions_per_day` in the profile is informational only in the current CLI (see
   `blockgen.py`'s `generate()`).
+- `workspace_root` — the placeholder `generate()` falls back to for a caller that never
+  materialises real checkouts (see "Real workspaces" above). The CLI is not such a caller: `main`
+  always overwrites it with the real, resolved `--workspaces` path before generating, so setting
+  this key in a `--profile` JSON file has no effect on `blockgen.py`'s own command-line behaviour
+  — it only matters to a script that imports `blockgen.generate()` directly and skips
+  `materialize_workspaces()` on purpose.
 
 ## The measured numbers behind the defaults
 
@@ -224,8 +261,16 @@ session/prompt id, every line round-trips through `json`, both assistant lines o
 `requestId`/`usage`, repository counts match the profile's weights exactly (not approximately),
 the output layout matches the sanitised-cwd convention, the run/break shapes stay inside the
 contract's bounds, the default anchor lands within seconds of real "now" (both via the library
-call and via the CLI), `--epoch`/`--end` refuse to be combined, and `--sessions 8` produces at
-least two ticket-carrying branches with distinct numbers.
+call and via the CLI), `--epoch`/`--end` refuse to be combined, `--sessions 8` produces at least
+two ticket-carrying branches with distinct numbers, `materialize_workspaces` writes a REAL,
+`git`-readable checkout for every profile repository (idempotently — calling it twice must not
+fail or drift), and the CLI's own `--workspaces` flag reaches it end to end (a generated session's
+`cwd` lands inside the given directory and its `.git/config` carries the intended remote). Every
+CLI-invoking test passes `--workspaces` explicitly, nested inside its own `tempfile.
+TemporaryDirectory()` (see the shared `_run_cli` helper) — omitting it would leak a real,
+uncleaned git-checkout tree to the CLI's own default location beside `--out` on whatever machine
+runs the suite, which is exactly the kind of self-inflicted mess "clean up after yourself" rules
+out.
 
 `test_blockgen_sidecar.py` ingests generated transcripts through `app.analysis.ingest.
 ingest_file` and asks `app.analysis.blocks.cut` for the resulting blocks — in-process, the same
@@ -242,17 +287,56 @@ proves the four acceptance properties from `docs/v3/contracts.md`:
 4. the intended repository resolves in the store's `repo` level as the exact full remote string,
    and never leaks into a different session.
 
+`_ingest_session` derives `resolved.repo` by actually reading each session's REAL, materialised
+checkout (`blockgen.read_origin_url` + `blockgen.normalise_remote` — `git config --get
+remote.origin.url`, normalised, never blockgen's own manifest metadata trusted directly), so
+property 4 is now a genuine end-to-end check rather than the sidecar being handed a value the
+test already knew was "correct" by construction. That distinction is exactly what let the
+coordinator's regression through the first version of this test: a `cwd` pointing at a
+placeholder path still let `_ingest_session` fabricate a plausible-looking `resolved.repo` from
+the manifest, even though a real daemon reading that same non-existent `cwd` never could have.
+
 A fifth test, `test_default_now_anchored_corpus_cuts_real_blocks_near_today`, generates a corpus
 with blockgen's un-pinned DEFAULT time base (no `--epoch`, no `--end`) and confirms the real
 sidecar cuts a block ending within the hour of actual wall-clock "now" — the end-to-end version
 of the "run it, open the app, see today's blocks" requirement this file's default now satisfies.
+
+A sixth, `test_repo_and_vcs_resolve_from_a_real_git_checkout`, is the direct regression test for
+the coordinator's reported gap: it confirms a session's materialised checkout normalises to the
+intended remote, that the store's `repo` event matches it, AND that `vcs` reads plain `"git"` —
+never `"git (reported, unverifiable)"`, the fallback that is exactly what a non-existent `cwd`
+used to produce.
 
 It sets `KELD_HOME` to a fresh temp directory **and** passes an explicit store path to
 `open_store()` — belt and suspenders, because this repo has been burned once already by a test
 that silently mutated the developer's real `~/.keld` (see `AGENTS.md`'s note on `teleproxy`'s
 `TestMain`). Confirmed on this machine: the real `~/.keld/state/refseries.db` is untouched by
 running the sidecar test (its own daemon keeps updating it independently in the background,
-which is expected and unrelated).
+which is expected and unrelated). It also tracks and removes every temp directory and file it
+creates — the isolated `KELD_HOME`, the materialised workspaces, each generated corpus, and each
+throwaway store — in a `finally` block, so a full run leaves nothing behind under `/tmp` even on
+test failure.
+
+## Which path actually populates the `repo` level
+
+Worth stating precisely, since it is easy to guess wrong: the `repo` level is **never** derived
+from anything inside the transcript. `sidecar/app/analysis/levels.py`'s `events_for_turns` reads
+it from `resolved["repo"]` alone — a fact supplied by the CALLER (the daemon in production,
+`test_blockgen_sidecar.py` standing in for it here), gated on `resolve_workspace` having also
+resolved a non-empty workspace name from the transcript's own evidence (marker files, the launch
+directory, `cd` targets). Two DIFFERENT, weaker levels — `repo_from_text` and `repo_mentioned` —
+are what `workspace.REMOTE_REPO`/`scan_workspace` lift from prose (a `git remote -v` command's
+text, a bare `https://github.com/<org>/<repo>` URL) — the module comment in `levels.py` is
+explicit that a remote merely mentioned in commands or message text is corroboration, never
+identity. So `remote_bash_input`'s planted `git remote -v` text and the real `.git/config` this
+generator now materialises are doing two DIFFERENT jobs: the former feeds `repo_from_text`/
+`repo_mentioned` and the general workspace-resolution evidence `scan_workspace` accumulates; the
+latter is what a real daemon reads to populate `resolved.repo`, which is the only thing that
+reaches the published `repo` level at all. `_git_root` (`workspace.py`) only ever checks
+`os.path.exists(os.path.join(dir, ".git"))` — true for either a `.git` directory (a normal
+checkout, which is what `git init` produces and what this generator materialises) or a `.git`
+FILE (a worktree/submodule pointer) — so either shape would satisfy it, though this generator
+always produces the former.
 
 ## What I had to change in the contract
 

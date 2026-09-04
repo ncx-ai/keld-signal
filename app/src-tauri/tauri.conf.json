@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Keld Signal",
+  "version": "0.1.0",
+  "identifier": "co.keld.signal",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self' http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com http://127.0.0.1:*; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline' http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:* http://localhost:*; img-src 'self' data: http://127.0.0.1:*",
+      "dangerousDisableAssetCspModification": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.png"],
+    "category": "DeveloperTool",
+    "shortDescription": "Your focus blocks, your projects, and whether they reached Atlas",
+    "longDescription": "Keld Signal shows what the local agent collected on this machine: today's focus blocks with their tokens and estimated spend, which project each one landed in, and whether it reached Atlas. The app is a window onto the local agent — it collects nothing itself and holds no credential.",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
