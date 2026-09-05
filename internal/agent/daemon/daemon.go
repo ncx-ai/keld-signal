@@ -665,19 +665,54 @@ func Run(ctx context.Context) error {
 	updateEvents := &bufferedEvents{}
 	confirmPendingUpdate(updateEvents.emit)
 
-	cfg, err := awaitConfig(ctx, hook.LoadConfig, configPollInterval(), func() {
-		log.Printf("keld-agent: not configured yet — idling until `keld login` + `keld signal setup` "+
-			"write %s; no restart needed once they do", paths.HookConfigPath())
-	})
-	if err != nil {
-		return nil // context cancelled while idling: a clean shutdown, not a failure
-	}
-
+	// ⚠️ **THE LISTENER IS BOUND BEFORE awaitConfig, AND THAT ORDER IS THE
+	// WHOLE POINT.** Everything below used to sit after the wait, so an
+	// unconfigured machine published no `agent.json`, served no page, and gave
+	// `POST /v1/config` — the route whose entire job is onboarding a machine —
+	// no way to be called. Pairing from the app was structurally impossible and
+	// `keld-agent install --code` was not a shortcut but the only door. See
+	// onboarding.go for why this is one listener with a swapped handler rather
+	// than a second server on a second port.
 	secret, err := agentcfg.NewSecret()
 	if err != nil {
 		return err
 	}
 	set := settings.Load()
+
+	addr := bindAddr()
+	if svcSecret, err := serviceSecret(); err != nil {
+		return err
+	} else if svcSecret != "" {
+		secret = svcSecret // overrides the generated agent.json secret in service mode
+		if os.Getenv("KELD_AGENT_TLS_TERMINATED") == "" {
+			log.Printf("keld-agent: WARNING binding %s off-loopback with no TLS termination declared; "+
+				"the /enrich secret is the only control on this listener", addr)
+		}
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := agentcfg.Write(agentcfg.Info{Port: port, Secret: secret}); err != nil {
+		return err
+	}
+	log.Printf("keld-agent: listening on %s", ln.Addr().String())
+
+	lb := newLoopbackServer(ln, onboardingHandler(set, secret))
+	lb.Serve(ctx)
+
+	cfg, err := awaitConfig(ctx, hook.LoadConfig, configPollInterval(),
+		awaitConfigNote(paths.HookConfigPath()))
+	if err != nil {
+		return nil // context cancelled while idling: a clean shutdown, not a failure
+	}
+
+	// settings.Load again: a machine that paired through the page may have
+	// written send_to_atlas or dev_blocks in the same session, and everything
+	// below resolves off `set`. Re-reading costs one small file and removes a
+	// whole class of "the toggle only took effect next boot".
+	set = settings.Load()
 	// attribOn is resolved once, here, and reused everywhere this run needs
 	// it (project-list posting below, the attributor's own construction, and
 	// the shared text encoder's existence/spawn-env gate) — attrib.Enabled has
@@ -769,26 +804,6 @@ func Run(ctx context.Context) error {
 	if windowSender == nil {
 		windowSender = pub
 	}
-
-	addr := bindAddr()
-	if svcSecret, err := serviceSecret(); err != nil {
-		return err
-	} else if svcSecret != "" {
-		secret = svcSecret // overrides the generated agent.json secret in service mode
-		if os.Getenv("KELD_AGENT_TLS_TERMINATED") == "" {
-			log.Printf("keld-agent: WARNING binding %s off-loopback with no TLS termination declared; "+
-				"the /enrich secret is the only control on this listener", addr)
-		}
-	}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	if err := agentcfg.Write(agentcfg.Info{Port: port, Secret: secret}); err != nil {
-		return err
-	}
-	log.Printf("keld-agent: listening on %s", ln.Addr().String())
 
 	// THE TELEMETRY PROXY. AI tools POST OTLP here instead of to Atlas, so none
 	// of them holds an Atlas credential and a token rotation strands nobody. A
@@ -1218,7 +1233,16 @@ func Run(ctx context.Context) error {
 		go txw.Run(ctx)
 	}
 
-	err = serve(ctx, ln, handler, q, emitter)
+	// The server has been accepting since before awaitConfig; this is the one
+	// handler swap in a daemon's life. Stop-time work is registered now rather
+	// than captured at construction, because neither the queue nor the emitter
+	// existed when the listener was bound.
+	lb.OnStop(func() {
+		emitter.EmitExempt("daemon.stop", clientevents.SevInfo, nil)
+		q.Close()
+	})
+	lb.Install(handler)
+	<-ctx.Done()
 
 	// ⚠️ SHUTDOWN IS NOT DONE WHEN serve() RETURNS, and pretending otherwise is
 	// what made the supervisor's kill path unreachable. serve returns as soon
@@ -1233,7 +1257,11 @@ func Run(ctx context.Context) error {
 	if svc.AwaitSidecarStop != nil {
 		svc.AwaitSidecarStop()
 	}
-	return err
+	// Reaching here means ctx was cancelled, which is a clean stop. This used
+	// to return serve()'s error, and serve() returned nil for every shutdown —
+	// ErrServerClosed was already filtered — so the value is unchanged; it is
+	// just no longer routed through a function that has been removed.
+	return nil
 }
 
 // drainEnrichSpool drains queued spool pointers into q, offering each as an
@@ -1416,41 +1444,6 @@ func thresholdsFrom(eff settings.EffectiveClientTelemetry) resource.Thresholds {
 		SustainedWindow: time.Duration(eff.SustainedWindowS) * time.Second,
 		GaugeInterval:   time.Duration(eff.GaugeIntervalS) * time.Second,
 	}
-}
-
-// serve runs the ingress HTTP server until ctx is cancelled, then gracefully
-// shuts it down and closes the queue. It blocks until the server stops.
-func serve(ctx context.Context, ln net.Listener, handler http.Handler, q *queue.Queue, emitter *clientevents.Emitter) error {
-	srv := &http.Server{
-		Handler: handler,
-		// KELD_AGENT_BIND=0.0.0.0:… (service mode) makes this reachable from
-		// anywhere, and connection acceptance happens before ingress.go's
-		// constant-time secret check — so an unauthenticated caller can hold a
-		// connection open (slowloris, or just an idle connection) before ever
-		// presenting a secret. A zero-value http.Server has no timeouts at all,
-		// which was fine on the loopback-only listener this predates but isn't
-		// once the bind can be public. ReadHeaderTimeout/ReadTimeout bound how
-		// long an unauthenticated connection can occupy a goroutine; IdleTimeout
-		// bounds a keep-alive connection sitting idle between requests. All three
-		// are generous relative to ingress.go's 1 MiB body cap — a legitimate
-		// large inline-prompt POST over a slow link still completes well inside
-		// ReadTimeout.
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-	go func() {
-		<-ctx.Done()
-		emitter.EmitExempt("daemon.stop", clientevents.SevInfo, nil)
-		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-		q.Close()
-	}()
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-	return nil
 }
 
 // mlBackendOpts holds overridable dependencies for mlBackend. Zero values
