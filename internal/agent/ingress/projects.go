@@ -453,26 +453,39 @@ func handleWorkstreamOff(w http.ResponseWriter, r *http.Request) {
 // remote project's bucket is its Team when its Workstream is empty — that is
 // where wire_projects puts the workstream's name (docs/v3/contracts.md).
 func withRemoteBuckets(local []projects.Workstream, candidates []projects.Project, off func(string) bool) []projects.Workstream {
+	// Seeded with KEYS only. It used to hold lower-cased keys AND names, so a
+	// bucket could be skipped because some other bucket's NAME collided with
+	// this one's key — a membership test about two different things.
 	seen := map[string]bool{}
 	for _, ws := range local {
 		seen[strings.ToLower(ws.Key)] = true
-		seen[strings.ToLower(ws.Name)] = true
+		seen[projects.WorkstreamKey(ws.Name)] = true
 	}
 	out := append([]projects.Workstream(nil), local...)
 	for _, p := range candidates {
 		if p.Origin != projects.OriginAtlas {
 			continue
 		}
-		name := p.Workstream
+		// The NAME is the human label Atlas serves (its `team`); the KEY is
+		// that name normalised. They are two different things and were being
+		// conflated: `p.Workstream` now HOLDS the key (see
+		// projects.FromRemoteProjects), so using it as the name would print
+		// "keld-projects" as a heading, and using the name as the key would
+		// group nothing.
+		name := p.Team
 		if name == "" {
-			name = p.Team
+			name = p.Workstream
 		}
-		if name == "" || seen[strings.ToLower(name)] {
+		key := projects.WorkstreamKey(name)
+		if p.Workstream != "" {
+			key = p.Workstream
+		}
+		if name == "" || key == "" || seen[key] {
 			continue
 		}
-		seen[strings.ToLower(name)] = true
+		seen[key] = true
 		out = append(out, projects.Workstream{
-			Key:    strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", "-")),
+			Key:    key,
 			Name:   name,
 			Origin: "atlas",
 			Off:    off(name),

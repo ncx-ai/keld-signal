@@ -387,13 +387,40 @@ func FromRemoteProjects(values []settings.RemoteProject) []Project {
 			Title:       v.Title,
 			Description: v.Description,
 			Team:        v.Team,
-			Repos:       repos,
-			Keywords:    v.Keywords,
-			TicketKey:   v.TicketKey,
-			Origin:      OriginAtlas,
+			// ⚠️ **THE BUCKET KEY IS SET HERE, AND IT USED TO BE LEFT EMPTY.**
+			// Atlas serves a value's bucket in `team` (see docs/v3/contracts.md:
+			// team carries the WORKSTREAM'S NAME when a value has no owning
+			// team), and nothing turned that into the key the Projects pane
+			// groups by. The pane groups projects by `workstream` and draws one
+			// card per workstream, so twenty org projects arrived with an empty
+			// key, matched no card, and every Atlas workstream read "No projects
+			// yet." while its projects were listed nowhere at all.
+			//
+			// Measured against the local Atlas: 20 projects and 4 workstreams
+			// fetched, attribution at 91% — and all four cards empty.
+			//
+			// The rule that prevents the next one: a project and its card derive
+			// the key from the SAME function. WorkstreamKey is that function, and
+			// withRemoteBuckets now calls it too, so the two cannot disagree.
+			// `team` is the ONLY bucket Atlas serves (settings.RemoteProject has
+			// no workstream field); docs/v3/contracts.md records that it carries
+			// the workstream's name when a value has no owning team.
+			Workstream: WorkstreamKey(v.Team),
+			Repos:      repos,
+			Keywords:   v.Keywords,
+			TicketKey:  v.TicketKey,
+			Origin:     OriginAtlas,
 		})
 	}
 	return out
+}
+
+// WorkstreamKey is the ONE normalisation from a workstream's display name to
+// its key: lowercased, spaces to hyphens. Exported because the bucket list and
+// the projects inside it must derive it identically — deriving it in two places
+// is what made twenty projects invisible.
+func WorkstreamKey(name string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", "-"))
 }
 
 // Attribute implements the four-step order docs/v3/contracts.md specifies,
