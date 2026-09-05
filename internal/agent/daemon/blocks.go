@@ -79,6 +79,12 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	// The project-attribution path (internal/agent/attrib) hangs off this seam
 	// — the block emitter itself knows nothing about attribution. nil when the
 	// attribution gate is off, which leaves OnPublished nil (cost-free).
+	// Which projects a block enters, with their rules — the local side of the
+	// comparison Atlas cannot otherwise see. Read PER BLOCK rather than
+	// captured: the projects document changes while the daemon runs (a person
+	// makes one, the poll reconciles one away), and a captured snapshot would
+	// stamp rows against a document that no longer exists.
+	em.Entered = enteredProjectsFor
 	em.OnPublished = onPublished
 	em.OnCut = onCut
 	em.OnPublishFailed = onFailed

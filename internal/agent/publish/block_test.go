@@ -154,7 +154,15 @@ func TestTheBlockWireShapeCannotCarryAnalysisInternals(t *testing.T) {
 		// named_terms is allowed DELIBERATELY and is the only key here whose
 		// values come from message text rather than tool-call inputs. See
 		// AnalysisFacets.
-		"named_terms":     true,
+		"named_terms": true,
+		// `entered` is allowed after checking exactly what the comment above
+		// demands. Its values are RULES — a repository remote and a ticket key
+		// — and both already cross on this same row as `workstreams`
+		// dimensions, so it opens no channel that was not already open. What it
+		// deliberately does NOT carry is a local project's title or its id (the
+		// id is derived from the title, so sending it would send the title in a
+		// thin disguise), and TestEnteredCarriesNoLocalIdentity pins that.
+		"entered":         true,
 		"prior":           true,
 		"pipeline_status": true, "extractor_versions": true, "schema_version": true, "ts": true,
 	}

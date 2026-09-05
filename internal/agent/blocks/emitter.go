@@ -163,6 +163,15 @@ type Emitter struct {
 	// from the publish loop, so a hook that blocks would delay the cursor
 	// advance for later chunks; attrib.Attributor.Schedule is built to return
 	// immediately for exactly that reason.
+	// Entered names the projects a block lands in, each with its rules, for the
+	// row Atlas receives. A hook rather than a dependency: which projects a
+	// block enters is the decision layer's question (internal/agent/projects),
+	// and this package publishes rather than decides.
+	//
+	// nil on a daemon that wires none — the eval harness and the tests — and
+	// the emitter then sends an empty list rather than omitting the key.
+	Entered func(b enrich.BlockCharacterisation) []publish.EnteredProject
+
 	OnPublished func(rows []publish.BlockEnrichment, path string)
 	// OnCut, when non-nil, is called with every block this sweep BUILT, before
 	// the publish is attempted — so a recorder learns that a block exists
@@ -490,7 +499,20 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 		chunk := blocks[start:end]
 		rows := make([]publish.BlockEnrichment, 0, len(chunk))
 		for _, b := range chunk {
-			rows = append(rows, publish.BuildBlock(b, e.actor, now))
+			row := publish.BuildBlock(b, e.actor, now)
+			// ⚠️ STAMPED HERE, NOT IN publish.BuildBlock, because deciding which
+			// projects a block enters is the decision layer's job and this
+			// package must not import it. Nil on a daemon that wires no hook
+			// (the eval harness, a test), and an empty list then travels rather
+			// than a missing key — "matched nothing" and "this client does not
+			// send them" have to stay different facts.
+			if e.Entered != nil {
+				row.Entered = e.Entered(b)
+			}
+			if row.Entered == nil {
+				row.Entered = []publish.EnteredProject{}
+			}
+			rows = append(rows, row)
 		}
 		// ⚠️ **FIRED BEFORE THE SEND, FOR EVERY BLOCK BUILT.** OnPublished fires
 		// only on success, which made a block whose publish FAILED invisible to

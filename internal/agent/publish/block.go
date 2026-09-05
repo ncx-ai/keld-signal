@@ -95,6 +95,25 @@ type BlockEnrichment struct {
 	// long before attribution can run (it needs the block's own analysis as
 	// input), so BuildBlock's callers must not have to thread three fields they
 	// don't yet have through every existing call site.
+	// Entered is every project this block landed in, each WITH ITS RULES.
+	//
+	// ⚠️ **IT IS NOT `Projects`, AND THE DIFFERENCE IS THE WHOLE FEATURE.**
+	// `Projects` is the semantic matcher's answer: Atlas value ids with
+	// confidences, averaging 4.9 ids per block on a real machine. `Entered` is
+	// the deterministic one — which projects hold a rule this block actually
+	// matches — and it carries the LOCAL projects too, which nothing else on
+	// the wire has ever done.
+	//
+	// The rules travel with it because Atlas cannot see the local side any
+	// other way. With both sides on one row, "a machine groups C with your A
+	// and B" is a set difference over rows Atlas already stores — no route, no
+	// suggestion object with a lifecycle, nothing to schedule or retract.
+	//
+	// A local project's TITLE and ID are never here: the id is derived from the
+	// title, so sending it would send the title in a thin disguise. Rules are a
+	// repository remote or a ticket key, both of which already cross as block
+	// dimensions.
+	Entered        []EnteredProject            `json:"entered"`
 	Projects       []enrich.ProjectAttribution `json:"projects,omitempty"`
 	ProjectsStatus string                      `json:"projects_status,omitempty"`
 	Attribution    *enrich.AttributionMeta     `json:"attribution,omitempty"`
@@ -120,6 +139,26 @@ type BlockEnrichment struct {
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
 	TS                string            `json:"ts"`
+}
+
+// EnteredProject is one project a block landed in, on the wire.
+//
+// Defined HERE rather than reused from internal/agent/projects, so the publish
+// layer does not depend on the decision layer: a wire shape and a matcher have
+// different reasons to change, and one importing the other makes the payload
+// hostage to a refactor of the rules.
+type EnteredProject struct {
+	// ID is the Atlas value id, EMPTY for a local project — its id is derived
+	// from its title, so sending it would send the title in a thin disguise.
+	ID string `json:"id,omitempty"`
+	// Origin is "atlas" or "user", so a reader need not infer whose project
+	// this is from whether an id is present.
+	Origin string `json:"origin"`
+	// Repos and TicketKey are the rules, sorted. They are what makes the row
+	// self-contained: Atlas can compute the difference against its own project
+	// without joining to a definition that may have changed since.
+	Repos     []string `json:"repos,omitempty"`
+	TicketKey string   `json:"ticket_key,omitempty"`
 }
 
 // BuildBlock maps one closed, characterised block into the wire shape.
