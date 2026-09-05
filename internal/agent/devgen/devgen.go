@@ -207,7 +207,14 @@ type Result struct {
 	Unattributed bool      `json:"unattributed"`
 }
 
-const defaultMinutes = 24
+const (
+	// defaultMinutes spans the 20-minute cap plus one 5-minute bin, so the cap
+	// closes the first block and the leftover bin is the open trailing one.
+	defaultMinutes = 25
+	// minMinutes is the shortest span whose first block can close at all. See
+	// Generate: shorter, and the only block is the trailing one.
+	minMinutes = 25
+)
 
 // Generate writes one session and returns what it wrote.
 func Generate(o Options) (Result, error) {
@@ -239,13 +246,28 @@ func Generate(o Options) (Result, error) {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	// ⚠️ The session ENDS one idle gap before now, not at now. blocks.py closes
-	// a block on 15 minutes of silence or a 20-minute cap; a session whose last
-	// line is the current instant has neither, so its final block stays OPEN and
-	// the button appears to do nothing for a quarter of an hour. Landing the end
-	// far enough back that the idle terminator has already fired is what makes
-	// the click produce a visible, closed, publishable block.
-	end = end.Add(-16 * time.Minute)
+	// ⚠️ **THE SESSION ENDS NOW, AND ITS FIRST BLOCK CLOSES ON THE BUDGET CAP.**
+	//
+	// This used to end 16 minutes in the past, so that blocks.py's 15-minute
+	// IDLE terminator had already fired by the time the sweep ran. It worked and
+	// it put the new block half an hour back in the list, below whatever real
+	// work had happened since — which is the opposite of what a person pressing
+	// a button is looking for.
+	//
+	// The cutter has a second terminator, and it does not need silence: a block
+	// ends at the 20-minute BUDGET cap when activity continues past it. So the
+	// session runs right up to now and spans MORE than one cap. The first block
+	// is then closed by the budget rule — its evidence is complete, nothing
+	// about it is faked — and ends only a few minutes ago, which puts it at the
+	// top of Today. The remaining sliver is a genuinely open trailing block and
+	// is correctly not emitted: work that is still going has not finished.
+	//
+	// The span is therefore a CONSTRAINT, not a preference: below one cap plus a
+	// bin there is no later activity, the single block is trailing, and only the
+	// idle rule could close it — which is the behaviour this replaced.
+	if minutes < minMinutes {
+		minutes = minMinutes
+	}
 	start := end.Add(-time.Duration(minutes) * time.Minute)
 
 	cwd := filepath.Join(o.Root, o.Repo.Workspace)

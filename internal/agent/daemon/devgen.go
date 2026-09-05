@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -76,6 +77,9 @@ type devIngest struct {
 
 var devIngestHook atomic.Pointer[devIngest]
 
+// devDriveMu serialises the pipeline drive. See devGenerateHook.
+var devDriveMu sync.Mutex
+
 func setDevIngest(signal func(string, enrich.ResolvedFacts) bool,
 	facts func(string) enrich.ResolvedFacts) {
 	if signal == nil && facts == nil {
@@ -92,6 +96,21 @@ func devGenerateHook(ctx context.Context, led *ledger.Store) func(session, path 
 		return nil
 	}
 	return func(session, path string) int {
+		// ⚠️ **SERIALISED, BECAUSE THE BUTTON DELIBERATELY IS NOT.** The page
+		// leaves the control pressable so a developer can queue several blocks,
+		// which means this hook can be entered concurrently — and `Emitter.Sweep`
+		// walks and rewrites the emitter's own active-set state, which the timer
+		// path only ever calls from a single goroutine. Two sweeps interleaving
+		// there would corrupt exactly the cursor that decides which blocks have
+		// already been emitted.
+		//
+		// A mutex rather than a queue with a bound: each press costs a few
+		// seconds, presses come from a human hand, and making the second click
+		// wait for the first is the honest behaviour — the alternative is
+		// dropping a press the person watched themselves make.
+		devDriveMu.Lock()
+		defer devDriveMu.Unlock()
+
 		var signalIngest func(string, enrich.ResolvedFacts) bool
 		resolved := enrich.ResolvedFacts{}
 		if h := devIngestHook.Load(); h != nil {

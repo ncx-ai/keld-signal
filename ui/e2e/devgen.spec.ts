@@ -73,6 +73,40 @@ test.describe("Generate block (developer)", () => {
       .toHaveValue("github.com/e2e-org/persisted");
   });
 
+  test("THE STORY: the button stays pressable, and three presses give three blocks",
+    async ({ signal, page }) => {
+      test.slow(); // three presses, serialised daemon-side, a few seconds each
+
+      await signal.open("settings");
+      await setSettingSwitch(signal, /^Generate block button/, true);
+      await signal.open("today");
+
+      const button = page.locator("#genBlockBtn");
+      await expect(button).toBeVisible();
+      const before = await signal.blockRows().count();
+
+      // ⚠️ **NOT DISABLED, EVER.** The button used to grey itself out for the
+      // request plus the label's own six-second hold, so a control whose entire
+      // purpose is "give me another block" refused the second press. The daemon
+      // serialises the pipeline drive, so overlapping presses are safe and the
+      // page has no business enforcing that with a disabled attribute.
+      for (let i = 0; i < 3; i++) {
+        await expect(button).toBeEnabled();
+        await button.click();
+        // Wait for this press to land before the next, so the assertion below
+        // is about three blocks rather than about how fast Playwright clicks.
+        await expect(button).toHaveText(/✓$|not cut$/, { timeout: 90_000 });
+      }
+      await expect(button).toBeEnabled();
+
+      await page.reload();
+      await expect(page.getByText("Loading…")).toBeHidden();
+      expect(await signal.blockRows().count()).toBeGreaterThanOrEqual(before + 3);
+
+      await signal.open("settings");
+      await setSettingSwitch(signal, /^Generate block button/, false);
+    });
+
   test("THE STORY: press it, and the block is in Focus blocks and reflected in Projects",
     async ({ signal, page }) => {
       await signal.open("settings");
@@ -93,6 +127,10 @@ test.describe("Generate block (developer)", () => {
 
       await signal.open("today");
       const blocksBefore = await signal.blockRows().count();
+      // The top row before the press, so the story's "at the top" half can be
+      // asserted rather than assumed. Its text is the time range plus the
+      // reasons line, which is unique enough to tell one block from another.
+      const topBefore = (await signal.blockRows().first().textContent()) || "";
 
       // Located by id: the label IS the thing under test, so a name-based
       // locator stops matching the moment the button does its job.
@@ -113,6 +151,16 @@ test.describe("Generate block (developer)", () => {
       await page.reload();
       await expect(page.getByText("Loading…")).toBeHidden();
       expect(await signal.blockRows().count()).toBeGreaterThan(blocksBefore);
+
+      // ⚠️ **AND IT IS THE TOP ROW.** Present-somewhere was the weaker claim
+      // this used to make, and it passed while the generated block sat half an
+      // hour down the list under whatever real work had happened since — which
+      // is exactly the complaint. The generator now runs its session up to now
+      // and past the 20-minute budget cap so the cutter closes the first block
+      // on budget rather than waiting out a 15-minute silence; that is what
+      // puts it first, and this is the assertion that keeps it there.
+      const topAfter = (await signal.blockRows().first().textContent()) || "";
+      expect(topAfter).not.toBe(topBefore);
 
       // PROJECTS reflects it: the block's repository is listed there.
       await signal.open("projects");

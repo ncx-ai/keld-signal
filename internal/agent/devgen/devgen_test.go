@@ -111,14 +111,82 @@ func TestWorkspaceEvidenceIsPlanted(t *testing.T) {
 	}
 }
 
-func TestSessionEndsFarEnoughBackToCloseItsBlock(t *testing.T) {
-	// ⚠️ blocks.py closes a block on 15 minutes of silence or a 20-minute cap.
-	// A session whose last line is "now" has neither, so its final block stays
-	// OPEN and the button looks like it did nothing for a quarter of an hour.
+func TestSessionRunsUpToNowAndSpansMoreThanOneBudgetCap(t *testing.T) {
+	// ⚠️ **THIS ASSERTED THE OPPOSITE UNTIL THE "NEWEST BLOCK" STORY.** It
+	// required the session to end at least 15 minutes ago, because that is what
+	// blocks.py's IDLE terminator needs — and it worked, at the cost of putting
+	// every generated block half an hour back in the list, below whatever real
+	// work had happened since.
+	//
+	// The cutter's other terminator needs no silence: a block ends at the
+	// 20-minute BUDGET cap when activity continues past it. So the session runs
+	// up to NOW and spans more than one cap, the first block closes on budget
+	// with complete evidence, and it lands at the top of Today. Both halves are
+	// asserted because either alone is useless: ending at now with a span under
+	// the cap gives one trailing block that only idle could close, which is the
+	// behaviour this replaced.
 	res, _ := genInto(t, Repo{Remote: "github.com/acme/web", Workspace: "web",
 		Language: "go", TicketPrefix: "ACME"})
-	if gap := time.Since(res.End); gap < 15*time.Minute {
-		t.Fatalf("the session ends %v ago; the idle terminator needs at least 15m", gap)
+
+	if gap := time.Since(res.End); gap > 2*time.Minute {
+		t.Fatalf("the session ends %v ago; it must run up to now so its block is the newest", gap)
+	}
+	const cap20 = 20 * time.Minute
+	if span := res.End.Sub(res.Start); span <= cap20 {
+		t.Fatalf("the session spans %v; it must exceed the %v budget cap or its only "+
+			"block is the trailing one and nothing can close it", span, cap20)
+	}
+	// And the evidence has to reach past the cap, not merely the declared span:
+	// blocks are cut from ACTIVITY, so a span with no events in its final bins
+	// would leave the first block trailing after all.
+	body, err := os.ReadFile(res.Transcript)
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	var latest time.Time
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var m map[string]any
+		_ = json.Unmarshal([]byte(line), &m)
+		ts, _ := m["timestamp"].(string)
+		if ts == "" {
+			continue
+		}
+		if at, err := time.Parse("2006-01-02T15:04:05.000Z", ts); err == nil {
+			if at.After(latest) {
+				latest = at
+			}
+		}
+	}
+	if latest.IsZero() {
+		t.Fatal("no timestamped lines at all")
+	}
+	if got := latest.Sub(res.Start.UTC()); got <= cap20 {
+		t.Fatalf("the last event is %v into the session; activity must continue past the "+
+			"%v cap for the first block to close on budget", got, cap20)
+	}
+}
+
+func TestAShorterSpanIsRaisedRatherThanAcceptedSilently(t *testing.T) {
+	// A caller asking for 5 minutes is asking for something the cutter cannot
+	// close. Raising it to the minimum is better than returning a session whose
+	// block never appears — and better than an error, because the request is
+	// reasonable and the constraint is ours, not theirs.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required to materialise a checkout")
+	}
+	base := t.TempDir()
+	res, err := Generate(Options{
+		Repo:        Repo{Remote: "github.com/acme/web", Workspace: "web", Language: "go"},
+		Root:        filepath.Join(base, "keld-devgen"),
+		ProjectsDir: filepath.Join(base, "projects"),
+		Minutes:     5,
+		Seed:        3,
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if span := res.End.Sub(res.Start); span <= 20*time.Minute {
+		t.Fatalf("a 5-minute request produced a %v span; it must be raised past the cap", span)
 	}
 }
 

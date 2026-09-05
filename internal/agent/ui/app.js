@@ -1527,12 +1527,23 @@ if (typeof document !== "undefined") {
     btn.onclick = clickGenerateBlock;
   }
 
+  // ⚠️ **THE BUTTON IS NEVER DISABLED.** It used to grey itself out for the
+  // duration of the request plus the label's own hold, which made a control
+  // whose entire purpose is "give me another block" refuse the second press for
+  // six seconds. Queueing several is a normal thing to want, and the daemon
+  // serialises the pipeline drive (daemon/devgen.go) so overlapping presses are
+  // safe — the page has no business enforcing that with a disabled attribute.
+  //
+  // `inFlight` counts presses rather than blocking them, so the label can say
+  // how many are still running instead of hiding the fact.
+  let inFlight = 0;
+
   async function clickGenerateBlock() {
     const btn = document.getElementById("genBlockBtn");
-    if (!btn || btn.disabled) return;
-    btn.disabled = true;
-    const previous = btn.textContent;
-    btn.textContent = "Generating…";
+    if (!btn) return;
+    inFlight++;
+    const previous = "Generate block";
+    btn.textContent = inFlight > 1 ? `Generating… (${inFlight})` : "Generating…";
     try {
       const res = await sendJSON("/v1/dev/generate", "POST", {});
       const body = (res && res.body) || {};
@@ -1553,6 +1564,7 @@ if (typeof document !== "undefined") {
     } catch (e) {
       btn.textContent = "Failed";
     }
+    inFlight--;
     // Re-read once: by the time the route answered, the block is already in
     // the ledger, so this is a refresh rather than a hopeful poll.
     await loadAll();
@@ -1561,12 +1573,18 @@ if (typeof document !== "undefined") {
     // was generated for, which is the one fact worth reading — and the reload
     // above eats part of the window, so the shorter delay left barely a second
     // to see it.
+    //
+    // A press that is still running wins the label back: restoring "Generate
+    // block" underneath a live request would say nothing is happening while
+    // something is.
     setTimeout(() => {
       const b = document.getElementById("genBlockBtn");
-      if (b) {
-        b.textContent = previous;
-        b.disabled = false;
+      if (!b) return;
+      if (inFlight > 0) {
+        b.textContent = inFlight > 1 ? `Generating… (${inFlight})` : "Generating…";
+        return;
       }
+      b.textContent = previous;
     }, 6000);
   }
 
