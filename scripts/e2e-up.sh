@@ -157,6 +157,34 @@ except Exception: print(0)' 2>/dev/null)
 done
 echo "e2e-up: $N of $INTENDED intended blocks in the ledger"
 
+# ⚠️ **THEN WAIT FOR THE REPOSITORY TO RESOLVE, WHICH IS NOT THE SAME AS
+# WAITING FOR BLOCKS.** A block's dims are recorded once, at cut time, and never
+# revised — so a block cut before the sidecar has finished resolving the
+# checkout's workspace carries no `repo` dim FOREVER, and the Projects pane
+# groups it under the directory name instead of the remote. Measured: the same
+# corpus produced a repo-keyed suggestion on one run and a workspace-keyed one
+# on the next, purely on ordering, which made the projects spec flaky.
+#
+# So the harness waits for the state the product is actually meant to be in
+# rather than asserting against whichever race it lost. A corpus of real git
+# checkouts that NEVER resolves a repository is a genuine bug, so a timeout here
+# fails loudly instead of proceeding: a spec passing against workspace-keyed
+# suggestions would be asserting the wrong thing quietly.
+echo "e2e-up: waiting for the repository dimension to resolve (up to ${SETTLE_TIMEOUT}s)"
+DEADLINE=$((SECONDS + SETTLE_TIMEOUT))
+REPO_KEYED=0
+while [ $SECONDS -lt $DEADLINE ]; do
+  REPO_KEYED=$(curl -s -H "x-keld-agent-secret: $SECRET" "$BASE/v1/projects" | python3 -c '
+import json,sys
+try: print(sum(1 for s in (json.load(sys.stdin).get("suggestions") or []) if s.get("kind") == "repo"))
+except Exception: print(0)' 2>/dev/null)
+  [ "${REPO_KEYED:-0}" -gt 0 ] && break
+  sleep 3
+done
+[ "${REPO_KEYED:-0}" -gt 0 ] \
+  || fail "no repository-keyed suggestion after ${SETTLE_TIMEOUT}s — the generated checkouts under $WORKSPACES did not resolve to a remote, so every block grouped by directory name instead. Check blockgen's .git/config and sidecar workspace resolution before trusting any spec."
+echo "e2e-up: repository resolved ($REPO_KEYED repo-keyed suggestion(s))"
+
 # Is B2's settings route mounted on this build? The specs that need it skip
 # with a reason when it is not, rather than failing on a lane still in flight.
 SETTINGS_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "x-keld-agent-secret: $SECRET" "$BASE/v1/settings")

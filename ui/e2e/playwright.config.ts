@@ -1,10 +1,28 @@
 import { defineConfig, devices } from "@playwright/test";
+import os from "node:os";
 import path from "node:path";
 
 // Where scripts/e2e-up.sh puts the isolated HOME, the corpus, the daemon log
-// and state.json. Inside this directory (gitignored) unless overridden, so a
-// clean checkout needs no other location to exist.
-export const WORK_DIR = process.env.KELD_E2E_WORK || path.join(__dirname, ".e2e-work");
+// and state.json.
+//
+// WARNING: OUTSIDE the repository, deliberately, and found the hard way. This
+// was `ui/e2e/.e2e-work`, and the suite failed there while passing under the
+// system temp dir: the sidecar rewrites any path containing
+// `/.claude/worktrees/<name>` back to its main checkout (analysis/paths.py's
+// WORKTREE regex, so a file edited in a worktree attributes to the repository
+// instead of splitting its own share). A synthetic checkout generated under
+// that path resolved its git root to THE REAL REPO, `vcs_of` answered
+// "git (reported, unverifiable)", and no block ever got a `repo` dimension --
+// the Projects pane grouped everything by bare directory name and the projects
+// spec failed on an assertion that was correct.
+//
+// Nothing is wrong with the sidecar: that rule exists for real worktrees. What
+// was wrong was generating a fake repository inside one. Test artifacts do not
+// belong in the source tree anyway, and keeping them in the system temp dir
+// means a failed run cannot leave a nested `.git` behind for a status check to
+// trip over.
+export const WORK_DIR =
+  process.env.KELD_E2E_WORK || path.join(os.tmpdir(), "keld-signal-e2e");
 export const STATE_FILE = path.join(WORK_DIR, "state.json");
 
 const viewport = { width: 1280, height: 900 };

@@ -22,7 +22,9 @@ test.describe("Projects", () => {
     const n = Number(/\d+$/.exec((await heading.innerText()).trim())![0]);
     expect(n).toBeGreaterThanOrEqual(1);
     await expect(page.getByRole("button", { name: "New project" })).toHaveCount(n);
-    await expect(page.getByRole("button", { name: /^Same as/ })).toHaveCount(n);
+    // "Same as" is a picker (a combobox), not a button: a person cannot be
+    // expected to type a project id, so the choices are listed.
+    await expect(page.getByRole("combobox", { name: /^Same as an existing project/ })).toHaveCount(n);
     // Suggestions come from what the machine saw: a repository, with counts.
     await expect(page.getByText(/matched by repository · \d+ blocks/).first()).toBeVisible();
   });
@@ -56,14 +58,12 @@ test.describe("Projects", () => {
     expect(await projectRows.count(), "a project to place it in").toBeGreaterThanOrEqual(1);
     const rulesBefore = await projectRows.first().locator("small").innerText();
 
-    // The prompt lists the candidate project ids in parentheses; pick the first.
-    page.once("dialog", (d) => {
-      const ids = /\(([^)]*)\)/.exec(d.message())?.[1] ?? "";
-      const first = ids.split(",")[0]?.trim();
-      if (!first) throw new Error(`prompt named no project id: ${d.message()}`);
-      return d.accept(first);
-    });
-    await page.getByRole("button", { name: /^Same as/ }).first().click();
+    // Choose the first real project in the picker. Its first option is the
+    // non-selectable "Same as…" label, so index 1 is the first project.
+    const picker = page.getByRole("combobox", { name: /^Same as an existing project/ }).first();
+    const targetID = await picker.locator("option").nth(1).getAttribute("value");
+    expect(targetID, "the picker offers at least one project").toBeTruthy();
+    await picker.selectOption(targetID!);
 
     await expect(page.getByText(APPLIED).first()).toBeVisible();
     await expect(heading).toHaveText(`Suggested by your activity · ${before - 1}`);

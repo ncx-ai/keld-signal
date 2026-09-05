@@ -43,7 +43,17 @@ func (v *v3) recordCut(rows []publish.BlockEnrichment, _ string) {
 			continue
 		}
 		v.ledger.Cut(k, end, r.StartReason, r.EndReason, r.Source.ID, now)
-		v.ledger.Observe(k, dimsOf(r.Workstreams), now)
+		dims := dimsOf(r.Workstreams)
+		v.ledger.Observe(k, dims, now)
+		// ⚠️ **And teach this session's EARLIER blocks the checkout.** Resolving
+		// a workspace is a whole-file pre-pass in the sidecar, so the first
+		// blocks of a session close before it knows the repository and would
+		// otherwise keep no `repo` dim forever — grouping that work under a bare
+		// directory name while the same session's later blocks group under the
+		// remote. A transcript is scoped to one checkout, so this is filling in
+		// something that was always true, never inventing it. See
+		// ledger.BackfillSessionDims for why `branch` is excluded.
+		v.ledger.BackfillSessionDims(k.Session, dims, now)
 		// ⚠️ **NO FIGURE IS NOT A FIGURE OF ZERO.** A sidecar older than SCHEMA
 		// 18 sends no token counts, and writing zeros for those blocks would put
 		// "0 tokens · $0.00 est." on a page describing an afternoon of work —

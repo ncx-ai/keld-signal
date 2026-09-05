@@ -1170,9 +1170,9 @@ if (typeof document !== "undefined") {
   // this lane's own choice of "the affected row" — the daemon's response
   // names no row, only the fact — so the caller (which knows what it just
   // mutated) supplies it.
-  function noteLocalConfirmation(rowKey, resp) {
+  function noteLocalConfirmation(rowKey, resp, targetOrigin) {
     if (resp && resp.local_only) {
-      state.confirmations.set(rowKey, { url: resp.atlas_editor_url || "" });
+      state.confirmations.set(rowKey, { url: resp.atlas_editor_url || "", origin: targetOrigin || "" });
     }
   }
 
@@ -1182,21 +1182,59 @@ if (typeof document !== "undefined") {
   function appendConfirmation(parent, rowKey) {
     const c = state.confirmations.get(rowKey);
     if (!c) return;
+    // ⚠️ The sentence depends on whose project was the target. Placing onto an
+    // ATLAS project is a local overlay, so it says the org's project is
+    // unchanged; "edit the workstream in Atlas" would read as an invitation to
+    // go change the org's copy, which is backwards. A local project has no org
+    // copy to leave alone, so the general advice is the real next step.
+    const atlasTarget = c.origin === "atlas";
     parent.appendChild(
       el(
         "div",
         { class: "local-note" },
-        localOnlyConfirmationText(),
-        c.url ? el("a", { href: c.url, target: "_blank", rel: "noopener" }, " Open the workstream in Atlas") : null
+        sameAsConfirmationText(c.origin),
+        !atlasTarget && c.url ? el("a", { href: c.url, target: "_blank", rel: "noopener" }, " Open the workstream in Atlas") : null
       )
     );
   }
 
-  async function placeSuggestion(suggestion) {
-    const target = prompt(`Same as which project id? (${(state.projects.projects || []).map((p) => p.id).join(", ")})`);
+  /** The "Same as" picker for one suggestion.
+   *
+   *  A <select> rather than the prompt() this replaced: a person cannot be
+   *  expected to type a project id, and the ids the org's values carry
+   *  ("keld_projects:signal") are not something anyone would guess. The
+   *  options come from sameAsOptions, which includes the org's own projects —
+   *  placing onto one is a LOCAL OVERLAY, so the confirmation says the org's
+   *  project is unchanged.
+   *
+   *  It reads as a button until used ("Same as…") because it is an action,
+   *  not a setting: the first option is a non-selectable label, and choosing a
+   *  real one fires immediately and resets, so the control never shows a
+   *  stale "current value" for something that is not a value. */
+  function sameAsSelect(suggestion) {
+    const opts = sameAsOptions(state.projects.projects || []);
+    const sel = el(
+      "select",
+      { class: "btn", "aria-label": `Same as an existing project, for ${suggestion.value}` },
+      el("option", { value: "" }, opts.length ? "Same as…" : "Same as… (no projects yet)")
+    );
+    for (const o of opts) sel.appendChild(el("option", { value: o.id }, o.label));
+    sel.disabled = opts.length === 0;
+    sel.onchange = async () => {
+      const target = sel.value;
+      sel.selectedIndex = 0;
+      if (target) await placeSuggestion(suggestion, target);
+    };
+    return sel;
+  }
+
+  async function placeSuggestion(suggestion, target) {
     if (!target) return;
+    const chosen = (state.projects.projects || []).find((p) => p.id === target);
     const res = await sendJSON("/v1/projects/place", "POST", { suggestion: suggestion.id, same_as: target });
-    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body);
+    // The sentence depends on WHOSE project it was: an Atlas-origin target gets
+    // "the org's project is unchanged", a local one gets the general advice.
+    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body, chosen && chosen.origin);
     await loadAll();
     route();
   }
