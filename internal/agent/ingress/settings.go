@@ -176,11 +176,23 @@ func handlePutSettings(w http.ResponseWriter, r *http.Request, restart func() er
 		return
 	}
 
-	// docs/v3/contracts.md: "send_to_atlas and dev_blocks require a restart."
-	// Attribution is also read at startup by the current daemon wiring, but
-	// the contract enumerates exactly these two, so that is what this route
-	// reports — widening it is a contract change, not a bug fix.
-	restartRequired := patch.SendToAtlas != nil || patch.DevBlocks != nil
+	// docs/v3/contracts.md: send_to_atlas, dev_blocks and attribution require
+	// a restart.
+	//
+	// ⚠️ **`attribution` WAS MISSING HERE AND THE TOGGLE WAS A SILENT NO-OP.**
+	// The contract originally enumerated two keys, `attribution` was added to
+	// the patch afterwards, and this line kept reporting the original two on
+	// the reasoning that widening it was "a contract change, not a bug fix".
+	// It is both, and the contract was the half that was wrong: the daemon
+	// reads the gate exactly once, at `daemon.go`'s `startAttributor` call,
+	// and never again. So turning Attribution on in the page wrote the file,
+	// answered `restart_required: false`, raised no restart bar, and changed
+	// nothing at all until the daemon happened to restart for another reason
+	// — a control that reports success and does nothing, which is the failure
+	// this codebase refuses at every other layer. A key that is read at
+	// startup belongs in this list; the test to write when adding the next one
+	// is "does anything re-read it while the daemon runs".
+	restartRequired := patch.SendToAtlas != nil || patch.DevBlocks != nil || patch.Attribution != nil
 	if restartRequired && restart != nil && r.URL.Query().Get("restart") == "1" {
 		go func() {
 			time.Sleep(restartDelay)

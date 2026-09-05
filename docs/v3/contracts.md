@@ -108,8 +108,16 @@ GET returns the effective values (file merged with env), plus `"readonly": [...]
 keys an env var currently pins. PUT takes any subset of the four keys above plus
 `attribution`; the daemon validates (`dev_blocks` with Atlas on → `409
 {"error":"turn_off_send_to_atlas_first"}`), writes the file, and answers
-`{"restart_required": true|false}`. `send_to_atlas` and `dev_blocks` require a restart;
-the daemon restarts itself when the caller passes `?restart=1`.
+`{"restart_required": true|false}`. `send_to_atlas`, `dev_blocks` and `attribution`
+require a restart; the daemon restarts itself when the caller passes `?restart=1`.
+
+⚠️ **`attribution` was missing from that list until 2026-09-05, and this document is
+where the defect lived.** The daemon resolves the gate exactly once, at `daemon.go`'s
+`startAttributor` call, so a PUT reporting `restart_required: false` left the page with
+no restart bar and the toggle with no effect — a control that reported success and did
+nothing. The rule the list encodes is not "these keys are special" but **"a key nothing
+re-reads while the daemon runs requires a restart"**; check that before adding the next
+one.
 
 ## `POST /v1/config`
 

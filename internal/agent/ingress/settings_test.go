@@ -328,8 +328,12 @@ func TestPutSettingsAttributionWritesFileAndWouldGateTheEncoder(t *testing.T) {
 	}
 	var out map[string]any
 	decodeInto(t, res, &out)
-	if out["restart_required"] != false {
-		t.Fatalf("attribution alone is not one of the two contract restart keys, got %v", out)
+	// ⚠️ Attribution IS a restart key, and this test asserted the opposite
+	// until 2026-09-05. The daemon resolves the gate once, at startAttributor,
+	// so a PUT that reported no restart left the toggle a silent no-op: the
+	// file said on, the page raised no restart bar, and nothing attributed.
+	if out["restart_required"] != true {
+		t.Fatalf("attribution is read once at startup, so it must require a restart, got %v", out)
 	}
 
 	after := settings.Load()
