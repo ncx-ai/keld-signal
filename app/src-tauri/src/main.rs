@@ -30,6 +30,8 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -90,6 +92,74 @@ fn page_url(info: &AgentInfo) -> String {
         info.port,
         urlencode(&info.secret)
     )
+}
+
+/// How often the shell re-reads `agent.json`. Two seconds is well inside the
+/// time a service restart takes and is a stat of one small local file.
+const FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
+
+/// follow_agent keeps the window pointed at wherever the daemon currently is.
+///
+/// ⚠️ **WITHOUT THIS, EVERY DAEMON RESTART STRANDS THE OPEN WINDOW, AND THE
+/// PAGE REPORTS THE OPPOSITE OF WHAT IS TRUE.** The daemon binds
+/// `127.0.0.1:0` — a fresh ephemeral port each start, which is why `agent.json`
+/// exists at all — and this shell used to resolve that file exactly once, in
+/// `setup`, baking the port into the window's own origin. So a restart moved
+/// the daemon and left the window talking to a closed port.
+///
+/// That is not a cosmetic staleness. Restarting is the documented outcome of
+/// two things a person does in Settings: pasting a setup code to switch Atlas,
+/// and toggling Send to Atlas. Both answer `restart_required`, both raise the
+/// restart bar, and the bar then polls `/v1/ledger` on the dead origin to
+/// decide when Signal is back. Measured on a real machine: the daemon moved
+/// 50953 → 51255 and came back healthy in about two seconds, while the window
+/// sat on "Restarting…" and then rendered "Signal is not running on this
+/// machine" — a confident negative about a daemon that was running perfectly.
+///
+/// `daemon/onboarding.go` states this rule one level down, for a swap inside a
+/// single process: "pair on one port and continue on another and the window can
+/// never come back." The same rule has to hold ACROSS a restart, and only the
+/// shell can enforce it, because a page whose origin has died cannot navigate
+/// itself.
+///
+/// The secret is part of the comparison, not just the port: `agentcfg.NewSecret`
+/// generates a fresh one per daemon start, so a restart that happened to land on
+/// the same port still needs the window reloaded with the new credential.
+fn follow_agent(window: tauri::WebviewWindow) {
+    thread::spawn(move || {
+        let mut current = read_agent().map(|i| (i.port, i.secret));
+        loop {
+            thread::sleep(FOLLOW_INTERVAL);
+            let latest = read_agent().map(|i| (i.port, i.secret));
+            if latest == current {
+                continue;
+            }
+            let url = match &latest {
+                // A daemon that has moved: follow it.
+                Some((port, secret)) => page_url(&AgentInfo {
+                    port: *port,
+                    secret: secret.clone(),
+                }),
+                // agent.json gone or unreadable. This is deliberately NOT
+                // treated as "the daemon stopped": the file is rewritten on
+                // every start, so a restart has a window in which it is absent
+                // or half-written, and navigating to the not-running screen
+                // there would flash it during a routine restart. The page's own
+                // banner already says when the daemon is unreachable, and it
+                // says so from an actual failed request rather than from a
+                // missing file.
+                None => {
+                    current = latest;
+                    continue;
+                }
+            };
+            if let Ok(parsed) = url.parse() {
+                if window.navigate(parsed).is_ok() {
+                    current = latest;
+                }
+            }
+        }
+    });
 }
 
 fn urlencode(s: &str) -> String {
@@ -186,6 +256,12 @@ fn main() {
                 .inner_size(1180.0, 820.0)
                 .min_inner_size(820.0, 560.0)
                 .build()?;
+
+            // Follow the daemon across restarts. Started for the not-running
+            // frame too, which is what makes the app recover on its own when
+            // the daemon starts after it — the ordinary case on a fresh
+            // install, where the service is registered before anyone pairs it.
+            follow_agent(window.clone());
 
             // See the header comment: closing the window hides it, it does
             // not quit. `prevent_close` stops the webview from tearing down
