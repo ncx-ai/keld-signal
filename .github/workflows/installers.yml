@@ -227,6 +227,35 @@ jobs:
           fi
           cp -R dist/keld-agent-sidecar stage/ 2>/dev/null || cp -R dist/keld-agent-sidecar/* stage/
 
+      # Build the Keld Signal desktop app, which the pkg now ships to
+      # /Applications (the user's decision, 2026-09-05: keep the pkg and the same
+      # build process; a drag-and-drop dmg is the next step, not this one).
+      #
+      # ⚠️ **build-pkg.sh HARD-FAILS without it, deliberately**, so this step is
+      # what keeps a macOS release possible at all — a pkg that silently shipped
+      # without the app would be worse than a build that stops. It adds a Rust
+      # toolchain to this job and about two minutes; the bundle itself is ~4 MB
+      # because Tauri uses the system WKWebView rather than bundling a browser,
+      # which is also why it does not reopen the notarization file-count problem
+      # that cut the sidecar from this payload.
+      - name: Build the desktop app (macOS)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null 2>&1 || true
+          case "${{ matrix.goarch }}" in
+            arm64) TARGET=aarch64-apple-darwin ;;
+            amd64) TARGET=x86_64-apple-darwin ;;
+            *)     echo "unexpected goarch ${{ matrix.goarch }}"; exit 1 ;;
+          esac
+          cd app
+          npx --yes @tauri-apps/cli@latest build --bundles app --target "$TARGET"
+          BUNDLE="src-tauri/target/$TARGET/release/bundle/macos/Keld Signal.app"
+          [ -d "$BUNDLE" ] || { echo "no app bundle at $BUNDLE"; ls -R src-tauri/target/*/release/bundle 2>/dev/null | head -40; exit 1; }
+          echo "KELD_APP_BUNDLE=$PWD/$BUNDLE" >> "$GITHUB_ENV"
+          echo "built $(du -sh "$BUNDLE" | cut -f1) app bundle for $TARGET"
+
       # Import the Developer ID identities into a throwaway keychain. Without this the
       # APPLE_DEVELOPER_ID_* names resolve against nothing: they are only identity
       # NAMES, looked up in the runner's keychain search list, and a fresh runner has
