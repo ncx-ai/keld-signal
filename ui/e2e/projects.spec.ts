@@ -131,6 +131,49 @@ test.describe("Projects", () => {
     await expect(heading).toHaveText(`Suggested by your activity · ${before}`);
   });
 
+  test("project rows line up: one picker column, one pill edge, nothing outside its card",
+    async ({ signal, page }) => {
+      // ⚠️ MEASURED, not eyeballed, because that is the only way this can fail
+      // honestly. The rows were laid out with `justify-content: space-between`,
+      // which positions the picker from the TITLE's width — two rows whose
+      // pickers were the same 320px started at x=652 and x=636 and the column
+      // visibly stepped. And an org row, having no picker, let its pill fall
+      // into the picker's grid column, putting every Atlas card's pill 16px
+      // left of every local one.
+      //
+      // Asserted per card rather than across the pane: cards are separate
+      // grids, and requiring one edge across all of them would be asserting
+      // something the design never promised.
+      await signal.open("projects");
+      const cards = await page.evaluate(() =>
+        [...document.querySelectorAll(".workstream-card")].map((card) => {
+          const cr = card.getBoundingClientRect();
+          const rows = [...card.querySelectorAll(".project-row")];
+          const r = (el: Element | null) => (el ? Math.round(el.getBoundingClientRect().right) : null);
+          const l = (el: Element | null) => (el ? Math.round(el.getBoundingClientRect().left) : null);
+          return {
+            name: card.querySelector(".name")?.textContent ?? "",
+            pickerLefts: [...new Set(rows.map((x) => l(x.querySelector("select"))).filter(Boolean))],
+            pillRights: [...new Set(rows.map((x) => r(x.querySelector(".pill"))).filter(Boolean))],
+            switchRight: r(card.querySelector(".workstream-head .switch")),
+            overflowing: [...card.querySelectorAll("*")]
+              .filter((e) => e.getBoundingClientRect().right > cr.right + 0.5).length,
+          };
+        }));
+      expect(cards.length).toBeGreaterThan(0);
+      for (const c of cards) {
+        expect(c.pickerLefts.length, `${c.name}: pickers start at ${c.pickerLefts}`)
+          .toBeLessThanOrEqual(1);
+        expect(c.pillRights.length, `${c.name}: pills end at ${c.pillRights}`)
+          .toBeLessThanOrEqual(1);
+        if (c.pillRights.length && c.switchRight !== null) {
+          // The header switch and the rows' pills share the card's content edge.
+          expect(c.pillRights[0], `${c.name}: pill edge vs switch edge`).toBe(c.switchRight);
+        }
+        expect(c.overflowing, `${c.name}: children outside the card`).toBe(0);
+      }
+    });
+
   test('"Same as" adds a suggestion to that project and confirms "Applied on this machine"', async ({ signal, page }) => {
     await signal.open("projects");
     const heading = page.getByText(/^Suggested by your activity · \d+$/);

@@ -1241,7 +1241,14 @@ if (typeof document !== "undefined") {
             // leaving the org's value untouched — a deletion that looks like a
             // move. The daemon refuses it too (projects.MapProjectTo); this is
             // the half that keeps a person from being offered it.
-            p.origin === "atlas" ? null : mapProjectSelect(p),
+            // ⚠️ An EMPTY CELL, never `null`, for an org project. The row is a
+            // three-column grid; skipping the child entirely lets the pill fall
+            // into the picker's column, and the org cards' pills then sat 16px
+            // left of the local ones (measured 1871 against 1887) — a whole
+            // column of misalignment from an absent element.
+            p.origin === "atlas"
+              ? el("span", { class: "row-spacer", "aria-hidden": "true" })
+              : mapProjectSelect(p),
             conflictIds.length
               ? el("span", { class: "pill no" }, "conflict · pick one")
               : el("span", { class: "pill ok" }, p.origin === "atlas" ? "✓ in Atlas" : "local")
