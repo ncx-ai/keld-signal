@@ -349,3 +349,30 @@ fieldset:disabled { opacity: .55; }
   background: var(--rule);
   margin: 14px 0 4px;
 }
+
+/* The inline "New project" name field. It replaces a native prompt(), which
+   WKWebView does not implement — see bundleSuggestion in app.js. Sized to the
+   row rather than the page: it sits where the button was. */
+.project-name {
+  padding: 5px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 220px;
+}
+.project-name:focus {
+  outline: 2px solid var(--green-strong);
+  outline-offset: 1px;
+}
+.btn-quiet {
+  background: transparent;
+  color: var(--ink-2);
+  border: 1px solid var(--rule);
+}
+.btn-quiet:hover {
+  color: var(--ink);
+  border-color: var(--ink-2);
+}

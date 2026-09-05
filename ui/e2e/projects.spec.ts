@@ -36,12 +36,20 @@ test.describe("Projects", () => {
     expect(before).toBeGreaterThanOrEqual(1);
     const firstValue = (await page.locator(".suggestion-row .row-title").first().innerText()).split("\n")[0].trim();
 
-    // The page asks for a title in a prompt, defaulting to the suggestion's own
-    // value (the repository). accept() WITHOUT an argument submits an EMPTY
-    // string rather than the default — the page then correctly does nothing, and
-    // the test fails on a page that behaved exactly right. Pass the default back.
-    page.once("dialog", (d) => d.accept(d.defaultValue()));
+    // ⚠️ **THIS USED TO DRIVE A NATIVE `prompt()`, AND THAT IS WHY THE BUG
+    // SHIPPED.** The page called `window.prompt()`; Playwright AUTO-HANDLES
+    // native dialogs, so this spec passed while the desktop app — WKWebView,
+    // which does not implement `prompt` — showed no dialog at all and the
+    // button did nothing: no field, no project, no error. A browser test can
+    // only ever assert the browser's behaviour, and the shell's was different.
+    //
+    // The page now owns an inline field, so this drives what a person drives.
     await page.getByRole("button", { name: "New project" }).first().click();
+    const nameField = page.getByLabel("New project name");
+    // Prefilled with the suggestion's own value — the repository — so the
+    // common case is one keystroke away from done.
+    await expect(nameField).toHaveValue(firstValue);
+    await page.getByRole("button", { name: "Create" }).click();
 
     await expect(page.getByText(APPLIED).first()).toBeVisible();
     await expect(heading).toHaveText(`Suggested by your activity · ${before - 1}`);
@@ -49,6 +57,28 @@ test.describe("Projects", () => {
     const yours = page.locator(".workstream-card");
     await expect(yours.getByText(firstValue).first()).toBeVisible();
     await expect(yours.getByText(`repo ${firstValue}`)).toBeVisible();
+  });
+
+  test('NEGATIVE: "New project" with an empty name creates nothing and says so', async ({ signal, page }) => {
+    await signal.open("projects");
+    const heading = page.getByText(/^Suggested by your activity · \d+$/);
+    const before = Number(/\d+$/.exec((await heading.innerText()).trim())![0]);
+    test.skip(before < 1, "no suggestion left to name");
+
+    await page.getByRole("button", { name: "New project" }).first().click();
+    const nameField = page.getByLabel("New project name");
+    await nameField.fill("   ");
+    await page.getByRole("button", { name: "Create" }).click();
+
+    // Said out loud. Silence here is indistinguishable from the prompt() bug
+    // this replaced, which is the whole reason the message exists.
+    await expect(page.getByText("Give the project a name first.")).toBeVisible();
+    await expect(heading).toHaveText(`Suggested by your activity · ${before}`);
+
+    // And Cancel leaves the row exactly as it was.
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByLabel("New project name")).toHaveCount(0);
+    await expect(heading).toHaveText(`Suggested by your activity · ${before}`);
   });
 
   test('"Same as" adds a suggestion to that project and confirms "Applied on this machine"', async ({ signal, page }) => {

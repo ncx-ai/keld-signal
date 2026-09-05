@@ -452,6 +452,20 @@ export const SETTINGS_ENV = {
   attribution: "KELD_ATTRIBUTION",
 };
 
+/** validProjectTitle is the one rule for naming a project from a suggestion:
+ *  trimmed, and empty means "no".
+ *
+ *  ⚠️ It is a named function rather than an inline `if (!title)` because that
+ *  inline check is exactly what swallowed the `prompt()` bug — a null from a
+ *  dialog that never opened was indistinguishable from a person choosing to
+ *  cancel, so the page could not tell "you said no" from "I never asked". The
+ *  caller now decides those separately: Cancel closes the field, an empty name
+ *  says so. Returns the trimmed name, or "" for a name that is not one.
+ */
+export function validProjectTitle(title) {
+  return String(title == null ? "" : title).trim();
+}
+
 export function readonlyNote(key) {
   const env = SETTINGS_ENV[key] || `KELD_${String(key || "").toUpperCase()}`;
   return `Set by ${env} on this machine.`;
@@ -664,6 +678,11 @@ if (typeof document !== "undefined") {
     settingsError: null,
     configError: "",
     configHost: "",
+    // naming: {id, title, error} while a suggestion is being turned into a
+    // project. Null the rest of the time. It lives in state rather than in the
+    // DOM because `route()` re-renders the whole pane, so a value held only in
+    // an input would be lost the moment anything else refreshed.
+    naming: null,
     // confirmations: rowKey -> {url}. Set after any /v1/projects (or
     // /v1/workstreams) mutation whose response carries local_only — read by
     // renderProjects to show localOnlyConfirmationText() under the row the
@@ -1101,12 +1120,34 @@ if (typeof document !== "undefined") {
             "div",
             { class: "suggestion-row" },
             el("div", { class: "row-title" }, s.value, el("small", {}, `${kindLabel(s.kind)} · ${s.blocks} blocks · ${formatMinutes(s.minutes)} · ${formatTokens(s.tokens)} tokens`)),
-            el(
-              "div",
-              { class: "row-actions" },
-              sameAsSelect(s),
-              el("button", { class: "btn", onclick: () => bundleSuggestion(s, workstreams) }, "New project")
-            )
+            namingThis(s)
+              ? el(
+                  "div",
+                  { class: "row-actions" },
+                  el("input", {
+                    type: "text",
+                    id: "projectNameInput",
+                    class: "project-name",
+                    "aria-label": "New project name",
+                    value: state.naming.title,
+                    oninput: (e) => { state.naming.title = e.target.value; },
+                    onkeydown: (e) => {
+                      if (e.key === "Enter") bundleSuggestion(s, workstreams, state.naming.title);
+                      if (e.key === "Escape") cancelNamingProject();
+                    },
+                  }),
+                  el("button", { class: "btn", onclick: () => bundleSuggestion(s, workstreams, state.naming.title) }, "Create"),
+                  el("button", { class: "btn btn-quiet", onclick: cancelNamingProject }, "Cancel")
+                )
+              : el(
+                  "div",
+                  { class: "row-actions" },
+                  sameAsSelect(s),
+                  el("button", { class: "btn", onclick: () => startNamingProject(s) }, "New project")
+                ),
+            namingThis(s) && state.naming.error
+              ? el("div", { class: "settings-note error-note" }, state.naming.error)
+              : null
           )
         );
       }
@@ -1239,13 +1280,65 @@ if (typeof document !== "undefined") {
     route();
   }
 
-  async function bundleSuggestion(suggestion, workstreams) {
-    const title = prompt("New project title:", suggestion.value);
-    if (!title) return;
+  // ⚠️ **THIS USED TO CALL `prompt()`, AND IN THE DESKTOP APP THAT DID NOTHING
+  // AT ALL.** WKWebView — what the Tauri shell runs on — does not implement
+  // `window.prompt` unless the host app provides a text-input panel, and Tauri
+  // does not. So it returned null instantly, the `if (!title) return` swallowed
+  // it, and pressing "New project" was silent: no dialog, no project, no error.
+  //
+  // It was invisible to the suite because Playwright AUTO-HANDLES native
+  // dialogs, so the browser spec passed while the shipped app had no dialog to
+  // handle. That is why the page now owns its own field, and why
+  // `TestPageUsesNoNativeDialogs` exists: the rule is not "this one call was
+  // replaced", it is that a native dialog anywhere in this page is a control
+  // that silently does nothing for the people who use the app.
+  //
+  // The prefill is the suggestion's own value — the repository name — because
+  // that is what a person would type, and the field is selected on open so the
+  // first keystroke replaces it.
+  function startNamingProject(suggestion) {
+    state.naming = { id: suggestion.id, title: suggestion.value, error: "" };
+    route();
+    // After the render, not before: the input does not exist yet.
+    requestAnimationFrame(() => {
+      const input = document.getElementById("projectNameInput");
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    });
+  }
+
+  /** namingThis reports whether this suggestion is the one being named. */
+  function namingThis(suggestion) {
+    return !!(state.naming && state.naming.id === suggestion.id);
+  }
+
+  function cancelNamingProject() {
+    state.naming = null;
+    route();
+  }
+
+  async function bundleSuggestion(suggestion, workstreams, title) {
+    // NEGATIVE 1: an empty name creates nothing and leaves the suggestion where
+    // it was. Said out loud rather than silently ignored — silence here is the
+    // exact defect this replaced.
+    const name = validProjectTitle(title);
+    if (!name) {
+      state.naming = { id: suggestion.id, title: title || "", error: "Give the project a name first." };
+      route();
+      return;
+    }
     const workstream = (workstreams[0] && workstreams[0].key) || "development";
-    const res = await sendJSON("/v1/projects/bundle", "POST", { title, workstream, suggestions: [suggestion.id] });
+    const res = await sendJSON("/v1/projects/bundle", "POST",
+      { title: name, workstream, suggestions: [suggestion.id] });
     if (res.ok && res.body && res.body.project && res.body.project.id) {
       noteLocalConfirmation(`project:${res.body.project.id}`, res.body);
+      state.naming = null;
+    } else {
+      // NEGATIVE 2: a refusal is REPORTED. The page going quiet on a failed
+      // create is indistinguishable from the bug this fixes.
+      state.naming = { id: suggestion.id, title: name, error: "That could not be created. Nothing was changed." };
     }
     await loadAll();
     route();
