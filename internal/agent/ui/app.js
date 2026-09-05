@@ -1535,19 +1535,26 @@ if (typeof document !== "undefined") {
     btn.textContent = "Generating…";
     try {
       const res = await sendJSON("/v1/dev/generate", "POST", {});
-      if (res && res.ok && res.body && res.body.repo) {
-        // The repository is the useful half: it is what decides whether this
-        // block attributes or lands in the unattributed pile, which is the
-        // thing being tested.
-        btn.textContent = shortRepo(res.body.repo) + " ✓";
+      const body = (res && res.body) || {};
+      if (res && res.ok && body.repo) {
+        // ⚠️ **THE LABEL REPORTS THE BLOCK, NOT THE REQUEST.** The route now
+        // drives the pipeline and answers with how many blocks the ledger
+        // actually holds for this session, so a tick here means the block is
+        // on the page below — it used to mean only that a file had been
+        // written, while the block appeared up to five minutes later or not at
+        // all. A zero says so rather than showing a tick over nothing.
+        const n = Number(body.blocks || 0);
+        btn.textContent = n > 0
+          ? shortRepo(body.repo) + " ✓"
+          : shortRepo(body.repo) + " — not cut";
       } else {
         btn.textContent = "Failed";
       }
     } catch (e) {
       btn.textContent = "Failed";
     }
-    // Reload rather than wait: the block is not cut yet, but the ledger poll
-    // that follows will pick it up, and re-reading now costs nothing.
+    // Re-read once: by the time the route answered, the block is already in
+    // the ledger, so this is a refresh rather than a hopeful poll.
     await loadAll();
     route();
     // Six seconds, not two and a half. The label names the repository the block

@@ -889,7 +889,12 @@ func Run(ctx context.Context) error {
 		// already does exactly this.
 		ingress.SettingsRoute(serviceRestarter{}.Restart),
 		ingress.ConfigRoute(),
-		ingress.DevGenerateRoute(),
+		// The hook is built here because only Run holds the three things it
+		// needs: the ledger the page reads, the sidecar's ingest signal, and the
+		// facts resolver that gives the transcript its repository identity.
+		// Without that identity the block is cut with no `repo` dimension and
+		// the Projects half of the story can never pass.
+		ingress.DevGenerateRoute(devGenerateHook(ctx, sig.ledger)),
 	)
 	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded, v3Routes...)
 	pollInterval := 5 * time.Minute
@@ -1222,6 +1227,12 @@ func Run(ctx context.Context) error {
 		// scoping and the drop policy, and note /analyze keeps its own on-demand
 		// ingest as the backstop, so a dropped signal costs latency only.
 		if svc.SignalIngest != nil {
+			// The generate button uses the SAME signal, synchronously, so its
+			// answer is about a block that exists. Installed here because this
+			// is where the sidecar client first exists — see setDevIngest.
+			devFacts := newFactsCache()
+			setDevIngest(svc.SignalIngest,
+				func(path string) enrich.ResolvedFacts { return devFacts.forTranscript(path).resolved() })
 			txw = txw.WithIngestSignal(ingestSignalHook(ctx, svc.SignalIngest))
 			// Block backfill needs a transcript to be ingestable BEFORE it next
 			// grows, or the emitter only ever sees files still being written and

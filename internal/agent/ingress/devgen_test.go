@@ -16,7 +16,7 @@ import (
 
 func TestGenerateIsRefusedUnlessTheSettingIsOn(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
-	srv := httptest.NewServer(DiscardHandler("s3cret", DevGenerateRoute()))
+	srv := httptest.NewServer(DiscardHandler("s3cret", DevGenerateRoute(driveStub)))
 	defer srv.Close()
 
 	res := doJSON(t, http.MethodPost, srv.URL+"/v1/dev/generate", map[string]any{})
@@ -43,7 +43,7 @@ func TestGenerateWritesATranscriptAndMarksIt(t *testing.T) {
 	if err := settings.WriteV3Settings(settings.V3Patch{DevGenerate: &on}); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
-	srv := httptest.NewServer(DiscardHandler("s3cret", DevGenerateRoute()))
+	srv := httptest.NewServer(DiscardHandler("s3cret", DevGenerateRoute(driveStub)))
 	defer srv.Close()
 
 	res := doJSON(t, http.MethodPost, srv.URL+"/v1/dev/generate", map[string]any{})
@@ -124,3 +124,9 @@ func TestDevGenerateNeedsNoRestart(t *testing.T) {
 		t.Fatal("dev_generate was not persisted")
 	}
 }
+
+// driveStub stands in for the daemon's pipeline hook. It reports one block, so
+// the route's own behaviour is under test rather than the emitter's — the
+// end-to-end claim that a block really lands is made by ui/e2e/devgen.spec.ts
+// against a live daemon, which is the only place it can honestly be made.
+func driveStub(session, path string) int { return 1 }

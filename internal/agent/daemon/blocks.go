@@ -92,6 +92,10 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 			"read_at_atlas": false,
 		})
 	}
+	// The generate button asks for one immediate pass rather than waiting out
+	// the interval; see daemon/devgen.go for why that is the button's whole
+	// correctness, not a shortcut.
+	setBlockSweep(em.Sweep)
 	go em.Run(ctx, interval)
 	return em.Advance
 }

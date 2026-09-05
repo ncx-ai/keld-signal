@@ -26,9 +26,20 @@ import (
 // a build tag, because the button has to be operable from the shipped app on a
 // machine nobody has a checkout on. That is a deliberate widening of who can
 // create synthetic work, and it is why devgen names every session `devgen-…`.
-func DevGenerateRoute() Route {
+// ⚠️ **`drive` IS WHAT MAKES THE BUTTON HONEST.** Without it this route wrote a
+// transcript, answered 200, and left the rest to timers — the watcher's poll and
+// then the block emitter's sweep, which is FIVE MINUTES by default. The button
+// reported success and the page showed nothing for minutes, which is not a
+// latency detail but a control that says it did something and visibly did not.
+//
+// `drive` runs the pipeline NOW — ingest, advance, one sweep — and returns how
+// many blocks the ledger then holds for this session, so the answer is a fact
+// rather than an intention. It is nil only where no emitter exists (blocks off),
+// and then the route says the block was not cut instead of implying it was.
+func DevGenerateRoute(drive func(session, path string) int) Route {
 	return Route(func(mux *http.ServeMux, auth func(http.Handler) http.Handler) {
-		mux.Handle("POST /v1/dev/generate", auth(http.HandlerFunc(handleDevGenerate)))
+		mux.Handle("POST /v1/dev/generate", auth(http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) { handleDevGenerate(w, r, drive) })))
 	})
 }
 
@@ -98,7 +109,7 @@ func devProjectsDir() (string, error) {
 	return filepath.Join(home, ".claude", "projects"), nil
 }
 
-func handleDevGenerate(w http.ResponseWriter, r *http.Request) {
+func handleDevGenerate(w http.ResponseWriter, r *http.Request, drive func(session, path string) int) {
 	set := settings.Load()
 	if !set.DevGenerate {
 		writeError(w, http.StatusConflict, "dev_generate_off")
@@ -147,5 +158,22 @@ func handleDevGenerate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "generate_failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+
+	// Drive the pipeline before answering. The response is then about a block
+	// that exists, which is the only version of this the page can act on.
+	out := map[string]any{
+		"session": res.Session, "repo": res.Repo, "workspace": res.Workspace,
+		"branch": res.Branch, "model": res.Model, "cwd": res.Cwd,
+		"transcript": res.Transcript, "prompts": res.Prompts,
+		"requests": res.Requests, "tokens": res.Tokens,
+	}
+	if drive != nil {
+		out["blocks"] = drive(res.Session, res.Transcript)
+	} else {
+		// No emitter on this daemon: the transcript is written and will be cut
+		// whenever blocks are switched on. Stated, not implied.
+		out["blocks"] = 0
+		out["note"] = "blocks are off on this machine, so nothing was cut"
+	}
+	writeJSON(w, http.StatusOK, out)
 }

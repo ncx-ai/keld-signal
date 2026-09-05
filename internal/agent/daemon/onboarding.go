@@ -151,8 +151,11 @@ func onboardingHandler(set settings.Settings, secret string) http.Handler {
 		ingress.ConfigRoute(),
 		// Generating work needs no Atlas and no token, and an unpaired machine
 		// is exactly where someone wants to see a block appear before deciding
-		// to pair at all.
-		ingress.DevGenerateRoute(),
+		// to pair at all. No drive hook: before configuration there is no block
+		// emitter and no sidecar client, so the route says the block was not cut
+		// rather than implying it was — and the transcript is on disk, so the
+		// configured daemon cuts it on its first sweep.
+		ingress.DevGenerateRoute(nil),
 	)
 	// DiscardHandler rather than Handler: there is no queue to offer to yet.
 	return ingress.DiscardHandler(secret, routes...)
