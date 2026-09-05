@@ -197,7 +197,66 @@ func Bundle(d Document, title, workstream string, suggestionIDs []string, sugges
 	p.ID = newProjectID(d, title)
 	next := d
 	next.Projects = append(append([]Project(nil), d.Projects...), p)
+	next.Workstreams = ensureWorkstream(d.Workstreams, p.Workstream)
 	return next, p, nil
+}
+
+// ensureWorkstream adds the project's workstream to the document if the org has
+// not declared one by that key.
+//
+// ⚠️ **A PROJECT FILED UNDER A WORKSTREAM THAT DOES NOT EXIST IS AN INVISIBLE
+// PROJECT.** The Projects pane renders projects by looping over workstreams and
+// showing each one's members, so a project whose workstream is in no list is
+// never drawn — it exists in this file, it attributes blocks, and the person who
+// made it sees nothing.
+//
+// Measured on a real machine: two projects on disk, `"workstreams": null`, and a
+// pane reading "YOUR PROJECTS" followed by nothing and "WORKSTREAMS ON 0 of 0".
+// From the outside that is indistinguishable from the suggestion having been
+// thrown away, which is exactly how it was reported.
+//
+// It happens whenever the org has declared no workstreams — every machine with
+// Send to Atlas off, which is the default for anyone trying Signal locally —
+// because the list is pushed down from Atlas and nothing local ever seeded it.
+// `bundleSuggestion` falls back to the key "development", so that was the name
+// of a workstream that never existed anywhere.
+//
+// Origin is LOCAL: this is the machine inventing a bucket to keep its own work
+// visible, and it must never be mistaken for something the org declared. If
+// Atlas later declares a workstream with the same key, the match is by key and
+// the org's own entry is the one already present, so this adds nothing.
+func ensureWorkstream(existing []Workstream, key string) []Workstream {
+	if key == "" {
+		return existing
+	}
+	for _, w := range existing {
+		if w.Key == key {
+			return existing
+		}
+	}
+	return append(append([]Workstream(nil), existing...), Workstream{
+		Key:      key,
+		Name:     workstreamDisplayName(key),
+		Origin:   WorkstreamOriginLocal,
+		Question: "Which project is this work for?",
+	})
+}
+
+// workstreamDisplayName turns a key into something a person reads:
+// "development" -> "Development", "product_design" -> "Product design". The
+// key stays the identity; only the label changes.
+func workstreamDisplayName(key string) string {
+	out := strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' {
+			return ' '
+		}
+		return r
+	}, key)
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return key
+	}
+	return strings.ToUpper(out[:1]) + out[1:]
 }
 
 // AddRules adds repo/ticket rules to an existing project.

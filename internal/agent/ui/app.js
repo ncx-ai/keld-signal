@@ -462,6 +462,49 @@ export const SETTINGS_ENV = {
  *  caller now decides those separately: Cancel closes the field, an empty name
  *  says so. Returns the trimmed name, or "" for a name that is not one.
  */
+/** projectGroups is what "Your projects" iterates: the org's workstreams, plus
+ *  one group for any project whose workstream is in none of them.
+ *
+ *  ⚠️ **WITHOUT THE SECOND HALF, A PROJECT CAN BE INVISIBLE.** The pane renders
+ *  projects by looping over workstreams and drawing each one's members, so a
+ *  project filed under a key that is in no list is never drawn at all. Measured
+ *  on a real machine: two projects on disk, `"workstreams": null` from the API,
+ *  and a pane reading "YOUR PROJECTS" followed by nothing. The person who made
+ *  them saw their suggestion disappear and nothing appear, which is
+ *  indistinguishable from the suggestion having been thrown away.
+ *
+ *  That is the state of EVERY machine with Send to Atlas off, because the
+ *  workstream list is pushed down by Atlas and nothing local seeded it.
+ *
+ *  The daemon now seeds it too (projects.ensureWorkstream), so this is the
+ *  second of two guards rather than the only one — deliberately, because the
+ *  rule worth keeping is "the page never silently drops a project", not "that
+ *  one data bug was fixed". A synthetic group carries `synthetic: true` so the
+ *  caller can decline to offer an org-level control on a bucket the org never
+ *  declared.
+ */
+export function projectGroups(workstreams, projects) {
+  const groups = (workstreams || []).map((w) => ({ ...w, synthetic: false }));
+  const known = new Set(groups.map((w) => w.key));
+  const extra = new Map();
+  for (const p of projects || []) {
+    if (p.hidden) continue;
+    const key = p.workstream || "development";
+    if (known.has(key) || extra.has(key)) continue;
+    extra.set(key, { key, name: workstreamDisplayName(key), off: false, synthetic: true });
+  }
+  return groups.concat([...extra.values()]);
+}
+
+/** workstreamDisplayName turns a key into something a person reads. Mirrors the
+ *  Go side's function of the same name so a locally-seeded workstream is
+ *  labelled identically whether the page or the daemon named it. */
+export function workstreamDisplayName(key) {
+  const out = String(key || "").replace(/[_-]+/g, " ").trim();
+  if (!out) return String(key || "");
+  return out[0].toUpperCase() + out.slice(1);
+}
+
 export function validProjectTitle(title) {
   return String(title == null ? "" : title).trim();
 }
@@ -1154,7 +1197,7 @@ if (typeof document !== "undefined") {
     }
 
     root.appendChild(el("div", { class: "section-label" }, "Your projects"));
-    for (const w of workstreams) {
+    for (const w of projectGroups(workstreams, allProjects)) {
       const inThis = allProjects.filter((p) => p.workstream === w.key && !p.hidden);
       const card = el(
         "div",
@@ -1163,10 +1206,16 @@ if (typeof document !== "undefined") {
           "div",
           { class: "workstream-head" },
           el("span", { class: "name" }, `${w.name}`),
-          el("label", {}, "counts for my work ", switchEl({
-            checked: !w.off,
-            onChange: (v) => setWorkstreamOff(w.key, !v),
-          }))
+          // A synthetic group is this machine's own bucket, not one the org
+          // declared, so it offers no "counts for my work" switch: that flag is
+          // stored per workstream key and would appear to reset on reload,
+          // which is a control that lies about what it did.
+          w.synthetic
+            ? null
+            : el("label", {}, "counts for my work ", switchEl({
+                checked: !w.off,
+                onChange: (v) => setWorkstreamOff(w.key, !v),
+              }))
         )
       );
       appendConfirmation(card, `workstream:${w.key}`);

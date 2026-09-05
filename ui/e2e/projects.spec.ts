@@ -8,6 +8,15 @@ test.describe.configure({ mode: "serial" });
 
 const APPLIED = "Applied on this machine";
 
+/** The page's own /v1/projects, read through the page so it carries the same
+ *  secret the page was handed. */
+async function readProjects(page: any): Promise<any> {
+  return await page.evaluate(async () =>
+    (await fetch("/v1/projects", {
+      headers: { "x-keld-agent-secret": new URLSearchParams(location.search).get("secret")! },
+    })).json());
+}
+
 test.describe("Projects", () => {
   test("shows the coverage tile and at least one suggestion", async ({ signal, page }) => {
     await signal.open("projects");
@@ -53,6 +62,41 @@ test.describe("Projects", () => {
 
     await expect(page.getByText(APPLIED).first()).toBeVisible();
     await expect(heading).toHaveText(`Suggested by your activity · ${before - 1}`);
+
+    // ⚠️ **AND IT IS VISIBLE WITH NO ORG WORKSTREAMS AT ALL, WHICH IS THE CASE
+    // THAT WAS BROKEN.** The pane draws projects by looping over workstreams,
+    // and that list is pushed down by Atlas — so on every machine with Send to
+    // Atlas off (this daemon included, and the default for anyone trying Signal
+    // locally) it was empty, the loop body never ran, and a freshly created
+    // project was invisible. Measured on a real machine: two projects on disk,
+    // "YOUR PROJECTS" followed by nothing. From the outside that is
+    // indistinguishable from the suggestion having been thrown away, which is
+    // exactly how it was reported.
+    //
+    // Asserted explicitly rather than left implicit: this suite ALWAYS runs with
+    // no workstreams, so without naming it a reader would not know the case is
+    // covered — and the earlier version of this test asserted `.workstream-card`
+    // while believing the fixture had org workstreams it never had.
+    // ⚠️ **EVERY WORKSTREAM HERE IS `origin: "local"`, AND THAT IS THE ASSERTION
+    // THAT MATTERS.** This suite always runs with Send to Atlas off, so the org
+    // has declared NONE — and the pane draws projects by looping over
+    // workstreams, so with an empty list a freshly created project was drawn
+    // nowhere at all. Measured on a real machine: two projects on disk, "YOUR
+    // PROJECTS" followed by nothing, which from the outside is indistinguishable
+    // from the suggestion having been thrown away. That is exactly how it was
+    // reported.
+    //
+    // Stated as "all local" rather than "was empty beforehand" on purpose: the
+    // emptiness is a property of the daemon at bring-up, not of this test's
+    // moment, and a serial suite that creates projects would make a
+    // before-assertion pass only when this test ran first — which is not a test.
+    // An org-declared workstream would show `origin: "atlas"`, so this still
+    // fails if the machine's own bucket is ever mislabelled as the org's.
+    const afterCreate = await readProjects(page);
+    const origins = (afterCreate.workstreams || []).map((w: any) => w.origin);
+    expect(origins.length).toBeGreaterThan(0);
+    expect([...new Set(origins)]).toEqual(["local"]);
+
     // The new project sits under "Your projects" with the repository as its rule.
     const yours = page.locator(".workstream-card");
     await expect(yours.getByText(firstValue).first()).toBeVisible();
