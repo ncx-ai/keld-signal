@@ -407,10 +407,22 @@ can render the code without waiting), then `{"event":"authorized",…}` or
 `{"event":"tool",…,"action":"configured|already_configured|skipped_conflict"}`
 line per tool, then `{"event":"done","configured":N,"restart_required":…}`.
 
-**`keld-agent install` is TTY-aware.** From a terminal it runs login → setup →
-service install. Headless, it registers the service only and prints the commands
-to finish setup, so a GUI installer's pages drive `--json` instead of hanging on
-an invisible prompt.
+**`keld-agent install` installs, and nothing more.** It registers the service and
+prints how to finish setup — in the Keld Signal app's Settings pane, or with
+`keld login && keld signal setup`. Onboarding is opt-in: `--code <CODE>` redeems a
+setup code non-interactively, and `--login` runs the browser device flow in this
+terminal (only when stdout really is one).
+
+⚠️ **That default was inverted until 2026-09-05.** `install` used to log in and
+configure tools whenever stdout looked like a terminal, with `--headless` to opt
+out. It was right while the CLI was the only place a machine could be onboarded:
+an install that did not onboard left a daemon idling with no way to fix it. The
+app removed that constraint — `POST /v1/config` pairs a machine from Settings, and
+the daemon serves that route before it has any config — so a command called
+`install` opening a browser became a command doing three things, and the common
+path needed a flag to get the obvious behaviour. `--headless` is still accepted and
+inert, because scripts and MDM payloads outlive a release and cobra rejects an
+unknown flag outright.
 
 ### Service mode (headless deployments)
 

@@ -75,7 +75,8 @@ install-linux: build-binaries sidecar install-service
 	@echo "  ml_backend=deterministic, blocks=true  (~/.keld/agent-config.json)"
 	@echo "  No model is downloaded. For the GLiNER2 pipeline instead:"
 	@echo "    keld-agent install --backend auto"
-	@echo "If not yet configured, run:  keld login && keld signal setup"
+	@echo "Not configured yet? Pair in the Keld Signal app (Settings), or run:"
+	@echo "    keld login && keld signal setup        # or: keld-agent install --login"
 	@echo "Visualize enrichments:      make enrichments-sink   (see README / the notes printed by this session)"
 
 .PHONY: signal-dev-artifacts

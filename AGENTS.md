@@ -2020,11 +2020,24 @@ on error); `--no-browser` suppresses the auto-open so the caller owns the link.
 tool (`configured`/`already_configured`/`skipped_conflict`) then `done`. Keep all
 auth/setup logic Go-side behind the `onStart` (auth) and `SetupOpts.Emit` (setup)
 seams — don't reimplement it in installer code; the human paths stay unchanged when
-those seams are unset. `keld-agent install` is **TTY-aware** (`term.IsTerminal` —
-`os.ModeCharDevice` is wrong because macOS launchd wires stdin to `/dev/null`):
-in a terminal it runs login → setup → service install; headless it registers the
-service only and prints the finish-setup commands, so a GUI installer's pages drive
-`keld --json` instead of a hung, invisible interactive flow.
+those seams are unset. **`keld-agent install` installs and nothing more**: it
+registers the service and prints how to finish — the app's Settings pane, or
+`keld login && keld signal setup`. Onboarding is OPT-IN, via `--code <CODE>`
+(non-interactive, the installers' path) or `--login` (browser device flow, gated
+on `term.IsTerminal` — `os.ModeCharDevice` is wrong because macOS launchd wires
+stdin to `/dev/null`).
+⚠️ **THAT DEFAULT WAS INVERTED UNTIL 2026-09-05, and the old one had EXPIRED
+rather than been chosen.** `install` used to log in whenever stdout looked like a
+terminal, with `--headless` to opt out — correct while the CLI was the only
+onboarding surface, because an install that did not onboard left a daemon idling
+with nowhere to be told about Atlas. `POST /v1/config` plus daemon/onboarding.go
+(the daemon now serves the page and that route BEFORE it has any config) removed
+the constraint, so the flag was protecting a dead end that no longer exists.
+`--headless` is kept ACCEPTED AND INERT — it asks for what already happens —
+because cobra fails hard on an unknown flag and scripts, runbooks and MDM
+payloads outlive a release. Both `onboard.command` and `onboard.cmd` pass
+`--login --yes` on their fallback path; they relied on the old default and would
+otherwise have silently stopped onboarding anyone whose setup code failed.
 
 ## Repo layout
 

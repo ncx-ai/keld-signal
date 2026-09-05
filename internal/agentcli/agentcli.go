@@ -103,19 +103,39 @@ type installConfig struct {
 	apiURL  string // --api-url passthrough for local dev
 	yes     bool   // pass --yes to signal setup (implied when code is set)
 	jsonOut bool   // --json passthrough for installer UIs
-	// headless forces the non-interactive branch regardless of what isTTY says.
-	// It exists because TTY DETECTION IS NOT A RELIABLE PROXY FOR "a human can
-	// answer this" ON WINDOWS: Inno Setup's `runhidden` launches a console app
-	// with STARTF_USESHOWWINDOW/SW_HIDE and does not redirect stdio, so the child
+	// login opts INTO the browser device-flow login. Without it, `install`
+	// installs and nothing else.
+	//
+	// ⚠️ **THIS WAS INVERTED UNTIL 2026-09-05, AND THE OLD DEFAULT HAD EXPIRED
+	// RATHER THAN BEEN CHOSEN.** `install` used to log in and configure tools
+	// whenever stdout was a terminal, with `--headless` to opt OUT. That was
+	// right while the CLI was the only onboarding surface: there was nowhere
+	// else to paste a token, so an install that did not onboard left a daemon
+	// idling with no way to fix it. The app removed that constraint —
+	// `POST /v1/config` pairs a machine from the Settings pane, and since
+	// daemon/onboarding.go the daemon serves that route before it has any
+	// config at all — so a command called `install` opening a browser is now
+	// just a command doing three things, and the common path needed a flag to
+	// get the obvious behaviour.
+	//
+	// TTY detection still gates it, because opting in is not the same as being
+	// answerable: TTY DETECTION IS NOT A RELIABLE PROXY FOR "a human can answer
+	// this" ON WINDOWS. Inno Setup's `runhidden` launches a console app with
+	// STARTF_USESHOWWINDOW/SW_HIDE and does not redirect stdio, so the child
 	// still owns a real console — just one nobody can see. stdout is a console
 	// handle, term.IsTerminal answers true, and install took the INTERACTIVE
 	// branch inside an invisible window. Observed on a real machine: the .iss's
 	// registration entry spawned `keld.exe signal setup`, which blocked forever
 	// on stdinConfirm's Fscanln (internal/cli/setup.go), Inno waited on it, and
-	// the installer sat at "Registering the Keld agent..." until that process was
-	// killed by hand — after which onboarding asked for a login a SECOND time,
-	// because the first one had already happened where nobody could see it.
-	// A caller that knows there is no reachable human says so; nothing is inferred.
+	// the installer sat at "Registering the Keld agent..." until that process
+	// was killed by hand — after which onboarding asked for a login a SECOND
+	// time, because the first had already happened where nobody could see it.
+	login bool
+	// headless is ACCEPTED AND INERT, kept so nothing that passes it breaks.
+	// It used to force the non-interactive branch; that branch is now the
+	// default, so the flag asks for what already happens. It is not deleted
+	// because scripts, MDM payloads and pasted runbooks outlive a release, and
+	// an unknown flag is a hard error from cobra rather than a warning.
 	headless bool
 	// backend is the ml_backend a v2 install lands on. Default "deterministic"
 	// (resolved in runInstall, so a zero-value installConfig in a test lands
@@ -141,9 +161,11 @@ type installConfig struct {
 // that only registers the service still has to be configured, or a GUI-installer
 // install runs v1 behaviour until someone notices.
 //
-// With a setup code the login+setup run non-interactively regardless of TTY;
-// without a code they run only in a real terminal — or not at all when the caller
-// passed --headless, which overrides the TTY probe outright.
+// With a setup code the login+setup run non-interactively regardless of TTY.
+// Without one they run ONLY when --login was asked for AND stdout is a real
+// terminal. Bare `install` registers the service and says how to finish, which
+// is now a complete outcome rather than a dead end: the app pairs the machine
+// from its Settings pane. See installConfig.login.
 func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string, error),
 	run stepRunner, writeConfig func(backend string, blocks bool) error, installService func() error) error {
 	backend := cfg.backend
@@ -201,7 +223,7 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 		if err := run(keld, setup...); err != nil {
 			return fmt.Errorf("keld signal setup: %w", err)
 		}
-	case !cfg.headless && isTTY():
+	case cfg.login && isTTY():
 		keld, err := resolveKeld()
 		if err != nil {
 			return err
@@ -216,7 +238,8 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 			return fmt.Errorf("keld signal setup: %w", err)
 		}
 	default:
-		fmt.Println("Service installed. Finish setup by running: keld login && keld signal setup")
+		fmt.Println("Service installed. Finish setup in the Keld Signal app (Settings → paste your setup code),")
+		fmt.Println("or from here with: keld login && keld signal setup")
 	}
 
 	if !cfg.jsonOut {
@@ -280,7 +303,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(runCmd)
 	installCmd := &cobra.Command{
 		Use:   "install",
-		Short: "Log in, set up telemetry, and install keld-agent as a per-user autostart service.",
+		Short: "Install keld-agent as a per-user autostart service (add --login or --code to onboard too).",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			code, _ := cmd.Flags().GetString("code")
 			if code == "" {
@@ -290,9 +313,10 @@ func NewRootCmd() *cobra.Command {
 			apiURL, _ := cmd.Flags().GetString("api-url")
 			jsonOut, _ := cmd.Flags().GetBool("json")
 			backend, _ := cmd.Flags().GetString("backend")
+			login, _ := cmd.Flags().GetBool("login")
 			headless, _ := cmd.Flags().GetBool("headless")
 			cfg := installConfig{code: code, apiURL: apiURL, yes: yes, jsonOut: jsonOut,
-				backend: backend, headless: headless}
+				backend: backend, login: login, headless: headless}
 			return runInstall(cfg, stdoutIsTTY, resolveKeld, runStep,
 				settings.WriteInstallDefaults, service.Install)
 		},
@@ -301,8 +325,10 @@ func NewRootCmd() *cobra.Command {
 	installCmd.Flags().Bool("yes", false, "Skip confirmation prompts during setup.")
 	installCmd.Flags().String("api-url", "", "Target a different Keld API base URL (e.g. http://localhost:8000) for local dev.")
 	installCmd.Flags().Bool("json", false, "Emit machine-readable NDJSON from login/setup (for installer UIs).")
+	installCmd.Flags().Bool("login", false,
+		"Also run the browser login and telemetry setup, in this terminal. Without it, install only installs — pair the machine afterwards in the Keld Signal app, or with `keld login && keld signal setup`.")
 	installCmd.Flags().Bool("headless", false,
-		"Never prompt: register the service and skip login/setup even if stdout looks like a terminal. For GUI installers that run this with no console a human can reach.")
+		"Accepted and inert: skipping login/setup is now the default. Kept so existing scripts and MDM payloads do not fail on an unknown flag.")
 	installCmd.Flags().String("backend", "deterministic",
 		"Enrichment backend to configure: deterministic (v2 default — no model download), auto (the GLiNER2 pipeline), or off.")
 	root.AddCommand(installCmd)
