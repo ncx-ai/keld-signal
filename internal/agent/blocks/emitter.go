@@ -173,6 +173,19 @@ type Emitter struct {
 	// land and the error that stopped it, so the reason a person reads on the
 	// page is the reason the transport actually gave.
 	OnPublishFailed func(rows []publish.BlockEnrichment, err error)
+	// OnCutPending, when non-nil, is called when a sweep could NOT ask the
+	// analysis service for a transcript's blocks at all: the sidecar has no
+	// /blocks route ("sidecar_outdated" — the same fact noteRouteUnsupported
+	// logs) or it could not answer for any other reason — not ready yet,
+	// restarting, or its own store behind the ask ("sidecar_behind", the
+	// sweepOne comment's own list of causes for `!ans.OK`). No block exists
+	// yet in either case, so this is keyed by SESSION rather than by a
+	// (session, start) pair. The reason strings are spelled out at the call
+	// site rather than imported from ledger.Reason so this package does not
+	// depend on ledger — see recordCutPending in internal/agent/daemon for
+	// where they are interpreted, and ledger.Store.Cut for how the resulting
+	// row clears itself the moment a later sweep succeeds.
+	OnCutPending func(session, reason string)
 
 	// routeGone latches the "this sidecar has no /blocks route" log to ONE line
 	// per daemon run. The sweep runs every interval against every active
@@ -256,6 +269,28 @@ func (e *Emitter) noteRouteUnsupported(ans enrich.BlocksAnswer) {
 		"this agent, so NO BLOCKS CAN BE EMITTED until it is updated. Re-run the Keld " +
 		"installer (macOS: /usr/local/keld/onboard.command). Blocks resume on the next " +
 		"sweep after that, with nothing lost: the cursor is held.")
+}
+
+// reportCutPending tells OnCutPending (if wired) that this sweep could not
+// ask for the transcript's blocks at all — every failed BlocksAnswer, and
+// nothing else: ans.OK means real ground was asked for and answered, even
+// when it held zero blocks, and that is not a pending condition.
+//
+// RouteUnsupported takes precedence because it is the stronger fact: an
+// outdated sidecar can never catch up on its own (the remedy is re-running
+// the installer, not waiting), whereas every other failure is transient by
+// construction — not ready yet, restarting, or the store behind the ask.
+// The two never overlap in practice (RouteUnsupported is never true
+// alongside OK), so this is an ordering of causes, not a real ambiguity.
+func (e *Emitter) reportCutPending(session string, ans enrich.BlocksAnswer) {
+	if e.OnCutPending == nil || session == "" || ans.OK {
+		return
+	}
+	if ans.RouteUnsupported {
+		e.OnCutPending(session, "sidecar_outdated")
+		return
+	}
+	e.OnCutPending(session, "sidecar_behind")
 }
 
 // Advance is the watcher's per-file signal that a transcript grew, in the shape
@@ -385,6 +420,7 @@ func (e *Emitter) sweepOne(tgt target, now time.Time) int {
 		ans := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
 			nil, now, 0, resolved)
 		e.noteRouteUnsupported(ans)
+		e.reportCutPending(tgt.Session, ans)
 		if ans.OK && ans.Watermark != nil {
 			e.st.advance(tgt.Path, *ans.Watermark)
 		}
@@ -394,6 +430,7 @@ func (e *Emitter) sweepOne(tgt target, now time.Time) int {
 	ans := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
 		tgt.Cursor, now, maxPerSweep, resolved)
 	e.noteRouteUnsupported(ans)
+	e.reportCutPending(tgt.Session, ans)
 	blocks := ans.Blocks
 	if !ans.OK {
 		// The sidecar could not answer (not ready, restarting, store behind).

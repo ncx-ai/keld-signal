@@ -844,9 +844,38 @@ func Run(ctx context.Context) error {
 	// window onto it must not be allowed to take it down.
 	sig := newV3(set, atlasCl)
 	sig.observeRemote(nil)
-	startHealth(ctx, sig, nil, set.AtlasEnabled())
+	// The attribution path's terminal-quarantine hook (v3attrib.go) is wired
+	// unconditionally, here, rather than only when attribution later turns
+	// out to be on: it is nil-safe on a machine that never quarantines a job,
+	// and wiring it once at startup means startAttributor never has to know
+	// whether v3 exists.
+	setAttribQuarantineHandler(sig.recordAttributeQuarantined)
+	// telemetryLast reads the running telemetry proxy's own record of its
+	// last successful forward — TelemetryLastForward already returns the zero
+	// time when no proxy is running at all, which startHealth's own note()
+	// already treats as "say nothing" (see its doc comment): a health fact
+	// that cannot be determined must never render as broken.
+	startHealth(ctx, sig, func() time.Time {
+		t, _ := TelemetryLastForward()
+		return t
+	}, set.AtlasEnabled())
+	// B2 — Send to Atlas (docs/v3/contracts.md): drain any blocks this ledger
+	// captured while a previous run had Atlas off (or a publish attempt failed
+	// and was never retried). A no-op the instant it finds nothing to send —
+	// see republish.go for why the payload has to be captured verbatim rather
+	// than rebuilt from the ledger's own delivery-cell schema.
+	startRepublisher(ctx, sig.ledger, atlasCl)
 
-	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded, sig.routes()...)
+	v3Routes := append(sig.routes(),
+		// SettingsRoute's restart function is service.Restart() — the SAME
+		// mechanism internal/agent/update already uses to restart the daemon
+		// after an auto-update (see daemon/update.go's serviceRestarter) —
+		// reused rather than a bespoke exit(0), since it already exists and
+		// already does exactly this.
+		ingress.SettingsRoute(serviceRestarter{}.Restart),
+		ingress.ConfigRoute(),
+	)
+	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded, v3Routes...)
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -1074,6 +1103,18 @@ func Run(ctx context.Context) error {
 		// job, and its own writes are fire-and-forget — the window onto the
 		// collector must never be able to stop the collector.
 		onBlockPublished = chainOnPublished(onBlockPublished, sig.recordDelivered)
+		// B2 — Send to Atlas: with Atlas off, sig.recordCut is the ONLY record
+		// of a block that will ever exist — the emitter's own Sender is
+		// localOnlySender here (see daemon/blocks.go), which discards and
+		// reports success so the cursor never re-offers it. captureOnCut keeps
+		// the block's own marshalled JSON so a LATER run with Atlas on can
+		// republish it verbatim (republish.go) without re-cutting anything.
+		// Only wired when Atlas is off: a machine that has always published
+		// live never pays for a table it will never need to drain.
+		onCut := sig.recordCut
+		if !set.AtlasEnabled() {
+			onCut = captureOnCut(sig.ledger, sig.recordCut)
+		}
 		// v2's block emitter, and the reason it sits beside the tick rather than
 		// inside it: a block reaches nowhere, so it needs none of the tick's
 		// frontier reasoning about which future prompts might sweep over a
@@ -1081,7 +1122,7 @@ func Run(ctx context.Context) error {
 		// Atlas stores blocks now but nothing reads them yet. Returns nil when
 		// off, which setBlockAdvance takes as "no observer".
 		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks,
-			set.AtlasEnabled(), onBlockPublished, sig.recordCut, sig.recordPublishFailed))
+			set.AtlasEnabled(), onBlockPublished, onCut, sig.recordPublishFailed, sig.recordCutPending))
 		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
 		// future-work prediction. svc.Features is non-nil ONLY under
 		// ml_backend "deterministic" (see deterministicBackend), so this is

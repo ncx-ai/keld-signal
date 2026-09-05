@@ -40,6 +40,13 @@ type v3 struct {
 	// needs it to record sent/received as NOT APPLICABLE rather than as a
 	// success on a machine that deliberately publishes nothing.
 	atlasOn bool
+	// atlas is the connector itself, held so the health strip can read
+	// LastResponse() when Atlas is on — "reachable" and "never tried" are
+	// different facts, and only the connector that actually made the calls
+	// knows which one is true. nil-checked at every read (Off still answers
+	// LastResponse(), but a future caller with a bare zero value must not
+	// panic).
+	atlas atlas.Client
 }
 
 func newV3(set settings.Settings, cl atlas.Client) *v3 {
@@ -51,7 +58,7 @@ func newV3(set settings.Settings, cl atlas.Client) *v3 {
 	// functions so internal/agent/projects depends on neither the ledger nor
 	// the Atlas connector — it is a pure decision layer and must stay one.
 	p.Blocks = ledgerBlocks{l}
-	v := &v3{ledger: l, projects: p, atlasOn: cl.Enabled()}
+	v := &v3{ledger: l, projects: p, atlasOn: cl.Enabled(), atlas: cl}
 	p.RemoteProjects = func() []settings.RemoteProject {
 		r := v.remote.Load()
 		if r == nil || r.Projects == nil {

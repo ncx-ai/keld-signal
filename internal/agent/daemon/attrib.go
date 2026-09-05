@@ -86,7 +86,13 @@ func startAttributor(ctx context.Context, dig blocks.Digester, cl attrib.Attribu
 		func(path string) enrich.ResolvedFacts { return facts.forTranscript(path).resolved() },
 		actor, dig).
 		WithProjects(projectsKnown, repostProjects).
-		WithEmitter(emitter)
+		WithEmitter(emitter).
+		// THE DELIVERY LEDGER's other quarantine seam (v3attrib.go): a job that
+		// exhausted its retries never got to answer for this block at all, and
+		// the ledger records that as attributed/failed/attribute_failed. A
+		// package-level accessor rather than a parameter here, so every
+		// existing call site of startAttributor is unaffected.
+		WithQuarantineHook(noteAttributionQuarantine)
 	interval := attrib.IntervalFromEnv()
 	log.Printf("keld-agent: project attribution ON (sweeping every %s)", interval)
 	if emitter != nil {

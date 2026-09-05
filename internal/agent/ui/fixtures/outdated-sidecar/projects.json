@@ -15,7 +15,8 @@
       "workstream": "development",
       "origin": "atlas",
       "hidden": false,
-      "atlas_value_id": "val_keld_signal"
+      "atlas_value_id": "val_keld_signal",
+      "rules": ["github.com/ncx-ai/keld-signal"]
     },
     {
       "id": "p_keld_atlas",
@@ -28,7 +29,8 @@
       "workstream": "development",
       "origin": "atlas",
       "hidden": false,
-      "atlas_value_id": "val_keld_atlas"
+      "atlas_value_id": "val_keld_atlas",
+      "rules": ["github.com/ncx-ai/keld-atlas"]
     },
     {
       "id": "p_marketing_launch",
@@ -41,7 +43,8 @@
       "workstream": "marketing",
       "origin": "atlas",
       "hidden": false,
-      "atlas_value_id": "val_launch"
+      "atlas_value_id": "val_launch",
+      "rules": []
     }
   ],
   "suggestions": [

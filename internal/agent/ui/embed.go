@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 )
@@ -96,6 +98,21 @@ func withSecretCookie(next http.Handler) http.Handler {
 // /v1/workstreams/.../off, POST /v1/config) are accepted and echoed back
 // rather than persisted: this is a fixture reviewer, not a second
 // implementation of D2/D3/D4's validation, restart bookkeeping or 409 rules.
+// Two flows below are enough of an exception to earn their own simulation,
+// because the page's Settings pane has real behaviour with nothing else to
+// exercise it against until D2/D4's routes are mounted on the real daemon
+// (see DevServer's own callers in cmd/ui-dev and this package's report):
+//
+//   - PUT /v1/settings answers `restart_required` FOR REAL (send_to_atlas or
+//     dev_blocks in the patch), so the page's restart bar has something
+//     honest to react to, and refuses a dev_blocks change exactly the way
+//     docs/v3/contracts.md documents (409 turn_off_send_to_atlas_first) when
+//     the loaded settings.json fixture has send_to_atlas on.
+//   - PUT /v1/settings?restart=1 arms a short countdown that makes the next
+//     two GET /v1/ledger calls answer 503, then resume — the
+//     "restart_required, then 503 twice, then 200" flow the D2 brief asks
+//     for, driven from any fixtures directory (fixtures/restart-required is
+//     just the obviously-named place to point at for it).
 func DevServer(fixturesDir string) http.Handler {
 	mux := http.NewServeMux()
 	// Same cookie-setting wrapper Route() uses in production, so
@@ -105,10 +122,14 @@ func DevServer(fixturesDir string) http.Handler {
 	// look identical whichever server is behind it.
 	mux.Handle("/", withSecretCookie(assetHandler()))
 
+	readFixture := func(filename string) ([]byte, bool) {
+		b, err := os.ReadFile(filepath.Join(fixturesDir, filename))
+		return b, err == nil
+	}
 	serveFixture := func(filename string) http.HandlerFunc {
 		return func(w http.ResponseWriter, _ *http.Request) {
-			b, err := os.ReadFile(filepath.Join(fixturesDir, filename))
-			if err != nil {
+			b, ok := readFixture(filename)
+			if !ok {
 				http.Error(w, `{"error":"daemon_not_running"}`, http.StatusServiceUnavailable)
 				return
 			}
@@ -117,25 +138,135 @@ func DevServer(fixturesDir string) http.Handler {
 		}
 	}
 
-	mux.HandleFunc("GET /v1/ledger", serveFixture("ledger.json"))
+	// restartCountdown: how many more GET /v1/ledger calls should still
+	// answer 503 after a `?restart=1` PUT — the "daemon is bouncing" window
+	// the page's restart bar polls through. Package-level state is fine here:
+	// DevServer is a single-operator manual review tool, never a concurrent
+	// test fixture.
+	var restartCountdown int32
+
+	mux.HandleFunc("GET /v1/ledger", func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadInt32(&restartCountdown) > 0 {
+			atomic.AddInt32(&restartCountdown, -1)
+			http.Error(w, `{"error":"daemon_restarting"}`, http.StatusServiceUnavailable)
+			return
+		}
+		serveFixture("ledger.json")(w, r)
+	})
 	mux.HandleFunc("GET /v1/settings", serveFixture("settings.json"))
 	mux.HandleFunc("GET /v1/projects", serveFixture("projects.json"))
 
-	mux.HandleFunc("PUT /v1/settings", devEcho(map[string]any{"restart_required": false}))
-	mux.HandleFunc("POST /v1/projects/bundle", devEcho(map[string]any{"ok": true}))
-	mux.HandleFunc("POST /v1/projects/place", devEcho(map[string]any{"ok": true}))
-	mux.HandleFunc("POST /v1/projects/", devEcho(map[string]any{"ok": true}))   // {id}/rules, {id}/hide
-	mux.HandleFunc("PUT /v1/workstreams/", devEcho(map[string]any{"ok": true})) // {key}/off
-	mux.HandleFunc("POST /v1/config", devEcho(map[string]any{"host": "https://atlas-dev.keld.co", "restart_required": true}))
+	mux.HandleFunc("PUT /v1/settings", func(w http.ResponseWriter, r *http.Request) {
+		var patch map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&patch)
+
+		if devBlocks, asked := patch["dev_blocks"]; asked {
+			if s, ok := devBlocks.(string); ok && s != "" && fixtureAtlasOn(fixturesDir) {
+				writeDevJSON(w, http.StatusConflict, map[string]any{"error": "turn_off_send_to_atlas_first"})
+				return
+			}
+		}
+
+		_, sendToAtlasAsked := patch["send_to_atlas"]
+		_, devBlocksAsked := patch["dev_blocks"]
+		restartRequired := sendToAtlasAsked || devBlocksAsked
+
+		if r.URL.Query().Get("restart") == "1" {
+			atomic.StoreInt32(&restartCountdown, 2) // next 2 GET /v1/ledger calls 503, then resume
+		}
+		writeDevJSON(w, http.StatusOK, map[string]any{"restart_required": restartRequired})
+	})
+	mux.HandleFunc("POST /v1/projects/bundle", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Title string `json:"title"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeDevJSON(w, http.StatusOK, localOnlyEcho(map[string]any{
+			"project": map[string]any{"id": "p_dev_" + strings.ToLower(strings.ReplaceAll(body.Title, " ", "_")), "title": body.Title},
+		}))
+	})
+	mux.HandleFunc("POST /v1/projects/place", devEcho(localOnlyEcho(nil)))
+	mux.HandleFunc("POST /v1/projects/", devEcho(localOnlyEcho(nil)))   // {id}/rules, {id}/hide
+	mux.HandleFunc("PUT /v1/workstreams/", devEcho(localOnlyEcho(nil))) // {key}/off
+
+	mux.HandleFunc("POST /v1/config", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		code := strings.TrimSpace(body.Code)
+		switch {
+		case code == "" || !strings.Contains(code, "/"):
+			// No "host/CODE" shape at all — the 400 docs/v3/contracts.md
+			// documents for a malformed code.
+			writeDevJSON(w, http.StatusBadRequest, map[string]any{"error": "malformed_code"})
+		case strings.Contains(strings.ToLower(code), "atlas-off"):
+			// A code containing "atlas-off" is this dev server's own trigger
+			// for the 409 docs/v3/contracts.md documents for POST /v1/config
+			// while send_to_atlas is false — there is no real settings state
+			// here to check against, so a manual reviewer asks for it by name.
+			writeDevJSON(w, http.StatusConflict, map[string]any{"error": "atlas_off"})
+		default:
+			b, ok := readFixture("config.json")
+			if !ok {
+				http.Error(w, `{"error":"daemon_not_running"}`, http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(b)
+		}
+	})
 
 	return mux
+}
+
+// fixtureAtlasOn reads the fixture directory's OWN settings.json for
+// send_to_atlas, to decide the dev_blocks 409 simulation — DevServer never
+// persists a PUT (see this function's caller), so the question is always
+// "what does the loaded fixture say", matching the "fixture reviewer, not a
+// second implementation" scope this file states above. Absent/unreadable
+// defaults to true (Settings.AtlasEnabled()'s own default), matching
+// app.js's atlasEnabled().
+func fixtureAtlasOn(fixturesDir string) bool {
+	b, err := os.ReadFile(filepath.Join(fixturesDir, "settings.json"))
+	if err != nil {
+		return true
+	}
+	var v struct {
+		SendToAtlas *bool `json:"send_to_atlas"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return true
+	}
+	if v.SendToAtlas == nil {
+		return true
+	}
+	return *v.SendToAtlas
+}
+
+// localOnlyEcho adds the local_only/atlas_editor_url pair every real
+// mutating /v1/projects (or /v1/workstreams) route stamps on
+// (docs/v3/contracts.md's verified note), so the page's confirmation UI has
+// something to react to against the dev server too, not only a live daemon.
+func localOnlyEcho(v map[string]any) map[string]any {
+	if v == nil {
+		v = map[string]any{}
+	}
+	v["local_only"] = true
+	v["atlas_editor_url"] = "https://atlas-dev.keld.co/workstreams"
+	return v
+}
+
+func writeDevJSON(w http.ResponseWriter, status int, body map[string]any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func devEcho(body map[string]any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var discard map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&discard) // accept, never persist
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(body)
+		writeDevJSON(w, http.StatusOK, body)
 	}
 }

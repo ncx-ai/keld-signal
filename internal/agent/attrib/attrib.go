@@ -274,6 +274,12 @@ type Attributor struct {
 	// the top of drainOnce, and unlocked for sweepOffset's reason: drainOnce is
 	// single-goroutine by construction.
 	repostedThisSweep bool
+	// onQuarantine is optional (see WithQuarantineHook). Called after a job is
+	// durably quarantined — never for a held pending/degraded job, and never
+	// for a successful publish-then-delete — so a recorder learns about the
+	// one outcome that means the deterministic attribution pass never got to
+	// answer this block at all.
+	onQuarantine func(sessionID string, start float64)
 }
 
 // New builds an Attributor. facts may be nil (empty resolved facts are sent
@@ -308,6 +314,15 @@ func (a *Attributor) WithProjects(known func() bool, repost func()) *Attributor 
 // WithEmitter wires client-events. Optional; every emit site is nil-guarded.
 func (a *Attributor) WithEmitter(e *clientevents.Emitter) *Attributor {
 	a.emitter = e
+	return a
+}
+
+// WithQuarantineHook wires a nil-safe observer of terminal job quarantines.
+// Optional — the delivery ledger hangs off this seam (internal/agent/daemon)
+// to record the block's `attributed` cell as failed; a caller that never sets
+// it (every test that doesn't care) is unaffected.
+func (a *Attributor) WithQuarantineHook(fn func(sessionID string, start float64)) *Attributor {
+	a.onQuarantine = fn
 	return a
 }
 
@@ -591,6 +606,9 @@ func (a *Attributor) retryOrQuarantine(j Job, reason string) {
 			"reason":   reason,
 			"source":   j.Source,
 		})
+		if a.onQuarantine != nil {
+			a.onQuarantine(j.SessionID, j.Start)
+		}
 		return
 	}
 	if err := a.st.Put(j); err != nil {

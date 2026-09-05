@@ -1,0 +1,14 @@
+{
+  "name": "keld-signal-e2e",
+  "private": true,
+  "description": "Playwright smoke suite for the Keld Signal page, driven against an isolated daemon + worktree sidecar over a generated corpus. See README.md.",
+  "scripts": {
+    "test": "playwright test",
+    "test:chromium": "playwright test --project=chromium --project=not-running",
+    "update-baselines": "playwright test visual.spec.ts --update-snapshots",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}

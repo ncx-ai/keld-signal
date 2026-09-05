@@ -374,6 +374,161 @@ export function findConflicts(projects, offWorkstreams) {
   return out;
 }
 
+/** What a project card shows as "the rules": GET /v1/projects' own `rules`
+ *  field (internal/agent/ingress/projects.go's projectView — declared repos
+ *  always, a repo-shaped keyword only once it has actually matched an
+ *  observed block), never the raw `repos ∪ keywords` the store holds. Reading
+ *  raw keywords would show an unmatched candidate like "design/ux" as if it
+ *  were a real rule — precisely the internal-vocabulary failure the daemon's
+ *  own split exists to prevent; the page must not re-introduce it by reading
+ *  the wrong field. Falls back to `repos` only for a payload that predates the
+ *  `rules` field (a fixture not yet updated), never as the normal path. */
+export function projectRulesSummary(p) {
+  const rules = Array.isArray(p.rules) ? p.rules : p.repos || [];
+  const bits = [];
+  if (rules.length) bits.push(`repo ${rules[0]}${rules.length > 1 ? ` +${rules.length - 1}` : ""}`);
+  if (p.ticket_key) bits.push(`tickets ${p.ticket_key}-xxx`);
+  return bits.join(" · ") || "no rules yet";
+}
+
+/** Every mutating /v1/projects (or /v1/workstreams) route answers
+ *  `{local_only: true, atlas_editor_url: "..."}` (docs/v3/contracts.md's
+ *  verified note: a machine cannot write to Atlas's vocabulary today). This
+ *  is the ONE sentence the page ever shows for that fact — one function so
+ *  two call sites cannot drift into saying it differently, and so neither
+ *  can accidentally imply the org learned anything. */
+export function localOnlyConfirmationText() {
+  return "Applied on this machine. To change it for everyone, edit the workstream in Atlas.";
+}
+
+/** Every project a suggestion's "Same as" picker may offer — every project
+ *  GET /v1/projects returns, INCLUDING the org's own (origin `atlas`):
+ *  internal/agent/ingress/projects.go's handleGetProjects already merges the
+ *  local document with the org's pooled workstream values into one list, so
+ *  "same as" is never limited to local projects. A hidden project is left
+ *  out — placing a suggestion on one a person chose to hide would silently
+ *  un-hide nothing and just confuse the coverage count. */
+export function sameAsOptions(projects) {
+  return (projects || [])
+    .filter((p) => !p.hidden)
+    .map((p) => ({ id: p.id, label: p.origin === "atlas" ? `${p.title} · in Atlas` : p.title }));
+}
+
+/** The confirmation sentence after "same as" specifically — placing a
+ *  suggestion onto an Atlas-origin project is a LOCAL OVERLAY (this
+ *  machine's rule is added locally; the org's project itself is never
+ *  written), so it needs its own sentence rather than
+ *  localOnlyConfirmationText(): that one's "edit the workstream in Atlas"
+ *  reads as an invitation to go change the org's copy, which is backwards
+ *  for a project this machine did not create. Placing onto a LOCAL project
+ *  (or "New project", which only ever creates one) keeps the general
+ *  sentence — there IS no org copy to leave alone in that case, so the
+ *  "edit it in Atlas" advice is the real next step. */
+export function sameAsConfirmationText(targetOrigin) {
+  if (targetOrigin === "atlas") {
+    return "Applied on this machine. The org's project is unchanged.";
+  }
+  return localOnlyConfirmationText();
+}
+
+/** "Start at login" (docs/v3/contracts.md, page convention 4): NOT a working
+ *  toggle until the desktop shell (Tauri autostart, D9) owns it. Always
+ *  unchecked and disabled, with a note saying where it actually lives — a
+ *  toggle that silently does nothing is the defect this whole page exists to
+ *  remove, so this is never rendered as live state from settings/localStorage. */
+export function startAtLoginProps() {
+  return { checked: false, disabled: true, note: "in the desktop app" };
+}
+
+/** The env var GET /v1/settings' `readonly` names a key by, and the note the
+ *  page shows next to a control that key disables — "keys named in readonly
+ *  render disabled with 'set by KELD_… on this machine'" (the D2 brief).
+ *  internal/agent/settings/v3.go + attrib.go name the three that currently
+ *  support an env override; an unknown future key still gets an honest guess
+ *  rather than silently showing nothing. */
+export const SETTINGS_ENV = {
+  send_to_atlas: "KELD_ATLAS",
+  dev_blocks: "KELD_DEV_BLOCKS",
+  attribution: "KELD_ATTRIBUTION",
+};
+
+export function readonlyNote(key) {
+  const env = SETTINGS_ENV[key] || `KELD_${String(key || "").toUpperCase()}`;
+  return `Set by ${env} on this machine.`;
+}
+
+/** `PUT /v1/settings`'s one documented refusal (docs/v3/contracts.md):
+ *  `dev_blocks` while `send_to_atlas` is on → 409
+ *  `{"error":"turn_off_send_to_atlas_first"}`. The sentence is shown VERBATIM
+ *  for a code this page knows, and for any code it doesn't — never swallowed
+ *  into a generic "something went wrong", which would hide a real, actionable
+ *  refusal behind a shrug. */
+export const SETTINGS_ERROR_TEXT = {
+  turn_off_send_to_atlas_first: "Turn off Send to Atlas first — dev blocks are refused while it's on.",
+};
+
+export function settingsErrorText(status, body) {
+  const code = body && body.error;
+  if (code) return SETTINGS_ERROR_TEXT[code] || code;
+  if (!status || status >= 500) return "Signal couldn't save that just now — try again.";
+  return "That change was refused.";
+}
+
+/** `POST /v1/config`'s two documented refusals (docs/v3/contracts.md): a
+ *  malformed code is 400, and the route is refused with 409 while
+ *  `send_to_atlas` is false (pointing at a different Atlas is meaningless
+ *  while nothing is being sent to one). */
+export function configErrorText(status, body) {
+  if (status === 400) return "That does not look like a setup code";
+  if (status === 409) return "Turn on Send to Atlas first";
+  if (body && body.error) return body.error;
+  return "Couldn't reach Signal to set that — try again.";
+}
+
+/** The restart-bar state machine. `PUT /v1/settings` answers
+ *  `restart_required` for `send_to_atlas`/`dev_blocks`; `POST /v1/config`
+ *  answers it on every success (a new host always needs one). Either landing
+ *  moves NEEDED → the bar shows and offers Restart; the daemon's only
+ *  restart trigger is `PUT /v1/settings?restart=1` (docs/v3/contracts.md), so
+ *  clicking it re-PUTs (RESTARTING), then the page polls `/v1/ledger`
+ *  (WAITING) until the new process answers (READY), and reloads. A pure
+ *  reducer so the sequence is one thing to test, not something to reconstruct
+ *  from reading the click handler. */
+export const RESTART_IDLE = "idle";
+export const RESTART_NEEDED = "needed";
+export const RESTART_RESTARTING = "restarting";
+export const RESTART_WAITING = "waiting";
+export const RESTART_READY = "ready";
+
+export function restartBarText(status) {
+  switch (status) {
+    case RESTART_NEEDED:
+      return "Signal restarts to apply this.";
+    case RESTART_RESTARTING:
+    case RESTART_WAITING:
+      return "Restarting…";
+    case RESTART_READY:
+      return "Signal is back — reloading…";
+    default:
+      return "";
+  }
+}
+
+export function nextRestartStatus(status, event) {
+  switch (status) {
+    case RESTART_NEEDED:
+      return event === "clicked" ? RESTART_RESTARTING : RESTART_NEEDED;
+    case RESTART_RESTARTING:
+      return event === "sent" ? RESTART_WAITING : RESTART_RESTARTING;
+    case RESTART_WAITING:
+      return event === "ledger_ok" ? RESTART_READY : RESTART_WAITING;
+    case RESTART_READY:
+      return RESTART_READY;
+    default: // RESTART_IDLE, or any state this reducer doesn't recognise
+      return event === "restart_required" ? RESTART_NEEDED : RESTART_IDLE;
+  }
+}
+
 /** One plain sentence per closed reason code
  *  (internal/agent/ledger/recorder.go). Copy is from the user's side of the
  *  screen — no "spool", "cursor" or "corr_id" here; those stay inside the
@@ -475,14 +630,16 @@ if (typeof document !== "undefined") {
     }
   }
 
-  // Two page-only preferences docs/v3/contracts.md does not define a wire
-  // field for: "Show details on cards" and "Start at login". Both stay
-  // entirely client-side (this browser's localStorage) rather than invent a
-  // settings key the daemon has never heard of. See the report for why.
+  // "Show details on cards" is a page-only preference (docs/v3/contracts.md's
+  // page convention 3): it changes nothing the daemon does, so it lives
+  // entirely client-side rather than in agent-config.json. "Start at login"
+  // used to live here too, as a toggle that looked real and did nothing —
+  // page convention 4 is explicit that this is the defect to remove, so it is
+  // no longer a stored preference at all; startAtLoginProps() always renders
+  // it disabled.
   function loadLocalPrefs() {
     return readJSONStorage(LOCAL_PREFS_KEY, {
       showDetails: false,
-      startAtLogin: false,
     });
   }
   function saveLocalPrefs(p) {
@@ -496,12 +653,55 @@ if (typeof document !== "undefined") {
     projects: null,
     offline: false,
     local: loadLocalPrefs(),
+    // restart: the bar's own state machine (see nextRestartStatus/
+    // restartBarText). `patch` is whatever PUT /v1/settings body last needs
+    // resending with ?restart=1 — empty for a restart /v1/config asked for,
+    // since that route already wrote everything itself.
+    restart: { status: RESTART_IDLE, patch: {} },
+    // settingsError: the last PUT /v1/settings refusal, scoped to the key(s)
+    // it was about, so it renders next to the control that caused it rather
+    // than as an unscoped banner nobody can connect to an action.
+    settingsError: null,
+    configError: "",
+    configHost: "",
+    // confirmations: rowKey -> {url}. Set after any /v1/projects (or
+    // /v1/workstreams) mutation whose response carries local_only — read by
+    // renderProjects to show localOnlyConfirmationText() under the row the
+    // mutation affected. Never cleared by loadAll(): a fixture/dev PUT that
+    // doesn't persist must not make the confirmation flicker away on the next
+    // poll.
+    confirmations: new Map(),
   };
 
   async function fetchJSON(path, opts) {
     const res = await fetch(path, { credentials: "same-origin", ...opts });
     if (!res.ok) throw new Error(`${path}: ${res.status}`);
     return res.json();
+  }
+
+  // sendJSON never throws on a non-2xx — settingsErrorText/configErrorText
+  // need the STATUS and the BODY of a refusal (400/409), which fetchJSON's
+  // throw-on-!ok would discard. Network failure (daemon down, dev server with
+  // no route) is reported as status 0 with a null body, which both error-text
+  // functions already treat as "couldn't reach it" rather than crashing.
+  async function sendJSON(path, method, payload) {
+    try {
+      const res = await fetch(path, {
+        method,
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {}),
+      });
+      let body = null;
+      try {
+        body = await res.json();
+      } catch {
+        // a 204/empty body is not an error in itself
+      }
+      return { ok: res.ok, status: res.status, body };
+    } catch {
+      return { ok: false, status: 0, body: null };
+    }
   }
 
   async function loadAll() {
@@ -790,20 +990,76 @@ if (typeof document !== "undefined") {
     );
   }
 
+  // updateSettings PUTs one key at a time (every toggle its own PUT, per the
+  // D2 brief) and reads BOTH halves of the response: a refusal (409, or
+  // anything else non-2xx) is shown next to the control that caused it and
+  // the toggle is left unchanged — a swallowed error would otherwise make a
+  // refused dev_blocks radio look like it took effect. A success is applied
+  // optimistically (see the note that used to live here: DevServer's PUT
+  // echoes and never persists, so an immediate reload would overwrite this
+  // with the unchanged fixture) and, when it carries `restart_required`,
+  // arms the restart bar with this patch so Restart can resend it.
   async function updateSettings(patch) {
-    try {
-      await fetchJSON("/v1/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
-    } catch {
-      // fixture/dev server or an unreachable daemon: keep the optimistic
-      // local update below so the toggle still visibly responds.
+    const res = await sendJSON("/v1/settings", "PUT", patch);
+    if (!res.ok) {
+      state.settingsError = { keys: Object.keys(patch), text: settingsErrorText(res.status, res.body) };
+      route();
+      return;
     }
-    // Optimistic only, deliberately not re-fetched here: DevServer's PUT
-    // echoes and never persists (see embed.go), so an immediate reload would
-    // overwrite this with the unchanged fixture and the toggle would look
-    // like it did nothing. The next periodic poll re-syncs from whatever the
-    // server actually holds — real on a live daemon, unchanged on a fixture.
+    state.settingsError = null;
     state.settings = { ...state.settings, ...patch };
+    if (res.body && res.body.restart_required) {
+      state.restart.patch = { ...state.restart.patch, ...patch };
+      state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
+    }
     route();
+  }
+
+  function settingsErrorFor(key) {
+    return state.settingsError && state.settingsError.keys.includes(key) ? state.settingsError.text : null;
+  }
+
+  // The daemon's only restart trigger is PUT /v1/settings?restart=1
+  // (docs/v3/contracts.md); POST /v1/config's own restart_required rides the
+  // same mechanism with whatever settings patch is pending (empty when a
+  // config change is what asked for it — that route already wrote
+  // hook.json/auth.json itself). Not specified by contracts.md which route a
+  // config-triggered restart should use — this lane's choice; see the report.
+  async function clickRestart() {
+    state.restart.status = nextRestartStatus(state.restart.status, "clicked");
+    route();
+    await sendJSON("/v1/settings?restart=1", "PUT", state.restart.patch);
+    state.restart.status = nextRestartStatus(state.restart.status, "sent");
+    route();
+    pollUntilBack();
+  }
+
+  // Bounded: RESTART_POLL_MAX_ATTEMPTS * RESTART_POLL_INTERVAL_MS is a
+  // generous ceiling for a daemon restart (Swap/confirm elsewhere in this
+  // repo budgets minutes, not seconds) without polling forever against a
+  // daemon that never comes back.
+  const RESTART_POLL_INTERVAL_MS = 750;
+  const RESTART_POLL_MAX_ATTEMPTS = 60;
+
+  async function pollUntilBack() {
+    for (let attempt = 0; attempt < RESTART_POLL_MAX_ATTEMPTS; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, RESTART_POLL_INTERVAL_MS));
+      try {
+        const res = await fetch("/v1/ledger", { credentials: "same-origin" });
+        if (res.ok) {
+          state.restart.status = nextRestartStatus(state.restart.status, "ledger_ok");
+          route();
+          location.reload();
+          return;
+        }
+      } catch {
+        // not back yet — keep polling
+      }
+    }
+    // Gave up waiting: reload anyway so the page re-reads whatever is there
+    // (a slower restart, or one that needs a human to look) rather than
+    // sitting on "Restarting…" forever.
+    location.reload();
   }
 
   // ---- Projects ----
@@ -848,7 +1104,7 @@ if (typeof document !== "undefined") {
             el(
               "div",
               { class: "row-actions" },
-              el("button", { class: "btn secondary", onclick: () => placeSuggestion(s) }, "Same as…"),
+              sameAsSelect(s),
               el("button", { class: "btn", onclick: () => bundleSuggestion(s, workstreams) }, "New project")
             )
           )
@@ -872,6 +1128,7 @@ if (typeof document !== "undefined") {
           }))
         )
       );
+      appendConfirmation(card, `workstream:${w.key}`);
       if (w.off) {
         card.appendChild(el("div", { class: "workstream-off-note" }, "Your work never lands here. Turn on if you work in this area."));
       } else if (!inThis.length) {
@@ -879,24 +1136,24 @@ if (typeof document !== "undefined") {
       } else {
         for (const p of inThis) {
           const conflictIds = conflicts[p.id] || [];
-          card.appendChild(
+          const row = el(
+            "div",
+            { class: "project-row" },
             el(
               "div",
-              { class: "project-row" },
-              el(
-                "div",
-                { class: "row-title" },
-                p.title,
-                el("small", {}, matchedBySummary(p))
-              ),
-              conflictIds.length
-                ? el("span", { class: "pill no" }, "conflict · pick one")
-                : el("span", { class: "pill ok" }, p.origin === "atlas" ? "✓ in Atlas" : "local")
-            )
+              { class: "row-title" },
+              p.title,
+              el("small", {}, projectRulesSummary(p))
+            ),
+            conflictIds.length
+              ? el("span", { class: "pill no" }, "conflict · pick one")
+              : el("span", { class: "pill ok" }, p.origin === "atlas" ? "✓ in Atlas" : "local")
           );
+          card.appendChild(row);
           if (conflictIds.length) {
             card.appendChild(el("div", { class: "conflict-note" }, `Also claimed by: ${conflictIds.join(", ")}`));
           }
+          appendConfirmation(card, `project:${p.id}`);
         }
       }
       root.appendChild(card);
@@ -907,17 +1164,39 @@ if (typeof document !== "undefined") {
     return kind === "repo" ? "matched by repository" : kind === "ticket" ? "ticket key from branch names" : "matched by workspace";
   }
 
-  function matchedBySummary(p) {
-    const bits = [];
-    if (p.repos && p.repos.length) bits.push(`repo ${p.repos[0]}${p.repos.length > 1 ? ` +${p.repos.length - 1}` : ""}`);
-    if (p.ticket_key) bits.push(`tickets ${p.ticket_key}-xxx`);
-    return bits.join(" · ") || "no rules yet";
+  // noteLocalConfirmation records the local-only confirmation for one row,
+  // read straight off a mutating route's response (docs/v3/contracts.md:
+  // every one of them carries `{local_only, atlas_editor_url}`). rowKey is
+  // this lane's own choice of "the affected row" — the daemon's response
+  // names no row, only the fact — so the caller (which knows what it just
+  // mutated) supplies it.
+  function noteLocalConfirmation(rowKey, resp) {
+    if (resp && resp.local_only) {
+      state.confirmations.set(rowKey, { url: resp.atlas_editor_url || "" });
+    }
+  }
+
+  // appendConfirmation renders noteLocalConfirmation's result under the row
+  // it belongs to, once — a quiet line, never a claim the org learned
+  // anything (localOnlyConfirmationText's own doc comment).
+  function appendConfirmation(parent, rowKey) {
+    const c = state.confirmations.get(rowKey);
+    if (!c) return;
+    parent.appendChild(
+      el(
+        "div",
+        { class: "local-note" },
+        localOnlyConfirmationText(),
+        c.url ? el("a", { href: c.url, target: "_blank", rel: "noopener" }, " Open the workstream in Atlas") : null
+      )
+    );
   }
 
   async function placeSuggestion(suggestion) {
     const target = prompt(`Same as which project id? (${(state.projects.projects || []).map((p) => p.id).join(", ")})`);
     if (!target) return;
-    await fetchJSON("/v1/projects/place", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ suggestion: suggestion.id, same_as: target }) }).catch(() => {});
+    const res = await sendJSON("/v1/projects/place", "POST", { suggestion: suggestion.id, same_as: target });
+    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body);
     await loadAll();
     route();
   }
@@ -926,18 +1205,31 @@ if (typeof document !== "undefined") {
     const title = prompt("New project title:", suggestion.value);
     if (!title) return;
     const workstream = (workstreams[0] && workstreams[0].key) || "development";
-    await fetchJSON("/v1/projects/bundle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, workstream, suggestions: [suggestion.id] }) }).catch(() => {});
+    const res = await sendJSON("/v1/projects/bundle", "POST", { title, workstream, suggestions: [suggestion.id] });
+    if (res.ok && res.body && res.body.project && res.body.project.id) {
+      noteLocalConfirmation(`project:${res.body.project.id}`, res.body);
+    }
     await loadAll();
     route();
   }
 
   async function setWorkstreamOff(key, off) {
-    await fetchJSON(`/v1/workstreams/${encodeURIComponent(key)}/off`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ off }) }).catch(() => {});
+    const res = await sendJSON(`/v1/workstreams/${encodeURIComponent(key)}/off`, "PUT", { off });
+    if (res.ok) noteLocalConfirmation(`workstream:${key}`, res.body);
     await loadAll();
     route();
   }
 
   // ---- Settings ----
+
+  // fieldNote renders a control's readonly note (env-pinned, takes priority
+  // since it explains why the control can't be touched at all) or its
+  // settings-error (a refusal from the last PUT about this key), or nothing.
+  function fieldNote(key, readonly) {
+    if (readonly.has(key)) return el("div", { class: "settings-note readonly-note" }, readonlyNote(key));
+    const err = settingsErrorFor(key);
+    return err ? el("div", { class: "settings-note error-note" }, err) : null;
+  }
 
   function renderSettings(root) {
     const { settings } = state;
@@ -948,6 +1240,10 @@ if (typeof document !== "undefined") {
     }
     const readonly = new Set(settings.readonly || []);
     const atlasOn = atlasEnabled(settings);
+    const startAtLogin = startAtLoginProps();
+
+    const bar = renderRestartBar();
+    if (bar) root.appendChild(bar);
 
     root.appendChild(
       el(
@@ -961,7 +1257,11 @@ if (typeof document !== "undefined") {
             el("input", { type: "text", id: "codeInput", placeholder: "atlas-dev.keld.co/ABCD-EFGH" }),
             el("button", { class: "btn", onclick: submitCode }, "Switch")
           ),
-          el("div", { class: "settings-note", style: "color:var(--muted)" }, "Paste a setup code from any Atlas. Signal restarts and points there.")
+          state.configError
+            ? el("div", { class: "settings-note error-note" }, state.configError)
+            : state.configHost
+            ? el("div", { class: "settings-note", style: "color:var(--green-strong)" }, `Now pointing at ${state.configHost}.`)
+            : el("div", { class: "settings-note", style: "color:var(--muted)" }, "Paste a setup code from any Atlas. Signal restarts and points there.")
         ),
         el(
           "div",
@@ -972,7 +1272,8 @@ if (typeof document !== "undefined") {
             { class: "settings-row" },
             el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks, sync projects, take the org's workstreams. Off: nothing leaves this machine.")),
             switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
-          )
+          ),
+          fieldNote("send_to_atlas", readonly)
         ),
         el(
           "div",
@@ -990,11 +1291,12 @@ if (typeof document !== "undefined") {
             el("span", {}, "Vector attribution", el("div", { class: "desc" }, "Downloads a 1.2 GB text model and reads your messages on this device to name projects for non-coding work.")),
             switchEl({ checked: !!settings.attribution, disabled: readonly.has("attribution"), onChange: (v) => updateSettings({ attribution: v }) })
           ),
+          fieldNote("attribution", readonly),
           el(
             "div",
             { class: "settings-row" },
-            el("span", {}, "Start at login", el("div", { class: "desc" }, "This browser only, until the Keld Signal app manages startup.")),
-            switchEl({ checked: !!state.local.startAtLogin, onChange: (v) => { state.local.startAtLogin = v; saveLocalPrefs(state.local); route(); } })
+            el("span", {}, "Start at login", el("div", { class: "desc" }, `Not yet a working toggle here — ${startAtLogin.note}.`)),
+            switchEl({ checked: startAtLogin.checked, disabled: startAtLogin.disabled })
           ),
           el(
             "div",
@@ -1016,7 +1318,8 @@ if (typeof document !== "undefined") {
       ["minute", "1 minute", "dev store"],
     ];
     const current = settings.dev_blocks || "";
-    const disabled = atlasOn || readonly.has("dev_blocks");
+    const isReadonly = readonly.has("dev_blocks");
+    const disabled = atlasOn || isReadonly;
     const grid = el(
       "div",
       { class: "radio-grid" },
@@ -1036,15 +1339,40 @@ if (typeof document !== "undefined") {
         )
       )
     );
+    // The readonly note takes priority — it's env-pinned regardless of
+    // Send to Atlas, and the "available while it's off" sentence would be
+    // actively wrong if send_to_atlas happens to already be off. A 409's
+    // error note is shown too (it can only ever be this same refusal, but
+    // settingsErrorFor is the one seam every field note goes through).
+    let note = null;
+    if (isReadonly) note = el("div", { class: "settings-note readonly-note" }, readonlyNote("dev_blocks"));
+    else if (atlasOn) note = el("div", { class: "settings-note" }, "Available while Send to Atlas is off. Dev blocks never leave the machine.");
+    const err = settingsErrorFor("dev_blocks");
     return el(
       "div",
       { class: "tile", style: "background:var(--nested)" },
       el("div", { class: "l" }, "Developer"),
       el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity"),
       grid,
-      disabled
-        ? el("div", { class: "settings-note" }, "Available while Send to Atlas is off. Dev blocks never leave the machine.")
-        : null
+      note,
+      err ? el("div", { class: "settings-note error-note" }, err) : null
+    );
+  }
+
+  // renderRestartBar renders nothing at all while idle (the common case) —
+  // see restartBarText/nextRestartStatus in app.js's pure section for the
+  // sequence it reflects. Returns null rather than a hidden node, so the
+  // caller can skip appendChild entirely.
+  function renderRestartBar() {
+    const status = state.restart.status;
+    if (status === RESTART_IDLE) return null;
+    const text = restartBarText(status);
+    const canClick = status === RESTART_NEEDED;
+    return el(
+      "div",
+      { class: "restart-bar" },
+      el("span", {}, text),
+      canClick ? el("button", { class: "btn", onclick: clickRestart }, "Restart") : null
     );
   }
 
@@ -1052,10 +1380,18 @@ if (typeof document !== "undefined") {
     const input = document.getElementById("codeInput");
     const code = input && input.value.trim();
     if (!code) return;
-    try {
-      await fetchJSON("/v1/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
-    } catch {
-      // fixture/dev server: nothing to do besides refresh below.
+    state.configError = "";
+    state.configHost = "";
+    const res = await sendJSON("/v1/config", "POST", { code });
+    if (!res.ok) {
+      state.configError = configErrorText(res.status, res.body);
+      route();
+      return;
+    }
+    state.configHost = (res.body && res.body.host) || "";
+    if (res.body && res.body.restart_required) {
+      state.restart.patch = {};
+      state.restart.status = nextRestartStatus(state.restart.status, "restart_required");
     }
     await loadAll();
     route();

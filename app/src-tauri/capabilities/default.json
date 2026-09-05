@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window loads the daemon's own remote page (http://127.0.0.1:<port>), never bundled content — so this capability grants that origin, and only that origin, the two commands the page needs to drive the desktop shell's autostart toggle. Nothing else is exposed: this shell holds no credential and makes no outbound request of its own (see src/main.rs), and IPC access must not become a second way to widen that.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*"]
+  },
+  "permissions": [
+    "allow-set-autostart",
+    "allow-get-autostart"
+  ]
+}

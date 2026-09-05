@@ -14,7 +14,8 @@
       "workstream": "development",
       "origin": "user",
       "hidden": false,
-      "atlas_value_id": null
+      "atlas_value_id": null,
+      "rules": ["github.com/ncx-ai/keld-signal"]
     }
   ],
   "suggestions": [],

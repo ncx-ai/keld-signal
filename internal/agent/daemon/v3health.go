@@ -91,6 +91,23 @@ func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, a
 
 		if !atlasOn {
 			sig.noteHealth(ledger.HealthAtlas, ledger.StatusNA, string(ledger.ReasonAtlasOff))
+		} else if sig.atlas != nil {
+			// ⚠️ **"REACHABLE" AND "NEVER TRIED" ARE DIFFERENT FACTS, and until
+			// this the health strip had no `atlas` row at all when Atlas was
+			// on — a real end-to-end run against a live Atlas found the page
+			// could not tell "Atlas reachable" from "never tried". A zero
+			// instant is the second: absent, not healthy and not broken, the
+			// same rule telemetryLast follows just above. A non-zero instant
+			// with status 0 is a real fact THOUGH — it means a call was made
+			// and got no usable answer (a network fault, or an intercepted
+			// 2xx) — so it reads as failed, not as unknown.
+			if status, at := sig.atlas.LastResponse(); !at.IsZero() {
+				if status >= 200 && status < 300 {
+					sig.noteHealth(ledger.HealthAtlas, ledger.StatusOK, "")
+				} else {
+					sig.noteHealth(ledger.HealthAtlas, ledger.StatusFailed, string(classifyAtlasStatus(status)))
+				}
+			}
 		}
 		sig.noteHealth(ledger.HealthStore, ledger.StatusOK, "")
 	}

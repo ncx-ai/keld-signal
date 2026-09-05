@@ -59,6 +59,20 @@ func (v *v3) recordCut(rows []publish.BlockEnrichment, _ string) {
 	}
 }
 
+// recordCutPending is the emitter's OnCutPending hook: this sweep could not
+// ask the analysis service for the transcript's blocks at all — the sidecar
+// has no /blocks route, or could not answer for any other reason (not ready,
+// restarting, its own store behind the ask). No block exists yet, so this is
+// keyed by SESSION rather than by a BlockKey; it clears itself the moment a
+// later sweep succeeds — ledger.Store.Cut deletes the pending row for a
+// session the instant it cuts a real block for it (TestCutPendingClearedByLaterCut).
+func (v *v3) recordCutPending(session, reason string) {
+	if v == nil || v.ledger == nil {
+		return
+	}
+	v.ledger.CutPending(session, ledger.Reason(reason), time.Now().UTC())
+}
+
 // recordDelivered is the OnPublished hook: the batch reached Atlas.
 //
 // `received` is written from the same fact `sent` is, because the emitter only
@@ -91,44 +105,91 @@ func (v *v3) recordDelivered(rows []publish.BlockEnrichment, _ string) {
 
 // recordPublishFailed is the OnPublishFailed hook: the batch did not land, and
 // the reason a person reads on the page is the reason the transport gave.
+//
+// ⚠️ **WHICH CELL FAILS DEPENDS ON WHETHER ATLAS EVER ANSWERED.** `sent` and
+// `received` are different facts (recorder.go: "the publisher POSTed it" vs
+// "Atlas acknowledged it"), and a batch can fail at either one. A captive
+// portal or a 4xx/5xx status means the request reached a server and got an
+// HTTP response back — the bytes were sent — so what failed is the ANSWER,
+// and the page must say `received`, not `sent` (see docs/v3/contracts.md's
+// own wire example: `sent: ok`, `received: failed, atlas_rejected, 401` — a
+// rejected credential does not mean the POST never left the machine). Only a
+// raw transport error, where no response was reached at all (DNS, connection
+// refused, TLS, timeout), is a `sent` failure: there is no answer to blame,
+// so there is nothing for `received` to say.
 func (v *v3) recordPublishFailed(rows []publish.BlockEnrichment, err error) {
 	if v == nil || v.ledger == nil {
 		return
 	}
 	now := time.Now().UTC()
-	reason, status := classifyPublishError(err)
+	stage, reason, status := classifyPublishFailure(err)
 	for _, r := range rows {
 		start, ok := epochOf(r.Window.Start)
 		if !ok || r.SessionID == "" {
 			continue
 		}
-		v.ledger.Failed(ledger.BlockKey{Session: r.SessionID, Start: start},
-			ledger.StageSent, reason, status, now)
+		k := ledger.BlockKey{Session: r.SessionID, Start: start}
+		if stage == ledger.StageReceived {
+			// An HTTP response came back, so the POST itself succeeded — it is
+			// Atlas's answer that failed, not the sending of it.
+			v.ledger.Sent(k, now)
+		}
+		v.ledger.Failed(k, stage, reason, status, now)
 	}
 }
 
-// classifyPublishError turns a transport error into the closed reason the page
-// renders as a sentence. The four cases are the ones a person can act on
-// differently: re-pair, wait, report, or check the network they are on.
-func classifyPublishError(err error) (ledger.Reason, int) {
+// classifyPublishFailure turns a transport error into the closed (stage,
+// reason, http_status) triple the page renders as a sentence against the
+// right cell. The reasons are the ones a person can act on differently:
+// re-pair, wait, report, or check the network they are on.
+func classifyPublishFailure(err error) (ledger.Stage, ledger.Reason, int) {
 	if err == nil {
-		return ledger.ReasonNone, 0
+		return ledger.StageSent, ledger.ReasonNone, 0
 	}
 	if errors.Is(err, publish.ErrIntercepted) {
-		return ledger.ReasonCaptivePortal, 0
+		// A 2xx came back — something answered — so transmission succeeded;
+		// what failed is that the answer was not from Atlas.
+		return ledger.StageReceived, ledger.ReasonCaptivePortal, 0
 	}
 	var se *retry.StatusError
 	if errors.As(err, &se) {
-		switch {
-		case se.Code == 401 || se.Code == 403:
-			return ledger.ReasonAtlasRejected, se.Code
-		case se.Code >= 500:
-			return ledger.ReasonAtlasUnavailable, se.Code
-		default:
-			return ledger.ReasonAtlasRefused, se.Code
-		}
+		// Any HTTP status, good or bad, means the POST reached a server and
+		// it answered. Transmission succeeded; this is reporting the answer.
+		return ledger.StageReceived, classifyAtlasStatus(se.Code), se.Code
 	}
-	return ledger.ReasonAtlasUnavailable, 0
+	// No response was reached at all, so there is no answer to attribute the
+	// failure to — the transmission itself is what failed.
+	return ledger.StageSent, ledger.ReasonAtlasUnavailable, 0
+}
+
+// classifyPublishError is classifyPublishFailure without the stage — kept for
+// callers that record a publish failure against one fixed cell regardless of
+// which fact actually failed (internal/agent/daemon/republish.go, B2's
+// recovery sweep for blocks captured while Send to Atlas was off). The reason
+// vocabulary and its (reason, http_status) shape are UNCHANGED from before
+// the stage split above; only recordPublishFailed's own caller needed to know
+// which cell to write.
+func classifyPublishError(err error) (ledger.Reason, int) {
+	_, reason, status := classifyPublishFailure(err)
+	return reason, status
+}
+
+// classifyAtlasStatus turns a raw HTTP status Atlas answered with into the
+// same closed reason vocabulary a block's `received` cell uses, so the health
+// strip's `atlas` row (see startHealth) and a block's own delivery cell never
+// disagree about what a given status means. status 0 here means "we asked
+// and got no usable response" (a network fault, or an intercepted 2xx) — a
+// FAILURE, not "never tried"; "never tried" is a fact about the instant, not
+// the status, and is handled by the caller before this is reached.
+func classifyAtlasStatus(status int) ledger.Reason {
+	switch {
+	case status == 401 || status == 403:
+		return ledger.ReasonAtlasRejected
+	case status >= 500 || status == 0:
+		return ledger.ReasonAtlasUnavailable
+	default:
+		return ledger.ReasonAtlasRefused
+	}
 }
 
 // epochOf parses the RFC3339 instant a block's span is spelled in on the wire.
