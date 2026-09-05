@@ -78,12 +78,65 @@ func newV3(set settings.Settings, cl atlas.Client) *v3 {
 // observeRemote is called from Run's onRemote on every successful settings
 // poll, so the Projects pane reflects the org's current vocabulary without a
 // restart — the same live-update property the PII region list already has.
+//
+// ⚠️ **IT ALSO RUNS STAGE 5 OF THE PROJECT LIFECYCLE, ON THIS SAME CALL.** When
+// an admin approves a suggestion into an org project, the definition arrives
+// here — and from that instant the org project and whatever local project was
+// standing in for it BOTH claim the same repository. Two visible projects
+// sharing a repository rule is `ReasonConflict`: the matcher reports every
+// matching id and refuses to pick one, so until the local project is folded
+// away NEITHER attributes and the work falls out of both.
+//
+// So the fold is not scheduled, queued or deferred to the next sweep. It
+// happens on the same call that installs the definition, and the interval in
+// which the two could coexist does not exist.
+//
+// Folding is restricted to FULL CONTAINMENT (projects.Inherit): it is the one
+// step in the lifecycle that changes a decision a person already made without
+// asking them, and it is only safe when the org's project covers every rule the
+// local one had — because then the two are the same thing.
 func (v *v3) observeRemote(r *settings.Remote) {
 	if v == nil || r == nil {
 		return
 	}
 	cp := *r
 	v.remote.Store(&cp)
+	v.inheritFromRemote()
+}
+
+// inheritFromRemote folds local projects the org has now defined.
+//
+// Errors are logged and dropped rather than retried: the next poll is five
+// minutes away and carries the same definitions, so a failed write costs one
+// interval. What it must never do is leave the document half-folded, and it
+// cannot — projects.Store.Update applies the whole transformation under one
+// lock or none of it.
+func (v *v3) inheritFromRemote() {
+	if v.projects == nil || v.projects.RemoteProjects == nil {
+		return
+	}
+	remote := projects.FromRemoteProjects(v.projects.RemoteProjects())
+	if len(remote) == 0 {
+		return
+	}
+	var moved []projects.Inherited
+	if _, err := v.projects.Update(func(d projects.Document) (projects.Document, error) {
+		next, m := projects.Inherit(d, remote, // Read fresh, not captured: the exclusion list is a local setting a
+			// person can change between polls.
+			projects.WorkstreamOffFunc(settings.Load()))
+		moved = m
+		return next, nil
+	}); err != nil {
+		log.Printf("keld-agent: could not fold local projects onto the org's: %v", err)
+		return
+	}
+	for _, m := range moved {
+		// Said out loud, once per fold. A person made that local project on
+		// purpose; it disappearing without a word is the kind of silent change
+		// that makes people distrust the pane.
+		log.Printf("keld-agent: %q is now the org's %q — %d rule(s) moved, nothing was unattributed",
+			m.LocalTitle, m.OrgTitle, len(m.Repos))
+	}
 }
 
 // routes are the v3 loopback surfaces, in the order they are mounted. The page
