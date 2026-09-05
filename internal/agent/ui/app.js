@@ -1426,14 +1426,19 @@ if (typeof document !== "undefined") {
             "div",
             {},
             el("div", { style: "margin-top:10px;color:var(--muted)" }, "Repositories it draws from"),
+            // ⚠️ The current value is a CHILD, not a `value` attribute. `el`
+            // sets attributes, and `setAttribute("value", …)` does nothing at
+            // all on a textarea — its content is its child text node — so the
+            // box rendered empty on every reload while the setting was stored
+            // correctly, which reads as "my repositories were not saved".
             el("textarea", {
               id: "devReposInput",
+              "aria-label": "Repositories the block generator draws from",
               class: "devrepos",
               rows: 4,
               placeholder: defaultDevRepos().join("\n"),
-              value: repos.join("\n"),
               onchange: (e) => updateSettings({ dev_repos: splitRepos(e.target.value) }),
-            }),
+            }, repos.join("\n")),
             // The fourth entry is the point of the control, not a footnote:
             // every declared repository attributes cleanly, so without one that
             // matches nothing the Projects pane's own job is never exercised.
@@ -1545,13 +1550,17 @@ if (typeof document !== "undefined") {
     // that follows will pick it up, and re-reading now costs nothing.
     await loadAll();
     route();
+    // Six seconds, not two and a half. The label names the repository the block
+    // was generated for, which is the one fact worth reading — and the reload
+    // above eats part of the window, so the shorter delay left barely a second
+    // to see it.
     setTimeout(() => {
       const b = document.getElementById("genBlockBtn");
       if (b) {
         b.textContent = previous;
         b.disabled = false;
       }
-    }, 2500);
+    }, 6000);
   }
 
   /** shortRepo trims a remote to its last path segment for a button label.

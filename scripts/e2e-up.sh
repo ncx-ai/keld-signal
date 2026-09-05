@@ -153,16 +153,52 @@ except Exception: print(0)' 2>/dev/null)
   sleep 2
 done
 [ "${N:-0}" -gt 0 ] || fail "no blocks after ${READY_TIMEOUT}s"
-echo "e2e-up: first block landed after $((SECONDS - (DEADLINE - READY_TIMEOUT)))s; settling until $INTENDED are cut (up to ${SETTLE_TIMEOUT}s)"
+# ⚠️ **SETTLE ON A COUNT THAT HAS STOPPED MOVING, NOT ON THE FIRST MOMENT IT
+# REACHES $INTENDED.** This loop exited as soon as the ledger held $INTENDED
+# blocks — while more were still arriving. The number it exits on is therefore
+# not the number the page shows a minute later, and the visual baseline is a
+# screenshot of the page a minute later.
+#
+# MEASURED: `visual.spec.ts` failed on roughly half of full-suite runs and
+# passed every time it ran alone, with the failing screenshot ~190px taller
+# (about two extra rows). A solo run screenshots seconds after bring-up; the
+# full suite reaches the same test after fourteen other tests, by which time the
+# late blocks have landed. A baseline that depends on how long the specs before
+# it took is not a baseline, and the failure looked like flakiness rather than
+# like a race the harness owned.
+#
+# So: wait for the count to be UNCHANGED across three consecutive polls, with
+# $INTENDED as a FLOOR rather than a target — the floor is what stops an early
+# plateau (the first session ingested, the rest still going) from reading as
+# settled. Report when it settles above the floor, since the cutter closing a
+# trailing block the generator did not lay out is a legitimate reason for the
+# two numbers to differ and the baseline is captured against the real one.
+echo "e2e-up: first block landed after $((SECONDS - (DEADLINE - READY_TIMEOUT)))s; settling (>= $INTENDED, until the count stops moving, up to ${SETTLE_TIMEOUT}s)"
 DEADLINE=$((SECONDS + SETTLE_TIMEOUT))
-while [ $SECONDS -lt $DEADLINE ] && [ "$N" -lt "$INTENDED" ]; do
+STABLE=0
+PREV=-1
+while [ $SECONDS -lt $DEADLINE ]; do
   sleep 3
   N=$(curl -s -H "x-keld-agent-secret: $SECRET" "$BASE/v1/ledger" | python3 -c '
 import json,sys
 try: print(len(json.load(sys.stdin).get("blocks") or []))
 except Exception: print(0)' 2>/dev/null)
+  if [ "${N:-0}" = "$PREV" ]; then
+    STABLE=$((STABLE + 1))
+  else
+    STABLE=0
+  fi
+  PREV=${N:-0}
+  # Three unchanged polls (~9s) AND at least what the generator laid out. The
+  # floor matters: an early plateau while the first session is still ingesting
+  # would otherwise look settled.
+  [ "$STABLE" -ge 3 ] && [ "${N:-0}" -ge "$INTENDED" ] && break
 done
-echo "e2e-up: $N of $INTENDED intended blocks in the ledger"
+if [ "${N:-0}" -gt "$INTENDED" ]; then
+  echo "e2e-up: $N blocks in the ledger ($INTENDED laid out by the generator, plus $((N - INTENDED)) trailing block(s) the cutter closed on idle)"
+else
+  echo "e2e-up: $N of $INTENDED intended blocks in the ledger"
+fi
 
 # ⚠️ **THEN WAIT FOR THE REPOSITORY TO RESOLVE, WHICH IS NOT THE SAME AS
 # WAITING FOR BLOCKS.** A block's dims are recorded once, at cut time, and never

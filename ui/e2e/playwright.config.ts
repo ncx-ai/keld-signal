@@ -54,12 +54,12 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"], viewport },
-      testIgnore: /not-running\.spec\.ts$/,
+      testIgnore: /(not-running|devgen)\.spec\.ts$/,
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"], viewport },
-      testIgnore: /not-running\.spec\.ts$/,
+      testIgnore: /(not-running|devgen)\.spec\.ts$/,
     },
     {
       // The page with NO daemon behind it: a tiny static server serves the
@@ -68,6 +68,26 @@ export default defineConfig({
       name: "not-running",
       use: { ...devices["Desktop Chrome"], viewport },
       testMatch: /not-running\.spec\.ts$/,
+    },
+    {
+      // ⚠️ **THE BLOCK GENERATOR RUNS LAST, IN A PROJECT OF ITS OWN, BECAUSE IT
+      // MUTATES THE CORPUS EVERY OTHER SPEC READS.** Pressing the button adds a
+      // real block to the shared ledger — that is the point of it — and it
+      // failed the visual baseline on BOTH browsers the first time this suite
+      // ran with it included.
+      //
+      // Renaming the file to sort last would not have been enough: Playwright
+      // runs project by project, so chromium's generated blocks would still be
+      // on the page when webkit reached its own screenshot. `dependencies` is
+      // the only ordering primitive that binds ACROSS projects.
+      //
+      // Chromium only: this is one journey through a developer control, not a
+      // browser matrix, and a second run would add a second block for no extra
+      // coverage.
+      name: "devgen",
+      use: { ...devices["Desktop Chrome"], viewport },
+      testMatch: /devgen\.spec\.ts$/,
+      dependencies: ["chromium", "webkit", "not-running"],
     },
   ],
 });
