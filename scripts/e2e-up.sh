@@ -111,7 +111,14 @@ export KELD_BLOCKS_INTERVAL=20s
 export KELD_BLOCKS_BACKFILL=1
 export KELD_WATCH_ROOTS="claude_code:$SIM"
 export KELD_WATCH_POLL=2s
-export KELD_WATCH_BACKFILL=${KELD_WATCH_BACKFILL:-0}
+# ⚠️ BACKFILL ON, and the default matters. The corpus is STATIC HISTORY written
+# before the daemon starts, so nothing ever "grows" for a forward-only watcher to
+# notice. Measured with it off: 1 of 5 transcripts was ever ingested, one
+# repository resolved, and the Projects pane had a single suggestion — which the
+# serial specs then consumed, leaving the next one nothing to place. A real
+# machine sees transcripts appear while it runs; a generated corpus does not, and
+# backfill is the mode that reads what is already on disk.
+export KELD_WATCH_BACKFILL=${KELD_WATCH_BACKFILL:-1}
 export KELD_TELEMETRY_PORT="$TELEMETRY_PORT"
 export KELD_SIDECAR_BIN="$WORK/sidecar-wrapper"
 # named_terms needs spaCy (~619 MB) and nothing the page shows reads it.

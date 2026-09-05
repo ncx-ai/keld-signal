@@ -36,9 +36,11 @@ test.describe("Projects", () => {
     expect(before).toBeGreaterThanOrEqual(1);
     const firstValue = (await page.locator(".suggestion-row .row-title").first().innerText()).split("\n")[0].trim();
 
-    // The page asks for a title in a prompt, defaulting to the suggestion's
-    // own value (the repository) — accept that.
-    page.once("dialog", (d) => d.accept());
+    // The page asks for a title in a prompt, defaulting to the suggestion's own
+    // value (the repository). accept() WITHOUT an argument submits an EMPTY
+    // string rather than the default — the page then correctly does nothing, and
+    // the test fails on a page that behaved exactly right. Pass the default back.
+    page.once("dialog", (d) => d.accept(d.defaultValue()));
     await page.getByRole("button", { name: "New project" }).first().click();
 
     await expect(page.getByText(APPLIED).first()).toBeVisible();
@@ -75,17 +77,22 @@ test.describe("Projects", () => {
 
   test("switching a workstream off changes its row and the 'workstreams on' tile, and back", async ({ signal, page }) => {
     await signal.open("projects");
-    const onTile = page.getByText("Workstreams on", { exact: true }).locator("..");
-    await expect(onTile).toContainText(/\b1\b.*of 1/s);
+    // ⚠️ Read the tile's VALUE element and match its WHOLE text. The count and
+    // the "of N" caption are adjacent with no whitespace, so the value renders
+    // as "1of 1" — every word-boundary assertion around the digit fails, twice
+    // over: "Workstreams on1of 1" for the tile, "1of 1" for the value. Anchoring
+    // the whole string is unambiguous and says what a person reads.
+    const onTileValue = page.getByText("Workstreams on", { exact: true }).locator("..").locator(".value, .v").first();
+    await expect(onTileValue).toHaveText(/^1of \d+$/);
 
     await signal.setSwitch(/^counts for my work/, false);
     await expect(page.getByText("Your work never lands here.")).toBeVisible();
-    await expect(onTile).toContainText(/\b0\b.*of 1/s);
+    await expect(onTileValue).toHaveText(/^0of \d+$/);
     await expect(page.getByText(APPLIED).first()).toBeVisible();
 
     // Restore, so the next browser starts from the same place.
     await signal.setSwitch(/^counts for my work/, true);
     await expect(page.getByText("Your work never lands here.")).toHaveCount(0);
-    await expect(onTile).toContainText(/\b1\b.*of 1/s);
+    await expect(onTileValue).toHaveText(/^1of \d+$/);
   });
 });

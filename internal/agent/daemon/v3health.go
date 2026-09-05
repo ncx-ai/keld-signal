@@ -25,7 +25,25 @@ type sidecarHealthProbe struct {
 	Version func() (string, bool)
 }
 
-func setSidecarProbe(p *sidecarHealthProbe) { sidecarProbe.Store(p) }
+// healthRefresh is set by startHealth so that installing the sidecar probe can
+// re-read the strip at once instead of waiting for the next tick.
+var healthRefresh atomic.Pointer[func()]
+
+// setSidecarProbe publishes the probe AND refreshes the health strip.
+//
+// ⚠️ **The refresh is the point, not a nicety.** The sidecar is spawned and
+// supervised asynchronously, so at the moment startHealth first runs there is
+// no probe at all and the strip records the analysis service as "not
+// installed". Without this the strip stayed wrong until the next tick — long
+// enough that a person opening the page right after login sees a warning about
+// a service that is already up, which is the same "confident wrong answer"
+// this page exists to remove.
+func setSidecarProbe(p *sidecarHealthProbe) {
+	sidecarProbe.Store(p)
+	if f := healthRefresh.Load(); f != nil {
+		(*f)()
+	}
+}
 
 // startHealth keeps the page's health strip current.
 //
@@ -112,9 +130,15 @@ func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, a
 		sig.noteHealth(ledger.HealthStore, ledger.StatusOK, "")
 	}
 
+	healthRefresh.Store(&note)
 	note()
 	go func() {
-		t := time.NewTicker(30 * time.Second)
+		// ⚠️ **10 seconds, not 30.** This is the strip a person reads to decide
+		// whether to restart something or report it, so a stale answer is worse
+		// than a slow page: for half a minute it could say the analysis service
+		// was down when it had already come up. Every reading is a loopback
+		// call or a value the daemon already holds, so the cost is nil.
+		t := time.NewTicker(10 * time.Second)
 		defer t.Stop()
 		for {
 			select {
