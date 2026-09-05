@@ -396,6 +396,113 @@ func PlaceSameAsWithRemote(d Document, remote []Project, suggestionID, targetPro
 	return next, nil
 }
 
+// MapProjectTo folds a LOCAL project into another project — normally one of the
+// org's — and removes the local entry.
+//
+// ⚠️ **THE RULES MOVE, WHICH IS WHY NOTHING BECOMES UNATTRIBUTED.** The obvious
+// worry about "map it and delete it" is that the blocks the local project was
+// holding fall out of every project. They do not: a block is attributed by a
+// RULE (a repo remote, a ticket key), not by the project's identity, so moving
+// the rules moves the blocks with them. The count under the target goes up by
+// exactly what the local one had.
+//
+// ⚠️ **AND THE LOCAL ENTRY MUST GO, RATHER THAN STAY AS A REFERENCE.** Keeping
+// it beside its target is the worse option and provably so: two visible
+// projects sharing a repository rule is `ReasonConflict`, which reports EVERY
+// matching id and deliberately refuses to pick one. A local "reference" beside
+// its Atlas twin would turn every one of its blocks into a conflict —
+// attributed to neither. That is the existing rule in Attribute, not a
+// preference.
+//
+// Placing onto an org value lays down the same OVERLAY entry PlaceSameAsWithRemote
+// uses: an entry whose id IS the Atlas value id, carrying its own repos, unioned
+// with the value's own keywords at read time and never sent anywhere. Nothing
+// about this reaches Atlas — see docs/v3/contracts.md's "no Atlas write-back".
+func MapProjectTo(d Document, remote []Project, localProjectID, targetProjectID string,
+	workstreamOff func(key string) bool) (Document, error) {
+	if localProjectID == "" || targetProjectID == "" {
+		return d, ErrProjectNotFound
+	}
+	// NEGATIVE: mapping a project onto itself would delete it and put its rules
+	// back on the entry that was just removed. Refused rather than silently
+	// doing nothing, because the caller asked for something incoherent.
+	if localProjectID == targetProjectID {
+		return d, ErrProjectNotFound
+	}
+	li, ok := findProject(d, localProjectID)
+	if !ok {
+		return d, ErrProjectNotFound
+	}
+	src := d.Projects[li]
+	// NEGATIVE: an ORG project is not ours to fold away. Its identity lives in
+	// Atlas, and removing the local overlay entry would drop the rules this
+	// machine had added to it while leaving the org's value untouched — a
+	// deletion that looks like a move and is not.
+	if src.Origin == OriginAtlas {
+		return d, ErrProjectNotFound
+	}
+
+	next := d
+	next.Projects = append([]Project(nil), d.Projects...)
+
+	ti, ok := findProject(next, targetProjectID)
+	if !ok {
+		var rv *Project
+		for k := range remote {
+			if remote[k].ID == targetProjectID {
+				rv = &remote[k]
+				break
+			}
+		}
+		if rv == nil || rv.Hidden {
+			return d, ErrProjectNotFound
+		}
+		if projectWorkstreamOff(*rv, workstreamOff) {
+			return d, ErrWorkstreamOff
+		}
+		next.Projects = append(next.Projects, Project{
+			ID:         rv.ID,
+			Title:      rv.Title,
+			Team:       rv.Team,
+			Workstream: rv.Workstream,
+			Origin:     OriginAtlas,
+		})
+		ti = len(next.Projects) - 1
+	}
+	target := next.Projects[ti]
+	if target.Hidden {
+		return d, ErrProjectNotFound
+	}
+	if projectWorkstreamOff(target, workstreamOff) {
+		return d, ErrWorkstreamOff
+	}
+
+	for _, r := range src.Repos {
+		applyRule(&target, Rule{Kind: DimRepo, Value: r}, true)
+	}
+	if src.TicketKey != "" && target.TicketKey == "" {
+		target.TicketKey = src.TicketKey
+	}
+	for _, k := range src.Keywords {
+		if !containsFold(target.Keywords, k) {
+			target.Keywords = append(target.Keywords, k)
+		}
+	}
+	next.Projects[ti] = target
+
+	// Remove the local entry LAST, by id: `ti` was computed against the slice
+	// that still contains it, so deleting first would invalidate the index.
+	out := next.Projects[:0:0]
+	for _, x := range next.Projects {
+		if x.ID == localProjectID {
+			continue
+		}
+		out = append(out, x)
+	}
+	next.Projects = out
+	return next, nil
+}
+
 // SetWorkstreamOff writes settings.Settings.WorkstreamsOff — the AUTHORITATIVE
 // exclusion list Attribute's workstreamOff parameter reads (see
 // internal/agent/settings/v3.go's WorkstreamOff) — adding or removing key.

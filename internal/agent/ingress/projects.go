@@ -55,6 +55,13 @@ func ProjectsRoute(s *projects.Store) Route {
 		mux.Handle("POST /v1/projects/{id}/hide", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleHide(w, r, s)
 		})))
+		// Fold a LOCAL project into another (normally one of the org's). The
+		// rules move with it and the local entry goes — see
+		// projects.MapProjectTo for why keeping it would make every one of its
+		// blocks a conflict.
+		mux.Handle("POST /v1/projects/{id}/same-as", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handleProjectSameAs(w, r, s)
+		})))
 		mux.Handle("POST /v1/projects/place", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handlePlace(w, r, s)
 		})))
@@ -425,6 +432,40 @@ func handlePlace(w http.ResponseWriter, r *http.Request, s *projects.Store) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, localOnly(nil))
+}
+
+// handleProjectSameAs maps a local project onto another project. Same error
+// vocabulary as handlePlace, because the failures are the same ones.
+func handleProjectSameAs(w http.ResponseWriter, r *http.Request, s *projects.Store) {
+	id := r.PathValue("id")
+	var body struct {
+		SameAs string `json:"same_as"`
+	}
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(body.SameAs) == "" {
+		writeError(w, http.StatusBadRequest, "id_and_same_as_required")
+		return
+	}
+	off := workstreamOffFunc()
+	_, err := s.Update(func(d projects.Document) (projects.Document, error) {
+		// An Atlas value may be the target: the merge lives in a local overlay
+		// and nothing is sent to Atlas (decided 2026-09-05).
+		return projects.MapProjectTo(d, remoteCandidates(s), id, body.SameAs, off)
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, projects.ErrProjectNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found")
+		case errors.Is(err, projects.ErrWorkstreamOff):
+			writeError(w, http.StatusConflict, "workstream_off")
+		default:
+			writeError(w, http.StatusInternalServerError, "store_write_failed")
+		}
+		return
+	}
 	writeJSON(w, http.StatusOK, localOnly(nil))
 }
 

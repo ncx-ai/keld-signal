@@ -1235,6 +1235,13 @@ if (typeof document !== "undefined") {
               p.title,
               el("small", {}, projectRulesSummary(p))
             ),
+            // ⚠️ **THE PICKER IS ON LOCAL PROJECTS ONLY.** An org project is not
+            // ours to fold away: its identity lives in Atlas, and removing the
+            // local overlay entry would drop the rules this machine added while
+            // leaving the org's value untouched — a deletion that looks like a
+            // move. The daemon refuses it too (projects.MapProjectTo); this is
+            // the half that keeps a person from being offered it.
+            p.origin === "atlas" ? null : mapProjectSelect(p),
             conflictIds.length
               ? el("span", { class: "pill no" }, "conflict · pick one")
               : el("span", { class: "pill ok" }, p.origin === "atlas" ? "✓ in Atlas" : "local")
@@ -1316,6 +1323,49 @@ if (typeof document !== "undefined") {
       if (target) await placeSuggestion(suggestion, target);
     };
     return sel;
+  }
+
+  /** mapProjectSelect folds a LOCAL project into another one — normally one of
+   *  the org's. The rules move with it and the local entry goes; see
+   *  projects.MapProjectTo for why keeping it beside its target would make
+   *  every one of its blocks a conflict.
+   *
+   *  It offers every project except this one, so a person cannot map a project
+   *  onto itself — which the daemon also refuses, since doing it would delete
+   *  the entry and then put its rules back on the one just removed. */
+  function mapProjectSelect(project) {
+    const opts = sameAsOptions(state.projects.projects || []).filter((o) => o.id !== project.id);
+    const sel = el(
+      "select",
+      // ⚠️ A DISTINCT ACCESSIBLE NAME from the suggestion picker's "Same as an
+      // existing project, for X". They are two different controls — one places
+      // a suggestion, this one folds a whole project away — and sharing a name
+      // pattern made a spec counting suggestion pickers find these too. A name
+      // is an identity; two controls with one identity is a bug for a screen
+      // reader before it is a bug for a test.
+      { class: "btn", "aria-label": `Map ${project.title} onto another project` },
+      el("option", { value: "" }, opts.length ? "Same as…" : "Same as… (nothing to map to)")
+    );
+    for (const o of opts) sel.appendChild(el("option", { value: o.id }, o.label));
+    sel.disabled = opts.length === 0;
+    sel.onchange = async () => {
+      const target = sel.value;
+      sel.selectedIndex = 0;
+      if (target) await mapProject(project, target);
+    };
+    return sel;
+  }
+
+  async function mapProject(project, target) {
+    if (!target) return;
+    const chosen = (state.projects.projects || []).find((p) => p.id === target);
+    const res = await sendJSON(`/v1/projects/${encodeURIComponent(project.id)}/same-as`, "POST", { same_as: target });
+    // The confirmation is placed on the TARGET row, because the source row is
+    // about to stop existing — a note under a row that disappears is a note
+    // nobody reads.
+    if (res.ok) noteLocalConfirmation(`project:${target}`, res.body, chosen && chosen.origin);
+    await loadAll();
+    route();
   }
 
   async function placeSuggestion(suggestion, target) {

@@ -98,7 +98,13 @@ test.describe("Projects", () => {
     expect([...new Set(origins)]).toEqual(["local"]);
 
     // The new project sits under "Your projects" with the repository as its rule.
-    const yours = page.locator(".workstream-card");
+    //
+    // ⚠️ Scoped to `.row-title`, not to the card. A project row now carries a
+    // "Map … onto another project" picker whose <option> labels are the other
+    // projects' titles — and an <option> is HIDDEN, so a card-wide text match
+    // resolved to one of those and failed `toBeVisible` on a page that was
+    // rendering perfectly.
+    const yours = page.locator(".workstream-card .project-row .row-title");
     await expect(yours.getByText(firstValue).first()).toBeVisible();
     await expect(yours.getByText(`repo ${firstValue}`)).toBeVisible();
   });
