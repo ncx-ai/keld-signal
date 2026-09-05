@@ -149,6 +149,10 @@ func onboardingHandler(set settings.Settings, secret string) http.Handler {
 	routes := append(sig.routes(),
 		ingress.SettingsRoute(serviceRestarter{}.Restart),
 		ingress.ConfigRoute(),
+		// Generating work needs no Atlas and no token, and an unpaired machine
+		// is exactly where someone wants to see a block appear before deciding
+		// to pair at all.
+		ingress.DevGenerateRoute(),
 	)
 	// DiscardHandler rather than Handler: there is no queue to offer to yet.
 	return ingress.DiscardHandler(secret, routes...)

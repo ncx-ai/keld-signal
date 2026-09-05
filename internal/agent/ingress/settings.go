@@ -53,6 +53,8 @@ type settingsView struct {
 	WorkstreamsOff []string `json:"workstreams_off"`
 	Attribution    bool     `json:"attribution"`
 	Readonly       []string `json:"readonly"`
+	DevGenerate    bool     `json:"dev_generate"`
+	DevRepos       []string `json:"dev_repos"`
 }
 
 func handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +64,13 @@ func handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	if off == nil {
 		off = []string{}
 	}
+	devRepos := set.DevRepos
+	if devRepos == nil {
+		devRepos = []string{}
+	}
 	writeJSON(w, http.StatusOK, settingsView{
+		DevGenerate:    set.DevGenerate,
+		DevRepos:       devRepos,
 		SendToAtlas:    set.AtlasEnabled(),
 		DevBlocks:      devBlocks,
 		ShowBreaks:     set.ShowBreaks,
@@ -131,6 +139,8 @@ type settingsPatch struct {
 	ShowBreaks     *bool     `json:"show_breaks"`
 	WorkstreamsOff *[]string `json:"workstreams_off"`
 	Attribution    *bool     `json:"attribution"`
+	DevGenerate    *bool     `json:"dev_generate"`
+	DevRepos       *[]string `json:"dev_repos"`
 }
 
 func handlePutSettings(w http.ResponseWriter, r *http.Request, restart func() error) {
@@ -170,6 +180,8 @@ func handlePutSettings(w http.ResponseWriter, r *http.Request, restart func() er
 		ShowBreaks:     patch.ShowBreaks,
 		WorkstreamsOff: patch.WorkstreamsOff,
 		Attribution:    patch.Attribution,
+		DevGenerate:    patch.DevGenerate,
+		DevRepos:       patch.DevRepos,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "settings_write_failed")
@@ -192,6 +204,11 @@ func handlePutSettings(w http.ResponseWriter, r *http.Request, restart func() er
 	// this codebase refuses at every other layer. A key that is read at
 	// startup belongs in this list; the test to write when adding the next one
 	// is "does anything re-read it while the daemon runs".
+	// dev_generate and dev_repos are deliberately absent: handleDevGenerate
+	// calls settings.Load() per request, so both take effect immediately. The
+	// rule is "a key nothing re-reads while the daemon runs", not "a key in the
+	// developer box" — adding them by symmetry would make the page demand a
+	// restart it does not need.
 	restartRequired := patch.SendToAtlas != nil || patch.DevBlocks != nil || patch.Attribution != nil
 	if restartRequired && restart != nil && r.URL.Query().Get("restart") == "1" {
 		go func() {

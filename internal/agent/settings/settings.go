@@ -119,6 +119,32 @@ type Settings struct {
 	// overrides. Forwarded to the sidecar as KELD_DEV_BLOCKS at spawn.
 	DevBlocks string `json:"dev_blocks,omitempty"`
 
+	// DevGenerate puts a "Generate block" button in the page's top bar.
+	//
+	// ⚠️ **UNLIKE DevBlocks, IT IS NOT REFUSED WHILE SendToAtlas IS ON, AND THE
+	// DIFFERENCE IS DELIBERATE.** A dev granularity MISLABELS real work — a
+	// minute-long block is a false statement about something a person actually
+	// did — so it must never reach the org's numbers. The generator instead ADDS
+	// work that never happened, and reaching Atlas is the whole point of it:
+	// what a developer is testing is that a block travels the entire path, and a
+	// generator that stopped at the ledger would prove only that the ledger
+	// works. What makes that acceptable is that every generated session is named
+	// `devgen-…` (devgen.SessionPrefix), so the rows are filterable and
+	// deletable wherever they land, rather than indistinguishable from real
+	// spend forever.
+	DevGenerate bool `json:"dev_generate,omitempty"`
+
+	// DevRepos is the repository list the generator draws from. Empty means the
+	// three stable defaults carried in the embedded corpus, so the button works
+	// before anyone configures anything.
+	//
+	// The generator also offers a fourth, RANDOM repository that no project rule
+	// can match. That is not padding: every declared repo attributes cleanly and
+	// therefore tests half the product, and the pane that lists work with
+	// nowhere to put it can only be exercised by evidence that genuinely matches
+	// nothing.
+	DevRepos []string `json:"dev_repos,omitempty"`
+
 	// ShowBreaks is a page preference: lay the gaps between focus blocks
 	// between the cards. Local, harmless, here because the page's Settings pane
 	// writes this file and a preference with no home is a preference that

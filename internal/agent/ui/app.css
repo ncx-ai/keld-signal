@@ -311,3 +311,41 @@ fieldset:disabled { opacity: .55; }
   .nav nav { flex-direction: row; }
   .tiles, .tiles.three { grid-template-columns: 1fr 1fr; }
 }
+
+/* The developer "Generate block" button and the repository box beside it.
+   Both live in the DEVELOPER surface, so they are deliberately quieter than a
+   primary action: this is a switch a person flips while testing, not something
+   the product asks anyone to press. */
+.btn-dev {
+  background: transparent;
+  color: var(--ink-2);
+  border: 1px solid var(--rule);
+  padding: 5px 12px;
+  font-size: 12px;
+}
+.btn-dev:hover:not(:disabled) {
+  border-color: var(--ink-2);
+  color: var(--ink);
+}
+.btn-dev:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.devrepos {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.settings-sep {
+  height: 1px;
+  background: var(--rule);
+  margin: 14px 0 4px;
+}

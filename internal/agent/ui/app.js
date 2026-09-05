@@ -1304,18 +1304,6 @@ if (typeof document !== "undefined") {
         el(
           "div",
           { class: "tile" },
-          el("div", { class: "l" }, "Atlas"),
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks, sync projects, take the org's workstreams. Off: nothing leaves this machine.")),
-            switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
-          ),
-          fieldNote("send_to_atlas", readonly)
-        ),
-        el(
-          "div",
-          { class: "tile" },
           el("div", { class: "l" }, "Attribution"),
           el(
             "div",
@@ -1390,11 +1378,91 @@ if (typeof document !== "undefined") {
       "div",
       { class: "tile", style: "background:var(--nested)" },
       el("div", { class: "l" }, "Developer"),
+      // ⚠️ Send to Atlas lives HERE rather than in a tile of its own. The two
+      // controls are read together and never separately: every other switch in
+      // this box is refused or reinterpreted depending on it, so putting them
+      // side by side is what makes those refusals legible instead of arriving
+      // as an error from a control three tiles away.
+      el(
+        "div",
+        { class: "settings-row" },
+        el("span", {}, "Send to Atlas", el("div", { class: "desc" }, "Publish focus blocks, sync projects, take the org's workstreams. Off: nothing leaves this machine.")),
+        switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
+      ),
+      fieldNote("send_to_atlas", readonly),
+      el("div", { class: "settings-sep" }),
       el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity"),
       grid,
       note,
-      err ? el("div", { class: "settings-note error-note" }, err) : null
+      err ? el("div", { class: "settings-note error-note" }, err) : null,
+      el("div", { class: "settings-sep" }),
+      renderDevGenerate(settings)
     );
+  }
+
+  // renderDevGenerate is the "Generate block" switch and the repository list it
+  // draws from.
+  //
+  // ⚠️ **IT IS NOT DISABLED WHILE SEND TO ATLAS IS ON, UNLIKE THE GRANULARITY
+  // ABOVE IT, AND THAT IS DELIBERATE RATHER THAN AN OVERSIGHT.** A dev
+  // granularity MISLABELS work someone really did; the generator ADDS work
+  // nobody did, and travelling all the way to Atlas is the entire thing being
+  // tested. What makes it acceptable is that every generated session is named
+  // `devgen-…`, so the rows stay filterable and deletable wherever they land.
+  function renderDevGenerate(settings) {
+    const on = !!settings.dev_generate;
+    const repos = Array.isArray(settings.dev_repos) ? settings.dev_repos : [];
+    return el(
+      "div",
+      {},
+      el(
+        "div",
+        { class: "settings-row" },
+        el("span", {}, "Generate block button", el("div", { class: "desc" }, "Puts a button in the top bar that writes one synthetic session. It becomes a real block: watched, ingested, cut, priced and published like any other.")),
+        switchEl({ checked: on, onChange: (v) => updateSettings({ dev_generate: v }) })
+      ),
+      on
+        ? el(
+            "div",
+            {},
+            el("div", { style: "margin-top:10px;color:var(--muted)" }, "Repositories it draws from"),
+            el("textarea", {
+              id: "devReposInput",
+              class: "devrepos",
+              rows: 4,
+              placeholder: defaultDevRepos().join("\n"),
+              value: repos.join("\n"),
+              onchange: (e) => updateSettings({ dev_repos: splitRepos(e.target.value) }),
+            }),
+            // The fourth entry is the point of the control, not a footnote:
+            // every declared repository attributes cleanly, so without one that
+            // matches nothing the Projects pane's own job is never exercised.
+            el("div", { class: "settings-note", style: "color:var(--muted)" },
+               "One per line; blank uses the three defaults. A fourth, randomly named repository is always in the mix, so you can see an unattributed block.")
+          )
+        : null
+    );
+  }
+
+  /** The three stable repositories the daemon falls back to. Shown as the
+   *  textarea's placeholder so the box is never a blank prompt with no clue
+   *  what belongs in it. */
+  function defaultDevRepos() {
+    return [
+      "github.com/ncx-ai/keld-signal",
+      "github.com/ncx-ai/keld-atlas",
+      "github.com/ncx-ai/sdk-testbench",
+    ];
+  }
+
+  /** splitRepos turns the textarea into the array the route takes. Empty lines
+   *  are dropped rather than sent as empty repositories, and an all-blank box
+   *  sends an empty array, which the daemon reads as "use the defaults". */
+  function splitRepos(text) {
+    return String(text || "")
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
   }
 
   // renderRestartBar renders nothing at all while idle (the common case) —
@@ -1437,15 +1505,74 @@ if (typeof document !== "undefined") {
 
   // ---- Router / boot ----
 
+  // renderGenerateButton shows the developer's "Generate block" button when the
+  // setting is on, and hides it otherwise.
+  //
+  // ⚠️ **THE BUTTON REPORTS WHAT WAS WRITTEN, NOT "done".** What it creates is a
+  // transcript; the block appears a poll or two later, once the watcher has seen
+  // the file, the sidecar has ingested it and the cutter has closed it. A button
+  // that said "done" and left the page unchanged for ten seconds would read as
+  // broken, so it names the repository and says the block is on its way.
+  function renderGenerateButton() {
+    const btn = document.getElementById("genBlockBtn");
+    if (!btn) return;
+    const on = !!(state.settings && state.settings.dev_generate);
+    btn.hidden = !on;
+    if (!on) return;
+    btn.onclick = clickGenerateBlock;
+  }
+
+  async function clickGenerateBlock() {
+    const btn = document.getElementById("genBlockBtn");
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    const previous = btn.textContent;
+    btn.textContent = "Generating…";
+    try {
+      const res = await sendJSON("/v1/dev/generate", "POST", {});
+      if (res && res.ok && res.body && res.body.repo) {
+        // The repository is the useful half: it is what decides whether this
+        // block attributes or lands in the unattributed pile, which is the
+        // thing being tested.
+        btn.textContent = shortRepo(res.body.repo) + " ✓";
+      } else {
+        btn.textContent = "Failed";
+      }
+    } catch (e) {
+      btn.textContent = "Failed";
+    }
+    // Reload rather than wait: the block is not cut yet, but the ledger poll
+    // that follows will pick it up, and re-reading now costs nothing.
+    await loadAll();
+    route();
+    setTimeout(() => {
+      const b = document.getElementById("genBlockBtn");
+      if (b) {
+        b.textContent = previous;
+        b.disabled = false;
+      }
+    }, 2500);
+  }
+
+  /** shortRepo trims a remote to its last path segment for a button label.
+   *  Never truncated mid-word: an identifier cut short is a false identifier,
+   *  so the whole segment is kept however long it is. */
+  function shortRepo(remote) {
+    const parts = String(remote || "").split("/");
+    return parts[parts.length - 1] || String(remote || "");
+  }
+
   function renderEnvPill() {
     const pill = document.getElementById("envPill");
     const settings = state.settings;
     if (!settings) {
       pill.hidden = true;
+      renderGenerateButton();
       return;
     }
     pill.hidden = false;
     pill.textContent = atlasEnabled(settings) ? "Send to Atlas: on" : "Local only";
+    renderGenerateButton();
   }
 
   function renderNavHealth() {

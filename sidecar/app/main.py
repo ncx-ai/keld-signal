@@ -847,7 +847,7 @@ def _dev_blocks_blocking(st, path, mode, since_ts, now, max_blocks, resolved):
         return devblocks.digest_dev_blocks(dst, path, mode, since_ts=since_ts, now=now,
                                            max_blocks=max_blocks, current=True)
     try:
-        current = is_current(st, path, None, resolved)
+        current = is_current(st, path, None, resolved, writes=False)
     except OSError:
         current = False
     return devblocks.digest_dev_blocks(st, path, mode, since_ts=since_ts, now=now,
@@ -888,7 +888,7 @@ def _blocks_blocking(path, since_ts, now, max_blocks, resolved=None):
         out = _dev_blocks_blocking(st, path, mode, since_ts, now, max_blocks, resolved)
     else:
         try:
-            current = is_current(st, path, None, resolved)
+            current = is_current(st, path, None, resolved, writes=False)
         except OSError:
             # The transcript is gone or unreadable. Not fatal: the SERIES still holds everything
             # that was ingested from it, and those blocks are as closed as they will ever be.
@@ -1026,7 +1026,7 @@ def _features_blocking(path, since_ts, now, max_rows, resolved=None):
     if st is None:
         raise StoreBehind("the reference-series store could not be opened")
     try:
-        current = is_current(st, path, None, resolved)
+        current = is_current(st, path, None, resolved, writes=False)
     except OSError:
         # The transcript is gone or unreadable. Not fatal: the SERIES still holds everything that
         # was ingested from it. Treated as "not current" so only the activity-after branch closes

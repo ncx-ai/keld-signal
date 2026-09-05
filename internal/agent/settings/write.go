@@ -15,6 +15,8 @@ import (
 // already uses, extended to every key this endpoint can write.
 type V3Patch struct {
 	SendToAtlas    *bool
+	DevGenerate    *bool
+	DevRepos       *[]string
 	DevBlocks      *string
 	ShowBreaks     *bool
 	WorkstreamsOff *[]string
@@ -72,6 +74,16 @@ func WriteV3Settings(p V3Patch) error {
 		return nil
 	}
 
+	if p.DevGenerate != nil {
+		if err := set("dev_generate", *p.DevGenerate); err != nil {
+			return err
+		}
+	}
+	if p.DevRepos != nil {
+		if err := set("dev_repos", *p.DevRepos); err != nil {
+			return err
+		}
+	}
 	if p.SendToAtlas != nil {
 		if err := set("send_to_atlas", *p.SendToAtlas); err != nil {
 			return err

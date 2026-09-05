@@ -465,6 +465,25 @@ def test_cli_smoke_produces_expected_layout():
             assert os.path.exists(os.path.join(out_dir, s["rel_path"]))
 
 
+def test_exported_corpus_matches_the_module():
+    """⚠️ The daemon embeds internal/agent/devgen/corpus.json and cannot run this script (a
+    frozen install ships no scripts/ directory and the service has no venv on its PATH). This
+    module stays the source of truth for what generated work SAYS; the Go side owns writing the
+    lines. That split is only safe while the committed copy still matches these constants, so a
+    drift has to fail here rather than quietly give the button a stale vocabulary."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    committed = os.path.normpath(os.path.join(
+        here, os.pardir, os.pardir, "internal", "agent", "devgen", "corpus.json"))
+    assert os.path.exists(committed), (
+        "internal/agent/devgen/corpus.json is missing — regenerate it with:\n"
+        "    python3 scripts/blockgen/blockgen.py --emit-corpus internal/agent/devgen/corpus.json")
+    with open(committed, encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk == blockgen.corpus_document(), (
+        "the committed corpus has drifted from blockgen.py — regenerate it with:\n"
+        "    python3 scripts/blockgen/blockgen.py --emit-corpus internal/agent/devgen/corpus.json")
+
+
 # -------------------------------------------------------------------------------- __main__
 
 if __name__ == "__main__":

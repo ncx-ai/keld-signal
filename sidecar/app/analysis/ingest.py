@@ -367,7 +367,7 @@ def repo_mode(resolved):
     return (resolved or {}).get("repo") or ""
 
 
-def _state_is_usable(raw, nlp, resolved=None):
+def _state_is_usable(raw, nlp, resolved=None, writes=True):
     """Whether a stored parse state may be resumed from, or must be thrown away and reparsed.
 
     Five reasons it cannot be: it is absent (a store written before `parse_state` existed, or
@@ -388,7 +388,7 @@ def _state_is_usable(raw, nlp, resolved=None):
     rows.
     """
     if not (bool(raw) and int(raw.get("v") or 0) == STATE_VERSION
-            and raw.get("terms") == terms_mode(nlp)
+            and (not writes or raw.get("terms") == terms_mode(nlp))
             and (raw.get("capture") or "0") == capture_mode()):
         return False
     stored, incoming = raw.get("repo") or "", repo_mode(resolved)
@@ -457,7 +457,7 @@ def pending_in(store, path, start, end):
             if start <= b[0] < end]
 
 
-def is_current(store, path, nlp=None, resolved=None):
+def is_current(store, path, nlp=None, resolved=None, writes=True):
     """Whether the store holds everything this transcript's bytes say, right now.
 
     This is the precondition for serving a window out of the store at all, and it is stronger
@@ -486,6 +486,27 @@ def is_current(store, path, nlp=None, resolved=None):
     - the parse state is usable at all (`_state_is_usable`), which is where the terms-pipeline
       fingerprint is checked.
 
+    ⚠️ **`writes=False` IS FOR A CALLER THAT WILL NOT INGEST, AND IT WAS MISSING.** `/blocks`,
+    `/features` and the dev-blocks path all read without ever writing a row, and all three passed
+    `nlp=None` — which this docstring already described as "the honest question for a caller that
+    will not ingest, the terms-mode fingerprint only matters to something about to write rows".
+    The comparison was symmetric, so `terms_mode(None)` resolved to `"regex"` and could never
+    equal a fingerprint stored by the DEFAULT pipeline (`spacy:en_core_web_sm:3.8.0`). Every one
+    of those callers therefore read `current=False` forever on an ordinary machine.
+
+    MEASURED, on a real install: `is_current` was False for **22 of 22** transcripts, and the
+    consequence is specific rather than general — `blockdigest.is_closed` falls back to its
+    "activity after" branch, so a block with later activity still closes and only the TRAILING
+    block of each session never does. A session that has ended has no later activity by
+    definition, so its last block is permanently unpublished. It is invisible in aggregate
+    (blocks keep appearing) and total for a short session that is all trailing block, which is
+    exactly the shape the developer block generator produces: the generated transcript ingested
+    cleanly, resolved its repository, cut one closed block in `blocks.cut` — and `/blocks`
+    returned nothing at all.
+
+    The fix is the same ASYMMETRY the `repo` rule below already has: a caller that is not about
+    to write rows cannot be invalidated by a fingerprint describing how rows were written.
+
     `os.stat` only: no file is opened, which is the property `/analyze` is measured against.
     """
     st = store.ingest_state(path)
@@ -496,7 +517,7 @@ def is_current(store, path, nlp=None, resolved=None):
     except OSError:
         return False
     return (st["size"] == size and st["mtime"] == mtime and st["offset"] == size
-            and _state_is_usable(store.parse_state(path), nlp, resolved))
+            and _state_is_usable(store.parse_state(path), nlp, resolved, writes))
 
 
 def _latest(a, b):

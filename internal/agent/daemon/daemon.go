@@ -889,6 +889,7 @@ func Run(ctx context.Context) error {
 		// already does exactly this.
 		ingress.SettingsRoute(serviceRestarter{}.Restart),
 		ingress.ConfigRoute(),
+		ingress.DevGenerateRoute(),
 	)
 	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded, v3Routes...)
 	pollInterval := 5 * time.Minute
