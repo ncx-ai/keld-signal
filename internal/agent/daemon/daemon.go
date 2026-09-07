@@ -38,6 +38,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 	"github.com/ncx-ai/keld-signal/internal/agent/resolve"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/agent/singleton"
 	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
@@ -655,7 +656,50 @@ func wellKnownSidecarDirs() []string {
 // registered before onboarding runs (the documented macOS pkg order), so this
 // waits for hook.json and starts the moment onboarding writes it. See
 // awaitConfig for why exiting here was wrong.
+// ErrAlreadyRunning reports that another daemon holds this KELD_HOME's lock,
+// so this one did nothing and exited.
+//
+// ⚠️ **IT IS A SENTINEL BECAUSE THE EXIT CODE MUST BE ZERO, AND THAT IS NOT A
+// STYLE POINT.** `executeCmd` turns any error out of `Run` into exit 1, and the
+// LaunchAgent's KeepAlive is the `SuccessfulExit=false` dictionary — so a
+// duplicate that exited non-zero would be respawned by launchd, refuse again,
+// exit non-zero again, forever. That is precisely the unconditional-KeepAlive
+// crashloop this repo already paid for once (69 launchd spawns in 12 minutes,
+// see service.go), rebuilt out of the very guard meant to prevent duplicates.
+// A duplicate is a NORMAL outcome — someone opened a second one — so it exits
+// cleanly and launchd lets it stay exited.
+var ErrAlreadyRunning = errors.New("another keld-agent is already running for this KELD_HOME")
+
 func Run(ctx context.Context) error {
+	// ⚠️ **THE LOCK IS TAKEN FIRST, BEFORE ANYTHING ELSE IN THE PROCESS DOES
+	// WORK — AND BEFORE reapStaleSidecars IN PARTICULAR.** That reaper kills
+	// every process matching the sidecar's basename, machine-wide, justified by
+	// "under single-instance service management any such process is stale".
+	// Nothing enforced that premise, so two daemons took turns killing each
+	// other's sidecar while both wrote to one refseries.db — a cause of the
+	// `database is locked` failures. Ordering is the whole claim: reaping first
+	// and locking second would still have killed a live daemon's sidecar before
+	// discovering this process should never have started, so the guard would
+	// have caused the exact damage it exists to prevent.
+	//
+	// It lives in Run rather than in the `run` command because the invariant
+	// belongs to the thing that assumes it. The reaper is inside this package;
+	// putting the guard one layer up would leave Run enterable twice by any
+	// other caller, which is the same assumed-but-unenforced bug in a new
+	// place.
+	lock, err := singleton.Acquire(paths.AgentLockPath())
+	if err != nil {
+		if errors.Is(err, singleton.ErrHeld) {
+			log.Printf("keld-agent: not starting — %v (%v)", ErrAlreadyRunning, err)
+			return ErrAlreadyRunning
+		}
+		return err
+	}
+	// Release is for orderly shutdown and for tests. Correctness does not rest
+	// on it: the kernel drops an fd-bound lock however the process ends, which
+	// is the reason this is not a pid file.
+	defer func() { _ = lock.Release() }()
+
 	// Resolve any update left in flight by a previous process, BEFORE
 	// awaitConfig — which blocks indefinitely on a machine that has not been
 	// onboarded. A daemon idling there still needs a bad update undone, and it

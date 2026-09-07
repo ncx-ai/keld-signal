@@ -36,11 +36,21 @@ func ManifestPath() string    { return filepath.Join(KeldHome(), "manifest.json"
 func HookConfigPath() string  { return filepath.Join(KeldHome(), "hook.json") }
 func AgentInfoPath() string   { return filepath.Join(KeldHome(), "agent.json") }
 func AgentConfigPath() string { return filepath.Join(KeldHome(), "agent-config.json") }
-func DebugLogPath() string    { return filepath.Join(KeldHome(), "agent.log") }
-func AgentLogDir() string     { return filepath.Join(KeldHome(), "logs") }
-func AgentStdoutLog() string  { return filepath.Join(AgentLogDir(), "agent.out.log") }
-func AgentStderrLog() string  { return filepath.Join(AgentLogDir(), "agent.err.log") }
-func StateDir() string        { return filepath.Join(KeldHome(), "state") }
+
+// AgentLockPath is the file the running daemon holds an exclusive OS lock on,
+// so a second `keld-agent run` against this KELD_HOME refuses to start.
+//
+// It is keyed on KELD_HOME rather than being machine-global on purpose: the
+// thing that must not be doubled is a daemon over a given state directory —
+// its spool, its ledger and the sidecar's refseries.db all live there. An
+// isolated daemon (the e2e harness, a test) gets its own home and so its own
+// lock, and is unaffected by whatever is running for the real one.
+func AgentLockPath() string  { return filepath.Join(KeldHome(), "agent.lock") }
+func DebugLogPath() string   { return filepath.Join(KeldHome(), "agent.log") }
+func AgentLogDir() string    { return filepath.Join(KeldHome(), "logs") }
+func AgentStdoutLog() string { return filepath.Join(AgentLogDir(), "agent.out.log") }
+func AgentStderrLog() string { return filepath.Join(AgentLogDir(), "agent.err.log") }
+func StateDir() string       { return filepath.Join(KeldHome(), "state") }
 
 // PromptLengthsPath holds the streaming prompt-length distribution the daemon
 // uses to size enrichment's input truncation (see agent/enrich/lenstat).

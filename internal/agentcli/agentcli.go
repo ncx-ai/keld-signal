@@ -3,6 +3,7 @@ package agentcli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -295,7 +296,22 @@ func NewRootCmd() *cobra.Command {
 			}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return daemon.Run(ctx)
+			err := daemon.Run(ctx)
+			// ⚠️ **A DUPLICATE EXITS ZERO.** Returning this error would make
+			// executeCmd exit 1, and the LaunchAgent's KeepAlive is the
+			// SuccessfulExit=false dictionary — so launchd would respawn the
+			// duplicate, which would refuse and exit 1 again, forever. The
+			// single-instance guard would then have MANUFACTURED the
+			// unconditional-KeepAlive crashloop it exists to prevent (69 spawns
+			// in 12 minutes, see service.go). Someone starting a second daemon
+			// is a normal thing to do, not a failure of this machine: say so on
+			// stderr, where a human running it in a terminal sees it, and let
+			// the process end cleanly so the supervisor leaves it ended.
+			if errors.Is(err, daemon.ErrAlreadyRunning) {
+				fmt.Fprintln(cmd.ErrOrStderr(), err)
+				return nil
+			}
+			return err
 		},
 	}
 	runCmd.Flags().Bool("hide-console", false,
