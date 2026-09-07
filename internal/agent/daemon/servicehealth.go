@@ -273,7 +273,37 @@ func (h *serviceHealth) run(ctx context.Context) {
 	start := h.now()
 	t := time.NewTicker(h.interval)
 	defer t.Stop()
+	last := h.now()
 	for {
+		// ⚠️ **A LAPTOP THAT SLEPT MUST NOT BE JUDGED ON WHAT IT MISSED.**
+		// Timers do not fire while the machine is suspended, and nothing in
+		// this daemon or the watcher noticed a wake before this. Two things go
+		// wrong without it, and the second is the expensive one. A probe fired
+		// in the first moments after a lid opens is measuring a machine whose
+		// network stack is still coming back and whose sidecar may have been
+		// suspended mid-request, so it fails for reasons that say nothing
+		// about the service. And a streak carried ACROSS the sleep is a
+		// judgement about a machine that no longer exists — three failures at
+		// 23:00 plus one at 08:00 is not four consecutive failures, it is one,
+		// and treating it as four restarts a daemon on the strength of
+		// evidence from last night.
+		//
+		// The detector is the gap itself. This loop wakes on a ticker, so on
+		// an ordinary tick the wall clock advances by about one interval; a
+		// jump far beyond that means time passed while nothing ran. The
+		// threshold is deliberately generous — a heavily loaded machine can
+		// delay a tick by seconds, and mistaking load for sleep would reset a
+		// real failure streak and hide exactly the outage this owner exists to
+		// catch. Erring the other way costs one extra probe cycle.
+		//
+		// A backwards jump counts too: a clock corrected by NTP, or a VM
+		// restored from a snapshot, leaves the same "the interval I measured
+		// is meaningless" state.
+		if gap := h.now().Sub(last); gap > h.sleepGap() || gap < 0 {
+			h.wokeUp(gap)
+			start = h.now() // re-arm the startup grace: a wake is a cold start
+		}
+		last = h.now()
 		// ⚠️ **THE GRACE SUPPRESSES ESCALATION, NOT REPORTING, and the split
 		// matters on every single daemon start.** Waiting to probe at all left
 		// this owner with no answer for the first minute, while the page's
@@ -324,6 +354,55 @@ func (h *serviceHealth) checkMode(ctx context.Context, counting bool) {
 // but "ever", so it accumulates across hours of ordinary operation and
 // eventually crosses a rung on a machine whose service is fine — a self-restart
 // caused entirely by the detector.
+// sleepGap is how large a gap between ticks has to be before this owner calls
+// it a suspended machine rather than a slow one.
+//
+// Four intervals, floored at two minutes. Both halves earn their place: the
+// multiple keeps it meaningful if someone sets a long interval, and the floor
+// keeps it from being twitchy if someone sets a short one — at a 5s interval,
+// four ticks is 20s, which a loaded machine can genuinely lose to scheduling.
+// A real sleep is minutes to hours, so nothing is lost by being generous, and
+// what is bought is that ordinary load can never silently wipe a failure
+// streak.
+func (h *serviceHealth) sleepGap() time.Duration {
+	if g := 4 * h.interval; g > 2*time.Minute {
+		return g
+	}
+	return 2 * time.Minute
+}
+
+// wokeUp discards the pre-sleep failure streak.
+//
+// ⚠️ **IT RESETS THE COUNTER BUT DOES NOT CLAIM THE SERVICE IS HEALTHY.** The
+// state is left exactly as it was, because this owner has not probed since the
+// machine came back and does not know — publishing `ok` here would be a
+// confident answer from a check that never ran, which is the one thing this
+// codebase refuses everywhere else. The very next line of the loop probes, and
+// that probe sets the state honestly. What is thrown away is only the arithmetic
+// that a suspended machine invalidated.
+//
+// The restart marker is deliberately NOT cleared: its cooldown is measured in
+// wall-clock hours, so sleeping through it is exactly as good as being awake
+// through it, and clearing it would let a lid-close reset a bound whose whole
+// job is to survive a restart.
+func (h *serviceHealth) wokeUp(gap time.Duration) {
+	h.mu.Lock()
+	prevFails := h.fails
+	h.fails = 0
+	h.mu.Unlock()
+
+	if prevFails == 0 {
+		return // nothing was in flight; the wake cost nothing and needs no line
+	}
+	log.Printf("keld-agent: %s passed between health checks — the machine was most likely asleep; "+
+		"discarding %d failed check(s) from before it, which say nothing about the machine that came back",
+		gap.Round(time.Second), prevFails)
+	h.emit("service.wake_reset", clientevents.SevInfo, map[string]any{
+		"gap_s":            int(gap.Round(time.Second).Seconds()),
+		"failures_dropped": prevFails,
+	})
+}
+
 func (h *serviceHealth) onSuccess() {
 	h.mu.Lock()
 	prev, prevFails, restarts := h.state, h.fails, h.sidecarRestarts
