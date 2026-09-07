@@ -439,9 +439,27 @@ func (h *serviceHealth) onFailure() {
 		h.restartSidecarRung(n)
 
 	case n < serviceRestartDaemonAt:
-		// The restart was issued and has not taken yet. Deliberately no second
-		// restart here: rungs fire on equality so an action happens once per
-		// streak, never once per probe.
+		// Deliberately no second restart here: rungs fire on equality so an
+		// action happens once per streak, never once per probe.
+		//
+		// ⚠️ **THIS USED TO SAY "was restarted" UNCONDITIONALLY, AND ON A REAL
+		// MACHINE THAT WAS A LIE.** Observed live: the sidecar rung asked the
+		// supervisor to restart, the supervisor had already surrendered and
+		// refused, and the page then read "the analysis service was restarted
+		// and still has not answered" — describing an action that never
+		// happened, to a person deciding whether to intervene. The whole point
+		// of this ladder is that what reaches a person is an accurate account
+		// of what was already tried; a reason string that invents a remedy is
+		// the same defect as a button that claims success on a 202.
+		h.mu.Lock()
+		gaveUp := h.gaveUp
+		h.mu.Unlock()
+		if gaveUp {
+			h.setState(serviceRestarting, fmt.Sprintf(
+				"the analysis service is not answering (%d checks in a row) and could not be restarted — "+
+					"its supervisor has given up. Restarting Signal itself is the next thing to try.", n))
+			break
+		}
 		h.setState(serviceRestarting, fmt.Sprintf(
 			"the analysis service was restarted and still has not answered (%d checks in a row).", n))
 

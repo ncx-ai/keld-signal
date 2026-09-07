@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -130,4 +131,35 @@ func (h *serviceHealth) reported() (serviceState, string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.state, h.reason
+}
+
+// NEGATIVE: the reason must never claim a restart that did not happen.
+//
+// ⚠️ Found by running the ladder against a genuinely dead sidecar on a real
+// machine, not by a test. The sidecar rung asked the supervisor to restart, the
+// supervisor had already surrendered and refused, and the page then read "the
+// analysis service was restarted and still has not answered" — describing an
+// action that never occurred, to the person deciding whether to intervene. A
+// reason string that invents a remedy is the same defect as a button claiming
+// success on a 202, and this whole ladder exists so that what reaches a person
+// is an accurate account of what was already tried.
+func TestTheReasonDoesNotClaimARestartThatWasRefused(t *testing.T) {
+	h := newTestHealth(t, func(context.Context) bool { return false },
+		func() error { return ErrSupervisorStopped }, nil, nil)
+
+	// Walk one rung past the refused sidecar restart.
+	for i := 0; i < serviceRestartSidecarAt+1; i++ {
+		h.check(context.Background())
+	}
+
+	state, reason := h.reported()
+	if state != serviceRestarting {
+		t.Fatalf("state = %v, want restarting at this rung", state)
+	}
+	if strings.Contains(reason, "was restarted") {
+		t.Fatalf("the reason claims a restart that was refused: %q", reason)
+	}
+	if !strings.Contains(reason, "could not be restarted") {
+		t.Fatalf("the reason does not say the restart was refused: %q", reason)
+	}
 }
