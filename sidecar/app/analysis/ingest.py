@@ -547,9 +547,24 @@ def ingest_file(store, path, nlp=None, resolved=None):
     same facts; see `_state_is_usable`.
 
     Single-flight per path. Two callers can legitimately want the same file at the same moment —
-    the daemon's watcher signal (task 4) and an `/analyze` that found the store behind — and
-    while SQLite would serialise the writes, both would parse the same bytes and one would
-    discard the work. The lock makes the second wait and then find nothing to do.
+    the daemon's watcher signal (task 4) and an `/analyze` that found the store behind — and both
+    would parse the same bytes and one would discard the work. The lock makes the second wait and
+    then find nothing to do.
+
+    ⚠️ **THAT LOCK IS ABOUT DUPLICATED PARSING, NOT ABOUT THE DATABASE, and this docstring used
+    to blur the two** — it said the work would be duplicated "while SQLite would serialise the
+    writes", which reads as though the database side were already handled. It was not.
+    `_path_lock` is keyed on the TRANSCRIPT, so two ingests of DIFFERENT transcripts take
+    different locks and then race for the same `refseries.db` write lock; SQLite serialises them
+    only in the sense that the loser waits `busy_timeout` and then raises
+    `sqlite3.OperationalError: database is locked`. Measured on a real machine: four such
+    failures in one day, five failed user actions, raised from `Store.transaction()`'s
+    `BEGIN IMMEDIATE` by way of `/analyze` → here. Three routes reach this function
+    (`main._ingest_blocking`, `analyze._rollup_from_store`, `main._dev_blocks_blocking`) and this
+    lock covers none of that. The database side is now serialised one level down, by
+    `Store._write_lock` inside `transaction()` — deliberately there rather than here, so only the
+    WRITE queues and the multi-second PARSE above it still runs in parallel across transcripts.
+    See the Concurrency block on `Store`.
 
     Retention rides this call, AFTER the ingest and OUTSIDE the path lock. This is where it
     belongs because both writers reach the store through here — the watcher's `/ingest` and
@@ -577,7 +592,14 @@ def _path_lock(path):
     """One lock per transcript, created on demand. Never evicted: a `Lock` is tens of bytes and
     the population is the number of transcripts on the machine (582 on this one), so a reaper
     would be more code than it saves — and evicting one that a caller is about to take is a
-    correctness question, not a memory one."""
+    correctness question, not a memory one.
+
+    PER TRANSCRIPT is the whole of its scope, and the 582 above is why that is not also the
+    database's protection: 582 locks, one store. What this prevents is two callers parsing the
+    same bytes; what it cannot prevent is two callers writing the same file. That is
+    `Store._write_lock`'s job, and the two are held in this order — path lock, then store lock,
+    always, because nothing inside a `transaction()` calls back into `ingest_file`. A future
+    caller that inverts that order introduces the deadlock this ordering currently rules out."""
     with _LOCKS_MUTEX:
         lk = _LOCKS.get(path)
         if lk is None:
