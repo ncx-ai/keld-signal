@@ -2,7 +2,7 @@
   "generated_at": "2026-09-04T17:34:00Z",
   "health": [
     { "key": "daemon", "status": "ok", "detail": "2.5.0", "at": "2026-09-04T17:34:00Z" },
-    { "key": "sidecar", "status": "ok", "detail": "2.5.0", "at": "2026-09-04T17:33:40Z" },
+    { "key": "sidecar", "status": "failed", "detail": "sidecar_down", "at": "2026-09-04T17:33:40Z" },
     { "key": "telemetry", "status": "ok", "detail": "", "at": "2026-09-04T17:33:00Z" },
     { "key": "atlas", "status": "ok", "detail": "", "at": "2026-09-04T17:21:00Z" },
     { "key": "store", "status": "ok", "detail": "", "at": "2026-09-04T17:34:00Z" }
@@ -94,5 +94,9 @@
     }
   ],
   "pending": [],
-  "service": { "state": "ok", "reason": "", "failures": 0 }
+  "service": {
+    "state": "stuck",
+    "reason": "Signal restarted the analysis service twice and it still isn't answering. 290 blocks are waiting.",
+    "failures": 2
+  }
 }

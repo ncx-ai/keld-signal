@@ -660,6 +660,223 @@ export function visibleHealth(health, settings) {
   return list.filter((h) => h.key !== "atlas");
 }
 
+/** ---- The analysis service's own health, which is NOT the `health` array ----
+ *
+ *  `GET /v1/ledger` carries a top-level `service` block beside `health`:
+ *
+ *      "service": { "state": "ok"|"degraded"|"restarting"|"stuck"
+ *                            |"not_applicable",
+ *                   "reason": "human sentence, empty when ok",
+ *                   "failures": 0 }
+ *
+ *  ⚠️ **It is deliberately not folded into `health`.** That array is PIPELINE
+ *  health — per-stage cells about blocks (cut / measured / attributed / sent /
+ *  received) — and answers a different question. A block pending delivery must
+ *  never render as a dead service, and a dead service must never hide inside a
+ *  row about blocks, so this is read separately and rendered in its own place.
+ *
+ *  ⚠️ **AN ABSENT `service` KEY MEANS "THIS DAEMON IS TOO OLD TO SAY", NEVER
+ *  "FINE".** The page renders nothing in that case. This is the same refusal
+ *  `visibleHealth` makes for the Atlas cell, `version.Skew` makes with
+ *  `known=false`, and `dynamics` makes by DROPPING a status string it does not
+ *  recognise: a check that did not run must never publish a confident
+ *  negative. An unrecognised `state` is dropped for exactly that reason too —
+ *  a newer daemon inventing a sixth value must not make this page assert
+ *  something about it.
+ */
+export const SERVICE_OK = "ok";
+export const SERVICE_DEGRADED = "degraded";
+export const SERVICE_RESTARTING = "restarting";
+export const SERVICE_STUCK = "stuck";
+export const SERVICE_NOT_APPLICABLE = "not_applicable";
+
+/** The three states that put something on screen. `ok` and `not_applicable`
+ *  are silent BY DESIGN: a healthy machine shows no alarm and no button, and a
+ *  machine that legitimately has no analysis service installed is not broken
+ *  (the daemon's own `noAnalysisService` path — see AGENTS.md's Model
+ *  backends) and must never be reported as if it were. */
+const SERVICE_ALARM_STATES = [SERVICE_DEGRADED, SERVICE_RESTARTING, SERVICE_STUCK];
+
+/**
+ * The service alarm to render, or null for "say nothing".
+ *
+ * Null covers four different silences, and they are all silences on purpose:
+ * no `service` key at all (an older daemon), `ok`, `not_applicable`, and a
+ * `state` string this page does not recognise.
+ *
+ * `offline` is the fifth: with the daemon unreachable the only `service`
+ * block we have is whatever the ledger cache last saw, which is a stale fact
+ * about a process that is not answering — and the Restart button could not
+ * reach anything anyway. The offline banner already says the true thing, so
+ * this one stands down rather than double-reporting it.
+ */
+export function serviceAlert(ledger, { offline = false } = {}) {
+  if (offline) return null;
+  const s = ledger && ledger.service;
+  if (!s || typeof s !== "object") return null;
+  if (!SERVICE_ALARM_STATES.includes(s.state)) return null;
+  return {
+    state: s.state,
+    // The contract types `reason` as a human sentence, so it is shown
+    // VERBATIM — never mapped through REASON_TEXT/HEALTH_DETAIL_SHORT. For
+    // `stuck` that sentence is the whole point: it is what says restarting
+    // was already tried, and a lookup table would replace it with a generic
+    // line that does not.
+    reason: typeof s.reason === "string" ? s.reason : "",
+    // Carried but deliberately NOT rendered: the contract says `failures` is
+    // a count and does not say what it counts, and this page does not invent
+    // a meaning for a number in order to have something to print.
+    failures: typeof s.failures === "number" ? s.failures : 0,
+  };
+}
+
+/** The headline, per state. Names the thing the way the health strip already
+ *  does ("Analysis service", healthLabel("sidecar")) — the word "sidecar"
+ *  never reaches the screen. */
+export function serviceHeadline(state) {
+  switch (state) {
+    case SERVICE_DEGRADED:
+      return "The analysis service isn't healthy.";
+    case SERVICE_STUCK:
+      return "The analysis service isn't recovering on its own.";
+    case SERVICE_RESTARTING:
+      return "Restarting the analysis service…";
+    default:
+      return "";
+  }
+}
+
+/** The server's sentence, verbatim. Only an EMPTY reason gets a fallback —
+ *  and the fallback says we were not told why, rather than inventing a cause. */
+export function serviceReasonText(alert) {
+  if (!alert) return "";
+  if (alert.reason) return alert.reason;
+  return "Signal didn't say why.";
+}
+
+/** What happens to the work meanwhile. True for as long as the daemon queues
+ *  and spools jobs against an unready analysis service rather than dropping
+ *  them (AGENTS.md, Delivery reliability). Not shown while it is already
+ *  coming back — the headline says that. */
+export function serviceQueueNote(state) {
+  if (state === SERVICE_DEGRADED || state === SERVICE_STUCK) {
+    return "Your work is still being recorded — Signal holds it until the service is back.";
+  }
+  return "";
+}
+
+/** The Restart button's own state machine, a pure reducer for the same reason
+ *  nextRestartStatus is one: the sequence is one thing to test rather than
+ *  something to reconstruct from reading a click handler.
+ *
+ *  ⚠️ **THERE IS NO "SUCCEEDED" STATE, AND THAT IS THE POINT.**
+ *  `POST /v1/service/restart` answers 202 — "accepted", not "fixed" — so the
+ *  furthest this machine can travel on its own is ACCEPTED. Only the next
+ *  `GET /v1/ledger` can retire the alarm, by no longer sending one. */
+export const SERVICE_RESTART_IDLE = "idle";
+export const SERVICE_RESTART_SENDING = "sending";
+export const SERVICE_RESTART_ACCEPTED = "accepted";
+export const SERVICE_RESTART_FAILED = "failed";
+
+export function nextServiceRestart(status, event) {
+  switch (status) {
+    case SERVICE_RESTART_SENDING:
+      if (event === "accepted") return SERVICE_RESTART_ACCEPTED;
+      if (event === "refused") return SERVICE_RESTART_FAILED;
+      return SERVICE_RESTART_SENDING;
+    case SERVICE_RESTART_ACCEPTED:
+      // ⚠️ **"gave_up" EXISTS BECAUSE A DISABLED BUTTON IS ALSO A LIE ONCE IT
+      // IS PERMANENT.** Found by driving the real page: the daemon answers
+      // 202, the ledger goes on reporting the same state, and nothing ever
+      // reconciles the local claim away — so the control read "Restart
+      // requested", disabled, forever, on the one machine where a second
+      // attempt is the only thing left to try. After a bounded wait the page
+      // stops claiming a request is outstanding and hands the press back.
+      return event === "gave_up" ? SERVICE_RESTART_IDLE : SERVICE_RESTART_ACCEPTED;
+    default: // IDLE, FAILED, or anything this reducer doesn't recognise
+      return event === "clicked" ? SERVICE_RESTART_SENDING : status;
+  }
+}
+
+/**
+ * Reconcile a click's local status against what the ledger now says.
+ *
+ * The local status is a claim about ONE observed state ("I asked for a
+ * restart while it was stuck"). The moment the server reports something else
+ * — including no alarm at all — that claim has been answered and is dropped,
+ * which is how "Restart requested" stops being shown without the page ever
+ * deciding for itself that the restart worked.
+ */
+export function reconcileServiceRestart(restart, alert) {
+  const r = restart || { status: SERVICE_RESTART_IDLE, forState: "" };
+  if (!alert) return { status: SERVICE_RESTART_IDLE, forState: "" };
+  if (r.forState && r.forState !== alert.state) return { status: SERVICE_RESTART_IDLE, forState: "" };
+  return r;
+}
+
+/** The button: label, and whether it can be pressed. Disabled while a request
+ *  is in flight, disabled once accepted (pressing again buys nothing until the
+ *  ledger answers), and disabled whenever the SERVER says it is already
+ *  restarting — the button reflects that state rather than pretending to it.
+ *  Pressing repeatedly therefore cannot queue a second restart behind the
+ *  first. */
+export function serviceButtonProps(status, state) {
+  if (state === SERVICE_RESTARTING) return { label: "Restarting…", disabled: true };
+  switch (status) {
+    case SERVICE_RESTART_SENDING:
+      return { label: "Restarting…", disabled: true };
+    case SERVICE_RESTART_ACCEPTED:
+      return { label: "Restart requested", disabled: true };
+    case SERVICE_RESTART_FAILED:
+      return { label: "Try again", disabled: false };
+    default:
+      return { label: "Restart service", disabled: false };
+  }
+}
+
+/** The line beside the button. ⚠️ ACCEPTED must never read as success: a 202
+ *  says the daemon took the request, and the only thing that can say the
+ *  service is back is the next poll finding no alarm to render. */
+export function serviceProgressText(status) {
+  switch (status) {
+    case SERVICE_RESTART_SENDING:
+      return "Asking Signal to restart it…";
+    case SERVICE_RESTART_ACCEPTED:
+      return "Restart requested. This page will clear once the service answers again.";
+    case SERVICE_RESTART_FAILED:
+      return "Couldn't ask Signal to restart it.";
+    default:
+      return "";
+  }
+}
+
+/**
+ * The nav dot, as one pure function over everything that can move it.
+ *
+ * ⚠️ The service alarm is NOT merged into the `health` array — it is a
+ * separate input with its own precedence, so a dead service can never hide
+ * inside a row about blocks and a block pending delivery can never render as
+ * a dead service. What it does share is the dot, because a sidebar reading
+ * "all good" beside a banner saying the analysis service is down is the page
+ * contradicting itself.
+ *
+ * Precedence: not running > service alarm > pipeline health. Each answers a
+ * strictly larger question than the next, and the largest true one is the one
+ * a person needs.
+ */
+export function navHealthState({ offline = false, alert = null, health = [], settings = null } = {}) {
+  if (offline) return { tone: "bad", text: "not running" };
+  if (alert) {
+    if (alert.state === SERVICE_RESTARTING) return { tone: "warn", text: "service restarting" };
+    if (alert.state === SERVICE_STUCK) return { tone: "bad", text: "service not recovering" };
+    return { tone: "bad", text: "service unhealthy" };
+  }
+  const visible = visibleHealth(health, settings);
+  if (visible.some((h) => h.status === "failed")) return { tone: "bad", text: "needs attention" };
+  if (visible.some((h) => h.status === "pending")) return { tone: "warn", text: "catching up" };
+  return { tone: "ok", text: "all good" };
+}
+
 export { CELL_STAGES };
 
 // =====================================================================
@@ -715,6 +932,12 @@ if (typeof document !== "undefined") {
     // resending with ?restart=1 — empty for a restart /v1/config asked for,
     // since that route already wrote everything itself.
     restart: { status: RESTART_IDLE, patch: {} },
+    // serviceRestart: the analysis-service Restart button's own state, and
+    // the service state it was pressed against. `forState` is what lets
+    // reconcileServiceRestart drop a stale "Restart requested" the moment the
+    // ledger says something different — the page never decides on its own
+    // that a restart worked.
+    serviceRestart: { status: SERVICE_RESTART_IDLE, forState: "" },
     // settingsError: the last PUT /v1/settings refusal, scoped to the key(s)
     // it was about, so it renders next to the control that caused it rather
     // than as an unscoped banner nobody can connect to an action.
@@ -1808,20 +2031,124 @@ if (typeof document !== "undefined") {
     renderGenerateButton();
   }
 
-  function renderNavHealth() {
+  function renderNavHealth(alert) {
     const dot = document.getElementById("navHealthDot");
     const text = document.getElementById("navHealthText");
     dot.classList.remove("ok", "bad", "warn");
-    if (state.offline) {
-      dot.classList.add("bad");
-      text.textContent = "not running";
+    const s = navHealthState({
+      offline: state.offline,
+      alert,
+      health: state.ledger ? state.ledger.health : [],
+      settings: state.settings,
+    });
+    dot.classList.add(s.tone);
+    text.textContent = s.text;
+  }
+
+  /**
+   * The service banner — the machine-level "something Signal depends on has
+   * stopped working" strip, sitting beside the offline banner above every
+   * pane rather than inside the Today pane's health strip. Two reasons, both
+   * about being unmissable: it must be there whichever pane a person lands
+   * on, and it is the one place on this page that already carries a fact of
+   * this size ("Signal is not running on this machine").
+   *
+   * Everything it shows comes from the ledger. The one thing held locally is
+   * whether a Restart request is in flight, and reconcileServiceRestart hands
+   * even that back to the server's answer as soon as one arrives.
+   */
+  function renderServiceBanner(alert) {
+    const banner = document.getElementById("serviceBanner");
+    if (!banner) return;
+    // Reconcile FIRST, including against a null alert: a ledger that no
+    // longer reports an alarm is what retires a pending "Restart requested",
+    // and doing this after an early return would leave that status latched
+    // forever behind a hidden banner.
+    state.serviceRestart = reconcileServiceRestart(state.serviceRestart, alert);
+    const status = state.serviceRestart.status;
+
+    // Absent `service` key, `ok`, `not_applicable`, an unrecognised state, or
+    // the daemon being unreachable: nothing at all. Never a reassuring
+    // "service: fine" derived from a check that did not run.
+    if (!alert) {
+      banner.hidden = true;
+      banner.classList.remove(SERVICE_DEGRADED, SERVICE_STUCK, SERVICE_RESTARTING);
       return;
     }
-    const health = visibleHealth(state.ledger ? state.ledger.health : [], state.settings);
-    const bad = health.some((h) => h.status === "failed");
-    const warn = health.some((h) => h.status === "pending");
-    dot.classList.add(bad ? "bad" : warn ? "warn" : "ok");
-    text.textContent = bad ? "needs attention" : warn ? "catching up" : "all good";
+
+    banner.hidden = false;
+    banner.classList.remove(SERVICE_DEGRADED, SERVICE_STUCK, SERVICE_RESTARTING);
+    banner.classList.add(alert.state);
+
+    document.getElementById("serviceHeadline").textContent = serviceHeadline(alert.state);
+    document.getElementById("serviceReason").textContent = serviceReasonText(alert);
+
+    const note = document.getElementById("serviceNote");
+    const noteText = serviceQueueNote(alert.state);
+    note.textContent = noteText;
+    note.hidden = !noteText;
+
+    const progress = document.getElementById("serviceProgress");
+    const progressText = serviceProgressText(status);
+    progress.textContent = progressText;
+    progress.hidden = !progressText;
+    progress.classList.toggle("failed", status === SERVICE_RESTART_FAILED);
+
+    const btn = document.getElementById("serviceRestartBtn");
+    const props = serviceButtonProps(status, alert.state);
+    btn.textContent = props.label;
+    btn.disabled = props.disabled;
+    btn.onclick = clickServiceRestart;
+  }
+
+  // How hard the page chases the ledger after a restart was ACCEPTED. The
+  // ordinary 30s poll is too slow to watch a restart with, and this is not a
+  // substitute for it: it only re-reads /v1/ledger, so whatever it finds is
+  // the daemon's own answer. It never concludes anything itself, and it stops
+  // whether or not the service came back — the banner then simply keeps
+  // saying what the ledger last said.
+  const SERVICE_POLL_INTERVAL_MS = 2000;
+  const SERVICE_POLL_MAX_ATTEMPTS = 20;
+
+  async function watchServiceBack() {
+    for (let attempt = 0; attempt < SERVICE_POLL_MAX_ATTEMPTS; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, SERVICE_POLL_INTERVAL_MS));
+      await loadAll();
+      route();
+      if (state.serviceRestart.status === SERVICE_RESTART_IDLE) return; // reconciled away
+    }
+    // Waited the whole window and the ledger never said anything different.
+    // Give the press back rather than sitting on "Restart requested" forever
+    // — the banner still says what is wrong, and a second attempt is now the
+    // only thing left to try.
+    if (state.serviceRestart.status === SERVICE_RESTART_ACCEPTED) {
+      state.serviceRestart = { status: nextServiceRestart(state.serviceRestart.status, "gave_up"), forState: "" };
+      route();
+    }
+  }
+
+  /**
+   * ⚠️ **A 202 IS "ACCEPTED", NOT "FIXED", AND THIS FUNCTION MUST NEVER SAY
+   * OTHERWISE.** It moves the button to ACCEPTED and stops. The alarm is
+   * retired by `renderServiceBanner` finding no alarm in a later ledger, and
+   * by nothing else — optimistically rendering success here is exactly the
+   * failure this whole piece of work exists to remove.
+   */
+  async function clickServiceRestart() {
+    const alert = serviceAlert(state.ledger, { offline: state.offline });
+    if (!alert) return;
+    state.serviceRestart = {
+      status: nextServiceRestart(state.serviceRestart.status, "clicked"),
+      forState: alert.state,
+    };
+    route();
+    const res = await sendJSON("/v1/service/restart", "POST", {});
+    state.serviceRestart = {
+      ...state.serviceRestart,
+      status: nextServiceRestart(state.serviceRestart.status, res.ok ? "accepted" : "refused"),
+    };
+    route();
+    if (res.ok) watchServiceBack();
   }
 
   function route() {
@@ -1829,7 +2156,9 @@ if (typeof document !== "undefined") {
     state.pane = pane;
     setActiveNav(pane);
     renderEnvPill();
-    renderNavHealth();
+    const alert = serviceAlert(state.ledger, { offline: state.offline });
+    renderServiceBanner(alert);
+    renderNavHealth(alert);
     document.getElementById("offlineBanner").hidden = !state.offline;
     const root = document.getElementById("paneRoot");
     if (pane === "today") renderToday(root);

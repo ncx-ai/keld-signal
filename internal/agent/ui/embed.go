@@ -185,6 +185,18 @@ func DevServer(fixturesDir string) http.Handler {
 			"project": map[string]any{"id": "p_dev_" + strings.ToLower(strings.ReplaceAll(body.Title, " ", "_")), "title": body.Title},
 		}))
 	})
+	// POST /v1/service/restart answers 202 and nothing else, which is the
+	// whole contract: "accepted", never "fixed". DevServer deliberately does
+	// NOT then flip its ledger.json to a healthy `service` block — a fixture
+	// that healed itself on the button press would demonstrate the exact lie
+	// this control is built not to tell. Point --fixtures at
+	// fixtures/service-stuck and the banner correctly sits on "Restart
+	// requested" while the ledger keeps saying stuck.
+	mux.HandleFunc("POST /v1/service/restart", func(w http.ResponseWriter, r *http.Request) {
+		var discard map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&discard)
+		writeDevJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+	})
 	mux.HandleFunc("POST /v1/projects/place", devEcho(localOnlyEcho(nil)))
 	mux.HandleFunc("POST /v1/projects/", devEcho(localOnlyEcho(nil)))   // {id}/rules, {id}/hide
 	mux.HandleFunc("PUT /v1/workstreams/", devEcho(localOnlyEcho(nil))) // {key}/off

@@ -32,6 +32,23 @@
         <div id="envPill" class="pill env" hidden></div>
       </div>
     </header>
+    <!-- The analysis service's own health. Sits beside the offline banner,
+         above every pane, because it is the same size of fact: something
+         Signal depends on has stopped working. It is deliberately NOT part of
+         the Today pane's health strip (that array is per-stage BLOCK health)
+         and it renders nothing at all when the daemon sends no `service` key,
+         when the service is `ok`, or when the machine has none installed. -->
+    <div id="serviceBanner" class="service-banner" role="status" hidden>
+      <div class="service-copy">
+        <strong id="serviceHeadline"></strong>
+        <span id="serviceReason"></span>
+        <small id="serviceNote" hidden></small>
+      </div>
+      <div class="service-actions">
+        <span id="serviceProgress" class="service-progress" hidden></span>
+        <button id="serviceRestartBtn" class="btn" type="button">Restart service</button>
+      </div>
+    </div>
     <div id="offlineBanner" class="offline-banner" hidden>
       <strong>Signal is not running on this machine.</strong>
       <span>Start it with <code>keld-agent run</code>, then reload this page.</span>

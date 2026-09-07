@@ -144,6 +144,50 @@ main { min-width: 0; }
 }
 .offline-banner code { font-family: var(--mono); background: var(--surface); padding: 1px 6px; border-radius: 5px; }
 
+/* ---- Service banner ----
+   The offline banner's sibling, and shaped like it on purpose: same margins,
+   same radius, same weight, so a person reads them as one class of fact
+   ("something this machine depends on isn't working") rather than as two
+   unrelated widgets. It carries an action, which the offline banner cannot,
+   so it is a two-column strip: copy on the left, the control on the right.
+
+   ⚠️ `display: flex` here is exactly the rule that made `el.hidden = true`
+   inert for .offline-banner — see the [hidden] note at the top of this file.
+   That `!important` rule is what keeps this banner off a healthy machine, and
+   test/css-visibility.test.js pins it. */
+.service-banner {
+  margin: 0 26px 14px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  background: var(--error-soft);
+  border: 1px solid var(--error);
+  color: var(--error-strong);
+}
+/* `degraded` is amber and `stuck` is red: one says the service is unwell, the
+   other says restarting it has already been tried and did not take. Rendering
+   those the same colour would flatten the one distinction the `reason`
+   sentence exists to make. `restarting` borrows the restart bar's indigo,
+   because it is the same "wait, something is happening" state. */
+.service-banner.degraded { background: var(--amber-soft); border-color: var(--amber); color: var(--amber-strong); }
+.service-banner.stuck { background: var(--error-soft); border-color: var(--error); color: var(--error-strong); }
+.service-banner.restarting { background: var(--indigo-soft); border-color: var(--indigo); color: var(--indigo); }
+.service-banner .service-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.service-banner .service-copy strong { font-weight: 600; }
+.service-banner .service-copy small { font-size: 12px; opacity: .82; }
+.service-banner .service-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.service-banner .service-progress { font-size: 12px; opacity: .85; max-width: 34ch; }
+.service-banner .service-progress.failed { font-weight: 600; }
+/* The button keeps the page's primary treatment (forest on white), the same
+   one the Settings restart bar uses — this is the same kind of action, and a
+   third button style would say it was a different kind. */
+.service-banner .btn:disabled { opacity: .45; }
+
 /* ---- Pills ---- */
 .pill {
   display: inline-flex;
