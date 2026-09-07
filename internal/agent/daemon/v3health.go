@@ -18,11 +18,26 @@ import (
 // every machine with no sidecar installed.
 var sidecarProbe atomic.Pointer[sidecarHealthProbe]
 
-// sidecarHealthProbe is the two questions the strip asks: is it answering, and
-// what version is it.
+// sidecarHealthProbe is what the daemon can ask of the analysis service: is it
+// answering, what version is it, and — since the health owner arrived — start
+// it again.
+//
+// ⚠️ **ITS PRESENCE IS THE not_applicable TEST.** A nil probe means no analysis
+// service exists this daemon run (no sidecar binary installed, its port could
+// not be allocated, or enrichment is off) — the state daemon.go deliberately
+// runs in rather than treats as a failure. Everything that could restart
+// something keys off this being non-nil, so a machine with no sidecar is
+// structurally unable to be restarted for not having one.
 type sidecarHealthProbe struct {
-	Healthy func() bool
+	// Healthy takes a context so the caller owns the deadline. It used to be a
+	// bare func() bool closed over the daemon's context, which was fine for a
+	// strip refresh and wrong for a health ladder: a probe with no deadline of
+	// its own cannot distinguish "answered no" from "never answered".
+	Healthy func(context.Context) bool
 	Version func() (string, bool)
+	// Restart is Supervisor.RequestRestart — non-blocking, and errors with
+	// ErrSupervisorStopped once the supervisor has surrendered.
+	Restart func() error
 }
 
 // healthRefresh is set by startHealth so that installing the sidecar probe can
@@ -68,7 +83,37 @@ func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, a
 		var sidecarHealthy func() bool
 		var sidecarVersion func() (string, bool)
 		if p := sidecarProbe.Load(); p != nil {
-			sidecarHealthy, sidecarVersion = p.Healthy, p.Version
+			sidecarVersion = p.Version
+			// ⚠️ **THE `sidecar` ROW AND THE LEDGER'S `service` BLOCK ARE ONE
+			// FACT, READ TWICE — NEVER TWO PROBES.** The page renders this row
+			// as "Analysis service" and the `service` block as the restart
+			// control's state, so two independent probers would let a machine
+			// show a green Analysis-service pill beside a `stuck` service block
+			// at precisely the moment someone is looking because something is
+			// wrong. A page that contradicts itself is worse than either
+			// statement alone. serviceHealth is the SINGLE prober; this is a
+			// mutex read of its last result, and the mapping is total:
+			//
+			//	owner ok                        → StatusOK
+			//	owner degraded/restarting/stuck → StatusFailed + sidecar_down
+			//	owner not_applicable            → StatusNA (the nil-probe branch
+			//	                                  above, never this call)
+			//
+			// The ONE place they legitimately differ is version skew: an
+			// answering-but-outdated sidecar is `ok` to the service block (it
+			// is running) and `failed`/`sidecar_outdated` here (it is the wrong
+			// build). Different questions, and the detail says which.
+			//
+			// known=false is the only fallback, and it is a sub-second window
+			// before the owner's first probe returns — the owner probes from
+			// t=0 and only its COUNTER waits out the startup grace, which is
+			// exactly so this fallback is not the startup answer.
+			sidecarHealthy = func() bool {
+				if ok, known := currentServiceHealth.Load().Healthy(); known {
+					return ok
+				}
+				return p.Healthy(ctx)
+			}
 		}
 		sig.noteHealth(ledger.HealthDaemon, ledger.StatusOK, version.CLI)
 

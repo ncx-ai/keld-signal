@@ -941,6 +941,16 @@ func Run(ctx context.Context) error {
 		ingress.DevGenerateRoute(devGenerateHook(ctx, sig.ledger)),
 	)
 	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded, v3Routes...)
+	// THE SERVICE HEALTH OWNER. Started HERE, immediately after wireEnrichment,
+	// because that is the first moment sidecarProbe either exists or
+	// definitively never will this daemon lifetime — and a nil probe is exactly
+	// what makes the owner report not_applicable and restart nothing.
+	//
+	// It is the answer to a measured outage: a daemon that ran 2h14m with no
+	// sidecar process, logging only downstream symptoms while nothing on the
+	// machine asked whether the analysis service was running. See
+	// servicehealth.go.
+	startServiceHealth(ctx, enrichmentEnabled, emitter)
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -1635,7 +1645,17 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 	// The same two questions the skew report asks, published for the page's
 	// health strip. See v3health.go.
 	setSidecarProbe(&sidecarHealthProbe{
-		Healthy: healthFn,
+		// scClient.Healthy directly, not healthFn: the caller owns the
+		// deadline. healthFn closes over the daemon context and is what the
+		// Supervisor's own ready-poll wants; the health ladder needs a probe it
+		// can bound, or "did not answer in time" is indistinguishable from
+		// "answered no".
+		Healthy: scClient.Healthy,
+		// The restart lever, published beside the two questions rather than
+		// threaded through five return values — see serviceHealth. It is the
+		// supervisor's own restart path (Supervisor.RequestRestart), never a
+		// second way to spawn a sidecar.
+		Restart: sup.RequestRestart,
 		Version: func() (string, bool) {
 			r, ok := scClient.Health(ctx)
 			if !ok || r.Version == "" {

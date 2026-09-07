@@ -152,7 +152,14 @@ func (v *v3) reconcileWithRemote() {
 // itself is last so its catch-all "/" cannot shadow a /v1 route.
 func (v *v3) routes() []ingress.Route {
 	return []ingress.Route{
-		ingress.LedgerRoute(v.ledger),
+		// ledgerRoute rather than ingress.LedgerRoute: the page's payload gains
+		// a `service` block beside `health`, and internal/agent/ledger has no
+		// seam for a key it does not own. See servicehealth_route.go.
+		ledgerRoute(v.ledger, func() serviceWire { return currentServiceHealth.Load().Snapshot() }),
+		// The restart control the page offers. It reads the health owner live,
+		// so an unconfigured machine (the onboarding handler mounts these too)
+		// answers 409 not_applicable rather than pretending to restart nothing.
+		serviceRestartRoute(func() error { return currentServiceHealth.Load().RestartSidecar() }, nil),
 		ingress.ProjectsRoute(v.projects),
 		ui.Route(),
 	}

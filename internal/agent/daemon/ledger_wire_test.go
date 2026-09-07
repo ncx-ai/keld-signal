@@ -201,7 +201,7 @@ func TestT8RouteUnsupportedIsPendingAndReflectedInHealth(t *testing.T) {
 
 	version.CLI = "2.5.0"
 	setSidecarProbe(&sidecarHealthProbe{
-		Healthy: func() bool { return true },
+		Healthy: func(context.Context) bool { return true },
 		Version: func() (string, bool) { return "2.4.0", true },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -303,7 +303,7 @@ func TestT35SidecarVersionSkewAndTheDevExemption(t *testing.T) {
 		t.Setenv("KELD_HOME", t.TempDir())
 		version.CLI = "2.5.0"
 		setSidecarProbe(&sidecarHealthProbe{
-			Healthy: func() bool { return true },
+			Healthy: func(context.Context) bool { return true },
 			Version: func() (string, bool) { return "2.4.0", true },
 		})
 		v := &v3{ledger: ledger.New(), atlasOn: false}
@@ -322,7 +322,7 @@ func TestT35SidecarVersionSkewAndTheDevExemption(t *testing.T) {
 		t.Setenv("KELD_HOME", t.TempDir())
 		version.CLI = "dev"
 		setSidecarProbe(&sidecarHealthProbe{
-			Healthy: func() bool { return true },
+			Healthy: func(context.Context) bool { return true },
 			Version: func() (string, bool) { return "2.4.0", true },
 		})
 		v := &v3{ledger: ledger.New(), atlasOn: false}
@@ -341,7 +341,7 @@ func TestT35SidecarVersionSkewAndTheDevExemption(t *testing.T) {
 		t.Setenv("KELD_HOME", t.TempDir())
 		version.CLI = "2.5.0"
 		setSidecarProbe(&sidecarHealthProbe{
-			Healthy: func() bool { return true },
+			Healthy: func(context.Context) bool { return true },
 			Version: func() (string, bool) { return "dev", true },
 		})
 		v := &v3{ledger: ledger.New(), atlasOn: false}

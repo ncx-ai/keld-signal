@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/exec"
@@ -82,6 +83,13 @@ type Supervisor struct {
 	stopped     chan struct{}
 	stoppedOnce sync.Once
 
+	// started latches when Start's loop begins, and restartReq is the 1-slot
+	// signal RequestRestart uses to ask that loop to replace the current child.
+	// Together they are what makes a DELIBERATE restart distinguishable from a
+	// crash: see RequestRestart.
+	started    atomic.Bool
+	restartReq chan struct{}
+
 	mu  sync.Mutex
 	cmd *exec.Cmd
 
@@ -149,6 +157,7 @@ func NewSupervisor(
 		readyTimeout: readyTimeout,
 		stopGrace:    stopGraceFromEnv(),
 		stopped:      make(chan struct{}),
+		restartReq:   make(chan struct{}, 1),
 	}
 }
 
@@ -199,6 +208,49 @@ func awaitSidecarStop(sup *Supervisor) func() {
 	}
 }
 
+// ErrSupervisorStopped is what RequestRestart returns when there is no
+// supervision loop left to ask. It is not a transient condition: Start has
+// already returned, either because the restart cap was exceeded (the surrender
+// path that emits sidecar.unavailable) or because the daemon is shutting down.
+// A caller that gets this must ESCALATE rather than retry — nothing on this
+// machine will spawn a sidecar again this daemon lifetime, which is exactly the
+// state a person needs told rather than a state to keep poking.
+var ErrSupervisorStopped = errors.New("sidecar supervisor is not running")
+
+// RequestRestart asks the supervision loop to replace the current child with a
+// fresh one. It NEVER blocks: it drops a token in a one-slot channel and
+// returns, so an HTTP handler or a health timer can call it directly. The
+// actual stop can take up to stopGrace, and it happens on the supervisor's own
+// goroutine.
+//
+// ⚠️ **A DELIBERATE RESTART IS NOT A CRASH, AND CONFLATING THEM WOULD MAKE THE
+// CRASH CAP MEANINGLESS IN BOTH DIRECTIONS.** The loop does not count it
+// against maxRestarts — a health owner restarting a WEDGED (but alive) sidecar
+// must not consume the budget that exists for one that keeps dying — and
+// equally it does not RESET the count, because laundering the crash budget
+// through a health-driven restart is how a crash-looping sidecar gets restarted
+// forever. The bound on deliberate restarts lives with the caller that issues
+// them (serviceHealth's ladder, and the restart route's rate limiter), not here.
+//
+// Returns ErrSupervisorStopped when Start has not begun or has already
+// returned; a second call while one is already queued is a no-op, since one
+// pending restart is all a one-slot channel can mean.
+func (s *Supervisor) RequestRestart() error {
+	if !s.started.Load() {
+		return ErrSupervisorStopped
+	}
+	select {
+	case <-s.stopped:
+		return ErrSupervisorStopped
+	default:
+	}
+	select {
+	case s.restartReq <- struct{}{}:
+	default: // one already queued; asking twice means the same thing as once
+	}
+	return nil
+}
+
 // Ready reports whether the sidecar has reported healthy at least once. This
 // is latched liveness for the supervisor's own restart/backoff machinery — it
 // is NOT the Worker's per-job readiness gate. That gate is model warmth (see
@@ -234,11 +286,17 @@ func (s *Supervisor) Start(ctx context.Context) {
 	// Latched via Once because the channel is closed from every return path and
 	// the documented contract ("Start must be called once") is not enforced.
 	defer s.stoppedOnce.Do(func() { close(s.stopped) })
+	s.started.Store(true)
 
 	restarts := 0
 	backoff := 250 * time.Millisecond
 
 	for {
+		// deliberate marks THIS iteration's child as having been replaced on
+		// request rather than having died. Reset per spawn, so a request can
+		// never leak into the accounting of a later, genuine crash.
+		deliberate := false
+
 		// Spawn.
 		cmd, err := s.spawn(s.port)
 		if err != nil {
@@ -283,6 +341,16 @@ func (s *Supervisor) Start(ctx context.Context) {
 				s.stopChild(waitCh) // also reaps, so no goroutine leak
 				return
 
+			case <-s.restartReq:
+				// Asked to replace a child that has not become healthy yet.
+				// Honoured, deliberately: "spawned but never answered /health"
+				// is the exact state that stranded a machine for 2h14m, and it
+				// is invisible to the crash path because nothing exited.
+				ticker.Stop()
+				s.stopChild(waitCh)
+				deliberate = true
+				break pollLoop
+
 			case exitErr := <-waitCh:
 				ticker.Stop()
 				_ = exitErr
@@ -321,6 +389,12 @@ func (s *Supervisor) Start(ctx context.Context) {
 			case <-ctx.Done():
 				s.stopChild(waitCh)
 				return
+			case <-s.restartReq:
+				// The healthy-then-wedged case: the process is alive, so the
+				// supervisor has nothing to react to. /health is the only thing
+				// that knows, which is why this signal exists at all.
+				s.stopChild(waitCh)
+				deliberate = true
 			case <-waitCh:
 				// Child died after becoming ready.
 			}
@@ -331,6 +405,16 @@ func (s *Supervisor) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		if deliberate {
+			// Not a crash: no restarts++, no cap check, and the backoff is
+			// reset because there is nothing to back off FROM — this child was
+			// stopped on purpose, at a moment the caller chose.
+			log.Printf("supervisor: sidecar restart requested; respawning")
+			s.emit("service.restarted", clientevents.SevWarn, map[string]any{"requested": true})
+			backoff = 250 * time.Millisecond
+			continue
 		}
 
 		restarts++
