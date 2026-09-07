@@ -47,9 +47,9 @@ import (
 // A package-level atomic for the reason `blockAdvance` beside it is one: the
 // emitter is optional and off by default, so widening the wiring to thread a
 // usually-nil hook through would cost more than it buys.
-var blockSweepNow atomic.Pointer[func(ctx context.Context, now time.Time) int]
+var blockSweepNow atomic.Pointer[func(ctx context.Context, path string, now time.Time) int]
 
-func setBlockSweep(fn func(ctx context.Context, now time.Time) int) {
+func setBlockSweep(fn func(ctx context.Context, path string, now time.Time) int) {
 	if fn == nil {
 		blockSweepNow.Store(nil)
 		return
@@ -137,7 +137,10 @@ func devGenerateHook(ctx context.Context, led *ledger.Store) func(session, path 
 		deadline := time.Now().Add(devGenerateWait)
 		for {
 			if fn := blockSweepNow.Load(); fn != nil {
-				(*fn)(ctx, time.Now())
+				// THIS transcript only. Sweeping the whole active set is
+				// O(transcripts) — 59 on a real machine — and the caller is a
+				// person holding down a button. See Emitter.SweepPath.
+				(*fn)(ctx, path, time.Now())
 			}
 			if n := countLedgerBlocks(led, session); n > 0 {
 				return n

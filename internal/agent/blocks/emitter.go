@@ -365,6 +365,38 @@ func (e *Emitter) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// SweepPath is one pass over a SINGLE transcript, for a caller that has just
+// created work and wants it cut now rather than at the next interval.
+//
+// ⚠️ **IT EXISTS BECAUSE Sweep IS O(ACTIVE SET), AND THAT MADE A SYNCHRONOUS
+// CALLER UNUSABLE.** The developer generate button drove `Sweep` so its answer
+// would be about a block that exists rather than a file that was written. On
+// the five-transcript test corpus that took four seconds. On a real machine
+// with 59 active transcripts it walked every one of them — each a `/blocks`
+// call, some triggering a first whole-file ingest measured at 5.1s — so the
+// button sat on "Generating…" for minutes and the request timed out.
+//
+// The caller only ever wanted its own transcript. Sweeping the rest was work it
+// did not ask for, charged to a person waiting on a button, and the periodic
+// sweep does it anyway a moment later.
+//
+// Returns 0 for a path the emitter is not tracking, which is the honest answer:
+// nothing was cut, and the caller reports that rather than a tick.
+func (e *Emitter) SweepPath(ctx context.Context, path string, now time.Time) int {
+	if ctx.Err() != nil || path == "" {
+		return 0
+	}
+	tgts := e.st.targets([]string{path})
+	if len(tgts) == 0 {
+		return 0
+	}
+	published := e.sweepOne(tgts[0], now)
+	if err := e.st.save(); err != nil {
+		log.Printf("keld-agent: blocks: could not save the cursor after a single-path sweep: %v", err)
+	}
+	return published
+}
+
 // Sweep is one pass over the active set. Split out so a test can drive it with
 // a fixed clock rather than waiting on a timer. Returns how many block rows
 // were published.
