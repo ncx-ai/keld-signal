@@ -366,10 +366,38 @@ func (s *Supervisor) Start(ctx context.Context) {
 				}
 				if time.Now().After(readyDeadline) {
 					ticker.Stop()
-					// readyTimeout elapsed — stop child and fall back.
+					// ⚠️ **THIS PATH GAVE UP FOR THE DAEMON'S WHOLE LIFE, ON
+					// ONE SLOW START, AND SAID NOTHING AT ALL.** It killed the
+					// child, latched fellBack and returned — so `Start` was
+					// over, `RequestRestart` answered ErrSupervisorStopped
+					// forever, and not one line was logged or emitted. Measured
+					// on a real machine: the sidecar was spawned, lived ~30s,
+					// was killed here, and the daemon then ran with no analysis
+					// service while reporting only downstream symptoms.
+					//
+					// Two things were wrong. It was SILENT, which is why the
+					// state could persist for hours unexplained. And it was
+					// TERMINAL ON THE FIRST TIMEOUT, which is not what a
+					// readiness deadline means: a child that is merely slow to
+					// load — spaCy is ~619 MB and the text encoder more —
+					// deserves the same three attempts a crashing one gets. A
+					// child that exits is retried; a child that is slow was
+					// not, and the slow case is the more recoverable of the
+					// two.
+					//
+					// So it now falls through to the restart path, counting
+					// against maxRestarts like any other failure. Three slow
+					// starts still end in the documented surrender, which is
+					// loud.
 					s.stopChild(waitCh)
-					s.fellBack.Store(true)
-					return
+					log.Printf("supervisor: the sidecar did not answer /health within %s; "+
+						"treating it as a failed start", s.readyTimeout)
+					s.emit("sidecar.slow_start", clientevents.SevWarn, map[string]any{
+						"ready_timeout_s": int(s.readyTimeout.Seconds()),
+						"restart":         restarts + 1,
+						"max_restarts":    maxRestarts,
+					})
+					break pollLoop
 				}
 			}
 		}

@@ -1631,7 +1631,22 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 		},
 		scPort,
 		healthFn,
-		30*time.Second,
+		// ⚠️ **30s WAS TOO SHORT ON A REAL MACHINE, AND THERE WAS NO WAY TO
+		// MOVE IT.** The sidecar's parent loads spaCy for the `named_terms`
+		// level (~619 MB, on by default) and, when attribution or
+		// KELD_TEXTEMBED is on, provisions and spawns the text encoder too.
+		// Measured here: spawned at 19:22:54, still not answering /health when
+		// the 30s deadline killed it at 19:23:25 — repeatedly, on every daemon
+		// start, which is what left the machine with no analysis service. The
+		// same start answers /health comfortably given more time.
+		//
+		// 90s is three times the old value and still well inside launchd's
+		// patience; the readiness deadline is a bound on a HUNG start, not a
+		// performance target, so being generous costs only how long a genuinely
+		// hung sidecar takes to be noticed — and since a timeout is now a
+		// counted failure rather than permanent surrender, that cost is
+		// recoverable where it used to be fatal.
+		envDuration("KELD_SIDECAR_READY_TIMEOUT", 90*time.Second),
 	)
 	sup.SetEmitter(emitter)
 
