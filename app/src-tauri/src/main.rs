@@ -25,6 +25,20 @@
 // tray's "Quit" is the only path that actually exits the process; "Open Keld
 // Signal" re-shows the same window rather than building a new one, so state
 // (scroll position, in-flight fetches) survives a hide/show cycle.
+//
+// ⚠️ **THERE IS EXACTLY ONE WINDOW, AND THAT IS A CORRECTNESS RULE RATHER THAN
+// A TIDINESS ONE.** A window resolves the daemon's address once, when it is
+// built, and the daemon binds an ephemeral port that moves on every restart —
+// which is the whole reason `follow_agent` exists. So a second window opened
+// after a restart would point at a different origin from the first: one live,
+// one dead, both titled "Keld Signal", disagreeing about the same machine.
+// `tauri-plugin-single-instance` makes a second launch hand its arguments to
+// this process and exit. There are THREE ways a person asks for this window —
+// the tray's "Open Keld Signal", a second launch of the binary, and a Dock
+// click on macOS (`RunEvent::Reopen`, which is the common one and which the
+// plugin does not see, because macOS activates the running process rather than
+// starting a second) — and all three call `show_main_window` and nothing else,
+// so they cannot drift into three different ideas of what "open" means.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -203,6 +217,40 @@ code{font:13px ui-monospace,SFMono-Regular,monospace;background:%23F6F4EE;
 <p style="font-size:.9rem">If you have never set it up: <code>keld-agent install</code></p>
 </main>"#;
 
+/// show_main_window brings the one window this app has back in front of the
+/// person, from whatever state it is currently in.
+///
+/// ⚠️ **`show()` IS THE STEP A NAIVE VERSION LEAVES OUT, AND IT IS THE ONE THAT
+/// MATTERS HERE.** Closing this window hides it rather than destroying it (see
+/// the header), so on the ordinary path — someone closed it to the tray this
+/// morning and is now reopening it — the window is not merely behind another
+/// one, it is not on screen at all. `set_focus` alone would focus a hidden
+/// window: nothing appears, and the second launch has just been swallowed with
+/// no visible effect, which reads as the app being broken.
+///
+/// `unminimize` covers the other half of the same question. A minimised window
+/// is shown but not readable, and `show` does not restore it, so both calls are
+/// needed to cover the states a window can be left in.
+///
+/// ⚠️ **BOTH CALLERS GO THROUGH HERE ON PURPOSE.** The tray's "Open Keld
+/// Signal" and the single-instance callback are answering the identical
+/// question — "make the existing window visible and focused" — and if they were
+/// written twice they would be fixed once. Nothing here unwraps: the window is
+/// looked up by label and can legitimately be absent (during teardown after
+/// "Quit", or if `setup` failed to build it), and a panic on a background
+/// activation path would take the whole app down for a state it can simply do
+/// nothing about.
+fn show_main_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if window.is_minimized().unwrap_or(false) {
+        let _ = window.unminimize();
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
 /// set_autostart enables or disables launching Keld Signal at login, via the
 /// official `tauri-plugin-autostart` (a LaunchAgent on macOS — the same
 /// mechanism class the daemon's own service registration uses, just a
@@ -238,6 +286,22 @@ fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
 
 fn main() {
     tauri::Builder::default()
+        // ⚠️ **THIS MUST BE THE FIRST PLUGIN IN THE CHAIN.** It is the plugin's
+        // own documented requirement, and getting it wrong fails SILENTLY —
+        // registered after another plugin it simply never takes effect, the
+        // second launch opens its own window, and nothing anywhere reports a
+        // problem. Do not reorder this line to keep the list alphabetical.
+        //
+        // The callback runs in the ALREADY-RUNNING process when someone launches
+        // Keld Signal a second time; the second process exits without building a
+        // window. `args`/`cwd` are the second launch's argv and working
+        // directory, and this app takes no arguments and does no work relative
+        // to a directory, so both are deliberately ignored rather than parsed —
+        // an unauthenticated local process can invoke this path, and the less it
+        // can influence, the less there is to get wrong.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .invoke_handler(tauri::generate_handler![set_autostart, get_autostart])
         .setup(|app| {
@@ -298,12 +362,10 @@ fn main() {
                 .tooltip("Keld Signal")
                 .menu(&tray_menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    "open" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
+                    // The same call the single-instance callback makes — see
+                    // `show_main_window`. "Open" here is never "build a window";
+                    // the window always exists, it is just hidden.
+                    "open" => show_main_window(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -311,8 +373,45 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("keld signal: failed to start the window");
+        // ⚠️ **`build(...).expect(...)` IS THE SAME FAILURE PATH `run(...)` HAD,
+        // NOT A NEW ONE.** `Builder::run` is `self.build(context)?` followed by
+        // `App::run`, and `App::run` cannot fail — so `build` was always the
+        // only source of the error the old `.expect` was catching, and the
+        // message is kept verbatim so a startup failure still aborts the process
+        // saying exactly what it said before. The split exists only to get at
+        // the event loop's callback; a restructure that quietly moved a startup
+        // failure onto a different exit path would be a regression hiding
+        // inside a refactor.
+        .build(tauri::generate_context!())
+        .expect("keld signal: failed to start the window")
+        .run(|_app, _event| {
+            // ⚠️ **macOS DOES NOT LAUNCH A SECOND PROCESS, SO THE
+            // SINGLE-INSTANCE PLUGIN NEVER FIRES ON THE COMMON PATH.** Clicking
+            // a running app's Dock icon — which is how a person actually
+            // "opens Signal again" on the platform this ships to as a .pkg —
+            // makes the OS activate the process that is already running and
+            // deliver it a reopen event. No second binary is started, so
+            // nothing hands anything to `tauri_plugin_single_instance`. Without
+            // this arm the guard would cover only duplicate CLI/binary launches
+            // and the story would be half-delivered on its main platform: with
+            // the window hidden to the tray, a Dock click would do nothing at
+            // all.
+            //
+            // The `#[cfg]` is REQUIRED, not stylistic: `RunEvent::Reopen` is
+            // itself declared macOS-only in Tauri, so naming the variant on
+            // Linux or Windows does not compile. `_app`/`_event` are
+            // underscore-prefixed for the same reason — on every other platform
+            // this closure body is empty and they are genuinely unused.
+            //
+            // `has_visible_windows` is deliberately ignored. It reports whether
+            // anything is on screen, and the answer does not change what to do:
+            // hidden means show it, visible means bring it forward, and
+            // `show_main_window` is correct for both.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                show_main_window(_app);
+            }
+        });
 }
 
 #[cfg(test)]
