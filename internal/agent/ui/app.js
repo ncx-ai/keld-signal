@@ -633,6 +633,61 @@ export function todayLedgerURL(now) {
   return `/v1/ledger?since=${startOfLocalDay(now)}`;
 }
 
+/** How many taps on the version turns developer mode on or off. Seven, because
+ *  that is the number people already know from Android's build-number gesture —
+ *  a hidden control is only useful if someone can be TOLD how to reach it, and
+ *  the familiar number is the instruction. */
+export const DEV_TAPS = 7;
+
+/** How long a tap streak survives without another tap.
+ *
+ *  ⚠️ Without a window the count is immortal: seven stray clicks spread over a
+ *  week would flip developer mode on for someone who never meant to, and the
+ *  first they would know of it is a Developer box appearing in Settings. Three
+ *  seconds is long enough for a deliberate run and short enough that idle
+ *  clicking never accumulates. */
+export const DEV_TAP_WINDOW_MS = 3000;
+
+/** devTapNext advances the tap streak. Pure: it takes the previous streak and
+ *  returns the next one, so the sequence is testable without a DOM or a clock.
+ *
+ *  `taps` counts up to DEV_TAPS and then resets; `toggled` is true only on the
+ *  tap that flipped it. `remaining` is what the hint shows and is deliberately
+ *  0 until the streak is past halfway — announcing "6 more" on the first stray
+ *  click would advertise a control that is meant to be told, not found.
+ */
+export function devTapNext(prev, on, now) {
+  const p = prev || { taps: 0, last: 0 };
+  const continuing = now - p.last <= DEV_TAP_WINDOW_MS;
+  const taps = (continuing ? p.taps : 0) + 1;
+  if (taps >= DEV_TAPS) {
+    return { taps: 0, last: now, toggled: true, on: !on, remaining: 0 };
+  }
+  const left = DEV_TAPS - taps;
+  return { taps, last: now, toggled: false, on, remaining: left <= 3 ? left : 0 };
+}
+
+/** versionFromHealth reads the daemon's own version off the health rows.
+ *
+ *  ⚠️ Returns "" when there is no daemon row or it carries no detail, and the
+ *  caller draws NOTHING rather than a blank line or the word "undefined". An
+ *  unknown version is not a version; see localagent.SidecarVersionState for the
+ *  same refusal one layer down.
+ */
+export function versionFromHealth(health) {
+  for (const h of health || []) {
+    if (h && h.key === "daemon" && typeof h.detail === "string" && h.detail !== "") {
+      return h.detail;
+    }
+  }
+  return "";
+}
+
+/** versionLabel is what the nav footer shows. */
+export function versionLabel(version) {
+  return version ? `v${version}` : "";
+}
+
 export function reasonText(code) {
   return REASON_TEXT[code] || (code ? code : "");
 }
@@ -1045,6 +1100,10 @@ if (typeof document !== "undefined") {
   function loadLocalPrefs() {
     return readJSONStorage(LOCAL_PREFS_KEY, {
       showDetails: false,
+      // Per-viewer and local by design: developer mode changes what THIS person
+      // sees, never what the daemon does. Nothing about it is published, and a
+      // second machine signed into the same org is unaffected.
+      devMode: false,
     });
   }
   function saveLocalPrefs(p) {
@@ -1978,10 +2037,19 @@ if (typeof document !== "undefined") {
     if (isReadonly) note = el("div", { class: "settings-note readonly-note" }, readonlyNote("dev_blocks"));
     else if (atlasOn) note = el("div", { class: "settings-note" }, "Available while Send to Atlas is off. Dev blocks never leave the machine.");
     const err = settingsErrorFor("dev_blocks");
+    // ⚠️ **SEND TO ATLAS IS NOT A DEVELOPER CONTROL, AND HIDING IT WITH THE
+    // DEVELOPER ROWS WOULD BE A BUG, NOT A FEATURE.** It decides whether this
+    // machine publishes at all — the single most consequential switch on the
+    // page — and it lives in this box only because the developer rows below it
+    // are refused or reinterpreted depending on it (see the comment on the row
+    // itself). So the box is always drawn and always carries that row; what
+    // developer mode gates is the rows underneath, and the heading, which is
+    // the only part that is actually about developing.
+    const dev = devModeOn();
     return el(
       "div",
       { class: "tile", style: "background:var(--nested)" },
-      el("div", { class: "l" }, "Developer"),
+      el("div", { class: "l" }, dev ? "Developer" : "Atlas"),
       // ⚠️ Send to Atlas lives HERE rather than in a tile of its own. The two
       // controls are read together and never separately: every other switch in
       // this box is refused or reinterpreted depending on it, so putting them
@@ -1994,13 +2062,13 @@ if (typeof document !== "undefined") {
         switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
       ),
       fieldNote("send_to_atlas", readonly),
-      SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
-      SHOW_BLOCK_GRANULARITY ? el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity") : null,
-      SHOW_BLOCK_GRANULARITY ? grid : null,
-      SHOW_BLOCK_GRANULARITY ? note : null,
-      SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
-      el("div", { class: "settings-sep" }),
-      renderDevGenerate(settings)
+      dev && SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
+      dev && SHOW_BLOCK_GRANULARITY ? el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity") : null,
+      dev && SHOW_BLOCK_GRANULARITY ? grid : null,
+      dev && SHOW_BLOCK_GRANULARITY ? note : null,
+      dev && SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
+      dev ? el("div", { class: "settings-sep" }) : null,
+      dev ? renderDevGenerate(settings) : null
     );
   }
 
@@ -2125,7 +2193,11 @@ if (typeof document !== "undefined") {
   function renderGenerateButton() {
     const btn = document.getElementById("genBlockBtn");
     if (!btn) return;
-    const on = !!(state.settings && state.settings.dev_generate);
+    // ⚠️ Gated on developer mode AS WELL as the setting. Without this, someone
+    // who turned the generator on and then left developer mode would keep a
+    // developer button in their top bar with no way to reach the switch that
+    // removes it — the setting lives in the box that just disappeared.
+    const on = !!(state.settings && state.settings.dev_generate) && devModeOn();
     btn.hidden = !on;
     if (!on) return;
     btn.onclick = clickGenerateBlock;
@@ -2211,6 +2283,63 @@ if (typeof document !== "undefined") {
     pill.hidden = false;
     pill.textContent = atlasEnabled(settings) ? "Send to Atlas: on" : "Local only";
     renderGenerateButton();
+  }
+
+  // devTap holds the streak between clicks. Module state rather than a stored
+  // preference: an unfinished streak is not something to remember across a
+  // reload — see DEV_TAP_WINDOW_MS.
+  let devTap = { taps: 0, last: 0 };
+  let devHintTimer = null;
+
+  function devModeOn() {
+    return !!loadLocalPrefs().devMode;
+  }
+
+  /** renderNavVersion draws the version under the status line, and wires the
+   *  hidden gesture onto it.
+   *
+   *  ⚠️ **DRAWN ONLY WHEN THERE IS A VERSION TO DRAW.** An absent daemon row
+   *  means the page has not heard from the daemon, not that it is version-less,
+   *  and rendering an empty line (or "vundefined") would put a blank control in
+   *  the corner that still counts taps. */
+  function renderNavVersion() {
+    const el0 = document.getElementById("navVersion");
+    if (!el0) return;
+    const label = versionLabel(versionFromHealth(state.ledger ? state.ledger.health : []));
+    el0.hidden = label === "";
+    if (label === "") return;
+    if (el0.dataset.label !== label) {
+      el0.dataset.label = label;
+      el0.textContent = label;
+    }
+    el0.onclick = () => {
+      const next = devTapNext(devTap, devModeOn(), Date.now());
+      devTap = { taps: next.taps, last: next.last };
+      if (next.toggled) {
+        const prefs = loadLocalPrefs();
+        prefs.devMode = next.on;
+        saveLocalPrefs(prefs);
+        showNavVersionHint(el0, label, next.on ? "Developer mode on" : "Developer mode off");
+        route();
+        return;
+      }
+      if (next.remaining > 0) {
+        showNavVersionHint(el0, label, `${next.remaining} more…`);
+      }
+    };
+  }
+
+  // The hint is the only feedback this gesture gives, and it appears only once
+  // a streak is clearly deliberate. It replaces the label for a moment and then
+  // puts it back — the element must never be left showing anything but the
+  // version, or the corner of the page quietly becomes a status area.
+  function showNavVersionHint(node, label, text) {
+    node.textContent = text;
+    if (devHintTimer) clearTimeout(devHintTimer);
+    devHintTimer = setTimeout(() => {
+      node.textContent = label;
+      devHintTimer = null;
+    }, 1400);
   }
 
   function renderNavHealth(alert) {
@@ -2341,6 +2470,7 @@ if (typeof document !== "undefined") {
     const alert = serviceAlert(state.ledger, { offline: state.offline });
     renderServiceBanner(alert);
     renderNavHealth(alert);
+    renderNavVersion();
     document.getElementById("offlineBanner").hidden = !state.offline;
     // ⚠️ **SCOPED TO TODAY BY A BODY CLASS, DELIBERATELY.** The fixed-height
     // layout below only makes sense for a pane with one long list in the

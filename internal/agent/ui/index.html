@@ -23,6 +23,11 @@
     <div class="navfoot" id="navHealthDot" title="Signal status">
       <span class="dot"></span><span id="navHealthText">checking…</span>
     </div>
+    <!-- The version, and the way into developer mode. Deliberately carries no
+         affordance: no pointer cursor, no hover, no role, no tab stop. It is
+         not a control a person should discover by looking — it is one they are
+         told about. See devTapNext in app.js. -->
+    <div class="navversion" id="navVersion" hidden></div>
   </aside>
   <main>
     <header class="topbar">

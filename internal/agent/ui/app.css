@@ -111,6 +111,19 @@ table { border-collapse: collapse; width: 100%; }
   font-size: 12px;
   color: var(--muted);
 }
+/* ⚠️ **NO AFFORDANCE, ON PURPOSE.** No pointer cursor, no hover, no underline:
+   this is a hidden gesture, and a cursor change is exactly what would turn it
+   into a control people click by accident. `user-select: none` is not polish —
+   seven fast clicks on text without it selects the text and the browser starts
+   dragging it. */
+.nav .navversion {
+  padding: 0 10px 8px;
+  font: 400 10px var(--mono);
+  color: var(--muted);
+  opacity: .7;
+  user-select: none;
+  -webkit-user-select: none;
+}
 .nav .navfoot .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rule-strong); display: inline-block; }
 .nav .navfoot.ok .dot { background: var(--green); }
 .nav .navfoot.bad .dot { background: var(--error); }
