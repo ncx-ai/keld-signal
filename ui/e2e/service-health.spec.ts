@@ -28,7 +28,7 @@ type ServiceBlock = { state: string; reason: string; failures: number };
 
 /** Serve the real ledger with one key written onto it. */
 async function withService(page: Page, service: ServiceBlock | null): Promise<void> {
-  await page.route("**/v1/ledger", async (route) => {
+  await page.route("**/v1/ledger**", async (route) => {
     const response = await route.fetch();
     const body = await response.json();
     if (service === null) delete body.service;
@@ -145,7 +145,7 @@ test.describe("Analysis service health", () => {
 
   test("the alarm clears only when the LEDGER stops reporting one", async ({ signal, page }) => {
     let service: ServiceBlock = STUCK;
-    await page.route("**/v1/ledger", async (route) => {
+    await page.route("**/v1/ledger**", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
       body.service = service;

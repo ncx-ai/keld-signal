@@ -23,7 +23,7 @@ head -1 "$cmd" | grep -q '^#!' || { echo "no shebang"; exit 1; }
 code_only="$(sed 's/#.*//' "$cmd")"
 printf '%s' "$code_only" | grep -qF 'install --code "$CODE"' \
   || { echo "no code redeem via agent install"; exit 1; }
-printf '%s' "$code_only" | grep -qF 'install --yes' \
+printf '%s' "$code_only" | grep -qF 'install --login --yes' \
   || { echo "no interactive fallback via agent install"; exit 1; }
 printf '%s' "$code_only" | grep -qF '"$AGENT" install' \
   || { echo "no agent install"; exit 1; }

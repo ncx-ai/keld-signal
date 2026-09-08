@@ -5,7 +5,60 @@ All notable changes to **keld-signal** (the Keld client — the `keld` CLI + the
 follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 semantic-ish versioning during `0.x`.
 
-## [Unreleased]
+## [Unreleased] — v3 (release/v3 branch, shipped as `v3.0.0-rc.N` pre-releases)
+
+Pre-releases from this branch are marked as such on GitHub, so `releases/latest`
+— what `install.sh`, `install.ps1` and the pkg fall back to — keeps pointing at
+2.5.0 until v3 is merged to `main` and tagged `v3.0.0`.
+
+### Added
+- **The Keld Signal desktop app** (`app/`, Tauri 2): a window onto the daemon's
+  own page — today's focus blocks with tokens and estimated spend, which project
+  each landed in, whether it reached Atlas, and a Settings pane that can pair a
+  machine with a setup code. Single instance; a second launch or a Dock click
+  raises the existing window. The macOS pkg installs it to `/Applications` and
+  `build-pkg.sh` refuses to build without it.
+- **`keld signal open`** opens the same page in a browser.
+- **The delivery ledger** (`internal/agent/ledger`, SQLite under `~/.keld/state`):
+  every block the daemon cut, what happened to it, and what is still pending.
+  Served on the loopback as `GET /v1/ledger` behind the existing per-user secret.
+- **Local projects and workstreams**: create a project, map a local one onto an
+  Atlas project ("same as", a local overlay — nothing is written back to Atlas),
+  switch a workstream off, and the org's projects arrive under their own
+  workstreams. Blocks show the project that matches them today; the vector pass
+  is a second opinion, never an eraser.
+- **Analysis-service health with a Restart button**: a health owner counts
+  failures, distinguishes a stuck wait from an ordinary one, notices the machine
+  slept, and ends its ladder in a person. `POST /v1/service/restart` is
+  rate-limited and answers 202 "accepted", never "fixed".
+- **Send to Atlas** (`send_to_atlas`, `KELD_ATLAS`): the boundary between Signal
+  and the Atlas connector. Absent means on, so existing installs are unchanged;
+  off keeps blocks, projects and the ledger on the machine.
+- **A block generator** (`scripts/blockgen`, `POST /v1/dev/generate`) for the
+  Playwright suite and developer machines, plus developer block granularity
+  (`KELD_DEV_BLOCKS`), refused while Send to Atlas is on.
+- **Tokens and estimated spend per block**, from a local price table
+  (`internal/agent/pricing/prices.json`, refreshed by `scripts/refresh-prices.py`).
+- **Version on the page**, and seven taps on it for developer mode.
+
+### Changed
+- `keld-agent install` installs and nothing more; logging in is opt-in
+  (`--login` / `--code`), so an unconfigured daemon serves the page and a
+  machine can pair from the app. `--headless` is accepted and inert.
+- The daemon refuses to start when another daemon holds the same `KELD_HOME`.
+- Block delivery is confirmed from the response body, not the status code alone
+  (captive portals answer 200 with HTML).
+- Sidecar `SCHEMA` 17 → 18; store `STATE_VERSION` 5 → 6, so **every existing
+  reference-series store reparses once on upgrade**. `enrich.SchemaVersion` is
+  unchanged at 23 and every block-wire change is additive (`entered`, `tokens`,
+  `requests`).
+
+### Fixed
+- A slow sidecar start is retried, not fatal. A refused restart is not reported
+  as a restart. A restart may not repoint the service at a binary that cannot run.
+- The sidecar serialises its writers with `busy_timeout` above the real worst case.
+- A repo declared twice by the org is imported once; an Atlas project id survives
+  being stored; tombstones are no longer counted as work in progress.
 
 ## [2.5.0] — 2026-09-04
 
