@@ -19,14 +19,21 @@ test.describe("Settings", () => {
     await expect(page.getByText("Send to Atlas: on")).toHaveCount(0);
   });
 
-  test("developer block granularity is enabled because Send to Atlas is off", async ({ signal, page }) => {
+  // ⚠️ **THIS ASSERTED THE CONTROL WAS VISIBLE, AND IT IS NOW HIDDEN ON
+  // PURPOSE.** Block granularity changes how a block is CUT — the 20-minute
+  // budget becomes 5 minutes, one prompt or one minute — which is the shape of
+  // every block a machine produces from then on, and the non-default modes have
+  // never been exercised end to end. The control is hidden behind
+  // SHOW_BLOCK_GRANULARITY in app.js until they are; the SETTING is untouched,
+  // so KELD_DEV_BLOCKS, the dev_blocks key and the server's refusal while Send
+  // to Atlas is on all still work and are still tested.
+  //
+  // Inverted rather than deleted: when the flag goes back on, this test is the
+  // thing that says what "on" should look like.
+  test("developer block granularity is hidden until its modes are tested", async ({ signal, page }) => {
     await signal.open("settings");
-    await expect(page.getByText("Block granularity")).toBeVisible();
-    const radios = page.getByRole("radio");
-    await expect(radios).toHaveCount(4);
-    for (let i = 0; i < 4; i++) await expect(radios.nth(i)).toBeEnabled();
-    await expect(page.getByRole("radio", { name: /20 minutes/ })).toBeChecked();
-    await expect(page.getByText("Available while Send to Atlas is off.")).toHaveCount(0);
+    await expect(page.getByText("Block granularity")).toHaveCount(0);
+    await expect(page.getByRole("radio")).toHaveCount(0);
   });
 
   test('"Show breaks" persists across a reload', async ({ signal, page }) => {

@@ -1884,6 +1884,22 @@ if (typeof document !== "undefined") {
     );
   }
 
+  /** Whether the developer block-granularity control is drawn.
+   *
+   *  ⚠️ **OFF BECAUSE IT HAS NOT BEEN TESTED, NOT BECAUSE IT IS GONE.** It
+   *  changes how a block is CUT — the 20-minute budget becomes 5 minutes, one
+   *  prompt, or one minute — which is the shape of every block a machine
+   *  produces from then on, and nothing has exercised the non-default modes end
+   *  to end. A control that silently changes what the whole product measures is
+   *  not something to leave in reach while that is true.
+   *
+   *  The setting itself is untouched: `KELD_DEV_BLOCKS` and the `dev_blocks`
+   *  key still work, the server still refuses them while Send to Atlas is on,
+   *  and every test for that refusal still runs. This hides one control, and
+   *  flipping it back is this one line.
+   */
+  const SHOW_BLOCK_GRANULARITY = false;
+
   function renderDevBlocksTile(settings, atlasOn, readonly) {
     const modes = [
       ["", "20 minutes", "default"],
@@ -1938,11 +1954,11 @@ if (typeof document !== "undefined") {
         switchEl({ checked: atlasOn, disabled: readonly.has("send_to_atlas"), onChange: (v) => updateSettings({ send_to_atlas: v }) })
       ),
       fieldNote("send_to_atlas", readonly),
-      el("div", { class: "settings-sep" }),
-      el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity"),
-      grid,
-      note,
-      err ? el("div", { class: "settings-note error-note" }, err) : null,
+      SHOW_BLOCK_GRANULARITY ? el("div", { class: "settings-sep" }) : null,
+      SHOW_BLOCK_GRANULARITY ? el("div", { style: "margin-top:6px;color:var(--muted)" }, "Block granularity") : null,
+      SHOW_BLOCK_GRANULARITY ? grid : null,
+      SHOW_BLOCK_GRANULARITY ? note : null,
+      SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
       el("div", { class: "settings-sep" }),
       renderDevGenerate(settings)
     );
