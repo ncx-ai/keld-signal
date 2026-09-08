@@ -237,6 +237,12 @@ main { min-width: 0; }
 }
 .blocks-table td { padding: 10px 10px 10px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
 .blocks-table td small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+/* The last row does not draw its own bottom rule, because whatever follows the
+   table draws its own top one — the health strip always does. With the
+   "never characterised" section removed from between them, those two landed
+   adjacent and the page ended in a visible double line. Same rule
+   `.suggestion-row:last-child` already applies one block down. */
+.blocks-table tbody tr:last-child td { border-bottom: none; }
 .blocks-table tr.break-row td {
   padding: 6px 0;
   color: var(--muted);
