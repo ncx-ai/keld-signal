@@ -1,6 +1,9 @@
 package ledger
 
 import (
+	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -117,5 +120,145 @@ func TestUnsentPayloadsLimit(t *testing.T) {
 	}
 	if got[0].Key.Start != 0 || got[1].Key.Start != 1 {
 		t.Fatalf("want the two oldest, got %+v", got)
+	}
+}
+
+// --- refusal counting and holding aside ---------------------------------
+//
+// These defend the bound that makes the republisher's retry loop terminate.
+// Delete them and a payload Atlas will never accept is either retried forever
+// (if the count stops being kept) or lost (if holding aside becomes a delete).
+
+// A refusal counts up and reports when it has reached the limit, so the caller
+// can print "refusal 3 of 5" and "held aside" as the different facts they are.
+// Without this the republisher would have to re-read the row or guess.
+func TestRefuseUnsentPayloadCountsUpAndReportsTheLimit(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	s := New()
+	k := BlockKey{Session: "sess-refused", Start: 10}
+	s.SaveUnsentPayload(k, []byte(`{}`), time.Now())
+
+	for want := 1; want < UnsentRefusalLimit; want++ {
+		n, heldAside := s.RefuseUnsentPayload(k)
+		if n != want {
+			t.Fatalf("refusal %d: got count %d", want, n)
+		}
+		if heldAside {
+			t.Fatalf("held aside at %d of %d — the bound must not fire early, or a transient "+
+				"server-side refusal permanently strands a good block", n, UnsentRefusalLimit)
+		}
+	}
+	n, heldAside := s.RefuseUnsentPayload(k)
+	if n != UnsentRefusalLimit || !heldAside {
+		t.Fatalf("at the limit: got (%d, %v), want (%d, true)", n, heldAside, UnsentRefusalLimit)
+	}
+}
+
+// THE NEGATIVE CASE, at the storage layer: a payload at the limit is no longer
+// offered to the drain, and is NOT deleted. Remove the filter and one block
+// Atlas refuses forever sits at the head of every batch this table hands out —
+// the drain reads oldest-first — so nothing behind it can ever be delivered.
+// Remove the "not deleted" half and a refused block silently disappears
+// instead of staying visible as refused.
+func TestAPayloadAtTheRefusalLimitIsHeldAsideFromTheDrainButKept(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	s := New()
+	now := time.Now()
+	bad := BlockKey{Session: "poison", Start: 1} // oldest: without the filter it leads every batch
+	good := BlockKey{Session: "fine", Start: 2}
+	s.SaveUnsentPayload(bad, []byte(`{"n":"bad"}`), now)
+	s.SaveUnsentPayload(good, []byte(`{"n":"good"}`), now)
+	for i := 0; i < UnsentRefusalLimit; i++ {
+		s.RefuseUnsentPayload(bad)
+	}
+
+	got, err := s.UnsentPayloads(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Key != good {
+		t.Fatalf("the drain must offer only the good block, got %+v", got)
+	}
+
+	total, heldAside, err := s.UnsentCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || heldAside != 1 {
+		t.Fatalf("UnsentCounts = (%d, %d), want (2, 1) — a held-aside payload is kept and counted, "+
+			"never deleted", total, heldAside)
+	}
+}
+
+// The counts are what the republisher's log line reports. It used to report
+// the size of the failed BATCH, so a machine holding 41 captured blocks said
+// 8, every time.
+func TestUnsentCountsSplitsWaitingFromHeldAside(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	s := New()
+	now := time.Now()
+	for i := int64(0); i < 4; i++ {
+		s.SaveUnsentPayload(BlockKey{Session: "many", Start: i}, []byte(`{}`), now)
+	}
+	for i := 0; i < UnsentRefusalLimit; i++ {
+		s.RefuseUnsentPayload(BlockKey{Session: "many", Start: 0})
+	}
+	total, heldAside, err := s.UnsentCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 4 || heldAside != 1 {
+		t.Fatalf("got (%d, %d), want (4, 1)", total, heldAside)
+	}
+}
+
+// An empty table reports (0, 0) and no error: "nothing captured" is a real
+// answer, and the republisher's stop condition depends on telling it apart
+// from "could not read".
+func TestUnsentCountsOnAnEmptyTable(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	s := New()
+	total, heldAside, err := s.UnsentCounts()
+	if err != nil || total != 0 || heldAside != 0 {
+		t.Fatalf("got (%d, %d, %v), want (0, 0, nil)", total, heldAside, err)
+	}
+}
+
+// A ledger written before `refusals` existed must be migrated in place, not
+// left to fail every read. Without this, every UnsentPayloads call on an
+// upgraded machine errors on a missing column and the drain reports "could not
+// read the captured blocks" forever — a silent, total stop, on exactly the
+// machines that already have blocks waiting.
+func TestARefusalColumnIsAddedToALedgerWrittenBeforeItExisted(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	path := dbPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE unsent_payloads (
+	  session TEXT NOT NULL, start INTEGER NOT NULL, payload TEXT NOT NULL,
+	  saved_at TEXT NOT NULL, PRIMARY KEY (session, start));`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(
+		`INSERT INTO unsent_payloads VALUES('legacy', 7, '{"v":1}', '2026-09-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	s := New()
+	got, err := s.UnsentPayloads(0)
+	if err != nil {
+		t.Fatalf("a pre-refusals ledger must migrate, not error: %v", err)
+	}
+	if len(got) != 1 || got[0].Key.Session != "legacy" || got[0].Refusals != 0 {
+		t.Fatalf("migrated row wrong: %+v", got)
+	}
+	if n, _ := s.RefuseUnsentPayload(got[0].Key); n != 1 {
+		t.Fatalf("the migrated column must be writable, got %d", n)
 	}
 }
