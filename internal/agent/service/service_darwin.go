@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
@@ -90,9 +91,43 @@ func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// currentPlist is the plist this binary should be installed with.
+// installedProgram reads the program the plist on disk already names, or ""
+// when there is no plist or it cannot be read.
+//
+// Deliberately a narrow string scan rather than a plist parser: this is only
+// consulted to KEEP an existing program, so a shape it does not recognise
+// falls through to the other sources rather than being guessed at.
+func installedProgram() string {
+	b, err := os.ReadFile(plistPath())
+	if err != nil {
+		return ""
+	}
+	s := string(b)
+	i := strings.Index(s, "<key>ProgramArguments</key>")
+	if i < 0 {
+		return ""
+	}
+	rest := s[i:]
+	open := strings.Index(rest, "<string>")
+	if open < 0 {
+		return ""
+	}
+	rest = rest[open+len("<string>"):]
+	close := strings.Index(rest, "</string>")
+	if close < 0 {
+		return ""
+	}
+	return rest[:close]
+}
+
+// currentPlist is the plist the service should be installed with.
+//
+// ⚠️ It resolves the DAEMON binary rather than "whatever is running" — see
+// agentExecutable. Using os.Executable() here is what let `keld signal restart`
+// rewrite the job to `keld run`, which cannot run, killing collection on the
+// machine silently.
 func currentPlist() (string, error) {
-	exe, err := os.Executable()
+	exe, err := agentExecutable(installedProgram, os.Executable)
 	if err != nil {
 		return "", err
 	}
