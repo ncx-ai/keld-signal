@@ -373,6 +373,81 @@ func WorkstreamOffFunc(s settings.Settings) func(string) bool {
 // dependency on the (optional, toggleable) Atlas connector, and this lane was
 // explicitly told not to import that package. The two converters read the
 // same wire shape independently rather than sharing one.
+// dedupeRepos removes repeated repository rules, keeping the FIRST spelling of
+// each and the order they arrived in.
+//
+// ⚠️ **SAMENESS IS THE MATCHER'S OWN, NOT STRING EQUALITY.** Two rules are the
+// same rule when `normalizeRepo` cannot tell them apart — it lowercases and
+// strips `https://`, `ssh://`, `git@` and `.git` — so a project declaring both
+// `github.com/ncx-ai/keld-signal` and `https://GitHub.com/ncx-ai/keld-signal.git`
+// has declared one repo twice, and deduping on the raw string would miss it
+// while the matcher treats them as identical. Using any other definition here
+// would mean the display and the match disagree about what a duplicate is.
+//
+// The FIRST spelling survives because it is the one a person will see: these
+// values are shown as a project's rules on the Projects pane, and silently
+// rewriting `git@github.com:x/y.git` into a normalised form would be this
+// function editing the org's own text rather than removing a repetition.
+//
+// A rule that normalises to nothing is passed through untouched. It can never
+// match anything, so collapsing several of them together would be tidying at
+// the cost of hiding whatever was declared.
+func dedupeRepos(repos []string) []string {
+	seen := make(map[string]bool, len(repos))
+	out := make([]string, 0, len(repos))
+	for _, r := range repos {
+		key := normalizeRepo(r)
+		if key == "" {
+			out = append(out, r)
+			continue
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, r)
+	}
+	return out
+}
+
+// dropKeywordsAlreadyDeclared removes repo-shaped KEYWORDS that name a
+// repository the project already declares.
+//
+// ⚠️ **THIS IS THE OTHER HALF, AND WITHOUT IT DEDUPING THE REPOS FIXES
+// NOTHING A PERSON SEES.** `Rules` is DeclaredRepos PLUS MatchedCandidates, and
+// MatchedCandidates reads `Keywords` — so an org declaring the same repository
+// in both `repos` and `keywords` still renders it twice however clean the repo
+// list is. Observed on a real machine after the first fix landed: repos
+// ["github.com/ncx-ai/keld-signal"], keywords ["github.com/ncx-ai/keld-signal"],
+// rules with it twice.
+//
+// Only REPO-LIKE keywords are considered, and only against repos the project
+// itself declares. A keyword that is not repo-shaped is free-authored text the
+// org meant to keep, and one naming a DIFFERENT repository is a real candidate
+// — neither is a repetition, and dropping either would quietly narrow what the
+// project covers.
+func dropKeywordsAlreadyDeclared(keywords, repos []string) []string {
+	if len(keywords) == 0 {
+		return keywords
+	}
+	declared := make(map[string]bool, len(repos))
+	for _, r := range repos {
+		if key := normalizeRepo(r); key != "" {
+			declared[key] = true
+		}
+	}
+	out := make([]string, 0, len(keywords))
+	for _, k := range keywords {
+		if RepoLike(k) {
+			if key := normalizeRepo(k); key != "" && declared[key] {
+				continue
+			}
+		}
+		out = append(out, k)
+	}
+	return out
+}
+
 func FromRemoteProjects(values []settings.RemoteProject) []Project {
 	out := make([]Project, 0, len(values))
 	for _, v := range values {
@@ -382,6 +457,25 @@ func FromRemoteProjects(values []settings.RemoteProject) []Project {
 				repos = append(repos, k)
 			}
 		}
+		// ⚠️ **DEDUPED AT THE IMPORT BOUNDARY, WHICH IS WHY ONE CALL COVERS
+		// BOTH REQUIREMENTS.** Everything downstream reads these values: the
+		// matcher's candidate set (via MergeCandidates) and the `rules` the
+		// Projects pane draws (via Rules -> DeclaredRepos) both come from here,
+		// so cleaning once means storage and display can never disagree about
+		// what was declared.
+		//
+		// Observed on a real machine: an org project listing
+		// `github.com/ncx-ai/keld-signal` twice, which the page then drew
+		// twice. It attributes correctly — the matcher counts a project once,
+		// pinned by TestOneProjectNamingTheSameRepoTwiceAttributesRatherThanConflicts
+		// — so this is about what a person is shown, not about correctness of
+		// the match. Scoped to the ATLAS import deliberately: a local project's
+		// rules are the user's own text and are not rewritten behind them.
+		repos = dedupeRepos(repos)
+		// And the keywords, against what is now declared — see
+		// dropKeywordsAlreadyDeclared for why deduping `repos` alone changes
+		// nothing on the page.
+		keywords := dropKeywordsAlreadyDeclared(v.Keywords, repos)
 		out = append(out, Project{
 			ID:          v.ID,
 			Title:       v.Title,
@@ -407,7 +501,7 @@ func FromRemoteProjects(values []settings.RemoteProject) []Project {
 			// the workstream's name when a value has no owning team.
 			Workstream: WorkstreamKey(v.Team),
 			Repos:      repos,
-			Keywords:   v.Keywords,
+			Keywords:   keywords,
 			TicketKey:  v.TicketKey,
 			Origin:     OriginAtlas,
 		})
