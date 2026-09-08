@@ -707,19 +707,6 @@ export function splitPending(list, now) {
   return { waiting, abandoned };
 }
 
-/** abandonedText is what an abandoned row says instead.
- *
- *  ⚠️ **PAST TENSE, AND IT DOES NOT DISAPPEAR.** The row is retired, not
- *  erased: a machine whose analysis service is genuinely broken and whose
- *  sessions have all gone quiet must not render as a clean page. That is a
- *  check that stopped running being displayed as a check that passed — the one
- *  failure this whole area exists to prevent. So it still says something, and
- *  what it says is true.
- */
-export function abandonedText() {
-  return "Signal never got focus blocks for this session and has stopped waiting on it.";
-}
-
 /** humanWait renders a duration the way a person would say it. Whole units
  *  only: "1 hour" reads as a fact, "1.03 hours" reads as a machine talking. */
 export function humanWait(ms) {
@@ -1353,12 +1340,20 @@ if (typeof document !== "undefined") {
       root.appendChild(el("div", { class: "section-label" }, `Waiting to be cut · ${waiting.length}`));
       root.appendChild(list);
     }
-    if (abandoned.length) {
-      const list = el("div", { class: "wrap", style: "margin-top:8px" });
-      for (const p of abandoned) list.appendChild(pendingRow(p, "gave up", abandonedText()));
-      root.appendChild(el("div", { class: "section-label" }, `Never characterised · ${abandoned.length}`));
-      root.appendChild(list);
-    }
+    // ⚠️ **`abandoned` IS COMPUTED AND DELIBERATELY NOT DRAWN.** It was, for
+    // one iteration, as a "Never characterised" section — and that was wrong
+    // twice over. The page said "all good" in the same frame, which is a
+    // contradiction no reader should have to reconcile; and a person cannot
+    // act on it at all, because the sessions are named by id, the work is
+    // historical, and no button changes it. It is an OPERATOR fact and it
+    // moved to `keld signal doctor`, where an operator is already looking:
+    // localagent.AbandonedSessions.
+    //
+    // What is kept is the half that was actually a lie — these rows are
+    // EXCLUDED from the count above, so "Waiting to be cut" means what it
+    // says. Deleting the split and going back to `ledger.pending.length` puts
+    // the tombstones back in the number.
+    void abandoned;
 
     root.appendChild(renderHealthStrip());
   }

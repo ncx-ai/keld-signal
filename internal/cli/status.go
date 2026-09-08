@@ -273,6 +273,21 @@ func newDoctorCmd() *cobra.Command {
 			// oldest a month old — an install that looked healthy and had enriched
 			// nothing for weeks. Reporting clean through that is the failure mode that
 			// makes this command untrustworthy exactly when it matters most.
+			// Sessions the daemon recorded as un-characterised and has since
+			// stopped asking about. Disk-only, same rule as everything above.
+			//
+			// ⚠️ **THIS LIVES HERE RATHER THAN ON THE PAGE, DELIBERATELY.** It
+			// was briefly rendered as a "Never characterised" section and that
+			// was wrong twice over: the page said "all good" in the same frame,
+			// and a user cannot act on it — the sessions are named by id, the
+			// work is historical, and nothing they press changes it. It is an
+			// operator fact, so it belongs where an operator is already
+			// looking. The page still EXCLUDES these rows from its "waiting to
+			// be cut" count, which is the half that was a lie.
+			if p := localagent.AbandonedSessions().ProblemLine(); p != "" {
+				problems = append(problems, p)
+			}
+
 			if n := staleSpoolWrites(); n > 0 {
 				problems = append(problems, fmt.Sprintf(
 					"%d abandoned write(s) in the spool (%s) — enrichment work is stranded on "+

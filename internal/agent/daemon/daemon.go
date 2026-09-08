@@ -831,7 +831,21 @@ func Run(ctx context.Context) error {
 	// THE ATLAS BOUNDARY. Exactly one connector is constructed, here, from the
 	// send_to_atlas setting: the live one, or atlas.Off, which holds no
 	// transport, no credential and no address. See daemon/atlas.go.
-	atlasCl := atlasClient(set, pub,
+	// ⚠️ **THE BLOCK PUBLISHER IS ITS OWN, AND HANDING THE ENRICHMENT ONE HERE
+	// COST EVERY REPUBLISHED BLOCK.** `pub` posts to `/v1/enrichments`; blocks
+	// go to `/v1/signal/blocks`. atlas.Live.SendBlocks was given `pub`, so the
+	// republish sweep posted BLOCK payloads at the ENRICHMENT route, which
+	// rejected them — correctly — with 422. Measured on a real machine: 41
+	// captured blocks that Atlas accepts on the right route were refused
+	// forever on the wrong one, and the health strip showed "Atlas batch
+	// refused" as a result. The live emitter was unaffected because
+	// blocks.go builds its own publisher on signalBlocksEndpoint, which is
+	// precisely why the two disagreed and why nothing caught it: the path
+	// people watch worked.
+	//
+	// Same derivation as the emitter's, from the one ingest endpoint.
+	blockPub := publish.New(signalBlocksEndpoint(cfg.Endpoint), tok.Get, actor)
+	atlasCl := atlasClient(set, blockPub,
 		settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), nil)
 	// ⚠️ **AND EVERY PATH THAT PREDATES THE BOUNDARY IS ROUTED THROUGH IT HERE.**
 	// atlas.Off makes the new connector incapable of reaching the network, but

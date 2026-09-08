@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import * as app from "../app.js";
 import {
   pendingIsAbandoned,
   splitPending,
-  abandonedText,
   pendingText,
   PENDING_ABANDONED_AFTER_MS,
 } from "../app.js";
@@ -84,23 +84,21 @@ test("NEGATIVE: a row whose age cannot be read is never called abandoned", () =>
   assert.equal(waiting.length, unreadable.length);
 });
 
-// ⚠️ RETIRED, NOT ERASED. A machine whose analysis service is genuinely broken
-// and whose sessions have all gone quiet must not render as a clean page —
-// that is a check which stopped running being displayed as a check that
-// passed. The row still says something, and what it says is true and past
-// tense.
-test("an abandoned row still says something, in the past tense", () => {
-  const text = abandonedText();
-  assert.ok(text.length > 0, "an abandoned row must not vanish silently");
-  assert.match(text, /never got focus blocks/);
-  assert.match(text, /stopped waiting/);
-  assert.ok(!text.includes("catching up"), "it must not claim work is still in progress");
-});
-
-test("the copy contains no internal vocabulary", () => {
-  for (const word of ["sidecar", "cursor", "sweep", "ledger", "daemon", "emitter"]) {
-    assert.ok(!abandonedText().toLowerCase().includes(word), `copy leaked "${word}"`);
-  }
+// ⚠️ **THE PAGE DOES NOT DRAW THESE, AND THAT IS THE DECISION.** They were
+// rendered for one iteration as a "Never characterised" section, and it was
+// wrong twice over: the page said "all good" in the same frame, and a person
+// cannot act on it — the sessions are named by id, the work is historical, and
+// no button changes it. The fact moved to `keld signal doctor`
+// (localagent.AbandonedSessions), where an operator is already looking.
+//
+// This test fails if a copy string for that section comes back, which is how
+// the decision would quietly reverse.
+test("the page has no user-facing copy for an abandoned session", () => {
+  assert.equal(
+    typeof app.abandonedText,
+    "undefined",
+    "abandoned rows are an operator fact and belong in doctor, not on the page",
+  );
 });
 
 // The two groups are independent: splitting must not disturb what a live row
