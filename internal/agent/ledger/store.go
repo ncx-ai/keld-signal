@@ -567,6 +567,24 @@ func (s *Store) CutPending(session string, r Reason, at time.Time) {
 		session, string(r), ts, ts)
 }
 
+// CutResolved deletes the pending note for a session the analysis service has
+// now answered for. Idempotent: deleting a row that is not there is the common
+// case and costs a primary-key lookup, so the caller does not need to remember
+// whether it ever wrote one — which matters, because that memory would live in
+// the emitter's process and not survive a restart, and a note from before the
+// restart would then never be cleared.
+//
+// A session that fails the shape check is refused silently, like CutPending:
+// never log the raw value, only the fact.
+func (s *Store) CutResolved(session string) {
+	session, ok := validSession(session)
+	if !ok {
+		s.logFailure("CutResolved", fmt.Errorf("session failed the identifier shape check; nothing resolved"))
+		return
+	}
+	s.exec("CutResolved", `DELETE FROM pending WHERE session=?`, session)
+}
+
 // Observe records the block's repo/branch/workspace dims.
 //
 // ⚠️ **It sets no stage cell**, deliberately. The five stages are a delivery

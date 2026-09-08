@@ -51,7 +51,8 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	atlasOn bool, onPublished func(rows []publish.BlockEnrichment, path string),
 	onCut func(rows []publish.BlockEnrichment, path string),
 	onFailed func(rows []publish.BlockEnrichment, err error),
-	onCutPending func(session, reason string)) func(source, path string) {
+	onCutPending func(session, reason string),
+	onCutResolved func(session string)) func(source, path string) {
 	if !blocks.Enabled(blocksConfigured) || dig == nil || token == nil {
 		return nil
 	}
@@ -89,6 +90,7 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	em.OnCut = onCut
 	em.OnPublishFailed = onFailed
 	em.OnCutPending = onCutPending
+	em.OnCutResolved = onCutResolved
 	interval := blocks.IntervalFromEnv()
 	log.Printf("keld-agent: v2 block emission ON (sweeping every %s). Blocks post to "+
 		"/v1/signal/blocks; Atlas STORES them but nothing reads them yet.", interval)

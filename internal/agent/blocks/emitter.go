@@ -195,6 +195,20 @@ type Emitter struct {
 	// where they are interpreted, and ledger.Store.Cut for how the resulting
 	// row clears itself the moment a later sweep succeeds.
 	OnCutPending func(session, reason string)
+	// OnCutResolved, when non-nil, is called on every sweep in which the
+	// analysis service DID answer for a transcript — with or without a block to
+	// cut. It is the other half of OnCutPending: "pending" means the service
+	// could not be asked, and being answered is what ends that, not a block
+	// closing.
+	//
+	// ⚠️ **CALLED ON EVERY OK SWEEP, DELIBERATELY, NOT ONLY AFTER A PENDING.**
+	// Remembering which sessions this emitter reported pending would make the
+	// call cheaper and would also make it wrong: that memory lives in this
+	// process, and a note written before a daemon restart would never be
+	// resolved by the emitter that came up after it. The recorder's side is a
+	// primary-key delete that usually matches nothing, which is cheaper than
+	// the bug it prevents.
+	OnCutResolved func(session string)
 
 	// routeGone latches the "this sidecar has no /blocks route" log to ONE line
 	// per daemon run. The sweep runs every interval against every active
@@ -292,7 +306,19 @@ func (e *Emitter) noteRouteUnsupported(ans enrich.BlocksAnswer) {
 // The two never overlap in practice (RouteUnsupported is never true
 // alongside OK), so this is an ordering of causes, not a real ambiguity.
 func (e *Emitter) reportCutPending(session string, ans enrich.BlocksAnswer) {
-	if e.OnCutPending == nil || session == "" || ans.OK {
+	if session == "" {
+		return
+	}
+	if ans.OK {
+		// The service answered. Whatever pending note this session carried is
+		// resolved — regardless of whether ans.Blocks is empty, because "nothing
+		// closed yet" is a successful answer, not a failure to ask.
+		if e.OnCutResolved != nil {
+			e.OnCutResolved(session)
+		}
+		return
+	}
+	if e.OnCutPending == nil {
 		return
 	}
 	if ans.RouteUnsupported {

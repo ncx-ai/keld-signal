@@ -204,6 +204,19 @@ type Recorder interface {
 	// CutPending records that blocks COULD NOT be asked for (sidecar outdated /
 	// down / behind). Keyed by session because no block exists yet.
 	CutPending(session string, r Reason, at time.Time)
+	// CutResolved records that the analysis service ANSWERED for this session —
+	// whether or not a block closed — and so any pending note for it is over.
+	//
+	// ⚠️ **WITHOUT THIS, A NOTE WRITTEN DURING A FIVE-MINUTE HICCUP LIVED UNTIL A
+	// BLOCK HAPPENED TO CLOSE.** The only thing that deleted a pending row was
+	// Cut, and Cut fires only when the sidecar closes a block. A sweep that
+	// succeeded with nothing new to cut wrote nothing and cleared nothing, so
+	// the page read "the analysis service is still catching up … 19 minutes"
+	// for a session the service had caught up on eighteen minutes earlier.
+	// Measured on a real machine: the row's `at` equalled its `since` — written
+	// once, never refreshed — which is exactly what "every sweep since was
+	// fine" looks like from the outside.
+	CutResolved(session string)
 	// Observe records the block's repo/branch/workspace dims — what the
 	// Projects pane groups unattributed work by. Separate from Measure
 	// because it answers a different question (where the work was, not what
@@ -224,6 +237,7 @@ type Nop struct{}
 
 func (Nop) Cut(BlockKey, int64, string, string, string, time.Time) {}
 func (Nop) CutPending(string, Reason, time.Time)                   {}
+func (Nop) CutResolved(string)                                     {}
 func (Nop) Observe(BlockKey, Dims, time.Time)                      {}
 func (Nop) Measure(BlockKey, Measured, time.Time)                  {}
 func (Nop) Attribute(BlockKey, Attributed, Reason, time.Time)      {}

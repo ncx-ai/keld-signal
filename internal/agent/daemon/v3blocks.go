@@ -84,6 +84,16 @@ func (v *v3) recordCutPending(session, reason string) {
 	v.ledger.CutPending(session, ledger.Reason(reason), time.Now().UTC())
 }
 
+// recordCutResolved is the emitter's OnCutResolved hook: the analysis service
+// answered for this session, so its pending note — if any — is over. See
+// ledger.Recorder.CutResolved for the defect this closes.
+func (v *v3) recordCutResolved(session string) {
+	if v == nil || v.ledger == nil {
+		return
+	}
+	v.ledger.CutResolved(session)
+}
+
 // recordDelivered is the OnPublished hook: the batch reached Atlas.
 //
 // `received` is written from the same fact `sent` is, because the emitter only
