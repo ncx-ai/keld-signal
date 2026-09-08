@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
+	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
 	"github.com/ncx-ai/keld-signal/internal/agent/pricing"
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
@@ -303,16 +304,24 @@ func (v *v3) attributeAndRecord(k ledger.BlockKey, r publish.BlockEnrichment, no
 		// ABSENT, which the page renders as unknown rather than as unattributed.
 		return
 	}
-	// The candidate set is the local document's projects PLUS the org's pooled
-	// workstream values, which are the vocabulary and arrive on the settings
-	// poll. The vector pass is nil here: this is the deterministic path, and a
-	// nil Vector is what makes "unattributed" mean "no rule matched" rather
-	// than "the encoder was not asked".
-	candidates := append([]projects.Project(nil), doc.Projects...)
+	// The candidate set is the local document's projects OVERLAID on the org's
+	// pooled workstream values, which are the vocabulary and arrive on the
+	// settings poll. The vector pass is nil here: this is the deterministic
+	// path, and a nil Vector is what makes "unattributed" mean "no rule
+	// matched" rather than "the encoder was not asked".
+	//
+	// ⚠️ **MergeCandidates, not a plain append.** A local overlay carrying
+	// rules a person added to an ORG value shares that value's id, so
+	// concatenating the two lists hands Attribute the same id twice and it
+	// reports the block as CONFLICTING WITH ITSELF — the exact failure
+	// MergeCandidates' own comment names. This is also the list the page's
+	// live pass uses (ingress.Attribution), so the recorded answer and the
+	// displayed one are computed over one candidate set rather than two.
+	var remote []projects.Project
 	if v.projects.RemoteProjects != nil {
-		candidates = append(candidates, projects.FromRemoteProjects(v.projects.RemoteProjects())...)
+		remote = projects.FromRemoteProjects(v.projects.RemoteProjects())
 	}
-	res := projects.Attribute(r.Workstreams, candidates,
+	res := projects.Attribute(r.Workstreams, projects.MergeCandidates(doc.Projects, remote),
 		projects.WorkstreamOffFunc(settings.Load()), nil)
 	v.ledger.Attribute(k, ledger.Attributed{
 		ProjectID: res.ProjectID,
@@ -345,5 +354,163 @@ func chainOnPublished(first, second func([]publish.BlockEnrichment, string)) fun
 		}
 		guard("block attribution", first)
 		guard("ledger", second)
+	}
+}
+
+// --- live attribution on read ---------------------------------------------
+
+// liveAttribution wraps the ledger's Reader so every block row GET /v1/ledger
+// serves gets its `attributed` cell from the SAME recomputation GET
+// /v1/projects does, instead of from the cell frozen at cut time.
+//
+// ⚠️ **WHY ON READ RATHER THAN A SWEEP THAT REWRITES CELLS.** Attribution ran
+// once, when the block was cut, and was never revisited: eleven blocks on a
+// real machine sat at `no_rule_matched` because they were cut in the hours
+// before the org's projects arrived on the settings poll, and the rule that
+// covers them — which exists now — could never reach them. Meanwhile the
+// Projects pane recomputed the same match live and reported 97 of 105
+// attributed against 8 on the Today rows. A sweep would have to rewrite stored
+// cells (and could corrupt them); recomputing on read stores nothing, so the
+// two surfaces AGREE BY CONSTRUCTION rather than by racing to the same answer.
+//
+// ⚠️ **NOTHING STORED IS TOUCHED.** attributeAndRecord still writes the cell at
+// cut time: that cell is the DELIVERY record — it is what `sent`/`received`
+// hang off and where a future vector answer sits — and this changes what is
+// DISPLAYED, not what is recorded.
+//
+// Cost is one extra query over the same rows the snapshot already selected,
+// one read of projects.json and one of agent-config.json. No network, no
+// model, no per-block I/O.
+type liveAttribution struct {
+	inner ledger.Reader
+	// dims returns the same rows Read did — the caller passes Read's own
+	// (since, limit), and ledger.Store.BlocksSince applies an identical
+	// WHERE/ORDER BY/LIMIT, so the two row sets match block for block.
+	dims  func(since time.Time, limit int) ([]ledger.BlockRecord, error)
+	store *projects.Store
+	now   func() time.Time
+}
+
+func (r liveAttribution) Read(since time.Time, limit int) (ledger.Snapshot, error) {
+	snap, err := r.inner.Read(since, limit)
+	if err != nil || len(snap.Blocks) == 0 {
+		return snap, err
+	}
+
+	// ⚠️ **AN UNREADABLE PROJECTS DOCUMENT IS UNKNOWN, NEVER "NO PROJECT".**
+	// The cut-time pass already refuses to record anything in this case
+	// (attributeAndRecord returns early, leaving the cell ABSENT); the read
+	// path has to make the same refusal, and here that means CLEARING the
+	// cell rather than serving a stored answer nothing can currently stand
+	// behind. The same applies when the dims those rules are matched against
+	// cannot be read: a check that could not run must not publish a confident
+	// negative.
+	pass, perr := ingress.NewAttribution(r.store)
+	records, derr := r.dims(since, limit)
+	if perr != nil || derr != nil {
+		for i := range snap.Blocks {
+			delete(snap.Blocks[i].Cells, string(ledger.StageAttributed))
+		}
+		return snap, nil
+	}
+
+	byKey := make(map[ledger.BlockKey]map[string]enrich.Labeled, len(records))
+	for _, rec := range records {
+		byKey[ledger.BlockKey{Session: rec.Session, Start: rec.Start}] = dimsOfRecord(rec)
+	}
+
+	at := r.now().UTC().Format(time.RFC3339)
+	for i := range snap.Blocks {
+		b := &snap.Blocks[i]
+		d, ok := byKey[ledger.BlockKey{Session: b.Key.Session, Start: b.Key.Start}]
+		if !ok {
+			// The row exists but its dims do not — nothing to match rules
+			// against, so there is no live answer to give. Unknown, for the
+			// same reason as above.
+			delete(b.Cells, string(ledger.StageAttributed))
+			continue
+		}
+		// ⚠️ The whole cell is replaced, unconditionally, because this cell is
+		// the DETERMINISTIC pass's and nothing else's: the vectorised pass
+		// writes its own `vector` cell and is forbidden by construction from
+		// touching this one (v3attrib.go's header — it holds a
+		// ledger.VectorRecorder, which has no method that could). So there is
+		// no second opinion here to preserve, and a stored answer that
+		// disagrees with the current rules is simply out of date.
+		if b.Cells == nil {
+			b.Cells = map[string]map[string]any{}
+		}
+		b.Cells[string(ledger.StageAttributed)] = attributedCell(pass.Of(d), at)
+	}
+	return snap, nil
+}
+
+// attributedCell builds the wire cell for one recomputed decision, in the
+// shape ledger.Store.Read produces for a recorded one — same keys, same
+// values — so no consumer needs to learn a second shape.
+func attributedCell(res projects.Result, at string) map[string]any {
+	if res.Reason == projects.ReasonNone && res.ProjectID != "" {
+		return map[string]any{
+			"status":     string(ledger.StatusOK),
+			"at":         at,
+			"project_id": res.ProjectID,
+			"method":     string(res.Method),
+		}
+	}
+	cell := map[string]any{
+		"status": string(ledger.StatusFailed),
+		"at":     at,
+		"reason": string(reasonOr(res.Reason, projects.ReasonNoRuleMatched)),
+	}
+	if res.Reason == projects.ReasonConflict && len(res.Conflict) > 0 {
+		cell["conflict"] = append([]string(nil), res.Conflict...)
+	}
+	return cell
+}
+
+func reasonOr(r, fallback projects.Reason) projects.Reason {
+	if r == projects.ReasonNone {
+		return fallback
+	}
+	return r
+}
+
+// dimsOfRecord turns one stored block row into the dims map the attribution
+// pass reads. ONE conversion, shared by the Projects pane's feed
+// (ledgerBlocks.SinceWeekStart) and by the live pass above — two copies of it
+// would be a second way for the two surfaces to disagree.
+//
+// Only a non-empty dim is offered, and it is offered as `attributed`: the
+// ledger stores a dimension value only when the sidecar had one, so an absent
+// dim here means the block genuinely had none rather than that it was thin.
+// Writing a thin status we do not have would make the projects layer refuse
+// evidence that is real.
+func dimsOfRecord(r ledger.BlockRecord) map[string]enrich.Labeled {
+	dims := map[string]enrich.Labeled{}
+	if r.Repo != "" {
+		dims[projects.DimRepo] = enrich.Labeled{Value: r.Repo, Status: enrich.WorkstreamAttributed}
+	}
+	if r.Branch != "" {
+		dims[projects.DimBranch] = enrich.Labeled{Value: r.Branch, Status: enrich.WorkstreamAttributed}
+	}
+	if r.Workspace != "" {
+		dims[projects.DimWorkspace] = enrich.Labeled{Value: r.Workspace, Status: enrich.WorkstreamAttributed}
+	}
+	return dims
+}
+
+// ledgerReader is what the page's /v1/ledger route reads through: the ledger
+// itself, wrapped so the block rows carry the live attribution answer. With no
+// projects store wired there is nothing to recompute from and the bare ledger
+// is served unchanged.
+func (v *v3) ledgerReader() ledger.Reader {
+	if v == nil || v.ledger == nil || v.projects == nil {
+		return v.ledger
+	}
+	return liveAttribution{
+		inner: v.ledger,
+		dims:  v.ledger.BlocksSince,
+		store: v.projects,
+		now:   time.Now,
 	}
 }

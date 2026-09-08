@@ -147,6 +147,58 @@ func remoteCandidates(s *projects.Store) []projects.Project {
 	return projects.FromRemoteProjects(s.RemoteProjects())
 }
 
+// Attribution is ONE live recomputation of the deterministic attribution
+// pass, held open across as many blocks as a caller has: the projects
+// document, the org's pooled values, and the workstream-off predicate, each
+// read exactly once and then applied.
+//
+// ⚠️ **IT EXISTS SO THE TWO SURFACES CANNOT ANSWER DIFFERENTLY.** Attribution
+// used to run once, at cut time, and the stored cell was never revisited — so
+// a block cut before its project was declared stayed `no_rule_matched`
+// forever, while the Projects pane recomputed the same match live and
+// reported it attributed. Measured on a real machine: 97 of 105 attributed on
+// the pane against 8 on the Today rows. Both surfaces now go through this one
+// value, which makes agreement a property rather than a race. The stored cell
+// is still written at cut time — it is the delivery record `sent`/`received`
+// hang off — it is simply no longer what is DISPLAYED.
+//
+// ⚠️ **A DOCUMENT THAT CANNOT BE READ IS AN ERROR, NEVER AN EMPTY ONE.**
+// "nobody has declared a project" and "we could not tell" are different
+// answers, and only the first may render as no project; the second must
+// render as unknown. That is why NewAttribution returns an error rather than
+// a zero Attribution.
+type Attribution struct {
+	// Document is the local projects file as it was read.
+	Document projects.Document
+	// Candidates is what Attribute may consider: the local document's
+	// projects merged with the org's pooled values.
+	Candidates []projects.Project
+	// Off is the authoritative workstream-exclusion predicate, read from
+	// agent-config.json at the same instant.
+	Off func(string) bool
+}
+
+// NewAttribution reads everything one pass needs, once.
+func NewAttribution(s *projects.Store) (Attribution, error) {
+	d, err := s.Load()
+	if err != nil {
+		return Attribution{}, err
+	}
+	return Attribution{
+		Document:   d,
+		Candidates: candidatesFor(s, d),
+		Off:        workstreamOffFunc(),
+	}, nil
+}
+
+// Of is one block's decision, from that block's already-published workstream
+// dims. The Vector pass is nil: this is the deterministic lane, and a nil
+// Vector is what makes "unattributed" mean "no rule matched" rather than
+// "the encoder was not asked".
+func (a Attribution) Of(dims map[string]enrich.Labeled) projects.Result {
+	return projects.Attribute(dims, a.Candidates, a.Off, nil)
+}
+
 // currentSuggestions recomputes the suggestion list exactly as GET
 // /v1/projects would, so a mutating route resolving a suggestion id sees the
 // same ids that route just handed the page. A nil Blocks getter yields no
@@ -160,12 +212,10 @@ func currentSuggestions(s *projects.Store, d projects.Document) ([]projects.Sugg
 	if err != nil {
 		return nil, err
 	}
-	off := workstreamOffFunc()
-	candidates := candidatesFor(s, d)
+	pass := Attribution{Document: d, Candidates: candidatesFor(s, d), Off: workstreamOffFunc()}
 	var unattributed []projects.UnattributedBlock
 	for _, b := range blocks {
-		res := projects.Attribute(b.Dims, candidates, off, nil)
-		if res.ProjectID == "" {
+		if pass.Of(b.Dims).ProjectID == "" {
 			unattributed = append(unattributed, projects.UnattributedBlock{
 				Dims: b.Dims, Minutes: b.Minutes, Tokens: b.Tokens,
 			})
@@ -177,20 +227,21 @@ func currentSuggestions(s *projects.Store, d projects.Document) ([]projects.Sugg
 // --- handlers --------------------------------------------------------------
 
 func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store) {
-	d, err := s.Load()
+	// The SAME live pass the Today rows are rendered from (see Attribution) —
+	// not a second implementation of it.
+	pass, err := NewAttribution(s)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "store_unreadable")
 		return
 	}
+	d, off, candidates := pass.Document, pass.Off, pass.Candidates
 
-	off := workstreamOffFunc()
 	workstreams := make([]projects.Workstream, len(d.Workstreams))
 	for i, ws := range d.Workstreams {
 		ws.Off = off(ws.Key)
 		workstreams[i] = ws
 	}
 
-	candidates := candidatesFor(s, d)
 	since := startOfWeek(time.Now())
 	attributed, total := 0, 0
 	var suggestions []projects.Suggestion
@@ -206,7 +257,7 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request, s *projects.Store
 		var unattributed []projects.UnattributedBlock
 		for _, b := range blocks {
 			total++
-			res := projects.Attribute(b.Dims, candidates, off, nil)
+			res := pass.Of(b.Dims)
 			if res.ProjectID != "" {
 				attributed++
 				continue

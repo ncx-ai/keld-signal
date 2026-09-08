@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/ledger"
 	"github.com/ncx-ai/keld-signal/internal/agent/projects"
@@ -155,7 +154,11 @@ func (v *v3) routes() []ingress.Route {
 		// ledgerRoute rather than ingress.LedgerRoute: the page's payload gains
 		// a `service` block beside `health`, and internal/agent/ledger has no
 		// seam for a key it does not own. See servicehealth_route.go.
-		ledgerRoute(v.ledger, func() serviceWire { return currentServiceHealth.Load().Snapshot() }),
+		// v.ledgerReader(), not v.ledger: the block rows' `attributed` cell is
+		// recomputed live from the current rules, so the Today rows and the
+		// Projects pane cannot answer differently about the same block (see
+		// liveAttribution in v3blocks.go). Nothing stored is rewritten.
+		ledgerRoute(v.ledgerReader(), func() serviceWire { return currentServiceHealth.Load().Snapshot() }),
 		// The restart control the page offers. It reads the health owner live,
 		// so an unconfigured machine (the onboarding handler mounts these too)
 		// answers 409 not_applicable rather than pretending to restart nothing.
@@ -181,27 +184,15 @@ func (b ledgerBlocks) SinceWeekStart() ([]projects.BlockSummary, error) {
 	}
 	out := make([]projects.BlockSummary, 0, len(recs))
 	for _, r := range recs {
-		dims := map[string]enrich.Labeled{}
-		// Only a non-empty dim is offered, and it is offered as `attributed`:
-		// the ledger stores a dimension value only when the sidecar had one,
-		// so an absent dim here means the block genuinely had none rather than
-		// that it was thin. Writing a thin status we do not have would make the
-		// projects layer refuse evidence that is real.
-		if r.Repo != "" {
-			dims[projects.DimRepo] = enrich.Labeled{Value: r.Repo, Status: enrich.WorkstreamAttributed}
-		}
-		if r.Branch != "" {
-			dims[projects.DimBranch] = enrich.Labeled{Value: r.Branch, Status: enrich.WorkstreamAttributed}
-		}
-		if r.Workspace != "" {
-			dims[projects.DimWorkspace] = enrich.Labeled{Value: r.Workspace, Status: enrich.WorkstreamAttributed}
-		}
 		out = append(out, projects.BlockSummary{
 			SessionID: r.Session,
 			Start:     r.Start,
-			Dims:      dims,
-			Minutes:   r.Minutes,
-			Tokens:    r.Tokens,
+			// dimsOfRecord, not a second copy of the same conversion: the
+			// Today rows' live pass reads the same rows through it, and two
+			// copies would be a way for the two surfaces to disagree again.
+			Dims:    dimsOfRecord(r),
+			Minutes: r.Minutes,
+			Tokens:  r.Tokens,
 		})
 	}
 	return out, nil
