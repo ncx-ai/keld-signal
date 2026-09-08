@@ -665,6 +665,61 @@ export function pendingText(entry, now) {
   return `${ordinary} It has been waiting ${humanWait(ms)} — longer than catching up normally takes.`;
 }
 
+/** How long after its last refresh a pending row stops being about NOW.
+ *
+ * ⚠️ **THIS ASKS A DIFFERENT QUESTION FROM `since`, AND `at` IS THE RIGHT FIELD
+ * FOR IT.** `since` answers "how long has this been waiting"; `at` answers "is
+ * anyone still waiting". A live wait is re-reported on every 5-minute sweep, so
+ * its `at` is never more than one interval old. A row whose `at` has not moved
+ * in an hour is not a slow wait — it is a note about a question nobody is
+ * asking any more, because the session went quiet and left the swept set.
+ *
+ * An hour is twelve sweep intervals. Deliberately generous: a live wait
+ * refreshes every five minutes so it can never drift near this, while a real
+ * abandonment is PERMANENT, so waiting an extra hour to say so costs nothing
+ * and mislabelling a live wait costs trust. The margin is the whole point.
+ */
+export const PENDING_ABANDONED_AFTER_MS = 60 * 60 * 1000;
+
+/** pendingIsAbandoned reports whether nothing is still asking about this row.
+ *
+ *  ⚠️ Returns FALSE when `at` is missing or unreadable. An unknown age must
+ *  never be declared abandoned — "Signal stopped waiting on this" is a definite
+ *  claim, and making it from a check that could not run is the confident
+ *  negative this codebase refuses everywhere. Unknown falls back to the
+ *  existing quiet "waiting" reading, which is what shipped before this.
+ */
+export function pendingIsAbandoned(entry, now) {
+  if (!entry || typeof entry.at !== "string" || entry.at === "") return false;
+  const last = Date.parse(entry.at);
+  if (!Number.isFinite(last)) return false;
+  return now - last > PENDING_ABANDONED_AFTER_MS;
+}
+
+/** splitPending separates rows something is still waiting on from rows nothing
+ *  is asking about any more. Order within each group is preserved. */
+export function splitPending(list, now) {
+  const waiting = [];
+  const abandoned = [];
+  for (const p of list || []) {
+    (pendingIsAbandoned(p, now) ? abandoned : waiting).push(p);
+  }
+  return { waiting, abandoned };
+}
+
+/** abandonedText is what an abandoned row says instead.
+ *
+ *  ⚠️ **PAST TENSE, AND IT DOES NOT DISAPPEAR.** The row is retired, not
+ *  erased: a machine whose analysis service is genuinely broken and whose
+ *  sessions have all gone quiet must not render as a clean page. That is a
+ *  check that stopped running being displayed as a check that passed — the one
+ *  failure this whole area exists to prevent. So it still says something, and
+ *  what it says is true.
+ */
+export function abandonedText() {
+  return "Signal never got focus blocks for this session and has stopped waiting on it.";
+}
+
 /** humanWait renders a duration the way a person would say it. Whole units
  *  only: "1 hour" reads as a fact, "1.03 hours" reads as a machine talking. */
 export function humanWait(ms) {
@@ -1276,20 +1331,32 @@ if (typeof document !== "undefined") {
     table.appendChild(tbody);
     if (blocks.length) root.appendChild(el("div", { class: "wrap" }, table));
 
-    const pending = ledger.pending || [];
-    if (pending.length) {
+    // ⚠️ **"Waiting to be cut" COUNTS ONLY WHAT IS STILL BEING WAITED ON.**
+    // It used to count every pending row, including ones frozen for a day —
+    // measured on a real machine: three rows last touched 21 hours earlier,
+    // for sessions nothing had asked about since, under a heading claiming the
+    // analysis service was still catching up. A count that includes tombstones
+    // is a number a person cannot act on.
+    const { waiting, abandoned } = splitPending(ledger.pending, Date.now());
+
+    const pendingRow = (p, pill, text) =>
+      el(
+        "div",
+        { class: "suggestion-row" },
+        el("span", { class: "pill wait" }, pill),
+        el("span", { style: "margin-left:10px;color:var(--ink-2)" }, text)
+      );
+
+    if (waiting.length) {
       const list = el("div", { class: "wrap", style: "margin-top:8px" });
-      for (const p of pending) {
-        list.appendChild(
-          el(
-            "div",
-            { class: "suggestion-row" },
-            el("span", { class: "pill wait" }, "waiting"),
-            el("span", { style: "margin-left:10px;color:var(--ink-2)" }, pendingText(p, Date.now()))
-          )
-        );
-      }
-      root.appendChild(el("div", { class: "section-label" }, `Waiting to be cut · ${pending.length}`));
+      for (const p of waiting) list.appendChild(pendingRow(p, "waiting", pendingText(p, Date.now())));
+      root.appendChild(el("div", { class: "section-label" }, `Waiting to be cut · ${waiting.length}`));
+      root.appendChild(list);
+    }
+    if (abandoned.length) {
+      const list = el("div", { class: "wrap", style: "margin-top:8px" });
+      for (const p of abandoned) list.appendChild(pendingRow(p, "gave up", abandonedText()));
+      root.appendChild(el("div", { class: "section-label" }, `Never characterised · ${abandoned.length}`));
       root.appendChild(list);
     }
 
