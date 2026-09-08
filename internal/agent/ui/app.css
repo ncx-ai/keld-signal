@@ -126,6 +126,49 @@ main { min-width: 0; }
 }
 .topbar-title { font-size: 22px; font-weight: 600; }
 .pane-root { padding: 10px 26px 60px; }
+
+/* ---- Today: the list scrolls, nothing else does ----
+   Everything here is scoped to `body.pane-today` (set in route()). Projects and
+   Settings are ordinary documents and must keep scrolling as a whole; a
+   viewport-height grid would trap their content in a box. */
+body.pane-today { overflow: hidden; }
+body.pane-today .shell { height: 100vh; min-height: 0; }
+body.pane-today main {
+  min-height: 0;      /* without this a grid child refuses to shrink and the
+                         page scrolls in the window again, silently */
+  display: flex;
+  flex-direction: column;
+}
+body.pane-today .pane-root {
+  flex: 1;
+  min-height: 0;      /* same reason, one level down */
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 10px;
+}
+/* The one scrolling region. It takes the space the fixed parts leave, and
+   `min-height` keeps it usable on a short window rather than collapsing to
+   nothing — a list with no height is a page that looks broken. */
+body.pane-today .today-scroll {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow-y: auto;
+  overscroll-behavior: contain;   /* a flick at the end of the list must not
+                                     start scrolling the window behind it */
+}
+/* Fixed: the header block above the list, and the strip below it. */
+body.pane-today .pane-root > :not(.today-scroll) { flex: 0 0 auto; }
+body.pane-today .health-strip { margin-top: 12px; }
+
+@media (max-width: 720px) {
+  /* The narrow layout turns the nav into a horizontal bar and the shell into
+     one column; pinning a viewport-height grid on top of that leaves almost no
+     room for the list, so the page goes back to scrolling as a whole. */
+  body.pane-today { overflow: auto; }
+  body.pane-today .shell { height: auto; min-height: 100vh; }
+  body.pane-today main, body.pane-today .pane-root { display: block; }
+  body.pane-today .today-scroll { overflow-y: visible; min-height: 0; }
+}
 .pane-sub { color: var(--muted); font-size: 13px; margin: -6px 0 16px; }
 .loading { color: var(--muted); }
 

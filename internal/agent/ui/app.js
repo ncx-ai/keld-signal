@@ -608,6 +608,31 @@ export const REASON_TEXT = {
   "": "",
 };
 
+/** startOfLocalDay is midnight this morning, in the viewer's own timezone, as
+ *  unix seconds — the `since` the Today pane asks the ledger for.
+ *
+ *  ⚠️ **LOCAL, NOT UTC, AND THE DIFFERENCE IS VISIBLE TO A PERSON.** "Today" is
+ *  the day someone is having, not the day in Greenwich: west of UTC a UTC-midnight
+ *  bound would drop this morning's work, and east of it the pane would still be
+ *  showing yesterday evening's. The block's own instant is a UTC point either
+ *  way; only the boundary is local.
+ *
+ *  Compared on BLOCK START, which is what the ledger's `since` already filters
+ *  on and what each row already displays. A block that runs across midnight
+ *  therefore belongs to the day it began — the alternative, splitting it or
+ *  counting it twice, would make the headline numbers stop summing to the list.
+ */
+export function startOfLocalDay(now) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return Math.floor(d.getTime() / 1000);
+}
+
+/** todayLedgerURL is the ledger request the Today pane makes. */
+export function todayLedgerURL(now) {
+  return `/v1/ledger?since=${startOfLocalDay(now)}`;
+}
+
 export function reasonText(code) {
   return REASON_TEXT[code] || (code ? code : "");
 }
@@ -1098,7 +1123,12 @@ if (typeof document !== "undefined") {
   async function loadAll() {
     try {
       const [ledger, settings, projects] = await Promise.all([
-        fetchJSON("/v1/ledger"),
+        // ⚠️ **BOUNDED TO TODAY, AND IT USED TO BE UNBOUNDED.** This asked for
+        // the whole ledger and the pane drew all of it: measured on a real
+        // machine, 108 blocks across FOUR days under a heading reading
+        // "Tuesday 8 September", with the four headline cards counting all of
+        // them. The route has always taken `since`; nothing passed one.
+        fetchJSON(todayLedgerURL(Date.now())),
         fetchJSON("/v1/settings"),
         fetchJSON("/v1/projects"),
       ]);
@@ -1316,7 +1346,14 @@ if (typeof document !== "undefined") {
       }
     }
     table.appendChild(tbody);
-    if (blocks.length) root.appendChild(el("div", { class: "wrap" }, table));
+    // ⚠️ **THE LIST IS THE ONLY THING THAT SCROLLS.** Everything above it —
+    // the date, the four cards, the rhythm — and the health strip below it are
+    // fixed, so resizing the window vertically changes the height of this
+    // container and nothing else. Before this the whole page scrolled in the
+    // window and the health strip sat below the fold, which is why it was
+    // invisible until you scrolled to the bottom.
+    const scroller = el("div", { class: "today-scroll" });
+    if (blocks.length) scroller.appendChild(el("div", { class: "wrap" }, table));
 
     // ⚠️ **"Waiting to be cut" COUNTS ONLY WHAT IS STILL BEING WAITED ON.**
     // It used to count every pending row, including ones frozen for a day —
@@ -1337,8 +1374,8 @@ if (typeof document !== "undefined") {
     if (waiting.length) {
       const list = el("div", { class: "wrap", style: "margin-top:8px" });
       for (const p of waiting) list.appendChild(pendingRow(p, "waiting", pendingText(p, Date.now())));
-      root.appendChild(el("div", { class: "section-label" }, `Waiting to be cut · ${waiting.length}`));
-      root.appendChild(list);
+      scroller.appendChild(el("div", { class: "section-label" }, `Waiting to be cut · ${waiting.length}`));
+      scroller.appendChild(list);
     }
     // ⚠️ **`abandoned` IS COMPUTED AND DELIBERATELY NOT DRAWN.** It was, for
     // one iteration, as a "Never characterised" section — and that was wrong
@@ -1355,6 +1392,7 @@ if (typeof document !== "undefined") {
     // the tombstones back in the number.
     void abandoned;
 
+    root.appendChild(scroller);
     root.appendChild(renderHealthStrip());
   }
 
@@ -1456,7 +1494,9 @@ if (typeof document !== "undefined") {
     for (let attempt = 0; attempt < RESTART_POLL_MAX_ATTEMPTS; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, RESTART_POLL_INTERVAL_MS));
       try {
-        const res = await fetch("/v1/ledger", { credentials: "same-origin" });
+        // Same bound as loadAll's, so the liveness probe and the pane cannot
+        // disagree about which request "the ledger is answering" means.
+        const res = await fetch(todayLedgerURL(Date.now()), { credentials: "same-origin" });
         if (res.ok) {
           state.restart.status = nextRestartStatus(state.restart.status, "ledger_ok");
           route();
@@ -2302,6 +2342,13 @@ if (typeof document !== "undefined") {
     renderServiceBanner(alert);
     renderNavHealth(alert);
     document.getElementById("offlineBanner").hidden = !state.offline;
+    // ⚠️ **SCOPED TO TODAY BY A BODY CLASS, DELIBERATELY.** The fixed-height
+    // layout below only makes sense for a pane with one long list in the
+    // middle. Projects and Settings are ordinary documents that should scroll
+    // as a whole, and applying a viewport-height grid to them would trap their
+    // content in a box. A class here is what keeps that impossible rather than
+    // careful.
+    document.body.classList.toggle("pane-today", pane === "today");
     const root = document.getElementById("paneRoot");
     if (pane === "today") renderToday(root);
     else if (pane === "projects") renderProjects(root);
