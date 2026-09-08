@@ -22,10 +22,23 @@ type HealthEntry struct {
 }
 
 // PendingEntry is a session for which blocks could not be asked for at all.
+//
+// ⚠️ **At AND Since ANSWER DIFFERENT QUESTIONS AND ARE NOT INTERCHANGEABLE.**
+// At is refreshed every sweep this session still cannot be cut, so it says
+// "this was still true a moment ago" and can never be more than one sweep
+// interval old. Since is written once, when the streak began, so it is the
+// only field that can say how long the wait has actually lasted. A reader
+// that thresholds on At is measuring the sweep timer.
+//
+// Since is empty on a row written before it existed, and on any row whose
+// origin is unknown. An empty Since must be read as "how long is unknown",
+// never as "just now" — an unknown age must not render as a problem, and it
+// must not render as reassurance either.
 type PendingEntry struct {
 	Session string `json:"session"`
 	Reason  string `json:"reason"`
 	At      string `json:"at"`
+	Since   string `json:"since,omitempty"`
 }
 
 // BlockKeyEntry identifies a block the way Atlas does.

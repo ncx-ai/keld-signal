@@ -204,7 +204,14 @@ func walkNoFreeText(t *testing.T, key string, v any) {
 			if !closedBoundaryReason[vv] {
 				t.Errorf("field %q has non-closed value %q", key, vv)
 			}
-		case "at", "generated_at", "ok_at":
+		// "since" is the instant a pending streak began — an RFC3339 timestamp
+		// like its siblings, and admitted here deliberately rather than by
+		// pattern. It is a MEASUREMENT of when the analysis service first fell
+		// behind for a session, never anything read from a transcript, so it
+		// carries no text, path, span or offset. It exists because "at" is
+		// refreshed every sweep and so can never say how long a wait has
+		// lasted; see PendingEntry in wire.go.
+		case "at", "generated_at", "ok_at", "since":
 			if !isRFC3339(vv) {
 				t.Errorf("field %q is not RFC3339: %q", key, vv)
 			}

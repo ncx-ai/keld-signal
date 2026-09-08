@@ -80,7 +80,17 @@ CREATE TABLE IF NOT EXISTS health (
 CREATE TABLE IF NOT EXISTS pending (
   session TEXT PRIMARY KEY,
   reason  TEXT NOT NULL,
-  at      TEXT NOT NULL
+  at      TEXT NOT NULL,
+  -- WARNING: at IS A HEARTBEAT, since IS AN AGE, AND ONLY ONE OF THEM CAN
+  -- ANSWER "HOW LONG HAS THIS BEEN STUCK?". reportCutPending fires on EVERY
+  -- sweep a transcript still cannot be cut, and the upsert in CutPending
+  -- overwrites at each time -- so now-minus-at is bounded by the sweep
+  -- interval (5 minutes) whether the analysis service is twenty seconds behind
+  -- or has been starved for a day. A page thresholding on it would be
+  -- measuring the sweep timer. since is written on INSERT only, so an unbroken
+  -- streak keeps its original instant. Same shape as a cell's ok_at beside its
+  -- at, and for the same reason. See PendingEntry in wire.go.
+  since   TEXT
 );
 `
 
@@ -347,6 +357,18 @@ func (s *Store) open() (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	// ⚠️ **`CREATE TABLE IF NOT EXISTS` DOES NOTHING TO A TABLE THAT ALREADY
+	// EXISTS**, so a column added to the schema above reaches new databases
+	// only. There is no version counter in this store, so the migration is the
+	// ALTER itself and "already applied" is reported as a duplicate-column
+	// error — which is the success case on every run after the first.
+	// Ignoring it is correct; failing on it would make the store unopenable
+	// the second time it was opened.
+	if _, err := db.Exec(`ALTER TABLE pending ADD COLUMN since TEXT`); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -466,10 +488,25 @@ func (s *Store) CutPending(session string, r Reason, at time.Time) {
 		return
 	}
 	r = validReason(r)
+	ts := at.UTC().Format(time.RFC3339)
+	// `since` survives an update while `reason` is unchanged, and RESTARTS when
+	// it changes — `sidecar_outdated` becoming `sidecar_behind` is a different
+	// wait, and carrying the old instant across would report the new one as
+	// hours old the moment it began.
+	//
+	// COALESCE covers rows written before `since` existed: they adopt the
+	// current instant, which UNDERSTATES how long they have waited. That is the
+	// safe direction — an understated age reads as "brief", which is the quiet
+	// message, and this codebase never lets an unknown render as a problem.
 	s.exec("CutPending",
-		`INSERT INTO pending(session, reason, at) VALUES(?,?,?)
-		 ON CONFLICT(session) DO UPDATE SET reason=excluded.reason, at=excluded.at`,
-		session, string(r), at.UTC().Format(time.RFC3339))
+		`INSERT INTO pending(session, reason, at, since) VALUES(?,?,?,?)
+		 ON CONFLICT(session) DO UPDATE SET
+		   reason = excluded.reason,
+		   at     = excluded.at,
+		   since  = CASE WHEN pending.reason = excluded.reason
+		                 THEN COALESCE(pending.since, excluded.since)
+		                 ELSE excluded.since END`,
+		session, string(r), ts, ts)
 }
 
 // Observe records the block's repo/branch/workspace dims.
@@ -700,13 +737,13 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 	}
 	hrows.Close()
 
-	prows, err := db.Query(`SELECT session, reason, at FROM pending ORDER BY at`)
+	prows, err := db.Query(`SELECT session, reason, at, COALESCE(since, '') FROM pending ORDER BY at`)
 	if err != nil {
 		return snap, err
 	}
 	for prows.Next() {
 		var p PendingEntry
-		if err := prows.Scan(&p.Session, &p.Reason, &p.At); err != nil {
+		if err := prows.Scan(&p.Session, &p.Reason, &p.At, &p.Since); err != nil {
 			prows.Close()
 			return snap, err
 		}

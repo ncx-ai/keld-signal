@@ -612,6 +612,70 @@ export function reasonText(code) {
   return REASON_TEXT[code] || (code ? code : "");
 }
 
+/** How long a wait has to last before it stops being ordinary catch-up.
+ *
+ * Fifteen minutes, and the number is derived rather than picked: the block
+ * emitter sweeps every 5 minutes, and a first whole-file ingest is measured at
+ * 5.1s on a 90 MB transcript — so ordinary catch-up clears inside one or two
+ * sweeps. Three sweeps is the point past which "still behind" can no longer be
+ * explained by one slow sweep, and it is the same span the block cutter itself
+ * already treats as silence (3 empty 5-minute bins).
+ */
+export const STUCK_AFTER_MS = 15 * 60 * 1000;
+
+/** pendingWaitMs is how long this session has been waiting, or null when that
+ *  cannot be known.
+ *
+ *  ⚠️ **IT READS `since`, NEVER `at`.** `at` is refreshed on every sweep the
+ *  session still cannot be cut, so `now - at` is bounded by the sweep interval
+ *  whether the wait is twenty seconds or a day old. Thresholding on it would
+ *  measure the sweep timer and never fire. `since` is written once, when the
+ *  streak began.
+ *
+ *  null — not 0 — when `since` is absent or unparseable: a row written by an
+ *  older daemon has no age, and an unknown age must not be rendered as either
+ *  a problem or a reassurance.
+ */
+export function pendingWaitMs(entry, now) {
+  if (!entry || typeof entry.since !== "string" || entry.since === "") return null;
+  const started = Date.parse(entry.since);
+  if (!Number.isFinite(started)) return null;
+  const ms = now - started;
+  return ms >= 0 ? ms : null; // a future timestamp is a broken clock, not a wait
+}
+
+/** pendingText is the sentence shown beside a waiting row.
+ *
+ *  ⚠️ **THE QUIET MESSAGE IS THE DEFAULT AND THE UNKNOWN CASE.** A page that
+ *  cries about ordinary catch-up trains people to ignore it, which is worse
+ *  than saying nothing — so escalation happens only on a wait we can actually
+ *  measure and that has actually lasted. No age, an unparseable age, or a
+ *  short one all render the ordinary sentence.
+ *
+ *  The escalated sentence deliberately says what is observable and stops
+ *  there. It does NOT name a cause: nothing in this payload carries memory
+ *  pressure, load, or anything else that would explain the delay, and naming
+ *  one would be inventing a finding from a check nobody ran.
+ */
+export function pendingText(entry, now) {
+  const ordinary = reasonText(entry && entry.reason) ||
+    "Signal hasn't been able to ask for this session's focus blocks yet.";
+  const ms = pendingWaitMs(entry, now);
+  if (ms === null || ms < STUCK_AFTER_MS) return ordinary;
+  return `${ordinary} It has been waiting ${humanWait(ms)} — longer than catching up normally takes.`;
+}
+
+/** humanWait renders a duration the way a person would say it. Whole units
+ *  only: "1 hour" reads as a fact, "1.03 hours" reads as a machine talking. */
+export function humanWait(ms) {
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins} minutes`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours === 1 ? "over an hour" : `over ${hours} hours`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "over a day" : `over ${days} days`;
+}
+
 /** Short phrases for the health strip's compact pills — the SAME closed
  *  reason vocabulary as REASON_TEXT, worded to fit next to a version number
  *  instead of standing alone as a sentence. `health[].detail` is typed as
@@ -1221,7 +1285,7 @@ if (typeof document !== "undefined") {
             "div",
             { class: "suggestion-row" },
             el("span", { class: "pill wait" }, "waiting"),
-            el("span", { style: "margin-left:10px;color:var(--ink-2)" }, reasonText(p.reason) || "Signal hasn't been able to ask for this session's focus blocks yet.")
+            el("span", { style: "margin-left:10px;color:var(--ink-2)" }, pendingText(p, Date.now()))
           )
         );
       }
