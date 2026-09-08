@@ -111,11 +111,66 @@ type Dims struct {
 	Workspace string
 }
 
-// Attributed is the outcome of the attribution pass for one block.
+// Attributed is the outcome of the DETERMINISTIC attribution pass for one
+// block — the rules a person declared, matched against the block's own
+// workstream dimensions. It is written by exactly one caller
+// (daemon.attributeAndRecord) and read as the machine's answer.
 type Attributed struct {
 	ProjectID string
 	Method    Method
 	Conflict  []string // project ids when Reason == ReasonConflict
+}
+
+// VectorAttributed is the VECTORISED pass's answer for the same block: a
+// second opinion, decided on device by the encoder, and stored in its own cell
+// beside the deterministic one rather than in place of it.
+//
+// ⚠️ **THE TWO ARE NEVER RECONCILED HERE, AND THAT IS DELIBERATE.** Both ids
+// are stored; nothing in this package picks a winner when they differ, because
+// choosing one needs data from a machine running both passes and no such data
+// exists yet. Representing the disagreement IS the feature. A reader that
+// renders one of them as "the" project is making a decision this package has
+// refused to make for it.
+type VectorAttributed struct {
+	// ProjectID is the id the vector pass named. Set only alongside StatusOK.
+	ProjectID string
+	// Confidence is that pass's own score for the id, in [0,1]. It is stored
+	// because a second opinion at 0.42 and one at 0.91 are different second
+	// opinions, and nothing else on the row would say which this was.
+	Confidence float64
+}
+
+// VectorRecorder is how — and the ONLY way — the vectorised attribution pass
+// reaches the ledger.
+//
+// ⚠️ **IT IS DELIBERATELY NOT PART OF Recorder, AND Recorder IS DELIBERATELY
+// NOT PART OF IT.** The two passes used to write the same cell: a vectorised
+// job that exhausted its retries called Failed(k, StageAttributed,
+// ReasonAttributeFailed) and overwrote whatever the deterministic pass had
+// already decided. Measured on one machine, 44 rows lost a correct project id
+// that way — 25 of them on a repository a declared rule matches exactly —
+// because an encoder could not get memory and took the good answer down with
+// it.
+//
+// Splitting the interfaces is what makes that unrepresentable rather than
+// merely absent: the attribution path holds a VectorRecorder, which has one
+// method that writes one cell, so there is no method on the value it holds
+// that could name `attributed`. The other direction is closed in store.go —
+// the vector columns are not registered in stageColumns, so the generic
+// Failed/NotApplicable stage writers cannot reach them either. Do not embed
+// one interface in the other, and do not add Vector to Recorder: either would
+// compile, and either would put the 44 rows back within reach.
+type VectorRecorder interface {
+	// Vector writes the vector cell and nothing else. status is the cell's
+	// own state (ok when the pass named a project, pending while it is still
+	// warming or waiting on weights, n/a when there was structurally nothing
+	// to match against, failed when the job was given up on); r names which,
+	// from the same closed vocabulary every other cell uses.
+	//
+	// A block whose vector cell was never written reads as ABSENT — never
+	// asked. That is a different fact from asked-and-failed, and a fleet that
+	// cannot tell them apart cannot be debugged.
+	Vector(k BlockKey, a VectorAttributed, status Status, r Reason, at time.Time)
 }
 
 // HealthKey names a machine-level fact. Health is not per block.
@@ -177,4 +232,13 @@ func (Nop) Received(BlockKey, int, time.Time)                      {}
 func (Nop) Failed(BlockKey, Stage, Reason, int, time.Time)         {}
 func (Nop) SetHealth(Health)                                       {}
 
-var _ Recorder = Nop{}
+// Nop satisfies VectorRecorder too, so a test wiring the attribution path
+// needs no second stub. Note it satisfies BOTH interfaces without either
+// embedding the other — which is the point: an implementation may serve both
+// roles, and no caller can hold one role and reach the other's cell.
+func (Nop) Vector(BlockKey, VectorAttributed, Status, Reason, time.Time) {}
+
+var (
+	_ Recorder       = Nop{}
+	_ VectorRecorder = Nop{}
+)

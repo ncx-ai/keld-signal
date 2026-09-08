@@ -219,10 +219,17 @@ func TestT8RouteUnsupportedIsPendingAndReflectedInHealth(t *testing.T) {
 }
 
 // T9: a quarantined attribution job (attrib.MaxAttempts genuine errors)
-// leaves `attributed` FAILED with attribute_failed — the deterministic pass
-// never got to answer at all, which is a different fact from "it ran and
-// found nothing".
-func TestT9QuarantinedAttributionJobMarksAttributedFailed(t *testing.T) {
+// leaves the VECTOR cell failed with attribute_failed.
+//
+// ⚠️ **THIS TEST USED TO ASSERT `attributed` WENT FAILED, AND THAT ASSERTION
+// IS WHAT HELD THE DEFECT IN PLACE.** `attributed` is the DETERMINISTIC pass's
+// answer; a vectorised job giving up says nothing about it. See
+// TestQuarantinedVectorJobLeavesTheDeterministicProjectIntact in
+// v3attrib_test.go for the 44-row measurement behind the change. What is
+// asserted here is unchanged in spirit — a job that exhausted its retries is a
+// terminal, recorded fact, distinct from an absent cell — only the cell it is
+// recorded against is now the one that pass owns.
+func TestT9QuarantinedAttributionJobMarksVectorFailed(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 	v := &v3{ledger: ledger.New(), atlasOn: true}
 
@@ -234,8 +241,8 @@ func TestT9QuarantinedAttributionJobMarksAttributedFailed(t *testing.T) {
 	v.recordCut([]publish.BlockEnrichment{row}, "/p/t9.jsonl")
 
 	// attrib.Attributor's own OnQuarantine, fired for real via
-	// noteAttributionQuarantine -> recordAttributeQuarantined.
-	v.recordAttributeQuarantined("sess-t9", float64(start))
+	// noteAttributionQuarantine -> vectorLedger.recordQuarantine.
+	v.vectorLedger().recordQuarantine("sess-t9", float64(start))
 
 	snap, err := v.ledger.Read(time.Time{}, 10)
 	if err != nil {
@@ -244,9 +251,9 @@ func TestT9QuarantinedAttributionJobMarksAttributedFailed(t *testing.T) {
 	if len(snap.Blocks) != 1 {
 		t.Fatalf("want 1 block, got %d", len(snap.Blocks))
 	}
-	cell := snap.Blocks[0].Cells["attributed"]
+	cell := snap.Blocks[0].Cells["vector"]
 	if cell["status"] != string(ledger.StatusFailed) || cell["reason"] != string(ledger.ReasonAttributeFailed) {
-		t.Fatalf("attributed = %#v, want failed/attribute_failed", cell)
+		t.Fatalf("vector = %#v, want failed/attribute_failed", cell)
 	}
 }
 

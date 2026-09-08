@@ -71,6 +71,40 @@ ordering rule above ("marking a stage twice never loses information"):
   "ok"`). This is `Attributed.Conflict` (recorder.go) reaching the wire; no other reason
   publishes stage-specific detail.
 
+### The `vector` cell — the second opinion, added 2026-09-08
+
+`attributed` is the **deterministic** pass's answer: the rules a person declared, matched
+against the block's dims. The **vectorised** pass (`attribution`, off by default) is a
+SECOND OPINION on the same block and gets its own cell:
+
+```json
+"vector": {"status": "ok", "at": "…", "project_id": "p_keld_atlas", "confidence": 0.61}
+```
+
+`status` is `ok` (it named a project), `pending` (warming, or `"reason":
+"weights_unavailable"` while the encoder's weights are still downloading), `n/a` (nothing
+declared to match against) or `failed` (`"reason": "attribute_failed"` — the job was
+retried and given up on). `project_id` and `confidence` appear only on `ok`.
+
+Three rules, and each was paid for:
+
+- ⚠️ **The two cells have one writer each and neither can write the other's.** They used to
+  share `attributed`: a vectorised job that exhausted its retries called `Failed(k,
+  StageAttributed, attribute_failed)` and ERASED the deterministic answer. Measured on one
+  machine, **44 rows** in that state, **25** on a repository a declared rule matches
+  exactly, all caused by an encoder that could not get memory. Enforced by type — the
+  attribution path holds `ledger.VectorRecorder`, one method, one cell — not by discipline.
+- ⚠️ **Absent means NEVER ASKED.** With the toggle off the key is not in `cells` at all —
+  not `null`, not an empty object, not a zero confidence. Never-asked and asked-and-failed
+  are different facts and a fleet that cannot tell them apart cannot be debugged. This is
+  the default population, so the toggle-off wire is byte-identical to what it was before
+  the cell existed.
+- ⚠️ **Nothing reconciles the two.** When both name a project, both ids are on the wire and
+  neither is rewritten; there is deliberately no `agrees` flag and no winner field.
+  Representing the disagreement is the point — choosing between them needs data from a
+  machine running both passes, which will not exist until this ships. A consumer that
+  renders one of them as "the" project is making that decision on evidence nobody has.
+
 Breaks are NOT stored: the page derives them as the gap between consecutive blocks of
 one session when the gap ≥ 15 minutes (a cap-cut block abuts the next with gap 0).
 

@@ -922,7 +922,14 @@ func Run(ctx context.Context) error {
 	// out to be on: it is nil-safe on a machine that never quarantines a job,
 	// and wiring it once at startup means startAttributor never has to know
 	// whether v3 exists.
-	setAttribQuarantineHandler(sig.recordAttributeQuarantined)
+	// Both halves of the vector cell's wiring, and NEITHER of them can reach
+	// the deterministic `attributed` cell: v3.vectorLedger() narrows the store
+	// to ledger.VectorRecorder, an interface with one method that writes one
+	// cell. See v3attrib.go for the 44 rows the previous wiring — which handed
+	// this path a method with `v.ledger` in scope — actually cost.
+	vecLedger := sig.vectorLedger()
+	setAttribQuarantineHandler(vecLedger.recordQuarantine)
+	setAttribOutcomeHandler(vecLedger.recordOutcome)
 	// telemetryLast reads the running telemetry proxy's own record of its
 	// last successful forward — TelemetryLastForward already returns the zero
 	// time when no proxy is running at all, which startHealth's own note()

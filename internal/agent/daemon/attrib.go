@@ -87,12 +87,18 @@ func startAttributor(ctx context.Context, dig blocks.Digester, cl attrib.Attribu
 		actor, dig).
 		WithProjects(projectsKnown, repostProjects).
 		WithEmitter(emitter).
-		// THE DELIVERY LEDGER's other quarantine seam (v3attrib.go): a job that
-		// exhausted its retries never got to answer for this block at all, and
-		// the ledger records that as attributed/failed/attribute_failed. A
-		// package-level accessor rather than a parameter here, so every
-		// existing call site of startAttributor is unaffected.
-		WithQuarantineHook(noteAttributionQuarantine)
+		// THE DELIVERY LEDGER's two seams for this pass (v3attrib.go), both
+		// package-level accessors rather than parameters so every existing
+		// call site of startAttributor is unaffected.
+		//
+		// ⚠️ **BOTH WRITE THE VECTOR CELL AND NEITHER WRITES `attributed`.**
+		// The quarantine seam used to record attributed/failed/attribute_failed
+		// — the deterministic pass's own cell — so an encoder that could not
+		// get memory erased a project id a declared rule had matched
+		// correctly. This pass adds an opinion; it never changes the other
+		// one.
+		WithQuarantineHook(noteAttributionQuarantine).
+		WithOutcomeHook(noteAttributionOutcome)
 	interval := attrib.IntervalFromEnv()
 	log.Printf("keld-agent: project attribution ON (sweeping every %s)", interval)
 	if emitter != nil {

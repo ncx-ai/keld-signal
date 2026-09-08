@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS blocks (
   method TEXT NOT NULL DEFAULT '',
   conflict TEXT NOT NULL DEFAULT '',
 
+  -- The VECTORISED pass's own answer, in its own cell. It is a SECOND OPINION
+  -- beside the deterministic one above, never a replacement for it: the two
+  -- ids are stored side by side and nothing reconciles them. Written only by
+  -- Store.Vector (see VectorRecorder in recorder.go for why that is a separate
+  -- interface, and for the 44 rows the shared cell cost).
+  vector_status TEXT, vector_at TEXT, vector_reason TEXT, vector_ok_at TEXT,
+  vector_project_id TEXT NOT NULL DEFAULT '',
+  vector_confidence REAL NOT NULL DEFAULT 0,
+
   sent_status TEXT, sent_at TEXT, sent_reason TEXT, sent_http_status INTEGER, sent_ok_at TEXT,
 
   received_status TEXT, received_at TEXT, received_reason TEXT, received_http_status INTEGER, received_ok_at TEXT,
@@ -274,6 +283,20 @@ func (s *Store) sanitizeKey(k BlockKey) (BlockKey, bool) {
 	return k, true
 }
 
+// stageColumns is what the GENERIC cell writers (setCell, and through it
+// Failed and NotApplicable) can address. Every stage listed here is writable
+// by any caller holding a Recorder, which is the right trade for the five
+// delivery stages: they are facts about one pipeline with one owner each.
+//
+// ⚠️ **THE `vector_*` COLUMNS ARE DELIBERATELY NOT HERE, AND ADDING THEM
+// WOULD PUT BACK A DEFECT THIS FILE ALREADY PAID FOR.** They are written only
+// by Store.Vector, which hard-codes them. Registering them would make
+// `Failed(k, Stage("vector"), …)` reach the vector cell from anywhere in the
+// codebase — and the symmetric mistake, a vectorised pass calling
+// `Failed(k, StageAttributed, …)`, is what overwrote 44 correct deterministic
+// attributions on a real machine (see VectorRecorder in recorder.go). A stage
+// in this map is a stage anyone may write; if the next cell you add has
+// exactly one legitimate writer, give it its own method instead of a row here.
 var stageColumns = map[Stage]string{
 	StageCut: "cut", StageMeasured: "measured", StageAttributed: "attributed",
 	StageSent: "sent", StageReceived: "received",
@@ -382,6 +405,27 @@ func (s *Store) open() (*sql.DB, error) {
 		!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 		db.Close()
 		return nil, err
+	}
+	// The vector cell's six columns, added the same way and for the same
+	// reason: every ledger written before this existed must still open, and on
+	// every run after the first each of these reports "duplicate column",
+	// which IS the success case. A ledger from before them reads as a block
+	// nobody asked the vector pass about — vector_status is NULL, so buildCell
+	// returns nil and the cell is absent from the wire, which is exactly the
+	// true statement about those rows.
+	for _, alter := range []string{
+		`ALTER TABLE blocks ADD COLUMN vector_status TEXT`,
+		`ALTER TABLE blocks ADD COLUMN vector_at TEXT`,
+		`ALTER TABLE blocks ADD COLUMN vector_reason TEXT`,
+		`ALTER TABLE blocks ADD COLUMN vector_ok_at TEXT`,
+		`ALTER TABLE blocks ADD COLUMN vector_project_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE blocks ADD COLUMN vector_confidence REAL NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.Exec(alter); err != nil &&
+			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			db.Close()
+			return nil, err
+		}
 	}
 	return db, nil
 }
@@ -656,6 +700,106 @@ func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 	})
 }
 
+// Vector writes the VECTORISED pass's cell, and only that cell. It is the
+// sole writer of the six `vector_*` columns — they are not in stageColumns,
+// so nothing else in this package can reach them, and the interface this
+// method satisfies (VectorRecorder) has no way to reach any other cell.
+//
+// ⚠️ **IT NEVER TOUCHES `attributed`, `project_id`, `method` OR `conflict`.**
+// That is the correction the whole VectorRecorder split exists for: the two
+// passes are two opinions, and a machine that cannot run the encoder must lose
+// the second opinion and nothing else. Nothing here compares the two ids or
+// prefers one; both are stored and a reader decides what to show.
+//
+// Statuses, and what each one claims:
+//
+//   - ok — the pass named a project. project_id and confidence are written,
+//     and vector_ok_at advances.
+//   - pending — it is warming, or waiting on weights that are still
+//     downloading. Held work, not failed work.
+//   - n/a — there was structurally nothing to match against.
+//   - failed — it was asked, it was retried, and it was given up on.
+//
+// A cell never written at all stays NULL and is ABSENT from the wire. That is
+// the state of every block on every machine with the toggle off, and it must
+// stay distinguishable from every status above.
+func (s *Store) Vector(k BlockKey, a VectorAttributed, status Status, r Reason, at time.Time) {
+	k, ok := s.sanitizeKey(k)
+	if !ok {
+		return
+	}
+	if !validStatuses[status] {
+		// Refused rather than clamped, the same call SetHealth makes: there is
+		// no safe default here — every status means something specific about
+		// what the encoder did, and guessing one would state a fact nobody
+		// established.
+		s.logFailure("Vector", fmt.Errorf("unknown status %q for the vector cell; nothing recorded", status))
+		return
+	}
+	r = validReason(r)
+	// Reported, not silently clamped — Attribute's own reasoning one method up:
+	// this id was computed from the daemon's project list microseconds earlier,
+	// so a shape failure is a wiring defect, not junk from a transcript.
+	rawProject := a.ProjectID
+	a.ProjectID = validProjectID(a.ProjectID)
+	if rawProject != "" && a.ProjectID == "" {
+		s.logFailure("Vector", fmt.Errorf(
+			"vector project id refused by shape (%d chars); the second opinion was computed and could not be stored", len(rawProject)))
+	}
+	// ⚠️ **A SECOND OPINION THAT NAMED NOTHING IS NOT A SECOND OPINION**, and
+	// the same invariant Attribute enforces applies here for the same reason: a
+	// cell reading `ok` with no id would say the encoder chose a project while
+	// naming none, which is worse than the honest absence. The sidecar answers
+	// `attributed` only with at least one project, so reaching this means the
+	// id was lost between deciding and storing.
+	if status == StatusOK && a.ProjectID == "" {
+		s.logFailure("Vector", fmt.Errorf(
+			"refusing to record a vector attribution with no project id; the id was lost before storage"))
+		return
+	}
+	// A confidence outside [0,1] is not a confidence. Written as 0 rather than
+	// stored verbatim, and note the comparison is deliberately positive
+	// (`>= 0 && <= 1`) so a NaN — which fails every comparison — lands here
+	// too: a NaN reaching the column would make the whole /v1/ledger response
+	// unmarshallable, taking the page down over one bad float.
+	conf := a.Confidence
+	if !(conf >= 0 && conf <= 1) {
+		conf = 0
+	}
+	atStr := at.UTC().Format(time.RFC3339)
+	reason := ""
+	var okAtArg any
+	if status == StatusOK {
+		okAtArg = atStr
+	} else {
+		reason = string(r)
+	}
+	s.tx("Vector", func(txn *sql.Tx) error {
+		if err := ensureRow(txn, k); err != nil {
+			return err
+		}
+		if status == StatusOK {
+			if _, err := txn.Exec(
+				`UPDATE blocks SET vector_project_id=?, vector_confidence=? WHERE session=? AND start=?`,
+				a.ProjectID, conf, k.Session, k.Start,
+			); err != nil {
+				return err
+			}
+		}
+		// project_id and confidence are left ALONE on a non-ok status, and
+		// vector_ok_at rides the same COALESCE the delivery cells use: a pass
+		// that answered on Monday and could not get memory on Tuesday must
+		// still show what it said on Monday. Losing an earlier success to a
+		// later failure is the exact defect this cell was split out to stop —
+		// it would be perverse to reintroduce it within the new cell.
+		_, err := txn.Exec(
+			`UPDATE blocks SET vector_status=?, vector_at=?, vector_reason=?, vector_ok_at=COALESCE(?, vector_ok_at)
+			 WHERE session=? AND start=?`,
+			string(status), atStr, reason, okAtArg, k.Session, k.Start)
+		return err
+	})
+}
+
 func (s *Store) Sent(k BlockKey, at time.Time) {
 	k, ok := s.sanitizeKey(k)
 	if !ok {
@@ -806,6 +950,7 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 		       input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, request_tokens, requests, model, estimate_usd,
 		       attributed_status, attributed_at, attributed_reason, attributed_http_status, attributed_ok_at,
 		       project_id, method, conflict,
+		       vector_status, vector_at, vector_reason, vector_ok_at, vector_project_id, vector_confidence,
 		       sent_status, sent_at, sent_reason, sent_http_status, sent_ok_at,
 		       received_status, received_at, received_reason, received_http_status, received_ok_at
 		FROM blocks
@@ -837,6 +982,10 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 			attrHTTP                                 sql.NullInt64
 			projectID, method, conflict              string
 
+			vecStatus, vecAt, vecReason, vecOkAt sql.NullString
+			vecProjectID                         string
+			vecConfidence                        float64
+
 			sentStatus, sentAt, sentReason, sentOkAt sql.NullString
 			sentHTTP                                 sql.NullInt64
 
@@ -850,6 +999,7 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 			&inputT, &outputT, &cacheReadT, &cacheCreateT, &requestT, &requests, &model, &estimateUSD,
 			&attrStatus, &attrAt, &attrReason, &attrHTTP, &attrOkAt,
 			&projectID, &method, &conflict,
+			&vecStatus, &vecAt, &vecReason, &vecOkAt, &vecProjectID, &vecConfidence,
 			&sentStatus, &sentAt, &sentReason, &sentHTTP, &sentOkAt,
 			&recvStatus, &recvAt, &recvReason, &recvHTTP, &recvOkAt,
 		); err != nil {
@@ -891,6 +1041,35 @@ func (s *Store) Read(since time.Time, limit int) (Snapshot, error) {
 				cell["conflict"] = strings.Split(conflict, ",")
 			}
 			be.Cells["attributed"] = cell
+		}
+		// The VECTOR cell — the second opinion, beside the first and never
+		// instead of it.
+		//
+		// ⚠️ **ABSENT IS A STATEMENT HERE, AND IT IS THE ONE MOST
+		// MACHINES MAKE.** buildCell returns nil while vector_status is NULL,
+		// so on every machine with the toggle off this key never appears and
+		// the marshalled block is byte-identical to what it was before this
+		// cell existed — not a null, not an empty object, not a zero
+		// confidence. Never-asked and asked-and-failed are different facts and
+		// this is where that distinction is actually made.
+		if cell := buildCell(vecStatus, vecAt, vecReason, sql.NullInt64{}, vecOkAt); cell != nil {
+			if vecProjectID != "" {
+				cell["project_id"] = vecProjectID
+				cell["confidence"] = vecConfidence
+			}
+			// ⚠️ **NO `agrees` FLAG, AND THE ABSENCE IS DELIBERATE TWICE
+			// OVER.** Agreement is already fully represented: both ids are on
+			// the wire, in their own cells, neither rewritten, so a reader can
+			// see they match or differ without this file taking a position on
+			// which is right — and taking that position is out of scope until a
+			// machine has run both passes side by side. It would also be a
+			// field this store cannot keep true: the route serves through
+			// daemon.liveAttribution, which RECOMPUTES the `attributed` cell
+			// from the current rules after this function has returned, so a
+			// flag derived from the stored id could contradict the very payload
+			// it shipped in. A derived field that can disagree with its own
+			// response is worse than no derived field.
+			be.Cells["vector"] = cell
 		}
 		if cell := buildCell(sentStatus, sentAt, sentReason, sentHTTP, sentOkAt); cell != nil {
 			be.Cells["sent"] = cell

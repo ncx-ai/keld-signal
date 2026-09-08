@@ -277,9 +277,12 @@ type Attributor struct {
 	// onQuarantine is optional (see WithQuarantineHook). Called after a job is
 	// durably quarantined — never for a held pending/degraded job, and never
 	// for a successful publish-then-delete — so a recorder learns about the
-	// one outcome that means the deterministic attribution pass never got to
-	// answer this block at all.
+	// one outcome that means this pass never got to answer this block at all.
 	onQuarantine func(sessionID string, start float64)
+	// onOutcome is optional (see WithOutcomeHook). Called for every ANSWER the
+	// sidecar gives, terminal or held, so a recorder can represent what the
+	// vectorised pass concluded rather than only that it failed.
+	onOutcome func(Outcome)
 }
 
 // New builds an Attributor. facts may be nil (empty resolved facts are sent
@@ -319,11 +322,87 @@ func (a *Attributor) WithEmitter(e *clientevents.Emitter) *Attributor {
 
 // WithQuarantineHook wires a nil-safe observer of terminal job quarantines.
 // Optional — the delivery ledger hangs off this seam (internal/agent/daemon)
-// to record the block's `attributed` cell as failed; a caller that never sets
+// to record the block's OWN VECTOR cell as failed; a caller that never sets
 // it (every test that doesn't care) is unaffected.
+//
+// ⚠️ **IT USED TO BE DESCRIBED AS RECORDING THE `attributed` CELL, AND THAT
+// WAS THE DEFECT.** `attributed` is the DETERMINISTIC pass's answer, written
+// by the block emitter before this job was ever scheduled. Routing a
+// vectorised job's exhaustion onto that cell overwrote a real project id with
+// `failed/attribute_failed` — measured on one machine, 44 rows in that state,
+// 25 of them on a repository a declared rule matches exactly, all of them
+// caused by an encoder that could not get memory. The hook is unchanged in
+// shape; what it must never again be wired to is the deterministic cell.
 func (a *Attributor) WithQuarantineHook(fn func(sessionID string, start float64)) *Attributor {
 	a.onQuarantine = fn
 	return a
+}
+
+// Outcome is what the vectorised pass concluded for one block, in the shape a
+// recorder needs and no wider: coordinates, the sidecar's own closed status
+// string (enrich.Projects*), and — only when that status is `attributed` —
+// the project id it named and the confidence it named it with.
+//
+// ⚠️ **It carries an ID and a NUMBER, never a title, a phrase or a concept.**
+// The /attribute response also carries `concepts`, which are phrases lifted
+// from the block's own words; those ride the published row and must not enter
+// an observer that exists to feed a local record keyed by identifiers. The
+// same rule ProjectAttribution itself is held to one package over.
+type Outcome struct {
+	SessionID string
+	Start     float64
+	// Status is the sidecar's own vocabulary, passed through unchanged so the
+	// observer decides what each one means rather than this package deciding
+	// for it. Never free text: drainJob only ever hands over a status it has
+	// already matched against the closed set (an unrecognised one is a
+	// genuine error and reaches retryOrQuarantine instead).
+	Status string
+	// ProjectID and Confidence are set only for enrich.ProjectsAttributed.
+	ProjectID  string
+	Confidence float64
+}
+
+// WithOutcomeHook wires a nil-safe observer of every ANSWER the sidecar gives
+// for a job — attributed, pending, degraded, or either skip. Optional, and
+// separate from WithQuarantineHook because the two report different kinds of
+// fact: this one is "the pass ran and concluded X", the other is "the pass
+// never got to conclude anything".
+//
+// It exists because the vectorised pass previously reached the ledger ONLY on
+// failure, which is why the record could show a vector opinion going wrong and
+// never show one going right. An observer that hears only about failures
+// cannot represent agreement, and representing agreement AND disagreement is
+// the point of keeping the two answers in separate cells.
+func (a *Attributor) WithOutcomeHook(fn func(Outcome)) *Attributor {
+	a.onOutcome = fn
+	return a
+}
+
+// noteOutcome is the nil-guarded call site every drainJob branch with an
+// answer routes through. Panic-isolated: the observer is a recorder wired in
+// by the daemon, and a ledger write must never be able to take down the sweep
+// that gets work to Atlas — chainOnPublished's rule one package over, applied
+// at this seam for the same reason.
+func (a *Attributor) noteOutcome(j Job, status string, res sidecar.AttributeResult) {
+	if a.onOutcome == nil {
+		return
+	}
+	o := Outcome{SessionID: j.SessionID, Start: j.Start, Status: status}
+	if status == enrich.ProjectsAttributed && len(res.Projects) > 0 {
+		// The first entry is the winner: the sidecar ranks Projects by score
+		// and everything within MARGIN of the top is assigned, so index 0 is
+		// the top-scoring id. A second entry is a co-assignment, not a
+		// competitor to choose between — and choosing between them is exactly
+		// what this path must not do.
+		o.ProjectID = res.Projects[0].ID
+		o.Confidence = res.Projects[0].Confidence
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("keld-agent: attribution outcome hook panicked, ignoring: %v", r)
+		}
+	}()
+	a.onOutcome(o)
 }
 
 func (a *Attributor) emit(code string, sev clientevents.Severity, fields map[string]any) {
@@ -523,6 +602,7 @@ func (a *Attributor) drainJob(j Job) {
 		// ⚠️ AMENDED RULE: pending does NOT consume an attempt. Re-spool j
 		// UNCHANGED (Attempts untouched) rather than the incremented copy
 		// retryOrQuarantine would write.
+		a.noteOutcome(j, res.Status, res)
 		a.hold(j, "pending")
 	case enrich.ProjectsDegradedWeights:
 		// NB2: publish ONCE, marked by DegradedPublished, then hold
@@ -541,12 +621,24 @@ func (a *Attributor) drainJob(j Job) {
 		// no-attempt rule as pending, because this is the identical
 		// provisioning-window condition the amendment protects, reached
 		// through a different status.
+		//
+		// The observer is told on EVERY sweep, not only the one that
+		// published: DegradedPublished suppresses a duplicate row on the WIRE,
+		// where an identical resend costs a request; a local recorder's write
+		// is idempotent (same key, same cell, same status) and telling it once
+		// and then falling silent for the rest of a multi-gigabyte download
+		// would make the record go stale rather than quiet.
+		a.noteOutcome(j, res.Status, res)
 		a.hold(j, "degraded:weights_unavailable")
 	case enrich.ProjectsAttributed, enrich.ProjectsSkippedDisabled, enrich.ProjectsSkippedNoProjects:
 		if err := a.republish(j, b, res); err != nil {
 			a.hold(j, "publish failed")
 			return
 		}
+		// After the publish, never before it: an observer that learned of an
+		// attribution the wire never carried would report a second opinion
+		// Atlas has no copy of.
+		a.noteOutcome(j, res.Status, res)
 		if err := a.st.Delete(j); err != nil {
 			log.Printf("keld-agent: attribution job not deleted after publish for session=%s start=%v: %v",
 				j.SessionID, j.Start, err)
