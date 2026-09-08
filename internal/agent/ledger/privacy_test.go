@@ -102,8 +102,23 @@ func TestNoFreeTextFieldInMarshalledLedger(t *testing.T) {
 	if m := b4.Cells["measured"]["model"]; m != "" {
 		t.Fatalf("attacked model must clamp to empty, got %q", m)
 	}
-	if p := b4.Cells["attributed"]["project_id"]; p != "" {
-		t.Fatalf("attacked project_id must clamp to empty, got %q", p)
+	// ⚠️ **project_id DIFFERS FROM source AND model ABOVE, DELIBERATELY, AND
+	// THE DIFFERENCE IS THE POINT.** Those two are DESCRIPTIVE — a block with
+	// a blank model is still a true record of a block, so clamping keeps a
+	// real row and drops a bad word. project_id is the SUBJECT of a claim: an
+	// `attributed ok` cell naming nothing asserts that this block was
+	// successfully attributed to a project, while naming no project. That is
+	// not a safer record, it is a false one — and it is exactly the state 6
+	// real rows reached when Atlas ids were being clamped for containing a
+	// colon, which is what made the defect invisible.
+	//
+	// So the ATTRIBUTION is refused rather than clamped, and the cell is
+	// ABSENT. The block row itself still exists (asserted above), so this is
+	// still not "refusing the whole row" — it refuses one claim it cannot make
+	// truthfully. Nothing about the attack string reaches storage either way,
+	// which is what this test is ultimately for.
+	if cells, ok := b4.Cells["attributed"]; ok {
+		t.Fatalf("an attribution whose project id was refused must record NO attributed cell, got %v", cells)
 	}
 
 	b, err := json.Marshal(snap)

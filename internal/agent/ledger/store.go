@@ -169,9 +169,23 @@ func clampBoundaryReason(s string) string {
 // mid-sentence") is that a truncated identifier is a FALSE identifier, and
 // the same logic applies here: a half-sentence is not a safer sentence.
 var (
-	sessionShape   = regexp.MustCompile(`^[A-Za-z0-9._:@-]{1,128}$`)
-	modelShape     = regexp.MustCompile(`^[A-Za-z0-9._:@/-]{1,128}$`)
-	projectIDShape = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+	sessionShape = regexp.MustCompile(`^[A-Za-z0-9._:@-]{1,128}$`)
+	modelShape   = regexp.MustCompile(`^[A-Za-z0-9._:@/-]{1,128}$`)
+	// ⚠️ **THE COLON IS NOT AN OVERSIGHT ANY MORE, AND ITS ABSENCE COST EVERY
+	// ATLAS ATTRIBUTION.** Atlas namespaces its project ids —
+	// `keld_projects:signal_on_device_client` — and this pattern did not admit
+	// `:`, so validProjectID clamped every one of them to "". The match had
+	// already SUCCEEDED; the id was discarded on the way into storage, and an
+	// empty id renders as "no project". Measured on a real machine: 6 rows
+	// recorded `attributed ok` with `method repo` and no project, which is a
+	// state the matcher cannot produce and only this could.
+	//
+	// The two shapes above already allow it: a session id is
+	// `^[A-Za-z0-9._:@-]$` and a model id allows `:` and `/` besides. This one
+	// simply never caught up. It stays a SHAPE check rather than becoming a
+	// pass-through, because the ledger is deliberately strict about anything
+	// that could carry text out of a transcript — see the comment above.
+	projectIDShape = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 )
 
 // validSources is closed rather than shape-matched: every real source is a
@@ -571,17 +585,47 @@ func (s *Store) Attribute(k BlockKey, a Attributed, r Reason, at time.Time) {
 		return
 	}
 	r = validReason(r)
+	// ⚠️ **A REFUSED ID IS REPORTED, NOT SILENTLY CLAMPED.** Clamping is right
+	// for a field that might carry junk out of a transcript; it is wrong here,
+	// because this id was computed by the daemon a microsecond earlier from its
+	// own project list. A silent clamp is exactly why the missing colon above
+	// went unnoticed for days while the page said "no project" — the write
+	// succeeded, the row looked ordinary, and nothing anywhere disagreed.
+	rawProject := a.ProjectID
 	a.ProjectID = validProjectID(a.ProjectID)
+	if rawProject != "" && a.ProjectID == "" {
+		s.logFailure("Attribute", fmt.Errorf(
+			"project id refused by shape (%d chars); the attribution was computed and could not be stored", len(rawProject)))
+	}
 	a.Method = validMethod(a.Method)
 	var conflict []string
 	for _, c := range a.Conflict {
-		if c = validProjectID(c); c != "" {
-			conflict = append(conflict, c)
+		valid := validProjectID(c)
+		if valid == "" {
+			// Same reasoning one level down: a conflict a person cannot act on
+			// because its ids were dropped is the defect this file already
+			// warns about in Attributed's doc comment.
+			s.logFailure("Attribute", fmt.Errorf(
+				"conflicting project id refused by shape (%d chars); the conflict cannot name it", len(c)))
+			continue
 		}
+		conflict = append(conflict, valid)
 	}
 	status := StatusOK
 	if r != ReasonNone {
 		status = StatusFailed
+	}
+	// ⚠️ **AN ATTRIBUTION THAT NAMED NOTHING IS NOT AN ATTRIBUTION.** The
+	// matcher cannot produce this pairing — every one of its returns with an
+	// empty project id carries a reason — so reaching here means the id was
+	// lost between deciding and storing, which is precisely the defect above.
+	// Six rows on a real machine were in this state. Refusing the write turns
+	// the next occurrence into a visible failure instead of a quiet "no
+	// project", and it is why this is an invariant rather than a comment.
+	if status == StatusOK && a.ProjectID == "" {
+		s.logFailure("Attribute", fmt.Errorf(
+			"refusing to record an attribution with no project id and no reason; the id was lost before storage"))
+		return
 	}
 	conflictStr := strings.Join(conflict, ",")
 
