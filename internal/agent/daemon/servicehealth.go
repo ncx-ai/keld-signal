@@ -273,7 +273,7 @@ func (h *serviceHealth) run(ctx context.Context) {
 	start := h.now()
 	t := time.NewTicker(h.interval)
 	defer t.Stop()
-	last := h.now()
+	last := h.now().Round(0) // wall clock; see the sleep detector below
 	for {
 		// ⚠️ **A LAPTOP THAT SLEPT MUST NOT BE JUDGED ON WHAT IT MISSED.**
 		// Timers do not fire while the machine is suspended, and nothing in
@@ -299,11 +299,24 @@ func (h *serviceHealth) run(ctx context.Context) {
 		// A backwards jump counts too: a clock corrected by NTP, or a VM
 		// restored from a snapshot, leaves the same "the interval I measured
 		// is meaningless" state.
-		if gap := h.now().Sub(last); gap > h.sleepGap() || gap < 0 {
+		//
+		// ⚠️ **WALL CLOCK, DELIBERATELY — `Round(0)` STRIPS THE MONOTONIC
+		// READING, AND WITHOUT THAT THIS DETECTOR NEVER FIRED.** Two
+		// `time.Now()` values carry a monotonic reading and `Sub` prefers it,
+		// and on macOS Go's monotonic clock does not advance while the machine
+		// sleeps. So a night of sleep measured as a few seconds of gap, the
+		// streak carried across every dark wake, and this line was logged
+		// exactly zero times on the night of 2026-09-08/09 while `pmset -g log`
+		// shows the machine asleep for hours. The jump a sleep makes is visible
+		// only on the wall clock, which is the one thing this comparison exists
+		// to read. `start` keeps its monotonic reading on purpose: the grace it
+		// measures is awake time since the wake, which is what a cold start
+		// needs.
+		if gap := h.now().Round(0).Sub(last); gap > h.sleepGap() || gap < 0 {
 			h.wokeUp(gap)
 			start = h.now() // re-arm the startup grace: a wake is a cold start
 		}
-		last = h.now()
+		last = h.now().Round(0)
 		// ⚠️ **THE GRACE SUPPRESSES ESCALATION, NOT REPORTING, and the split
 		// matters on every single daemon start.** Waiting to probe at all left
 		// this owner with no answer for the first minute, while the page's
@@ -613,18 +626,27 @@ func (h *serviceHealth) setStuck(n int) {
 // stuckReason is the sentence a person reads. Split out so a test can pin the
 // wording against the claim it makes — a `stuck` that does not name what was
 // tried is indistinguishable from a `degraded` and is worth nothing.
+//
+// ⚠️ The tail used to read "Nothing further will be restarted automatically."
+// That was true while the supervisor surrendered after its restart cap and is
+// a lie now that it rests and retries on its own (supervisor.go,
+// afterFailedStart). What is still true, and is what the sentence now says, is
+// that THIS ladder is spent: it will not restart the daemon again, and the
+// remaining automatic recovery is the supervisor's — or the person's, via
+// Restart, which ends a rest immediately.
 func stuckReason(n int, sidecarRestarts int, daemonRestarted, gaveUp bool) string {
+	const tail = " The daemon will not be restarted again by this check; the service keeps retrying on its own, and Restart tries now."
 	switch {
 	case sidecarRestarts > 0 && daemonRestarted:
-		return fmt.Sprintf("restarted the analysis service and then the daemon; still not answering after %d checks. Nothing further will be restarted automatically.", n)
+		return fmt.Sprintf("restarted the analysis service and then the daemon; still not answering after %d checks.", n) + tail
 	case daemonRestarted:
-		return fmt.Sprintf("restarted the daemon; the analysis service is still not answering after %d checks. Nothing further will be restarted automatically.", n)
+		return fmt.Sprintf("restarted the daemon; the analysis service is still not answering after %d checks.", n) + tail
 	case sidecarRestarts > 0:
-		return fmt.Sprintf("restarted the analysis service; it is still not answering after %d checks, and the daemon cannot be restarted again yet. Nothing further will be restarted automatically.", n)
+		return fmt.Sprintf("restarted the analysis service; it is still not answering after %d checks, and the daemon cannot be restarted again yet.", n) + tail
 	case gaveUp:
-		return fmt.Sprintf("the analysis service has not answered %d checks in a row, its supervisor has given up restarting it, and the daemon cannot be restarted again yet.", n)
+		return fmt.Sprintf("the analysis service has not answered %d checks in a row, its supervisor is not running, and the daemon cannot be restarted again yet.", n)
 	default:
-		return fmt.Sprintf("the analysis service has not answered %d checks in a row and could not be restarted. Nothing further will be restarted automatically.", n)
+		return fmt.Sprintf("the analysis service has not answered %d checks in a row and could not be restarted.", n) + tail
 	}
 }
 

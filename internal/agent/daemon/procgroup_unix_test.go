@@ -282,22 +282,27 @@ func TestChildGroupRefusesAGroupWeDoNotOwn(t *testing.T) {
 // TestStopWithNoChildIsANoOp preserves the pre-fix behaviour when there is
 // nothing to reap: a spawn that fails must not leave the supervisor waiting on
 // a grace period or blocking on a waitCh that has no producer.
+//
+// A failed spawn used to END supervision, so this waited for Start to return.
+// It is now a failed start like any other — retried, then rested — so the
+// same claim is made against the rest: with a 10s grace that would have been
+// waited four times, reaching the rest inside 3s proves no grace was waited.
 func TestStopWithNoChildIsANoOp(t *testing.T) {
 	s := NewSupervisor(func(int) (*exec.Cmd, error) { return nil, os.ErrNotExist },
 		0, func() bool { return false }, 30*time.Second)
 	s.stopGrace = 10 * time.Second // would dominate if it were ever waited
+	s.restBase, s.restMax = time.Hour, time.Hour
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	start := time.Now()
 	go s.Start(ctx)
+	waitFor(t, 3*time.Second, func() bool { return s.FellBack() })
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("rested after %s — a grace period was waited with no child to wait for", d)
+	}
+	cancel()
 	if !s.AwaitStopped(2 * time.Second) {
-		t.Fatal("a supervisor with no child must return immediately")
-	}
-	if d := time.Since(start); d > time.Second {
-		t.Fatalf("returned after %s — a grace period was waited with no child to wait for", d)
-	}
-	if !s.FellBack() {
-		t.Fatal("a failed spawn must still fall back")
+		t.Fatal("a resting supervisor must return promptly once the daemon is shutting down")
 	}
 }
 
@@ -314,6 +319,7 @@ func TestRestartPathSurvivesTheProcessGroup(t *testing.T) {
 	}
 	s := NewSupervisor(spawn, 0, func() bool { return false }, 5*time.Second)
 	s.stopGrace = 200 * time.Millisecond
+	s.restBase, s.restMax = time.Hour, time.Hour // exactly maxRestarts+1 generations, then a rest
 
 	// Sample each generation's pgid as it appears. A mutex-guarded map plus an
 	// explicit join, rather than a channel closed from the test goroutine: the
@@ -350,10 +356,19 @@ func TestRestartPathSurvivesTheProcessGroup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	go s.Start(ctx)
-	if !s.AwaitStopped(8 * time.Second) {
+	// Exhausting the budget used to end Start; it now begins a rest (pinned
+	// long above so no fifth generation appears). The pgid claim below is
+	// about the generations that DID run, so wait for the rest, then shut down.
+	if !waitForCond(8*time.Second, s.FellBack) {
 		close(stopSampler)
 		<-samplerDone
 		t.Fatal("supervisor did not exhaust its restart budget in time")
+	}
+	cancel()
+	if !s.AwaitStopped(4 * time.Second) {
+		close(stopSampler)
+		<-samplerDone
+		t.Fatal("a resting supervisor did not return on shutdown")
 	}
 	close(stopSampler)
 	<-samplerDone

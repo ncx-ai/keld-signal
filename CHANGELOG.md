@@ -54,6 +54,21 @@ Pre-releases from this branch are marked as such on GitHub, so `releases/latest`
   `requests`).
 
 ### Fixed
+- **The analysis service no longer dies for the night when a Mac sleeps, and
+  the daemon never gives up on it for good.** Measured 2026-09-09: macOS woke
+  for ~2 seconds every 15 minutes overnight, and each wake fired the sidecar's
+  90-second start deadline, which was set before sleep and measured on the
+  wall clock. Three such "failed starts" spent the supervisor's restart cap,
+  after which nothing on the machine would start a sidecar again and the page's
+  Restart button was refused. Three changes, one commit: the readiness deadline
+  now counts time the machine was **awake** (a wall-clock jump between two
+  health polls re-arms it); exceeding the cap is a **rest** (one minute,
+  doubling to thirty) after which the supervisor tries again on its own, with
+  a Restart request ending the rest immediately and a healthy child resetting
+  the budget; and both sleep detectors compare wall-clock instants, because on
+  macOS Go's monotonic clock stops during sleep — the health owner's own
+  detector had logged nothing across the whole night for that reason. The
+  `stuck` banner no longer claims "nothing further will be restarted".
 - A slow sidecar start is retried, not fatal. A refused restart is not reported
   as a restart. A restart may not repoint the service at a binary that cannot run.
 - The sidecar serialises its writers with `busy_timeout` above the real worst case.

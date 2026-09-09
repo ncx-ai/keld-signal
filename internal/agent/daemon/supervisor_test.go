@@ -160,7 +160,12 @@ func TestSupervisorKillsChildOnShutdown(t *testing.T) {
 // log.Printf calls actually fire: a child that exits immediately (never
 // healthy, health always false) cycles through worker.crash on each restart,
 // then sidecar.unavailable once the restart cap is exceeded and the supervisor
-// gives up.
+// begins its rest.
+//
+// This used to wait for Start to RETURN, because exceeding the cap was
+// permanent surrender. It is not any more (see supervisor_rest_test.go), so
+// the test waits for the fall-back state itself; the events it pins are the
+// same ones.
 func TestSupervisorEmitsWorkerCrashAndFallbackViaEmitter(t *testing.T) {
 	emitter := enabledEmitter()
 	spawn := func(int) (*exec.Cmd, error) { return exec.Command("true"), nil }
@@ -169,21 +174,9 @@ func TestSupervisorEmitsWorkerCrashAndFallbackViaEmitter(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	go s.Start(ctx)
 
-	done := make(chan struct{})
-	go func() {
-		s.Start(ctx)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(4 * time.Second):
-		t.Fatal("supervisor did not fall back within the test timeout")
-	}
-	if !s.FellBack() {
-		t.Fatal("expected FellBack after the restart cap is exceeded")
-	}
+	waitFor(t, 4*time.Second, func() bool { return s.FellBack() })
 
 	events := emitter.Drain()
 	if findEvent(events, "worker.crash") == nil {

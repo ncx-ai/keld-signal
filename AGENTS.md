@@ -1264,9 +1264,27 @@ selects one of three modes:
   is fetched. Dropping the facet entirely and reporting it dropped is not the
   substitution never-degrade forbids — nothing lower-fidelity stands in for
   window analysis.
-  *Known gap:* a service that **starts** and then permanently gives up
-  (supervisor restart cap exhausted) still wedges this mode; that third case is
-  not yet distinguished from "starting".
+  ⚠️ **This used to carry a known gap — "a service that starts and then
+  permanently gives up (supervisor restart cap exhausted) still wedges this
+  mode" — and on 2026-09-09 a real machine fell into it overnight, so the gap
+  is closed at its cause rather than distinguished.** The supervisor no longer
+  gives up: after `maxRestarts` CONSECUTIVE failed starts it **rests** (one
+  minute, doubling to thirty) and tries again on its own, a `RequestRestart`
+  (the page's Restart button, the health owner's ladder) ends the rest at once,
+  and a child that answers `/health` resets the budget — four crashes over a
+  month are four recoveries, not a crash loop. `ErrSupervisorStopped` therefore
+  means only "Start has not begun or the daemon is shutting down". Two clock
+  facts made the night possible and both are fixed in the same commit
+  (`supervisor.go` → `defaultStartSleepGap`, `servicehealth.go`'s detector):
+  the sidecar's **readiness deadline is measured in time the machine was
+  AWAKE** — a wall-clock jump between two health polls re-arms it instead of
+  spending it, because macOS wakes for ~2 seconds every 15 minutes and each
+  wake used to kill a child as a "failed start" (three of them spent the cap);
+  and both sleep detectors compare **wall-clock instants (`Round(0)`)**,
+  because on macOS Go's monotonic clock does not advance while the machine
+  sleeps, which is why the health owner's own detector logged nothing across a
+  night of sleep. A gate that waits on this service therefore waits for a
+  bounded rest, never for a human.
   `wireEnrichment` returns the analyzer as its own value (derived from the
   service client, not from the `Model`) and threads it to `process`.
   `Settings.MLEnabled()` is false in this mode;

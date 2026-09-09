@@ -373,8 +373,15 @@ func TestStuckReasonNamesWhatWasAlreadyTried(t *testing.T) {
 	if !strings.Contains(r, "analysis service") || !strings.Contains(r, "daemon") {
 		t.Fatalf("stuck reason = %q, want it to name BOTH restarts that were already tried", r)
 	}
-	if !strings.Contains(r, "Nothing further") {
-		t.Fatalf("stuck reason = %q, want it to say no further restarts will happen", r)
+	// The ladder itself is spent — but the sentence must not claim nothing will
+	// happen, because the supervisor now keeps trying on its own (see
+	// supervisor_rest_test.go). "Nothing further will be restarted" was true
+	// under permanent surrender and is a lie under rest-and-retry.
+	if !strings.Contains(r, "keeps retrying") {
+		t.Fatalf("stuck reason = %q, want it to say the service keeps retrying on its own", r)
+	}
+	if strings.Contains(r, "Nothing further") {
+		t.Fatalf("stuck reason = %q claims nothing further will happen; the supervisor retries on its own", r)
 	}
 }
 
@@ -566,22 +573,32 @@ func TestSupervisorRestartRequestIsNotCountedAsACrash(t *testing.T) {
 // "nothing will ever start a sidecar again", which is the difference between a
 // `restarting` and a `stuck` on the page — the only two states a person acts on
 // differently.
+//
+// "Not running" means exactly two things now: Start has not begun, or the
+// daemon is shutting down. Exceeding the restart cap used to be a third — the
+// supervisor surrendered and Start returned — and this test waited for that.
+// It rests instead (supervisor_rest_test.go), and a request during the rest is
+// ACCEPTED: that is the Restart button working on the one morning it matters.
 func TestRequestRestartRefusesWhenTheSupervisorIsNotRunning(t *testing.T) {
 	s := NewSupervisor(func(int) (*exec.Cmd, error) { return exec.Command("sleep", "30"), nil },
 		0, func() bool { return false }, 100*time.Millisecond)
+	s.restBase, s.restMax = time.Hour, time.Hour
 
 	if err := s.RequestRestart(); !errors.Is(err, ErrSupervisorStopped) {
 		t.Fatalf("RequestRestart before Start = %v, want ErrSupervisorStopped", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	go s.Start(ctx)
-	// Never healthy, so it falls back and Start returns.
-	waitFor(t, 3*time.Second, func() bool { return s.FellBack() })
-	waitFor(t, 3*time.Second, func() bool { return s.AwaitStopped(10 * time.Millisecond) })
+	// Never healthy, so it exhausts the fast retries and rests.
+	waitFor(t, 6*time.Second, func() bool { return s.FellBack() })
+	if err := s.RequestRestart(); err != nil {
+		t.Fatalf("RequestRestart while resting = %v, want it accepted — the rest is the state a person presses the button in", err)
+	}
 
+	cancel()
+	waitFor(t, 6*time.Second, func() bool { return s.AwaitStopped(10 * time.Millisecond) })
 	if err := s.RequestRestart(); !errors.Is(err, ErrSupervisorStopped) {
-		t.Fatalf("RequestRestart after surrender = %v, want ErrSupervisorStopped", err)
+		t.Fatalf("RequestRestart after shutdown = %v, want ErrSupervisorStopped", err)
 	}
 }
