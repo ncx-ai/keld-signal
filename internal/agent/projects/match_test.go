@@ -20,7 +20,7 @@ func TestT13BothSidesOfTheComparisonAreOnTheRow(t *testing.T) {
 	remote := FromRemoteProjects([]settings.RemoteProject{
 		org("org:one", "One", "Eng", "github.com/acme/a", "github.com/acme/b"),
 	})
-	got := EnteredBy(repoDims("github.com/acme/a"),
+	got := MatchesFor(repoDims("github.com/acme/a"),
 		MergeCandidates([]Project{local}, remote), noneOff)
 
 	if len(got) != 2 {
@@ -46,7 +46,7 @@ func TestT13BothSidesOfTheComparisonAreOnTheRow(t *testing.T) {
 	}
 }
 
-func TestT14EnteredCarriesNoLocalIdentity(t *testing.T) {
+func TestT14ProjectMatchesCarryNoLocalIdentity(t *testing.T) {
 	// ⚠️ A local project's ID IS DERIVED FROM ITS TITLE (newProjectID), so
 	// sending the id would send the title in a thin disguise. Rules cross
 	// because a repository remote already crosses as a block dimension; a
@@ -57,7 +57,7 @@ func TestT14EnteredCarriesNoLocalIdentity(t *testing.T) {
 		Repos: []string{"github.com/acme/a"}, Origin: OriginUser,
 		Workstream: "development",
 	}
-	got := EnteredBy(repoDims("github.com/acme/a"), []Project{local}, noneOff)
+	got := MatchesFor(repoDims("github.com/acme/a"), []Project{local}, noneOff)
 	if len(got) != 1 {
 		t.Fatalf("want the local project, got %+v", got)
 	}
@@ -83,35 +83,35 @@ func TestT15NoMatchIsAnEmptyAnswerNotAWrongOne(t *testing.T) {
 	remote := FromRemoteProjects([]settings.RemoteProject{
 		org("org:one", "One", "Eng", "github.com/acme/z"),
 	})
-	if got := EnteredBy(repoDims("github.com/acme/a"), remote, noneOff); len(got) != 0 {
-		t.Fatalf("want nothing entered, got %+v", got)
+	if got := MatchesFor(repoDims("github.com/acme/a"), remote, noneOff); len(got) != 0 {
+		t.Fatalf("want no matches, got %+v", got)
 	}
 	// And a block with no dimensions at all.
-	if got := EnteredBy(nil, remote, noneOff); len(got) != 0 {
-		t.Fatalf("a block with no dimensions entered %+v", got)
+	if got := MatchesFor(nil, remote, noneOff); len(got) != 0 {
+		t.Fatalf("a block with no dimensions matched %+v", got)
 	}
 }
 
-func TestT16AWorkstreamThatIsOffIsNeverEntered(t *testing.T) {
+func TestT16AWorkstreamThatIsOffIsNeverMatched(t *testing.T) {
 	// Its projects are excluded from matching, so reporting a block as having
-	// entered one would tell Atlas the opposite of what this machine did.
+	// matching one would tell Atlas the opposite of what this machine did.
 	remote := FromRemoteProjects([]settings.RemoteProject{
 		org("org:mkt", "Campaign", "Marketing", "github.com/acme/a"),
 	})
 	off := func(key string) bool { return key == "marketing" || key == "Marketing" }
-	if got := EnteredBy(repoDims("github.com/acme/a"), remote, off); len(got) != 0 {
-		t.Fatalf("entered a switched-off workstream: %+v", got)
+	if got := MatchesFor(repoDims("github.com/acme/a"), remote, off); len(got) != 0 {
+		t.Fatalf("matched a switched-off workstream: %+v", got)
 	}
 }
 
-func TestEnteredRulesAreSortedSoTwoMachinesAgree(t *testing.T) {
-	// The row must be a function of WHAT was entered, not of the order the
+func TestMatchRulesAreSortedSoTwoMachinesAgree(t *testing.T) {
+	// The row must be a function of WHAT was matched, not of the order the
 	// document happened to hold — otherwise two machines with the same projects
 	// produce different rows and Atlas cannot group them.
 	a := localProject("p_1", "one", "github.com/acme/b", "github.com/acme/a")
 	b := localProject("p_2", "two", "github.com/acme/a", "github.com/acme/b")
-	ea := EnteredBy(repoDims("github.com/acme/a"), []Project{a}, noneOff)
-	eb := EnteredBy(repoDims("github.com/acme/a"), []Project{b}, noneOff)
+	ea := MatchesFor(repoDims("github.com/acme/a"), []Project{a}, noneOff)
+	eb := MatchesFor(repoDims("github.com/acme/a"), []Project{b}, noneOff)
 	ja, _ := json.Marshal(ea)
 	jb, _ := json.Marshal(eb)
 	if string(ja) != string(jb) {
@@ -119,8 +119,8 @@ func TestEnteredRulesAreSortedSoTwoMachinesAgree(t *testing.T) {
 	}
 }
 
-func TestEnteredListsEveryMatchRatherThanPickingOne(t *testing.T) {
-	// ⚠️ "Entered" is not "attributed". Attribute picks one and REFUSES when
+func TestProjectMatchesListEveryMatchRatherThanPickingOne(t *testing.T) {
+	// ⚠️ A match is not an attribution. Attribute picks one and REFUSES when
 	// two match; this lists everything, because two projects claiming one
 	// repository is precisely the state an admin needs to see. Reconcile should
 	// make it impossible for a local/org pair — and if it ever reappears, this
@@ -132,19 +132,19 @@ func TestEnteredListsEveryMatchRatherThanPickingOne(t *testing.T) {
 	if res := Attribute(repoDims("github.com/acme/a"), both, noneOff, nil); res.Reason != ReasonConflict {
 		t.Fatalf("precondition: want a conflict, got %q", res.Reason)
 	}
-	got := EnteredBy(repoDims("github.com/acme/a"), both, noneOff)
+	got := MatchesFor(repoDims("github.com/acme/a"), both, noneOff)
 	if len(got) != 2 {
 		t.Fatalf("a conflict must be reported as two entries, got %+v", got)
 	}
 }
 
-func TestEnteredMatchesOnATicketKeyFromTheBranch(t *testing.T) {
+func TestAMatchCanComeFromATicketKeyInTheBranch(t *testing.T) {
 	p := Project{ID: "org:one", Title: "One", Origin: OriginAtlas,
 		TicketKey: "KELD", Workstream: "eng"}
 	dims := map[string]enrich.Labeled{
 		DimBranch: {Value: "keld-637-auth-flow", Status: enrich.WorkstreamAttributed},
 	}
-	got := EnteredBy(dims, []Project{p}, noneOff)
+	got := MatchesFor(dims, []Project{p}, noneOff)
 	if len(got) != 1 || got[0].TicketKey != "KELD" {
 		t.Fatalf("a ticket rule did not match: %+v", got)
 	}

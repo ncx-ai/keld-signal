@@ -12,7 +12,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/paths"
 )
 
-// enteredProjectsFor answers, for one block about to be published, which
+// projectMatchesFor answers, for one block about to be published, which
 // projects it lands in — each with its rules.
 //
 // ⚠️ **THIS IS THE LOCAL SIDE OF A COMPARISON ATLAS CANNOT MAKE ALONE.** Atlas
@@ -46,7 +46,7 @@ func setRemoteProjects(fn func() []settings.RemoteProject) {
 	remoteProjects.Store(&fn)
 }
 
-func enteredProjectsFor(b enrich.BlockCharacterisation) []publish.EnteredProject {
+func projectMatchesFor(b enrich.BlockCharacterisation) []publish.ProjectMatch {
 	store := projects.NewStore(filepath.Join(paths.StateDir(), "projects.json"))
 	d, err := store.Load()
 	if err != nil {
@@ -61,18 +61,18 @@ func enteredProjectsFor(b enrich.BlockCharacterisation) []publish.EnteredProject
 			candidates = projects.MergeCandidates(candidates, remote)
 		}
 	}
-	entered := projects.EnteredBy(b.Analysis.Workstreams, candidates,
+	matches := projects.MatchesFor(b.Analysis.Workstreams, candidates,
 		projects.WorkstreamOffFunc(settings.Load()))
-	if len(entered) == 0 {
+	if len(matches) == 0 {
 		return nil
 	}
-	out := make([]publish.EnteredProject, 0, len(entered))
-	for _, e := range entered {
-		out = append(out, publish.EnteredProject{
+	out := make([]publish.ProjectMatch, 0, len(matches))
+	for _, e := range matches {
+		out = append(out, publish.ProjectMatch{
 			ID: e.ID, Origin: e.Origin, Repos: e.Repos, TicketKey: e.TicketKey,
 		})
 	}
-	// Sorted so the row is a function of WHAT was entered rather than of the
+	// Sorted so the row is a function of WHAT was matched rather than of the
 	// order the document happened to hold — two machines with the same
 	// projects produce the same row, which is what lets Atlas group them.
 	sort.Slice(out, func(i, j int) bool {

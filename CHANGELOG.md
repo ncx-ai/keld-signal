@@ -42,6 +42,15 @@ Pre-releases from this branch are marked as such on GitHub, so `releases/latest`
 - **Version on the page**, and seven taps on it for developer mode.
 
 ### Changed
+- **The block row's `entered` key is now `project_matches`.** It carries the
+  projects a block matched and the rules that matched them. The old name came
+  from the set model underneath, where a project is a set of rules and a block
+  enters it by matching any member: true about the mechanism, and no help to
+  anyone reading the payload. Renamed while it was free, since the key had
+  shipped only in `v3.0.0-rc.1` and no Atlas consumer reads it yet. The pair
+  now reads as what it is, `project_matches` matched by rule against `projects`
+  scored by model. Go-side: `publish.ProjectMatch`, `projects.Match`,
+  `projects.MatchesFor`.
 - **Vector attribution is off on every install and is now a developer control.**
   `rc.1`'s installer wrote the `attribution` key as a copy of `blocks`, so a
   fresh install switched on a 1.2 GB text-model download and a message-reading

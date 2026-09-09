@@ -65,8 +65,8 @@ func newV3(set settings.Settings, cl atlas.Client) *v3 {
 		}
 		return *r.Projects
 	}
-	// The block row's `entered` list needs the org's values too, and it is
-	// stamped from a hook the emitter already holds — see entered.go for why
+	// The block row's `project_matches` list needs the org's values too, and it is
+	// stamped from a hook the emitter already holds — see projectmatches.go for why
 	// this cannot be a parameter.
 	setRemoteProjects(p.RemoteProjects)
 	if !cl.Enabled() {

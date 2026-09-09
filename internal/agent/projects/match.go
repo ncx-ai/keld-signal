@@ -7,7 +7,16 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
 )
 
-// Entered is one project a block landed in, listed WITH ITS RULES.
+// Match is one project a block matched, listed WITH THE RULES that matched it.
+//
+// ⚠️ **IT WAS CALLED `Entered` UNTIL 2026-09-09, AND THE WIRE KEY WAS
+// `entered`.** The name came from the set model this is built on: a project is
+// a set of rules and a block enters it by matching any member. That is exactly
+// right about the mechanism and useless to a reader, who meets a field called
+// "entered" on a block row and cannot tell what entered what, nor that the
+// rules travel with it. Renamed while it was free: the key had shipped only in
+// a pre-release and nothing in Atlas read it yet, because the set-difference
+// work there is deliberately not built.
 //
 // ⚠️ **THE RULES ARE THE POINT, NOT THE ID.** Atlas already knows its own
 // projects' rules; what it cannot see is the local ones. Putting both sides on
@@ -22,7 +31,7 @@ import (
 // `ID` is omitted for a local project for the same reason: it is derived from
 // the title (`newProjectID`), so sending it would send the title in a thin
 // disguise.
-type Entered struct {
+type Match struct {
 	// ID is the Atlas value id, and EMPTY for a local project — see above.
 	ID string `json:"id,omitempty"`
 	// Origin is "atlas" or "user", so a reader can tell whose project this is
@@ -35,17 +44,17 @@ type Entered struct {
 	TicketKey string   `json:"ticket_key,omitempty"`
 }
 
-// EnteredBy is every project these block dimensions land in, each with its
+// MatchesFor is every project these block dimensions land in, each with its
 // rules.
 //
-// ⚠️ **IT IS "ENTERED", NOT "ATTRIBUTED", AND THE TWO DIFFER EXACTLY WHERE IT
-// MATTERS.** Attribute picks ONE project and refuses when two match; this lists
+// ⚠️ **IT IS "MATCHES", NOT "ATTRIBUTED", AND THE PLURAL IS THE POINT.**
+// Attribute picks ONE project and refuses when two match; this lists
 // everything the block matched, because a block that matched two projects is
 // the case an admin most needs to see. Reconcile should have made that
 // impossible for a local/org pair, and if it ever reappears this is what
 // carries the evidence rather than swallowing it.
-func EnteredBy(dims map[string]enrich.Labeled, candidates []Project,
-	workstreamOff func(key string) bool) []Entered {
+func MatchesFor(dims map[string]enrich.Labeled, candidates []Project,
+	workstreamOff func(key string) bool) []Match {
 	repo, hasRepo := attributedValue(dims, DimRepo)
 	ticket, hasTicket := "", false
 	if branch, ok := attributedValue(dims, DimBranch); ok {
@@ -54,7 +63,7 @@ func EnteredBy(dims map[string]enrich.Labeled, candidates []Project,
 	if !hasRepo && !hasTicket {
 		return nil
 	}
-	var out []Entered
+	var out []Match
 	for _, p := range candidates {
 		if p.Hidden || projectWorkstreamOff(p, workstreamOff) {
 			continue
@@ -75,7 +84,7 @@ func EnteredBy(dims map[string]enrich.Labeled, candidates []Project,
 		if !matched {
 			continue
 		}
-		e := Entered{Origin: p.Origin, TicketKey: p.TicketKey}
+		e := Match{Origin: p.Origin, TicketKey: p.TicketKey}
 		if p.Origin == OriginAtlas {
 			e.ID = p.ID
 		}

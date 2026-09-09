@@ -163,14 +163,14 @@ type Emitter struct {
 	// from the publish loop, so a hook that blocks would delay the cursor
 	// advance for later chunks; attrib.Attributor.Schedule is built to return
 	// immediately for exactly that reason.
-	// Entered names the projects a block lands in, each with its rules, for the
+	// ProjectMatches names the projects a block matched, each with its rules, for the
 	// row Atlas receives. A hook rather than a dependency: which projects a
 	// block enters is the decision layer's question (internal/agent/projects),
 	// and this package publishes rather than decides.
 	//
 	// nil on a daemon that wires none — the eval harness and the tests — and
 	// the emitter then sends an empty list rather than omitting the key.
-	Entered func(b enrich.BlockCharacterisation) []publish.EnteredProject
+	ProjectMatches func(b enrich.BlockCharacterisation) []publish.ProjectMatch
 
 	OnPublished func(rows []publish.BlockEnrichment, path string)
 	// OnCut, when non-nil, is called with every block this sweep BUILT, before
@@ -564,11 +564,11 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 			// (the eval harness, a test), and an empty list then travels rather
 			// than a missing key — "matched nothing" and "this client does not
 			// send them" have to stay different facts.
-			if e.Entered != nil {
-				row.Entered = e.Entered(b)
+			if e.ProjectMatches != nil {
+				row.ProjectMatches = e.ProjectMatches(b)
 			}
-			if row.Entered == nil {
-				row.Entered = []publish.EnteredProject{}
+			if row.ProjectMatches == nil {
+				row.ProjectMatches = []publish.ProjectMatch{}
 			}
 			rows = append(rows, row)
 		}

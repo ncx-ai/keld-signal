@@ -85,7 +85,7 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	// captured: the projects document changes while the daemon runs (a person
 	// makes one, the poll reconciles one away), and a captured snapshot would
 	// stamp rows against a document that no longer exists.
-	em.Entered = enteredProjectsFor
+	em.ProjectMatches = projectMatchesFor
 	em.OnPublished = onPublished
 	em.OnCut = onCut
 	em.OnPublishFailed = onFailed

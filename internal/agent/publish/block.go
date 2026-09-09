@@ -95,14 +95,23 @@ type BlockEnrichment struct {
 	// long before attribution can run (it needs the block's own analysis as
 	// input), so BuildBlock's callers must not have to thread three fields they
 	// don't yet have through every existing call site.
-	// Entered is every project this block landed in, each WITH ITS RULES.
+	// ProjectMatches is every project this block matched, each WITH THE RULES
+	// that matched it.
+	//
+	// ⚠️ **IT WAS `Entered` / `entered` UNTIL 2026-09-09.** The old name came
+	// from the set model underneath — a project is a set of rules and a block
+	// enters it by matching any member — which describes the mechanism and
+	// tells a reader of the payload nothing. Renamed while it was free: the key
+	// had shipped only in a pre-release and no Atlas consumer read it yet. The
+	// pair now reads as what it is: `project_matches` is matched by rule,
+	// `projects` is scored by model.
 	//
 	// ⚠️ **IT IS NOT `Projects`, AND THE DIFFERENCE IS THE WHOLE FEATURE.**
 	// `Projects` is the semantic matcher's answer: Atlas value ids with
-	// confidences, averaging 4.9 ids per block on a real machine. `Entered` is
-	// the deterministic one — which projects hold a rule this block actually
-	// matches — and it carries the LOCAL projects too, which nothing else on
-	// the wire has ever done.
+	// confidences, averaging 4.9 ids per block on a real machine.
+	// `ProjectMatches` is the deterministic one — which projects hold a rule
+	// this block actually matches — and it carries the LOCAL projects too,
+	// which nothing else on the wire has ever done.
 	//
 	// The rules travel with it because Atlas cannot see the local side any
 	// other way. With both sides on one row, "a machine groups C with your A
@@ -113,7 +122,7 @@ type BlockEnrichment struct {
 	// title, so sending it would send the title in a thin disguise. Rules are a
 	// repository remote or a ticket key, both of which already cross as block
 	// dimensions.
-	Entered        []EnteredProject            `json:"entered"`
+	ProjectMatches []ProjectMatch              `json:"project_matches"`
 	Projects       []enrich.ProjectAttribution `json:"projects,omitempty"`
 	ProjectsStatus string                      `json:"projects_status,omitempty"`
 	Attribution    *enrich.AttributionMeta     `json:"attribution,omitempty"`
@@ -141,13 +150,13 @@ type BlockEnrichment struct {
 	TS                string            `json:"ts"`
 }
 
-// EnteredProject is one project a block landed in, on the wire.
+// ProjectMatch is one project a block landed in, on the wire.
 //
 // Defined HERE rather than reused from internal/agent/projects, so the publish
 // layer does not depend on the decision layer: a wire shape and a matcher have
 // different reasons to change, and one importing the other makes the payload
 // hostage to a refactor of the rules.
-type EnteredProject struct {
+type ProjectMatch struct {
 	// ID is the Atlas value id, EMPTY for a local project — its id is derived
 	// from its title, so sending it would send the title in a thin disguise.
 	ID string `json:"id,omitempty"`
