@@ -38,8 +38,13 @@ func TestWriteInstallDefaultsCreatesBothKeys(t *testing.T) {
 	if m["blocks"] != true {
 		t.Errorf("blocks = %v, want true", m["blocks"])
 	}
-	if m["attribution"] != true {
-		t.Errorf("attribution = %v, want true", m["attribution"])
+	// ⚠️ OFF, with blocks ON. Until 2026-09-09 this asserted `true` — the key
+	// was derived from blocks — so a fresh install switched on a 1.2 GB model
+	// download and a message-reading pass for a person who had chosen nothing.
+	// Vector attribution is a developer control while it is being built, and an
+	// install must never be what turns it on.
+	if m["attribution"] != false {
+		t.Errorf("attribution = %v, want false on a fresh install", m["attribution"])
 	}
 
 	// And it round-trips through the real loader, which is what the daemon uses.
@@ -50,18 +55,42 @@ func TestWriteInstallDefaultsCreatesBothKeys(t *testing.T) {
 	if !s.Blocks {
 		t.Error("Load().Blocks = false, want true")
 	}
-	if !s.Attribution {
-		t.Error("Load().Attribution = false, want true")
+	if s.Attribution {
+		t.Error("Load().Attribution = true on a fresh install, want false")
 	}
 	if s.MLEnabled() {
 		t.Error("MLEnabled() = true; deterministic must not enable the model")
 	}
 }
 
-// The invariant WriteInstallDefaults expresses: attribution rides on blocks,
-// because the attribution loop is driven off the block emitter's publish hook.
-// A blocks=false, attribution=true config would read as "on" and attribute
-// nothing, so it must not be writable.
+// A re-install CONVERGES attribution to off, the way ml_backend converges. The
+// machines rc.1 installed onto were handed `attribution: true` by the installer
+// itself, not by a person, and the next install has to take that back; a
+// developer who wants the feature flips it in developer mode afterwards.
+func TestWriteInstallDefaultsTurnsAttributionOffEvenWhenItWasOn(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+
+	if err := WriteInstallDefaults("deterministic", true); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	on := true
+	if err := WriteV3Settings(V3Patch{Attribution: &on}); err != nil {
+		t.Fatalf("turning attribution on: %v", err)
+	}
+	if !Load().Attribution {
+		t.Fatal("precondition: attribution should be on before the re-install")
+	}
+
+	if err := WriteInstallDefaults("deterministic", true); err != nil {
+		t.Fatalf("re-install: %v", err)
+	}
+	if m := readConfig(t); m["attribution"] != false {
+		t.Errorf("attribution after re-install = %v, want false", m["attribution"])
+	}
+}
+
+// The old invariant — attribution never outlives blocks — still holds, now
+// trivially: the installer never writes it on at all.
 func TestWriteInstallDefaultsTiesAttributionToBlocks(t *testing.T) {
 	t.Setenv("KELD_HOME", t.TempDir())
 

@@ -42,6 +42,13 @@ Pre-releases from this branch are marked as such on GitHub, so `releases/latest`
 - **Version on the page**, and seven taps on it for developer mode.
 
 ### Changed
+- **Vector attribution is off on every install and is now a developer control.**
+  `rc.1`'s installer wrote the `attribution` key as a copy of `blocks`, so a
+  fresh install switched on a 1.2 GB text-model download and a message-reading
+  pass for someone who had chosen nothing. The installer now writes it `false`
+  unconditionally (a re-install converges, so `rc.1` machines are turned back
+  off), and the switch has moved from the Attribution tile to the Developer box,
+  visible only after seven taps on the version. `KELD_ATTRIBUTION` still wins.
 - `keld-agent install` installs and nothing more; logging in is opt-in
   (`--login` / `--code`), so an unconfigured daemon serves the page and a
   machine can pair from the app. `--headless` is accepted and inert.

@@ -58,4 +58,26 @@ test.describe("Settings", () => {
     await expect(input).not.toBeChecked();
     await expect(page.getByText(/in the desktop app/)).toBeVisible();
   });
+
+  // Vector attribution is a DEVELOPER control while the feature is being built
+  // (moved out of the Attribution tile on 2026-09-09): switching it on starts a
+  // 1.2 GB download and a model that reads messages on the device, and the
+  // installer writes it off on every install. So a person who never entered
+  // developer mode must not see the switch at all, and a developer who did sees
+  // it in the Developer box, off.
+  test("Vector attribution is a developer control: absent by default, off and in the Developer box after seven taps", async ({ signal, page }) => {
+    await signal.open("settings");
+    await expect(page.getByText("Vector attribution")).toHaveCount(0);
+    await expect(page.getByText("Developer", { exact: true })).toHaveCount(0);
+
+    // Seven taps on the version within the tap window turns developer mode on.
+    const version = page.locator("#navVersion");
+    await expect(version).toBeVisible();
+    for (let i = 0; i < 7; i++) await version.click();
+
+    await expect(page.getByText("Developer", { exact: true })).toBeVisible();
+    await expect(page.getByText("Vector attribution")).toBeVisible();
+    const { input } = signal.settingSwitch(/^Vector attribution/);
+    await expect(input).not.toBeChecked();
+  });
 });

@@ -1958,13 +1958,11 @@ if (typeof document !== "undefined") {
             el("span", {}, "Suggest projects from repositories and ticket keys", el("div", { class: "desc" }, "Always on — deterministic, no model, costs nothing.")),
             switchEl({ checked: true, disabled: true })
           ),
-          el(
-            "div",
-            { class: "settings-row" },
-            el("span", {}, "Vector attribution", el("div", { class: "desc" }, "Downloads a 1.2 GB text model and reads your messages on this device to name projects for non-coding work.")),
-            switchEl({ checked: !!settings.attribution, disabled: readonly.has("attribution"), onChange: (v) => updateSettings({ attribution: v }) })
-          ),
-          fieldNote("attribution", readonly),
+          // Vector attribution used to be the second row here. It is a
+          // developer control while the feature is still being built — see
+          // renderDevAttribution — so a person who never turned developer mode
+          // on cannot switch on a 1.2 GB download and a message-reading model
+          // from this tile.
           el(
             "div",
             { class: "settings-row" },
@@ -2068,7 +2066,31 @@ if (typeof document !== "undefined") {
       dev && SHOW_BLOCK_GRANULARITY ? note : null,
       dev && SHOW_BLOCK_GRANULARITY && err ? el("div", { class: "settings-note error-note" }, err) : null,
       dev ? el("div", { class: "settings-sep" }) : null,
-      dev ? renderDevGenerate(settings) : null
+      dev ? renderDevGenerate(settings) : null,
+      dev ? el("div", { class: "settings-sep" }) : null,
+      dev ? renderDevAttribution(settings, readonly) : null
+    );
+  }
+
+  // renderDevAttribution is the vector-attribution switch, a DEVELOPER control
+  // for as long as the feature is still being built (moved here from the
+  // Attribution tile on 2026-09-09). Two reasons it is gated rather than merely
+  // labelled: switching it on starts a 1.2 GB download and a model that reads
+  // messages on this device, and the installer now writes it OFF on every
+  // install (settings.WriteInstallDefaults), so the only way it turns on is a
+  // person in developer mode choosing it. The env pin (KELD_ATTRIBUTION) still
+  // wins and still renders read-only here, exactly as it did in its old tile.
+  function renderDevAttribution(settings, readonly) {
+    return el(
+      "div",
+      {},
+      el(
+        "div",
+        { class: "settings-row" },
+        el("span", {}, "Vector attribution", el("div", { class: "desc" }, "In development. Downloads a 1.2 GB text model and reads your messages on this device to name projects for non-coding work. Off on every install.")),
+        switchEl({ checked: !!settings.attribution, disabled: readonly.has("attribution"), onChange: (v) => updateSettings({ attribution: v }) })
+      ),
+      fieldNote("attribution", readonly)
     );
   }
 

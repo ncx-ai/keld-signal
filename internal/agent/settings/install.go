@@ -36,20 +36,23 @@ var KnownBackends = []string{"auto", "deterministic", "off"}
 // An absent or unparseable file starts from empty rather than failing: that
 // mirrors Load(), which keeps zero-value defaults on invalid JSON, and an
 // install must not be abortable by a corrupt config.
-// ⚠️ ATTRIBUTION IS DERIVED FROM blocks, NOT WRITTEN AS A LITERAL, and never
-// given a parameter of its own. The attribution loop is driven off the block
-// emitter's OnPublished hook (see daemon/workstreams.go), so `attribution` with
-// `blocks` off is a key that can never do anything — a config an operator would
-// read as "on" while nothing was ever attributed. There is no blocks=false,
-// attribution=true install, so the invariant is expressed here rather than left
-// to a caller to honour.
+// ⚠️ ATTRIBUTION IS ALWAYS WRITTEN OFF, on every install, and never given a
+// parameter of its own. Until 2026-09-09 it was DERIVED FROM blocks — so a
+// fresh v2 install landed with vector attribution ON: a 1.2 GB model download
+// and a pass that reads messages on the device, switched on for a person who
+// had chosen nothing, for a feature that is still being built. It is now a
+// developer control on the page (the Developer box, behind developer mode) and
+// the install writes `false` unconditionally, converging a re-install the same
+// way ml_backend does: the machines rc.1 turned on without asking are turned
+// back off by the next install, and a developer who wants it flips it again.
+// The old invariant still holds trivially — attribution never outlives blocks,
+// because it is never on by the installer's hand at all.
 //
 // ⚠️ IT IS WRITTEN AT ALL because KELD_ATTRIBUTION is unreachable from an
 // installed service — the same reason `blocks` has a config key. No service
 // definition on any OS carries an environment block (LaunchAgentPlist and
-// SystemdUnit have none, the Windows task is a bare /TR "<exe>" run), so before
-// this key an installed daemon could not be told to attribute at all, and every
-// machine that did was one someone had started by hand with the env var set.
+// SystemdUnit have none, the Windows task is a bare /TR "<exe>" run), so the
+// page's toggle writes this key and the daemon reads it at startup.
 // KELD_ATTRIBUTION still wins in both directions — see attrib.Enabled.
 func WriteInstallDefaults(backend string, blocks bool) error {
 	if !validBackend(backend) {
@@ -70,7 +73,7 @@ func WriteInstallDefaults(backend string, blocks bool) error {
 	if err != nil {
 		return err
 	}
-	attributionJSON, err := json.Marshal(blocks)
+	attributionJSON, err := json.Marshal(false)
 	if err != nil {
 		return err
 	}

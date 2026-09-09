@@ -1332,12 +1332,19 @@ selects one of three modes:
   Telemetry and client-events are unaffected.
 
 ⚠️ **WHAT A FRESH INSTALL LANDS ON, AND WHY IT IS NOT THE COMPILED-IN DEFAULT.**
-`keld-agent install` writes two keys into `~/.keld/agent-config.json` —
-`{"ml_backend": "deterministic", "blocks": true}` — via
+`keld-agent install` writes three keys into `~/.keld/agent-config.json` —
+`{"ml_backend": "deterministic", "blocks": true, "attribution": false}` — via
 `settings.WriteInstallDefaults`, which MERGES, so an operator's `pii_regions`,
 `include_entity_text` and feature toggles survive an installer run. That is v2: the
 model-free facet set plus the block emitter, and **no multi-gigabyte model download,
-ever**.
+ever**. ⚠️ **`attribution` is written OFF unconditionally, and until 2026-09-09 it
+was written as a copy of `blocks` — i.e. ON.** A fresh install therefore switched on
+vector attribution (a 1.2 GB text-model download and a pass that reads messages on
+the device) for a person who had chosen nothing, for a feature still being built.
+It is now a DEVELOPER control on the page — the Developer box, behind seven taps on
+the version — and a re-install converges it to off the way `ml_backend` converges,
+so the machines `v3.0.0-rc.1` turned it on for are turned back off by the next
+install. `KELD_ATTRIBUTION` still wins in both directions.
 
 ⚠️ **FIRST SIGHT BACKFILLS, and that default is a REVERSAL.** The block emitter
 used to seed its cursor at the transcript's watermark and emit nothing on first
