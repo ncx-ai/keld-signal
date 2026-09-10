@@ -183,18 +183,6 @@ func classifyPublishFailure(err error) (ledger.Stage, ledger.Reason, int) {
 	return ledger.StageSent, ledger.ReasonAtlasUnavailable, 0
 }
 
-// classifyPublishError is classifyPublishFailure without the stage — kept for
-// callers that record a publish failure against one fixed cell regardless of
-// which fact actually failed (internal/agent/daemon/republish.go, B2's
-// recovery sweep for blocks captured while Send to Atlas was off). The reason
-// vocabulary and its (reason, http_status) shape are UNCHANGED from before
-// the stage split above; only recordPublishFailed's own caller needed to know
-// which cell to write.
-func classifyPublishError(err error) (ledger.Reason, int) {
-	_, reason, status := classifyPublishFailure(err)
-	return reason, status
-}
-
 // classifyAtlasStatus turns a raw HTTP status Atlas answered with into the
 // same closed reason vocabulary a block's `received` cell uses, so the health
 // strip's `atlas` row (see startHealth) and a block's own delivery cell never

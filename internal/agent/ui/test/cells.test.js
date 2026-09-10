@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readCell, cellGlyph, atlasCellStatus } from "../app.js";
+import { readCell, atlasCellStatus } from "../app.js";
 
 test("a cell absent from `cells` reads as unknown, not failed", () => {
   const block = { cells: { cut: { status: "ok" } } }; // no "received" key at all
@@ -9,16 +9,9 @@ test("a cell absent from `cells` reads as unknown, not failed", () => {
   assert.equal(cell.status, "unknown");
 });
 
-test("cellGlyph never renders an absent cell as the failure glyph", () => {
-  const absent = readCell({ cells: {} }, "sent");
-  assert.equal(cellGlyph(absent), "—");
-  assert.notEqual(cellGlyph(absent), "✗", 'an absent cell must never be the same glyph as "we checked and it failed"');
-});
-
 test("a cell with no `cells` object at all is also absent, never a crash", () => {
   const cell = readCell({}, "cut");
   assert.equal(cell.present, false);
-  assert.equal(cellGlyph(cell), "—");
 });
 
 test("a genuinely failed cell renders as failed, distinct from absent", () => {
@@ -26,7 +19,6 @@ test("a genuinely failed cell renders as failed, distinct from absent", () => {
   const cell = readCell(block, "received");
   assert.equal(cell.present, true);
   assert.equal(cell.status, "failed");
-  assert.equal(cellGlyph(cell), "✗");
   assert.equal(cell.reason, "atlas_rejected");
   assert.equal(cell.http_status, 401);
 });

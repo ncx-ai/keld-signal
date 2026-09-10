@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"log"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
@@ -23,14 +22,13 @@ import (
 // The daemon logs the choice once at startup, because "is this machine sending
 // anything to Atlas?" is the first question anyone debugging a quiet fleet asks,
 // and until v3 the only way to answer it was to read the config file.
-func atlasClient(set settings.Settings, pub *publish.Publisher, sc *settings.Client,
-	redeem func(context.Context, string) (atlas.Paired, error)) atlas.Client {
+func atlasClient(set settings.Settings, pub *publish.Publisher, sc *settings.Client) atlas.Client {
 	if !set.AtlasEnabled() {
 		log.Printf("keld-agent: Send to Atlas is OFF (send_to_atlas=false or KELD_ATLAS=0) — " +
 			"focus blocks, projects and the ledger stay on this machine; nothing is published")
 		return atlas.Off{}
 	}
-	return &atlas.Live{Blocks: pub, Settings_: sc, Redeem: redeem}
+	return &atlas.Live{Blocks: pub, Settings_: sc}
 }
 
 // devBlocksMode resolves the developer block granularity and REFUSES it while

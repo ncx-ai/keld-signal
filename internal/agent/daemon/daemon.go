@@ -846,7 +846,7 @@ func Run(ctx context.Context) error {
 	// Same derivation as the emitter's, from the one ingest endpoint.
 	blockPub := publish.New(signalBlocksEndpoint(cfg.Endpoint), tok.Get, actor)
 	atlasCl := atlasClient(set, blockPub,
-		settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), nil)
+		settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second))
 	// ⚠️ **AND EVERY PATH THAT PREDATES THE BOUNDARY IS ROUTED THROUGH IT HERE.**
 	// atlas.Off makes the new connector incapable of reaching the network, but
 	// the enrichment worker, the tick, the settings poll and the reporter each

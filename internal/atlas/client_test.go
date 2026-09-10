@@ -31,15 +31,6 @@ func TestOffRefusesEveryCall(t *testing.T) {
 	if _, err := c.Settings(ctx); !errors.Is(err, ErrOffline) {
 		t.Fatalf("Settings: want ErrOffline, got %v", err)
 	}
-	if _, err := c.Workstreams(ctx); !errors.Is(err, ErrOffline) {
-		t.Fatalf("Workstreams: want ErrOffline, got %v", err)
-	}
-	if err := c.PatchWorkstream(ctx, "development", []Value{{Name: "x"}}); !errors.Is(err, ErrOffline) {
-		t.Fatalf("PatchWorkstream: want ErrOffline, got %v", err)
-	}
-	if _, err := c.RedeemCode(ctx, "host/ABCD-EFGH"); !errors.Is(err, ErrOffline) {
-		t.Fatalf("RedeemCode: want ErrOffline, got %v", err)
-	}
 	if st, at := c.LastResponse(); st != 0 || !at.IsZero() {
 		t.Fatalf("LastResponse: want (0, zero), got (%d, %v)", st, at)
 	}

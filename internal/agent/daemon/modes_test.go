@@ -68,11 +68,9 @@ func TestT36_AtlasOffDialsNothingAcrossEveryWiredPath(t *testing.T) {
 	atlasPub := publish.New("http://atlas.example.invalid/v1/enrichments", func() string { return "t" }, "actor")
 	atlasPub.HTTP = tripwire
 	sc := settings.NewClient("http://atlas.example.invalid/v1/enrichment-settings", func() string { return "t" }, 2*time.Second)
-	cl := atlasClient(set, atlasPub, sc, nil)
+	cl := atlasClient(set, atlasPub, sc)
 	_, _ = cl.SendBlocks(ctx, []publish.BlockEnrichment{{}})
 	_, _ = cl.Settings(ctx)
-	_, _ = cl.Workstreams(ctx)
-	_, _ = cl.RedeemCode(ctx, "atlas.example.invalid/ABCD-EFGH")
 
 	// 3) The block emitter's own Sender substitution — reproduces
 	// daemon/blocks.go's startBlockEmitter inline decision ("var pub
@@ -144,7 +142,7 @@ func TestT37_AtlasOffLedgerHealthAndSentCells(t *testing.T) {
 	off := false
 	set := settings.Settings{SendToAtlas: &off}
 
-	atlasCl := atlasClient(set, nil, nil, nil)
+	atlasCl := atlasClient(set, nil, nil)
 	if atlasCl.Enabled() {
 		t.Fatal("test setup: Atlas must resolve OFF")
 	}
@@ -211,7 +209,7 @@ func TestT38_RepublishesLocalOnlyBlocksWhenAtlasComesOn(t *testing.T) {
 	// sig.recordCut in captureOnCut whenever Atlas is off.
 	off := false
 	setOff := settings.Settings{SendToAtlas: &off}
-	atlasOffCl := atlasClient(setOff, nil, nil, nil)
+	atlasOffCl := atlasClient(setOff, nil, nil)
 	sig := newV3(setOff, atlasOffCl)
 
 	onCut := sig.recordCut

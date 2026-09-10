@@ -7,7 +7,7 @@
 // Atlas take it" at the level where the answer lives.
 //
 // This file is the CONTRACT other packages compile against: the Recorder
-// interface, the stage and reason vocabularies, and a Nop. The SQLite store
+// interface and the stage and reason vocabularies. The SQLite store
 // behind it lives in store.go (deliverable D2). Nothing here may hold text, a
 // span, an offset or a path: a reason is a code from the closed set below and
 // the API refuses free-text messages by construction (there is no string
@@ -230,29 +230,3 @@ type Recorder interface {
 	Failed(k BlockKey, s Stage, r Reason, httpStatus int, at time.Time)
 	SetHealth(h Health)
 }
-
-// Nop is the Recorder used until D2 wires the store, and by every test that
-// does not care. It records nothing and never fails.
-type Nop struct{}
-
-func (Nop) Cut(BlockKey, int64, string, string, string, time.Time) {}
-func (Nop) CutPending(string, Reason, time.Time)                   {}
-func (Nop) CutResolved(string)                                     {}
-func (Nop) Observe(BlockKey, Dims, time.Time)                      {}
-func (Nop) Measure(BlockKey, Measured, time.Time)                  {}
-func (Nop) Attribute(BlockKey, Attributed, Reason, time.Time)      {}
-func (Nop) Sent(BlockKey, time.Time)                               {}
-func (Nop) Received(BlockKey, int, time.Time)                      {}
-func (Nop) Failed(BlockKey, Stage, Reason, int, time.Time)         {}
-func (Nop) SetHealth(Health)                                       {}
-
-// Nop satisfies VectorRecorder too, so a test wiring the attribution path
-// needs no second stub. Note it satisfies BOTH interfaces without either
-// embedding the other — which is the point: an implementation may serve both
-// roles, and no caller can hold one role and reach the other's cell.
-func (Nop) Vector(BlockKey, VectorAttributed, Status, Reason, time.Time) {}
-
-var (
-	_ Recorder       = Nop{}
-	_ VectorRecorder = Nop{}
-)

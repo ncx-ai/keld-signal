@@ -64,15 +64,6 @@ func (f *ledgerFakeAtlasClient) SendBlocks(context.Context, []publish.BlockEnric
 func (f *ledgerFakeAtlasClient) Settings(context.Context) (settings.Remote, error) {
 	return settings.Remote{}, nil
 }
-func (f *ledgerFakeAtlasClient) Workstreams(context.Context) ([]atlas.Workstream, error) {
-	return nil, nil
-}
-func (f *ledgerFakeAtlasClient) PatchWorkstream(context.Context, string, []atlas.Value) error {
-	return nil
-}
-func (f *ledgerFakeAtlasClient) RedeemCode(context.Context, string) (atlas.Paired, error) {
-	return atlas.Paired{}, nil
-}
 func (f *ledgerFakeAtlasClient) LastResponse() (int, time.Time) { return f.status, f.at }
 
 var _ atlas.Client = (*ledgerFakeAtlasClient)(nil)

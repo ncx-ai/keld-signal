@@ -102,24 +102,6 @@ export function readCell(block, stage) {
   return { present: true, ...cell };
 }
 
-/** The glyph for one cell's status. "—" (em dash) is reserved for "unknown /
- *  never happened"; a real failure is always "✗", never the same mark. */
-export function cellGlyph(cellRead) {
-  if (!cellRead.present) return "—";
-  switch (cellRead.status) {
-    case "ok":
-      return "✓";
-    case "failed":
-      return "✗";
-    case "pending":
-      return "…";
-    case "n/a":
-      return "n/a";
-    default:
-      return "—";
-  }
-}
-
 /** Every dollar figure on this page carries "est." — the client never knows
  *  the org's negotiated rates (docs/v3/contracts.md). */
 export function formatEstUSD(usd) {

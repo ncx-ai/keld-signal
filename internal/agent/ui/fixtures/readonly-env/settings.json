@@ -1,8 +1,0 @@
-{
-  "send_to_atlas": true,
-  "dev_blocks": "",
-  "show_breaks": true,
-  "workstreams_off": [],
-  "attribution": false,
-  "readonly": ["send_to_atlas"]
-}

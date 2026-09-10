@@ -67,13 +67,6 @@ func (f *fakeAtlasClient) SendBlocks(_ context.Context, rows []publish.BlockEnri
 func (f *fakeAtlasClient) Settings(context.Context) (settings.Remote, error) {
 	return settings.Remote{}, nil
 }
-func (f *fakeAtlasClient) Workstreams(context.Context) ([]atlas.Workstream, error) { return nil, nil }
-func (f *fakeAtlasClient) PatchWorkstream(context.Context, string, []atlas.Value) error {
-	return nil
-}
-func (f *fakeAtlasClient) RedeemCode(context.Context, string) (atlas.Paired, error) {
-	return atlas.Paired{}, nil
-}
 func (f *fakeAtlasClient) LastResponse() (int, time.Time) { return 0, time.Time{} }
 
 var _ atlas.Client = (*fakeAtlasClient)(nil)

@@ -16,7 +16,7 @@ func TestAtlasOffConstructsNoLiveClient(t *testing.T) {
 	t.Setenv(settings.AtlasEnv, "")
 	off := false
 	c := atlasClient(settings.Settings{SendToAtlas: &off},
-		publish.New("http://example.invalid", func() string { return "t" }, "a"), nil, nil)
+		publish.New("http://example.invalid", func() string { return "t" }, "a"), nil)
 	if c.Enabled() {
 		t.Fatal("send_to_atlas=false must yield the Off client")
 	}
@@ -28,7 +28,7 @@ func TestAtlasOffConstructsNoLiveClient(t *testing.T) {
 func TestAtlasOnConstructsLive(t *testing.T) {
 	t.Setenv(settings.AtlasEnv, "")
 	c := atlasClient(settings.Settings{},
-		publish.New("http://example.invalid", func() string { return "t" }, "a"), nil, nil)
+		publish.New("http://example.invalid", func() string { return "t" }, "a"), nil)
 	if !c.Enabled() {
 		t.Fatal("an absent send_to_atlas key must mean ON")
 	}
@@ -36,12 +36,12 @@ func TestAtlasOnConstructsLive(t *testing.T) {
 
 func TestKeldAtlasEnvOverridesTheFile(t *testing.T) {
 	t.Setenv(settings.AtlasEnv, "0")
-	if atlasClient(settings.Settings{}, nil, nil, nil).Enabled() {
+	if atlasClient(settings.Settings{}, nil, nil).Enabled() {
 		t.Fatal("KELD_ATLAS=0 must win over the default")
 	}
 	t.Setenv(settings.AtlasEnv, "1")
 	on := false
-	if !atlasClient(settings.Settings{SendToAtlas: &on}, nil, nil, nil).Enabled() {
+	if !atlasClient(settings.Settings{SendToAtlas: &on}, nil, nil).Enabled() {
 		t.Fatal("KELD_ATLAS=1 must win over an explicit false")
 	}
 }
@@ -64,14 +64,11 @@ func TestAtlasOffNeverDials(t *testing.T) {
 	pub := publish.New("http://atlas.example.invalid/v1/enrichments", func() string { return "t" }, "a")
 	pub.HTTP = tripwire
 
-	c := atlasClient(settings.Settings{}, pub, nil, nil)
+	c := atlasClient(settings.Settings{}, pub, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_, _ = c.SendBlocks(ctx, []publish.BlockEnrichment{{}})
 	_, _ = c.Settings(ctx)
-	_, _ = c.Workstreams(ctx)
-	_ = c.PatchWorkstream(ctx, "development", []atlas.Value{{Name: "x"}})
-	_, _ = c.RedeemCode(ctx, "host/ABCD-EFGH")
 
 	select {
 	case addr := <-dialed:

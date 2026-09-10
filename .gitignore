@@ -35,3 +35,7 @@ __pycache__/
 #   cd app && npx @tauri-apps/cli build --bundles app
 # An earlier commit added 3,286 of these files by accident.
 /app/src-tauri/target/
+
+# Tauri build output: tauri_build rewrites these on every build (Tauri's own
+# app template ignores them too). 4,714 lines were committed by accident.
+/app/src-tauri/gen/schemas

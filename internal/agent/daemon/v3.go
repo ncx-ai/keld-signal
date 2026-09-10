@@ -207,10 +207,3 @@ func (v *v3) noteHealth(key ledger.HealthKey, status ledger.Status, detail strin
 	}
 	v.ledger.SetHealth(ledger.Health{Key: key, Status: status, Detail: detail, At: time.Now().UTC()})
 }
-
-// announce logs where the page is, once, at startup. A loopback URL nobody
-// knows about is the same as no page at all — and this is the line a colleague
-// on Windows will be told to look for.
-func announcePage(port int) {
-	log.Printf("keld-agent: Keld Signal page at http://127.0.0.1:%d/ — open it with `keld signal open`", port)
-}

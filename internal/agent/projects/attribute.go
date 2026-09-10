@@ -366,13 +366,12 @@ func WorkstreamOffFunc(s settings.Settings) func(string) bool {
 // does not distinguish the two on the wire), which is why it rides straight
 // into Project.Team rather than Workstream — see Project's doc comment and
 // projectWorkstreamOff.
-// NOTE: internal/atlas also converts settings.RemoteProject (its own
-// FromRemoteProjects, grouping into atlas.Workstream/atlas.Value for a
-// different consumer) -- this package deliberately does not import
-// internal/atlas or reuse it: the attribution engine must work with zero
-// dependency on the (optional, toggleable) Atlas connector, and this lane was
-// explicitly told not to import that package. The two converters read the
-// same wire shape independently rather than sharing one.
+// NOTE: this is the ONLY converter from settings.RemoteProject. internal/atlas
+// used to carry a second one (grouping into its own Workstream/Value types for
+// a consumer that never materialised); it was removed on 2026-09-10 as dead.
+// This package still deliberately does not import internal/atlas: the
+// attribution engine must work with zero dependency on the (optional,
+// toggleable) Atlas connector.
 // dedupeRepos removes repeated repository rules, keeping the FIRST spelling of
 // each and the order they arrived in.
 //
