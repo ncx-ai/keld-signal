@@ -38,6 +38,22 @@ export class SignalApp {
     await expect(input).toBeChecked({ checked: on });
   }
 
+  /** Turn developer mode on the way a person does: seven taps on the version
+   *  in the sidebar, inside the tap window. Developer mode is a per-browser
+   *  preference (localStorage), so it survives every `open()` in the same
+   *  test and never leaks into the next one, which starts a fresh context.
+   *
+   *  ⚠️ The taps TOGGLE. Call this once per test, on a fresh context; a second
+   *  call turns developer mode back off. The Developer heading is the proof
+   *  the taps landed — without it the developer rows are simply absent and a
+   *  spec waiting for one times out saying nothing useful. */
+  async enterDeveloperMode(): Promise<void> {
+    const version = this.page.locator("#navVersion");
+    await expect(version).toBeVisible();
+    for (let i = 0; i < 7; i++) await version.click();
+    await expect(this.page.getByText("Developer", { exact: true })).toBeVisible();
+  }
+
   /** A setting row's switch: `<div class=settings-row><span>Name<div
    *  class=desc>…</div></span><label class=switch><input></label></div>`. */
   settingSwitch(name: RegExp): { control: Locator; input: Locator } {

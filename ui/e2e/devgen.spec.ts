@@ -27,8 +27,15 @@ import { test, expect } from "./support/fixtures";
  * textarea's content).
  */
 test.describe("Generate block (developer)", () => {
-  test.beforeEach(({ state }) => {
+  test.beforeEach(async ({ state, signal }) => {
     test.skip(!state.settingsMounted, "GET /v1/settings is not mounted on this daemon build");
+    // The "Generate block button" switch is a DEVELOPER row: since 8fa9e81 the
+    // Settings pane draws it only in developer mode, entered by seven taps on
+    // the version. This spec predates that and drove the switch directly, so
+    // every case timed out waiting for a row that was never rendered. Each
+    // test gets a fresh browser context, so this runs once per test.
+    await signal.open("settings");
+    await signal.enterDeveloperMode();
   });
 
   /** The Settings pane's switches sit beside their label rather than inside it,
