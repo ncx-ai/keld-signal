@@ -86,7 +86,24 @@ fi
 pkgbuild --root "$STAGE" --install-location /usr/local/keld \
   --scripts "$ROOT/scripts" --identifier co.keld.agent --version "$VERSION" "$TMP/component.pkg"
 
-pkgbuild --root "$APP_STAGE" --install-location /Applications \
+# ⚠️ The app component MUST be marked non-relocatable, and pkgbuild's default is the
+# opposite. With no component plist, Installer.app treats a bundle as relocatable:
+# before writing to /Applications it asks Spotlight whether a bundle with the same
+# CFBundleIdentifier already exists anywhere on the volume, and if one does it installs
+# ON TOP OF THAT COPY instead. Measured on a developer machine installing rc.3: the
+# install log read "Applications/Keld Signal.app relocated to <worktree>/app/src-tauri/
+# target/release/bundle/macos/Keld Signal.app", the receipt said location=Applications,
+# and /Applications held nothing — the pkg had quietly overwritten the dev build. Any
+# machine that has ever had a copy of the app elsewhere (a Downloads folder, an old dmg
+# mount, a second user) is exposed the same way, and nothing reports it.
+# pkgbuild --analyze emits the component plist with BundleIsRelocatable true; flip it.
+APP_PLIST="$TMP/app-component.plist"
+pkgbuild --analyze --root "$APP_STAGE" "$APP_PLIST"
+plutil -replace 0.BundleIsRelocatable -bool NO "$APP_PLIST"
+plutil -extract 0.BundleIsRelocatable raw "$APP_PLIST" | grep -qx false \
+  || { echo "FAILING: could not mark Keld Signal.app non-relocatable in $APP_PLIST"; exit 1; }
+
+pkgbuild --root "$APP_STAGE" --install-location /Applications --component-plist "$APP_PLIST" \
   --identifier co.keld.signal --version "$VERSION" "$TMP/app-component.pkg"
 
 PB=(productbuild --distribution "$ROOT/distribution.xml" --resources "$ROOT/../resources" --package-path "$TMP" "$OUT")
