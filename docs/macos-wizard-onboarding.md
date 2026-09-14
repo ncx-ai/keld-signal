@@ -27,9 +27,13 @@ user, via `launchctl asuser <uid> sudo -u <user> -H`.
   process stops when installation completes. Measured, not assumed.
 - **`sudo` without `-H`** writes the LaunchAgent into `/var/root`.
 
-If the pane does not run at all, `postinstall` falls back to opening
-`onboard.command`, which is the pre-wizard Terminal flow and is kept for exactly
-this.
+The fallback is two-part, not one: `postinstall` opens `onboard.command` (the
+pre-wizard Terminal flow, kept for exactly this) only when BOTH the pane never
+ran at all (no handoff file was ever written) AND the machine ended up
+unconfigured (no `hook.json`). Gating on `hook.json` alone would also fire for
+someone who ran the pane and deliberately clicked "Set up later" — opening a
+Terminal at a person who just made that choice is exactly what the two-part
+condition exists to avoid.
 
 ## Verifying a build (no production release)
 
@@ -53,3 +57,14 @@ this.
 5. Signing and notarization: a `workflow_dispatch` run receives the Apple secrets,
    so signing can be exercised without cutting a release. Verdicts have been
    landing in ~25s.
+6. ⚠️ **This step is only meaningful on a TAGGED build.** `make release-dry`'s
+   `0.0.0-dryrun` version takes the no-tag branch in both the pane
+   (`startSidecarDownload`) and `postinstall`'s fallback fetch — it never
+   builds a `--tag` argument at all, so a dry run proves nothing about tag
+   resolution and cannot catch a tag built wrong (e.g. a doubled `v`). On an
+   actual tagged build (a real release, or a `workflow_dispatch` run against a
+   tag), confirm: the engine progress row actually reaches **100%** rather
+   than falling back to "Could not download it" partway through, and
+   `~/.local/bin/keld-agent-sidecar/VERSION` equals `/usr/local/keld/VERSION`
+   exactly (not merely present) — the two must match because a mismatch is
+   the version-skew failure this whole path exists to prevent.

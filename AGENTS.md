@@ -2358,7 +2358,11 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   Terminal at someone who just made that choice is exactly what this branch
   exists to stop. `installers/macos/onboard.command` is retained for the
   pane-never-ran fallback and for MDM; it is no longer opened on the success
-  path.
+  path. It is staged into the payload by `build-pkg.sh` (alongside `keld`,
+  `keld-agent` and `VERSION`) and, on the fallback path, opened via
+  `launchctl asuser <uid> sudo -u <user> open "$PREFIX/onboard.command"` — the
+  same asuser idiom every other user-side postinstall command uses, so the
+  script runs in the console user's own GUI session rather than root's.
   See `docs/macos-wizard-onboarding.md`.
 - **Windows onboarding UI:** `installers/windows/onboard.cmd`, staged into the
   payload by the `.iss` `[Files]` section and opened by the post-install `[Run]`

@@ -183,7 +183,7 @@ user):
 
 ```json
 { "version": "3.0.0-rc.5", "paired": true, "tools": ["claude_code", "codex"],
-  "sidecar_staged": "/Users/x/.local/bin/.keld-sidecar.AbC123" }
+  "sidecar_staged": "/Users/x/.local/bin/.keld-update.AbC123" }
 ```
 
 ⚠️ **The setup code itself is NEVER written to disk.** The pane redeems it
