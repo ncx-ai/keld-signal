@@ -32,14 +32,68 @@ for d in ${userhome:+"$userhome/.local/bin"} /opt/homebrew/bin; do
   done
 done
 
-# Replace the running process: restart the per-user agent so the live daemon is
-# THIS build, not a lingering older one from a previous install. Best-effort —
-# a no-op if it isn't loaded yet (a first install loads it via onboard.command).
-launchctl kickstart -k "gui/$uid/co.keld.agent" 2>/dev/null || true
+# ── Finish what the wizard pane started ──────────────────────────────────────
+# The pane (installers/macos/plugin) ran BEFORE this, redeemed the setup code and
+# staged the analysis sidecar; it left a handoff file naming what it did. This
+# script does everything that rewrites the user's files, which deliberately does
+# NOT happen in the pane: until the install is committed, a person can still
+# cancel, and a cancelled install must not leave rewritten tool configs behind.
+#
+# ⚠️ EVERY user-side command runs `launchctl asuser <uid> sudo -u <user> -H`.
+# Without -H, sudo keeps HOME=/var/root, and service_darwin.go builds the
+# LaunchAgent path from os.UserHomeDir() — so the job would be written into
+# root's home and never load, with nothing reporting it.
+asuser() { launchctl asuser "$uid" sudo -u "$user" -H "$@"; }
 
-# Onboarding runs in the user's GUI session and registers/starts the agent itself
-# (after login + setup), so the agent isn't started before the user is set up.
-if [ -f "$PREFIX/onboard.command" ]; then
+HANDOFF="$userhome/.keld/state/installer-handoff.json"
+paired=false
+api_url=""
+tools=""
+staged=""
+if [ -f "$HANDOFF" ]; then
+  paired=$(/usr/bin/plutil -extract paired raw -o - "$HANDOFF" 2>/dev/null || echo false)
+  api_url=$(/usr/bin/plutil -extract api_url raw -o - "$HANDOFF" 2>/dev/null || echo "")
+  staged=$(/usr/bin/plutil -extract sidecar_staged raw -o - "$HANDOFF" 2>/dev/null || echo "")
+  tools=$(/usr/bin/plutil -extract tools json -o - "$HANDOFF" 2>/dev/null \
+          | tr -d '[]"' | tr ',' ' ' || echo "")
+fi
+
+# 1. The analysis sidecar the pane already downloaded and verified: a rename into
+#    place, in the user's own ~/.local/bin (same filesystem, so ~15,000 files move
+#    atomically rather than being copied).
+if [ -n "$staged" ] && [ -d "$staged" ]; then
+  asuser "$PREFIX/keld" signal install-sidecar --commit "$staged" || true
+else
+  # No staged tree (no network in the pane, or the pane never ran). Retry in the
+  # background: enrichment spools until it lands, so this is late, not fatal.
+  asuser /bin/sh -c "\"$PREFIX/keld\" signal install-sidecar >/dev/null 2>&1 &" || true
+fi
+
+# 2. The AI tools the person ticked. --bin-path pins the INSTALLED keld: the pane
+#    ran a copy from inside the plugin bundle, and pinning THAT path into hook
+#    commands breaks every hook the moment the wizard closes.
+if [ "$paired" = "true" ] || [ "$paired" = "1" ]; then
+  set -- signal setup --yes --bin-path "$PREFIX/keld"
+  [ -n "$api_url" ] && set -- "$@" --api-url "$api_url"
+  for t in $tools; do
+    [ -n "$t" ] && set -- "$@" --tool "$t"
+  done
+  asuser "$PREFIX/keld" "$@" || true
+fi
+
+# 3. Register and start the agent. This is what used to happen only inside the
+#    Terminal script, which is why a machine that never opened it collected
+#    nothing.
+asuser "$PREFIX"/keld-agent install || true
+
+rm -f "$HANDOFF"
+
+# ⚠️ FALLBACK — and it is not optional. The wizard plugin can fail to load with
+# NO diagnostic whatsoever (a stale code signature does exactly this; measured
+# 2026-09-14). A machine in that state has installed cleanly and been asked for
+# nothing, so without this it would sit idle forever. The old Terminal path is
+# kept precisely to be this.
+if [ ! -f "$userhome/.keld/hook.json" ] && [ -f "$PREFIX/onboard.command" ]; then
   chmod +x "$PREFIX/onboard.command" || true
   launchctl asuser "$uid" sudo -u "$user" open "$PREFIX/onboard.command" || true
 fi
