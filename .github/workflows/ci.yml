@@ -97,6 +97,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: macOS onboarding contract
         run: bash installers/macos/onboard_command_test.sh
+      - name: macOS wizard pane contract
+        run: bash installers/macos/plugin_test.sh
+      - name: macOS postinstall contract
+        run: bash installers/macos/postinstall_test.sh
       - name: Windows installer contract
         run: bash installers/windows/keld_agent_iss_test.sh
       # A `#` between two backslash-continued arguments truncates the command. That

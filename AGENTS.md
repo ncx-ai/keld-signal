@@ -2338,14 +2338,24 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   worker-spawn gate locally (Linux); CI's installer smoke does the same for every
   shipped OS. Any change touching the worker/spawn/freeze path must keep those
   green.
-- **macOS onboarding UI:** `installers/macos/onboard.command` is a plain Terminal
-  script (no SwiftUI app) staged executable into the payload by `build-pkg.sh` and
-  opened by the pkg `postinstall` in the logged-in user's GUI session (`launchctl
-  asuser … open onboard.command`). It prompts for the one-time setup code and runs
-  `keld login --code "$CODE"` (falling back to interactive `keld login` on an empty
-  or failed code), then `keld signal setup --yes`, then `keld-agent install` —
-  **last**, since onboarding precedes the agent: `postinstall` no longer
-  pre-registers the service headlessly. Best-effort (`|| true`) and safe to re-run.
+- **macOS onboarding UI:** onboarding happens INSIDE the installer wizard — a
+  custom Installer.app section (`installers/macos/plugin/`, ordered before the
+  Install step) that redeems the setup code, downloads the analysis sidecar with a
+  progress bar, and collects which AI tools to configure. It renders the NDJSON
+  emitted by `keld … --json` and reimplements none of it.
+  ⚠️ **A pane CANNOT be placed after the Install step** (measured 2026-09-14,
+  macOS 26.5.2: it enters with `installStarted=0` and the plugin's host process
+  stops when installation completes), which is why everything interactive is
+  pre-install and `scripts/postinstall` does every destructive step afterwards.
+  ⚠️ **Two failure modes here are completely silent** — a `SectionOrder` entry
+  missing `.bundle` loads nothing, and a bundle signed before its executable was
+  recompiled fails to load with no diagnostic at all. Both are pinned by
+  `installers/macos/plugin_test.sh`, and `postinstall` falls back to opening
+  `onboard.command` whenever the handoff file is absent, because a silently
+  missing pane would otherwise leave a machine installed and never asked for a
+  code. `installers/macos/onboard.command` is retained for that fallback and for
+  MDM; it is no longer opened on the success path.
+  See `docs/macos-wizard-onboarding.md`.
 - **Windows onboarding UI:** `installers/windows/onboard.cmd`, staged into the
   payload by the `.iss` `[Files]` section and opened by the post-install `[Run]`
   step with `postinstall shellexec skipifsilent`. It is the sibling of macOS's

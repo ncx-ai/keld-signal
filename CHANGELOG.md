@@ -40,8 +40,17 @@ Pre-releases from this branch are marked as such on GitHub, so `releases/latest`
 - **Tokens and estimated spend per block**, from a local price table
   (`internal/agent/pricing/prices.json`, refreshed by `scripts/refresh-prices.py`).
 - **Version on the page**, and seven taps on it for developer mode.
+- `keld signal install-sidecar` — download, verify and install the analysis
+  sidecar, with `--json` NDJSON progress. Replaces the shell copy of that logic.
+- `keld signal setup --bin-path` — pin a specific `keld` path into tool hooks.
+- `keld login --json` now reports the resolved `api_url`.
 
 ### Changed
+- **macOS: the installer no longer opens a Terminal.** Onboarding runs inside the
+  wizard — a custom Installer.app pane redeems the setup code, downloads the
+  analysis sidecar with a progress bar, and collects which AI tools to configure;
+  `postinstall` then applies them and starts the agent silently.
+  `onboard.command` is retained as the fallback when the pane cannot run.
 - **The block row's `entered` key is now `project_matches`.** It carries the
   projects a block matched and the rules that matched them. The old name came
   from the set model underneath, where a project is a set of rules and a block
