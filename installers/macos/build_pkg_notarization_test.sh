@@ -61,3 +61,14 @@ fi
 
 [ "$fails" -eq 0 ] || { echo; echo "$fails check(s) failed"; exit 1; }
 echo; echo "build-pkg notarization gate: all checks passed"
+
+# ── The wizard plugin ────────────────────────────────────────────────────────
+# The pane is what removes the Terminal; these pin that it is actually built,
+# actually signed, and actually handed to productbuild.
+b="$d/build-pkg.sh"
+grep -qF 'plugin/build-plugin.sh' "$b" || { echo "build-pkg.sh does not build the wizard plugin"; exit 1; }
+grep -qF -- '--plugins' "$b" || { echo "build-pkg.sh does not pass --plugins to productbuild"; exit 1; }
+# ⚠️ The plugin lives OUTSIDE $STAGE, so sign-macho.sh's sweep does not see it.
+# An unsigned Mach-O anywhere in a submission fails notarization for the whole pkg.
+grep -qF 'codesign --verify --strict --verbose=2 "$PLUGIN_DIR/KeldSetup.bundle"' "$b" \
+  || { echo "build-pkg.sh does not verify the plugin's signature"; exit 1; }
