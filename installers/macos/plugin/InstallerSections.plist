@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- ⚠️ EVERY ENTRY MUST END IN .bundle. A bare name (e.g. "Introduction")
+       matches nothing, silently: the section simply does not load, with no error
+       and no log line. Measured 2026-09-14 — a list of bare built-in names left
+       KeldSetup as the only recognised section, so it rendered FIRST and looked
+       like proof that a post-install pane works. It is not.
+       KeldSetup sits BEFORE Install.bundle because a pane after it never
+       appears: the plugin's host process stops when installation completes. -->
+  <key>SectionOrder</key>
+  <array>
+    <string>Introduction.bundle</string>
+    <string>ReadMe.bundle</string>
+    <string>License.bundle</string>
+    <string>TargetSelect.bundle</string>
+    <string>PackageSelection.bundle</string>
+    <string>KeldSetup.bundle</string>
+    <string>Install.bundle</string>
+    <string>Summary.bundle</string>
+  </array>
+</dict>
+</plist>

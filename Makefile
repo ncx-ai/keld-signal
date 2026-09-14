@@ -35,6 +35,15 @@ help:
 	@echo "  make scaleway-down      delete it (YES=1 skips confirm; still bills the 24h minimum)"
 	@echo "  make scaleway-status    show the current Mac + connection details"
 	@echo ""
+	@echo "Checks:"
+	@echo "  make freeze-check              run the PLAIN freeze + worker-spawn acceptance gate locally (Linux)"
+	@echo "  make obfuscate-check           run the OBFUSCATED freeze + worker-spawn acceptance gate locally (Linux)"
+	@echo "  make obfuscation-coverage-check  fast: assert every sidecar/app/**/*.py is actually obfuscated (CI-safe)"
+	@echo "  make fixture-identity-check    fast: verify the committed fixture corpus matches its baseline fingerprint (CI-safe)"
+	@echo "  make dependency-staleness-check  warn/fail when a sidecar/requirements.txt pin has sat unrevisited"
+	@echo "  make crosscheck                verify all release targets build pure-Go (CGO_ENABLED=0)"
+	@echo "  make pkg-plugin-check          macOS-only: compile + sign + verify the Installer.app wizard pane"
+	@echo ""
 	@echo "Vars: DEST=$(DEST)  SIDECAR_VENV=$(SIDECAR_VENV)  PYTHON=$(PYTHON)  STUDY_PYTHON=$(STUDY_PYTHON)  SINK_PORT=$(SINK_PORT)"
 	@echo "      VERSION=<X.Y.Z> (release, optional)  YES=1 (release/scaleway-down, skip confirm)"
 	@echo "      SCALEWAY_ZONE=$(SCALEWAY_ZONE)  SCALEWAY_UP_TIMEOUT=$(SCALEWAY_UP_TIMEOUT) (seconds)"
@@ -208,3 +217,14 @@ crosscheck:  ## verify all release targets build pure-Go (CGO_ENABLED=0)
 	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build ./... \
 	    && echo "  OK   $$t" || { echo "  FAIL $$t"; exit 1; }; \
 	done
+
+# Compile + sign + verify the macOS wizard plugin. macOS-only; a no-op elsewhere.
+# This is what catches the stale-signature failure, which is invisible at runtime.
+.PHONY: pkg-plugin-check
+pkg-plugin-check: ## macOS-only: compile + sign + verify the Installer.app wizard pane (KeldSetup.bundle)
+	@[ "$$(uname -s)" = "Darwin" ] || { echo "pkg-plugin-check: macOS only — skipping"; exit 0; }
+	@bash installers/macos/plugin_test.sh
+	@go build -o /tmp/keld-plugin-check-keld ./cmd/keld
+	@bash installers/macos/plugin/build-plugin.sh /tmp/keld-plugin-check-plugins 0.0.0-check /tmp/keld-plugin-check-keld
+	@rm -rf /tmp/keld-plugin-check-plugins /tmp/keld-plugin-check-keld
+	@echo "pkg-plugin-check: OK"
