@@ -333,6 +333,13 @@
         [_toolsStack addArrangedSubview:[self labelWithText:@"No supported AI tools found on this Mac." bold:NO]];
         return;
     }
+    // `action` is one of configured | already_configured | skipped_conflict |
+    // will_configure — the last is `signal setup --dry-run --json`'s event for
+    // a detected, unconflicted tool that WOULD be written on a real run (see
+    // runSetup). Everything except skipped_conflict is tickable and ticked by
+    // default, will_configure included: its plain display-name label is
+    // correct as-is, since there is nothing more specific to say about a tool
+    // that simply hasn't been configured yet.
     for (NSDictionary *t in tools) {
         NSString *display = t[@"display"] ?: t[@"name"];
         NSString *action = t[@"action"] ?: @"";

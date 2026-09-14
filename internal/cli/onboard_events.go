@@ -34,7 +34,7 @@ type toolEvent struct {
 	Event   string `json:"event"`
 	Name    string `json:"name"`
 	Display string `json:"display"`
-	Action  string `json:"action"` // configured | already_configured | skipped_conflict
+	Action  string `json:"action"` // configured | already_configured | skipped_conflict | will_configure
 	Path    string `json:"path"`
 	Backup  string `json:"backup,omitempty"`
 }

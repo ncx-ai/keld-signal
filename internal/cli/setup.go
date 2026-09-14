@@ -169,6 +169,19 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 	say(fmt.Sprintf("  ✓ %-26s %s", "Hook", "~/.keld/hook.json"))
 
 	if opts.DryRun {
+		// ⚠️ A dry run must say what it WOULD do, not just what it is skipping.
+		// Every event above this point is skipped_conflict/already_configured;
+		// an adapter that is detected, unconflicted and changed reached
+		// `approveds` with no event of its own, because the "configured" event
+		// is emitted later, inside the write loop a dry run never reaches. The
+		// macOS wizard pane renders exactly the `tool` events runSetup emits,
+		// so on a fresh Mac with (say) Claude Code installed and unconfigured —
+		// the common case — the pane saw nothing and rendered "No supported AI
+		// tools found on this Mac." while the tool sat right there.
+		for _, a := range approveds {
+			emit(SetupEvent{Kind: "tool", Name: a.adapter.Name(), Display: a.adapter.DisplayName(),
+				Action: "will_configure", Path: a.plan.ConfigPath})
+		}
 		return config.LoadManifest()
 	}
 	if len(approveds) == 0 {

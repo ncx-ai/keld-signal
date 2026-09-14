@@ -155,6 +155,59 @@ func TestRunSetupDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+// TestRunSetupDryRunEmitsWillConfigureForApprovedTool pins the fix for the
+// macOS wizard pane's empty tool checklist: a --dry-run run only ever emitted
+// `tool` events for skipped_conflict/already_configured, never for a detected,
+// unconflicted, changed adapter — the common case on a fresh Mac with Claude
+// Code installed and unconfigured. The pane renders exactly the `tool` events
+// runSetup emits, so that gap rendered "No supported AI tools found on this
+// Mac." for a tool sitting right there. A dry run must say what it WOULD do.
+func TestRunSetupDryRunEmitsWillConfigureForApprovedTool(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	dir := t.TempDir()
+
+	adapter := &fakeAdapter{
+		name: "faketool",
+		plan: tools.Plan{
+			Name:       "faketool",
+			ConfigPath: filepath.Join(dir, "tool.json"),
+			AfterText:  `{"key":"val"}`,
+			Managed:    map[string]any{},
+			Summary:    []string{"added key"},
+			Changed:    true,
+		},
+	}
+
+	ob := &api.Onboarding{Endpoint: "https://ep.example.com", IngestToken: "tok", Actor: "actor1"}
+	client := &api.Client{}
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
+
+	var events []SetupEvent
+	opts := SetupOpts{
+		DryRun:  true,
+		Yes:     true,
+		Confirm: func(string) bool { return true },
+		Emit:    func(e SetupEvent) { events = append(events, e) },
+	}
+
+	if _, err := runSetup([]tools.Adapter{adapter}, p, client, ob, opts); err != nil {
+		t.Fatalf("runSetup returned error: %v", err)
+	}
+
+	var tool *SetupEvent
+	for i := range events {
+		if events[i].Kind == "tool" && events[i].Name == "faketool" {
+			tool = &events[i]
+		}
+	}
+	if tool == nil {
+		t.Fatalf("dry run emitted no tool event for an approved, unconflicted, changed adapter; events=%+v", events)
+	}
+	if tool.Action != "will_configure" {
+		t.Fatalf("expected action %q, got %q", "will_configure", tool.Action)
+	}
+}
+
 // TestRunSetupConfirmedApplyWritesExtraFile covers the write-on-confirm path:
 // once the user confirms (or --yes is set) and dry-run is off, a plan's
 // ExtraFile must be written to disk at the given mode alongside the primary
