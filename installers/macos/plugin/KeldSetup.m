@@ -33,6 +33,14 @@
     BOOL _paired;
     NSString *_apiURL;
     NSString *_stagedSidecar;
+    // Keeps an in-flight NSTask/NSPipe pair alive for the life of the spawn —
+    // neither block below is captured BY anything else, so without this ARC
+    // could reclaim both moments after launchAndReturnError: returns and no
+    // event, and no `done`, would ever arrive.
+    NSMutableArray *_activeTasks;
+    // Guards startSidecarDownload so re-entering the pane (Back, then
+    // Continue) can't pile up a second concurrent ~190 MB download.
+    BOOL _sidecarDownloadStarted;
 }
 
 - (NSString *)title { return @"Set Up Keld"; }
@@ -67,6 +75,16 @@
     task.standardOutput = out;
     task.standardError = [NSPipe pipe];   // keep stderr off the console log
 
+    // ⚠️ Hold the pair explicitly. `task`/`out` are locals; the blocks below
+    // reference them by their own block-parameter names (`t`/`fh`) or, for
+    // `out`, only inside the terminationHandler — neither block is retained
+    // by anything outside `task` itself, so nothing keeps `task` (and
+    // therefore its blocks) alive once this method returns. Removed again in
+    // the done path below, whichever way it's reached.
+    if (!_activeTasks) _activeTasks = [NSMutableArray array];
+    NSArray *handle = @[task, out];
+    [_activeTasks addObject:handle];
+
     NSMutableData *buffer = [NSMutableData data];
     out.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
         [buffer appendData:fh.availableData];
@@ -85,10 +103,14 @@
     task.terminationHandler = ^(NSTask *t) {
         t.standardOutput = nil;
         out.fileHandleForReading.readabilityHandler = nil;
-        dispatch_async(dispatch_get_main_queue(), ^{ done(t.terminationStatus); });
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_activeTasks removeObject:handle];
+            done(t.terminationStatus);
+        });
     };
     NSError *err = nil;
     if (![task launchAndReturnError:&err]) {
+        [_activeTasks removeObject:handle];
         dispatch_async(dispatch_get_main_queue(), ^{ done(-1); });
     }
 }
@@ -156,7 +178,13 @@
     // clicked). Catching a bad code HERE is the point: there is no pane after
     // the install to catch it in.
     self.nextEnabled = _paired;
-    [self startSidecarDownload];
+    // Guarded: the pane can be re-entered (Back, then Continue again), and
+    // without this a second entry would start a second concurrent ~190 MB
+    // download rather than reusing the first.
+    if (!_sidecarDownloadStarted) {
+        _sidecarDownloadStarted = YES;
+        [self startSidecarDownload];
+    }
 }
 
 // shouldExitPane writes the handoff postinstall consumes. Returning YES always:

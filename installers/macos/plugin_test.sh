@@ -35,7 +35,21 @@ grep -q 'install-sidecar' "$p/KeldSetup.m" || fail "pane does not drive keld sig
 grep -q 'installer-handoff.json' "$p/KeldSetup.m" || fail "pane writes no handoff file"
 grep -q 'nextEnabled' "$p/KeldSetup.m" || fail "pane never gates Continue"
 
-# The setup code must never be persisted.
-grep -qE 'writeToFile.*code|@"code"' "$p/KeldSetup.m" && fail "the setup code must never be written to disk" || true
+# The setup code must never be persisted. A negative grep only catches
+# spellings its own pattern anticipated (it's case-sensitive, and it only
+# inspects the writeToFile: line, by which point the payload is already an
+# opaque NSData) — so this is a POSITIVE assertion on the handoff payload's
+# key set instead: exactly these five keys, no more, no fewer. A new key of
+# any spelling then fails here until someone justifies it.
+python3 - "$p/KeldSetup.m" <<'PY' || fail "the setup code must never be written to disk"
+import re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r'NSDictionary \*payload = @\{(.*?)\};', src, re.S)
+if not m:
+    sys.exit(1)
+keys = set(re.findall(r'@"([A-Za-z0-9_]+)"\s*:', m.group(1)))
+expected = {"version", "paired", "api_url", "tools", "sidecar_staged"}
+sys.exit(0 if keys == expected else 1)
+PY
 
 echo "plugin_test.sh: OK"
