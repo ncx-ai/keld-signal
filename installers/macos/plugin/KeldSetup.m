@@ -100,16 +100,27 @@
             }
         }
     };
+    // ⚠️ `terminationHandler` retains its block, which captures `handle` (and
+    // so `task`) and, if `self` is captured strongly, `self` too — closing
+    // task -> block -> handle -> task (and task -> block -> self). Both
+    // edges are broken below: `t.terminationHandler = nil` once the handler
+    // has what it needs from `t`, on every path that assigns the handler, and
+    // a WEAK self capture matching the idiom already used in connect:,
+    // loadTools and startSidecarDownload.
+    __weak typeof(self) weakSelf = self;
     task.terminationHandler = ^(NSTask *t) {
         t.standardOutput = nil;
         out.fileHandleForReading.readabilityHandler = nil;
+        t.terminationHandler = nil;   // breaks the task -> block edge
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self->_activeTasks removeObject:handle];
+            typeof(self) s = weakSelf; if (!s) return;
+            [s->_activeTasks removeObject:handle];
             done(t.terminationStatus);
         });
     };
     NSError *err = nil;
     if (![task launchAndReturnError:&err]) {
+        task.terminationHandler = nil;   // same edge, on the launch-failure path
         [_activeTasks removeObject:handle];
         dispatch_async(dispatch_get_main_queue(), ^{ done(-1); });
     }
