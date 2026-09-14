@@ -86,7 +86,7 @@ fi
 #    nothing.
 asuser "$PREFIX"/keld-agent install || true
 
-rm -f "$HANDOFF"
+rm -f "$HANDOFF" || true
 
 # ⚠️ FALLBACK — and it is not optional. The wizard plugin can fail to load with
 # NO diagnostic whatsoever (a stale code signature does exactly this; measured
