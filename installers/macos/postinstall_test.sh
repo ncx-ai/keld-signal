@@ -34,4 +34,49 @@ printf '%s' "$code" | grep -qF -- '--bin-path' || fail "signal setup must pin th
 printf '%s' "$code" | grep -qF 'had_handoff=false' || fail "postinstall must track whether the handoff existed before it was deleted"
 printf '%s' "$code" | grep -qF '[ "$had_handoff" = false ] && [ ! -f "$userhome/.keld/hook.json" ]' || fail "fallback must require both: no handoff AND no hook.json"
 
+# ── IMPORTANT 3: a handoff from a CANCELLED or otherwise DIFFERENT build is
+# left behind because the pane writes it before the commit point, and this
+# script only deletes it on a run that gets that far. A later install whose
+# plugin fails to load silently — the one case the fallback above exists for —
+# must not trust a stale file's "paired: false" and disable that fallback. The
+# handoff's own `version` field is what discriminates "stale" from "current".
+printf '%s' "$code" | grep -qF 'plutil -extract version raw -o - "$HANDOFF"' \
+  || fail "postinstall never reads the handoff's own version"
+printf '%s' "$code" | grep -qF '[ "$hv" != "$pv" ]' \
+  || fail "postinstall does not compare the handoff version against \$PREFIX/VERSION before trusting it"
+
+# ── IMPORTANT 1: an empty tool selection (every checkbox unticked in the pane)
+# must configure NOTHING — distinct from "the pane never ran", which must
+# still configure every detected adapter (today's unfiltered `signal setup`
+# behaviour, tools.Select(nil)). had_handoff is the only signal that tells the
+# two apart. Extract the real block (rather than re-typing its logic here) and
+# run it under a stubbed `asuser` that records what it was asked to do, so a
+# regression in the ACTUAL script fails this test, not just a copy of it.
+tool_block="$(awk '/^if \[ "\$paired" = "true"/,/^fi$/' "$p")"
+[ -n "$tool_block" ] || fail "could not extract the tool-configuration block for testing"
+
+run_tool_case() { # $1=had_handoff $2=paired $3=tools -> prints the number of `asuser ... signal setup ...` calls
+  ( set +e
+    had_handoff="$1"; paired="$2"; tools="$3"; api_url=""; PREFIX="/usr/local/keld"
+    calls="$(mktemp)"; trap 'rm -f "$calls"' EXIT
+    asuser() { printf '%s\n' "$*" >> "$calls"; }
+    eval "$tool_block"
+    n="$(grep -c 'signal setup' "$calls" 2>/dev/null)"
+    # grep -c exits 1 on a zero count even though it still prints "0"; the
+    # caller runs under `set -euo pipefail`, so the raw exit status must never
+    # escape this subshell — only the printed count may.
+    echo "$n"
+    true
+  )
+}
+
+r="$(run_tool_case true true "")"
+[ "$r" = "0" ] || fail "an empty tool selection from a REAL handoff (had_handoff=true) still ran signal setup — got $r call(s), expected 0"
+
+r="$(run_tool_case false true "")"
+[ "$r" = "1" ] || fail "the pane-never-ran case (had_handoff=false) must still configure every detected tool — got $r call(s), expected 1"
+
+r="$(run_tool_case true true "claude_code")"
+[ "$r" = "1" ] || fail "a real, non-empty tool selection did not configure anything — got $r call(s), expected 1"
+
 echo "postinstall_test.sh: OK"
