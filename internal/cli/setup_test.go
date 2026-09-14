@@ -491,3 +491,19 @@ func TestRunSetupConflictYes(t *testing.T) {
 		t.Error("auto-skipped tool should not appear in manifest")
 	}
 }
+
+func TestSetupBinPathFlagOverridesRunningBinary(t *testing.T) {
+	cmd := newSetupCmd()
+	f := cmd.Flags().Lookup("bin-path")
+	if f == nil {
+		t.Fatal("keld signal setup must accept --bin-path: the installer pane runs a copy " +
+			"of keld from inside the plugin bundle, and pinning THAT path into tool hooks " +
+			"breaks every hook the moment the wizard closes")
+	}
+	if got := resolveSetupBinPath("/usr/local/keld/keld"); got != "/usr/local/keld/keld" {
+		t.Fatalf("explicit bin path = %q, want /usr/local/keld/keld", got)
+	}
+	if got := resolveSetupBinPath(""); got != keldBinaryPath() {
+		t.Fatalf("empty bin path = %q, want the running binary %q", got, keldBinaryPath())
+	}
+}

@@ -35,6 +35,21 @@ func keldBinaryPath() string {
 	return exe
 }
 
+// resolveSetupBinPath picks the keld path pinned into tool hook commands.
+//
+// ⚠️ IT EXISTS BECAUSE THE macOS INSTALLER RUNS A COPY OF keld FROM INSIDE THE
+// WIZARD PLUGIN BUNDLE, at a path that ceases to exist when the wizard closes.
+// keldBinaryPath() would pin that temporary path into every tool's hook command
+// and the failure would be silent: the config looks right, the hook never runs.
+// The installer passes --bin-path /usr/local/keld/keld, which is where the pkg
+// actually puts the binary.
+func resolveSetupBinPath(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return keldBinaryPath()
+}
+
 // SetupOpts holds behavioural knobs for runSetup that are separate from the
 // telemetry parameters.
 type SetupOpts struct {
@@ -289,6 +304,7 @@ func newSetupCmd() *cobra.Command {
 	var noLogin bool
 	var apiURL string
 	var jsonOut bool
+	var binPath string
 
 	cmd := &cobra.Command{
 		Use:   "setup",
@@ -331,7 +347,7 @@ func newSetupCmd() *cobra.Command {
 			p := tools.SetupParams{
 				Endpoint:    tp.Endpoint,
 				IngestToken: tp.Secret,
-				BinPath:     keldBinaryPath(),
+				BinPath:     resolveSetupBinPath(binPath),
 			}
 
 			opts := SetupOpts{
@@ -365,6 +381,8 @@ func newSetupCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompts.")
 	cmd.Flags().BoolVar(&noLogin, "no-login", false, "Fail instead of opening a browser.")
 	cmd.Flags().StringVar(&apiURL, "api-url", "", "Target a different Keld API base URL for local dev.")
+	cmd.Flags().StringVar(&binPath, "bin-path", "",
+		"Absolute path of the keld binary to pin into tool hooks (default: the running binary).")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit machine-readable NDJSON events on stdout (implies --yes).")
 
 	return cmd
