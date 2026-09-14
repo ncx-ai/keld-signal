@@ -2350,11 +2350,15 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   ⚠️ **Two failure modes here are completely silent** — a `SectionOrder` entry
   missing `.bundle` loads nothing, and a bundle signed before its executable was
   recompiled fails to load with no diagnostic at all. Both are pinned by
-  `installers/macos/plugin_test.sh`, and `postinstall` falls back to opening
-  `onboard.command` whenever the handoff file is absent, because a silently
-  missing pane would otherwise leave a machine installed and never asked for a
-  code. `installers/macos/onboard.command` is retained for that fallback and for
-  MDM; it is no longer opened on the success path.
+  `installers/macos/plugin_test.sh`. `postinstall` falls back to opening
+  `onboard.command` only when BOTH the pane never ran at all (no handoff file
+  was ever written) AND the machine ended up unconfigured (no `hook.json`) —
+  not on either alone: gating on `hook.json` by itself would also fire for a
+  person who ran the pane and deliberately chose "Set up later", and opening a
+  Terminal at someone who just made that choice is exactly what this branch
+  exists to stop. `installers/macos/onboard.command` is retained for the
+  pane-never-ran fallback and for MDM; it is no longer opened on the success
+  path.
   See `docs/macos-wizard-onboarding.md`.
 - **Windows onboarding UI:** `installers/windows/onboard.cmd`, staged into the
   payload by the `.iss` `[Files]` section and opened by the post-install `[Run]`

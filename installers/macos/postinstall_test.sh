@@ -25,4 +25,13 @@ printf '%s' "$code" | grep -qF 'onboard.command' || fail "no fallback when the w
 # The tool half must be pointed at the INSTALLED keld, never the plugin's copy.
 printf '%s' "$code" | grep -qF -- '--bin-path' || fail "signal setup must pin the installed keld path"
 
+# ⚠️ THE FALLBACK MUST NOT FIRE FOR "SET UP LATER". Gating on hook.json ALONE
+# also fires for a person who deliberately deferred setup in the pane — opening
+# a Terminal at someone who just chose "Set up later" is exactly what this
+# branch exists to stop. The condition is two-part: the pane never ran (no
+# handoff file existed, captured in had_handoff BEFORE the handoff is deleted)
+# AND the machine ended up unconfigured (no hook.json).
+printf '%s' "$code" | grep -qF 'had_handoff=false' || fail "postinstall must track whether the handoff existed before it was deleted"
+printf '%s' "$code" | grep -qF '[ "$had_handoff" = false ] && [ ! -f "$userhome/.keld/hook.json" ]' || fail "fallback must require both: no handoff AND no hook.json"
+
 echo "postinstall_test.sh: OK"

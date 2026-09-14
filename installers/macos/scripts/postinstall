@@ -50,7 +50,9 @@ paired=false
 api_url=""
 tools=""
 staged=""
+had_handoff=false
 if [ -f "$HANDOFF" ]; then
+  had_handoff=true
   paired=$(/usr/bin/plutil -extract paired raw -o - "$HANDOFF" 2>/dev/null || echo false)
   api_url=$(/usr/bin/plutil -extract api_url raw -o - "$HANDOFF" 2>/dev/null || echo "")
   staged=$(/usr/bin/plutil -extract sidecar_staged raw -o - "$HANDOFF" 2>/dev/null || echo "")
@@ -88,12 +90,18 @@ asuser "$PREFIX"/keld-agent install || true
 
 rm -f "$HANDOFF" || true
 
-# ⚠️ FALLBACK — and it is not optional. The wizard plugin can fail to load with
-# NO diagnostic whatsoever (a stale code signature does exactly this; measured
-# 2026-09-14). A machine in that state has installed cleanly and been asked for
-# nothing, so without this it would sit idle forever. The old Terminal path is
-# kept precisely to be this.
-if [ ! -f "$userhome/.keld/hook.json" ] && [ -f "$PREFIX/onboard.command" ]; then
+# ⚠️ FALLBACK — and it is not optional, but it is deliberately NARROW. The
+# wizard plugin can fail to load with NO diagnostic whatsoever (a stale code
+# signature does exactly this; measured 2026-09-14): the pane never ran, the
+# handoff file was never written, and a machine in that state has installed
+# cleanly and been asked for nothing — so without this it would sit idle
+# forever. That is the ONLY case this is for. Gating on hook.json alone would
+# also fire for someone who ran the pane and deliberately clicked "Set up
+# later": that person made a choice, and opening a Terminal at them is exactly
+# what this branch exists to stop. So both halves are required: the pane never
+# ran (had_handoff is false, captured above before the handoff file was
+# deleted) AND the machine ended up unconfigured (no hook.json).
+if [ "$had_handoff" = false ] && [ ! -f "$userhome/.keld/hook.json" ] && [ -f "$PREFIX/onboard.command" ]; then
   chmod +x "$PREFIX/onboard.command" || true
   launchctl asuser "$uid" sudo -u "$user" open "$PREFIX/onboard.command" || true
 fi
