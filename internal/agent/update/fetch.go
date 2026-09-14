@@ -123,6 +123,19 @@ func (f *Fetcher) Fetch(ctx context.Context, tag, asset, dest string) error {
 	return nil
 }
 
+// FetchUnverified downloads without a published-hash check. It exists for ONE
+// caller — the installer's sidecar fetch, where a human is watching and
+// scripts/install.sh has always degraded this way. Auto-update must never call
+// it: an unattended swap has no reader who can abort.
+func (f *Fetcher) FetchUnverified(ctx context.Context, tag, asset, dest string) error {
+	url := fmt.Sprintf("%s/%s/%s", f.base(), tag, asset)
+	if _, err := f.download(ctx, url, dest); err != nil {
+		_ = os.Remove(dest)
+		return err
+	}
+	return nil
+}
+
 // download writes url to dest and returns the hex SHA-256 of what it wrote.
 // The hash is computed from the bytes as they land, so a body that disagrees
 // with its Content-Length cannot pass by being re-read from a cache.
