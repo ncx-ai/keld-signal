@@ -1,0 +1,553 @@
+<title>Normalised Turn Record</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4F7; --ink:#1B2430; --muted:#5E6B7A; --rule:#D3D9E1; --panel:#FFFFFF;
+  --daemon:#3B5B8C; --daemon-soft:#DCE5F2;
+  --enc:#C0761A; --enc-soft:#F6E4C8;
+  --bad:#B3392F; --bad-soft:#F3D8D4;
+  --good:#2E7D4F; --good-soft:#D6EBDD;
+  --wait:#B9C1CB;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+    --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+    --enc:#E0A24F; --enc-soft:#3D2C14;
+    --bad:#E0736A; --bad-soft:#3F1E1B;
+    --good:#6CC08E; --good-soft:#193226;
+    --wait:#4A5563;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+  --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+  --enc:#E0A24F; --enc-soft:#3D2C14;
+  --bad:#E0736A; --bad-soft:#3F1E1B;
+  --good:#6CC08E; --good-soft:#193226;
+  --wait:#4A5563;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 "IBM Plex Sans",system-ui,sans-serif;margin:0}
+main{max-width:900px;margin:0 auto;padding:40px 24px 72px}
+h1{font-size:28px;font-weight:600;margin:0 0 6px;text-wrap:balance}
+h2{font-size:18px;font-weight:600;margin:46px 0 8px;text-wrap:balance;scroll-margin-top:16px}
+h3{font-size:14px;font-weight:600;margin:26px 0 6px;letter-spacing:.01em}
+h3 .mono{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+p{max-width:66ch;margin:0 0 12px}
+ul{max-width:68ch;margin:0 0 12px;padding-left:20px}
+li{margin:0 0 4px}
+.lede{color:var(--muted);font-size:15px;max-width:70ch}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.meta{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:14px 0 0;font-size:13px;color:var(--muted)}
+.chip{display:inline-block;padding:3px 10px;border-radius:999px;font:500 11px "IBM Plex Mono",monospace;letter-spacing:.06em;text-transform:uppercase}
+.chip-draft{background:var(--enc-soft);color:var(--enc);border:1px solid var(--enc)}
+.chip-signed{background:var(--good-soft);color:var(--good);border:1px solid var(--good)}
+.chip-reviewed{background:var(--daemon-soft);color:var(--daemon);border:1px solid var(--daemon)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:14px;margin:18px 0 0;max-width:680px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0}
+.wrap{overflow-x:auto;margin:0 0 4px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;margin:0}
+th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--rule);padding:0 12px 6px 0;text-transform:uppercase;white-space:nowrap}
+td{border-bottom:1px solid var(--rule);padding:8px 12px 8px 0;vertical-align:top}
+table.ac td:first-child,table.tests td:first-child{width:52px;color:var(--muted);white-space:nowrap}
+table.ac td:nth-child(2){width:42%}
+table.tests td:nth-child(2){width:38%}
+tr:target td{background:var(--daemon-soft)}
+.pill{display:inline-block;padding:2px 8px;border-radius:4px;font:500 11px "IBM Plex Mono",monospace;letter-spacing:.04em;white-space:nowrap}
+.p-met{background:var(--good-soft);color:var(--good)}
+.p-partial{background:var(--enc-soft);color:var(--enc)}
+.p-missed{background:var(--bad-soft);color:var(--bad)}
+.p-unver{background:var(--rule);color:var(--muted)}
+.p-reuse{background:var(--good-soft);color:var(--good)}
+.p-extend{background:var(--daemon-soft);color:var(--daemon)}
+.p-new{background:var(--enc-soft);color:var(--enc)}
+.p-pattern{background:var(--bad-soft);color:var(--bad)}
+.p-h{background:var(--bad-soft);color:var(--bad)}
+.p-m{background:var(--enc-soft);color:var(--enc)}
+.p-l{background:var(--good-soft);color:var(--good)}
+pre.gherkin{background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--daemon);border-radius:4px;padding:14px 16px;margin:0 0 12px;overflow-x:auto;font:13px/1.6 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink)}
+pre.gherkin .kw{color:var(--daemon);font-weight:500}
+pre.gherkin .cov{color:var(--muted)}
+.note{border-left:3px solid var(--enc);background:var(--enc-soft);padding:10px 14px;margin:0 0 14px;max-width:68ch;font-size:14px}
+.note strong{color:var(--enc)}
+figure{margin:18px 0 0;padding:0}
+figure svg{display:block;width:100%;height:auto;max-width:100%;font:12px "IBM Plex Sans",system-ui,sans-serif}
+figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
+.lane{stroke:var(--rule);stroke-width:1}
+.lanelbl{fill:var(--muted);font:500 11px "IBM Plex Mono",monospace;letter-spacing:.06em}
+.txt{fill:var(--ink)}
+.small{fill:var(--muted);font-size:11px}
+.b-daemon{fill:var(--daemon-soft);stroke:var(--daemon);stroke-width:1.4}
+.b-enc{fill:var(--enc-soft);stroke:var(--enc);stroke-width:1.4}
+.b-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.4}
+.b-good{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4}
+.b-plain{fill:var(--bg);stroke:var(--ink);stroke-width:1.2}
+.b-new{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4;stroke-dasharray:5 3}
+.b-wait{fill:var(--wait);stroke:none}
+.arr{stroke:var(--ink);stroke-width:1.3;fill:none}
+.arr-bad{stroke:var(--bad);stroke-width:1.3;fill:none;stroke-dasharray:4 3}
+.arr-good{stroke:var(--good);stroke-width:1.3;fill:none}
+.t-bad{fill:var(--bad)}
+.t-good{fill:var(--good)}
+.t-enc{fill:var(--enc)}
+.t-daemon{fill:var(--daemon)}
+.tick{stroke:var(--rule);stroke-width:1}
+.qa{border-top:1px solid var(--rule);margin-top:48px;padding-top:20px}
+.qa dt{font-weight:600;margin-top:14px}
+.qa dd{margin:4px 0 0;max-width:66ch;color:var(--ink)}
+</style>
+
+<main>
+
+<h1>Normalised Turn Record — Discovery</h1>
+<p class="lede">One turn record between a tool's transcript and the reference-series store, and a Codex reader as the first proof. If this is wrong, Codex stays a telemetry-only source and every further tool costs a second copy of the Claude parser.</p>
+
+<div class="meta">
+  <span class="chip chip-draft">Draft — awaiting sign-off</span>
+  <span>Fable 5.1 (1M context) — thinking: medium</span>
+  <span class="mono">2026-09-14</span>
+</div>
+
+<dl class="kv">
+  <dt>Repo / branch</dt><dd class="mono">ncx-ai/keld-signal · release/v3</dd>
+  <dt>Spec source</dt><dd class="mono">docs/superpowers/specs/2026-09-14-normalised-turn-record-discovery.html</dd>
+  <dt>Codex prompts ever captured</dt><dd class="mono">0 — watcher needs an ordinal; 0 of 4,076 user_message lines carry one (287 rollouts, 20 CLI versions, this machine)</dd>
+  <dt>Modules reading Claude field names</dt><dd class="mono">6 — ingest.py, levels.py, capture.py, workspace.py, textembed.py, analyze.py (grep, release/v3)</dd>
+  <dt>turn_context before its user_message</dt><dd class="mono">1,846 of 1,848 turns (40 newest rollouts) — the 2 exceptions get the timestamp fallback</dd>
+  <dt>Codex records that carry the work</dt><dd class="mono">turn_context (cwd, model, turn_id) · item_completed (CommandExecution, FileChange, McpToolCall) · token_usage_record</dd>
+  <dt>Parity oracle</dt><dd class="mono">analyze_window_by_parse + 284-transcript chunk equivalence; both exist today</dd>
+  <dt>codeburn</dt><dd class="mono">MIT · reference only · src/providers/codex.ts, 1,409 lines</dd>
+</dl>
+
+<h2 id="s1">1 · Hypothesis &amp; scope</h2>
+
+<h3>The why</h3>
+<ul>
+  <li><strong>Problem:</strong> Codex sessions reach Atlas as telemetry only. No Codex prompt has ever been enriched, and no Codex block has ever been cut.</li>
+  <li><strong>Who feels it:</strong> Any org that runs Codex. The Alpha account sees activity for Codex and classifications only for Claude.</li>
+  <li><strong>Business value:</strong> Workstreams, blocks and project attribution cover every tool <span class="mono">keld signal setup</span> configures, not one.</li>
+  <li><strong>Hypothesis:</strong> If the sidecar reads a normalised turn record instead of the Claude line, a Codex reader of a few hundred lines yields the same workstreams Claude gets, and the Claude path stays byte-identical.</li>
+</ul>
+
+<h3>Goals</h3>
+<ul>
+  <li><strong>G1</strong> — A Codex session publishes blocks with attributed workstreams.</li>
+  <li><strong>G2</strong> — Claude Code and Cowork rows do not change by one byte.</li>
+  <li><strong>G3</strong> — A third tool is a reader plus one eligibility entry. Nothing else.</li>
+</ul>
+
+<h3>Acceptance criteria</h3>
+<p>Binary, observable at a seam, each naming its verification. The reviewer grades by ID.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th></tr></thead>
+<tbody>
+  <tr id="ac-1"><td class="mono">AC-1</td><td>Claude field names (<span class="mono">promptId</span>, <span class="mono">gitBranch</span>, <span class="mono">attributionSkill</span>, <span class="mono">message.content</span>, <span class="mono">tool_use</span>, <span class="mono">isSidechain</span>) appear in exactly one sidecar module, the Claude reader.</td><td>source tree</td><td class="mono">sidecar/app/test_reader_boundary.py — greps analysis/*.py, fails on any hit outside readers/claude.py</td></tr>
+  <tr id="ac-2"><td class="mono">AC-2</td><td>Over the fixture transcripts, the store's <span class="mono">event</span>, <span class="mono">bin</span>, <span class="mono">prompt</span> and <span class="mono">turn_magnitude</span> rows equal a golden dump taken at the commit before the record.</td><td>refseries.db rows</td><td class="mono">test_reader_golden.py against docs/superpowers/specs/golden/turn-record-*.jsonl, committed first</td></tr>
+  <tr id="ac-3"><td class="mono">AC-3</td><td>For a rollout captured from Codex 0.153.4, the watcher emits one pointer per <span class="mono">event_msg/user_message</span>, id <span class="mono">&lt;session_id&gt;#&lt;turn_id&gt;</span>, cwd from <span class="mono">turn_context</span>.</td><td>spool.Pointer</td><td class="mono">go test ./internal/agent/watch -run TestCodexExtractorRealRollout</td></tr>
+  <tr id="ac-4"><td class="mono">AC-4</td><td>No fixture in <span class="mono">watch</span> or <span class="mono">resolve</span> places an <span class="mono">ordinal</span> on a <span class="mono">user_message</span> line, and the Codex fixture is a captured file, not a hand-written one.</td><td>test fixtures</td><td class="mono">TestCodexFixturesMatchProduction — parses every fixture, fails on the shape</td></tr>
+  <tr id="ac-5"><td class="mono">AC-5</td><td><span class="mono">CodexReader.Read(path, id)</span> returns the human text of that turn and no other turn's text, for the AC-3 fixture.</td><td>resolve.TranscriptReader</td><td class="mono">go test ./internal/agent/resolve -run TestCodexReaderReadByTurnID</td></tr>
+  <tr id="ac-6"><td class="mono">AC-6</td><td>Ingesting the AC-3 rollout writes <span class="mono">workspace</span>, <span class="mono">model</span>, <span class="mono">tool</span>, <span class="mono">exe</span>, <span class="mono">action</span> and <span class="mono">mag/tok</span> rows, and no <span class="mono">say</span> row carries text.</td><td>refseries.db rows</td><td class="mono">sidecar/app/test_codex_reader.py</td></tr>
+  <tr id="ac-7"><td class="mono">AC-7</td><td>Chunked ingest of the Codex rollout in 40 pieces equals one pass, row for row.</td><td>refseries.db rows</td><td class="mono">test_ingest.py::test_chunked_ingest_of_a_codex_rollout_equals_one_pass</td></tr>
+  <tr id="ac-8"><td class="mono">AC-8</td><td><span class="mono">analyze_window_by_parse</span> equals the store's answer for a Codex prompt id, and the oracle resolves that id from the reader, not from Claude keys.</td><td>/analyze response</td><td class="mono">test_prompt_id_seam.py::test_codex_oracle_agrees_with_the_index</td></tr>
+  <tr id="ac-9"><td class="mono">AC-9</td><td><span class="mono">WorkstreamsEligible("codex")</span> is true, the ingest signal fires for a Codex path, and <span class="mono">WorkstreamsEligible("gemini")</span> is unchanged.</td><td>enrich + daemon</td><td class="mono">go test ./internal/agent/enrich ./internal/agent/daemon -run 'Eligible|IngestSignal'</td></tr>
+  <tr id="ac-10"><td class="mono">AC-10</td><td>A real Codex session through an isolated daemon against the dev Atlas publishes at least one block whose <span class="mono">workstreams.model</span> is <span class="mono">attributed</span>, and its telemetry row is unchanged.</td><td>Atlas blocks table + ledger</td><td class="mono">scripts/ledger_e2e.sh --source codex, read back by (session_id, start_ts)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Explicit exclusions</h3>
+<ul>
+  <li>A Gemini reader. Same shape, separate page; see section 8.</li>
+  <li>Embedding or porting codeburn. Its Codex parser is the field-mapping reference and nothing more.</li>
+  <li>Any change to Codex telemetry, the proxy, or Atlas. Atlas already renders <span class="mono">workstreams</span> for any source.</li>
+  <li>A Codex prompt hook. Codex fires no prompt-submit hook; the watcher is the only capture path.</li>
+  <li>Keyword or heuristic classification of Codex turns. The workstream dimensions are counted, as for Claude.</li>
+  <li>Branch for Codex. Rollouts carry no branch field; the dimension stays unattributed until measured otherwise.</li>
+</ul>
+
+<h2 id="s2">2 · Proposed solution</h2>
+
+<h3>Prior art — what this builds on</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Existing thing</th><th>Path</th><th>Role here</th></tr></thead>
+<tbody>
+  <tr><td><span class="mono">turns_in</span>, the one door into a transcript</td><td class="mono">sidecar/app/analysis/transcript.py:24</td><td><span class="pill p-extend">extend</span> yields a record, not the raw line</td></tr>
+  <tr><td><span class="mono">events_for_turns</span>, the extractor</td><td class="mono">sidecar/app/analysis/levels.py:95-380</td><td><span class="pill p-extend">extend</span> reads record fields</td></tr>
+  <tr><td>ingest: cwd list, watermark, prompt index</td><td class="mono">sidecar/app/analysis/ingest.py:641-720</td><td><span class="pill p-extend">extend</span> reads record fields</td></tr>
+  <tr><td><span class="mono">session_of</span>, <span class="mono">_scope</span> — path-derived, Claude layout</td><td class="mono">sidecar/app/analysis/ingest.py:216,246</td><td><span class="pill p-extend">extend</span> the reader supplies both</td></tr>
+  <tr><td><span class="mono">capture.scan</span>, tool outcomes + bin offsets</td><td class="mono">sidecar/app/analysis/capture.py:86-92</td><td><span class="pill p-extend">extend</span> routes by record kind</td></tr>
+  <tr><td><span class="mono">scan_tool_use</span>, workspace pre-pass</td><td class="mono">sidecar/app/analysis/workspace.py:192-223</td><td><span class="pill p-extend">extend</span> reads record tool calls</td></tr>
+  <tr><td><span class="mono">messages_in</span>, text half</td><td class="mono">sidecar/app/analysis/textembed.py:228-258</td><td><span class="pill p-extend">extend</span> reads record text blocks</td></tr>
+  <tr><td><span class="mono">_prompt_time</span>, the oracle</td><td class="mono">sidecar/app/analysis/analyze.py:534</td><td><span class="pill p-extend">extend</span> resolves by record ids</td></tr>
+  <tr><td><span class="mono">TranscriptReader</span> — the Go precedent, one per source</td><td class="mono">internal/agent/resolve/resolve.go:6</td><td><span class="pill p-reuse">reuse</span> the pattern, in Python</td></tr>
+  <tr><td>Codex watcher, ordinal gate</td><td class="mono">internal/agent/watch/codex.go:68</td><td><span class="pill p-extend">extend</span> identity from turn_context</td></tr>
+  <tr><td>Codex resolver, by ordinal</td><td class="mono">internal/agent/resolve/codex.go:42</td><td><span class="pill p-extend">extend</span> by turn_id</td></tr>
+  <tr><td>Eligibility set</td><td class="mono">internal/agent/enrich/workstreams.go:24</td><td><span class="pill p-extend">extend</span> one entry</td></tr>
+  <tr><td>Ingest signal, blocks, features, tick gates</td><td class="mono">daemon/ingestsignal.go:177 · blocks.go:121 · features.go:183 · tick.go:148</td><td><span class="pill p-reuse">reuse</span> already keyed on the predicate</td></tr>
+  <tr><td>Sidecar path allowlist includes <span class="mono">~/.codex/sessions</span></td><td class="mono">internal/agent/watch/roots.go:115</td><td><span class="pill p-reuse">reuse</span> no change</td></tr>
+  <tr><td>Chunk equivalence and prompt-id seam tests</td><td class="mono">sidecar/app/test_ingest.py:320 · test_prompt_id_seam.py:125</td><td><span class="pill p-reuse">reuse</span> the parity bar</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Reuse ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Level</th><th>Justification</th></tr></thead>
+<tbody>
+  <tr><td><span class="mono">Turn</span> record + <span class="mono">readers/claude.py</span></td><td><span class="pill p-extend">extend</span></td><td>Generalises the seam that already exists by name. Six readers of the raw line become six readers of one record.</td></tr>
+  <tr><td><span class="mono">readers/codex.py</span></td><td><span class="pill p-new">new</span></td><td>A new source needs a new mapping. It follows the Go <span class="mono">TranscriptReader</span> pattern; no new pattern.</td></tr>
+  <tr><td>Codex identity in watch + resolve</td><td><span class="pill p-extend">extend</span></td><td>The ordinal never existed. <span class="mono">turn_context.turn_id</span> does, and precedes the prompt 1,846 of 1,848 times.</td></tr>
+  <tr><td><span class="mono">workstreamAnalyzableSources["codex"]</span></td><td><span class="pill p-extend">extend</span></td><td>One entry. The code comment already names this as the only edit needed once a reader exists.</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li><strong>New patterns introduced:</strong> None. The record is the Python twin of <span class="mono">resolve.TranscriptReader</span>.</li>
+  <li><strong>Shared-decision helpers:</strong> the human-turn rule for Codex (<span class="mono">event_msg/user_message</span>, never <span class="mono">response_item</span> user-role) lives in <span class="mono">readers/codex.py</span> and the Go watcher reads the same rule from a table pinned by AC-4.</li>
+</ul>
+
+<h3>Technical design</h3>
+<ul>
+  <li><strong>Data:</strong> No schema change. Codex rows use the existing levels. No <span class="mono">STATE_VERSION</span> bump: AC-2 proves Claude stores need no reparse.</li>
+  <li><strong>The record:</strong> <span class="mono">ts, session, scope_root, line_id, prompt_id, role, cwd, branch, model, sidechain, skill, mcp_server, mcp_tool, text, think_chars[], tool_calls[{name, input}], usage, request_id</span>. Text stays in memory; only lengths and terms are stored, as today.</li>
+  <li><strong>API:</strong> <span class="mono">/ingest</span> and <span class="mono">/analyze</span> unchanged. The reader is chosen by path root, the same table <span class="mono">AnalyzeRoots</span> already builds.</li>
+  <li><strong>Read path:</strong> workstreams, blocks, dynamics and prior consume rows. None of them learns the word Codex.</li>
+  <li><strong>Invariants respected:</strong> text never crosses (unchanged); the <span class="mono">term</span> level reads Codex text under the same v18 rule; path confinement already covers <span class="mono">~/.codex/sessions</span>; single-flight untouched, this path issues no inference.</li>
+</ul>
+
+<h3>Codex field mapping</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Record field</th><th>Claude Code</th><th>Codex rollout</th><th>Note</th></tr></thead>
+<tbody>
+  <tr><td class="mono">ts</td><td class="mono">timestamp</td><td class="mono">timestamp</td><td>both top-level</td></tr>
+  <tr><td class="mono">session</td><td>path-derived</td><td class="mono">session_meta.id</td><td>subagent rollouts carry <span class="mono">parent_thread_id</span>; keep their own id</td></tr>
+  <tr><td class="mono">prompt_id</td><td class="mono">promptId</td><td class="mono">&lt;session_id&gt;#turn_context.turn_id</td><td>fallback: the prompt's own timestamp, 2 of 1,848</td></tr>
+  <tr><td class="mono">role</td><td class="mono">type</td><td><span class="mono">user_message</span> → user; <span class="mono">AgentMessage</span> item → assistant</td><td><span class="mono">response_item</span> user-role is injected context, not a human turn</td></tr>
+  <tr><td class="mono">cwd</td><td class="mono">cwd</td><td class="mono">turn_context.cwd</td><td><span class="mono">session_meta.cwd</span> as fallback</td></tr>
+  <tr><td class="mono">model</td><td class="mono">message.model</td><td class="mono">turn_context.model</td><td></td></tr>
+  <tr><td class="mono">branch</td><td class="mono">gitBranch</td><td>—</td><td>unattributed; excluded above</td></tr>
+  <tr><td class="mono">tool_calls</td><td class="mono">content[].tool_use</td><td class="mono">item_completed.item</td><td><span class="mono">CommandExecution{command,cwd}</span> → Bash; <span class="mono">FileChange.changes[].path</span> → edit; <span class="mono">McpToolCall</span> → mcp</td></tr>
+  <tr><td class="mono">usage</td><td class="mono">message.usage</td><td class="mono">token_usage_record.usage</td><td><span class="mono">cached_input_tokens</span> → in_cached; <span class="mono">cache_write_input_tokens</span> → in_fresh</td></tr>
+  <tr><td class="mono">request_id</td><td class="mono">requestId</td><td class="mono">token_usage_record.response_id</td><td>dedup across batches, as today</td></tr>
+  <tr><td class="mono">think_chars</td><td>thinking blocks</td><td><span class="mono">Reasoning</span> items</td><td>count only; Codex reasoning is encrypted</td></tr>
+  <tr><td class="mono">skill</td><td class="mono">attributionSkill</span> · Skill tool</td><td>—</td><td>unattributed</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>System diagram</h3>
+<figure>
+<svg viewBox="0 0 880 330" role="img" aria-label="Two lanes. Top lane, the daemon in Go: a Codex rollout on disk reaches the watcher, which is changed to name a prompt by turn_id, then the queue, then the resolver, also changed to read by turn_id. Bottom lane, the sidecar in Python: the daemon's ingest signal reaches a new reader-selection step keyed on the path root; two readers sit beside it, a changed Claude reader that owns every Claude field name and a new, dashed Codex reader. Both emit the same Turn record into the extractor, events_for_turns, which is changed only to read record fields. The store, blocks, workstreams and Atlas to the right are untouched.">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+    <marker id="ah-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-good"/></marker>
+  </defs>
+  <line x1="20" y1="120" x2="860" y2="120" class="lane"/>
+  <text x="20" y="28" class="lanelbl">DAEMON (GO)</text>
+  <text x="20" y="148" class="lanelbl">SIDECAR (PYTHON)</text>
+
+  <rect x="20" y="46" width="140" height="56" rx="4" class="b-plain"/>
+  <text x="90" y="69" text-anchor="middle" class="txt">rollout-*.jsonl</text>
+  <text x="90" y="87" text-anchor="middle" class="small">~/.codex/sessions</text>
+  <path d="M160 74H186" class="arr" marker-end="url(#ah)"/>
+  <rect x="188" y="46" width="150" height="56" rx="4" class="b-enc"/>
+  <text x="263" y="69" text-anchor="middle" class="txt">watch/codex.go</text>
+  <text x="263" y="87" text-anchor="middle" class="small mono">id = session#turn_id</text>
+  <path d="M338 74H364" class="arr" marker-end="url(#ah)"/>
+  <rect x="366" y="46" width="120" height="56" rx="4" class="b-daemon"/>
+  <text x="426" y="69" text-anchor="middle" class="txt">queue</text>
+  <text x="426" y="87" text-anchor="middle" class="small">untouched</text>
+  <path d="M486 74H512" class="arr" marker-end="url(#ah)"/>
+  <rect x="514" y="46" width="150" height="56" rx="4" class="b-enc"/>
+  <text x="589" y="69" text-anchor="middle" class="txt">resolve/codex.go</text>
+  <text x="589" y="87" text-anchor="middle" class="small">text by turn_id, local</text>
+  <path d="M664 74H690" class="arr" marker-end="url(#ah)"/>
+  <rect x="692" y="46" width="168" height="56" rx="4" class="b-enc"/>
+  <text x="776" y="69" text-anchor="middle" class="txt">WorkstreamsEligible</text>
+  <text x="776" y="87" text-anchor="middle" class="small mono">+ "codex" (one line)</text>
+  <path d="M263 102V160" class="arr" marker-end="url(#ah)"/>
+  <text x="272" y="136" class="small">POST /ingest · path only</text>
+
+  <rect x="188" y="162" width="150" height="50" rx="4" class="b-new"/>
+  <text x="263" y="183" text-anchor="middle" class="txt">reader by root</text>
+  <text x="263" y="200" text-anchor="middle" class="small">AnalyzeRoots table</text>
+  <path d="M338 176H364" class="arr" marker-end="url(#ah)"/>
+  <rect x="366" y="162" width="120" height="50" rx="4" class="b-new"/>
+  <text x="426" y="183" text-anchor="middle" class="txt">readers/codex.py</text>
+  <text x="426" y="200" text-anchor="middle" class="small">NEW</text>
+  <path d="M338 200L352 240H364" class="arr" marker-end="url(#ah)"/>
+  <rect x="366" y="224" width="120" height="50" rx="4" class="b-enc"/>
+  <text x="426" y="245" text-anchor="middle" class="txt">readers/claude.py</text>
+  <text x="426" y="262" text-anchor="middle" class="small">owns every Claude key</text>
+  <path d="M486 187H512" class="arr" marker-end="url(#ah)"/>
+  <path d="M486 249L500 213H512" class="arr" marker-end="url(#ah)"/>
+  <rect x="514" y="176" width="110" height="56" rx="4" class="b-new"/>
+  <text x="569" y="199" text-anchor="middle" class="txt">Turn record</text>
+  <text x="569" y="217" text-anchor="middle" class="small">one shape</text>
+  <path d="M624 204H650" class="arr" marker-end="url(#ah)"/>
+  <rect x="652" y="176" width="100" height="56" rx="4" class="b-enc"/>
+  <text x="702" y="199" text-anchor="middle" class="txt">extractor</text>
+  <text x="702" y="217" text-anchor="middle" class="small">record fields</text>
+  <path d="M752 204H778" class="arr-good" marker-end="url(#ah-good)"/>
+  <rect x="780" y="176" width="80" height="56" rx="4" class="b-daemon"/>
+  <text x="820" y="199" text-anchor="middle" class="txt">store</text>
+  <text x="820" y="217" text-anchor="middle" class="small">untouched</text>
+  <text x="514" y="300" class="small">Dashed = new · amber = changed · plain/blue = untouched. Blocks, workstreams, dynamics, prior, Atlas: untouched.</text>
+</svg>
+<figcaption>Everything to the right of the record is untouched. That is the claim AC-2 grades: the store cannot tell which reader produced a row.</figcaption>
+</figure>
+
+<h2 id="s3">3 · Alternatives considered</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Option</th><th>Approach</th><th>Rejected because</th></tr></thead>
+<tbody>
+  <tr><td class="mono">A</td><td>Add a Codex branch inside <span class="mono">events_for_turns</span> and friends, no record</td><td>Six modules each grow a second shape. The prompt-id index bug came from exactly two copies of one rule drifting.</td></tr>
+  <tr><td class="mono">B</td><td>Embed codeburn's parsers as a Node step</td><td>CLI-only, no library exports, output is aggregated cost. A Node runtime in the client to fork a 5,561-line parser.</td></tr>
+  <tr><td class="mono">C</td><td>Convert rollouts to Claude JSONL on disk, then reuse everything</td><td>A second file per session, a second byte-offset checkpoint, and a translation with no oracle to check it against.</td></tr>
+  <tr><td class="mono">D</td><td>Fix the watcher's ordinal check only</td><td>Codex prompts would publish sensitivity alone. Atlas renders that as no classification; the report stays true.</td></tr>
+  <tr><td class="mono">E</td><td>Do nothing</td><td>Codex stays telemetry-only for every org, and each further tool restates the whole question.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Closest call:</strong> A. It ships Codex fastest. It lost on one fact: six modules read Claude keys today, so A is six edits per tool forever, and the record is six edits once.</p>
+
+<h2 id="s4">4 · Behaviour &amp; test specification</h2>
+
+<h3>User flow</h3>
+<figure>
+<svg viewBox="0 0 880 400" role="img" aria-label="A decision chain for one Codex rollout line. Is it turn_context? Then remember turn_id, cwd and model for the coming turn. Is it a user_message event? If a turn_context is pending, emit a Turn record with prompt id session hash turn_id; if none is pending, the unhappy path: fall back to the prompt's own timestamp and count the fallback. Is it item_completed? Emit the tool call onto the current turn. Is it token_usage_record? Attach usage, deduplicated by response_id. Anything else, including response_item user-role context and encrypted reasoning bodies, is skipped and counted, never an error.">
+  <defs>
+    <marker id="f-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+    <marker id="f-ah-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-good"/></marker>
+    <marker id="f-ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-bad"/></marker>
+  </defs>
+  <rect x="300" y="16" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="43" text-anchor="middle" class="txt">one rollout line</text>
+  <path d="M440 60V84" class="arr" marker-end="url(#f-ah)"/>
+
+  <rect x="300" y="86" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="113" text-anchor="middle" class="txt">turn_context?</text>
+  <path d="M580 108H660" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="620" y="100" text-anchor="middle" class="small">yes</text>
+  <rect x="662" y="86" width="198" height="44" rx="4" class="b-good"/>
+  <text x="761" y="106" text-anchor="middle" class="txt">remember turn_id, cwd, model</text>
+  <text x="761" y="122" text-anchor="middle" class="small">for the turn that follows</text>
+  <path d="M440 130V154" class="arr" marker-end="url(#f-ah)"/>
+  <text x="452" y="146" class="small">no</text>
+
+  <rect x="300" y="156" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="183" text-anchor="middle" class="txt">event_msg / user_message?</text>
+  <path d="M580 178H660" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="620" y="170" text-anchor="middle" class="small">yes, context pending</text>
+  <rect x="662" y="156" width="198" height="44" rx="4" class="b-good"/>
+  <text x="761" y="176" text-anchor="middle" class="txt">Turn record, role user</text>
+  <text x="761" y="192" text-anchor="middle" class="small mono">prompt_id = session#turn_id</text>
+  <path d="M300 178H220" class="arr-bad" marker-end="url(#f-ah-bad)"/>
+  <text x="260" y="170" text-anchor="middle" class="small">yes, none pending</text>
+  <rect x="20" y="156" width="198" height="44" rx="4" class="b-bad"/>
+  <text x="119" y="176" text-anchor="middle" class="txt">fallback: own timestamp</text>
+  <text x="119" y="192" text-anchor="middle" class="small">counted · 2 of 1,848 measured</text>
+  <path d="M440 200V224" class="arr" marker-end="url(#f-ah)"/>
+  <text x="452" y="216" class="small">no</text>
+
+  <rect x="300" y="226" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="253" text-anchor="middle" class="txt">item_completed?</text>
+  <path d="M580 248H660" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="620" y="240" text-anchor="middle" class="small">yes</text>
+  <rect x="662" y="226" width="198" height="44" rx="4" class="b-good"/>
+  <text x="761" y="246" text-anchor="middle" class="txt">tool call on the open turn</text>
+  <text x="761" y="262" text-anchor="middle" class="small">CommandExecution · FileChange · Mcp</text>
+  <path d="M440 270V294" class="arr" marker-end="url(#f-ah)"/>
+  <text x="452" y="286" class="small">no</text>
+
+  <rect x="300" y="296" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="323" text-anchor="middle" class="txt">token_usage_record?</text>
+  <path d="M580 318H660" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="620" y="310" text-anchor="middle" class="small">yes</text>
+  <rect x="662" y="296" width="198" height="44" rx="4" class="b-good"/>
+  <text x="761" y="316" text-anchor="middle" class="txt">usage, once per response_id</text>
+  <text x="761" y="332" text-anchor="middle" class="small">tok + mag rows, as Claude</text>
+  <path d="M440 340V364" class="arr" marker-end="url(#f-ah)"/>
+  <text x="452" y="356" class="small">no</text>
+
+  <rect x="300" y="366" width="280" height="30" rx="4" class="b-wait"/>
+  <text x="440" y="386" text-anchor="middle" class="txt">skipped and counted — never an error</text>
+</svg>
+<figcaption>The reader has one unhappy path and it degrades to a worse id, not to a dropped prompt. Every unknown record type is a counter, so a future Codex record cannot silently empty a session the way the ordinal did.</figcaption>
+</figure>
+
+<h3>Behavioural specs</h3>
+<pre class="gherkin"><span class="kw">Feature:</span> Normalised turn record with a Codex reader
+
+  <span class="cov"># Covers: AC-1, AC-2</span>
+  <span class="kw">Scenario:</span> Claude rows are byte-identical through the record
+    <span class="kw">Given</span> the fixture transcripts and the golden row dump from the parent commit
+    <span class="kw">When</span>  each is ingested through readers/claude.py
+    <span class="kw">Then</span>  event, bin, prompt and turn_magnitude rows equal the dump
+    <span class="kw">And</span>   no module outside readers/claude.py names a Claude field
+
+  <span class="cov"># Covers: AC-3, AC-4, AC-5</span>
+  <span class="kw">Scenario:</span> A captured Codex rollout is named and read
+    <span class="kw">Given</span> a rollout captured from Codex 0.153.4 with no ordinal on any user_message
+    <span class="kw">When</span>  the watcher scans it
+    <span class="kw">Then</span>  one pointer per user_message, id session#turn_id, cwd from turn_context
+    <span class="kw">And</span>   CodexReader.Read returns that turn's text and no other
+
+  <span class="cov"># Covers: AC-6, AC-7, AC-8</span>
+  <span class="kw">Scenario:</span> The store cannot tell the reader apart
+    <span class="kw">Given</span> the same rollout
+    <span class="kw">When</span>  ingested in one pass and in 40 chunks
+    <span class="kw">Then</span>  workspace, model, tool, exe, action and tok rows exist and are equal
+    <span class="kw">And</span>   analyze_window_by_parse equals the store for a Codex prompt id
+
+  <span class="cov"># Covers: AC-3 (unhappy)</span>
+  <span class="kw">Scenario:</span> A prompt with no preceding turn_context
+    <span class="kw">Given</span> a user_message with no pending turn_context
+    <span class="kw">When</span>  the reader meets it
+    <span class="kw">Then</span>  the prompt id falls back to the prompt's own timestamp
+    <span class="kw">And</span>   the fallback is counted, and the prompt is not dropped
+
+  <span class="cov"># Covers: AC-9, AC-10</span>
+  <span class="kw">Scenario:</span> Codex reaches Atlas as blocks
+    <span class="kw">Given</span> an isolated daemon with Send to Atlas on against the dev Atlas
+    <span class="kw">When</span>  a real Codex session is written
+    <span class="kw">Then</span>  at least one block is read back with workstreams.model attributed
+    <span class="kw">And</span>   Gemini is still ineligible and its behaviour unchanged</pre>
+
+<h3>Decision table</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Source</th><th>Line</th><th>turn_context pending</th><th>Expected</th><th>AC</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>claude_code</td><td>any</td><td>—</td><td>rows equal the golden dump</td><td class="mono"><a href="#ac-2">AC-2</a></td></tr>
+  <tr><td class="mono">2</td><td>codex</td><td>user_message</td><td>yes</td><td>record, prompt_id session#turn_id</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
+  <tr><td class="mono">3</td><td>codex</td><td>user_message</td><td>no</td><td>record, prompt_id from timestamp, fallback counted</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
+  <tr><td class="mono">4</td><td>codex</td><td>response_item, role user</td><td>—</td><td>skipped: injected context, not a human turn</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
+  <tr><td class="mono">5</td><td>codex</td><td>item_completed CommandExecution</td><td>—</td><td>tool Bash, exe/verb/action rows, cwd path pending</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+  <tr><td class="mono">6</td><td>codex</td><td>token_usage_record, response_id seen</td><td>—</td><td>no second tok/mag row</td><td class="mono"><a href="#ac-7">AC-7</a></td></tr>
+  <tr><td class="mono">7</td><td>codex</td><td>unknown type</td><td>—</td><td>skipped, counted in /metrics</td><td class="mono"><a href="#ac-6">AC-6</a></td></tr>
+  <tr><td class="mono">8</td><td>gemini</td><td>any</td><td>—</td><td>ineligible, no ingest signal, unchanged</td><td class="mono"><a href="#ac-9">AC-9</a></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s5">5 · Integration, dependencies &amp; security surface</h2>
+
+<h3>System contacts</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>System</th><th>Direction</th><th>Change</th></tr></thead>
+<tbody>
+  <tr><td class="mono">~/.keld/state/refseries.db</td><td>write</td><td>Codex rows under the existing schema and levels. No DDL.</td></tr>
+  <tr><td class="mono">POST /ingest · POST /analyze · POST /blocks</td><td>both</td><td>Contract unchanged. Codex paths now accepted; they were already inside <span class="mono">KELD_ANALYZE_ROOTS</span>.</td></tr>
+  <tr><td class="mono">spool.Pointer · corr_id</td><td>write</td><td>Codex id format becomes <span class="mono">session#turn_id</span>. The old format produced zero pointers, so nothing existing breaks.</td></tr>
+  <tr><td class="mono">Atlas /v1/signal/blocks</td><td>write</td><td>None. Blocks with <span class="mono">source: codex</span> arrive in the existing shape.</td></tr>
+  <tr><td class="mono">codeburn</td><td>read</td><td>None at runtime. Reference for field mapping only.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Data privacy</h3>
+<ul>
+  <li><strong>New PII:</strong> None new in kind. Codex prompt text is read on device, as Claude's is. Only lengths, terms and vectors (when enabled) derive from it.</li>
+  <li><strong>Cross-boundary data:</strong> Nothing new crosses. <span class="mono">named_terms</span> will now include proper nouns from Codex messages under the existing v18 rule; the installer Read Me already states this for all sources.</li>
+  <li><strong>Auth surface:</strong> None. Path confinement already lists <span class="mono">~/.codex/sessions</span>; the sidecar stays loopback with no auth, as today.</li>
+</ul>
+
+<h2 id="s6">6 · Success metrics</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Metric</th><th>Baseline today</th><th>Target</th><th>Where read</th></tr></thead>
+<tbody>
+  <tr><td>Codex prompts entering enrichment per session</td><td class="mono">0</td><td class="mono">= user_message count</td><td>daemon log · queue Accepted counter</td></tr>
+  <tr><td>Codex blocks published</td><td class="mono">0</td><td class="mono">&gt; 0 per active Codex session</td><td>ledger (<span class="mono">/v1/ledger</span>) · Atlas blocks by source</td></tr>
+  <tr><td>Claude row parity</td><td class="mono">n/a</td><td class="mono">0 rows differ</td><td>AC-2 golden test</td></tr>
+  <tr><td>Codex reader unknown-record rate</td><td class="mono">unknown</td><td class="mono">reported, not hidden</td><td><span class="mono">/metrics</span> store block, new counter</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s7">7 · Risks, observability &amp; rollback</h2>
+
+<h3>Risk evaluation</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Class</th><th>Mitigation</th></tr></thead>
+<tbody>
+  <tr><td>The record refactor changes a Claude row</td><td><span class="pill p-m">M</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-h">High</span></td><td>Golden dump committed before the change; AC-2 blocks merge on one differing row.</td></tr>
+  <tr><td>Codex subagent rollouts collapse onto one session key</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>Session from <span class="mono">session_meta.id</span>, never the filename; the <span class="mono">test_session_key</span> precedent applies.</td></tr>
+  <tr><td>Fork replays double-count usage</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>Dedup by <span class="mono">response_id</span> across batches (the <span class="mono">reqs</span> accumulator); codeburn's <span class="mono">forked_from_id</span> handling is the reference.</td></tr>
+  <tr><td>Codex changes its record shape again</td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>Unknown records are counted in <span class="mono">/metrics</span>; a session that empties is visible, unlike today.</td></tr>
+  <tr><td>Codex text enters <span class="mono">named_terms</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>Same rule as Claude, already disclosed. No new class of data.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Destructive change ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Codex pointer id format <span class="mono">#ordinal</span> → <span class="mono">#turn_id</span> (wire: <span class="mono">corr_id</span>)</td><td>yes</td><td>zero rows: the old format never produced a pointer</td><td>AC-3, AC-4</td></tr>
+  <tr><td>Deleted: the ordinal-keyed Codex fixtures and their tests</td><td>yes</td><td>tests only</td><td>replaced by the captured fixture</td></tr>
+  <tr><td>No schema change, no <span class="mono">STATE_VERSION</span> bump, no default flip</td><td>—</td><td>—</td><td>AC-2 is what lets us not bump</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Observability</h3>
+<ul>
+  <li><strong>Reused signals:</strong> queue Accepted/Duplicate counters, <span class="mono">/metrics</span> store block, ledger, <span class="mono">sidecar.version_skew</span>, doctor.</li>
+  <li><strong>New signals:</strong> one counter, <span class="mono">reader.skipped</span> by record type and source, in the existing <span class="mono">/metrics</span> store block.</li>
+</ul>
+
+<h3>Rollback plan</h3>
+<ul>
+  <li><strong>Flag:</strong> None. Eligibility is compile-time and a flag would be a second gate on the same predicate.</li>
+  <li><strong>Steps:</strong> revert the eligibility entry first; Codex stops being signalled and no Codex job runs. Codex rows already in the store are inert. Claude is untouched by construction (AC-2).</li>
+</ul>
+
+<h2 id="s8">8 · Open gaps &amp; technical debt</h2>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Unknown or debt</th><th>Blocks?</th><th>Needs</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>Gemini reader. Same shape; its watcher's id scheme is untested against real files.</td><td>no</td><td>its own discovery, after this lands</td></tr>
+  <tr><td class="mono">2</td><td><span class="mono">exec</span> custom_tool_call carries a string script. Whether <span class="mono">item_completed</span> covers every command it runs is unmeasured.</td><td>no</td><td>spike on the 287 rollouts: count commands seen in one and not the other</td></tr>
+  <tr><td class="mono">3</td><td>Codex has no branch field. Recovering it from <span class="mono">git</span> commands is possible and unmeasured.</td><td>no</td><td>nothing, deferred</td></tr>
+  <tr><td class="mono">4</td><td><span class="mono">isSidechain</span> for Codex subagents (<span class="mono">parent_thread_id</span>). Left unattributed here.</td><td>no</td><td>decision from Gabriel on whether subagent work should fold into the parent</td></tr>
+  <tr><td class="mono">5</td><td>The July Codex readers were never run against a real rollout. Whether Gemini's were is unknown.</td><td>no</td><td>AC-4's fixture rule, extended to Gemini in item 1</td></tr>
+  <tr><td class="mono">6</td><td>Blocks for Codex read the same 20-minute cap and 15-minute idle. Codex agent runs may pace differently.</td><td>no</td><td>measure block attribution rate on Codex after AC-10</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s9">9 · Review log</h2>
+<p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to match the code — a wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
+<div class="note"><strong>Not yet reviewed.</strong> Implementation has not been graded against these criteria.</div>
+
+<section class="qa">
+<h2 id="objections">Objections</h2>
+<dl>
+  <dt>Why refactor six modules first? Ship the Codex reader and refactor later.</dt>
+  <dd>That is option A, and it is faster by days. The cost is a second shape in six places, which is the drift class that produced the uuid-only index bug. AC-2 makes the refactor safe: one golden dump, zero rows may differ.</dd>
+  <dt>Isn't the golden dump just freezing today's bugs?</dt>
+  <dd>Yes, and that is the point. This page changes where the code reads from, not what it computes. A bug fixed on the way would be invisible inside the refactor; fix it in its own commit, and regenerate the dump there.</dd>
+  <dt>Why not codeburn? It already has 46 parsers.</dt>
+  <dd>It has 46 parsers behind a CLI with no library exports, emitting aggregated cost. We need events with timestamps, paths and turn ids inside a Python process. Reading its Codex parser saved a day of field-hunting; running it would cost a Node runtime in every install.</dd>
+  <dt>The record is the Claude shape with new names. Is that really neutral?</dt>
+  <dd>Partly true. Its fields are what the extractor consumes today, which was written for Claude. It is neutral where it matters: Codex fills every field the workstream dimensions need except branch and skill, and those stay unattributed rather than faked.</dd>
+  <dt>Does Codex text now leak into named_terms?</dt>
+  <dd>Proper nouns from Codex messages publish as term plus count, exactly as Claude's do, and the installer Read Me states that for all sources. No text, span or offset crosses. This page adds a source, not a class of data.</dd>
+  <dt>Two of 1,848 turns had no turn_context first. Why not treat them as broken?</dt>
+  <dd>A dropped prompt is the failure we are fixing. The fallback id is worse, and it is counted, so if the 2 ever become 200 the counter says so before Atlas does.</dd>
+</dl>
+</section>
+
+</main>

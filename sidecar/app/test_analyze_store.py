@@ -683,6 +683,49 @@ def test_a_stale_store_is_refused_and_not_served_from_what_it_happens_to_hold():
         raise AssertionError("a stale store served a window")
 
 
+def test_a_reader_that_will_not_ingest_is_not_invalidated_by_the_terms_fingerprint():
+    """⚠️ MEASURED BUG. `/blocks`, `/features` and the dev-blocks path all read without ever
+    writing a row, and all three call `is_current(st, path, None, resolved)`. The terms
+    comparison was symmetric, so `terms_mode(None)` resolved to "regex" and could never equal a
+    fingerprint written by the DEFAULT pipeline ("spacy:..."): every one of those callers read
+    `current=False` forever on an ordinary machine.
+
+    On a real install `is_current` was False for 22 of 22 transcripts. The damage is specific
+    rather than general -- `blockdigest.is_closed` falls back to its "activity after" branch, so
+    a block with later activity still closes and only the TRAILING block of each session never
+    does. A session that has ended has no later activity, so its last block is permanently
+    unpublished; and a short session that is ALL trailing block (the developer generator's
+    output) produces no block at all, while ingesting cleanly and cutting one in `blocks.cut`.
+
+    `writes=False` is the same asymmetry the `repo` rule already has: a caller not about to
+    write rows cannot be invalidated by a fingerprint describing how rows were written."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, nlp = _store(tmp), _FakeNlp()
+        path = _write(tmp)
+        ingest_file(st, path, nlp)
+
+        # Ingested WITH a terms pipeline, then asked by a reader that has none.
+        assert is_current(st, path, nlp), "the store is stale right after its own ingest"
+        assert not is_current(st, path, None), (
+            "a WRITER with a different terms pipeline must still force a reparse")
+        assert is_current(st, path, None, None, writes=False), (
+            "a reader that will not ingest must not be invalidated by the terms fingerprint")
+
+
+def test_writes_false_still_refuses_a_store_that_actually_is_stale():
+    """The relaxation is scoped to the terms fingerprint and nothing else. A transcript that
+    grew, or a state version this code cannot read, must still read as not-current for every
+    caller -- otherwise `is_closed` would settle a trailing block over bytes nobody has
+    parsed, which is the confident-answer-over-a-prefix failure the whole check exists for."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, nlp = _store(tmp), _FakeNlp()
+        prefix = _write(tmp, TURNS[:-6])
+        ingest_file(st, prefix, nlp)
+        path = _write(tmp)                     # same path, now the whole transcript
+        assert not is_current(st, path, None, None, writes=False), (
+            "a grown transcript must be stale for a reader too")
+
+
 def test_not_yet_ingested_and_prompt_not_found_stay_distinguishable():
     """One is transient and the caller must retry; the other is permanent. A single failure
     mode for both would either spin forever on a real 404 or drop a window that was one

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/exec"
@@ -14,8 +15,41 @@ import (
 )
 
 const (
+	// maxRestarts bounds CONSECUTIVE failed starts before the supervisor rests.
+	// It is not a lifetime budget: a child that became healthy resets it (see
+	// Start), and exceeding it is a pause, never a surrender.
 	maxRestarts        = 3
 	healthPollInterval = 200 * time.Millisecond
+
+	// defaultStartSleepGap is the wall-clock jump between two health polls
+	// that reads as "the machine was asleep" while a sidecar was starting. The
+	// polls are 200ms apart, so 30s is 150 polls' worth — a loaded machine
+	// delays a tick by seconds, not by half a minute — and mistaking load for
+	// sleep would only ever grant a slow child one more readiness window.
+	//
+	// ⚠️ **THE READINESS DEADLINE IS MEASURED IN TIME THE MACHINE WAS AWAKE,
+	// AND THAT NEEDS THE WALL CLOCK, NOT GO'S MONOTONIC ONE.** Measured on a
+	// real Mac (2026-09-09): a 90s deadline was armed at 03:19, the machine
+	// then slept with ~2-second dark wakes every 15 minutes, and at 05:20, 07:23
+	// and 09:42 — each within three seconds of a dark wake in `pmset -g log` —
+	// the supervisor killed a child that had been given seconds of real time as
+	// a "failed start". The third exhausted the cap. So the loop compares
+	// wall-clock instants (`Round(0)` strips the monotonic reading): a jump far
+	// beyond the poll interval is a sleep, and a sleep re-arms the deadline
+	// instead of spending it. Go's monotonic clock cannot be the detector here,
+	// because on macOS it does not advance while the machine sleeps — which is
+	// also why the health owner's own sleep detector, built on it, logged
+	// nothing that night.
+	defaultStartSleepGap = 30 * time.Second
+
+	// The rest between rounds of fast retries: first a minute, doubling to
+	// half an hour. Long enough that a sidecar which is genuinely broken costs
+	// a spawn and one loud line per rest rather than a busy loop; short enough
+	// that a machine coming back from sleep, a swapped binary or a returned
+	// venv is picked up without anyone restarting the daemon. Fields on the
+	// Supervisor so tests can shrink them.
+	defaultRestBase = time.Minute
+	defaultRestMax  = 30 * time.Minute
 
 	// DefaultStopGrace is how long stopChild lets the sidecar shut itself down
 	// after SIGTERM before the process group is SIGKILLed.
@@ -68,8 +102,20 @@ type Supervisor struct {
 	health       enrich.HealthFunc
 	readyTimeout time.Duration
 
-	ready    atomic.Bool
+	ready atomic.Bool
+	// fellBack is true while there is NO child and the supervisor is between
+	// rounds — the fast retries are spent and it is resting before the next
+	// attempt. It is a state, not a verdict: cleared the moment a child becomes
+	// healthy, and RequestRestart ends the rest early. See FellBack.
 	fellBack atomic.Bool
+
+	// now is the clock the readiness deadline and its sleep detector read.
+	// time.Now in production; tests substitute one they can jump. Only wall
+	// time is ever compared (see defaultStartSleepGap).
+	now      func() time.Time
+	sleepGap time.Duration
+	restBase time.Duration
+	restMax  time.Duration
 
 	// stopGrace is how long the graceful half of stopChild waits before the
 	// forceful half runs. A field rather than a constant so tests can shorten
@@ -81,6 +127,13 @@ type Supervisor struct {
 	// See AwaitStopped.
 	stopped     chan struct{}
 	stoppedOnce sync.Once
+
+	// started latches when Start's loop begins, and restartReq is the 1-slot
+	// signal RequestRestart uses to ask that loop to replace the current child.
+	// Together they are what makes a DELIBERATE restart distinguishable from a
+	// crash: see RequestRestart.
+	started    atomic.Bool
+	restartReq chan struct{}
 
 	mu  sync.Mutex
 	cmd *exec.Cmd
@@ -147,8 +200,13 @@ func NewSupervisor(
 		port:         port,
 		health:       health,
 		readyTimeout: readyTimeout,
+		now:          time.Now,
+		sleepGap:     defaultStartSleepGap,
+		restBase:     defaultRestBase,
+		restMax:      defaultRestMax,
 		stopGrace:    stopGraceFromEnv(),
 		stopped:      make(chan struct{}),
+		restartReq:   make(chan struct{}, 1),
 	}
 }
 
@@ -199,6 +257,54 @@ func awaitSidecarStop(sup *Supervisor) func() {
 	}
 }
 
+// ErrSupervisorStopped is what RequestRestart returns when there is no
+// supervision loop left to ask: Start has not begun, or it has returned because
+// the daemon is shutting down. It is not a transient condition, and a caller
+// that gets it must ESCALATE rather than retry.
+//
+// ⚠️ It used to have a third cause — the restart cap exceeded — and that one
+// is gone on purpose. Surrender made every transient (a night of macOS dark
+// wakes, a slow first spaCy load, a binary swapped mid-update) into a state
+// only a human restarting the daemon could leave, and the page's Restart
+// button answered "cannot restart" in exactly the moment it was pressed. The
+// supervisor now RESTS between rounds and a request during the rest is
+// accepted and acted on at once. See Start.
+var ErrSupervisorStopped = errors.New("sidecar supervisor is not running")
+
+// RequestRestart asks the supervision loop to replace the current child with a
+// fresh one. It NEVER blocks: it drops a token in a one-slot channel and
+// returns, so an HTTP handler or a health timer can call it directly. The
+// actual stop can take up to stopGrace, and it happens on the supervisor's own
+// goroutine.
+//
+// ⚠️ **A DELIBERATE RESTART IS NOT A CRASH, AND CONFLATING THEM WOULD MAKE THE
+// CRASH CAP MEANINGLESS IN BOTH DIRECTIONS.** The loop does not count it
+// against maxRestarts — a health owner restarting a WEDGED (but alive) sidecar
+// must not consume the budget that exists for one that keeps dying — and
+// equally it does not RESET the count, because laundering the crash budget
+// through a health-driven restart is how a crash-looping sidecar gets restarted
+// forever. The bound on deliberate restarts lives with the caller that issues
+// them (serviceHealth's ladder, and the restart route's rate limiter), not here.
+//
+// Returns ErrSupervisorStopped when Start has not begun or has already
+// returned; a second call while one is already queued is a no-op, since one
+// pending restart is all a one-slot channel can mean.
+func (s *Supervisor) RequestRestart() error {
+	if !s.started.Load() {
+		return ErrSupervisorStopped
+	}
+	select {
+	case <-s.stopped:
+		return ErrSupervisorStopped
+	default:
+	}
+	select {
+	case s.restartReq <- struct{}{}:
+	default: // one already queued; asking twice means the same thing as once
+	}
+	return nil
+}
+
 // Ready reports whether the sidecar has reported healthy at least once. This
 // is latched liveness for the supervisor's own restart/backoff machinery — it
 // is NOT the Worker's per-job readiness gate. That gate is model warmth (see
@@ -218,14 +324,15 @@ func (s *Supervisor) Pid() int {
 	return 0
 }
 
-// FellBack reports whether the supervisor gave up waiting for health or
-// exhausted its restart budget. There is no fallback backend to switch to.
+// FellBack reports whether the supervisor is RESTING: the fast retries are
+// spent, there is no child, and the next attempt is a bounded pause away (or
+// one RequestRestart away). There is no fallback backend to switch to, and the
+// state is not permanent — it clears when a child becomes healthy.
 // Like Ready, this is retained for the supervisor's own liveness/restart
 // bookkeeping, not as the Worker's per-job gate — that gate is model warmth
-// (see Ready's doc comment). A fallen-back or dead sidecar closes the warmth
-// gate indirectly: with no process serving /metrics, client.WorkerReady can't
-// reach it and reports not-warm, so jobs queue/spool until the daemon is
-// restarted and the sidecar comes up cleanly.
+// (see Ready's doc comment). A resting or dead sidecar closes the warmth gate
+// indirectly: with no process serving /metrics, client.WorkerReady can't reach
+// it and reports not-warm, so jobs queue/spool until the sidecar comes up.
 func (s *Supervisor) FellBack() bool { return s.fellBack.Load() }
 
 // Start spawns the sidecar and supervises it. It blocks until ctx is Done.
@@ -234,18 +341,44 @@ func (s *Supervisor) Start(ctx context.Context) {
 	// Latched via Once because the channel is closed from every return path and
 	// the documented contract ("Start must be called once") is not enforced.
 	defer s.stoppedOnce.Do(func() { close(s.stopped) })
+	s.started.Store(true)
 
+	// restarts counts CONSECUTIVE failed starts — a crash, a readiness timeout,
+	// a spawn that could not happen — and is reset by a child that answers
+	// /health. backoff is the fast retry pause while that budget lasts; rest is
+	// the long one once it is spent. All three start over on ready.
 	restarts := 0
 	backoff := 250 * time.Millisecond
+	rest := s.restBase
+	spawns := 0
 
 	for {
-		// Spawn.
+		// deliberate marks THIS iteration's child as having been replaced on
+		// request rather than having died. Reset per spawn, so a request can
+		// never leak into the accounting of a later, genuine crash.
+		deliberate := false
+		// failure names how this iteration's child ended, for the retry log
+		// line; the crash case is the default and the others overwrite it.
+		failure := "child exited"
+		spawns++
+		// No child is healthy until this iteration's child answers /health.
+		// Ready used to latch true for the supervisor's life, so a reader saw
+		// "ready" across a crash, a restart and the whole readiness wait of the
+		// replacement — a stale yes about a process that no longer existed.
+		s.ready.Store(false)
+
+		// Spawn. A spawn that cannot happen is a failed start like any other,
+		// not the end of supervision: the binary may be mid-swap by an update
+		// or about to be fetched by onboarding, and the daemon should not need
+		// restarting to notice it arrive.
 		cmd, err := s.spawn(s.port)
 		if err != nil {
 			log.Printf("supervisor: spawn error: %v", err)
 			s.emit("sidecar.unavailable", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
-			s.fellBack.Store(true)
-			return
+			if !s.afterFailedStart(ctx, "the sidecar could not be spawned", &restarts, &backoff, &rest) {
+				return
+			}
+			continue
 		}
 		// ⚠️ Set here, not in each spawn func, so no caller can forget it: the
 		// group is what stopChild signals, and a child spawned without one
@@ -256,8 +389,10 @@ func (s *Supervisor) Start(ctx context.Context) {
 		if err := cmd.Start(); err != nil {
 			log.Printf("supervisor: cmd.Start error: %v", err)
 			s.emit("sidecar.unavailable", clientevents.SevError, map[string]any{"error": clientevents.RedactError(err)})
-			s.fellBack.Store(true)
-			return
+			if !s.afterFailedStart(ctx, "the sidecar could not be started", &restarts, &backoff, &rest) {
+				return
+			}
+			continue
 		}
 
 		s.mu.Lock()
@@ -270,8 +405,14 @@ func (s *Supervisor) Start(ctx context.Context) {
 			waitCh <- c.Wait()
 		}(cmd)
 
-		// Poll health until ready or readyTimeout.
-		readyDeadline := time.Now().Add(s.readyTimeout)
+		// Poll health until ready or readyTimeout — a timeout measured in time
+		// the machine was AWAKE. Wall-clock instants only (Round(0) strips the
+		// monotonic reading), because the sleep detector below needs to SEE the
+		// jump a sleep makes, and on macOS Go's monotonic clock does not make
+		// one. See defaultStartSleepGap for the night that proved it.
+		wall := func() time.Time { return s.now().Round(0) }
+		lastPoll := wall()
+		readyDeadline := lastPoll.Add(s.readyTimeout)
 		ticker := time.NewTicker(healthPollInterval)
 		becameReady := false
 
@@ -283,6 +424,16 @@ func (s *Supervisor) Start(ctx context.Context) {
 				s.stopChild(waitCh) // also reaps, so no goroutine leak
 				return
 
+			case <-s.restartReq:
+				// Asked to replace a child that has not become healthy yet.
+				// Honoured, deliberately: "spawned but never answered /health"
+				// is the exact state that stranded a machine for 2h14m, and it
+				// is invisible to the crash path because nothing exited.
+				ticker.Stop()
+				s.stopChild(waitCh)
+				deliberate = true
+				break pollLoop
+
 			case exitErr := <-waitCh:
 				ticker.Stop()
 				_ = exitErr
@@ -290,37 +441,96 @@ func (s *Supervisor) Start(ctx context.Context) {
 				break pollLoop
 
 			case <-ticker.C:
+				now := wall()
+				// A gap far beyond the poll interval is time the machine did not
+				// run — asleep, or a clock stepped backwards. The child got none
+				// of it, so the deadline is re-armed rather than spent: a wake is
+				// a cold start. Same rule serviceHealth applies to its counter.
+				if gap := now.Sub(lastPoll); gap > s.sleepGap || gap < 0 {
+					log.Printf("supervisor: %s passed between two health polls while the sidecar was starting — "+
+						"the machine was most likely asleep; giving it a fresh %s to answer", gap.Round(time.Second), s.readyTimeout)
+					s.emit("service.wake_reset", clientevents.SevInfo, map[string]any{
+						"gap_s":  int(gap.Round(time.Second).Seconds()),
+						"during": "sidecar_start",
+					})
+					readyDeadline = now.Add(s.readyTimeout)
+				}
+				lastPoll = now
 				if s.health() {
 					s.ready.Store(true)
 					becameReady = true
 					ticker.Stop()
 					break pollLoop
 				}
-				if time.Now().After(readyDeadline) {
+				if now.After(readyDeadline) {
 					ticker.Stop()
-					// readyTimeout elapsed — stop child and fall back.
+					// ⚠️ **THIS PATH GAVE UP FOR THE DAEMON'S WHOLE LIFE, ON
+					// ONE SLOW START, AND SAID NOTHING AT ALL.** It killed the
+					// child, latched fellBack and returned — so `Start` was
+					// over, `RequestRestart` answered ErrSupervisorStopped
+					// forever, and not one line was logged or emitted. Measured
+					// on a real machine: the sidecar was spawned, lived ~30s,
+					// was killed here, and the daemon then ran with no analysis
+					// service while reporting only downstream symptoms.
+					//
+					// Two things were wrong. It was SILENT, which is why the
+					// state could persist for hours unexplained. And it was
+					// TERMINAL ON THE FIRST TIMEOUT, which is not what a
+					// readiness deadline means: a child that is merely slow to
+					// load — spaCy is ~619 MB and the text encoder more —
+					// deserves the same three attempts a crashing one gets. A
+					// child that exits is retried; a child that is slow was
+					// not, and the slow case is the more recoverable of the
+					// two.
+					//
+					// So it falls through to the retry path, counting against
+					// maxRestarts like any other failure — and since the cap is
+					// now a rest rather than a surrender, three slow starts cost
+					// a pause, not the daemon's lifetime.
 					s.stopChild(waitCh)
-					s.fellBack.Store(true)
-					return
+					log.Printf("supervisor: the sidecar did not answer /health within %s of awake time; "+
+						"treating it as a failed start", s.readyTimeout)
+					s.emit("sidecar.slow_start", clientevents.SevWarn, map[string]any{
+						"ready_timeout_s": int(s.readyTimeout.Seconds()),
+						"restart":         restarts + 1,
+						"max_restarts":    maxRestarts,
+					})
+					failure = "the sidecar did not become ready"
+					break pollLoop
 				}
 			}
 		}
 
-		if becameReady && restarts > 0 {
+		if becameReady && spawns > 1 {
 			// A REPLACEMENT child is healthy. Whatever the daemon pushed down
 			// to the previous process's memory went with it — see
 			// SetOnRespawn. Own goroutine: this does network I/O against the
-			// child we are supervising.
+			// child we are supervising. Keyed on "not the first child" rather
+			// than on the crash counter, which a healthy child now resets — and
+			// which a DELIBERATE restart never incremented, so the hook used to
+			// skip exactly the restarts the health owner issues.
 			if hook := s.respawnHook(); hook != nil {
 				go hook()
 			}
 		}
 		if becameReady {
+			// A child that answered /health is not a failed start. The cap
+			// bounds CONSECUTIVE failures, so the budget, the fast backoff and
+			// the rest all start over — four crashes over a month of uptime are
+			// four recoveries, not a crash loop.
+			s.fellBack.Store(false)
+			restarts, backoff, rest = 0, 250*time.Millisecond, s.restBase
 			// Sidecar is healthy; supervise indefinitely.
 			select {
 			case <-ctx.Done():
 				s.stopChild(waitCh)
 				return
+			case <-s.restartReq:
+				// The healthy-then-wedged case: the process is alive, so the
+				// supervisor has nothing to react to. /health is the only thing
+				// that knows, which is why this signal exists at all.
+				s.stopChild(waitCh)
+				deliberate = true
 			case <-waitCh:
 				// Child died after becoming ready.
 			}
@@ -333,28 +543,81 @@ func (s *Supervisor) Start(ctx context.Context) {
 		default:
 		}
 
-		restarts++
-		if restarts > maxRestarts {
-			log.Printf("supervisor: restart cap (%d) exceeded, falling back", maxRestarts)
-			s.emit("sidecar.unavailable", clientevents.SevError, map[string]any{"restarts": maxRestarts})
-			s.fellBack.Store(true)
-			return
+		if deliberate {
+			// Not a crash: no restarts++, no cap check, and the backoff is
+			// reset because there is nothing to back off FROM — this child was
+			// stopped on purpose, at a moment the caller chose.
+			log.Printf("supervisor: sidecar restart requested; respawning")
+			s.emit("service.restarted", clientevents.SevWarn, map[string]any{"requested": true})
+			backoff = 250 * time.Millisecond
+			continue
 		}
 
-		log.Printf("supervisor: child exited (restart %d/%d), retrying in %s", restarts, maxRestarts, backoff)
+		if !s.afterFailedStart(ctx, failure, &restarts, &backoff, &rest) {
+			return
+		}
+	}
+}
+
+// afterFailedStart accounts for one failed start — a crash, a readiness
+// timeout, a spawn that could not happen — and waits before the caller tries
+// again: the fast backoff while the consecutive-failure budget lasts, then a
+// REST once it is spent. It reports false only when ctx ended during the wait.
+//
+// ⚠️ **EXCEEDING THE CAP USED TO RETURN FROM Start, AND THAT RETURN IS THE
+// DEFECT THIS FUNCTION REPLACES.** Surrender turned every transient into a
+// state only a human could leave: measured on 2026-09-09, a night of macOS
+// dark wakes spent the three attempts on a sidecar that had been given seconds
+// of real time, `RequestRestart` then refused for the rest of the daemon's
+// life, and the page's Restart button answered "cannot restart" to the person
+// pressing it. AGENTS.md had carried it as a known gap — "a service that
+// starts and then permanently gives up still wedges this mode".
+//
+// A rest is bounded and loud: one `sidecar.unavailable` naming when the next
+// attempt is, a pause that doubles to restMax, and a restart request (the
+// button, the health owner) ends it immediately. A sidecar that is genuinely
+// broken therefore costs one spawn and one line per half hour, which is the
+// price of never needing a human to notice that a venv came back.
+func (s *Supervisor) afterFailedStart(ctx context.Context, what string, restarts *int, backoff, rest *time.Duration) bool {
+	*restarts++
+	if *restarts <= maxRestarts {
+		log.Printf("supervisor: %s (restart %d/%d), retrying in %s", what, *restarts, maxRestarts, *backoff)
 		s.emit("worker.crash", clientevents.SevWarn, map[string]any{
-			"restart":      restarts,
+			"restart":      *restarts,
 			"max_restarts": maxRestarts,
 			"backoff_s":    backoff.Seconds(),
 		})
-
 		select {
 		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
+			return false
+		case <-time.After(*backoff):
 		}
-		backoff *= 2
+		*backoff *= 2
+		return true
 	}
+
+	log.Printf("supervisor: restart cap (%d) exceeded; no analysis service until the next attempt in %s "+
+		"(a restart request tries now)", maxRestarts, *rest)
+	s.emit("sidecar.unavailable", clientevents.SevError, map[string]any{
+		"restarts":   maxRestarts,
+		"retry_in_s": int(rest.Seconds()),
+	})
+	s.fellBack.Store(true)
+	select {
+	case <-ctx.Done():
+		return false
+	case <-s.restartReq:
+		log.Printf("supervisor: restart requested during the rest; trying now")
+	case <-time.After(*rest):
+		log.Printf("supervisor: rest over; trying to start the sidecar again")
+	}
+	*restarts = 0
+	*backoff = 250 * time.Millisecond
+	*rest *= 2
+	if *rest > s.restMax {
+		*rest = s.restMax
+	}
+	return true
 }
 
 // emit is a nil-safe convenience over s.emitter (optional — see SetEmitter).

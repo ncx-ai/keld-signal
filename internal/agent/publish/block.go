@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/enrich"
@@ -93,6 +95,34 @@ type BlockEnrichment struct {
 	// long before attribution can run (it needs the block's own analysis as
 	// input), so BuildBlock's callers must not have to thread three fields they
 	// don't yet have through every existing call site.
+	// ProjectMatches is every project this block matched, each WITH THE RULES
+	// that matched it.
+	//
+	// ⚠️ **IT WAS `Entered` / `entered` UNTIL 2026-09-09.** The old name came
+	// from the set model underneath — a project is a set of rules and a block
+	// enters it by matching any member — which describes the mechanism and
+	// tells a reader of the payload nothing. Renamed while it was free: the key
+	// had shipped only in a pre-release and no Atlas consumer read it yet. The
+	// pair now reads as what it is: `project_matches` is matched by rule,
+	// `projects` is scored by model.
+	//
+	// ⚠️ **IT IS NOT `Projects`, AND THE DIFFERENCE IS THE WHOLE FEATURE.**
+	// `Projects` is the semantic matcher's answer: Atlas value ids with
+	// confidences, averaging 4.9 ids per block on a real machine.
+	// `ProjectMatches` is the deterministic one — which projects hold a rule
+	// this block actually matches — and it carries the LOCAL projects too,
+	// which nothing else on the wire has ever done.
+	//
+	// The rules travel with it because Atlas cannot see the local side any
+	// other way. With both sides on one row, "a machine groups C with your A
+	// and B" is a set difference over rows Atlas already stores — no route, no
+	// suggestion object with a lifecycle, nothing to schedule or retract.
+	//
+	// A local project's TITLE and ID are never here: the id is derived from the
+	// title, so sending it would send the title in a thin disguise. Rules are a
+	// repository remote or a ticket key, both of which already cross as block
+	// dimensions.
+	ProjectMatches []ProjectMatch              `json:"project_matches"`
 	Projects       []enrich.ProjectAttribution `json:"projects,omitempty"`
 	ProjectsStatus string                      `json:"projects_status,omitempty"`
 	Attribution    *enrich.AttributionMeta     `json:"attribution,omitempty"`
@@ -118,6 +148,26 @@ type BlockEnrichment struct {
 	ExtractorVersions map[string]string `json:"extractor_versions"`
 	SchemaVersion     int               `json:"schema_version"`
 	TS                string            `json:"ts"`
+}
+
+// ProjectMatch is one project a block landed in, on the wire.
+//
+// Defined HERE rather than reused from internal/agent/projects, so the publish
+// layer does not depend on the decision layer: a wire shape and a matcher have
+// different reasons to change, and one importing the other makes the payload
+// hostage to a refactor of the rules.
+type ProjectMatch struct {
+	// ID is the Atlas value id, EMPTY for a local project — its id is derived
+	// from its title, so sending it would send the title in a thin disguise.
+	ID string `json:"id,omitempty"`
+	// Origin is "atlas" or "user", so a reader need not infer whose project
+	// this is from whether an id is present.
+	Origin string `json:"origin"`
+	// Repos and TicketKey are the rules, sorted. They are what makes the row
+	// self-contained: Atlas can compute the difference against its own project
+	// without joining to a definition that may have changed since.
+	Repos     []string `json:"repos,omitempty"`
+	TicketKey string   `json:"ticket_key,omitempty"`
 }
 
 // BuildBlock maps one closed, characterised block into the wire shape.
@@ -147,7 +197,7 @@ func BuildBlock(b enrich.BlockCharacterisation, actor string, now time.Time) Blo
 		Window:            b.Ref,
 		StartReason:       b.Ref.StartReason,
 		EndReason:         b.Ref.EndReason,
-		AnalysisFacets:    facetsOf(b.Analysis),
+		AnalysisFacets:    withSpend(facetsOf(b.Analysis), b.Tokens, b.Requests),
 		PipelineStatus:    enrich.PipelineStatusBlock,
 		ExtractorVersions: blockExtractorVersions(),
 		SchemaVersion:     enrich.SchemaVersion,
@@ -229,18 +279,36 @@ type blocksEnvelope struct {
 // 201 is the documented success; anything below 400 is accepted, so a later
 // 200/202 on the same route is not read as a failure and re-sent forever.
 func (p *Publisher) SendBlocks(blocks []BlockEnrichment) error {
+	_, err := p.SendBlocksResult(blocks)
+	return err
+}
+
+// SendBlocksResult is SendBlocks plus the HTTP status Atlas actually answered
+// with — 0 when no response was reached at all.
+//
+// ⚠️ **The status exists so the ledger can record `received` from the RESPONSE
+// rather than from the absence of an error** (docs/v3/contracts.md). It also
+// carries the captive-portal check this path did not have: the body used to be
+// copied straight to io.Discard, so a hotel wifi answering **200 with an HTML
+// login page** looked exactly like a successful publish — the emitter advanced
+// its cursor and those blocks were never sent again. The telemetry drain has
+// checked its response body for this reason since it was written; the block
+// route inherited the status-only test and the bug with it. A response whose
+// content-type is HTML, or whose body opens with `<`, is now a failure with
+// status 0 so a caller cannot mistake it for a rejection by Atlas.
+func (p *Publisher) SendBlocksResult(blocks []BlockEnrichment) (int, error) {
 	if len(blocks) == 0 {
-		return nil
+		return 0, nil
 	}
 	body, err := json.Marshal(blocksEnvelope{Blocks: blocks})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("x-keld-ingest-token", p.Token())
@@ -251,12 +319,33 @@ func (p *Publisher) SendBlocks(blocks []BlockEnrichment) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
+	head, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= 400 {
-		return &retry.StatusError{Code: resp.StatusCode}
+		return resp.StatusCode, &retry.StatusError{Code: resp.StatusCode}
 	}
-	return nil
+	if looksIntercepted(resp.Header.Get("content-type"), head) {
+		// Status 0, not the 200 we were handed: the 200 came from something
+		// that is not Atlas, and reporting it would let a caller record the
+		// batch as received.
+		return 0, ErrIntercepted
+	}
+	return resp.StatusCode, nil
+}
+
+// ErrIntercepted is a 2xx that did not come from Atlas — a captive portal or a
+// proxy's own page. Not a StatusError: nothing about the request was refused,
+// so retrying it later is exactly right.
+var ErrIntercepted = errors.New("publish: response body is not from Atlas (captive portal?)")
+
+func looksIntercepted(contentType string, head []byte) bool {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if strings.HasPrefix(ct, "text/html") {
+		return true
+	}
+	trimmed := bytes.TrimLeft(head, " \t\r\n\xef\xbb\xbf") // leading space or a UTF-8 BOM
+	return len(trimmed) > 0 && trimmed[0] == '<'
 }

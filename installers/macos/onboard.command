@@ -147,9 +147,9 @@ read -r CODE
 if [ -n "$CODE" ]; then
   # keld-agent install redeems the code (keld login --code), configures tools, then
   # starts the agent. Fall back to interactive install (browser login) if the code fails.
-  "$AGENT" install --code "$CODE" || { echo "Setup code didn't work; falling back to browser login…"; "$AGENT" install --yes || exit 1; }
+  "$AGENT" install --code "$CODE" || { echo "Setup code didn't work; falling back to browser login…"; "$AGENT" install --login --yes || exit 1; }
 else
-  "$AGENT" install --yes || exit 1
+  "$AGENT" install --login --yes || exit 1
 fi
 # Claim success only if it is true: setup is done when an ingest token exists in
 # hook.json, the same file the daemon reads. `keld-agent install` can exit 0 after

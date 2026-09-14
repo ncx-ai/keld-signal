@@ -27,32 +27,84 @@ printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 # dropping it from the pkg payload here costs nothing downstream.
 rm -rf "$STAGE/keld-agent-sidecar"
 
+# Build component pkg into a temp dir so the final pkg glob never catches it and
+# productbuild doesn't scan the repo root.
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# The Tauri desktop shell (app/) ships INSIDE this pkg, installing to
+# /Applications/Keld Signal.app — a SEPARATE pkgbuild component with its own
+# --install-location, because pkgbuild maps one root to one destination and
+# $STAGE above is already committed to /usr/local/keld. KELD_APP_BUNDLE overrides
+# the path (e.g. a CI job that stages the built app elsewhere); the default is
+# where `cd app && npx --yes @tauri-apps/cli@latest build --bundles app` puts it.
+#
+# A dmg (drag-and-drop) is the planned next distribution shape, not this one — see
+# app/README.md for why: it needs its own build+sign+notarize pass, which nothing
+# produces yet, while the pkg path already exists end to end. Shipping inside the
+# pkg today costs nothing new to build.
+#
+# It is deliberately ONE bundle, not a tree: unlike the sidecar this ships fine in
+# a notarized submission (Apple's notary scans every file in a submission, which is
+# exactly why the sidecar was cut from this payload — see above). The bundle itself
+# is currently 3 files (Info.plist, the Mach-O, one .icns), so this doesn't reopen
+# that problem.
+APP_BUNDLE="${KELD_APP_BUNDLE:-$ROOT/../../app/src-tauri/target/release/bundle/macos/Keld Signal.app}"
+if [ ! -e "$APP_BUNDLE" ]; then
+  echo "FAILING: Keld Signal.app not found at '$APP_BUNDLE'."
+  echo "  Build it first: cd app && npx --yes @tauri-apps/cli@latest build --bundles app"
+  echo "  Or set KELD_APP_BUNDLE to an already-built .app's path."
+  exit 1
+fi
+APP_STAGE="$TMP/app-stage"
+mkdir -p "$APP_STAGE"
+cp -R "$APP_BUNDLE" "$APP_STAGE/Keld Signal.app"
+
 # Codesign every Mach-O in the payload (hardened runtime) when a signing identity is present.
 # Notarization rejects the whole submission over a single unsigned binary, so this sweeps the
 # tree by content rather than trusting a hand-maintained list — it stays correct if the payload
 # ever regains nested code. Signing is inside-out (dependencies before the executables that load
-# them), so the top-level binaries go last.
+# them), so the top-level binaries go last. The app bundle rides the SAME sweep as $STAGE (one
+# invocation, one identity) rather than a second signing pass — it is unconditional here exactly
+# like keld/keld-agent: signed when an identity is configured, unsigned (matching the rest of the
+# unsigned-first build) otherwise.
 #
 # The sidecar's ~100 nested .so/.dylib files are no longer signed here because they are no longer
 # shipped in the pkg (see above). They are signed by whoever publishes the standalone tarball;
 # the tarball path is NOT notarized, and does not need to be — Gatekeeper's quarantine bit is
 # never set on a curl download.
 if [ -n "${APPLE_DEVELOPER_ID_APP:-}" ]; then
-  "$ROOT/sign-macho.sh" "$STAGE"
+  "$ROOT/sign-macho.sh" "$STAGE" "$APP_STAGE"
   # Verify rather than trust: an unsigned or badly-sealed binary otherwise surfaces much
   # later as an opaque notarization rejection.
   for b in keld keld-agent; do
     codesign --verify --strict --verbose=2 "$STAGE/$b"
   done
+  codesign --verify --strict --verbose=2 "$APP_STAGE/Keld Signal.app"
 fi
-
-# Build component pkg into a temp dir so the final pkg glob never catches it and
-# productbuild doesn't scan the repo root.
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
 
 pkgbuild --root "$STAGE" --install-location /usr/local/keld \
   --scripts "$ROOT/scripts" --identifier co.keld.agent --version "$VERSION" "$TMP/component.pkg"
+
+# ⚠️ The app component MUST be marked non-relocatable, and pkgbuild's default is the
+# opposite. With no component plist, Installer.app treats a bundle as relocatable:
+# before writing to /Applications it asks Spotlight whether a bundle with the same
+# CFBundleIdentifier already exists anywhere on the volume, and if one does it installs
+# ON TOP OF THAT COPY instead. Measured on a developer machine installing rc.3: the
+# install log read "Applications/Keld Signal.app relocated to <worktree>/app/src-tauri/
+# target/release/bundle/macos/Keld Signal.app", the receipt said location=Applications,
+# and /Applications held nothing — the pkg had quietly overwritten the dev build. Any
+# machine that has ever had a copy of the app elsewhere (a Downloads folder, an old dmg
+# mount, a second user) is exposed the same way, and nothing reports it.
+# pkgbuild --analyze emits the component plist with BundleIsRelocatable true; flip it.
+APP_PLIST="$TMP/app-component.plist"
+pkgbuild --analyze --root "$APP_STAGE" "$APP_PLIST"
+plutil -replace 0.BundleIsRelocatable -bool NO "$APP_PLIST"
+plutil -extract 0.BundleIsRelocatable raw "$APP_PLIST" | grep -qx false \
+  || { echo "FAILING: could not mark Keld Signal.app non-relocatable in $APP_PLIST"; exit 1; }
+
+pkgbuild --root "$APP_STAGE" --install-location /Applications --component-plist "$APP_PLIST" \
+  --identifier co.keld.signal --version "$VERSION" "$TMP/app-component.pkg"
 
 PB=(productbuild --distribution "$ROOT/distribution.xml" --resources "$ROOT/../resources" --package-path "$TMP" "$OUT")
 if [ -n "${APPLE_DEVELOPER_ID_INSTALLER:-}" ]; then

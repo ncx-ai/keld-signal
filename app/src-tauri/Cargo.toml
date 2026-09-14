@@ -1,0 +1,56 @@
+[package]
+name = "keld-signal-app"
+version = "0.1.0"
+description = "Keld Signal — your focus blocks, your projects, and whether they reached Atlas"
+authors = ["Keld"]
+edition = "2021"
+rust-version = "1.77"
+
+# ⚠️ **THE SHELL RUNS NOTHING.** It opens a window on the page the daemon
+# already serves at 127.0.0.1, and that is the whole of it: no collection, no
+# analysis, no credential of its own. Everything it shows is the same embedded
+# page `keld signal open` opens in a browser, so the two can never disagree
+# about what a person is looking at.
+#
+# It uses the SYSTEM web view rather than bundling one — WKWebView on macOS,
+# WebView2 on Windows, WebKitGTK on Linux. That keeps the app a single small
+# binary, which matters here specifically because the macOS installer already
+# sits behind Apple's notary service and every file in a submission is scanned:
+# an Electron shell would add a Chromium framework tree to a payload that was
+# deliberately cut to four files for exactly that reason.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# image-png: the tray icon is loaded at runtime from a bundled PNG
+# (`Image::from_path`), not baked in at compile time — see the tray-icon
+# comment in src/main.rs for why it is a separate monochrome asset from the
+# app's own coloured icon.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart = "2"
+# tauri-plugin-single-instance: a second launch must bring the FIRST window
+# forward, never open a window of its own. Two windows are not merely untidy
+# here — each resolves the daemon's port from `~/.keld/agent.json` when it is
+# built, and the daemon binds an ephemeral port that moves on every restart
+# (see `follow_agent` in src/main.rs). So two windows opened either side of a
+# restart sit on two different origins, one live and one dead, and disagree
+# about the same machine. The plugin hands the second launch's argv to the
+# already-running process and exits the second one.
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# Tauri's own convention: a release build with no custom-protocol asset server.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+# The app is a window around a web view; nothing here is hot. Optimise for size
+# so the shipped binary stays small enough that bundling it into the existing
+# installers is not a conversation about download size.
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

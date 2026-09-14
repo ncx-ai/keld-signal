@@ -29,3 +29,13 @@ __pycache__/
 .DS_Store
 /.claude/settings.local.json
 /.claude/worktrees/
+
+# Rust build output for the desktop shell (app/src-tauri). 2.9 GB of
+# artifacts; the .app bundle is a BUILD PRODUCT, rebuilt by
+#   cd app && npx @tauri-apps/cli build --bundles app
+# An earlier commit added 3,286 of these files by accident.
+/app/src-tauri/target/
+
+# Tauri build output: tauri_build rewrites these on every build (Tauri's own
+# app template ignores them too). 4,714 lines were committed by accident.
+/app/src-tauri/gen/schemas

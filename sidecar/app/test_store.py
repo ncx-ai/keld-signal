@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.analysis import magnitude, window, workstreams
-from app.analysis.store import (BIN_SECONDS, PRECOMPUTED_LEVELS, default_path, open_store)
+from app.analysis.store import (BIN_SECONDS, BUSY_TIMEOUT_MS, PRECOMPUTED_LEVELS, default_path,
+                                open_store)
 
 SESSION = "3f1a9c2b"
 OTHER = "aa11bb22"
@@ -642,7 +643,11 @@ def test_wal_is_enabled_so_a_reader_never_blocks_on_the_writer():
     with tempfile.TemporaryDirectory() as tmp:
         st = _store(tmp)
         assert st._conn().execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-        assert st._conn().execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+        # 30 s, not the 5 s this asserted until the `database is locked` incident: a first
+        # whole-file ingest holds the write lock for a measured 5.1 s, so the old wait expired
+        # just below the worst case it existed to cover. See `store.BUSY_TIMEOUT_MS`.
+        assert st._conn().execute("PRAGMA busy_timeout").fetchone()[0] == BUSY_TIMEOUT_MS
+        assert BUSY_TIMEOUT_MS >= 30000, "must stay well above the 5.1 s measured whole-file ingest"
         st.close()
 
 

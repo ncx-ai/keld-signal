@@ -1,18 +1,48 @@
 {
- "rows": 224,
- "sha256": "b26c149d201e93ae91a9e57932a404eed1719b1a5ea2d6e6a90df68ae6ac7060",
+ "rows": 239,
+ "sha256": "ba254ed6bd15ce0bfd873ef5c7388415e3ddfde878394cc6f1076082e0300aa2",
  "levels": {
+  "mag/cache_creation_tokens": {
+   "rows": 1,
+   "total": 120.0,
+   "distinct": 1,
+   "sha256": "ea56602eb16481e252eeb7672e2b9895da0c9345fd2f4bd1d5e6bf3160bf4e5a"
+  },
+  "mag/cache_read_tokens": {
+   "rows": 2,
+   "total": 380.0,
+   "distinct": 1,
+   "sha256": "9d76f9237eed4ebd0d51fcbaf2475d28be4692e5cbdbe36700d28f9fd0bf1453"
+  },
   "mag/edit_bytes": {
    "rows": 4,
    "total": 113.0,
    "distinct": 1,
    "sha256": "178b530266ed61e366b7bf2bd4be5c5315d04cd71c941f47314caa03384156d0"
   },
+  "mag/input_tokens": {
+   "rows": 4,
+   "total": 2480.0,
+   "distinct": 1,
+   "sha256": "4002cf2532e1460f0989945b068f897e2814a1b4999da6d811f35ef3a048c961"
+  },
+  "mag/output_tokens": {
+   "rows": 4,
+   "total": 922.0,
+   "distinct": 1,
+   "sha256": "27e4c9205acb8121f0b19b0af23c5a2f95f47235ad0bca4e3c3b50d54b6d25f1"
+  },
   "mag/request_tokens": {
    "rows": 4,
    "total": 7278.0,
    "distinct": 1,
    "sha256": "2b4a45788bd1c40dbec5bb47ca4802c9d8063b6caa898ce9efed91c794678d6b"
+  },
+  "mag/requests": {
+   "rows": 4,
+   "total": 4.0,
+   "distinct": 1,
+   "sha256": "acebebfc0f8dcaf5ba32cabc0bd19b74514a0768dfe2e48dd2aa258a15eb47ab"
   },
   "mag/tokens": {
    "rows": 4,

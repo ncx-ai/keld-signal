@@ -1264,9 +1264,27 @@ selects one of three modes:
   is fetched. Dropping the facet entirely and reporting it dropped is not the
   substitution never-degrade forbids — nothing lower-fidelity stands in for
   window analysis.
-  *Known gap:* a service that **starts** and then permanently gives up
-  (supervisor restart cap exhausted) still wedges this mode; that third case is
-  not yet distinguished from "starting".
+  ⚠️ **This used to carry a known gap — "a service that starts and then
+  permanently gives up (supervisor restart cap exhausted) still wedges this
+  mode" — and on 2026-09-09 a real machine fell into it overnight, so the gap
+  is closed at its cause rather than distinguished.** The supervisor no longer
+  gives up: after `maxRestarts` CONSECUTIVE failed starts it **rests** (one
+  minute, doubling to thirty) and tries again on its own, a `RequestRestart`
+  (the page's Restart button, the health owner's ladder) ends the rest at once,
+  and a child that answers `/health` resets the budget — four crashes over a
+  month are four recoveries, not a crash loop. `ErrSupervisorStopped` therefore
+  means only "Start has not begun or the daemon is shutting down". Two clock
+  facts made the night possible and both are fixed in the same commit
+  (`supervisor.go` → `defaultStartSleepGap`, `servicehealth.go`'s detector):
+  the sidecar's **readiness deadline is measured in time the machine was
+  AWAKE** — a wall-clock jump between two health polls re-arms it instead of
+  spending it, because macOS wakes for ~2 seconds every 15 minutes and each
+  wake used to kill a child as a "failed start" (three of them spent the cap);
+  and both sleep detectors compare **wall-clock instants (`Round(0)`)**,
+  because on macOS Go's monotonic clock does not advance while the machine
+  sleeps, which is why the health owner's own detector logged nothing across a
+  night of sleep. A gate that waits on this service therefore waits for a
+  bounded rest, never for a human.
   `wireEnrichment` returns the analyzer as its own value (derived from the
   service client, not from the `Model`) and threads it to `process`.
   `Settings.MLEnabled()` is false in this mode;
@@ -1314,12 +1332,19 @@ selects one of three modes:
   Telemetry and client-events are unaffected.
 
 ⚠️ **WHAT A FRESH INSTALL LANDS ON, AND WHY IT IS NOT THE COMPILED-IN DEFAULT.**
-`keld-agent install` writes two keys into `~/.keld/agent-config.json` —
-`{"ml_backend": "deterministic", "blocks": true}` — via
+`keld-agent install` writes three keys into `~/.keld/agent-config.json` —
+`{"ml_backend": "deterministic", "blocks": true, "attribution": false}` — via
 `settings.WriteInstallDefaults`, which MERGES, so an operator's `pii_regions`,
 `include_entity_text` and feature toggles survive an installer run. That is v2: the
 model-free facet set plus the block emitter, and **no multi-gigabyte model download,
-ever**.
+ever**. ⚠️ **`attribution` is written OFF unconditionally, and until 2026-09-09 it
+was written as a copy of `blocks` — i.e. ON.** A fresh install therefore switched on
+vector attribution (a 1.2 GB text-model download and a pass that reads messages on
+the device) for a person who had chosen nothing, for a feature still being built.
+It is now a DEVELOPER control on the page — the Developer box, behind seven taps on
+the version — and a re-install converges it to off the way `ml_backend` converges,
+so the machines `v3.0.0-rc.1` turned it on for are turned back off by the next
+install. `KELD_ATTRIBUTION` still wins in both directions.
 
 ⚠️ **FIRST SIGHT BACKFILLS, and that default is a REVERSAL.** The block emitter
 used to seed its cursor at the transcript's watermark and emit nothing on first
@@ -2020,11 +2045,24 @@ on error); `--no-browser` suppresses the auto-open so the caller owns the link.
 tool (`configured`/`already_configured`/`skipped_conflict`) then `done`. Keep all
 auth/setup logic Go-side behind the `onStart` (auth) and `SetupOpts.Emit` (setup)
 seams — don't reimplement it in installer code; the human paths stay unchanged when
-those seams are unset. `keld-agent install` is **TTY-aware** (`term.IsTerminal` —
-`os.ModeCharDevice` is wrong because macOS launchd wires stdin to `/dev/null`):
-in a terminal it runs login → setup → service install; headless it registers the
-service only and prints the finish-setup commands, so a GUI installer's pages drive
-`keld --json` instead of a hung, invisible interactive flow.
+those seams are unset. **`keld-agent install` installs and nothing more**: it
+registers the service and prints how to finish — the app's Settings pane, or
+`keld login && keld signal setup`. Onboarding is OPT-IN, via `--code <CODE>`
+(non-interactive, the installers' path) or `--login` (browser device flow, gated
+on `term.IsTerminal` — `os.ModeCharDevice` is wrong because macOS launchd wires
+stdin to `/dev/null`).
+⚠️ **THAT DEFAULT WAS INVERTED UNTIL 2026-09-05, and the old one had EXPIRED
+rather than been chosen.** `install` used to log in whenever stdout looked like a
+terminal, with `--headless` to opt out — correct while the CLI was the only
+onboarding surface, because an install that did not onboard left a daemon idling
+with nowhere to be told about Atlas. `POST /v1/config` plus daemon/onboarding.go
+(the daemon now serves the page and that route BEFORE it has any config) removed
+the constraint, so the flag was protecting a dead end that no longer exists.
+`--headless` is kept ACCEPTED AND INERT — it asks for what already happens —
+because cobra fails hard on an unknown flag and scripts, runbooks and MDM
+payloads outlive a release. Both `onboard.command` and `onboard.cmd` pass
+`--login --yes` on their fallback path; they relied on the old default and would
+otherwise have silently stopped onboarding anyone whose setup code failed.
 
 ## Repo layout
 

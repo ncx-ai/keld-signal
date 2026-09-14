@@ -38,6 +38,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 	"github.com/ncx-ai/keld-signal/internal/agent/resolve"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/agent/singleton"
 	"github.com/ncx-ai/keld-signal/internal/agent/watch"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/config"
@@ -546,7 +547,15 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, svc serviceFacets
 	// Log successes too (not just failures) so "are enrichments reaching Atlas"
 	// is answerable from the daemon log — silent success made this hard to tell
 	// apart from a broken pipeline.
-	log.Printf("keld-agent: published enrichment for %s", j.Key())
+	// ⚠️ Say what actually happened. With Send to Atlas off this same path runs
+	// and succeeds, and logging "published" there would be the log telling a
+	// developer the opposite of the truth — the precise failure this whole
+	// build exists to remove, reproduced in the one place people look first.
+	if _, local := pub.(*localOnlySender); local {
+		log.Printf("keld-agent: enriched %s (kept locally; Send to Atlas is off)", j.Key())
+	} else {
+		log.Printf("keld-agent: published enrichment for %s", j.Key())
+	}
 	return true
 }
 
@@ -647,7 +656,50 @@ func wellKnownSidecarDirs() []string {
 // registered before onboarding runs (the documented macOS pkg order), so this
 // waits for hook.json and starts the moment onboarding writes it. See
 // awaitConfig for why exiting here was wrong.
+// ErrAlreadyRunning reports that another daemon holds this KELD_HOME's lock,
+// so this one did nothing and exited.
+//
+// ⚠️ **IT IS A SENTINEL BECAUSE THE EXIT CODE MUST BE ZERO, AND THAT IS NOT A
+// STYLE POINT.** `executeCmd` turns any error out of `Run` into exit 1, and the
+// LaunchAgent's KeepAlive is the `SuccessfulExit=false` dictionary — so a
+// duplicate that exited non-zero would be respawned by launchd, refuse again,
+// exit non-zero again, forever. That is precisely the unconditional-KeepAlive
+// crashloop this repo already paid for once (69 launchd spawns in 12 minutes,
+// see service.go), rebuilt out of the very guard meant to prevent duplicates.
+// A duplicate is a NORMAL outcome — someone opened a second one — so it exits
+// cleanly and launchd lets it stay exited.
+var ErrAlreadyRunning = errors.New("another keld-agent is already running for this KELD_HOME")
+
 func Run(ctx context.Context) error {
+	// ⚠️ **THE LOCK IS TAKEN FIRST, BEFORE ANYTHING ELSE IN THE PROCESS DOES
+	// WORK — AND BEFORE reapStaleSidecars IN PARTICULAR.** That reaper kills
+	// every process matching the sidecar's basename, machine-wide, justified by
+	// "under single-instance service management any such process is stale".
+	// Nothing enforced that premise, so two daemons took turns killing each
+	// other's sidecar while both wrote to one refseries.db — a cause of the
+	// `database is locked` failures. Ordering is the whole claim: reaping first
+	// and locking second would still have killed a live daemon's sidecar before
+	// discovering this process should never have started, so the guard would
+	// have caused the exact damage it exists to prevent.
+	//
+	// It lives in Run rather than in the `run` command because the invariant
+	// belongs to the thing that assumes it. The reaper is inside this package;
+	// putting the guard one layer up would leave Run enterable twice by any
+	// other caller, which is the same assumed-but-unenforced bug in a new
+	// place.
+	lock, err := singleton.Acquire(paths.AgentLockPath())
+	if err != nil {
+		if errors.Is(err, singleton.ErrHeld) {
+			log.Printf("keld-agent: not starting — %v (%v)", ErrAlreadyRunning, err)
+			return ErrAlreadyRunning
+		}
+		return err
+	}
+	// Release is for orderly shutdown and for tests. Correctness does not rest
+	// on it: the kernel drops an fd-bound lock however the process ends, which
+	// is the reason this is not a pid file.
+	defer func() { _ = lock.Release() }()
+
 	// Resolve any update left in flight by a previous process, BEFORE
 	// awaitConfig — which blocks indefinitely on a machine that has not been
 	// onboarded. A daemon idling there still needs a bad update undone, and it
@@ -657,19 +709,54 @@ func Run(ctx context.Context) error {
 	updateEvents := &bufferedEvents{}
 	confirmPendingUpdate(updateEvents.emit)
 
-	cfg, err := awaitConfig(ctx, hook.LoadConfig, configPollInterval(), func() {
-		log.Printf("keld-agent: not configured yet — idling until `keld login` + `keld signal setup` "+
-			"write %s; no restart needed once they do", paths.HookConfigPath())
-	})
-	if err != nil {
-		return nil // context cancelled while idling: a clean shutdown, not a failure
-	}
-
+	// ⚠️ **THE LISTENER IS BOUND BEFORE awaitConfig, AND THAT ORDER IS THE
+	// WHOLE POINT.** Everything below used to sit after the wait, so an
+	// unconfigured machine published no `agent.json`, served no page, and gave
+	// `POST /v1/config` — the route whose entire job is onboarding a machine —
+	// no way to be called. Pairing from the app was structurally impossible and
+	// `keld-agent install --code` was not a shortcut but the only door. See
+	// onboarding.go for why this is one listener with a swapped handler rather
+	// than a second server on a second port.
 	secret, err := agentcfg.NewSecret()
 	if err != nil {
 		return err
 	}
 	set := settings.Load()
+
+	addr := bindAddr()
+	if svcSecret, err := serviceSecret(); err != nil {
+		return err
+	} else if svcSecret != "" {
+		secret = svcSecret // overrides the generated agent.json secret in service mode
+		if os.Getenv("KELD_AGENT_TLS_TERMINATED") == "" {
+			log.Printf("keld-agent: WARNING binding %s off-loopback with no TLS termination declared; "+
+				"the /enrich secret is the only control on this listener", addr)
+		}
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := agentcfg.Write(agentcfg.Info{Port: port, Secret: secret}); err != nil {
+		return err
+	}
+	log.Printf("keld-agent: listening on %s", ln.Addr().String())
+
+	lb := newLoopbackServer(ln, onboardingHandler(set, secret))
+	lb.Serve(ctx)
+
+	cfg, err := awaitConfig(ctx, hook.LoadConfig, configPollInterval(),
+		awaitConfigNote(paths.HookConfigPath()))
+	if err != nil {
+		return nil // context cancelled while idling: a clean shutdown, not a failure
+	}
+
+	// settings.Load again: a machine that paired through the page may have
+	// written send_to_atlas or dev_blocks in the same session, and everything
+	// below resolves off `set`. Re-reading costs one small file and removes a
+	// whole class of "the toggle only took effect next boot".
+	set = settings.Load()
 	// attribOn is resolved once, here, and reused everywhere this run needs
 	// it (project-list posting below, the attributor's own construction, and
 	// the shared text encoder's existence/spawn-env gate) — attrib.Enabled has
@@ -741,25 +828,40 @@ func Run(ctx context.Context) error {
 	q := queue.New(queueCap())
 	pub := publish.New(enrichEndpoint(cfg.Endpoint), tok.Get, actor)
 
-	addr := bindAddr()
-	if svcSecret, err := serviceSecret(); err != nil {
-		return err
-	} else if svcSecret != "" {
-		secret = svcSecret // overrides the generated agent.json secret in service mode
-		if os.Getenv("KELD_AGENT_TLS_TERMINATED") == "" {
-			log.Printf("keld-agent: WARNING binding %s off-loopback with no TLS termination declared; "+
-				"the /enrich secret is the only control on this listener", addr)
-		}
+	// THE ATLAS BOUNDARY. Exactly one connector is constructed, here, from the
+	// send_to_atlas setting: the live one, or atlas.Off, which holds no
+	// transport, no credential and no address. See daemon/atlas.go.
+	// ⚠️ **THE BLOCK PUBLISHER IS ITS OWN, AND HANDING THE ENRICHMENT ONE HERE
+	// COST EVERY REPUBLISHED BLOCK.** `pub` posts to `/v1/enrichments`; blocks
+	// go to `/v1/signal/blocks`. atlas.Live.SendBlocks was given `pub`, so the
+	// republish sweep posted BLOCK payloads at the ENRICHMENT route, which
+	// rejected them — correctly — with 422. Measured on a real machine: 41
+	// captured blocks that Atlas accepts on the right route were refused
+	// forever on the wrong one, and the health strip showed "Atlas batch
+	// refused" as a result. The live emitter was unaffected because
+	// blocks.go builds its own publisher on signalBlocksEndpoint, which is
+	// precisely why the two disagreed and why nothing caught it: the path
+	// people watch worked.
+	//
+	// Same derivation as the emitter's, from the one ingest endpoint.
+	blockPub := publish.New(signalBlocksEndpoint(cfg.Endpoint), tok.Get, actor)
+	atlasCl := atlasClient(set, blockPub,
+		settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second))
+	// ⚠️ **AND EVERY PATH THAT PREDATES THE BOUNDARY IS ROUTED THROUGH IT HERE.**
+	// atlas.Off makes the new connector incapable of reaching the network, but
+	// the enrichment worker, the tick, the settings poll and the reporter each
+	// hold their own endpoint and would happily keep dialling — measured, once
+	// every two seconds, on a machine that had asked for local-only. `sender`
+	// is what those paths publish through, so a path that forgets to consult a
+	// flag still cannot send. See localonly.go.
+	sender := senderFor(set, pub)
+	// The tick publishes window rows rather than enrichments, so it needs the
+	// same value under its own interface. One concrete sender satisfies both;
+	// `pub` does too, which is why the fallback is a plain type assertion.
+	windowSender, _ := sender.(WindowSender)
+	if windowSender == nil {
+		windowSender = pub
 	}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	if err := agentcfg.Write(agentcfg.Info{Port: port, Secret: secret}); err != nil {
-		return err
-	}
-	log.Printf("keld-agent: listening on %s", ln.Addr().String())
 
 	// THE TELEMETRY PROXY. AI tools POST OTLP here instead of to Atlas, so none
 	// of them holds an Atlas credential and a token rotation strands nobody. A
@@ -809,7 +911,67 @@ func Run(ctx context.Context) error {
 	// facets on the startup value.
 	live := settings.NewLive(set)
 
-	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded)
+	// The Keld Signal page and its routes. Built before the enrichment wiring
+	// because the loopback mux is assembled there, and deliberately never able
+	// to fail that call: see v3.go — the collector is the product and the
+	// window onto it must not be allowed to take it down.
+	sig := newV3(set, atlasCl)
+	sig.observeRemote(nil)
+	// The attribution path's terminal-quarantine hook (v3attrib.go) is wired
+	// unconditionally, here, rather than only when attribution later turns
+	// out to be on: it is nil-safe on a machine that never quarantines a job,
+	// and wiring it once at startup means startAttributor never has to know
+	// whether v3 exists.
+	// Both halves of the vector cell's wiring, and NEITHER of them can reach
+	// the deterministic `attributed` cell: v3.vectorLedger() narrows the store
+	// to ledger.VectorRecorder, an interface with one method that writes one
+	// cell. See v3attrib.go for the 44 rows the previous wiring — which handed
+	// this path a method with `v.ledger` in scope — actually cost.
+	vecLedger := sig.vectorLedger()
+	setAttribQuarantineHandler(vecLedger.recordQuarantine)
+	setAttribOutcomeHandler(vecLedger.recordOutcome)
+	// telemetryLast reads the running telemetry proxy's own record of its
+	// last successful forward — TelemetryLastForward already returns the zero
+	// time when no proxy is running at all, which startHealth's own note()
+	// already treats as "say nothing" (see its doc comment): a health fact
+	// that cannot be determined must never render as broken.
+	startHealth(ctx, sig, func() time.Time {
+		t, _ := TelemetryLastForward()
+		return t
+	}, set.AtlasEnabled())
+	// B2 — Send to Atlas (docs/v3/contracts.md): drain any blocks this ledger
+	// captured while a previous run had Atlas off (or a publish attempt failed
+	// and was never retried). A no-op the instant it finds nothing to send —
+	// see republish.go for why the payload has to be captured verbatim rather
+	// than rebuilt from the ledger's own delivery-cell schema.
+	startRepublisher(ctx, sig.ledger, atlasCl)
+
+	v3Routes := append(sig.routes(),
+		// SettingsRoute's restart function is service.Restart() — the SAME
+		// mechanism internal/agent/update already uses to restart the daemon
+		// after an auto-update (see daemon/update.go's serviceRestarter) —
+		// reused rather than a bespoke exit(0), since it already exists and
+		// already does exactly this.
+		ingress.SettingsRoute(serviceRestarter{}.Restart),
+		ingress.ConfigRoute(),
+		// The hook is built here because only Run holds the three things it
+		// needs: the ledger the page reads, the sidecar's ingest signal, and the
+		// facts resolver that gives the transcript its repository identity.
+		// Without that identity the block is cut with no `repo` dimension and
+		// the Projects half of the story can never pass.
+		ingress.DevGenerateRoute(devGenerateHook(ctx, sig.ledger)),
+	)
+	handler, model, svc, gate, warmup, enrichmentEnabled := wireEnrichment(ctx, set, secret, q, emitter, live.PIIRegions, encoderNeeded, v3Routes...)
+	// THE SERVICE HEALTH OWNER. Started HERE, immediately after wireEnrichment,
+	// because that is the first moment sidecarProbe either exists or
+	// definitively never will this daemon lifetime — and a nil probe is exactly
+	// what makes the owner report not_applicable and restart nothing.
+	//
+	// It is the answer to a measured outage: a daemon that ran 2h14m with no
+	// sidecar process, logging only downstream symptoms while nothing on the
+	// machine asked whether the analysis service was running. See
+	// servicehealth.go.
+	startServiceHealth(ctx, enrichmentEnabled, emitter)
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("KELD_SETTINGS_POLL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -823,7 +985,18 @@ func Run(ctx context.Context) error {
 			flushInterval = d
 		}
 	}
-	reporter := clientevents.NewReporter(signalClientEventsEndpoint(cfg.Endpoint), tok.Get, installID, emitter.Drain, paths.ClientEventsSpoolDir())
+	// ⚠️ The reporter is the THIRD path that predates the Atlas boundary, and it
+	// was still dialling after the worker, the tick and the settings poll were
+	// routed through it — found by an end-to-end run, not by a unit test. Same
+	// remedy, same reason: it is handed an endpoint it cannot reach rather than
+	// a flag it might forget to consult. Operational events about a machine
+	// nobody is collecting from have nowhere to go, and spooling them would
+	// grow a queue that can never drain.
+	clientEventsEndpoint := signalClientEventsEndpoint(cfg.Endpoint)
+	if !set.AtlasEnabled() {
+		clientEventsEndpoint = ""
+	}
+	reporter := clientevents.NewReporter(clientEventsEndpoint, tok.Get, installID, emitter.Drain, paths.ClientEventsSpoolDir())
 	go reporter.Run(ctx, flushInterval)
 
 	sampleInterval := 10 * time.Second
@@ -863,6 +1036,11 @@ func Run(ctx context.Context) error {
 		log.Printf("keld-agent: auto-update unavailable on this install (no writable destination); updates must be applied by re-running the installer")
 	}
 	onRemote := func(r *settings.Remote) {
+		// The Projects pane's vocabulary is the org's pooled workstream values,
+		// which arrive here; observing them on every poll is what lets a value
+		// added in Atlas show up without a daemon restart.
+		sig.observeRemote(r)
+
 		re := r.ClientTelemetry.WithDefaults()
 		emitter.SetGate(gateFrom(re))
 		watcher.SetThresholds(thresholdsFrom(re))
@@ -957,7 +1135,9 @@ func Run(ctx context.Context) error {
 			svc.OnSidecarRespawn(func() { repostProjectsAfterRespawn(postProjects, lastProjects) })
 		}
 	}
-	go pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
+	pollSettingsIfOnline(ctx, set.AtlasEnabled(), func(ctx context.Context) {
+		pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
+	})
 	if enrichmentEnabled {
 		// warmup comes from wireEnrichment, not from warmupFunc(model): it is
 		// the composition of on-demand provisioning with the model load, and
@@ -966,7 +1146,7 @@ func Run(ctx context.Context) error {
 		// 43-45 points of it. OFF by default because such a row joins to nothing at
 		// Atlas yet; see tick.go's envTick for the whole of that reasoning. Started
 		// BEFORE the worker so the observer is in place for the first job.
-		setTickObserver(startTicker(ctx, svc.Tick, pub, actor, emitter))
+		setTickObserver(startTicker(ctx, svc.Tick, windowSender, actor, emitter))
 		// THE SHARED TEXT ENCODER's on-demand provisioner — ONE instance for
 		// both callers that can want it (attribution and the signal-embeddings
 		// path), never two independently fetching the same ~1.2 GB into the
@@ -1012,6 +1192,25 @@ func Run(ctx context.Context) error {
 		// argument uses for the org's `features` toggle.
 		onBlockPublished = demandModelsForAttribution(onBlockPublished,
 			lastProjects.knownNonEmpty, enc.demand, verifierEnc.demand)
+		// THE DELIVERY LEDGER hangs off the same hook, CHAINED rather than
+		// replacing: attribution's model-demand wrapper and the ledger both want
+		// to know a block published, and neither is the other's precondition.
+		// The ledger runs second so a panic in it cannot cost the attribution
+		// job, and its own writes are fire-and-forget — the window onto the
+		// collector must never be able to stop the collector.
+		onBlockPublished = chainOnPublished(onBlockPublished, sig.recordDelivered)
+		// B2 — Send to Atlas: with Atlas off, sig.recordCut is the ONLY record
+		// of a block that will ever exist — the emitter's own Sender is
+		// localOnlySender here (see daemon/blocks.go), which discards and
+		// reports success so the cursor never re-offers it. captureOnCut keeps
+		// the block's own marshalled JSON so a LATER run with Atlas on can
+		// republish it verbatim (republish.go) without re-cutting anything.
+		// Only wired when Atlas is off: a machine that has always published
+		// live never pays for a table it will never need to drain.
+		onCut := sig.recordCut
+		if !set.AtlasEnabled() {
+			onCut = captureOnCut(sig.ledger, sig.recordCut)
+		}
 		// v2's block emitter, and the reason it sits beside the tick rather than
 		// inside it: a block reaches nowhere, so it needs none of the tick's
 		// frontier reasoning about which future prompts might sweep over a
@@ -1019,7 +1218,8 @@ func Run(ctx context.Context) error {
 		// Atlas stores blocks now but nothing reads them yet. Returns nil when
 		// off, which setBlockAdvance takes as "no observer".
 		setBlockAdvance(startBlockEmitter(ctx, svc.Blocks, cfg.Endpoint, tok.Get, actor, emitter, set.Blocks,
-			onBlockPublished))
+			set.AtlasEnabled(), onBlockPublished, onCut, sig.recordPublishFailed, sig.recordCutPending,
+			sig.recordCutResolved))
 		// THE SIGNAL-EMBEDDINGS PATH: the client-side training corpus for
 		// future-work prediction. svc.Features is non-nil ONLY under
 		// ml_backend "deterministic" (see deterministicBackend), so this is
@@ -1029,7 +1229,7 @@ func Run(ctx context.Context) error {
 		// on — which is what lets an org enable it without a restart.
 		setFeatureAdvance(startFeatureEmitter(ctx, svc.Features, cfg.Endpoint, tok.Get,
 			actor, installID, live.FeaturesEnabled, live.FeaturesPublishEnabled, emitter, enc))
-		go Worker(ctx, q, model, svc, pub, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
+		go Worker(ctx, q, model, svc, sender, actor, live.IncludeEntityText, gate, warmup, emitter, ra, custom)
 	}
 
 	// Drain enrich pointers the hook spooled while the daemon was down, then keep
@@ -1103,6 +1303,12 @@ func Run(ctx context.Context) error {
 		// scoping and the drop policy, and note /analyze keeps its own on-demand
 		// ingest as the backstop, so a dropped signal costs latency only.
 		if svc.SignalIngest != nil {
+			// The generate button uses the SAME signal, synchronously, so its
+			// answer is about a block that exists. Installed here because this
+			// is where the sidecar client first exists — see setDevIngest.
+			devFacts := newFactsCache()
+			setDevIngest(svc.SignalIngest,
+				func(path string) enrich.ResolvedFacts { return devFacts.forTranscript(path).resolved() })
 			txw = txw.WithIngestSignal(ingestSignalHook(ctx, svc.SignalIngest))
 			// Block backfill needs a transcript to be ingestable BEFORE it next
 			// grows, or the emitter only ever sees files still being written and
@@ -1115,7 +1321,16 @@ func Run(ctx context.Context) error {
 		go txw.Run(ctx)
 	}
 
-	err = serve(ctx, ln, handler, q, emitter)
+	// The server has been accepting since before awaitConfig; this is the one
+	// handler swap in a daemon's life. Stop-time work is registered now rather
+	// than captured at construction, because neither the queue nor the emitter
+	// existed when the listener was bound.
+	lb.OnStop(func() {
+		emitter.EmitExempt("daemon.stop", clientevents.SevInfo, nil)
+		q.Close()
+	})
+	lb.Install(handler)
+	<-ctx.Done()
 
 	// ⚠️ SHUTDOWN IS NOT DONE WHEN serve() RETURNS, and pretending otherwise is
 	// what made the supervisor's kill path unreachable. serve returns as soon
@@ -1130,7 +1345,11 @@ func Run(ctx context.Context) error {
 	if svc.AwaitSidecarStop != nil {
 		svc.AwaitSidecarStop()
 	}
-	return err
+	// Reaching here means ctx was cancelled, which is a clean stop. This used
+	// to return serve()'s error, and serve() returned nil for every shutdown —
+	// ErrServerClosed was already filtered — so the value is unchanged; it is
+	// just no longer routed through a function that has been removed.
+	return nil
 }
 
 // drainEnrichSpool drains queued spool pointers into q, offering each as an
@@ -1265,10 +1484,10 @@ func runSweep(ctx context.Context, q *queue.Queue, emitter *clientevents.Emitter
 //     trivially true when none does (see deterministicBackend).
 //   - enabled: whether Run should start the enrich Worker — true for both
 //     "auto" (or "") and "deterministic"; only "off" disables it.
-func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
+func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q *queue.Queue, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool, extra ...ingress.Route) (handler http.Handler, model enrich.Model, svc serviceFacets, gate func() bool, warmup func(context.Context) error, enabled bool) {
 	if !set.EnrichmentEnabled() {
 		log.Printf("keld-agent: enrichment disabled (ml_backend=off)")
-		return ingress.DiscardHandler(secret), nil, serviceFacets{}, nil, nil, false
+		return ingress.DiscardHandler(secret, extra...), nil, serviceFacets{}, nil, nil, false
 	}
 	if !set.MLEnabled() {
 		// deterministic: the Worker still runs, and so does the analysis
@@ -1277,10 +1496,10 @@ func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q
 		// warmup, no download either.
 		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the analysis service runs, the model is never loaded", set.MLBackend)
 		svc, gate := deterministicBackend(ctx, emitter, regions, encoderNeeded)
-		return ingress.Handler(q, secret), nil, svc, gate, nil, true
+		return ingress.Handler(q, secret, extra...), nil, svc, gate, nil, true
 	}
 	model, svc, gate, warmup = mlBackend(ctx, emitter, regions, encoderNeeded)
-	return ingress.Handler(q, secret), model, svc, gate, warmup, true
+	return ingress.Handler(q, secret, extra...), model, svc, gate, warmup, true
 }
 
 // newRunID generates a per-run correlation id (16 random bytes, hex-encoded),
@@ -1313,41 +1532,6 @@ func thresholdsFrom(eff settings.EffectiveClientTelemetry) resource.Thresholds {
 		SustainedWindow: time.Duration(eff.SustainedWindowS) * time.Second,
 		GaugeInterval:   time.Duration(eff.GaugeIntervalS) * time.Second,
 	}
-}
-
-// serve runs the ingress HTTP server until ctx is cancelled, then gracefully
-// shuts it down and closes the queue. It blocks until the server stops.
-func serve(ctx context.Context, ln net.Listener, handler http.Handler, q *queue.Queue, emitter *clientevents.Emitter) error {
-	srv := &http.Server{
-		Handler: handler,
-		// KELD_AGENT_BIND=0.0.0.0:… (service mode) makes this reachable from
-		// anywhere, and connection acceptance happens before ingress.go's
-		// constant-time secret check — so an unauthenticated caller can hold a
-		// connection open (slowloris, or just an idle connection) before ever
-		// presenting a secret. A zero-value http.Server has no timeouts at all,
-		// which was fine on the loopback-only listener this predates but isn't
-		// once the bind can be public. ReadHeaderTimeout/ReadTimeout bound how
-		// long an unauthenticated connection can occupy a goroutine; IdleTimeout
-		// bounds a keep-alive connection sitting idle between requests. All three
-		// are generous relative to ingress.go's 1 MiB body cap — a legitimate
-		// large inline-prompt POST over a slow link still completes well inside
-		// ReadTimeout.
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-	go func() {
-		<-ctx.Done()
-		emitter.EmitExempt("daemon.stop", clientevents.SevInfo, nil)
-		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-		q.Close()
-	}()
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-	return nil
 }
 
 // mlBackendOpts holds overridable dependencies for mlBackend. Zero values
@@ -1469,7 +1653,22 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 		},
 		scPort,
 		healthFn,
-		30*time.Second,
+		// ⚠️ **30s WAS TOO SHORT ON A REAL MACHINE, AND THERE WAS NO WAY TO
+		// MOVE IT.** The sidecar's parent loads spaCy for the `named_terms`
+		// level (~619 MB, on by default) and, when attribution or
+		// KELD_TEXTEMBED is on, provisions and spawns the text encoder too.
+		// Measured here: spawned at 19:22:54, still not answering /health when
+		// the 30s deadline killed it at 19:23:25 — repeatedly, on every daemon
+		// start, which is what left the machine with no analysis service. The
+		// same start answers /health comfortably given more time.
+		//
+		// 90s is three times the old value and still well inside launchd's
+		// patience; the readiness deadline is a bound on a HUNG start, not a
+		// performance target, so being generous costs only how long a genuinely
+		// hung sidecar takes to be noticed — and since a timeout is now a
+		// counted failure rather than permanent surrender, that cost is
+		// recoverable where it used to be fatal.
+		envDuration("KELD_SIDECAR_READY_TIMEOUT", 90*time.Second),
 	)
 	sup.SetEmitter(emitter)
 
@@ -1479,6 +1678,29 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 	// block on that — sidecarService returns before the caller has even started
 	// the supervisor. See versionskew.go.
 	go reportSidecarVersionSkew(ctx, scClient, emitter)
+
+	// The same two questions the skew report asks, published for the page's
+	// health strip. See v3health.go.
+	setSidecarProbe(&sidecarHealthProbe{
+		// scClient.Healthy directly, not healthFn: the caller owns the
+		// deadline. healthFn closes over the daemon context and is what the
+		// Supervisor's own ready-poll wants; the health ladder needs a probe it
+		// can bound, or "did not answer in time" is indistinguishable from
+		// "answered no".
+		Healthy: scClient.Healthy,
+		// The restart lever, published beside the two questions rather than
+		// threaded through five return values — see serviceHealth. It is the
+		// supervisor's own restart path (Supervisor.RequestRestart), never a
+		// second way to spawn a sidecar.
+		Restart: sup.RequestRestart,
+		Version: func() (string, bool) {
+			r, ok := scClient.Health(ctx)
+			if !ok || r.Version == "" {
+				return "", false
+			}
+			return r.Version, true
+		},
+	})
 
 	return scClient, sup, healthFn, true, nil
 }

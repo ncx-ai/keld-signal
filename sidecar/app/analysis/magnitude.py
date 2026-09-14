@@ -118,9 +118,40 @@ TIER = {"batch": 0.5}
 TOKENS = "tokens"
 REQUEST_TOKENS = "request_tokens"
 EDIT_BYTES = "edit_bytes"
+
+# The four RAW token classes `message.usage` carries, recorded ONCE per requestId -- the same
+# cadence as `REQUEST_TOKENS`, and for the same reason: a request is written as several assistant
+# lines each repeating its `usage`, so summing a per-LINE count would multiply a request by its
+# line count (median 2, up to 12 measured -- see `REQUEST_TOKENS` above). Unlike `TOKENS`/
+# `REQUEST_TOKENS`, which are a single PRICE-WEIGHTED number, these are the raw counts themselves,
+# unweighted -- what `/blocks` publishes as `tokens.{input,output,cache_read,cache_creation}` (D5;
+# see `blockdigest._tokens_at`), because a block's own token mix is a fact a reader may want
+# un-collapsed, the same way `effort` publishes both a sum and a count for diff magnitude rather
+# than only the sum.
+#
+# NOT the CAPTURE kinds `TOK_OUT`/`TOK_IN_FRESH`/`TOK_IN_CACHED` below: those are gated behind
+# `KELD_CAPTURE` (off by default) and combine classes that must stay separate here (`TOK_IN_FRESH`
+# is `input_tokens + cache_creation_input_tokens` merged; `cache_creation` on its own is not
+# recoverable from it). Block token totals are not a capture feature -- they must be available
+# with capture off, so these are COST kinds (`KINDS`, always recorded), not CAPTURE ones.
+INPUT_TOKENS = "input_tokens"
+OUTPUT_TOKENS = "output_tokens"
+CACHE_READ_TOKENS = "cache_read_tokens"
+CACHE_CREATION_TOKENS = "cache_creation_tokens"
+
+# ONE row per costed API request -- value always 1, recorded under the identical `if w:` gate as
+# `REQUEST_TOKENS` (see `levels.events_for_turns`), so a `<synthetic>`, all-zero-usage line (no
+# real request at all -- `test_an_all_zero_usage_emits_no_magnitude_row`) is never counted. Not
+# derived from any of the four raw sums above: a request whose every class happens to be zero
+# except one must still count as one request, and deriving "requests" from a sum that a `_aggregate_mag`
+# zero-filter can independently drop would make the count depend on which class happened to be
+# nonzero.
+REQUESTS = "requests"
+
 # The COST kinds. `Store.has_magnitudes` is scoped to exactly this tuple, because it answers
 # "was anything costed here", and the capture kinds below are not costs.
-KINDS = (TOKENS, REQUEST_TOKENS, EDIT_BYTES)
+KINDS = (TOKENS, REQUEST_TOKENS, EDIT_BYTES,
+        INPUT_TOKENS, OUTPUT_TOKENS, CACHE_READ_TOKENS, CACHE_CREATION_TOKENS, REQUESTS)
 
 # The CAPTURE kinds: written only under `KELD_CAPTURE=1`, and never a cost. They ride
 # `turn_magnitude` rather than a table of their own because that table's `kind` is a DIMENSION
@@ -219,6 +250,34 @@ def token_weight(usage):
          + CACHE_READ * read
          + OUTPUT * out)
     return float(w) * TIER.get(usage.get("service_tier"), 1.0)
+
+
+RawTokens = collections.namedtuple("RawTokens", "input output cache_read cache_creation")
+
+
+def raw_tokens(usage):
+    """`message.usage` -> the four RAW token classes `token_weight` above is computed from,
+    unweighted. Reads the `cache_creation` sub-object with the IDENTICAL precedence `token_weight`
+    uses (the sub-object when present, the flat `cache_creation_input_tokens` field otherwise, both
+    TTLs summed into one `cache_creation` figure since D5 does not publish them separately) so the
+    two functions never disagree about which regime a request was billed under.
+
+    Returns all-zero for anything that is not a usage object, matching `token_weight`'s own
+    contract -- and `token_weight(usage) == 0` if and only if every field here is 0, which is what
+    lets `levels.events_for_turns` gate both on the SAME `if w:` check (see there).
+    """
+    if not isinstance(usage, dict):
+        return RawTokens(0, 0, 0, 0)
+    fresh = _count(usage.get("input_tokens"))
+    out = _count(usage.get("output_tokens"))
+    read = _count(usage.get("cache_read_input_tokens"))
+    cc = usage.get("cache_creation")
+    if isinstance(cc, dict):
+        creation = (_count(cc.get("ephemeral_5m_input_tokens"))
+                   + _count(cc.get("ephemeral_1h_input_tokens")))
+    else:
+        creation = _count(usage.get("cache_creation_input_tokens"))
+    return RawTokens(fresh, out, read, creation)
 
 
 def edit_bytes(name, inp):

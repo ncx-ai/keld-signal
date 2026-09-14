@@ -262,6 +262,47 @@ func TestGenuineErrorRetriesThenQuarantines(t *testing.T) {
 	}
 }
 
+// The delivery ledger's quarantine seam (internal/agent/daemon's
+// noteAttributionQuarantine, wired via WithQuarantineHook): it must fire
+// exactly once, with the job's own coordinates, at the SAME instant a job is
+// quarantined — never before (a held pending/degraded job must not trip it)
+// and never twice for the same job.
+func TestQuarantineHookFiresOnceWithTheJobsCoordinates(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	if err := st.Put(Job{SessionID: "s-quarantine", Path: "/tmp/x.jsonl", Start: 42, End: 102}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	dig := digesterFor("s-quarantine", 42, 102)
+	a := New(st, errorClient(), &fakeSender{}, nil, "actor@x", dig)
+	var calls []struct {
+		session string
+		start   float64
+	}
+	a.WithQuarantineHook(func(sessionID string, start float64) {
+		calls = append(calls, struct {
+			session string
+			start   float64
+		}{sessionID, start})
+	})
+	ctx := context.Background()
+
+	for i := 0; i < MaxAttempts-1; i++ {
+		a.drainOnce(ctx)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("quarantine hook fired %d times before MaxAttempts was reached, want 0", len(calls))
+	}
+
+	a.drainOnce(ctx) // the MaxAttempts-th failure quarantines the job
+	if len(calls) != 1 {
+		t.Fatalf("quarantine hook fired %d times, want exactly 1", len(calls))
+	}
+	if calls[0].session != "s-quarantine" || calls[0].start != 42 {
+		t.Fatalf("quarantine hook called with %+v, want session=s-quarantine start=42", calls[0])
+	}
+}
+
 // I2: a transient Atlas outage (SendBlocks failing) must HOLD the job — no
 // attempt consumed, never quarantined — the same argument the block emitter
 // already makes for its own publish path: a block's identity is

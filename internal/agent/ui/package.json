@@ -1,0 +1,6 @@
+{
+  "name": "keld-signal-ui",
+  "private": true,
+  "type": "module",
+  "description": "Node-only manifest so `node --test` resolves app.js as an ES module. Not part of the Go build; go:embed only picks up index.html/app.css/app.js."
+}

@@ -711,3 +711,65 @@ func TestSweepSaysARouteIsMissingOnceAndHoldsTheCursor(t *testing.T) {
 			"block before it, permanently", *tgts[0].Cursor)
 	}
 }
+
+// OnCutPending is what tells a recorder "blocks could not even be asked for",
+// keyed by session because no block exists yet. RouteUnsupported and a
+// generic failure (fakeDig's plain `fail`, standing in for "not ready yet,
+// restarting, or the store is behind") must report the two distinct reasons
+// the daemon's ledger interprets — and a sweep that actually succeeds, even
+// with zero blocks, must never report pending at all.
+func TestOnCutPendingReportsWhyBlocksCouldNotBeAsked(t *testing.T) {
+	t.Run("route unsupported", func(t *testing.T) {
+		dig := &fakeDig{routeGone: true}
+		e := newTestEmitter(t, dig, &fakeSender{})
+		var got []struct{ session, reason string }
+		e.OnCutPending = func(session, reason string) {
+			got = append(got, struct{ session, reason string }{session, reason})
+		}
+		now := time.Unix(9000, 0)
+		e.advanceAt("claude_code", txPath, now)
+		e.Sweep(context.Background(), now)
+
+		if len(got) != 1 || got[0].reason != "sidecar_outdated" {
+			t.Fatalf("OnCutPending = %+v, want one call with reason sidecar_outdated", got)
+		}
+		if want := sessionIDFor(txPath); got[0].session != want {
+			t.Fatalf("session = %q, want %q", got[0].session, want)
+		}
+	})
+
+	t.Run("generic failure reads as sidecar_behind", func(t *testing.T) {
+		dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000)}, watermark: f64(900)}
+		e := newTestEmitter(t, dig, &fakeSender{})
+		now := time.Unix(10000, 0)
+		e.advanceAt("claude_code", txPath, now)
+		e.Sweep(context.Background(), now) // seeds the cursor at 900; no hook wired yet
+
+		var got []struct{ session, reason string }
+		e.OnCutPending = func(session, reason string) {
+			got = append(got, struct{ session, reason string }{session, reason})
+		}
+		dig.mu.Lock()
+		dig.fail = true
+		dig.mu.Unlock()
+		e.Sweep(context.Background(), now.Add(time.Hour))
+
+		if len(got) != 1 || got[0].reason != "sidecar_behind" {
+			t.Fatalf("OnCutPending = %+v, want one call with reason sidecar_behind", got)
+		}
+	})
+
+	t.Run("a healthy sweep never reports pending, even with zero blocks", func(t *testing.T) {
+		dig := &fakeDig{all: []enrich.BlockCharacterisation{block(1000)}, watermark: f64(900)}
+		e := newTestEmitter(t, dig, &fakeSender{})
+		var calls int
+		e.OnCutPending = func(string, string) { calls++ }
+		now := time.Unix(9000, 0)
+		e.advanceAt("claude_code", txPath, now)
+		e.Sweep(context.Background(), now)
+		e.Sweep(context.Background(), now.Add(time.Hour))
+		if calls != 0 {
+			t.Fatalf("OnCutPending called %d times against a healthy sidecar, want 0", calls)
+		}
+	})
+}

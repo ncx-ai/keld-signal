@@ -154,7 +154,7 @@ printf '%s\n' "$code" | grep -q "GetEnv('KELD_HOME')" || \
 # 4. onboard.cmd's own contract: redeem a code, fall back to a browser login, and
 #    report from OBSERVED STATE rather than an exit code.
 grep -qF 'install --code' "$cmd" || fail "onboard.cmd never redeems a setup code"
-grep -qF 'install --yes'  "$cmd" || fail "onboard.cmd has no browser-login fallback"
+grep -qF 'install --login --yes' "$cmd" || fail "onboard.cmd has no browser-login fallback"
 grep -qF 'ingest_token'   "$cmd" || fail "onboard.cmd claims success without checking hook.json"
 
 echo "PASS: windows installer registers unconditionally, onboards visibly, adds PATH without asking, hides the file firehose, uninstalls cleanly, and claims success from observed state"

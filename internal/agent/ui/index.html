@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keld Signal</title>
+<!-- Google Fonts is the one external request this page makes, per
+     docs/v3/contracts.md's D6 scope; every family below carries a real
+     fallback stack so the page still renders if it's unreachable. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app" class="shell">
+  <aside class="nav" aria-label="Keld Signal">
+    <div class="brand">Keld Signal</div>
+    <nav aria-label="Panes">
+      <a href="#/today" data-pane="today">Today</a>
+      <a href="#/projects" data-pane="projects">Projects</a>
+      <div class="navgroup">Machine</div>
+      <a href="#/settings" data-pane="settings">Settings</a>
+    </nav>
+    <div class="navfoot" id="navHealthDot" title="Signal status">
+      <span class="dot"></span><span id="navHealthText">checking…</span>
+    </div>
+    <!-- The version, and the way into developer mode. Deliberately carries no
+         affordance: no pointer cursor, no hover, no role, no tab stop. It is
+         not a control a person should discover by looking — it is one they are
+         told about. See devTapNext in app.js. -->
+    <div class="navversion" id="navVersion" hidden></div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div class="topbar-title" id="topbarTitle">Today</div>
+      <div class="topbar-right">
+        <button id="genBlockBtn" class="btn btn-dev" type="button" hidden>Generate block</button>
+        <div id="envPill" class="pill env" hidden></div>
+      </div>
+    </header>
+    <!-- The analysis service's own health. Sits beside the offline banner,
+         above every pane, because it is the same size of fact: something
+         Signal depends on has stopped working. It is deliberately NOT part of
+         the Today pane's health strip (that array is per-stage BLOCK health)
+         and it renders nothing at all when the daemon sends no `service` key,
+         when the service is `ok`, or when the machine has none installed. -->
+    <div id="serviceBanner" class="service-banner" role="status" hidden>
+      <div class="service-copy">
+        <strong id="serviceHeadline"></strong>
+        <span id="serviceReason"></span>
+        <small id="serviceNote" hidden></small>
+      </div>
+      <div class="service-actions">
+        <span id="serviceProgress" class="service-progress" hidden></span>
+        <button id="serviceRestartBtn" class="btn" type="button">Restart service</button>
+      </div>
+    </div>
+    <div id="offlineBanner" class="offline-banner" hidden>
+      <strong>Signal is not running on this machine.</strong>
+      <span>Start it with <code>keld-agent run</code>, then reload this page.</span>
+    </div>
+    <div id="paneRoot" class="pane-root" aria-live="polite">
+      <p class="loading">Loading…</p>
+    </div>
+  </main>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

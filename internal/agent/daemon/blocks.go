@@ -48,11 +48,23 @@ func signalBlocksEndpoint(ingest string) string {
 // even the same shape.
 func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint string,
 	token func() string, actor string, emitter *clientevents.Emitter, blocksConfigured bool,
-	onPublished func(rows []publish.BlockEnrichment, path string)) func(source, path string) {
+	atlasOn bool, onPublished func(rows []publish.BlockEnrichment, path string),
+	onCut func(rows []publish.BlockEnrichment, path string),
+	onFailed func(rows []publish.BlockEnrichment, err error),
+	onCutPending func(session, reason string),
+	onCutResolved func(session string)) func(source, path string) {
 	if !blocks.Enabled(blocksConfigured) || dig == nil || token == nil {
 		return nil
 	}
-	pub := publish.New(signalBlocksEndpoint(ingestEndpoint), token, actor)
+	// ⚠️ THE FOURTH PATH THAT PREDATES THE ATLAS BOUNDARY. The emitter builds
+	// its own publisher because the block route is not the enrichments route —
+	// which also meant it kept dialling after the worker, the tick, the
+	// settings poll and the reporter had all been routed through the boundary.
+	// Found by an end-to-end run with Send to Atlas off, not by a unit test.
+	var pub blocks.Sender = publish.New(signalBlocksEndpoint(ingestEndpoint), token, actor)
+	if !atlasOn {
+		pub = &localOnlySender{}
+	}
 	// One facts cache for the emitter's lifetime, shared across sweeps: a
 	// transcript's checkout does not move between sweeps, and re-walking the
 	// ReadDir chain plus .git/config for every active transcript every interval
@@ -68,7 +80,17 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 	// The project-attribution path (internal/agent/attrib) hangs off this seam
 	// — the block emitter itself knows nothing about attribution. nil when the
 	// attribution gate is off, which leaves OnPublished nil (cost-free).
+	// Which projects a block enters, with their rules — the local side of the
+	// comparison Atlas cannot otherwise see. Read PER BLOCK rather than
+	// captured: the projects document changes while the daemon runs (a person
+	// makes one, the poll reconciles one away), and a captured snapshot would
+	// stamp rows against a document that no longer exists.
+	em.ProjectMatches = projectMatchesFor
 	em.OnPublished = onPublished
+	em.OnCut = onCut
+	em.OnPublishFailed = onFailed
+	em.OnCutPending = onCutPending
+	em.OnCutResolved = onCutResolved
 	interval := blocks.IntervalFromEnv()
 	log.Printf("keld-agent: v2 block emission ON (sweeping every %s). Blocks post to "+
 		"/v1/signal/blocks; Atlas STORES them but nothing reads them yet.", interval)
@@ -78,6 +100,10 @@ func startBlockEmitter(ctx context.Context, dig blocks.Digester, ingestEndpoint 
 			"read_at_atlas": false,
 		})
 	}
+	// The generate button asks for one immediate pass rather than waiting out
+	// the interval; see daemon/devgen.go for why that is the button's whole
+	// correctness, not a shortcut.
+	setBlockSweep(em.SweepPath)
 	go em.Run(ctx, interval)
 	return em.Advance
 }

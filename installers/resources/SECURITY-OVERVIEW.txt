@@ -1,6 +1,6 @@
 KELD SIGNAL — SECURITY & PRIVACY OVERVIEW
 
-Last updated: July 9, 2026
+Last updated: September 14, 2026
 
 Keld Signal gives your organization visibility into how AI coding tools
 are used — without your prompts, code, or AI responses ever leaving your
@@ -11,13 +11,38 @@ and how the software protects your data.
 WHAT GETS INSTALLED
 
   keld                 A command-line tool for sign-in, setup, and status.
-  keld-agent           A per-user background service that analyzes your AI
-                       usage locally.
-  keld-agent-sidecar   An on-device machine-learning model used by
-                       keld-agent. All inference runs on your computer.
+  keld-agent           A per-user background service that reads your AI
+                       sessions locally, derives the signal described
+                       below, and sends only that.
+  keld-agent-sidecar   The on-device analysis service keld-agent talks to
+                       over loopback. A standard install needs no
+                       machine-learning model and never downloads one. (An
+                       organization may opt a machine into a mode that
+                       loads one; that too runs entirely on your computer.)
+  Keld Signal.app      macOS only. A desktop window onto the agent's own
+                       local status page: what was collected today, which
+                       projects it was attributed to, and whether the agent
+                       is healthy. It holds no credential and makes no
+                       network request of its own.
 
-The install is per-user; no administrator privileges are required on
-Windows, and the background service runs under your own account.
+Where they go:
+
+  macOS     keld, keld-agent, the onboarding script, VERSION, README and
+            CHANGELOG in /usr/local/keld, with keld and keld-agent linked
+            from /usr/local/bin. Keld Signal.app in /Applications. The
+            analysis service in ~/.local/bin/keld-agent-sidecar, fetched
+            by the onboarding script after the package installs. The
+            background service registered as a per-user LaunchAgent
+            (~/Library/LaunchAgents/co.keld.agent.plist).
+  Windows   keld, keld-agent, the analysis service and the onboarding
+            script in %LOCALAPPDATA%\Programs\keld, plus a logon task
+            that starts the agent under your account.
+  All       Configuration, sign-in tokens, logs and local state under
+            ~/.keld, readable by your user only.
+
+The macOS installer asks for an administrator password to place files in
+/usr/local and /Applications; the background service itself runs under
+your own account. On Windows no administrator privileges are required.
 
 
 DATA THAT IS COLLECTED (USAGE TELEMETRY)
@@ -36,11 +61,27 @@ organization's Keld Atlas service:
 
 DATA THAT IS DERIVED ON YOUR COMPUTER (ENRICHMENT)
 
-The keld-agent service reads AI-session transcripts locally and derives
-per-prompt labels: task type, domain, activity type, work/personal,
-inferred business function and subcategory, a sensitivity category, and
-prompt length in characters. The prompt itself is never transmitted —
-these derived labels are the only output that leaves your computer.
+The keld-agent service reads AI-session transcripts locally and reports
+derived, non-textual signal about each stretch of work (a "block" of up
+to 20 minutes) and each prompt:
+
+  - Which project, repository branch, model, programming language,
+    output type, skill and tooling the work belonged to — counted from
+    tool-call metadata, each with a confidence and an evidence count
+  - Which files and directories of the repository were touched
+    (paths relative to the repository, never their contents)
+  - Token counts and notional cost per block
+  - A sensitivity category (see below) and prompt length in characters
+  - Proper nouns that appear in messages — product, project and,
+    sometimes, people's names — as a term and a count, never with any
+    surrounding text, position or offset
+
+Where an organization has opted a machine into the model-backed mode,
+per-prompt labels are added: task type, domain, activity type,
+work/personal, inferred business function and subcategory.
+
+The prompt itself is never transmitted — these derived values are the
+only output that leaves your computer.
 
 DATA THAT IS NEVER COLLECTED
 
@@ -107,7 +148,8 @@ GOVERNANCE & COMPLIANCE POSTURE
     organization uses this data should go to your administrator.
   - Removal: uninstalling via "keld signal uninstall" plus the platform
     uninstaller removes the software, its configuration changes, and its
-    background service. Issued tokens are revocable server-side.
+    background service; on macOS, drag Keld Signal.app to the Trash.
+    Issued tokens are revocable server-side.
 
 Security contact: security@keld.co
 Full agreement: see the accompanying End User License Agreement.

@@ -631,7 +631,18 @@ func TestDoctorReportsStaleSpoolBacklog(t *testing.T) {
 
 // The clean case must stay clean: an empty spool directory is not a problem, and
 // neither is a spool directory that does not exist yet.
+//
+// ⚠️ **IT ALSO HAS TO ISOLATE `PATH`, BECAUSE IT READS THE DEVELOPER'S OWN.**
+// `keldPATHBinaries` walks the real `PATH` looking for `keld`, and doctor
+// correctly reports a problem when it finds more than one. A developer who has
+// actually installed Keld has exactly that — measured here: `~/.local/bin/keld`
+// from `make build-binaries` and `/usr/local/bin/keld` from the macOS pkg — so
+// this test failed on the one class of machine it most needs to pass on, and
+// its message was "doctor should pass on an empty spool" while nothing about
+// the spool was wrong. A test that reads the machine it runs on is the defect
+// AGENTS.md already records for teleproxy's `KELD_HOME`, one variable over.
 func TestDoctorSilentOnHealthySpool(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	home := t.TempDir()
 	t.Setenv("KELD_HOME", home)
 	// Pin ml_backend so this test isolates the SPOOL check. Without it the backend

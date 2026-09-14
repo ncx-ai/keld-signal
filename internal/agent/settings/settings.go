@@ -99,6 +99,64 @@ type Settings struct {
 	// either way — see attrib.Enabled.
 	Attribution bool `json:"attribution"`
 
+	// SendToAtlas is THE BOUNDARY between Signal and the Atlas connector
+	// (docs/v3/contracts.md, deliverable D4). nil/absent means ON — Atlas is
+	// the default for an installed daemon — and false means the connector
+	// package is never constructed: no publish, no settings poll, no
+	// workstreams sync, no code redemption; zero outbound connections.
+	// A pointer so an absent key stays distinguishable from an explicit false,
+	// the same idiom Remote.PIIRegions uses. KELD_ATLAS=0 overrides to off,
+	// KELD_ATLAS=1 to on. Written by the page's Settings pane.
+	SendToAtlas *bool `json:"send_to_atlas,omitempty"`
+
+	// DevBlocks is the DEVELOPER block granularity: "" (default, the cutter's
+	// 20-minute cap / 15-minute idle), "prompt" (one block per human prompt),
+	// "bin" (one block per non-empty 5-minute bin) or "minute" (60-second bins
+	// against a separate refseries-dev.db). Anything but "" is REFUSED while
+	// SendToAtlas is on — a minute-long block is not a fact about anyone's work
+	// and must never reach the org's numbers; the validation lives in
+	// DevBlocksMode, so a caller cannot read an unsafe value. KELD_DEV_BLOCKS
+	// overrides. Forwarded to the sidecar as KELD_DEV_BLOCKS at spawn.
+	DevBlocks string `json:"dev_blocks,omitempty"`
+
+	// DevGenerate puts a "Generate block" button in the page's top bar.
+	//
+	// ⚠️ **UNLIKE DevBlocks, IT IS NOT REFUSED WHILE SendToAtlas IS ON, AND THE
+	// DIFFERENCE IS DELIBERATE.** A dev granularity MISLABELS real work — a
+	// minute-long block is a false statement about something a person actually
+	// did — so it must never reach the org's numbers. The generator instead ADDS
+	// work that never happened, and reaching Atlas is the whole point of it:
+	// what a developer is testing is that a block travels the entire path, and a
+	// generator that stopped at the ledger would prove only that the ledger
+	// works. What makes that acceptable is that every generated session is named
+	// `devgen-…` (devgen.SessionPrefix), so the rows are filterable and
+	// deletable wherever they land, rather than indistinguishable from real
+	// spend forever.
+	DevGenerate bool `json:"dev_generate,omitempty"`
+
+	// DevRepos is the repository list the generator draws from. Empty means the
+	// three stable defaults carried in the embedded corpus, so the button works
+	// before anyone configures anything.
+	//
+	// The generator also offers a fourth, RANDOM repository that no project rule
+	// can match. That is not padding: every declared repo attributes cleanly and
+	// therefore tests half the product, and the pane that lists work with
+	// nowhere to put it can only be exercised by evidence that genuinely matches
+	// nothing.
+	DevRepos []string `json:"dev_repos,omitempty"`
+
+	// ShowBreaks is a page preference: lay the gaps between focus blocks
+	// between the cards. Local, harmless, here because the page's Settings pane
+	// writes this file and a preference with no home is a preference that
+	// resets.
+	ShowBreaks bool `json:"show_breaks,omitempty"`
+
+	// WorkstreamsOff lists workstream keys whose values are EXCLUDED from
+	// attribution on this machine ("counts for my work" switched off). Local
+	// only; Atlas is never told. A developer's work can then never land in the
+	// Marketing bucket.
+	WorkstreamsOff []string `json:"workstreams_off,omitempty"`
+
 	// TelemetryPort is the loopback port AI tools POST OTLP to.
 	//
 	// ⚠️ IT HAS A CONFIG KEY FOR THE REASON `Blocks` DOES: an env-only knob is

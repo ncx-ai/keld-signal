@@ -75,6 +75,18 @@ log = logging.getLogger("keld.sidecar.store")
 # a *reporting window* is placed, not how the underlying series is binned, and does not apply.
 BIN_SECONDS = 300
 
+# How long a writer waits for SQLite's write lock before giving up with `database is locked`.
+#
+# ⚠️ This was 5000 and the number was WRONG BY A FACTOR THAT MATTERED. See the Concurrency block
+# on `Store` for the measurement: a first whole-file ingest holds this lock for 5.1 s on a 90 MB
+# transcript, so a 5 s wait expired at almost exactly the moment it was there to cover, and the
+# `database is locked` that produced surfaced four times in one day on a real machine. 30 s is
+# ~6x the measured worst case.
+#
+# It is a BACKSTOP for a second PROCESS, not the fix for the race: `Store._write_lock`
+# serialises this process's own writers, and that is what closes the window this widens.
+BUSY_TIMEOUT_MS = 30000
+
 # The levels binned eagerly, DERIVED from the payload that consumes them rather than restated:
 # the 7 ALLOCATION levels and the 9 INVENTORY levels, 16 in all (INVENTORY grew from 6 to 9 when
 # `file`/`dir`/`component` joined it as `files`/`directories`/`components`). `events_for_turns`
@@ -203,9 +215,11 @@ DEFAULT_TERM_RETAIN_DAYS = 90.0
 
 # Rows per DELETE. MEASURED at 14 ms for 5,000 rows, which is the point: task 4 made `/ingest`
 # a SECOND writer, and one unbounded DELETE would hold the write lock for its whole duration
-# until a concurrent watcher-driven ingest exhausted `busy_timeout=5000` and failed. Chunked,
-# each chunk is its own short transaction and the lock is released between them, so a concurrent
-# ingest interleaves instead of erroring.
+# until a concurrent watcher-driven ingest exhausted the then-5 s `busy_timeout` and failed.
+# Chunked, each chunk is its own short transaction and the lock is released between them, so a
+# concurrent ingest interleaves instead of erroring. That argument now holds one level up as
+# well: each chunk takes and releases `Store._write_lock` too, so a prune can never hold the
+# in-process writer queue for the length of an unbounded DELETE either.
 PRUNE_CHUNK = 5000
 # One call's ceiling, so retention riding the ingest path can never make one ingest unbounded.
 # 400 * 5,000 = 2,000,000 rows, more than a year of events, and what is left waits for the next
@@ -507,30 +521,71 @@ def _epoch(v):
     return v.timestamp()
 
 
-def _floor_bin(t):
-    return int(math.floor(t / BIN_SECONDS)) * BIN_SECONDS
+def _floor_bin(t, bin_seconds=BIN_SECONDS):
+    return int(math.floor(t / bin_seconds)) * bin_seconds
 
 
-def _ceil_bin(t):
-    return int(math.ceil(t / BIN_SECONDS)) * BIN_SECONDS
+def _ceil_bin(t, bin_seconds=BIN_SECONDS):
+    return int(math.ceil(t / bin_seconds)) * bin_seconds
 
 
 class Store:
     """The reference series for this machine.
 
-    **Concurrency.** One writer (ingest, driven by the daemon's watcher signal) and concurrent
-    readers (`/analyze`, which uvicorn dispatches with `run_in_executor`, so reads arrive on
-    arbitrary threads; plus anything inspecting the file out of process). Three decisions follow
-    from exactly that pattern, none of them habit:
+    **Concurrency.** ⚠️ **THREE in-process writers, not one — and this paragraph read "One
+    writer" for the whole life of the store while all three were racing.** They are:
+    `POST /ingest` (the watcher's advance signal, `main._ingest_blocking`); `/analyze`'s
+    on-demand refresh when it finds the store behind (`analyze._rollup_from_store`); and the
+    `KELD_DEV_BLOCKS=minute` branch of `/blocks` (`main._dev_blocks_blocking`). Retention is a
+    fourth, and it rides `ingest_file` deliberately OUTSIDE that function's per-path lock. uvicorn
+    dispatches every one of them with `run_in_executor`, so they arrive on arbitrary threads at
+    the same instant, and so do the readers (`/analyze`, `/tick`, `/blocks`, `/features`,
+    `/metrics`).
+
+    MEASURED on a real machine: `sqlite3.OperationalError: database is locked` raised from
+    `transaction()`'s `BEGIN IMMEDIATE` by way of `/analyze` → `ingest_file`, four times in one
+    day, failing five user actions. It does not crash the sidecar — it 500s one request, which is
+    why it survived from v2.0.2 onward unnoticed.
+
+    `ingest._path_lock` does NOT cover this and was never meant to: it is keyed on the TRANSCRIPT
+    PATH, so it serialises two callers who want the same file (the watcher signal and an
+    `/analyze` that found the store behind) and does nothing at all about two callers who want
+    DIFFERENT files and the same database. Every machine has hundreds of transcripts and one
+    store, so the common case is the uncovered one.
+
+    Four decisions follow, none of them habit:
 
     - **WAL.** Under the default rollback journal a writer locks readers out for the whole write
       transaction, which here is a whole ingest batch. WAL lets a reader keep serving the last
       committed state while ingest runs — the only mode in which "digests are served while the
       transcript is being ingested" is true at all.
-    - **`busy_timeout=5000`.** Matches the Go stores in this repo (`internal/spool/db.go`,
-      `llmstudy/digeststore`). WAL still serialises writers against each other and against a
-      checkpoint, and the contending party can be a second PROCESS this object knows nothing
-      about; a bounded wait turns that into queueing instead of an immediate SQLITE_BUSY.
+    - **One in-process write lock (`_write_lock`), taken by `transaction()` at depth 0.** This is
+      what actually closes the race above: every writer in this process queues instead of racing,
+      so `BEGIN IMMEDIATE` can no longer contend with a sibling thread. Two properties of WHERE
+      it sits are load-bearing, and both are easy to lose in a "tidy-up":
+        * It is on the TRANSACTION, not on `ingest_file`. Only the WRITE is serialised; the parse
+          that precedes it — `turns_in`, `events_for_turns`, `reconcile`, the multi-second half of
+          a whole-file ingest — still runs in parallel across transcripts, where it never
+          contended for anything. A lock around `ingest_file` would serialise seconds of pure CPU
+          for no benefit.
+        * NO READ PATH TAKES IT, because no read path opens a transaction (`rollup_window`,
+          `window_rows`, `prompt_time`, `watermark`, `turn_magnitudes` and friends all go straight
+          to `_conn()`). Turning a reader into a waiter would destroy the WAL property in the
+          bullet above, which is the single guarantee this store's serving story rests on. A
+          global "one operation at a time" lock would fix the crash and silently trade it for
+          that.
+    - **`busy_timeout=30000`.** ⚠️ **This was 5000, on the stated reasoning that it "matches the
+      Go stores in this repo" (`internal/spool/db.go`, `llmstudy/digeststore`) — and that
+      reasoning does not transfer to this store.** Those stores write single small rows and hold
+      the lock for microseconds. This one has a writer that holds it for SECONDS: a first
+      whole-file ingest measured 5.1 s on a 90 MB transcript. So the wait was set just BELOW the
+      worst case it exists to cover, and expired at almost exactly the moment it was needed —
+      which is what the `database is locked` above is. 30 s is ~6x that measured worst case.
+      It is a BACKSTOP, not the fix, and it must not be read as one: the write lock removes
+      same-process contention, and what is left for the timeout to absorb is a second PROCESS
+      this object knows nothing about (a second sidecar mid-restart, a CLI opening the file),
+      which no in-process lock can reach. The cost of the longer wait is that a genuinely wedged
+      external writer is reported after 30 s instead of 5; a slow answer beats a wrong one.
     - **`synchronous=NORMAL`, with writes batched per ingest.** FULL fsyncs every commit, which
       on a 3,882-events/day stream is pure cost, and the data here is reconstructible: an ingest
       batch commits its events, its re-rolled bins and its byte-offset checkpoint in ONE
@@ -548,9 +603,18 @@ class Store:
     `_Tx` for the failure that produced.
     """
 
-    def __init__(self, path, precomputed_levels=PRECOMPUTED_LEVELS):
+    def __init__(self, path, precomputed_levels=PRECOMPUTED_LEVELS, bin_seconds=BIN_SECONDS):
+        """`bin_seconds` is an instance width, not the module default, for exactly one reason:
+        `KELD_DEV_BLOCKS=minute` (`app/analysis/devblocks.py`) ingests the SAME transcript into a
+        SEPARATE store (`refseries-dev.db`) at 60-second granularity, and bin WIDTH is fixed in
+        the `bin` table at the moment a row is written -- there is no query-time way to re-bin an
+        already-rolled-up interval. Every OTHER caller passes nothing and gets the shipped
+        300-second width unchanged; nothing about the default path's behaviour or its `bin` rows
+        moves by this parameter existing.
+        """
         self.path = path
         self.levels = tuple(dict.fromkeys(precomputed_levels))
+        self.bin_seconds = int(bin_seconds)
         d = os.path.dirname(path)
         if d:
             os.makedirs(d, mode=0o700, exist_ok=True)
@@ -561,6 +625,12 @@ class Store:
         self._local = threading.local()
         self._conns = []
         self._conns_lock = threading.Lock()
+        # THE in-process writer queue. Per STORE (not per module, not per path): two Store
+        # objects are two different SQLite files -- `refseries.db` and, under
+        # `KELD_DEV_BLOCKS=minute`, `refseries-dev.db` -- and serialising a writer of one behind
+        # a writer of the other would be a lock with no contention to prevent. Constructed here,
+        # before `_register_levels()` below opens the first transaction. See `_Tx.__enter__`.
+        self._write_lock = threading.Lock()
         self._stats_cache = None
         conn = self._conn()
         with self._conns_lock:
@@ -608,7 +678,7 @@ class Store:
         if c is None:
             c = sqlite3.connect(self.path, isolation_level=None)
             c.execute("PRAGMA journal_mode=WAL")
-            c.execute("PRAGMA busy_timeout=5000")
+            c.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
             c.execute("PRAGMA synchronous=NORMAL")
             c.execute("PRAGMA foreign_keys=ON")
             self._local.conn = c
@@ -654,7 +724,36 @@ class Store:
             s = self.store
             depth = getattr(s._local, "depth", 0)
             if depth == 0:
-                s._conn().execute("BEGIN IMMEDIATE")
+                # ⚠️ THE FIX FOR `database is locked`. Three routes reach `ingest_file` --
+                # `POST /ingest`, `/analyze`'s on-demand refresh, and `/blocks`' dev-store
+                # branch -- plus retention, and nothing serialised them. `ingest._path_lock` is
+                # keyed on the TRANSCRIPT, so two ingests of DIFFERENT transcripts took
+                # different locks and then raced for the same database, one of them exhausting
+                # `busy_timeout` inside the BEGIN below. Measured: four failures in one day on a
+                # real machine, five failed user actions.
+                #
+                # DEPTH 0 ONLY, and that is what keeps a plain non-reentrant Lock safe here.
+                # `transaction()` is reentrant BY DESIGN -- every `upsert_*` opens one and
+                # `_ingest_from` wraps a dozen of them in an outer one -- so acquiring
+                # unconditionally would have the same thread block on a lock it already holds
+                # and wedge the sidecar's whole write path on the first ingest. The depth
+                # counter beside it is per-THREAD (see this class's docstring), so acquire and
+                # release always pair on one thread at one depth transition.
+                #
+                # It does NOT cover a reader: no read path opens a transaction, so `/analyze`
+                # keeps answering out of WAL while an ingest holds this. That asymmetry is the
+                # design, not an oversight -- see the Concurrency block on `Store`.
+                s._write_lock.acquire()
+                try:
+                    s._conn().execute("BEGIN IMMEDIATE")
+                except BaseException:
+                    # A raising `__enter__` means `__exit__` is NEVER called, so without this
+                    # the lock would be held for the life of the process and every subsequent
+                    # writer would hang forever -- strictly worse than the error we are
+                    # propagating. Still reachable: `busy_timeout` can be exhausted by a second
+                    # PROCESS, which no in-process lock reaches.
+                    s._write_lock.release()
+                    raise
             s._local.depth = depth + 1
             return s
 
@@ -663,7 +762,14 @@ class Store:
             depth = getattr(s._local, "depth", 0) - 1
             s._local.depth = depth
             if depth == 0:
-                s._conn().execute("ROLLBACK" if exc_type else "COMMIT")
+                try:
+                    s._conn().execute("ROLLBACK" if exc_type else "COMMIT")
+                finally:
+                    # `finally`, because a COMMIT can raise (a disk-full, or the
+                    # "no transaction is active" this class's docstring records) and a lock
+                    # leaked on that path wedges every later writer -- turning a recoverable
+                    # one-request failure into a permanently dead store.
+                    s._write_lock.release()
             return False
 
     def transaction(self):
@@ -701,7 +807,7 @@ class Store:
             q = ",".join("?" * len(new))
             c.execute(f"""
                 INSERT INTO bin(session, bin_ts, level, ref, n)
-                SELECT session, CAST(ts / {BIN_SECONDS} AS INTEGER) * {BIN_SECONDS},
+                SELECT session, CAST(ts / {self.bin_seconds} AS INTEGER) * {self.bin_seconds},
                        level, ref, SUM(n)
                 FROM event WHERE level IN ({q})
                 GROUP BY 1, 2, 3, 4
@@ -745,7 +851,7 @@ class Store:
         mags = self._aggregate_mag(rows, source_line, capture=capture)
         if not agg and not mags:
             return 0
-        touched = {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
+        touched = {_floor_bin(ts, self.bin_seconds) for _line, ts, _lv, _ref in agg}
         with self.transaction():
             if agg:
                 self._insert(session, agg)
@@ -831,7 +937,7 @@ class Store:
                 WHERE session = ? AND ts >= ? AND ts < ?
                   AND level IN (SELECT level FROM bin_level)
                 GROUP BY level, ref""",
-                (session, b, session, float(b), float(b + BIN_SECONDS)))
+                (session, b, session, float(b), float(b + self.bin_seconds)))
 
     def replace_events(self, session, source_line, rows):
         """Make `(session, source_line)` hold exactly `rows` — inserting, revising AND DELETING.
@@ -855,8 +961,8 @@ class Store:
         with self.transaction():
             old = c.execute("SELECT ts FROM event WHERE session = ? AND source_line = ?",
                             (session, int(source_line))).fetchall()
-            touched = {_floor_bin(t[0]) for t in old}
-            touched |= {_floor_bin(ts) for _line, ts, _lv, _ref in agg}
+            touched = {_floor_bin(t[0], self.bin_seconds) for t in old}
+            touched |= {_floor_bin(ts, self.bin_seconds) for _line, ts, _lv, _ref in agg}
             c.execute("DELETE FROM event WHERE session = ? AND source_line = ?",
                       (session, int(source_line)))
             # The slot's magnitudes go with its events, symmetrically. `reconcile` emits none
@@ -1067,9 +1173,12 @@ class Store:
         """Delete matching `event` rows in bounded chunks, newest-deleted timestamp first.
 
         Returns `(rows_deleted, newest_ts_deleted, chunks_used)`. Each chunk is its OWN short
-        transaction: the write lock is taken and released per chunk, so a concurrent
-        watcher-driven `/ingest` queues briefly on `busy_timeout` instead of failing against a
-        lock held for the length of an unbounded DELETE.
+        transaction: both write locks -- SQLite's, and `Store._write_lock` that `transaction()`
+        now takes -- are acquired and released per chunk, so a concurrent watcher-driven
+        `/ingest` queues briefly instead of waiting behind a lock held for the length of an
+        unbounded DELETE. Retention is the writer that reaches the store OUTSIDE
+        `ingest_file`'s per-path lock (see its docstring), so it is exactly the one for which
+        "the other writer is a different transcript" is always true.
         """
         deleted, newest, used = 0, None, 0
         c = self._conn()
@@ -1146,7 +1255,7 @@ class Store:
         out["term_pruned"] = n
         with self.transaction():
             cur = self._conn().execute("DELETE FROM bin WHERE level = ? AND bin_ts < ?",
-                                       (TERM_LEVEL, _floor_bin(tcut)))
+                                       (TERM_LEVEL, _floor_bin(tcut, self.bin_seconds)))
             out["term_bins_pruned"] = cur.rowcount or 0
         if n or out["term_bins_pruned"]:
             self.note_pruned("term", newest if n else tcut, n, now)
@@ -1179,7 +1288,7 @@ class Store:
                 cur = self._conn().execute("DELETE FROM turn_magnitude WHERE ts <= ?", (floor,))
                 out["magnitude_pruned"] = cur.rowcount or 0
                 cur = self._conn().execute(
-                    "DELETE FROM bin_offset WHERE bin_ts + ? <= ?", (BIN_SECONDS, floor))
+                    "DELETE FROM bin_offset WHERE bin_ts + ? <= ?", (self.bin_seconds, floor))
                 out["bin_offset_pruned"] = cur.rowcount or 0
 
         with self.transaction():
@@ -1324,7 +1433,7 @@ class Store:
                 WHERE session = ? AND ts >= ? AND ts < ? AND source_line NOT IN ({ph})
                 GROUP BY level, ref""", (session, start, end) + slots)]
             return _pseudo_rows(session, parts)
-        first, last = _ceil_bin(start), _floor_bin(end)
+        first, last = _ceil_bin(start, self.bin_seconds), _floor_bin(end, self.bin_seconds)
         iv_start, iv_end = (first, last) if last > first else (start, start)
 
         parts = []
@@ -1507,14 +1616,24 @@ class Store:
 
         MIN() on conflict, not overwrite: see the table's comment. A replayed batch re-presents
         offsets it has already stored, and the smallest is the answer in every case.
+
+        WRAPPED IN `transaction()` like every other public writer here, and it was the ONE that
+        was not. Today its only caller is `ingest._ingest_from`, which already holds an outer
+        transaction, so `transaction()`'s reentrancy makes this a no-op and not one byte of
+        committed data moves. It matters for what comes next: `transaction()` is now where
+        `Store._write_lock` is taken, so a writer that skips it writes in autocommit and races
+        the in-process queue exactly as the three ingest routes used to. A public write method
+        that is safe only because of who happens to call it is a defect waiting for its second
+        caller.
         """
         if not pairs:
             return 0
-        self._conn().executemany("""
-            INSERT INTO bin_offset(session, bin_ts, "offset") VALUES (?,?,?)
-            ON CONFLICT(session, bin_ts)
-            DO UPDATE SET "offset" = MIN("offset", excluded."offset")
-            """, [(session, int(b), int(o)) for b, o in pairs.items()])
+        with self.transaction():
+            self._conn().executemany("""
+                INSERT INTO bin_offset(session, bin_ts, "offset") VALUES (?,?,?)
+                ON CONFLICT(session, bin_ts)
+                DO UPDATE SET "offset" = MIN("offset", excluded."offset")
+                """, [(session, int(b), int(o)) for b, o in pairs.items()])
         return len(pairs)
 
     def bin_offset(self, session, bin_ts):

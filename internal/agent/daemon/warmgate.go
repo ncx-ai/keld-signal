@@ -17,9 +17,11 @@ const warmPollInterval = 500 * time.Millisecond
 // bool, refreshed by a background poller.
 //
 // It exists for two reasons, and both matter. First, correctness:
-// Supervisor.Ready() latches true after the first /health success and never
-// reflects a later idle-kill reload, so the Worker needs live state to avoid
-// counting model-load time against a job's deadline. Second, COST: the Worker
+// Supervisor.Ready() is about the sidecar PROCESS answering /health (and since
+// 2026-09-09 it drops back to false whenever that process is gone); it never
+// reflects the inference worker's idle-kill reload inside a live sidecar, so
+// the Worker needs live state to avoid counting model-load time against a
+// job's deadline. Second, COST: the Worker
 // calls its gate at the top of every job and waitWarm re-calls it roughly
 // every 20ms while a job waits, so the gate must be a memory read. Probing the
 // service inside the gate instead means thousands of loopback requests per

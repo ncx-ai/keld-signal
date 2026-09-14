@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/retry"
@@ -112,6 +113,16 @@ func NewTransport(endpoint string, token func() string, spoolDir string) *Transp
 		httpClient: &http.Client{Timeout: postTimeout},
 	}
 	t.post = t.doPost
+	// ⚠️ **NO ENDPOINT MEANS DISCARD, NOT SPOOL.** An empty endpoint is how the
+	// daemon says "Send to Atlas is off" (see daemon/localonly.go); left to the
+	// normal path it would fail to build a request, be classified as a
+	// permanent error, and — worse — spool every batch to disk forever, growing
+	// a queue that by construction can never drain. Operational events about a
+	// machine nobody is collecting from have nowhere to go, and saying so
+	// costs one branch here rather than a bounded-but-pointless disk queue.
+	if strings.TrimSpace(endpoint) == "" {
+		t.post = func(context.Context, []byte) (int, []byte, error) { return 204, nil, nil }
+	}
 	return t
 }
 

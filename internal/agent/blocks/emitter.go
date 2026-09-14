@@ -163,7 +163,52 @@ type Emitter struct {
 	// from the publish loop, so a hook that blocks would delay the cursor
 	// advance for later chunks; attrib.Attributor.Schedule is built to return
 	// immediately for exactly that reason.
+	// ProjectMatches names the projects a block matched, each with its rules, for the
+	// row Atlas receives. A hook rather than a dependency: which projects a
+	// block enters is the decision layer's question (internal/agent/projects),
+	// and this package publishes rather than decides.
+	//
+	// nil on a daemon that wires none — the eval harness and the tests — and
+	// the emitter then sends an empty list rather than omitting the key.
+	ProjectMatches func(b enrich.BlockCharacterisation) []publish.ProjectMatch
+
 	OnPublished func(rows []publish.BlockEnrichment, path string)
+	// OnCut, when non-nil, is called with every block this sweep BUILT, before
+	// the publish is attempted — so a recorder learns that a block exists
+	// whether or not it reaches Atlas. See the call site for why OnPublished
+	// alone was not enough.
+	OnCut func(rows []publish.BlockEnrichment, path string)
+	// OnPublishFailed, when non-nil, is called with the batch that did not
+	// land and the error that stopped it, so the reason a person reads on the
+	// page is the reason the transport actually gave.
+	OnPublishFailed func(rows []publish.BlockEnrichment, err error)
+	// OnCutPending, when non-nil, is called when a sweep could NOT ask the
+	// analysis service for a transcript's blocks at all: the sidecar has no
+	// /blocks route ("sidecar_outdated" — the same fact noteRouteUnsupported
+	// logs) or it could not answer for any other reason — not ready yet,
+	// restarting, or its own store behind the ask ("sidecar_behind", the
+	// sweepOne comment's own list of causes for `!ans.OK`). No block exists
+	// yet in either case, so this is keyed by SESSION rather than by a
+	// (session, start) pair. The reason strings are spelled out at the call
+	// site rather than imported from ledger.Reason so this package does not
+	// depend on ledger — see recordCutPending in internal/agent/daemon for
+	// where they are interpreted, and ledger.Store.Cut for how the resulting
+	// row clears itself the moment a later sweep succeeds.
+	OnCutPending func(session, reason string)
+	// OnCutResolved, when non-nil, is called on every sweep in which the
+	// analysis service DID answer for a transcript — with or without a block to
+	// cut. It is the other half of OnCutPending: "pending" means the service
+	// could not be asked, and being answered is what ends that, not a block
+	// closing.
+	//
+	// ⚠️ **CALLED ON EVERY OK SWEEP, DELIBERATELY, NOT ONLY AFTER A PENDING.**
+	// Remembering which sessions this emitter reported pending would make the
+	// call cheaper and would also make it wrong: that memory lives in this
+	// process, and a note written before a daemon restart would never be
+	// resolved by the emitter that came up after it. The recorder's side is a
+	// primary-key delete that usually matches nothing, which is cheaper than
+	// the bug it prevents.
+	OnCutResolved func(session string)
 
 	// routeGone latches the "this sidecar has no /blocks route" log to ONE line
 	// per daemon run. The sweep runs every interval against every active
@@ -249,6 +294,40 @@ func (e *Emitter) noteRouteUnsupported(ans enrich.BlocksAnswer) {
 		"sweep after that, with nothing lost: the cursor is held.")
 }
 
+// reportCutPending tells OnCutPending (if wired) that this sweep could not
+// ask for the transcript's blocks at all — every failed BlocksAnswer, and
+// nothing else: ans.OK means real ground was asked for and answered, even
+// when it held zero blocks, and that is not a pending condition.
+//
+// RouteUnsupported takes precedence because it is the stronger fact: an
+// outdated sidecar can never catch up on its own (the remedy is re-running
+// the installer, not waiting), whereas every other failure is transient by
+// construction — not ready yet, restarting, or the store behind the ask.
+// The two never overlap in practice (RouteUnsupported is never true
+// alongside OK), so this is an ordering of causes, not a real ambiguity.
+func (e *Emitter) reportCutPending(session string, ans enrich.BlocksAnswer) {
+	if session == "" {
+		return
+	}
+	if ans.OK {
+		// The service answered. Whatever pending note this session carried is
+		// resolved — regardless of whether ans.Blocks is empty, because "nothing
+		// closed yet" is a successful answer, not a failure to ask.
+		if e.OnCutResolved != nil {
+			e.OnCutResolved(session)
+		}
+		return
+	}
+	if e.OnCutPending == nil {
+		return
+	}
+	if ans.RouteUnsupported {
+		e.OnCutPending(session, "sidecar_outdated")
+		return
+	}
+	e.OnCutPending(session, "sidecar_behind")
+}
+
 // Advance is the watcher's per-file signal that a transcript grew, in the shape
 // watch.WithIngestSignal hands out. It is the emitter's ONLY trigger for adding
 // work: a transcript nothing has written to cannot have a block that has not
@@ -310,6 +389,38 @@ func (e *Emitter) Run(ctx context.Context, interval time.Duration) {
 			e.Sweep(ctx, time.Now())
 		}
 	}
+}
+
+// SweepPath is one pass over a SINGLE transcript, for a caller that has just
+// created work and wants it cut now rather than at the next interval.
+//
+// ⚠️ **IT EXISTS BECAUSE Sweep IS O(ACTIVE SET), AND THAT MADE A SYNCHRONOUS
+// CALLER UNUSABLE.** The developer generate button drove `Sweep` so its answer
+// would be about a block that exists rather than a file that was written. On
+// the five-transcript test corpus that took four seconds. On a real machine
+// with 59 active transcripts it walked every one of them — each a `/blocks`
+// call, some triggering a first whole-file ingest measured at 5.1s — so the
+// button sat on "Generating…" for minutes and the request timed out.
+//
+// The caller only ever wanted its own transcript. Sweeping the rest was work it
+// did not ask for, charged to a person waiting on a button, and the periodic
+// sweep does it anyway a moment later.
+//
+// Returns 0 for a path the emitter is not tracking, which is the honest answer:
+// nothing was cut, and the caller reports that rather than a tick.
+func (e *Emitter) SweepPath(ctx context.Context, path string, now time.Time) int {
+	if ctx.Err() != nil || path == "" {
+		return 0
+	}
+	tgts := e.st.targets([]string{path})
+	if len(tgts) == 0 {
+		return 0
+	}
+	published := e.sweepOne(tgts[0], now)
+	if err := e.st.save(); err != nil {
+		log.Printf("keld-agent: blocks: could not save the cursor after a single-path sweep: %v", err)
+	}
+	return published
 }
 
 // Sweep is one pass over the active set. Split out so a test can drive it with
@@ -376,6 +487,7 @@ func (e *Emitter) sweepOne(tgt target, now time.Time) int {
 		ans := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
 			nil, now, 0, resolved)
 		e.noteRouteUnsupported(ans)
+		e.reportCutPending(tgt.Session, ans)
 		if ans.OK && ans.Watermark != nil {
 			e.st.advance(tgt.Path, *ans.Watermark)
 		}
@@ -385,6 +497,7 @@ func (e *Emitter) sweepOne(tgt target, now time.Time) int {
 	ans := e.dig.BlocksCharacterised(tgt.Path, tgt.Source, tgt.Session,
 		tgt.Cursor, now, maxPerSweep, resolved)
 	e.noteRouteUnsupported(ans)
+	e.reportCutPending(tgt.Session, ans)
 	blocks := ans.Blocks
 	if !ans.OK {
 		// The sidecar could not answer (not ready, restarting, store behind).
@@ -444,10 +557,35 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 		chunk := blocks[start:end]
 		rows := make([]publish.BlockEnrichment, 0, len(chunk))
 		for _, b := range chunk {
-			rows = append(rows, publish.BuildBlock(b, e.actor, now))
+			row := publish.BuildBlock(b, e.actor, now)
+			// ⚠️ STAMPED HERE, NOT IN publish.BuildBlock, because deciding which
+			// projects a block enters is the decision layer's job and this
+			// package must not import it. Nil on a daemon that wires no hook
+			// (the eval harness, a test), and an empty list then travels rather
+			// than a missing key — "matched nothing" and "this client does not
+			// send them" have to stay different facts.
+			if e.ProjectMatches != nil {
+				row.ProjectMatches = e.ProjectMatches(b)
+			}
+			if row.ProjectMatches == nil {
+				row.ProjectMatches = []publish.ProjectMatch{}
+			}
+			rows = append(rows, row)
+		}
+		// ⚠️ **FIRED BEFORE THE SEND, FOR EVERY BLOCK BUILT.** OnPublished fires
+		// only on success, which made a block whose publish FAILED invisible to
+		// anything downstream — including the delivery ledger, whose entire job
+		// is to say "this block was cut and did not reach Atlas". A recorder
+		// that only hears about successes cannot report a failure, and a page
+		// built on it would show a short day rather than a broken one.
+		if e.OnCut != nil {
+			e.OnCut(rows, tgt.Path)
 		}
 		if err := e.pub.SendBlocks(rows); err != nil {
 			log.Printf("keld-agent: block publish failed for %s: %v", tgt.Session, err)
+			if e.OnPublishFailed != nil {
+				e.OnPublishFailed(rows, err)
+			}
 			// Stop here. Everything before this chunk is banked by the advances
 			// below; everything from this chunk on is re-fetched next interval.
 			return sent

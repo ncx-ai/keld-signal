@@ -48,10 +48,10 @@ func recorder() (*[]string, stepRunner) {
 	}
 }
 
-func TestRunInstallSequence(t *testing.T) { // no code, TTY → login, signal setup (no --yes)
+func TestRunInstallSequence(t *testing.T) { // --login in a TTY → login, signal setup (no --yes)
 	calls, run := recorder()
 	installed := false
-	err := runInstall(installConfig{}, func() bool { return true },
+	err := runInstall(installConfig{login: true}, func() bool { return true },
 		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { installed = true; return nil })
 	if err != nil {
 		t.Fatalf("runInstall: %v", err)
@@ -112,7 +112,7 @@ func TestRunInstallTTYLoginFailureAbortsBeforeService(t *testing.T) {
 		return nil
 	}
 	installed := false
-	err := runInstall(installConfig{}, func() bool { return true },
+	err := runInstall(installConfig{login: true}, func() bool { return true },
 		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { installed = true; return nil })
 	if err == nil {
 		t.Fatal("expected error when login fails in the TTY branch")
@@ -139,9 +139,9 @@ func TestRunInstallApiURLAndJSONPassthrough(t *testing.T) {
 	}
 }
 
-func TestRunInstallYesInTTY(t *testing.T) { // no code, TTY, yes=true → setup --yes
+func TestRunInstallYesInTTY(t *testing.T) { // --login in a TTY, yes=true → setup --yes
 	calls, run := recorder()
-	err := runInstall(installConfig{yes: true}, func() bool { return true },
+	err := runInstall(installConfig{login: true, yes: true}, func() bool { return true },
 		func() (string, error) { return "/fake/keld", nil }, run, noopConfig, func() error { return nil })
 	if err != nil {
 		t.Fatalf("runInstall: %v", err)
@@ -204,11 +204,70 @@ func TestRunInstallAbortsWhenKeldMissing(t *testing.T) {
 	installed := false
 	install := func() error { installed = true; return nil }
 
-	if err := runInstall(installConfig{}, func() bool { return true }, resolve, run, noopConfig, install); err == nil {
+	if err := runInstall(installConfig{login: true}, func() bool { return true }, resolve, run, noopConfig, install); err == nil {
 		t.Fatal("expected error when keld is missing")
 	}
 	if ran || installed {
 		t.Fatal("no steps should run when keld cannot be resolved")
+	}
+}
+
+// ⚠️ **BARE `install` INSTALLS AND NOTHING ELSE, EVEN IN A REAL TERMINAL.**
+//
+// It used to log in and configure tools whenever stdout was a terminal, with
+// --headless to opt out. That was correct while the CLI was the only place a
+// machine could be onboarded; the app removed that constraint, so the common
+// path needed a flag to get the obvious behaviour. This test is the guard
+// against it drifting back: a TTY alone must not start a browser login.
+func TestBareInstallInATTYDoesNotLogIn(t *testing.T) {
+	calls, run := recorder()
+	installed := false
+	err := runInstall(installConfig{}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig,
+		func() error { installed = true; return nil })
+	if err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("bare install ran onboarding steps %v; install must only install", *calls)
+	}
+	if !installed {
+		t.Fatal("the service was not installed")
+	}
+}
+
+// --headless is kept as an accepted no-op so scripts and MDM payloads that
+// still pass it do not fail on an unknown flag. It asks for what already
+// happens, so it must behave exactly like bare install.
+func TestHeadlessIsAcceptedAndInert(t *testing.T) {
+	bare, runBare := recorder()
+	if err := runInstall(installConfig{}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, runBare, noopConfig,
+		func() error { return nil }); err != nil {
+		t.Fatalf("bare: %v", err)
+	}
+	legacy, runLegacy := recorder()
+	if err := runInstall(installConfig{headless: true}, func() bool { return true },
+		func() (string, error) { return "/fake/keld", nil }, runLegacy, noopConfig,
+		func() error { return nil }); err != nil {
+		t.Fatalf("--headless: %v", err)
+	}
+	if strings.Join(*bare, "|") != strings.Join(*legacy, "|") {
+		t.Fatalf("--headless changed behaviour: bare=%v headless=%v", *bare, *legacy)
+	}
+}
+
+// A setup code still onboards with no TTY and no --login: that is the
+// installer's path, and it was never the thing that needed a terminal.
+func TestCodeStillOnboardsWithoutLoginFlag(t *testing.T) {
+	calls, run := recorder()
+	if err := runInstall(installConfig{code: "ABCD-EFGH"}, func() bool { return false },
+		func() (string, error) { return "/fake/keld", nil }, run, noopConfig,
+		func() error { return nil }); err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+	if len(*calls) != 2 || !strings.Contains((*calls)[0], "login --code ABCD-EFGH") {
+		t.Fatalf("a setup code must still onboard non-interactively, got %v", *calls)
 	}
 }
 

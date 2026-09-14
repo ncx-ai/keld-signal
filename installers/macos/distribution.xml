@@ -12,6 +12,12 @@
   </choices-outline>
   <choice id="default">
     <pkg-ref id="co.keld.agent"/>
+    <pkg-ref id="co.keld.signal"/>
   </choice>
   <pkg-ref id="co.keld.agent" version="0">component.pkg</pkg-ref>
+  <!-- Keld Signal.app (app/src-tauri), installing to /Applications — see build-pkg.sh
+       for why it is a separate component (a different install location than the CLI
+       payload's /usr/local/keld). customize="never" above keeps both installing as one
+       unit; there is no way for someone running this pkg to get one without the other. -->
+  <pkg-ref id="co.keld.signal" version="0">app-component.pkg</pkg-ref>
 </installer-gui-script>

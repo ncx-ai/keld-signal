@@ -286,6 +286,25 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                 # key carries the batch ordinal.
                 if w:
                     add("mag", magnitude.REQUEST_TOKENS, "", w)
+                    # The four RAW classes beside the price-weighted spend, on the IDENTICAL
+                    # once-per-request cadence and the IDENTICAL `if w:` gate -- `w == 0` iff
+                    # every one of these is 0 too (see `magnitude.raw_tokens`), which is what
+                    # keeps a `<synthetic>`, all-zero-usage line from minting a "request" that
+                    # never happened. D5: `/blocks` publishes these as `tokens.{input,output,
+                    # cache_read,cache_creation}` -- see `blockdigest._tokens_at`.
+                    rt = magnitude.raw_tokens(u)
+                    if rt.input:
+                        add("mag", magnitude.INPUT_TOKENS, "", rt.input)
+                    if rt.output:
+                        add("mag", magnitude.OUTPUT_TOKENS, "", rt.output)
+                    if rt.cache_read:
+                        add("mag", magnitude.CACHE_READ_TOKENS, "", rt.cache_read)
+                    if rt.cache_creation:
+                        add("mag", magnitude.CACHE_CREATION_TOKENS, "", rt.cache_creation)
+                    # The REQUEST COUNT itself, value always 1 -- never derived from the four
+                    # sums above, so a request that happens to be zero in every class but one
+                    # still counts as one request.
+                    add("mag", magnitude.REQUESTS, "", 1)
 
         paths = []
         if isinstance(content, list):

@@ -21,10 +21,10 @@ if defined CODE (
   "%AGENT%" install --code "%CODE%"
   if errorlevel 1 (
     echo Setup code didn't work; falling back to browser login...
-    "%AGENT%" install --yes
+    "%AGENT%" install --login --yes
   )
 ) else (
-  "%AGENT%" install --yes
+  "%AGENT%" install --login --yes
 )
 
 rem Claim success only if it is true: setup is done when an ingest token exists in

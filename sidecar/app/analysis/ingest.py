@@ -115,7 +115,20 @@ HEAD_BYTES = 4096
 #           member of its own batch and no upsert can collapse it. So this bump is what REPAIRS
 #           an existing store -- it forces one reparse, `clear_session` drops the magnitudes, and
 #           the whole history is re-derived with the set carried. Exact by definition.
-STATE_VERSION = 5
+#   4 -> 5: no change of its own -- this is the historical value at the time D5 (below) was
+#           written, kept as its own line so the 5 -> 6 note reads against the number it actually
+#           followed rather than one renumbered around it.
+#   5 -> 6: D5's per-block `tokens`/`requests` (`magnitude.INPUT_TOKENS` and its four siblings,
+#           `POST /blocks`). No new PARSE-STATE FIELD -- the four raw classes and the request
+#           count ride the identical `seen_req`/`if w:` gate `REQUEST_TOKENS` already uses, so
+#           nothing about what is CARRIED between batches changed. What forces the bump is that a
+#           store already fully ingested has none of these rows and nothing recomputes them after
+#           the fact (the same argument as 2 -> 3's `repo`): without a version bump, a machine
+#           whose transcripts are all dormant would report `tokens: None` on every block FOREVER,
+#           because the code that would have written the rows never runs again on a file that
+#           never grows. One forced reparse backfills the whole history, exactly as 2 -> 3 and
+#           3 -> 4 did for `repo` and `reqs`.
+STATE_VERSION = 6
 
 
 def terms_mode(nlp):
@@ -354,7 +367,7 @@ def repo_mode(resolved):
     return (resolved or {}).get("repo") or ""
 
 
-def _state_is_usable(raw, nlp, resolved=None):
+def _state_is_usable(raw, nlp, resolved=None, writes=True):
     """Whether a stored parse state may be resumed from, or must be thrown away and reparsed.
 
     Five reasons it cannot be: it is absent (a store written before `parse_state` existed, or
@@ -375,7 +388,7 @@ def _state_is_usable(raw, nlp, resolved=None):
     rows.
     """
     if not (bool(raw) and int(raw.get("v") or 0) == STATE_VERSION
-            and raw.get("terms") == terms_mode(nlp)
+            and (not writes or raw.get("terms") == terms_mode(nlp))
             and (raw.get("capture") or "0") == capture_mode()):
         return False
     stored, incoming = raw.get("repo") or "", repo_mode(resolved)
@@ -444,7 +457,7 @@ def pending_in(store, path, start, end):
             if start <= b[0] < end]
 
 
-def is_current(store, path, nlp=None, resolved=None):
+def is_current(store, path, nlp=None, resolved=None, writes=True):
     """Whether the store holds everything this transcript's bytes say, right now.
 
     This is the precondition for serving a window out of the store at all, and it is stronger
@@ -473,6 +486,27 @@ def is_current(store, path, nlp=None, resolved=None):
     - the parse state is usable at all (`_state_is_usable`), which is where the terms-pipeline
       fingerprint is checked.
 
+    ⚠️ **`writes=False` IS FOR A CALLER THAT WILL NOT INGEST, AND IT WAS MISSING.** `/blocks`,
+    `/features` and the dev-blocks path all read without ever writing a row, and all three passed
+    `nlp=None` — which this docstring already described as "the honest question for a caller that
+    will not ingest, the terms-mode fingerprint only matters to something about to write rows".
+    The comparison was symmetric, so `terms_mode(None)` resolved to `"regex"` and could never
+    equal a fingerprint stored by the DEFAULT pipeline (`spacy:en_core_web_sm:3.8.0`). Every one
+    of those callers therefore read `current=False` forever on an ordinary machine.
+
+    MEASURED, on a real install: `is_current` was False for **22 of 22** transcripts, and the
+    consequence is specific rather than general — `blockdigest.is_closed` falls back to its
+    "activity after" branch, so a block with later activity still closes and only the TRAILING
+    block of each session never does. A session that has ended has no later activity by
+    definition, so its last block is permanently unpublished. It is invisible in aggregate
+    (blocks keep appearing) and total for a short session that is all trailing block, which is
+    exactly the shape the developer block generator produces: the generated transcript ingested
+    cleanly, resolved its repository, cut one closed block in `blocks.cut` — and `/blocks`
+    returned nothing at all.
+
+    The fix is the same ASYMMETRY the `repo` rule below already has: a caller that is not about
+    to write rows cannot be invalidated by a fingerprint describing how rows were written.
+
     `os.stat` only: no file is opened, which is the property `/analyze` is measured against.
     """
     st = store.ingest_state(path)
@@ -483,7 +517,7 @@ def is_current(store, path, nlp=None, resolved=None):
     except OSError:
         return False
     return (st["size"] == size and st["mtime"] == mtime and st["offset"] == size
-            and _state_is_usable(store.parse_state(path), nlp, resolved))
+            and _state_is_usable(store.parse_state(path), nlp, resolved, writes))
 
 
 def _latest(a, b):
@@ -513,9 +547,24 @@ def ingest_file(store, path, nlp=None, resolved=None):
     same facts; see `_state_is_usable`.
 
     Single-flight per path. Two callers can legitimately want the same file at the same moment —
-    the daemon's watcher signal (task 4) and an `/analyze` that found the store behind — and
-    while SQLite would serialise the writes, both would parse the same bytes and one would
-    discard the work. The lock makes the second wait and then find nothing to do.
+    the daemon's watcher signal (task 4) and an `/analyze` that found the store behind — and both
+    would parse the same bytes and one would discard the work. The lock makes the second wait and
+    then find nothing to do.
+
+    ⚠️ **THAT LOCK IS ABOUT DUPLICATED PARSING, NOT ABOUT THE DATABASE, and this docstring used
+    to blur the two** — it said the work would be duplicated "while SQLite would serialise the
+    writes", which reads as though the database side were already handled. It was not.
+    `_path_lock` is keyed on the TRANSCRIPT, so two ingests of DIFFERENT transcripts take
+    different locks and then race for the same `refseries.db` write lock; SQLite serialises them
+    only in the sense that the loser waits `busy_timeout` and then raises
+    `sqlite3.OperationalError: database is locked`. Measured on a real machine: four such
+    failures in one day, five failed user actions, raised from `Store.transaction()`'s
+    `BEGIN IMMEDIATE` by way of `/analyze` → here. Three routes reach this function
+    (`main._ingest_blocking`, `analyze._rollup_from_store`, `main._dev_blocks_blocking`) and this
+    lock covers none of that. The database side is now serialised one level down, by
+    `Store._write_lock` inside `transaction()` — deliberately there rather than here, so only the
+    WRITE queues and the multi-second PARSE above it still runs in parallel across transcripts.
+    See the Concurrency block on `Store`.
 
     Retention rides this call, AFTER the ingest and OUTSIDE the path lock. This is where it
     belongs because both writers reach the store through here — the watcher's `/ingest` and
@@ -543,7 +592,14 @@ def _path_lock(path):
     """One lock per transcript, created on demand. Never evicted: a `Lock` is tens of bytes and
     the population is the number of transcripts on the machine (582 on this one), so a reaper
     would be more code than it saves — and evicting one that a caller is about to take is a
-    correctness question, not a memory one."""
+    correctness question, not a memory one.
+
+    PER TRANSCRIPT is the whole of its scope, and the 582 above is why that is not also the
+    database's protection: 582 locks, one store. What this prevents is two callers parsing the
+    same bytes; what it cannot prevent is two callers writing the same file. That is
+    `Store._write_lock`'s job, and the two are held in this order — path lock, then store lock,
+    always, because nothing inside a `transaction()` calls back into `ingest_file`. A future
+    caller that inverts that order introduces the deadlock this ordering currently rules out."""
     with _LOCKS_MUTEX:
         lk = _LOCKS.get(path)
         if lk is None:
