@@ -138,11 +138,18 @@ func TestInstallSidecarChecksumMismatchInstallsNothing(t *testing.T) {
 	}); err == nil {
 		t.Fatal("checksum mismatch must be fatal")
 	}
-	entries, _ := os.ReadDir(dest)
-	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".") {
-			t.Fatalf("mismatch left something behind: %s", e.Name())
-		}
+	// Assert directly rather than by scanning for non-dot entries: StageDir
+	// creates staging dirs as ".keld-update.*", so that scan is vacuous — it
+	// passes whether or not the staging directory leaked.
+	if _, err := os.Stat(filepath.Join(dest, "keld-agent-sidecar")); !os.IsNotExist(err) {
+		t.Fatalf("mismatch installed a sidecar tree: stat err = %v", err)
+	}
+	leftover, err := filepath.Glob(filepath.Join(dest, ".keld-update.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftover) != 0 {
+		t.Fatalf("mismatch left staging litter behind: %v", leftover)
 	}
 }
 
@@ -168,5 +175,143 @@ func TestInstallSidecarMissingPublishedHashStillInstalls(t *testing.T) {
 	}
 	if res.Version != "9.9.9" {
 		t.Fatalf("version = %q, want 9.9.9", res.Version)
+	}
+}
+
+// fakeSidecarTarballNoBinary builds a tree with a VERSION file but no
+// keld-agent-sidecar binary at all — the shape a checksum-valid but
+// wrong-arch or badly-built release tarball would have: it unpacks cleanly
+// and there is nothing runnable inside it.
+func fakeSidecarTarballNoBinary(t *testing.T, version string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	body := version + "\n"
+	if err := tw.WriteHeader(&tar.Header{Name: "keld-agent-sidecar/VERSION", Mode: 0o644, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestCommitStagedSidecarRefusesATreeWithNoBinary(t *testing.T) {
+	srv := fakeReleaseServer(t, fakeSidecarTarballNoBinary(t, "9.9.9"))
+	defer srv.Close()
+	dest := t.TempDir()
+
+	// A pre-existing installed sidecar that must survive a refused commit.
+	existing := filepath.Join(dest, "keld-agent-sidecar")
+	if err := os.MkdirAll(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(existing, "VERSION"), []byte("1.1.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	staged, err := installSidecar(installSidecarOpts{
+		BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest, StageOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+
+	if _, err := commitStagedSidecar(staged.StagedPath, dest); err == nil {
+		t.Fatal("commit must refuse a staged tree with no sidecar binary")
+	}
+
+	got, err := os.ReadFile(filepath.Join(existing, "VERSION"))
+	if err != nil || strings.TrimSpace(string(got)) != "1.1.1" {
+		t.Fatalf("a refused commit disturbed the installed sidecar: %q %v", got, err)
+	}
+}
+
+// TestSidecarProgressThrottleForwardsEveryIndeterminateCall pins Finding 1: a
+// naive "-1 means nothing emitted yet" sentinel collides with total == -1
+// (Fetcher.Progress's documented value when the server sent no
+// Content-Length), so every call for the whole indeterminate transfer was
+// silently dropped. The indeterminate branch must never be throttled.
+func TestSidecarProgressThrottleForwardsEveryIndeterminateCall(t *testing.T) {
+	var calls []int64
+	throttle := newSidecarProgressThrottle(func(received, total int64) {
+		calls = append(calls, received)
+	})
+	throttle(10, -1)
+	throttle(20, -1)
+	throttle(30, -1)
+	if len(calls) != 3 {
+		t.Fatalf("indeterminate progress calls must never be throttled: got %d calls, want 3 (%v)", len(calls), calls)
+	}
+}
+
+// TestSidecarProgressThrottleDedupesByPercent pins the determinate half of the
+// same function: repeated calls landing on the same percentage collapse to
+// one, and a new percentage always gets through.
+func TestSidecarProgressThrottleDedupesByPercent(t *testing.T) {
+	var calls []int64
+	throttle := newSidecarProgressThrottle(func(received, total int64) {
+		calls = append(calls, received)
+	})
+	throttle(0, 1000)   // 0%
+	throttle(1, 1000)   // still 0% -> deduped
+	throttle(10, 1000)  // 1% -> new
+	throttle(500, 1000) // 50% -> new
+	if len(calls) != 3 {
+		t.Fatalf("want 3 calls (one per distinct percent), got %d: %v", len(calls), calls)
+	}
+	if calls[0] != 0 || calls[1] != 10 || calls[2] != 500 {
+		t.Fatalf("unexpected sequence: %v", calls)
+	}
+}
+
+// TestInstallSidecarProgressReportsIndeterminateTotal drives the real
+// installSidecar path — not just the throttle unit — against a server that
+// sends no Content-Length, and confirms the raw Progress callback set on
+// installSidecarOpts (there was no test at all setting it before this) fires
+// at least once and reports total == -1, matching Fetcher.Progress's contract.
+func TestInstallSidecarProgressReportsIndeterminateTotal(t *testing.T) {
+	tarball := fakeSidecarTarball(t, "9.9.9")
+	sum := sha256.Sum256(tarball)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			fmt.Fprintf(w, "%s  sidecar.tar.gz\n", hex.EncodeToString(sum[:]))
+			return
+		}
+		// Flushing before the body is written forces chunked transfer
+		// encoding, so no Content-Length header is ever sent — the case
+		// Fetcher.Progress documents as total == -1.
+		w.(http.Flusher).Flush()
+		_, _ = w.Write(tarball)
+	}))
+	defer srv.Close()
+
+	dest := t.TempDir()
+	var calls int
+	sawIndeterminate := false
+	_, err := installSidecar(installSidecarOpts{
+		BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest, StageOnly: true,
+		Progress: func(received, total int64) {
+			calls++
+			if total == -1 {
+				sawIndeterminate = true
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("installSidecar: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("Progress callback never fired")
+	}
+	if !sawIndeterminate {
+		t.Fatal("Progress callback never reported total == -1 for a Content-Length-less download")
 	}
 }

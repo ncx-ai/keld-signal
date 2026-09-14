@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,15 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/retry"
 )
+
+// ErrNoPublishedHash identifies Fetch's refusal to install an asset with no
+// published SHA-256, across the package boundary. Callers that need to
+// distinguish this refusal from any other Fetch error (the installer's
+// warn-and-continue policy is the one caller that does) must match on this
+// sentinel with errors.Is, never on a substring of Fetch's error text — a
+// future reword of that text must not silently flip a warning into a refusal,
+// or the reverse.
+var ErrNoPublishedHash = errors.New("update: no published SHA-256 for the release asset")
 
 // DefaultBaseURL is the GitHub release download path — the same host
 // scripts/install.sh fetches from. Atlas can override it (Release.BaseURL) so
@@ -108,7 +118,7 @@ func (f *Fetcher) Fetch(ctx context.Context, tag, asset, dest string) error {
 		return err
 	}
 	if want == "" {
-		return fmt.Errorf("update: no published SHA-256 for %s in release %s; refusing to install an unverified asset", asset, tag)
+		return fmt.Errorf("update: no published SHA-256 for %s in release %s; refusing to install an unverified asset: %w", asset, tag, ErrNoPublishedHash)
 	}
 	url := fmt.Sprintf("%s/%s/%s", f.base(), tag, asset)
 	sum, err := f.download(ctx, url, dest)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -137,6 +138,13 @@ func TestFetchRefusesAnAssetWithNoPublishedHash(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no published") {
 		t.Fatalf("got %v", err)
+	}
+	// The sentinel is what callers (the installer's warn-and-continue policy)
+	// must match on — never a substring of this message, which is free to
+	// reword. Pinned here so a change that stops wrapping ErrNoPublishedHash
+	// fails at the source rather than only in the cli package that consumes it.
+	if !errors.Is(err, ErrNoPublishedHash) {
+		t.Fatalf("error does not wrap ErrNoPublishedHash: %v", err)
 	}
 }
 

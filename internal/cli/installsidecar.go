@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -129,8 +130,10 @@ func installSidecar(opts installSidecarOpts) (installSidecarResult, error) {
 	archive := filepath.Join(stage, asset)
 	if err := f.Fetch(context.Background(), tag, asset, archive); err != nil {
 		// A release with no published hash is a warning here, not a refusal —
-		// see the policy note at the top of this file.
-		if !strings.Contains(err.Error(), "no published SHA-256") {
+		// see the policy note at the top of this file. Matched on the sentinel,
+		// never a substring of Fetch's error text: a future reword of that
+		// message must not silently flip this policy in either direction.
+		if !errors.Is(err, update.ErrNoPublishedHash) {
 			return res, err
 		}
 		console.Print("  ! no published SHA-256 for " + asset + "; skipping integrity check")
@@ -165,6 +168,23 @@ func commitStagedSidecar(staged, dest string) (installSidecarResult, error) {
 	tree := filepath.Join(staged, "keld-agent-sidecar")
 	if fi, err := os.Stat(tree); err != nil || !fi.IsDir() {
 		return res, fmt.Errorf("no staged sidecar at %s", tree)
+	}
+	// Cheap pre-flight before committing: a checksum-valid but wrong-arch or
+	// badly-built tarball can still unpack into a tree with no runnable binary
+	// at all. Catching that here — one os.Stat — is what keeps a bad release
+	// from ever displacing a working install; Replace has no way to notice
+	// this on its own, since a directory rename succeeds regardless of what's
+	// inside it.
+	bin := filepath.Join(tree, "keld-agent-sidecar")
+	fi, err := os.Stat(bin)
+	if err != nil {
+		return res, fmt.Errorf("staged sidecar has no binary at %s: %w", bin, err)
+	}
+	if fi.IsDir() {
+		return res, fmt.Errorf("staged sidecar binary at %s is a directory, not a file", bin)
+	}
+	if fi.Mode()&0o111 == 0 {
+		return res, fmt.Errorf("staged sidecar binary at %s is not executable", bin)
 	}
 	res.Version = readSidecarVersion(tree)
 	target := filepath.Join(dest, "keld-agent-sidecar")
@@ -202,6 +222,33 @@ type sidecarInstalledEvent struct {
 	Event   string `json:"event"`
 	Path    string `json:"path"`
 	Version string `json:"version,omitempty"`
+}
+
+// newSidecarProgressThrottle collapses bursty byte-level progress updates to
+// one call per percentage point, so a ~190MB download does not emit hundreds
+// of thousands of NDJSON lines. When total is indeterminate (<=0 — no
+// Content-Length on the response; Fetcher.Progress's doc comment states this
+// is exactly when total is -1) there is no percentage to dedupe on, so every
+// call is forwarded unthrottled: the wizard pane renders an indeterminate bar
+// from raw byte counts instead. That branch must never fall through to the
+// percentage comparison below it — a naive "-1 means unset" sentinel collides
+// with the indeterminate percentage itself and silently drops every event for
+// the whole transfer.
+func newSidecarProgressThrottle(emit func(received, total int64)) func(received, total int64) {
+	var lastPct atomic.Int64
+	lastPct.Store(-1)
+	return func(received, total int64) {
+		if total <= 0 {
+			emit(received, total)
+			return
+		}
+		pct := received * 100 / total
+		if pct == lastPct.Load() {
+			return
+		}
+		lastPct.Store(pct)
+		emit(received, total)
+	}
 }
 
 func newInstallSidecarCmd() *cobra.Command {
@@ -246,23 +293,11 @@ func newInstallSidecarCmd() *cobra.Command {
 				return nil
 			}
 
-			// Throttle: the pane redraws on every event and a 190MB download
-			// would otherwise emit hundreds of thousands of lines.
-			var lastPct atomic.Int64
-			lastPct.Store(-1)
 			opts := installSidecarOpts{BaseURL: baseURL, Tag: tag, Dest: dest, StageOnly: stageOnly}
 			if jsonOut {
-				opts.Progress = func(received, total int64) {
-					pct := int64(-1)
-					if total > 0 {
-						pct = received * 100 / total
-					}
-					if pct == lastPct.Load() {
-						return
-					}
-					lastPct.Store(pct)
+				opts.Progress = newSidecarProgressThrottle(func(received, total int64) {
 					emitEvent(sidecarProgressEvent{Event: "progress", Received: received, Total: total})
-				}
+				})
 			}
 			res, err := installSidecar(opts)
 			if err != nil {
