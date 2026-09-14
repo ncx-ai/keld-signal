@@ -197,6 +197,13 @@
     [root addArrangedSubview:[self labelWithText:@"Your setup code" bold:YES]];
     _codeField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
     _codeField.placeholderString = @"atlas.keld.co/ABCD-EFGH";
+    // ⚠️ A frame set at init time is DISCARDED once a view is added to an
+    // NSStackView's arranged subviews — the stack view lays it out with Auto
+    // Layout from its intrinsic content size instead, which for a plain text
+    // field is small and arbitrary. An explicit width constraint is what
+    // actually sizes it; nothing else here can catch that but a real Mac.
+    _codeField.translatesAutoresizingMaskIntoConstraints = NO;
+    [_codeField.widthAnchor constraintEqualToConstant:320].active = YES;
     _connectButton = [NSButton buttonWithTitle:@"Connect" target:self action:@selector(connect:)];
     NSStackView *codeRow = [NSStackView stackViewWithViews:@[_codeField, _connectButton]];
     codeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -211,6 +218,9 @@
     _engineBar.indeterminate = YES;
     _engineBar.minValue = 0;
     _engineBar.maxValue = 100;
+    // Same NSStackView frame-discarding issue as _codeField above.
+    _engineBar.translatesAutoresizingMaskIntoConstraints = NO;
+    [_engineBar.widthAnchor constraintEqualToConstant:420].active = YES;
     [_engineBar startAnimation:nil];
     [root addArrangedSubview:_engineBar];
     _engineStatus = [self labelWithText:@"Preparing…" bold:NO];
@@ -230,6 +240,14 @@
 
     _view = root;
     return _view;
+}
+
+// The code field is the one control a person actually needs to type into the
+// moment this pane appears; without an explicit initialKeyView, InstallerPane
+// falls back to whatever the view hierarchy happens to make first responder,
+// which is not guaranteed to be it.
+- (NSView *)initialKeyView {
+    return _codeField;
 }
 
 #pragma mark - Pane lifecycle
