@@ -39,6 +39,14 @@ type Fetcher struct {
 	HTTP    *http.Client
 	BaseURL string
 	Policy  retry.Policy
+
+	// Progress, when non-nil, is called as bytes land. total is -1 when the
+	// server sent no Content-Length. It exists for the installer's wizard pane,
+	// which needs a determinate bar; the unattended update path leaves it nil.
+	//
+	// It is called from the download goroutine, synchronously, so a slow
+	// callback slows the download — keep it to a channel send or an atomic store.
+	Progress func(received, total int64)
 }
 
 func (f *Fetcher) policy() retry.Policy {
@@ -66,6 +74,25 @@ func (f *Fetcher) base() string {
 // take seconds each for no added coverage.
 func fastPolicy() retry.Policy {
 	return retry.Policy{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond, Multiplier: 2}
+}
+
+// progressReader counts bytes as they are read and reports them.
+type progressReader struct {
+	r        io.Reader
+	total    int64
+	received int64
+	report   func(received, total int64)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.received += int64(n)
+		if p.report != nil {
+			p.report(p.received, p.total)
+		}
+	}
+	return n, err
 }
 
 // Fetch downloads <base>/<tag>/<asset> to dest and verifies its SHA-256
@@ -119,7 +146,14 @@ func (f *Fetcher) download(ctx context.Context, url, dest string) (string, error
 			return err
 		}
 		h := sha256.New()
-		n, err := io.Copy(io.MultiWriter(out, h), resp.Body)
+		var src io.Reader = resp.Body
+		if f.Progress != nil {
+			// Constructed per ATTEMPT, inside the retry closure: a retried
+			// download restarts at zero bytes, and a counter that survived the
+			// retry would report a bar running past 100%.
+			src = &progressReader{r: resp.Body, total: resp.ContentLength, report: f.Progress}
+		}
+		n, err := io.Copy(io.MultiWriter(out, h), src)
 		cerr := out.Close()
 		if err != nil {
 			return err

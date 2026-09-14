@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -262,5 +264,61 @@ func TestAssetNamesMatchWhatTheReleasePublishes(t *testing.T) {
 	}
 	if w, _ := AssetNames("windows", "amd64"); w != "keld_windows_amd64.zip" {
 		t.Fatalf("windows ships a zip, got %q", w)
+	}
+}
+
+func TestFetchReportsProgress(t *testing.T) {
+	body := strings.Repeat("x", 4096)
+	sum := sha256.Sum256([]byte(body))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			fmt.Fprintf(w, "%s  asset.tar.gz\n", hex.EncodeToString(sum[:]))
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	var last int64
+	var total int64
+	calls := 0
+	f := &Fetcher{BaseURL: srv.URL, Policy: fastPolicy(), Progress: func(received, tot int64) {
+		calls++
+		if received < last {
+			t.Errorf("progress went backwards: %d after %d", received, last)
+		}
+		last, total = received, tot
+	}}
+	dest := filepath.Join(t.TempDir(), "asset.tar.gz")
+	if err := f.Fetch(context.Background(), "v1.2.3", "asset.tar.gz", dest); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("Progress was never called")
+	}
+	if last != int64(len(body)) {
+		t.Fatalf("final received = %d, want %d", last, len(body))
+	}
+	if total != int64(len(body)) {
+		t.Fatalf("total = %d, want %d", total, len(body))
+	}
+}
+
+func TestFetchWithoutProgressCallbackStillWorks(t *testing.T) {
+	body := "hello"
+	sum := sha256.Sum256([]byte(body))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			fmt.Fprintf(w, "%s  asset.tar.gz\n", hex.EncodeToString(sum[:]))
+			return
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+	f := &Fetcher{BaseURL: srv.URL, Policy: fastPolicy()}
+	dest := filepath.Join(t.TempDir(), "asset.tar.gz")
+	if err := f.Fetch(context.Background(), "v1", "asset.tar.gz", dest); err != nil {
+		t.Fatalf("Fetch with nil Progress: %v", err)
 	}
 }
