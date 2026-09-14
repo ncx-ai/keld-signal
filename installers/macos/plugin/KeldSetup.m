@@ -160,7 +160,18 @@
     // a WEAK self capture matching the idiom already used in connect:,
     // loadTools and startSidecarDownload.
     task.terminationHandler = ^(NSTask *t) {
-        t.standardOutput = nil;
+        // ⚠️ DO NOT clear `t.standardOutput` (or any other stream/launch
+        // property) here. NSTask raises NSInvalidArgumentException
+        // ("task already launched") on those setters once the task has been
+        // launched, an ObjC throw inside a dispatch block is uncaught, and the
+        // result is SIGTRAP: the plugin process dies and Installer.app puts up
+        // "the installer encountered an error, install anyway?". That is
+        // exactly what a real install did on 2026-09-14 — the first time this
+        // async path ever ran, since the design probe used a synchronous
+        // readDataToEndOfFile/waitUntilExit and no automated check can drive a
+        // wizard pane. `terminationHandler` is the one property that tolerates
+        // a post-launch write (measured, standalone), and clearing it is all
+        // the cycle break needs; the pipe is released when this block is.
         t.terminationHandler = nil;   // breaks the task -> block edge
         dispatch_async(dispatch_get_main_queue(), ^{
             sawExit = YES;

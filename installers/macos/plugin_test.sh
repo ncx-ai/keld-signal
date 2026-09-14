@@ -64,4 +64,26 @@ PY
 grep -qE '@"v"[[:space:]]*stringByAppendingString:version\]' "$p/KeldSetup.m" \
   && fail "pane prefixes 'v' onto the raw bundle version, which already carries one from the release tag — normalise (strip then re-add) instead of blindly prepending"
 
+# ⚠️ NSTask REFUSES STREAM-PROPERTY WRITES AFTER LAUNCH, AND THE RAISE IS FATAL
+# HERE. `t.standardOutput = nil` inside the terminationHandler throws
+# NSInvalidArgumentException ("task already launched"); an ObjC throw inside a
+# dispatch block is uncaught, so it is SIGTRAP — the plugin process dies and
+# Installer.app puts up "the installer encountered an error, install anyway?".
+# Measured on a real install 2026-09-14 (crash report: EXC_BREAKPOINT, frame
+# `-[KeldSetupPane runKeld:onEvent:done:]_block_invoke` -> NOCOPY_SETTER_IMPL),
+# then reproduced standalone: setting `terminationHandler` after launch is fine,
+# setting `standardOutput` is not.
+#
+# NOTHING ELSE CAN CATCH THIS. `make pkg-plugin-check` compiles and signs but
+# never RUNS the pane, no CI check can drive a wizard, and the design probe used
+# a synchronous readDataToEndOfFile/waitUntilExit — so this async path had never
+# executed once before a human double-clicked the pkg.
+#
+# The check keys on the handler's parameter name `t`, which is what separates a
+# post-launch write from the legitimate pre-launch ones on `task`.
+pane_body="$(sed 's|//.*||' "$p/KeldSetup.m")"
+if grep -qE '(^|[^A-Za-z0-9_])t\.(standardOutput|standardError|standardInput|arguments|executableURL)[[:space:]]*=' <<< "$pane_body"; then
+  fail "KeldSetup.m writes an NSTask stream/launch property on the terminationHandler's task; that raises NSInvalidArgumentException and kills the plugin process"
+fi
+
 echo "plugin_test.sh: OK"
