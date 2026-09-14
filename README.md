@@ -272,14 +272,14 @@ The **platform installers are the recommended path**. Grab the latest from
 
 | Platform | Download | What it does |
 |---|---|---|
-| **macOS** (Apple Silicon) | `keld-<version>-arm64.pkg` | CLI + agent + per-user service; fetches the sidecar during onboarding |
+| **macOS** (Apple Silicon) | `keld-<version>-arm64.pkg` | CLI + agent + **Keld Signal.app** + per-user service; fetches the analysis sidecar during onboarding |
 | **Windows** (x64) | `keld-setup.exe` | CLI + agent + logon-task agent |
 | **Linux** (x64/arm64) | one-liner below | CLI + agent + sidecar |
 
 ### macOS — `.pkg`
 
-Installs to `/usr/local/keld` and registers the per-user agent. It's a **`.pkg`,
-not a DMG** — Keld installs a CLI plus a background daemon, which the pkg's
+Installs the CLI and agent to `/usr/local/keld`, **Keld Signal.app** to
+`/Applications`, and registers the per-user agent. It's a **`.pkg`, not a DMG** — Keld installs a CLI plus a background daemon, which the pkg's
 install scripts wire up.
 
 ⚠️ **The pkg ships *without* the sidecar.** Apple's notary service scans every
