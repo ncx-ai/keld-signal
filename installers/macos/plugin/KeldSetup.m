@@ -365,10 +365,26 @@
     // A dry-run build carries no real release tag; the Go side then resolves the
     // latest release, which is what onboard.command already does.
     if (version.length && [version rangeOfString:@"dryrun"].location == NSNotFound) {
-        [args addObjectsFromArray:@[@"--tag", [@"v" stringByAppendingString:version]]];
+        // ⚠️ CFBundleShortVersionString is stamped verbatim from build-pkg.sh's
+        // own $VERSION, which CI sets from the release tag itself
+        // (installers.yml: VER="$TAG", e.g. "v3.0.0-rc.5") — it ALREADY carries
+        // the leading "v". Blindly prefixing another one here asked GitHub for
+        // "vv3.0.0-rc.5" on every tagged build, which 404s outright; it was
+        // invisible on a dry-run build only because "0.0.0-dryrun" takes the
+        // branch above instead of reaching this line. Strip any leading "v"
+        // first — so this is correct whether or not the bundle version happens
+        // to carry one — then add exactly one back.
+        NSString *bare = [version hasPrefix:@"v"] ? [version substringFromIndex:1] : version;
+        [args addObjectsFromArray:@[@"--tag", [@"v" stringByAppendingString:bare]]];
     }
     __weak typeof(self) weakSelf = self;
     __block NSString *failure = nil;
+    // The missing-published-hash warning (installsidecar.go, --json path):
+    // `console.Print` writes to the same stream as the NDJSON events, and the
+    // pane drops any line it can't parse as one, so under --json that warning
+    // reached nobody. The spec justifies the degraded policy on "a human is
+    // watching a progress bar" — this is what makes that true.
+    __block NSString *warning = nil;
     [self runKeld:args onEvent:^(NSDictionary *e) {
         typeof(self) s = weakSelf; if (!s) return;
         NSString *kind = e[@"event"];
@@ -384,6 +400,9 @@
             s->_stagedSidecar = e[@"path"];
         } else if ([kind isEqualToString:@"error"]) {
             failure = e[@"message"];
+        } else if ([kind isEqualToString:@"warning"]) {
+            warning = e[@"message"];
+            s->_engineStatus.stringValue = warning ?: s->_engineStatus.stringValue;
         }
     } done:^(int status) {
         typeof(self) s = weakSelf; if (!s) return;
@@ -391,7 +410,9 @@
         s->_engineBar.indeterminate = NO;
         if (s->_stagedSidecar.length) {
             s->_engineBar.doubleValue = 100;
-            s->_engineStatus.stringValue = @"Ready. Nothing multi-gigabyte is downloaded, now or later.";
+            s->_engineStatus.stringValue = warning.length
+                ? [NSString stringWithFormat:@"Ready (%@).", warning]
+                : @"Ready. Nothing multi-gigabyte is downloaded, now or later.";
         } else {
             s->_engineBar.doubleValue = 0;
             s->_engineStatus.stringValue = failure

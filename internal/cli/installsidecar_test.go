@@ -178,6 +178,39 @@ func TestInstallSidecarMissingPublishedHashStillInstalls(t *testing.T) {
 	}
 }
 
+// TestInstallSidecarMissingPublishedHashWarnsViaCallback pins the --json fix:
+// console.Print writes to the same stream as the NDJSON events, and the macOS
+// wizard pane drops any line it can't parse as one — so under --json the
+// missing-hash warning reached nobody. opts.Warn is what the --json path sets
+// so the warning becomes an event the pane can actually render instead.
+func TestInstallSidecarMissingPublishedHashWarnsViaCallback(t *testing.T) {
+	tarball := fakeSidecarTarball(t, "9.9.9")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(tarball)
+	}))
+	defer srv.Close()
+
+	var warnings []string
+	dest := t.TempDir()
+	_, err := installSidecar(installSidecarOpts{
+		BaseURL: srv.URL, Tag: "v9.9.9", Dest: dest,
+		Warn: func(msg string) { warnings = append(warnings, msg) },
+	})
+	if err != nil {
+		t.Fatalf("a missing published hash must not be fatal for the installer: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly one Warn call, got %v", warnings)
+	}
+	if !strings.Contains(warnings[0], "no published SHA-256") {
+		t.Fatalf("warning message = %q, want it to name the missing hash", warnings[0])
+	}
+}
+
 // fakeSidecarTarballNoBinary builds a tree with a VERSION file but no
 // keld-agent-sidecar binary at all — the shape a checksum-valid but
 // wrong-arch or badly-built release tarball would have: it unpacks cleanly

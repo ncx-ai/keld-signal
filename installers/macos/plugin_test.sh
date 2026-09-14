@@ -52,4 +52,16 @@ expected = {"version", "paired", "api_url", "tools", "sidecar_staged"}
 sys.exit(0 if keys == expected else 1)
 PY
 
+
+# ⚠️ CRITICAL: CFBundleShortVersionString is stamped verbatim from build-pkg.sh's
+# own $VERSION, which CI sets from the release tag itself (installers.yml:
+# VER="$TAG", e.g. "v3.0.0-rc.5") — it ALREADY carries the leading "v". Blindly
+# prefixing another "v" onto it asks GitHub for "vv3.0.0-rc.5" on every tagged
+# build, which 404s outright. This is invisible on `make release-dry`, whose
+# "0.0.0-dryrun" version takes the no-tag branch instead and never reaches this
+# line. Defensive normalisation (strip any leading "v", then add exactly one
+# back) is fine; blindly appending "v" to the raw bundle version is not.
+grep -qE '@"v"[[:space:]]*stringByAppendingString:version\]' "$p/KeldSetup.m" \
+  && fail "pane prefixes 'v' onto the raw bundle version, which already carries one from the release tag — normalise (strip then re-add) instead of blindly prepending"
+
 echo "plugin_test.sh: OK"

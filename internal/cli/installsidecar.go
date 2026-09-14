@@ -38,6 +38,12 @@ type installSidecarOpts struct {
 	Dest      string // directory that holds keld-agent-sidecar/; empty = ~/.local/bin
 	StageOnly bool
 	Progress  func(received, total int64)
+	// Warn reports a non-fatal problem during the fetch — currently only the
+	// missing-published-hash case. Nil means: print it with console.Print (the
+	// human CLI path). The --json path sets this to emit a `warning` NDJSON
+	// event instead, because console.Print reaches nobody under --json — see
+	// the policy note above.
+	Warn func(string)
 }
 
 type installSidecarResult struct {
@@ -136,7 +142,12 @@ func installSidecar(opts installSidecarOpts) (installSidecarResult, error) {
 		if !errors.Is(err, update.ErrNoPublishedHash) {
 			return res, err
 		}
-		console.Print("  ! no published SHA-256 for " + asset + "; skipping integrity check")
+		msg := "no published SHA-256 for " + asset + "; skipping integrity check"
+		if opts.Warn != nil {
+			opts.Warn(msg)
+		} else {
+			console.Print("  ! " + msg)
+		}
 		if err := f.FetchUnverified(context.Background(), tag, asset, archive); err != nil {
 			return res, err
 		}
@@ -298,6 +309,9 @@ func newInstallSidecarCmd() *cobra.Command {
 				opts.Progress = newSidecarProgressThrottle(func(received, total int64) {
 					emitEvent(sidecarProgressEvent{Event: "progress", Received: received, Total: total})
 				})
+				opts.Warn = func(msg string) {
+					emitEvent(warningEvent{Event: "warning", Message: msg})
+				}
 			}
 			res, err := installSidecar(opts)
 			if err != nil {

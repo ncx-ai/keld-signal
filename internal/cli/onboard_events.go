@@ -54,6 +54,18 @@ type errorEvent struct {
 	Message string `json:"message"`
 }
 
+// warningEvent reports a NON-FATAL problem that a human running the human CLI
+// would see via console.Print — currently only installSidecar's missing-
+// published-hash case. Under --json, console.Print reaches nobody: it writes
+// to the same stream as the NDJSON events, and the macOS wizard pane drops any
+// line it cannot parse as one. The installer's missing-checksum policy
+// (installsidecar.go) is justified specifically by "a human is watching a
+// progress bar" — this event is what makes that true under --json too.
+type warningEvent struct {
+	Event   string `json:"event"`
+	Message string `json:"message"`
+}
+
 // SetupEvent is the wire-agnostic progress event runSetup passes to SetupOpts.Emit.
 // The command layer maps it to toolEvent/doneEvent NDJSON.
 type SetupEvent struct {
