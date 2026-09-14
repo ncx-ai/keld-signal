@@ -225,3 +225,20 @@ func TestLoginCodeUsesHostFromPairingCode(t *testing.T) {
 		t.Fatalf("stored APIURL = %q, want %q", stored.APIURL, srv.URL)
 	}
 }
+
+func TestAuthorizedEventCarriesAPIURL(t *testing.T) {
+	b, err := json.Marshal(authorizedEvent{
+		Event: "authorized", Principal: "a@b.co", Org: "acme", APIURL: "https://atlas-dev.keld.co",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["api_url"] != "https://atlas-dev.keld.co" {
+		t.Fatalf(`authorized event must carry api_url so the installer can pass `+
+			`--api-url to signal setup; got %v`, got)
+	}
+}

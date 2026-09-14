@@ -62,7 +62,7 @@ func newLoginCmd() *cobra.Command {
 					return err
 				}
 				if jsonOut {
-					emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org})
+					emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org, APIURL: paths.APIBase()})
 				} else {
 					console.Print(fmt.Sprintf("  ✓ %s · org %s", a.Principal, a.Org))
 				}
@@ -84,7 +84,7 @@ func newLoginCmd() *cobra.Command {
 					emitEvent(errorEvent{Event: "error", Message: cleanErrorMessage(err)})
 					return errs.ErrSilentExit
 				}
-				emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org})
+				emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org, APIURL: paths.APIBase()})
 				return nil
 			}
 

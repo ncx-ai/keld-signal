@@ -21,6 +21,13 @@ type authorizedEvent struct {
 	Event     string `json:"event"`
 	Principal string `json:"principal"`
 	Org       string `json:"org"`
+	// APIURL is the host the code resolved to. A setup code may carry its own
+	// ("atlas-dev.keld.co/ABCD-EFGH"), and `keld signal setup` reads
+	// paths.APIBase() rather than auth.json — so a caller that runs the two
+	// separately (the macOS installer: login in the wizard pane, setup in
+	// postinstall) must pass --api-url or write the previous endpoint into
+	// hook.json. That is the split-brain install runInstall already guards against.
+	APIURL string `json:"api_url,omitempty"`
 }
 
 type toolEvent struct {
