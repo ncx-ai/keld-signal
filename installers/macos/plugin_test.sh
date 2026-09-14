@@ -86,4 +86,27 @@ if grep -qE '(^|[^A-Za-z0-9_])t\.(standardOutput|standardError|standardInput|arg
   fail "KeldSetup.m writes an NSTask stream/launch property on the terminationHandler's task; that raises NSInvalidArgumentException and kills the plugin process"
 fi
 
+# ⚠️ THE INSTALL IS ALL-OR-NOTHING: there is no "set up later". Continue is
+# enabled only by a VERIFIED connection — either a setup code Atlas accepted, or
+# `whoami --verify` confirming the stored credential still works. A deferral
+# button would produce exactly the state this wizard exists to prevent: a machine
+# that installed cleanly, collects nothing, and has no non-shell way to finish.
+if grep -qiE 'set[[:space:]]?up later|setUpLater|skip for now' "$p/KeldSetup.m"; then
+  fail "the pane offers a way to defer setup; the install is all-or-nothing"
+fi
+
+# The already-connected claim must rest on a VERIFIED credential, never on
+# auth.json existing — `keld whoami` without --verify never contacts Atlas, so a
+# revoked token reads identical to a live one.
+grep -qF 'whoami' "$p/KeldSetup.m" || fail "pane never checks whether this machine is already connected"
+grep -qF -- '--verify' "$p/KeldSetup.m" || fail "pane checks identity without --verify, which cannot tell a revoked token from a live one"
+
+# The code is prefilled from the clipboard (the Atlas download page's Copy
+# button is what puts it there) rather than typed.
+grep -qF 'NSPasteboard' "$p/KeldSetup.m" || fail "pane does not read the clipboard, so the person must type the code by hand"
+grep -qF 'KeldLooksLikePairingCode' "$p/KeldSetup.m" || fail "pane does not shape-check clipboard contents before submitting them"
+
+# Content flush against the pane's frame reads as broken; the stack needs insets.
+grep -qF 'edgeInsets' "$p/KeldSetup.m" || fail "pane's stack has no edge insets, so content sits flush against the panel border"
+
 echo "plugin_test.sh: OK"

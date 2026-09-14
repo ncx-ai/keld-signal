@@ -16,6 +16,7 @@
 // rewrites a user's files.
 #import <Cocoa/Cocoa.h>
 #import <InstallerPlugins/InstallerPlugins.h>
+#import "KeldCode.h"
 
 @interface KeldSetupPane : InstallerPane
 @end
@@ -29,7 +30,7 @@
     NSTextField *_engineStatus;
     NSStackView *_toolsStack;
     NSMutableArray<NSButton *> *_toolChecks;
-    NSButton *_laterButton;
+    NSButton *_retryButton;
     BOOL _paired;
     NSString *_apiURL;
     NSString *_stagedSidecar;
@@ -203,9 +204,13 @@
     NSStackView *root = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 620, 340)];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.alignment = NSLayoutAttributeLeading;
-    root.spacing = 14;
+    root.spacing = 18;
+    // Installer.app hands a pane's contentView the full width of its frame, so
+    // without insets every label and control sits flush against the panel's
+    // border and the pane reads as broken next to Apple's own panes.
+    root.edgeInsets = NSEdgeInsetsMake(20, 24, 20, 24);
 
-    [root addArrangedSubview:[self labelWithText:@"Your setup code" bold:YES]];
+    [root addArrangedSubview:[self labelWithText:@"Your Keld account" bold:YES]];
     _codeField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
     _codeField.placeholderString = @"atlas.keld.co/ABCD-EFGH";
     // ⚠️ A frame set at init time is DISCARDED once a view is added to an
@@ -219,9 +224,16 @@
     NSStackView *codeRow = [NSStackView stackViewWithViews:@[_codeField, _connectButton]];
     codeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     [root addArrangedSubview:codeRow];
-    _codeStatus = [self labelWithText:@"Paste the code from your Keld download page." bold:NO];
+    _codeStatus = [self labelWithText:@"Checking this Mac…" bold:NO];
     _codeStatus.textColor = [NSColor secondaryLabelColor];
     [root addArrangedSubview:_codeStatus];
+
+    // Shown only when Atlas could not be reached. The install is all-or-nothing,
+    // so this is the one way forward from that state: fix the network, try
+    // again. There is deliberately no button that proceeds unverified.
+    _retryButton = [NSButton buttonWithTitle:@"Try again" target:self action:@selector(retryIdentity:)];
+    _retryButton.hidden = YES;
+    [root addArrangedSubview:_retryButton];
 
     [root addArrangedSubview:[self labelWithText:@"Analysis engine" bold:YES]];
     _engineBar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 420, 16)];
@@ -245,10 +257,6 @@
     _toolsStack.spacing = 4;
     [root addArrangedSubview:_toolsStack];
 
-    _laterButton = [NSButton buttonWithTitle:@"Set up later" target:self action:@selector(setUpLater:)];
-    _laterButton.bezelStyle = NSBezelStyleInline;
-    [root addArrangedSubview:_laterButton];
-
     _view = root;
     return _view;
 }
@@ -265,10 +273,15 @@
 
 - (void)didEnterPane:(InstallerSectionDirection)dir {
     (void)[self contentView];
-    // ⚠️ Continue is disabled until the code is accepted (or "Set up later" is
-    // clicked). Catching a bad code HERE is the point: there is no pane after
-    // the install to catch it in.
+    // ⚠️ THE INSTALL IS ALL-OR-NOTHING. Continue is enabled by exactly one
+    // thing — a VERIFIED connection to Atlas, either a setup code it accepted or
+    // `whoami --verify` confirming the stored credential still works. There is
+    // no deferral: a machine that installs unconnected collects nothing, and
+    // (the app being unreleased and the CLI being a terminal) has no way to
+    // finish that this wizard was built to replace. Catching that HERE is the
+    // only option, because no pane can run after the install.
     self.nextEnabled = _paired;
+    if (!_paired) [self checkIdentity];
     // Guarded: the pane can be re-entered (Back, then Continue again), and
     // without this a second entry would start a second concurrent ~190 MB
     // download rather than reusing the first.
@@ -278,9 +291,10 @@
     }
 }
 
-// shouldExitPane writes the handoff postinstall consumes. Returning YES always:
-// by this point either pairing succeeded or the person chose to finish later,
-// and both are states postinstall knows how to complete.
+// shouldExitPane writes the handoff postinstall consumes. Returning YES is safe
+// because reaching here at all means Continue was enabled, and Continue is
+// enabled only for a verified connection — so the handoff can only ever say
+// paired.
 - (BOOL)shouldExitPane:(InstallerSectionDirection)dir {
     if (dir == InstallerDirectionForward) [self writeHandoff];
     return YES;
@@ -433,9 +447,77 @@
     }];
 }
 
-- (void)setUpLater:(id)sender {
-    _codeStatus.stringValue = @"Skipping for now — nothing is collected until you add a code.";
-    self.nextEnabled = YES;
+#pragma mark - Identity
+
+// checkIdentity asks whether this machine is ALREADY connected, and does it by
+// asking Atlas rather than by looking for auth.json.
+//
+// ⚠️ `keld whoami` on its own never contacts Atlas — it prints what a local file
+// says — so a revoked token and a live one are indistinguishable to it. Enabling
+// Continue on that basis would let someone install with a dead credential and
+// collect nothing, which is the confused state this pane exists to prevent.
+// `--verify` performs the same `Onboarding()` call postinstall will make minutes
+// later, so a verified answer predicts that step rather than merely correlating
+// with it.
+//
+// The three failure states are kept apart deliberately: `unauthorized` means a
+// code is required, `unreachable` means we learned nothing and the install must
+// not proceed, `none` means a fresh machine.
+- (void)checkIdentity {
+    _codeStatus.stringValue = @"Checking this Mac…";
+    _retryButton.hidden = YES;
+    __weak typeof(self) weakSelf = self;
+    __block NSDictionary *identity = nil;
+    [self runKeld:@[@"whoami", @"--verify", @"--json"] onEvent:^(NSDictionary *e) {
+        if ([e[@"event"] isEqualToString:@"identity"]) identity = e;
+    } done:^(int status) {
+        typeof(self) s = weakSelf; if (!s) return;
+        NSString *state = identity[@"status"] ?: @"none";
+        if ([state isEqualToString:@"verified"]) {
+            s->_paired = YES;
+            s->_codeField.hidden = YES;
+            s->_connectButton.hidden = YES;
+            s->_codeStatus.stringValue =
+                [NSString stringWithFormat:@"Already connected — %@ · %@",
+                 identity[@"principal"] ?: @"", identity[@"org"] ?: @""];
+            s.nextEnabled = YES;
+            [s loadTools];
+            return;
+        }
+        if ([state isEqualToString:@"unreachable"]) {
+            // All-or-nothing: we cannot confirm this machine can report to
+            // Atlas, so the install does not proceed. Retry is the only way on.
+            s->_codeStatus.stringValue =
+                @"Can't reach Atlas — Keld can't be set up right now.";
+            s->_retryButton.hidden = NO;
+            s.nextEnabled = NO;
+            return;
+        }
+        // `none` or `unauthorized`: a setup code is required. An expired
+        // credential is not a reason to nag about the old one, so both read the
+        // same to the person.
+        s->_codeStatus.stringValue = @"Paste the setup code from your Keld download page.";
+        [s prefillFromClipboard];
+    }];
+}
+
+- (void)retryIdentity:(id)sender {
+    [self checkIdentity];
+}
+
+// prefillFromClipboard fills the field from the clipboard and submits it.
+//
+// The Atlas download page's Copy button is what puts the code there, so in the
+// normal flow it is already on the clipboard at the moment this pane appears and
+// nobody should have to retype it. `KeldLooksLikePairingCode` (unit-tested in
+// KeldCodeTest.m) is what keeps this from firing a login attempt at arbitrary
+// copied text; the value stays visible and editable either way.
+- (void)prefillFromClipboard {
+    NSString *pasted = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+    if (!KeldLooksLikePairingCode(pasted)) return;
+    _codeField.stringValue = [pasted stringByTrimmingCharactersInSet:
+                              [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [self connect:nil];
 }
 
 #pragma mark - Handoff
