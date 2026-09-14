@@ -59,7 +59,20 @@
 #pragma mark - Running keld
 
 // runKeld spawns the embedded CLI and delivers one parsed NDJSON object per
-// line on the MAIN queue. `done` fires once, after exit.
+// line on the MAIN queue. `done` fires exactly once, after BOTH the process
+// has exited AND its stdout pipe has been fully drained to EOF.
+//
+// ⚠️ THOSE ARE TWO SEPARATE SIGNALS ON TWO SEPARATE QUEUES, and `done` used to
+// fire on termination alone. `readabilityHandler` runs off a GCD queue that is
+// not synchronized with `terminationHandler`'s, so a chunk the OS pipe still
+// held when the process exited could be delivered to the readability queue
+// AFTER the termination queue had already cleared the handler and called
+// `done` — dropping it. `authorized` is the LAST line `keld login --json`
+// writes and `_paired` is set only from it (the `staged` event has the same
+// shape), so the observable failure was: the machine IS paired, auth.json IS
+// written, and the pane still says "That code was not accepted" with Continue
+// disabled. Waiting for BOTH signals — in whichever order they arrive — is
+// what removes the race rather than narrowing it.
 - (void)runKeld:(NSArray<NSString *> *)args
          onEvent:(void (^)(NSDictionary *event))onEvent
             done:(void (^)(int status))done {
@@ -85,9 +98,23 @@
     NSArray *handle = @[task, out];
     [_activeTasks addObject:handle];
 
+    // Every read below, every mutation of `buffer`, and both completion flags
+    // are only ever touched on the MAIN queue — the readability handler's own
+    // queue is used solely for the blocking `fh.availableData` call, whose
+    // result is immediately handed to the main queue. That is what makes two
+    // independently-scheduled signals safe to combine without a lock.
     NSMutableData *buffer = [NSMutableData data];
-    out.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
-        [buffer appendData:fh.availableData];
+    __block BOOL sawEOF = NO;
+    __block BOOL sawExit = NO;
+    __block int exitStatus = -1;
+    __weak typeof(self) weakSelf = self;
+    void (^finishIfReady)(void) = ^{
+        if (!sawEOF || !sawExit) return;   // only ever fires once: both flip exactly once
+        typeof(self) s = weakSelf; if (!s) return;
+        [s->_activeTasks removeObject:handle];
+        done(exitStatus);
+    };
+    void (^drainLines)(void) = ^{
         while (YES) {
             NSRange nl = [buffer rangeOfData:[@"\n" dataUsingEncoding:NSUTF8StringEncoding]
                                      options:0 range:NSMakeRange(0, buffer.length)];
@@ -95,10 +122,35 @@
             NSData *line = [buffer subdataWithRange:NSMakeRange(0, nl.location)];
             [buffer replaceBytesInRange:NSMakeRange(0, nl.location + 1) withBytes:NULL length:0];
             NSDictionary *obj = [NSJSONSerialization JSONObjectWithData:line options:0 error:nil];
-            if ([obj isKindOfClass:[NSDictionary class]]) {
-                dispatch_async(dispatch_get_main_queue(), ^{ onEvent(obj); });
-            }
+            if ([obj isKindOfClass:[NSDictionary class]]) onEvent(obj);
         }
+    };
+    // A weak reference for the handler to nil itself out through, so it does
+    // not strongly capture the very pipe whose property retains it — the same
+    // block -> pipe -> block cycle `t.terminationHandler = nil` below avoids
+    // by using its block parameter instead of a captured variable.
+    __weak NSPipe *weakOut = out;
+    out.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
+        NSData *chunk = fh.availableData;   // the only part that must run off-main
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (chunk.length == 0) {
+                // EOF: the pipe's write end closed (the process exited or
+                // closed its stdout). Parse whatever is left in the buffer —
+                // a final line with no trailing newline must not be silently
+                // dropped either — then stop the handler and signal.
+                if (buffer.length > 0) {
+                    NSDictionary *obj = [NSJSONSerialization JSONObjectWithData:buffer options:0 error:nil];
+                    if ([obj isKindOfClass:[NSDictionary class]]) onEvent(obj);
+                    [buffer setLength:0];
+                }
+                weakOut.fileHandleForReading.readabilityHandler = nil;
+                sawEOF = YES;
+                finishIfReady();
+                return;
+            }
+            [buffer appendData:chunk];
+            drainLines();
+        });
     };
     // ⚠️ `terminationHandler` retains its block, which captures `handle` (and
     // so `task`) and, if `self` is captured strongly, `self` too — closing
@@ -107,20 +159,19 @@
     // has what it needs from `t`, on every path that assigns the handler, and
     // a WEAK self capture matching the idiom already used in connect:,
     // loadTools and startSidecarDownload.
-    __weak typeof(self) weakSelf = self;
     task.terminationHandler = ^(NSTask *t) {
         t.standardOutput = nil;
-        out.fileHandleForReading.readabilityHandler = nil;
         t.terminationHandler = nil;   // breaks the task -> block edge
         dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) s = weakSelf; if (!s) return;
-            [s->_activeTasks removeObject:handle];
-            done(t.terminationStatus);
+            sawExit = YES;
+            exitStatus = t.terminationStatus;
+            finishIfReady();
         });
     };
     NSError *err = nil;
     if (![task launchAndReturnError:&err]) {
         task.terminationHandler = nil;   // same edge, on the launch-failure path
+        out.fileHandleForReading.readabilityHandler = nil;
         [_activeTasks removeObject:handle];
         dispatch_async(dispatch_get_main_queue(), ^{ done(-1); });
     }
