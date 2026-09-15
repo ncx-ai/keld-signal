@@ -535,19 +535,25 @@ def _prompt_time(path, prompt_id):
     """The target prompt's own timestamp, by a pass over the transcript. The oracle's half of
     what the `prompt` index now answers from the store.
 
-    ⚠️ Matches EITHER id, and must keep matching whatever `ingest.py` indexes. A user line
-    carries `uuid` (unique per line) and `promptId` (the human turn's identity, shared by its
-    follow-on lines); the daemon asks by `promptId`. If this oracle and that index resolve
-    different ids, the equality test that guards the whole store is comparing two different
-    windows and proves nothing -- which is exactly how indexing uuid alone survived every test
-    while failing every real call.
+    ⚠️ Matches EITHER id, and must keep matching whatever `ingest.py` indexes. A turn carries a
+    per-LINE id and, on a human turn, the id of the TURN, shared by its follow-on lines; the
+    daemon asks by the latter. If this oracle and that index resolve different ids, the equality
+    test that guards the whole store is comparing two different windows and proves nothing --
+    which is exactly how indexing the line id alone survived every test while failing every real
+    call.
+
+    ⚠️ AND BOTH SIDES NOW READ THE SAME RECORD, which is the structural half of that repair. The
+    oracle and the index used to name the fields separately -- two copies of one rule, which is
+    how they came to disagree -- and they now resolve `Turn.line_id` / `Turn.prompt_id` off the
+    reader that produced the row. A tool whose ids are shaped differently (Codex names a turn
+    `<session_id>#<turn_id>`) changes the reader and nothing here.
 
     FIRST match in file order, mirroring `upsert_prompts`' ON CONFLICT DO NOTHING: a shared
-    promptId resolves to the human prompt's own instant, never a continuation's.
+    prompt id resolves to the human prompt's own instant, never a continuation's.
     """
     for o in iter_turns(path):
-        if o.get("uuid") == prompt_id or o.get("promptId") == prompt_id:
-            return o["timestamp"]
+        if o.line_id == prompt_id or o.prompt_id == prompt_id:
+            return o.ts
     raise PromptNotFound(prompt_id)
 
 
@@ -563,7 +569,7 @@ def _rollup_by_parse(path, prompt_id, span_minutes=60, nlp=None, resolved=None):
     lo, hi = quantize(start.timestamp()), quantize(end.timestamp())
     turns = [o for o in turns_between(path, (start - timedelta(seconds=1)).isoformat(),
                                       (end + timedelta(seconds=1)).isoformat())
-             if lo <= quantize(_order_key(o["timestamp"]).timestamp()) < hi]
+             if lo <= quantize(_order_key(o.ts).timestamp()) < hi]
 
     # `root` is reconcile.py's machine-scope key: in production a transcript's path is
     # `<root>/<projdir>/<session>.jsonl` for one of `--roots` (refseries.py), so the collection
