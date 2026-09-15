@@ -673,7 +673,8 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
     # line is filtered out before that function sees it (see `capture.py`), and a byte offset is
     # not a property of a turn at all. One walk, no `json.loads`.
     capture_on = capture_mode() == "1"
-    outcomes, bin_offsets = capture.scan(lines, offsets) if capture_on else ([], {})
+    outcomes, bin_offsets = (capture.scan(lines, offsets, reader=reader) if capture_on
+                             else ([], {}))
     outcome_rows = []
     # `t` arrives already quantized, from the same arithmetic `capture.scan` binned the offset
     # with. Re-deriving it here is what let the two disagree across a bin boundary.
