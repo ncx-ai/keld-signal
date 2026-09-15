@@ -130,7 +130,7 @@
 
 @end
 
-@interface KeldSetupPane : InstallerPane
+@interface KeldSetupPane : InstallerPane <WKNavigationDelegate>
 @end
 
 @implementation KeldSetupPane {
@@ -162,6 +162,11 @@
     // Atlas's own approval page, embedded. Hidden until a device_code arrives
     // and again once approval lands.
     WKWebView *_approvalWeb;
+    // The wait's own state: the bar that shows it is happening, the URL to
+    // re-request if it fails, and how many times we have tried.
+    NSProgressIndicator *_approvalBar;
+    NSString *_approvalURL;
+    int _approvalAttempts;
     // The sections hidden while the approval page is up: an Installer pane has a
     // fixed height, so the web view has to borrow their space rather than push
     // the pane taller (which would simply clip).
@@ -425,13 +430,41 @@
 // falls back to whatever the view hierarchy happens to make first responder,
 // which is not guaranteed to be it.
 - (NSView *)initialKeyView {
-    return _codeField;
+    // ⚠️ NEVER NAME A HIDDEN CONTROL HERE. Installer.app applies
+    // initialKeyView on EVERY entry, so this is re-entered on Back-then-Continue
+    // — and by then the code field is hidden behind the approval page.
+    // Measured with a standalone harness (focustest.m): `makeFirstResponder:` on
+    // a HIDDEN NSTextField returns YES and installs its field editor, so the
+    // window's first responder becomes an NSTextView nobody can see and every
+    // keystroke disappears into it. On screen that reads as the embedded page's
+    // email and password fields being disabled — they render, they just never
+    // receive a key. First entry hid the bug completely, because the field IS
+    // visible then.
+    if (_approvalWeb && !_approvalWeb.hidden) return _approvalWeb;
+    if (!_codeField.hidden) return _codeField;
+    return nil;
+}
+
+// klog writes to the unified log, which is the ONLY way to see inside this
+// process: the pane runs in InstallerRemotePluginService, out of process, with
+// no console and no stderr anyone will ever read. Two bugs here (the fatal
+// NSTask property write, and focus going to a hidden field) were each diagnosed
+// by other means because this did not exist. Read it with:
+//   log show --last 10m --predicate 'process == "InstallerRemotePluginService"'
+static void klog(NSString *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    NSString *m = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    NSLog(@"keld-pane: %@", m);
 }
 
 #pragma mark - Pane lifecycle
 
 - (void)didEnterPane:(InstallerSectionDirection)dir {
     (void)[self contentView];
+    klog(@"didEnterPane dir=%ld paired=%d signInStarted=%d web=%@ hidden=%d url=%@",
+         (long)dir, (int)_paired, (int)_signInStarted,
+         _approvalWeb ? @"yes" : @"no", (int)_approvalWeb.hidden, _approvalURL ?: @"(none)");
     // ⚠️ THE INSTALL IS ALL-OR-NOTHING. Continue is enabled by exactly one
     // thing — a VERIFIED connection to Atlas, either a setup code it accepted or
     // `whoami --verify` confirming the stored credential still works. There is
@@ -447,6 +480,37 @@
     if (!_sidecarDownloadStarted) {
         _sidecarDownloadStarted = YES;
         [self startSidecarDownload];
+    }
+
+    // ⚠️ THE APPROVAL PAGE IS REBUILT ON RE-ENTRY RATHER THAN REUSED. Coming
+    // back to this pane left the embedded page's fields unable to receive a
+    // keystroke. Two mechanisms were ruled out by measurement rather than
+    // argument: a hidden control CAN take first responder (focustest.m), which
+    // was real and is fixed, and was not this; and plain AppKit re-parenting —
+    // removing the container from the window and re-adding it, which is what
+    // Back-then-Continue does — leaves a WKWebView fully typeable
+    // (reparent.m: "VERDICT: typing after re-parent WORKS").
+    //
+    // What neither harness can reproduce is this pane's actual host: the plugin
+    // runs in InstallerRemotePluginService, and the page is therefore a remote
+    // view inside a remote view. Rather than guess at that boundary a third
+    // time, the view is discarded and rebuilt — which is correct whichever half
+    // is at fault, because a brand-new WKWebView has no stale responder link and
+    // no suspended content process.
+    //
+    // The cost is one reload: anything half-typed into the form is lost. That is
+    // strictly better than a page that cannot be typed into at all, and the
+    // device code survives (the login child keeps polling across the Back), so
+    // the flow itself is not restarted.
+    // Runs LAST, and only on a real re-entry: on first entry there is no page
+    // yet, and an early return here would skip the identity check and the
+    // sidecar download above.
+    if (dir == InstallerDirectionForward && _approvalWeb && !_approvalWeb.hidden
+        && _approvalURL.length > 0) {
+        klog(@"rebuilding approval web view for re-entry");
+        NSString *url = _approvalURL;
+        [self discardApprovalWebView];
+        [self showApprovalPage:url];
     }
 }
 
@@ -724,7 +788,14 @@
             // requirement.
             NSString *url = e[@"installer_url"] ?: @"";
             if (url.length == 0) url = e[@"verification_url"] ?: @"";
-            s->_codeStatus.stringValue = @"Sign in to connect this device.";
+            // ⚠️ THE PROMPT IS NOT SET HERE ANY MORE. This event marks the
+            // moment the page starts LOADING, not the moment it can be used,
+            // and the gap between the two is seconds (longer against an Atlas
+            // compiling the route on demand). Saying "sign in" over a blank
+            // rectangle names an action with nothing to act on, which reads as
+            // a form that failed to render — so people retry a page that was
+            // still on its way. showApprovalPage: says it is loading; the
+            // navigation delegate says it has loaded.
             [s showApprovalPage:url];
         } else if ([kind isEqualToString:@"authorized"]) {
             [s hideApprovalPage];
@@ -806,8 +877,21 @@
         } @catch (NSException *e) {
             // Cosmetic only; nothing about the flow depends on it.
         }
+        // Knowing when the page is READY is what separates a wait from a
+        // failure, and without a delegate the pane cannot tell them apart.
+        _approvalWeb.navigationDelegate = self;
         // No size constraints: KeldPaneView gives the page the pane's width and
         // whatever height is left below the status line.
+    }
+    if (!_approvalBar) {
+        // Indeterminate: the load reports no progress fraction, and a bar that
+        // invents one is a worse lie than no bar. KeldPaneView gives any
+        // NSProgressIndicator a fixed 16pt row, so this needs no sizing.
+        _approvalBar = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
+        _approvalBar.style = NSProgressIndicatorStyleBar;
+        _approvalBar.indeterminate = YES;
+        _approvalBar.controlSize = NSControlSizeSmall;
+        _approvalBar.usesThreadedAnimation = YES;
     }
     // An Installer pane cannot grow, so the approval page borrows the space of
     // the sections below it rather than pushing them off the bottom.
@@ -826,16 +910,123 @@
             _connectButton.hidden = YES;
         }
     }
+    // The bar is added BEFORE the page so it sits above it: the web view's row
+    // height is "whatever is left", so anything appended after it would be laid
+    // out past the bottom edge and silently clipped.
+    if (_approvalBar.superview == nil) {
+        [root addSubview:_approvalBar];
+        root.rows = [root.rows arrayByAddingObject:_approvalBar];
+    }
     if (_approvalWeb.superview == nil) {
         [root addSubview:_approvalWeb];
         root.rows = [root.rows arrayByAddingObject:_approvalWeb];
     }
     _approvalWeb.hidden = NO;
-    [root setNeedsLayout:YES];
+    _approvalURL = urlString;
+    _approvalAttempts = 0;
+    [self beginApprovalLoad:url];
+}
+
+// beginApprovalLoad starts a load and puts the pane into its WAITING state: the
+// bar runs, and the status line describes what is happening rather than what
+// the person should do about it.
+- (void)beginApprovalLoad:(NSURL *)url {
+    _approvalAttempts++;
+    _approvalBar.hidden = NO;
+    [_approvalBar startAnimation:nil];
+    _codeStatus.stringValue = @"Loading the sign-in page\u2026";
+    [_root setNeedsLayout:YES];
     [_approvalWeb loadRequest:[NSURLRequest requestWithURL:url]];
 }
 
+- (void)stopApprovalBar {
+    [_approvalBar stopAnimation:nil];
+    _approvalBar.hidden = YES;
+    [_root setNeedsLayout:YES];
+}
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    klog(@"approval page loaded; firstResponder=%@",
+         _root.window.firstResponder.className ?: @"(none)");
+    [self stopApprovalBar];
+    // NOW there is a form to sign in to.
+    _codeStatus.stringValue = @"Sign in to connect this device.";
+}
+
+// A failed load has to SAY so. Without a delegate this state was
+// indistinguishable from a slow one: a blank rectangle under a prompt, for as
+// long as the person was willing to wait.
+- (void)approvalLoadFailed:(NSError *)error {
+    // A load replaced by another load reports NSURLErrorCancelled. That is
+    // bookkeeping, not a failure, and reporting it would fire on an ordinary
+    // in-page navigation.
+    if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) return;
+    NSString *why = error.localizedDescription ?: @"unknown error";
+    // Retry twice before giving up: the usual causes are transient (a route
+    // being compiled, a network still coming up after a restart), and a wizard
+    // that surrenders to one blip sends the person back to a Terminal. Bounded,
+    // because retrying forever leaves the same blank rectangle with a spinner
+    // over it -- the exact failure this method exists to end.
+    if (_approvalAttempts < 3) {
+        _codeStatus.stringValue =
+            [NSString stringWithFormat:@"Couldn't load the sign-in page (%@). Retrying\u2026", why];
+        NSURL *url = [NSURL URLWithString:_approvalURL ?: @""];
+        if (!url) { [self stopApprovalBar]; return; }
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            typeof(self) s = weakSelf; if (!s) return;
+            if (s->_approvalWeb.hidden) return;   // sign-in finished, or was abandoned
+            [s beginApprovalLoad:url];
+        });
+        return;
+    }
+    [self stopApprovalBar];
+    // No "Try again" button here: `_signInStarted` gates re-entry and is cleared
+    // only when the login child exits, so the button would do nothing. The child
+    // is still polling, so the honest statement is what is wrong -- not an
+    // action that would not work.
+    _codeStatus.stringValue =
+        [NSString stringWithFormat:@"Couldn't load the sign-in page (%@). Check the connection to Atlas.", why];
+}
+
+- (void)webView:(WKWebView *)webView
+        didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self approvalLoadFailed:error];
+}
+
+// A terminated web content process renders as a page that is visibly THERE and
+// completely inert — the exact shape of "the fields are disabled". It is worth
+// naming in the log, and worth recovering from, because the recovery is the same
+// rebuild re-entry performs.
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    klog(@"web content process TERMINATED; rebuilding");
+    NSString *url = _approvalURL;
+    [self discardApprovalWebView];
+    if (url.length > 0) [self showApprovalPage:url];
+}
+
+- (void)webView:(WKWebView *)webView
+        didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self approvalLoadFailed:error];
+}
+
+// discardApprovalWebView tears the page down completely: out of the layout, out
+// of the view hierarchy, and off the delegate, so nothing retained points at it.
+// showApprovalPage: builds a fresh one on the next call.
+- (void)discardApprovalWebView {
+    if (!_approvalWeb) return;
+    NSMutableArray *rows = [_root.rows mutableCopy];
+    [rows removeObject:_approvalWeb];
+    _root.rows = rows;
+    [_approvalWeb stopLoading];
+    _approvalWeb.navigationDelegate = nil;
+    [_approvalWeb removeFromSuperview];
+    _approvalWeb = nil;
+}
+
 - (void)hideApprovalPage {
+    [self stopApprovalBar];
     _approvalWeb.hidden = YES;
     for (NSView *v in _stowedWhileSigningIn) v.hidden = NO;
     [_stowedWhileSigningIn removeAllObjects];
