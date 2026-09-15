@@ -238,3 +238,22 @@ pkg-plugin-check: ## macOS-only: compile + sign + verify the Installer.app wizar
 	@bash installers/macos/plugin/build-plugin.sh /tmp/keld-plugin-check-plugins 0.0.0-check /tmp/keld-plugin-check-keld
 	@rm -rf /tmp/keld-plugin-check-plugins /tmp/keld-plugin-check-keld
 	@echo "pkg-plugin-check: OK"
+
+# --- conformance harness -----------------------------------------------------
+# Drive a REAL tool against a mock model and a mock Atlas inside an isolated
+# HOME, and assert the five checkpoints (AC-10). Nothing here reaches the
+# network, touches the developer's ~/.keld or ~/.claude, or registers a service.
+#
+#   make conformance TOOL=claude_code [CHAIN=A] [SEED=42] [WORK=/tmp/xyz]
+#
+# The tool is used AS INSTALLED on this machine, so a local run proves this
+# machine's version; the container and VM legs (task A.4) set
+# KELD_CONFORM_INSTALL=1 to npm-install it at @latest instead.
+.PHONY: conformance
+conformance: ## Run a conformance chain against a real tool (TOOL=claude_code)
+	@[ -n "$(TOOL)" ] || { echo "usage: make conformance TOOL=claude_code"; exit 2; }
+	@bash scripts/conformance/run-chain.sh \
+		--tool "$(TOOL)" \
+		$(if $(CHAIN),--chain "$(CHAIN)",) \
+		$(if $(SEED),--seed "$(SEED)",) \
+		$(if $(WORK),--work "$(WORK)",)
