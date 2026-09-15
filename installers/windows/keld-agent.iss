@@ -30,6 +30,26 @@ DefaultDirName={localappdata}\Programs\keld
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 OutputBaseFilename=keld-setup
+; ⚠️ THE UNINSTALLER IS THE ONE BINARY NO BUILD STEP CAN REACH. Inno extracts
+; unins000.exe onto the target machine at install time, so signing the payload
+; and signing keld-setup.exe both miss it — and an unsigned uninstaller is
+; blocked on exactly the machines installing was blocked on, leaving people
+; unable to remove the product. `SignedUninstaller` is what covers it: Inno
+; signs the uninstaller with the SignTool configured below.
+;
+; ⚠️ BOTH DIRECTIVES ARE GATED, BECAUSE EITHER ONE ALONE FAILS THE COMPILE.
+; Measured: with `SignedUninstaller=yes` and no SignTool, iscc HALTS with
+; "Signed uninstaller mode is enabled … please attach your digital signature",
+; which would take the Windows build down on every fork and dry run — the exact
+; thing the macOS job's no-secrets path is careful to avoid. The preprocessor
+; check keeps an unsigned build byte-identical to today's.
+;
+; CI supplies the tool with `iscc /Skeldsign=<command with $f>`; see
+; .github/workflows/installers.yml.
+#if GetEnv("KELD_SIGN_COMMAND") != ""
+SignTool=keldsign
+SignedUninstaller=yes
+#endif
 ChangesEnvironment=yes
 LicenseFile=..\resources\EULA.txt
 InfoBeforeFile=..\resources\SECURITY-OVERVIEW.txt
