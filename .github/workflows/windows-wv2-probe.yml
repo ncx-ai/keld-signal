@@ -1,0 +1,87 @@
+# Throwaway probe, workflow_dispatch ONLY — never runs on push, never part of a
+# release. It answers one question before the Windows wizard design commits to
+# it: can a pure-Go process embed WebView2 into an HWND owned by another
+# process (an Inno wizard page's TPanel)?
+#
+# It runs here rather than on a dev machine because Smart App Control — on by
+# default on clean Windows 11 — blocks freshly-built unsigned binaries that
+# create windows and spawn processes, and cannot be re-enabled once turned off
+# without resetting Windows. Runners have no SAC and ship the WebView2 runtime.
+#
+# See installers/windows/probe/README.md. Delete this file with the probe.
+name: windows-wv2-probe
+
+on:
+  workflow_dispatch:
+  # ⚠️ A workflow_dispatch workflow is only triggerable once it exists on the
+  # DEFAULT branch, and this one deliberately never will. The push trigger,
+  # scoped to the probe branch alone, is what actually runs it.
+  push:
+    branches: [ "probe/windows-webview2-embed" ]
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: false
+
+      # State the runtime version rather than assuming one is present: "Embed
+      # returned false" reads completely differently with and without it.
+      - name: WebView2 runtime present?
+        shell: pwsh
+        run: |
+          $keys = @(
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          )
+          $found = $false
+          foreach ($k in $keys) {
+            if (Test-Path $k) { "WebView2 runtime $((Get-ItemProperty $k).pv) at $k"; $found = $true }
+          }
+          if (-not $found) { "NO WebView2 runtime found in the usual keys" }
+
+      - name: Build the probe (pure Go, no cgo)
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+        working-directory: installers/windows/probe
+        run: |
+          go build -o host.exe ./cmd/host
+          go build -o harness.exe ./cmd/harness
+          Get-ChildItem *.exe | Select-Object Name,Length | Format-Table -AutoSize
+
+      # continue-on-error: a FAIL line in the log is the result we came for, not
+      # a broken job. The log and the PNG are printed either way below.
+      - name: Run the probe
+        id: run
+        continue-on-error: true
+        shell: pwsh
+        working-directory: installers/windows/probe
+        run: |
+          .\harness.exe "$PWD\host.exe" "https://example.com" "$PWD\host.log" "$PWD\panel.png"
+
+      - name: Host log
+        if: always()
+        shell: pwsh
+        working-directory: installers/windows/probe
+        run: |
+          if (Test-Path host.log) { Get-Content host.log } else { "NO HOST LOG — the host never started" }
+
+      # ⚠️ THE PNG IS THE VERDICT. `Embed` returning true only proves a call
+      # succeeded. A capture showing the page inside the panel proves a browser
+      # surface rendered in a window another process owns.
+      - name: Upload the capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wv2-probe-capture
+          path: |
+            installers/windows/probe/panel.png
+            installers/windows/probe/host.log
+          if-no-files-found: warn
