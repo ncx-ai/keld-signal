@@ -564,7 +564,7 @@ begin
   // (PrivilegesRequired=lowest).
   WebPanel.Visible := False;
   PanelRunning := False;
-  SetStatus('Approve this device in your browser — code ' + EvUserCode);
+  SetStatus('Approve this device in the browser window that just opened.');
   if EvApprovalURL <> '' then
     ShellExec('open', EvApprovalURL, '', '', SW_SHOW, ewNoWait, RC);
 end;
@@ -604,7 +604,7 @@ begin
       // run finishes — the run does not finish until the person has approved.
       if (EvApprovalURL <> '') and not ApprovalShown then
       begin
-        SetStatus('Sign in and approve — code ' + EvUserCode);
+        SetStatus('Sign in to approve this device.');
         ShowApproval(EvApprovalURL);
       end;
     end;
@@ -724,9 +724,19 @@ end;
 // URL itself, putting the same approval in two places at once — one of them the
 // browser this page exists to avoid sending anyone to.
 //
-// ⚠️ THE USER CODE IS DISPLAYED ON PURPOSE. Device flow's protection against
-// being phished into approving someone else's sign-in is that the code on this
-// screen matches the code in the page; showing only a spinner throws that away.
+// ⚠️ **THE USER CODE IS DELIBERATELY NOT SHOWN, AND THIS COMMENT USED TO ARGUE
+// THE OPPOSITE.** The rule it invoked is real — device flow's protection against
+// being phished into approving someone else's sign-in is that the code on screen
+// matches the code on the page being approved — but it does not reach this flow.
+// Atlas's embedded route reads the code from its own URL and posts it
+// (services/web/app/cli/installer/page.tsx); it never renders it. So there was
+// nothing on screen to compare against, and displaying a code beside a page that
+// does not show one asks the person to verify a match they cannot perform. A
+// check nobody can carry out is worse than no check: it looks like one.
+//
+// The protection that DOES apply here is that the code never left this process —
+// the page fetched it and put it in the URL itself, with no human in the loop to
+// mistype or be redirected.
 procedure BrowserSignIn;
 begin
   if SignInStarted then

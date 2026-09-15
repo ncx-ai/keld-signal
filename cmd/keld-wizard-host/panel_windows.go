@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -202,7 +203,55 @@ func panel(o options) int {
 		}
 	}
 
+	// ⚠️ THE BORDER MUST HUG THE CONTENT, NOT THE PANEL. The panel is whatever
+	// space the wizard page has left over, and Atlas's approval page is a compact
+	// form — so bordering the panel drew a box with the form in its top-left
+	// corner and a large empty region down and to the right. Nothing outside the
+	// page knows how big the page is, so the page is ASKED: a script injected at
+	// document-create posts its scroll size back, and the two windows shrink to
+	// it.
+	//
+	// ⚠️ SHRINK ONLY, AND BOUNDED. Resizing the window changes the viewport, which
+	// can change the reported size, which would resize again — a loop that shows
+	// up as a flickering panel. Growing is never needed (the panel is the maximum)
+	// and a small adjustment budget ends it regardless.
 	chromium := edge.NewChromium()
+
+	fits := 0
+	fit := func(cw, ch int) {
+		if cw <= 0 || ch <= 0 || fits >= 4 {
+			return
+		}
+		maxW, maxH := int(pw), int(ph)
+		w := cw + 2*inset
+		h := ch + 2*inset
+		if w > maxW {
+			w = maxW
+		}
+		if h > maxH {
+			h = maxH
+		}
+		ow, oh := clientSize(outer)
+		// Only ever tighten, and ignore noise.
+		if w >= int(ow)-2 && h >= int(oh)-2 {
+			return
+		}
+		fits++
+		pMoveWindow.Call(outer, 0, 0, uintptr(w), uintptr(h), 1)
+		pMoveWindow.Call(child, uintptr(inset), uintptr(inset),
+			uintptr(w-2*inset), uintptr(h-2*inset), 1)
+		chromium.Resize()
+	}
+
+	chromium.MessageCallback = func(s string) {
+		var m struct {
+			W float64 `json:"w"`
+			H float64 `json:"h"`
+		}
+		if json.Unmarshal([]byte(s), &m) == nil {
+			fit(int(m.W), int(m.H))
+		}
+	}
 	if !chromium.Embed(child) {
 		// ⚠️ A DISTINCT EXIT CODE, because the page's response is specific: fall
 		// back to opening this URL in the default browser. Collapsing it into a
@@ -212,6 +261,20 @@ func panel(o options) int {
 		say("no_runtime")
 		return exitNoWebView2
 	}
+	// Report the content's own size once it has laid out, and again if the page
+	// reflows. `requestAnimationFrame` after `load` is what makes the first
+	// reading come after layout rather than during it.
+	chromium.Init(`(function () {
+  function report() {
+    var d = document.documentElement, b = document.body;
+    if (!d || !b) return;
+    var w = Math.max(d.scrollWidth, b.scrollWidth);
+    var h = Math.max(d.scrollHeight, b.scrollHeight);
+    window.chrome.webview.postMessage(JSON.stringify({ w: w, h: h }));
+  }
+  window.addEventListener("load", function () { requestAnimationFrame(report); });
+  window.addEventListener("resize", function () { requestAnimationFrame(report); });
+})();`)
 	chromium.Resize()
 	chromium.Navigate(o.URL)
 	say("embedded")
