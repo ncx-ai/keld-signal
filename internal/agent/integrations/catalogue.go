@@ -153,10 +153,13 @@ var Catalogue = []Entry{
 		ConfigDir:    homeDir(".codex"),
 		StorageClass: StorageJSONLTail,
 		Supported:    true,
-		// No sidecar reader for Codex rollouts yet (WS-D). Expecting the reader
-		// lane today would read "broken · reader" by construction on every
-		// Codex machine from the day the pane ships.
-		ReaderAvailable: false,
+		// ⚠️ TRUE SINCE 2026-09-15, and it was left FALSE for a while after the
+		// reader landed. The stale value fails QUIETLY, which is why the test
+		// beside it reads the file rather than trusting this line: with the
+		// reader lane not expected, a Codex machine whose reader had broken
+		// would read `idle` instead of `broken · reader` — the state rule cannot
+		// report a lane it was told not to expect.
+		ReaderAvailable: true,
 		Surfaces: []SurfaceSpec{
 			{Kind: SurfaceHook, Documented: true, ExpectedWhen: whenSupported},
 			{Kind: SurfaceOTel, Documented: true, ExpectedWhen: whenSupported},
