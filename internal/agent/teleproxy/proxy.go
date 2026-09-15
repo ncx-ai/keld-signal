@@ -80,6 +80,12 @@ type Proxy struct {
 	// telemetry last arrive", not a write per OTLP batch.
 	lastPersisted time.Time
 	statePath     string
+	// sources is the PER-TOOL record (persource.go), beside the machine-wide
+	// lastForward above. Row 6 of the integrations decision table asks whether
+	// one named tool's telemetry arrived, and a single global instant cannot
+	// answer it: on a machine running Claude Code and Codex, Claude Code's
+	// forwards vouch for Codex's silence.
+	sources *sourceRecord
 
 	wg sync.WaitGroup
 }
@@ -103,6 +109,7 @@ func New(logsEndpoint, metricsEndpoint string, token func() string, secret, spoo
 		// again — and the first forward would then WRITE that empty map back,
 		// erasing the history rather than merely not reading it.
 		sessions: SessionsOnDisk(),
+		sources:  newSourceRecord(),
 	}
 	// Stamp every forward so a proxied machine stays distinguishable from a
 	// direct-push one while both populations exist. See PathHeader.
@@ -280,12 +287,18 @@ func (p *Proxy) receive(tr *clientevents.Transport) http.HandlerFunc {
 		// Read on THIS goroutine: body is handed to the forwarder below and must
 		// not be walked concurrently with it.
 		ids := SessionIDs(body)
+		src := SourceOf(body)
 
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
 			if err := tr.Deliver(context.Background(), body); err == nil {
-				p.noteForward(time.Now(), ids)
+				now := time.Now()
+				p.noteForward(now, ids)
+				// Recorded only on DELIVERY, like the instant above: an
+				// attempt would make a machine with no network read as a tool
+				// whose telemetry lane is working.
+				p.sources.note(now, src)
 			}
 		}()
 		w.WriteHeader(http.StatusAccepted)

@@ -1,0 +1,345 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "arm64"
+      }
+     },
+     {
+      "key": "os.type",
+      "value": {
+       "stringValue": "darwin"
+      }
+     },
+     {
+      "key": "os.version",
+      "value": {
+       "stringValue": "25.6.0"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.271"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events",
+      "version": "2.1.271"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1789482702632000000",
+       "observedTimeUnixNano": "1789482702632000000",
+       "body": {
+        "stringValue": "claude_code.hook_execution_start"
+       },
+       "attributes": [
+        {
+         "key": "user.id",
+         "value": {
+          "stringValue": "952eb9b091255b822b043cb20f4003a7a47bd2919d4d1da8edf6d4d12c00b954"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "organization.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "user.account_uuid",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "user_017G885aXPuCXx7wR6imcWdw"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "hook_execution_start"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-15T14:31:42.632Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 0
+         }
+        },
+        {
+         "key": "hook_event",
+         "value": {
+          "stringValue": "SessionStart"
+         }
+        },
+        {
+         "key": "hook_name",
+         "value": {
+          "stringValue": "SessionStart:startup"
+         }
+        },
+        {
+         "key": "num_hooks",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "managed_only",
+         "value": {
+          "stringValue": "false"
+         }
+        },
+        {
+         "key": "hook_source",
+         "value": {
+          "stringValue": "merged"
+         }
+        },
+        {
+         "key": "safe_mode",
+         "value": {
+          "stringValue": "false"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      },
+      {
+       "timeUnixNano": "1789482702684000000",
+       "observedTimeUnixNano": "1789482702684000000",
+       "body": {
+        "stringValue": "claude_code.hook_registered"
+       },
+       "attributes": [
+        {
+         "key": "user.id",
+         "value": {
+          "stringValue": "952eb9b091255b822b043cb20f4003a7a47bd2919d4d1da8edf6d4d12c00b954"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "organization.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "user.account_uuid",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "user_017G885aXPuCXx7wR6imcWdw"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "hook_registered"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-15T14:31:42.684Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 1
+         }
+        },
+        {
+         "key": "hook_event",
+         "value": {
+          "stringValue": "SessionStart"
+         }
+        },
+        {
+         "key": "hook_type",
+         "value": {
+          "stringValue": "command"
+         }
+        },
+        {
+         "key": "hook_source",
+         "value": {
+          "stringValue": "userSettings"
+         }
+        },
+        {
+         "key": "safe_mode",
+         "value": {
+          "stringValue": "false"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      },
+      {
+       "timeUnixNano": "1789482702684000000",
+       "observedTimeUnixNano": "1789482702684000000",
+       "body": {
+        "stringValue": "claude_code.hook_registered"
+       },
+       "attributes": [
+        {
+         "key": "user.id",
+         "value": {
+          "stringValue": "952eb9b091255b822b043cb20f4003a7a47bd2919d4d1da8edf6d4d12c00b954"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "organization.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "user.account_uuid",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "user_017G885aXPuCXx7wR6imcWdw"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "hook_registered"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-15T14:31:42.684Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 2
+         }
+        },
+        {
+         "key": "hook_event",
+         "value": {
+          "stringValue": "UserPromptSubmit"
+         }
+        },
+        {
+         "key": "hook_type",
+         "value": {
+          "stringValue": "command"
+         }
+        },
+        {
+         "key": "hook_source",
+         "value": {
+          "stringValue": "userSettings"
+         }
+        },
+        {
+         "key": "safe_mode",
+         "value": {
+          "stringValue": "false"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

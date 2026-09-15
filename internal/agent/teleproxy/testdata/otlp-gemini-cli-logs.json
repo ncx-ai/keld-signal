@@ -1,0 +1,260 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "host.name",
+      "value": {
+       "stringValue": "<redacted>"
+      }
+     },
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "arm64"
+      }
+     },
+     {
+      "key": "process.pid",
+      "value": {
+       "intValue": 63712
+      }
+     },
+     {
+      "key": "process.executable.name",
+      "value": {
+       "stringValue": "<redacted>"
+      }
+     },
+     {
+      "key": "process.executable.path",
+      "value": {
+       "stringValue": "<redacted>"
+      }
+     },
+     {
+      "key": "process.command_args",
+      "value": {
+       "stringValue": "<redacted>"
+      }
+     },
+     {
+      "key": "process.runtime.version",
+      "value": {
+       "stringValue": "25.9.0"
+      }
+     },
+     {
+      "key": "process.runtime.name",
+      "value": {
+       "stringValue": "nodejs"
+      }
+     },
+     {
+      "key": "process.runtime.description",
+      "value": {
+       "stringValue": "Node.js"
+      }
+     },
+     {
+      "key": "process.command",
+      "value": {
+       "stringValue": "<redacted>"
+      }
+     },
+     {
+      "key": "process.owner",
+      "value": {
+       "stringValue": "<redacted>"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "gemini-cli"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "v25.9.0"
+      }
+     },
+     {
+      "key": "session.id",
+      "value": {
+       "stringValue": "00000000-0000-4000-8000-000000000000"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "gemini-cli"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1789482831867000000",
+       "observedTimeUnixNano": "1789482831867000000",
+       "body": {
+        "stringValue": "Keychain availability: false"
+       },
+       "attributes": [
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "installation.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "interactive",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "gemini_cli.keychain.availability"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-15T14:33:51.866Z"
+         }
+        },
+        {
+         "key": "available",
+         "value": {
+          "boolValue": false
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      },
+      {
+       "timeUnixNano": "1789482831906000000",
+       "observedTimeUnixNano": "1789482831906000000",
+       "body": {
+        "stringValue": "Token storage initialized. Type: encrypted_file. Forced: false"
+       },
+       "attributes": [
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "installation.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "interactive",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "gemini_cli.token_storage.initialization"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-15T14:33:51.906Z"
+         }
+        },
+        {
+         "key": "type",
+         "value": {
+          "stringValue": "encrypted_file"
+         }
+        },
+        {
+         "key": "forced",
+         "value": {
+          "boolValue": false
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      },
+      {
+       "timeUnixNano": "1789482832144000000",
+       "observedTimeUnixNano": "1789482832144000000",
+       "body": {
+        "stringValue": "Onboarding started."
+       },
+       "attributes": [
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "installation.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "interactive",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "gemini_cli.onboarding.start"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-15T14:33:52.143Z"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
