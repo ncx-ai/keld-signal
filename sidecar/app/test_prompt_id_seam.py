@@ -139,6 +139,60 @@ def test_the_oracle_scan_agrees_with_the_index_on_promptId():
             f"oracle and index disagree on {pid!r}"
 
 
+# ---------------------------------------------------------------- Codex (AC-8)
+#
+# ⚠️ THE SAME SEAM, ONE TOOL OVER, AND THE SAME WAY OF GETTING IT WRONG. A Codex rollout names a
+# human turn `<session_id>#<turn_id>` — the id the watcher publishes as `corr_id` — and neither
+# half of that is a Claude key, so nothing above this line touches it. The rule the incident at
+# the top of this file established is not "index promptId", it is "the oracle and the index must
+# resolve the SAME id"; since the record refactor both of them read `Turn.line_id` /
+# `Turn.prompt_id` off whichever reader produced the row, so they cannot drift apart per tool.
+# This pins that for Codex, against a REAL redacted rollout rather than a line written to match
+# the reader — the fixture rule that the Claude half of this file exists because of.
+
+def _codex_fixture(tmp, name="codex-0.153.4"):
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "analysis", "testdata",
+                       "codex", f"{name}.jsonl")
+    d = os.path.join(tmp, ".codex", "sessions", "2026", "09", "13")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, f"rollout-{name}.jsonl")
+    with open(p, "w") as fh:
+        fh.write(open(src).read())
+    return p
+
+
+def test_codex_oracle_agrees_with_the_index():
+    from app.analysis.analyze import _prompt_time
+    from app.analysis.readers import codex
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _codex_fixture(tmp)
+        st = open_store(os.path.join(tmp, "s.db"))
+        ingest_file(st, path)
+        sess = session_of(path)
+        ids = [t.prompt_id for t in codex.turns_in(open(path).readlines()) if t.role == "user"]
+        assert ids, "the fixture has no human turn to resolve"
+        assert all("#" in i for i in ids), ids[:3]
+        for pid in ids:
+            assert st.prompt_time(sess, pid) is not None, f"{pid} is not in the index"
+            assert _prompt_time(path, pid) == st.prompt_time(sess, pid), \
+                f"oracle and index disagree on {pid!r}"
+
+
+def test_a_codex_prompt_id_is_the_turn_id_not_the_line_id():
+    """The Codex analogue of the uuid-vs-promptId rule. A `CommandExecution` item's own id is a
+    per-LINE id and must never be what a human prompt resolves by, or a window would start at a
+    tool call rather than at the turn that caused it."""
+    from app.analysis.readers import codex
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _codex_fixture(tmp)
+        turns = list(codex.turns_in(open(path).readlines()))
+        users = [t for t in turns if t.role == "user"]
+        assert users
+        for t in users:
+            assert t.prompt_id != t.line_id, t.prompt_id
+            assert t.prompt_id.split("#", 1)[1], t.prompt_id
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
