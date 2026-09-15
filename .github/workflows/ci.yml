@@ -108,6 +108,11 @@ jobs:
       # every other gate stayed green.
       - name: Workflow line-continuation guard
         run: bash scripts/workflow_continuation_test.sh
+      # Three hops (input -> job env -> build-pkg.sh -> build-plugin.sh) and a
+      # break anywhere in them is silent: the build succeeds and the pkg
+      # installs, it just quietly points at production.
+      - name: Installer dev-target plumbing
+        run: bash scripts/installers_api_url_test.sh
 
   obfuscation-coverage:
     runs-on: ubuntu-latest
