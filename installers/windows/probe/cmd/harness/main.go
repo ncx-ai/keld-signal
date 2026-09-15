@@ -3,10 +3,13 @@
 // panel's HWND — exactly what Inno's `Exec(..., IntToStr(Panel.Handle), ...)`
 // does — then captures the window to a PNG.
 //
-// ⚠️ THE SCREENSHOT IS THE VERDICT, not the log. `Embed` returning true only
-// says a call succeeded; a PNG showing the page inside the panel says a browser
-// surface actually rendered in a window this process owns. The macOS work was
-// wrong twice about "it worked" on exactly this kind of evidence.
+// ⚠️ THE SCREENSHOT IS NOT THE VERDICT, AND MEASURING IS WHAT SAID SO. WebView2
+// composites through DirectComposition — note the "Intermediate D3D Window" in
+// the tree the host logs — so BitBlt of this window's DC captures a BLANK panel
+// however well the page rendered. The first CI run produced exactly that, with
+// a fully wired render-surface tree sitting under the panel at the same moment.
+// The capture is kept because it does show the harness window itself; the
+// verdict is the JS round-trip the host logs out of the live DOM.
 //
 // Usage: harness.exe <hostExe> <url> <logpath> <pngpath>
 package main
@@ -202,7 +205,9 @@ func main() {
 		} else {
 			fmt.Println("captured", pngPath)
 		}
-		time.Sleep(2 * time.Second)
+		// Outlive the host: tearing the panel down while a webview is embedded in
+		// it proves nothing and muddies the log.
+		time.Sleep(18 * time.Second)
 		pPostThreadMsgW.Call(mainThread, wmQuit, 0, 0)
 	}()
 

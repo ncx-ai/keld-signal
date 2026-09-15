@@ -185,12 +185,36 @@ func main() {
 	logf("PASS created WS_CHILD hwnd=%d under foreign panel %d (our pid=%d)", child, parent, os.Getpid())
 
 	chromium := edge.NewChromium()
+	// ⚠️ THE JS ROUND-TRIP IS THE VERDICT — the screenshot is not, and cannot be.
+	// WebView2 composites through DirectComposition (note the "Intermediate D3D
+	// Window" in the tree this logs), so BitBlt of the host DC captures a BLANK
+	// panel however well the page rendered. The first run was read as a failure
+	// on exactly that evidence. A message arriving here can only have been sent
+	// by script running in a document the embedded control loaded.
+	msgs := make(chan string, 4)
+	chromium.MessageCallback = func(s string) {
+		select {
+		case msgs <- s:
+		default:
+		}
+	}
 	if !chromium.Embed(child) {
 		logf("FAIL edge.Chromium.Embed returned false — no WebView2 runtime, or embed refused")
 		os.Exit(1)
 	}
 	logf("PASS edge.Chromium.Embed succeeded")
 	chromium.Resize()
+	// Runs at document creation on every navigation; reports once the page is
+	// actually loaded, with content read out of the live DOM.
+	chromium.Init(`window.addEventListener("load", function() {
+		window.chrome.webview.postMessage(JSON.stringify({
+			title: document.title,
+			url: location.href,
+			heading: (document.querySelector("h1") || {}).textContent || "",
+			ready: document.readyState,
+			size: window.innerWidth + "x" + window.innerHeight
+		}));
+	});`)
 	chromium.Navigate(os.Args[2])
 	logf("navigating to %s", os.Args[2])
 
@@ -204,6 +228,12 @@ func main() {
 		}
 		cw, ch := clientSize(child)
 		logf("child client size now %dx%d", cw, ch)
+		select {
+		case m := <-msgs:
+			logf("PASS page reported from inside the embedded control: %s", m)
+		case <-time.After(10 * time.Second):
+			logf("FAIL no message from the page — nothing rendered, or the JS bridge is unavailable")
+		}
 		time.Sleep(time.Duration(secs) * time.Second)
 		logf("host: posting WM_QUIT to thread %d", mainThread)
 		pPostThreadMsgW.Call(mainThread, wmQuit, 0, 0)

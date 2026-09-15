@@ -46,10 +46,15 @@ re-runs — but note a `workflow_dispatch` workflow is only triggerable once it
 exists on the DEFAULT branch, which this one deliberately never will, so the
 push is what actually starts it.
 
-The job prints the host log and uploads `panel.png` — a capture of the harness
-window taken after navigation. **The screenshot is the actual verdict.**
-`Embed` returning true only proves a call succeeded; the PNG proves a page
-rendered inside the panel.
+The job prints the host log and uploads `panel.png`.
+
+⚠️ **THE VERDICT IS THE JS ROUND-TRIP IN THE LOG, NOT THE SCREENSHOT.** WebView2
+composites through DirectComposition, so `BitBlt` of the host window captures a
+BLANK panel however well the page rendered — the first run produced exactly that
+while a fully wired render-surface tree sat under the panel. The host therefore
+injects a `load` listener that posts `document.title`, the URL and an `h1` back
+over the WebView2 message bridge: a message arriving there can only have been
+sent by script running in a document the embedded control loaded.
 
 ## Layout
 

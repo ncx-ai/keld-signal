@@ -77,9 +77,10 @@ jobs:
         run: |
           if (Test-Path host.log) { Get-Content host.log } else { "NO HOST LOG — the host never started" }
 
-      # ⚠️ THE PNG IS THE VERDICT. `Embed` returning true only proves a call
-      # succeeded. A capture showing the page inside the panel proves a browser
-      # surface rendered in a window another process owns.
+      # ⚠️ THE PNG IS EVIDENCE, NOT THE VERDICT — it cannot photograph WebView2
+      # content at all (DirectComposition; BitBlt sees a blank panel). The
+      # verdict is the "PASS page reported from inside the embedded control"
+      # line in the host log above.
       - name: Upload the capture
         if: always()
         uses: actions/upload-artifact@v4
