@@ -220,12 +220,10 @@ Filename: "{sys}\taskkill.exe"; \
 // a version guard to detect that — for no benefit at all.
 
 const
-  RunNone         = 0;
-  RunIdentity     = 1;
-  RunLoginCode    = 2;
-  RunLoginBrowser = 3;
-  RunTools        = 4;
-  RunClipboard    = 5;
+  RunNone     = 0;
+  RunIdentity = 1;
+  RunSignIn   = 2;
+  RunTools    = 3;
 
   TickMs = 200;
   // Bound the work one tick may do: a burst of events must not turn a timer
@@ -245,8 +243,7 @@ function GetCurrentProcessId: DWORD;
 var
   SetupPage: TWizardPage;
   AccountHdr, StatusLbl, ToolsHdr, RestartLbl: TNewStaticText;
-  CodeEdit: TNewEdit;
-  ConnectBtn, RetryBtn: TNewButton;
+  RetryBtn: TNewButton;
   WebPanel: TPanel;
   LoadingBar: TNewProgressBar;
   ToolChecks: array of TNewCheckBox;
@@ -273,14 +270,13 @@ var
 
   // Filled by the event handler, read when the run finishes.
   EvIdentityStatus, EvPrincipal, EvOrg, EvAPIURL, EvError: String;
-  EvUserCode, EvApprovalURL, EvClipboard: String;
+  EvUserCode, EvApprovalURL: String;
   PendingNames, PendingDisplays, PendingActions: TArrayOfString;
 
 procedure StartTools; forward;
 procedure BrowserSignIn; forward;
 procedure CheckIdentity; forward;
 procedure OnRunFinished(FinishedMode: Integer); forward;
-procedure AfterClipboard; forward;
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -356,56 +352,6 @@ begin
   CreateDir(Result);
 end;
 
-function IsAlnum(C: Char): Boolean;
-begin
-  Result := ((C >= 'a') and (C <= 'z')) or ((C >= 'A') and (C <= 'Z')) or
-            ((C >= '0') and (C <= '9'));
-end;
-
-// LooksLikePairingCode mirrors KeldLooksLikePairingCode in
-// installers/macos/plugin/KeldCode.m. ⚠️ The two must agree: a code the Mac
-// accepts and Windows rejects (or the reverse) is a difference nobody would
-// think to look for. A single whitespace-free token whose last "/"-separated
-// segment is two alphanumeric groups joined by one dash — that last rule is what
-// separates a real code from ordinary copied text and from a plain download URL,
-// whose final segment ("download") carries no separator.
-function LooksLikePairingCode(S: String): Boolean;
-var
-  T, Seg, A, B: String;
-  I, Dash: Integer;
-begin
-  Result := False;
-  T := Trim(S);
-  if (T = '') or (Length(T) > 128) then
-    exit;
-  for I := 1 to Length(T) do
-    if (T[I] = ' ') or (T[I] = #9) or (T[I] = #13) or (T[I] = #10) then
-      exit;
-
-  Seg := T;
-  for I := Length(T) downto 1 do
-    if T[I] = '/' then
-    begin
-      Seg := Copy(T, I + 1, Length(T) - I);
-      break;
-    end;
-
-  Dash := Pos('-', Seg);
-  if Dash = 0 then
-    exit;
-  A := Copy(Seg, 1, Dash - 1);
-  B := Copy(Seg, Dash + 1, Length(Seg) - Dash);
-  if (A = '') or (B = '') or (Pos('-', B) > 0) then
-    exit;
-  for I := 1 to Length(A) do
-    if not IsAlnum(A[I]) then
-      exit;
-  for I := 1 to Length(B) do
-    if not IsAlnum(B[I]) then
-      exit;
-  Result := True;
-end;
-
 // ── Driving keld ─────────────────────────────────────────────────────────────
 
 // StartRun launches one `keld` invocation and RETURNS IMMEDIATELY. The timer
@@ -428,24 +374,6 @@ begin
     Trace('run start FAILED to exec ' + TmpHost);
   if Result then
     Mode := NewMode
-  else
-    Mode := RunNone;
-end;
-
-// StartClipboardRead asks the helper what the clipboard holds. Same event
-// plumbing as every other step, so there is one code path to get wrong.
-function StartClipboardRead: Boolean;
-var
-  Params: String;
-  RC: Integer;
-begin
-  RunDir := NewRunDir;
-  RunSeqNo := 1;
-  EvClipboard := '';
-  Params := '--clipboard --events-dir "' + RunDir + '"';
-  Result := Exec(TmpHost, Params, '', SW_HIDE, ewNoWait, RC);
-  if Result then
-    Mode := RunClipboard
   else
     Mode := RunNone;
 end;
@@ -473,7 +401,7 @@ begin
         EvAPIURL := JsonStr(Line, 'api_url');
       end;
 
-    RunLoginCode, RunLoginBrowser:
+    RunSignIn:
       begin
         if Ev = 'device_code' then
         begin
@@ -495,10 +423,6 @@ begin
           PairedAPIURL := JsonStr(Line, 'api_url');
         end;
       end;
-
-    RunClipboard:
-      if Ev = 'clipboard' then
-        EvClipboard := JsonStr(Line, 'text');
 
     RunTools:
       if Ev = 'tool' then
@@ -562,8 +486,6 @@ begin
   ApprovalShown := True;
   ShowToolSection(False);
   RestartLbl.Visible := False;
-  CodeEdit.Visible := False;
-  ConnectBtn.Visible := False;
   RetryBtn.Visible := False;
   WebPanel.Visible := False;
   SetStatus('Loading the Keld sign-in page…');
@@ -755,37 +677,9 @@ end;
 procedure MarkConnected;
 begin
   Paired := True;
-  CodeEdit.Visible := False;
-  ConnectBtn.Visible := False;
   RetryBtn.Visible := False;
   SetStatus('Connected — ' + EvPrincipal + ' · ' + EvOrg);
   WizardForm.NextButton.Enabled := True;
-end;
-
-procedure ConnectWithCode(const Code: String);
-begin
-  ConnectBtn.Enabled := False;
-  SetStatus('Connecting…');
-  if not StartRun(RunLoginCode, 'login --code "' + Code + '" --json') then
-  begin
-    ConnectBtn.Enabled := True;
-    SetStatus('Could not start sign-in. Try again.');
-  end;
-end;
-
-procedure ConnectClick(Sender: TObject);
-var
-  Code: String;
-begin
-  if Mode <> RunNone then
-    exit;
-  Code := Trim(CodeEdit.Text);
-  if Code = '' then
-  begin
-    SetStatus('Enter the setup code from your Keld download page.');
-    exit;
-  end;
-  ConnectWithCode(Code);
 end;
 
 // BrowserSignIn runs the OAuth device-authorization flow with Atlas's approval
@@ -818,13 +712,11 @@ begin
   // until `device_code` arrived — a network round trip — so the page sat there
   // offering "paste a setup code / Connect" underneath the words "Signing in to
   // Keld…", inviting a second, conflicting action while the first was in flight.
-  CodeEdit.Visible := False;
-  ConnectBtn.Visible := False;
   RetryBtn.Visible := False;
   LoadingBar.Visible := True;
   EvUserCode := '';
   EvApprovalURL := '';
-  if not StartRun(RunLoginBrowser, 'login --json --no-browser') then
+  if not StartRun(RunSignIn, 'login --json --no-browser') then
   begin
     SignInStarted := False;
     SetStatus('Could not start sign-in. Try again, or paste a setup code.');
@@ -913,41 +805,24 @@ begin
     exit;
   end;
 
-  // `none` or `unauthorized`: this machine needs connecting. An expired
-  // credential is not a reason to nag about the old one, so both read the same.
+  // `none` or `unauthorized`: this machine needs connecting, and there is exactly
+  // one way to do it — Atlas's own sign-in page, in the panel below.
   //
-  // The clipboard is tried first only because it is INSTANT for someone who came
-  // straight from the Keld download page and clicked Copy; with nothing there,
-  // the page fetches a code itself rather than asking anyone to go and find one.
-  //
-  // ⚠️ The READ goes through the helper because Pascal Script has no clipboard
-  // function at all — see clipboard_windows.go. The JUDGEMENT stays here, where
-  // it mirrors macOS.
-  if not StartClipboardRead then
-    BrowserSignIn;
-end;
-
-procedure AfterClipboard;
-var
-  Pasted: String;
-begin
-  Trace('AfterClipboard len=' + IntToStr(Length(Trim(EvClipboard))));
-  Pasted := Trim(EvClipboard);
-  if LooksLikePairingCode(Pasted) then
-  begin
-    CodeEdit.Text := Pasted;
-    ConnectWithCode(Pasted);
-    exit;
-  end;
+  // ⚠️ **THERE IS NO SETUP-CODE FIELD, AND ITS REMOVAL IS THE POINT.** The page
+  // began as a port of the macOS pane, which offers one because the pkg's flow
+  // starts from a code on the download page. This flow does not: the page fetches
+  // the code itself, puts it in the URL, and Atlas's route redeems it — nothing
+  // is ever shown to the person to copy, type or check. Keeping the field meant
+  // offering a second, conflicting way in that nobody needs and that this flow
+  // cannot even produce a code for. The clipboard read went with it, for the same
+  // reason: there is nothing for a pasted code to do here.
   BrowserSignIn;
 end;
 
-procedure AfterLogin(WasBrowser: Boolean);
+procedure AfterLogin;
 begin
-  Trace('AfterLogin browser=' + IntToStr(Integer(WasBrowser)) + ' paired=' + IntToStr(Integer(Paired)) + ' err=' + EvError);
-  if WasBrowser then
-    HideApproval;
-  ConnectBtn.Enabled := True;
+  Trace('AfterLogin paired=' + IntToStr(Integer(Paired)) + ' err=' + EvError);
+  HideApproval;
 
   if Paired then
   begin
@@ -956,26 +831,13 @@ begin
     exit;
   end;
 
-  if WasBrowser then
-  begin
-    // All-or-nothing: Next stays disabled and the only ways on are to try again
-    // or to paste a code by hand.
-    SignInStarted := False;
-    CodeEdit.Visible := True;
-    ConnectBtn.Visible := True;
-    if EvError <> '' then
-      SetStatus('Sign-in didn''t finish (' + EvError + '). Try again, or paste a setup code.')
-    else
-      SetStatus('Sign-in didn''t finish. Try again, or paste a setup code.');
-    RetryBtn.Visible := True;
-  end
+  // All-or-nothing: Next stays disabled and the only way on is to try again.
+  SignInStarted := False;
+  if EvError <> '' then
+    SetStatus('Sign-in didn''t finish (' + EvError + '). Try again.')
   else
-  begin
-    if EvError <> '' then
-      SetStatus(EvError)
-    else
-      SetStatus('That code was not accepted. Check it and try again.');
-  end;
+    SetStatus('Sign-in didn''t finish. Try again.');
+  RetryBtn.Visible := True;
 end;
 
 procedure OnRunFinished(FinishedMode: Integer);
@@ -983,12 +845,8 @@ begin
   case FinishedMode of
     RunIdentity:
       AfterIdentity;
-    RunLoginCode:
-      AfterLogin(False);
-    RunLoginBrowser:
-      AfterLogin(True);
-    RunClipboard:
-      AfterClipboard;
+    RunSignIn:
+      AfterLogin;
     RunTools:
       begin
         RenderTools;
@@ -1029,17 +887,6 @@ begin
   AccountHdr.SetBounds(0, 0, W, ScaleY(15));
   AccountHdr.Font.Style := [fsBold];
   AccountHdr.Caption := 'Your Keld account';
-
-  ConnectBtn := TNewButton.Create(SetupPage);
-  ConnectBtn.Parent := SetupPage.Surface;
-  ConnectBtn.SetBounds(W - ScaleX(90), ScaleY(20), ScaleX(90), ScaleY(23));
-  ConnectBtn.Caption := 'Connect';
-  ConnectBtn.OnClick := @ConnectClick;
-
-  CodeEdit := TNewEdit.Create(SetupPage);
-  CodeEdit.Parent := SetupPage.Surface;
-  CodeEdit.SetBounds(0, ScaleY(20), W - ScaleX(98), ScaleY(23));
-  CodeEdit.Text := '';
 
   StatusLbl := TNewStaticText.Create(SetupPage);
   StatusLbl.Parent := SetupPage.Surface;
