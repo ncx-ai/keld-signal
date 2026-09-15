@@ -1,0 +1,46 @@
+{
+  "_comment": [
+    "The tool versions conformance has actually PROVEN, and the state the daily",
+    "version watch compares npm against. `version-watch.sh` reads it; the",
+    "workflow's `record` job writes it back after a passing run, so a commit here",
+    "means a chain went green at that version on that date — never that someone",
+    "looked.",
+    "harness: 'supported' = the tool is in scripts/conformance/lib/tools.sh and",
+    "the canary may dispatch a run for it. 'pending' = listed so the watch can",
+    "still report a release, but never dispatched, because run-chain.sh would",
+    "exit 2 on it.",
+    "version: null = never proven. First sight RECORDS and does not dispatch —",
+    "a version nobody has tested is not a change, and the same forward-only rule",
+    "the watcher's first sighting follows."
+  ],
+  "tools": {
+    "claude_code": {
+      "package": "@anthropic-ai/claude-code",
+      "version": "2.1.271",
+      "tested_on": "2026-09-15",
+      "proven_by": "local host run on darwin/arm64: make conformance TOOL=claude_code, five checkpoints",
+      "harness": "supported"
+    },
+    "codex": {
+      "package": "@openai/codex",
+      "version": null,
+      "tested_on": null,
+      "proven_by": null,
+      "harness": "pending"
+    },
+    "pi": {
+      "package": "@earendil-works/pi-coding-agent",
+      "version": null,
+      "tested_on": null,
+      "proven_by": null,
+      "harness": "pending"
+    },
+    "gemini_cli": {
+      "package": "@google/gemini-cli",
+      "version": null,
+      "tested_on": null,
+      "proven_by": null,
+      "harness": "pending"
+    }
+  }
+}

@@ -257,3 +257,35 @@ conformance: ## Run a conformance chain against a real tool (TOOL=claude_code)
 		$(if $(CHAIN),--chain "$(CHAIN)",) \
 		$(if $(SEED),--seed "$(SEED)",) \
 		$(if $(WORK),--work "$(WORK)",)
+
+# The Linux leg, in a container: ubuntu 24.04, Node 22, Python 3.12, sqlite3,
+# the tool installed at @latest. The repo is mounted READ-ONLY and everything
+# the run writes goes to named volumes.
+#
+#   make conformance-linux TOOL=codex [CHAIN=A] [SEED=42]
+#
+# ⚠️ A container has no launchd and no systemd user bus, so SERVICE
+# REGISTRATION is not exercised here and the entrypoint says so every run.
+# AC-12's installer path belongs to conformance-macos-vm and to the CI runners.
+.PHONY: conformance-linux
+conformance-linux: ## Run a conformance chain in the Linux container (TOOL=claude_code)
+	@[ -n "$(TOOL)" ] || { echo "usage: make conformance-linux TOOL=claude_code"; exit 2; }
+	@TOOL="$(TOOL)" CHAIN="$(CHAIN)" SEED="$(SEED)" \
+		docker compose -f scripts/conformance/compose/docker-compose.yml run --rm --build conformance
+
+# The macOS leg, in a throwaway Tart VM — the only local place the .pkg and real
+# service registration (AC-12) can run without rewriting this machine's own
+# LaunchAgent.
+#
+#   make conformance-macos-vm TOOL=claude_code [CHAIN=A] [SEED=42] [PKG=path.pkg]
+#
+# ⚠️ UNVERIFIED: needs `tart` and a ~40 GB image pull, neither done yet. Read
+# docs/conformance.md (licence + disk) before the first run.
+.PHONY: conformance-macos-vm
+conformance-macos-vm: ## Run a conformance chain in a clean macOS VM (needs tart)
+	@[ -n "$(TOOL)" ] || { echo "usage: make conformance-macos-vm TOOL=claude_code"; exit 2; }
+	@bash scripts/conformance/tart/run.sh \
+		--tool "$(TOOL)" \
+		$(if $(CHAIN),--chain "$(CHAIN)",) \
+		$(if $(SEED),--seed "$(SEED)",) \
+		$(if $(PKG),--pkg "$(PKG)",)

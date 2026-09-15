@@ -1,0 +1,485 @@
+name: conformance
+
+# Prove each integration against a REAL tool on a clean machine: install the
+# tool, install Signal unattended, talk to a mock model and a mock Atlas on
+# loopback, and read five checkpoints out of the isolated daemon (AC-10, AC-11,
+# AC-12). Spec: docs/superpowers/specs/2026-09-15-signal-integrations-discovery.html
+# § "Conformance matrix — how it runs on GitHub".
+#
+# ⚠️ **THERE IS NO NIGHTLY FULL MATRIX, DELIBERATELY.** A run with nothing new
+# to test proves nothing new and spends the money in the wrong place. The daily
+# job is one minute of `npm view` (`version-watch.sh`) and a chain runs only
+# when a tool actually published a version we have not proven. That canary is
+# what the nightly was replaced BY, not a cheaper version of it.
+#
+# ⚠️ **THE SCHEDULE ONLY EXISTS ON THE DEFAULT BRANCH.** GitHub runs `schedule`
+# from the default branch's copy of a workflow, so committing this on
+# `feat/integrations-ci` turns nothing on; it starts when the branch merges.
+# That is also why it is safe to land with the triggers in place.
+on:
+  schedule:
+    # 06:17 UTC — off the hour, so it is not queued behind everyone else's
+    # midnight cron.
+    - cron: "17 6 * * *"
+
+  # A Signal release: installers.yml has finished building the artifacts a user
+  # would download, so the matrix tests those rather than rebuilding them.
+  workflow_run:
+    workflows: [installers]
+    types: [completed]
+
+  workflow_dispatch:
+    inputs:
+      tool:
+        description: "Tool id (claude_code, codex, pi, gemini_cli)"
+        type: string
+        default: claude_code
+      version:
+        description: "Tool version to pin (empty = @latest)"
+        type: string
+        default: ""
+      os:
+        description: "Runner"
+        type: choice
+        options: [ubuntu-latest, macos-14, windows-latest, all]
+        default: ubuntu-latest
+      chain:
+        description: "Chain"
+        type: choice
+        options: ["A", "B", "all"]
+        default: "A"
+      seed:
+        description: "Seed for the before/after split (empty = the run id)"
+        type: string
+        default: ""
+      force_fail:
+        description: "Force a failing checkpoint, to prove the issue step (AC-11)"
+        type: boolean
+        default: false
+
+# One conformance run at a time per trigger. NOT cancel-in-progress: a chain
+# killed half way tells you nothing, and the run it would cancel is the one
+# holding the evidence.
+concurrency:
+  group: conformance-${{ github.event_name }}-${{ github.event.workflow_run.id || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------- plan -----
+  # One job decides what to run for all three triggers, so the matrix lives in
+  # exactly one place. On a schedule this IS the version watch (~1 minute).
+  plan:
+    name: plan (version watch on a schedule)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A workflow_run fires for EVERY installers.yml run, including failed ones
+    # and dry runs on a branch. Only a successful build of a v* tag is a release.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      any: ${{ steps.plan.outputs.any }}
+      seed: ${{ steps.plan.outputs.seed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Version watch
+        if: github.event_name == 'schedule'
+        run: bash scripts/conformance/version-watch.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Decide the matrix
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_TOOL: ${{ inputs.tool }}
+          IN_VERSION: ${{ inputs.version }}
+          IN_OS: ${{ inputs.os }}
+          IN_CHAIN: ${{ inputs.chain }}
+          IN_SEED: ${{ inputs.seed }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          seed="${IN_SEED:-$RUN_ID}"
+          case "$EVENT" in
+            schedule)
+              # Only tools whose published version moved, Linux only: a
+              # transcript shape does not differ by OS, so paying for macOS
+              # minutes on a tool release buys nothing.
+              matrix=$(bash scripts/conformance/version-watch.sh --matrix)
+              ;;
+            workflow_run)
+              # A Signal release: every OS, both chains. Installers and service
+              # registration ARE OS-specific, which is what this trigger is for.
+              #
+              # ⚠️ One tool per cell, and today that is claude_code only —
+              # lib/tools.sh's table has one row and run-chain.sh exits 2 on any
+              # other id. When the table grows, the tool dimension collapses
+              # into the chain (the seeded before/after split the spec
+              # describes) rather than multiplying the matrix by four.
+              matrix='{"include":[
+                {"os":"ubuntu-latest","chain":"A","tool":"claude_code","version":""},
+                {"os":"ubuntu-latest","chain":"B","tool":"claude_code","version":""},
+                {"os":"macos-14","chain":"A","tool":"claude_code","version":""},
+                {"os":"macos-14","chain":"B","tool":"claude_code","version":""},
+                {"os":"windows-latest","chain":"A","tool":"claude_code","version":""},
+                {"os":"windows-latest","chain":"B","tool":"claude_code","version":""}]}'
+              ;;
+            *)
+              matrix=$(python3 - <<'PY'
+          import json, os
+          oses = ["ubuntu-latest", "macos-14", "windows-latest"] if os.environ["IN_OS"] == "all" else [os.environ["IN_OS"]]
+          chains = ["A", "B"] if os.environ["IN_CHAIN"] == "all" else [os.environ["IN_CHAIN"]]
+          tool = os.environ["IN_TOOL"] or "claude_code"
+          version = os.environ["IN_VERSION"]
+          print(json.dumps({"include": [
+              {"os": o, "chain": c, "tool": tool, "version": version}
+              for o in oses for c in chains]}))
+          PY
+              )
+              ;;
+          esac
+          matrix=$(printf '%s' "$matrix" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))')
+          any=$(printf '%s' "$matrix" | python3 -c 'import json,sys; print("true" if json.load(sys.stdin)["include"] else "false")')
+          {
+            echo "matrix=$matrix"
+            echo "any=$any"
+            echo "seed=$seed"
+          } >> "$GITHUB_OUTPUT"
+          echo "matrix: $matrix"
+          echo "seed: $seed"
+
+      - name: Nothing to run
+        if: steps.plan.outputs.any == 'false'
+        run: |
+          echo "No tool published a version we have not already proven — no chain run." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------- chain -----
+  chain:
+    name: ${{ matrix.tool }} · chain ${{ matrix.chain }} · ${{ matrix.os }}
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ${{ matrix.os }}
+    # 25 minutes: a chain is ~15 (npm install, a Go build, two headless prompts
+    # and the settle), and a hung daemon must not hold a macOS runner at 10x.
+    timeout-minutes: 25
+    # ⚠️ The Windows leg is EXPECTED TO FAIL and is marked so on purpose:
+    # scripts/conformance/run-chain.ps1 does not exist yet (task A.3's Windows
+    # half, owned elsewhere). A permanently red leg nobody reads is worse than
+    # an honest amber one, and deleting the leg would hide that Windows is
+    # unproven. Remove this the day the .ps1 lands.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    permissions:
+      contents: read
+      issues: write
+      actions: read   # download-artifact from the installers.yml run
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      SEED: ${{ needs.plan.outputs.seed }}
+      TOOL_VERSION: ${{ matrix.version }}
+      KELD_CONFORM_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The cache holds the npm STORE and its key names no tool version, so
+      # `@latest` still resolves to whatever is published today — a cache keyed
+      # by version would quietly pin the canary to the thing it is watching.
+      - name: Cache the npm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: conformance-npm-${{ runner.os }}
+          restore-keys: conformance-npm-${{ runner.os }}
+
+      - name: sqlite3 (store_rows reads refseries.db through it)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3
+
+      # --- the Signal artifacts under test ---------------------------------
+      #
+      # ⚠️ installers.yml uploads workflow ARTIFACTS only on its dry-run
+      # dispatch path; on a real release it attaches the pkg/exe/sidecar to the
+      # GitHub RELEASE instead. So both are tried, artifacts first, and neither
+      # failing stops the job — the chain still builds from source and reports
+      # which sidecar it resolved.
+      - name: Download the installers.yml artifacts
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: artifacts
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fall back to the release assets
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          mkdir -p artifacts
+          if [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
+            echo "no workflow artifacts; pulling the assets attached to $TAG"
+            gh release download "$TAG" --dir artifacts \
+              --pattern '*.pkg' --pattern 'keld-setup.exe' \
+              --pattern 'keld-agent-sidecar_*.tar.gz' || true
+          fi
+          ls -la artifacts || true
+
+      # AC-12: every installer we ship has an unattended mode. This is where
+      # that claim is exercised — the silent invocation per artifact, no window.
+      - name: Install Signal unattended (AC-12)
+        if: github.event_name == 'workflow_run' && runner.os != 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          case "$RUNNER_OS" in
+            macOS)
+              for p in artifacts/*.pkg; do
+                echo "installer -pkg $p -target /"
+                sudo installer -pkg "$p" -target / || echo "pkg install failed"
+              done
+              ;;
+            Linux)
+              # The Linux path is the tarball install.sh performs; here the
+              # sidecar is what the harness needs on disk.
+              for t in artifacts/keld-agent-sidecar_linux_*.tar.gz; do
+                mkdir -p "$HOME/.local/bin" && tar -xzf "$t" -C "$HOME/.local/bin"
+                echo "sidecar -> $HOME/.local/bin/keld-agent-sidecar ($(cat "$HOME/.local/bin/keld-agent-sidecar/VERSION" 2>/dev/null || echo 'no VERSION'))"
+              done
+              ;;
+          esac
+
+      # A frozen sidecar must exist for the store_rows checkpoint to mean
+      # anything (lib/isolate.sh refuses to run without one). On a tool-release
+      # or dispatch run there are no artifacts, so the latest published Linux
+      # sidecar stands in — which is also what a user has.
+      - name: Provide a sidecar
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -x "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar" ]; then
+            echo "sidecar already present"; exit 0
+          fi
+          case "$RUNNER_OS" in
+            Linux) asset="keld-agent-sidecar_linux_amd64.tar.gz" ;;
+            macOS) asset="keld-agent-sidecar_darwin_arm64.tar.gz" ;;
+          esac
+          mkdir -p "$HOME/.local/bin"
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir /tmp/sc || true
+          if [ -f "/tmp/sc/$asset" ]; then
+            tar -xzf "/tmp/sc/$asset" -C "$HOME/.local/bin"
+            chmod +x "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar" || true
+            echo "sidecar $(cat "$HOME/.local/bin/keld-agent-sidecar/VERSION" 2>/dev/null || echo 'no VERSION')"
+          else
+            echo "::warning::no frozen sidecar available; the chain will say so and stop"
+          fi
+
+      # --- the chain --------------------------------------------------------
+      - name: Run the chain
+        id: chain
+        if: runner.os != 'Windows' && !inputs.force_fail
+        shell: bash
+        env:
+          TOOL: ${{ matrix.tool }}
+          CHAIN: ${{ matrix.chain }}
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/conformance"
+          make conformance TOOL="$TOOL" CHAIN="$CHAIN" SEED="$SEED" \
+            WORK="$RUNNER_TEMP/conformance" 2>&1 | tee "$RUNNER_TEMP/conformance/chain.log"
+          exit "${PIPESTATUS[0]}"
+
+      # ⚠️ run-chain.ps1 DOES NOT EXIST. It is task A.3's Windows half and is
+      # not this workstream's file, so this leg calls the script it will be and
+      # says exactly why it failed. The job is continue-on-error for this cell
+      # (see above) so the red is amber and named, not an unexplained failure.
+      - name: Run the chain (Windows)
+        id: chain-windows
+        if: runner.os == 'Windows' && !inputs.force_fail
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "scripts/conformance/run-chain.ps1")) {
+            Write-Host "::warning::scripts/conformance/run-chain.ps1 does not exist yet (task A.3, Windows half)."
+            Write-Host "Windows conformance is UNPROVEN: the Inno installer path and the tool's Windows"
+            Write-Host "transcript roots have never been run by this workflow."
+            exit 1
+          }
+          pwsh scripts/conformance/run-chain.ps1 -Tool "${{ matrix.tool }}" -Chain "${{ matrix.chain }}" -Seed "$env:SEED" -Work "$env:RUNNER_TEMP/conformance"
+
+      # The forced failure that proves the issue step (AC-11). It fabricates a
+      # failing verdict rather than breaking the harness, so what is tested is
+      # the reporting path and nothing else.
+      - name: Force a failing checkpoint (AC-11 proof)
+        id: forced
+        if: inputs.force_fail
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/conformance"
+          cat > "$RUNNER_TEMP/conformance/verdict-after-signal.json" <<JSON
+          {"tool":"${{ matrix.tool }}","chain":"${{ matrix.chain }}","step":"after-signal",
+           "seed":"$SEED","pass":false,
+           "checkpoints":[
+             {"name":"transcript","ok":true,"required":true,"source":"forced","detail":"forced pass"},
+             {"name":"pointer","ok":false,"required":true,"source":"forced","detail":"FORCED FAILURE (workflow_dispatch force_fail=true)"},
+             {"name":"store_rows","ok":true,"required":true,"source":"forced","detail":"forced pass"},
+             {"name":"telemetry","ok":true,"required":true,"source":"forced","detail":"forced pass"},
+             {"name":"publish","ok":true,"required":true,"source":"forced","detail":"forced pass"}]}
+          JSON
+          echo "forced a failing 'pointer' checkpoint"
+          exit 1
+
+      # --- reporting --------------------------------------------------------
+      - name: Summary table
+        id: summary
+        if: always() && runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -uo pipefail
+          python3 - "$RUNNER_TEMP/conformance" > "$RUNNER_TEMP/summary.md" <<'PY'
+          import glob, json, os, sys
+          work = sys.argv[1]
+          rows, failed = [], []
+          for path in sorted(glob.glob(os.path.join(work, "verdict-*.json"))):
+              try:
+                  v = json.load(open(path))
+              except Exception:
+                  continue
+              for c in v.get("checkpoints", []):
+                  mark = "✅" if c["ok"] else ("❌" if c.get("required", True) else "n/a")
+                  rows.append(f"| `{v['tool']}` | {v['chain']}/{v['step']} | `{c['name']}` | {mark} | {c.get('detail','')} |")
+                  if not c["ok"] and c.get("required", True):
+                      failed.append((v["tool"], v["chain"], v["step"], c["name"]))
+          print("| tool | chain/step | checkpoint | ok | detail |")
+          print("| --- | --- | --- | --- | --- |")
+          print("\n".join(rows) if rows else "| — | — | — | — | no verdict was written (the chain stopped before its first step) |")
+          if failed:
+              t, ch, st, cp = failed[0]
+              with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+                  fh.write(f"failed_tool={t}\nfailed_chain={ch}\nfailed_step={st}\nfailed_checkpoint={cp}\n")
+          PY
+          {
+            echo "### ${{ matrix.tool }} · chain ${{ matrix.chain }} · ${{ matrix.os }}"
+            echo
+            echo "tool version: \`${TOOL_VERSION:-@latest}\` · seed: \`$SEED\`"
+            echo
+            cat "$RUNNER_TEMP/summary.md"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ⚠️ **WHAT MAY BE UPLOADED IS AN EXHAUSTIVE LIST, NOT A DIRECTORY.** The
+      # run's HOME is isolated, so the only transcript under it is the one OUR
+      # scripted prompt produced ("reply with one word") — nothing a person
+      # wrote is reachable. That is a property of the isolation, so the paths
+      # are named one by one rather than swept with a wildcard from $HOME.
+      - name: Upload the evidence
+        if: failure() && runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-${{ matrix.tool }}-${{ matrix.chain }}-${{ matrix.os }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/conformance/chain.log
+            ${{ runner.temp }}/conformance/daemon.log
+            ${{ runner.temp }}/conformance/mockllm.jsonl
+            ${{ runner.temp }}/conformance/mockllm.out
+            ${{ runner.temp }}/conformance/mockatlas.out
+            ${{ runner.temp }}/conformance/verdict-*.json
+            ${{ runner.temp }}/conformance/setup.out
+            ${{ runner.temp }}/conformance/login.out
+            ${{ runner.temp }}/conformance/npm-install.log
+            ${{ runner.temp }}/conformance/home/.claude/settings.json
+            ${{ runner.temp }}/conformance/home/.codex/config.toml
+            ${{ runner.temp }}/conformance/home/hook.json
+            ${{ runner.temp }}/conformance/home/.claude/projects/**/*.jsonl
+
+      - name: File or update the issue (AC-11)
+        if: failure() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          bash scripts/conformance/file-issue.sh \
+            --tool "${{ steps.summary.outputs.failed_tool || matrix.tool }}" \
+            --version "${TOOL_VERSION:-latest}" \
+            --os "${{ matrix.os }}" \
+            --chain "${{ steps.summary.outputs.failed_chain || matrix.chain }}" \
+            --step "${{ steps.summary.outputs.failed_step || 'chain' }}" \
+            --checkpoint "${{ steps.summary.outputs.failed_checkpoint || 'run' }}" \
+            --seed "$SEED" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --summary "$RUNNER_TEMP/summary.md"
+
+  # -------------------------------------------------------------- record -----
+  # A version lands in .conformance/last-tested.json only after a chain PROVED
+  # it. That is the whole contract of the file: a commit there means green, not
+  # that somebody looked.
+  record:
+    name: record the proven versions
+    needs: [plan, chain]
+    if: github.event_name == 'schedule' && needs.chain.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record and commit
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          python3 - "$MATRIX" > /tmp/proven.txt <<'PY'
+          import json, sys
+          for c in json.loads(sys.argv[1])["include"]:
+              print(c["tool"], c["version"])
+          PY
+          while read -r tool version; do
+            [ -n "$tool" ] || continue
+            bash scripts/conformance/version-watch.sh --record "$tool" "$version"
+          done < /tmp/proven.txt
+          git config user.name "keld-conformance"
+          git config user.email "noreply@keld.co"
+          git add .conformance/last-tested.json
+          # `git diff --quiet && …` would be a failing list under `set -e` in
+          # the CHANGED case and fail the job for having work to do.
+          if git diff --cached --quiet; then echo "nothing to record"; exit 0; fi
+          git commit -m "chore(conformance): record proven tool versions
+
+          A chain passed at these versions on ubuntu-latest."
+          git push
