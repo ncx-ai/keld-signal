@@ -11,8 +11,9 @@ from datetime import datetime
 
 from app.analysis import magnitude, terms
 from app.analysis.paths import PATH_INPUTS, WORKTREE, rel_within
+from app.analysis.readers import coerce
 from app.analysis.shell import bash_refs
-from app.analysis.text import is_command_echo, text_of, think_blocks
+from app.analysis.text import is_command_echo
 from app.analysis.vocab import action_for, artifacts_for, mcp_provider, toolchain_for
 from app.analysis.workspace import resolve_workspace, scan_workspace, vcs_of
 
@@ -96,15 +97,25 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                      resolved=None, seen_requests=None):
     """One transcript's turns -> its rows and pending paths.
 
-    `turns` is the output of `transcript.iter_turns(path)` — already filtered to `user`/
-    `assistant` lines with a timestamp. `path` is still needed here for `scan_workspace` (a
-    separate pre-pass over the same file that resolution depends on) and for the row label
-    `session` defaults to; nothing in this function opens it directly.
+    `turns` is the output of `transcript.iter_turns(path)` — `readers.base.Turn` records, already
+    filtered to speech turns with a timestamp. This function names no tool's field: every read
+    below is a record attribute, which is what makes a second tool a READER rather than a branch
+    here (see `readers/base.py`, and `app/test_reader_boundary.py` which greps for the names).
+    A raw decoded line is still accepted and coerced through the Claude reader — the study
+    harness, `scripts/*.py` and a dozen tests call this with lines they built themselves, and
+    that seam is what lets the golden dump check this refactor instead of every caller.
+
+    `path` is still needed here for `scan_workspace` (a separate pre-pass over the same file that
+    resolution depends on) and for the row label `session` defaults to; nothing in this function
+    opens it directly.
 
     `session` overrides that label. A caller that GROUPS the returned rows by transcript must
     pass one: the default is `display_session(path)`, which is not unique (see its docstring),
     and a caller keying on it silently merges unrelated transcripts into one pseudo-session —
-    measured at 550 windows against a true 1,022 in the study that found it.
+    measured at 550 windows against a true 1,022 in the study that found it. A RECORD may also
+    carry its own label (`Turn.session`), which wins over the path default and loses to an
+    explicit argument: Claude leaves it None, and Codex sets it because every rollout filename
+    begins `rollout-` and the 8-character prefix collides for all of them.
 
     `evidence` is the `(marker_dirs, cd_targets, remotes)` triple `scan_workspace` would return,
     supplied by a caller that already has it. Incremental ingest (`analysis/ingest.py`) does: it
@@ -150,14 +161,15 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
     marker_dirs, cd_targets, remotes = (evidence if evidence is not None
                                         else scan_workspace(path))
     ws_cache = {}
-    session = display_session(path) if session is None else session
+    default_session = display_session(path)
     seen_req = set() if seen_requests is None else seen_requests
     for o in turns:
-        ts = o.get("timestamp")
+        o = coerce(o)
+        ts = o.ts
         n_lines += 1
         t = _epoch(ts)
-        cwd_clean = WORKTREE.sub("", o.get("cwd") or "")
-        cwd_raw = o.get("cwd") or ""
+        cwd_clean = WORKTREE.sub("", o.cwd)
+        cwd_raw = o.cwd
         if cwd_raw not in ws_cache:
             # repo_root or () : resolve_workspace's own default is (), for the direct/no-fixture
             # caller this interface is meant to support (e.g. a bare `events_for_turns(turns,
@@ -173,8 +185,8 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
         # machine's ~/.claude/projects against a colleague's export.
         root_key = root
         root_dir = root_dir_resolved
-        base = (quantize(t), session, repo, o.get("gitBranch") or None,
-                bool(o.get("isSidechain")))
+        row_session = session if session is not None else (o.session or default_session)
+        base = (quantize(t), row_session, repo, o.branch, o.sidechain)
 
         def add(kind, level, ref, n):
             rows.append(base + (kind, level, ref, float(n)))
@@ -182,7 +194,7 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
         if repo:
             add("ref", "workspace", repo, 1)
             add("ref", "workspace_evidence", f"{ws_src} [{ws_conf}]", 1)
-            add("ref", "vcs", vcs_of(o.get("cwd"), o.get("gitBranch")), 1)
+            add("ref", "vcs", vcs_of(o.cwd, o.branch), 1)
             # The DAEMON-resolved repository identity, beside the machine-local workspace name
             # it exists to replace. Same condition and same cadence as `workspace` above, so
             # the two are directly comparable per turn.
@@ -212,20 +224,17 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     add("ref", "repo_mentioned", rr, 1)
         if base[3]:
             add("ref", "branch", base[3], 1)
-        if o.get("attributionSkill"):
-            add("ref", "skill", o["attributionSkill"], 1)
-            for kind in artifacts_for(skill=o["attributionSkill"]):
+        if o.skill:
+            add("ref", "skill", o.skill, 1)
+            for kind in artifacts_for(skill=o.skill):
                 add("ref", "artifact", kind, 1)
-        if o.get("attributionMcpServer"):
-            add("ref", "mcp_server",
-                mcp_provider(o["attributionMcpServer"], o.get("attributionMcpTool")), 1)
-        if o.get("attributionMcpTool"):
-            add("ref", "mcp_tool", o["attributionMcpTool"], 1)
+        if o.mcp_server:
+            add("ref", "mcp_server", mcp_provider(o.mcp_server, o.mcp_tool), 1)
+        if o.mcp_tool:
+            add("ref", "mcp_tool", o.mcp_tool, 1)
 
-        msg = o.get("message") or {}
-        content = msg.get("content")
-        if o.get("type") == "user":
-            body = text_of(content)
+        if o.role == "user":
+            body = o.text
             if body.strip():
                 add("say", "user_echo" if is_command_echo(body) else "user", "",
                     len(body))
@@ -233,9 +242,9 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     for t in terms.tally([body], nlp):
                         add("ref", "term", t["term"], t["n"])
         else:
-            if msg.get("model"):
-                add("ref", "model", msg["model"], 1)
-            said = text_of(content)
+            if o.model:
+                add("ref", "model", o.model, 1)
+            said = o.text
             if said.strip():
                 add("say", "asst", "", len(said))
                 for t in terms.tally([said], nlp):
@@ -253,12 +262,12 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
             # The COUNT is obtainable and is what `text.py` names as the designed-for signal
             # (`asst_think_msgs`), so it is emitted as its own row: whether this turn thought at
             # all, which the zero-length drop otherwise destroys.
-            blocks = think_blocks(content)
+            blocks = o.think_chars
             for nchars in blocks:
                 add("say", "asst_think", "", nchars)
             if blocks:
                 add("say", "asst_think_blocks", "", len(blocks))
-            u, rid = msg.get("usage"), o.get("requestId")
+            u, rid = o.usage, o.request_id
             # The ROLLUP WEIGHT: the price-weighted cost of the request this line belongs to, on
             # EVERY line of that request — deliberately outside the `requestId` dedup below.
             # A request is written as several assistant lines each repeating its `usage`, and 72%
@@ -307,66 +316,63 @@ def events_for_turns(turns, path, root, repo_root, nlp=None, evidence=None, sess
                     add("mag", magnitude.REQUESTS, "", 1)
 
         paths = []
-        if isinstance(content, list):
-            for b in content:
-                if not (isinstance(b, dict) and b.get("type") == "tool_use"):
-                    continue
-                name, inp = b.get("name"), b.get("input") or {}
-                act = action_for(tool=name)
-                if act:
+        for call in o.tool_calls:
+            name, inp = call.name, call.input
+            act = action_for(tool=name)
+            if act:
+                add("ref", "action", act, 1)
+            # How much file text this edit handled, in bytes. ONE ROW PER EDIT EVENT, not
+            # per turn, because the count of edits is precisely the useless predictor this
+            # replaces — `edit >= 5` says nothing, a byte extent separates a typo fix from
+            # authoring. `magnitude.edit_bytes` returns an int and is the only thing in this
+            # module that may see `old_string`/`new_string`/`content`: the payload is file
+            # contents, and a length is all that may survive contact with it.
+            nbytes = magnitude.edit_bytes(name, inp)
+            if nbytes:
+                add("mag", magnitude.EDIT_BYTES, "", nbytes)
+            m = MCP_TOOL.match(name or "")
+            if m:
+                add("ref", "tool", "mcp:" + m["tool"], 1)
+                add("ref", "mcp_server", mcp_provider(m["server"], m["tool"]), 1)
+                add("ref", "mcp_tool", m["tool"], 1)
+                # The server id is a uuid; the tool name carries the recognisable
+                # service ("notion-fetch" -> notion), which is what a reader needs.
+                add("ref", "service", "mcp:" + m["tool"].split("-")[0].split("_")[0],
+                    1)
+            else:
+                add("ref", "tool", name, 1)
+            if name == "Agent" and inp.get("subagent_type"):
+                add("ref", "agent", inp["subagent_type"], 1)
+            if name == "Skill" and inp.get("skill"):
+                add("ref", "skill", inp["skill"], 1)
+                for kind in artifacts_for(skill=inp["skill"]):
+                    add("ref", "artifact", kind, 1)
+            for host in dict.fromkeys(
+                    services_in(" ".join(v for v in (inp.get("command"),
+                                                     inp.get("url"),
+                                                     inp.get("query"))
+                                         if isinstance(v, str)))):
+                add("ref", "service", host, 1)
+            for k in PATH_INPUTS:
+                if isinstance(inp.get(k), str):
+                    paths.append((inp[k], True))     # a tool's file_path IS a file
+            if name == "Bash":
+                verbs, exes, bp, acts = bash_refs(inp.get("command"))
+                for v in verbs:
+                    add("ref", "verb", v, 1)
+                for e in dict.fromkeys(exes):
+                    add("ref", "exe", e, 1)
+                    for kind in toolchain_for(e):
+                        add("ref", "toolchain", kind, 1)
+                # The acts come from `bash_refs`, not from a second pass over `verbs`: a
+                # verb is a segment's two-word HEAD, so deriving the act from it here saw
+                # neither the tool a wrapper runs nor the flags. `pnpm exec vitest` read as
+                # `run a service` and `sed -i` as `sed`. Only the shell walk has the argv.
+                for act in acts:
                     add("ref", "action", act, 1)
-                # How much file text this edit handled, in bytes. ONE ROW PER EDIT EVENT, not
-                # per turn, because the count of edits is precisely the useless predictor this
-                # replaces — `edit >= 5` says nothing, a byte extent separates a typo fix from
-                # authoring. `magnitude.edit_bytes` returns an int and is the only thing in this
-                # module that may see `old_string`/`new_string`/`content`: the payload is file
-                # contents, and a length is all that may survive contact with it.
-                nbytes = magnitude.edit_bytes(name, inp)
-                if nbytes:
-                    add("mag", magnitude.EDIT_BYTES, "", nbytes)
-                m = MCP_TOOL.match(name or "")
-                if m:
-                    add("ref", "tool", "mcp:" + m["tool"], 1)
-                    add("ref", "mcp_server", mcp_provider(m["server"], m["tool"]), 1)
-                    add("ref", "mcp_tool", m["tool"], 1)
-                    # The server id is a uuid; the tool name carries the recognisable
-                    # service ("notion-fetch" -> notion), which is what a reader needs.
-                    add("ref", "service", "mcp:" + m["tool"].split("-")[0].split("_")[0],
-                        1)
-                else:
-                    add("ref", "tool", name, 1)
-                if name == "Agent" and inp.get("subagent_type"):
-                    add("ref", "agent", inp["subagent_type"], 1)
-                if name == "Skill" and inp.get("skill"):
-                    add("ref", "skill", inp["skill"], 1)
-                    for kind in artifacts_for(skill=inp["skill"]):
-                        add("ref", "artifact", kind, 1)
-                for host in dict.fromkeys(
-                        services_in(" ".join(v for v in (inp.get("command"),
-                                                         inp.get("url"),
-                                                         inp.get("query"))
-                                             if isinstance(v, str)))):
-                    add("ref", "service", host, 1)
-                for k in PATH_INPUTS:
-                    if isinstance(inp.get(k), str):
-                        paths.append((inp[k], True))     # a tool's file_path IS a file
-                if name == "Bash":
-                    verbs, exes, bp, acts = bash_refs(inp.get("command"))
-                    for v in verbs:
-                        add("ref", "verb", v, 1)
-                    for e in dict.fromkeys(exes):
-                        add("ref", "exe", e, 1)
-                        for kind in toolchain_for(e):
-                            add("ref", "toolchain", kind, 1)
-                    # The acts come from `bash_refs`, not from a second pass over `verbs`: a
-                    # verb is a segment's two-word HEAD, so deriving the act from it here saw
-                    # neither the tool a wrapper runs nor the flags. `pnpm exec vitest` read as
-                    # `run a service` and `sed -i` as `sed`. Only the shell walk has the argv.
-                    for act in acts:
-                        add("ref", "action", act, 1)
-                    paths += [(q, False) for q in bp]
+                paths += [(q, False) for q in bp]
         for p, from_input in paths:
-            rel = rel_within(p, root_dir, o.get("cwd"))
+            rel = rel_within(p, root_dir, o.cwd)
             if not rel or rel.startswith("."):
                 continue
             # Classification is DEFERRED to a second pass. A path quoted in a command has
