@@ -86,12 +86,13 @@ func TestTheIngestSignalFeedsTheBlockEmitterUnderTheSameEligibilityGate(t *testi
 	hook := ingestSignalHook(ctx, func(path string, r enrich.ResolvedFacts) bool { return true })
 
 	hook("claude_code", "/p/a.jsonl")
-	hook("codex", "/p/b.jsonl") // not workstreams-eligible: /analyze cannot resolve it
+	hook("codex", "/p/b.jsonl")      // eligible since 2026-09-15: the sidecar has a Codex reader
+	hook("gemini_cli", "/p/d.jsonl") // NOT eligible: no reader resolves a Gemini prompt id
 	hook("cowork", "/p/c.jsonl")
 
 	// Give the serial sender goroutine nothing to race on: the observer is called
 	// inline by the hook, not by the queue.
-	want := []string{"claude_code:/p/a.jsonl", "cowork:/p/c.jsonl"}
+	want := []string{"claude_code:/p/a.jsonl", "codex:/p/b.jsonl", "cowork:/p/c.jsonl"}
 	if len(seen) != len(want) {
 		t.Fatalf("advances = %v, want %v", seen, want)
 	}

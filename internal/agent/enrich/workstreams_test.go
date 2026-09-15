@@ -184,14 +184,17 @@ func coords(t *testing.T) *JobContext {
 	return c
 }
 
-// The analysis resolves a prompt by Claude-Code JSONL shape (a line with
-// "type":"user" and a matching "uuid"). Codex ("<session>#<ordinal>") and
-// Gemini ("<session>########<ordinal>") prompt ids over their own file shapes
-// cannot resolve, so /analyze 404s — which would fail the pass and downgrade
-// EVERY Codex/Gemini job to "partial" in the DEFAULT ml_backend mode. The pass
-// must not be registered for those sources at all.
+// The analysis can only resolve a prompt id for a source the sidecar has a
+// READER for. Without one, /analyze 404s — which would fail the pass and
+// downgrade EVERY job from that source to "partial" in the DEFAULT ml_backend
+// mode. The pass must not be registered for those sources at all.
+//
+// ⚠️ CODEX WAS THE FIRST EXAMPLE HERE AND IS NOW THE COUNTER-EXAMPLE
+// (TestRunRegistersWorkstreamsForCodex below). It moved on 2026-09-15 when
+// readers/codex.py landed. Gemini has not moved: its chat files are a different
+// shape again and nothing reads them.
 func TestRunSkipsWorkstreamsForSourcesTheAnalysisCannotRead(t *testing.T) {
-	for _, source := range []string{"codex", "gemini_cli", "other"} {
+	for _, source := range []string{"gemini_cli", "other"} {
 		called := false
 		p := Run("hello", source, Meta{}, nil,
 			WithPassTimeout(0),
@@ -213,15 +216,39 @@ func TestRunSkipsWorkstreamsForSourcesTheAnalysisCannotRead(t *testing.T) {
 }
 
 func TestWorkstreamsEligibleSources(t *testing.T) {
-	for _, s := range []string{"claude_code", "cowork"} {
+	for _, s := range []string{"claude_code", "cowork", "codex"} {
 		if !WorkstreamsEligible(s) {
-			t.Errorf("%s writes Claude-Code-shaped transcripts the analysis reads", s)
+			t.Errorf("%s has a reader in the analysis; its windows can be served", s)
 		}
 	}
-	for _, s := range []string{"codex", "gemini_cli", "", "hook"} {
+	for _, s := range []string{"gemini_cli", "", "hook"} {
 		if WorkstreamsEligible(s) {
-			t.Errorf("%s is not analyzable today", s)
+			t.Errorf("%s has no reader in the analysis; every one of its jobs would publish partial", s)
 		}
+	}
+}
+
+// The counter-example, and the proof the Codex work is wired end to end: the
+// pass IS registered and the analyzer IS called for a Codex job. Codex spent its
+// whole life as a configured source publishing no workstream at all; this is the
+// assertion that would fail first if any half of that chain regressed.
+func TestRunRegistersWorkstreamsForCodex(t *testing.T) {
+	called := false
+	p := Run("hello", "codex", Meta{}, nil,
+		WithPassTimeout(0),
+		WithCoordinates("/tmp/rollout.jsonl", "01a0a504-72ba-7f80-803f-d847527b0aec#turn-3"),
+		WithWorkstreams(func(string, string, int, ResolvedFacts) (WindowAnalysis, bool) {
+			called = true
+			return WindowAnalysis{Workstreams: map[string]Labeled{"project": {Value: "acme", Confidence: 1}}}, true
+		}))
+	if !called {
+		t.Fatal("the analysis was never asked about a Codex transcript")
+	}
+	if p.Workstreams == nil {
+		t.Fatal("a Codex job published no workstreams")
+	}
+	if _, ran := p.ExtractorVersions["workstreams"]; !ran {
+		t.Error("the workstreams pass was not registered for codex")
 	}
 }
 
