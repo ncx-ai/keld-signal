@@ -52,7 +52,52 @@ Microsoft has said it intends to extend the service to younger companies. **Add 
 reminder to re-check this at our three-year mark**, or sooner if Microsoft
 announces a change — it would cut this cost by roughly 95%.
 
-## 4. What to buy instead
+## 3a. Is there a way to avoid signing altogether? No.
+
+Asked and answered, because it is the first thing anyone will want to try.
+
+Smart App Control blocks **unsigned native code from running**. Keld is a
+command-line tool, a background daemon and a Python analysis service — all native
+executables. No packaging choice or code change makes unsigned native code
+runnable on an enforcing machine.
+
+⚠️ **AND "LET REPUTATION BUILD UP" IS NOT A STRATEGY, BECAUSE REPUTATION IS PER
+FILE.** Every release is a new set of files with no history, so each one would
+start blocked and stay blocked until Microsoft's cloud decided otherwise — which
+is exactly the flip-flop measured in §1, where the same file ran at 2:05pm and
+was refused at 2:44pm. Shipping would become a lottery drawn afresh each release.
+
+The **Microsoft Store** would sign it for us, but an MSIX package is a poor fit
+for what Keld does — register a logon task, run a background service, and edit
+other applications' configuration files — and Store review is weeks, not days.
+
+So the alternatives are not ways to avoid a signature. They are different ways to
+**obtain** one, and one of them avoids our company-age problem entirely.
+
+## 3b. THE FAST ROUTE: sign as an individual, not as the company
+
+An **Individual Validated (IV)** code signing certificate validates *a person*,
+not a business. No company entity, no D-U-N-S, no three-year history — the
+authority checks a government ID and proof of address, and Certum's individual
+cloud product does it with an online ID and face scan plus a utility bill. Cloud
+signing is available, so no USB token. It is publicly trusted, which is all Smart
+App Control asks for.
+
+**This is the only route that can plausibly start today.**
+
+⚠️ **THE TRADE IS THE PUBLISHER NAME, AND IT IS VISIBLE TO CUSTOMERS.** The
+signature carries the individual's personal name, not "Keld". That is what appears
+in the file's properties and in Windows' own prompts — a personal name on an
+enterprise security product invites exactly the question an enterprise buyer
+should not have to ask. There is also a **"Sole Proprietorship EV"** variant that
+attaches an individual's identity to a company-style EV certificate, which reads
+better and costs more.
+
+Recommended shape: **take the individual certificate now to unblock shipping, and
+replace it with a company certificate (§4) once the company can be validated.**
+Re-signing later costs nothing but a rebuild.
+
+## 4. What to buy for the company (the durable answer)
 
 **An OV ("Organisation Validation") code signing certificate, from a vendor that
 offers CLOUD SIGNING.**
@@ -141,6 +186,11 @@ cannot be used for Windows.
 
 ## 8. Decision needed
 
+0. ⚠️ **FIRST: decide whether to take an INDIVIDUAL certificate now (§3b) to
+   unblock shipping this week.** It needs a person, an ID and a utility bill
+   rather than a verified company, so it is the only option that can start
+   today. Everything below is the durable company answer and is unchanged by
+   taking it.
 1. Confirm the exact legal entity to certify, and that we hold a D-U-N-S number
    (or start that today).
 2. Pick a vendor and buy an **OV certificate with cloud signing** — not a USB
