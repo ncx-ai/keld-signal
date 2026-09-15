@@ -203,3 +203,59 @@ cannot be used for Windows.
 Until this lands, Windows 11 machines with Smart App Control on cannot run Keld.
 Developers can work around it locally by putting Smart App Control into
 Evaluation mode; that is not something customers can be asked to do.
+
+---
+
+## Appendix: ready-to-send request
+
+Copy this to whoever administers the corporate accounts. It deliberately leads
+with the decision and the one buying mistake that costs a week, not with the
+technical explanation — the body of this document is there if they want it.
+
+> **Subject: Need a Windows code signing certificate bought today**
+>
+> We've hit a blocker that stops Keld running on current Windows 11 machines,
+> and the fix is a purchase rather than engineering work.
+>
+> **The problem.** Windows 11 now refuses to run software that isn't signed by a
+> recognised certificate authority. None of our Windows programs are signed, so
+> on affected machines Keld simply doesn't start — this already affects the
+> shipped product, not just something we're building. Nothing we can change in
+> the code avoids it.
+>
+> **What I need you to buy.** A **code signing certificate** — and specifically
+> one with **cloud signing** (sometimes called "cloud HSM" or, at SSL.com,
+> "eSigner").
+>
+> ⚠️ **Do not accept a USB hardware token.** Most vendors ship one by default. It
+> is useless to us — our software is built on servers we can't plug a USB stick
+> into — and ordering one means waiting for the post and then buying the right
+> thing anyway. If the order page offers "hardware token" or "cloud", choose
+> cloud.
+>
+> **Two options, and I suggest we do both:**
+>
+> 1. **Individual certificate — today.** Verifies a person, not the company:
+>    government ID plus a proof of address. No company-age requirement, so it can
+>    start immediately. Roughly $215–290/year. The catch is that our software
+>    will show an individual's name as the publisher rather than "Keld".
+> 2. **Company (OV) certificate — in parallel.** Shows "Keld" as the publisher,
+>    which is what we want long-term. Takes 1–3 business days *after* validation
+>    documents are accepted, and being a young company is the risk: ask the
+>    vendor up front what they accept for a business incorporated this year.
+>
+> Start #1 so we're unblocked, run #2 behind it, and we'll switch over when it
+> lands.
+>
+> **Please also check whether we have a D-U-N-S number.** It's free from Dun &
+> Bradstreet but can take several days to issue, and it's the most common cause
+> of delay on the company certificate. If we don't have one, request it today.
+>
+> **What I'll need back:** the sign-in credentials for the vendor's cloud signing
+> service. Please send those through the password manager rather than email or
+> chat — anyone holding them can publish software as us.
+>
+> **What I do NOT need:** anything to do with Apple. Our Mac certificate is
+> separate and unaffected.
+>
+> Happy to join the call if the vendor wants technical detail.
