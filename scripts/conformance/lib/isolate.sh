@@ -138,7 +138,14 @@ isolate_init() {
   else
     for d in "$HOME/.local/bin/keld-agent-sidecar" "/usr/local/keld/keld-agent-sidecar"; do
       if [ -x "$d/keld-agent-sidecar" ]; then
-        FROZEN_SIDECAR="$d/keld-agent-sidecar"
+        # ⚠️ The DIRECTORY, not the executable inside it. `sidecar_point_at`
+        # takes a tree (it reads VERSION beside the binary), and handing it the
+        # executable produced a wrapper that exec'd
+        # …/keld-agent-sidecar/keld-agent-sidecar/keld-agent-sidecar. The sidecar
+        # then never started and three checkpoints failed at once with no line
+        # anywhere saying why — caught by running the reference chain, not by
+        # reading it.
+        FROZEN_SIDECAR="$d"
         SIDECAR_KIND="frozen $(cat "$d/VERSION" 2>/dev/null || echo "(no VERSION — predates the stamp)") at $d"
         break
       fi
