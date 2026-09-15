@@ -430,13 +430,39 @@
 // falls back to whatever the view hierarchy happens to make first responder,
 // which is not guaranteed to be it.
 - (NSView *)initialKeyView {
-    return _codeField;
+    // ⚠️ NEVER NAME A HIDDEN CONTROL HERE. Installer.app applies
+    // initialKeyView on EVERY entry, so this is re-entered on Back-then-Continue
+    // — and by then the code field is hidden behind the approval page.
+    // Measured with a standalone harness (focustest.m): `makeFirstResponder:` on
+    // a HIDDEN NSTextField returns YES and installs its field editor, so the
+    // window's first responder becomes an NSTextView nobody can see and every
+    // keystroke disappears into it. On screen that reads as the embedded page's
+    // email and password fields being disabled — they render, they just never
+    // receive a key. First entry hid the bug completely, because the field IS
+    // visible then.
+    if (_approvalWeb && !_approvalWeb.hidden) return _approvalWeb;
+    if (!_codeField.hidden) return _codeField;
+    return nil;
 }
 
 #pragma mark - Pane lifecycle
 
 - (void)didEnterPane:(InstallerSectionDirection)dir {
     (void)[self contentView];
+    // Re-assert focus explicitly as well as through -initialKeyView. The two
+    // agree, but they are applied at different moments: initialKeyView can be
+    // consulted before this view is in a window, where makeFirstResponder: is a
+    // no-op. Deferred to the next turn of the run loop so it lands AFTER
+    // Installer's own focus assignment for this transition rather than before
+    // it.
+    if (_approvalWeb && !_approvalWeb.hidden) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) s = weakSelf; if (!s) return;
+            if (s->_approvalWeb.hidden) return;
+            [s->_approvalWeb.window makeFirstResponder:s->_approvalWeb];
+        });
+    }
     // ⚠️ THE INSTALL IS ALL-OR-NOTHING. Continue is enabled by exactly one
     // thing — a VERIFIED connection to Atlas, either a setup code it accepted or
     // `whoami --verify` confirming the stored credential still works. There is

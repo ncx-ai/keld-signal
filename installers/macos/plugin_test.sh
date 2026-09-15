@@ -208,4 +208,20 @@ printf '%s' "$body" | grep -q 'loadRequest' \
   || fail "the indicator starts in a method that does not issue the load"
 
 
+# ⚠️ -initialKeyView MUST NEVER NAME A HIDDEN CONTROL, and returning one broke
+# the pane on RE-ENTRY only. Installer.app applies initialKeyView on every pane
+# entry, not just the first. The code field is hidden while the approval page is
+# showing, so after Back-then-Continue the window's first responder became a
+# field nobody could see: measured with a standalone harness (focustest.m),
+# `makeFirstResponder:` on a HIDDEN NSTextField returns YES and installs its
+# field editor, so every keystroke lands in an invisible NSTextView and the
+# embedded page's own inputs look disabled.
+#
+# The guard is that the method consults `hidden` before naming anything.
+key=$(awk '/- \(NSView \*\)initialKeyView/,/^}/' "$p/KeldSetup.m")
+printf '%s' "$key" | grep -q 'hidden' \
+  || fail "initialKeyView can return a hidden control, so pane re-entry sends typing to an invisible field"
+printf '%s' "$key" | grep -q '_approvalWeb' \
+  || fail "initialKeyView ignores the approval page, so focus never reaches the form actually on screen"
+
 echo "plugin_test.sh: OK"
