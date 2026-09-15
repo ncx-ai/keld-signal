@@ -116,6 +116,15 @@ grep -qF 'device_code' "$p/KeldSetup.m" || fail "pane does not handle the device
 grep -qF 'user_code' "$p/KeldSetup.m" || fail "pane never renders the device-flow user code, which is what the person matches against the browser"
 grep -qF 'verification_url' "$p/KeldSetup.m" || fail "pane does not surface the verification URL, so a failed browser open is a dead end"
 
+# ⚠️ THE APPROVAL HAPPENS INSIDE THE WIZARD, on Atlas's OWN page. The pane loads
+# the verification URL in a WKWebView, so the sign-in fields and the confirm
+# button are Atlas's — this installer never sees a password, autofill behaves,
+# and an SSO or 2FA step added later keeps working untouched. A native
+# credential form here would own all three of those problems.
+grep -qF 'WKWebView' "$p/KeldSetup.m" || fail "pane does not embed the approval page, so approval leaves the wizard"
+# ...which means the CLI must NOT also open an external browser behind it.
+grep -qF -- '--no-browser' "$p/KeldSetup.m" || fail "pane embeds the approval page but lets keld open a browser too, so both appear"
+
 # Content flush against the pane's frame reads as broken; the stack needs insets.
 grep -qF 'edgeInsets' "$p/KeldSetup.m" || fail "pane's stack has no edge insets, so content sits flush against the panel border"
 

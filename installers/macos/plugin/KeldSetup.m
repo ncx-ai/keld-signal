@@ -15,6 +15,7 @@
 // (auth.json) and stage a download — and postinstall does everything that
 // rewrites a user's files.
 #import <Cocoa/Cocoa.h>
+#import <WebKit/WebKit.h>
 #import <InstallerPlugins/InstallerPlugins.h>
 #import "KeldCode.h"
 
@@ -46,6 +47,13 @@
     // second browser window or start a second polling child. Cleared when a
     // sign-in ends without pairing, so Try again can start a fresh one.
     BOOL _signInStarted;
+    // Atlas's own approval page, embedded. Hidden until a device_code arrives
+    // and again once approval lands.
+    WKWebView *_approvalWeb;
+    // The sections hidden while the approval page is up: an Installer pane has a
+    // fixed height, so the web view has to borrow their space rather than push
+    // the pane taller (which would simply clip).
+    NSMutableArray<NSView *> *_stowedWhileSigningIn;
 }
 
 - (NSString *)title { return @"Set Up Keld"; }
@@ -528,20 +536,25 @@
 - (void)beginBrowserSignIn {
     if (_signInStarted) return;
     _signInStarted = YES;
-    _codeStatus.stringValue = @"Opening your browser to sign in…";
+    _codeStatus.stringValue = @"Signing in to Keld…";
     _retryButton.hidden = YES;
     __weak typeof(self) weakSelf = self;
     __block NSString *failure = nil;
-    [self runKeld:@[@"login", @"--json"] onEvent:^(NSDictionary *e) {
+    // ⚠️ `--no-browser` is load-bearing: the CLI opens the verification URL
+    // itself by default, and with the page also embedded here that would put the
+    // same approval in two places at once — one of which is the app this wizard
+    // exists to avoid sending people to.
+    [self runKeld:@[@"login", @"--json", @"--no-browser"] onEvent:^(NSDictionary *e) {
         typeof(self) s = weakSelf; if (!s) return;
         NSString *kind = e[@"event"];
         if ([kind isEqualToString:@"device_code"]) {
             NSString *code = e[@"user_code"] ?: @"";
             NSString *url = e[@"verification_url"] ?: @"";
             s->_codeStatus.stringValue =
-                [NSString stringWithFormat:@"Approve in your browser — code %@\n%@", code, url];
-            s->_codeStatus.maximumNumberOfLines = 2;
+                [NSString stringWithFormat:@"Sign in and approve — code %@", code];
+            [s showApprovalPage:url];
         } else if ([kind isEqualToString:@"authorized"]) {
+            [s hideApprovalPage];
             s->_paired = YES;
             s->_apiURL = e[@"api_url"] ?: @"";
             s->_codeField.hidden = YES;
@@ -557,6 +570,7 @@
     } done:^(int status) {
         typeof(self) s = weakSelf; if (!s) return;
         if (s->_paired) return;
+        [s hideApprovalPage];
         // Sign-in did not complete — expired, declined, or the browser never
         // opened. All-or-nothing: Continue stays disabled and the only way on is
         // to try again, or to paste a code by hand into the field below.
@@ -570,6 +584,55 @@
 
 - (void)retryIdentity:(id)sender {
     [self checkIdentity];
+}
+
+#pragma mark - Embedded approval
+
+// showApprovalPage puts ATLAS'S OWN sign-in and approval page inside the pane.
+//
+// ⚠️ THE FIELDS ARE ATLAS'S, NOT OURS, AND THAT IS THE ENTIRE POINT. A native
+// email/password form here would work — `POST /auth/login` then
+// `POST /cli/device/approve` needs no server change — but it would make this
+// installer an auth client handling somebody's org password, dead-end the day
+// Atlas gains SSO or 2FA, break password-manager autofill, and teach people that
+// typing credentials into a pkg wizard is normal (anyone can build a lookalike
+// pkg; only a real page can prove its own origin). Rendering Atlas's page costs
+// none of that, and the wizard still never sends anyone to another app.
+//
+// The trade we accept: a WKWebView has its own cookie store and cannot see
+// Safari's session, so someone already signed in to Atlas in their browser signs
+// in again here.
+- (void)showApprovalPage:(NSString *)urlString {
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) return;
+    NSStackView *root = (NSStackView *)_view;
+    if (!_approvalWeb) {
+        _approvalWeb = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 560, 300)
+                                          configuration:[WKWebViewConfiguration new]];
+        _approvalWeb.translatesAutoresizingMaskIntoConstraints = NO;
+        [_approvalWeb.widthAnchor constraintEqualToConstant:560].active = YES;
+        [_approvalWeb.heightAnchor constraintEqualToConstant:300].active = YES;
+    }
+    // An Installer pane cannot grow, so the approval page borrows the space of
+    // the sections below it rather than pushing them off the bottom.
+    if (!_stowedWhileSigningIn) _stowedWhileSigningIn = [NSMutableArray array];
+    if (_stowedWhileSigningIn.count == 0) {
+        for (NSView *v in root.arrangedSubviews) {
+            if (v == _codeStatus) continue;   // the code line stays visible beside the page
+            if (v.hidden) continue;
+            [_stowedWhileSigningIn addObject:v];
+        }
+        for (NSView *v in _stowedWhileSigningIn) v.hidden = YES;
+    }
+    if (_approvalWeb.superview == nil) [root addArrangedSubview:_approvalWeb];
+    _approvalWeb.hidden = NO;
+    [_approvalWeb loadRequest:[NSURLRequest requestWithURL:url]];
+}
+
+- (void)hideApprovalPage {
+    _approvalWeb.hidden = YES;
+    for (NSView *v in _stowedWhileSigningIn) v.hidden = NO;
+    [_stowedWhileSigningIn removeAllObjects];
 }
 
 // prefillFromClipboard fills the field from the clipboard and submits it.
