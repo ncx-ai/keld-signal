@@ -106,6 +106,16 @@ grep -qF -- '--verify' "$p/KeldSetup.m" || fail "pane checks identity without --
 grep -qF 'NSPasteboard' "$p/KeldSetup.m" || fail "pane does not read the clipboard, so the person must type the code by hand"
 grep -qF 'KeldLooksLikePairingCode' "$p/KeldSetup.m" || fail "pane does not shape-check clipboard contents before submitting them"
 
+# ⚠️ NOBODY SHOULD HAVE TO FETCH A CODE BY HAND. With no verified credential and
+# nothing usable on the clipboard, the pane starts the OAuth device flow itself
+# (`keld login --json` with no --code), so Atlas mints the code for that browser
+# session. The pane must RENDER the returned user code: matching it against what
+# the browser shows is the device flow's anti-phishing step, and hiding it turns
+# a security property into decoration.
+grep -qF 'device_code' "$p/KeldSetup.m" || fail "pane does not handle the device_code event, so it cannot start a browser sign-in"
+grep -qF 'user_code' "$p/KeldSetup.m" || fail "pane never renders the device-flow user code, which is what the person matches against the browser"
+grep -qF 'verification_url' "$p/KeldSetup.m" || fail "pane does not surface the verification URL, so a failed browser open is a dead end"
+
 # Content flush against the pane's frame reads as broken; the stack needs insets.
 grep -qF 'edgeInsets' "$p/KeldSetup.m" || fail "pane's stack has no edge insets, so content sits flush against the panel border"
 

@@ -42,6 +42,10 @@
     // Guards startSidecarDownload so re-entering the pane (Back, then
     // Continue) can't pile up a second concurrent ~190 MB download.
     BOOL _sidecarDownloadStarted;
+    // Same guard for the browser sign-in: re-entering the pane must not open a
+    // second browser window or start a second polling child. Cleared when a
+    // sign-in ends without pairing, so Try again can start a fresh one.
+    BOOL _signInStarted;
 }
 
 - (NSString *)title { return @"Set Up Keld"; }
@@ -254,7 +258,13 @@
     _toolsStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
     _toolsStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     _toolsStack.alignment = NSLayoutAttributeLeading;
-    _toolsStack.spacing = 4;
+    // ⚠️ A nested NSStackView does NOT inherit its parent's edgeInsets, and its
+    // own default to zero — so the checkbox rows sat tight against the section
+    // above and hard against the panel's left edge while every sibling label
+    // was inset. The rows also need more air between them than the 4pt that
+    // reads as a single block of text rather than a list of choices.
+    _toolsStack.edgeInsets = NSEdgeInsetsMake(4, 2, 4, 2);
+    _toolsStack.spacing = 8;
     [root addArrangedSubview:_toolsStack];
 
     _view = root;
@@ -493,11 +503,68 @@
             s.nextEnabled = NO;
             return;
         }
-        // `none` or `unauthorized`: a setup code is required. An expired
-        // credential is not a reason to nag about the old one, so both read the
-        // same to the person.
-        s->_codeStatus.stringValue = @"Paste the setup code from your Keld download page.";
-        [s prefillFromClipboard];
+        // `none` or `unauthorized`: this machine needs to be connected. An
+        // expired credential is not a reason to nag about the old one, so both
+        // read the same to the person.
+        //
+        // The clipboard is tried first only because it is INSTANT when someone
+        // came straight from the download page; with nothing there, the pane
+        // fetches a code itself rather than asking anyone to go and find one.
+        if ([s prefillFromClipboard]) return;
+        [s beginBrowserSignIn];
+    }];
+}
+
+// beginBrowserSignIn runs the OAuth device-authorization flow: `keld login
+// --json` with no --code asks Atlas for a code, opens the browser itself, and
+// polls until the person approves.
+//
+// ⚠️ THE USER CODE IS DISPLAYED ON PURPOSE. Device flow's protection against
+// being phished into approving someone else's sign-in is that the code on this
+// screen must match the code in the browser; showing only a spinner would throw
+// that away. The verification URL is shown for the same reason it is returned —
+// if the browser does not open (no default handler, a locked-down Mac), the
+// person still has somewhere to go instead of a dead end.
+- (void)beginBrowserSignIn {
+    if (_signInStarted) return;
+    _signInStarted = YES;
+    _codeStatus.stringValue = @"Opening your browser to sign in…";
+    _retryButton.hidden = YES;
+    __weak typeof(self) weakSelf = self;
+    __block NSString *failure = nil;
+    [self runKeld:@[@"login", @"--json"] onEvent:^(NSDictionary *e) {
+        typeof(self) s = weakSelf; if (!s) return;
+        NSString *kind = e[@"event"];
+        if ([kind isEqualToString:@"device_code"]) {
+            NSString *code = e[@"user_code"] ?: @"";
+            NSString *url = e[@"verification_url"] ?: @"";
+            s->_codeStatus.stringValue =
+                [NSString stringWithFormat:@"Approve in your browser — code %@\n%@", code, url];
+            s->_codeStatus.maximumNumberOfLines = 2;
+        } else if ([kind isEqualToString:@"authorized"]) {
+            s->_paired = YES;
+            s->_apiURL = e[@"api_url"] ?: @"";
+            s->_codeField.hidden = YES;
+            s->_connectButton.hidden = YES;
+            s->_codeStatus.stringValue =
+                [NSString stringWithFormat:@"Connected — %@ · %@",
+                 e[@"principal"] ?: @"", e[@"org"] ?: @""];
+            s.nextEnabled = YES;
+            [s loadTools];
+        } else if ([kind isEqualToString:@"error"]) {
+            failure = e[@"message"];
+        }
+    } done:^(int status) {
+        typeof(self) s = weakSelf; if (!s) return;
+        if (s->_paired) return;
+        // Sign-in did not complete — expired, declined, or the browser never
+        // opened. All-or-nothing: Continue stays disabled and the only way on is
+        // to try again, or to paste a code by hand into the field below.
+        s->_signInStarted = NO;
+        s->_codeStatus.stringValue = failure
+            ? [NSString stringWithFormat:@"Sign-in didn't finish (%@). Try again, or paste a setup code.", failure]
+            : @"Sign-in didn't finish. Try again, or paste a setup code.";
+        s->_retryButton.hidden = NO;
     }];
 }
 
@@ -512,12 +579,13 @@
 // nobody should have to retype it. `KeldLooksLikePairingCode` (unit-tested in
 // KeldCodeTest.m) is what keeps this from firing a login attempt at arbitrary
 // copied text; the value stays visible and editable either way.
-- (void)prefillFromClipboard {
+- (BOOL)prefillFromClipboard {
     NSString *pasted = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
-    if (!KeldLooksLikePairingCode(pasted)) return;
+    if (!KeldLooksLikePairingCode(pasted)) return NO;
     _codeField.stringValue = [pasted stringByTrimmingCharactersInSet:
                               [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     [self connect:nil];
+    return YES;
 }
 
 #pragma mark - Handoff

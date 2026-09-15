@@ -97,6 +97,30 @@ func TestIdentityEventCarriesStatusOnTheWire(t *testing.T) {
 	}
 }
 
+// The macOS installer's wizard pane starts the device flow itself and renders
+// the returned code beside the verification URL — matching that code against the
+// browser is the flow's anti-phishing step. It reads both by name off this
+// event, so renaming either field silently turns the pane's sign-in screen into
+// a spinner with no code on it.
+func TestDeviceCodeEventCarriesTheFieldsTheInstallerRenders(t *testing.T) {
+	b, err := json.Marshal(deviceCodeEvent{
+		Event: "device_code", VerificationURL: "https://atlas.keld.co/device",
+		UserCode: "WXYZ-1234", ExpiresIn: 900, Interval: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"event", "verification_url", "user_code"} {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("device_code event is missing %q; the installer pane reads it by name (got %v)", key, got)
+		}
+	}
+}
+
 func TestWhoamiAcceptsVerifyAndJSONFlags(t *testing.T) {
 	cmd := newWhoamiCmd()
 	for _, name := range []string{"verify", "json"} {
