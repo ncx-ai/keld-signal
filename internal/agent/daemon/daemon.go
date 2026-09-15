@@ -728,6 +728,7 @@ func Run(ctx context.Context) error {
 	}
 	set := settings.Load()
 
+
 	addr := bindAddr()
 	if svcSecret, err := serviceSecret(); err != nil {
 		return err
@@ -747,6 +748,23 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	log.Printf("keld-agent: listening on %s", ln.Addr().String())
+
+	// The integrations catalogue poll, started here for the same reason the
+	// listener is bound here: everything below blocks on awaitConfig, and a
+	// machine nobody has onboarded must still LIST its tools, configure one
+	// that appears, and answer the route the page calls.
+	//
+	// ⚠️ AFTER agentcfg.Write, NOT BEFORE. The detector's setup params mint the
+	// telemetry secret, and agentcfg writes that key on its own — so starting it
+	// any earlier races a PARTIAL agent.json into existence, with a telemetry
+	// secret and no port. `TestAgentJSONIsWrittenBeforeConfigArrives` catches
+	// exactly that, and did.
+	//
+	// Its event seams resolve late: the emitter is built from the config
+	// awaitConfig is waiting for, and setIntegrationSink hands it over then.
+	setIntegrationLanes(integrations.LoadLanes())
+	bindPointerObserver()
+	startIntegrationsDetector(ctx)
 
 	lb := newLoopbackServer(ln, onboardingHandler(set, secret))
 	lb.Serve(ctx)
@@ -1144,9 +1162,10 @@ func Run(ctx context.Context) error {
 	// enrichment branch: LISTING every tool Signal knows is the product even
 	// on a machine where enrichment is off, and the auto-setup toggle is read
 	// live inside the detector rather than captured here.
-	setIntegrationLanes(integrations.LoadLanes())
-	bindPointerObserver()
-	startIntegrationsDetector(ctx, emitter)
+	// The emitter exists now, so the integrations seams that resolved late
+	// during the onboarding wait start publishing. The detector itself has been
+	// running since before awaitConfig — see startIntegrationsDetector.
+	setIntegrationSink(emitter)
 	pollSettingsIfOnline(ctx, set.AtlasEnabled(), func(ctx context.Context) {
 		pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	})

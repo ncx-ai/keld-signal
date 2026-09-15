@@ -58,6 +58,19 @@ type Detector struct {
 	// Log is where refusals go. Optional.
 	Log func(format string, args ...any)
 
+	// Snapshot answers the current state of every row, and Sink publishes what
+	// changed. ⚠️ BOTH ARE NEW ON 2026-09-15 AND THE ABSENCE WAS THE BUG:
+	// `Reconcile` had no caller anywhere, so `integration.broken` could never
+	// fire on any machine and goal G3 — a break reaches us as an event — did
+	// not hold. The transition rule and its ten tests were green throughout.
+	//
+	// The poll is the right home: it already walks the catalogue on a timer,
+	// and a state transition is what a timer is for. Nil on either leaves the
+	// detector doing exactly what it did before, so a caller that wants only
+	// auto-setup is unchanged.
+	Snapshot func() []Integration
+	Sink     Sink
+
 	// present is the previous tick's answer, so Tick can report what is NEW.
 	present map[string]bool
 	// attempted bounds retries to one per tool per daemon run. A tool whose
@@ -73,6 +86,7 @@ type Detector struct {
 // a minute for no reason.
 func (d *Detector) Run(ctx context.Context) {
 	d.Tick()
+	d.reconcile()
 	t := time.NewTicker(d.interval())
 	defer t.Stop()
 	for {
@@ -81,7 +95,35 @@ func (d *Detector) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			d.Tick()
+			d.reconcile()
 		}
+	}
+}
+
+// reconcile publishes what CHANGED since the last poll, and persists what it
+// published so a machine sitting broken for a week sends one event rather than
+// one per minute. Silent unless both seams are wired.
+func (d *Detector) reconcile() {
+	if d.Snapshot == nil || d.Sink == nil {
+		return
+	}
+	prev, err := LoadEmittedStates()
+	if err != nil {
+		// An unreadable record is "nothing emitted yet", never a reason to skip
+		// the poll: the cost of re-announcing a break after a corrupt file is
+		// one duplicate event, and the cost of skipping is silence.
+		d.logf("integrations: emitted-state record unreadable, treating as empty: %v", err)
+		prev = map[string]EmittedState{}
+	}
+	ems, next := Reconcile(time.Now(), d.Snapshot(), prev, nil, DefaultWindow)
+	if len(ems) == 0 {
+		return
+	}
+	Emit(d.Sink, ems)
+	if err := SaveEmittedStates(next); err != nil {
+		// Publishing already happened. Not persisting means the next poll
+		// re-announces, which is noisy but never silent — the safe direction.
+		d.logf("integrations: could not persist emitted states: %v", err)
 	}
 }
 

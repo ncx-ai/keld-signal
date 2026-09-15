@@ -32,16 +32,44 @@ func (a eventEmitter) Emit(code string, fields map[string]any) {
 // It is started unconditionally, because LISTING is the product even when
 // auto-setup is off (AC-3's second half). The toggle is read live, per tick,
 // inside the detector.
-func startIntegrationsDetector(ctx context.Context, emitter *clientevents.Emitter) *integrations.Detector {
+// startIntegrationsDetector starts the catalogue poll.
+//
+// ⚠️ IT IS CALLED BEFORE awaitConfig, AND THAT ORDER IS THE POINT — the same
+// correction the listener already carries a few lines above. Its own comment
+// said "started unconditionally", and it was not: sitting after the wait meant
+// a machine nobody had onboarded ran no detector at all, while the route it
+// feeds answered happily and reported auto-setup as ON. Measured on a real
+// isolated daemon 2026-09-15: ~/.codex appeared, the row moved to
+// not_configured, and nothing was ever written.
+//
+// A missing hook.json is a NORMAL startup state on this product (the macOS pkg
+// registers the service before onboarding runs), and configuring a tool needs
+// nothing from Atlas: the tool is pointed at the LOOPBACK proxy with a LOCAL
+// secret, and its telemetry spools until onboarding completes.
+//
+// Both event seams therefore resolve LATE. The emitter is built from the config
+// awaitConfig is waiting for, so capturing it here would capture nil forever.
+func startIntegrationsDetector(ctx context.Context) *integrations.Detector {
 	d := &integrations.Detector{
 		Entries:   integrations.Catalogue,
 		AutoSetup: func() bool { return settings.Load().AutoSetupEnabled() },
 		Params:    integrationsSetupParams,
-		Emit:      eventEmitter{emitter},
+		Emit:      lateEmitter{},
 		Log:       log.Printf,
+		Snapshot:  func() []integrations.Integration { return integrations.Snapshot(integrations.Deps{}, integrations.Options{}).Integrations },
+		Sink:      currentIntegrationSink(),
 	}
 	go d.Run(ctx)
 	return d
+}
+
+// lateEmitter resolves the emitter per call, for the reason above.
+type lateEmitter struct{}
+
+func (lateEmitter) Emit(code string, fields map[string]any) {
+	if s := integrationSink.Load(); s != nil {
+		s.Emit(code, string(clientevents.SevInfo), fields)
+	}
 }
 
 // integrationsSetupParams is what the detector writes into a tool's config.
