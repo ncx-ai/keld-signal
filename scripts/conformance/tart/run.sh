@@ -41,7 +41,9 @@ done
 
 export TART_SSH_USERNAME=${TART_SSH_USERNAME:-admin}
 export TART_SSH_PASSWORD=${TART_SSH_PASSWORD:-admin}
-OUT=${KELD_CONFORM_OUT:-$ROOT/.conformance/vm-out}
+# Outside the checkout on purpose: a run must never leave the working tree
+# dirty, and .conformance/ holds one file with a contract (last-tested.json).
+OUT=${KELD_CONFORM_OUT:-${TMPDIR:-/tmp}/keld-conformance-vm-out}
 
 cleanup() {
   local rc=$?
