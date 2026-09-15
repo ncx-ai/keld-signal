@@ -1,0 +1,10 @@
+{
+  "session_id": "01a0a573-ec93-7ac3-bb25-a3cba9a14203",
+  "turn_id": "01a0a573-ecdf-7fb2-84e7-fee5fccddb19",
+  "transcript_path": "/private/tmp/claude-501/-Users-gabrielionescu-projects-keld-keld-signal/3099ecfc-8cac-44ea-8722-d6ba8df5f604/scratchpad/codexcap/ch/sessions/2026/09/15/rollout-2026-09-15T16-23-52-01a0a573-ec93-7ac3-bb25-a3cba9a14203.jsonl",
+  "cwd": "/private/tmp/claude-501/-Users-gabrielionescu-projects-keld-keld-signal/3099ecfc-8cac-44ea-8722-d6ba8df5f604/scratchpad/codexcap/work",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "mock-1",
+  "permission_mode": "bypassPermissions",
+  "prompt": "<redacted>"
+}

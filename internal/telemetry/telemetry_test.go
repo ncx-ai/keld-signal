@@ -41,10 +41,14 @@ func TestClaudeEnvOrderAndHeaders(t *testing.T) {
 func TestCodexBlockBodyHasHooksAndOtel(t *testing.T) {
 	p := SetupParams{Endpoint: "https://e", IngestToken: "tok"}
 	body := CodexBlockBody(p, "codex")
-	for _, want := range []string{"[otel]", "[[hooks.SessionStart]]", "[[hooks.PreToolUse]]", "keld __hook --source codex"} {
+	for _, want := range []string{"[otel]", "[[hooks.SessionStart]]", "[[hooks.UserPromptSubmit]]", "[[hooks.Stop]]", "keld __hook --source codex"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q\n%s", want, body)
 		}
+	}
+	// PreToolUse names no prompt and fires per tool call; it must not return.
+	if strings.Contains(body, "[[hooks.PreToolUse]]") {
+		t.Errorf("body registers PreToolUse\n%s", body)
 	}
 }
 

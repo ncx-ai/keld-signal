@@ -121,7 +121,7 @@ func (a *CodexAdapter) Apply(currentText *string, p SetupParams, replace bool) P
 		ConfigPath: a.ConfigPath(),
 		AfterText:  after,
 		Managed:    map[string]any{"block": true, "created": currentText == nil},
-		Summary:    []string{"add [otel] + SessionStart/PreToolUse hooks block"},
+		Summary:    []string{"add [otel] + SessionStart/UserPromptSubmit/Stop hooks block"},
 		Changed:    after != ptrToStr(currentText),
 	}
 }

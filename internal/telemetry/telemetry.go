@@ -69,8 +69,26 @@ var ClaudeHookEvents = []ClaudeHookEvent{
 	{Event: "UserPromptSubmit", Matcher: nil},
 }
 
-// CodexHookEvents is the list of hook event names keld registers with Codex.
-var CodexHookEvents = []string{"SessionStart", "PreToolUse"}
+// CodexHookEvents is the list of hook event names keld registers with Codex,
+// in lifecycle order.
+//
+// ⚠️ This was {SessionStart, PreToolUse} and neither of those could ever
+// produce a captured prompt. `UserPromptSubmit` is the human turn and the only
+// event whose payload carries a `turn_id` beside the prompt — the identity
+// `hook.Run` builds `<session_id>#<turn_id>` from. `Stop` closes that same
+// turn under the same `turn_id`. `SessionStart` stays because it is how the
+// daemon learns a Codex session exists before any prompt arrives.
+//
+// `PreToolUse` is dropped rather than kept for completeness: it fires once per
+// TOOL CALL — dozens per turn on an agentic session — and its payload names no
+// prompt, so every one of those was a process spawn that could not produce a
+// pointer.
+//
+// ⚠️ Changing this list changes the hook COMMANDS Codex hashes, and Codex marks
+// a changed hook for review again: a machine that had approved keld's hooks
+// returns to `approval_required` at its next setup. That is stated on the
+// Integrations row rather than hidden — see tools.CodexHooksTrusted.
+var CodexHookEvents = []string{"SessionStart", "UserPromptSubmit", "Stop"}
 
 // HookCommand returns the command string keld uses for a hook invocation from
 // the given source tool. The binary acts as its own hook runner. binPath is the

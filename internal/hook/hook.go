@@ -92,7 +92,7 @@ func Run(source string, stdin io.Reader, stderr io.Writer, now time.Time) (code 
 		sessionID = stringVal(hookInput, "thread_id")
 	}
 
-	promptID := stringVal(hookInput, "prompt_id")
+	promptID := promptIdentity(hookInput, sessionID)
 	transcriptPath := stringVal(hookInput, "transcript_path")
 
 	// Best-effort: hand the local enrichment daemon a pointer to this prompt.
@@ -100,6 +100,33 @@ func Run(source string, stdin io.Reader, stderr io.Writer, now time.Time) (code 
 	// or the daemon isn't running (power-user path).
 	forwardToAgent(source, sessionID, promptID, transcriptPath, cwd)
 	return 0
+}
+
+// promptIdentity resolves the id that names this human turn.
+//
+// `prompt_id` first, because a tool that states one is stating the identity
+// Atlas will join on and a synthesised id beside it would name the same prompt
+// twice. ⚠️ Codex states none — at ANY hook event, in the 0.153.4 payloads
+// captured in testdata/codex-0.153.4 — and that single absence is the whole
+// Codex capture bug: this function's predecessor read `prompt_id`, found "",
+// and returned silently, so Codex produced ZERO captured prompts for the life
+// of the feature while its telemetry flowed normally and nothing said so.
+//
+// What Codex does send is `turn_id`, the identity of the turn, which is what
+// its rollout's `turn_context` carries too — so `<session_id>#<turn_id>` is
+// the same id the transcript watcher synthesises for the same prompt, and the
+// queue dedups the hook↔watcher overlap on it exactly as it does for Claude
+// Code. Both halves are required: a bare `#<turn_id>` is not unique across
+// sessions, so with no session id there is no identity and no pointer.
+func promptIdentity(hookInput map[string]any, sessionID string) string {
+	if id := stringVal(hookInput, "prompt_id"); id != "" {
+		return id
+	}
+	turnID := stringVal(hookInput, "turn_id")
+	if turnID == "" || sessionID == "" {
+		return ""
+	}
+	return sessionID + "#" + turnID
 }
 
 // stringVal extracts a string value from a map[string]any, returning "" if
