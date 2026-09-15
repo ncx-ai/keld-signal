@@ -13,6 +13,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"syscall"
@@ -79,6 +80,23 @@ func IsTransient(err error) bool {
 	}
 	var de *net.DNSError
 	if errors.As(err, &de) && de.IsTemporary {
+		return true
+	}
+	// ⚠️ A *url.Error CARRYING io.EOF MEANS THE REQUEST NEVER COMPLETED: the
+	// server closed the connection before answering. That is what a dropped
+	// keep-alive looks like to Go, and Go does not retry it itself for a POST.
+	//
+	// Measured 2026-09-14: the CLI's device-login poll died on its FIRST attempt
+	// against a local Atlas with `Post ".../device/poll": EOF` while the server
+	// logged that same request as 202 Accepted — and inside the macOS installer
+	// that made the approval page appear and vanish before anyone could type in
+	// it.
+	//
+	// Scoped to the round-trip error on purpose. A BARE io.EOF is not transient:
+	// outside a round trip it is how an empty body reads to a decoder, and
+	// retrying that hammers a server that answered perfectly well.
+	var ue *url.Error
+	if errors.As(err, &ue) && (errors.Is(ue.Err, io.EOF) || errors.Is(ue.Err, io.ErrUnexpectedEOF)) {
 		return true
 	}
 	return false // unrecognized -> permanent (don't hammer)

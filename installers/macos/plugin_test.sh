@@ -131,6 +131,21 @@ grep -qF 'installer_url' "$p/KeldSetup.m" || fail "pane embeds verification_url,
 # ...which means the CLI must NOT also open an external browser behind it.
 grep -qF -- '--no-browser' "$p/KeldSetup.m" || fail "pane embeds the approval page but lets keld open a browser too, so both appear"
 
+# ⚠️ THE PANE CANNOT BE AIMED WITH AN ENVIRONMENT VARIABLE, AND THAT IS
+# MEASURED. Installer.app inherits the env of whatever launched it — a launch
+# carrying KELD_API_URL shows up in /var/log/install.log — but the plugin runs in
+# InstallerRemotePluginService, an XPC service that starts with a CLEAN
+# environment: the pane logged `KELD_API_URL=(unset)` while Installer's own dump
+# showed it set. So `keld` defaulted to production and loaded production's page.
+#
+# The target therefore has to be BAKED IN at build time (build-plugin.sh stamps
+# KeldAPIURL into the bundle's Info.plist when KELD_API_URL is set) and passed
+# explicitly on the command line. A release build sets nothing and gets the
+# compiled-in default.
+grep -qF 'KeldAPIURL' "$p/KeldSetup.m" || fail "pane cannot be pointed at a non-default Atlas: nothing reads the bundle's KeldAPIURL"
+grep -qF -- '--api-url' "$p/KeldSetup.m" || fail "pane reads a configured Atlas but never passes --api-url, so the child still uses the default"
+grep -qF 'KeldAPIURL' "$p/build-plugin.sh" || fail "build-plugin.sh never stamps the configured Atlas into the bundle"
+
 # Content flush against the pane's frame reads as broken; the stack needs insets.
 grep -qF 'edgeInsets' "$p/KeldSetup.m" || fail "pane's stack has no edge insets, so content sits flush against the panel border"
 

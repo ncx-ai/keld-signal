@@ -69,6 +69,32 @@
     return v ?: @"";
 }
 
+
+// configuredAPIURL is the Atlas this build targets, or nil for the default.
+//
+// ⚠️ IT IS BAKED IN AT BUILD TIME BECAUSE AN ENVIRONMENT VARIABLE CANNOT REACH
+// HERE. Installer.app does inherit the environment of whatever launched it — a
+// launch carrying KELD_API_URL appears in /var/log/install.log — but this pane
+// runs inside InstallerRemotePluginService, an XPC service that starts with a
+// CLEAN environment. Measured 2026-09-14: the pane read `KELD_API_URL=(unset)`
+// in the same run where Installer's own env dump showed it set, so `keld`
+// defaulted to production and loaded production's page.
+//
+// build-plugin.sh stamps this key when KELD_API_URL is set AT BUILD TIME; a
+// release build stamps nothing and the CLI uses its compiled-in default.
+- (NSString *)configuredAPIURL {
+    NSString *v = [[NSBundle bundleForClass:[self class]] objectForInfoDictionaryKey:@"KeldAPIURL"];
+    return v.length > 0 ? v : nil;
+}
+
+// apiArgs returns the --api-url pair for a build that targets a non-default
+// Atlas, or nothing at all. Every `keld` invocation that talks to Atlas takes
+// it; the sidecar download does not, because it fetches from the release host.
+- (NSArray<NSString *> *)apiArgs {
+    NSString *api = [self configuredAPIURL];
+    return api ? @[@"--api-url", api] : @[];
+}
+
 #pragma mark - Running keld
 
 // runKeld spawns the embedded CLI and delivers one parsed NDJSON object per
@@ -215,7 +241,13 @@
 
     NSStackView *root = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 620, 340)];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
-    root.alignment = NSLayoutAttributeLeading;
+    // ⚠️ WIDTH, not LEADING. With leading alignment each row hugs its own
+    // content and a row wider than the pane simply overflows the right edge —
+    // which is how the Connect button ended up off-panel and how a long status
+    // line ran past the insets and read as unpadded. Installer panes are
+    // narrower than the frame this code was written against, and the pane does
+    // not get to choose its width.
+    root.alignment = NSLayoutAttributeWidth;
     root.spacing = 18;
     // Installer.app hands a pane's contentView the full width of its frame, so
     // without insets every label and control sits flush against the panel's
@@ -231,13 +263,22 @@
     // field is small and arbitrary. An explicit width constraint is what
     // actually sizes it; nothing else here can catch that but a real Mac.
     _codeField.translatesAutoresizingMaskIntoConstraints = NO;
-    [_codeField.widthAnchor constraintEqualToConstant:320].active = YES;
+    // A floor, not a fixed width: the row fills the pane and the field takes
+    // whatever the button leaves, so neither can be pushed off the edge.
+    [_codeField.widthAnchor constraintGreaterThanOrEqualToConstant:140].active = YES;
     _connectButton = [NSButton buttonWithTitle:@"Connect" target:self action:@selector(connect:)];
     NSStackView *codeRow = [NSStackView stackViewWithViews:@[_codeField, _connectButton]];
     codeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     [root addArrangedSubview:codeRow];
-    _codeStatus = [self labelWithText:@"Checking this Mac…" bold:NO];
+    _codeStatus = [self labelWithText:@"Checking this device…" bold:NO];
     _codeStatus.textColor = [NSColor secondaryLabelColor];
+    // Long states ("Sign-in didn't finish (…)") must wrap within the pane's
+    // insets; a single unwrapped line runs past them and reads as missing
+    // padding rather than as an overflowing label.
+    _codeStatus.lineBreakMode = NSLineBreakByWordWrapping;
+    _codeStatus.maximumNumberOfLines = 3;
+    [_codeStatus setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
     [root addArrangedSubview:_codeStatus];
 
     // Shown only when Atlas could not be reached. The install is all-or-nothing,
@@ -331,7 +372,7 @@
     _codeStatus.stringValue = @"Connecting…";
     __weak typeof(self) weakSelf = self;
     __block NSString *failure = nil;
-    [self runKeld:@[@"login", @"--code", code, @"--json"]
+    [self runKeld:[@[@"login", @"--code", code, @"--json"] arrayByAddingObjectsFromArray:[self apiArgs]]
           onEvent:^(NSDictionary *e) {
         typeof(self) s = weakSelf; if (!s) return;
         NSString *kind = e[@"event"];
@@ -544,7 +585,7 @@
     // itself by default, and with the page also embedded here that would put the
     // same approval in two places at once — one of which is the app this wizard
     // exists to avoid sending people to.
-    [self runKeld:@[@"login", @"--json", @"--no-browser"] onEvent:^(NSDictionary *e) {
+    [self runKeld:[@[@"login", @"--json", @"--no-browser"] arrayByAddingObjectsFromArray:[self apiArgs]] onEvent:^(NSDictionary *e) {
         typeof(self) s = weakSelf; if (!s) return;
         NSString *kind = e[@"event"];
         if ([kind isEqualToString:@"device_code"]) {
@@ -619,8 +660,10 @@
         _approvalWeb = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 560, 300)
                                           configuration:[WKWebViewConfiguration new]];
         _approvalWeb.translatesAutoresizingMaskIntoConstraints = NO;
-        [_approvalWeb.widthAnchor constraintEqualToConstant:560].active = YES;
-        [_approvalWeb.heightAnchor constraintEqualToConstant:300].active = YES;
+        // Height only. A fixed 560 width was a guess at the pane's size and was
+        // wrong: the stack's width alignment now sizes it to whatever the pane
+        // actually is, on any Installer layout.
+        [_approvalWeb.heightAnchor constraintEqualToConstant:260].active = YES;
     }
     // An Installer pane cannot grow, so the approval page borrows the space of
     // the sections below it rather than pushing them off the bottom.

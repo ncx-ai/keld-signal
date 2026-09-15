@@ -28,6 +28,20 @@ plutil -replace CFBundleShortVersionString -string "$VERSION" "$BUNDLE/Contents/
 cp "$KELD" "$BUNDLE/Contents/Resources/keld"
 chmod +x "$BUNDLE/Contents/Resources/keld"
 
+# ⚠️ THE ATLAS TARGET MUST BE BAKED IN; AN ENV VAR CANNOT REACH THE PANE.
+# Installer.app inherits the environment of whatever launched it, but the plugin
+# runs in InstallerRemotePluginService — an XPC service with a CLEAN
+# environment. Measured 2026-09-14: the pane read KELD_API_URL=(unset) in the
+# same run where Installer's own env dump showed it set, so `keld` silently used
+# production. Stamping it here is what makes a dev-targeted build possible.
+#
+# Set at BUILD time, never at install time. A release build sets nothing, the key
+# is absent, and the CLI uses its compiled-in default.
+if [ -n "${KELD_API_URL:-}" ]; then
+  plutil -replace KeldAPIURL -string "$KELD_API_URL" "$BUNDLE/Contents/Info.plist"
+  echo "  ! plugin targets $KELD_API_URL (KELD_API_URL was set at build time) — NOT a release build"
+fi
+
 cp "$ROOT/InstallerSections.plist" "$OUT/InstallerSections.plist"
 
 # ⚠️ SIGN AFTER BUILDING, THEN VERIFY. A bundle whose executable was recompiled

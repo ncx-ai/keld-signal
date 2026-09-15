@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"fmt"
 	"github.com/ncx-ai/keld-signal/internal/errs"
 	"github.com/ncx-ai/keld-signal/internal/retry"
 )
@@ -120,12 +121,12 @@ func (c *Client) Onboarding() (*Onboarding, error) {
 	}
 	req, err := http.NewRequest(http.MethodGet, c.BaseURL+"/v1/cli/onboarding", nil)
 	if err != nil {
-		return nil, errs.New("network error contacting Atlas: %v", err)
+		return nil, fmt.Errorf("network error contacting Atlas: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, errs.New("network error contacting Atlas: %v", err)
+		return nil, fmt.Errorf("network error contacting Atlas: %w", err)
 	}
 	defer resp.Body.Close()
 	if err := checkStatus(resp); err != nil {
@@ -146,14 +147,14 @@ func (c *Client) post(path string, body []byte) (*http.Response, error) {
 	}
 	req, err := http.NewRequest(http.MethodPost, c.BaseURL+path, bodyReader)
 	if err != nil {
-		return nil, errs.New("network error contacting Atlas: %v", err)
+		return nil, fmt.Errorf("network error contacting Atlas: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, errs.New("network error contacting Atlas: %v", err)
+		return nil, fmt.Errorf("network error contacting Atlas: %w", err)
 	}
 	return resp, nil
 }

@@ -10,7 +10,17 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/errs"
 	"github.com/ncx-ai/keld-signal/internal/paths"
+	"github.com/ncx-ai/keld-signal/internal/retry"
 )
+
+// pollInterval is the device flow's polling cadence, floored at one second so a
+// server that reports 0 (or omits the field) cannot turn the loop into a spin.
+func pollInterval(ds *api.DeviceStart) int {
+	if ds.Interval < 1 {
+		return 1
+	}
+	return ds.Interval
+}
 
 // Login performs the OAuth2 device-flow login against the Atlas API.
 // sleep and opener are injectable for testing; in production use time.Sleep
@@ -40,19 +50,37 @@ func Login(c *api.Client, openBrowser bool, sleep func(time.Duration), opener fu
 	for waited <= ds.ExpiresIn {
 		result, err := c.DevicePoll(ds.DeviceCode)
 		if err != nil {
-			return nil, err
+			// ⚠️ A TRANSPORT FAILURE IS NOT A REJECTED LOGIN, AND TREATING IT AS
+			// ONE ENDED THE WHOLE FLOW. This loop returned on ANY error, so a
+			// single dropped keep-alive — which Go will not retry for a POST —
+			// aborted a ten-minute device flow on its first poll.
+			//
+			// Measured against a local Atlas 2026-09-14: every attempt failed
+			// with `Post ".../device/poll": EOF` while the server logged that
+			// same request as 202 Accepted. Inside the macOS installer the
+			// symptom was the approval page appearing and vanishing a second
+			// later, before anyone could type into it.
+			//
+			// The person is looking at a code and waiting; the right answer to a
+			// blip is to poll again on the next tick. retry.IsTransient is the
+			// same classifier the rest of this codebase uses — net faults and
+			// 408/429/5xx are transient, and UNKNOWN ERRORS ARE PERMANENT, so a
+			// refusal the server meant (a 410 for an expired code) still ends
+			// the login rather than spinning for the full expiry.
+			if !retry.IsTransient(err) {
+				return nil, err
+			}
+			sleep(time.Duration(pollInterval(ds)) * time.Second)
+			waited += pollInterval(ds)
+			continue
 		}
 		if result != nil {
 			// The "Logged in as …" confirmation is printed by the command layer
 			// (login.go) so it appears exactly once regardless of entry path.
 			return persistToken(result, c.BaseURL)
 		}
-		sleep(time.Duration(ds.Interval) * time.Second)
-		interval := ds.Interval
-		if interval < 1 {
-			interval = 1
-		}
-		waited += interval
+		sleep(time.Duration(pollInterval(ds)) * time.Second)
+		waited += pollInterval(ds)
 	}
 
 	return nil, errs.New("login timed out; please run `keld login` again")
