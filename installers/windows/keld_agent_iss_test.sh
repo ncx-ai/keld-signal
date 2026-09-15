@@ -194,4 +194,26 @@ printf '%s\n' "$code_block" | grep -q -- '--bin-path' || \
 printf '%s\n' "$onb_line" | grep -q 'Check:' || \
   fail "onboard.cmd is unconditional - a console would open after a successful wizard"
 
-echo "PASS: windows installer registers unconditionally, onboards in the wizard, keeps the console fallback gated, reads as UTF-8, adds PATH without asking, hides the file firehose, uninstalls cleanly, and claims success from observed state"
+# 10. ⚠️ A `Source:` the BUILD never produces is a compile error, and the two
+#     build paths are NOT the same path. installers.yml stages keld.exe /
+#     keld-agent.exe / keld-wizard-host.exe from the GoReleaser archive on a
+#     release, and rebuilds them natively on a workflow_dispatch DRY RUN. The
+#     helper was added to the release path and to .goreleaser.yaml but not to the
+#     dry-run branch, so the only way to exercise this workflow without cutting a
+#     release failed on a Copy-Item the release path would have satisfied —
+#     i.e. the rehearsal broke while the performance worked, which is the worst
+#     ordering there is. Guard #7 above proves the .iss wants the binary; this
+#     proves both halves of CI actually produce it.
+wf="$d/../../.github/workflows/installers.yml"
+test -f "$wf" || fail "cannot find installers.yml - this guard would pass vacuously"
+stage_step="$(sed -n '/name: Stage keld\/keld-agent binaries/,/^      - name: /p' "$wf")"
+printf '%s\n' "$stage_step" | grep -q 'cmd/keld-wizard-host' || \
+  fail "installers.yml never builds cmd/keld-wizard-host on the dry-run path - a workflow_dispatch run cannot package Windows"
+grep -q 'keld-wizard-host' "$d/../../.goreleaser.yaml" || \
+  fail ".goreleaser.yaml does not build keld-wizard-host - the RELEASE path would stage a binary the archive lacks"
+# The archive it rides must be the one the workflow unzips (keld_windows_amd64.zip),
+# so the id has to appear in an archive's `ids:` list, not merely under `builds:`.
+awk '/^archives:/{a=1} a' "$d/../../.goreleaser.yaml" | grep -q 'keld-wizard-host' || \
+  fail "keld-wizard-host is built but not listed in any archive's ids - it would never reach the release asset"
+
+echo "PASS: windows installer registers unconditionally, onboards in the wizard, keeps the console fallback gated, reads as UTF-8, adds PATH without asking, hides the file firehose, uninstalls cleanly, ships the wizard helper on both CI paths, and claims success from observed state"
