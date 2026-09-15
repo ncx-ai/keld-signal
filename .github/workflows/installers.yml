@@ -54,6 +54,10 @@ on:
         description: "Existing release tag to attach assets to (repair path). Empty = dry run."
         type: string
         default: ""
+      api_url:
+        description: "Atlas the macOS wizard pane targets (e.g. https://atlas-dev.keld.co). Empty = the CLI's built-in default. NEVER set this for a release."
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -326,6 +330,21 @@ jobs:
           # dry runs on a repo without the Apple secrets), which is meant to produce
           # unsigned, non-distributable output rather than fail.
           KELD_NOTARY_REQUIRED: ${{ secrets.APPLE_NOTARY_KEY != '' && '1' || '0' }}
+          # ⚠️ AN ENV VAR CANNOT REACH THE PANE AT INSTALL TIME, so the Atlas
+          # target is baked in HERE, at build time. Installer.app does inherit
+          # the environment of whatever launched it, but the pane runs inside
+          # InstallerRemotePluginService — an XPC service that starts with a
+          # clean environment (measured 2026-09-14: the pane read
+          # KELD_API_URL=(unset) in the same run where Installer's own env dump
+          # showed it set, and silently used production).
+          #
+          # Empty on every path but a deliberate workflow_dispatch, so a release
+          # build stamps nothing and the CLI uses its compiled-in default. A
+          # published installer pointing at a dev Atlas would send real
+          # machines' telemetry there, which is why this is bound to the input
+          # alone and build-plugin.sh prints a loud "NOT a release build" line
+          # whenever it is set.
+          KELD_API_URL: ${{ inputs.api_url }}
         run: |
           # Flatten sidecar one-dir beside keld-agent in the payload.
           VER="$TAG"
