@@ -407,7 +407,11 @@ jobs:
         run: |
           if (-not $env:KELD_VERSION) { $env:KELD_VERSION = "0.0.0-dryrun" }
           Copy-Item -Recurse -Force dist\keld-agent-sidecar installers\windows\keld-agent-sidecar
-          Copy-Item stage\keld.exe, stage\keld-agent.exe installers\windows\
+          # ⚠️ keld-wizard-host.exe is REQUIRED by the .iss — the wizard page
+          # drives it — so a missing copy here fails the build rather than
+          # shipping a page that silently cannot run anything. It rides the same
+          # GoReleaser archive as the other two (windows/amd64 only).
+          Copy-Item stage\keld.exe, stage\keld-agent.exe, stage\keld-wizard-host.exe installers\windows\
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
           & $iscc installers\windows\keld-agent.iss
