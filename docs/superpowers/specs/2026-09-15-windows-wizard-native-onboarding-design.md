@@ -342,7 +342,41 @@ verification either has SAC off already or must be a VM.
 9. Cancel mid-sign-in, then check Task Manager: **no orphaned `keld.exe`**.
 10. `/SILENT`: no page, no console, task registered, machine on `awaitConfig`.
 
-## 11. Signing, which this design does not fix and should not hide
+## 11. Signing — MEASURED AS A HARD BLOCKER, not a nice-to-have
+
+⚠️ **THIS SECTION UNDERSTATED THE PROBLEM AND IS CORRECTED RATHER THAN EDITED.**
+It read "this design adds a second unsigned executable to the payload" and
+treated signing as an open decision to take before shipping. Driving the real
+wizard on a Smart App Control machine (2026-09-15) showed it is load-bearing for
+the feature itself:
+
+```
+run start mode=1 args=whoami --verify --json
+run finished mode=1 msg=could not start C:\…\is-PVEZHWTRPH.tmp\keld.exe:
+  An Application Control policy has blocked this file.
+```
+
+**SAC blocks the `keld.exe` the page extracts to `{tmp}` and drives** (§5.3), so
+identity, login and tool detection all fail to START. Nothing about the page is
+wrong; it simply has nothing to drive. The same binary run from a normal
+directory is allowed, so this is not about the bytes — it is about an unsigned
+binary extracted by an installer into a temp directory.
+
+Consequences worth stating plainly:
+
+- **The wizard cannot work on a SAC machine until `keld.exe` is signed.** Not
+  degraded — inoperative. The console fallback (§8) is what such a machine gets,
+  which is exactly the outcome this design exists to remove.
+- **Signing `keld-setup.exe` alone is not enough.** The blocked file is the
+  payload binary, not the installer. `keld.exe`, `keld-agent.exe` and
+  `keld-wizard-host.exe` all need it.
+- **The failure was originally reported to the person as "Sign-in didn't
+  finish"** — a confident negative from a check that never ran. The page now
+  distinguishes a run that FAILED TO START from one that answered no, and says
+  which; an empty `identity` status is treated as the absence of an answer rather
+  than a fourth kind of answer.
+
+## 11a. What signing does not fix, and should not hide
 
 `keld-setup.exe` is **unsigned** — `installers.yml` has no Windows signing step —
 and Smart App Control blocks unsigned installers (§9). This design adds a second

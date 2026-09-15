@@ -32,9 +32,18 @@ func relay(o options) int {
 		em.emitValue(exitEvent{Event: "__exit", Code: 2, Message: err.Error()})
 		return 2
 	}
-	// The page never sees stderr, which is what lets it treat every event file it
-	// reads as an event rather than having to tell prose from JSON.
-	cmd.Stderr = os.Stderr
+	// ⚠️ **LEAVE STDERR NIL — DO NOT HAND IT os.Stderr.** This helper is built
+	// -H windowsgui and the wizard launches it with SW_HIDE, so it has no console
+	// and its standard handles are not valid ones. Assigning os.Stderr in that
+	// state gives exec an invalid handle, and `Start` fails before the child ever
+	// runs: no stdout, no events, and the page sees a run that began and ended
+	// having produced nothing.
+	//
+	// It reproduces as "the sign-in page never loads" with an empty identity and
+	// an instant login — which is exactly what the trace showed. A nil Stderr
+	// sends the child's stderr to the null device, which is where it was going
+	// anyway: the page only ever reads the event files.
+	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
 		em.emitValue(exitEvent{
