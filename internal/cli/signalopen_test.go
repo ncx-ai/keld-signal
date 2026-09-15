@@ -111,8 +111,11 @@ func TestFirstExistingRequiresTheRightKind(t *testing.T) {
 }
 
 func TestDarwinAppCandidatesChecksSystemAndUserApplications(t *testing.T) {
+	// darwinAppCandidates builds the per-user path with filepath.Join, so the
+	// expectation has to be built the same way: on Windows (where this test still
+	// compiles and runs) Join yields backslashes, not the macOS spelling.
 	got := darwinAppCandidates("/Users/dev")
-	want := []string{"/Applications/Keld Signal.app", "/Users/dev/Applications/Keld Signal.app"}
+	want := []string{"/Applications/Keld Signal.app", filepath.Join("/Users/dev", "Applications", "Keld Signal.app")}
 	if len(got) != len(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}

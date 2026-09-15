@@ -157,4 +157,41 @@ grep -qF 'install --code' "$cmd" || fail "onboard.cmd never redeems a setup code
 grep -qF 'install --login --yes' "$cmd" || fail "onboard.cmd has no browser-login fallback"
 grep -qF 'ingest_token'   "$cmd" || fail "onboard.cmd claims success without checking hook.json"
 
-echo "PASS: windows installer registers unconditionally, onboards visibly, adds PATH without asking, hides the file firehose, uninstalls cleanly, and claims success from observed state"
+# ── The wizard page ──────────────────────────────────────────────────────────
+
+# 5. ⚠️ INNO READS A SCRIPT AS UTF-8 ONLY WHEN IT HAS A BOM. Without one it falls
+#    back to the system codepage and every non-ASCII character in a DISPLAYED
+#    string becomes mojibake — no error, no warning, nothing in the compile
+#    output. Measured on the first real run of the page, which read
+#      Connected â€" dg@keld.co Â· Keld
+#    where an em-dash and a middot should have been.
+bom="$(head -c 3 "$iss" | od -An -tx1 | tr -d ' \n')"
+[ "$bom" = "efbbbf" ] || \
+  fail "keld-agent.iss has no UTF-8 BOM - every non-ASCII string renders as mojibake"
+
+# 6. The page runs BEFORE the payload is installed, so it drives copies extracted
+#    to {tmp}. Without a dontcopy entry it drives paths that do not exist, and
+#    every step fails to start.
+grep -q 'Source: "keld.exe";.*Flags: dontcopy' "$iss" || \
+  fail "keld.exe is not staged dontcopy - the wizard page would have nothing to drive"
+grep -q 'Source: "keld-wizard-host.exe";.*Flags: dontcopy' "$iss" || \
+  fail "keld-wizard-host.exe is not staged dontcopy - the page could not run anything"
+grep -q 'ExtractTemporaryFile' "$iss" || \
+  fail "no ExtractTemporaryFile - a dontcopy file is not on disk until it is extracted"
+
+# 7. The helper is required by the page AND installed, so CI must stage it too.
+grep -q 'Source: "keld-wizard-host.exe";.*DestDir' "$iss" || \
+  fail "keld-wizard-host.exe is not installed to {app}"
+
+# 8. ⚠️ Without --bin-path every tool hook pins {tmp}\keld.exe, a path that stops
+#    existing when the wizard closes. The config looks right; the hook never runs.
+code_block="$(sed -n '/^\[Code\]/,$p' "$iss")"
+printf '%s\n' "$code_block" | grep -q -- '--bin-path' || \
+  fail "ssPostInstall omits --bin-path - every tool hook would pin a temp path"
+
+# 9. The console fallback must no longer fire on the success path, and must still
+#    exist for /SILENT and for a [Code] failure.
+printf '%s\n' "$onb_line" | grep -q 'Check:' || \
+  fail "onboard.cmd is unconditional - a console would open after a successful wizard"
+
+echo "PASS: windows installer registers unconditionally, onboards in the wizard, keeps the console fallback gated, reads as UTF-8, adds PATH without asking, hides the file firehose, uninstalls cleanly, and claims success from observed state"
