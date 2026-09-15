@@ -1304,7 +1304,22 @@ def metrics():
         budget_shortfall_mb=wm.budget_shortfall_mb() if wm.ceiling_mb() is not None else None,
         store_stats=_store_stats(), embed_stats=_embed_stats(),
         verifier_stats=_verifier_stats(), attribution_stats=_attribution_stats(),
+        reader_skipped=_reader_skipped(),
     )
+
+
+def _reader_skipped():
+    """`reader.skipped` for /metrics, read WITHOUT importing the analysis package if it has not
+    already been imported — the same rule `_attribution_stats` follows: /metrics must never be
+    the thing that creates state, and a sidecar that has never read a transcript should report
+    the absence rather than pull in spaCy to report zeros from."""
+    mod = sys.modules.get("app.analysis.readers.base")
+    if mod is None:
+        return {}
+    try:
+        return mod.skipped_counts()
+    except Exception:                      # noqa: BLE001 — /metrics degrades, never 500s
+        return {}
 
 
 def _attribution_stats():
