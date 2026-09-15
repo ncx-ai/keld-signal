@@ -100,6 +100,15 @@ func newStatusCmd() *cobra.Command {
 				console.Print(fmt.Sprintf("  hook            v%s", manifest.Hook.Version))
 			}
 
+			// The integrations view, from integrations.Compute via
+			// localagent.IntegrationStates — the SAME function GET
+			// /v1/integrations answers from. Nothing here decides a state; the
+			// server's string is printed verbatim (AC-8).
+			console.Print("Integrations:")
+			for _, line := range localagent.IntegrationLines(localagent.IntegrationStates()) {
+				console.Print(line)
+			}
+
 			info, _ := agentcfg.Read()
 			health := localagent.Health(info, service.Status, localagent.FetchText)
 			for _, line := range renderLocalService(health) {
@@ -220,6 +229,11 @@ func newDoctorCmd() *cobra.Command {
 			if p := encoder.ProblemLine(); p != "" {
 				problems = append(problems, p)
 			}
+
+			// Per-integration findings, from the ONE state function (AC-8).
+			// doctor formats; integrations.Compute decides. `idle` is not a
+			// finding and never becomes one — a quiet user is not a bug.
+			problems = append(problems, localagent.IntegrationProblems(localagent.IntegrationStates())...)
 
 			// An update that was applied and did not come up, or one that could
 			// not be rolled back. Disk-only, same rule as the model states.

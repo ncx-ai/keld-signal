@@ -180,7 +180,14 @@ func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceK
 	// DETECTOR's doing, not a branch here: once it has applied the adapter the
 	// manifest records the tool and the session predates the new config, so
 	// row 3 produces restart_required on the very next poll.
-	if !f.Configured {
+	//
+	// ⚠️ IT DOES NOT APPLY TO AN ENTRY WITH NO ADAPTER. Cowork is configured as
+	// part of Claude Desktop and keld writes nothing for it — the watcher
+	// reading its transcripts host-side is the only lane that can ever feed —
+	// so there is no config to write and the manifest will never record it.
+	// Calling it `not_configured` would put a permanent Set up button on a row
+	// with nothing to set up, and a permanent doctor finding beside it.
+	if e.AdapterName != "" && !f.Configured {
 		return NotConfigured, ""
 	}
 	// Row 3. ⚠️ A ZERO NewestSessionStart IS UNKNOWN, NOT "LONG AGO". A tool

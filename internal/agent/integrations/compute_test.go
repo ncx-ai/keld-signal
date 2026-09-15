@@ -1,7 +1,11 @@
 package integrations
 
 import (
+	"io/fs"
 	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -368,4 +372,74 @@ func surfaceOf(t *testing.T, in Integration, kind SurfaceKind) Surface {
 	}
 	t.Fatalf("%s has no %q surface", in.ID, kind)
 	return Surface{}
+}
+
+// Cowork has no adapter: keld writes nothing for it, so the manifest will
+// never record it and `not_configured` would be a permanent Set up button on a
+// row with nothing to set up.
+func TestAnEntryWithNoAdapterIsNeverNotConfigured(t *testing.T) {
+	e := entry(t, "cowork")
+	if e.AdapterName != "" {
+		t.Fatalf("catalogue changed: cowork's AdapterName is %q", e.AdapterName)
+	}
+	f := Facts{
+		Configured: false,
+		Wiring: WiringFacts{
+			ConfigPresent: true, ConfigMtime: now.Add(-48 * time.Hour),
+			NewestSessionStart: now.Add(-time.Hour),
+		},
+	}
+	if got := one(t, e, f); got.State != Idle {
+		t.Fatalf("state = %q, want %q", got.State, Idle)
+	}
+}
+
+// AC-8, as a tripwire rather than a convention: the state vocabulary exists in
+// exactly one Go package. A second copy of the rule elsewhere would have to
+// name these strings, and this is what would notice.
+func TestTheStateVocabularyLivesInThisPackageOnly(t *testing.T) {
+	// ⚠️ `restart_required` is deliberately NOT in this list. It is already a
+	// JSON key on /v1/settings and /v1/config with an unrelated meaning ("this
+	// write needs a service restart"), so scanning for it would fail on two
+	// files that predate this package and have nothing to do with it. The
+	// other three are unambiguous.
+	distinctive := []string{"not_configured", "approval_required", "not_installed"}
+	root := filepath.Join("..", "..", "..")
+	var offenders []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "sidecar", "docs", "ui":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(p) != ".go" || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		if strings.Contains(filepath.ToSlash(p), "internal/agent/integrations/") {
+			return nil // this package is where they live
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		for _, s := range distinctive {
+			if strings.Contains(string(body), `"`+s+`"`) {
+				offenders = append(offenders, p+" → "+s)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("the state vocabulary is named outside internal/agent/integrations — "+
+			"a second copy of the rule is the one defect AC-8 exists to prevent:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
 }
