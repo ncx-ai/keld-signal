@@ -218,39 +218,56 @@ func panel(o options) int {
 	chromium := edge.NewChromium()
 
 	fits := 0
-	fit := func(cw, ch int) {
-		if cw <= 0 || ch <= 0 || fits >= 4 {
+	// fitHeight tightens the box VERTICALLY to the height the page needs, and
+	// never touches its width.
+	//
+	// ⚠️ **FITTING THE WIDTH TOO MADE IT WORSE, AND THE REASON IS WHAT
+	// `scrollWidth` MEANS.** It reports the content's MINIMUM width — what the
+	// layout collapses to — not the width the page wants. Atlas's approval route
+	// has no width constraint at all (a `px-5 py-4` wrapper with `w-full`
+	// inputs), so it fills whatever viewport it is given and its scrollWidth is
+	// far narrower than any comfortable reading width. Shrinking to it squeezed
+	// the form into a column, which is worse than the empty space it was meant to
+	// remove. The panel's width is the right width; only its height was wrong.
+	fitHeight := func(ch int) {
+		if ch <= 0 || fits >= 4 {
 			return
 		}
-		maxW, maxH := int(pw), int(ph)
-		w := cw + 2*inset
 		h := ch + 2*inset
-		if w > maxW {
-			w = maxW
+		if h > int(ph) {
+			h = int(ph)
 		}
-		if h > maxH {
-			h = maxH
-		}
-		ow, oh := clientSize(outer)
+		_, oh := clientSize(outer)
 		// Only ever tighten, and ignore noise.
-		if w >= int(ow)-2 && h >= int(oh)-2 {
+		if h >= int(oh)-2 {
 			return
 		}
 		fits++
-		pMoveWindow.Call(outer, 0, 0, uintptr(w), uintptr(h), 1)
+		pMoveWindow.Call(outer, 0, 0, uintptr(pw), uintptr(h), 1)
 		pMoveWindow.Call(child, uintptr(inset), uintptr(inset),
-			uintptr(w-2*inset), uintptr(h-2*inset), 1)
+			uintptr(int(pw)-2*inset), uintptr(h-2*inset), 1)
 		chromium.Resize()
 	}
 
+	// ⚠️ "embedded" IS NOT "LOADED", AND THE PAGE NEEDS THE SECOND ONE. Embedding
+	// succeeds the moment the control exists — before a single byte of Atlas has
+	// arrived — so a wizard that reveals the panel then shows an empty rectangle
+	// for as long as the network takes. The first size report can only come from
+	// a document that has fired `load`, so it doubles as the signal that there is
+	// something worth looking at.
+	loaded := false
 	chromium.MessageCallback = func(s string) {
 		var m struct {
-			W float64 `json:"w"`
 			H float64 `json:"h"`
 		}
-		if json.Unmarshal([]byte(s), &m) == nil {
-			fit(int(m.W), int(m.H))
+		if json.Unmarshal([]byte(s), &m) != nil {
+			return
 		}
+		if !loaded {
+			loaded = true
+			say("loaded")
+		}
+		fitHeight(int(m.H))
 	}
 	if !chromium.Embed(child) {
 		// ⚠️ A DISTINCT EXIT CODE, because the page's response is specific: fall
@@ -264,16 +281,29 @@ func panel(o options) int {
 	// Report the content's own size once it has laid out, and again if the page
 	// reflows. `requestAnimationFrame` after `load` is what makes the first
 	// reading come after layout rather than during it.
+	// Report the content's own HEIGHT once it has laid out, and again whenever it
+	// changes — an error message appearing under the form makes the page taller,
+	// and a box that did not follow would clip it.
+	//
+	// ⚠️ HEIGHT ONLY. See fitHeight: `scrollWidth` is the content's MINIMUM width,
+	// and fitting to it collapses a full-width form into a column.
 	chromium.Init(`(function () {
+  var last = -1;
   function report() {
     var d = document.documentElement, b = document.body;
     if (!d || !b) return;
-    var w = Math.max(d.scrollWidth, b.scrollWidth);
     var h = Math.max(d.scrollHeight, b.scrollHeight);
-    window.chrome.webview.postMessage(JSON.stringify({ w: w, h: h }));
+    if (h === last) return;
+    last = h;
+    window.chrome.webview.postMessage(JSON.stringify({ h: h }));
   }
-  window.addEventListener("load", function () { requestAnimationFrame(report); });
-  window.addEventListener("resize", function () { requestAnimationFrame(report); });
+  function schedule() { requestAnimationFrame(report); }
+  window.addEventListener("load", schedule);
+  if (window.ResizeObserver) {
+    window.addEventListener("load", function () {
+      new ResizeObserver(schedule).observe(document.body);
+    });
+  }
 })();`)
 	chromium.Resize()
 	chromium.Navigate(o.URL)

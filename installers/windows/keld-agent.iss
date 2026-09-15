@@ -248,6 +248,7 @@ var
   CodeEdit: TNewEdit;
   ConnectBtn, RetryBtn: TNewButton;
   WebPanel: TPanel;
+  LoadingBar: TNewProgressBar;
   ToolChecks: array of TNewCheckBox;
   ToolNames: array of String;
 
@@ -529,6 +530,11 @@ end;
 
 // An Inno wizard page has a FIXED height, so the approval panel borrows the
 // space of the sections below it rather than pushing them off the bottom.
+// ⚠️ THE PANEL STAYS HIDDEN UNTIL THE PAGE HAS LOADED. Embedding succeeds the
+// instant the control exists — before a byte of Atlas has arrived — so revealing
+// it here shows an empty rectangle for however long the network takes, which
+// reads as a broken installer rather than a loading one. A marquee bar holds the
+// space until the helper reports `loaded` (see DrainPanel).
 procedure ShowApproval(const URL: String);
 begin
   ApprovalShown := True;
@@ -537,7 +543,9 @@ begin
   CodeEdit.Visible := False;
   ConnectBtn.Visible := False;
   RetryBtn.Visible := False;
-  WebPanel.Visible := True;
+  WebPanel.Visible := False;
+  SetStatus('Loading the Keld sign-in page…');
+  LoadingBar.Visible := True;
   StartPanel(URL);
 end;
 
@@ -550,6 +558,7 @@ begin
   end;
   ApprovalShown := False;
   WebPanel.Visible := False;
+  LoadingBar.Visible := False;
 end;
 
 // DrainPanel notices the one thing the page must react to: a machine with no
@@ -570,8 +579,19 @@ begin
   if JsonStr(Lines[0], 'event') <> 'panel' then
     exit;
   Status := JsonStr(Lines[0], 'status');
+
+  // `embedded` only means the control exists — keep the loading bar up.
   if Status = 'embedded' then
     exit;
+
+  // `loaded` is the page having actually rendered: swap the bar for the panel.
+  if Status = 'loaded' then
+  begin
+    LoadingBar.Visible := False;
+    WebPanel.Visible := True;
+    SetStatus('Sign in to approve this device.');
+    exit;
+  end;
 
   // Degraded, stated, and still no console: the approval opens in the default
   // browser and the device-flow poll carries on unchanged.
@@ -581,6 +601,7 @@ begin
   // it needs admin rights this installer deliberately never asks for
   // (PrivilegesRequired=lowest).
   WebPanel.Visible := False;
+  LoadingBar.Visible := False;
   PanelRunning := False;
   SetStatus('Approve this device in the browser window that just opened.');
   if EvApprovalURL <> '' then
@@ -761,7 +782,14 @@ begin
     exit;
   SignInStarted := True;
   SetStatus('Signing in to Keld…');
+  // ⚠️ THE CODE FIELD GOES NOW, NOT WHEN THE PANEL APPEARS. It used to survive
+  // until `device_code` arrived — a network round trip — so the page sat there
+  // offering "paste a setup code / Connect" underneath the words "Signing in to
+  // Keld…", inviting a second, conflicting action while the first was in flight.
+  CodeEdit.Visible := False;
+  ConnectBtn.Visible := False;
   RetryBtn.Visible := False;
+  LoadingBar.Visible := True;
   EvUserCode := '';
   EvApprovalURL := '';
   if not StartRun(RunLoginBrowser, 'login --json --no-browser') then
@@ -971,6 +999,15 @@ begin
   RetryBtn.Caption := 'Try again';
   RetryBtn.OnClick := @RetryClick;
   RetryBtn.Visible := False;
+
+  // Marquee, not a percentage: nothing here knows how far along a page load or a
+  // device-flow round trip is, and a progress bar that invents a number is worse
+  // than one that only says "still working".
+  LoadingBar := TNewProgressBar.Create(SetupPage);
+  LoadingBar.Parent := SetupPage.Surface;
+  LoadingBar.SetBounds(0, ScaleY(72), W, ScaleY(12));
+  LoadingBar.Style := npbstMarquee;
+  LoadingBar.Visible := False;
 
   WebPanel := TPanel.Create(SetupPage);
   WebPanel.Parent := SetupPage.Surface;
