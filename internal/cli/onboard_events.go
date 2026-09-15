@@ -12,9 +12,22 @@ import (
 type deviceCodeEvent struct {
 	Event           string `json:"event"`
 	VerificationURL string `json:"verification_url"`
-	UserCode        string `json:"user_code"`
-	ExpiresIn       int    `json:"expires_in"`
-	Interval        int    `json:"interval"`
+	// InstallerURL is the same approval on Atlas's compact route, for a caller
+	// that EMBEDS the page rather than opening a browser — the macOS wizard pane
+	// renders it at roughly 560x300, where VerificationURL's page (which
+	// redirects to the full login when unauthenticated, and lays every state out
+	// with min-h-screen) does not fit and cannot be scrolled sensibly.
+	//
+	// ⚠️ Omitted when Atlas does not offer one, and that distinction is
+	// load-bearing: an older Atlas sends nothing, and the pane must fall back to
+	// the browser-shaped page rather than load an empty URL. The pane deriving
+	// this itself — patching `/cli/signal` into `/cli/installer` — was the
+	// alternative, and it puts Atlas's routing inside a binary already shipped
+	// to people's machines.
+	InstallerURL string `json:"installer_url,omitempty"`
+	UserCode     string `json:"user_code"`
+	ExpiresIn    int    `json:"expires_in"`
+	Interval     int    `json:"interval"`
 }
 
 type authorizedEvent struct {

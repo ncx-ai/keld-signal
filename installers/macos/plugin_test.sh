@@ -122,6 +122,12 @@ grep -qF 'verification_url' "$p/KeldSetup.m" || fail "pane does not surface the 
 # and an SSO or 2FA step added later keeps working untouched. A native
 # credential form here would own all three of those problems.
 grep -qF 'WKWebView' "$p/KeldSetup.m" || fail "pane does not embed the approval page, so approval leaves the wizard"
+# ⚠️ It must embed Atlas's COMPACT route. `verification_url` is the page built
+# for a browser window — unauthenticated it redirects to the full login, and
+# every state is min-h-screen — which in a 560x300 panel is a page the person
+# has to scroll around inside a frame. Atlas returns `installer_url` for this,
+# and the pane prefers it, falling back only for an Atlas that predates it.
+grep -qF 'installer_url' "$p/KeldSetup.m" || fail "pane embeds verification_url, the browser-shaped page, instead of Atlas's compact installer route"
 # ...which means the CLI must NOT also open an external browser behind it.
 grep -qF -- '--no-browser' "$p/KeldSetup.m" || fail "pane embeds the approval page but lets keld open a browser too, so both appear"
 

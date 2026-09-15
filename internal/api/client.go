@@ -19,8 +19,13 @@ type DeviceStart struct {
 	DeviceCode      string `json:"device_code"`
 	UserCode        string `json:"user_code"`
 	VerificationURL string `json:"verification_url"`
-	Interval        int    `json:"interval"`
-	ExpiresIn       int    `json:"expires_in"`
+	// InstallerURL is Atlas's compact approval route, for callers that embed the
+	// page instead of opening a browser. Empty against an Atlas that predates
+	// it, which callers must treat as "use VerificationURL" rather than as an
+	// address.
+	InstallerURL string `json:"installer_url"`
+	Interval     int    `json:"interval"`
+	ExpiresIn    int    `json:"expires_in"`
 }
 
 // Onboarding holds the response from the onboarding endpoint.

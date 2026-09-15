@@ -74,6 +74,7 @@ func newLoginCmd() *cobra.Command {
 					emitEvent(deviceCodeEvent{
 						Event:           "device_code",
 						VerificationURL: ds.VerificationURL,
+						InstallerURL:    ds.InstallerURL,
 						UserCode:        ds.UserCode,
 						ExpiresIn:       ds.ExpiresIn,
 						Interval:        ds.Interval,

@@ -549,7 +549,16 @@
         NSString *kind = e[@"event"];
         if ([kind isEqualToString:@"device_code"]) {
             NSString *code = e[@"user_code"] ?: @"";
-            NSString *url = e[@"verification_url"] ?: @"";
+            // ⚠️ Prefer Atlas's compact route. `verification_url` is the page
+            // built for a real browser window: unauthenticated it redirects to
+            // the full login, and every state centres itself with min-h-screen,
+            // so inside this panel it is a page to scroll around rather than a
+            // form to fill in. `installer_url` is the same approval, sized for
+            // an embedded view. It is absent on an Atlas that predates it, and
+            // that case must still work — hence the fallback rather than a
+            // requirement.
+            NSString *url = e[@"installer_url"] ?: @"";
+            if (url.length == 0) url = e[@"verification_url"] ?: @"";
             s->_codeStatus.stringValue =
                 [NSString stringWithFormat:@"Sign in and approve — code %@", code];
             [s showApprovalPage:url];
