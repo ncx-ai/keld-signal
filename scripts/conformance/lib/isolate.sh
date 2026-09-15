@@ -18,7 +18,7 @@
 # --- failure reporting -------------------------------------------------------
 
 fail() {
-  echo "conformance: FAIL: $*" >&2
+  echo "conformance: FAIL [seed ${SEED:-?} chain ${CHAIN:-?} step ${STEP:-?}]: $*" >&2
   if [ -n "${DAEMON_LOG:-}" ] && [ -f "$DAEMON_LOG" ]; then
     echo "--- last 40 lines of the daemon log ---" >&2
     tail -40 "$DAEMON_LOG" >&2
@@ -53,6 +53,56 @@ teardown() {
 
 free_port() {
   python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'
+}
+
+# --- binaries and the sidecar they talk to -----------------------------------
+#
+# Chain B swaps both halves of the install mid-run, so "which keld" and "which
+# sidecar" are variables rather than constants. Both are also what makes the
+# version-skew assertion mean anything: a build with no version reports `dev`,
+# and `version.Skew` answers `known=false` for a dev half — correctly, since a
+# source checkout cannot be compared to anything. So the harness STAMPS the
+# binaries it builds, or its skew check would be vacuous on every developer
+# machine, which is the shape of the outage it exists to catch.
+
+# keld_build <dir> <version> — build keld + keld-agent, stamped.
+keld_build() {
+  local dir=$1 ver=$2
+  mkdir -p "$dir"
+  local ldflags="-X github.com/ncx-ai/keld-signal/internal/version.CLI=$ver"
+  (cd "$ROOT" && go build -ldflags "$ldflags" -o "$dir/keld" ./cmd/keld) || fail "go build ./cmd/keld"
+  (cd "$ROOT" && go build -ldflags "$ldflags" -o "$dir/keld-agent" ./cmd/keld-agent) || fail "go build ./cmd/keld-agent"
+}
+
+# bin_use <dir> — the keld/keld-agent this run drives from now on.
+bin_use() {
+  BIN_DIR=$1
+  KELD_VERSION_SEEN=$("$BIN_DIR/keld-agent" --version 2>/dev/null | head -1)
+  say "keld binaries: $BIN_DIR ($KELD_VERSION_SEEN)"
+}
+
+# sidecar_point_at <worktree|/path/to/frozen/dir> — (re)write the wrapper the
+# daemon spawns. Called again by chain B's upgrade step, which is the only way
+# to replace one half of an install while the other stays put.
+sidecar_point_at() {
+  local what=$1
+  if [ "$what" = "worktree" ]; then
+    SIDECAR_TARGET="\"$PY\" \"$ROOT/sidecar/serve.py\""
+    SIDECAR_KIND="venv (worktree serve.py, $PY)"
+    SIDECAR_VERSION_SEEN="dev"
+  else
+    SIDECAR_TARGET="\"$what/keld-agent-sidecar\""
+    SIDECAR_VERSION_SEEN=$(cat "$what/VERSION" 2>/dev/null || echo "dev")
+    SIDECAR_KIND="frozen $SIDECAR_VERSION_SEEN at $what"
+  fi
+  cat > "$WORK/sidecar-wrapper" <<SH
+#!/bin/sh
+# Record the process GROUP so teardown can reap the sidecar's children even if
+# the daemon is already gone.
+ps -o pgid= -p \$\$ | tr -d ' ' > "$SIDECAR_PID_FILE"
+exec $SIDECAR_TARGET "\$@"
+SH
+  chmod +x "$WORK/sidecar-wrapper"
 }
 
 # isolate_init <workdir> — build the binaries and lay out the isolated HOME.
@@ -113,9 +163,9 @@ isolate_init() {
   mkdir -p "$ISO_HOME/state" "$ATLAS_STATE"
 
   say "building keld, keld-agent, keld-conform"
-  (cd "$ROOT" && go build -o "$WORK/keld" ./cmd/keld) || fail "go build ./cmd/keld"
-  (cd "$ROOT" && go build -o "$WORK/keld-agent" ./cmd/keld-agent) || fail "go build ./cmd/keld-agent"
   (cd "$ROOT" && go build -o "$WORK/keld-conform" ./cmd/keld-conform) || fail "go build ./cmd/keld-conform"
+  keld_build "$WORK/bin-under-test" "$UNDER_TEST_VERSION"
+  bin_use "$WORK/bin-under-test"
 
   # What a fresh install lands on (settings.WriteInstallDefaults): the
   # model-free facet set plus the block emitter. Under the compiled-in "auto"
@@ -126,18 +176,10 @@ isolate_init() {
 JSON
 
   if [ -n "${FROZEN_SIDECAR:-}" ]; then
-    SIDECAR_TARGET="\"$FROZEN_SIDECAR\""
+    sidecar_point_at "$FROZEN_SIDECAR"
   else
-    SIDECAR_TARGET="\"$PY\" \"$ROOT/sidecar/serve.py\""
+    sidecar_point_at worktree
   fi
-  cat > "$WORK/sidecar-wrapper" <<SH
-#!/bin/sh
-# Record the process GROUP so teardown can reap the sidecar's children even if
-# the daemon is already gone.
-ps -o pgid= -p \$\$ | tr -d ' ' > "$SIDECAR_PID_FILE"
-exec $SIDECAR_TARGET "\$@"
-SH
-  chmod +x "$WORK/sidecar-wrapper"
 
   TELEMETRY_PORT=$(free_port)
 
@@ -152,6 +194,10 @@ SH
   # named_terms loads spaCy (~619 MB) into a parent that is never recycled, and
   # no checkpoint reads it.
   export KELD_TERMS=0
+  # The skew event and every other operational event reach the mock through the
+  # reporter's batch flush (30s by default), and a chain step that waited that
+  # long per assertion would spend its budget on a timer.
+  export KELD_CLIENTEVENTS_FLUSH=5s
   export PATH="$WORK:$PATH"
 
   say "isolated HOME=$ISO_HOME  telemetry port=$TELEMETRY_PORT"
@@ -191,26 +237,53 @@ await_line() {
 # is deliberately NOT called (see the header).
 signal_install() {
   say "keld login --code (against the mock Atlas)"
-  "$WORK/keld" login --code CONFORM --api-url "$MOCK_ATLAS_URL" >"$WORK/login.out" 2>&1 \
+  "$BIN_DIR/keld" login --code CONFORM --api-url "$MOCK_ATLAS_URL" >"$WORK/login.out" 2>&1 \
     || fail "keld login failed: $(cat "$WORK/login.out")"
 
   say "keld signal setup --yes"
-  "$WORK/keld" signal setup --yes >"$WORK/setup.out" 2>&1 \
+  "$BIN_DIR/keld" signal setup --yes >"$WORK/setup.out" 2>&1 \
     || fail "keld signal setup failed: $(tail -20 "$WORK/setup.out")"
 
   [ -s "$ISO_HOME/hook.json" ] || fail "setup wrote no hook.json"
   grep -q ingest_token "$ISO_HOME/hook.json" || fail "hook.json carries no ingest token"
 }
 
+# agent_json_field <key> — one field of ~/.keld/agent.json, empty when absent.
+agent_json_field() {
+  python3 -c "import json,sys
+try: print(json.load(open(sys.argv[1])).get(sys.argv[2],''))
+except Exception: print('')" "$ISO_HOME/agent.json" "$1" 2>/dev/null || echo ""
+}
+
 # daemon_start — foreground daemon + worktree sidecar; waits for agent.json.
 daemon_start() {
-  say "starting keld-agent (foreground)"
-  "$WORK/keld-agent" run >"$DAEMON_LOG" 2>&1 &
+  # ⚠️ READ FIRST, LAUNCH SECOND. The daemon writes agent.json within
+  # milliseconds of exec, so reading the previous ingress secret after starting
+  # it is a race the harness loses: it reads the NEW secret as the OLD one and
+  # then waits out the whole 90s budget for a change that already happened.
+  local prev_secret=""
+  [ -f "$ISO_HOME/agent.json" ] && prev_secret=$(agent_json_field secret)
+
+  say "starting keld-agent (foreground): $BIN_DIR/keld-agent $KELD_VERSION_SEEN against $SIDECAR_KIND"
+  "$BIN_DIR/keld-agent" run >>"$DAEMON_LOG" 2>&1 &
   DAEMON_PID=$!
 
-  local i
+  # ⚠️ **NEVER DELETE agent.json TO WAIT FOR A RESTART.** It carries
+  # `telemetry_secret` — the STABLE local secret `keld signal setup` wrote into
+  # every tool's config — beside the per-start ingress secret. Removing it makes
+  # the next daemon mint a new one, and every already-configured tool then posts
+  # a credential the proxy rejects. Measured when this function did exactly that
+  # for one commit: claude posted OTLP, the proxy answered 401, nothing was
+  # spooled, and the telemetry checkpoint read a flat zero — which is the
+  # rotated-credential outage AGENTS.md describes, rebuilt by the harness meant
+  # to catch it. The restart is detected by the INGRESS secret changing instead:
+  # the daemon regenerates that one on every start, by design.
+  local i now_secret
   for i in $(seq 1 90); do
-    [ -f "$ISO_HOME/agent.json" ] && break
+    if [ -f "$ISO_HOME/agent.json" ]; then
+      now_secret=$(agent_json_field secret)
+      [ -n "$now_secret" ] && [ "$now_secret" != "$prev_secret" ] && break
+    fi
     kill -0 "$DAEMON_PID" 2>/dev/null || fail "daemon exited early"
     sleep 1
   done
@@ -219,12 +292,12 @@ daemon_start() {
   # ⚠️ agent.json appears BEFORE its port is filled in, so waiting on the file
   # alone reported "daemon on http://127.0.0.1:0". Wait for the port itself.
   for i in $(seq 1 30); do
-    DAEMON_PORT=$(python3 -c "import json;print(json.load(open('$ISO_HOME/agent.json')).get('port',0))" 2>/dev/null || echo 0)
+    DAEMON_PORT=$(agent_json_field port)
     [ "${DAEMON_PORT:-0}" -gt 0 ] && break
     sleep 1
   done
   [ "${DAEMON_PORT:-0}" -gt 0 ] || fail "agent.json never carried a port"
-  DAEMON_SECRET=$(python3 -c "import json;print(json.load(open('$ISO_HOME/agent.json'))['secret'])")
+  DAEMON_SECRET=$(agent_json_field secret)
   DAEMON_URL="http://127.0.0.1:$DAEMON_PORT"
   say "daemon on $DAEMON_URL"
 
@@ -237,4 +310,47 @@ daemon_start() {
   done
   [ -f "$ISO_HOME/state/refseries.db" ] \
     || say "WARNING: no refseries.db yet; the store_rows checkpoint will say so"
+}
+
+# daemon_stop — stop the daemon and its sidecar's whole process group, and WAIT.
+# Chain B restarts a second daemon on the same isolated HOME, so a straggler
+# holding the loopback port or the store's WAL is not a tidiness question.
+daemon_stop() {
+  [ -n "${DAEMON_PID:-}" ] || return 0
+  kill -TERM "$DAEMON_PID" 2>/dev/null || true
+  local i
+  for i in $(seq 1 20); do
+    kill -0 "$DAEMON_PID" 2>/dev/null || break
+    sleep 1
+  done
+  kill -KILL "$DAEMON_PID" 2>/dev/null || true
+  if [ -f "$SIDECAR_PID_FILE" ]; then
+    local pgid
+    pgid=$(cat "$SIDECAR_PID_FILE" 2>/dev/null || echo "")
+    [ -n "$pgid" ] && kill -KILL "-$pgid" 2>/dev/null || true
+    rm -f "$SIDECAR_PID_FILE"
+  fi
+  DAEMON_PID=""
+  say "daemon stopped"
+}
+
+# clientevent_count <code> — how many times an operational event reached the
+# mock Atlas. Read from the PERSISTED BODIES rather than from a log line,
+# because the fleet's view of a machine is what arrived at Atlas; a log line the
+# reporter never flushed is exactly the invisible state this chain is about.
+clientevent_count() {
+  local code=$1 dir="$ATLAS_STATE/v1_signal_client-events"
+  [ -d "$dir" ] || { echo 0; return 0; }
+  grep -ho "\"$code\"" "$dir"/* 2>/dev/null | wc -l | tr -d ' '
+}
+
+# await_clientevent <code> <seconds> — wait for one to arrive. The reporter
+# batches and flushes on KELD_CLIENTEVENTS_FLUSH, which isolate_init shortens.
+await_clientevent() {
+  local code=$1 budget=${2:-30} i
+  for i in $(seq 1 "$budget"); do
+    [ "$(clientevent_count "$code")" -gt 0 ] && return 0
+    sleep 1
+  done
+  return 1
 }
