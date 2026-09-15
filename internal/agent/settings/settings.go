@@ -157,6 +157,24 @@ type Settings struct {
 	// Marketing bucket.
 	WorkstreamsOff []string `json:"workstreams_off,omitempty"`
 
+	// AutoSetupIntegrations decides whether the daemon's integrations detector
+	// CONFIGURES a supported tool whose config dir appears after Signal was
+	// installed, or merely lists it as `not_configured` with a Set up button
+	// (AC-3).
+	//
+	// ⚠️ DEFAULT ON, AND A POINTER FOR THAT REASON. A plain bool cannot express
+	// "absent means true" — every existing agent-config.json on every machine
+	// omits this key, and a plain bool would read them all as an explicit
+	// refusal. Same idiom SendToAtlas uses, for the same reason.
+	//
+	// On by default because the alternative was measured rather than assumed:
+	// prompting first (alternative D in the discovery) costs one prompt nobody
+	// is looking at, and a notice nobody sees is a tool that stays
+	// unconfigured forever. The installer already edits these same files with
+	// one consent and a backup; this is that consent continuing to apply.
+	// Off is the other position of the toggle, not a different design.
+	AutoSetupIntegrations *bool `json:"auto_setup_integrations,omitempty"`
+
 	// TelemetryPort is the loopback port AI tools POST OTLP to.
 	//
 	// ⚠️ IT HAS A CONFIG KEY FOR THE REASON `Blocks` DOES: an env-only knob is
@@ -278,4 +296,21 @@ func Load() Settings {
 	}
 	_ = json.Unmarshal(data, &s) // invalid JSON -> keep zero-value defaults
 	return s
+}
+
+// AutoSetupIntegrationsEnv overrides the file on one machine.
+const AutoSetupIntegrationsEnv = "KELD_AUTO_SETUP_INTEGRATIONS"
+
+// AutoSetupEnabled resolves env > agent-config.json > ON.
+func (s Settings) AutoSetupEnabled() bool {
+	switch strings.TrimSpace(os.Getenv(AutoSetupIntegrationsEnv)) {
+	case "0", "false", "off":
+		return false
+	case "1", "true", "on":
+		return true
+	}
+	if s.AutoSetupIntegrations != nil {
+		return *s.AutoSetupIntegrations
+	}
+	return true
 }

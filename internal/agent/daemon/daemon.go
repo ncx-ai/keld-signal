@@ -32,6 +32,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/features"
 	"github.com/ncx-ai/keld-signal/internal/agent/hardware"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
+	"github.com/ncx-ai/keld-signal/internal/agent/integrations"
 	"github.com/ncx-ai/keld-signal/internal/agent/promptlog"
 	"github.com/ncx-ai/keld-signal/internal/agent/provision"
 	"github.com/ncx-ai/keld-signal/internal/agent/publish"
@@ -456,6 +457,10 @@ func process(ctx context.Context, j queue.Job, m enrich.Model, svc serviceFacets
 			je.Emit("worker.panic", clientevents.SevError, map[string]any{"error": clientevents.RedactError(panicErr)})
 		}
 	}()
+	// The integrations pane's hook/watcher lane facts, recorded ON ARRIVAL —
+	// before the resolve, because "did the hook fire" is answered yes by a
+	// pointer we could not resolve. See integrations_lanes.go.
+	noteIntegrationLane(j)
 	text, ok := resolve.Resolve(j.Source, j.TranscriptPath, j.PromptID, j.Inline)
 	if !ok {
 		return false // could not resolve prompt text; skip silently
@@ -1135,6 +1140,12 @@ func Run(ctx context.Context) error {
 			svc.OnSidecarRespawn(func() { repostProjectsAfterRespawn(postProjects, lastProjects) })
 		}
 	}
+	// The integrations catalogue poll. Started unconditionally and outside the
+	// enrichment branch: LISTING every tool Signal knows is the product even
+	// on a machine where enrichment is off, and the auto-setup toggle is read
+	// live inside the detector rather than captured here.
+	setIntegrationLanes(integrations.LoadLanes())
+	startIntegrationsDetector(ctx, emitter)
 	pollSettingsIfOnline(ctx, set.AtlasEnabled(), func(ctx context.Context) {
 		pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)
 	})

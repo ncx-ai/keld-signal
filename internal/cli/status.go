@@ -100,6 +100,15 @@ func newStatusCmd() *cobra.Command {
 				console.Print(fmt.Sprintf("  hook            v%s", manifest.Hook.Version))
 			}
 
+			// The integrations view, from integrations.Compute via
+			// localagent.IntegrationStates — the SAME function GET
+			// /v1/integrations answers from. Nothing here decides a state; the
+			// server's string is printed verbatim (AC-8).
+			console.Print("Integrations:")
+			for _, line := range localagent.IntegrationLines(localagent.IntegrationStates()) {
+				console.Print(line)
+			}
+
 			info, _ := agentcfg.Read()
 			health := localagent.Health(info, service.Status, localagent.FetchText)
 			for _, line := range renderLocalService(health) {
@@ -191,13 +200,12 @@ func newDoctorCmd() *cobra.Command {
 					// Unknown tool in manifest — skip silently (matches Python behaviour).
 					continue
 				}
-				var current *string
-				if data, err := os.ReadFile(tm.ConfigPath); err == nil {
-					s := string(data)
-					current = &s
-				}
-				st := adapter.Status(current, tm.Managed)
-				if !st.Configured {
+				// tools.ConfiguredAt, not a second copy of the read-and-ask:
+				// the integrations route's `surfaces[].wired` asks the same
+				// question of the same file (AC-1, "read back, not
+				// remembered"), and two implementations are two ways for
+				// doctor and the pane to disagree about one config.
+				if !tools.ConfiguredAt(adapter, tm.ConfigPath, tm.Managed) {
 					problems = append(problems,
 						fmt.Sprintf("%s: manifest records setup but config is not configured (drift). Re-run `keld signal setup`.", adapter.DisplayName()),
 					)
@@ -221,6 +229,11 @@ func newDoctorCmd() *cobra.Command {
 			if p := encoder.ProblemLine(); p != "" {
 				problems = append(problems, p)
 			}
+
+			// Per-integration findings, from the ONE state function (AC-8).
+			// doctor formats; integrations.Compute decides. `idle` is not a
+			// finding and never becomes one — a quiet user is not a bug.
+			problems = append(problems, localagent.IntegrationProblems(localagent.IntegrationStates())...)
 
 			// An update that was applied and did not come up, or one that could
 			// not be rolled back. Disk-only, same rule as the model states.
