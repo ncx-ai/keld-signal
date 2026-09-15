@@ -23,6 +23,8 @@ func main() {
 		err = runMockLLM(args)
 	case "mockatlas":
 		err = runMockAtlas(args)
+	case "check":
+		err = runCheck(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -43,5 +45,6 @@ func usage() {
 subcommands:
   mockllm    serve the mock model (Anthropic Messages + OpenAI Responses)
   mockatlas  serve the mock Atlas (login, onboarding, publish, settings)
+  check      read the five checkpoints and print a JSON verdict
 `)
 }
