@@ -29,8 +29,14 @@ printf '%s' "$code_only" | grep -qF '"$AGENT" install' \
   || { echo "no agent install"; exit 1; }
 printf '%s' "$code_only" | grep -qF 'ingest_token' \
   || { echo "claims success without checking hook.json"; exit 1; }
-grep -q 'KeldSetup' "$d/build-pkg.sh" && { echo "build-pkg still refs KeldSetup"; exit 1; } || true
-grep -q 'KeldSetup.app' "$d/scripts/postinstall" && { echo "postinstall still refs app"; exit 1; } || true
+# This guarded against the removed SwiftUI onboarding app (`$STAGE/KeldSetup.app`,
+# staged and deep-signed by build-pkg.sh before 20713dc). It must stay specific to
+# `.app`: the macOS wizard onboarding work (2026-09-14) reintroduces a differently
+# shaped, unrelated artifact — `KeldSetup.bundle`, an Installer.app plugin section
+# built by plugin/build-plugin.sh and handed to `productbuild --plugins`, never
+# staged into `$STAGE` at all — and a bare 'KeldSetup' match would misfire on it.
+grep -q 'KeldSetup\.app' "$d/build-pkg.sh" && { echo "build-pkg still refs the old KeldSetup.app"; exit 1; } || true
+grep -q 'KeldSetup\.app' "$d/scripts/postinstall" && { echo "postinstall still refs app"; exit 1; } || true
 grep -q 'onboard.command' "$d/scripts/postinstall" || { echo "postinstall does not open onboard.command"; exit 1; }
 
 # ── AC-3 / AC-4: the sidecar is replaced on VERSION MISMATCH, not merely fetched

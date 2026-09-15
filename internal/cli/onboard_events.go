@@ -12,22 +12,42 @@ import (
 type deviceCodeEvent struct {
 	Event           string `json:"event"`
 	VerificationURL string `json:"verification_url"`
-	UserCode        string `json:"user_code"`
-	ExpiresIn       int    `json:"expires_in"`
-	Interval        int    `json:"interval"`
+	// InstallerURL is the same approval on Atlas's compact route, for a caller
+	// that EMBEDS the page rather than opening a browser — the macOS wizard pane
+	// renders it at roughly 560x300, where VerificationURL's page (which
+	// redirects to the full login when unauthenticated, and lays every state out
+	// with min-h-screen) does not fit and cannot be scrolled sensibly.
+	//
+	// ⚠️ Omitted when Atlas does not offer one, and that distinction is
+	// load-bearing: an older Atlas sends nothing, and the pane must fall back to
+	// the browser-shaped page rather than load an empty URL. The pane deriving
+	// this itself — patching `/cli/signal` into `/cli/installer` — was the
+	// alternative, and it puts Atlas's routing inside a binary already shipped
+	// to people's machines.
+	InstallerURL string `json:"installer_url,omitempty"`
+	UserCode     string `json:"user_code"`
+	ExpiresIn    int    `json:"expires_in"`
+	Interval     int    `json:"interval"`
 }
 
 type authorizedEvent struct {
 	Event     string `json:"event"`
 	Principal string `json:"principal"`
 	Org       string `json:"org"`
+	// APIURL is the host the code resolved to. A setup code may carry its own
+	// ("atlas-dev.keld.co/ABCD-EFGH"), and `keld signal setup` reads
+	// paths.APIBase() rather than auth.json — so a caller that runs the two
+	// separately (the macOS installer: login in the wizard pane, setup in
+	// postinstall) must pass --api-url or write the previous endpoint into
+	// hook.json. That is the split-brain install runInstall already guards against.
+	APIURL string `json:"api_url,omitempty"`
 }
 
 type toolEvent struct {
 	Event   string `json:"event"`
 	Name    string `json:"name"`
 	Display string `json:"display"`
-	Action  string `json:"action"` // configured | already_configured | skipped_conflict
+	Action  string `json:"action"` // configured | already_configured | skipped_conflict | will_configure
 	Path    string `json:"path"`
 	Backup  string `json:"backup,omitempty"`
 }
@@ -43,6 +63,18 @@ type doneEvent struct {
 }
 
 type errorEvent struct {
+	Event   string `json:"event"`
+	Message string `json:"message"`
+}
+
+// warningEvent reports a NON-FATAL problem that a human running the human CLI
+// would see via console.Print — currently only installSidecar's missing-
+// published-hash case. Under --json, console.Print reaches nobody: it writes
+// to the same stream as the NDJSON events, and the macOS wizard pane drops any
+// line it cannot parse as one. The installer's missing-checksum policy
+// (installsidecar.go) is justified specifically by "a human is watching a
+// progress bar" — this event is what makes that true under --json too.
+type warningEvent struct {
 	Event   string `json:"event"`
 	Message string `json:"message"`
 }

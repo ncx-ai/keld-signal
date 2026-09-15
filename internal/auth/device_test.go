@@ -399,3 +399,71 @@ func TestAPIBaseFallsBackToDefaultWithNoStoredCreds(t *testing.T) {
 		t.Fatalf("APIBase = %q, want %q", paths.APIBase(), paths.DefaultAPIURL)
 	}
 }
+
+// ⚠️ A DROPPED CONNECTION MUST NOT END A TEN-MINUTE LOGIN. The poll loop used to
+// return on ANY error from DevicePoll, so a single transport blip — a keep-alive
+// the server closed between the device/start response and the first poll, which
+// Go will not retry for a POST — aborted the whole device flow.
+//
+// Measured against a local Atlas on 2026-09-14: every attempt died on the FIRST
+// poll with `Post ".../v1/cli/device/poll": EOF` while the server's own log
+// recorded that same poll as 202 Accepted. In the macOS installer the visible
+// effect was the approval page appearing and then vanishing a second later,
+// before anyone could type into it.
+//
+// Permanent refusals must still abort — see the test below this one.
+func TestLoginSurvivesATransientPollFailure(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	polls := 0
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/cli/device/start":
+			w.Write([]byte(`{"device_code":"dc","user_code":"UC","verification_url":"https://v","interval":1,"expires_in":10}`))
+		case "/v1/cli/device/poll":
+			polls++
+			if polls == 1 {
+				// Hijack and close without answering: the same shape as the
+				// dropped keep-alive that produced the EOF above.
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					conn.Close()
+				}
+				return
+			}
+			w.Write([]byte(`{"access_token":"AT","principal":"p","org":"o"}`))
+		}
+	}))
+	defer srv.Close()
+
+	got, err := Login(api.NewClient(srv.URL, ""), false, func(time.Duration) {}, func(string) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("a dropped connection on one poll must not end the login: %v", err)
+	}
+	if got.AccessToken != "AT" {
+		t.Fatalf("token = %q, want AT", got.AccessToken)
+	}
+	if polls < 2 {
+		t.Fatalf("polled %d times; the loop must keep waiting after a transport failure", polls)
+	}
+}
+
+// The mirror of the above: a refusal the server MEANT is final, and retrying it
+// would spin for the whole ten minutes reporting nothing.
+func TestLoginStopsWhenTheDeviceCodeIsRejected(t *testing.T) {
+	t.Setenv("KELD_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/cli/device/start":
+			w.Write([]byte(`{"device_code":"dc","user_code":"UC","verification_url":"https://v","interval":1,"expires_in":10}`))
+		case "/v1/cli/device/poll":
+			w.WriteHeader(410)
+			w.Write([]byte(`{"detail":"device code expired or unknown"}`))
+		}
+	}))
+	defer srv.Close()
+
+	if _, err := Login(api.NewClient(srv.URL, ""), false, func(time.Duration) {}, func(string) error { return nil }, nil); err == nil {
+		t.Fatal("a rejected device code must end the login rather than being retried")
+	}
+}

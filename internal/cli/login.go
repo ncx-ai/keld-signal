@@ -62,7 +62,7 @@ func newLoginCmd() *cobra.Command {
 					return err
 				}
 				if jsonOut {
-					emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org})
+					emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org, APIURL: paths.APIBase()})
 				} else {
 					console.Print(fmt.Sprintf("  ✓ %s · org %s", a.Principal, a.Org))
 				}
@@ -74,6 +74,7 @@ func newLoginCmd() *cobra.Command {
 					emitEvent(deviceCodeEvent{
 						Event:           "device_code",
 						VerificationURL: ds.VerificationURL,
+						InstallerURL:    ds.InstallerURL,
 						UserCode:        ds.UserCode,
 						ExpiresIn:       ds.ExpiresIn,
 						Interval:        ds.Interval,
@@ -84,7 +85,7 @@ func newLoginCmd() *cobra.Command {
 					emitEvent(errorEvent{Event: "error", Message: cleanErrorMessage(err)})
 					return errs.ErrSilentExit
 				}
-				emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org})
+				emitEvent(authorizedEvent{Event: "authorized", Principal: a.Principal, Org: a.Org, APIURL: paths.APIBase()})
 				return nil
 			}
 
@@ -147,13 +148,39 @@ func newLogoutCmd() *cobra.Command {
 }
 
 func newWhoamiCmd() *cobra.Command {
-	return &cobra.Command{
+	var verify bool
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "whoami",
 		Short: "Show the logged-in principal.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := auth.Load()
 			if err != nil {
 				return err
+			}
+			// --verify asks Atlas whether the stored credential still works,
+			// instead of reporting what a local file happens to say. It is opt-in
+			// because it costs a round trip, and the human path below is expected
+			// to be instant. See whoami_verify.go for why the distinction matters
+			// to the macOS installer.
+			if verify {
+				ev := verifyIdentity(a)
+				if jsonOut {
+					emitEvent(ev)
+					if ev.Status != identityVerified {
+						return errs.ErrSilentExit
+					}
+					return nil
+				}
+				switch ev.Status {
+				case identityVerified:
+					console.Print(fmt.Sprintf("%s · org %s · %s (verified)", ev.Principal, ev.Org, ev.APIURL))
+					return nil
+				case identityNone:
+					return console.Fail("not logged in (run `keld login`)")
+				default:
+					return console.Fail(fmt.Sprintf("%s: %s", ev.Status, ev.Message))
+				}
 			}
 			if a == nil {
 				return console.Fail("not logged in (run `keld login`)")
@@ -167,4 +194,9 @@ func newWhoamiCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&verify, "verify", false,
+		"Ask Atlas whether the stored credential still works, instead of only reading auth.json.")
+	cmd.Flags().BoolVar(&jsonOut, "json", false,
+		"Emit one machine-readable NDJSON identity event on stdout (implies --verify semantics for callers).")
+	return cmd
 }

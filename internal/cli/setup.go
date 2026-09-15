@@ -35,6 +35,21 @@ func keldBinaryPath() string {
 	return exe
 }
 
+// resolveSetupBinPath picks the keld path pinned into tool hook commands.
+//
+// ⚠️ IT EXISTS BECAUSE THE macOS INSTALLER RUNS A COPY OF keld FROM INSIDE THE
+// WIZARD PLUGIN BUNDLE, at a path that ceases to exist when the wizard closes.
+// keldBinaryPath() would pin that temporary path into every tool's hook command
+// and the failure would be silent: the config looks right, the hook never runs.
+// The installer passes --bin-path /usr/local/keld/keld, which is where the pkg
+// actually puts the binary.
+func resolveSetupBinPath(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return keldBinaryPath()
+}
+
 // SetupOpts holds behavioural knobs for runSetup that are separate from the
 // telemetry parameters.
 type SetupOpts struct {
@@ -154,6 +169,19 @@ func runSetup(adapters []tools.Adapter, p tools.SetupParams, client *api.Client,
 	say(fmt.Sprintf("  ✓ %-26s %s", "Hook", "~/.keld/hook.json"))
 
 	if opts.DryRun {
+		// ⚠️ A dry run must say what it WOULD do, not just what it is skipping.
+		// Every event above this point is skipped_conflict/already_configured;
+		// an adapter that is detected, unconflicted and changed reached
+		// `approveds` with no event of its own, because the "configured" event
+		// is emitted later, inside the write loop a dry run never reaches. The
+		// macOS wizard pane renders exactly the `tool` events runSetup emits,
+		// so on a fresh Mac with (say) Claude Code installed and unconfigured —
+		// the common case — the pane saw nothing and rendered "No supported AI
+		// tools found on this Mac." while the tool sat right there.
+		for _, a := range approveds {
+			emit(SetupEvent{Kind: "tool", Name: a.adapter.Name(), Display: a.adapter.DisplayName(),
+				Action: "will_configure", Path: a.plan.ConfigPath})
+		}
 		return config.LoadManifest()
 	}
 	if len(approveds) == 0 {
@@ -289,6 +317,7 @@ func newSetupCmd() *cobra.Command {
 	var noLogin bool
 	var apiURL string
 	var jsonOut bool
+	var binPath string
 
 	cmd := &cobra.Command{
 		Use:   "setup",
@@ -331,7 +360,7 @@ func newSetupCmd() *cobra.Command {
 			p := tools.SetupParams{
 				Endpoint:    tp.Endpoint,
 				IngestToken: tp.Secret,
-				BinPath:     keldBinaryPath(),
+				BinPath:     resolveSetupBinPath(binPath),
 			}
 
 			opts := SetupOpts{
@@ -365,6 +394,8 @@ func newSetupCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompts.")
 	cmd.Flags().BoolVar(&noLogin, "no-login", false, "Fail instead of opening a browser.")
 	cmd.Flags().StringVar(&apiURL, "api-url", "", "Target a different Keld API base URL for local dev.")
+	cmd.Flags().StringVar(&binPath, "bin-path", "",
+		"Absolute path of the keld binary to pin into tool hooks (default: the running binary).")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit machine-readable NDJSON events on stdout (implies --yes).")
 
 	return cmd

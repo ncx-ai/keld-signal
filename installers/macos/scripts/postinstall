@@ -32,14 +32,126 @@ for d in ${userhome:+"$userhome/.local/bin"} /opt/homebrew/bin; do
   done
 done
 
-# Replace the running process: restart the per-user agent so the live daemon is
-# THIS build, not a lingering older one from a previous install. Best-effort —
-# a no-op if it isn't loaded yet (a first install loads it via onboard.command).
-launchctl kickstart -k "gui/$uid/co.keld.agent" 2>/dev/null || true
+# ── Finish what the wizard pane started ──────────────────────────────────────
+# The pane (installers/macos/plugin) ran BEFORE this, redeemed the setup code and
+# staged the analysis sidecar; it left a handoff file naming what it did. This
+# script does everything that rewrites the user's files, which deliberately does
+# NOT happen in the pane: until the install is committed, a person can still
+# cancel, and a cancelled install must not leave rewritten tool configs behind.
+#
+# ⚠️ EVERY user-side command runs `launchctl asuser <uid> sudo -u <user> -H`.
+# Without -H, sudo keeps HOME=/var/root, and service_darwin.go builds the
+# LaunchAgent path from os.UserHomeDir() — so the job would be written into
+# root's home and never load, with nothing reporting it.
+asuser() { launchctl asuser "$uid" sudo -u "$user" -H "$@"; }
 
-# Onboarding runs in the user's GUI session and registers/starts the agent itself
-# (after login + setup), so the agent isn't started before the user is set up.
-if [ -f "$PREFIX/onboard.command" ]; then
+HANDOFF="$userhome/.keld/state/installer-handoff.json"
+paired=false
+api_url=""
+tools=""
+staged=""
+had_handoff=false
+if [ -f "$HANDOFF" ]; then
+  # ⚠️ A handoff can be LEFT BEHIND by a CANCELLED install: the pane writes it
+  # in shouldExitPane, before the commit point, and this script only deletes it
+  # on a run that reaches the bottom of this file. So a LATER install —
+  # including one whose plugin fails to load silently, which is precisely the
+  # case the fallback below exists for — can find a stale file from a
+  # different build. Trust it only when its own `version` matches THIS build's
+  # $PREFIX/VERSION; otherwise treat it as absent, so a stale "paired: false"
+  # (or a stale tool list) from a cancelled install can never disable the
+  # mandatory fallback or misconfigure this one.
+  hv=$(/usr/bin/plutil -extract version raw -o - "$HANDOFF" 2>/dev/null || echo "")
+  pv=""
+  [ -f "$PREFIX/VERSION" ] && pv=$(tr -d ' \n' < "$PREFIX/VERSION")
+  if [ "$hv" != "$pv" ]; then
+    rm -f "$HANDOFF" || true
+  else
+    had_handoff=true
+    paired=$(/usr/bin/plutil -extract paired raw -o - "$HANDOFF" 2>/dev/null || echo false)
+    api_url=$(/usr/bin/plutil -extract api_url raw -o - "$HANDOFF" 2>/dev/null || echo "")
+    staged=$(/usr/bin/plutil -extract sidecar_staged raw -o - "$HANDOFF" 2>/dev/null || echo "")
+    tools=$(/usr/bin/plutil -extract tools json -o - "$HANDOFF" 2>/dev/null \
+            | tr -d '[]"' | tr ',' ' ' || echo "")
+  fi
+fi
+
+# 1. The analysis sidecar the pane already downloaded and verified: a rename into
+#    place, in the user's own ~/.local/bin (same filesystem, so ~15,000 files move
+#    atomically rather than being copied).
+if [ -n "$staged" ] && [ -d "$staged" ]; then
+  asuser "$PREFIX/keld" signal install-sidecar --commit "$staged" || true
+else
+  # No staged tree — no network in the pane, the pane never ran, or a person
+  # clicked Continue before a slow download finished. Retry in the background:
+  # enrichment spools until it lands, so this is late, not fatal.
+  #
+  # A Continue click mid-download can leave the pane's own spawned `keld` still
+  # writing into a `.keld-update.*` staging dir under ~/.local/bin
+  # (update.StageDir) — nothing ever commits or cleans it, and it would sit
+  # there concurrently with the fresh fetch started below. Sweep it first, as
+  # the user, best-effort.
+  asuser /bin/sh -c "rm -rf \"$userhome\"/.local/bin/.keld-update.* 2>/dev/null" || true
+
+  # ⚠️ PINNED to this pkg's own release, the same way onboard.command's
+  # fetch_sidecar already does. An unpinned call resolves releases/latest,
+  # which lags behind an in-flight pre-release train (see CHANGELOG.md) and
+  # would install a STALE sidecar under this daemon — the exact version-skew
+  # failure AGENTS.md documents at length (a 2.3.0 daemon against an Aug-11
+  # sidecar: /blocks 404s, zero blocks published, doctor reports no problems).
+  tag=""
+  [ -f "$PREFIX/VERSION" ] && tag=$(tr -d ' \n' < "$PREFIX/VERSION")
+  case "$tag" in ""|*dryrun*) tag="" ;; esac
+  if [ -n "$tag" ]; then
+    asuser /bin/sh -c "\"$PREFIX/keld\" signal install-sidecar --tag \"$tag\" >/dev/null 2>&1 &" || true
+  else
+    asuser /bin/sh -c "\"$PREFIX/keld\" signal install-sidecar >/dev/null 2>&1 &" || true
+  fi
+fi
+
+# 2. The AI tools the person ticked. --bin-path pins the INSTALLED keld: the pane
+#    ran a copy from inside the plugin bundle, and pinning THAT path into hook
+#    commands breaks every hook the moment the wizard closes.
+#
+# ⚠️ AN EMPTY SELECTION MUST CONFIGURE NOTHING, not everything.
+# `tools.Select(nil)` reads "no --tool flags at all" as "configure every
+# detected adapter" — correct when the pane never ran (had_handoff is false,
+# so today's unfiltered `signal setup` behaviour is exactly right), and wrong
+# when the pane DID run and every checkbox was unticked (had_handoff is true
+# and tools is empty): that person made a choice, and without had_handoff the
+# two cases are indistinguishable.
+if [ "$paired" = "true" ] || [ "$paired" = "1" ]; then
+  if [ "$had_handoff" = true ] && [ -z "$tools" ]; then
+    : # every tool was unticked; configure none
+  else
+    set -- signal setup --yes --bin-path "$PREFIX/keld"
+    [ -n "$api_url" ] && set -- "$@" --api-url "$api_url"
+    for t in $tools; do
+      [ -n "$t" ] && set -- "$@" --tool "$t"
+    done
+    asuser "$PREFIX/keld" "$@" || true
+  fi
+fi
+
+# 3. Register and start the agent. This is what used to happen only inside the
+#    Terminal script, which is why a machine that never opened it collected
+#    nothing.
+asuser "$PREFIX"/keld-agent install || true
+
+rm -f "$HANDOFF" || true
+
+# ⚠️ FALLBACK — and it is not optional, but it is deliberately NARROW. The
+# wizard plugin can fail to load with NO diagnostic whatsoever (a stale code
+# signature does exactly this; measured 2026-09-14): the pane never ran, the
+# handoff file was never written, and a machine in that state has installed
+# cleanly and been asked for nothing — so without this it would sit idle
+# forever. That is the ONLY case this is for. Gating on hook.json alone would
+# also fire for someone who ran the pane and deliberately clicked "Set up
+# later": that person made a choice, and opening a Terminal at them is exactly
+# what this branch exists to stop. So both halves are required: the pane never
+# ran (had_handoff is false, captured above before the handoff file was
+# deleted) AND the machine ended up unconfigured (no hook.json).
+if [ "$had_handoff" = false ] && [ ! -f "$userhome/.keld/hook.json" ] && [ -f "$PREFIX/onboard.command" ]; then
   chmod +x "$PREFIX/onboard.command" || true
   launchctl asuser "$uid" sudo -u "$user" open "$PREFIX/onboard.command" || true
 fi

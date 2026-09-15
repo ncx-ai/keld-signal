@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,15 @@ import (
 
 	"github.com/ncx-ai/keld-signal/internal/retry"
 )
+
+// ErrNoPublishedHash identifies Fetch's refusal to install an asset with no
+// published SHA-256, across the package boundary. Callers that need to
+// distinguish this refusal from any other Fetch error (the installer's
+// warn-and-continue policy is the one caller that does) must match on this
+// sentinel with errors.Is, never on a substring of Fetch's error text — a
+// future reword of that text must not silently flip a warning into a refusal,
+// or the reverse.
+var ErrNoPublishedHash = errors.New("update: no published SHA-256 for the release asset")
 
 // DefaultBaseURL is the GitHub release download path — the same host
 // scripts/install.sh fetches from. Atlas can override it (Release.BaseURL) so
@@ -39,6 +49,14 @@ type Fetcher struct {
 	HTTP    *http.Client
 	BaseURL string
 	Policy  retry.Policy
+
+	// Progress, when non-nil, is called as bytes land. total is -1 when the
+	// server sent no Content-Length. It exists for the installer's wizard pane,
+	// which needs a determinate bar; the unattended update path leaves it nil.
+	//
+	// It is called from the download goroutine, synchronously, so a slow
+	// callback slows the download — keep it to a channel send or an atomic store.
+	Progress func(received, total int64)
 }
 
 func (f *Fetcher) policy() retry.Policy {
@@ -68,6 +86,25 @@ func fastPolicy() retry.Policy {
 	return retry.Policy{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond, Multiplier: 2}
 }
 
+// progressReader counts bytes as they are read and reports them.
+type progressReader struct {
+	r        io.Reader
+	total    int64
+	received int64
+	report   func(received, total int64)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.received += int64(n)
+		if p.report != nil {
+			p.report(p.received, p.total)
+		}
+	}
+	return n, err
+}
+
 // Fetch downloads <base>/<tag>/<asset> to dest and verifies its SHA-256
 // against the release's published hash.
 //
@@ -81,7 +118,7 @@ func (f *Fetcher) Fetch(ctx context.Context, tag, asset, dest string) error {
 		return err
 	}
 	if want == "" {
-		return fmt.Errorf("update: no published SHA-256 for %s in release %s; refusing to install an unverified asset", asset, tag)
+		return fmt.Errorf("update: no published SHA-256 for %s in release %s; refusing to install an unverified asset: %w", asset, tag, ErrNoPublishedHash)
 	}
 	url := fmt.Sprintf("%s/%s/%s", f.base(), tag, asset)
 	sum, err := f.download(ctx, url, dest)
@@ -92,6 +129,19 @@ func (f *Fetcher) Fetch(ctx context.Context, tag, asset, dest string) error {
 	if !strings.EqualFold(sum, want) {
 		_ = os.Remove(dest)
 		return fmt.Errorf("update: checksum mismatch for %s: expected %s, got %s (the download is corrupt or truncated)", asset, want, sum)
+	}
+	return nil
+}
+
+// FetchUnverified downloads without a published-hash check. It exists for ONE
+// caller — the installer's sidecar fetch, where a human is watching and
+// scripts/install.sh has always degraded this way. Auto-update must never call
+// it: an unattended swap has no reader who can abort.
+func (f *Fetcher) FetchUnverified(ctx context.Context, tag, asset, dest string) error {
+	url := fmt.Sprintf("%s/%s/%s", f.base(), tag, asset)
+	if _, err := f.download(ctx, url, dest); err != nil {
+		_ = os.Remove(dest)
+		return err
 	}
 	return nil
 }
@@ -119,7 +169,14 @@ func (f *Fetcher) download(ctx context.Context, url, dest string) (string, error
 			return err
 		}
 		h := sha256.New()
-		n, err := io.Copy(io.MultiWriter(out, h), resp.Body)
+		var src io.Reader = resp.Body
+		if f.Progress != nil {
+			// Constructed per ATTEMPT, inside the retry closure: a retried
+			// download restarts at zero bytes, and a counter that survived the
+			// retry would report a bar running past 100%.
+			src = &progressReader{r: resp.Body, total: resp.ContentLength, report: f.Progress}
+		}
+		n, err := io.Copy(io.MultiWriter(out, h), src)
 		cerr := out.Close()
 		if err != nil {
 			return err

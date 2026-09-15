@@ -3,7 +3,9 @@ package retry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/url"
 	"syscall"
 	"testing"
 	"time"
@@ -111,5 +113,31 @@ func TestBackoffJitterBounded(t *testing.T) {
 		if d := backoff(p, 1, 0); d < 0 || d > time.Second {
 			t.Fatalf("jittered backoff %s out of [0,1s]", d)
 		}
+	}
+}
+
+// ⚠️ A *url.Error CARRYING io.EOF MEANS THE REQUEST NEVER COMPLETED — the server
+// closed the connection before answering, which is what a dropped keep-alive
+// looks like to Go (and which it will not retry itself for a POST). That is a
+// transport fault, not a verdict, so it must classify as transient.
+//
+// It cost a real flow: the CLI's device-login poll aborted on its first attempt
+// against a local Atlas (`Post ".../device/poll": EOF`) while the server logged
+// the same request as 202, which in the macOS installer made the approval page
+// appear and vanish before anyone could use it.
+//
+// Bare io.EOF is deliberately NOT transient: outside a round trip it is how an
+// empty body reads to a decoder, and retrying that would hammer a server that
+// answered perfectly well.
+func TestIsTransientOnAConnectionClosedBeforeTheResponse(t *testing.T) {
+	roundTrip := &url.Error{Op: "Post", URL: "https://atlas.example/v1/cli/device/poll", Err: io.EOF}
+	if !IsTransient(roundTrip) {
+		t.Fatal("a url.Error wrapping io.EOF must be transient: the request never completed")
+	}
+	if !IsTransient(fmt.Errorf("network error contacting Atlas: %w", roundTrip)) {
+		t.Fatal("it must still classify when wrapped by a caller's message")
+	}
+	if IsTransient(io.EOF) {
+		t.Fatal("a bare io.EOF is an empty body, not a transport failure — retrying it hammers a healthy server")
 	}
 }

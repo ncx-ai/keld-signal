@@ -106,7 +106,27 @@ plutil -extract 0.BundleIsRelocatable raw "$APP_PLIST" | grep -qx false \
 pkgbuild --root "$APP_STAGE" --install-location /Applications --component-plist "$APP_PLIST" \
   --identifier co.keld.signal --version "$VERSION" "$TMP/app-component.pkg"
 
-PB=(productbuild --distribution "$ROOT/distribution.xml" --resources "$ROOT/../resources" --package-path "$TMP" "$OUT")
+# ── The wizard pane ──────────────────────────────────────────────────────────
+# Onboarding happens INSIDE the wizard: a custom Installer.app section, ordered
+# before the Install step, that redeems the setup code, downloads the analysis
+# sidecar with a progress bar, and collects which AI tools to configure. It
+# carries its own copy of `keld` because the payload is not installed while it
+# runs.
+#
+# ⚠️ A pane cannot be placed AFTER the install — measured 2026-09-14: the
+# section enters with installStarted=0 and the plugin's host process stops the
+# moment installation completes. postinstall does the rest, silently.
+PLUGIN_DIR="$TMP/plugins"
+mkdir -p "$PLUGIN_DIR"
+"$ROOT/plugin/build-plugin.sh" "$PLUGIN_DIR" "$VERSION" "$STAGE/keld"
+# build-plugin.sh signs and verifies internally (sign-after-build, or the bundle
+# fails to load with no diagnostic); verify again here for the same reason the
+# payload binaries are verified — an opaque notarization rejection is the
+# alternative.
+codesign --verify --strict --verbose=2 "$PLUGIN_DIR/KeldSetup.bundle"
+
+PB=(productbuild --distribution "$ROOT/distribution.xml" --resources "$ROOT/../resources" \
+    --plugins "$PLUGIN_DIR" --package-path "$TMP" "$OUT")
 if [ -n "${APPLE_DEVELOPER_ID_INSTALLER:-}" ]; then
   PB+=(--sign "$APPLE_DEVELOPER_ID_INSTALLER")
 fi
