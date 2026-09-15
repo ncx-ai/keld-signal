@@ -228,6 +228,16 @@ jobs:
             # already build with -s -w.
             GOOS=$goos GOARCH=$arch go build -ldflags "-s -w" -o "stage/keld${ext}" ./cmd/keld
             GOOS=$goos GOARCH=$arch go build -ldflags "-s -w" -o "stage/keld-agent${ext}" ./cmd/keld-agent
+            # ⚠️ The Windows leg needs a THIRD binary, and omitting it here breaks the
+            # DRY RUN specifically — the only way to exercise this workflow without
+            # cutting a release. On a real release keld-wizard-host.exe rides the
+            # GoReleaser archive unzipped above; on a dry run nothing produces it, so
+            # the `Copy-Item stage\keld-wizard-host.exe` below fails for a reason the
+            # release path does not have. -H windowsgui matches .goreleaser.yaml: a
+            # console-less helper is the entire point of the wizard page.
+            if [ "$goos" = "windows" ]; then
+              GOOS=$goos GOARCH=$arch go build -ldflags "-s -w -H windowsgui" -o "stage/keld-wizard-host${ext}" ./cmd/keld-wizard-host
+            fi
           fi
           cp -R dist/keld-agent-sidecar stage/ 2>/dev/null || cp -R dist/keld-agent-sidecar/* stage/
 

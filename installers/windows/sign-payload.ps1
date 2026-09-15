@@ -123,3 +123,9 @@ if ($unsigned.Count -gt 0) {
 }
 
 Write-Host "signed and verified: $($needed.Count) binaries"
+# ⚠️ EXIT EXPLICITLY. `$LASTEXITCODE` is NOT reset by a script that falls off its
+# end — measured: after `cmd /c "exit 7"` a script with no `exit` leaves it at 7 —
+# and the caller in installers.yml reads it as this script's verdict. Every other
+# path here exits on purpose; without this one the success path would inherit
+# whatever the last native command in the caller's shell happened to return.
+exit 0
