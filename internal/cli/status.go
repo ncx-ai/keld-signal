@@ -191,13 +191,12 @@ func newDoctorCmd() *cobra.Command {
 					// Unknown tool in manifest — skip silently (matches Python behaviour).
 					continue
 				}
-				var current *string
-				if data, err := os.ReadFile(tm.ConfigPath); err == nil {
-					s := string(data)
-					current = &s
-				}
-				st := adapter.Status(current, tm.Managed)
-				if !st.Configured {
+				// tools.ConfiguredAt, not a second copy of the read-and-ask:
+				// the integrations route's `surfaces[].wired` asks the same
+				// question of the same file (AC-1, "read back, not
+				// remembered"), and two implementations are two ways for
+				// doctor and the pane to disagree about one config.
+				if !tools.ConfiguredAt(adapter, tm.ConfigPath, tm.Managed) {
 					problems = append(problems,
 						fmt.Sprintf("%s: manifest records setup but config is not configured (drift). Re-run `keld signal setup`.", adapter.DisplayName()),
 					)
