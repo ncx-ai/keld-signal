@@ -123,9 +123,23 @@ grep -qF 'KeldLooksLikePairingCode' "$p/KeldSetup.m" || fail "pane does not shap
 # session. The pane must RENDER the returned user code: matching it against what
 # the browser shows is the device flow's anti-phishing step, and hiding it turns
 # a security property into decoration.
-grep -qF 'device_code' "$p/KeldSetup.m" || fail "pane does not handle the device_code event, so it cannot start a browser sign-in"
-grep -qF 'user_code' "$p/KeldSetup.m" || fail "pane never renders the device-flow user code, which is what the person matches against the browser"
-grep -qF 'verification_url' "$p/KeldSetup.m" || fail "pane does not surface the verification URL, so a failed browser open is a dead end"
+grep -qF 'device_code' "$p/KeldSetup.m" || fail "pane does not handle the device_code event, so it cannot start a sign-in"
+grep -qF 'verification_url' "$p/KeldSetup.m" || fail "pane has no fallback URL for an Atlas that predates the compact route"
+
+# ⚠️ THIS ASSERTION USED TO DEMAND THE OPPOSITE, and the reversal is the point
+# rather than a loosening. It required the pane to RENDER the device-flow user
+# code, because matching that code against the one in the browser is the flow's
+# anti-phishing step — true while approval happened in a browser.
+#
+# Approval now happens on Atlas's page EMBEDDED IN THIS PANE: the pane supplies
+# the code, loads the page and reads the result, so there is no second surface
+# to compare against and printing it asks someone to check a number against
+# itself. If approval ever moves out of the pane again — a system browser, or a
+# platform that cannot embed a web view — the comparison becomes real again and
+# this assertion should flip back with it.
+if grep -qF '@"user_code"' "$p/KeldSetup.m"; then
+  fail "pane reads the device-flow user code; with the approval page embedded there is nothing to compare it against, so it should not be displayed"
+fi
 
 # ⚠️ THE APPROVAL HAPPENS INSIDE THE WIZARD, on Atlas's OWN page. The pane loads
 # the verification URL in a WKWebView, so the sign-in fields and the confirm
