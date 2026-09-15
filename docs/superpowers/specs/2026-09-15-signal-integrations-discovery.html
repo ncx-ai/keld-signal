@@ -101,7 +101,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <main>
 
 <h1>Signal Integrations — Discovery</h1>
-<p class="lede">An Integrations pane that lists every tool Signal knows, says how each is wired, shows whether it is working, sets up a tool that appears later, reports a break to us, and a nightly matrix that proves each integration against the latest tool version without provider accounts. If this is wrong, Codex stays silently spend-only and the next Codex release breaks Claude-shaped assumptions with nobody told.</p>
+<p class="lede">An Integrations pane that lists every tool Signal knows, says how each is wired, shows whether it is working, sets up a tool that appears later, reports a break to us, and a conformance matrix that proves each integration against the latest tool version whenever a tool or Signal releases. If this is wrong, Codex stays silently spend-only and the next Codex release breaks Claude-shaped assumptions with nobody told.</p>
 
 <div class="meta">
   <span class="chip chip-draft">Draft — awaiting sign-off</span>
@@ -133,7 +133,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <ul>
   <li><strong>Problem:</strong> A tool installed after Signal is never configured. A configured tool that stops producing is reported nowhere. Codex has produced no classified prompt since it was wired, and nothing said so.</li>
   <li><strong>Who feels it:</strong> The user, who sees a tool "set up" and nothing in Atlas. Us, who learn a tool release broke capture only when a customer asks.</li>
-  <li><strong>Business value:</strong> One person can support many tools: the machine sets them up, the machine says which lane broke, the nightly run says which tool version broke it.</li>
+  <li><strong>Business value:</strong> One person can support many tools: the machine sets them up, the machine says which lane broke, the matrix says which tool version broke it.</li>
   <li><strong>Hypothesis:</strong> If integration state is one computed fact per tool and surface, shown in the pane, in doctor and in a fleet event, then a break is visible within a day on the machine and within a day across the fleet, and adding a tool costs one adapter plus one conformance scenario.</li>
 </ul>
 
@@ -142,7 +142,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <li><strong>G1</strong> — A user sees every known integration, how it is wired, and whether it works, in the local UI.</li>
   <li><strong>G2</strong> — A tool installed later is configured without a command, with a backup, and the pane says so.</li>
   <li><strong>G3</strong> — A broken integration reaches us as an event with the tool version attached, and the user can send a redacted report with one click.</li>
-  <li><strong>G4</strong> — Each integration is proven nightly against the latest tool version on three OSes. A mock model is used where the tool accepts one; a real provider credential is used where it does not. Lack of a credential never excludes a tool.</li>
+  <li><strong>G4</strong> — Each integration is proven against the latest tool version: on Linux whenever a tool publishes a new version, on three OSes whenever Signal releases, and on demand. Never on a timer alone. A mock model is used where the tool accepts one; a real provider credential is used where it does not. Lack of a credential never excludes a tool.</li>
 </ul>
 
 <h3>Acceptance criteria</h3>
@@ -161,7 +161,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <tr id="ac-8"><td class="mono">AC-8</td><td><span class="mono">keld signal doctor</span> prints the same per-integration states as the route, from one function <span class="mono">integrations.Compute</span>. No second copy of the rule exists.</td><td>CLI output</td><td class="mono">go test ./internal/cli -run 'DoctorIntegrationsParity'; grep shows one implementation</td></tr>
   <tr id="ac-9"><td class="mono">AC-9</td><td>Codex setup registers <span class="mono">UserPromptSubmit</span> and <span class="mono">Stop</span>, drops <span class="mono">PreToolUse</span>, and <span class="mono">keld __hook</span> accepts <span class="mono">turn_id</span> when <span class="mono">prompt_id</span> is absent. A captured Codex 0.153.4 payload yields a pointer <span class="mono">session#turn_id</span>. The Codex row shows <span class="mono">approval_required</span> until Codex holds a trust entry for keld's hooks, detected by reading the <span class="mono">[hooks.state."&lt;source&gt;:&lt;event&gt;:…"]</span> tables Codex writes into its own <span class="mono">config.toml</span> (<span class="mono">enabled = true</span>, <span class="mono">trusted_hash</span>), never remembered; the instruction reads "Open Codex, run /hooks, approve the two keld hooks. Signal confirms here within a minute." Codex marks a CHANGED hook for review again, so a keld release that edits the hook command returns the row to <span class="mono">approval_required</span> and says why. The hook lane never reads <span class="mono">working</span> before approval.</td><td>hook + config + route</td><td class="mono">go test ./internal/hook ./internal/tools ./internal/agent/integrations -run 'Codex'</td></tr>
   <tr id="ac-10"><td class="mono">AC-10</td><td><span class="mono">make conformance TOOL=claude_code</span> runs Claude Code headless against <span class="mono">scripts/conformance/mockllm.py</span> with a fake key in an isolated config dir, and asserts five checkpoints: transcript written, pointer received, store rows present, telemetry forwarded, enrichment produced. Exit 0 locally and in the Linux container.</td><td>script exit code</td><td class="mono">make conformance TOOL=claude_code; .github/workflows/conformance.yml</td></tr>
-  <tr id="ac-11"><td class="mono">AC-11</td><td>The nightly matrix runs the installed-tool scenarios at <span class="mono">latest</span> on ubuntu (Docker Compose), macos-14 and windows-latest. A failing checkpoint opens or updates one GitHub issue titled <span class="mono">conformance: &lt;tool&gt; &lt;version&gt; &lt;os&gt; &lt;checkpoint&gt;</span>, deduplicated by title.</td><td>workflow + issue tracker</td><td class="mono">.github/workflows/conformance.yml; one forced-failure dispatch run</td></tr>
+  <tr id="ac-11"><td class="mono">AC-11</td><td>The matrix runs the three scenarios at <span class="mono">tool@latest</span>: on ubuntu (Docker Compose) when a tool's npm version changes, on ubuntu, macos-14 and windows-latest when <span class="mono">installers.yml</span> completes for a release tag, and on <span class="mono">workflow_dispatch</span>. A failing checkpoint opens or updates one GitHub issue titled <span class="mono">conformance: &lt;tool&gt; &lt;version&gt; &lt;os&gt; &lt;checkpoint&gt;</span>, deduplicated by title.</td><td>workflow + issue tracker</td><td class="mono">.github/workflows/conformance.yml; one forced-failure dispatch run</td></tr>
   <tr id="ac-12"><td class="mono">AC-12</td><td><strong>Every installer we ship has an unattended mode, and every onboarding step is reachable from a command.</strong> The matrix installs each artifact that way: <span class="mono">sudo installer -pkg</span> for the pkg, <span class="mono">/VERYSILENT</span> for the Inno .exe, <span class="mono">install.sh</span> on Linux, and, for a .dmg, mount + copy + the app binary's <span class="mono">install --code</span>. An installer or onboarding step that exists only as a window fails this criterion.</td><td>installer artifacts + docs</td><td class="mono">scripts/conformance/install-&lt;os&gt;.sh runs each artifact unattended; docs/install.md lists the silent invocation per artifact</td></tr>
 </tbody>
 </table>
@@ -213,7 +213,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <tr><td>Codes <span class="mono">integration.configured / broken / recovered / report</span></td><td><span class="pill p-extend">extend</span></td><td>The catalogue and the redaction gate exist; a bundle is a <span class="mono">fields</span> object of primitives and strings.</td></tr>
   <tr><td>Teleproxy: last forward per source</td><td><span class="pill p-extend">extend</span></td><td>Today one global instant; the state rule needs it per tool. Source comes from the OTLP resource's <span class="mono">service.name</span> (gap 3).</td></tr>
   <tr><td><span class="mono">scripts/conformance/</span>: mock model, scenarios, checkpoints</td><td><span class="pill p-new">new</span></td><td>Nothing drives a real tool binary today; the e2e scripts generate transcripts. The mock server is 60 lines; the isolation is <span class="mono">e2e-up.sh</span>'s.</td></tr>
-  <tr><td><span class="mono">conformance.yml</span> nightly</td><td><span class="pill p-extend">extend</span></td><td>Same three runners as <span class="mono">installers.yml</span>; a schedule and an issue step.</td></tr>
+  <tr><td><span class="mono">conformance.yml</span> (version watch · release · dispatch)</td><td><span class="pill p-extend">extend</span></td><td>Same three runners as <span class="mono">installers.yml</span>; a version watch, a <span class="mono">workflow_run</span> trigger and an issue step.</td></tr>
 </tbody>
 </table>
 </div>
@@ -237,7 +237,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 
 <h3>System diagram</h3>
 <figure>
-<svg viewBox="0 0 880 420" role="img" aria-label="Three lanes. Top lane, the tools: Claude Code, Codex and Pi, each with a config directory and its surfaces. Middle lane, the daemon: a new detector polls the config directories every sixty seconds and runs the existing adapters with a backup; a new integrations package computes one state per tool from four lane facts, the hook pointers, the watcher pointers, the teleproxy's last forward per source, and the store's rows; the client-events emitter, changed, sends integration events and the report bundle. Bottom lane: the local UI gains an Integrations pane fed by new loopback routes, Atlas receives the events on the existing client-events route, and a new nightly conformance workflow drives each tool against a mock model and checks five checkpoints.">
+<svg viewBox="0 0 880 420" role="img" aria-label="Three lanes. Top lane, the tools: Claude Code, Codex and Pi, each with a config directory and its surfaces. Middle lane, the daemon: a new detector polls the config directories every sixty seconds and runs the existing adapters with a backup; a new integrations package computes one state per tool from four lane facts, the hook pointers, the watcher pointers, the teleproxy's last forward per source, and the store's rows; the client-events emitter, changed, sends integration events and the report bundle. Bottom lane: the local UI gains an Integrations pane fed by new loopback routes, Atlas receives the events on the existing client-events route, and a new conformance workflow, run when a tool or Signal releases, drives each tool against a mock model and checks five checkpoints.">
   <defs>
     <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
     <marker id="ah-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-good"/></marker>
@@ -306,7 +306,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <path d="M450 286V338" class="arr-good" marker-end="url(#ah-good)"/>
 
   <rect x="590" y="340" width="270" height="60" rx="4" class="b-new"/>
-  <text x="725" y="361" text-anchor="middle" class="txt">conformance.yml · nightly, 3 OSes</text>
+  <text x="725" y="361" text-anchor="middle" class="txt">conformance.yml · on tool or Signal release</text>
   <text x="725" y="378" text-anchor="middle" class="small">install tool@latest → mock model → 5 checkpoints</text>
   <text x="725" y="392" text-anchor="middle" class="small">failure → one issue per tool · version · os · checkpoint</text>
   <path d="M725 338V212" class="arr" marker-end="url(#ah)"/>
@@ -317,12 +317,14 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 </figure>
 
 <h3>Conformance matrix — how it runs on GitHub</h3>
-<p>One workflow, <span class="mono">.github/workflows/conformance.yml</span>, beside the existing <span class="mono">installers.yml</span>. One job per OS × scenario. Every job installs the tool at <span class="mono">@latest</span>, installs Signal unattended (AC-12), talks to a mock model and a mock Atlas, and reads five checkpoints from the isolated daemon. No provider account is used by default; a real key is a CI secret added per tool only where the mock cannot stand in.</p>
+<p>One workflow, <span class="mono">.github/workflows/conformance.yml</span>, beside the existing <span class="mono">installers.yml</span>. It runs when a tool publishes a new version (Linux only, since a transcript shape is the same on every OS), when Signal releases (all three OSes, because installers and service registration are OS-specific), and on demand. There is no nightly full run: the cost went to the wrong place, and a run with nothing new to test proves nothing new. One job per OS × scenario. Every job installs the tool at <span class="mono">@latest</span>, installs Signal unattended (AC-12), talks to a mock model and a mock Atlas, and reads five checkpoints from the isolated daemon. No provider account is used by default; a real key is a CI secret added per tool only where the mock cannot stand in.</p>
 <div class="wrap">
 <table>
 <thead><tr><th>GitHub piece</th><th>Used for</th></tr></thead>
 <tbody>
-  <tr><td class="mono">on: schedule</td><td>Nightly, 03:00 UTC. Plus <span class="mono">workflow_dispatch</span> with <span class="mono">tool</span>, <span class="mono">version</span> and <span class="mono">force_fail</span> inputs for a manual run, a pinned-version rerun, or the forced-failure test that proves the issue step (AC-11).</td></tr>
+  <tr><td class="mono">on: schedule (version watch)</td><td>A one-minute Linux job, daily: <span class="mono">npm view &lt;pkg&gt; version</span> per tool against <span class="mono">.conformance/last-tested.json</span>. A changed version starts the Linux matrix for that tool only and commits the new version to the file on a pass. This is the tool-release canary, and it is what replaces the nightly.</td></tr>
+  <tr><td class="mono">on: workflow_run (installers.yml, tags v*)</td><td>When a release build completes, the full 3-OS matrix runs against the artifacts that build produced. This is the Signal-release gate: installers, service registration, upgrade over the previous release.</td></tr>
+  <tr><td class="mono">on: workflow_dispatch</td><td>Inputs <span class="mono">tool</span>, <span class="mono">version</span>, <span class="mono">os</span>, <span class="mono">force_fail</span>: a manual run, a pinned-version rerun, one OS only, or the forced-failure test that proves the issue step (AC-11).</td></tr>
   <tr><td class="mono">strategy.matrix</td><td><span class="mono">os × scenario</span>, <span class="mono">fail-fast: false</span>, so one red leg never hides the others. OS legs: <span class="mono">ubuntu-latest</span> (Docker Compose), <span class="mono">macos-14</span> (Apple Silicon, the pkg path), <span class="mono">windows-latest</span> (the Inno path). Same runners <span class="mono">installers.yml</span> already uses.</td></tr>
   <tr><td class="mono">actions/download-artifact</td><td>The Signal artifacts under test come from the latest <span class="mono">installers.yml</span> run on the branch: pkg, Inno .exe, frozen sidecar tarball per OS. The matrix never rebuilds them, so it tests what a user would download.</td></tr>
   <tr><td class="mono">actions/setup-node · actions/cache</td><td>Tool installs are npm packages (<span class="mono">@anthropic-ai/claude-code</span>, <span class="mono">@openai/codex</span>, <span class="mono">@earendil-works/pi-coding-agent</span>, <span class="mono">@google/gemini-cli</span>) at <span class="mono">@latest</span>; the cache holds the npm store, never the tool version, so "latest" is real every night.</td></tr>
@@ -330,12 +332,27 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <tr><td class="mono">GITHUB_STEP_SUMMARY</td><td>One table per run: tool, version installed, OS, scenario, five checkpoints, pass/fail. This is the page a person opens.</td></tr>
   <tr><td class="mono">gh issue · permissions: issues: write</td><td>A failing checkpoint opens or updates one issue titled <span class="mono">conformance: &lt;tool&gt; &lt;version&gt; &lt;os&gt; &lt;checkpoint&gt;</span>, deduplicated by title, with the summary table and the artifact link in the body.</td></tr>
   <tr><td class="mono">actions/upload-artifact (on failure)</td><td>Daemon log, mock model and mock Atlas request logs, the isolated config dirs and the transcript of the scripted prompt. The prompt is ours, so the transcript holds no user text.</td></tr>
-  <tr><td class="mono">concurrency · timeout-minutes · cost</td><td>One nightly at a time; 25 minutes per job. GitHub-hosted minutes on a private repo (rates from 2026-01-01): Linux $0.006, Windows $0.010, macOS $0.062 per minute, all-in. Against the plan's included minutes (Team: 3,000/month) a Windows minute counts 2× and a macOS minute 10×. Estimate for 3 OS × 3 scenarios at 15 min each: 135 runner-minutes a night ≈ <strong>$3.50/night, ~$105/month</strong>, of which macOS is $2.79/night; the quota is exhausted in the first week, so this is paid usage. Two levers if that matters: run the macOS leg on a self-hosted Mac (free minutes; the platform charge for self-hosted runners was postponed), or run macOS for one scenario nightly and the rest weekly.</td></tr>
+  <tr><td class="mono">concurrency · timeout-minutes · cost</td><td>One nightly at a time; 25 minutes per job. GitHub-hosted minutes on a private repo (rates from 2026-01-01): Linux $0.006, Windows $0.010, macOS $0.062 per minute, all-in. Against the plan's included minutes (Team: 3,000/month) a Windows minute counts 2× and a macOS minute 10×. Estimates at 15 min per job: the daily version watch ≈ $0.18/month; a Linux run for one tool release (3 scenarios) ≈ 45 runner-minutes ≈ <strong>$0.27</strong>; a full 3-OS run for a Signal release ≈ 135 runner-minutes ≈ <strong>$3.50</strong>, of which macOS is $2.79. At two tool releases a week and two Signal releases a month that is <strong>about $10/month</strong>, against $105 for a nightly full matrix. A self-hosted Mac makes the macOS leg free (the platform charge for self-hosted runners was postponed).</td></tr>
 </tbody>
 </table>
 </div>
+<h3>The three scenarios, and why only three run on VMs</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Scenario</th><th>Steps</th><th>What only a real OS can show</th></tr></thead>
+<tbody>
+  <tr><td class="mono">S1</td><td><strong>Tools first, then Signal.</strong> The common case.</td><td>install tool@latest → run the Signal installer unattended → restart nothing (the tool was never started) → one headless prompt → five checkpoints</td><td>the packaged installer, service registration, the adapters against the tool's real current config file</td></tr>
+  <tr><td class="mono">S2</td><td><strong>Signal first, then a tool.</strong> The detector case (AC-3).</td><td>install Signal → wait for the daemon → install tool@latest → within 60 s the row is configured with a backup → one headless prompt → five checkpoints</td><td>the detector against a real install writing its config dir, and the tool reading a config it did not write</td></tr>
+  <tr><td class="mono">S3</td><td><strong>Upgrade over the previous release.</strong></td><td>install the previous Signal release → configure → install the current release over it → configs preserved, sidecar replaced, no <span class="mono">sidecar.version_skew</span> → one headless prompt → five checkpoints</td><td>the upgrade path of each installer, which is where the three-week sidecar skew hid</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li><strong>Unit-tested instead, on every pull request:</strong> a tool already running when setup runs (<span class="mono">restart_required</span>, never <span class="mono">broken</span>); a tool that already has its own telemetry section (skip or replace); uninstall restores every backup. Each is a decision in our Go code and a fake filesystem proves it in milliseconds.</li>
+  <li><strong>Per OS, per run:</strong> S1 and S2 on a tool release (Linux); S1, S2 and S3 on a Signal release (all three OSes). S3 is skipped on a tool release because Signal did not change.</li>
+</ul>
 <figure>
-<svg viewBox="0 0 880 400" role="img" aria-label="Three lanes. Top lane, GitHub: a nightly schedule or a manual dispatch starts the workflow; the matrix fans out into one job per OS and scenario on ubuntu, macos-14 and windows-latest runners; the Signal artifacts are downloaded from the latest installers run. Middle lane, one job: install the tool at latest from npm, install Signal unattended, start the mock model and the mock Atlas on loopback, run the scenario, which is one headless prompt, then read the five checkpoints from the isolated daemon and the mocks. Bottom lane, outputs: the step summary table, and on failure one deduplicated GitHub issue named after tool, version, OS and checkpoint, plus the uploaded logs.">
+<svg viewBox="0 0 880 400" role="img" aria-label="Three lanes. Top lane, GitHub: a tool version change, a Signal release or a manual dispatch starts the workflow; the matrix fans out into one job per OS and scenario on ubuntu, macos-14 and windows-latest runners; the Signal artifacts are downloaded from the latest installers run. Middle lane, one job: install the tool at latest from npm, install Signal unattended, start the mock model and the mock Atlas on loopback, run the scenario, which is one headless prompt, then read the five checkpoints from the isolated daemon and the mocks. Bottom lane, outputs: the step summary table, and on failure one deduplicated GitHub issue named after tool, version, OS and checkpoint, plus the uploaded logs.">
   <defs>
     <marker id="g-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
     <marker id="g-ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-bad"/></marker>
@@ -348,8 +365,8 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <text x="20" y="320" class="lanelbl">OUTPUTS</text>
 
   <rect x="20" y="40" width="170" height="60" rx="4" class="b-new"/>
-  <text x="105" y="62" text-anchor="middle" class="txt">schedule · dispatch</text>
-  <text x="105" y="79" text-anchor="middle" class="small">nightly 03:00 UTC · inputs: tool, version</text>
+  <text x="105" y="62" text-anchor="middle" class="txt">triggers</text>
+  <text x="105" y="79" text-anchor="middle" class="small">tool release · Signal release · dispatch</text>
   <path d="M190 70H228" class="arr" marker-end="url(#g-ah)"/>
   <rect x="230" y="40" width="200" height="60" rx="4" class="b-new"/>
   <text x="330" y="62" text-anchor="middle" class="txt">matrix: os × scenario</text>
@@ -569,7 +586,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 
   <span class="cov"># Covers: AC-11</span>
   <span class="kw">Scenario:</span> A tool release breaks capture overnight
-    <span class="kw">Given</span> the nightly matrix installs codex@latest and checkpoint "pointer received" fails on ubuntu
+    <span class="kw">Given</span> the version watch sees a new codex version, the Linux matrix installs it, and checkpoint "pointer received" fails
     <span class="kw">When</span>  the workflow finishes
     <span class="kw">Then</span>  one issue titled "conformance: codex &lt;version&gt; ubuntu pointer" exists, updated not duplicated</pre>
 
@@ -625,8 +642,8 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <tr><td>Time from a lane breaking to a person knowing</td><td class="mono">never (Codex, since install)</td><td class="mono">≤ 24 h on the machine · ≤ 24 h in Atlas</td><td>pane · integration.broken events</td></tr>
   <tr><td>Installed tools left unconfigured</td><td class="mono">every tool installed after Signal</td><td class="mono">0 with auto-setup on</td><td>/v1/integrations · integration.configured</td></tr>
   <tr><td>Codex prompts entering enrichment</td><td class="mono">0</td><td class="mono">= human prompts</td><td>queue counters · pane</td></tr>
-  <tr><td>Tool releases caught before a customer report</td><td class="mono">0 of 3 Codex shape changes since April</td><td class="mono">every nightly failure filed within 24 h</td><td>conformance issues</td></tr>
-  <tr><td>Conformance pass rate at tool@latest</td><td class="mono">unknown</td><td class="mono">reported nightly, per tool and OS</td><td>workflow summary</td></tr>
+  <tr><td>Tool releases caught before a customer report</td><td class="mono">0 of 3 Codex shape changes since April</td><td class="mono">a failure filed within 24 h of the tool's release</td><td>conformance issues</td></tr>
+  <tr><td>Conformance pass rate at tool@latest</td><td class="mono">unknown</td><td class="mono">reported per run, per tool and OS</td><td>workflow summary</td></tr>
 </tbody>
 </table>
 </div>
@@ -665,7 +682,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <h3>Observability</h3>
 <ul>
   <li><strong>Reused signals:</strong> queue Accepted/Duplicate counters, teleproxy last-forward record, doctor states, <span class="mono">/metrics</span>, the client-events spool and its <span class="mono">spool.depth</span> gauge.</li>
-  <li><strong>New signals:</strong> <span class="mono">integration.configured</span>, <span class="mono">integration.broken</span>, <span class="mono">integration.recovered</span>, <span class="mono">integration.report</span>; the nightly workflow summary and its issues.</li>
+  <li><strong>New signals:</strong> <span class="mono">integration.configured</span>, <span class="mono">integration.broken</span>, <span class="mono">integration.recovered</span>, <span class="mono">integration.report</span>; the workflow summary and its issues.</li>
 </ul>
 
 <h3>Rollback plan</h3>
