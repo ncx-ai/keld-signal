@@ -52,3 +52,41 @@ func TestSysctlOutputEmptyOnUnknownOrHangingCommand(t *testing.T) {
 		t.Fatalf("sysctlOutput(unknown key) = %q, want \"\"", got)
 	}
 }
+
+// ⚠️ THE FIELD IS ONLY USEFUL IF ITS VALUES ARE A CLOSED SET. It exists to be
+// COUNTED across a fleet — "how many machines refuse to run unsigned binaries" —
+// and a stray spelling silently lands in its own bucket, understating whichever
+// bucket it should have joined. This is the same discipline the dynamics
+// vocabularies are pinned with, for the same reason.
+func TestSmartAppControlIsFromTheClosedSet(t *testing.T) {
+	allowed := map[string]bool{
+		"":           true, // not Windows
+		"off":        true,
+		"on":         true,
+		"evaluation": true,
+		"absent":     true,
+		"unknown":    true,
+		"unexpected": true,
+	}
+	got := Collect().SmartAppControl
+	if !allowed[got] {
+		t.Fatalf("smart_app_control = %q, which is not one of the documented states", got)
+	}
+	if runtime.GOOS != "windows" && got != "" {
+		t.Fatalf("smart_app_control = %q off Windows; it must stay empty so an absent key "+
+			"means \"not Windows\" rather than \"could not tell\"", got)
+	}
+	if runtime.GOOS == "windows" && got == "" {
+		t.Fatal("smart_app_control is empty ON Windows; every Windows machine must report " +
+			"a real state, including \"unknown\"")
+	}
+}
+
+// Collect must never fail, on any platform — it runs synchronously in daemon
+// startup, so a registry read that goes wrong must degrade, never propagate.
+func TestCollectSurvivesWindowsProbe(t *testing.T) {
+	info := Collect()
+	if info.LogicalCores <= 0 {
+		t.Fatalf("logical_cores = %d; Collect returned a broken snapshot", info.LogicalCores)
+	}
+}

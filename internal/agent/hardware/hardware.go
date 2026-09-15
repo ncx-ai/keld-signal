@@ -36,13 +36,23 @@ type Info struct {
 	LogicalCores int    `json:"logical_cores"`
 	MemTotalGB   int    `json:"mem_total_gb"`
 	OSVersion    string `json:"os_version"`
+	// SmartAppControl is the Windows machine-protection state that decides
+	// whether UNSIGNED binaries may run at all — on an enforcing machine every
+	// Keld binary is refused, so this is the field that says whether the fleet
+	// can run us today. Empty off Windows; see hardware_windows.go for why
+	// "absent" and "unknown" are kept apart from "off".
+	SmartAppControl string `json:"smart_app_control,omitempty"`
 }
 
 // Collect returns a best-effort hardware snapshot for this host. LogicalCores
 // is runtime.NumCPU() on every platform — it needs no exec or file read and
-// can never fail. CPUModel/MemTotalGB/OSVersion are resolved per OS; Windows
-// leaves CPUModel and OSVersion empty this iteration (the daemon's event
-// envelope still stamps os/arch on every event regardless).
+// can never fail. CPUModel/MemTotalGB/OSVersion are resolved per OS.
+//
+// Windows fills OSVersion and SmartAppControl (both single registry reads) and
+// still leaves CPUModel and MemTotalGB empty — the Windows collector was added
+// for the Smart App Control question, not to complete the hardware picture, and
+// claiming otherwise here would be the doc-ahead-of-the-code problem this repo
+// has paid for before. The event envelope stamps os/arch regardless.
 func Collect() Info {
 	info := Info{LogicalCores: runtime.NumCPU()}
 	switch runtime.GOOS {
@@ -50,6 +60,8 @@ func Collect() Info {
 		collectDarwin(&info)
 	case "linux":
 		collectLinux(&info)
+	case "windows":
+		collectWindows(&info)
 	}
 	return info
 }
