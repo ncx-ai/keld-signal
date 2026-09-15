@@ -37,7 +37,7 @@ def iter_turns(path):
     return turns_in(open(path, errors="replace"), reader=readers.reader_for(path))
 
 
-def turns_in(lines, reader=None):
+def turns_in(lines, reader=None, carry=None):
     """`iter_turns` over an arbitrary sequence of raw lines rather than a whole file.
 
     Incremental ingest (`analysis/ingest.py`) holds only the bytes a transcript grew by, and must
@@ -45,6 +45,13 @@ def turns_in(lines, reader=None):
     would be a second place for them to drift, and a tail filtered differently from the head is
     precisely the silent inequality that design has to rule out. This module stays the only one
     that opens a transcript; `iter_turns` is the file-shaped door and this is the line-shaped one.
+
+    `carry` is the reader's cross-batch state, mutated in place. Claude Code writes every fact of
+    a turn on the turn's own line and carries nothing; Codex splits a turn across records — the
+    cwd, model and turn id arrive on a `turn_context` and the text on the `user_message` that
+    follows — so a batch that begins between them needs what the previous batch saw. `ingest`
+    persists it beside `pending`, `cwds` and `reqs`, which exist for exactly this reason. `None`
+    means a whole-file read.
 
     `reader` defaults to Claude Code. An incremental caller that has the PATH should pass
     `reader_for(path)`: the line-shaped door cannot work out which tool wrote a line it is handed
@@ -56,7 +63,7 @@ def turns_in(lines, reader=None):
     carries no speech and no reference and is also where the huge lines are. Skipping it unparsed
     is what keeps this a seconds-long parse rather than a minutes-long one.
     """
-    return (reader or readers.DEFAULT).turns_in(lines)
+    return (reader or readers.DEFAULT).turns_in(lines, carry=carry)
 
 
 def iter_tool_use_lines(path):
@@ -69,10 +76,10 @@ def iter_tool_use_lines(path):
     return tool_use_in(open(path, errors="replace"), reader=readers.reader_for(path))
 
 
-def tool_use_in(lines, reader=None):
+def tool_use_in(lines, reader=None, carry=None):
     """`iter_tool_use_lines` over raw lines rather than a whole file — the same seam, and for
     the same reason, as `turns_in` above."""
-    return (reader or readers.DEFAULT).tool_turns_in(lines)
+    return (reader or readers.DEFAULT).tool_turns_in(lines, carry=carry)
 
 
 def _order_key(ts):

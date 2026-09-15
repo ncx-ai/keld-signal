@@ -171,11 +171,16 @@ def record(o):
 
 # ---------------------------------------------------------------- the two projections
 
-def turns_in(lines):
+def turns_in(lines, carry=None):
     """Speech turns from raw lines, in file order.
 
     Lines that fail to parse as JSON, or that parse but carry no `timestamp`, are skipped the
     same way a `tool_result` is — there is nothing a caller could do with either.
+
+    `carry` is accepted and IGNORED. Claude Code writes every fact of a turn on the turn's own
+    line, so this reader has no cross-batch state; Codex splits a turn across records and does.
+    The argument is in the interface rather than in one reader's signature so that `transcript.py`
+    and `ingest.py` have one call shape, not two.
     """
     for line in lines:
         if not speech_line(line):
@@ -189,7 +194,7 @@ def turns_in(lines):
         yield record(o)
 
 
-def tool_turns_in(lines):
+def tool_turns_in(lines, carry=None):
     """The tool-use projection: every line naming a `tool_use` block, whatever its type.
 
     No `type` and no `timestamp` restriction, deliberately — the workspace pre-pass asks what was

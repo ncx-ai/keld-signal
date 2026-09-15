@@ -24,11 +24,11 @@ makes that visible, counted by record type and source, instead of silent.
 ## What a reader module must provide
 
     speech_line(line)            raw-line filter: is this worth decoding as a speech turn?
+    turns_in(lines, carry)       carry is the cross-batch state `ingest` persists, or None
     tool_use_line(line)          raw-line filter: does this line name a tool call?
     message_line(line)           raw-line filter: may `capture.scan` regex this line's timestamp?
     tool_result_line(line)       raw-line filter: does this line carry a tool OUTCOME?
-    turns_in(lines)              -> Turn, the speech projection, in file order
-    tool_turns_in(lines)         -> Turn, the tool-call projection, in file order
+    tool_turns_in(lines, carry)  -> Turn, the tool-call projection, in file order
     scope(path)                  -> (root, projdir)
     session_label(path)          -> str, or None for the path-derived default
     SOURCE                       the daemon's own source id for this tool
@@ -38,16 +38,18 @@ is one function table per source and not a hierarchy.
 """
 import os
 
-from app.analysis.readers import claude
-from app.analysis.readers.base import ToolCall, Turn
+from app.analysis.readers import claude, codex
+from app.analysis.readers.base import (ToolCall, Turn, note_skipped, reset_skipped,
+                                       skipped_counts)
 
-__all__ = ["Turn", "ToolCall", "claude", "reader_for", "reader_named", "coerce",
-           "READERS", "DEFAULT"]
+__all__ = ["Turn", "ToolCall", "claude", "codex", "reader_for", "reader_named", "coerce",
+           "READERS", "DEFAULT", "note_skipped", "skipped_counts", "reset_skipped"]
 
 DEFAULT = claude
 
 READERS = {
     claude.SOURCE: claude,
+    codex.SOURCE: codex,
 }
 
 # Path fragments that identify a tool's transcript tree. Matched against the NORMALISED absolute
@@ -58,6 +60,7 @@ READERS = {
 # <id>/.claude/projects/...`), and matching the tail is what identifies it wherever the app
 # happens to keep them.
 _ROOT_MARKERS = (
+    (os.path.join(".codex", "sessions"), codex),
     (os.path.join(".claude", "projects"), claude),
 )
 

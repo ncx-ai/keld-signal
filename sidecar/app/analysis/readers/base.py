@@ -38,6 +38,35 @@ disagreeing.
 the length is always 0. Codex reasoning is encrypted and gives the same answer for a different
 reason.
 """
+import collections
+
+
+# ---------------------------------------------------------------- the skipped counter
+#
+# `{(source, record type): n}` -- every record a reader produced NOTHING from, by type. Most keys
+# are expected (a request record whose completion carries the row, a machine-wide state snapshot);
+# the point is that a record type a tool invents TOMORROW appears as a NEW key rather than as
+# silence. That is exactly how the Codex watcher's ordinal gate managed to produce zero pointers
+# from 4,076 real prompts with nothing raised. Surfaced in `/metrics` as `reader.skipped`.
+#
+# Process-lifetime, like every other `/metrics` count. `reset()` is a test seam.
+_SKIPPED = collections.Counter()
+
+
+def note_skipped(source, kind):
+    _SKIPPED[(source, str(kind))] += 1
+
+
+def skipped_counts():
+    """`{source: {record type: n}}`, a snapshot."""
+    out = {}
+    for (source, kind), n in _SKIPPED.items():
+        out.setdefault(source, {})[kind] = n
+    return out
+
+
+def reset_skipped():
+    _SKIPPED.clear()
 
 
 class ToolCall:

@@ -245,14 +245,20 @@ def session_of(path):
 
 
 def _scope(path):
-    """`(root, projdir)`, derived exactly as `analyze.analyze_window` derives them, and for the
-    reasons documented there: a transcript's path is `<root>/<projdir>/<session>.jsonl`, so the
-    collection root is recovered by two `dirname`s rather than by a second convention. Like
-    `analyze_window`, this layer passes `repo_root=()` — it has no configured filesystem
-    repo-root list to confirm a candidate checkout against, and needs none to resolve a
-    workspace from transcript evidence alone.
+    """`(root, projdir)` — THE READER'S, not a layout this module assumes.
+
+    For Claude Code a transcript's path is `<root>/<projdir>/<session>.jsonl`, so the collection
+    root is two `dirname`s up and `projdir` is the encoded launch directory. That was hard-coded
+    here and in `analyze.py`, which is two copies of one convention — and it is wrong for a Codex
+    rollout, whose path is `<sessions>/<YYYY>/<MM>/<DD>/rollout-….jsonl`: two `dirname`s would
+    make every MONTH its own reconcile scope and silently disable cross-session reattribution
+    within a session's own year.
+
+    Like `analyze_window`, this layer passes `repo_root=()` — it has no configured filesystem
+    repo-root list to confirm a candidate checkout against, and needs none to resolve a workspace
+    from transcript evidence alone.
     """
-    return os.path.dirname(os.path.dirname(path)), os.path.basename(os.path.dirname(path))
+    return reader_for(path).scope(path)
 
 
 def _head_fingerprint(path, nbytes=HEAD_BYTES):
@@ -407,11 +413,15 @@ def _load_state(store, path):
     for name, n in raw.get("remotes") or ():
         evidence[2][name] += n
     pending = [(tuple(b), rel, bool(fi), rt) for b, rel, fi, rt in raw.get("pending") or ()]
+    # `reader` is the READER's own carried state, and an absent key loads as empty. It needs no
+    # STATE_VERSION bump for the reason an added accumulator usually would: the Claude reader
+    # carries nothing, so every existing store is correct with an empty one, and no Codex session
+    # has ever been ingested by any released build, so there is no Codex state to repair.
     return (evidence, pending, list(raw.get("cwds") or ()), int(raw.get("lines") or 0),
-            set(raw.get("reqs") or ()))
+            set(raw.get("reqs") or ()), dict(raw.get("reader") or {}))
 
 
-def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None, reqs=()):
+def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None, reqs=(), reader_carry=None):
     """The state as storable JSON. `reqs` is a SET on the way in and a sorted list on the way
     out: nothing reads it but a membership test, and sorting makes the stored blob a function of
     the file rather than of Python's iteration order — which is what lets two ingests of the same
@@ -437,6 +447,7 @@ def _dump_state(evidence, pending, cwds, lines, nlp, resolved=None, reqs=()):
             "pending": [[list(b), rel, fi, rt] for b, rel, fi, rt in pending],
             "cwds": cwds,
             "reqs": sorted(reqs),
+            "reader": dict(reader_carry or {}),
             "lines": lines}
 
 
@@ -636,14 +647,16 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
     # doors cannot work out which tool wrote a line they are handed out of context. One lookup,
     # two projections: a batch read by two different readers is not a batch at all.
     reader = reader_for(path)
-    evidence, pending, cwds, prev_lines, reqs = ((new_evidence(), [], [], 0, set()) if reparse
-                                                 else _load_state(store, path))
+    evidence, pending, cwds, prev_lines, reqs, carry = (
+        (new_evidence(), [], [], 0, set(), {}) if reparse else _load_state(store, path))
     before = _answers(cwds, projdir, evidence)
-    scan_tool_use(tool_use_in(lines, reader=reader), into=evidence)
+    # The tool projection takes a COPY of the carry: it walks the same batch BEFORE the speech
+    # pass, and a shared dict would leave that pass reading state this one had already advanced.
+    scan_tool_use(tool_use_in(lines, reader=reader, carry=dict(carry)), into=evidence)
     if not reparse and _answers(cwds, projdir, evidence) != before:
         return None
 
-    turns = list(turns_in(lines, reader=reader))
+    turns = list(turns_in(lines, reader=reader, carry=carry))
     # `seen_requests=reqs` is MUTATED in place by the call, exactly as `evidence` is: a request
     # is written as several assistant lines, so the "cost this request once" rule spans batches
     # and cannot live inside one call. See `levels.events_for_turns`' `seen_requests` for the
@@ -728,7 +741,8 @@ def _ingest_from(store, path, size, offset, watermark_ts, reparse, nlp, resolved
         recon_rows, _stats = reconcile(pending, COMPONENT_DEPTH)
         store.replace_events(session, RECONCILE_SLOT, recon_rows)
         store.set_parse_state(path,
-                              _dump_state(evidence, pending, cwds, n_lines, nlp, resolved, reqs))
+                              _dump_state(evidence, pending, cwds, n_lines, nlp, resolved, reqs,
+                                          reader_carry=carry))
         store.record_ingest(path, end_offset, size, _head_fingerprint(path),
                             os.path.getmtime(path), watermark_ts)
     return IngestResult(len(turns), watermark_ts, reparse)
