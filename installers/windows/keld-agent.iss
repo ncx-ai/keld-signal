@@ -1,4 +1,4 @@
-; Inno Setup script — build in CI: iscc installers\windows\keld-agent.iss
+﻿; Inno Setup script — build in CI: iscc installers\windows\keld-agent.iss
 ; Per-user install (no admin). Files staged next to this script by CI:
 ;   keld.exe, keld-agent.exe, keld-wizard-host.exe, keld-agent-sidecar\  (frozen one-dir)
 ; onboard.cmd is committed beside this script, not staged by CI.

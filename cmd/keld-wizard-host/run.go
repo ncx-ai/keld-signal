@@ -22,6 +22,11 @@ func relay(o options) int {
 	}
 
 	cmd := exec.Command(o.Exe, o.Args...)
+	// ⚠️ Before anything else: a CONSOLE child started from this GUI process gets
+	// a console window of its own unless told not to, and the wizard page runs
+	// several of them in a row. See nowindow_windows.go.
+	hideChildWindow(cmd)
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		em.emitValue(exitEvent{Event: "__exit", Code: 2, Message: err.Error()})
