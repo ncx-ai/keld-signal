@@ -46,3 +46,11 @@ __pycache__/
 # Tauri build output: tauri_build rewrites these on every build (Tauri's own
 # app template ignores them too). 4,714 lines were committed by accident.
 /app/src-tauri/gen/schemas
+
+# Staged by CI (and by a local test build) next to the .iss; never committed.
+installers/windows/keld.exe
+installers/windows/keld-agent.exe
+installers/windows/keld-wizard-host.exe
+installers/windows/keld-agent-sidecar/
+installers/windows/Output/
+installers/windows/keld-agent-wizardtest.iss
