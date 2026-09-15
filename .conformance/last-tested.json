@@ -3,44 +3,44 @@
     "The tool versions conformance has actually PROVEN, and the state the daily",
     "version watch compares npm against. `version-watch.sh` reads it; the",
     "workflow's `record` job writes it back after a passing run, so a commit here",
-    "means a chain went green at that version on that date — never that someone",
+    "means a chain went green at that version on that date \u2014 never that someone",
     "looked.",
-    "harness: 'supported' = the tool is in scripts/conformance/lib/tools.sh and",
     "the canary may dispatch a run for it. 'pending' = listed so the watch can",
     "still report a release, but never dispatched, because run-chain.sh would",
     "exit 2 on it.",
-    "version: null = never proven. First sight RECORDS and does not dispatch —",
+    "version: null = never proven. First sight RECORDS and does not dispatch \u2014",
     "a version nobody has tested is not a change, and the same forward-only rule",
-    "the watcher's first sighting follows."
+    "the watcher's first sighting follows.",
+    "harness: NOT a key here any more. Whether the harness can run a tool is asked",
+    "of scripts/conformance/lib/tools.sh's tool_supported \u2014 it used to be duplicated",
+    "here and the two drifted at once: tools.sh ran codex while this file said",
+    "'pending', so the canary reported every Codex release as not-in-the-harness and",
+    "dispatched nothing. This file records only what has been PROVEN."
   ],
   "tools": {
     "claude_code": {
       "package": "@anthropic-ai/claude-code",
       "version": "2.1.271",
       "tested_on": "2026-09-15",
-      "proven_by": "local host run on darwin/arm64: make conformance TOOL=claude_code, five checkpoints",
-      "harness": "supported"
+      "proven_by": "local host run on darwin/arm64: make conformance TOOL=claude_code, five checkpoints"
     },
     "codex": {
       "package": "@openai/codex",
-      "version": null,
-      "tested_on": null,
-      "proven_by": null,
-      "harness": "pending"
+      "version": "0.153.4",
+      "tested_on": "2026-09-15",
+      "proven_by": "local host run on darwin/arm64: chain A, five checkpoints. \u26a0\ufe0f Requires --dangerously-bypass-hook-trust, which a real user cannot pass \u2014 so this proves the hooks are registered and the payload is read, NOT that a person's first Codex session captures anything."
     },
     "pi": {
       "package": "@earendil-works/pi-coding-agent",
       "version": null,
       "tested_on": null,
-      "proven_by": null,
-      "harness": "pending"
+      "proven_by": null
     },
     "gemini_cli": {
       "package": "@google/gemini-cli",
       "version": null,
       "tested_on": null,
-      "proven_by": null,
-      "harness": "pending"
+      "proven_by": null
     }
   }
 }

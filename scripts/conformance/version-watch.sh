@@ -67,23 +67,33 @@ trap 'rm -f "$TMP"' EXIT
 # collapses consecutive tabs and an empty `version` silently shifted `harness`
 # into it — every unproven tool then read as harness "" and was reported under
 # the wrong column.
+# ⚠️ WHETHER THE HARNESS CAN RUN A TOOL IS ASKED OF THE HARNESS, not of this
+# JSON. It used to be a `harness` key here, and the two drifted immediately:
+# `lib/tools.sh` ran codex while this file called it "pending", so the canary
+# reported every Codex release as "not in the harness yet" and dispatched
+# nothing. One fact, one owner — `tool_supported` in lib/tools.sh.
+#
+# What stays in the JSON is only what has been PROVEN: the version, when, and
+# by which run. A record of evidence, not a second configuration.
+. "$(dirname "$0")/lib/tools.sh"
+
 python3 - "$FILE" > "$TMP" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 for tool, e in doc["tools"].items():
-    print("|".join([tool, e["package"], str(e.get("version") or ""), e.get("harness", "pending")]))
+    print("|".join([tool, e["package"], str(e.get("version") or "")]))
 PY
 
 CHANGED=""
 REPORT=""
-while IFS='|' read -r tool pkg known harness; do
+while IFS='|' read -r tool pkg known; do
   [ -n "$tool" ] || continue
   latest=$(published "$pkg")
   if [ -z "$latest" ]; then
     REPORT="$REPORT$tool\t$pkg\t${known:-—}\tunreachable\tskipped (npm view gave nothing)\n"
     continue
   fi
-  if [ "$harness" != "supported" ]; then
+  if ! tool_supported "$tool"; then
     REPORT="$REPORT$tool\t$pkg\t${known:-—}\t$latest\tnot in the harness yet (never dispatched)\n"
     continue
   fi
