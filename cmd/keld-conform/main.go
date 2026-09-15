@@ -21,6 +21,8 @@ func main() {
 	switch cmd {
 	case "mockllm":
 		err = runMockLLM(args)
+	case "mockatlas":
+		err = runMockAtlas(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -40,5 +42,6 @@ func usage() {
 
 subcommands:
   mockllm    serve the mock model (Anthropic Messages + OpenAI Responses)
+  mockatlas  serve the mock Atlas (login, onboarding, publish, settings)
 `)
 }
