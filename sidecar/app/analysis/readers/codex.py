@@ -67,13 +67,27 @@ an estimate**.
 `input_tokens` at the FRESH rate and `cache_read_input_tokens` at the cached one, so the cached
 count is SUBTRACTED on the way into the record. Not doing so prices every cached token as fresh.
 
-⚠️ **The dedup key is `(timestamp, cumulative total)` and deliberately NOT `response_id`.**
-`token_usage_record` carries a `response_id` and would be the stronger key, but it exists only in
-0.153.4 and sits on a DIFFERENT record from the one that carries the usage — so reconstructing the
-pairing requires state that a tail batch beginning between the two does not have. A key that
-differs between a tail parse and a whole-file parse breaks AC-7 (40-chunk equivalence) for a
-marginal gain. `token_usage_record` is consequently read for nothing at all; the usage it repeats
-is taken from `token_count`, which every version writes.
+⚠️ **THE DEDUP KEY IS THE CUMULATIVE TOTAL ALONE, AND `(timestamp, cumulative)` OVER-COUNTED BY
+18.5%.** Codex sometimes emits the SAME `token_count` twice — identical `last_token_usage`,
+identical `total_token_usage`, a different timestamp — and a key carrying the timestamp treats the
+two as separate spend. Measured against Codex's OWN final cumulative on the committed fixtures:
+
+    key = (timestamp, total)   0.125.0  1,645,854 input against Codex's 1,389,445   +18.5%
+                               0.151.0  4,987,110 against 4,932,109                  +1.1%
+                               0.153.4  4,036,184 against 4,036,184                  exact
+    key = total                all three EXACT
+
+Two duplicate events on the 0.125 fixture account for its entire excess (128,742 + 127,667). The
+cumulative total IS the identity of a spend observation — that is the decision table's own wording
+("a `token_count` whose cumulative total was already costed") — and it is monotone, so the key is
+also stable across any chunking, which is what AC-7 needs.
+
+`token_usage_record` carries a `response_id` that would be a stronger key still, and it is
+deliberately NOT used: it exists only in 0.153.4 and sits on a DIFFERENT record from the one that
+carries the usage, so reconstructing the pairing needs state a tail batch beginning between the
+two does not have — and a key that differs between a tail parse and a whole-file parse breaks
+AC-7 for a marginal gain. It is consequently read for nothing at all; the usage it repeats is
+taken from `token_count`, which every version writes.
 
 ## Replays
 
@@ -422,9 +436,13 @@ def _records(o, carry):
         usage, rid = _usage_from(pl.get("info"), carry)
         if usage is None:
             return ()
-        # `(timestamp, cumulative total)` — see the module docstring for why not `response_id`.
+        # The CUMULATIVE TOTAL is the identity — see the module docstring for the 18.5%
+        # over-count a timestamped key produced. With no cumulative to key on (a producer that
+        # reports only `last_token_usage`, which no observed version does) the instant is the
+        # only thing left, and costing a duplicate is the safe direction there: the alternative
+        # key would be the usage VALUES, which two genuinely different requests can share.
         return (_turn(carry, "assistant", ts=ts, usage=usage,
-                      request_id=f"tc:{ts}:{rid}"),)
+                      request_id=f"tc:{rid}" if rid is not None else f"tc@{ts}"),)
 
     if t == _RESPONSE_ITEM and pt == "reasoning":
         # Codex reasoning is ENCRYPTED, so the body has no readable length and the COUNT is the

@@ -246,14 +246,71 @@ def test_only_a_total_gives_a_delta_and_neither_gives_nothing():
         "the classic fixture no longer carries the `info: null` case this rule is for"
 
 
+def test_the_readers_spend_equals_codexs_own_arithmetic():
+    """⚠️ THE TRIPWIRE THAT CAUGHT AN 18.5% OVER-COUNT. Codex reports a running
+    `total_token_usage` beside each `last_token_usage`, so the file states its own answer and the
+    reader's sum has to equal it. It did not: Codex sometimes emits the SAME `token_count` twice —
+    identical usage, identical cumulative, a DIFFERENT timestamp — and a dedup key carrying the
+    timestamp counted both.
+
+        key = (timestamp, total)   0.125.0  1,645,854 against Codex's 1,389,445   +18.5%
+                                   0.151.0  4,987,110 against 4,932,109            +1.1%
+                                   0.153.4  4,036,184 against 4,036,184            exact
+        key = total                all three EXACT
+
+    Two duplicate events account for the whole of 0.125's excess. Getting this wrong doubles spend
+    SILENTLY, which is what the `reqs` accumulator already fixed once for Claude.
+    """
+    for name in ALL:
+        got, seen = collections.Counter(), set()
+        for t in _turns(name):
+            if t.usage and t.request_id not in seen:
+                seen.add(t.request_id)
+                got.update(t.usage)
+        codex_says = None
+        for o in _raw(name):
+            pl = o.get("payload") or {}
+            if o.get("type") == "event_msg" and pl.get("type") == "token_count":
+                info = pl.get("info")
+                if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
+                    codex_says = info["total_token_usage"]
+        assert codex_says, f"{name} states no cumulative of its own to check against"
+        # Codex counts cached tokens INSIDE input_tokens; the reader splits them, so the
+        # comparison puts them back together.
+        assert got["input_tokens"] + got["cache_read_input_tokens"] == \
+            codex_says["input_tokens"], name
+        assert got["output_tokens"] == codex_says["output_tokens"], name
+        assert got["cache_read_input_tokens"] == (codex_says.get("cached_input_tokens") or 0), name
+
+
+def test_a_repeated_token_count_is_costed_once():
+    """The mechanism behind the test above, in isolation: two events, same cumulative, different
+    instants."""
+    def ev(ts):
+        return json.dumps({"timestamp": ts, "type": "event_msg", "payload": {
+            "type": "token_count", "info": {
+                "last_token_usage": {"input_tokens": 100, "cached_input_tokens": 0,
+                                     "cache_write_input_tokens": 0, "output_tokens": 5,
+                                     "total_tokens": 105},
+                "total_token_usage": {"input_tokens": 100, "cached_input_tokens": 0,
+                                      "cache_write_input_tokens": 0, "output_tokens": 5,
+                                      "total_tokens": 105}}}})
+    ids = [t.request_id for t in
+           codex.turns_in([ev("2026-09-13T20:42:11.604Z"), ev("2026-09-13T20:42:19.000Z")])
+           if t.usage]
+    assert len(ids) == 2 and len(set(ids)) == 1, ids
+
+
 def test_the_dedup_key_is_reconstructible_from_a_tail():
     """⚠️ `token_usage_record.response_id` would be the stronger key and is deliberately NOT used:
     it sits on a DIFFERENT record from the usage and exists only in 0.153.4, so a tail batch
     beginning between the two cannot reconstruct the pairing — and a key that differs between a
     tail parse and a whole-file parse breaks the 40-chunk equivalence for a marginal gain."""
     ids = [t.request_id for t in _turns(BOTH) if t.usage]
-    assert ids and all(i and i.startswith("tc:") for i in ids), ids[:3]
-    assert len(set(ids)) == len(ids), "two usage events share a dedup key"
+    assert ids and all(i and i.startswith("tc") for i in ids), ids[:3]
+    # No timestamp in the key: it is the cumulative total, which a tail batch reads off the
+    # record in front of it and which is identical whatever the chunking.
+    assert not any(":2026-" in i for i in ids), ids[:3]
 
 
 def test_token_usage_record_is_read_for_nothing():
