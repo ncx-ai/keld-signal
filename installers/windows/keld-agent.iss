@@ -8,6 +8,24 @@
 [Setup]
 AppName=Keld
 AppVersion={#MyVersion}
+; Publisher and file metadata. Windows shows these in the file's Properties and
+; in Add/Remove Programs, and an installer carrying none of them looks anonymous
+; to both a person and to reputation-based gates.
+;
+; ⚠️ THIS IS NOT A SUBSTITUTE FOR SIGNING, and must not be mistaken for one.
+; keld-setup.exe is unsigned, and Smart App Control — on by default on clean
+; Windows 11 — blocks unsigned installers outright, with a dialog and no log
+; line. Observed on a dev machine 2026-09-15: some builds of this very installer
+; ran and others were blocked, because the verdict is per file hash. Metadata
+; makes the file honest about its origin; only an Authenticode signature makes it
+; reliably runnable.
+AppPublisher=Keld
+AppPublisherURL=https://keld.co
+AppSupportURL=https://keld.co
+VersionInfoCompany=Keld
+VersionInfoProductName=Keld Signal
+VersionInfoDescription=Keld Signal installer
+VersionInfoCopyright=Keld
 DefaultDirName={localappdata}\Programs\keld
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
