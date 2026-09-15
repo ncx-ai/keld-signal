@@ -15,7 +15,12 @@ import (
 func sandboxGeminiHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
+	// Both vars: os.UserHomeDir reads $HOME on unix but %USERPROFILE% on
+	// Windows, and setting only HOME leaves these tests writing into the
+	// developer's real ~/.gemini there -- the exact thing this helper exists
+	// to prevent.
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	return home
 }
 
