@@ -138,7 +138,24 @@ const (
 //
 // The reader is the one lane whose absence can mean we could not ask.
 func laneActivity(e Entry, f Facts, now time.Time, window time.Duration) map[SurfaceKind]laneState {
+	// ⚠️ THE LOOK-BACK NEVER REACHES BACK PAST THE CONFIG. Activity a tool
+	// produced BEFORE Signal configured it says nothing about whether that
+	// config works, and counting it reports a tool broken seconds after setup:
+	// pre-config telemetry supplies the "one expected lane saw it" half while a
+	// hook wired one second ago supplies the silent one. Reproduced by the
+	// conformance chain on 2026-09-15 for both Codex and Claude Code.
+	//
+	// A lane that has existed for one second has not been SILENT; it has not
+	// been asked — the same distinction AC-4 draws between idle and broken.
+	//
+	// It is a clamp, not a grace period: once anything lands after the config,
+	// a silent expected lane breaks the tool inside the window as before. An
+	// UNREADABLE mtime (zero) falls back to the plain window rather than
+	// suppressing every break forever.
 	cut := now.Add(-window)
+	if m := f.Wiring.ConfigMtime; !m.IsZero() && m.After(cut) {
+		cut = m
+	}
 	within := func(t *time.Time) laneState {
 		if t == nil || t.Before(cut) {
 			return laneSilent
