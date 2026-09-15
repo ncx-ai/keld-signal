@@ -171,9 +171,9 @@ secrets. Anyone holding them can sign software as Keld.
 Engineering then does the rest, with no further input needed:
 
 - sign our four Windows programs and the installer;
-- sign the ~45 third-party components inside the installer that arrive unsigned
-  (measured: 118 binaries in the payload, most already signed by their own
-  vendors);
+- sign the ~110 third-party components inside the installer that arrive unsigned
+  (measured on the real CI payload, run 35021526816: 16,498 files, 188 PE
+  binaries, 78 of them already signed by their own vendors, 110 needing ours);
 - add the signing step to the automated build and remove the obsolete
   placeholder that assumed the pre-2023 approach.
 

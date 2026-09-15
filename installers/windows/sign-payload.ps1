@@ -10,12 +10,21 @@
   installs an unsigned keld.exe buys nothing: the installer runs, and the product
   is refused the moment it starts.
 
-  Measured on the payload (2026-09-15): 15,007 files, of which only **118** are
-  PE binaries — 5 .exe, 65 .dll, 48 .pyd. Most of the DLLs and .pyd files arrive
-  already signed by their own vendors inside Python wheels, so the set that
-  actually needs our signature is far smaller than the file count suggests. This
-  is nothing like the macOS notarization problem, where every one of ~15,000
-  files is scanned.
+  Measured ON THE REAL CI PAYLOAD (run 35021526816, 2026-09-15): **16,498 files,
+  188 PE binaries, 78 already vendor-signed, 110 needing ours.**
+
+  ⚠️ **AN EARLIER LOCAL MEASUREMENT SAID 15,007 / 118 / 42 AND IS KEPT HERE
+  BECAUSE THE GAP IS THE POINT.** It was taken on a locally-staged payload, and
+  it undercounted the work by 2.6x — 42 against 110. Anything sized off it
+  (signing-service quota, per-signature cost, batch wall-clock) is wrong in the
+  direction that bites. Re-measure from a CI run, never from a dev machine: the
+  frozen sidecar's file set is what the freeze produces on that runner, not what
+  a local build happens to leave behind.
+
+  Most of the DLLs and .pyd files arrive already signed by their own vendors
+  inside Python wheels, so the set needing our signature is still far smaller
+  than the file count suggests. This is nothing like the macOS notarization
+  problem, where every one of ~16,000 files is scanned.
 
   ⚠️ **AN ALREADY-VALID THIRD-PARTY SIGNATURE IS LEFT ALONE.** Re-signing a
   vendor's DLL replaces their attestation with ours, which is both rude and a
@@ -59,6 +68,16 @@ $ErrorActionPreference = 'Stop'
 
 if (-not (Test-Path $PayloadDir)) { throw "payload directory not found: $PayloadDir" }
 
+# ⚠️ RESOLVE TO AN ABSOLUTE PATH BEFORE MEASURING IT. `Get-ChildItem` returns
+# absolute `FullName`s, so trimming `$PayloadDir.Length` characters off one is
+# only correct when `$PayloadDir` is itself absolute. CI passes it RELATIVE
+# (`installers\windows`, 18 chars), so the listing cut 18 characters off
+# `D:\a\keld-signal\keld-signal\...` and printed `eld-signal\installers\...` —
+# a path that does not exist, in the one output a human reads to check what is
+# about to be signed. Display-only, and exactly the kind of wrong that gets
+# believed.
+$payloadRoot = (Resolve-Path -LiteralPath $PayloadDir).Path
+
 # The extensions Windows loads as code. Data files are not evaluated and must not
 # be signed — signing them wastes quota and tells the reader something false
 # about what the build does.
@@ -91,7 +110,7 @@ if (-not $SignCommand) {
   # whole Windows build down over a purchase order.
   Write-Warning "no -SignCommand given: the payload is UNSIGNED."
   Write-Warning "Smart App Control refuses unsigned binaries; see docs/superpowers/plans/2026-09-15-windows-code-signing-procurement.md"
-  $needed | ForEach-Object { Write-Host "  would sign: $($_.FullName.Substring($PayloadDir.Length).TrimStart('\'))" }
+  $needed | ForEach-Object { Write-Host "  would sign: $($_.FullName.Substring($payloadRoot.Length).TrimStart('\'))" }
   exit 0
 }
 
