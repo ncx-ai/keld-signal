@@ -184,22 +184,25 @@ func sameLanes(got, want []SurfaceKind) bool {
 
 func TestCatalogueExpectedLanesFollowSupportLevel(t *testing.T) {
 	// A lane a tool cannot feed is not expected, so it can never make the tool
-	// broken. Codex has no reader yet: expecting one would read
-	// "broken · reader" by construction from the day the pane ships.
+	// broken. ⚠️ THIS ASSERTION HAS FLIPPED. It was written while Codex had no
+	// reader and said so: "flip this and the row below together". The reader
+	// landed on 2026-09-15, this test failed loudly at that moment — which is
+	// what it was for — and both halves moved in the same commit.
 	codex, ok := Get("codex")
 	if !ok {
 		t.Fatal("catalogue has no codex entry")
 	}
-	if codex.ReaderAvailable {
-		t.Fatal("codex.ReaderAvailable is true: WS-D has not shipped its reader yet (flip this and the row below together)")
+	if !codex.ReaderAvailable {
+		t.Fatal("codex.ReaderAvailable is false: readers/codex.py exists, and a false flag hides a broken reader as `idle`")
 	}
-	if got, want := codex.ExpectedLanes(codex.SupportLevel()), []SurfaceKind{SurfaceHook, SurfaceOTel}; !sameLanes(got, want) {
+	if got, want := codex.ExpectedLanes(codex.SupportLevel()), []SurfaceKind{SurfaceHook, SurfaceOTel, SurfaceWatcher, SurfaceReader}; !sameLanes(got, want) {
 		t.Errorf("codex expected lanes = %v, want %v", got, want)
 	}
-	// ...and the same table says what happens the day the reader lands.
-	withReader := SupportLevel{Supported: true, ReaderAvailable: true}
-	if got, want := codex.ExpectedLanes(withReader), []SurfaceKind{SurfaceHook, SurfaceOTel, SurfaceWatcher, SurfaceReader}; !sameLanes(got, want) {
-		t.Errorf("codex expected lanes with a reader = %v, want %v", got, want)
+	// ...and the same table still says what a reader-less Codex would expect, so
+	// the rule stays readable rather than collapsing into today's answer.
+	noReader := SupportLevel{Supported: true, ReaderAvailable: false}
+	if got, want := codex.ExpectedLanes(noReader), []SurfaceKind{SurfaceHook, SurfaceOTel}; !sameLanes(got, want) {
+		t.Errorf("codex expected lanes without a reader = %v, want %v", got, want)
 	}
 
 	if got, want := lanes(t, "claude_code", SupportLevel{Supported: true, ReaderAvailable: true}), []SurfaceKind{SurfaceHook, SurfaceOTel, SurfaceWatcher, SurfaceReader}; !sameLanes(got, want) {

@@ -137,13 +137,35 @@ func TestComputeDecisionTable(t *testing.T) {
 			state: Broken, lane: SurfaceReader,
 		},
 		{
-			row: "7b · same, but the reader is NOT expected (Codex today)", id: "codex",
+			// ⚠️ The example moved from Codex to Gemini on 2026-09-15, when
+			// readers/codex.py landed and Codex's reader became expected. Gemini
+			// has no reader, so its silence still cannot break the tool. Gemini
+			// runs no hook either, so its expected lanes are otel and watcher.
+			row: "7b · same, but the reader is NOT expected (Gemini today)", id: "gemini_cli",
+			facts: func() Facts {
+				f := configured()
+				f.Lanes = LaneFacts{
+					LastWatcherPointer:    ago(time.Hour),
+					LastTelemetryForward:  ago(time.Hour),
+					RowsForRecentPointers: no(),
+				}
+				return f
+			},
+			state: Working,
+		},
+		{
+			// The case the whole 2026-09-15 Codex run exists to produce, and it
+			// could not be written before: with a reader on disk Codex expects
+			// all four lanes, so this row is only green when the hook is trusted,
+			// the pointer arrived, telemetry forwarded and the store holds rows.
+			row: "8b · Codex, fully wired: trusted hook and all four lanes", id: "codex",
 			facts: func() Facts {
 				f := trusted(configured())
 				f.Lanes = LaneFacts{
 					LastHookPointer:       ago(time.Hour),
+					LastWatcherPointer:    ago(time.Hour),
 					LastTelemetryForward:  ago(time.Hour),
-					RowsForRecentPointers: no(),
+					RowsForRecentPointers: yes(),
 				}
 				return f
 			},
@@ -290,11 +312,11 @@ func TestUnexpectedLaneCannotBreak(t *testing.T) {
 	}
 
 	// And the mirror: an unexpected lane that IS active cannot supply the
-	// "one lane saw it" half either. Codex's watcher is unexpected today.
-	cx := entry(t, "codex")
+	// "one lane saw it" half either. Gemini's READER is unexpected today — it
+	// was Codex's watcher until readers/codex.py landed on 2026-09-15.
+	cx := entry(t, "gemini_cli")
 	cf := configured()
-	cf.Wiring.HookTrusted, cf.Wiring.HookTrustKnown = true, true
-	cf.Lanes = LaneFacts{LastWatcherPointer: ago(time.Hour)}
+	cf.Lanes = LaneFacts{RowsForRecentPointers: yes()}
 	if got := one(t, cx, cf); got.State != Idle {
 		t.Fatalf("state = %q, want %q — an unexpected lane's activity is not evidence the tool is working", got.State, Idle)
 	}
@@ -303,12 +325,11 @@ func TestUnexpectedLaneCannotBreak(t *testing.T) {
 // Row 7b's other half: the reader is shown, unexpected, and SAYS SO.
 func TestUnexpectedReaderExplainsItself(t *testing.T) {
 	f := configured()
-	f.Wiring.HookTrusted, f.Wiring.HookTrustKnown = true, true
-	f.Lanes = LaneFacts{LastHookPointer: ago(time.Hour), LastTelemetryForward: ago(time.Hour), RowsForRecentPointers: no()}
-	got := one(t, entry(t, "codex"), f)
+	f.Lanes = LaneFacts{LastWatcherPointer: ago(time.Hour), LastTelemetryForward: ago(time.Hour), RowsForRecentPointers: no()}
+	got := one(t, entry(t, "gemini_cli"), f)
 	s := surfaceOf(t, got, SurfaceReader)
 	if s.Expected {
-		t.Fatal("Codex's reader surface is expected — it would read broken·reader on every machine")
+		t.Fatal("Gemini's reader surface is expected — it would read broken·reader on every machine")
 	}
 	if s.WaitingOn != WaitingOnReader || s.Instruction != InstructionReader {
 		t.Fatalf("reader surface waiting_on=%q instruction=%q", s.WaitingOn, s.Instruction)
