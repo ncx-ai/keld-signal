@@ -18,8 +18,8 @@ import re
 
 from app.analysis import transcript
 from app.analysis.paths import PATH_INPUTS, WORKTREE
+from app.analysis.readers import coerce
 from app.analysis.shell import bash_refs
-from app.analysis.text import text_of
 
 # ---------------------------------------------------------------- workspace resolution
 #
@@ -190,7 +190,19 @@ def scan_workspace(path):
 
 
 def scan_tool_use(objs, into=None):
-    """The body of `scan_workspace`, over already-parsed lines and into existing evidence.
+    """The body of `scan_workspace`, over already-read TURN RECORDS and into existing evidence.
+
+    `objs` are `readers.base.Turn` records from the tool-call projection
+    (`transcript.iter_tool_use_lines` / `tool_use_in`). A raw decoded line is coerced through the
+    Claude reader, for the reason `levels.events_for_turns` gives: this function has callers
+    outside the package that build lines by hand.
+
+    ⚠️ THE OLD CODE REQUIRED `message.content` TO BE A LIST AND THE RECORD DOES NOT — and the two
+    are still equal, because a record built from a non-list content carries no tool calls and an
+    empty `text`, so the loop body runs zero times and `REMOTE_REPO` matches over `"" + " " + ""`.
+    The one visible change would be a line with content that is a bare STRING naming a remote,
+    which the old code skipped before reaching the regex; it is still skipped, because a bare
+    string carries no `tool_use` block and so never reaches this projection at all.
 
     Split out for INCREMENTAL ingest (`analysis/ingest.py`), which parses only the bytes a
     transcript grew by and must not re-read the file from the start to rebuild this triple —
@@ -211,13 +223,9 @@ def scan_tool_use(objs, into=None):
     """
     marker_dirs, cd_targets, remotes = into if into is not None else new_evidence()
     for o in objs:
-        content = (o.get("message") or {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for b in content:
-            if not (isinstance(b, dict) and b.get("type") == "tool_use"):
-                continue
-            inp = b.get("input") or {}
+        o = coerce(o)
+        for call in o.tool_calls:
+            inp = call.input
             cands = [v for k, v in inp.items()
                      if k in PATH_INPUTS and isinstance(v, str)]
             cmd = inp.get("command") if isinstance(inp.get("command"), str) else ""
@@ -228,7 +236,7 @@ def scan_tool_use(objs, into=None):
                         cd_targets.add(WORKTREE.sub("", t.rstrip("/")))
                 bp = bash_refs(cmd)[2]
                 cands += [q for q in bp if q.startswith("/")]
-            for m in REMOTE_REPO.finditer(cmd + " " + text_of(content)):
+            for m in REMOTE_REPO.finditer(cmd + " " + o.text):
                 if m.group(1).lower() not in NON_REPO_GH:
                     remotes[f"{m.group(1)}/{m.group(2)}".lower()] += 1
             for q in cands:
