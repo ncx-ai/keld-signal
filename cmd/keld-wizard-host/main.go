@@ -16,7 +16,7 @@
 //	    Publishes one {"event":"clipboard","text":"…"} — Pascal Script cannot read
 //	    the clipboard at all.
 //
-//	--panel <hwnd> --url <url> [--sentinel <f>] [--parent-pid <n>]
+//	--panel <hwnd> --url <url> [--inset <px>] [--sentinel <f>] [--parent-pid <n>]
 //	    Embeds a WebView2 surface in <hwnd> — a TPanel on the wizard page, owned
 //	    by another process — and navigates to <url>.
 package main
@@ -43,6 +43,10 @@ type options struct {
 	ParentPID int
 	Panel     uintptr
 	URL       string
+	// Inset leaves a ring of the host panel visible around the webview, which is
+	// how the page draws a border around it — we cannot paint on a window another
+	// process owns, so the border is the panel showing through.
+	Inset int
 }
 
 func usage() {
@@ -95,6 +99,11 @@ func parseArgs(argv []string) (options, error) {
 			}
 		case "--url":
 			o.URL, err = next()
+		case "--inset":
+			var s string
+			if s, err = next(); err == nil {
+				o.Inset, err = strconv.Atoi(s)
+			}
 		default:
 			return o, fmt.Errorf("unknown argument %q", a)
 		}
