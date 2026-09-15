@@ -2,6 +2,8 @@ package integrations
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -150,47 +152,87 @@ func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 	}
 	d.attempted[e.ID] = true
 
-	adapter, err := d.adapterFor(e.AdapterName)
+	res, err := ApplyEntry(e, d.adapterFor, d.Params, manifest)
 	if err != nil {
-		d.logf("integrations: no adapter %q for %s: %v", e.AdapterName, e.ID, err)
-		return
-	}
-	if d.Params == nil {
-		return
-	}
-	p, err := d.Params()
-	if err != nil {
-		d.logf("integrations: telemetry parameters unavailable, %s not configured: %v", e.ID, err)
-		// Not a permanent refusal — the secret may simply not exist yet on a
-		// daemon that has not finished onboarding.
+		d.logf("integrations: %s not configured: %v", e.ID, err)
+		// Not a permanent refusal — the telemetry secret may simply not exist
+		// yet on a daemon that has not finished onboarding, and the manifest
+		// may be writable on the next poll.
 		d.attempted[e.ID] = false
 		return
+	}
+	if res.Conflict != "" {
+		// ⚠️ NEVER `replace` UNASKED. A conflict means the person's own
+		// telemetry section is in that file; overwriting it silently from a
+		// background poll is the one edit no backup makes acceptable. The
+		// pane's Set up button is a human asking, and that is the path.
+		d.logf("integrations: %s not configured (conflict: %s) — Set up on the pane to resolve", e.ID, res.Conflict)
+		return
+	}
+	if !res.RestartRequired {
+		return // nothing changed; the adapter had nothing to write
+	}
+
+	if d.Emit != nil {
+		d.Emit.Emit(EventConfigured, map[string]any{
+			"source":     e.ID,
+			"auto_setup": true,
+			"backup":     res.Backup != "",
+		})
+	}
+	d.logf("integrations: configured %s automatically (backup %q) — restart it to finish", e.ID, res.Backup)
+}
+
+// ApplyEntry configures ONE catalogue entry through the adapter, the write
+// path and the manifest record `keld signal setup` uses. It is what both the
+// detector's automatic poll and the pane's Set up button call, so the two
+// cannot produce differently-configured machines.
+//
+// It never resolves a conflict: the answer carries the conflict string and the
+// file is left exactly as it was.
+//
+// manifest is UPDATED AND SAVED on a successful write — merged, never rebuilt.
+// runSetup writes a fresh manifest because it configures every tool in one
+// pass and owns the result; this runs one tool at a time against a machine
+// that is already configured, and rebuilding would erase the others.
+func ApplyEntry(e Entry, adapterFor func(string) (tools.Adapter, error), params func() (tools.SetupParams, error), manifest *config.Manifest) (SetupResult, error) {
+	if !e.Supported || e.AdapterName == "" {
+		return SetupResult{}, fmt.Errorf("%s has no adapter to apply", e.ID)
+	}
+	if adapterFor == nil {
+		adapterFor = tools.Get
+	}
+	adapter, err := adapterFor(e.AdapterName)
+	if err != nil {
+		return SetupResult{}, err
+	}
+	if params == nil {
+		return SetupResult{}, errors.New("no telemetry parameters")
+	}
+	p, err := params()
+	if err != nil {
+		return SetupResult{}, err
 	}
 
 	plan := adapter.Apply(tools.ReadConfig(adapter), p, false)
 	if plan.Conflict != "" {
-		// ⚠️ NEVER `replace` UNASKED. A conflict means the person's own
-		// telemetry section is in that file; overwriting it silently from a
-		// background poll is the one edit no backup makes acceptable. The pane
-		// shows Set up, which is a human asking.
-		d.logf("integrations: %s not configured (conflict: %s) — Set up on the pane to resolve", e.ID, plan.Conflict)
-		return
+		return SetupResult{Conflict: plan.Conflict}, nil
 	}
 	if !plan.Changed {
-		return
+		// Already exactly what the adapter would write. Not an error and not a
+		// restart notice: nothing moved.
+		return SetupResult{}, nil
 	}
 
 	backup, err := tools.CommitPlan(adapter, plan)
 	if err != nil {
-		d.logf("integrations: writing %s config failed: %v", e.ID, err)
-		d.attempted[e.ID] = false
-		return
+		return SetupResult{}, err
 	}
-
-	// MERGE into the manifest; never rebuild it. runSetup writes a fresh
-	// manifest because it configures every tool in one pass and owns the
-	// result; this runs one tool at a time against a machine that is already
-	// configured, and rebuilding would erase the others.
+	if manifest == nil {
+		if manifest, err = config.LoadManifest(); err != nil {
+			return SetupResult{}, err
+		}
+	}
 	if manifest.Tools == nil {
 		manifest.Tools = map[string]config.ToolManifest{}
 	}
@@ -205,18 +247,9 @@ func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 		BackupPath: backupPtr,
 	}
 	if err := manifest.Save(); err != nil {
-		d.logf("integrations: saving the manifest after configuring %s failed: %v", e.ID, err)
-		return
+		return SetupResult{}, err
 	}
-
-	if d.Emit != nil {
-		d.Emit.Emit(EventConfigured, map[string]any{
-			"source":     e.ID,
-			"auto_setup": true,
-			"backup":     backup != "",
-		})
-	}
-	d.logf("integrations: configured %s automatically (backup %q) — restart it to finish", e.ID, backup)
+	return SetupResult{Backup: backup, RestartRequired: true}, nil
 }
 
 func (d *Detector) adapterFor(name string) (tools.Adapter, error) {

@@ -164,6 +164,10 @@ func (v *v3) routes() []ingress.Route {
 		// answers 409 not_applicable rather than pretending to restart nothing.
 		serviceRestartRoute(func() error { return currentServiceHealth.Load().RestartSidecar() }, nil),
 		ingress.ProjectsRoute(v.projects),
+		// The Integrations pane's two routes. nil seams ⇒ the live readers:
+		// integrations.Snapshot off disk, and integrations.ApplyEntry through
+		// the same adapters and the same write path `keld signal setup` uses.
+		IntegrationsRoute(nil, nil),
 		ui.Route(),
 	}
 }
