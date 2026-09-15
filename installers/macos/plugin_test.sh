@@ -9,19 +9,30 @@ fail() { echo "FAIL: $1"; exit 1; }
 test -f "$p/KeldSetup.m" || fail "missing KeldSetup.m"
 test -x "$p/build-plugin.sh" || fail "build-plugin.sh is not executable"
 
-# ⚠️ Every SectionOrder entry must end in .bundle — a bare name loads nothing.
-python3 - "$p/InstallerSections.plist" <<'PY' || fail "SectionOrder entries must all end in .bundle"
+# ⚠️ BUILT-IN SECTIONS ARE NAMED; ONLY OUR OWN BUNDLE IS A FILENAME — and
+# getting that backwards broke the INSTALL, not merely the order. Listing the
+# built-ins as Introduction.bundle/TargetSelect.bundle/... produced a scrambled
+# sidebar on a real run and the install then failed at the end with an EMPTY
+# message and `IFDInstallController state = 0`, having never written a payload.
+#
+# Installer.app's binary carries the bare names beside the filenames, and the
+# section whose file is TargetSelect.bundle is named just "Target" — which is
+# what proves they are two namespaces rather than aliases.
+python3 - "$p/InstallerSections.plist" <<'PY' || fail "SectionOrder must name built-ins (Introduction, Target, ...) and use a filename only for KeldSetup.bundle"
 import plistlib, sys
 order = plistlib.load(open(sys.argv[1], 'rb'))["SectionOrder"]
-bad = [s for s in order if not s.endswith(".bundle")]
-sys.exit(1 if bad else 0)
+builtins = {"Introduction", "ReadMe", "License", "Target", "PackageSelection", "Install", "Summary"}
+ours = [s for s in order if s.endswith(".bundle")]
+named = [s for s in order if not s.endswith(".bundle")]
+ok = ours == ["KeldSetup.bundle"] and set(named) <= builtins and {"Install", "Summary"} <= set(named)
+sys.exit(0 if ok else 1)
 PY
 
 # The pane must come BEFORE Install.bundle: a section after it never appears.
-python3 - "$p/InstallerSections.plist" <<'PY' || fail "KeldSetup.bundle must be ordered before Install.bundle"
+python3 - "$p/InstallerSections.plist" <<'PY' || fail "KeldSetup.bundle must be ordered before Install"
 import plistlib, sys
 order = plistlib.load(open(sys.argv[1], 'rb'))["SectionOrder"]
-sys.exit(0 if order.index("KeldSetup.bundle") < order.index("Install.bundle") else 1)
+sys.exit(0 if order.index("KeldSetup.bundle") < order.index("Install") else 1)
 PY
 
 # Sign-after-build, then verify.

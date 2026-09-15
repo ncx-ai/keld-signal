@@ -19,17 +19,129 @@
 #import <InstallerPlugins/InstallerPlugins.h>
 #import "KeldCode.h"
 
+
+// ⚠️ THIS PANE LAYS ITSELF OUT, AND THAT IS FORCED BY MEASUREMENT.
+//
+// An Installer pane's view is hosted OUT OF PROCESS: its superview is an
+// `NSNextStepFrame.ViewBridge.jail`. Inside that jail the Auto Layout this code
+// originally relied on does not run. Measured on a real installer 2026-09-15,
+// with an NSStackView whose alignment was NSLayoutAttributeWidth and whose
+// edgeInsets were 20/24:
+//
+//     container frame = {446, 338}   superview (the pane) = {418, 330}
+//     children: x=303 w=121 | x=0 w=446 | x=134 w=290 | x=2 w=420
+//
+// Three things are wrong there and none are fixable by adding more constraints:
+// the view is 28pt WIDER than the pane containing it (so its right-hand content
+// is clipped), the children have unrelated widths (the width alignment never
+// applied), and none sit at the 24pt inset (edgeInsets never applied either).
+//
+// Explicit frames are deterministic, need no nib — which would need Xcode — and
+// cannot be quietly ignored by a host we do not control.
+@interface KeldPaneView : NSView
+@property (nonatomic, strong) NSArray<NSView *> *rows;    // laid out top to bottom
+@property (nonatomic, strong) NSView *trailingControl;    // shares a line with trailingPartner
+@property (nonatomic, strong) NSView *trailingPartner;
+// ⚠️ ONLY THE PANE'S OWN CONTENT VIEW CLAMPS ITSELF TO ITS SUPERVIEW. That rule
+// exists because the ViewBridge jail hands the content view a frame wider than
+// the pane; applied to a NESTED instance it means "grow to fill my parent",
+// which made the tool list resize to the whole pane and draw its checkboxes
+// over the account section at the top.
+@property (nonatomic) BOOL clampsToHost;
+// Nested instances sit inside their parent's inset already, so they carry their
+// own (usually zero).
+@property (nonatomic) CGFloat insetX;
+@property (nonatomic) CGFloat insetTop;
+/// Height this view needs for `width`, so a parent can lay it out as one row.
+- (CGFloat)contentHeightForWidth:(CGFloat)width;
+@end
+
+@implementation KeldPaneView
+
+// Top-down coordinates, so the arithmetic below reads in the same order as the
+// pane does.
+- (BOOL)isFlipped { return YES; }
+
+- (void)layout {
+    [super layout];
+
+    // ⚠️ Clamp to the host's bounds FIRST: the jail hands this view a frame
+    // larger than the pane it is displayed in (446 against 418, measured), and
+    // anything laid out past that edge is silently clipped.
+    if (self.clampsToHost && self.superview &&
+        !NSEqualSizes(self.frame.size, self.superview.bounds.size)) {
+        self.frame = self.superview.bounds;
+    }
+
+    const CGFloat spacing = 9, gap = 8;
+    const CGFloat insetX = self.insetX, insetTop = self.insetTop;
+    CGFloat width = self.bounds.size.width - insetX * 2;
+    if (width <= 0) return;
+    CGFloat y = insetTop;
+
+    for (NSView *row in self.rows) {
+        if (row.hidden) continue;
+        CGFloat rowWidth = width;
+        // The code field shares its line with the Connect button and takes what
+        // the button leaves, so neither is pushed off the edge however narrow
+        // the pane turns out to be.
+        if (row == self.trailingPartner && self.trailingControl && !self.trailingControl.hidden) {
+            NSSize t = self.trailingControl.fittingSize;
+            CGFloat tw = MIN(MAX(t.width, 70), width * 0.45);
+            rowWidth = width - tw - gap;
+            self.trailingControl.frame = NSMakeRect(insetX + rowWidth + gap, y, tw, MAX(t.height, 22));
+        }
+        CGFloat height = [self heightFor:row width:rowWidth];
+        row.frame = NSMakeRect(insetX, y, rowWidth, height);
+        y += height + spacing;
+    }
+}
+
+- (CGFloat)heightFor:(NSView *)v width:(CGFloat)width {
+    if ([v isKindOfClass:[WKWebView class]]) {
+        // The page takes whatever is left, so it never exceeds the pane and
+        // never needs a scrollbar someone would have to go looking for.
+        return MAX(140, self.bounds.size.height - v.frame.origin.y - 14);
+    }
+    if ([v isKindOfClass:[NSProgressIndicator class]]) return 16;
+    if ([v isKindOfClass:[NSTextField class]]) {
+        NSTextField *tf = (NSTextField *)v;
+        NSSize fit = [tf.cell cellSizeForBounds:NSMakeRect(0, 0, width, CGFLOAT_MAX)];
+        return MAX(16, ceil(fit.height));
+    }
+    if ([v isKindOfClass:[KeldPaneView class]]) {
+        return [(KeldPaneView *)v contentHeightForWidth:width];
+    }
+    if ([v isKindOfClass:[NSButton class]]) return MAX(22, v.fittingSize.height);
+    return MAX(20, v.fittingSize.height);
+}
+
+- (CGFloat)contentHeightForWidth:(CGFloat)width {
+    const CGFloat spacing = 9;
+    CGFloat inner = width - self.insetX * 2;
+    if (inner <= 0) return 0;
+    CGFloat total = self.insetTop;
+    for (NSView *row in self.rows) {
+        if (row.hidden) continue;
+        total += [self heightFor:row width:inner] + spacing;
+    }
+    return MAX(0, total - spacing);
+}
+
+@end
+
 @interface KeldSetupPane : InstallerPane
 @end
 
 @implementation KeldSetupPane {
     NSView *_view;
+    KeldPaneView *_root;
     NSTextField *_codeField;
     NSButton *_connectButton;
     NSTextField *_codeStatus;
     NSProgressIndicator *_engineBar;
     NSTextField *_engineStatus;
-    NSStackView *_toolsStack;
+    KeldPaneView *_toolsPane;
     NSMutableArray<NSButton *> *_toolChecks;
     NSButton *_retryButton;
     BOOL _paired;
@@ -232,6 +344,11 @@
 - (NSTextField *)labelWithText:(NSString *)s bold:(BOOL)bold {
     NSTextField *l = [NSTextField labelWithString:s];
     if (bold) l.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+    // ⚠️ STATE THE ALIGNMENT. Once the stack stretches a label to the full pane
+    // width, an unstated alignment is not "left" — it is whatever the cell
+    // decides, which put the section headers hard right and the status lines in
+    // the middle while the checkboxes stayed left.
+    l.alignment = NSTextAlignmentLeft;
     return l;
 }
 
@@ -239,84 +356,67 @@
     if (_view) return _view;
     _toolChecks = [NSMutableArray array];
 
-    NSStackView *root = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 620, 340)];
-    root.orientation = NSUserInterfaceLayoutOrientationVertical;
-    // ⚠️ WIDTH, not LEADING. With leading alignment each row hugs its own
-    // content and a row wider than the pane simply overflows the right edge —
-    // which is how the Connect button ended up off-panel and how a long status
-    // line ran past the insets and read as unpadded. Installer panes are
-    // narrower than the frame this code was written against, and the pane does
-    // not get to choose its width.
-    root.alignment = NSLayoutAttributeWidth;
-    root.spacing = 18;
-    // Installer.app hands a pane's contentView the full width of its frame, so
-    // without insets every label and control sits flush against the panel's
-    // border and the pane reads as broken next to Apple's own panes.
-    root.edgeInsets = NSEdgeInsetsMake(20, 24, 20, 24);
+    // Plain subviews in a view that lays them out itself. No NSStackView and no
+    // constraints: see KeldPaneView's header for the measurements showing that
+    // neither survives the pane's out-of-process host.
+    KeldPaneView *pane = [[KeldPaneView alloc] initWithFrame:NSMakeRect(0, 0, 418, 330)];
+    pane.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    pane.clampsToHost = YES;   // the content view, and only it — see the header
+    pane.insetX = 20;
+    pane.insetTop = 14;
 
-    [root addArrangedSubview:[self labelWithText:@"Your Keld account" bold:YES]];
-    _codeField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
+    NSTextField *accountHeader = [self labelWithText:@"Your Keld account" bold:YES];
+
+    _codeField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     _codeField.placeholderString = @"atlas.keld.co/ABCD-EFGH";
-    // ⚠️ A frame set at init time is DISCARDED once a view is added to an
-    // NSStackView's arranged subviews — the stack view lays it out with Auto
-    // Layout from its intrinsic content size instead, which for a plain text
-    // field is small and arbitrary. An explicit width constraint is what
-    // actually sizes it; nothing else here can catch that but a real Mac.
-    _codeField.translatesAutoresizingMaskIntoConstraints = NO;
-    // A floor, not a fixed width: the row fills the pane and the field takes
-    // whatever the button leaves, so neither can be pushed off the edge.
-    [_codeField.widthAnchor constraintGreaterThanOrEqualToConstant:140].active = YES;
     _connectButton = [NSButton buttonWithTitle:@"Connect" target:self action:@selector(connect:)];
-    NSStackView *codeRow = [NSStackView stackViewWithViews:@[_codeField, _connectButton]];
-    codeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    [root addArrangedSubview:codeRow];
+
     _codeStatus = [self labelWithText:@"Checking this device…" bold:NO];
     _codeStatus.textColor = [NSColor secondaryLabelColor];
-    // Long states ("Sign-in didn't finish (…)") must wrap within the pane's
-    // insets; a single unwrapped line runs past them and reads as missing
-    // padding rather than as an overflowing label.
+    // Long states ("Sign-in didn't finish (…)") wrap within the pane's insets
+    // rather than running past them, which reads as missing padding.
     _codeStatus.lineBreakMode = NSLineBreakByWordWrapping;
     _codeStatus.maximumNumberOfLines = 3;
-    [_codeStatus setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [root addArrangedSubview:_codeStatus];
 
     // Shown only when Atlas could not be reached. The install is all-or-nothing,
     // so this is the one way forward from that state: fix the network, try
     // again. There is deliberately no button that proceeds unverified.
     _retryButton = [NSButton buttonWithTitle:@"Try again" target:self action:@selector(retryIdentity:)];
     _retryButton.hidden = YES;
-    [root addArrangedSubview:_retryButton];
 
-    [root addArrangedSubview:[self labelWithText:@"Analysis engine" bold:YES]];
-    _engineBar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 420, 16)];
+    NSTextField *engineHeader = [self labelWithText:@"Analysis engine" bold:YES];
+    _engineBar = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     _engineBar.style = NSProgressIndicatorStyleBar;
     _engineBar.indeterminate = YES;
     _engineBar.minValue = 0;
     _engineBar.maxValue = 100;
-    // Same NSStackView frame-discarding issue as _codeField above.
-    _engineBar.translatesAutoresizingMaskIntoConstraints = NO;
-    [_engineBar.widthAnchor constraintEqualToConstant:420].active = YES;
     [_engineBar startAnimation:nil];
-    [root addArrangedSubview:_engineBar];
     _engineStatus = [self labelWithText:@"Preparing…" bold:NO];
     _engineStatus.textColor = [NSColor secondaryLabelColor];
-    [root addArrangedSubview:_engineStatus];
 
-    [root addArrangedSubview:[self labelWithText:@"Your AI tools" bold:YES]];
-    _toolsStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    _toolsStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    _toolsStack.alignment = NSLayoutAttributeLeading;
-    // ⚠️ A nested NSStackView does NOT inherit its parent's edgeInsets, and its
-    // own default to zero — so the checkbox rows sat tight against the section
-    // above and hard against the panel's left edge while every sibling label
-    // was inset. The rows also need more air between them than the 4pt that
-    // reads as a single block of text rather than a list of choices.
-    _toolsStack.edgeInsets = NSEdgeInsetsMake(4, 2, 4, 2);
-    _toolsStack.spacing = 8;
-    [root addArrangedSubview:_toolsStack];
+    NSTextField *toolsHeader = [self labelWithText:@"Your AI tools" bold:YES];
+    // The tool rows are their own laid-out view for the same reason as the pane.
+    _toolsPane = [[KeldPaneView alloc] initWithFrame:NSZeroRect];
+    _toolsPane.rows = @[];
+    // Nested: no clamp (it is a row, not the host's view) and no inset of its
+    // own, because the pane has already inset it.
+    _toolsPane.clampsToHost = NO;
+    _toolsPane.insetX = 0;
+    _toolsPane.insetTop = 0;
 
-    _view = root;
+    for (NSView *v in @[accountHeader, _codeField, _connectButton, _codeStatus, _retryButton,
+                        engineHeader, _engineBar, _engineStatus, toolsHeader, _toolsPane]) {
+        [pane addSubview:v];
+    }
+    // _connectButton shares the code field's line rather than taking one of its
+    // own, and is therefore not in `rows`.
+    pane.rows = @[accountHeader, _codeField, _codeStatus, _retryButton,
+                  engineHeader, _engineBar, _engineStatus, toolsHeader, _toolsPane];
+    pane.trailingPartner = _codeField;
+    pane.trailingControl = _connectButton;
+
+    _root = pane;
+    _view = pane;
     return _view;
 }
 
@@ -411,10 +511,15 @@
 }
 
 - (void)renderTools:(NSArray<NSDictionary *> *)tools {
-    for (NSView *v in [_toolsStack.arrangedSubviews copy]) [_toolsStack removeArrangedSubview:v], [v removeFromSuperview];
+    for (NSView *v in [_toolsPane.subviews copy]) [v removeFromSuperview];
+    _toolsPane.rows = @[];
     [_toolChecks removeAllObjects];
+    NSMutableArray<NSView *> *rows = [NSMutableArray array];
     if (tools.count == 0) {
-        [_toolsStack addArrangedSubview:[self labelWithText:@"No supported AI tools found on this Mac." bold:NO]];
+        NSTextField *none = [self labelWithText:@"No supported AI tools found on this device." bold:NO];
+        [_toolsPane addSubview:none];
+        _toolsPane.rows = @[none];
+        [_toolsPane setNeedsLayout:YES];
         return;
     }
     // `action` is one of configured | already_configured | skipped_conflict |
@@ -433,11 +538,20 @@
         NSButton *check = [NSButton checkboxWithTitle:title target:nil action:nil];
         check.identifier = t[@"name"];
         check.state = [action isEqualToString:@"skipped_conflict"] ? NSControlStateValueOff : NSControlStateValueOn;
-        [_toolsStack addArrangedSubview:check];
+        [_toolsPane addSubview:check];
+        [rows addObject:check];
         [_toolChecks addObject:check];
     }
-    [_toolsStack addArrangedSubview:[self labelWithText:
-        @"Restart these apps after setup — they read their settings once, at startup." bold:NO]];
+    NSTextField *restart = [self labelWithText:
+        @"Restart these apps after setup — they read their settings once, at startup." bold:NO];
+    restart.lineBreakMode = NSLineBreakByWordWrapping;
+    restart.maximumNumberOfLines = 2;
+    [_toolsPane addSubview:restart];
+    [rows addObject:restart];
+    _toolsPane.rows = rows;
+    [_toolsPane setNeedsLayout:YES];
+    // The tool list changes the pane's height, so the pane relays out too.
+    [_root setNeedsLayout:YES];
 }
 
 // The download starts on its own and NEVER gates Continue: a late sidecar costs
@@ -655,29 +769,36 @@
 - (void)showApprovalPage:(NSString *)urlString {
     NSURL *url = [NSURL URLWithString:urlString];
     if (!url) return;
-    NSStackView *root = (NSStackView *)_view;
+    KeldPaneView *root = _root;
     if (!_approvalWeb) {
         _approvalWeb = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 560, 300)
                                           configuration:[WKWebViewConfiguration new]];
-        _approvalWeb.translatesAutoresizingMaskIntoConstraints = NO;
-        // Height only. A fixed 560 width was a guess at the pane's size and was
-        // wrong: the stack's width alignment now sizes it to whatever the pane
-        // actually is, on any Installer layout.
-        [_approvalWeb.heightAnchor constraintEqualToConstant:260].active = YES;
+        // No size constraints: KeldPaneView gives the page the pane's width and
+        // whatever height is left below the status line.
     }
     // An Installer pane cannot grow, so the approval page borrows the space of
     // the sections below it rather than pushing them off the bottom.
     if (!_stowedWhileSigningIn) _stowedWhileSigningIn = [NSMutableArray array];
     if (_stowedWhileSigningIn.count == 0) {
-        for (NSView *v in root.arrangedSubviews) {
-            if (v == _codeStatus) continue;   // the code line stays visible beside the page
+        for (NSView *v in root.rows) {
+            if (v == _codeStatus) continue;   // the code line stays visible above the page
             if (v.hidden) continue;
             [_stowedWhileSigningIn addObject:v];
         }
         for (NSView *v in _stowedWhileSigningIn) v.hidden = YES;
+        // The Connect button shares the code field's line and is not in `rows`,
+        // so it has to be hidden explicitly or it floats over the page.
+        if (!_connectButton.hidden) {
+            [_stowedWhileSigningIn addObject:_connectButton];
+            _connectButton.hidden = YES;
+        }
     }
-    if (_approvalWeb.superview == nil) [root addArrangedSubview:_approvalWeb];
+    if (_approvalWeb.superview == nil) {
+        [root addSubview:_approvalWeb];
+        root.rows = [root.rows arrayByAddingObject:_approvalWeb];
+    }
     _approvalWeb.hidden = NO;
+    [root setNeedsLayout:YES];
     [_approvalWeb loadRequest:[NSURLRequest requestWithURL:url]];
 }
 
@@ -685,6 +806,7 @@
     _approvalWeb.hidden = YES;
     for (NSView *v in _stowedWhileSigningIn) v.hidden = NO;
     [_stowedWhileSigningIn removeAllObjects];
+    [_root setNeedsLayout:YES];
 }
 
 // prefillFromClipboard fills the field from the clipboard and submits it.

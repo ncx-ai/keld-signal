@@ -2,23 +2,38 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- ⚠️ EVERY ENTRY MUST END IN .bundle. A bare name (e.g. "Introduction")
-       matches nothing, silently: the section simply does not load, with no error
-       and no log line. Measured 2026-09-14 — a list of bare built-in names left
-       KeldSetup as the only recognised section, so it rendered FIRST and looked
-       like proof that a post-install pane works. It is not.
-       KeldSetup sits BEFORE Install.bundle because a pane after it never
-       appears: the plugin's host process stops when installation completes. -->
+  <!-- ⚠️ BUILT-IN SECTIONS ARE NAMED, THIRD-PARTY ONES ARE FILENAMES, AND
+       GETTING THAT BACKWARDS BREAKS THE INSTALL ITSELF — not just the order.
+
+       Listing the built-ins by their bundle FILENAMES (Introduction.bundle,
+       TargetSelect.bundle, …) produced a scrambled sidebar on a real run —
+       "Set Up Keld, Introduction, Destination Select, Summary, Installation
+       Type, Read Me, License, Installation" — and the install then failed at
+       the end with an EMPTY message and `IFDInstallController state = 0` in
+       /var/log/install.log, having never written a payload or run a script.
+       An installation sequenced out of order fails exactly that way: instantly,
+       with nothing to report.
+
+       The names below are Installer.app's own: the binary carries bare
+       "Introduction", "ReadMe", "License", "Target", "PackageSelection",
+       "Install" and "Summary" beside the .bundle filenames, and note that the
+       one whose file is TargetSelect.bundle is named just "Target" — which is
+       what shows the two are different namespaces rather than aliases.
+
+       KeldSetup is OUR bundle, so it is the filename, and it sits before
+       "Install" because a section placed after it never appears at all: the
+       plugin's host process stops the moment installation completes (measured
+       2026-09-14). -->
   <key>SectionOrder</key>
   <array>
-    <string>Introduction.bundle</string>
-    <string>ReadMe.bundle</string>
-    <string>License.bundle</string>
-    <string>TargetSelect.bundle</string>
-    <string>PackageSelection.bundle</string>
+    <string>Introduction</string>
+    <string>ReadMe</string>
+    <string>License</string>
+    <string>Target</string>
+    <string>PackageSelection</string>
     <string>KeldSetup.bundle</string>
-    <string>Install.bundle</string>
-    <string>Summary.bundle</string>
+    <string>Install</string>
+    <string>Summary</string>
   </array>
 </dict>
 </plist>
