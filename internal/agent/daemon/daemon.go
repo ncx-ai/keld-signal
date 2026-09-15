@@ -1145,6 +1145,7 @@ func Run(ctx context.Context) error {
 	// on a machine where enrichment is off, and the auto-setup toggle is read
 	// live inside the detector rather than captured here.
 	setIntegrationLanes(integrations.LoadLanes())
+	bindPointerObserver()
 	startIntegrationsDetector(ctx, emitter)
 	pollSettingsIfOnline(ctx, set.AtlasEnabled(), func(ctx context.Context) {
 		pollSettings(ctx, settings.NewClient(settingsEndpoint(cfg.Endpoint), tok.Get, 10*time.Second), live, pollInterval, emitter, onRemote, ra)

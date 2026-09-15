@@ -5,7 +5,9 @@ import (
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/integrations"
+	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
+	"github.com/ncx-ai/keld-signal/internal/spool"
 )
 
 // integrationLanes is the daemon's single lane record, loaded from disk once
@@ -55,4 +57,22 @@ func noteIntegrationLane(j queue.Job) {
 		return
 	}
 	currentIntegrationLanes().RecordPointer(j.Source, origin, time.Now())
+}
+
+// bindPointerObserver makes the ingress record a lane for every pointer the
+// daemon ACCEPTS, not only for those an enrichment worker later picks up.
+//
+// ⚠️ Without it, `ml_backend: "off"` reports a false `broken`. That mode runs no
+// worker — /enrich accepts-and-discards — while telemetry is explicitly
+// unaffected and keeps reporting. One expected lane active and another silent is
+// the predicate for `broken`, so the pane would have blamed a hook that fired
+// correctly every time, on every machine with enrichment off.
+//
+// The worker's own call site stays: a pointer drained from the on-disk spool
+// after a daemon restart never passed through the ingress at all, and that hook
+// fired too.
+func bindPointerObserver() {
+	ingress.OnPointer = func(p spool.Pointer) {
+		noteIntegrationLane(queue.Job{Source: p.Source.ID, Origin: p.Source.Origin})
+	}
 }

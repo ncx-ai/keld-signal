@@ -69,6 +69,35 @@ func Handler(q *queue.Queue, secret string, extras ...Route) http.Handler {
 	return mux
 }
 
+// OnPointer observes every /enrich pointer the daemon ACCEPTS, before it is
+// enqueued or discarded. It exists so the integrations pane can answer "did this
+// tool's hook fire", which is a fact about the TOOL and stays true whether or not
+// this daemon goes on to enrich the prompt.
+//
+// ⚠️ It is called from DiscardHandler too, and that is the whole point. Under
+// `ml_backend: "off"` no enrichment worker runs, so the worker's own call site
+// never fires — while telemetry is explicitly unaffected by that mode and keeps
+// reporting. One expected lane active and another silent is the predicate for
+// `broken`, so every machine with enrichment off would have been reported broken
+// on a hook that fired correctly every time.
+//
+// Never called for a rejected request: an unauthenticated or malformed POST
+// establishes nothing about the tool, and recording it would make the lane
+// unfalsifiable. A seam rather than a parameter because DiscardHandler has ~20
+// call sites, and observation is not part of its contract.
+var OnPointer func(spool.Pointer)
+
+// notePointer calls OnPointer if one is set. Panic-isolated: an observer is a
+// reporting concern and must never turn an accepted pointer into a 500.
+func notePointer(p spool.Pointer) {
+	f := OnPointer
+	if f == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	f(p)
+}
+
 // DiscardHandler returns the daemon's /enrich handler for when enrichment is
 // disabled (ml_backend=off): it authenticates and validates the request body
 // exactly like Handler, but never enqueues — it accepts-and-discards (202) so
@@ -91,6 +120,8 @@ func DiscardHandler(secret string, extras ...Route) http.Handler {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		// The hook fired even though nothing will consume this pointer.
+		notePointer(p)
 		w.WriteHeader(http.StatusAccepted)
 	})
 	return mux
