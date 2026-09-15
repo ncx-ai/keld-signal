@@ -8,6 +8,52 @@ wizard page that renders the NDJSON `keld` already emits, with one helper proces
 for the two things Pascal Script cannot do: host a browser, and run a child
 asynchronously.
 
+## Status — bottom line, 2026-09-15
+
+**The wizard is built. It cannot be verified on a current Windows 11 machine
+until the binaries are signed.**
+
+1. **The port is done** and lives on `feat/windows-wizard-onboarding`: a custom
+   Inno page, a WebView2 panel embedding Atlas's own sign-in, tool checkboxes, a
+   silent post-install, and the console fallback kept and gated. `internal/cli`
+   is unchanged — it consumes the seam the macOS work already built.
+
+2. ⚠️ **SIGNING IS A HARD BLOCKER, AND IT IS NOT ABOUT THE WIZARD.** The
+   *shipped* `keld.exe` is refused on an enforcing machine today. Smart App
+   Control blocks unsigned native code; every Keld binary is unsigned; so the
+   CLI, the daemon and the console fallback all fail there. The wizard was
+   merely the first thing to notice. No code change avoids it, and "let
+   reputation accumulate" fails because reputation is per FILE — every release
+   starts with none. See design §11 and
+   `2026-09-15-windows-code-signing-procurement.md`.
+
+3. **Fastest way out: an Individual Validated certificate** — a person, an ID and
+   a utility bill, no company age requirement, cloud signing so it works in CI.
+   The cost is a personal name as the publisher; swap to a company certificate
+   when validation is possible.
+
+4. **To keep developing meanwhile**, put Smart App Control in Evaluation mode
+   (Microsoft's documented registry procedure). It stops blocking and logs what
+   it would have blocked, which doubles as the signing inventory.
+
+5. ⚠️ **WHAT HAS NOT BEEN VERIFIED, STATED SO IT IS NOT ASSUMED:** nobody has
+   seen the sign-in panel work end to end. The WebView2 embed is proven (CI,
+   cross-process, live DOM), Inno's HWND handoff is proven, and the page's own
+   logic is traced — but **the three have never run together**, because SAC
+   blocks the step that would join them. Expect the first real run to find
+   something.
+
+**Next, in order:** certificate → sign the 118 payload binaries plus the
+installer → walk the design's §10 manual checklist → then the wizard is real.
+Tasks 7–9 below (CI wiring, guards, docs) are unstarted.
+
+**Exposure is now instrumented rather than argued:** `agent.hardware` reports
+`smart_app_control` per install, so the share of the fleet that refuses unsigned
+binaries becomes a number once agents update. ⚠️ It is a FLOOR, not the true
+figure — a machine locked down enough that the agent never starts reports
+nothing — and it arrives *after* the certificate, since the release carrying it
+is itself unsigned.
+
 ## Global Constraints
 
 - **`internal/cli` DOES NOT CHANGE.** Every seam consumed here already exists and
