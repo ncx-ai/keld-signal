@@ -1,0 +1,27 @@
+model = "gpt-6-astra"
+model_reasoning_effort = "medium"
+personality = "pragmatic"
+service_tier = "default"
+
+[tui.model_availability_nux]
+"gpt-5.5" = 4
+gpt-6-astra = 4
+
+
+
+# >>> keld (managed by keld CLI — do not edit between markers)
+[otel]
+environment = "prod"
+log_user_prompt = false
+exporter = { otlp-http = { endpoint = "https://atlas.keld.co/v1/logs", protocol = "json", headers = { "x-keld-ingest-token" = "tok" } } }
+metrics_exporter = { otlp-http = { endpoint = "https://atlas.keld.co/v1/metrics", protocol = "json", headers = { "x-keld-ingest-token" = "tok" } } }
+
+[[hooks.SessionStart]]
+hooks = [ { type = "command", command = '/Users/gabrielionescu/.local/bin/keld __hook --source codex' } ]
+
+[[hooks.UserPromptSubmit]]
+hooks = [ { type = "command", command = '/Users/gabrielionescu/.local/bin/keld __hook --source codex' } ]
+
+[[hooks.Stop]]
+hooks = [ { type = "command", command = '/Users/gabrielionescu/.local/bin/keld __hook --source codex' } ]
+# <<< keld

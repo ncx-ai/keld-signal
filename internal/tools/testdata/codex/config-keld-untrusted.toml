@@ -1,0 +1,45 @@
+model = "gpt-6-astra"
+model_reasoning_effort = "medium"
+personality = "pragmatic"
+service_tier = "default"
+
+[tui.model_availability_nux]
+"gpt-5.5" = 4
+gpt-6-astra = 4
+
+
+[hooks.state."/Users/gabrielionescu/.codex/hooks.json:session_start:0:0"]
+enabled = true
+trusted_hash = "sha256:64357e17c7fe0ca241477decbf0442684d503aea7c8a6829b6ee9256b2f4efb5"
+[hooks.state."/Users/gabrielionescu/.codex/hooks.json:user_prompt_submit:0:0"]
+enabled = true
+trusted_hash = "sha256:6a0b6d4bfdfbd93c379149cf59b92daeca3a47fabeb65d04d419915ba3d86c23"
+[hooks.state."/Users/gabrielionescu/.codex/hooks.json:pre_tool_use:0:0"]
+enabled = true
+trusted_hash = "sha256:bf2b1f4617cb62ca69c1f098414ed4638626d15b5d851a98109ae004d9848175"
+[hooks.state."/Users/gabrielionescu/.codex/hooks.json:permission_request:0:0"]
+enabled = true
+trusted_hash = "sha256:c4f2d8d5e607115f6a8e734ca66ea4f096ed6082cf5bf1ebbb321b04564b4deb"
+[hooks.state."/Users/gabrielionescu/.codex/hooks.json:post_tool_use:0:0"]
+enabled = true
+trusted_hash = "sha256:3eea3238d230bae0a35fd2e2dd87c0e9e3660e0d1d4101cb1fe1aa5b103467ec"
+[hooks.state."/Users/gabrielionescu/.codex/hooks.json:stop:0:0"]
+enabled = true
+trusted_hash = "sha256:75dc33c9407d423a1f21a7f7bd32c83434abf413e7b31606bcf8c0d3b42ca0b5"
+
+# >>> keld (managed by keld CLI — do not edit between markers)
+[otel]
+environment = "prod"
+log_user_prompt = false
+exporter = { otlp-http = { endpoint = "https://atlas.keld.co/v1/logs", protocol = "json", headers = { "x-keld-ingest-token" = "tok" } } }
+metrics_exporter = { otlp-http = { endpoint = "https://atlas.keld.co/v1/metrics", protocol = "json", headers = { "x-keld-ingest-token" = "tok" } } }
+
+[[hooks.SessionStart]]
+hooks = [ { type = "command", command = '/Users/gabrielionescu/.local/bin/keld __hook --source codex' } ]
+
+[[hooks.UserPromptSubmit]]
+hooks = [ { type = "command", command = '/Users/gabrielionescu/.local/bin/keld __hook --source codex' } ]
+
+[[hooks.Stop]]
+hooks = [ { type = "command", command = '/Users/gabrielionescu/.local/bin/keld __hook --source codex' } ]
+# <<< keld
