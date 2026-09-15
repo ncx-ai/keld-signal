@@ -43,11 +43,32 @@ builds:
       - goos: windows
         goarch: arm64
 
+  # ⚠️ WINDOWS ONLY, and that is not an oversight — this is the Inno wizard
+  # page's helper. It hosts the WebView2 approval panel and runs `keld`
+  # asynchronously, neither of which Pascal Script can do for itself. macOS has
+  # a native Installer.app pane and Linux's install.sh has no wizard at all, so
+  # building it there would ship a binary nothing could ever run.
+  - id: keld-wizard-host
+    main: ./cmd/keld-wizard-host
+    binary: keld-wizard-host
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      # ⚠️ -H windowsgui, or the helper flashes a console window every time the
+      # wizard page runs a step — which is several times per install, on the one
+      # screen whose whole purpose is that no console ever appears.
+      - -s -w -H windowsgui -X github.com/ncx-ai/keld-signal/internal/version.CLI={{.Version}}
+    goos:
+      - windows
+    goarch:
+      - amd64
+
 archives:
   - id: keld
     ids:
       - keld
       - keld-agent
+      - keld-wizard-host
     name_template: "keld_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
