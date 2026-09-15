@@ -17,15 +17,12 @@
 
 # --- failure reporting -------------------------------------------------------
 
-CONFORM_FAILED=0
-
 fail() {
   echo "conformance: FAIL: $*" >&2
   if [ -n "${DAEMON_LOG:-}" ] && [ -f "$DAEMON_LOG" ]; then
     echo "--- last 40 lines of the daemon log ---" >&2
     tail -40 "$DAEMON_LOG" >&2
   fi
-  CONFORM_FAILED=1
   teardown
   exit 1
 }
