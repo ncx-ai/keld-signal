@@ -404,6 +404,17 @@ jobs:
         shell: pwsh
         env:
           KELD_VERSION: ${{ env.TAG }}
+          # The whole signing configuration, as one command template with {FILES}
+          # standing in for the file list. Deliberately opaque to this workflow:
+          # the certificate authority is not chosen yet, and every cloud signing
+          # service exposes a different tool (signtool with a CSP/KSP, SSL.com's
+          # CodeSignTool, DigiCert's smctl). Whichever it turns out to be, it is
+          # set once as a secret and nothing here changes.
+          #
+          # ⚠️ ABSENT ON A FORK OR A DRY RUN, AND THAT MUST STAY HARMLESS — the
+          # build produces an unsigned installer rather than failing, exactly as
+          # the Apple secrets behave for the macOS job.
+          KELD_SIGN_COMMAND: ${{ secrets.KELD_SIGN_COMMAND }}
         run: |
           if (-not $env:KELD_VERSION) { $env:KELD_VERSION = "0.0.0-dryrun" }
           Copy-Item -Recurse -Force dist\keld-agent-sidecar installers\windows\keld-agent-sidecar
@@ -412,10 +423,52 @@ jobs:
           # shipping a page that silently cannot run anything. It rides the same
           # GoReleaser archive as the other two (windows/amd64 only).
           Copy-Item stage\keld.exe, stage\keld-agent.exe, stage\keld-wizard-host.exe installers\windows\
+          # ⚠️ SIGN THE PAYLOAD BEFORE iscc, NOT AFTER. Smart App Control
+          # evaluates binaries AS THEY LOAD, so a signed installer carrying
+          # unsigned binaries is refused the moment the product runs — the
+          # installer would succeed and `keld.exe` would not start. The payload
+          # must therefore be signed while it is still loose files.
+          #
+          # Inert without KELD_SIGN_COMMAND: the build still produces an
+          # (unsigned, SAC-blocked) installer rather than failing over a
+          # purchase order. See docs/superpowers/plans/2026-09-15-windows-code-signing-procurement.md
+          ./installers/windows/sign-payload.ps1 -PayloadDir installers\windows -SignCommand $env:KELD_SIGN_COMMAND
+          if ($LASTEXITCODE -ne 0) { throw "payload signing failed" }
+
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
-          & $iscc installers\windows\keld-agent.iss
-          if ($env:WINDOWS_CERT_PFX) { Write-Host "signtool sign step (gated) would run here" }
+
+          # The .iss enables SignedUninstaller only when KELD_SIGN_COMMAND is
+          # set, and it then requires a SignTool named `keldsign` to exist — so
+          # the two must be supplied together or iscc halts. Inno's template uses
+          # $f for the file; ours uses {FILES}.
+          # ⚠️ THE /S ARGUMENT MUST BE ONE QUOTED TOKEN. A signing command contains
+          # spaces, and unquoted iscc reads each word after the first as another
+          # script filename and fails with "You may not specify more than one
+          # script filename" — measured, not guessed.
+          $isccArgs = @()
+          if ($env:KELD_SIGN_COMMAND) {
+            $isccArgs += '"/Skeldsign=' + $env:KELD_SIGN_COMMAND.Replace('{FILES}', '$f') + '"'
+          }
+          $isccArgs += "installers\windows\keld-agent.iss"
+          & $iscc @isccArgs
+          if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
+
+          # And the installer itself, last — it does not exist until iscc runs.
+          # ⚠️ THE UNINSTALLER IS A THIRD THING AND IS EASY TO MISS: Inno
+          # extracts unins000.exe onto the target machine at install time, so it
+          # is never signed by this step. `SignedUninstaller=yes` in the .iss is
+          # what covers it, and without it uninstalling is blocked on exactly the
+          # machines installing was blocked on.
+          if ($env:KELD_SIGN_COMMAND) {
+            $setup = "installers\windows\Output\keld-setup.exe"
+            Invoke-Expression ($env:KELD_SIGN_COMMAND.Replace('{FILES}', "`"$setup`""))
+            if ($LASTEXITCODE -ne 0) { throw "installer signing failed" }
+            if ((Get-AuthenticodeSignature $setup).Status -ne 'Valid') { throw "keld-setup.exe is not validly signed" }
+            Write-Host "signed: $setup"
+          } else {
+            Write-Warning "KELD_SIGN_COMMAND not set - keld-setup.exe is UNSIGNED and Smart App Control will refuse it"
+          }
 
       # Release runs attach the installers to the GitHub release.
       - name: Upload installers to release
