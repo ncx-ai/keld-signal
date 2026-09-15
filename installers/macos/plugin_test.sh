@@ -174,4 +174,38 @@ grep -qF 'KeldAPIURL' "$p/build-plugin.sh" || fail "build-plugin.sh never stamps
 # Content flush against the pane's frame reads as broken; the stack needs insets.
 grep -qF 'edgeInsets' "$p/KeldSetup.m" || fail "pane's stack has no edge insets, so content sits flush against the panel border"
 
+# ⚠️ THE PANE MUST NOT PROMPT FOR A SIGN-IN THAT IS NOT ON SCREEN YET. The
+# approval page is fetched over the network and compiled by Atlas on demand, so
+# there is a window — seconds, and longer against a cold route — in which the
+# pane showed "Sign in to connect this device." above an empty rectangle. That
+# is the worst possible reading of a wait: it names an action, offers nothing to
+# act on, and so invites a retry of something that was merely still arriving.
+#
+# Two halves, and the fix is incomplete without either. A progress indicator has
+# to be RUNNING while the page loads, and the prompt has to be set from the
+# navigation delegate's didFinish — i.e. when the form actually exists — rather
+# than from the `device_code` event, which only marks the moment the load began.
+grep -q 'navigationDelegate = self' "$p/KeldSetup.m" \
+  || fail "pane never becomes the web view's navigation delegate, so it cannot know when the page has loaded"
+grep -q 'didFinishNavigation' "$p/KeldSetup.m" \
+  || fail "pane does not implement didFinishNavigation, so nothing distinguishes a loading page from a loaded one"
+
+# The prompt must live INSIDE didFinishNavigation. A grep for the string alone
+# would pass on exactly the code this pins against — it was already present, in
+# the device_code handler, which is the bug.
+awk '/didFinishNavigation/,/^}/' "$p/KeldSetup.m" | grep -q 'Sign in to connect' \
+  || fail "the sign-in prompt is not set when the page finishes loading, so it still appears over a blank view"
+
+# And the wait has to be visible for as long as it lasts. The invariant is
+# co-location: whichever method issues the request must also start the
+# indicator, so a later edit cannot move the load somewhere the spinner does not
+# follow. Asserting them separately would pass on a file where one runs and the
+# other never does.
+body=$(awk '/- \(void\)beginApprovalLoad:/,/^}/' "$p/KeldSetup.m")
+printf '%s' "$body" | grep -q 'startAnimation' \
+  || fail "no progress indicator is started when the approval page begins loading"
+printf '%s' "$body" | grep -q 'loadRequest' \
+  || fail "the indicator starts in a method that does not issue the load"
+
+
 echo "plugin_test.sh: OK"
