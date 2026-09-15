@@ -703,7 +703,17 @@
         typeof(self) s = weakSelf; if (!s) return;
         NSString *kind = e[@"event"];
         if ([kind isEqualToString:@"device_code"]) {
-            NSString *code = e[@"user_code"] ?: @"";
+            // ⚠️ THE USER CODE IS DELIBERATELY NOT SHOWN. Displaying it was the
+            // device flow's anti-phishing step, and that step assumed a SECOND
+            // surface — a browser the person could compare against. With the
+            // approval page embedded here, the pane supplies the code, loads
+            // the page, and reads the result: there is nothing to compare it
+            // with, so printing it only asks someone to check a number against
+            // itself.
+            //
+            // It comes back if the approval ever moves out of the pane again
+            // (a system browser, or a platform that cannot embed a web view),
+            // because then the comparison is real.
             // ⚠️ Prefer Atlas's compact route. `verification_url` is the page
             // built for a real browser window: unauthenticated it redirects to
             // the full login, and every state centres itself with min-h-screen,
@@ -714,8 +724,7 @@
             // requirement.
             NSString *url = e[@"installer_url"] ?: @"";
             if (url.length == 0) url = e[@"verification_url"] ?: @"";
-            s->_codeStatus.stringValue =
-                [NSString stringWithFormat:@"Sign in and approve — code %@", code];
+            s->_codeStatus.stringValue = @"Sign in to connect this device.";
             [s showApprovalPage:url];
         } else if ([kind isEqualToString:@"authorized"]) {
             [s hideApprovalPage];
@@ -773,6 +782,30 @@
     if (!_approvalWeb) {
         _approvalWeb = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 560, 300)
                                           configuration:[WKWebViewConfiguration new]];
+        // ⚠️ THE PAGE'S TRANSPARENCY IS WASTED UNLESS THE WEB VIEW IS ALSO
+        // NON-OPAQUE. Atlas's route drops its canvas so the approval form can
+        // sit on the installer's own panel, but a WKWebView paints an opaque
+        // white backdrop of its own underneath — so the seam just moves from
+        // the page to the view. `underPageBackgroundColor` is the public way to
+        // say "paint nothing": the page then composites onto the pane, and the
+        // form reads as part of the wizard rather than as a website embedded
+        // in one.
+        _approvalWeb.underPageBackgroundColor = [NSColor clearColor];
+        // ⚠️ `underPageBackgroundColor` alone may not be enough: it colours what
+        // is drawn UNDER the page (overscroll), while the view's own opacity is
+        // governed by `drawsBackground`, which WebKit exposes only through KVC.
+        // Both are set, because the visible result of getting this half wrong is
+        // a white rectangle where the seam was supposed to disappear.
+        //
+        // Wrapped, because an unknown key RAISES — and an uncaught ObjC
+        // exception in this process is not an error message, it is SIGTRAP and
+        // a dead wizard (measured 2026-09-14, from `t.standardOutput = nil`).
+        // If a future WebKit drops the key, the page merely stays opaque.
+        @try {
+            [_approvalWeb setValue:@NO forKey:@"drawsBackground"];
+        } @catch (NSException *e) {
+            // Cosmetic only; nothing about the flow depends on it.
+        }
         // No size constraints: KeldPaneView gives the page the pane's width and
         // whatever height is left below the status line.
     }
