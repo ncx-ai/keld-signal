@@ -1,0 +1,48 @@
+{
+  "integrations": [
+    {
+      "id": "codex",
+      "display_name": "Codex",
+      "installed": true,
+      "configured": false,
+      "supported": true,
+      "storage_class": "jsonl-tail",
+      "state": "not_configured",
+      "tool_version": "0.153.4",
+      "surfaces": [
+        {
+          "kind": "hook",
+          "documented": true,
+          "wired": false,
+          "expected": true
+        },
+        {
+          "kind": "otel",
+          "documented": true,
+          "wired": false,
+          "expected": true
+        }
+      ]
+    }
+  ],
+  "vocabulary": {
+    "states": [
+      "not_installed",
+      "not_configured",
+      "restart_required",
+      "approval_required",
+      "idle",
+      "working",
+      "broken",
+      "unsupported"
+    ],
+    "waiting_on": [
+      "",
+      "restart",
+      "approval",
+      "reader"
+    ]
+  },
+  "auto_setup": true,
+  "computed_at": "2026-09-15T09:13:00Z"
+}
