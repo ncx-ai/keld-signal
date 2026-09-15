@@ -369,8 +369,17 @@ func (p *Proxy) authorized(r *http.Request) bool {
 func textKey(k string) bool {
 	k = strings.ToLower(k)
 	matched := false
-	for _, s := range []string{"prompt", "completion", "message.content", "response.text",
-		"input.text", "output.text", "user_text", "assistant_text"} {
+	for _, s := range []string{"prompt", "completion", "message.content", "response",
+		"input.text", "output.text", "user_text", "assistant_text",
+		// ARGV. A tool's own command line is not metadata: it is whatever the
+		// person typed. ⚠️ MEASURED 2026-09-15 — Gemini CLI sets the OTLP
+		// resource attribute `process.command_args` to its full argv, so a
+		// `gemini -p "<prompt>"` run put the prompt on the wire and this gate
+		// matched none of its words. Same class as the `prompt.id` incident one
+		// direction over, and invisible for the same reason: no captured payload
+		// was in a fixture. `executable.path` goes with them — it is a home
+		// directory, and `executable.name` survives to identify the tool.
+		"command_args", "command_line", "process.command", "executable.path"} {
 		if strings.Contains(k, s) {
 			matched = true
 			break
@@ -378,6 +387,14 @@ func textKey(k string) bool {
 	}
 	return matched && !identifierOrMeasure(k)
 }
+
+// ⚠️ `response` is deliberately the BARE word, not `response.text`. Claude Code's
+// attribute is spelled `response`, and the narrower spelling was written from
+// imagination rather than from a capture: the tool redacts the value by default,
+// so the leak was latent until a managed settings file set
+// OTEL_LOG_ASSISTANT_RESPONSES=1. The proxy must not rely on a tool's own default
+// to uphold this repo's invariant. `response_length`/`response_id` are subtracted
+// below, which is what keeps the widening from costing a measure.
 
 // identifierOrMeasure reports whether a key that named a text word in fact ends
 // in an identifier or a quantity — `prompt.id`, `prompt_length`, `prompt_tokens`.
