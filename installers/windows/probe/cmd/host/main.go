@@ -36,7 +36,12 @@ var (
 	pGetMessageW     = user32.NewProc("GetMessageW")
 	pTranslateMsg    = user32.NewProc("TranslateMessage")
 	pDispatchMsgW    = user32.NewProc("DispatchMessageW")
-	pPostQuitMessage = user32.NewProc("PostQuitMessage")
+	// ⚠️ PostThreadMessageW, NOT PostQuitMessage. PostQuitMessage posts WM_QUIT
+	// to the CALLING thread's queue, and the timer below runs on a different
+	// OS thread — so the loop never saw it and the probe hung until the job
+	// timed out. The quit has to be addressed to the loop's own thread id.
+	pPostThreadMsgW  = user32.NewProc("PostThreadMessageW")
+	pGetCurrentThrd  = kernel32.NewProc("GetCurrentThreadId")
 	pGetClientRect   = user32.NewProc("GetClientRect")
 	pGetParent       = user32.NewProc("GetParent")
 	pEnumChildWin    = user32.NewProc("EnumChildWindows")
@@ -49,6 +54,7 @@ var (
 const (
 	wsChild   = 0x40000000
 	wsVisible = 0x10000000
+	wmQuit    = 0x0012
 )
 
 type rect struct{ Left, Top, Right, Bottom int32 }
@@ -119,6 +125,9 @@ func describeTree(root uintptr, label string) int {
 func main() {
 	// The message loop must stay on the thread that created the window.
 	runtime.LockOSThread()
+	mainThread, _, _ := pGetCurrentThrd.Call()
+	// Same watchdog as the harness, for the same reason.
+	time.AfterFunc(60*time.Second, func() { os.Exit(3) })
 
 	if len(os.Args) < 4 {
 		fmt.Fprintln(os.Stderr, "usage: host <parentHWND> <url> <logpath> [seconds]")
@@ -196,8 +205,8 @@ func main() {
 		cw, ch := clientSize(child)
 		logf("child client size now %dx%d", cw, ch)
 		time.Sleep(time.Duration(secs) * time.Second)
-		logf("host: posting quit")
-		pPostQuitMessage.Call(0)
+		logf("host: posting WM_QUIT to thread %d", mainThread)
+		pPostThreadMsgW.Call(mainThread, wmQuit, 0, 0)
 	}()
 
 	logf("entering message loop")

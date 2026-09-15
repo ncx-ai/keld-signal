@@ -61,6 +61,10 @@ jobs:
       - name: Run the probe
         id: run
         continue-on-error: true
+        # The first run wedged for the full job timeout and produced no log:
+        # WM_QUIT was posted from the wrong thread. Both halves now carry a
+        # watchdog, and this bounds it regardless.
+        timeout-minutes: 3
         shell: pwsh
         working-directory: installers/windows/probe
         run: |
