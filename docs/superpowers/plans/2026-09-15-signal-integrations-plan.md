@@ -47,6 +47,50 @@ Shared read-only inputs: `internal/agent/queue`, `internal/spool`, `internal/con
 3. **WS-C1 merges second**, then **WS-B**, then **WS-E** (needs the live route for its real-state specs), then **WS-C2**, then **WS-D**, then WS-B's final one-line eligibility flip (`workstreamAnalyzableSources["codex"] = true`) as its own commit after WS-D.
 4. WS-A's `conformance.yml` is enabled on `release/v3` after milestone M1 and grows a checkpoint as each workstream lands.
 
+## Status — 2026-09-15, after the first parallel run
+
+All six workstreams landed and merged on `docs/signal-integrations`. Verified on the
+MERGED tree, not per-branch: **`go test ./...` 57 packages ok / 0 fail**, **48 Playwright
+tests** (chromium + webkit, 1280 and 400 wide), **`make conformance TOOL=claude_code` PASS**
+(all five checkpoints, seed printed).
+
+| Workstream | State | Not done |
+|---|---|---|
+| WS-0 Contract | merged | — |
+| WS-A Harness | merged (A.1-A.3 first half) | **A.4** local envs (Compose, Tart), **A.5** `conformance.yml` |
+| WS-B Codex Go | merged, incl. B.6 eligibility flip | — |
+| WS-C1 State/detector/route/doctor | merged | lane facts under `ml_backend:"off"` record nothing |
+| WS-C2 Events/report/per-source | merged | `LaneCounts` from real counters |
+| WS-D Turn record + Codex reader | merged | — |
+
+**Milestones:** M1 local half ✅ (GitHub dispatch ⛔ pending A.5) · M2 ✅ (Codex chain in the
+harness not yet RUN) · M3 ✅ Go+sidecar (AC-10 against dev Atlas ⛔) · M4 ✅ except the
+workflow, chain B and Tart.
+
+**Three defects found by implementation, each fixed with a test:**
+1. ⚠️ **A live prompt leak.** Gemini CLI puts its full argv in the OTLP resource attribute
+   `process.command_args`, so `gemini -p "<prompt>"` sent the prompt to Atlas verbatim; the
+   text gate matched none of its words. Claude Code's assistant-response key is the bare
+   `response` and the gate knew only `response.text` — latent, because the tool redacts by
+   default. Both fixed in `teleproxy.textKey`, pinned by `striptext_argv_test.go`. Same class
+   as the `prompt.id` incident one direction over, invisible for the same reason: no captured
+   payload was in a fixture.
+2. **Codex token over-count**, +18.5% on 0.125.0 and +1.1% on 0.151.0, exact on 0.153.4 — the
+   `(timestamp, cumulative)` dedup key, because Codex re-emits a `token_count` with a new
+   instant. Keyed on the cumulative alone, all three match Codex's own running total exactly.
+   Found by a tripwire, invisible on the newest version.
+3. **The golden dump depended on the day it ran** — `ingest_file` runs retention, so the
+   fixture lost all 43 magnitude rows the day it was written. Horizons pinned. *Side finding:
+   `check-fixture-identity.sh`'s own corpus is dated 2026-08-10 and is ~54 days from losing
+   its `term` rows the same way.*
+
+**Two contract defects found by WS-0 before a line was written:** AC-1's surface kinds were
+missing `reader`, and the Gemini adapter name (`gemini`) differs from its integration id
+(`gemini_cli`), which would have made Gemini permanently unconfigurable. Both fixed in the
+spec and republished.
+
+**Next:** A.4 + A.5, then run chain A with Codex in both halves.
+
 ## Milestones (iterative value)
 
 | # | When | What a person can see |
