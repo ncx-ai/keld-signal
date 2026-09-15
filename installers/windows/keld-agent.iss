@@ -259,7 +259,7 @@ var
   ApprovalShown: Boolean;
   PanelRunning: Boolean;
 
-  TmpKeld, TmpHost, CancelFile, PanelStopFile: String;
+  TmpKeld, TmpHost, CancelFile, PanelStopFile, TraceFile: String;
   TimerID: Longword;
   RunCounter: Integer;
 
@@ -325,9 +325,28 @@ begin
     Result := '0' + Result;
 end;
 
+// Trace appends one line to a fixed path, so a run that goes wrong leaves
+// evidence rather than a description.
+//
+// ⚠️ It writes OUTSIDE {tmp} on purpose: Inno deletes {tmp} when the wizard
+// closes, taking the helper's event files with it, so a log kept there is gone
+// exactly when it is wanted. The page state is ids and statuses — no code, no
+// token, no URL query.
+procedure Trace(const S: String);
+var
+  Existing: AnsiString;
+begin
+  if TraceFile = '' then
+    exit;
+  if not LoadStringFromFile(TraceFile, Existing) then
+    Existing := '';
+  SaveStringToFile(TraceFile, Existing + S + #13#10, False);
+end;
+
 procedure SetStatus(const S: String);
 begin
   StatusLbl.Caption := S;
+  Trace('status: ' + S);
 end;
 
 function NewRunDir: String;
@@ -403,7 +422,10 @@ begin
             ' --sentinel "' + CancelFile + '"' +
             ' --parent-pid ' + IntToStr(GetCurrentProcessId) +
             ' -- ' + Args;
+  Trace('run start mode=' + IntToStr(NewMode) + ' args=' + Args);
   Result := Exec(TmpHost, Params, '', SW_HIDE, ewNoWait, RC);
+  if not Result then
+    Trace('run start FAILED to exec ' + TmpHost);
   if Result then
     Mode := NewMode
   else
@@ -579,6 +601,7 @@ begin
   if JsonStr(Lines[0], 'event') <> 'panel' then
     exit;
   Status := JsonStr(Lines[0], 'status');
+  Trace('panel status=' + Status);
 
   // `embedded` only means the control exists — keep the loading bar up.
   if Status = 'embedded' then
@@ -633,11 +656,20 @@ begin
     begin
       if JsonStr(Lines[0], 'event') = '__exit' then
       begin
+        Trace('run finished mode=' + IntToStr(Mode) + ' msg=' + JsonStr(Lines[0], 'message'));
+        // ⚠️ A RUN THAT NEVER STARTED IS NOT A RUN THAT ANSWERED NO. The helper
+        // reports the reason on __exit; without capturing it here the page said
+        // "Sign-in didn't finish" when Windows had refused to launch keld.exe at
+        // all — a confident negative from a check nobody performed, which is the
+        // one thing this codebase refuses to publish anywhere else either.
+        if (EvError = '') and (JsonStr(Lines[0], 'message') <> '') then
+          EvError := JsonStr(Lines[0], 'message');
         FinishedMode := Mode;
         Mode := RunNone;
         OnRunFinished(FinishedMode);
         exit;
       end;
+      Trace('  event=' + JsonStr(Lines[0], 'event'));
       HandleEvent(Lines[0]);
       // A device_code arrives MID-RUN and the panel must go up now, not when the
       // run finishes — the run does not finish until the person has approved.
@@ -844,6 +876,24 @@ end;
 
 procedure AfterIdentity;
 begin
+  Trace('AfterIdentity status=' + EvIdentityStatus);
+
+  // ⚠️ NO STATUS AT ALL MEANS THE CHECK NEVER RAN. `whoami --verify --json`
+  // always emits an `identity` event, so an empty status is not a fourth kind of
+  // answer — it is the absence of one, and the only case seen in the wild is
+  // Windows refusing to launch keld.exe (Smart App Control blocks unsigned
+  // binaries, and the page drives a copy extracted to {tmp}). Reporting it as an
+  // ordinary sign-in failure sent people to retry something that cannot succeed.
+  if EvIdentityStatus = '' then
+  begin
+    if EvError <> '' then
+      SetStatus('Keld could not run a required component: ' + EvError)
+    else
+      SetStatus('Keld could not check this PC. Try again.');
+    RetryBtn.Visible := True;
+    WizardForm.NextButton.Enabled := False;
+    exit;
+  end;
   if EvIdentityStatus = 'verified' then
   begin
     PairedAPIURL := EvAPIURL;
@@ -881,6 +931,7 @@ procedure AfterClipboard;
 var
   Pasted: String;
 begin
+  Trace('AfterClipboard len=' + IntToStr(Length(Trim(EvClipboard))));
   Pasted := Trim(EvClipboard);
   if LooksLikePairingCode(Pasted) then
   begin
@@ -893,6 +944,7 @@ end;
 
 procedure AfterLogin(WasBrowser: Boolean);
 begin
+  Trace('AfterLogin browser=' + IntToStr(Integer(WasBrowser)) + ' paired=' + IntToStr(Integer(Paired)) + ' err=' + EvError);
   if WasBrowser then
     HideApproval;
   ConnectBtn.Enabled := True;
@@ -963,6 +1015,8 @@ begin
   // status line above it still says what is happening.
   WizardForm.FilenameLabel.Visible := False;
 
+  TraceFile := ExpandConstant('{%TEMP}\keld-wizard-trace.log');
+  DeleteFile(TraceFile);
   CancelFile := ExpandConstant('{tmp}\keld-wizard-cancel');
   PanelStopFile := ExpandConstant('{tmp}\keld-wizard-panel-stop');
 
