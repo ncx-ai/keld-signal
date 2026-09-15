@@ -1,0 +1,608 @@
+<title>Signal Integrations</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4F7; --ink:#1B2430; --muted:#5E6B7A; --rule:#D3D9E1; --panel:#FFFFFF;
+  --daemon:#3B5B8C; --daemon-soft:#DCE5F2;
+  --enc:#C0761A; --enc-soft:#F6E4C8;
+  --bad:#B3392F; --bad-soft:#F3D8D4;
+  --good:#2E7D4F; --good-soft:#D6EBDD;
+  --wait:#B9C1CB;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+    --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+    --enc:#E0A24F; --enc-soft:#3D2C14;
+    --bad:#E0736A; --bad-soft:#3F1E1B;
+    --good:#6CC08E; --good-soft:#193226;
+    --wait:#4A5563;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#13181E; --ink:#E6EAF0; --muted:#98A4B3; --rule:#2B3440; --panel:#1A2128;
+  --daemon:#7FA3D6; --daemon-soft:#1E2C40;
+  --enc:#E0A24F; --enc-soft:#3D2C14;
+  --bad:#E0736A; --bad-soft:#3F1E1B;
+  --good:#6CC08E; --good-soft:#193226;
+  --wait:#4A5563;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 "IBM Plex Sans",system-ui,sans-serif;margin:0}
+main{max-width:900px;margin:0 auto;padding:40px 24px 72px}
+h1{font-size:28px;font-weight:600;margin:0 0 6px;text-wrap:balance}
+h2{font-size:18px;font-weight:600;margin:46px 0 8px;text-wrap:balance;scroll-margin-top:16px}
+h3{font-size:14px;font-weight:600;margin:26px 0 6px;letter-spacing:.01em}
+h3 .mono{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+p{max-width:66ch;margin:0 0 12px}
+ul{max-width:68ch;margin:0 0 12px;padding-left:20px}
+li{margin:0 0 4px}
+.lede{color:var(--muted);font-size:15px;max-width:70ch}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.meta{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:14px 0 0;font-size:13px;color:var(--muted)}
+.chip{display:inline-block;padding:3px 10px;border-radius:999px;font:500 11px "IBM Plex Mono",monospace;letter-spacing:.06em;text-transform:uppercase}
+.chip-draft{background:var(--enc-soft);color:var(--enc);border:1px solid var(--enc)}
+.chip-signed{background:var(--good-soft);color:var(--good);border:1px solid var(--good)}
+.chip-reviewed{background:var(--daemon-soft);color:var(--daemon);border:1px solid var(--daemon)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:14px;margin:18px 0 0;max-width:720px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0}
+.wrap{overflow-x:auto;margin:0 0 4px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;margin:0}
+th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--rule);padding:0 12px 6px 0;text-transform:uppercase;white-space:nowrap}
+td{border-bottom:1px solid var(--rule);padding:8px 12px 8px 0;vertical-align:top}
+table.ac td:first-child,table.tests td:first-child{width:52px;color:var(--muted);white-space:nowrap}
+table.ac td:nth-child(2){width:42%}
+table.tests td:nth-child(2){width:38%}
+tr:target td{background:var(--daemon-soft)}
+.pill{display:inline-block;padding:2px 8px;border-radius:4px;font:500 11px "IBM Plex Mono",monospace;letter-spacing:.04em;white-space:nowrap}
+.p-met{background:var(--good-soft);color:var(--good)}
+.p-partial{background:var(--enc-soft);color:var(--enc)}
+.p-missed{background:var(--bad-soft);color:var(--bad)}
+.p-unver{background:var(--rule);color:var(--muted)}
+.p-reuse{background:var(--good-soft);color:var(--good)}
+.p-extend{background:var(--daemon-soft);color:var(--daemon)}
+.p-new{background:var(--enc-soft);color:var(--enc)}
+.p-pattern{background:var(--bad-soft);color:var(--bad)}
+.p-h{background:var(--bad-soft);color:var(--bad)}
+.p-m{background:var(--enc-soft);color:var(--enc)}
+.p-l{background:var(--good-soft);color:var(--good)}
+pre.gherkin{background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--daemon);border-radius:4px;padding:14px 16px;margin:0 0 12px;overflow-x:auto;font:13px/1.6 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink)}
+pre.gherkin .kw{color:var(--daemon);font-weight:500}
+pre.gherkin .cov{color:var(--muted)}
+.note{border-left:3px solid var(--enc);background:var(--enc-soft);padding:10px 14px;margin:0 0 14px;max-width:68ch;font-size:14px}
+.note strong{color:var(--enc)}
+figure{margin:18px 0 0;padding:0}
+figure svg{display:block;width:100%;height:auto;max-width:100%;font:12px "IBM Plex Sans",system-ui,sans-serif}
+figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
+.lane{stroke:var(--rule);stroke-width:1}
+.lanelbl{fill:var(--muted);font:500 11px "IBM Plex Mono",monospace;letter-spacing:.06em}
+.txt{fill:var(--ink)}
+.small{fill:var(--muted);font-size:11px}
+.b-daemon{fill:var(--daemon-soft);stroke:var(--daemon);stroke-width:1.4}
+.b-enc{fill:var(--enc-soft);stroke:var(--enc);stroke-width:1.4}
+.b-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.4}
+.b-good{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4}
+.b-plain{fill:var(--bg);stroke:var(--ink);stroke-width:1.2}
+.b-new{fill:var(--good-soft);stroke:var(--good);stroke-width:1.4;stroke-dasharray:5 3}
+.b-wait{fill:var(--wait);stroke:none}
+.arr{stroke:var(--ink);stroke-width:1.3;fill:none}
+.arr-bad{stroke:var(--bad);stroke-width:1.3;fill:none;stroke-dasharray:4 3}
+.arr-good{stroke:var(--good);stroke-width:1.3;fill:none}
+.t-bad{fill:var(--bad)}
+.t-good{fill:var(--good)}
+.t-enc{fill:var(--enc)}
+.t-daemon{fill:var(--daemon)}
+.tick{stroke:var(--rule);stroke-width:1}
+.qa{border-top:1px solid var(--rule);margin-top:48px;padding-top:20px}
+.qa dt{font-weight:600;margin-top:14px}
+.qa dd{margin:4px 0 0;max-width:66ch;color:var(--ink)}
+</style>
+
+<main>
+
+<h1>Signal Integrations — Discovery</h1>
+<p class="lede">An Integrations pane that lists every tool Signal knows, says how each is wired, shows whether it is working, sets up a tool that appears later, reports a break to us, and a nightly matrix that proves each integration against the latest tool version without provider accounts. If this is wrong, Codex stays silently spend-only and the next Codex release breaks Claude-shaped assumptions with nobody told.</p>
+
+<div class="meta">
+  <span class="chip chip-draft">Draft — awaiting sign-off</span>
+  <span>Fable 5.1 (1M context) — thinking: medium</span>
+  <span class="mono">2026-09-15</span>
+</div>
+
+<dl class="kv">
+  <dt>Repo / branch</dt><dd class="mono">ncx-ai/keld-signal · release/v3</dd>
+  <dt>Spec source</dt><dd class="mono">docs/superpowers/specs/2026-09-15-signal-integrations-discovery.html</dd>
+  <dt>Tools setup knows today</dt><dd class="mono">3 — Claude Code, Codex, Gemini CLI (internal/tools/registry.go:8); detected by config dir existing</dd>
+  <dt>When setup runs</dt><dd class="mono">once, at install; nothing re-runs it (grep: no caller of tools.Select outside internal/cli)</dd>
+  <dt>Codex prompts captured, ever</dt><dd class="mono">0 — hook reads prompt_id, Codex sends turn_id; watcher waits for an ordinal no rollout carries</dd>
+  <dt>Silent-failure precedent</dt><dd class="mono">40 min of dead telemetry with doctor reporting "No problems found", correctly (AGENTS.md, telemetry proxy bullet)</dd>
+  <dt>Local UI today</dt><dd class="mono">vanilla JS, 112 KB app.js, hash routes #/today #/projects #/settings, health dot, service banner (internal/agent/ui)</dd>
+  <dt>Daemon routes the UI uses</dt><dd class="mono">/v1/config · /v1/settings · /v1/ledger · /v1/projects · /v1/service/restart (daemon/*.go)</dd>
+  <dt>Company-side channel</dt><dd class="mono">client-events → POST /v1/signal/client-events, redaction gate, 26 codes (docs/signal-client-events.md)</dd>
+  <dt>Mock-model run, verified today</dt><dd class="mono">Claude Code 2.1.x · ANTHROPIC_BASE_URL → local mock · fake key · isolated CLAUDE_CONFIG_DIR → 17-line transcript, 2 streamed requests, usage and cost reported · no account</dd>
+  <dt>Tool version in transcripts</dt><dd class="mono">Claude line `version` (2.1.267 here) · Codex `session_meta.cli_version` · Pi header `version: 3`</dd>
+  <dt>CI legs today</dt><dd class="mono">installers.yml: macos-14 arm64, windows-latest amd64, ubuntu manylinux container smoke</dd>
+  <dt>Detector poll</dt><dd class="mono">60 s — a choice, not a measurement; a stat of three directories</dd>
+  <dt>Broken window</dt><dd class="mono">24 h — a starting guess; tuned after the first week of fleet events</dd>
+</dl>
+
+<h2 id="s1">1 · Hypothesis &amp; scope</h2>
+
+<h3>The why</h3>
+<ul>
+  <li><strong>Problem:</strong> A tool installed after Signal is never configured. A configured tool that stops producing is reported nowhere. Codex has produced no classified prompt since it was wired, and nothing said so.</li>
+  <li><strong>Who feels it:</strong> The user, who sees a tool "set up" and nothing in Atlas. Us, who learn a tool release broke capture only when a customer asks.</li>
+  <li><strong>Business value:</strong> One person can support many tools: the machine sets them up, the machine says which lane broke, the nightly run says which tool version broke it.</li>
+  <li><strong>Hypothesis:</strong> If integration state is one computed fact per tool and surface, shown in the pane, in doctor and in a fleet event, then a break is visible within a day on the machine and within a day across the fleet, and adding a tool costs one adapter plus one conformance scenario.</li>
+</ul>
+
+<h3>Goals</h3>
+<ul>
+  <li><strong>G1</strong> — A user sees every known integration, how it is wired, and whether it works, in the local UI.</li>
+  <li><strong>G2</strong> — A tool installed later is configured without a command, with a backup, and the pane says so.</li>
+  <li><strong>G3</strong> — A broken integration reaches us as an event with the tool version attached, and the user can send a redacted report with one click.</li>
+  <li><strong>G4</strong> — Each integration is proven nightly against the latest tool version on three OSes, with no provider account where the tool allows it.</li>
+</ul>
+
+<h3>Acceptance criteria</h3>
+<p>Binary, observable at a seam, each naming its own verification. These IDs are the contract the reviewer grades. Do not renumber them later.</p>
+<div class="wrap">
+<table class="ac">
+<thead><tr><th>ID</th><th>Criterion</th><th>Observable at</th><th>Verified by</th></tr></thead>
+<tbody>
+  <tr id="ac-1"><td class="mono">AC-1</td><td><span class="mono">GET /v1/integrations</span> returns one entry per known integration with <span class="mono">installed</span>, <span class="mono">configured</span>, <span class="mono">state</span> ∈ {not_installed, not_configured, restart_required, idle, working, broken, unsupported}, <span class="mono">tool_version</span>, and <span class="mono">surfaces[]</span> each with <span class="mono">kind</span> ∈ {hook, otel, watcher, extension}, <span class="mono">documented</span>, <span class="mono">last_seen</span>.</td><td>daemon route</td><td class="mono">go test ./internal/agent/daemon -run Integrations; curl -s :port/v1/integrations</td></tr>
+  <tr id="ac-2"><td class="mono">AC-2</td><td>The pane at <span class="mono">#/integrations</span> renders that list. A row in <span class="mono">not_configured</span> shows <strong>Set up</strong>; clicking it applies the tool's adapter with a backup and the row becomes <span class="mono">restart_required</span> with the restart notice.</td><td>rendered pane</td><td class="mono">ui/e2e/integrations.spec.ts (Playwright, 1280×800 and 400 wide)</td></tr>
+  <tr id="ac-3"><td class="mono">AC-3</td><td>A tool whose config dir appears after the daemon started is listed within 60 s. With <span class="mono">auto_setup_integrations</span> on (the default) it is configured with a backup and <span class="mono">integration.configured</span> is emitted; with it off, the row waits in <span class="mono">not_configured</span>.</td><td>route + client-event</td><td class="mono">go test ./internal/agent/daemon -run 'Detector'; HOME is a temp dir in the test</td></tr>
+  <tr id="ac-4"><td class="mono">AC-4</td><td><span class="mono">broken</span> is set only when one lane saw the tool in the window and another lane that should have did not. A configured tool with no activity on any lane is <span class="mono">idle</span>, never <span class="mono">broken</span>. A tool session that started before its config was written is <span class="mono">restart_required</span>, never <span class="mono">broken</span>.</td><td>state function</td><td class="mono">go test ./internal/agent/integrations -run 'State' (table-driven, every row of the decision table)</td></tr>
+  <tr id="ac-5"><td class="mono">AC-5</td><td>A transition into <span class="mono">broken</span> emits exactly one <span class="mono">integration.broken</span> client-event with <span class="mono">fields.source</span>, <span class="mono">fields.surface</span>, <span class="mono">fields.tool_version</span> and the window counters; leaving it emits <span class="mono">integration.recovered</span>. Both codes are listed in <span class="mono">docs/signal-client-events.md</span>.</td><td>client-events</td><td class="mono">go test ./internal/agent/integrations -run 'Emit'; grep -c 'integration\.' docs/signal-client-events.md == 4</td></tr>
+  <tr id="ac-6"><td class="mono">AC-6</td><td><strong>Report a problem</strong> on a row posts <span class="mono">integration.report</span> carrying doctor findings, agent/sidecar/tool versions, per-source counters and the last 200 log lines after the redaction gate, and writes the same bundle to <span class="mono">~/.keld/reports/</span>. A log seeded with a prompt string and a credential yields a bundle containing neither.</td><td>client-events + disk</td><td class="mono">go test ./internal/agent/clientevents -run 'Report'; ui/e2e/integrations.spec.ts</td></tr>
+  <tr id="ac-7"><td class="mono">AC-7</td><td><span class="mono">tool_version</span> is read from the newest transcript: Claude Code <span class="mono">version</span>, Codex <span class="mono">session_meta.cli_version</span>, Pi header <span class="mono">version</span>; absent reads as <span class="mono">""</span>, never a guess.</td><td>route field</td><td class="mono">go test ./internal/agent/integrations -run 'ToolVersion' on captured fixture lines</td></tr>
+  <tr id="ac-8"><td class="mono">AC-8</td><td><span class="mono">keld signal doctor</span> prints the same per-integration states as the route, from one function <span class="mono">integrations.Compute</span>. No second copy of the rule exists.</td><td>CLI output</td><td class="mono">go test ./internal/cli -run 'DoctorIntegrationsParity'; grep shows one implementation</td></tr>
+  <tr id="ac-9"><td class="mono">AC-9</td><td>Codex setup registers <span class="mono">UserPromptSubmit</span> and <span class="mono">Stop</span>, drops <span class="mono">PreToolUse</span>, and <span class="mono">keld __hook</span> accepts <span class="mono">turn_id</span> when <span class="mono">prompt_id</span> is absent. A captured Codex 0.153.4 payload yields a pointer <span class="mono">session#turn_id</span>.</td><td>hook + config</td><td class="mono">go test ./internal/hook ./internal/tools -run 'Codex'</td></tr>
+  <tr id="ac-10"><td class="mono">AC-10</td><td><span class="mono">make conformance TOOL=claude_code</span> runs Claude Code headless against <span class="mono">scripts/conformance/mockllm.py</span> with a fake key in an isolated config dir, and asserts five checkpoints: transcript written, pointer received, store rows present, telemetry forwarded, enrichment produced. Exit 0 locally and in the Linux container.</td><td>script exit code</td><td class="mono">make conformance TOOL=claude_code; .github/workflows/conformance.yml</td></tr>
+  <tr id="ac-11"><td class="mono">AC-11</td><td>The nightly matrix runs the installed-tool scenarios at <span class="mono">latest</span> on ubuntu (Docker Compose), macos-14 and windows-latest. A failing checkpoint opens or updates one GitHub issue titled <span class="mono">conformance: &lt;tool&gt; &lt;version&gt; &lt;os&gt; &lt;checkpoint&gt;</span>, deduplicated by title.</td><td>workflow + issue tracker</td><td class="mono">.github/workflows/conformance.yml; one forced-failure dispatch run</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Explicit exclusions</h3>
+<ul>
+  <li>The Codex and Pi readers. Codex has its own discovery; Pi is listed as <span class="mono">unsupported</span> until a reader exists. This page makes both visible, not working.</li>
+  <li>Antigravity, Cursor, and a browser extension. They appear as catalogue rows only, with their storage class named.</li>
+  <li>Any Atlas UI. Atlas already receives client-events; a fleet dashboard over <span class="mono">integration.*</span> is Atlas work.</li>
+  <li>Real-credential conformance runs. Optional, weekly, only where the mock path is unverified (section 8).</li>
+  <li>Auto-updating the tools themselves.</li>
+</ul>
+
+<h2 id="s2">2 · Proposed solution</h2>
+
+<h3>Prior art — what this builds on</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Existing thing</th><th>Path</th><th>Role here</th></tr></thead>
+<tbody>
+  <tr><td>Tool adapters: <span class="mono">Detect</span>, <span class="mono">Apply</span> with backup, <span class="mono">Remove</span></td><td class="mono">internal/tools/claude.go:35 · codex.go:35 · registry.go:8</td><td><span class="pill p-reuse">reuse</span> the detector calls exactly these</td></tr>
+  <tr><td>Setup flow: confirm, backup, manifest, restart notice</td><td class="mono">internal/cli/setup.go:165-224</td><td><span class="pill p-extend">extend</span> the same apply path, called from the daemon</td></tr>
+  <tr><td>Manifest of configured tools</td><td class="mono">internal/config/manifest.go:32</td><td><span class="pill p-reuse">reuse</span> "configured" is a manifest fact</td></tr>
+  <tr><td>Status: installed / not configured / configured per tool</td><td class="mono">internal/cli/status.go:85-96</td><td><span class="pill p-extend">extend</span> becomes a call to <span class="mono">integrations.Compute</span></td></tr>
+  <tr><td>Doctor states: telemetry, per-session telemetry, models, sidecar version, abandoned spool</td><td class="mono">internal/localagent/*.go</td><td><span class="pill p-reuse">reuse</span> the lane facts the state rule consumes</td></tr>
+  <tr><td>Teleproxy last-forward and per-session record</td><td class="mono">internal/agent/teleproxy (LastForwardOnDisk, SessionsOnDisk)</td><td><span class="pill p-extend">extend</span> last forward per SOURCE, not only global</td></tr>
+  <tr><td>Queue outcomes and pointer origin (hook / watcher)</td><td class="mono">internal/agent/queue · internal/spool (Source.Origin)</td><td><span class="pill p-extend">extend</span> a last-seen per source × origin</td></tr>
+  <tr><td>Client-events emitter, redaction gate, spool</td><td class="mono">internal/agent/clientevents · redact.go · docs/signal-client-events.md</td><td><span class="pill p-extend">extend</span> four new codes, one bundle payload</td></tr>
+  <tr><td>Local UI: hash-routed panes, <span class="mono">/v1/config</span>, <span class="mono">/v1/settings</span> with <span class="mono">restart_required</span></td><td class="mono">internal/agent/ui/app.js:182-528 · index.html:17</td><td><span class="pill p-extend">extend</span> one more pane in the same pattern</td></tr>
+  <tr><td>Service health banner and ladder</td><td class="mono">internal/agent/daemon/servicehealth_route.go:67</td><td><span class="pill p-reuse">reuse</span> the idle/degraded/stuck discipline, one level out</td></tr>
+  <tr><td>Isolated daemon over a corpus; e2e against dev Atlas</td><td class="mono">scripts/e2e-up.sh · scripts/ledger_e2e.sh</td><td><span class="pill p-extend">extend</span> the conformance harness is these plus a real tool</td></tr>
+  <tr><td>Installer smoke matrix</td><td class="mono">.github/workflows/installers.yml:78-90, 460-500</td><td><span class="pill p-extend">extend</span> same runners, a scheduled sibling workflow</td></tr>
+  <tr><td>Hook runner reading <span class="mono">prompt_id</span>, <span class="mono">transcript_path</span></td><td class="mono">internal/hook/hook.go:86-102</td><td><span class="pill p-extend">extend</span> <span class="mono">turn_id</span> as a second id key</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Reuse ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Level</th><th>Justification</th></tr></thead>
+<tbody>
+  <tr><td><span class="mono">internal/agent/integrations</span>: catalogue + <span class="mono">Compute</span></td><td><span class="pill p-new">new</span></td><td>The rule "idle vs working vs broken" exists nowhere. Doctor's states are per lane; this composes them per tool. One function, three callers (route, doctor, events).</td></tr>
+  <tr><td>Detector loop in the daemon</td><td><span class="pill p-extend">extend</span></td><td>Calls <span class="mono">tools.Select</span> and <span class="mono">Apply</span> unchanged. New only in WHEN they run.</td></tr>
+  <tr><td><span class="mono">/v1/integrations</span>, <span class="mono">/v1/integrations/{id}/setup</span>, <span class="mono">/v1/integrations/{id}/report</span></td><td><span class="pill p-extend">extend</span></td><td>Same mux, same loopback secret, same JSON conventions as <span class="mono">/v1/settings</span>.</td></tr>
+  <tr><td>Pane <span class="mono">#/integrations</span></td><td><span class="pill p-extend">extend</span></td><td>Fourth pane in an app that already has three and a health strip.</td></tr>
+  <tr><td>Codes <span class="mono">integration.configured / broken / recovered / report</span></td><td><span class="pill p-extend">extend</span></td><td>The catalogue and the redaction gate exist; a bundle is a <span class="mono">fields</span> object of primitives and strings.</td></tr>
+  <tr><td>Teleproxy: last forward per source</td><td><span class="pill p-extend">extend</span></td><td>Today one global instant; the state rule needs it per tool. Source comes from the OTLP resource's <span class="mono">service.name</span> (gap 3).</td></tr>
+  <tr><td><span class="mono">scripts/conformance/</span>: mock model, scenarios, checkpoints</td><td><span class="pill p-new">new</span></td><td>Nothing drives a real tool binary today; the e2e scripts generate transcripts. The mock server is 60 lines; the isolation is <span class="mono">e2e-up.sh</span>'s.</td></tr>
+  <tr><td><span class="mono">conformance.yml</span> nightly</td><td><span class="pill p-extend">extend</span></td><td>Same three runners as <span class="mono">installers.yml</span>; a schedule and an issue step.</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+  <li><strong>New patterns introduced:</strong> None. The state rule follows <span class="mono">servicehealth</span>'s ladder; the pane follows the three existing panes; the harness follows <span class="mono">e2e-up.sh</span>.</li>
+  <li><strong>Shared-decision helpers:</strong> <span class="mono">integrations.Compute</span> is the ONLY place the state is decided. The route, doctor, the pane, and the event emitter all call it. A second copy in JavaScript is a defect.</li>
+</ul>
+
+<h3>Technical design</h3>
+<ul>
+  <li><strong>Data:</strong> No store schema change. New file <span class="mono">~/.keld/state/integrations.json</span>: last-seen per source × surface, last emitted state per source. New setting <span class="mono">auto_setup_integrations</span> (default <span class="mono">true</span>) in <span class="mono">agent-config.json</span>. New dir <span class="mono">~/.keld/reports/</span>.</li>
+  <li><strong>Catalogue:</strong> one Go table: id, display name, config dir, surfaces with kind and documented flag, storage class (jsonl-tail / db-poll / rpc), support level (supported / unsupported). Claude Code, Codex, Gemini CLI, Cowork supported; Pi, Antigravity, Cursor unsupported rows.</li>
+  <li><strong>Lane facts:</strong> hook lane = last pointer with <span class="mono">Origin: hook</span> per source; watcher lane = last pointer with <span class="mono">Origin: watcher</span>; otel lane = teleproxy last forward per source; reader lane = store rows exist for the last N pointers of that source. Tool session start comes from the newest transcript mtime and its first timestamped line.</li>
+  <li><strong>API:</strong> <span class="mono">GET /v1/integrations</span>; <span class="mono">POST /v1/integrations/{id}/setup</span> → runs the adapter, returns <span class="mono">{backup, restart_required}</span>; <span class="mono">POST /v1/integrations/{id}/report</span> → returns <span class="mono">{report_path, event_queued}</span>. Loopback, existing secret.</li>
+  <li><strong>Read path:</strong> pane polls <span class="mono">/v1/integrations</span> every 10 s like the health dot; doctor calls <span class="mono">Compute</span> once.</li>
+  <li><strong>Conformance:</strong> per tool a scenario file: install command, config-dir env for isolation (<span class="mono">CLAUDE_CONFIG_DIR</span>, <span class="mono">CODEX_HOME</span>, Pi <span class="mono">--session</span>), headless command, mock-model env (<span class="mono">ANTHROPIC_BASE_URL</span>, <span class="mono">model_providers</span>, <span class="mono">registerProvider</span>), and the five checkpoints read from the isolated daemon's <span class="mono">/v1/integrations</span>, store and mock Atlas.</li>
+  <li><strong>Invariants respected:</strong> no text in any event or report (redaction gate, AC-6); the pane never triggers a model load; a tool config is edited only through the adapter with a backup; the daemon never edits a config while the manifest already records that tool.</li>
+</ul>
+
+<h3>System diagram</h3>
+<figure>
+<svg viewBox="0 0 880 420" role="img" aria-label="Three lanes. Top lane, the tools: Claude Code, Codex and Pi, each with a config directory and its surfaces. Middle lane, the daemon: a new detector polls the config directories every sixty seconds and runs the existing adapters with a backup; a new integrations package computes one state per tool from four lane facts, the hook pointers, the watcher pointers, the teleproxy's last forward per source, and the store's rows; the client-events emitter, changed, sends integration events and the report bundle. Bottom lane: the local UI gains an Integrations pane fed by new loopback routes, Atlas receives the events on the existing client-events route, and a new nightly conformance workflow drives each tool against a mock model and checks five checkpoints.">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+    <marker id="ah-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-good"/></marker>
+  </defs>
+  <line x1="20" y1="112" x2="860" y2="112" class="lane"/>
+  <line x1="20" y1="300" x2="860" y2="300" class="lane"/>
+  <text x="20" y="26" class="lanelbl">TOOLS ON THE MACHINE</text>
+  <text x="20" y="136" class="lanelbl">DAEMON</text>
+  <text x="20" y="324" class="lanelbl">LOCAL UI · ATLAS · CI</text>
+
+  <rect x="20" y="40" width="190" height="56" rx="4" class="b-plain"/>
+  <text x="115" y="61" text-anchor="middle" class="txt">Claude Code · ~/.claude</text>
+  <text x="115" y="78" text-anchor="middle" class="small">hook · OTEL · transcript</text>
+  <rect x="240" y="40" width="190" height="56" rx="4" class="b-enc"/>
+  <text x="335" y="61" text-anchor="middle" class="txt">Codex · ~/.codex</text>
+  <text x="335" y="78" text-anchor="middle" class="small">hooks → UserPromptSubmit, Stop · OTEL</text>
+  <rect x="460" y="40" width="190" height="56" rx="4" class="b-plain"/>
+  <text x="555" y="61" text-anchor="middle" class="txt">Pi · ~/.pi/agent</text>
+  <text x="555" y="78" text-anchor="middle" class="small">listed as unsupported until a reader exists</text>
+  <rect x="680" y="40" width="180" height="56" rx="4" class="b-plain"/>
+  <text x="770" y="61" text-anchor="middle" class="txt">pointers · OTLP</text>
+  <text x="770" y="78" text-anchor="middle" class="small">existing lanes, unchanged</text>
+
+  <path d="M115 96V150" class="arr" marker-end="url(#ah)"/>
+  <path d="M335 96V150" class="arr" marker-end="url(#ah)"/>
+  <path d="M555 96V150" class="arr" marker-end="url(#ah)"/>
+  <text x="122" y="128" class="small">config dir stat</text>
+  <path d="M770 96V150" class="arr" marker-end="url(#ah)"/>
+  <text x="777" y="128" class="small">hook · watcher · teleproxy</text>
+
+  <rect x="20" y="152" width="290" height="60" rx="4" class="b-new"/>
+  <text x="165" y="173" text-anchor="middle" class="txt">detector · every 60 s</text>
+  <text x="165" y="190" text-anchor="middle" class="small">tools.Select → Apply with backup · manifest</text>
+  <text x="165" y="204" text-anchor="middle" class="small">auto_setup_integrations, default on</text>
+
+  <rect x="340" y="152" width="300" height="60" rx="4" class="b-new"/>
+  <text x="490" y="173" text-anchor="middle" class="txt">integrations.Compute</text>
+  <text x="490" y="190" text-anchor="middle" class="small">catalogue × lane facts → one state per tool</text>
+  <text x="490" y="204" text-anchor="middle" class="small">idle ≠ broken · restart_required ≠ broken</text>
+
+  <rect x="670" y="152" width="190" height="60" rx="4" class="b-enc"/>
+  <text x="765" y="173" text-anchor="middle" class="txt">lane facts</text>
+  <text x="765" y="190" text-anchor="middle" class="small">last pointer per source × origin</text>
+  <text x="765" y="204" text-anchor="middle" class="small">teleproxy last forward PER SOURCE</text>
+  <path d="M670 182H640" class="arr" marker-end="url(#ah)"/>
+  <path d="M310 182H340" class="arr" marker-end="url(#ah)"/>
+  <text x="312" y="176" class="small">configured?</text>
+
+  <rect x="340" y="230" width="300" height="56" rx="4" class="b-enc"/>
+  <text x="490" y="251" text-anchor="middle" class="txt">clientevents</text>
+  <text x="490" y="268" text-anchor="middle" class="small">integration.configured · broken · recovered · report (bundle)</text>
+  <path d="M490 212V228" class="arr" marker-end="url(#ah)"/>
+  <text x="497" y="224" class="small">on transition</text>
+
+  <rect x="20" y="340" width="290" height="60" rx="4" class="b-new"/>
+  <text x="165" y="361" text-anchor="middle" class="txt">pane #/integrations</text>
+  <text x="165" y="378" text-anchor="middle" class="small">GET /v1/integrations · POST …/setup · POST …/report</text>
+  <text x="165" y="392" text-anchor="middle" class="small">doctor prints the same states</text>
+  <path d="M165 212V338" class="arr" marker-end="url(#ah)"/>
+  <text x="172" y="290" class="small">state · actions</text>
+
+  <rect x="340" y="340" width="220" height="60" rx="4" class="b-plain"/>
+  <text x="450" y="361" text-anchor="middle" class="txt">Atlas · client-events route</text>
+  <text x="450" y="378" text-anchor="middle" class="small">unchanged · fleet reads tool_version</text>
+  <text x="450" y="392" text-anchor="middle" class="small">on every broken event</text>
+  <path d="M450 286V338" class="arr-good" marker-end="url(#ah-good)"/>
+
+  <rect x="590" y="340" width="270" height="60" rx="4" class="b-new"/>
+  <text x="725" y="361" text-anchor="middle" class="txt">conformance.yml · nightly, 3 OSes</text>
+  <text x="725" y="378" text-anchor="middle" class="small">install tool@latest → mock model → 5 checkpoints</text>
+  <text x="725" y="392" text-anchor="middle" class="small">failure → one issue per tool · version · os · checkpoint</text>
+  <path d="M725 338V212" class="arr" marker-end="url(#ah)"/>
+  <text x="732" y="290" class="small">reads /v1/integrations</text>
+  <text x="732" y="304" class="small">of the isolated daemon</text>
+</svg>
+<figcaption>One function decides the state and three consumers read it. The detector only changes when the existing adapters run; the harness only adds a real tool binary in front of the existing isolated daemon. Nothing in the capture path itself changes.</figcaption>
+</figure>
+
+<h2 id="s3">3 · Alternatives considered</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Option</th><th>Approach</th><th>Rejected because</th></tr></thead>
+<tbody>
+  <tr><td class="mono">A</td><td>Doctor CLI only, no pane, no detector</td><td>Doctor already exists and was clean during 40 minutes of dead telemetry. Nobody runs it unprompted; a tool installed later stays unconfigured forever.</td></tr>
+  <tr><td class="mono">B</td><td>Fleet view in Atlas only</td><td>The facts live on the machine: config dirs, hook arrivals, tool versions. Atlas sees only what is forwarded, so it cannot tell "not configured" from "quiet". The events this page adds are what would feed that view later.</td></tr>
+  <tr><td class="mono">C</td><td>Conformance with real provider accounts</td><td>Secrets in CI, spend per run, and a run that fails when a provider is down rather than when we broke. The mock path is verified for Claude Code today; real-credential runs stay optional where the mock is unverified.</td></tr>
+  <tr><td class="mono">D</td><td>Prompt the user before configuring a newly installed tool</td><td>The installer already edits the same files with one consent and a backup. A prompt nobody sees is a tool that stays unconfigured. Kept as the off position of one toggle.</td></tr>
+  <tr><td class="mono">E</td><td>Own VMs per OS (Tart, UTM) instead of GitHub runners</td><td>The installer workflow already runs on macos-14 and windows-latest and installs tools there. VMs become necessary only when a tool cannot be installed on a runner (section 8).</td></tr>
+  <tr><td class="mono">F</td><td>Do nothing</td><td>Codex stays spend-only with no signal, Pi appears nowhere, and the next tool release is found by a customer.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Closest call:</strong> D. It costs one prompt. It lost on the measured pattern that a notice nobody is looking at is a notice that did not happen; the toggle keeps the choice available.</p>
+
+<h2 id="s4">4 · Behaviour &amp; test specification</h2>
+
+<h3>User flow</h3>
+<figure>
+<svg viewBox="0 0 880 560" role="img" aria-label="A decision chain for one tool. Is its config directory present? If not, the row reads not installed. Is it in the catalogue as supported? If not, unsupported, with the storage class named. Is it configured in the manifest? If not and auto-setup is on, the adapter runs with a backup and the row reads restart required with a notice; if auto-setup is off, the row shows a Set up button. If configured, did the newest tool session start before the config was written? Then restart required. Otherwise, was there any activity on any lane in the window? None means idle, in grey, never red. Activity on one lane but silence on a lane that should have seen it means broken, in red, with the lane named, one broken event to Atlas, and a Report a problem action. Every expected lane active means working, in green.">
+  <defs>
+    <marker id="f-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+    <marker id="f-ah-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-good"/></marker>
+    <marker id="f-ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="t-bad"/></marker>
+  </defs>
+  <rect x="300" y="16" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="43" text-anchor="middle" class="txt">config dir present?</text>
+  <path d="M580 38H660" class="arr" marker-end="url(#f-ah)"/>
+  <text x="620" y="30" text-anchor="middle" class="small">no</text>
+  <rect x="662" y="16" width="198" height="44" rx="4" class="b-wait"/>
+  <text x="761" y="43" text-anchor="middle" class="txt">not_installed</text>
+  <path d="M440 60V84" class="arr" marker-end="url(#f-ah)"/>
+  <text x="452" y="76" class="small">yes</text>
+
+  <rect x="300" y="86" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="113" text-anchor="middle" class="txt">supported in the catalogue?</text>
+  <path d="M580 108H660" class="arr" marker-end="url(#f-ah)"/>
+  <text x="620" y="100" text-anchor="middle" class="small">no</text>
+  <rect x="662" y="86" width="198" height="44" rx="4" class="b-wait"/>
+  <text x="761" y="106" text-anchor="middle" class="txt">unsupported</text>
+  <text x="761" y="122" text-anchor="middle" class="small">Pi today · storage class named</text>
+  <path d="M440 130V154" class="arr" marker-end="url(#f-ah)"/>
+  <text x="452" y="146" class="small">yes</text>
+
+  <rect x="300" y="156" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="183" text-anchor="middle" class="txt">configured in the manifest?</text>
+  <path d="M300 178H220" class="arr" marker-end="url(#f-ah)"/>
+  <text x="260" y="170" text-anchor="middle" class="small">no</text>
+  <rect x="20" y="156" width="198" height="44" rx="4" class="b-plain"/>
+  <text x="119" y="183" text-anchor="middle" class="txt">auto_setup on?</text>
+  <path d="M119 200V224" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="128" y="216" class="small">yes</text>
+  <rect x="20" y="226" width="198" height="44" rx="4" class="b-good"/>
+  <text x="119" y="246" text-anchor="middle" class="txt">Apply with backup</text>
+  <text x="119" y="262" text-anchor="middle" class="small">→ restart_required · integration.configured</text>
+  <path d="M20 178C0 178 0 300 20 300" class="arr" marker-end="url(#f-ah)"/>
+  <text x="26" y="290" class="small">no</text>
+  <rect x="20" y="296" width="198" height="44" rx="4" class="b-enc"/>
+  <text x="119" y="316" text-anchor="middle" class="txt">not_configured</text>
+  <text x="119" y="332" text-anchor="middle" class="small">pane shows Set up</text>
+  <path d="M440 200V224" class="arr" marker-end="url(#f-ah)"/>
+  <text x="452" y="216" class="small">yes</text>
+
+  <rect x="300" y="226" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="253" text-anchor="middle" class="txt">newest session older than the config?</text>
+  <path d="M580 248H660" class="arr" marker-end="url(#f-ah)"/>
+  <text x="620" y="240" text-anchor="middle" class="small">yes</text>
+  <rect x="662" y="226" width="198" height="44" rx="4" class="b-enc"/>
+  <text x="761" y="246" text-anchor="middle" class="txt">restart_required</text>
+  <text x="761" y="262" text-anchor="middle" class="small">never broken</text>
+  <path d="M440 270V294" class="arr" marker-end="url(#f-ah)"/>
+  <text x="452" y="286" class="small">no</text>
+
+  <rect x="300" y="296" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="323" text-anchor="middle" class="txt">any lane active in the window?</text>
+  <path d="M580 318H660" class="arr" marker-end="url(#f-ah)"/>
+  <text x="620" y="310" text-anchor="middle" class="small">no</text>
+  <rect x="662" y="296" width="198" height="44" rx="4" class="b-wait"/>
+  <text x="761" y="316" text-anchor="middle" class="txt">idle</text>
+  <text x="761" y="332" text-anchor="middle" class="small">grey · a quiet user is not a bug</text>
+  <path d="M440 340V364" class="arr" marker-end="url(#f-ah)"/>
+  <text x="452" y="356" class="small">yes</text>
+
+  <rect x="300" y="366" width="280" height="44" rx="4" class="b-plain"/>
+  <text x="440" y="393" text-anchor="middle" class="txt">every expected lane saw it?</text>
+  <path d="M440 410V434" class="arr-good" marker-end="url(#f-ah-good)"/>
+  <text x="452" y="426" class="small">yes</text>
+  <rect x="300" y="436" width="280" height="44" rx="4" class="b-good"/>
+  <text x="440" y="456" text-anchor="middle" class="txt">working</text>
+  <text x="440" y="472" text-anchor="middle" class="small">tool version shown · last seen per surface</text>
+  <path d="M580 388H660" class="arr-bad" marker-end="url(#f-ah-bad)"/>
+  <text x="620" y="380" text-anchor="middle" class="small">no</text>
+  <rect x="662" y="366" width="198" height="60" rx="4" class="b-bad"/>
+  <text x="761" y="386" text-anchor="middle" class="txt">broken · lane named</text>
+  <text x="761" y="402" text-anchor="middle" class="small">one integration.broken event</text>
+  <text x="761" y="418" text-anchor="middle" class="small">Report a problem → bundle, redacted</text>
+
+  <text x="20" y="530" class="small">Window: 24 h at first. "Expected lanes" come from the catalogue: Claude Code hook + otel + watcher; Codex hook + otel + watcher; Gemini otel + watcher.</text>
+  <text x="20" y="546" class="small">A lane fact is an instant on disk (last pointer per source and origin; last forward per source), so a restart does not erase it.</text>
+</svg>
+<figcaption>The rule has two refusals that matter more than the happy path: silence is idle, not broken, and a session older than its config is a restart notice, not a fault. Both are the discipline the rest of the daemon already runs on.</figcaption>
+</figure>
+
+<h3>Behavioural specs</h3>
+<pre class="gherkin"><span class="kw">Feature:</span> Signal Integrations
+
+  <span class="cov"># Covers: AC-1, AC-2, AC-8</span>
+  <span class="kw">Scenario:</span> A user sees what is wired and what is not
+    <span class="kw">Given</span> Claude Code is configured and Codex's config dir exists with no manifest entry
+    <span class="kw">When</span>  the pane loads #/integrations
+    <span class="kw">Then</span>  Claude Code shows its three surfaces with last-seen instants
+    <span class="kw">And</span>   Codex shows not_configured with a Set up action
+    <span class="kw">And</span>   keld signal doctor prints the same two states
+
+  <span class="cov"># Covers: AC-3</span>
+  <span class="kw">Scenario:</span> A tool installed after Signal is configured on its own
+    <span class="kw">Given</span> the daemon is running and ~/.codex does not exist
+    <span class="kw">When</span>  ~/.codex/config.toml appears
+    <span class="kw">Then</span>  within 60 s the row is listed
+    <span class="kw">And</span>   with auto_setup on the adapter runs, a backup is written, and integration.configured is emitted
+    <span class="kw">And</span>   the row reads restart_required until a new Codex session starts
+
+  <span class="cov"># Covers: AC-4, AC-5</span>
+  <span class="kw">Scenario:</span> Telemetry flows but no prompt ever arrives
+    <span class="kw">Given</span> Codex telemetry was forwarded in the last 24 h and no Codex pointer arrived
+    <span class="kw">When</span>  Compute runs
+    <span class="kw">Then</span>  the state is broken with surface hook named
+    <span class="kw">And</span>   exactly one integration.broken event carries source, surface and tool_version
+
+  <span class="cov"># Covers: AC-4 (refusal)</span>
+  <span class="kw">Scenario:</span> A quiet weekend
+    <span class="kw">Given</span> a configured tool with no pointer and no telemetry in 24 h
+    <span class="kw">When</span>  Compute runs
+    <span class="kw">Then</span>  the state is idle and no event is emitted
+
+  <span class="cov"># Covers: AC-6</span>
+  <span class="kw">Scenario:</span> The user reports a problem
+    <span class="kw">Given</span> the daemon log contains a planted prompt string and a planted API key
+    <span class="kw">When</span>  Report a problem is clicked on the Codex row
+    <span class="kw">Then</span>  a bundle is written under ~/.keld/reports/ and queued as integration.report
+    <span class="kw">And</span>   neither planted string appears in either copy
+
+  <span class="cov"># Covers: AC-9, AC-10</span>
+  <span class="kw">Scenario:</span> Conformance without an account
+    <span class="kw">Given</span> an isolated daemon and the mock model on loopback
+    <span class="kw">When</span>  make conformance TOOL=claude_code runs claude -p with a fake key
+    <span class="kw">Then</span>  the five checkpoints pass and the run exits 0
+    <span class="kw">And</span>   the Codex scenario yields a pointer session#turn_id from the UserPromptSubmit hook
+
+  <span class="cov"># Covers: AC-11</span>
+  <span class="kw">Scenario:</span> A tool release breaks capture overnight
+    <span class="kw">Given</span> the nightly matrix installs codex@latest and checkpoint "pointer received" fails on ubuntu
+    <span class="kw">When</span>  the workflow finishes
+    <span class="kw">Then</span>  one issue titled "conformance: codex &lt;version&gt; ubuntu pointer" exists, updated not duplicated</pre>
+
+<h3>Decision table</h3>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>configured</th><th>session newer than config</th><th>pointers · 24 h</th><th>telemetry · 24 h</th><th>rows for pointers</th><th>Expected</th><th>AC</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>no dir</td><td>—</td><td>—</td><td>—</td><td>—</td><td>not_installed</td><td class="mono"><a href="#ac-1">AC-1</a></td></tr>
+  <tr><td class="mono">2</td><td>no</td><td>—</td><td>—</td><td>—</td><td>—</td><td>not_configured, or auto-setup → restart_required</td><td class="mono"><a href="#ac-3">AC-3</a></td></tr>
+  <tr><td class="mono">3</td><td>yes</td><td>no</td><td>any</td><td>any</td><td>any</td><td>restart_required</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
+  <tr><td class="mono">4</td><td>yes</td><td>yes</td><td>0</td><td>0</td><td>—</td><td>idle</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
+  <tr><td class="mono">5</td><td>yes</td><td>yes</td><td>0</td><td>&gt;0</td><td>—</td><td>broken · hook</td><td class="mono"><a href="#ac-4">AC-4</a>, <a href="#ac-5">AC-5</a></td></tr>
+  <tr><td class="mono">6</td><td>yes</td><td>yes</td><td>&gt;0</td><td>0</td><td>yes</td><td>broken · otel</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
+  <tr><td class="mono">7</td><td>yes</td><td>yes</td><td>&gt;0</td><td>&gt;0</td><td>no</td><td>broken · reader</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
+  <tr><td class="mono">8</td><td>yes</td><td>yes</td><td>&gt;0</td><td>&gt;0</td><td>yes</td><td>working</td><td class="mono"><a href="#ac-1">AC-1</a></td></tr>
+  <tr><td class="mono">9</td><td>unsupported entry</td><td>—</td><td>—</td><td>—</td><td>—</td><td>unsupported, storage class shown</td><td class="mono"><a href="#ac-1">AC-1</a></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s5">5 · Integration, dependencies &amp; security surface</h2>
+
+<h3>System contacts</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>System</th><th>Direction</th><th>Change</th></tr></thead>
+<tbody>
+  <tr><td class="mono">~/.claude/settings.json · ~/.codex/config.toml · ~/.gemini/settings.json</td><td>write</td><td>Edited by the daemon's detector through the existing adapters, with a backup. Today only the CLI edits them.</td></tr>
+  <tr><td class="mono">~/.keld/state/integrations.json · ~/.keld/reports/</td><td>write</td><td>New files. Instants and states; report bundles after redaction.</td></tr>
+  <tr><td class="mono">POST /v1/signal/client-events</td><td>write</td><td>Four new codes. Route and envelope unchanged.</td></tr>
+  <tr><td class="mono">loopback /v1/integrations*</td><td>both</td><td>Three new routes behind the existing secret.</td></tr>
+  <tr><td class="mono">GitHub Actions · issues</td><td>write</td><td>A scheduled workflow that installs tools at latest and files issues.</td></tr>
+  <tr><td class="mono">npm · brew · pi.dev</td><td>read</td><td>Tool installs inside CI only. Nothing on a user machine fetches a tool.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Data privacy</h3>
+<ul>
+  <li><strong>New PII:</strong> None. The report bundle holds versions, counters, states and redacted log lines. The redaction gate that already strips paths and reduces errors runs on every field; AC-6 plants a prompt and a key and asserts absence.</li>
+  <li><strong>Cross-boundary data:</strong> tool version strings and lane states leave the machine in events. No text, span, offset or path.</li>
+  <li><strong>Auth surface:</strong> none new. The routes ride the loopback secret; the events ride the ingest token.</li>
+</ul>
+
+<h2 id="s6">6 · Success metrics</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>Metric</th><th>Baseline today</th><th>Target</th><th>Where read</th></tr></thead>
+<tbody>
+  <tr><td>Time from a lane breaking to a person knowing</td><td class="mono">never (Codex, since install)</td><td class="mono">≤ 24 h on the machine · ≤ 24 h in Atlas</td><td>pane · integration.broken events</td></tr>
+  <tr><td>Installed tools left unconfigured</td><td class="mono">every tool installed after Signal</td><td class="mono">0 with auto-setup on</td><td>/v1/integrations · integration.configured</td></tr>
+  <tr><td>Codex prompts entering enrichment</td><td class="mono">0</td><td class="mono">= human prompts</td><td>queue counters · pane</td></tr>
+  <tr><td>Tool releases caught before a customer report</td><td class="mono">0 of 3 Codex shape changes since April</td><td class="mono">every nightly failure filed within 24 h</td><td>conformance issues</td></tr>
+  <tr><td>Conformance pass rate at tool@latest</td><td class="mono">unknown</td><td class="mono">reported nightly, per tool and OS</td><td>workflow summary</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s7">7 · Risks, observability &amp; rollback</h2>
+
+<h3>Risk evaluation</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Class</th><th>Mitigation</th></tr></thead>
+<tbody>
+  <tr><td>The daemon edits a tool config the user did not expect</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>Same adapter, same backup, same manifest as the installer; the pane shows what changed and the backup path; one toggle turns it off.</td></tr>
+  <tr><td>False "broken" on a quiet or sleeping machine</td><td><span class="pill p-m">M</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-h">High</span></td><td>AC-4's refusals; instants on disk; the 24 h window starts wide and is tuned from fleet events.</td></tr>
+  <tr><td>A report bundle leaks text</td><td><span class="pill p-l">L</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-m">Med</span></td><td>Existing redaction gate on every field; AC-6's planted-string test; no transcript path is ever read for the bundle.</td></tr>
+  <tr><td>The mock model drifts from the real API and hides a break</td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-m">Med</span></td><td>The checkpoints test our capture, not the provider; an optional weekly real-credential run covers the tool-to-provider edge.</td></tr>
+  <tr><td>Codex hooks do not fire under <span class="mono">codex exec</span></td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>Docs are silent. The Codex scenario checks the watcher lane until verified; the hook lane is a second checkpoint added when it is.</td></tr>
+  <tr><td>A runner cannot install a tool (Windows Pi, macOS Docker)</td><td><span class="pill p-m">M</span></td><td><span class="pill p-l">L</span></td><td><span class="pill p-l">Low</span></td><td>Scenario marked skipped with a reason, visible in the summary; VMs only when a skip blocks a supported tool.</td></tr>
+  <tr><td>Two copies of the state rule (Go and JavaScript) drift</td><td><span class="pill p-l">L</span></td><td><span class="pill p-h">H</span></td><td><span class="pill p-m">Med</span></td><td>The pane renders server states verbatim; AC-8 pins doctor and route to one function.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Destructive change ledger</h3>
+<div class="wrap">
+<table>
+<thead><tr><th>Change</th><th>Reversible?</th><th>Blast radius</th><th>Guard</th></tr></thead>
+<tbody>
+  <tr><td>Codex hook set: <span class="mono">PreToolUse</span> removed, <span class="mono">UserPromptSubmit</span> + <span class="mono">Stop</span> added, on next setup or auto-setup</td><td>yes (backup)</td><td>every Codex machine, at its next setup</td><td>AC-9; adapter tests; backup file</td></tr>
+  <tr><td>New default <span class="mono">auto_setup_integrations = true</span>: the daemon edits tool configs without a prompt</td><td>yes (toggle)</td><td>machines where a tool is installed after Signal</td><td>backup + manifest + pane notice + integration.configured</td></tr>
+  <tr><td>Four new client-event codes</td><td>additive</td><td>Atlas consumers ignore unknown codes today</td><td>doc catalogue updated in the same commit</td></tr>
+  <tr><td>Doctor output gains per-integration lines</td><td>yes</td><td>anyone parsing doctor text</td><td>none needed; doctor has no machine consumer</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Observability</h3>
+<ul>
+  <li><strong>Reused signals:</strong> queue Accepted/Duplicate counters, teleproxy last-forward record, doctor states, <span class="mono">/metrics</span>, the client-events spool and its <span class="mono">spool.depth</span> gauge.</li>
+  <li><strong>New signals:</strong> <span class="mono">integration.configured</span>, <span class="mono">integration.broken</span>, <span class="mono">integration.recovered</span>, <span class="mono">integration.report</span>; the nightly workflow summary and its issues.</li>
+</ul>
+
+<h3>Rollback plan</h3>
+<ul>
+  <li><strong>Flag:</strong> <span class="mono">auto_setup_integrations</span> (local, default on) stops the detector's writes. The pane and route are read-only without it.</li>
+  <li><strong>Steps:</strong> turn the flag off; restore any tool config from its backup path shown in the pane; the events already sent are inert; the workflow is disabled by removing its schedule.</li>
+</ul>
+
+<h2 id="s8">8 · Open gaps &amp; technical debt</h2>
+<div class="wrap">
+<table class="tests">
+<thead><tr><th>#</th><th>Unknown or debt</th><th>Blocks?</th><th>Needs</th></tr></thead>
+<tbody>
+  <tr><td class="mono">1</td><td>Whether Codex hooks fire under <span class="mono">codex exec</span>. The docs do not say.</td><td>no</td><td>one run with <span class="mono">CODEX_HOME</span> isolated; a checkpoint added either way</td></tr>
+  <tr><td class="mono">2</td><td>Mock-model path for Codex (<span class="mono">model_providers</span> + Responses API), Pi (<span class="mono">registerProvider</span>) and Gemini. Verified for Claude Code only.</td><td>no</td><td>three short spikes; Gemini may need a real key</td></tr>
+  <tr><td class="mono">3</td><td>Telling Codex's OTLP from Claude Code's in the proxy. The resource's <span class="mono">service.name</span> is the candidate.</td><td><strong>yes</strong> for row 6 of the decision table</td><td>read one captured payload per tool; fall back to "otel: unknown source" if absent</td></tr>
+  <tr><td class="mono">4</td><td>Report bundle size against the client-events batch path. 200 redacted log lines may exceed a batch.</td><td>no</td><td>measure; cap lines or split the bundle</td></tr>
+  <tr><td class="mono">5</td><td>Prompt or auto-configure. This page recommends auto with a toggle; the installer consent is the argument.</td><td>no</td><td>decision from Gabriel</td></tr>
+  <tr><td class="mono">6</td><td>Pi, Antigravity and Cursor rows show storage class only. Pi's reader is the next discovery; the others wait for demand.</td><td>no</td><td>nothing, deferred</td></tr>
+  <tr><td class="mono">7</td><td>Cowork's lanes: no hook can reach the host, so its expected set is watcher only. Its VM builds hide transcripts entirely.</td><td>no</td><td>catalogue entry says so; the existing coworkHidden advisory stays</td></tr>
+  <tr><td class="mono">8</td><td>An Atlas fleet view over <span class="mono">integration.*</span>: which tool versions break on how many machines.</td><td>no</td><td>Atlas work, after the events flow</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s9">9 · Review log</h2>
+<p class="lede">Filled by the reviewer agent in phase 2. The criteria above do not move to match the code — a wrong criterion is recorded as <span class="mono">MISSED</span>, with the reason.</p>
+<div class="note"><strong>Not yet reviewed.</strong> Implementation has not been graded against these criteria.</div>
+
+<section class="qa">
+<h2 id="objections">Objections</h2>
+<dl>
+  <dt>Doctor already reports problems. Why a pane?</dt>
+  <dd>Doctor is correct and unread. It said "No problems found" through 40 minutes of dead telemetry because every fact it could reach was fine, and nobody ran it anyway. The pane is open when the user looks at Signal, and the detector acts without either.</dd>
+  <dt>Editing a user's tool settings from a background service is a step too far.</dt>
+  <dd>It is the same edit the installer makes, with the same backup, after the same consent. The difference is timing. The toggle exists for anyone who wants the prompt back, and the pane shows the backup path for every edit.</dd>
+  <dt>Testing against a fake model proves nothing about the real provider.</dt>
+  <dd>True, and that is not what it tests. It tests that the tool at its latest version still writes the files, fires the hooks and emits the telemetry our capture depends on. That is the part that broke three times this year. Provider behaviour is the tool's problem, and an optional weekly real-credential run covers it where it matters.</dd>
+  <dt>This is a lot of surface for a one-person team.</dt>
+  <dd>It is the surface that lets one person stay one person. Every piece reuses something that exists: adapters, manifest, doctor states, client-events, the isolated daemon, the CI runners. The new code is one state function, one pane, one mock server and one workflow.</dd>
+  <dt>Why not fix Codex first and do this later?</dt>
+  <dd>Fixing Codex without this repeats the failure: nothing would say when the next release breaks it. AC-9 is in this page precisely so the pane has a second working tool to show, and so the Codex scenario in the matrix guards the fix.</dd>
+  <dt>Twenty-four hours is arbitrary.</dt>
+  <dd>Yes, and it is labelled as a starting guess. The right window depends on how quiet real machines get, which the fleet events will show within a week. Idle-is-not-broken keeps a wrong window from producing false alarms while it is tuned.</dd>
+</dl>
+</section>
+
+</main>
