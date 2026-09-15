@@ -445,24 +445,26 @@
     return nil;
 }
 
+// klog writes to the unified log, which is the ONLY way to see inside this
+// process: the pane runs in InstallerRemotePluginService, out of process, with
+// no console and no stderr anyone will ever read. Two bugs here (the fatal
+// NSTask property write, and focus going to a hidden field) were each diagnosed
+// by other means because this did not exist. Read it with:
+//   log show --last 10m --predicate 'process == "InstallerRemotePluginService"'
+static void klog(NSString *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    NSString *m = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    NSLog(@"keld-pane: %@", m);
+}
+
 #pragma mark - Pane lifecycle
 
 - (void)didEnterPane:(InstallerSectionDirection)dir {
     (void)[self contentView];
-    // Re-assert focus explicitly as well as through -initialKeyView. The two
-    // agree, but they are applied at different moments: initialKeyView can be
-    // consulted before this view is in a window, where makeFirstResponder: is a
-    // no-op. Deferred to the next turn of the run loop so it lands AFTER
-    // Installer's own focus assignment for this transition rather than before
-    // it.
-    if (_approvalWeb && !_approvalWeb.hidden) {
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) s = weakSelf; if (!s) return;
-            if (s->_approvalWeb.hidden) return;
-            [s->_approvalWeb.window makeFirstResponder:s->_approvalWeb];
-        });
-    }
+    klog(@"didEnterPane dir=%ld paired=%d signInStarted=%d web=%@ hidden=%d url=%@",
+         (long)dir, (int)_paired, (int)_signInStarted,
+         _approvalWeb ? @"yes" : @"no", (int)_approvalWeb.hidden, _approvalURL ?: @"(none)");
     // ⚠️ THE INSTALL IS ALL-OR-NOTHING. Continue is enabled by exactly one
     // thing — a VERIFIED connection to Atlas, either a setup code it accepted or
     // `whoami --verify` confirming the stored credential still works. There is
@@ -478,6 +480,37 @@
     if (!_sidecarDownloadStarted) {
         _sidecarDownloadStarted = YES;
         [self startSidecarDownload];
+    }
+
+    // ⚠️ THE APPROVAL PAGE IS REBUILT ON RE-ENTRY RATHER THAN REUSED. Coming
+    // back to this pane left the embedded page's fields unable to receive a
+    // keystroke. Two mechanisms were ruled out by measurement rather than
+    // argument: a hidden control CAN take first responder (focustest.m), which
+    // was real and is fixed, and was not this; and plain AppKit re-parenting —
+    // removing the container from the window and re-adding it, which is what
+    // Back-then-Continue does — leaves a WKWebView fully typeable
+    // (reparent.m: "VERDICT: typing after re-parent WORKS").
+    //
+    // What neither harness can reproduce is this pane's actual host: the plugin
+    // runs in InstallerRemotePluginService, and the page is therefore a remote
+    // view inside a remote view. Rather than guess at that boundary a third
+    // time, the view is discarded and rebuilt — which is correct whichever half
+    // is at fault, because a brand-new WKWebView has no stale responder link and
+    // no suspended content process.
+    //
+    // The cost is one reload: anything half-typed into the form is lost. That is
+    // strictly better than a page that cannot be typed into at all, and the
+    // device code survives (the login child keeps polling across the Back), so
+    // the flow itself is not restarted.
+    // Runs LAST, and only on a real re-entry: on first entry there is no page
+    // yet, and an early return here would skip the identity check and the
+    // sidecar download above.
+    if (dir == InstallerDirectionForward && _approvalWeb && !_approvalWeb.hidden
+        && _approvalURL.length > 0) {
+        klog(@"rebuilding approval web view for re-entry");
+        NSString *url = _approvalURL;
+        [self discardApprovalWebView];
+        [self showApprovalPage:url];
     }
 }
 
@@ -913,6 +946,8 @@
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    klog(@"approval page loaded; firstResponder=%@",
+         _root.window.firstResponder.className ?: @"(none)");
     [self stopApprovalBar];
     // NOW there is a form to sign in to.
     _codeStatus.stringValue = @"Sign in to connect this device.";
@@ -960,9 +995,34 @@
     [self approvalLoadFailed:error];
 }
 
+// A terminated web content process renders as a page that is visibly THERE and
+// completely inert — the exact shape of "the fields are disabled". It is worth
+// naming in the log, and worth recovering from, because the recovery is the same
+// rebuild re-entry performs.
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    klog(@"web content process TERMINATED; rebuilding");
+    NSString *url = _approvalURL;
+    [self discardApprovalWebView];
+    if (url.length > 0) [self showApprovalPage:url];
+}
+
 - (void)webView:(WKWebView *)webView
         didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     [self approvalLoadFailed:error];
+}
+
+// discardApprovalWebView tears the page down completely: out of the layout, out
+// of the view hierarchy, and off the delegate, so nothing retained points at it.
+// showApprovalPage: builds a fresh one on the next call.
+- (void)discardApprovalWebView {
+    if (!_approvalWeb) return;
+    NSMutableArray *rows = [_root.rows mutableCopy];
+    [rows removeObject:_approvalWeb];
+    _root.rows = rows;
+    [_approvalWeb stopLoading];
+    _approvalWeb.navigationDelegate = nil;
+    [_approvalWeb removeFromSuperview];
+    _approvalWeb = nil;
 }
 
 - (void)hideApprovalPage {
