@@ -26,9 +26,67 @@ var (
 	pGetClientRect   = user32.NewProc("GetClientRect")
 	pIsWindow        = user32.NewProc("IsWindow")
 	pMoveWindow      = user32.NewProc("MoveWindow")
+	pDefWindowProcW  = user32.NewProc("DefWindowProcW")
+	pRegisterClassEx = user32.NewProc("RegisterClassExW")
 	pGetModuleHandle = kernel32.NewProc("GetModuleHandleW")
 	pGetCurrentThrd  = kernel32.NewProc("GetCurrentThreadId")
+
+	gdi32             = syscall.NewLazyDLL("gdi32.dll")
+	pCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
 )
+
+// borderColor is the dark gray drawn around the embedded page, as a COLORREF
+// (0x00BBGGRR — Windows orders the bytes blue-green-red, not red-green-blue).
+const borderColor = 0x00595959
+
+type wndClassExW struct {
+	cbSize        uint32
+	style         uint32
+	lpfnWndProc   uintptr
+	cbClsExtra    int32
+	cbWndExtra    int32
+	hInstance     uintptr
+	hIcon         uintptr
+	hCursor       uintptr
+	hbrBackground uintptr
+	lpszMenuName  *uint16
+	lpszClassName *uint16
+	hIconSm       uintptr
+}
+
+// registerBorderClass makes a window class whose background is the border
+// colour, and returns its name — or "" when registration fails, in which case
+// the caller falls back to an unbordered STATIC.
+//
+// ⚠️ **THE BORDER HAS TO BE A WINDOW WE OWN.** The first attempt drew it by
+// insetting the webview and letting Inno's TPanel colour show through the ring,
+// which puts the result at the mercy of the wizard's theming: a themed TPanel
+// paints its parent's background and ignores Color entirely, so the border
+// silently does not appear and nothing says why. A class background brush is
+// painted by this process for a window this process created, so no theme, no
+// parent and no Inno version can suppress it.
+func registerBorderClass(hinst uintptr) *uint16 {
+	name, err := syscall.UTF16PtrFromString("KeldWizardBorder")
+	if err != nil {
+		return nil
+	}
+	brush, _, _ := pCreateSolidBrush.Call(borderColor)
+	if brush == 0 {
+		return nil
+	}
+	wc := wndClassExW{
+		cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
+		lpfnWndProc:   pDefWindowProcW.Addr(),
+		hInstance:     hinst,
+		hbrBackground: brush,
+		lpszClassName: name,
+	}
+	// A duplicate registration fails harmlessly — this process registers once.
+	if atom, _, _ := pRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc))); atom == 0 {
+		return nil
+	}
+	return name
+}
 
 const (
 	wsChild   = 0x40000000
@@ -84,27 +142,52 @@ func panel(o options) int {
 	}
 
 	pw, ph := clientSize(o.Panel)
-	// The border is the host panel showing through: we cannot paint on a window
-	// another process owns, so the page sets the panel's colour and we sit inside
-	// it by o.Inset pixels.
 	inset := o.Inset
 	if inset < 0 {
 		inset = 0
 	}
 	hinst, _, _ := pGetModuleHandle.Call(0)
-	cls, _ := syscall.UTF16PtrFromString("STATIC")
 	empty, _ := syscall.UTF16PtrFromString("")
+
+	// TWO windows, not one. The OUTER fills the host panel and its only job is to
+	// be the border — its class background brush is the border colour, painted by
+	// this process. The INNER holds the webview, inset by `inset` pixels, so what
+	// shows around it is the outer's background.
+	//
+	// Falling back to STATIC with inset 0 when the class cannot be registered is
+	// deliberate: an unbordered page is a cosmetic loss, and refusing to sign
+	// anyone in over a border would not be.
+	outerCls := registerBorderClass(hinst)
+	if outerCls == nil {
+		outerCls, _ = syscall.UTF16PtrFromString("STATIC")
+		inset = 0
+	}
+	outer, _, err := pCreateWindowExW.Call(
+		0,
+		uintptr(unsafe.Pointer(outerCls)),
+		uintptr(unsafe.Pointer(empty)),
+		wsChild|wsVisible,
+		0, 0, uintptr(pw), uintptr(ph),
+		o.Panel, 0, hinst, 0,
+	)
+	if outer == 0 {
+		fmt.Fprintln(os.Stderr, "keld-wizard-host: CreateWindowExW(outer):", err)
+		return 2
+	}
+	defer pDestroyWindow.Call(outer)
+
+	innerCls, _ := syscall.UTF16PtrFromString("STATIC")
 	child, _, err := pCreateWindowExW.Call(
 		0,
-		uintptr(unsafe.Pointer(cls)),
+		uintptr(unsafe.Pointer(innerCls)),
 		uintptr(unsafe.Pointer(empty)),
 		wsChild|wsVisible,
 		uintptr(inset), uintptr(inset),
 		uintptr(int(pw)-2*inset), uintptr(int(ph)-2*inset),
-		o.Panel, 0, hinst, 0,
+		outer, 0, hinst, 0,
 	)
 	if child == 0 {
-		fmt.Fprintln(os.Stderr, "keld-wizard-host: CreateWindowExW:", err)
+		fmt.Fprintln(os.Stderr, "keld-wizard-host: CreateWindowExW(inner):", err)
 		return 2
 	}
 	defer pDestroyWindow.Call(child)
@@ -150,6 +233,7 @@ func panel(o options) int {
 			w, h := clientSize(o.Panel)
 			if w != last[0] || h != last[1] {
 				last = [2]int32{w, h}
+				pMoveWindow.Call(outer, 0, 0, uintptr(w), uintptr(h), 1)
 				pMoveWindow.Call(child, uintptr(inset), uintptr(inset),
 					uintptr(int(w)-2*inset), uintptr(int(h)-2*inset), 1)
 				chromium.Resize()
