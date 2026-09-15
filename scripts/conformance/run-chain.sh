@@ -80,6 +80,7 @@ tool_env "$TOOL"
 # The tool runs before Signal exists. No checkpoints: there is no daemon to have
 # received anything, and asserting one here would be asserting nothing.
 step_begin "before-signal"
+tool_materialize "$TOOL"
 tool_prompt "$TOOL" "before-signal"
 [ -d "$(tool_transcript_root "$TOOL")" ] \
   || fail "the tool wrote no transcript root at $(tool_transcript_root "$TOOL")"

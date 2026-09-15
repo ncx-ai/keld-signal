@@ -96,6 +96,18 @@ isolate_init() {
   fi
   [ -n "$SIDECAR_KIND" ] || fail "no analysis sidecar: run 'make sidecar' for the venv, install one, or set KELD_CONFORM_PYTHON"
   say "sidecar: $SIDECAR_KIND"
+  if [ -n "${FROZEN_SIDECAR:-}" ]; then
+    # ⚠️ A frozen sidecar is a RELEASED artifact and this worktree is not. Any
+    # lane whose sidecar half is new here — the Codex reader is the live
+    # example, and `store_rows` is the checkpoint that reads it — is being
+    # asked of code that predates the change, so a failure means "that release
+    # cannot do this yet", not "this branch is broken". Saying which one ran is
+    # the whole lesson of the three-week sidecar skew; saying it only in
+    # passing is how that outage stayed invisible.
+    say "⚠️  that sidecar is a RELEASE, not this worktree. A checkpoint that depends"
+    say "    on a sidecar change made here CANNOT pass on it. Point the run at the"
+    say "    worktree with KELD_CONFORM_PYTHON=<python with sidecar/requirements.txt>."
+  fi
 
   rm -rf "$ISO_HOME" "$ATLAS_STATE" "$WORK/state.json"
   mkdir -p "$ISO_HOME/state" "$ATLAS_STATE"
