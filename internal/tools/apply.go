@@ -1,6 +1,10 @@
 package tools
 
-import "os"
+import (
+	"os"
+
+	"github.com/ncx-ai/keld-signal/internal/config"
+)
 
 // ReadConfig reads an adapter's config file, returning nil when it is absent —
 // the shape every Adapter method takes for `currentText`. An unreadable file is
@@ -46,4 +50,55 @@ func ConfiguredAt(a Adapter, path string, managed map[string]any) bool {
 		current = &s
 	}
 	return a.Status(current, managed).Configured
+}
+
+// CommitPlan writes one planned config change to disk: the pristine backup
+// first, then the config atomically, then the adapter's secondary artifact
+// (Gemini's ~/.gemini/.env).
+//
+// ⚠️ IT IS THE ONE WRITE PATH, and that is why it was extracted rather than
+// reimplemented. `keld signal setup` and the daemon's detector now edit tool
+// configs through the same three steps in the same order; a second path would
+// be a second chance to forget the backup, and the backup is what makes
+// `keld signal uninstall` able to put a machine back.
+//
+// It is the caller's job to have passed the dry-run / confirm gate first: this
+// function writes.
+func CommitPlan(a Adapter, plan Plan) (backup string, err error) {
+	backup, err = config.BackupConfig(plan.ConfigPath, a.Name())
+	if err != nil {
+		return "", err
+	}
+	if err := config.WriteAtomic(plan.ConfigPath, plan.AfterText, false); err != nil {
+		return "", err
+	}
+	if err := WriteExtraFile(plan.ExtraFile); err != nil {
+		return "", err
+	}
+	return backup, nil
+}
+
+// WriteExtraFile writes (or deletes) an adapter's secondary artifact. A nil ef
+// is a no-op. Callers must only reach this from a branch that has already
+// passed the same gate guarding the primary config write, so the extra file is
+// never touched during a preview or a declined confirmation.
+func WriteExtraFile(ef *ExtraFile) error {
+	if ef == nil {
+		return nil
+	}
+	if ef.Delete {
+		if err := os.Remove(ef.Path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := config.WriteAtomic(ef.Path, ef.AfterText, false); err != nil {
+		return err
+	}
+	if ef.Mode != 0 {
+		if err := os.Chmod(ef.Path, ef.Mode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
