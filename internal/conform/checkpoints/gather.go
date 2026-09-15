@@ -40,7 +40,7 @@ type Options struct {
 // Gather reads every fact and Check evaluates them; a caller usually wants Check.
 func Gather(o Options) Facts {
 	f := Facts{AtlasCounts: map[string]int{}, Errors: map[string]string{}}
-	gatherTranscripts(&f, o.TranscriptRoot, o.Since)
+	gatherTranscripts(&f, o.TranscriptRoot, o.Tool, o.Since)
 	gatherStore(&f, o.StorePath, f.PromptIDs)
 	gatherAtlas(&f, o.AtlasURL, o.AtlasState)
 	if len(f.Errors) == 0 {
@@ -70,11 +70,17 @@ func (f *Facts) fail(checkpoint string, format string, args ...any) {
 // gatherTranscripts walks the tool's transcript root for `*.jsonl` written at or
 // after `since` and reads the human-turn ids out of them.
 //
-// ⚠️ The prompt id is read by DECODING each line for a top-level `promptId`,
-// never by pattern-matching the first line: Claude Code opens a transcript with
-// untimestamped `queue-operation` / `custom-title` bookkeeping records that
-// carry no id at all — the same trap `capture.scan` documents.
-func gatherTranscripts(f *Facts, root string, since ...time.Time) {
+// ⚠️ The prompt id is read by DECODING each line, never by pattern-matching the
+// first one: Claude Code opens a transcript with untimestamped
+// `queue-operation` / `custom-title` bookkeeping records that carry no id at
+// all — the same trap `capture.scan` documents.
+//
+// ⚠️ **Which id to read depends on the TOOL, and guessing costs a silent
+// pass.** A Codex rollout carries no `promptId` and no `"type":"user"` line, so
+// the Claude reader finds nothing in one — and nothing is not loud:
+// `gatherStore` returns early with "nothing to look up" and `pointer` reports
+// "no enrichment matched". A real break would look identical.
+func gatherTranscripts(f *Facts, root, tool string, since ...time.Time) {
 	if root == "" {
 		f.fail(Transcript, "no transcript root given")
 		return
@@ -109,7 +115,7 @@ func gatherTranscripts(f *Facts, root string, since ...time.Time) {
 			rel = filepath.Base(path)
 		}
 		f.Transcripts = append(f.Transcripts, rel)
-		for _, id := range promptIDsIn(path) {
+		for _, id := range promptIDsIn(path, tool) {
 			if !seen[id] {
 				seen[id] = true
 				f.PromptIDs = append(f.PromptIDs, id)
@@ -119,14 +125,20 @@ func gatherTranscripts(f *Facts, root string, since ...time.Time) {
 	})
 }
 
-func promptIDsIn(path string) []string {
+// promptIDsIn reads the human-turn ids out of one transcript, in the shape the
+// tool writes them.
+func promptIDsIn(path, tool string) []string {
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer fh.Close()
 	sc := bufio.NewScanner(fh)
-	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
+	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
+
+	if tool == "codex" {
+		return codexPromptIDs(sc)
+	}
 	var out []string
 	for sc.Scan() {
 		var rec struct {
@@ -141,6 +153,90 @@ func promptIDsIn(path string) []string {
 		// keeps this the same predicate `watch/filter.go` applies.
 		if rec.Type == "user" && rec.PromptID != "" {
 			out = append(out, rec.PromptID)
+		}
+	}
+	return out
+}
+
+// codexPromptIDs reads `<session_meta.id>#<turn_id>` per human turn — the same
+// identity `watch/codex.go` synthesizes and `readers/codex.py` indexes, which
+// is what lets one id join a transcript, a pointer and a store row.
+//
+// Both human-turn shapes are accepted because Codex writes two: `user_message`
+// (0.125, 0.153.4) and `item_completed` with `item.type == "UserMessage"`
+// (0.148–0.151, which writes ONLY this one). A turn with neither its own
+// `turn_id` nor a preceding `turn_context` is named by its own instant, exactly
+// as the watcher names it — a prompt with an awkward id is still a prompt, and
+// the two halves must agree on the awkward one too.
+func codexPromptIDs(sc *bufio.Scanner) []string {
+	var session, turn string
+	var out []string
+	for sc.Scan() {
+		var ln struct {
+			Timestamp string          `json:"timestamp"`
+			Type      string          `json:"type"`
+			Payload   json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &ln); err != nil {
+			continue
+		}
+		switch ln.Type {
+		case "session_meta":
+			var p struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(ln.Payload, &p) == nil && p.ID != "" {
+				session = p.ID
+			}
+		case "turn_context":
+			var p struct {
+				TurnID string `json:"turn_id"`
+			}
+			if json.Unmarshal(ln.Payload, &p) == nil {
+				turn = p.TurnID
+			}
+		case "event_msg":
+			var p struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+				TurnID  string `json:"turn_id"`
+				Item    *struct {
+					Type    string `json:"type"`
+					Content []struct {
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"item"`
+			}
+			if json.Unmarshal(ln.Payload, &p) != nil {
+				continue
+			}
+			human := false
+			switch p.Type {
+			case "user_message":
+				human = p.Message != ""
+			case "item_completed":
+				if p.Item != nil && p.Item.Type == "UserMessage" {
+					for _, c := range p.Item.Content {
+						if c.Text != "" {
+							human = true
+						}
+					}
+				}
+			}
+			if !human || session == "" {
+				continue
+			}
+			key := p.TurnID
+			if key == "" {
+				key = turn
+			}
+			if key == "" {
+				key = ln.Timestamp
+			}
+			if key == "" {
+				continue
+			}
+			out = append(out, session+"#"+key)
 		}
 	}
 	return out

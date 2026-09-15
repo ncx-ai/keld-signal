@@ -240,23 +240,40 @@ pkg-plugin-check: ## macOS-only: compile + sign + verify the Installer.app wizar
 	@echo "pkg-plugin-check: OK"
 
 # --- conformance harness -----------------------------------------------------
-# Drive a REAL tool against a mock model and a mock Atlas inside an isolated
+# Drive REAL tools against a mock model and a mock Atlas inside an isolated
 # HOME, and assert the five checkpoints (AC-10). Nothing here reaches the
-# network, touches the developer's ~/.keld or ~/.claude, or registers a service.
+# network, touches the developer's ~/.keld, ~/.claude or ~/.codex, or registers
+# a service.
 #
-#   make conformance TOOL=claude_code [CHAIN=A] [SEED=42] [WORK=/tmp/xyz]
+#   make conformance TOOL=all                    both tools, halves split by seed
+#   make conformance TOOL=claude_code            one tool (it lands in the before half)
+#   make conformance TOOL=all CHAIN=B            the upgrade chain
+#   make conformance TOOL=all SEED=42 WORK=/tmp/xyz PREVIOUS=dir:/path/to/release
 #
-# The tool is used AS INSTALLED on this machine, so a local run proves this
-# machine's version; the container and VM legs (task A.4) set
-# KELD_CONFORM_INSTALL=1 to npm-install it at @latest instead.
+# TOOL=all splits the installable tools into a `before` half (installed and used
+# before Signal) and an `after` half (installed after it, so the daemon's
+# detector configures them), seeded by SEED — else $GITHUB_RUN_ID, else the
+# epoch. The seed is the first line of output and rides every failure line.
+#
+# CHAIN=B installs the PREVIOUS release first and upgrades onto it: configs
+# preserved, sidecar replaced, no version skew. PREVIOUS is `installed` (the
+# release on this machine, the default) or `dir:<path>` (a downloaded release —
+# the seam CI uses).
+#
+# The tools are used AS INSTALLED on this machine, so a local run proves this
+# machine's versions; the container and VM legs (task A.4) set
+# KELD_CONFORM_INSTALL=1 to npm-install them at @latest instead.
 .PHONY: conformance
-conformance: ## Run a conformance chain against a real tool (TOOL=claude_code)
-	@[ -n "$(TOOL)" ] || { echo "usage: make conformance TOOL=claude_code"; exit 2; }
+conformance: ## Run a conformance chain against real tools (TOOL=all|claude_code|codex, CHAIN=A|B)
+	@[ -n "$(TOOL)" ] || { echo "usage: make conformance TOOL=all [CHAIN=A|B] [SEED=n]"; exit 2; }
 	@bash scripts/conformance/run-chain.sh \
 		--tool "$(TOOL)" \
 		$(if $(CHAIN),--chain "$(CHAIN)",) \
 		$(if $(SEED),--seed "$(SEED)",) \
-		$(if $(WORK),--work "$(WORK)",)
+		$(if $(WORK),--work "$(WORK)",) \
+		$(if $(PREVIOUS),--previous "$(PREVIOUS)",) \
+		$(if $(BEFORE),--before "$(BEFORE)",) \
+		$(if $(AFTER),--after "$(AFTER)",)
 
 # The Linux leg, in a container: ubuntu 24.04, Node 22, Python 3.12, sqlite3,
 # the tool installed at @latest. The repo is mounted READ-ONLY and everything

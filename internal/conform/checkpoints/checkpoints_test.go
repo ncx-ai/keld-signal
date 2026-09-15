@@ -175,7 +175,7 @@ func TestGatherTranscriptsFindsPromptIDsUnderTheRoot(t *testing.T) {
 	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 
 	f := Facts{}
-	gatherTranscripts(&f, root)
+	gatherTranscripts(&f, root, "claude_code")
 	if len(f.Transcripts) != 1 || !strings.HasSuffix(f.Transcripts[0], "s1.jsonl") {
 		t.Fatalf("transcripts = %v, want the one under the root", f.Transcripts)
 	}
@@ -191,7 +191,7 @@ func TestGatherTranscriptsFindsPromptIDsUnderTheRoot(t *testing.T) {
 
 func TestGatherTranscriptsOnAnEmptyRootIsNotAnError(t *testing.T) {
 	f := Facts{}
-	gatherTranscripts(&f, t.TempDir())
+	gatherTranscripts(&f, t.TempDir(), "claude_code")
 	if len(f.Transcripts) != 0 {
 		t.Errorf("transcripts = %v, want none", f.Transcripts)
 	}
@@ -289,5 +289,93 @@ func TestCorrelationIDAlsoAcceptsTheAtlasSideSpelling(t *testing.T) {
 	}
 	if got := correlationID([]byte(`{}`)); got != "" {
 		t.Errorf("empty body = %q, want empty", got)
+	}
+}
+
+// ---- the Codex transcript format ----
+//
+// ⚠️ A Codex rollout carries NO `promptId` and no `"type":"user"` line, so the
+// Claude reader finds zero ids in one — and a zero id list is not a loud
+// failure: `gatherStore` returns early with "nothing to look up" and the
+// pointer checkpoint reads "no enrichment matched", i.e. a real defect wearing
+// the costume of a real result. The reader is therefore chosen by TOOL.
+//
+// The fixtures are the watcher's own captured rollouts rather than copies, so
+// the harness and the daemon are pinned to the same real bytes: a shape change
+// that moves one moves the other in the same run.
+const codexFixtures = "../../agent/watch/testdata/codex"
+
+func TestCodexPromptIDsAreSessionHashTurn(t *testing.T) {
+	cases := []struct {
+		file string
+		want []string
+	}{
+		// 0.153.4 and 0.125 write `event_msg`/`user_message`; 0.151 writes ONLY
+		// `item_completed` with `item.type == "UserMessage"`, so a reader that
+		// knows one shape captures nothing at all on that release.
+		{"rollout-0.153.4.jsonl", []string{
+			"01a09cd9-4ff9-7cb3-b217-4d622483e83d#01a09cd9-7e3a-7f83-a573-47bf9efe2b0e",
+			"01a09cd9-4ff9-7cb3-b217-4d622483e83d#01a09cd9-cda5-7d92-92bd-6ee3559b332c",
+		}},
+		{"rollout-0.151.jsonl", []string{
+			"01a06e7c-a243-70f1-bb8d-ad8239bc843c#01a06e7d-689b-7870-b62f-c379d96d1fdf",
+		}},
+		{"rollout-0.125.jsonl", []string{
+			"019dd64d-e967-7c82-93b8-313f862b6702#019dd666-08b7-7200-9516-306b91a24d48",
+		}},
+	}
+	for _, c := range cases {
+		path := filepath.Join(codexFixtures, c.file)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("captured rollout missing: %v (did the watcher's testdata move?)", err)
+		}
+		got := promptIDsIn(path, "codex")
+		for _, want := range c.want {
+			found := false
+			for _, g := range got {
+				if g == want {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s: %q not among %d ids read: %v", c.file, want, len(got), got)
+			}
+		}
+	}
+}
+
+func TestClaudeReaderFindsNothingInACodexRollout(t *testing.T) {
+	// The reason the format is a parameter rather than a guess: this is what a
+	// tool-blind harness would have reported for every Codex step.
+	got := promptIDsIn(filepath.Join(codexFixtures, "rollout-0.153.4.jsonl"), "claude_code")
+	if len(got) != 0 {
+		t.Fatalf("the Claude reader found %v in a Codex rollout", got)
+	}
+}
+
+func TestGatherTranscriptsReadsNestedCodexRollouts(t *testing.T) {
+	root := t.TempDir()
+	// Codex writes sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl — three levels
+	// deeper than Claude Code's projects/<dir>/.
+	dir := filepath.Join(root, "2026", "09", "15")
+	os.MkdirAll(dir, 0o755)
+	src, err := os.ReadFile(filepath.Join(codexFixtures, "rollout-0.153.4.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "rollout-x.jsonl"), src, 0o644)
+
+	f := Facts{}
+	gatherTranscripts(&f, root, "codex")
+	if len(f.Transcripts) != 1 {
+		t.Fatalf("transcripts = %v, want the one nested rollout", f.Transcripts)
+	}
+	if len(f.PromptIDs) == 0 {
+		t.Fatal("no prompt ids read out of a nested Codex rollout")
+	}
+	for _, id := range f.PromptIDs {
+		if !strings.Contains(id, "#") {
+			t.Errorf("prompt id %q is not <session>#<turn>", id)
+		}
 	}
 }
