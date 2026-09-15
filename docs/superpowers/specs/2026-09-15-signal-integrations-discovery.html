@@ -225,7 +225,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
 <h3>Technical design</h3>
 <ul>
   <li><strong>Data:</strong> No store schema change. New file <span class="mono">~/.keld/state/integrations.json</span>: last-seen per source × surface, last emitted state per source. New setting <span class="mono">auto_setup_integrations</span> (default <span class="mono">true</span>) in <span class="mono">agent-config.json</span>. New dir <span class="mono">~/.keld/reports/</span>.</li>
-  <li><strong>Catalogue:</strong> one Go table: id, display name, config dir, surfaces with kind and documented flag, storage class (jsonl-tail / db-poll / rpc), support level (supported / unsupported). Claude Code, Codex, Gemini CLI, Cowork supported; Pi, Antigravity, Cursor unsupported rows.</li>
+  <li><strong>Catalogue:</strong> one Go table: id, display name, config dir, surfaces with kind and documented flag, storage class (jsonl-tail / db-poll / rpc), support level (supported / unsupported), and the <strong>expected lanes</strong> for that support level. A lane a tool cannot yet feed is not expected, so it cannot make the tool <span class="mono">broken</span>: Codex expects hook + otel until its reader ships, then watcher + reader join. Without this, Codex would read <span class="mono">broken · reader</span> by construction from day one. Claude Code, Codex, Gemini CLI, Cowork supported; Pi, Antigravity, Cursor unsupported rows.</li>
   <li><strong>Lane facts:</strong> hook lane = last pointer with <span class="mono">Origin: hook</span> per source; watcher lane = last pointer with <span class="mono">Origin: watcher</span>; otel lane = teleproxy last forward per source; reader lane = store rows exist for the last N pointers of that source. Tool session start comes from the newest transcript mtime and its first timestamped line.</li>
   <li><strong>API:</strong> <span class="mono">GET /v1/integrations</span>; <span class="mono">POST /v1/integrations/{id}/setup</span> → runs the adapter, returns <span class="mono">{backup, restart_required}</span>; <span class="mono">POST /v1/integrations/{id}/report</span> → returns <span class="mono">{report_path, event_queued}</span>. Loopback, existing secret.</li>
   <li><strong>Read path:</strong> pane polls <span class="mono">/v1/integrations</span> every 10 s like the health dot; doctor calls <span class="mono">Compute</span> once.</li>
@@ -413,7 +413,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <text x="761" y="402" text-anchor="middle" class="small">one integration.broken event</text>
   <text x="761" y="418" text-anchor="middle" class="small">Report a problem → bundle, redacted</text>
 
-  <text x="20" y="530" class="small">Window: 24 h at first. "Expected lanes" come from the catalogue: Claude Code hook + otel + watcher; Codex hook + otel + watcher; Gemini otel + watcher.</text>
+  <text x="20" y="530" class="small">Window: 24 h at first. "Expected lanes" come from the catalogue AND the support level: Claude Code hook + otel + watcher + reader; Codex hook + otel only until its reader ships; Gemini otel + watcher.</text>
   <text x="20" y="546" class="small">A lane fact is an instant on disk (last pointer per source and origin; last forward per source), so a restart does not erase it.</text>
 </svg>
 <figcaption>The rule has two refusals that matter more than the happy path: silence is idle, not broken, and a session older than its config is a restart notice, not a fault. Both are the discipline the rest of the daemon already runs on.</figcaption>
@@ -483,7 +483,8 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <tr><td class="mono">4</td><td>yes</td><td>yes</td><td>0</td><td>0</td><td>—</td><td>idle</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
   <tr><td class="mono">5</td><td>yes</td><td>yes</td><td>0</td><td>&gt;0</td><td>—</td><td>broken · hook</td><td class="mono"><a href="#ac-4">AC-4</a>, <a href="#ac-5">AC-5</a></td></tr>
   <tr><td class="mono">6</td><td>yes</td><td>yes</td><td>&gt;0</td><td>0</td><td>yes</td><td>broken · otel</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
-  <tr><td class="mono">7</td><td>yes</td><td>yes</td><td>&gt;0</td><td>&gt;0</td><td>no</td><td>broken · reader</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
+  <tr><td class="mono">7</td><td>yes</td><td>yes</td><td>&gt;0</td><td>&gt;0</td><td>no, and reader is an expected lane</td><td>broken · reader</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
+  <tr><td class="mono">7b</td><td>yes</td><td>yes</td><td>&gt;0</td><td>&gt;0</td><td>no, reader not expected (Codex today)</td><td>working · reader shown as "not yet supported"</td><td class="mono"><a href="#ac-4">AC-4</a></td></tr>
   <tr><td class="mono">8</td><td>yes</td><td>yes</td><td>&gt;0</td><td>&gt;0</td><td>yes</td><td>working</td><td class="mono"><a href="#ac-1">AC-1</a></td></tr>
   <tr><td class="mono">9</td><td>unsupported entry</td><td>—</td><td>—</td><td>—</td><td>—</td><td>unsupported, storage class shown</td><td class="mono"><a href="#ac-1">AC-1</a></td></tr>
 </tbody>
@@ -584,6 +585,7 @@ figcaption{color:var(--muted);font-size:13px;margin-top:8px;max-width:72ch}
   <tr><td class="mono">6</td><td>Pi, Antigravity and Cursor rows show storage class only. Pi's reader is the next discovery; the others wait for demand.</td><td>no</td><td>nothing, deferred</td></tr>
   <tr><td class="mono">7</td><td>Cowork's lanes: no hook can reach the host, so its expected set is watcher only. Its VM builds hide transcripts entirely.</td><td>no</td><td>catalogue entry says so; the existing coworkHidden advisory stays</td></tr>
   <tr><td class="mono">8</td><td>An Atlas fleet view over <span class="mono">integration.*</span>: which tool versions break on how many machines.</td><td>no</td><td>Atlas work, after the events flow</td></tr>
+  <tr><td class="mono">10</td><td>A tool pointed at a local or third-party model (Ollama via <span class="mono">ANTHROPIC_BASE_URL</span>, Codex <span class="mono">model_providers</span>, Pi <span class="mono">models.json</span>) still reports vendor list prices: Claude Code priced the mock call at $0.000342 for a model name it never reached. Spend rows from such a machine are fiction.</td><td>no</td><td>the integration row reads the tool's endpoint from its config and flags <span class="mono">local model · cost not billed</span>; Atlas gets the flag as a field; pricing is Atlas work</td></tr>
   <tr><td class="mono">9</td><td>A future .dmg has no postinstall script, so onboarding moves into the app's first launch. AC-12 requires that launch path to be callable as a command (<span class="mono">Keld Signal.app/Contents/MacOS/… install --code</span>); a window-only onboarding would break the matrix and MDM at once.</td><td>no, until the dmg exists</td><td>design the app's headless entrypoint before the dmg ships; the manual check per release stays "the onboarding window opens"</td></tr>
 </tbody>
 </table>
