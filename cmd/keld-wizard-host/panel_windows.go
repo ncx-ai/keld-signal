@@ -84,6 +84,13 @@ func panel(o options) int {
 	}
 
 	pw, ph := clientSize(o.Panel)
+	// The border is the host panel showing through: we cannot paint on a window
+	// another process owns, so the page sets the panel's colour and we sit inside
+	// it by o.Inset pixels.
+	inset := o.Inset
+	if inset < 0 {
+		inset = 0
+	}
 	hinst, _, _ := pGetModuleHandle.Call(0)
 	cls, _ := syscall.UTF16PtrFromString("STATIC")
 	empty, _ := syscall.UTF16PtrFromString("")
@@ -92,7 +99,8 @@ func panel(o options) int {
 		uintptr(unsafe.Pointer(cls)),
 		uintptr(unsafe.Pointer(empty)),
 		wsChild|wsVisible,
-		0, 0, uintptr(pw), uintptr(ph),
+		uintptr(inset), uintptr(inset),
+		uintptr(int(pw)-2*inset), uintptr(int(ph)-2*inset),
 		o.Panel, 0, hinst, 0,
 	)
 	if child == 0 {
@@ -142,7 +150,8 @@ func panel(o options) int {
 			w, h := clientSize(o.Panel)
 			if w != last[0] || h != last[1] {
 				last = [2]int32{w, h}
-				pMoveWindow.Call(child, 0, 0, uintptr(w), uintptr(h), 1)
+				pMoveWindow.Call(child, uintptr(inset), uintptr(inset),
+					uintptr(int(w)-2*inset), uintptr(int(h)-2*inset), 1)
 				chromium.Resize()
 			}
 		}

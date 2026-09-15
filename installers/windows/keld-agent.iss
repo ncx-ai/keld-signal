@@ -492,6 +492,7 @@ begin
   PanelSeqNo := 1;
   Params := '--panel ' + IntToStr(WebPanel.Handle) +
             ' --url "' + URL + '"' +
+            ' --inset 1' +
             ' --events-dir "' + PanelDir + '"' +
             ' --sentinel "' + PanelStopFile + '"' +
             ' --parent-pid ' + IntToStr(GetCurrentProcessId);
@@ -948,6 +949,11 @@ begin
   WebPanel.SetBounds(0, ScaleY(70), W, SetupPage.SurfaceHeight - ScaleY(74));
   WebPanel.BevelOuter := bvNone;
   WebPanel.Caption := '';
+  // A dark-gray hairline around the embedded page. It IS the panel showing
+  // through: the helper cannot paint on a window this process owns, so it insets
+  // its webview by one pixel (--inset, below) and this colour fills the ring.
+  // A panel colour that fails to apply costs the border and nothing else.
+  WebPanel.Color := $00595959;
   WebPanel.Visible := False;
 
   ToolsHdr := TNewStaticText.Create(SetupPage);

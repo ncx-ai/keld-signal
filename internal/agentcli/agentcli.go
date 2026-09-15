@@ -21,6 +21,7 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
 	"github.com/ncx-ai/keld-signal/internal/auth"
 	"github.com/ncx-ai/keld-signal/internal/console"
+	"github.com/ncx-ai/keld-signal/internal/hook"
 	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/version"
 )
@@ -239,8 +240,27 @@ func runInstall(cfg installConfig, isTTY func() bool, resolveKeld func() (string
 			return fmt.Errorf("keld signal setup: %w", err)
 		}
 	default:
-		fmt.Println("Service installed. Finish setup in the Keld Signal app (Settings → paste your setup code),")
-		fmt.Println("or from here with: keld login && keld signal setup")
+		// ⚠️ ONLY SAY THIS WHEN IT IS TRUE. `install` no longer onboards by
+		// default, so this branch is also what an INSTALLER reaches after its own
+		// wizard has already paired the machine and configured the tools — the
+		// Windows page and macOS's postinstall both run `keld signal setup` and
+		// then this command. Telling that person to go and paste a setup code is
+		// wrong twice over: the work is done, and the thing it names is a step
+		// they just completed.
+		//
+		// Measured on Windows 2026-09-15: a GUI installer launched from a console
+		// inherits it, so this line printed into the terminal the user had
+		// started setup.exe from, moments after the wizard said "Connected".
+		//
+		// The test is OBSERVED STATE — an ingest token in hook.json, the same
+		// file the daemon reads and the same check onboard.cmd claims success
+		// from — never an assumption about who invoked us.
+		if hookConfigured() {
+			fmt.Println("Service installed and already signed in.")
+		} else {
+			fmt.Println("Service installed. Finish setup in the Keld Signal app (Settings → paste your setup code),")
+			fmt.Println("or from here with: keld login && keld signal setup")
+		}
 	}
 
 	if !cfg.jsonOut {
@@ -417,3 +437,15 @@ func executeCmd(root *cobra.Command, stderr io.Writer) int {
 
 // Execute runs the keld-agent CLI and returns an exit code.
 func Execute() int { return executeCmd(NewRootCmd(), os.Stderr) }
+
+// hookConfigured reports whether this machine already has an ingest token —
+// i.e. whether `keld signal setup` has run and the daemon has something to read.
+//
+// ⚠️ Deliberately the SAME observed-state test `onboard.cmd` uses to decide
+// whether onboarding succeeded, rather than an exit code or a flag: the two must
+// agree about what "set up" means, and hook.json is the file the daemon actually
+// reads.
+func hookConfigured() bool {
+	cfg, err := hook.LoadConfig()
+	return err == nil && cfg != nil && cfg.IngestToken != ""
+}
