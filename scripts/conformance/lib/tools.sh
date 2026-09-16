@@ -36,6 +36,26 @@ tool_display() {
   esac
 }
 
+# tool_npm_prefix <dir> — the prefix in the form npm itself can use.
+#
+# ⚠️ **npm IS A WINDOWS PROGRAM AND CANNOT READ AN MSYS PATH.** Under Git Bash
+# the harness's $WORK is `/d/a/_temp/...`; handing that to `npm config set
+# prefix` silently does nothing useful, and npm keeps whatever prefix the
+# runner already had.
+#
+# Measured on windows-latest 2026-09-16, and only because the resolver printed
+# what it found: the prefix directory was EMPTY while `npm config get prefix`
+# reported `C:\npm\prefix`. The install had succeeded — into the runner's
+# global location, nowhere near the isolated work dir. An isolated harness that
+# quietly writes outside its isolation is the failure mode worth catching here,
+# not the missing shim it showed up as.
+tool_npm_prefix() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) cygpath -w "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 # tool_npm_bin <prefix> <name> — where npm put a CLI's entry point.
 #
 # ⚠️ **npm DOES NOT CREATE A BARE EXECUTABLE ON WINDOWS.** It writes shims:
@@ -112,7 +132,13 @@ tool_install() {
         local prefix="$WORK/npm"
         mkdir -p "$prefix"
         say "npm i -g $(tool_npm_package "$tool")@${TOOL_VERSION:-latest} into $prefix"
-        npm config set prefix "$prefix" >/dev/null 2>&1
+        local npm_prefix; npm_prefix=$(tool_npm_prefix "$prefix")
+        npm config set prefix "$npm_prefix" >/dev/null 2>&1
+        # ⚠️ ASSERTED, not hoped: npm silently keeps its old prefix when handed
+        # one it cannot parse, and the install then lands outside the isolated
+        # work dir with a zero exit code.
+        local seen; seen=$(npm config get prefix 2>/dev/null)
+        [ "$seen" = "$npm_prefix" ] || fail "npm kept prefix '$seen' after being set to '$npm_prefix' — the install would land outside $WORK"
         npm i -g "$(tool_npm_package "$tool")@${TOOL_VERSION:-latest}" >"$WORK/npm-install.log" 2>&1 \
           || fail "npm install failed: $(tail -20 "$WORK/npm-install.log")"
         TOOL_BIN=$(tool_npm_bin "$prefix" claude)
@@ -138,7 +164,13 @@ tool_install() {
         local prefix="$WORK/npm"
         mkdir -p "$prefix"
         say "npm i -g $(tool_npm_package "$tool")@${TOOL_VERSION:-latest} into $prefix"
-        npm config set prefix "$prefix" >/dev/null 2>&1
+        local npm_prefix; npm_prefix=$(tool_npm_prefix "$prefix")
+        npm config set prefix "$npm_prefix" >/dev/null 2>&1
+        # ⚠️ ASSERTED, not hoped: npm silently keeps its old prefix when handed
+        # one it cannot parse, and the install then lands outside the isolated
+        # work dir with a zero exit code.
+        local seen; seen=$(npm config get prefix 2>/dev/null)
+        [ "$seen" = "$npm_prefix" ] || fail "npm kept prefix '$seen' after being set to '$npm_prefix' — the install would land outside $WORK"
         npm i -g "$(tool_npm_package "$tool")@${TOOL_VERSION:-latest}" >"$WORK/npm-install-codex.log" 2>&1 \
           || fail "npm install failed: $(tail -20 "$WORK/npm-install-codex.log")"
         TOOL_BIN=$(tool_npm_bin "$prefix" codex)
