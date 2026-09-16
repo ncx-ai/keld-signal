@@ -156,7 +156,8 @@ jobs:
                 {"os":"ubuntu-latest","chain":"A","tool":"claude_code","version":""},
                 {"os":"ubuntu-latest","chain":"B","tool":"claude_code","version":""},
                 {"os":"macos-14","chain":"A","tool":"claude_code","version":""},
-                {"os":"macos-14","chain":"B","tool":"claude_code","version":""}]}'
+                {"os":"macos-14","chain":"B","tool":"claude_code","version":""},
+                {"os":"windows-latest","chain":"A","tool":"claude_code","version":""}]}'
               ;;
             workflow_run)
               # A Signal release: every OS, both chains. Installers and service
@@ -461,22 +462,58 @@ jobs:
             WORK="$RUNNER_TEMP/conformance" 2>&1 | tee "$RUNNER_TEMP/conformance/chain.log"
           exit "${PIPESTATUS[0]}"
 
-      # ⚠️ run-chain.ps1 DOES NOT EXIST. It is task A.3's Windows half and is
-      # not this workstream's file, so this leg calls the script it will be and
-      # says exactly why it failed. The job is continue-on-error for this cell
-      # (see above) so the red is amber and named, not an unexplained failure.
-      - name: Run the chain (Windows)
+      # --- the chain, Windows -----------------------------------------------
+      #
+      # ⚠️ THIS RAN `run-chain.ps1`, A FILE THAT HAS NEVER EXISTED, and exited 1
+      # to say so. That was honest but it bought nothing: it asserted Windows is
+      # unproven without ever finding out WHY, and it set the price of Windows
+      # at "write a second chain runner in PowerShell" — 1,500 lines of harness,
+      # reimplemented, with two copies of every rule to keep in step.
+      #
+      # That price was never checked against the code. Reading it first:
+      #   - The chain runs the daemon in the FOREGROUND (lib/isolate.sh), so it
+      #     needs no launchd, no systemd and no schtasks. Service registration
+      #     belongs to install-<os>.sh (AC-12), not here.
+      #   - The transcript watcher is NOT platform-gated. There are no
+      #     _windows/_darwin files under internal/agent/watch, discoverRoots
+      #     puts ~/.claude/projects in unconditionally, and only the Cowork glob
+      #     is darwin-only. AGENTS.md's "macOS + Linux; Windows deferred" does
+      #     not describe this code.
+      #   - windows-latest ships Git Bash, Node, Python and Go.
+      #
+      # So the harness is mostly platform-neutral and the honest next step is to
+      # RUN it and read the failure, not to guess at a rewrite. Whatever breaks
+      # here is a real, named Windows gap; a PowerShell port written blind would
+      # have had to discover the same list anyway, after the rewrite.
+      #
+      # ⚠️ Still `continue-on-error` for this cell (see the job), so this is an
+      # honest amber while we learn. It stops being amber the day it passes, not
+      # the day we stop looking.
+      #
+      # run-chain.sh is invoked directly rather than through `make`: GNU make is
+      # not guaranteed on windows-latest, and the Makefile target is a
+      # passthrough anyway. Paths come through `cygpath -u` because RUNNER_TEMP
+      # is a Windows path and Git Bash needs a POSIX one.
+      - name: Run the chain (Windows, Git Bash)
         id: chain-windows
         if: runner.os == 'Windows' && !inputs.force_fail
-        shell: pwsh
+        shell: bash
+        env:
+          TOOL: ${{ matrix.tool }}
+          CHAIN: ${{ matrix.chain }}
+          KELD_CONFORM_DISPOSABLE: "1"
         run: |
-          if (-not (Test-Path "scripts/conformance/run-chain.ps1")) {
-            Write-Host "::warning::scripts/conformance/run-chain.ps1 does not exist yet (task A.3, Windows half)."
-            Write-Host "Windows conformance is UNPROVEN: the Inno installer path and the tool's Windows"
-            Write-Host "transcript roots have never been run by this workflow."
-            exit 1
-          }
-          pwsh scripts/conformance/run-chain.ps1 -Tool "${{ matrix.tool }}" -Chain "${{ matrix.chain }}" -Seed "$env:SEED" -Work "$env:RUNNER_TEMP/conformance"
+          set -uo pipefail
+          work="$(cygpath -u "$RUNNER_TEMP")/conformance"
+          mkdir -p "$work"
+          echo "bash: $(bash --version | head -1)"
+          echo "node: $(node --version 2>&1)  python: $(python --version 2>&1)  go: $(go version 2>&1)"
+          bash scripts/conformance/run-chain.sh \
+            --tool "$TOOL" --chain "$CHAIN" --seed "$SEED" --work "$work" \
+            2>&1 | tee "$work/chain.log"
+          rc=${PIPESTATUS[0]}
+          echo "run-chain.sh exited $rc"
+          exit "$rc"
 
       # The forced failure that proves the issue step (AC-11). It fabricates a
       # failing verdict rather than breaking the harness, so what is tested is
