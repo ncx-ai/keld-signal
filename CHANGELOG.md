@@ -5,6 +5,31 @@ All notable changes to **keld-signal** (the Keld client — the `keld` CLI + the
 follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 semantic-ish versioning during `0.x`.
 
+## [3.0.2] — 2026-09-16
+
+### Fixed
+- **Installing a new sidecar now restarts the one that is running.** Swapping the
+  tree on disk does not change the process serving from it, and on a real 3.0.1
+  install the two happened five seconds apart in the wrong order:
+
+  ```
+  08:41:26  daemon starts, spawns the sidecar   (postinstall: keld-agent install)
+  08:41:31  sidecar tree replaced on disk (v3.0.1)
+  08:41:32  sidecar binary written
+  ```
+
+  `postinstall` backgrounds the ~190 MB fetch deliberately — it must not block
+  the install — and restarts the daemon on its own schedule, so the daemon
+  spawned the OLD image and held it. `doctor` reported version skew on a machine
+  whose disk was entirely correct, and a manual `keld-agent restart` cleared it
+  at once. The restart now lives beside the swap itself
+  (`commitStagedSidecar`), so no future call site can perform one without the
+  other. It is best-effort: the new sidecar is already on disk and verified, the
+  next daemon start respawns it anyway, and doctor reports the gap meanwhile —
+  failing there would discard a completed install over a recoverable condition.
+  The result and the `installed` NDJSON event say whether the running sidecar is
+  the one just installed (`restarted`, `restart_error`).
+
 ## [3.0.1] — 2026-09-16
 
 ### Fixed
