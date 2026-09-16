@@ -393,26 +393,43 @@ jobs:
       # the chain IS the Windows half of the installer claim.
       - name: Install the Windows sidecar from keld-setup.exe
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
-                  --json tagName,isPrerelease,isDraft \
-                  --jq '[.[] | select(.isPrerelease == false and .isDraft == false)][0].tagName')
-          [ -n "$tag" ] || { echo "::error::no published release carrying keld-setup.exe"; exit 1; }
-          echo "installing $tag unattended"
-          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "keld-setup.exe" --dir /tmp/win
-          # The documented silent invocation (docs/install.md). //SP- and the
-          # doubled slashes are MSYS quoting: Git Bash rewrites a leading / as a
-          # path, which turns /VERYSILENT into C:/VERYSILENT and the installer
-          # then shows its GUI and hangs the job forever.
-          MSYS_NO_PATHCONV=1 /tmp/win/keld-setup.exe //VERYSILENT //SUPPRESSMSGBOXES //NORESTART //LOG=C:\\Windows\\Temp\\keld-install.log
-          app="$(cygpath -u "$LOCALAPPDATA")/Programs/keld"
-          ls -la "$app" | head -20 || true
-          [ -x "$app/keld-agent-sidecar.exe" ] || { echo "::error::no keld-agent-sidecar.exe under $app after a silent install"; exit 1; }
-          echo "sidecar $(cat "$app/VERSION" 2>/dev/null || echo '(no VERSION)') at $app"
+          $ErrorActionPreference = "Stop"
+          $tags = gh release list --repo "$env:GITHUB_REPOSITORY" --limit 20 `
+                    --json tagName,isPrerelease,isDraft `
+                    --jq '[.[] | select(.isPrerelease == false and .isDraft == false)][0].tagName'
+          if (-not $tags) { throw "no published release carrying keld-setup.exe" }
+          Write-Host "installing $tags unattended"
+          gh release download $tags --repo "$env:GITHUB_REPOSITORY" --pattern "keld-setup.exe" --dir "$env:RUNNER_TEMP/win"
+          # ⚠️ **pwsh, NOT Git Bash, AND Start-Process -Wait.** The first attempt
+          # ran this from bash with //VERYSILENT — the doubled slash is the MSYS
+          # idiom for "do not rewrite this as a path", and Inno does not accept
+          # it, so the installer opened its GUI on a headless runner and hung
+          # until the job was killed. The evidence was in the cleanup, not the
+          # step: "Terminate orphan process: pid (3056) (keld-setup)".
+          #
+          # In pwsh the flags need no escaping at all. -Wait is load-bearing for
+          # a different reason: an Inno setup re-execs itself as keld-setup.tmp
+          # and the parent returns IMMEDIATELY, so without it the next step
+          # races a half-finished install.
+          $p = Start-Process -FilePath "$env:RUNNER_TEMP/win/keld-setup.exe" `
+                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$env:RUNNER_TEMP/keld-install.log" `
+                 -Wait -PassThru -NoNewWindow
+          Write-Host "installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path "$env:RUNNER_TEMP/keld-install.log") { Get-Content "$env:RUNNER_TEMP/keld-install.log" -Tail 40 }
+            throw "keld-setup.exe exited $($p.ExitCode)"
+          }
+          $app = "$env:LOCALAPPDATA\Programs\keld"
+          Get-ChildItem $app | Select-Object -First 20 | Format-Table Name,Length
+          if (-not (Test-Path "$app\keld-agent-sidecar.exe")) {
+            throw "no keld-agent-sidecar.exe under $app after a silent install"
+          }
+          $v = if (Test-Path "$app\VERSION") { Get-Content "$app\VERSION" -Raw } else { "(no VERSION)" }
+          Write-Host "sidecar $($v.Trim()) at $app"
 
       # --- chain B's previous release ---------------------------------------
       #
@@ -449,15 +466,38 @@ jobs:
           esac
           dest="$RUNNER_TEMP/previous"
           mkdir -p "$dest" /tmp/prev
-          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
+          # ⚠️ **TWO RELEASES, NOT ONE — an upgrade needs something to upgrade TO.**
+          # The first cut downloaded only the latest and left the NEW sidecar
+          # pointing at the same tree, so both halves reported v3.0.1 and the
+          # chain refused at step `upgrade`: "the sidecar was NOT replaced".
+          # That refusal is correct and worth keeping — a run that calls an
+          # upgrade an upgrade when nothing moved proves nothing — so the fix is
+          # to give it a real pair.
+          #
+          # previous = the SECOND-newest published release, new = the newest.
+          # Both are real, shipped, STAMPED sidecars, which is what the skew
+          # assertion needs: it fired correctly on the run before this one, and
+          # it can only stay meaningful while the two halves genuinely differ.
+          tags=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 30 \
                   --json tagName,isPrerelease,isDraft \
-                  --jq '[.[] | select(.isPrerelease == false and .isDraft == false)][0].tagName')
-          [ -n "$tag" ] || { echo "::error::no published non-prerelease to upgrade from"; exit 1; }
-          echo "previous release: $tag"
+                  --jq '[.[] | select(.isPrerelease == false and .isDraft == false)][0:2] | .[].tagName')
+          new_tag=$(echo "$tags" | sed -n 1p)
+          tag=$(echo "$tags" | sed -n 2p)
+          [ -n "$tag" ] && [ -n "$new_tag" ] || { echo "::error::need two published non-prereleases to test an upgrade; found: $tags"; exit 1; }
+          echo "upgrade: $tag -> $new_tag"
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$cli" --dir /tmp/prev
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$sc"  --dir /tmp/prev
           tar -xzf "/tmp/prev/$cli" -C "$dest"
           tar -xzf "/tmp/prev/$sc"  -C "$dest"
+          # The NEWER sidecar is what the upgrade moves to. Staged separately so
+          # the two trees can never be confused for one another.
+          newsc="$RUNNER_TEMP/new-sidecar"
+          mkdir -p "$newsc" /tmp/new
+          gh release download "$new_tag" --repo "$GITHUB_REPOSITORY" --pattern "$sc" --dir /tmp/new
+          tar -xzf "/tmp/new/$sc" -C "$newsc"
+          [ -x "$newsc/keld-agent-sidecar/keld-agent-sidecar" ] || { echo "::error::$new_tag has no sidecar binary"; exit 1; }
+          echo "  new sidecar $(cat "$newsc/keld-agent-sidecar/VERSION" 2>/dev/null || echo '?')"
+          echo "newsidecar=$newsc/keld-agent-sidecar" >> "$GITHUB_OUTPUT"
           chmod +x "$dest/keld" "$dest/keld-agent" "$dest/keld-agent-sidecar/keld-agent-sidecar"
           # prev_resolve needs all three; assert rather than discover it mid-chain.
           for f in keld keld-agent keld-agent-sidecar/keld-agent-sidecar; do
@@ -490,6 +530,7 @@ jobs:
           KELD_CONFORM_DISPOSABLE: "1"
           # Empty on chain A, so the ${VAR:+...} below adds nothing there.
           PREVIOUS: ${{ steps.previous.outputs.dir && format('dir:{0}', steps.previous.outputs.dir) || '' }}
+          NEW_SIDECAR: ${{ steps.previous.outputs.newsidecar || '' }}
           # ⚠️ **A RUNNER HAS NO ~/.keld/sidecar-venv**, so the chain's default
           # "upgrade to the WORKTREE sidecar" cannot happen here — `make sidecar`
           # is a developer step and freezing one in CI costs a ~5 GB venv and
@@ -513,9 +554,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/conformance"
           # $HOME is only real inside the shell, which is why this is not an
           # env: entry — GitHub expressions cannot read the runner's HOME.
-          if [ "$CHAIN" = "B" ]; then
-            export KELD_CONFORM_NEW_SIDECAR="$HOME/.local/bin/keld-agent-sidecar"
-            echo "chain B upgrades the BINARIES only; sidecar stays $(cat "$KELD_CONFORM_NEW_SIDECAR/VERSION" 2>/dev/null || echo '?')"
+          if [ "$CHAIN" = "B" ] && [ -n "${NEW_SIDECAR:-}" ]; then
+            export KELD_CONFORM_NEW_SIDECAR="$NEW_SIDECAR"
+            echo "chain B upgrades to sidecar $(cat "$NEW_SIDECAR/VERSION" 2>/dev/null || echo '?')"
           fi
           make conformance TOOL="$TOOL" CHAIN="$CHAIN" SEED="$SEED" \
             ${ARTIFACT:+ARTIFACT="$ARTIFACT"} \
