@@ -36,6 +36,27 @@ tool_display() {
   esac
 }
 
+# tool_npm_bin <prefix> <name> — where npm put a CLI's entry point.
+#
+# ⚠️ **npm DOES NOT CREATE A BARE EXECUTABLE ON WINDOWS.** It writes shims:
+# <prefix>/<name> (a shell script, POSIX only), <name>.cmd and <name>.ps1, and
+# on Windows the bare name is ABSENT. It also puts them at the prefix ROOT, not
+# under bin/.
+#
+# Measured on windows-latest 2026-09-16: the chain installed Claude Code fine,
+# reported its version as empty, and then died at the first prompt with
+# `claude: No such file or directory` — exit 127 from a path that was never
+# going to exist. The version probe had already failed silently one line
+# earlier, which is the part worth keeping: a resolver that cannot find the
+# binary must fail THERE, not three steps later.
+tool_npm_bin() {
+  local prefix=$1 name=$2 c
+  for c in "$prefix/bin/$name" "$prefix/$name.cmd" "$prefix/bin/$name.cmd" "$prefix/$name"; do
+    [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  fail "npm installed $name but left no runnable shim under $prefix (looked for bin/$name, $name.cmd, bin/$name.cmd, $name)"
+}
+
 # tool_bin <tool> / tool_version_of <tool> — what `tool_install` resolved.
 #
 # ⚠️ One global TOOL_BIN was enough while a chain drove one tool. A split chain
@@ -75,7 +96,7 @@ tool_install() {
         npm config set prefix "$prefix" >/dev/null 2>&1
         npm i -g "$(tool_npm_package "$tool")@${TOOL_VERSION:-latest}" >"$WORK/npm-install.log" 2>&1 \
           || fail "npm install failed: $(tail -20 "$WORK/npm-install.log")"
-        TOOL_BIN="$prefix/bin/claude"
+        TOOL_BIN=$(tool_npm_bin "$prefix" claude)
       else
         TOOL_BIN=${KELD_CONFORM_CLAUDE_BIN:-}
         if [ -z "$TOOL_BIN" ]; then
@@ -89,6 +110,7 @@ tool_install() {
           || fail "claude not found (set KELD_CONFORM_CLAUDE_BIN, or KELD_CONFORM_INSTALL=1 to npm-install it)"
       fi
       TOOL_VERSION_SEEN=$("$TOOL_BIN" --version 2>/dev/null | head -1)
+      [ -n "$TOOL_VERSION_SEEN" ] || fail "$TOOL_BIN produced no --version output; it is not runnable here"
       tool_remember "$tool" "$TOOL_BIN" "$TOOL_VERSION_SEEN"
       say "$(tool_display "$tool") = $TOOL_BIN ($TOOL_VERSION_SEEN)"
       ;;
@@ -100,7 +122,7 @@ tool_install() {
         npm config set prefix "$prefix" >/dev/null 2>&1
         npm i -g "$(tool_npm_package "$tool")@${TOOL_VERSION:-latest}" >"$WORK/npm-install-codex.log" 2>&1 \
           || fail "npm install failed: $(tail -20 "$WORK/npm-install-codex.log")"
-        TOOL_BIN="$prefix/bin/codex"
+        TOOL_BIN=$(tool_npm_bin "$prefix" codex)
       else
         TOOL_BIN=${KELD_CONFORM_CODEX_BIN:-}
         if [ -z "$TOOL_BIN" ]; then
