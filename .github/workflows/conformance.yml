@@ -708,8 +708,36 @@ jobs:
       # scripted prompt produced ("reply with one word") — nothing a person
       # wrote is reachable. That is a property of the isolation, so the paths
       # are named one by one rather than swept with a wildcard from $HOME.
+      # ⚠️ **WINDOWS WAS EXCLUDED FROM THIS, WHICH IS BACKWARDS.** The exclusion
+      # dated from when the Windows leg was a stub that exited 1 with nothing to
+      # collect. It now runs the real chain, so it is the leg with the most to
+      # learn from and was the only one whose evidence was thrown away — two
+      # rounds of Windows debugging were spent reading the step's stdout because
+      # the daemon log was never uploaded.
+      # A Windows-only dump of the three files that answer "why did the hook
+      # not fire". The enrichment lane is the last failing checkpoint there, and
+      # the hook is a command the TOOL runs, so what matters is what setup wrote
+      # into the tool's own config — not anything the chain prints.
+      - name: Why did the hook not fire (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          work="$(cygpath -u "$RUNNER_TEMP")/conformance"
+          echo "=== the hook command setup wrote into Claude Code's settings ==="
+          find "$work/home" -name settings.json 2>/dev/null | head -3 | while read -r f; do
+            echo "--- $f"; cat "$f"
+          done
+          echo "=== is that command actually there, and runnable? ==="
+          ls -la "$work/bin-under-test" 2>/dev/null | head
+          echo "=== hook.json (onboarding) ==="
+          cat "$work/home/.keld/hook.json" 2>/dev/null | sed -e 's/\(ingest_token[^A-Za-z0-9]*[A-Za-z0-9]\{4\}\)[^"]*/\1…REDACTED/'
+          echo "=== daemon log tail ==="
+          tail -60 "$work/daemon.log" 2>/dev/null
+          echo "=== did the hook ever reach the daemon? ==="
+          grep -icE 'enrich|hook' "$work/daemon.log" 2>/dev/null || true
+
       - name: Upload the evidence
-        if: failure() && runner.os != 'Windows'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: conformance-${{ matrix.tool }}-${{ matrix.chain }}-${{ matrix.os }}-${{ github.run_id }}
