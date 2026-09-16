@@ -747,6 +747,14 @@ jobs:
           echo "$payload" | "$work/bin-under-test/keld.exe" __hook --source claude_code
           echo "hook exit: $?"
           echo
+          echo "=== THE HOOK'S OWN LOG (absent => the tool never ran it) ==="
+          if [ -f "$home/.keld/agent.log" ]; then
+            tail -40 "$home/.keld/agent.log"
+          else
+            echo "  NO $home/.keld/agent.log — debuglog.Append writes it on every hook"
+            echo "  invocation with nothing gating it, so the tool never ran the hook at all."
+          fi
+          echo
           echo "=== did anything reach the daemon's spool? ==="
           find "$home/.keld/spool" -type f 2>/dev/null | head -10
           echo "=== hook.json ==="
@@ -804,6 +812,15 @@ jobs:
             ${{ runner.temp }}/conformance/home/.claude/settings.json
             ${{ runner.temp }}/conformance/home/.codex/config.toml
             ${{ runner.temp }}/conformance/home/hook.json
+            # ⚠️ THE HOOK'S OWN LOG, and the one file that settles whether the
+            # hook ever RAN. debuglog.Append writes $KELD_HOME/agent.log
+            # unconditionally — no env var gates it — so its absence means the
+            # tool never invoked the hook, and its presence names what the hook
+            # then did (spooled, POSTed, got a status). Two rounds of Windows
+            # debugging asked that question without collecting the file that
+            # answers it.
+            ${{ runner.temp }}/conformance/home/.keld/agent.log
+            ${{ runner.temp }}/conformance/home/.keld/agent.log.1
             ${{ runner.temp }}/conformance/home/.claude/projects/**/*.jsonl
 
       - name: File or update the issue (AC-11)
