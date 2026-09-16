@@ -163,11 +163,24 @@ jobs:
               # A Signal release: every OS, both chains. Installers and service
               # registration ARE OS-specific, which is what this trigger is for.
               #
-              # ⚠️ One tool per cell, and today that is claude_code only —
-              # lib/tools.sh's table has one row and run-chain.sh exits 2 on any
-              # other id. When the table grows, the tool dimension collapses
-              # into the chain (the seeded before/after split the spec
-              # describes) rather than multiplying the matrix by four.
+              # ⚠️ **THIS COMMENT WAS FALSE AND IT HID A REAL GAP.** It read
+              # "lib/tools.sh's table has one row and run-chain.sh exits 2 on
+              # any other id", which justified pinning every cell to
+              # claude_code. The table has TWO rows — `tool_supported` accepts
+              # claude_code and codex, and `tool_all` returns both — so Codex
+              # was fully built into the harness and never once exercised by
+              # CI, with a comment explaining why it could not be.
+              #
+              # A comment that misdescribes the code is how a gap stays
+              # invisible; this branch has already been bitten by that twice
+              # (a spec header claiming unmerged code, and AGENTS.md's "Windows
+              # deferred" for a watcher that is not platform-gated at all).
+              #
+              # `all` is the design the spec describes: the tool dimension
+              # collapses INTO the chain via the seeded before/after split, so
+              # adding a tool costs no extra cells. Windows stays on
+              # claude_code until its chain A is green — one new variable at a
+              # time.
               matrix='{"include":[
                 {"os":"ubuntu-latest","chain":"A","tool":"claude_code","version":""},
                 {"os":"ubuntu-latest","chain":"B","tool":"claude_code","version":""},
