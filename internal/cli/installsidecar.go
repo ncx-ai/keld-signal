@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ncx-ai/keld-signal/internal/agent/service"
 	"github.com/ncx-ai/keld-signal/internal/agent/update"
 	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/errs"
@@ -50,7 +51,31 @@ type installSidecarResult struct {
 	StagedPath string // set by StageOnly
 	Path       string // set by a full install/commit
 	Version    string
+	// Restarted says the service was bounced so the RUNNING sidecar is the one
+	// just installed; RestartErr says why it was not. A swap with neither is
+	// not a thing the type can express, which is the point — see
+	// restartServiceAfterSwap.
+	Restarted  bool
+	RestartErr string
 }
+
+// restartServiceAfterSwap bounces the local service so it respawns the sidecar
+// from the tree that was just installed. A var so tests can observe it without
+// touching the machine they run on.
+//
+// ⚠️ A NEW SIDECAR ON DISK IS NOT A NEW SIDECAR RUNNING, and on a real v3.0.1
+// install the gap was five seconds in the wrong order:
+//
+//	08:41:26  daemon starts, spawns the sidecar   (postinstall: keld-agent install)
+//	08:41:31  sidecar tree replaced on disk (v3.0.1)
+//	08:41:32  sidecar binary written
+//
+// postinstall backgrounds the ~190MB fetch on purpose — it must not block the
+// install — and restarts the daemon on its own schedule, so the daemon spawned
+// the OLD image and held it. `doctor` then reported version skew on a machine
+// whose disk was entirely correct, and a manual restart cleared it at once.
+// An installer is supposed to replace AND restart; this is the second half.
+var restartServiceAfterSwap = service.Restart
 
 // sidecarDestDir is where the macOS pkg and scripts/install.sh both put the
 // sidecar: a user-writable directory that sidecarBinPath() already searches, so
@@ -206,7 +231,38 @@ func commitStagedSidecar(staged, dest string) (installSidecarResult, error) {
 	sw.Commit()
 	_ = os.RemoveAll(staged)
 	res.Path = target
+
+	// ⚠️ BEST EFFORT, AND DELIBERATELY NOT AN ERROR. By this point the new
+	// sidecar is on disk and verified; all that is missing is a respawn, which
+	// the next daemon start performs anyway and which doctor's skew check
+	// reports in the meantime. Failing here would discard a completed ~190MB
+	// install over a recoverable condition — and on postinstall's background
+	// path nobody is reading the exit code at all.
+	if err := restartServiceAfterSwap(); err != nil {
+		res.RestartErr = err.Error()
+	} else {
+		res.Restarted = true
+	}
 	return res, nil
+}
+
+// reportSidecarInstall says where the sidecar went AND whether the running one
+// is now that sidecar. Those are different facts: the swap can succeed while the
+// restart does not, which leaves a correct tree on disk and a stale process
+// serving — the exact state doctor's version-skew check reports.
+func reportSidecarInstall(res installSidecarResult, jsonOut bool) {
+	if jsonOut {
+		emitEvent(sidecarInstalledEvent{
+			Event: "installed", Path: res.Path, Version: res.Version,
+			Restarted: res.Restarted, RestartError: res.RestartErr,
+		})
+		return
+	}
+	console.Print("  ✓ analysis sidecar → " + res.Path)
+	if !res.Restarted && res.RestartErr != "" {
+		console.Print("    ⚠ could not restart the agent (" + res.RestartErr + ") — " +
+			"the previous sidecar keeps running until it restarts. `keld-agent restart` finishes it.")
+	}
 }
 
 func readSidecarVersion(tree string) string {
@@ -233,6 +289,11 @@ type sidecarInstalledEvent struct {
 	Event   string `json:"event"`
 	Path    string `json:"path"`
 	Version string `json:"version,omitempty"`
+	// Whether the RUNNING sidecar is now the one just installed. Omitted when
+	// the restart succeeded and nothing needs saying; a consumer that sees
+	// restart_error knows the tree is current and the process is not.
+	Restarted    bool   `json:"restarted,omitempty"`
+	RestartError string `json:"restart_error,omitempty"`
 }
 
 // newSidecarProgressThrottle collapses bursty byte-level progress updates to
@@ -296,11 +357,7 @@ func newInstallSidecarCmd() *cobra.Command {
 				if err != nil {
 					return fail(err)
 				}
-				if jsonOut {
-					emitEvent(sidecarInstalledEvent{Event: "installed", Path: res.Path, Version: res.Version})
-				} else {
-					console.Print("  ✓ analysis sidecar → " + res.Path)
-				}
+				reportSidecarInstall(res, jsonOut)
 				return nil
 			}
 
@@ -322,10 +379,8 @@ func newInstallSidecarCmd() *cobra.Command {
 				emitEvent(sidecarStagedEvent{Event: "staged", Path: res.StagedPath, Version: res.Version})
 			case stageOnly:
 				console.Print("  ✓ analysis sidecar staged at " + res.StagedPath)
-			case jsonOut:
-				emitEvent(sidecarInstalledEvent{Event: "installed", Path: res.Path, Version: res.Version})
 			default:
-				console.Print("  ✓ analysis sidecar → " + res.Path)
+				reportSidecarInstall(res, jsonOut)
 			}
 			return nil
 		},
