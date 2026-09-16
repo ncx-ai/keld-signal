@@ -79,4 +79,24 @@ r="$(run_tool_case false true "")"
 r="$(run_tool_case true true "claude_code")"
 [ "$r" = "1" ] || fail "a real, non-empty tool selection did not configure anything — got $r call(s), expected 1"
 
+# ⚠️ THE FALLBACK FETCH MUST OUTLIVE THIS SCRIPT, AND MUST LEAVE A RECORD.
+# It used to be a bare `sh -c "keld signal install-sidecar … >/dev/null 2>&1 &"`.
+# Measured on a real v3.0.2 install (2026-09-16): postinstall ran at 10:40:34,
+# this path fired, and two minutes later there was no fetch process, no staging
+# dir, and a sidecar tree still carrying its previous mtime — while the same
+# command run by hand worked first time. A bare background child does not
+# survive PackageKit tearing down the script's sandbox, and /dev/null meant
+# nothing said so.
+#
+# Anyone ALREADY SIGNED IN takes this path: they reach Continue before the
+# pane's ~190MB download finishes, so no tree is staged. The faster the person,
+# the likelier the sidecar silently never updates.
+grep -q 'launchctl bootstrap' "$p" \
+  || fail "the fallback sidecar fetch is not handed to launchd, so it dies with postinstall"
+grep -q 'sidecar-install.log' "$p" \
+  || fail "the fallback sidecar fetch writes no log, so a silent failure stays silent"
+if grep -E 'install-sidecar[^|]*>/dev/null 2>&1 *&' "$p" >/dev/null; then
+  fail "the fallback still backgrounds the fetch into /dev/null — the exact shape that achieved nothing"
+fi
+
 echo "postinstall_test.sh: OK"

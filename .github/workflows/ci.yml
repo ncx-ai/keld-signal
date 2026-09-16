@@ -35,6 +35,7 @@ jobs:
           bash installers/macos/onboard_command_test.sh
           bash installers/macos/build_pkg_notarization_test.sh
           bash installers/macos/build_pkg_app_version_test.sh
+          bash installers/macos/postinstall_fetchjob_test.sh
 
   goreleaser-check:
     runs-on: ubuntu-latest

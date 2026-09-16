@@ -5,6 +5,38 @@ All notable changes to **keld-signal** (the Keld client — the `keld` CLI + the
 follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 semantic-ish versioning during `0.x`.
 
+## [3.0.3] — 2026-09-16
+
+### Fixed
+- **A sidecar download that silently never happened.** The fallback path — taken
+  by anyone ALREADY SIGNED IN, who reaches Continue before the ~190 MB download
+  finishes — backgrounded the fetch as a child of `postinstall` and sent its
+  output to `/dev/null`. Measured on a real 3.0.2 install: no fetch process, no
+  staging directory, a sidecar tree still bearing its previous timestamp, and
+  nothing said. The work is now a launchd job, which owns it independently of
+  the installer script's lifetime, and it writes
+  `~/.keld/logs/sidecar-install.log`. It runs Keld's own signed binary rather
+  than a generated shell script, because **macOS names the background item after
+  the program and shows that to the person installing** — the first attempt
+  produced a system notification reading "'.sidecar-fetch.sh' can run in the
+  background". `--cleanup-job` deletes the job after a SUCCESSFUL fetch; a
+  failed one keeps it, since it is the only thing that will try again.
+- **The pane's diagnostics recorded nothing.** They went to the unified log,
+  where os_log redacts dynamic strings: every line arrived as
+  `keld-pane: <private>`. They now write `~/.keld/logs/installer-pane.log`.
+- **The setup-code field is gone.** The pane fetches its own device code and
+  approves inside the embedded page, so a box asking for `ABCD-EFGH` was an
+  instruction for a step that never comes, sitting under a form that had already
+  signed you in. The clipboard auto-submit and its shape-check went with it.
+- **The wait after signing in is visible.** Atlas's form posts over `fetch`, so
+  no navigation occurs and the pane could not tell that anyone had pressed
+  anything: the panel sat unchanged until the device poll answered. The pane now
+  injects its own click listener, says "Signing you in…" the moment the form is
+  submitted, and keeps a progress bar moving through both that wait and the tool
+  enumeration that follows. Continue is held until the tool list is actually on
+  screen, so the button becoming available means the pane is finished rather
+  than lighting up over an empty panel.
+
 ## [3.0.2] — 2026-09-16
 
 ### Fixed
