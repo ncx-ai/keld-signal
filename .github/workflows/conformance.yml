@@ -157,7 +157,8 @@ jobs:
                 {"os":"ubuntu-latest","chain":"B","tool":"claude_code","version":""},
                 {"os":"macos-14","chain":"A","tool":"claude_code","version":""},
                 {"os":"macos-14","chain":"B","tool":"claude_code","version":""},
-                {"os":"windows-latest","chain":"A","tool":"claude_code","version":""}]}'
+                {"os":"windows-latest","chain":"A","tool":"claude_code","version":""},
+                {"os":"windows-latest","chain":"B","tool":"claude_code","version":""}]}'
               ;;
             workflow_run)
               # A Signal release: every OS, both chains. Installers and service
@@ -515,6 +516,67 @@ jobs:
       # this upgrades from the last thing real users were given, never from an
       # rc. A missing asset FAILS the step rather than silently leaving
       # PREVIOUS empty, which would put the fallback back.
+      # --- chain B's release pair, Windows ------------------------------------
+      #
+      # ⚠️ **WINDOWS PUBLISHES NO SIDECAR ARCHIVE, so a "previous release"
+      # cannot be assembled by downloading.** Every other platform gets
+      # keld-agent-sidecar_<os>_<arch>.tar.gz and unpacks two of them side by
+      # side; Windows ships the sidecar ONLY inside keld-setup.exe. So the pair
+      # is built by INSTALLING each release and copying the result aside —
+      # both write to the same {localappdata}\Programs\keld, so the older must
+      # be taken away before the newer overwrites it.
+      #
+      # That ordering is the whole step: install old -> copy -> install new ->
+      # copy. Reversing it silently yields two copies of the same version, and
+      # the chain would then refuse at `upgrade` with "the sidecar was NOT
+      # replaced" — which is what it did on Linux when both halves matched.
+      - name: Build chain B's release pair (Windows)
+        id: previous-windows
+        if: matrix.chain == 'B' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $app = "$env:LOCALAPPDATA\Programs\keld"
+          # Releases chosen by CONTENT, never by position — a tag mid-publish is
+          # newest and carries nothing (measured on v3.0.2, 2026-09-16).
+          $have = @()
+          $cands = gh release list --repo "$env:GITHUB_REPOSITORY" --limit 20 `
+                     --json tagName,isPrerelease,isDraft `
+                     --jq '[.[] | select(.isPrerelease == false and .isDraft == false)] | .[].tagName'
+          foreach ($c in $cands) {
+            $names = gh release view $c --repo "$env:GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | join(" ")'
+            if ($names -match 'keld-setup\.exe') { $have += $c }
+            if ($have.Count -ge 2) { break }
+          }
+          if ($have.Count -lt 2) { throw "need two published releases carrying keld-setup.exe; found $($have.Count)" }
+          $newTag, $oldTag = $have[0], $have[1]
+          Write-Host "upgrade: $oldTag -> $newTag"
+
+          function Install-Keld([string]$tag, [string]$into) {
+            $dir = "$env:RUNNER_TEMP\dl-$tag"
+            gh release download $tag --repo "$env:GITHUB_REPOSITORY" --pattern "keld-setup.exe" --dir $dir
+            $p = Start-Process -FilePath "$dir\keld-setup.exe" `
+                   -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) { throw "$tag installer exited $($p.ExitCode)" }
+            New-Item -ItemType Directory -Force -Path $into | Out-Null
+            Copy-Item -Path "$app\*" -Destination $into -Recurse -Force
+            $v = if (Test-Path "$into\VERSION") { (Get-Content "$into\VERSION" -Raw).Trim() } else { "(no VERSION)" }
+            Write-Host "  $tag -> $into (sidecar $v)"
+          }
+
+          # OLD FIRST. The newer install overwrites the same directory.
+          $prev = "$env:RUNNER_TEMP\previous"
+          $newsc = "$env:RUNNER_TEMP\new-sidecar"
+          Install-Keld $oldTag $prev
+          Install-Keld $newTag $newsc
+          foreach ($f in @("keld.exe","keld-agent.exe","keld-agent-sidecar.exe")) {
+            if (-not (Test-Path "$prev\$f")) { throw "$oldTag install left no $f" }
+          }
+          "dir=$prev"        | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "newsidecar=$newsc" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
       - name: Fetch the previous release (chain B)
         id: previous
         if: matrix.chain == 'B' && runner.os != 'Windows'
@@ -686,14 +748,24 @@ jobs:
           # run printed no control line at all and looked like the control had
           # failed, when it had simply never been switched on.
           KELD_CONFORM_HOOK_CONTROL: "1"
+          PREVIOUS_WIN: ${{ steps.previous-windows.outputs.dir || '' }}
+          NEW_SIDECAR_WIN: ${{ steps.previous-windows.outputs.newsidecar || '' }}
         run: |
           set -uo pipefail
           work="$(cygpath -u "$RUNNER_TEMP")/conformance"
+          # Chain B's pair, converted to POSIX for the harness that reads them.
+          PREV_ARG=""
+          if [ "$CHAIN" = "B" ] && [ -n "${PREVIOUS_WIN:-}" ]; then
+            PREV_ARG="--previous dir:$(cygpath -u "$PREVIOUS_WIN")"
+            export KELD_CONFORM_NEW_SIDECAR="$(cygpath -u "$NEW_SIDECAR_WIN")"
+            echo "chain B: previous=$PREVIOUS_WIN new sidecar=$NEW_SIDECAR_WIN"
+          fi
           mkdir -p "$work"
           echo "bash: $(bash --version | head -1)"
           echo "node: $(node --version 2>&1)  python: $(python --version 2>&1)  go: $(go version 2>&1)"
+          # shellcheck disable=SC2086  # PREV_ARG must word-split into two args
           bash scripts/conformance/run-chain.sh \
-            --tool "$TOOL" --chain "$CHAIN" --seed "$SEED" --work "$work" \
+            --tool "$TOOL" --chain "$CHAIN" --seed "$SEED" --work "$work" $PREV_ARG \
             2>&1 | tee "$work/chain.log"
           rc=${PIPESTATUS[0]}
           echo "run-chain.sh exited $rc"

@@ -398,9 +398,26 @@ prev_resolve() {
   case "$spec" in
     dir:*)
       local d=${spec#dir:}
-      [ -x "$d/keld-agent" ] || { say "no keld-agent under $d"; return 1; }
+      local agent=keld-agent
+      case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) agent=keld-agent.exe ;; esac
+      [ -f "$d/$agent" ] || { say "no $agent under $d"; return 1; }
       PREV_BIN_DIR=$d
-      PREV_SIDECAR_DIR="$d/keld-agent-sidecar"
+      # ⚠️ **TWO LAYOUTS, BECAUSE WINDOWS SHIPS NO SIDECAR ARCHIVE.** Every
+      # other platform publishes keld-agent-sidecar_<os>_<arch>.tar.gz, which
+      # unpacks into its own keld-agent-sidecar/ directory. Windows publishes
+      # the sidecar ONLY inside keld-setup.exe, whose [Files] line lays it FLAT
+      # into {localappdata}\Programs\keld beside keld.exe — so a "previous
+      # release" assembled on Windows has the sidecar binary as a SIBLING of
+      # keld-agent.exe rather than one directory down.
+      #
+      # Detected by LOOKING, not from uname: a caller may hand over a tree it
+      # unpacked itself in either shape, and inferring from the OS would be
+      # wrong for that caller on the platform where it matters least.
+      if [ -d "$d/keld-agent-sidecar" ]; then
+        PREV_SIDECAR_DIR="$d/keld-agent-sidecar"
+      else
+        PREV_SIDECAR_DIR="$d"
+      fi
       ;;
     installed)
       PREV_BIN_DIR=""
