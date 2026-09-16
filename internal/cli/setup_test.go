@@ -9,10 +9,15 @@ import (
 	"strings"
 	"testing"
 
+	"encoding/json"
+
 	"github.com/ncx-ai/keld-signal/internal/api"
+	"github.com/ncx-ai/keld-signal/internal/config"
 	"github.com/ncx-ai/keld-signal/internal/console"
 	"github.com/ncx-ai/keld-signal/internal/errs"
+	"github.com/ncx-ai/keld-signal/internal/paths"
 	"github.com/ncx-ai/keld-signal/internal/tools"
+	"github.com/ncx-ai/keld-signal/internal/version"
 )
 
 // fakeAdapter is a test double for tools.Adapter.
@@ -50,6 +55,143 @@ func (f *fakeAdapter) Status(current *string, managed map[string]any) tools.Tool
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// readHookConfig reads ~/.keld/hook.json the way the hook and the daemon do.
+// config keeps its file struct unexported, so the test asserts on the BYTES on
+// disk rather than on a loader it would then be trusting.
+func readHookConfig(t *testing.T) struct {
+	Endpoint    string `json:"endpoint"`
+	IngestToken string `json:"ingest_token"`
+} {
+	t.Helper()
+	var hf struct {
+		Endpoint    string `json:"endpoint"`
+		IngestToken string `json:"ingest_token"`
+	}
+	b, err := os.ReadFile(paths.HookConfigPath())
+	if err != nil {
+		t.Fatalf("reading hook.json: %v", err)
+	}
+	if err := json.Unmarshal(b, &hf); err != nil {
+		t.Fatalf("parsing hook.json: %v", err)
+	}
+	return hf
+}
+
+// ⚠️ AN UPGRADE MUST ADOPT THE CREDENTIAL IT JUST VERIFIED, EVEN WHEN NO TOOL
+// CONFIG CHANGES. `SaveHookConfig` and the manifest write used to sit BELOW the
+// `len(approveds) == 0` early return, so a machine whose tools were already
+// configured discarded a verified onboarding and kept whatever hook.json it had.
+//
+// Measured on a real install (2026-09-16, v3.0.0 from the release): the wizard
+// signed in to production, `postinstall` ran `signal setup --yes`, every tool
+// reported "already configured", and hook.json kept YESTERDAY's endpoint —
+// `http://localhost:8000` with a dev token. The agent log then showed 882 calls
+// to localhost against 9 to atlas.keld.co, while `keld signal status` reported
+// the production login. `doctor` said no problems, correctly: nothing compared
+// the two.
+//
+// The installer is supposed to replace and restart everything. A pass that
+// leaves the daemon reporting somewhere other than the identity it just
+// verified is an internally inconsistent machine, which is worse than a loud
+// failure.
+func TestRunSetupWritesHookConfigWhenEveryToolIsAlreadyConfigured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	// The state an upgrade finds: a hook.json pointing somewhere else entirely.
+	if err := config.SaveHookConfig("http://localhost:8000", "stale-dev-token"); err != nil {
+		t.Fatalf("seeding hook.json: %v", err)
+	}
+
+	// Nothing to apply: the one detected tool is already configured, which is
+	// the ordinary state of every re-install and every upgrade.
+	adapter := &fakeAdapter{
+		name: "faketool",
+		plan: tools.Plan{
+			Name:       "faketool",
+			ConfigPath: filepath.Join(t.TempDir(), "tool.json"),
+			AfterText:  `{"key":"val"}`,
+			Managed:    map[string]any{},
+			Changed:    false,
+		},
+	}
+
+	ob := &api.Onboarding{Endpoint: "https://atlas.keld.co", IngestToken: "fresh-prod-token", Actor: "dg@keld.co"}
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
+	opts := SetupOpts{
+		Yes:             true,
+		Confirm:         func(string) bool { return true },
+		ResolveConflict: func(tools.Adapter, tools.Plan) string { return "skip" },
+	}
+
+	if _, err := runSetup([]tools.Adapter{adapter}, p, &api.Client{}, ob, opts); err != nil {
+		t.Fatalf("runSetup returned error: %v", err)
+	}
+
+	hook := readHookConfig(t)
+	if hook.Endpoint != ob.Endpoint {
+		t.Errorf("hook.json endpoint = %q, want %q — the verified onboarding was discarded", hook.Endpoint, ob.Endpoint)
+	}
+	if hook.IngestToken != ob.IngestToken {
+		t.Error("hook.json kept the stale ingest token instead of the one setup just obtained")
+	}
+
+	// The manifest records which CLI wrote the hook; leaving it behind is what
+	// made `keld signal status` report a stale hook version after an upgrade.
+	m, err := config.LoadManifest()
+	if err != nil {
+		t.Fatalf("loading manifest: %v", err)
+	}
+	if m == nil || m.Hook == nil || m.Hook.Version != version.CLI {
+		got := "<nil>"
+		if m != nil && m.Hook != nil {
+			got = m.Hook.Version
+		}
+		t.Errorf("manifest hook version = %s, want %s", got, version.CLI)
+	}
+}
+
+// The companion refusal: a dry run inspects, it does not adopt. Without this,
+// the fix above would let `--dry-run` rewrite the machine's credential — which
+// is exactly what the wizard pane runs before anyone has agreed to anything.
+func TestRunSetupDryRunDoesNotAdoptTheOnboarding(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KELD_HOME", home)
+
+	if err := config.SaveHookConfig("http://localhost:8000", "stale-dev-token"); err != nil {
+		t.Fatalf("seeding hook.json: %v", err)
+	}
+
+	adapter := &fakeAdapter{
+		name: "faketool",
+		plan: tools.Plan{
+			Name:       "faketool",
+			ConfigPath: filepath.Join(t.TempDir(), "tool.json"),
+			AfterText:  `{"key":"val"}`,
+			Managed:    map[string]any{},
+			Changed:    true,
+		},
+	}
+
+	ob := &api.Onboarding{Endpoint: "https://atlas.keld.co", IngestToken: "fresh-prod-token", Actor: "dg@keld.co"}
+	p := tools.SetupParams{Endpoint: "http://127.0.0.1:14318", IngestToken: "local-secret"}
+	opts := SetupOpts{
+		DryRun:          true,
+		Yes:             true,
+		Confirm:         func(string) bool { return true },
+		ResolveConflict: func(tools.Adapter, tools.Plan) string { return "skip" },
+	}
+
+	if _, err := runSetup([]tools.Adapter{adapter}, p, &api.Client{}, ob, opts); err != nil {
+		t.Fatalf("runSetup returned error: %v", err)
+	}
+
+	hook := readHookConfig(t)
+	if hook.Endpoint != "http://localhost:8000" || hook.IngestToken != "stale-dev-token" {
+		t.Errorf("dry run rewrote hook.json: endpoint=%q", hook.Endpoint)
+	}
 }
 
 func TestRunSetupEmitsEventsWhenEmitSet(t *testing.T) {
@@ -448,7 +590,11 @@ func TestRunSetupHumanOutputFormat(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^\s*✓ codex\s+already configured\s*$`).MatchString(got) {
 		t.Fatalf("missing already-configured tool line: %q", got)
 	}
-	if !regexp.MustCompile(`(?m)^\s*✓ Hook\s+~/\.keld/hook\.json\s*$`).MatchString(got) {
+	// The Hook line now names the DESTINATION it wrote, not just the path. It
+	// used to print unconditionally, above a return that wrote nothing, so an
+	// install log showed the hook being configured on exactly the run that left
+	// it stale — see TestRunSetupWritesHookConfigWhenEveryToolIsAlreadyConfigured.
+	if !regexp.MustCompile(`(?m)^\s*✓ Hook\s+~/\.keld/hook\.json → \S+\s*$`).MatchString(got) {
 		t.Fatalf("missing Hook line: %q", got)
 	}
 	if strings.Contains(got, "Nothing to apply.") {
