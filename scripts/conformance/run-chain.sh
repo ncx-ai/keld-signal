@@ -483,8 +483,20 @@ config_normalise() {
   # differ in more than a pair of characters.
   python3 -c '
 import sys
+# Every line keld OWNS, and nothing else. A self-repair re-runs the adapter,
+# which rewrites the whole managed block — not just the hook command — and the
+# telemetry endpoint legitimately moves because the restarted daemon picked a
+# new loopback port. Blanking only the hook line left that endpoint behind and
+# the check reported a change "outside keld|s own hook command", which was true
+# and still not a trampling.
+OWNED = (
+    "__hook --source",              # the hook command itself
+    "OTEL_",                        # endpoint, protocol, exporters, headers
+    "CLAUDE_CODE_ENABLE_TELEMETRY", # the switch that turns the above on
+    "x-keld-ingest-token",          # the loopback secret, inside the headers
+)
 for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
-    sys.stdout.write("<KELD_HOOK_LINE>\n" if "__hook --source" in line else line)
+    sys.stdout.write("<KELD_OWNED_LINE>\n" if any(k in line for k in OWNED) else line)
 ' "$1"
 }
 
