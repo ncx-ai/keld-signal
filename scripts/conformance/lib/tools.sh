@@ -282,6 +282,18 @@ tool_env() {
       # Gemini reads ~/.gemini from the home dir; HOME/USERPROFILE are already
       # the isolated ones, so nothing else is needed to keep it contained.
       export GEMINI_CLI_DISABLE_AUTOUPDATER=1
+      # ⚠️ **THE THIRD GATE, AND EACH ONE ONLY APPEARS AFTER THE LAST IS PAST.**
+      # Gemini refuses to run in a directory nobody has trusted: exit 55,
+      # "not running in a trusted directory". Its own message names the fix for
+      # exactly this case, and the ENV VAR is taken over `--skip-trust` because
+      # it is the documented headless/automated switch and so does not depend on
+      # a flag surviving a version bump.
+      #
+      # Worth stating plainly: this is a real prompt a real first-time user
+      # answers, and the harness is skipping it. What the run proves is what
+      # happens AFTER a person has trusted their workspace, not that the
+      # trusting itself works.
+      export GEMINI_CLI_TRUST_WORKSPACE=true
       ;;
     codex)
       # CodexAdapter.ConfigPath resolves $HOME/.codex/config.toml and knows
