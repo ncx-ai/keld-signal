@@ -185,6 +185,29 @@ DETECT_BUDGET=${KELD_CONFORM_DETECT:-90}
 # serve is the lane the upgrade must repair.
 PREV_NOT_EXPECTED=store_rows
 
+# ⚠️ **ON WINDOWS THE PREVIOUS RELEASE CANNOT ENRICH AT ALL, and that is a
+# PRODUCT fact this branch just fixed rather than a harness gap.** Every keld
+# up to and including v3.0.3 writes its hook command as a BARE path, and on
+# Windows a bare path is a run of backslash escapes that leaves nothing
+# executable behind — so no hook ever fires, no pointer ever reaches the daemon,
+# and `pointer`/`publish` are dark. Measured on windows-latest 2026-09-16, and
+# proven rather than inferred: a control hook added beside keld's own FIRED, so
+# the tool runs hooks and keld's command was the thing that did not work.
+#
+# That is exactly what chain B exists to express. The lane the OLD release
+# cannot serve is the lane the UPGRADE must repair — the same asymmetry
+# store_rows already encodes one line up — so the expectation is widened here
+# and the post-upgrade step still requires ALL FIVE. If the upgrade did not fix
+# it, `upgraded-prompts` fails and this expectation cannot hide it.
+#
+# ⚠️ REMOVE THIS the release after the quoting fix ships. Once the previous
+# release is one that CAN enrich on Windows, keeping it would let a real
+# regression pass unnoticed — an expectation that outlives its reason is
+# indistinguishable from a silenced test.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) PREV_NOT_EXPECTED="$PREV_NOT_EXPECTED,pointer,publish" ;;
+esac
+
 step_before_install() {
   step_begin "before-install"
   local t
