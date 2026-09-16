@@ -427,10 +427,11 @@ config_snapshot() {
   sha256_resolve
   CONFIG_HASHES="$WORK/config-hashes.txt"
   : > "$CONFIG_HASHES"
+  rm -f "$CONFIG_HASHES".*
   local t p
   for t in $BEFORE $AFTER; do
     p=$(tool_config_path "$t")
-    [ -f "$p" ] && $SHA256_CMD "$p" >> "$CONFIG_HASHES"
+    [ -f "$p" ] && config_normalise "$p" | $SHA256_CMD >> "$CONFIG_HASHES.$t"
   done
   say "config snapshot: $(wc -l < "$CONFIG_HASHES" | tr -d ' ') file(s)"
 }
@@ -441,13 +442,50 @@ config_snapshot() {
 config_unchanged() {
   [ -f "${CONFIG_HASHES:-}" ] || { say "no config snapshot to compare"; return 0; }
   sha256_resolve
-  if $SHA256_CMD -c "$CONFIG_HASHES" >"$WORK/config-check.out" 2>&1; then
-    say "tool configs preserved byte for byte across the upgrade"
+  local t p before now ok=1
+  for t in $BEFORE $AFTER; do
+    [ -f "$CONFIG_HASHES.$t" ] || continue
+    p=$(tool_config_path "$t")
+    [ -f "$p" ] || { say "$t's config DISAPPEARED across the upgrade"; ok=0; continue; }
+    before=$(cat "$CONFIG_HASHES.$t")
+    now=$(config_normalise "$p" | $SHA256_CMD)
+    if [ "$before" != "$now" ]; then
+      say "$t's config CHANGED across the upgrade, outside keld's own hook command"
+      ok=0
+    fi
+  done
+  if [ "$ok" = "1" ]; then
+    say "tool configs preserved across the upgrade (keld's own hook command aside)"
     return 0
   fi
-  say "a tool config CHANGED across the upgrade:"
-  cat "$WORK/config-check.out" >&2
   return 1
+}
+
+# config_normalise — the config with keld's own hook COMMAND blanked.
+#
+# ⚠️ **"PRESERVED BYTE FOR BYTE" CANNOT SURVIVE A SELF-REPAIR, and the
+# assertion it was protecting is not the one that matters.** The detector now
+# rewrites a hook command that cannot execute — that IS the fix — and the new
+# command also names the new binary, so on a machine that needed repairing the
+# file legitimately differs in two ways at once.
+#
+# What the check exists to catch is an upgrade trampling a config its OWNER
+# edited: a re-pointed endpoint, a dropped env block, a lost unrelated hook.
+# Blanking keld's own command value keeps every one of those failing while
+# letting the repair through, which is strictly MORE precise than byte
+# equality — under the old rule a repair and a trampling were the same event.
+config_normalise() {
+  # Any LINE carrying keld's hook command is keld's own — Claude Code's JSON
+  # object and Codex's TOML inline table both put the whole entry on one line —
+  # so the line is replaced wholesale. A regex over the command VALUE was tried
+  # first and could not see both shapes at once: the repaired form arrives with
+  # its inner quotes ESCAPED inside the JSON string, so "quoted" and "bare"
+  # differ in more than a pair of characters.
+  python3 -c '
+import sys
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    sys.stdout.write("<KELD_HOOK_LINE>\n" if "__hook --source" in line else line)
+' "$1"
 }
 
 # --- the previous release ----------------------------------------------------
