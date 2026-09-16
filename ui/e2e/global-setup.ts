@@ -17,6 +17,7 @@ export type E2EState = {
   work: string;
   log: string;
   settingsMounted: boolean;
+  integrationsMounted: boolean;
   blocks: number;
   intended: number;
 };
