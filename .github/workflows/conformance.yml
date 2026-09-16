@@ -153,12 +153,12 @@ jobs:
               #
               # Widen this the day each of those is true, not before.
               matrix='{"include":[
-                {"os":"ubuntu-latest","chain":"A","tool":"claude_code","version":""},
-                {"os":"ubuntu-latest","chain":"B","tool":"claude_code","version":""},
-                {"os":"macos-14","chain":"A","tool":"claude_code","version":""},
-                {"os":"macos-14","chain":"B","tool":"claude_code","version":""},
-                {"os":"windows-latest","chain":"A","tool":"claude_code","version":""},
-                {"os":"windows-latest","chain":"B","tool":"claude_code","version":""}]}'
+                {"os":"ubuntu-latest","chain":"A","tool":"all","version":""},
+                {"os":"ubuntu-latest","chain":"B","tool":"all","version":""},
+                {"os":"macos-14","chain":"A","tool":"all","version":""},
+                {"os":"macos-14","chain":"B","tool":"all","version":""},
+                {"os":"windows-latest","chain":"A","tool":"all","version":""},
+                {"os":"windows-latest","chain":"B","tool":"all","version":""}]}'
               ;;
             workflow_run)
               # A Signal release: every OS, both chains. Installers and service
@@ -179,9 +179,13 @@ jobs:
               #
               # `all` is the design the spec describes: the tool dimension
               # collapses INTO the chain via the seeded before/after split, so
-              # adding a tool costs no extra cells. Windows stays on
-              # claude_code until its chain A is green — one new variable at a
-              # time.
+              # adding a tool costs no extra cells.
+              #
+              # ⚠️ Windows is now green on BOTH chains, so the reason it stayed
+              # pinned to claude_code is gone. Every cell drives `all`, which
+              # today is claude_code + codex + gemini_cli — three tools across
+              # six cells rather than eighteen, because the split rotates per
+              # run instead of multiplying the matrix.
               matrix='{"include":[
                 {"os":"ubuntu-latest","chain":"A","tool":"claude_code","version":""},
                 {"os":"ubuntu-latest","chain":"B","tool":"claude_code","version":""},
