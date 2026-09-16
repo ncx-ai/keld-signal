@@ -747,12 +747,30 @@ jobs:
           echo "$payload" | "$work/bin-under-test/keld.exe" __hook --source claude_code
           echo "hook exit: $?"
           echo
-          echo "=== THE HOOK'S OWN LOG (absent => the tool never ran it) ==="
-          if [ -f "$home/agent.log" ]; then
-            tail -40 "$home/agent.log"
+          # ⚠️ **AN ABSENT agent.log IS AMBIGUOUS, and this step used to claim
+          # otherwise.** debuglog.Append is called ONLY on forwardToAgent's
+          # FAILURE branches — a spool write, or an unreachable daemon. The
+          # happy path (postToAgent returns true) logs nothing at all. So no
+          # file means "every hook that ran delivered" OR "no hook ran", and it
+          # cannot separate them. Printed for what it does say, not as a verdict.
+          echo "=== hook log (FAILURE paths only — absence is ambiguous) ==="
+          [ -f "$home/agent.log" ] && tail -40 "$home/agent.log" || echo "  (none: either no hook ran, or each one delivered)"
+          echo
+          # THE UNAMBIGUOUS EXPERIMENT: give Claude Code a hook that can only
+          # leave a trace, and look for the trace. This separates the two
+          # candidates nothing else has — "Claude Code runs no hook on Windows"
+          # versus "it runs them and keld's command form is wrong".
+          echo "=== CONTROL: does Claude Code run ANY hook on Windows? ==="
+          marker="$work/hook-marker.txt"; rm -f "$marker"
+          probe="$work/probe-hook.cmd"
+          printf '@echo off\r\necho fired 1>>"%%~1"\r\n' > "$probe"
+          PROBE_WIN=$(cygpath -w "$probe"); MARKER_WIN=$(cygpath -w "$marker")
+          python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); c="\"%s\" \"%s\""%(sys.argv[2],sys.argv[3]); d.setdefault("hooks",{}).setdefault("UserPromptSubmit",[]).append({"hooks":[{"type":"command","command":c}]}); json.dump(d,open(p,"w"),indent=2); print("control hook:",c)' "$home/.claude/settings.json" "$PROBE_WIN" "$MARKER_WIN"
+          "$work/npm/claude" -p "say ok" >/dev/null 2>&1
+          if [ -f "$marker" ]; then
+            echo "  CONTROL FIRED — Claude Code DOES run hooks here; keld's command form is the suspect"
           else
-            echo "  NO $home/agent.log — debuglog.Append writes it on every hook"
-            echo "  invocation with nothing gating it, so the tool never ran the hook at all."
+            echo "  CONTROL DID NOT FIRE — Claude Code ran no hook at all on this platform"
           fi
           echo
           echo "=== did anything reach the daemon's spool? ==="
