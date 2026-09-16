@@ -1,11 +1,20 @@
 // Package mockllm is the conformance harness's stand-in for a model provider.
 //
-// It answers the two wire protocols the tools Signal integrates with speak —
-// Anthropic Messages (`POST /v1/messages`, streaming and not) for Claude Code,
-// and OpenAI Responses (`POST /v1/responses`, streaming and not) for Codex and
-// Pi — with a fixed reply and fixed usage numbers, so a conformance run is
-// deterministic, free, and fails only when OUR capture broke rather than when a
-// provider was down.
+// It answers the wire protocols the tools Signal integrates with speak, with a
+// fixed reply and fixed usage numbers, so a conformance run is deterministic,
+// free, and fails only when OUR capture broke rather than when a provider was
+// down:
+//
+//   - Anthropic Messages   `POST /v1/messages`         — Claude Code
+//   - OpenAI Responses     `POST /v1/responses`        — Codex, Pi
+//   - OpenAI Chat Compl.   `POST /v1/chat/completions` — everything that speaks
+//     "OpenAI-compatible": Goose, Qwen Code, Cline, OpenCode, Aider, Continue
+//
+// ⚠️ **THE PROTOCOL LIST IS WHAT GATES THE TOOL LIST.** A tool can be tested
+// without credentials when two things hold: it lets you choose its model
+// endpoint, and it speaks something answered here. Adding a protocol therefore
+// unlocks a whole GROUP of tools at once, which is why Chat Completions was
+// worth more than any single adapter.
 //
 // ⚠️ **It never writes a request body anywhere.** The harness drives a REAL
 // tool, so the body on the wire is a real prompt; the per-request log records
@@ -68,6 +77,7 @@ func New(opts Options) (*Server, error) {
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/v1/messages", s.handleMessages)
 	s.mux.HandleFunc("/v1/responses", s.handleResponses)
+	s.mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
 	return s, nil
 }
 
