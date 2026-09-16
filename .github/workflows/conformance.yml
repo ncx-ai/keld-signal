@@ -568,8 +568,23 @@ jobs:
           function Install-Keld([string]$tag, [string]$into) {
             $dir = "$env:RUNNER_TEMP\dl-$tag"
             gh release download $tag --repo "$env:GITHUB_REPOSITORY" --pattern "keld-setup.exe" --dir $dir
+            # ⚠️ **THE FIRST INSTALL LEAVES keld RUNNING, AND A SILENT
+            # INSTALLER CANNOT ASK TO CLOSE IT.** v3.0.2 installed fine; v3.0.3
+            # over the top of it exited 5 — Inno's files-in-use prompt, which
+            # /VERYSILENT can only answer by refusing. `keld-agent install`
+            # registers and STARTS the logon task, so by the second install the
+            # binary Inno wants to replace is open.
+            #
+            # Two belts: stop anything of ours still running, and pass
+            # /FORCECLOSEAPPLICATIONS so Inno closes what it finds rather than
+            # asking a question nobody is there to answer. The Stop-Process is
+            # best-effort — nothing running is the normal case on the first
+            # install, and that must not be an error.
+            Get-Process -Name keld,keld-agent,keld-agent-sidecar -ErrorAction SilentlyContinue |
+              Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
             $p = Start-Process -FilePath "$dir\keld-setup.exe" `
-                   -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru -NoNewWindow
+                   -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/FORCECLOSEAPPLICATIONS' -Wait -PassThru -NoNewWindow
             # Inno exit 5 is "cancelled, or declined a prompt" — what a silent
             # install returns rather than overwrite an existing one. Named here
             # so the next reader is not sent to a search engine by a number.
