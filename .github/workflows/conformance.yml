@@ -445,8 +445,19 @@ jobs:
       # Windows installer exercised unattended, and nothing had ever run it.
       # This runs it with the documented silent flags, so the step that unblocks
       # the chain IS the Windows half of the installer claim.
+      # ⚠️ **CHAIN A ONLY. TWO INSTALLER STEPS IN ONE JOB FOUGHT, AND THE SILENT
+      # INSTALLER LOST.** This step installed the newest release; chain B's pair
+      # step then installed an OLDER one over it, and keld-setup.exe exited 5 —
+      # Inno's "cancelled, or declined a prompt", which is what a SILENT install
+      # returns rather than go backwards over an existing install. It cannot
+      # ask, so it refuses and returns a number.
+      #
+      # Chain B needs no help here: its pair step installs both releases itself,
+      # oldest first, and leaves the NEWER one in {localappdata}\Programs\keld,
+      # which is exactly what isolate_init's frozen-sidecar resolution finds.
+      # One installer owner per job.
       - name: Install the Windows sidecar from keld-setup.exe
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.chain == 'A'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -559,6 +570,12 @@ jobs:
             gh release download $tag --repo "$env:GITHUB_REPOSITORY" --pattern "keld-setup.exe" --dir $dir
             $p = Start-Process -FilePath "$dir\keld-setup.exe" `
                    -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru -NoNewWindow
+            # Inno exit 5 is "cancelled, or declined a prompt" — what a silent
+            # install returns rather than overwrite an existing one. Named here
+            # so the next reader is not sent to a search engine by a number.
+            if ($p.ExitCode -eq 5) {
+              throw "$tag installer exited 5 (Inno: cancelled/declined) - something is already installed at $app; one step must own the installer for the whole job"
+            }
             if ($p.ExitCode -ne 0) { throw "$tag installer exited $($p.ExitCode)" }
             New-Item -ItemType Directory -Force -Path $into | Out-Null
             Copy-Item -Path "$app\*" -Destination $into -Recurse -Force
