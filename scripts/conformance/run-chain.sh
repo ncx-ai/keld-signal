@@ -370,14 +370,37 @@ step_upgraded_prompts() {
 
 # --- config preservation -----------------------------------------------------
 
+# sha256_tool — how to hash on THIS machine.
+#
+# ⚠️ **`shasum` DOES NOT EXIST IN GIT BASH.** It is a Perl script shipped by
+# macOS and most Linux distributions; Git for Windows bundles coreutils, which
+# provides `sha256sum` and not `shasum`. The config check called `shasum`
+# unconditionally, so on Windows it failed with "command not found" and the
+# chain reported "a tool config CHANGED across the upgrade" — a confident claim
+# about the product derived from a missing tool, and exactly the wrong sentence
+# to put in front of whoever reads that failure.
+#
+# Resolved once, and the run SAYS which it picked, because a checksum that
+# silently changes implementation between platforms is worth stating.
+SHA256_CMD=""
+sha256_resolve() {
+  [ -n "$SHA256_CMD" ] && return 0
+  if command -v sha256sum >/dev/null 2>&1; then SHA256_CMD=sha256sum
+  elif command -v shasum >/dev/null 2>&1; then SHA256_CMD="shasum -a 256"
+  else fail "no sha256sum and no shasum on PATH; the config-preservation check cannot run"
+  fi
+  say "config hashing with: $SHA256_CMD"
+}
+
 # config_snapshot — hash every tool config file the chain has configured.
 config_snapshot() {
+  sha256_resolve
   CONFIG_HASHES="$WORK/config-hashes.txt"
   : > "$CONFIG_HASHES"
   local t p
   for t in $BEFORE $AFTER; do
     p=$(tool_config_path "$t")
-    [ -f "$p" ] && shasum -a 256 "$p" >> "$CONFIG_HASHES"
+    [ -f "$p" ] && $SHA256_CMD "$p" >> "$CONFIG_HASHES"
   done
   say "config snapshot: $(wc -l < "$CONFIG_HASHES" | tr -d ' ') file(s)"
 }
@@ -387,7 +410,8 @@ config_snapshot() {
 # owner had edited it.
 config_unchanged() {
   [ -f "${CONFIG_HASHES:-}" ] || { say "no config snapshot to compare"; return 0; }
-  if shasum -a 256 -c "$CONFIG_HASHES" >"$WORK/config-check.out" 2>&1; then
+  sha256_resolve
+  if $SHA256_CMD -c "$CONFIG_HASHES" >"$WORK/config-check.out" 2>&1; then
     say "tool configs preserved byte for byte across the upgrade"
     return 0
   fi
