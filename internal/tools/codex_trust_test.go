@@ -1,10 +1,16 @@
 package tools
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 // keldCodexCommand is the substring a caller passes: the recognizer already
@@ -166,5 +172,99 @@ func TestCodexHookTrustIgnoresAnotherToolsApproval(t *testing.T) {
 func TestCodexTrustEventsAreEventsWeRegister(t *testing.T) {
 	if !codexTrustEventsAreRegistered() {
 		t.Fatalf("codexTrustEvents %v is not a subset of telemetry.CodexHookEvents", codexTrustEvents)
+	}
+}
+
+// TestCodexHookHashIsCodexsOwnHash is the empirical anchor for everything
+// below it: a REAL input/output pair, taken off this machine on 2026-09-15.
+//
+// `hooks-third-party.json` is another tool's hook file verbatim, and
+// `config-third-party-trusted.toml` carries the six `trusted_hash` values
+// Codex 0.153.4 itself wrote after a human approved those hooks in `/hooks`.
+// Note all six COMMANDS are byte-identical and all six HASHES differ — which
+// is what says the event name is inside the hash and the command alone is not
+// the input. If codexHookHash ever stops reproducing these six, our reading of
+// Codex's rule has drifted from Codex's and every trust answer is a guess.
+func TestCodexHookHashIsCodexsOwnHash(t *testing.T) {
+	var file struct {
+		Hooks map[string][]struct {
+			Matcher *string          `json:"matcher"`
+			Hooks   []map[string]any `json:"hooks"`
+		} `json:"hooks"`
+	}
+	raw := readCodexTrustFixture(t, "hooks-third-party.json")
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&file); err != nil {
+		t.Fatalf("decode hooks-third-party.json: %v", err)
+	}
+	if len(file.Hooks) != 6 {
+		t.Fatalf("fixture holds %d events, want the 6 Codex recorded", len(file.Hooks))
+	}
+
+	var cfg map[string]any
+	if err := toml.Unmarshal(readCodexTrustFixture(t, "config-third-party-trusted.toml"), &cfg); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	state, _ := cfg["hooks"].(map[string]any)["state"].(map[string]any)
+	if len(state) != 6 {
+		t.Fatalf("config fixture holds %d state entries, want 6", len(state))
+	}
+
+	for event, groups := range file.Hooks {
+		for gi, group := range groups {
+			for hi, handler := range group.Hooks {
+				got, err := codexHookHash(event, group.Matcher, handler)
+				if err != nil {
+					t.Fatalf("%s: %v", event, err)
+				}
+				key := fmt.Sprintf("/Users/gabrielionescu/.codex/hooks.json:%s:%d:%d",
+					codexSnakeEvent(event), gi, hi)
+				entry, ok := state[key].(map[string]any)
+				if !ok {
+					t.Fatalf("no recorded state for %s", key)
+				}
+				want, _ := entry["trusted_hash"].(string)
+				if got != want {
+					t.Errorf("%s\n got  %s\n want %s (Codex's own)", key, got, want)
+				}
+			}
+		}
+	}
+}
+
+// TestCodexHookTrustFailsWhenTheCommandChanged is AC-9's last clause. Codex
+// records trust against the hook's hash, not its position, and marks a CHANGED
+// hook for review again — so a keld release that edits the hook command leaves
+// the approval in place and STOPS RUNNING THE HOOK. Reading `enabled = true`
+// alone reports that machine as healthy while it captures nothing, which is
+// the silent-inert failure `approval_required` exists to make loud.
+//
+// The fixture is `config-keld-trusted.toml` with the command a release would
+// have edited; the approvals are untouched and still name the old command's
+// hash, exactly as Codex would leave them.
+func TestCodexHookTrustFailsWhenTheCommandChanged(t *testing.T) {
+	trusted, known := CodexHooksTrusted(readCodexTrustFixture(t, "config-keld-changed.toml"), keldCodexCommand)
+	if !known {
+		t.Error("known=false — the config HAS a hooks.state section, so we CAN tell")
+	}
+	if trusted {
+		t.Error("trusted=true after the hook command changed; Codex will refuse to run it")
+	}
+}
+
+// TestCodexHookTrustRefusesAnApprovalWithNoHash: a state entry carrying
+// `enabled = true` and no `trusted_hash` is what Codex calls Untrusted — it
+// has nothing to compare the current hook against, and neither have we.
+// Vouching for it would be exactly the positional reading this test replaced.
+func TestCodexHookTrustRefusesAnApprovalWithNoHash(t *testing.T) {
+	cfg := string(readCodexTrustFixture(t, "config-keld-trusted.toml"))
+	stripped := regexp.MustCompile(`(?m)^trusted_hash = .*\n`).ReplaceAllString(cfg, "")
+	if strings.Contains(stripped, "trusted_hash") {
+		t.Fatal("fixture still carries a trusted_hash")
+	}
+	trusted, known := CodexHooksTrusted([]byte(stripped), keldCodexCommand)
+	if !known || trusted {
+		t.Errorf("trusted=%v known=%v, want false/true", trusted, known)
 	}
 }

@@ -1,0 +1,64 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh' ]; then /bin/sh '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh'; fi"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh' ]; then /bin/sh '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh'; fi"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh' ]; then /bin/sh '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh'; fi"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh' ]; then /bin/sh '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh'; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh' ]; then /bin/sh '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh'; fi"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh' ]; then /bin/sh '/Users/gabrielionescu/.nodeterm/agent-hooks/codex.sh'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
