@@ -368,7 +368,20 @@ jobs:
             macOS) asset="keld-agent-sidecar_darwin_arm64.tar.gz" ;;
           esac
           mkdir -p "$HOME/.local/bin"
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir /tmp/sc || true
+          # ⚠️ RETRIED. The sidecar asset is ~440 MB and a single GET of it
+          # failed mid-stream on 2026-09-16 ("read: connection reset by peer"),
+          # which left the runner with no sidecar and turned a green leg red for
+          # a reason that had nothing to do with the code. A gate that fails on
+          # someone else's TCP reset is a gate people learn to re-run without
+          # reading, which is the same as not having one.
+          for attempt in 1 2 3; do
+            rm -rf /tmp/sc; mkdir -p /tmp/sc
+            if gh release download --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir /tmp/sc; then
+              break
+            fi
+            echo "::warning::sidecar download attempt $attempt failed; retrying"
+            sleep $((attempt * 10))
+          done
           if [ -f "/tmp/sc/$asset" ]; then
             tar -xzf "/tmp/sc/$asset" -C "$HOME/.local/bin"
             chmod +x "$HOME/.local/bin/keld-agent-sidecar/keld-agent-sidecar" || true

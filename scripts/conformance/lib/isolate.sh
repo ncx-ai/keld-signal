@@ -264,7 +264,16 @@ JSON
       say "windows: USERPROFILE=$USERPROFILE (HOME alone does not isolate a Windows program)"
       ;;
   esac
-  export KELD_HOME="$ISO_HOME"
+  # ⚠️ **A GO BINARY ON WINDOWS CANNOT READ AN MSYS PATH.** KELD_HOME is read by
+  # keld and keld-agent — Windows executables — and `/d/a/_temp/.../home` means
+  # nothing to them. Measured: `keld signal setup --yes` ran, exited 0, and
+  # wrote no hook.json, so the chain failed at signal-install with the setup
+  # command reporting success. Same shape as npm's prefix and USERPROFILE: the
+  # variable was set, and the program that reads it never saw a usable value.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) export KELD_HOME=$(cygpath -w "$ISO_HOME") ;;
+    *)                    export KELD_HOME="$ISO_HOME" ;;
+  esac
   export KELD_TELEMETRY_PORT="$TELEMETRY_PORT"
   # The wrapper on POSIX, the executable itself on Windows — see sidecar_point_at.
   export KELD_SIDECAR_BIN="${SIDECAR_LAUNCH:-$WORK/sidecar-wrapper}"
