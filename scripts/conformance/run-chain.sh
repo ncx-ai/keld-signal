@@ -431,7 +431,10 @@ config_snapshot() {
   local t p
   for t in $BEFORE $AFTER; do
     p=$(tool_config_path "$t")
-    [ -f "$p" ] && config_normalise "$p" | $SHA256_CMD >> "$CONFIG_HASHES.$t"
+    if [ -f "$p" ]; then
+      config_normalise "$p" > "$WORK/config-before-$t.txt"
+      $SHA256_CMD < "$WORK/config-before-$t.txt" > "$CONFIG_HASHES.$t"
+    fi
   done
   say "config snapshot: $(wc -l < "$CONFIG_HASHES" | tr -d ' ') file(s)"
 }
@@ -450,7 +453,16 @@ config_unchanged() {
     before=$(cat "$CONFIG_HASHES.$t")
     now=$(config_normalise "$p" | $SHA256_CMD)
     if [ "$before" != "$now" ]; then
-      say "$t's config CHANGED across the upgrade, outside keld's own hook command"
+      say "$t's config CHANGED across the upgrade, outside the lines keld owns:"
+      # ⚠️ PRINT THE DIFF. Two rounds were spent widening the blanking list by
+      # guessing at what else had moved, on a message that named only what it
+      # was NOT. A check that reports a mismatch without showing it costs a full
+      # CI round trip per guess — the same lesson the npm shim resolver learned.
+      config_normalise "$p" > "$WORK/config-now-$t.txt"
+      if [ -f "$WORK/config-before-$t.txt" ]; then
+        diff -u "$WORK/config-before-$t.txt" "$WORK/config-now-$t.txt" \
+          | head -40 | sed 's/^/    /' >&2
+      fi
       ok=0
     fi
   done
