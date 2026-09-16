@@ -133,12 +133,23 @@ tool_install() {
         mkdir -p "$prefix"
         say "npm i -g $(tool_npm_package "$tool")@${TOOL_VERSION:-latest} into $prefix"
         local npm_prefix; npm_prefix=$(tool_npm_prefix "$prefix")
-        npm config set prefix "$npm_prefix" >/dev/null 2>&1
-        # ⚠️ ASSERTED, not hoped: npm silently keeps its old prefix when handed
-        # one it cannot parse, and the install then lands outside the isolated
-        # work dir with a zero exit code.
+        # ⚠️ **AN ENVIRONMENT VARIABLE, NOT `npm config set`.** npm's precedence
+        # is env > command line > user npmrc > builtin, and the GitHub Windows
+        # image ships `npm_config_prefix=C:\npm\prefix` in the environment. So
+        # `npm config set prefix` wrote the user npmrc, npm ignored it, and the
+        # install went to the runner's global location — outside the isolated
+        # work dir, with a zero exit code.
+        #
+        # Measured twice on windows-latest 2026-09-16: first as an empty prefix
+        # directory with `npm config get prefix` reporting C:\npm\prefix, then
+        # again after the path was correctly converted to D:\a\_temp\... and
+        # npm STILL kept its own. The path was never the whole problem.
+        export npm_config_prefix="$npm_prefix"
+        # ⚠️ ASSERTED, not hoped. Setting a value a program discards is not
+        # setting it, and the cost of believing otherwise is a harness that
+        # writes outside its isolation while reporting success.
         local seen; seen=$(npm config get prefix 2>/dev/null)
-        [ "$seen" = "$npm_prefix" ] || fail "npm kept prefix '$seen' after being set to '$npm_prefix' — the install would land outside $WORK"
+        [ "$seen" = "$npm_prefix" ] || fail "npm kept prefix '$seen' after npm_config_prefix='$npm_prefix' — the install would land outside $WORK"
         npm i -g "$(tool_npm_package "$tool")@${TOOL_VERSION:-latest}" >"$WORK/npm-install.log" 2>&1 \
           || fail "npm install failed: $(tail -20 "$WORK/npm-install.log")"
         TOOL_BIN=$(tool_npm_bin "$prefix" claude)
@@ -165,12 +176,23 @@ tool_install() {
         mkdir -p "$prefix"
         say "npm i -g $(tool_npm_package "$tool")@${TOOL_VERSION:-latest} into $prefix"
         local npm_prefix; npm_prefix=$(tool_npm_prefix "$prefix")
-        npm config set prefix "$npm_prefix" >/dev/null 2>&1
-        # ⚠️ ASSERTED, not hoped: npm silently keeps its old prefix when handed
-        # one it cannot parse, and the install then lands outside the isolated
-        # work dir with a zero exit code.
+        # ⚠️ **AN ENVIRONMENT VARIABLE, NOT `npm config set`.** npm's precedence
+        # is env > command line > user npmrc > builtin, and the GitHub Windows
+        # image ships `npm_config_prefix=C:\npm\prefix` in the environment. So
+        # `npm config set prefix` wrote the user npmrc, npm ignored it, and the
+        # install went to the runner's global location — outside the isolated
+        # work dir, with a zero exit code.
+        #
+        # Measured twice on windows-latest 2026-09-16: first as an empty prefix
+        # directory with `npm config get prefix` reporting C:\npm\prefix, then
+        # again after the path was correctly converted to D:\a\_temp\... and
+        # npm STILL kept its own. The path was never the whole problem.
+        export npm_config_prefix="$npm_prefix"
+        # ⚠️ ASSERTED, not hoped. Setting a value a program discards is not
+        # setting it, and the cost of believing otherwise is a harness that
+        # writes outside its isolation while reporting success.
         local seen; seen=$(npm config get prefix 2>/dev/null)
-        [ "$seen" = "$npm_prefix" ] || fail "npm kept prefix '$seen' after being set to '$npm_prefix' — the install would land outside $WORK"
+        [ "$seen" = "$npm_prefix" ] || fail "npm kept prefix '$seen' after npm_config_prefix='$npm_prefix' — the install would land outside $WORK"
         npm i -g "$(tool_npm_package "$tool")@${TOOL_VERSION:-latest}" >"$WORK/npm-install-codex.log" 2>&1 \
           || fail "npm install failed: $(tail -20 "$WORK/npm-install-codex.log")"
         TOOL_BIN=$(tool_npm_bin "$prefix" codex)
