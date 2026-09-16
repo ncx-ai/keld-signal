@@ -28,6 +28,29 @@ on:
     workflows: [installers]
     types: [completed]
 
+  # ⚠️ **THIS IS HOW THE WORKFLOW RUNS ON A BRANCH, AND IT USED TO HAVE NO WAY
+  # TO.** The three triggers were schedule, workflow_run and workflow_dispatch.
+  # None of them fires on a branch: `schedule` and the manual Run-workflow
+  # button both require the file to be on the DEFAULT branch, and workflow_run
+  # needs a real release build. So the only way to exercise this workflow was to
+  # merge it to main first — i.e. to ship the thing before proving it, which is
+  # backwards and is exactly what this whole harness exists to stop.
+  #
+  # `pull_request` fires on the PR's own branch, running that branch's copy of
+  # both the workflow and every script it calls. Nothing needs to be on main.
+  #
+  # ⚠️ It is PATH-SCOPED on purpose. The full matrix is six cells of up to 25
+  # minutes, and macOS bills at 10x — charging that to every unrelated PR is how
+  # a useful gate becomes the one people disable. It runs only when the harness
+  # itself changes, which is when a PR can actually invalidate it.
+  pull_request:
+    paths:
+      - "scripts/conformance/**"
+      - ".github/workflows/conformance.yml"
+      - "internal/conform/**"
+      - "cmd/keld-conform/**"
+      - "Makefile"
+
   workflow_dispatch:
     inputs:
       tool:
@@ -115,6 +138,23 @@ jobs:
               # transcript shape does not differ by OS, so paying for macOS
               # minutes on a tool release buys nothing.
               matrix=$(bash scripts/conformance/version-watch.sh --matrix)
+              ;;
+            pull_request)
+              # ⚠️ CHAIN A ONLY, AND NOT WINDOWS — because those are the cells
+              # that can pass today, and a gate that is red before anyone
+              # touches it teaches people to ignore it.
+              #
+              # Chain B upgrades FROM a previous release and the workflow never
+              # supplies one (`--previous` appears nowhere), so it falls back to
+              # "whatever is installed on this machine" and a clean runner has
+              # nothing — it cannot pass here until that is wired.
+              # run-chain.ps1 does not exist, so the Windows leg exits 1 by
+              # design. Both are tracked; neither belongs in a PR gate yet.
+              #
+              # Widen this the day each of those is true, not before.
+              matrix='{"include":[
+                {"os":"ubuntu-latest","chain":"A","tool":"claude_code","version":""},
+                {"os":"macos-14","chain":"A","tool":"claude_code","version":""}]}'
               ;;
             workflow_run)
               # A Signal release: every OS, both chains. Installers and service
