@@ -680,6 +680,12 @@ jobs:
           TOOL: ${{ matrix.tool }}
           CHAIN: ${{ matrix.chain }}
           KELD_CONFORM_DISPOSABLE: "1"
+          # ⚠️ THE WINDOWS LEG HAS ITS OWN env BLOCK, and the control flag was
+          # set on the OTHER chain step — so it was armed for the two platforms
+          # that do not need it and absent on the one being debugged. A whole
+          # run printed no control line at all and looked like the control had
+          # failed, when it had simply never been switched on.
+          KELD_CONFORM_HOOK_CONTROL: "1"
         run: |
           set -uo pipefail
           work="$(cygpath -u "$RUNNER_TEMP")/conformance"
