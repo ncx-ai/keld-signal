@@ -102,7 +102,42 @@ func HookCommand(binPath, source string) string {
 	if binPath != "" {
 		bin = binPath
 	}
-	return bin + " __hook --source " + source
+	return quoteBin(bin) + " __hook --source " + source
+}
+
+// quoteBin wraps the binary path in double quotes when it cannot survive being
+// read bare, and leaves it alone otherwise.
+//
+// ⚠️ **AN UNQUOTED WINDOWS PATH IS A STRING OF ESCAPES, AND IT COST THE WHOLE
+// ENRICHMENT LANE ON WINDOWS.** Measured on a real runner 2026-09-16: the
+// conformance chain passed transcript, store_rows and telemetry and failed only
+// the enrichment checkpoints, with NO pointer ever reaching the daemon. The
+// hook binary itself was fine — run by hand with a real payload it exits 0 —
+// and Claude Code was fine too: a control hook added beside keld's own FIRED.
+//
+// The control is the natural experiment, because it differed in exactly one
+// way. It was written QUOTED and ran; keld's was written BARE and did not:
+//
+//	"C:\...\probe.cmd" "C:\...\marker"                  → fired
+//	D:\a\...\keld.exe __hook --source claude_code        → never ran
+//
+// To anything shell-like, `\a` `\_` `\b` are escapes, and what is left is
+// not a path to anything. Inside double quotes a backslash is literal in both
+// cmd.exe and POSIX sh, so one pair of quotes fixes both readers.
+//
+// Scoped to paths that CANNOT work bare — a space, or a backslash — so the
+// millions of plain Unix paths already written are byte-identical and nothing
+// rewrites them for no reason. `HookCommandSubstr` is unaffected either way:
+// it matches the FLAG and its argument, never the binary, which is exactly why
+// that constant was widened. A test pins that.
+func quoteBin(bin string) string {
+	if bin == "" || (!strings.ContainsAny(bin, ` \`)) {
+		return bin
+	}
+	if strings.HasPrefix(bin, `"`) {
+		return bin // already quoted by a caller
+	}
+	return `"` + bin + `"`
 }
 
 // ClaudeEnv returns an ordered map of environment variables to inject into
