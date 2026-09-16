@@ -244,6 +244,26 @@ JSON
   TELEMETRY_PORT=$(free_port)
 
   export HOME="$ISO_HOME"
+  # ⚠️ **ON WINDOWS, `HOME` ISOLATES NOTHING BY ITSELF.** Go's os.UserHomeDir()
+  # and Node's os.homedir() both read USERPROFILE there, not HOME — so the Go
+  # daemon would resolve ~/.keld and the tool adapters' config paths, and Claude
+  # Code would write its transcripts, under the REAL profile while this harness
+  # believed it had moved them.
+  #
+  # That is not a failed run, it is a harness quietly rewriting the machine it
+  # is testing: the same class as npm installing outside its prefix one file
+  # over, and as the teleproxy tests that used to overwrite a developer's real
+  # ~/.keld. Both variables are set, and USERPROFILE gets the NATIVE path
+  # because the programs reading it are Windows programs.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      USERPROFILE=$(cygpath -w "$ISO_HOME") || fail "cygpath -w failed for $ISO_HOME"
+      export USERPROFILE
+      export HOMEDRIVE="${USERPROFILE%%:*}:"
+      export HOMEPATH="${USERPROFILE#*:}"
+      say "windows: USERPROFILE=$USERPROFILE (HOME alone does not isolate a Windows program)"
+      ;;
+  esac
   export KELD_HOME="$ISO_HOME"
   export KELD_TELEMETRY_PORT="$TELEMETRY_PORT"
   # The wrapper on POSIX, the executable itself on Windows — see sidecar_point_at.
