@@ -116,6 +116,27 @@ sidecar_point_at() {
     SIDECAR_VERSION_SEEN=$(cat "$what/VERSION" 2>/dev/null || echo "dev")
     SIDECAR_KIND="frozen $SIDECAR_VERSION_SEEN at $what"
   fi
+  # ⚠️ **WINDOWS CANNOT EXECUTE THE WRAPPER, SO IT DOES NOT GET ONE.** The
+  # wrapper is a `#!/bin/sh` script and the thing that launches it is the Go
+  # daemon — a Windows binary, which has no shebang handling. Pointing
+  # KELD_SIDECAR_BIN at it there gives a sidecar that never starts, and the
+  # run fails three checkpoints later reading an empty store rather than at the
+  # launch that did not happen.
+  #
+  # Nothing is lost by skipping it. The wrapper exists ONLY to record the
+  # process GROUP for teardown, and process groups are a POSIX concept: the
+  # daemon's own Windows reaping is `taskkill /T` over the process tree
+  # (procgroup_windows.go), which needs no pgid file. So on Windows the daemon
+  # is pointed straight at the executable.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      # SIDECAR_TARGET carries its own quoting for the POSIX `exec` line; the
+      # env var needs the bare path.
+      SIDECAR_LAUNCH=$(printf '%s' "$SIDECAR_TARGET" | tr -d '"')
+      [ -f "$SIDECAR_LAUNCH" ] || fail "no sidecar executable at $SIDECAR_LAUNCH"
+      return 0
+      ;;
+  esac
   cat > "$WORK/sidecar-wrapper" <<SH
 #!/bin/sh
 # Record the process GROUP so teardown can reap the sidecar's children even if
@@ -124,6 +145,7 @@ ps -o pgid= -p \$\$ | tr -d ' ' > "$SIDECAR_PID_FILE"
 exec $SIDECAR_TARGET "\$@"
 SH
   chmod +x "$WORK/sidecar-wrapper"
+  SIDECAR_LAUNCH="$WORK/sidecar-wrapper"
 }
 
 # isolate_init <workdir> — build the binaries and lay out the isolated HOME.
@@ -224,7 +246,8 @@ JSON
   export HOME="$ISO_HOME"
   export KELD_HOME="$ISO_HOME"
   export KELD_TELEMETRY_PORT="$TELEMETRY_PORT"
-  export KELD_SIDECAR_BIN="$WORK/sidecar-wrapper"
+  # The wrapper on POSIX, the executable itself on Windows — see sidecar_point_at.
+  export KELD_SIDECAR_BIN="${SIDECAR_LAUNCH:-$WORK/sidecar-wrapper}"
   export KELD_WATCH_POLL=2s
   export KELD_BLOCKS=1
   export KELD_BLOCKS_INTERVAL=20s
