@@ -22,6 +22,11 @@ deduplicated issue), **AC-12** (every installer has an unattended mode). Spec:
 `docs/superpowers/specs/2026-09-15-signal-integrations-discovery.html`,
 § "Conformance matrix — how it runs on GitHub".
 
+**AC-12's own page is `docs/install.md`** — the silent invocation per artifact,
+what each verifies, and the MDM path. The harness never invents an installation
+route: it runs `scripts/conformance/install-<os>.sh`, which run the same
+commands that page documents.
+
 ---
 
 ## Three places it runs, and what each one can prove
@@ -30,7 +35,8 @@ deduplicated issue), **AC-12** (every installer has an unattended mode). Spec:
 |---|---|---|---|
 | this machine | `make conformance TOOL=claude_code` | the five lanes against **the tool version you have installed** | nothing about a clean machine; the daemon runs foreground, no service is registered |
 | a Linux container | `make conformance-linux TOOL=claude_code` | the same, against **`tool@latest`** on a clean filesystem | **service registration — impossible in a container**; the installers |
-| a macOS VM (Tart) | `make conformance-macos-vm TOOL=claude_code` | the packaged `.pkg` installed **unattended**, real LaunchAgent registration (AC-12) | ⚠️ **unverified — nobody has run it yet** |
+| a macOS VM (Tart) | `make conformance-macos-vm TOOL=claude_code PKG=…` | the packaged `.pkg` installed **unattended**, real LaunchAgent registration (AC-12) | ⚠️ **unverified — nobody has run it yet** |
+| any disposable machine | `scripts/conformance/install-<os>.sh` | one artifact installed silently, onboarded by command, verified from observed state | nothing about the five lanes — that is the chain's job |
 | GitHub | `.github/workflows/conformance.yml` | all of the above on three OSes, on a tool release and on a Signal release | Windows, until `run-chain.ps1` exists |
 
 **Why the host leg never registers a service.** `KELD_HOME` isolates `~/.keld`
@@ -39,6 +45,45 @@ but **not** the service path, which `service.Install` resolves from
 the developer's real LaunchAgent to point at a temp binary and restart it into
 `failed`. So the harness starts the daemon in the foreground, and the installer
 path belongs to the disposable machines: the VM leg and the CI runners.
+
+---
+
+## Installing the artifact (AC-12)
+
+```bash
+# the chain, driving a REAL release rather than a source build
+make conformance TOOL=claude_code ARTIFACT=dir:./artifacts
+
+# or one artifact on its own
+KELD_CONFORM_DISPOSABLE=1 scripts/conformance/install-macos.sh --pkg keld-3.0.0-arm64.pkg --code CONFORM
+KELD_CONFORM_DISPOSABLE=1 scripts/conformance/install-linux.sh --artifacts ./artifacts --code CONFORM
+pwsh scripts/conformance/install-windows.ps1 -Artifacts artifacts -Code CONFORM
+```
+
+`--artifact dir:<path>` follows `--previous dir:<path>`'s shape and changes only
+what the chain's **signal-install** step does: the release is installed the
+unattended way, onboarded with `keld login --code` / `keld signal setup --yes` /
+`keld-agent install`, verified, and then the chain runs on the **installed**
+binaries. Without it the chain builds from source exactly as before.
+
+⚠️ **The artifact install runs against the machine's own HOME, not the isolated
+one**, because a package installs system-wide and a service registration is not
+isolated by `KELD_HOME`. Verifying a LaunchAgent under a temp HOME would verify
+one nothing would ever load. The five lanes go on being proved in the isolated
+HOME immediately afterwards — that split is why the chain's shape is unchanged.
+
+⚠️ **Every install script refuses a machine that has not declared itself
+disposable** (`KELD_CONFORM_DISPOSABLE=1`, or `CI=true`), and the harness does
+**not** set that variable for you: a harness that set it would have deleted the
+guard rather than passed it.
+
+**What has actually been run (2026-09-16):** `install-macos.sh` and
+`install-linux.sh` against a **local fake release** — inert stand-in binaries
+served over loopback — covering argument handling, `install.sh`'s unattended
+path, and all four verification outcomes, including a run where every command
+exits 0 and the script still fails at `verify-onboarded` because no `hook.json`
+was written. Against a REAL pkg or tarball: **not yet**.
+`install-windows.ps1` has never been run, or even parsed.
 
 ---
 

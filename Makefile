@@ -249,6 +249,9 @@ pkg-plugin-check: ## macOS-only: compile + sign + verify the Installer.app wizar
 #   make conformance TOOL=claude_code            one tool (it lands in the before half)
 #   make conformance TOOL=all CHAIN=B            the upgrade chain
 #   make conformance TOOL=all SEED=42 WORK=/tmp/xyz PREVIOUS=dir:/path/to/release
+#   make conformance TOOL=all ARTIFACT=dir:/path/to/artifacts   (AC-12: install
+#       the REAL pkg/tarball unattended first — needs a DISPOSABLE machine, see
+#       scripts/conformance/install-<os>.sh)
 #
 # TOOL=all splits the installable tools into a `before` half (installed and used
 # before Signal) and an `after` half (installed after it, so the daemon's
@@ -272,6 +275,7 @@ conformance: ## Run a conformance chain against real tools (TOOL=all|claude_code
 		$(if $(SEED),--seed "$(SEED)",) \
 		$(if $(WORK),--work "$(WORK)",) \
 		$(if $(PREVIOUS),--previous "$(PREVIOUS)",) \
+		$(if $(ARTIFACT),--artifact "$(ARTIFACT)",) \
 		$(if $(BEFORE),--before "$(BEFORE)",) \
 		$(if $(AFTER),--after "$(AFTER)",)
 

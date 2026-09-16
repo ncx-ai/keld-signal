@@ -4,6 +4,7 @@
 #   scripts/conformance/run-chain.sh --tool all [--chain A|B] [--seed N] [--work DIR]
 #   scripts/conformance/run-chain.sh --tool claude_code
 #   scripts/conformance/run-chain.sh --tool all --chain B --previous installed
+#   scripts/conformance/run-chain.sh --tool all --artifact dir:./artifacts
 #
 # What it proves (AC-10): the packaged onboarding commands configure REAL tools,
 # and the five lanes carry each tool's next prompt all the way to Atlas —
@@ -56,6 +57,14 @@ WORK=""
 BEFORE_ARG=""
 AFTER_ARG=""
 PREVIOUS="installed"
+# Where the Signal under test comes from. `none` (the default) BUILDS FROM
+# SOURCE and onboards with the same commands the installers call — the original
+# behaviour, unchanged. `dir:<path>` is the AC-12 seam: a directory of REAL
+# release artifacts, installed the unattended way by
+# scripts/conformance/install-<os>.sh before the chain's own onboarding runs.
+# Same shape as --previous, deliberately: one spec string, two forms, no new
+# concept.
+ARTIFACT="none"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -66,6 +75,7 @@ while [ $# -gt 0 ]; do
     --before)   BEFORE_ARG=$2; shift 2 ;;
     --after)    AFTER_ARG=$2; shift 2 ;;
     --previous) PREVIOUS=$2; shift 2 ;;
+    --artifact) ARTIFACT=$2; shift 2 ;;
     -h|--help)
       sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
@@ -142,6 +152,15 @@ else
 fi
 echo "split ($SPLIT_KIND): before=[${BEFORE:-none}] after=[${AFTER:-none}]"
 
+# Validate --artifact BEFORE the run starts. Resolution stays in the step (the
+# artifacts have to exist when the installer runs, not now), but a typo in the
+# spec must not cost a Go build, two npm installs and a headless prompt first.
+case "$ARTIFACT" in
+  none|dir:*) ;;
+  *) echo "run-chain.sh: --artifact must be 'none' or 'dir:<path>' (got $ARTIFACT)" >&2; exit 2 ;;
+esac
+[ "$ARTIFACT" = "none" ] || echo "artifact: $ARTIFACT (the release under test is INSTALLED, not built — AC-12)"
+
 trap 'teardown' EXIT
 
 # --- the steps ---------------------------------------------------------------
@@ -180,6 +199,10 @@ step_before_install() {
 
 step_signal_install() {
   step_begin "signal-install"
+  # AC-12, when the run was given real artifacts: install them the unattended
+  # way and verify the machine from observed state. A no-op under the default
+  # `--artifact none`, so every existing invocation is byte-for-byte unchanged.
+  artifact_install || return 1
   signal_install
   daemon_start
   return 0
