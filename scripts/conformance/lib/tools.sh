@@ -51,10 +51,29 @@ tool_display() {
 # binary must fail THERE, not three steps later.
 tool_npm_bin() {
   local prefix=$1 name=$2 c
-  for c in "$prefix/bin/$name" "$prefix/$name.cmd" "$prefix/bin/$name.cmd" "$prefix/$name"; do
+  # Every shape npm is known to produce: POSIX puts a shell script in bin/;
+  # Windows puts .cmd/.ps1 shims at the prefix ROOT; and a prefix npm decided
+  # not to honour leaves them under node_modules/.bin/.
+  for c in \
+    "$prefix/bin/$name" "$prefix/bin/$name.cmd" \
+    "$prefix/$name" "$prefix/$name.cmd" \
+    "$prefix/node_modules/.bin/$name" "$prefix/node_modules/.bin/$name.cmd"; do
     [ -f "$c" ] && { printf '%s' "$c"; return 0; }
   done
-  fail "npm installed $name but left no runnable shim under $prefix (looked for bin/$name, $name.cmd, bin/$name.cmd, $name)"
+  # ⚠️ The failure LISTS the tree. A resolver that says only "not found" makes
+  # every wrong guess cost a whole CI round trip, and the guesses are the slow
+  # part: this is the second one. What npm actually wrote is the only fact that
+  # settles it, so print it here rather than guessing a third time.
+  {
+    echo "npm installed $name but left no runnable shim under $prefix."
+    echo "  tried: bin/$name[.cmd], $name[.cmd], node_modules/.bin/$name[.cmd]"
+    echo "  what is actually under $prefix:"
+    find "$prefix" -maxdepth 2 -name "*$name*" 2>/dev/null | head -20 | sed 's/^/    /'
+    echo "  top level:"
+    ls -la "$prefix" 2>/dev/null | head -15 | sed 's/^/    /'
+    echo "  npm prefix reports: $(npm config get prefix 2>/dev/null)"
+  } >&2
+  fail "no runnable $name shim under $prefix (tree printed above)"
 }
 
 # tool_bin <tool> / tool_version_of <tool> — what `tool_install` resolved.
