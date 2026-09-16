@@ -176,6 +176,18 @@ const CODEX_SESSION = (home: string) =>
   path.join(home, ".codex", "sessions", "2026", "09", "16", "rollout-e2e.jsonl");
 
 test.describe("Integrations · live daemon", () => {
+  // ⚠️ **THE SUITE'S 45 s PER-TEST TIMEOUT IS BELOW THE DETECTOR'S OWN 60 s
+  // POLL, so a journey that waits for a tick cannot fit inside it.** AC-3
+  // passed at 30.2 s on the first run and was killed at 45.1 s on the second —
+  // same code, same daemon, a tick that happened to land later. A 90 s `expect`
+  // budget is not a budget at all while the test around it dies at 45.
+  //
+  // The fix is the TEST budget, never the poll: shortening
+  // KELD_INTEGRATIONS_POLL to make the default timeout fit would stop AC-3
+  // measuring the 60 s its own criterion names. Three polls plus the page's own
+  // 10 s refresh is the wait that has to be affordable, so 180 s it is.
+  test.setTimeout(180_000);
+
   test.beforeEach(({ state }) => {
     test.skip(
       !state.integrationsMounted,
