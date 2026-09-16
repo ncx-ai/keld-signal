@@ -9,6 +9,8 @@
 //   - OpenAI Responses     `POST /v1/responses`        — Codex, Pi
 //   - OpenAI Chat Compl.   `POST /v1/chat/completions` — everything that speaks
 //     "OpenAI-compatible": Goose, Qwen Code, Cline, OpenCode, Aider, Continue
+//   - Google GenLang       `POST /v1beta/models/<model>:generateContent` and
+//     `:streamGenerateContent` — Gemini CLI
 //
 // ⚠️ **THE PROTOCOL LIST IS WHAT GATES THE TOOL LIST.** A tool can be tested
 // without credentials when two things hold: it lets you choose its model
@@ -78,6 +80,9 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("/v1/messages", s.handleMessages)
 	s.mux.HandleFunc("/v1/responses", s.handleResponses)
 	s.mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
+	// A PREFIX, not a fixed path: Gemini puts the model and the method in the
+	// URL (`/v1beta/models/<model>:generateContent`).
+	s.mux.HandleFunc("/v1beta/models/", s.handleGemini)
 	return s, nil
 }
 
