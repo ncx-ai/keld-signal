@@ -479,6 +479,24 @@ jobs:
           # `git diff --quiet && …` would be a failing list under `set -e` in
           # the CHANGED case and fail the job for having work to do.
           if git diff --cached --quiet; then echo "nothing to record"; exit 0; fi
+          # ⚠️ THIS JOB HOLDS `contents: write` AND PUSHES TO THE DEFAULT
+          # BRANCH, so it is fenced to the one file it exists to update.
+          # The realistic failure is not a compromised script but a buggy one —
+          # a version-watch change that rewrites more than it means to, landing
+          # on main unattended at 03:00 with nobody reading the run. Both guards
+          # below fail the job rather than push something unexpected.
+          git add -A .conformance/last-tested.json
+          changed=$(git diff --cached --name-only)
+          if [ "$changed" != ".conformance/last-tested.json" ]; then
+            echo "refusing to push: expected only .conformance/last-tested.json, staged:" >&2
+            echo "$changed" >&2
+            exit 1
+          fi
+          # A corrupt record is worse than a stale one: the canary reads this
+          # file, so unparseable JSON on main turns the whole trigger off and
+          # nothing says so.
+          python3 -c "import json,sys; d=json.load(open('.conformance/last-tested.json')); sys.exit(0 if d.get('tools') else 1)" \
+            || { echo "refusing to push: the record is not valid JSON with a tools key" >&2; exit 1; }
           git commit -m "chore(conformance): record proven tool versions
 
           A chain passed at these versions on ubuntu-latest."
