@@ -38,6 +38,12 @@ type WiringFacts struct {
 	// refusal localagent.ModelState and version.Skew make.
 	HookTrusted    bool
 	HookTrustKnown bool
+	// HookCommandBroken — keld's hook command is present in the tool's config
+	// but was written before the quoting rule and cannot execute as it stands.
+	// See hookCommandBroken; the repair is Compute returning NotConfigured, so
+	// the detector rewrites it through the ONE setup path.
+	HookCommandBroken bool
+
 	// ConfigMtime — when keld's config was last written. The other half of the
 	// restart question.
 	ConfigMtime time.Time
@@ -209,12 +215,40 @@ func ReadWiring(e Entry, d Deps) WiringFacts {
 		if e.ID == "codex" {
 			w.HookTrusted, w.HookTrustKnown = CodexHooksTrusted([]byte(*current), d.HookCommandSubstr)
 		}
+		w.HookCommandBroken = hookCommandBroken(*current)
 	}
 	if info, err := os.Stat(adapter.ConfigPath()); err == nil {
 		w.ConfigMtime = info.ModTime().UTC()
 	}
 	w.NewestSessionStart = newestSessionStart(d.TranscriptDirs(e))
 	return w
+}
+
+// hookCommandBroken reports whether any keld hook command in this config was
+// written before the quoting rule and cannot execute as it stands.
+//
+// ⚠️ Read out of the CONFIG TEXT rather than rebuilt from the current binary
+// path, because the question is what the TOOL will try to run — which is
+// whatever an older keld wrote, on a machine this keld has never configured.
+// Scanning line-wise is enough for both shapes keld writes: Claude Code's JSON
+// string and Codex's TOML string both put the command on one line.
+func hookCommandBroken(configText string) bool {
+	for _, line := range strings.Split(configText, "\n") {
+		i := strings.Index(line, telemetry.HookCommandSubstr)
+		if i < 0 {
+			continue
+		}
+		// Trim back to the opening quote of the JSON/TOML string value, so the
+		// binary half is what the tool would actually execute.
+		start := strings.LastIndexAny(line[:i], `"'`)
+		if start < 0 {
+			continue
+		}
+		if telemetry.HookCommandNeedsRepair(line[start+1:]) {
+			return true
+		}
+	}
+	return false
 }
 
 // ReadLanes answers the four lane questions for one entry.

@@ -204,7 +204,23 @@ func decide(e Entry, f Facts, expected map[SurfaceKind]bool, active map[SurfaceK
 	// so there is no config to write and the manifest will never record it.
 	// Calling it `not_configured` would put a permanent Set up button on a row
 	// with nothing to set up, and a permanent doctor finding beside it.
-	if e.AdapterName != "" && !f.Configured {
+	// ⚠️ **A BROKEN HOOK COMMAND IS NOT-CONFIGURED, and that is how an upgrade
+	// reaches a machine it is forbidden to rewrite.** An upgrade deliberately
+	// preserves tool configs — chain B asserts "preserved byte for byte" — so a
+	// keld that fixes the hook QUOTING cannot repair the machines an older keld
+	// configured. Measured on windows-latest: the upgrade lands, the configs
+	// survive, and enrichment stays dark because the fixed binary is running
+	// against a command it may not touch.
+	//
+	// Saying not_configured puts the repair on the path that already exists:
+	// the detector applies the adapter, through the ONE setup path, and the row
+	// then moves to restart_required on the next poll exactly as a new install
+	// does. No new mechanism, no change to what an upgrade itself does.
+	//
+	// It cannot loop: `HookCommandNeedsRepair` is the same rule `HookCommand`
+	// writes to, and a test pins that what the writer produces is never seen as
+	// needing repair.
+	if e.AdapterName != "" && (!f.Configured || f.Wiring.HookCommandBroken) {
 		return NotConfigured, ""
 	}
 	// Row 3. ⚠️ A ZERO NewestSessionStart IS UNKNOWN, NOT "LONG AGO". A tool

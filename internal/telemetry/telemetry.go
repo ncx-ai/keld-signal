@@ -231,3 +231,32 @@ func CodexBlockBody(p SetupParams, source string) string {
 		strings.Join(hookBlocks, "\n"),
 	)
 }
+
+// HookCommandNeedsRepair reports whether a hook command already on disk was
+// written before the quoting rule existed and cannot execute as it stands.
+//
+// ⚠️ **ONE RULE, TWO USERS, AND THEY MUST NOT DRIFT.** `HookCommand` quotes a
+// binary that cannot survive being read bare; this answers the same question
+// about a command already written into a tool's config. If the two disagree the
+// detector either misses a broken machine or rewrites a healthy one every
+// minute forever — `TestRepairIsIdempotent` pins that by asking this about what
+// HookCommand itself produces.
+//
+// Why it is needed at all: an upgrade DELIBERATELY preserves tool configs, so a
+// keld that fixes the quoting cannot reach a machine the old keld configured.
+// Measured on windows-latest: chain B installs the previous release, upgrades,
+// asserts "tool configs preserved byte for byte" — and enrichment stays dark,
+// because the fixed binary is running against a command it is not allowed to
+// rewrite. Without a repair path, every existing Windows install stays broken
+// after upgrading until a human re-runs setup.
+func HookCommandNeedsRepair(cmd string) bool {
+	i := strings.Index(cmd, HookCommandSubstr)
+	if i <= 0 {
+		return false // not keld's hook, or nothing before the flag
+	}
+	bin := strings.TrimSpace(cmd[:i])
+	if bin == "" || strings.HasPrefix(bin, `"`) {
+		return false // bare `keld`, or already quoted
+	}
+	return strings.ContainsAny(bin, ` \`)
+}
