@@ -333,10 +333,6 @@ jobs:
           # disposable. A GitHub runner is thrown away after the job; a
           # developer's Mac is not, which is the case the guard exists for.
           KELD_CONFORM_DISPOSABLE: "1"
-          # Windows only, and only while the enrichment lane is unexplained
-          # there: arms a marker hook beside keld's own so the run can say
-          # whether the TOOL runs hooks at all. Remove once Windows is green.
-          KELD_CONFORM_HOOK_CONTROL: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: |
           set -uo pipefail
           shopt -s nullglob
@@ -774,12 +770,6 @@ jobs:
           TOOL: ${{ matrix.tool }}
           CHAIN: ${{ matrix.chain }}
           KELD_CONFORM_DISPOSABLE: "1"
-          # ⚠️ THE WINDOWS LEG HAS ITS OWN env BLOCK, and the control flag was
-          # set on the OTHER chain step — so it was armed for the two platforms
-          # that do not need it and absent on the one being debugged. A whole
-          # run printed no control line at all and looked like the control had
-          # failed, when it had simply never been switched on.
-          KELD_CONFORM_HOOK_CONTROL: "1"
           PREVIOUS_WIN: ${{ steps.previous-windows.outputs.dir || '' }}
           NEW_SIDECAR_WIN: ${{ steps.previous-windows.outputs.newsidecar || '' }}
         run: |

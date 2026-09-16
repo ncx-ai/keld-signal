@@ -235,14 +235,7 @@ step_before_prompts() {
   step_begin "after-signal"
   local t
   for t in $BEFORE; do tool_prompt "$t" "after-signal"; done
-  # The hook control is read HERE, right after the prompt that should have
-  # triggered it, and reported whether the step passes or fails — a control
-  # that only speaks on failure cannot establish that it works when things
-  # are fine, which is the whole point of having one.
-  local rc=0
-  step_assert "$SETTLE" "" $BEFORE || rc=1
-  hook_control_report
-  return $rc
+  step_assert "$SETTLE" "" $BEFORE
 }
 
 step_detect() {
