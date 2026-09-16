@@ -34,6 +34,7 @@ jobs:
           bash sidecar/test_build_freeze.sh
           bash installers/macos/onboard_command_test.sh
           bash installers/macos/build_pkg_notarization_test.sh
+          bash installers/macos/build_pkg_app_version_test.sh
 
   goreleaser-check:
     runs-on: ubuntu-latest

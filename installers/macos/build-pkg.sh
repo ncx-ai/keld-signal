@@ -60,6 +60,42 @@ APP_STAGE="$TMP/app-stage"
 mkdir -p "$APP_STAGE"
 cp -R "$APP_BUNDLE" "$APP_STAGE/Keld Signal.app"
 
+# ⚠️ STAMP THE APP'S VERSION, OR EVERY UPGRADE AFTER THE FIRST SILENTLY SKIPS IT.
+# Tauri's default is 0.1.0 and nothing here used to change it, so every release
+# shipped an app claiming 0.1.0. PackageKit compares component versions and
+# refuses one that is not newer, logging (real v3.0.0 install, 2026-09-16):
+#
+#   PackageKit: Skipping component "co.keld.signal" (0.1.0-0.1.0-*) because the
+#   version 2.5.0-1.0.0-* is already installed at /Applications/Keld Signal.app.
+#
+# Nothing failed and nothing warned; the app on disk simply stayed at whatever
+# arrived first. Because the version never advanced, no later release could ever
+# replace it.
+#
+# The stamp is applied to the STAGED COPY — packaging must not mutate a
+# developer's build output — and to BOTH keys: CFBundleShortVersionString is what
+# a person reads, CFBundleVersion is what PackageKit actually compares, so
+# stamping only the first would look fixed and change nothing.
+#
+# $VERSION carries a leading "v" from the release tag ("v3.0.1"); CFBundle* keys
+# must be numeric-dotted or PackageKit's comparison is undefined, so it is
+# stripped here rather than at the call site.
+APP_PLIST="$APP_STAGE/Keld Signal.app/Contents/Info.plist"
+APP_VERSION="${VERSION#v}"
+plutil -replace CFBundleShortVersionString -string "$APP_VERSION" "$APP_PLIST"
+plutil -replace CFBundleVersion -string "$APP_VERSION" "$APP_PLIST"
+# Read the stamp back. plutil can exit 0 without having set what you asked for
+# (a binary plist with an unexpected layout, a key of another type), and a stamp
+# that silently no-ops is this defect wearing a fix's clothes.
+stamped_version="$(plutil -extract CFBundleVersion raw -o - "$APP_PLIST" 2>/dev/null || true)"
+[ "$stamped_version" = "$APP_VERSION" ] || {
+  echo "FAILING: app bundle version stamp did not take."
+  echo "  wanted CFBundleVersion=$APP_VERSION, read back '$stamped_version'"
+  echo "  plist: $APP_PLIST"
+  exit 1
+}
+echo "app bundle stamped $APP_VERSION"
+
 # Codesign every Mach-O in the payload (hardened runtime) when a signing identity is present.
 # Notarization rejects the whole submission over a single unsigned binary, so this sweeps the
 # tree by content rather than trusting a hand-maintained list — it stays correct if the payload

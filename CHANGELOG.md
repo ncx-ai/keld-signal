@@ -5,6 +5,37 @@ All notable changes to **keld-signal** (the Keld client — the `keld` CLI + the
 follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 semantic-ish versioning during `0.x`.
 
+## [3.0.1] — 2026-09-16
+
+### Fixed
+- **An install no longer leaves the machine internally inconsistent.** Measured
+  on a real 3.0.0 install: the wizard signed in to production, every tool
+  reported "already configured", and the daemon went on publishing to a dev
+  Atlas from the day before — 882 calls to `localhost` against 9 to
+  `atlas.keld.co` — while `status` showed the production login and `doctor`
+  reported no problems. Every fact either command could reach was true; nothing
+  compared them. Three causes:
+  - `signal setup` discarded the credential it had just verified whenever no
+    tool config needed changing, which is the ordinary state of every upgrade:
+    `SaveHookConfig` and the manifest write sat below the "nothing to apply"
+    early return. Both paths now adopt through one function. A dry run still
+    writes nothing; an aborted confirmation still changes nothing. The
+    `✓ Hook` line — printed unconditionally, above that return, so the install
+    log showed the hook being configured on exactly the run that left it stale —
+    now prints where the write happens and names the destination.
+  - **The desktop app was skipped on every upgrade after the first.**
+    `build-pkg.sh` stamped `VERSION` and the wizard plugin but never the app
+    bundle, so every release shipped Tauri's default `0.1.0` and PackageKit
+    refused a component that was not newer. Both version keys are now stamped on
+    the staged copy before `pkgbuild`, and read back — `plutil` can exit 0
+    without having set what it was asked to.
+  - **Nothing compared the signed-in Atlas with the daemon's.** `doctor` gained
+    that comparison, naming both endpoints and the one command that reconciles
+    them. It stays silent where it cannot know: a machine paired by setup code
+    (no CLI credential) and an unconfigured daemon (no hook yet) are not
+    mismatches, and a trailing slash or a capitalised host is not a difference.
+- `keld signal status` printed the hook version as `vv2.5.0`.
+
 ## [3.0.0] — 2026-09-16
 
 The v3 line, shipped. `releases/latest` — what `install.sh`, `install.ps1` and
