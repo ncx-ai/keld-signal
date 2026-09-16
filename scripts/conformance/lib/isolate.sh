@@ -239,6 +239,76 @@ await_line() {
   return 1
 }
 
+# artifact_install — AC-12's half of the Signal-install step: install a REAL
+# release artifact the unattended way, onboard it by command, and verify the
+# machine from observed state. A no-op unless the run was given `--artifact
+# dir:<path>`.
+#
+# ⚠️ **IT RUNS AGAINST THE MACHINE'S OWN HOME, NOT THE ISOLATED ONE, AND THAT
+# IS THE POINT.** A package installs system-wide and registers a service;
+# neither is isolated by KELD_HOME (AGENTS.md: service.Install resolves the
+# service path from os.UserHomeDir()). Pretending otherwise would verify a
+# LaunchAgent nothing would ever load. So this step proves the INSTALLER on the
+# machine, and the chain's five lanes go on being proved in the isolated HOME
+# immediately afterwards by signal_install — the split is deliberate and is why
+# the chain's shape does not change.
+#
+# ⚠️ **THE DISPOSABLE GUARD IS NOT SET HERE.** install-<os>.sh refuses unless
+# the machine says it is disposable, and a harness that quietly set that
+# variable would have deleted the guard rather than passed it. The VM, the
+# container and CI each set it themselves.
+artifact_install() {
+  case "${ARTIFACT:-none}" in
+    none|"") return 0 ;;
+    dir:*)   ARTIFACT_DIR=${ARTIFACT#dir:} ;;
+    *) say "--artifact must be 'none' or 'dir:<path>' (got $ARTIFACT)"; return 1 ;;
+  esac
+  [ -d "$ARTIFACT_DIR" ] || { say "no such artifacts directory: $ARTIFACT_DIR"; return 1; }
+  ARTIFACT_DIR=$(cd "$ARTIFACT_DIR" && pwd)
+
+  local script
+  case "$(uname -s)" in
+    Darwin) script="$ROOT/scripts/conformance/install-macos.sh" ;;
+    Linux)  script="$ROOT/scripts/conformance/install-linux.sh" ;;
+    *) say "no unattended installer script for $(uname -s); Windows runs install-windows.ps1 directly"; return 1 ;;
+  esac
+
+  if [ "${CI:-}" != "true" ] && [ "${KELD_CONFORM_DISPOSABLE:-0}" != "1" ]; then
+    say "--artifact installs a REAL release on THIS machine (service registration included)."
+    say "  Set KELD_CONFORM_DISPOSABLE=1 only where the machine is disposable — a VM, a"
+    say "  container, or CI. Refusing rather than rewriting a developer's own service."
+    return 1
+  fi
+
+  local out="$WORK/artifact-install.log"
+  say "installing the release under test from $ARTIFACT_DIR (unattended, AC-12)"
+  # `--stop-service` leaves the job REGISTERED (so what was verified stays true)
+  # but not running: the chain drives its own foreground daemon and must not
+  # race a launchd/systemd one over the same ports.
+  env HOME="$REAL_HOME" KELD_HOME="$REAL_HOME/.keld" \
+      bash "$script" --artifacts "$ARTIFACT_DIR" --code CONFORM \
+        --api-url "$MOCK_ATLAS_URL" --stop-service \
+        ${KELD_CONFORM_INSTALL_FLAGS:-} 2>&1 | tee "$out"
+  [ "${PIPESTATUS[0]}" = "0" ] || { say "the unattended install FAILED — see $out"; return 1; }
+
+  # The installed tree is what the rest of the chain drives, so a green chain is
+  # a statement about the ARTIFACT rather than about a source build.
+  local bin sc
+  bin=$(sed -n 's/^install-[a-z]*: bin_dir=//p' "$out" | tail -1)
+  sc=$(sed -n 's/^install-[a-z]*: sidecar_dir=//p' "$out" | tail -1)
+  [ -n "$bin" ] && [ -x "$bin/keld-agent" ] \
+    || { say "the installer reported no usable bin_dir (got '${bin:-}')"; return 1; }
+  bin_use "$bin"
+  if [ -n "$sc" ] && [ -x "$sc/keld-agent-sidecar" ]; then
+    sidecar_point_at "$sc"
+    say "chain now runs the INSTALLED halves: $bin + $SIDECAR_KIND"
+  else
+    say "the installed sidecar is not on disk yet ($sc); keeping $SIDECAR_KIND"
+    say "  — on macOS postinstall fetches it in the background, so this is timing, not failure"
+  fi
+  return 0
+}
+
 # signal_install — onboarding as a person would do it, through the commands the
 # installers call: a setup code, then tool configuration. `keld-agent install`
 # is deliberately NOT called (see the header).

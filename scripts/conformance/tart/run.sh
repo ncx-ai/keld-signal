@@ -79,13 +79,21 @@ tart ssh "$NAME" -- bash -lc '
   brew install -q go node@22 python@3.12 sqlite || true
 '
 
+ARTIFACT_FLAG=""
 if [ -n "$INSTALLER" ]; then
-  echo "run.sh: staging $INSTALLER and installing it unattended (AC-12)"
+  # ⚠️ **STAGED HERE, INSTALLED BY THE CHAIN.** This used to run
+  # `sudo installer -pkg` right here, before the chain started — which installs
+  # the package but leaves onboarding to nobody, since the mock Atlas the setup
+  # code is redeemed against does not exist until run-chain.sh starts it. The
+  # pkg is therefore staged into ~/artifacts and handed to the chain as
+  # `--artifact dir:…`; scripts/conformance/install-macos.sh then does the
+  # unattended install, the three onboarding commands and the verification at
+  # the one moment when all of them can work.
+  echo "run.sh: staging $INSTALLER into ~/artifacts for the chain to install unattended (AC-12)"
   base=$(basename "$INSTALLER")
-  tart ssh "$NAME" -- "cat > ~/$base" < "$INSTALLER"
-  # The unattended invocation AC-12 requires. `-target /` is the whole of it;
-  # if this ever needs a click, the installer has failed the criterion.
-  tart ssh "$NAME" -- "echo admin | sudo -S installer -pkg ~/$base -target /"
+  tart ssh "$NAME" -- "mkdir -p ~/artifacts"
+  tart ssh "$NAME" -- "cat > ~/artifacts/$base" < "$INSTALLER"
+  ARTIFACT_FLAG="--artifact dir:\$HOME/artifacts"
 fi
 
 echo "run.sh: chain $CHAIN, tool $TOOL"
@@ -94,6 +102,9 @@ tart ssh "$NAME" -- bash -lc "
   eval \"\$(/opt/homebrew/bin/brew shellenv)\"
   export PATH=\"\$(brew --prefix node@22)/bin:\$(brew --prefix python@3.12)/bin:\$PATH\"
   export KELD_CONFORM_INSTALL=1
+  # The VM is deleted by down.sh, so it is disposable in the literal sense the
+  # install scripts' guard asks about. Nothing else on this machine is ours.
+  export KELD_CONFORM_DISPOSABLE=1
   cd ~/keld-signal
-  bash scripts/conformance/run-chain.sh --tool '$TOOL' --chain '$CHAIN' ${SEED:+--seed '$SEED'} --work /tmp/keld-conformance
+  bash scripts/conformance/run-chain.sh --tool '$TOOL' --chain '$CHAIN' ${SEED:+--seed '$SEED'} $ARTIFACT_FLAG --work /tmp/keld-conformance
 "
