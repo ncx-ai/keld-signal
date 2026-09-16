@@ -17,7 +17,7 @@
 # tool_supported <tool> — is this tool in the table yet?
 tool_supported() {
   case "$1" in
-    claude_code|codex) return 0 ;;
+    claude_code|codex|gemini_cli) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -25,13 +25,14 @@ tool_supported() {
 # tool_all — every tool the table can drive, in a stable order. The seeded
 # before/after split shuffles THIS list, so adding a row here is all it takes
 # for a tool to appear in both halves over a few runs.
-tool_all() { echo "claude_code codex"; }
+tool_all() { echo "claude_code codex gemini_cli"; }
 
 # tool_display <tool>
 tool_display() {
   case "$1" in
     claude_code) echo "Claude Code" ;;
     codex)       echo "Codex" ;;
+    gemini_cli)  echo "Gemini CLI" ;;
     *) echo "$1" ;;
   esac
 }
@@ -170,6 +171,33 @@ tool_install() {
       tool_remember "$tool" "$TOOL_BIN" "$TOOL_VERSION_SEEN"
       say "$(tool_display "$tool") = $TOOL_BIN ($TOOL_VERSION_SEEN)"
       ;;
+    gemini_cli)
+      if [ "${KELD_CONFORM_INSTALL:-0}" = "1" ]; then
+        local prefix="$WORK/npm"
+        mkdir -p "$prefix"
+        say "npm i -g $(tool_npm_package "$tool")@${TOOL_VERSION:-latest} into $prefix"
+        local npm_prefix; npm_prefix=$(tool_npm_prefix "$prefix")
+        export npm_config_prefix="$npm_prefix"
+        local seen; seen=$(npm config get prefix 2>/dev/null)
+        [ "$seen" = "$npm_prefix" ] || fail "npm kept prefix '$seen' after npm_config_prefix='$npm_prefix'"
+        npm i -g "$(tool_npm_package "$tool")@${TOOL_VERSION:-latest}" >"$WORK/npm-install-gemini.log" 2>&1 \
+          || fail "npm install failed: $(tail -20 "$WORK/npm-install-gemini.log")"
+        TOOL_BIN=$(tool_npm_bin "$prefix" gemini)
+      else
+        TOOL_BIN=${KELD_CONFORM_GEMINI_BIN:-}
+        if [ -z "$TOOL_BIN" ]; then
+          for c in "$REAL_HOME/.local/bin/gemini" "/opt/homebrew/bin/gemini" "/usr/local/bin/gemini"; do
+            [ -x "$c" ] && { TOOL_BIN=$c; break; }
+          done
+        fi
+        [ -n "$TOOL_BIN" ] && [ -x "$TOOL_BIN" ] \
+          || fail "gemini not found (set KELD_CONFORM_GEMINI_BIN, or KELD_CONFORM_INSTALL=1)"
+      fi
+      TOOL_VERSION_SEEN=$("$TOOL_BIN" --version 2>/dev/null | head -1)
+      [ -n "$TOOL_VERSION_SEEN" ] || fail "$TOOL_BIN produced no --version output"
+      tool_remember "$tool" "$TOOL_BIN" "$TOOL_VERSION_SEEN"
+      say "$(tool_display "$tool") = $TOOL_BIN ($TOOL_VERSION_SEEN)"
+      ;;
     codex)
       if [ "${KELD_CONFORM_INSTALL:-0}" = "1" ]; then
         local prefix="$WORK/npm"
@@ -244,6 +272,17 @@ tool_env() {
       # `tool_materialize` is what creates it, at the point in the chain where
       # this tool is "installed".
       ;;
+    gemini_cli)
+      # ⚠️ GOOGLE_GEMINI_BASE_URL is what makes this tool testable with NO
+      # credential: it chooses the endpoint, and the key it then sends is never
+      # validated by the mock. GEMINI_API_KEY must still be SET — the CLI
+      # refuses to start without one — so a visibly fake value is supplied.
+      export GOOGLE_GEMINI_BASE_URL="$MOCK_LLM_URL"
+      export GEMINI_API_KEY=mock-not-a-real-key
+      # Gemini reads ~/.gemini from the home dir; HOME/USERPROFILE are already
+      # the isolated ones, so nothing else is needed to keep it contained.
+      export GEMINI_CLI_DISABLE_AUTOUPDATER=1
+      ;;
     codex)
       # CodexAdapter.ConfigPath resolves $HOME/.codex/config.toml and knows
       # nothing about CODEX_HOME, while watch.DiscoverRoots and
@@ -269,6 +308,12 @@ tool_materialize() {
   case "$1" in
     claude_code)
       mkdir -p "$ISO_HOME/.claude"
+      ;;
+    gemini_cli)
+      # The config DIRECTORY is the fact tools.Detect and the detector key on,
+      # and it is all Gemini needs: unlike Codex it requires no provider block
+      # to start, because its endpoint and key come from the environment.
+      mkdir -p "$ISO_HOME/.gemini"
       ;;
     codex)
       # Codex needs a provider before it can run at all, so its config.toml is
@@ -310,6 +355,7 @@ tool_transcript_root() {
     claude_code) echo "$ISO_HOME/.claude/projects" ;;
     # Codex nests: sessions/<yyyy>/<mm>/<dd>/rollout-<ts>-<session>.jsonl.
     codex)       echo "$ISO_HOME/.codex/sessions" ;;
+    gemini_cli)  echo "$ISO_HOME/.gemini/tmp" ;;
   esac
 }
 
@@ -332,6 +378,19 @@ tool_prompt() {
       [ $rc -eq 0 ] || fail "claude -p exited $rc: $(tail -5 "$out")"
       grep -q '"is_error":false' "$out" \
         || fail "claude -p reported an error: $(tail -5 "$out")"
+      ;;
+    gemini_cli)
+      say "prompt [$label]: gemini -p"
+      # ⚠️ NOT `env -i`, for the reason codex's case documents at length: the
+      # ambient environment is already the isolated one, and emptying it drops
+      # KELD_HOME. The provider variables are unset so a developer's own key
+      # cannot be picked up — GOOGLE_GEMINI_BASE_URL and the fake key set by
+      # tool_env are what this run must use.
+      ( cd "$WORK" \
+          && unset GOOGLE_API_KEY GOOGLE_APPLICATION_CREDENTIALS \
+          && "$bin" -p "reply with one word" < /dev/null > "$out" 2>&1 )
+      local rc=$?
+      [ $rc -eq 0 ] || fail "gemini -p exited $rc: $(tail -5 "$out")"
       ;;
     codex)
       # ⚠️ **`--dangerously-bypass-hook-trust` IS REQUIRED HERE, AND A REAL USER
@@ -382,6 +441,19 @@ tool_not_expected() {
     # machine where one is known-broken, so a narrowing is always visible in
     # the command line rather than hidden in this table.
     codex)       echo "${KELD_CONFORM_CODEX_NOT_EXPECTED:-}" ;;
+    # ⚠️ TWO CHECKPOINTS ARE STRUCTURALLY UNREACHABLE FOR GEMINI, and saying so
+    # is not the same as excusing them.
+    #
+    # `store_rows` reads the sidecar's reference series, which is filled by the
+    # ingest signal — and that signal is scoped to enrich.WorkstreamsEligible
+    # (claude_code, cowork) because /analyze resolves a prompt by Claude-Code
+    # JSONL shape. A Gemini prompt id 404s there by construction, so requiring
+    # the row would be requiring a lane the product deliberately does not wire.
+    #
+    # The catalogue says the same thing in its own vocabulary: gemini_cli
+    # declares OTel and Watcher surfaces and NO hook lane, with
+    # ReaderAvailable false.
+    gemini_cli)  echo "${KELD_CONFORM_GEMINI_NOT_EXPECTED:-store_rows}" ;;
     *)           echo "" ;;
   esac
 }
@@ -392,6 +464,7 @@ tool_config_path() {
   case "$1" in
     claude_code) echo "$ISO_HOME/.claude/settings.json" ;;
     codex)       echo "$ISO_HOME/.codex/config.toml" ;;
+    gemini_cli)  echo "$ISO_HOME/.gemini/settings.json" ;;
   esac
 }
 
