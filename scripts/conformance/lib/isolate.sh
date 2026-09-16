@@ -87,11 +87,32 @@ bin_use() {
 sidecar_point_at() {
   local what=$1
   if [ "$what" = "worktree" ]; then
+    # ⚠️ **A MISSING $PY USED TO PRODUCE A WRAPPER THAT COULD NOT RUN, AND SAID
+    # NOTHING.** The wrapper was written unconditionally, the daemon exec'd a
+    # python that is not there, the sidecar never started, and the run failed
+    # three checkpoints later with `store_rows 0 prompt row(s)` — a sentence
+    # that points at the store, which was fine, instead of at the interpreter,
+    # which was absent.
+    #
+    # Measured on GitHub 2026-09-16: chain B on ubuntu and macOS both failed
+    # exactly that way. A runner has no ~/.keld/sidecar-venv — `make sidecar`
+    # is a developer step — so "upgrade to the worktree sidecar" is not a thing
+    # CI can do, and the harness reported it as a product failure.
+    #
+    # Fail HERE, naming the interpreter. A harness that cannot tell you which
+    # half is missing is worse than one that refuses to start.
+    [ -x "$PY" ] || fail "sidecar_point_at worktree: no python at $PY.
+  The worktree sidecar runs serve.py under the venv 'make sidecar' creates, and
+  there is none here. Set KELD_CONFORM_PYTHON, or point this run at a frozen
+  sidecar with KELD_CONFORM_NEW_SIDECAR=<dir> (CI does the latter: a runner
+  never has the venv)."
     SIDECAR_TARGET="\"$PY\" \"$ROOT/sidecar/serve.py\""
     SIDECAR_KIND="venv (worktree serve.py, $PY)"
     SIDECAR_VERSION_SEEN="dev"
   else
-    SIDECAR_TARGET="\"$what/keld-agent-sidecar\""
+    local sc_bin=keld-agent-sidecar
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) sc_bin=keld-agent-sidecar.exe ;; esac
+    SIDECAR_TARGET="\"$what/$sc_bin\""
     SIDECAR_VERSION_SEEN=$(cat "$what/VERSION" 2>/dev/null || echo "dev")
     SIDECAR_KIND="frozen $SIDECAR_VERSION_SEEN at $what"
   fi
@@ -136,8 +157,18 @@ isolate_init() {
   if [ -x "$PY" ]; then
     SIDECAR_KIND="venv (worktree serve.py, $PY)"
   else
-    for d in "$HOME/.local/bin/keld-agent-sidecar" "/usr/local/keld/keld-agent-sidecar"; do
-      if [ -x "$d/keld-agent-sidecar" ]; then
+    # ⚠️ Windows: the binary carries .exe, and the Inno installer lays the
+    # sidecar FLAT into {localappdata}\Programs\keld (its [Files] line is
+    # `Source: "keld-agent-sidecar\*"; DestDir: "{app}"`), not into a
+    # keld-agent-sidecar/ subdirectory like the tarballs do. Both shapes are
+    # searched rather than assumed, because resolveSidecar in the daemon
+    # accepts both too.
+    local sc_bin=keld-agent-sidecar
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) sc_bin=keld-agent-sidecar.exe ;; esac
+    local win_app=""
+    [ -n "${LOCALAPPDATA:-}" ] && win_app=$(cygpath -u "$LOCALAPPDATA" 2>/dev/null)/Programs/keld
+    for d in "$HOME/.local/bin/keld-agent-sidecar" "/usr/local/keld/keld-agent-sidecar" ${win_app:+"$win_app"}; do
+      if [ -x "$d/$sc_bin" ] || [ -f "$d/$sc_bin" ]; then
         # ⚠️ The DIRECTORY, not the executable inside it. `sidecar_point_at`
         # takes a tree (it reads VERSION beside the binary), and handing it the
         # executable produced a wrapper that exec'd

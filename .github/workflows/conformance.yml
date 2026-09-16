@@ -377,6 +377,43 @@ jobs:
             echo "::warning::no frozen sidecar available; the chain will say so and stop"
           fi
 
+      # --- the Windows sidecar ----------------------------------------------
+      #
+      # ⚠️ **WINDOWS HAS NO SIDECAR TARBALL.** Every other platform publishes
+      # keld-agent-sidecar_<os>_<arch>.tar.gz; Windows ships it INSIDE
+      # keld-setup.exe (installers/windows/keld.iss lays it flat into
+      # {localappdata}\Programs\keld). So the only way to get one onto a runner
+      # is to run the real installer — which is why the Windows chain failed at
+      # `no analysis sidecar` on its first real run, the single thing stopping
+      # it after bash, Node, Python and Go all turned out to be present.
+      #
+      # That is a happy accident rather than a workaround: AC-12 needs the
+      # Windows installer exercised unattended, and nothing had ever run it.
+      # This runs it with the documented silent flags, so the step that unblocks
+      # the chain IS the Windows half of the installer claim.
+      - name: Install the Windows sidecar from keld-setup.exe
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
+                  --json tagName,isPrerelease,isDraft \
+                  --jq '[.[] | select(.isPrerelease == false and .isDraft == false)][0].tagName')
+          [ -n "$tag" ] || { echo "::error::no published release carrying keld-setup.exe"; exit 1; }
+          echo "installing $tag unattended"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "keld-setup.exe" --dir /tmp/win
+          # The documented silent invocation (docs/install.md). //SP- and the
+          # doubled slashes are MSYS quoting: Git Bash rewrites a leading / as a
+          # path, which turns /VERYSILENT into C:/VERYSILENT and the installer
+          # then shows its GUI and hangs the job forever.
+          MSYS_NO_PATHCONV=1 /tmp/win/keld-setup.exe //VERYSILENT //SUPPRESSMSGBOXES //NORESTART //LOG=C:\\Windows\\Temp\\keld-install.log
+          app="$(cygpath -u "$LOCALAPPDATA")/Programs/keld"
+          ls -la "$app" | head -20 || true
+          [ -x "$app/keld-agent-sidecar.exe" ] || { echo "::error::no keld-agent-sidecar.exe under $app after a silent install"; exit 1; }
+          echo "sidecar $(cat "$app/VERSION" 2>/dev/null || echo '(no VERSION)') at $app"
+
       # --- chain B's previous release ---------------------------------------
       #
       # ⚠️ CHAIN B COULD NOT PASS ON ANY RUNNER UNTIL THIS EXISTED. It upgrades
@@ -453,9 +490,33 @@ jobs:
           KELD_CONFORM_DISPOSABLE: "1"
           # Empty on chain A, so the ${VAR:+...} below adds nothing there.
           PREVIOUS: ${{ steps.previous.outputs.dir && format('dir:{0}', steps.previous.outputs.dir) || '' }}
+          # ⚠️ **A RUNNER HAS NO ~/.keld/sidecar-venv**, so the chain's default
+          # "upgrade to the WORKTREE sidecar" cannot happen here — `make sidecar`
+          # is a developer step and freezing one in CI costs a ~5 GB venv and
+          # minutes. Left at the default it wrote a wrapper pointing at a python
+          # that does not exist, the sidecar never started, and chain B failed
+          # three checkpoints later with `store_rows 0` — blaming the store for
+          # a missing interpreter. isolate.sh now refuses that case by name; this
+          # is the other half, which makes the leg actually runnable.
+          #
+          # So CI upgrades the BINARIES (previous release -> this branch's build)
+          # while the sidecar half stays the frozen one already downloaded. What
+          # that still proves is most of chain B: the upgrade completes, the
+          # tool configs survive it byte for byte, and prompts after it still
+          # produce a transcript, a pointer, store rows, telemetry and a publish.
+          # What it cannot prove is the skew assertion, which needs two DIFFERENT
+          # stamped sidecars — the chain already reports that as INCONCLUSIVE
+          # rather than passing it, which is the honest half of the same fact.
+
         run: |
           set -uo pipefail
           mkdir -p "$RUNNER_TEMP/conformance"
+          # $HOME is only real inside the shell, which is why this is not an
+          # env: entry — GitHub expressions cannot read the runner's HOME.
+          if [ "$CHAIN" = "B" ]; then
+            export KELD_CONFORM_NEW_SIDECAR="$HOME/.local/bin/keld-agent-sidecar"
+            echo "chain B upgrades the BINARIES only; sidecar stays $(cat "$KELD_CONFORM_NEW_SIDECAR/VERSION" 2>/dev/null || echo '?')"
+          fi
           make conformance TOOL="$TOOL" CHAIN="$CHAIN" SEED="$SEED" \
             ${ARTIFACT:+ARTIFACT="$ARTIFACT"} \
             ${PREVIOUS:+PREVIOUS="$PREVIOUS"} \
