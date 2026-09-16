@@ -718,6 +718,53 @@ jobs:
       # not fire". The enrichment lane is the last failing checkpoint there, and
       # the hook is a command the TOOL runs, so what matters is what setup wrote
       # into the tool's own config — not anything the chain prints.
+      # Why the enrichment lane is dark on Windows. The daemon log from the
+      # previous run showed NO pointer arriving at all, so the question is
+      # narrowed: does `keld.exe __hook` work when something other than the
+      # tool runs it? That is the one thing nothing has ever checked, and it
+      # separates "Claude Code did not run the hook" from "the hook runs and
+      # cannot reach the daemon".
+      #
+      # ⚠️ `set +e` FIRST. The previous version of this step died on its own
+      # `cat` of a missing file, because the step shell runs with -e — a
+      # diagnostic that aborts halfway is worse than none, since it looks like
+      # the thing it was diagnosing.
+      - name: Why did the hook not fire (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          set +e
+          work="$(cygpath -u "$RUNNER_TEMP")/conformance"
+          home="$work/home"
+          echo "=== hook command as written into settings.json ==="
+          find "$home" -name settings.json 2>/dev/null | while read -r f; do
+            echo "--- $f"; grep -o '"command": "[^"]*"' "$f" | sort -u
+          done
+          echo
+          echo "=== RUN THE HOOK BY HAND, exactly as the tool would ==="
+          # A UserPromptSubmit payload is what Claude Code pipes on stdin.
+          payload='{"session_id":"winprobe","transcript_path":"'"$home"'/.claude/projects/x.jsonl","prompt_id":"winprobe-1","hook_event_name":"UserPromptSubmit"}'
+          echo "$payload" | "$work/bin-under-test/keld.exe" __hook --source claude_code
+          echo "hook exit: $?"
+          echo
+          echo "=== did anything reach the daemon's spool? ==="
+          find "$home/.keld/spool" -type f 2>/dev/null | head -10
+          echo "=== hook.json ==="
+          sed -e 's/\(ingest_token[^A-Za-z0-9]*[A-Za-z0-9]\{4\}\)[^"]*/\1…REDACTED/' "$home/.keld/hook.json" 2>/dev/null
+          echo "=== daemon log ==="
+          tail -40 "$work/daemon.log" 2>/dev/null
+          exit 0
+
+      # ⚠️ **WINDOWS WAS EXCLUDED FROM THIS, WHICH IS BACKWARDS.** The exclusion
+      # dated from when the Windows leg was a stub that exited 1 with nothing to
+      # collect. It now runs the real chain, so it is the leg with the most to
+      # learn from and was the only one whose evidence was thrown away — two
+      # rounds of Windows debugging were spent reading the step's stdout because
+      # the daemon log was never uploaded.
+      # A Windows-only dump of the three files that answer "why did the hook
+      # not fire". The enrichment lane is the last failing checkpoint there, and
+      # the hook is a command the TOOL runs, so what matters is what setup wrote
+      # into the tool's own config — not anything the chain prints.
       - name: Why did the hook not fire (Windows)
         if: failure() && runner.os == 'Windows'
         shell: bash
