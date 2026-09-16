@@ -152,6 +152,15 @@ else
 fi
 echo "split ($SPLIT_KIND): before=[${BEFORE:-none}] after=[${AFTER:-none}]"
 
+# Validate --artifact BEFORE the run starts. Resolution stays in the step (the
+# artifacts have to exist when the installer runs, not now), but a typo in the
+# spec must not cost a Go build, two npm installs and a headless prompt first.
+case "$ARTIFACT" in
+  none|dir:*) ;;
+  *) echo "run-chain.sh: --artifact must be 'none' or 'dir:<path>' (got $ARTIFACT)" >&2; exit 2 ;;
+esac
+[ "$ARTIFACT" = "none" ] || echo "artifact: $ARTIFACT (the release under test is INSTALLED, not built — AC-12)"
+
 trap 'teardown' EXIT
 
 # --- the steps ---------------------------------------------------------------
