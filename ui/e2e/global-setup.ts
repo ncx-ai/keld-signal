@@ -15,6 +15,10 @@ export type E2EState = {
   sidecarPidFile: string;
   home: string;
   work: string;
+  // The repo this daemon was built from. Published by e2e-up.sh so a spec can
+  // run a repo tool (keld-conform) without guessing its way up from __dirname,
+  // which does not survive the ESM/CJS difference between Playwright configs.
+  repoRoot: string;
   log: string;
   settingsMounted: boolean;
   integrationsMounted: boolean;

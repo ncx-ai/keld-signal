@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -125,13 +126,39 @@ const HOOKS_STATE_UNTRUSTED =
  * `SessionStart` is deliberately absent: `codexTrustEvents` is
  * {UserPromptSubmit, Stop}, because those are the two that name a prompt.
  */
-const HOOKS_STATE_TRUSTED =
-  '\n[hooks.state."/home/e2e/.codex/config.toml:user_prompt_submit:0:0"]\n' +
-  "enabled = true\n" +
-  'trusted_hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111"\n' +
-  '\n[hooks.state."/home/e2e/.codex/config.toml:stop:0:0"]\n' +
-  "enabled = true\n" +
-  'trusted_hash = "sha256:2222222222222222222222222222222222222222222222222222222222222222"\n';
+// ⚠️ **THE APPROVED BLOCK IS GENERATED, NOT WRITTEN DOWN, AND THAT IS A
+// CORRECTION.** This constant used to be a literal `[hooks.state…]` block with
+// `trusted_hash = "sha256:1111…"` in it, and it passed — while `enabled = true`
+// alone was what "approved" meant. The day the daemon began COMPARING the hash
+// against the one Codex would record (internal/tools/codex_hash.go), the
+// literal became a state Codex can never be in, and this journey failed on a
+// merge of two independently-green branches.
+//
+// A placeholder cannot be repaired by writing a better placeholder: the hash is
+// a function of the hook as keld writes it TODAY, so any constant here goes
+// stale the next time the command changes. `keld-conform codex-approve` derives
+// it from the same walk and the same hash function the trust check reads.
+//
+// It does NOT prove the hash is right — it shares codexHookHash with the code
+// under test. `TestCodexHookHashIsCodexsOwnHash` is the oracle for that, pinned
+// against hashes Codex actually recorded. This only puts the fixture into the
+// approved state, which is what the journey needs and what no human is here to
+// do.
+function hooksStateTrusted(state: E2EState, home: string): string {
+  return execFileSync(
+    "go",
+    [
+      "run",
+      "./cmd/keld-conform",
+      "codex-approve",
+      "--config",
+      CODEX_CONFIG(home),
+      "--source",
+      CODEX_CONFIG(home),
+    ],
+    { cwd: state.repoRoot, encoding: "utf8" }
+  );
+}
 
 // The three instruction sentences, quoted here the way AC-9 quotes the middle
 // one — verbatim, from integrations/vocabulary.go.
@@ -393,7 +420,7 @@ test.describe("Integrations · live daemon", () => {
     // except the bytes in config.toml.
     const secondSessionAt = new Date();
     writeFile(CODEX_SESSION(home), codexSessionMeta(secondSessionAt), secondSessionAt);
-    writeFile(CODEX_CONFIG(home), written + HOOKS_STATE_TRUSTED, new Date(secondSessionAt.getTime() - 60_000));
+    writeFile(CODEX_CONFIG(home), written + hooksStateTrusted(state, home), new Date(secondSessionAt.getTime() - 60_000));
 
     // `idle`, not `working`: this fixture has no lane traffic at all, and a
     // quiet machine is idle. The point is that it is no longer held on a human.

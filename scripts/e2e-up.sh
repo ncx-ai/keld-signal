@@ -9,7 +9,8 @@
 #
 # On success <workdir>/state.json holds everything the suite needs:
 #   {"baseURL","secret","port","daemonPid","pgid","sidecarPidFile",
-#    "home","work","log","settingsMounted","integrationsMounted","blocks"}
+#    "home","work","repoRoot","log","settingsMounted","integrationsMounted",
+#    "blocks"}
 # and the daemon (plus its sidecar) is left RUNNING, in the process group
 # this script was started in, for ui/e2e/global-teardown.ts to reap.
 #
@@ -294,6 +295,7 @@ json.dump({
   "sidecarPidFile": "$WORK/sidecar.pid",
   "home": "$HOME_DIR",
   "work": "$WORK",
+  "repoRoot": "$ROOT",
   "log": "$LOG",
   "settingsMounted": $SETTINGS_MOUNTED,
   "integrationsMounted": $INTEGRATIONS_MOUNTED,
