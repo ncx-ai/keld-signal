@@ -19,7 +19,7 @@ mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 clang -bundle -fobjc-arc -arch arm64 \
   -isysroot "$SDK" -mmacosx-version-min=12.0 \
   -framework Cocoa -framework WebKit -framework InstallerPlugins \
-  -o "$BUNDLE/Contents/MacOS/KeldSetup" "$ROOT/KeldSetup.m" "$ROOT/KeldCode.m"
+  -o "$BUNDLE/Contents/MacOS/KeldSetup" "$ROOT/KeldSetup.m"
 
 cp "$ROOT/Info.plist" "$BUNDLE/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$BUNDLE/Contents/Info.plist"

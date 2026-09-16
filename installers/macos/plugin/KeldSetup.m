@@ -16,8 +16,8 @@
 // rewrites a user's files.
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <os/log.h>
 #import <InstallerPlugins/InstallerPlugins.h>
-#import "KeldCode.h"
 
 
 // ⚠️ THIS PANE LAYS ITSELF OUT, AND THAT IS FORCED BY MEASUREMENT.
@@ -130,14 +130,12 @@
 
 @end
 
-@interface KeldSetupPane : InstallerPane <WKNavigationDelegate>
+@interface KeldSetupPane : InstallerPane <WKNavigationDelegate, WKScriptMessageHandler>
 @end
 
 @implementation KeldSetupPane {
     NSView *_view;
     KeldPaneView *_root;
-    NSTextField *_codeField;
-    NSButton *_connectButton;
     NSTextField *_codeStatus;
     NSProgressIndicator *_engineBar;
     NSTextField *_engineStatus;
@@ -167,6 +165,12 @@
     NSProgressIndicator *_approvalBar;
     NSString *_approvalURL;
     int _approvalAttempts;
+    // Set once the approval page has finished its FIRST load, so a later
+    // navigation can be read as the person submitting rather than as the page
+    // still arriving.
+    BOOL _approvalPageLoaded;
+    // What to say once the pane has finished filling itself in.
+    NSString *_connectedAs;
     // The sections hidden while the approval page is up: an Installer pane has a
     // fixed height, so the web view has to borrow their space rather than push
     // the pane taller (which would simply clip).
@@ -372,9 +376,6 @@
 
     NSTextField *accountHeader = [self labelWithText:@"Your Keld account" bold:YES];
 
-    _codeField = [[NSTextField alloc] initWithFrame:NSZeroRect];
-    _codeField.placeholderString = @"atlas.keld.co/ABCD-EFGH";
-    _connectButton = [NSButton buttonWithTitle:@"Connect" target:self action:@selector(connect:)];
 
     _codeStatus = [self labelWithText:@"Checking this device…" bold:NO];
     _codeStatus.textColor = [NSColor secondaryLabelColor];
@@ -409,16 +410,12 @@
     _toolsPane.insetX = 0;
     _toolsPane.insetTop = 0;
 
-    for (NSView *v in @[accountHeader, _codeField, _connectButton, _codeStatus, _retryButton,
+    for (NSView *v in @[accountHeader, _codeStatus, _retryButton,
                         engineHeader, _engineBar, _engineStatus, toolsHeader, _toolsPane]) {
         [pane addSubview:v];
     }
-    // _connectButton shares the code field's line rather than taking one of its
-    // own, and is therefore not in `rows`.
-    pane.rows = @[accountHeader, _codeField, _codeStatus, _retryButton,
+    pane.rows = @[accountHeader, _codeStatus, _retryButton,
                   engineHeader, _engineBar, _engineStatus, toolsHeader, _toolsPane];
-    pane.trailingPartner = _codeField;
-    pane.trailingControl = _connectButton;
 
     _root = pane;
     _view = pane;
@@ -441,21 +438,59 @@
     // receive a key. First entry hid the bug completely, because the field IS
     // visible then.
     if (_approvalWeb && !_approvalWeb.hidden) return _approvalWeb;
-    if (!_codeField.hidden) return _codeField;
     return nil;
 }
 
-// klog writes to the unified log, which is the ONLY way to see inside this
-// process: the pane runs in InstallerRemotePluginService, out of process, with
-// no console and no stderr anyone will ever read. Two bugs here (the fatal
-// NSTask property write, and focus going to a hidden field) were each diagnosed
-// by other means because this did not exist. Read it with:
-//   log show --last 10m --predicate 'process == "InstallerRemotePluginService"'
+// klog records what the pane did. It runs in an XPC service with no console and
+// no stderr anyone will ever read, so without this the only evidence of a defect
+// is its symptom.
+//
+// ⚠️ IT WROTE TO THE UNIFIED LOG AND THAT WAS EFFECTIVELY WRITE-ONLY. Measured
+// 2026-09-16, streaming during a real install:
+//
+//   InstallerRemotePluginService-arm64[48511] (KeldSetup) keld-pane: <private>
+//
+// Two separate faults in one line. os_log REDACTS dynamic strings unless they
+// are declared public, so every message arrived as `<private>` — the log
+// recorded that something happened and never what. And the process is
+// `InstallerRemotePluginService-arm64`, not the name this comment used to give
+// for `log show`, so the documented way to read it back matched nothing at all.
+//
+// So it now writes a FILE, and the file is the primary record: greppable after
+// the fact, with no predicate to get wrong and no privacy rules to lose to.
+// ~/.keld/logs is where the daemon already writes, and HOME resolves to the
+// console user's because the pane runs as them. The os_log line is kept as a
+// secondary trace with %{public}s so a live stream is readable too.
 static void klog(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *m = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
-    NSLog(@"keld-pane: %@", m);
+
+    os_log(OS_LOG_DEFAULT, "keld-pane: %{public}s", m.UTF8String);
+
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@".keld/logs"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                              withIntermediateDirectories:YES attributes:nil error:NULL];
+    NSString *path = [dir stringByAppendingPathComponent:@"installer-pane.log"];
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    df.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss";
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [df stringFromDate:[NSDate date]], m];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (fh) {
+        @try {
+            [fh seekToEndOfFile];
+            [fh writeData:data];
+        } @catch (NSException *e) {
+            // A log that cannot be written must never take the wizard down with
+            // it: an uncaught ObjC exception in this process is SIGTRAP and a
+            // dead installer (measured 2026-09-14, from an NSTask property
+            // write). Losing a log line is the acceptable outcome here.
+        }
+        [fh closeFile];
+    } else {
+        [data writeToFile:path atomically:NO];
+    }
 }
 
 #pragma mark - Pane lifecycle
@@ -525,38 +560,38 @@ static void klog(NSString *fmt, ...) {
 
 #pragma mark - Steps
 
-- (void)connect:(id)sender {
-    NSString *code = [_codeField.stringValue stringByTrimmingCharactersInSet:
-                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (code.length == 0) {
-        _codeStatus.stringValue = @"Enter the setup code from your Keld download page.";
-        return;
-    }
-    _connectButton.enabled = NO;
-    _codeStatus.stringValue = @"Connecting…";
-    __weak typeof(self) weakSelf = self;
-    __block NSString *failure = nil;
-    [self runKeld:[@[@"login", @"--code", code, @"--json"] arrayByAddingObjectsFromArray:[self apiArgs]]
-          onEvent:^(NSDictionary *e) {
-        typeof(self) s = weakSelf; if (!s) return;
-        NSString *kind = e[@"event"];
-        if ([kind isEqualToString:@"authorized"]) {
-            s->_paired = YES;
-            s->_apiURL = e[@"api_url"] ?: @"";
-            s->_codeStatus.stringValue = [NSString stringWithFormat:@"Connected — %@ · %@",
-                                          e[@"principal"] ?: @"", e[@"org"] ?: @""];
-            s.nextEnabled = YES;
-            [s loadTools];
-        } else if ([kind isEqualToString:@"error"]) {
-            failure = e[@"message"] ?: @"that code was not accepted";
-        }
-    } done:^(int status) {
-        typeof(self) s = weakSelf; if (!s) return;
-        s->_connectButton.enabled = YES;
-        if (!s->_paired) {
-            s->_codeStatus.stringValue = failure ?: @"That code was not accepted. Check it and try again.";
-        }
-    }];
+// beginLoadingTools is the state between "signed in" and "ready to continue".
+//
+// ⚠️ CONTINUE IS HELD UNTIL THE PANEL IS ACTUALLY FINISHED. It used to be
+// enabled the instant the credential verified, while `signal setup --dry-run`
+// was still enumerating the tools — so the pane showed a success line, an empty
+// tool list, a disabled-looking wizard and no motion, and a person could not
+// tell whether it was working or stuck. Saying what is happening and moving
+// something while it happens is the whole fix; the button then becomes the
+// signal that the pane is done rather than a control that lights up early.
+- (void)beginLoadingTools {
+    _codeStatus.stringValue = _connectedAs.length
+        ? [NSString stringWithFormat:@"%@ — checking your AI tools…", _connectedAs]
+        : @"Checking your AI tools…";
+    _approvalBar.hidden = NO;
+    [_approvalBar startAnimation:nil];
+    self.nextEnabled = NO;
+    [_root setNeedsLayout:YES];
+    [self loadTools];
+}
+
+// finishLoadingTools returns the pane to a settled state: the bar stops, the
+// line states the connection, and Continue becomes available.
+//
+// It runs whether the enumeration succeeded or not. A tool list that could not
+// be read is not a reason to trap someone on this pane — the credential is
+// verified, which is the thing this install is all-or-nothing about, and
+// postinstall configures whatever is present regardless.
+- (void)finishLoadingTools {
+    [self stopApprovalBar];
+    if (_connectedAs.length) _codeStatus.stringValue = _connectedAs;
+    self.nextEnabled = YES;
+    [_root setNeedsLayout:YES];
 }
 
 // loadTools enumerates what is installed WITHOUT writing anything: --dry-run
@@ -571,6 +606,7 @@ static void klog(NSString *fmt, ...) {
     } done:^(int status) {
         typeof(self) s = weakSelf; if (!s) return;
         [s renderTools:found];
+        [s finishLoadingTools];
     }];
 }
 
@@ -712,13 +748,10 @@ static void klog(NSString *fmt, ...) {
         NSString *state = identity[@"status"] ?: @"none";
         if ([state isEqualToString:@"verified"]) {
             s->_paired = YES;
-            s->_codeField.hidden = YES;
-            s->_connectButton.hidden = YES;
-            s->_codeStatus.stringValue =
+            s->_connectedAs =
                 [NSString stringWithFormat:@"Already connected — %@ · %@",
                  identity[@"principal"] ?: @"", identity[@"org"] ?: @""];
-            s.nextEnabled = YES;
-            [s loadTools];
+            [s beginLoadingTools];
             return;
         }
         if ([state isEqualToString:@"unreachable"]) {
@@ -734,10 +767,6 @@ static void klog(NSString *fmt, ...) {
         // expired credential is not a reason to nag about the old one, so both
         // read the same to the person.
         //
-        // The clipboard is tried first only because it is INSTANT when someone
-        // came straight from the download page; with nothing there, the pane
-        // fetches a code itself rather than asking anyone to go and find one.
-        if ([s prefillFromClipboard]) return;
         [s beginBrowserSignIn];
     }];
 }
@@ -801,13 +830,10 @@ static void klog(NSString *fmt, ...) {
             [s hideApprovalPage];
             s->_paired = YES;
             s->_apiURL = e[@"api_url"] ?: @"";
-            s->_codeField.hidden = YES;
-            s->_connectButton.hidden = YES;
-            s->_codeStatus.stringValue =
+            s->_connectedAs =
                 [NSString stringWithFormat:@"Connected — %@ · %@",
                  e[@"principal"] ?: @"", e[@"org"] ?: @""];
-            s.nextEnabled = YES;
-            [s loadTools];
+            [s beginLoadingTools];
         } else if ([kind isEqualToString:@"error"]) {
             failure = e[@"message"];
         }
@@ -820,8 +846,8 @@ static void klog(NSString *fmt, ...) {
         // to try again, or to paste a code by hand into the field below.
         s->_signInStarted = NO;
         s->_codeStatus.stringValue = failure
-            ? [NSString stringWithFormat:@"Sign-in didn't finish (%@). Try again, or paste a setup code.", failure]
-            : @"Sign-in didn't finish. Try again, or paste a setup code.";
+            ? [NSString stringWithFormat:@"Sign-in didn't finish (%@). Try again.", failure]
+            : @"Sign-in didn't finish. Try again.";
         s->_retryButton.hidden = NO;
     }];
 }
@@ -851,8 +877,37 @@ static void klog(NSString *fmt, ...) {
     if (!url) return;
     KeldPaneView *root = _root;
     if (!_approvalWeb) {
+        // ⚠️ THE PAGE SUBMITS WITH fetch(), SO NO NAVIGATION EVER HAPPENS.
+        // Atlas's approval form posts /auth/login and /cli/device/approve over
+        // XHR and re-renders in place — no provisional navigation, no title
+        // change, no progress to observe. The pane therefore could not tell
+        // that anyone had pressed anything: the person submitted, the panel sat
+        // unchanged, and the next thing they saw was the whole view being
+        // replaced whenever the device poll happened to answer. Reported twice
+        // from real installs (2026-09-16) as the state being vague and giving no
+        // sign it was working.
+        //
+        // The pane injects its own listener rather than waiting for Atlas to
+        // send one: a capturing click handler that reports any button press
+        // back through a message handler. It needs no change to the page, and
+        // if a future page shape stops matching, the worst case is the state we
+        // already had.
+        WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
+        WKUserContentController *ucc = [WKUserContentController new];
+        NSString *js =
+            @"document.addEventListener('click', function (e) {"
+            @"  var t = e.target && e.target.closest ? e.target.closest('button, [type=submit]') : null;"
+            @"  if (t && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.keld) {"
+            @"    window.webkit.messageHandlers.keld.postMessage('submitted');"
+            @"  }"
+            @"}, true);";
+        [ucc addUserScript:[[WKUserScript alloc] initWithSource:js
+                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                               forMainFrameOnly:YES]];
+        [ucc addScriptMessageHandler:self name:@"keld"];
+        cfg.userContentController = ucc;
         _approvalWeb = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 560, 300)
-                                          configuration:[WKWebViewConfiguration new]];
+                                          configuration:cfg];
         // ⚠️ THE PAGE'S TRANSPARENCY IS WASTED UNLESS THE WEB VIEW IS ALSO
         // NON-OPAQUE. Atlas's route drops its canvas so the approval form can
         // sit on the installer's own panel, but a WKWebView paints an opaque
@@ -903,12 +958,6 @@ static void klog(NSString *fmt, ...) {
             [_stowedWhileSigningIn addObject:v];
         }
         for (NSView *v in _stowedWhileSigningIn) v.hidden = YES;
-        // The Connect button shares the code field's line and is not in `rows`,
-        // so it has to be hidden explicitly or it floats over the page.
-        if (!_connectButton.hidden) {
-            [_stowedWhileSigningIn addObject:_connectButton];
-            _connectButton.hidden = YES;
-        }
     }
     // The bar is added BEFORE the page so it sits above it: the web view's row
     // height is "whatever is left", so anything appended after it would be laid
@@ -945,9 +994,38 @@ static void klog(NSString *fmt, ...) {
     [_root setNeedsLayout:YES];
 }
 
+// ⚠️ THE WAIT AFTER SUBMITTING WAS INVISIBLE. Once the page is up, a further
+// navigation is the person signing in — and the device poll can take its whole
+// interval to answer. That gap showed the unchanged "Sign in to connect this
+// device.", i.e. an instruction for a step they had just finished, with nothing
+// moving. Reported as: the panel says I may proceed, Continue is disabled, and
+// it is not clear anything is happening.
+// userContentController:didReceiveScriptMessage: is the injected listener
+// reporting that the person acted on the form. From here the pane is waiting on
+// the device poll — up to a full interval — so it says so and keeps something
+// moving until the answer arrives.
+- (void)userContentController:(WKUserContentController *)ucc
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (_paired) return;
+    klog(@"approval form submitted; waiting for the device poll");
+    _codeStatus.stringValue = @"Signing you in…";
+    _approvalBar.hidden = NO;
+    [_approvalBar startAnimation:nil];
+    [_root setNeedsLayout:YES];
+}
+
+- (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
+    if (!_approvalPageLoaded) return;   // the first load is not a submission
+    _codeStatus.stringValue = @"Finishing sign-in…";
+    _approvalBar.hidden = NO;
+    [_approvalBar startAnimation:nil];
+    [_root setNeedsLayout:YES];
+}
+
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     klog(@"approval page loaded; firstResponder=%@",
          _root.window.firstResponder.className ?: @"(none)");
+    _approvalPageLoaded = YES;
     [self stopApprovalBar];
     // NOW there is a form to sign in to.
     _codeStatus.stringValue = @"Sign in to connect this device.";
@@ -1021,6 +1099,11 @@ static void klog(NSString *fmt, ...) {
     _root.rows = rows;
     [_approvalWeb stopLoading];
     _approvalWeb.navigationDelegate = nil;
+    // ⚠️ A SCRIPT MESSAGE HANDLER IS RETAINED BY THE CONTENT CONTROLLER, which
+    // the web view retains — so leaving it installed keeps this pane alive for
+    // the life of the process. Removing it is what makes the rebuild on
+    // re-entry a rebuild rather than a leak.
+    [_approvalWeb.configuration.userContentController removeScriptMessageHandlerForName:@"keld"];
     [_approvalWeb removeFromSuperview];
     _approvalWeb = nil;
 }
@@ -1031,22 +1114,6 @@ static void klog(NSString *fmt, ...) {
     for (NSView *v in _stowedWhileSigningIn) v.hidden = NO;
     [_stowedWhileSigningIn removeAllObjects];
     [_root setNeedsLayout:YES];
-}
-
-// prefillFromClipboard fills the field from the clipboard and submits it.
-//
-// The Atlas download page's Copy button is what puts the code there, so in the
-// normal flow it is already on the clipboard at the moment this pane appears and
-// nobody should have to retype it. `KeldLooksLikePairingCode` (unit-tested in
-// KeldCodeTest.m) is what keeps this from firing a login attempt at arbitrary
-// copied text; the value stays visible and editable either way.
-- (BOOL)prefillFromClipboard {
-    NSString *pasted = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
-    if (!KeldLooksLikePairingCode(pasted)) return NO;
-    _codeField.stringValue = [pasted stringByTrimmingCharactersInSet:
-                              [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    [self connect:nil];
-    return YES;
 }
 
 #pragma mark - Handoff

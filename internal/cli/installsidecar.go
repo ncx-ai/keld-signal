@@ -45,6 +45,22 @@ type installSidecarOpts struct {
 	// event instead, because console.Print reaches nobody under --json — see
 	// the policy note above.
 	Warn func(string)
+	// CleanupJob is a launchd plist to delete once the install SUCCEEDS.
+	//
+	// ⚠️ macOS NAMES THE BACKGROUND ITEM AFTER THE PROGRAM IT RUNS, AND SHOWS
+	// THAT TO THE PERSON INSTALLING. The fallback fetch used to run from a
+	// generated shell script, so macOS announced "'.sidecar-fetch.sh' can run
+	// in the background" — a dot-prefixed script inside a log directory,
+	// presented to someone who just wanted to install Keld (reported from a
+	// real install, 2026-09-16). The job now runs this signed binary directly,
+	// which is what macOS names instead, and launchd handles the logging.
+	//
+	// Deleting the plist is the one thing the shell wrapper did that the
+	// binary must take over: without it the job re-runs a ~190MB download at
+	// every login. Only on success — on failure the job is the ONLY thing that
+	// will try again, and removing it would leave a stale sidecar with nothing
+	// scheduled to fix it.
+	CleanupJob string
 }
 
 type installSidecarResult struct {
@@ -195,7 +211,24 @@ func installSidecar(opts installSidecarOpts) (installSidecarResult, error) {
 	if err != nil {
 		return res, err
 	}
+	cleanupLaunchdJob(opts.CleanupJob)
 	return r, nil
+}
+
+// cleanupLaunchdJob removes a one-shot launchd plist. Best-effort: the install
+// itself has already succeeded by this point, and a plist that cannot be
+// deleted costs a redundant fetch at next login, not a broken machine.
+//
+// It deliberately does NOT `launchctl bootout` the label. That kills the very
+// process doing the cleanup — measured on a real install, where the shell
+// version logged exit=0 and left both its files on disk. A RunAtLoad job with no
+// KeepAlive is finished when its program exits, and with the plist gone nothing
+// loads it again.
+func cleanupLaunchdJob(path string) {
+	if path == "" {
+		return
+	}
+	_ = os.Remove(path)
 }
 
 // commitStagedSidecar moves a staged tree into place and removes the staging dir.
@@ -325,12 +358,13 @@ func newSidecarProgressThrottle(emit func(received, total int64)) func(received,
 
 func newInstallSidecarCmd() *cobra.Command {
 	var (
-		jsonOut   bool
-		tag       string
-		dest      string
-		stageOnly bool
-		commit    string
-		baseURL   string
+		jsonOut    bool
+		tag        string
+		dest       string
+		stageOnly  bool
+		commit     string
+		baseURL    string
+		cleanupJob string
 	)
 	cmd := &cobra.Command{
 		Use:   "install-sidecar",
@@ -361,7 +395,7 @@ func newInstallSidecarCmd() *cobra.Command {
 				return nil
 			}
 
-			opts := installSidecarOpts{BaseURL: baseURL, Tag: tag, Dest: dest, StageOnly: stageOnly}
+			opts := installSidecarOpts{BaseURL: baseURL, Tag: tag, Dest: dest, StageOnly: stageOnly, CleanupJob: cleanupJob}
 			if jsonOut {
 				opts.Progress = newSidecarProgressThrottle(func(received, total int64) {
 					emitEvent(sidecarProgressEvent{Event: "progress", Received: received, Total: total})
@@ -391,5 +425,7 @@ func newInstallSidecarCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&stageOnly, "stage-only", false, "Download and unpack, but do not replace the installed sidecar.")
 	cmd.Flags().StringVar(&commit, "commit", "", "Install a previously staged tree (the path from --stage-only).")
 	cmd.Flags().StringVar(&baseURL, "base-url", "", "Release download base URL (testing).")
+	cmd.Flags().StringVar(&cleanupJob, "cleanup-job", "",
+		"launchd plist to delete after a successful install (the installer's one-shot fetch job).")
 	return cmd
 }

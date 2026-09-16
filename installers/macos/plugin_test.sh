@@ -41,7 +41,17 @@ awk '/clang -bundle/{c=NR} /codesign --force/{if (!s) s=NR} /codesign --verify/{
   "$p/build-plugin.sh" || fail "build-plugin.sh must compile, THEN sign, THEN verify"
 
 # The pane must not reimplement Go logic.
-grep -q 'login", @"--code' "$p/KeldSetup.m" || fail "pane does not redeem the code via keld login --json"
+# ⚠️ THIS ASSERTION USED TO REQUIRE THE OPPOSITE — `login --code`, the pane
+# redeeming a typed setup code. That flow is gone: the pane fetches its own
+# device code and approves inside the embedded page, so a field asking someone
+# to paste `ABCD-EFGH` was an instruction for a step that never comes, sitting
+# under a form that had already signed them in. The inversion is deliberate, not
+# a weakened test — a reintroduced field would fail here.
+if grep -qE '_codeField|_connectButton|prefillFromClipboard' "$p/KeldSetup.m"; then
+  fail "the pane still carries the setup-code field; the device flow replaced it"
+fi
+grep -qF 'login", @"--json"' "$p/KeldSetup.m" \
+  || fail "pane does not start a device sign-in via keld login --json"
 grep -q 'install-sidecar' "$p/KeldSetup.m" || fail "pane does not drive keld signal install-sidecar"
 grep -q 'installer-handoff.json' "$p/KeldSetup.m" || fail "pane writes no handoff file"
 grep -q 'nextEnabled' "$p/KeldSetup.m" || fail "pane never gates Continue"
@@ -114,8 +124,14 @@ grep -qF -- '--verify' "$p/KeldSetup.m" || fail "pane checks identity without --
 
 # The code is prefilled from the clipboard (the Atlas download page's Copy
 # button is what puts it there) rather than typed.
-grep -qF 'NSPasteboard' "$p/KeldSetup.m" || fail "pane does not read the clipboard, so the person must type the code by hand"
-grep -qF 'KeldLooksLikePairingCode' "$p/KeldSetup.m" || fail "pane does not shape-check clipboard contents before submitting them"
+# The clipboard shortcut existed only to fill the setup-code field, which is
+# gone; reading a person's pasteboard for no remaining purpose is worse than not.
+if grep -qF 'NSPasteboard' "$p/KeldSetup.m"; then
+  fail "the pane still reads the clipboard, which only served the removed setup-code field"
+fi
+# (Its companion — the shape check that kept arbitrary copied text from being
+# submitted as a code — went with it. KeldCode.m and its unit tests remain in
+# the tree, unreferenced, and are removed in the same commit.)
 
 # ⚠️ NOBODY SHOULD HAVE TO FETCH A CODE BY HAND. With no verified credential and
 # nothing usable on the clipboard, the pane starts the OAuth device flow itself
@@ -223,5 +239,54 @@ printf '%s' "$key" | grep -q 'hidden' \
   || fail "initialKeyView can return a hidden control, so pane re-entry sends typing to an invisible field"
 printf '%s' "$key" | grep -q '_approvalWeb' \
   || fail "initialKeyView ignores the approval page, so focus never reaches the form actually on screen"
+
+# ⚠️ "CONNECTED" MUST NOT MEAN "READY" WHILE THE PANE IS STILL FILLING IN.
+# Continue used to be enabled the instant the credential verified, while
+# `signal setup --dry-run` was still enumerating tools — so the panel showed a
+# success line, an empty list, and no motion, and a person could not tell
+# working from stuck. Reported as: it says I may proceed, the button is
+# disabled, and nothing indicates anything is happening.
+#
+# Two halves: a stated loading state, and Continue held until the list is on
+# screen. Asserting only the first would pass on a pane that still enables the
+# button early.
+grep -q 'beginLoadingTools' "$p/KeldSetup.m" \
+  || fail "the pane has no loading state between signing in and being ready"
+awk '/- \(void\)beginLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q 'nextEnabled = NO' \
+  || fail "Continue is not held while the pane is still loading its tool list"
+awk '/- \(void\)beginLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q 'startAnimation' \
+  || fail "nothing moves while the pane loads, so the wait is indistinguishable from a hang"
+awk '/- \(void\)finishLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q 'nextEnabled = YES' \
+  || fail "Continue is never re-enabled once loading finishes"
+
+# And the gap between submitting the form and the device poll answering must
+# also say something: that wait is up to a full poll interval of nothing.
+#
+# ⚠️ A NAVIGATION DELEGATE IS NOT ENOUGH, AND ASSERTING ONLY THAT WAS A TEST
+# THAT COULD NOT FAIL FOR THE REAL CASE. Atlas's approval form submits with
+# fetch() and re-renders in place — no navigation ever happens — so the pane
+# learned nothing when the person pressed the button, and the panel sat
+# unchanged until the device poll answered. The pane therefore INJECTS its own
+# click listener and receives it as a script message; that is the signal, and it
+# is what must be present.
+grep -q 'addScriptMessageHandler' "$p/KeldSetup.m" \
+  || fail "the pane cannot tell that a sign-in was submitted (the page posts by fetch, not navigation)"
+grep -q 'didReceiveScriptMessage' "$p/KeldSetup.m" \
+  || fail "the pane installs a message handler and never handles the message"
+awk '/didReceiveScriptMessage/,/^}/' "$p/KeldSetup.m" | grep -q 'startAnimation' \
+  || fail "submitting the form starts nothing moving, so the wait still looks like a hang"
+# The handler is retained by the content controller, which the web view retains:
+# leaving it installed keeps the pane alive for the life of the process.
+grep -q 'removeScriptMessageHandlerForName' "$p/KeldSetup.m" \
+  || fail "the script message handler is never removed, so the pane leaks through the retain cycle"
+
+# ⚠️ THE PANE'S LOG MUST BE READABLE. It wrote via NSLog to the unified log,
+# where os_log redacts dynamic strings: every line arrived as
+# `keld-pane: <private>` (measured 2026-09-16, streaming a real install), which
+# records that something happened and never what. A file is the primary record.
+grep -q 'installer-pane.log' "$p/KeldSetup.m" \
+  || fail "the pane writes no log file, so its diagnostics are only in a redacting log"
+grep -q '%{public}s' "$p/KeldSetup.m" \
+  || fail "the os_log line still lets its message be redacted to <private>"
 
 echo "plugin_test.sh: OK"

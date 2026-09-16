@@ -474,3 +474,60 @@ func TestStageOnlyDoesNotRestartTheService(t *testing.T) {
 		t.Errorf("staging restarted the service %d times; nothing was installed yet", restarts)
 	}
 }
+
+// ⚠️ THE LAUNCHD JOB MUST NOT BE A SHELL SCRIPT, BECAUSE macOS SHOWS ITS NAME TO
+// THE PERSON INSTALLING. The fallback fetch ran from
+// ~/.keld/logs/.sidecar-fetch.sh, and macOS announced "'.sidecar-fetch.sh' can
+// run in the background" — a dot-prefixed script in a log directory, presented
+// to someone who just wanted to install Keld. Reported from a real install,
+// 2026-09-16.
+//
+// So the job runs the signed `keld` binary directly, which is what macOS then
+// names, and launchd does the logging through StandardOutPath. That leaves one
+// thing the shell used to do: delete the plist, without which the job re-runs a
+// ~190MB download at every login. --cleanup-job is that, moved into the binary
+// where it can be tested.
+func TestCleanupJobRemovesThePlistAfterASuccessfulInstall(t *testing.T) {
+	plist := filepath.Join(t.TempDir(), "co.keld.sidecar-fetch.plist")
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := fakeReleaseServer(t, fakeSidecarTarball(t, "v9.9.9"))
+	defer srv.Close()
+
+	if _, err := installSidecar(installSidecarOpts{
+		BaseURL: srv.URL, Tag: "v9.9.9", Dest: t.TempDir(), CleanupJob: plist,
+	}); err != nil {
+		t.Fatalf("installSidecar: %v", err)
+	}
+	if _, err := os.Stat(plist); !os.IsNotExist(err) {
+		t.Error("the launchd job's plist survived a successful install, so the fetch re-runs at every login")
+	}
+}
+
+// ⚠️ A FAILED FETCH MUST KEEP ITS JOB. The plist is the only thing that will try
+// again — delete it on failure and the machine is left with a stale sidecar and
+// nothing scheduled to fix it, which is the silent state this whole path exists
+// to end.
+func TestCleanupJobSurvivesAFailedInstall(t *testing.T) {
+	plist := filepath.Join(t.TempDir(), "co.keld.sidecar-fetch.plist")
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A server that answers nothing useful: the fetch cannot succeed.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	if _, err := installSidecar(installSidecarOpts{
+		BaseURL: srv.URL, Tag: "v9.9.9", Dest: t.TempDir(), CleanupJob: plist,
+	}); err == nil {
+		t.Fatal("expected the install to fail")
+	}
+	if _, err := os.Stat(plist); err != nil {
+		t.Error("a failed fetch deleted its own retry job, leaving nothing to try again")
+	}
+}

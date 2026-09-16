@@ -102,10 +102,68 @@ else
   tag=""
   [ -f "$PREFIX/VERSION" ] && tag=$(tr -d ' \n' < "$PREFIX/VERSION")
   case "$tag" in ""|*dryrun*) tag="" ;; esac
+
+  # ⚠️ THIS FALLBACK RAN AND ACHIEVED NOTHING, SILENTLY, ON EVERY FAST INSTALL.
+  # It used to be `asuser /bin/sh -c "keld signal install-sidecar … &"` with the
+  # output sent to /dev/null. Measured on a real v3.0.2 install (2026-09-16):
+  # postinstall ran at 10:40:34, the fallback fired, and two minutes later there
+  # was no fetch process, no staging directory, and a sidecar tree still bearing
+  # its previous timestamp. Running the SAME command by hand worked first time,
+  # so the fetch is fine — what does not survive is a bare background child of a
+  # script PackageKit tears down the moment it exits.
+  #
+  # Who hits it: anyone ALREADY SIGNED IN. They reach Continue in seconds, the
+  # pane's ~190MB download has not finished, so no tree is staged and this is the
+  # only path left. The faster the person, the likelier their sidecar never
+  # updates — and nothing said so, because of the /dev/null.
+  #
+  # Two changes. The work is handed to LAUNCHD, which owns it independently of
+  # this script's lifetime; and it writes a LOG, so the next occurrence is one
+  # file rather than an investigation. The plist removes itself after running,
+  # so nothing persists once the fetch is done.
+  fetch_log="$userhome/.keld/logs/sidecar-install.log"
+  asuser /bin/sh -c "mkdir -p \"$userhome/.keld/logs\"" || true
+  plist="$userhome/Library/LaunchAgents/co.keld.sidecar-fetch.plist"
+
+  # ⚠️ THE JOB RUNS THE SIGNED BINARY, NOT A GENERATED SHELL SCRIPT — because
+  # macOS NAMES THE BACKGROUND ITEM AFTER THE PROGRAM AND SHOWS IT TO THE PERSON
+  # INSTALLING. The first version ran ~/.keld/logs/.sidecar-fetch.sh, and macOS
+  # announced "'.sidecar-fetch.sh' can run in the background": a dot-prefixed
+  # script inside a log directory, presented to someone who just wanted to
+  # install Keld (reported from a real install, 2026-09-16). Running
+  # `$PREFIX/keld` directly means macOS names Keld's own signed binary instead.
+  #
+  # Everything the wrapper existed for is now native: launchd writes the log
+  # through StandardOutPath/StandardErrorPath, and `--cleanup-job` has the
+  # binary delete this plist after a SUCCESSFUL install (unit-tested in
+  # installsidecar_test.go). On failure the plist stays, because it is the only
+  # thing that will try again.
+  args="<string>$PREFIX/keld</string><string>signal</string><string>install-sidecar</string>"
   if [ -n "$tag" ]; then
-    asuser /bin/sh -c "\"$PREFIX/keld\" signal install-sidecar --tag \"$tag\" >/dev/null 2>&1 &" || true
+    args="$args<string>--tag</string><string>$tag</string>"
+  fi
+  args="$args<string>--cleanup-job</string><string>$plist</string>"
+
+  cat > "$plist" <<PLIST 2>/dev/null || true
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>co.keld.sidecar-fetch</string>
+  <key>ProgramArguments</key><array>$args</array>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$fetch_log</string>
+  <key>StandardErrorPath</key><string>$fetch_log</string>
+</dict></plist>
+PLIST
+  chown "$user" "$plist" 2>/dev/null || true
+  asuser /bin/launchctl bootout "gui/$uid/co.keld.sidecar-fetch" 2>/dev/null || true
+  if asuser /bin/launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null; then
+    echo "  • analysis sidecar downloading in the background — see ~/.keld/logs/sidecar-install.log"
   else
-    asuser /bin/sh -c "\"$PREFIX/keld\" signal install-sidecar >/dev/null 2>&1 &" || true
+    # launchd refused the job. Say so rather than leaving the machine to find
+    # out via a version-skew finding days later.
+    rm -f "$plist" 2>/dev/null || true
+    echo "  ⚠ could not start the sidecar download. Run: keld signal install-sidecar"
   fi
 fi
 
