@@ -48,6 +48,7 @@ SKIP_ONBOARD=0
 INSTALLER_CODE=0
 ALLOW_NO_MANAGER=""
 SERVER_PID=""
+INSTALL_RC=0
 
 usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -144,7 +145,39 @@ env KELD_RELEASE_TAG="$TAG" \
     KELD_INSTALL_DIR="$DEST" \
     sh "$ROOT/scripts/install.sh" $INSTALL_ARGS </dev/null 2>&1 | sed "s/^/$IV_NAME:   | /"
 rc=${PIPESTATUS[0]}
-[ "$rc" = "0" ] || iv_die "scripts/install.sh exited $rc"
+if [ "$rc" != "0" ]; then
+  # ⚠️ **A NON-ZERO EXIT IS DEFERRED HERE, NOT FORGIVEN — and only behind the
+  # flag.** This script's own rule is that nothing is judged by an exit code,
+  # because `install.sh` can exit 0 having placed files and onboarded nobody.
+  # The converse is just as true and is what a container hits every time: it
+  # exits 1 having placed EVERYTHING correctly, because `keld-agent install`
+  # registers the unit and then tries to START it, and there is no systemd user
+  # bus to start it with.
+  #
+  # Measured 2026-09-16, real v2.5.0 release, ubuntu:24.04 under docker, both
+  # ways round: with no systemd installed at all the line is
+  # `exec: "systemctl": executable file not found in $PATH`; with systemd
+  # installed but no user bus it is a bare `exit status 1`. Either way the
+  # binaries, the 1.2 GB sidecar tree and
+  # ~/.config/systemd/user/keld-agent.service were all correctly in place.
+  #
+  # So `--allow-no-service-manager` could not do the job its own header claims
+  # — it relaxed `verify-service`, which this die never let the run reach.
+  #
+  # Deferred means: the failure is STATED, the run continues, and every
+  # verification below must still pass on observed state. Nothing is skipped
+  # and no check is weakened; if the install really was broken, the binaries
+  # will not run or the sidecar will be missing and the run dies there instead,
+  # with both facts printed. Without the flag, a non-zero exit is still fatal.
+  if [ -n "$ALLOW_NO_MANAGER" ]; then
+    iv_say "  ⚠ scripts/install.sh exited $rc. DEFERRED, not forgiven: --allow-no-service-manager"
+    iv_say "    says this machine has no service manager to start the agent with, and the"
+    iv_say "    verifications below decide — on observed state, as they always do."
+    INSTALL_RC=$rc
+  else
+    iv_die "scripts/install.sh exited $rc"
+  fi
+fi
 
 # --- 2. onboard, by command ---------------------------------------------------
 
@@ -163,8 +196,13 @@ else
     || iv_die "keld signal setup --yes failed"
   # Idempotent, and it re-points the service at the installed binary and
   # restarts it — ml_backend is read at daemon STARTUP and never re-read.
-  iv_run "keld-agent-install" "$DEST/keld-agent" install \
-    || iv_die "keld-agent install failed"
+  # Same deferral, same reason: this is the command that registers the unit and
+  # then starts it, so on a machine with no service manager it reports failure
+  # having done the half that can be verified.
+  if ! iv_run "keld-agent-install" "$DEST/keld-agent" install; then
+    [ -n "$ALLOW_NO_MANAGER" ] || iv_die "keld-agent install failed"
+    iv_say "  ⚠ keld-agent install exited non-zero; deferred for the same reason as install.sh"
+  fi
 fi
 
 # --- 3. verify, from observed state -------------------------------------------
@@ -199,6 +237,11 @@ if [ "$STOP_SERVICE" = "1" ]; then
 fi
 
 echo
-iv_say "OK — installed by scripts/install.sh, onboarded by command, verified from observed state"
+if [ "$INSTALL_RC" != "0" ]; then
+  iv_say "OK — verified from observed state, but scripts/install.sh EXITED $INSTALL_RC"
+  iv_say "     (no service manager on this machine; the unit file is present and was checked)"
+else
+  iv_say "OK — installed by scripts/install.sh, onboarded by command, verified from observed state"
+fi
 iv_say "bin_dir=$DEST"
 iv_say "sidecar_dir=$SIDECAR_DIR"

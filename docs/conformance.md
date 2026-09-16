@@ -77,13 +77,95 @@ disposable** (`KELD_CONFORM_DISPOSABLE=1`, or `CI=true`), and the harness does
 **not** set that variable for you: a harness that set it would have deleted the
 guard rather than passed it.
 
-**What has actually been run (2026-09-16):** `install-macos.sh` and
-`install-linux.sh` against a **local fake release** — inert stand-in binaries
-served over loopback — covering argument handling, `install.sh`'s unattended
-path, and all four verification outcomes, including a run where every command
-exits 0 and the script still fails at `verify-onboarded` because no `hook.json`
-was written. Against a REAL pkg or tarball: **not yet**.
-`install-windows.ps1` has never been run, or even parsed.
+**What has actually been run (2026-09-16):**
+
+1. `install-macos.sh` and `install-linux.sh` against a **local fake release** —
+   inert stand-in binaries served over loopback — covering argument handling,
+   `install.sh`'s unattended path, and all four verification outcomes, including
+   a run where every command exits 0 and the script still fails at
+   `verify-onboarded` because no `hook.json` was written.
+2. ⚠️ **`install-linux.sh --tag v2.5.0` against the REAL published release**, in
+   a disposable container, on both architectures. This is the run that matters,
+   and it is the one a fake release cannot substitute for — see below.
+3. `install-windows.ps1` has never been run, or even parsed. It also has no
+   invoker: the CI install step is gated `runner.os != 'Windows'` and
+   `lib/isolate.sh` declines it, so today it is an artifact, not a path.
+
+### ⚠️ What the REAL release found, and the fake one could not
+
+**A fake release builds whatever archive it is asked for, so it can never be
+missing one.** That is not a smaller version of the test — it is a different
+test, one with no failure mode. Run against the real thing, two defects
+surfaced immediately:
+
+**1. Linux arm64 cannot be installed at all, on any published release.**
+`scripts/install.sh` accepts `arm64|aarch64` and then downloads
+`keld-agent-sidecar_linux_arm64.tar.gz`, which **is not published** — v2.5.0 and
+v3.0.0-rc.3 both ship `keld_linux_arm64.tar.gz` (the CLI) with no arm64 sidecar
+beside it. The installer treats the sidecar as mandatory and aborts, so the run
+ends with the binaries on disk, nothing onboarded, exit 1:
+
+```
+  ✓ keld + keld-agent          → /work/bin
+curl: (22) The requested URL returned error: 404
+keld: analysis sidecar install failed — ... Aborting.
+  URL: .../v2.5.0/keld-agent-sidecar_linux_arm64.tar.gz
+```
+
+This is **exactly** the failure `scripts/verify-release-assets.sh` was written
+for after v0.20.0 ("every Linux curl|sh install hard-failed until the job was
+re-run four days later") — and the gate does not catch it, because
+`keld-agent-sidecar_linux_arm64.tar.gz` is deliberately absent from its
+`expected` manifest. So the gate reports the release COMPLETE while an
+advertised platform cannot install. Three ways out, and the choice is not this
+document's: publish the arm64 sidecar, stop publishing the arm64 CLI, or make
+`install.sh` refuse arm64 Linux by name instead of by 404.
+
+**2. `--allow-no-service-manager` could not rescue a container, which is what it
+was written for — now fixed.** Its header says a container has no systemd user
+bus and the flag downgrades the "is it loaded" half of the check. But it only
+affected `verify-service`, and `install.sh` exited 1 long before that:
+`keld-agent install` registers the unit and then STARTS it. Measured both ways
+round: with no systemd installed, `exec: "systemctl": executable file not found
+in $PATH`; with systemd installed but no user bus, a bare `exit status 1`.
+
+A non-zero exit from `install.sh` is now DEFERRED behind that flag rather than
+fatal — stated out loud, with every verification below still required to pass on
+observed state. That is the script's own rule applied symmetrically: it already
+refuses to trust exit 0 ("install.sh can exit 0 having placed files and
+onboarded nobody"), and the converse is just as true — it can exit 1 having
+placed everything correctly. Nothing is skipped and no check is weakened; the
+closing line says `EXITED 1` rather than claiming a clean install. Without the
+flag a non-zero exit is still fatal.
+
+**3. Onboarding needs a tool to configure.** With no AI tool on the machine,
+`keld signal setup --yes` answers "No supported tools detected", writes no
+`hook.json`, and `verify-onboarded` fails — correctly. A container therefore
+needs one planted (or installed, as the Compose leg does).
+
+### The real release, installed end to end (2026-09-16, linux/amd64)
+
+With those three understood, `install-linux.sh --tag v2.5.0` against the REAL
+published release completes and exits 0:
+
+```
+  ✓ keld + keld-agent          → /work/bin
+  ✓ analysis sidecar           → /work/bin/keld-agent-sidecar
+  ✓ /work/bin/keld — keld version 2.5.0
+  ✓ /work/bin/keld-agent — keld-agent version 2.5.0
+  ✓ sidecar v2.5.0 at /work/bin/keld-agent-sidecar
+  ✓ ~/.config/systemd/user/keld-agent.service exists and names keld-agent
+  ✓ systemctl --user is-enabled keld-agent.service -> enabled
+    systemctl --user is-active  -> Failed to connect to bus: No medium found
+  ✓ ~/.keld/hook.json holds an ingest token (20 chars, not printed)
+OK — verified from observed state, but scripts/install.sh EXITED 1
+```
+
+Real statically linked ELF binaries, the real 1.2 GB sidecar tree, the unit file
+**enabled**, and a real ingest token written by a real onboarding against the
+mock Atlas. What is still NOT proven anywhere: the macOS `.pkg` (installing one
+rewrites the developer's own LaunchAgent, so it needs a VM or CI) and every line
+of `install-windows.ps1`.
 
 ---
 

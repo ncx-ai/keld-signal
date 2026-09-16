@@ -115,9 +115,11 @@ func Reconcile(now time.Time, current []Integration, prev map[string]EmittedStat
 
 		switch {
 		case in.State == Broken && (!known || was.State != Broken):
-			out = append(out, brokenEmission(in, counts[in.ID], windowH))
+			c, counted := counts[in.ID]
+			out = append(out, brokenEmission(in, c, counted, windowH))
 		case in.State != Broken && known && was.State == Broken:
-			out = append(out, recoveredEmission(in, counts[in.ID], windowH))
+			c, counted := counts[in.ID]
+			out = append(out, recoveredEmission(in, c, counted, windowH))
 		}
 	}
 
@@ -136,11 +138,11 @@ func Reconcile(now time.Time, current []Integration, prev map[string]EmittedStat
 // present, and tool_version is present even when empty — "" is the honest
 // answer for a version we could not read, and an absent key would be
 // indistinguishable from a daemon too old to send one.
-func brokenEmission(in Integration, c LaneCounts, windowH float64) Emission {
+func brokenEmission(in Integration, c LaneCounts, counted bool, windowH float64) Emission {
 	return Emission{
 		Code:     CodeBroken,
 		Severity: SeverityWarn,
-		Fields:   laneFields(in, c, windowH, nil),
+		Fields:   laneFields(in, c, counted, windowH, nil),
 	}
 }
 
@@ -150,27 +152,47 @@ func brokenEmission(in Integration, c LaneCounts, windowH float64) Emission {
 // default `warn` floor an info recovery is dropped while the warn-level break
 // that preceded it was delivered, so every tool that ever broke would look
 // permanently broken in a fleet view.
-func recoveredEmission(in Integration, c LaneCounts, windowH float64) Emission {
+func recoveredEmission(in Integration, c LaneCounts, counted bool, windowH float64) Emission {
 	return Emission{
 		Code:     CodeRecovered,
 		Severity: SeverityInfo,
 		Exempt:   true,
-		Fields:   laneFields(in, c, windowH, map[string]any{"state": string(in.State)}),
+		Fields:   laneFields(in, c, counted, windowH, map[string]any{"state": string(in.State)}),
 	}
 }
 
 // laneFields is the shared field set: who, which lane, what version, over what
 // window, and how much each lane carried.
-func laneFields(in Integration, c LaneCounts, windowH float64, extra map[string]any) map[string]any {
+// ⚠️ `counted` DECIDES WHETHER THE FOUR COUNTERS APPEAR AT ALL, and until it
+// existed they were always published as 0 on a real daemon. `detector.go` calls
+// Reconcile with a nil `counts` map, nothing anywhere produces a LaneCounts
+// outside this package's own tests, and `counts[id]` on a nil map yields the
+// zero value — so every integration.broken this client has ever sent said
+// hook_n=0, watcher_n=0, otel_n=0, reader_n=0.
+//
+// Four zeros are not a missing field, they are a MEASUREMENT: "nothing arrived
+// on any lane" — the most incriminating sentence this event can carry, from a
+// count nobody took. That is the confident-negative-from-a-check-nobody-ran
+// failure this repo forbids by name (facets_degraded, thin vs absent,
+// "Absent means NOT RECORDED, never zero").
+//
+// So an absent count is now an ABSENT KEY, and a measured 0 still publishes —
+// "counted, none arrived" is exactly the fact the event exists to carry, and
+// collapsing it into the same shape as "nobody counted" is what caused this.
+// The keys return the moment a producer is wired; this does not remove the
+// field from the contract, it stops the field lying while no producer exists.
+func laneFields(in Integration, c LaneCounts, counted bool, windowH float64, extra map[string]any) map[string]any {
 	f := map[string]any{
 		"source":       in.ID,
 		"surface":      string(in.BrokenLane),
 		"tool_version": in.ToolVersion,
 		"window_h":     windowH,
-		"hook_n":       c.Hook,
-		"watcher_n":    c.Watcher,
-		"otel_n":       c.OTel,
-		"reader_n":     c.Reader,
+	}
+	if counted {
+		f["hook_n"] = c.Hook
+		f["watcher_n"] = c.Watcher
+		f["otel_n"] = c.OTel
+		f["reader_n"] = c.Reader
 	}
 	for k, v := range extra {
 		f[k] = v
