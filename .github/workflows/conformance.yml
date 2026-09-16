@@ -332,6 +332,10 @@ jobs:
           # disposable. A GitHub runner is thrown away after the job; a
           # developer's Mac is not, which is the case the guard exists for.
           KELD_CONFORM_DISPOSABLE: "1"
+          # Windows only, and only while the enrichment lane is unexplained
+          # there: arms a marker hook beside keld's own so the run can say
+          # whether the TOOL runs hooks at all. Remove once Windows is green.
+          KELD_CONFORM_HOOK_CONTROL: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: |
           set -uo pipefail
           shopt -s nullglob

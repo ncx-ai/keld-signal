@@ -425,6 +425,57 @@ signal_install() {
 
   [ -s "$ISO_HOME/hook.json" ] || fail "setup wrote no hook.json"
   grep -q ingest_token "$ISO_HOME/hook.json" || fail "hook.json carries no ingest token"
+  hook_control_arm
+}
+
+# hook_control_arm / hook_control_report — is the TOOL running hooks at all?
+#
+# ⚠️ **THIS HAS TO RUN INSIDE THE CHAIN, AND A POST-HOC PROBE CANNOT.** The
+# obvious version — after the chain fails, add a marker hook and run the tool
+# again — was tried on Windows and answered "no hook fired" for a reason that
+# had nothing to do with hooks: the mock MODEL dies with the chain, so the tool
+# could not complete a prompt at all, and a prompt that never happens submits
+# no UserPromptSubmit. An experiment whose control condition is broken reports
+# a confident answer to a question it never asked.
+#
+# So it is armed HERE, while the mocks are up, and read back after the prompt.
+# Off unless KELD_CONFORM_HOOK_CONTROL=1: it appends a second hook to the
+# tool's real config, which is not something a normal run should carry.
+hook_control_arm() {
+  [ "${KELD_CONFORM_HOOK_CONTROL:-0}" = "1" ] || return 0
+  local settings="$ISO_HOME/.claude/settings.json"
+  [ -f "$settings" ] || return 0
+  HOOK_CONTROL_MARKER="$WORK/hook-control-fired.txt"
+  rm -f "$HOOK_CONTROL_MARKER"
+  local probe marker_arg probe_arg
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      probe="$WORK/probe-hook.cmd"
+      printf '@echo off\r\necho fired 1>>"%%~1"\r\n' > "$probe"
+      probe_arg=$(cygpath -w "$probe"); marker_arg=$(cygpath -w "$HOOK_CONTROL_MARKER")
+      ;;
+    *)
+      probe="$WORK/probe-hook.sh"
+      printf '#!/bin/sh\necho fired >> "$1"\n' > "$probe"; chmod +x "$probe"
+      probe_arg=$probe; marker_arg=$HOOK_CONTROL_MARKER
+      ;;
+  esac
+  python3 -c 'import json,sys
+p=sys.argv[1]; d=json.load(open(p))
+c="\"%s\" \"%s\"" % (sys.argv[2], sys.argv[3])
+d.setdefault("hooks",{}).setdefault("UserPromptSubmit",[]).append({"hooks":[{"type":"command","command":c}]})
+json.dump(d, open(p,"w"), indent=2)' "$settings" "$probe_arg" "$marker_arg" \
+    && say "hook control ARMED (a marker hook beside keld's own)"
+}
+
+hook_control_report() {
+  [ "${KELD_CONFORM_HOOK_CONTROL:-0}" = "1" ] || return 0
+  [ -n "${HOOK_CONTROL_MARKER:-}" ] || return 0
+  if [ -f "$HOOK_CONTROL_MARKER" ]; then
+    say "HOOK CONTROL FIRED — the tool DOES run hooks here, so keld's own hook is what is not working"
+  else
+    say "HOOK CONTROL DID NOT FIRE — the tool ran NO hook at all, keld's or ours"
+  fi
 }
 
 # agent_json_field <key> — one field of ~/.keld/agent.json, empty when absent.
