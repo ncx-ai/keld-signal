@@ -255,29 +255,56 @@ jobs:
 
       # AC-12: every installer we ship has an unattended mode. This is where
       # that claim is exercised — the silent invocation per artifact, no window.
+      #
+      # ⚠️ **THIS STEP USED TO BE `continue-on-error: true` AND END `|| echo`,
+      # AND SO COULD NOT FAIL.** The phase-2 review found it and marked AC-12
+      # MISSED for exactly that: a gate that cannot go red is not a gate, and
+      # nothing downstream consumed it either — the chain built from source, so
+      # a pkg that refused to install changed nothing anybody could see. Both
+      # are gone. scripts/conformance/install-<os>.sh installs the artifact
+      # unattended, onboards by command and verifies from OBSERVED STATE, and
+      # its failure fails this job.
+      #
+      # It is skipped when there is no artifact rather than "passed": an
+      # installer nobody handed us is not an installer that worked.
       - name: Install Signal unattended (AC-12)
+        id: install
         if: github.event_name == 'workflow_run' && runner.os != 'Windows'
-        continue-on-error: true
         shell: bash
+        env:
+          # The scripts refuse to touch a machine that has not said it is
+          # disposable. A GitHub runner is thrown away after the job; a
+          # developer's Mac is not, which is the case the guard exists for.
+          KELD_CONFORM_DISPOSABLE: "1"
         run: |
           set -uo pipefail
           shopt -s nullglob
           case "$RUNNER_OS" in
-            macOS)
-              for p in artifacts/*.pkg; do
-                echo "installer -pkg $p -target /"
-                sudo installer -pkg "$p" -target / || echo "pkg install failed"
-              done
-              ;;
-            Linux)
-              # The Linux path is the tarball install.sh performs; here the
-              # sidecar is what the harness needs on disk.
-              for t in artifacts/keld-agent-sidecar_linux_*.tar.gz; do
-                mkdir -p "$HOME/.local/bin" && tar -xzf "$t" -C "$HOME/.local/bin"
-                echo "sidecar -> $HOME/.local/bin/keld-agent-sidecar ($(cat "$HOME/.local/bin/keld-agent-sidecar/VERSION" 2>/dev/null || echo 'no VERSION'))"
-              done
-              ;;
+            macOS) pkgs=(artifacts/*.pkg)
+                   if [ ${#pkgs[@]} -eq 0 ]; then
+                     echo "::warning::no .pkg among the artifacts; AC-12's macOS path was NOT exercised"
+                     echo "exercised=false" >> "$GITHUB_OUTPUT"; exit 0
+                   fi
+                   bash scripts/conformance/install-macos.sh \
+                     --pkg "${pkgs[0]}" --skip-onboarding
+                   ;;
+            Linux) # install.sh downloads both archives; without the CLI tarball
+                   # there is nothing for it to install, and installers.yml only
+                   # attaches the sidecar on this leg today.
+                   if [ ! -f artifacts/keld_linux_amd64.tar.gz ]; then
+                     echo "::warning::no keld_linux_amd64.tar.gz among the artifacts; AC-12's Linux path was NOT exercised"
+                     echo "exercised=false" >> "$GITHUB_OUTPUT"; exit 0
+                   fi
+                   # ⚠️ A GitHub runner has no systemd --user bus, so the "is it
+                   # loaded" half of the service check is downgraded to a stated
+                   # line. The unit FILE is still required — the flag narrows one
+                   # check, it does not switch verification off.
+                   bash scripts/conformance/install-linux.sh \
+                     --artifacts artifacts --skip-onboarding \
+                     --allow-no-service-manager
+                   ;;
           esac
+          echo "exercised=true" >> "$GITHUB_OUTPUT"
 
       # A frozen sidecar must exist for the store_rows checkpoint to mean
       # anything (lib/isolate.sh refuses to run without one). On a tool-release
@@ -315,10 +342,23 @@ jobs:
         env:
           TOOL: ${{ matrix.tool }}
           CHAIN: ${{ matrix.chain }}
+          # When the step above actually installed an artifact, the chain
+          # installs it AGAIN at its own signal-install step — idempotent, and
+          # the only moment at which onboarding can be completed by command,
+          # since the setup code is redeemed against a mock Atlas that does not
+          # exist until run-chain.sh starts it. The chain then drives the
+          # INSTALLED binaries, so a green result is a statement about the
+          # artifact rather than about a source build.
+          ARTIFACT: ${{ steps.install.outputs.exercised == 'true' && format('dir:{0}/artifacts', github.workspace) || '' }}
+          # A GitHub runner has no systemd --user bus; the flag narrows the
+          # service check to the unit file and says so, it does not skip it.
+          KELD_CONFORM_INSTALL_FLAGS: ${{ runner.os == 'Linux' && '--allow-no-service-manager' || '' }}
+          KELD_CONFORM_DISPOSABLE: "1"
         run: |
           set -uo pipefail
           mkdir -p "$RUNNER_TEMP/conformance"
           make conformance TOOL="$TOOL" CHAIN="$CHAIN" SEED="$SEED" \
+            ${ARTIFACT:+ARTIFACT="$ARTIFACT"} \
             WORK="$RUNNER_TEMP/conformance" 2>&1 | tee "$RUNNER_TEMP/conformance/chain.log"
           exit "${PIPESTATUS[0]}"
 
@@ -413,6 +453,7 @@ jobs:
           retention-days: 14
           path: |
             ${{ runner.temp }}/conformance/chain.log
+            ${{ runner.temp }}/conformance/artifact-install.log
             ${{ runner.temp }}/conformance/daemon.log
             ${{ runner.temp }}/conformance/mockllm.jsonl
             ${{ runner.temp }}/conformance/mockllm.out

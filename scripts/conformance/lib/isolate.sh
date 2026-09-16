@@ -282,6 +282,11 @@ artifact_install() {
 
   local out="$WORK/artifact-install.log"
   say "installing the release under test from $ARTIFACT_DIR (unattended, AC-12)"
+  # KELD_CONFORM_INSTALL_FLAGS is how an environment states what it cannot
+  # prove — a GitHub runner has no systemd --user bus, so the Linux leg passes
+  # --allow-no-service-manager. It narrows ONE check to the unit file and says
+  # so in the output; it is not a way to turn verification off.
+  #
   # `--stop-service` leaves the job REGISTERED (so what was verified stays true)
   # but not running: the chain drives its own foreground daemon and must not
   # race a launchd/systemd one over the same ports.
@@ -289,6 +294,8 @@ artifact_install() {
       bash "$script" --artifacts "$ARTIFACT_DIR" --code CONFORM \
         --api-url "$MOCK_ATLAS_URL" --stop-service \
         ${KELD_CONFORM_INSTALL_FLAGS:-} 2>&1 | tee "$out"
+  # ⚠️ PIPESTATUS must be read on the very next COMMAND; only comments may sit
+  # between (they are not commands and do not reset it).
   [ "${PIPESTATUS[0]}" = "0" ] || { say "the unattended install FAILED — see $out"; return 1; }
 
   # The installed tree is what the rest of the chain drives, so a green chain is
