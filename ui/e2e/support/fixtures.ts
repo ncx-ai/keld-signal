@@ -5,7 +5,7 @@ import type { E2EState } from "../global-setup";
 
 export { expect };
 
-export type Pane = "today" | "projects" | "settings";
+export type Pane = "today" | "projects" | "integrations" | "settings";
 
 /**
  * The page as a user drives it. Every spec goes through this: it opens a pane

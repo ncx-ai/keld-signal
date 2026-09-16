@@ -54,12 +54,12 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"], viewport },
-      testIgnore: /(not-running|devgen|map-project)\.spec\.ts$/,
+      testIgnore: /(not-running|devgen|map-project|integrations)\.spec\.ts$/,
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"], viewport },
-      testIgnore: /(not-running|devgen|map-project)\.spec\.ts$/,
+      testIgnore: /(not-running|devgen|map-project|integrations)\.spec\.ts$/,
     },
     {
       // The page with NO daemon behind it: a tiny static server serves the
@@ -97,6 +97,29 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport },
       testMatch: /map-project\.spec\.ts$/,
       dependencies: ["chromium", "webkit", "not-running"],
+    },
+    {
+      // ⚠️ **THE LIVE INTEGRATIONS JOURNEYS RUN LAST, ALONE, AND IN ONE
+      // BROWSER — for the same reason "devgen" does, one step further.** They
+      // do not merely mutate the ledger: they create tool config directories
+      // inside the fixture HOME and let the daemon's own adapters write real
+      // configs into them. That changes what `watch.DiscoverRoots()` finds,
+      // which changes what the watcher tails, which can change the blocks and
+      // the repository suggestions every other spec asserts on.
+      //
+      // Running them in the `chromium`/`webkit` matrix would be worse than
+      // untidy, it would be MEANINGLESS: the journeys are serial by
+      // construction (the Codex row is `not_configured` exactly once, and the
+      // first browser to press Set up consumes it), so the second browser
+      // would find a tool that is already configured and assert nothing. The
+      // two widths AC-2 names are covered where a width can be covered —
+      // `integrations-states.spec.ts` renders every state at 1280 and at 400
+      // against fixtures. What cannot be faked is that the state is real, and
+      // that needs one daemon, one browser, one pass.
+      name: "integrations-live",
+      use: { ...devices["Desktop Chrome"], viewport },
+      testMatch: /integrations\.spec\.ts$/,
+      dependencies: ["chromium", "webkit", "not-running", "devgen", "map-project"],
     },
   ],
 });
