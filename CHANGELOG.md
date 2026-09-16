@@ -5,13 +5,30 @@ All notable changes to **keld-signal** (the Keld client — the `keld` CLI + the
 follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 semantic-ish versioning during `0.x`.
 
-## [Unreleased] — v3 (release/v3 branch, shipped as `v3.0.0-rc.N` pre-releases)
+## [3.0.0] — 2026-09-16
 
-Pre-releases from this branch are marked as such on GitHub, so `releases/latest`
-— what `install.sh`, `install.ps1` and the pkg fall back to — keeps pointing at
-2.5.0 until v3 is merged to `main` and tagged `v3.0.0`.
+The v3 line, shipped. `releases/latest` — what `install.sh`, `install.ps1` and
+the pkg's sidecar fetch fall back to — moves off 2.5.0 with this tag, so every
+NEW install gets v3; running daemons do not move themselves, because nothing
+serves `agent_release` yet (see *Auto-update* in AGENTS.md).
+
+Preceded by `v3.0.0-rc.1` … `v3.0.0-rc.4`, whose entries are folded in here.
 
 ### Added
+- **macOS installs with no Terminal at all.** Onboarding now happens INSIDE the
+  installer wizard: a custom Installer.app section
+  (`installers/macos/plugin/`, ordered before the Install step) runs the device
+  flow itself, embeds Atlas's own compact approval page in a web view, and
+  collects which AI tools to configure — then `postinstall` does every
+  destructive step silently. No shell, no browser tab, no second app. The page
+  is Atlas's own (`/cli/installer`), never native credential fields: the
+  installer is not an auth client, so SSO and 2FA remain Atlas's business, and
+  only a real page can prove its own origin. `onboard.command` is retained for
+  MDM and for the case where the pane never ran at all.
+  ⚠️ The pane is ALL-OR-NOTHING by design — Continue is enabled by a VERIFIED
+  connection (`whoami --verify`, which performs the same call `postinstall`
+  makes minutes later), never by a file existing, and there is no "set up
+  later": a machine that installs unconnected collects nothing.
 - **The Keld Signal desktop app** (`app/`, Tauri 2): a window onto the daemon's
   own page — today's focus blocks with tokens and estimated spend, which project
   each landed in, whether it reached Atlas, and a Settings pane that can pair a
@@ -79,6 +96,28 @@ Pre-releases from this branch are marked as such on GitHub, so `releases/latest`
   `requests`).
 
 ### Fixed
+- **The installer pane shows its wait instead of prompting over a blank page.**
+  It set "Sign in to connect this device." from the `device_code` event — when
+  the embedded page starts LOADING, not when it can be used — so a slow route
+  looked like a form that had failed to render, and the reasonable response was
+  to retry something that was merely still arriving. A progress bar now runs
+  while it loads, the prompt is set from `didFinishNavigation`, and a failed
+  load is stated with its error and retried twice before it gives up.
+- **Going Back and returning no longer leaves the sign-in page untypeable.**
+  Two causes, each ruled in or out by measurement rather than argument.
+  `-initialKeyView` returned the code field unconditionally, and Installer.app
+  applies it on EVERY pane entry — by which point that field is hidden behind
+  the page; a standalone harness (`plugin/focustest.m`) confirmed AppKit hands
+  first responder to a HIDDEN NSTextField and installs its field editor, so
+  keystrokes vanished into a control nobody could see. That is fixed, and was
+  not the whole story: `plugin/reparent.m` showed plain AppKit re-parenting
+  leaves a WKWebView fully typeable, so the remaining cause is this pane's own
+  out-of-process host. Re-entry therefore DISCARDS the web view and builds a
+  fresh one, which is correct whichever half is at fault. A terminated web
+  content process triggers the same rebuild.
+- **The pane logs.** It runs in `InstallerRemotePluginService` with no console,
+  which is why its first two bugs had to be diagnosed by side channels. Read it
+  with `log show --predicate 'process == "InstallerRemotePluginService"'`.
 - **The analysis service no longer dies for the night when a Mac sleeps, and
   the daemon never gives up on it for good.** Measured 2026-09-09: macOS woke
   for ~2 seconds every 15 minutes overnight, and each wake fired the sidecar's
