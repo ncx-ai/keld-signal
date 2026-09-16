@@ -391,9 +391,32 @@ jobs:
           # a reason that had nothing to do with the code. A gate that fails on
           # someone else's TCP reset is a gate people learn to re-run without
           # reading, which is the same as not having one.
+          # ⚠️ **"THE LATEST RELEASE" CAN BE ONE THAT IS STILL BEING BUILT.**
+          # Measured 2026-09-16: v3.0.2 was tagged at 17:13 and its release
+          # workflow was still running; the tag was already `latest` and
+          # non-prerelease while carrying only the six Go archives — no sidecar
+          # for any platform, no pkg, no exe. Every cell in the matrix went red
+          # at once on "no analysis sidecar", for something nobody had broken.
+          #
+          # So the release is chosen by what it CARRIES, not by its position:
+          # walk the published non-prereleases newest-first and take the first
+          # one that actually has this runner's sidecar. A release mid-publish
+          # is simply skipped until it is complete.
+          tag=""
+          for cand in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
+                          --json tagName,isPrerelease,isDraft \
+                          --jq '[.[] | select(.isPrerelease == false and .isDraft == false)] | .[].tagName'); do
+            if gh release view "$cand" --repo "$GITHUB_REPOSITORY" --json assets \
+                 --jq '[.assets[].name]' | grep -q "$asset"; then
+              tag=$cand; break
+            fi
+            echo "  $cand carries no $asset (mid-publish, or an incomplete release) — skipping"
+          done
+          [ -n "$tag" ] || { echo "::warning::no published release carries $asset"; exit 0; }
+          echo "sidecar release: $tag"
           for attempt in 1 2 3; do
             rm -rf /tmp/sc; mkdir -p /tmp/sc
-            if gh release download --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir /tmp/sc; then
+            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir /tmp/sc; then
               break
             fi
             echo "::warning::sidecar download attempt $attempt failed; retrying"
@@ -508,9 +531,21 @@ jobs:
           # Both are real, shipped, STAMPED sidecars, which is what the skew
           # assertion needs: it fired correctly on the run before this one, and
           # it can only stay meaningful while the two halves genuinely differ.
-          tags=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 30 \
-                  --json tagName,isPrerelease,isDraft \
-                  --jq '[.[] | select(.isPrerelease == false and .isDraft == false)][0:2] | .[].tagName')
+          # Same rule as the sidecar step, and for the same measured reason: a
+          # tag that is still mid-publish is `latest` and carries nothing. Take
+          # the two newest releases that actually hold BOTH archives.
+          tags=""
+          for cand in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 30 \
+                          --json tagName,isPrerelease,isDraft \
+                          --jq '[.[] | select(.isPrerelease == false and .isDraft == false)] | .[].tagName'); do
+            names=$(gh release view "$cand" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name]')
+            if grep -q "$cli" <<<"$names" && grep -q "$sc" <<<"$names"; then
+              tags="$tags$cand"$'\n'
+              [ "$(printf '%s' "$tags" | grep -c .)" -ge 2 ] && break
+            else
+              echo "  $cand is incomplete for this runner — skipping"
+            fi
+          done
           new_tag=$(echo "$tags" | sed -n 1p)
           tag=$(echo "$tags" | sed -n 2p)
           [ -n "$tag" ] && [ -n "$new_tag" ] || { echo "::error::need two published non-prereleases to test an upgrade; found: $tags"; exit 1; }
