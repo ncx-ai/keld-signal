@@ -177,6 +177,23 @@ func (d *Detector) Tick() []string {
 	return appeared
 }
 
+// hookCommandBroken reports whether the tool's config already holds a keld hook
+// command that cannot execute as written — the one condition under which the
+// detector edits a config the manifest records. Reading the CONFIG TEXT is the
+// point: the question is what the TOOL will try to run, which is whatever an
+// older keld wrote.
+func (d *Detector) hookCommandBroken(e Entry) bool {
+	adapter, err := d.adapterFor(e.AdapterName)
+	if err != nil || adapter == nil {
+		return false
+	}
+	current := tools.ReadConfig(adapter)
+	if current == nil {
+		return false
+	}
+	return hookCommandBroken(*current)
+}
+
 // maybeConfigure applies one entry's adapter, subject to every refusal.
 func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 	switch {
@@ -186,8 +203,19 @@ func (d *Detector) maybeConfigure(e Entry, manifest *config.Manifest) {
 		return
 	case d.AutoSetup == nil || !d.AutoSetup():
 		return
-	case Configured(e, manifest):
-		// The daemon never edits a config the manifest already records.
+	case Configured(e, manifest) && !d.hookCommandBroken(e):
+		// The daemon never edits a config the manifest already records —
+		// ⚠️ UNLESS what it records cannot execute. An upgrade preserves tool
+		// configs by design, so a keld that fixes the hook QUOTING can never
+		// reach a machine an older keld configured; without this the fix lands
+		// in the binary and the machine stays broken forever. Measured on
+		// windows-latest: upgrade completes, configs survive, enrichment dark.
+		//
+		// This is the narrowest possible exception. It fires only on a command
+		// this keld can see is unrunnable as written, it rewrites through the
+		// same ApplyEntry path a first-time setup uses, and `attempted` bounds
+		// it to one try per daemon life. A healthy row never reaches it,
+		// pinned by TestRepairIsIdempotent one package over.
 		return
 	case d.attempted[e.ID]:
 		return

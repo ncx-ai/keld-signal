@@ -361,8 +361,38 @@ step_upgrade() {
   return 0
 }
 
+# await_hook_repair — the detector repairs a broken hook command on its own
+# poll, so the chain must wait for it exactly as a real machine's next prompt
+# would.
+#
+# ⚠️ **WITHOUT THIS THE REPAIR IS UNTESTABLE, not merely slow.** The prompt
+# happens ONCE and then step_assert only re-reads checkpoints; a hook repaired
+# after the prompt cannot retroactively produce a pointer for it. So a run that
+# prompted immediately would fail for its whole budget with the fix working
+# perfectly.
+#
+# It waits on the CONFIG, not on a timer: the repair is done when the tool's own
+# config no longer holds a command that cannot run. DETECT_BUDGET is the same
+# one poll plus slack AC-3 is measured against, and KELD_INTEGRATIONS_POLL is
+# NOT shortened — a run that shortened it would stop proving the number.
+await_hook_repair() {
+  local t p budget=$DETECT_BUDGET i
+  for t in $BEFORE $AFTER; do
+    p=$(tool_config_path "$t")
+    [ -f "$p" ] || continue
+    for i in $(seq 1 "$budget"); do
+      if ! grep -qE '"[^"]*[\\ ][^"]*__hook --source' "$p" 2>/dev/null; then
+        [ "$i" -gt 1 ] && say "hook command repaired for $t after ${i}s"
+        break
+      fi
+      sleep 1
+    done
+  done
+}
+
 step_upgraded_prompts() {
   step_begin "upgraded-prompts"
+  await_hook_repair
   local t
   for t in $BEFORE; do tool_prompt "$t" "upgraded-prompts"; done
   step_assert "$SETTLE" "" $BEFORE
