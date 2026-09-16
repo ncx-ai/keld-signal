@@ -138,6 +138,7 @@
     KeldPaneView *_root;
     NSTextField *_codeStatus;
     NSProgressIndicator *_engineBar;
+    NSButton *_engineRetryButton;
     NSTextField *_engineStatus;
     KeldPaneView *_toolsPane;
     NSMutableArray<NSButton *> *_toolChecks;
@@ -171,6 +172,10 @@
     BOOL _approvalPageLoaded;
     // What to say once the pane has finished filling itself in.
     NSString *_connectedAs;
+    // The three conditions Continue is computed from. Each is owned by exactly
+    // one step, and only updateNextEnabled reads them together.
+    BOOL _toolsLoaded;
+    BOOL _sidecarSettled;
     // The sections hidden while the approval page is up: an Installer pane has a
     // fixed height, so the web view has to borrow their space rather than push
     // the pane taller (which would simply clip).
@@ -391,6 +396,14 @@
     _retryButton.hidden = YES;
 
     NSTextField *engineHeader = [self labelWithText:@"Analysis engine" bold:YES];
+    // Shown only when the download fails. Continue is already available by then
+    // (the gate is on the download being finished, not on it succeeding), so
+    // this is an offer rather than the only way forward: someone on a flaky
+    // network gets the engine now instead of after the install.
+    _engineRetryButton = [NSButton buttonWithTitle:@"Try again"
+                                            target:self
+                                            action:@selector(retrySidecarDownload:)];
+    _engineRetryButton.hidden = YES;
     _engineBar = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     _engineBar.style = NSProgressIndicatorStyleBar;
     _engineBar.indeterminate = YES;
@@ -411,11 +424,13 @@
     _toolsPane.insetTop = 0;
 
     for (NSView *v in @[accountHeader, _codeStatus, _retryButton,
-                        engineHeader, _engineBar, _engineStatus, toolsHeader, _toolsPane]) {
+                        engineHeader, _engineBar, _engineStatus, _engineRetryButton,
+                        toolsHeader, _toolsPane]) {
         [pane addSubview:v];
     }
     pane.rows = @[accountHeader, _codeStatus, _retryButton,
-                  engineHeader, _engineBar, _engineStatus, toolsHeader, _toolsPane];
+                  engineHeader, _engineBar, _engineStatus, _engineRetryButton,
+                  toolsHeader, _toolsPane];
 
     _root = pane;
     _view = pane;
@@ -493,6 +508,33 @@ static void klog(NSString *fmt, ...) {
     }
 }
 
+// updateNextEnabled decides whether Continue is available, and is the ONLY
+// place that decides it.
+//
+// ⚠️ IT USED TO BE ASSIGNED FROM FOUR SCATTERED SITES — on entry, after the tool
+// list, after a failed identity check — each knowing its own condition and none
+// knowing the others. That is how this pane's earlier state bugs happened, and
+// adding a fourth condition that way would have guaranteed a repeat.
+//
+// Three conditions, and the third is the new one:
+//   _paired         — a VERIFIED connection to Atlas. The install is
+//                     all-or-nothing about this; there is no deferral.
+//   _toolsLoaded    — the panel has finished filling itself in, so the button
+//                     becoming available means the pane is done rather than
+//                     lighting up over an empty list.
+//   _sidecarSettled — the analysis engine download has FINISHED.
+//
+// ⚠️ SETTLED, NOT SUCCEEDED. Gating on a successful fetch would make an offline
+// machine impossible to install — a captive portal, a VPN or a GitHub outage
+// would leave someone unable to finish at all — and the install is still worth
+// completing without it: telemetry works, enrichment spools, and postinstall's
+// launchd job fetches the engine later. What this gate buys is that nobody
+// clicks through MID-DOWNLOAD, which is what made that fallback the common path
+// rather than the exception.
+- (void)updateNextEnabled {
+    self.nextEnabled = _paired && _toolsLoaded && _sidecarSettled;
+}
+
 #pragma mark - Pane lifecycle
 
 - (void)didEnterPane:(InstallerSectionDirection)dir {
@@ -507,7 +549,7 @@ static void klog(NSString *fmt, ...) {
     // (the app being unreleased and the CLI being a terminal) has no way to
     // finish that this wizard was built to replace. Catching that HERE is the
     // only option, because no pane can run after the install.
-    self.nextEnabled = _paired;
+    [self updateNextEnabled];
     if (!_paired) [self checkIdentity];
     // Guarded: the pane can be re-entered (Back, then Continue again), and
     // without this a second entry would start a second concurrent ~190 MB
@@ -575,7 +617,8 @@ static void klog(NSString *fmt, ...) {
         : @"Checking your AI tools…";
     _approvalBar.hidden = NO;
     [_approvalBar startAnimation:nil];
-    self.nextEnabled = NO;
+    _toolsLoaded = NO;
+    [self updateNextEnabled];
     [_root setNeedsLayout:YES];
     [self loadTools];
 }
@@ -590,7 +633,8 @@ static void klog(NSString *fmt, ...) {
 - (void)finishLoadingTools {
     [self stopApprovalBar];
     if (_connectedAs.length) _codeStatus.stringValue = _connectedAs;
-    self.nextEnabled = YES;
+    _toolsLoaded = YES;
+    [self updateNextEnabled];
     [_root setNeedsLayout:YES];
 }
 
@@ -675,6 +719,10 @@ static void klog(NSString *fmt, ...) {
         NSString *bare = [version hasPrefix:@"v"] ? [version substringFromIndex:1] : version;
         [args addObjectsFromArray:@[@"--tag", [@"v" stringByAppendingString:bare]]];
     }
+    // Continue is held until this finishes, so the panel has to say why — a
+    // disabled button with no stated reason is the state this pane has already
+    // been corrected for twice.
+    _engineStatus.stringValue = @"Downloading the analysis engine — you can continue once it lands.";
     __weak typeof(self) weakSelf = self;
     __block NSString *failure = nil;
     // The missing-published-hash warning (installsidecar.go, --json path):
@@ -710,13 +758,21 @@ static void klog(NSString *fmt, ...) {
             s->_engineBar.doubleValue = 100;
             s->_engineStatus.stringValue = warning.length
                 ? [NSString stringWithFormat:@"Ready (%@).", warning]
-                : @"Ready. Nothing multi-gigabyte is downloaded, now or later.";
+                : @"Ready.";
         } else {
             s->_engineBar.doubleValue = 0;
             s->_engineStatus.stringValue = failure
-                ? [NSString stringWithFormat:@"Could not download it (%@). Keld will retry in the background.", failure]
-                : @"Could not download it. Keld will retry in the background.";
+                ? [NSString stringWithFormat:@"Couldn't download it (%@) — Keld will fetch it in the background.", failure]
+                : @"Couldn't download it — Keld will fetch it in the background.";
+            s->_engineRetryButton.hidden = NO;
         }
+        // ⚠️ SET ON BOTH BRANCHES. The gate is on the download being FINISHED,
+        // never on it having succeeded: a failed fetch that also blocked
+        // Continue would make an offline machine impossible to install, which is
+        // a worse outcome than installing without the engine — it arrives later
+        // either way.
+        s->_sidecarSettled = YES;
+        [s updateNextEnabled];
     }];
 }
 
@@ -760,7 +816,7 @@ static void klog(NSString *fmt, ...) {
             s->_codeStatus.stringValue =
                 @"Can't reach Atlas — Keld can't be set up right now.";
             s->_retryButton.hidden = NO;
-            s.nextEnabled = NO;
+            [s updateNextEnabled];
             return;
         }
         // `none` or `unauthorized`: this machine needs to be connected. An
@@ -850,6 +906,19 @@ static void klog(NSString *fmt, ...) {
             : @"Sign-in didn't finish. Try again.";
         s->_retryButton.hidden = NO;
     }];
+}
+
+// retrySidecarDownload re-runs the fetch after a failure, without leaving the
+// pane. `_sidecarDownloadStarted` is deliberately NOT consulted here — that
+// guard exists to stop pane RE-ENTRY starting a second concurrent download, and
+// a deliberate retry is the one case that should start another.
+- (void)retrySidecarDownload:(id)sender {
+    _engineRetryButton.hidden = YES;
+    _sidecarSettled = NO;
+    [self updateNextEnabled];
+    _engineBar.indeterminate = YES;
+    [_engineBar startAnimation:nil];
+    [self startSidecarDownload];
 }
 
 - (void)retryIdentity:(id)sender {
