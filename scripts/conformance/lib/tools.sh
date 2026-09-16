@@ -310,10 +310,26 @@ tool_materialize() {
       mkdir -p "$ISO_HOME/.claude"
       ;;
     gemini_cli)
-      # The config DIRECTORY is the fact tools.Detect and the detector key on,
-      # and it is all Gemini needs: unlike Codex it requires no provider block
-      # to start, because its endpoint and key come from the environment.
+      # ⚠️ **AN API KEY IS NOT ENOUGH: GEMINI MUST BE TOLD WHICH AUTH METHOD TO
+      # USE.** With only GEMINI_API_KEY set, `gemini -p` exits 41 with "Invalid
+      # auth method selected" — measured on 0.60.0. The choice lives in
+      # settings.json, and it is written here rather than left to the tool
+      # because an unattended run has nobody to answer the picker.
+      #
+      # BOTH keys are written on purpose. 0.60.0 reads the nested
+      # `security.auth.selectedType`; older builds read the flat
+      # `selectedAuthType`, and a real machine carries both (verified on a
+      # developer's own ~/.gemini/settings.json). Writing one would work until
+      # the matrix pinned a version that wanted the other.
+      #
+      # This is also the realistic case, like Codex's provider block: a config
+      # that already holds the user's own content, which keld's adapter must
+      # MERGE into rather than replace.
       mkdir -p "$ISO_HOME/.gemini"
+      if [ ! -f "$ISO_HOME/.gemini/settings.json" ]; then
+        printf '{\n  "selectedAuthType": "gemini-api-key",\n  "security": { "auth": { "selectedType": "gemini-api-key" } }\n}\n' \
+          > "$ISO_HOME/.gemini/settings.json"
+      fi
       ;;
     codex)
       # Codex needs a provider before it can run at all, so its config.toml is
