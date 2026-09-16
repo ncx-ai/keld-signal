@@ -154,7 +154,9 @@ jobs:
               # Widen this the day each of those is true, not before.
               matrix='{"include":[
                 {"os":"ubuntu-latest","chain":"A","tool":"claude_code","version":""},
-                {"os":"macos-14","chain":"A","tool":"claude_code","version":""}]}'
+                {"os":"ubuntu-latest","chain":"B","tool":"claude_code","version":""},
+                {"os":"macos-14","chain":"A","tool":"claude_code","version":""},
+                {"os":"macos-14","chain":"B","tool":"claude_code","version":""}]}'
               ;;
             workflow_run)
               # A Signal release: every OS, both chains. Installers and service
@@ -374,6 +376,60 @@ jobs:
             echo "::warning::no frozen sidecar available; the chain will say so and stop"
           fi
 
+      # --- chain B's previous release ---------------------------------------
+      #
+      # ⚠️ CHAIN B COULD NOT PASS ON ANY RUNNER UNTIL THIS EXISTED. It upgrades
+      # FROM a previous release, and `--previous` was supplied nowhere in this
+      # file, so run-chain.sh fell back to its `installed` default: the Signal
+      # release already on THIS machine. A GitHub runner has none, so every
+      # chain B cell failed at its first step, on every OS, for a reason that
+      # had nothing to do with the code under test.
+      #
+      # `dir:<path>` is the seam run-chain.sh documents for exactly this ("the
+      # workflow downloads the previous release's artifacts and points the chain
+      # at them, so the run names a VERSION rather than a machine"). Downloading
+      # belongs here, in the job that already holds the token and knows the
+      # asset names — not in the script, where it would be a network path
+      # nothing local could test.
+      #
+      # The default (no --pattern tag) resolves the latest NON-prerelease, so
+      # this upgrades from the last thing real users were given, never from an
+      # rc. A missing asset FAILS the step rather than silently leaving
+      # PREVIOUS empty, which would put the fallback back.
+      - name: Fetch the previous release (chain B)
+        id: previous
+        if: matrix.chain == 'B' && runner.os != 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) cli="keld_linux_amd64.tar.gz";  sc="keld-agent-sidecar_linux_amd64.tar.gz" ;;
+            macOS) cli="keld_darwin_arm64.tar.gz"; sc="keld-agent-sidecar_darwin_arm64.tar.gz" ;;
+            *) echo "::error::unsupported runner $RUNNER_OS"; exit 1 ;;
+          esac
+          dest="$RUNNER_TEMP/previous"
+          mkdir -p "$dest" /tmp/prev
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
+                  --json tagName,isPrerelease,isDraft \
+                  --jq '[.[] | select(.isPrerelease == false and .isDraft == false)][0].tagName')
+          [ -n "$tag" ] || { echo "::error::no published non-prerelease to upgrade from"; exit 1; }
+          echo "previous release: $tag"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$cli" --dir /tmp/prev
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$sc"  --dir /tmp/prev
+          tar -xzf "/tmp/prev/$cli" -C "$dest"
+          tar -xzf "/tmp/prev/$sc"  -C "$dest"
+          chmod +x "$dest/keld" "$dest/keld-agent" "$dest/keld-agent-sidecar/keld-agent-sidecar"
+          # prev_resolve needs all three; assert rather than discover it mid-chain.
+          for f in keld keld-agent keld-agent-sidecar/keld-agent-sidecar; do
+            [ -x "$dest/$f" ] || { echo "::error::$tag has no $f"; exit 1; }
+          done
+          echo "  keld      $("$dest/keld" --version 2>&1 | head -1)"
+          echo "  sidecar   $(cat "$dest/keld-agent-sidecar/VERSION" 2>/dev/null || echo '(no VERSION)')"
+          echo "dir=$dest" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"  >> "$GITHUB_OUTPUT"
+
       # --- the chain --------------------------------------------------------
       - name: Run the chain
         id: chain
@@ -394,11 +450,14 @@ jobs:
           # service check to the unit file and says so, it does not skip it.
           KELD_CONFORM_INSTALL_FLAGS: ${{ runner.os == 'Linux' && '--allow-no-service-manager' || '' }}
           KELD_CONFORM_DISPOSABLE: "1"
+          # Empty on chain A, so the ${VAR:+...} below adds nothing there.
+          PREVIOUS: ${{ steps.previous.outputs.dir && format('dir:{0}', steps.previous.outputs.dir) || '' }}
         run: |
           set -uo pipefail
           mkdir -p "$RUNNER_TEMP/conformance"
           make conformance TOOL="$TOOL" CHAIN="$CHAIN" SEED="$SEED" \
             ${ARTIFACT:+ARTIFACT="$ARTIFACT"} \
+            ${PREVIOUS:+PREVIOUS="$PREVIOUS"} \
             WORK="$RUNNER_TEMP/conformance" 2>&1 | tee "$RUNNER_TEMP/conformance/chain.log"
           exit "${PIPESTATUS[0]}"
 
