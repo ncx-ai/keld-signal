@@ -70,8 +70,20 @@ keld_build() {
   local dir=$1 ver=$2
   mkdir -p "$dir"
   local ldflags="-X github.com/ncx-ai/keld-signal/internal/version.CLI=$ver"
-  (cd "$ROOT" && go build -ldflags "$ldflags" -o "$dir/keld" ./cmd/keld) || fail "go build ./cmd/keld"
-  (cd "$ROOT" && go build -ldflags "$ldflags" -o "$dir/keld-agent" ./cmd/keld-agent) || fail "go build ./cmd/keld-agent"
+  # ⚠️ **`go build -o <name>` DOES NOT ADD .exe.** Verified for GOOS=windows:
+  # an explicit -o is taken literally, so the harness was producing extensionless
+  # PE files where every shipped installer lays down keld.exe / keld-agent.exe.
+  #
+  # It matters beyond tidiness. `keld signal setup` writes its own path into the
+  # tool's config as the hook command, and that command is later run by the
+  # TOOL — Node, or Codex — not by this shell. Testing a hook whose executable
+  # is named differently from the one users get is testing something else.
+  # MSYS bash appends .exe when resolving, so every "$BIN_DIR/keld" call site
+  # here keeps working unchanged.
+  local ext=""
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ext=".exe" ;; esac
+  (cd "$ROOT" && go build -ldflags "$ldflags" -o "$dir/keld$ext" ./cmd/keld) || fail "go build ./cmd/keld"
+  (cd "$ROOT" && go build -ldflags "$ldflags" -o "$dir/keld-agent$ext" ./cmd/keld-agent) || fail "go build ./cmd/keld-agent"
 }
 
 # bin_use <dir> — the keld/keld-agent this run drives from now on.
