@@ -252,11 +252,13 @@ printf '%s' "$key" | grep -q '_approvalWeb' \
 # button early.
 grep -q 'beginLoadingTools' "$p/KeldSetup.m" \
   || fail "the pane has no loading state between signing in and being ready"
-awk '/- \(void\)beginLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q 'nextEnabled = NO' \
+# (Expressed through the single source of truth now: the step clears its own
+# condition and asks for a recompute, rather than assigning the button directly.)
+awk '/- \(void\)beginLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q '_toolsLoaded = NO' \
   || fail "Continue is not held while the pane is still loading its tool list"
 awk '/- \(void\)beginLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q 'startAnimation' \
   || fail "nothing moves while the pane loads, so the wait is indistinguishable from a hang"
-awk '/- \(void\)finishLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q 'nextEnabled = YES' \
+awk '/- \(void\)finishLoadingTools/,/^}/' "$p/KeldSetup.m" | grep -q '_toolsLoaded = YES' \
   || fail "Continue is never re-enabled once loading finishes"
 
 # And the gap between submitting the form and the device poll answering must
@@ -288,5 +290,37 @@ grep -q 'installer-pane.log' "$p/KeldSetup.m" \
   || fail "the pane writes no log file, so its diagnostics are only in a redacting log"
 grep -q '%{public}s' "$p/KeldSetup.m" \
   || fail "the os_log line still lets its message be redacted to <private>"
+
+# ⚠️ CONTINUE IS COMPUTED IN ONE PLACE, FROM ALL THREE CONDITIONS.
+# It used to be assigned from four scattered sites (`nextEnabled = _paired` on
+# entry, after the tool list, after a failed identity check), which is precisely
+# how this pane's earlier state bugs happened: each site knew about its own
+# condition and nothing knew about the others. Adding the sidecar as a fourth
+# scattered assignment would have guaranteed a repeat.
+grep -q '\- (void)updateNextEnabled' "$p/KeldSetup.m" \
+  || fail "Continue's state is not computed in one place"
+body=$(awk '/- \(void\)updateNextEnabled/,/^}/' "$p/KeldSetup.m")
+printf '%s' "$body" | grep -q '_paired' \
+  || fail "updateNextEnabled ignores whether the machine is connected"
+printf '%s' "$body" | grep -q '_toolsLoaded' \
+  || fail "updateNextEnabled ignores whether the tool list has been read"
+printf '%s' "$body" | grep -q '_sidecarSettled' \
+  || fail "updateNextEnabled ignores the sidecar download, so someone can click through mid-download"
+
+# Nothing else may set it, or the single source of truth is decorative.
+strays=$(grep -c 'nextEnabled = ' "$p/KeldSetup.m" || true)
+[ "$strays" -eq 1 ] \
+  || fail "nextEnabled is assigned in $strays places; it must be computed only inside updateNextEnabled"
+
+# ⚠️ SETTLED, NOT SUCCEEDED — A FAILED DOWNLOAD MUST NOT WEDGE THE INSTALL.
+# Gating Continue on a SUCCESSFUL fetch makes an offline machine impossible to
+# install: a captive portal, a VPN or a GitHub outage would leave someone unable
+# to finish at all. The install is still worth completing without it — telemetry
+# works, enrichment spools, and the launchd fallback fetches the sidecar later —
+# so the failure path sets the same flag and offers a retry.
+done_body=$(awk '/_sidecarSettled = YES/{found++} END{print found+0}' "$p/KeldSetup.m")
+[ "$done_body" -ge 1 ] || fail "nothing ever marks the sidecar download as settled"
+awk '/- \(void\)startSidecarDownload/,/^\}/' "$p/KeldSetup.m" | grep -q 'Downloading the analysis engine' \
+  || fail "the pane does not say why Continue is held while the engine downloads"
 
 echo "plugin_test.sh: OK"

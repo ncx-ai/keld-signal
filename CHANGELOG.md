@@ -5,6 +5,27 @@ All notable changes to **keld-signal** (the Keld client — the `keld` CLI + the
 follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 semantic-ish versioning during `0.x`.
 
+## [3.0.4] — 2026-09-16
+
+### Changed
+- **Continue waits for the analysis engine.** The wizard pane let someone click
+  past while the ~190 MB download was still running, which is what made
+  `postinstall`'s fallback the common path rather than the exception — and that
+  fallback is the one that silently did nothing until 3.0.3. Continue is now
+  computed in ONE place from three conditions (connected, tool list read, engine
+  download settled) rather than assigned from four scattered sites, which is how
+  this pane's earlier state bugs happened. The panel says why it is held.
+  ⚠️ **Settled, not succeeded:** a failed download still enables Continue and
+  offers Try again. Gating on success would make an offline machine impossible
+  to install — a captive portal, a VPN or a GitHub outage would leave someone
+  unable to finish — and the install is worth completing without it, since the
+  engine arrives in the background either way.
+- **Removed "nothing multi-gigabyte is fetched, now or later"** from the macOS
+  pane, `onboard.command`, `onboard.cmd` and `install.sh`. It reassured people
+  about an implementation detail they had not asked about and could not act on.
+  Replaced with what the line is actually for: prompts are analysed on the
+  machine, and only masked signal is sent.
+
 ## [3.0.3] — 2026-09-16
 
 ### Fixed

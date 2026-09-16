@@ -41,8 +41,7 @@ if errorlevel 1 (
   echo The agent is already running and picks the configuration up on its own.
 ) else (
   echo Keld is set up and running. You can close this window.
-  echo   Enrichment runs on-device with no model download - nothing multi-gigabyte
-  echo   is fetched, now or later.
+  echo   Prompts are analysed on this machine; only masked signal is sent.
 )
 
 echo.
