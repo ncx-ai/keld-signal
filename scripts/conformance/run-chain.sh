@@ -231,10 +231,35 @@ step_signal_install() {
   return 0
 }
 
+# close_open_blocks — make the step's block emittable NOW instead of in 15 minutes.
+#
+# ⚠️ **A DEV GRANULARITY CHANGES WHERE BLOCKS ARE CUT, NOT WHEN THE LAST ONE
+# CLOSES.** `blockdigest.is_closed` emits a block immediately when a LATER block
+# exists, and the trailing one only once `now - b.end >= IDLE_SECONDS` — which
+# is blocks.IDLE_BINS (3) x BIN_SECONDS (300) = 900 seconds. So a step that
+# sends one prompt cuts exactly one block, that block is trailing, and no
+# setting makes it emittable inside a run that lasts seconds. Measured: with
+# KELD_DEV_BLOCKS=prompt and the worktree sidecar, store_rows PASSED for both
+# tools and `blocks` still read 0.
+#
+# One more prompt is the whole fix, and it needs no new knob: it cuts a SECOND
+# block, which makes the first one non-trailing, which closes it at once. It is
+# also the realistic shape — a session with one prompt in it is not a session.
+#
+# The extra prompt is sent BEFORE the assertion, so every count the checkpoints
+# read includes it rather than racing it.
+close_open_blocks() {
+  local t
+  for t in "$@"; do
+    tool_prompt "$t" "close-block"
+  done
+}
+
 step_before_prompts() {
   step_begin "after-signal"
   local t
   for t in $BEFORE; do tool_prompt "$t" "after-signal"; done
+  close_open_blocks $BEFORE
   step_assert "$SETTLE" "" $BEFORE
 }
 
@@ -388,6 +413,7 @@ step_upgraded_prompts() {
   await_hook_repair
   local t
   for t in $BEFORE; do tool_prompt "$t" "upgraded-prompts"; done
+  close_open_blocks $BEFORE
   step_assert "$SETTLE" "" $BEFORE
 }
 
