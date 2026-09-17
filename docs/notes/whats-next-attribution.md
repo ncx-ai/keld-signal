@@ -146,6 +146,50 @@ five were not in these arms and still need a gate before they score coding block
   `raw->'projects'`, minutes double-count across multi-project blocks, no time-window filter.
 - GLiNER sunset — still deferred, unchanged.
 
+- ⚠️ **SIGNAL UI: the desktop Projects pane drops a block that matches two workstream
+  GROUPS. Deferred 2026-09-17 for someone else to pick up — it is NOT part of the Atlas
+  multi-group work and nothing in Atlas depends on it.**
+
+  *Context.* "Workstream" is an ATLAS construct. Atlas flattens every group's values into
+  one flat `projects` list (`Organization.projects`) and Signal matches repos/ticket keys
+  against it, knowing nothing about which group a value came from. Atlas's matcher dedup
+  (`services/api/app/services/workstreams.py` → `_clean_values`) builds `seen_matchers`
+  **per workstream**, so the same repo in Group A *and* Group B is already permitted —
+  verified 2026-09-17 by reading that function's scope.
+
+  *What is fine.* The WIRE is unaffected. `daemon/projectmatches.go` → `projects.MatchesFor`
+  iterates every candidate with `continue`, never `break`, so `project_matches` carries
+  EVERY match; Atlas maps the ids back to workstreams itself (`values_by_id`) and assigns
+  both. Atlas-side multi-group attribution needs no Signal change at all.
+
+  *What is broken.* A SECOND function, `projects.Attribute`
+  (`internal/agent/projects/attribute.go`), feeds the local ledger and the desktop Projects
+  pane via `daemon/v3blocks.go` and `ingress/projects.go`. It refuses to choose:
+
+      if len(matches) > 1 {
+          return Result{Reason: ReasonConflict, Conflict: conflictIDs(matches)}
+      }
+
+  So a repo used by a workstream in two groups makes the block `ReasonConflict` and it is
+  attributed to NEITHER locally. `ledger.db`'s `blocks.project_id` is a single column, which
+  is the other half of the same assumption.
+
+  *Why it was right before.* The rule is correct for a ONE-GROUP world: within a group a repo
+  may belong to at most one workstream, so `len(matches) > 1` really did mean a
+  misconfiguration. The rule did not become wrong — its world changed.
+
+  *The fix, when someone picks it up.* `Attribute` returns N results; the ledger holds N;
+  `ReasonConflict` is retained for what it now means — two values in the SAME group. Note
+  that Atlas's `_clean_values` comment currently cites this Signal behaviour as its reason
+  for deduping matchers; that comment overstates the blast radius (it says the block "lands
+  in NEITHER and stays unattributed", which is true of the local pane and NOT of Atlas), and
+  is worth correcting in the same pass.
+
+  Both behaviours are pinned: Claim: `attribute-conflicts-on-multi-match` and
+  Claim: `matchesfor-reports-every-match`. Each was mutation-checked on 2026-09-17 —
+  breaking the code makes its test fail for its own reason — so a change to either
+  function surfaces the claim rather than silently passing.
+
 ## Restarting the smoke setup
 
 ```

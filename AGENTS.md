@@ -770,6 +770,18 @@ text, no span, no offset, in either direction.**
   (`Supervisor.SetOnRespawn`): module state in the parent does not survive a
   crash-restart, and a change-gated POST concluded there was nothing new to say.
   Anything else the daemon pushes DOWN once belongs on that hook.
+- ⚠️ **TWO MATCHERS, OPPOSITE BEHAVIOURS, DIFFERENT CONSUMERS — and one of them drops a
+  block that matches two workstream GROUPS.** `projects.MatchesFor` (→ `project_matches`
+  on the wire) returns EVERY match; Atlas maps the ids to workstreams itself, so
+  **Atlas-side multi-group attribution needs no Signal change**. `projects.Attribute`
+  (→ the local ledger and the desktop Projects pane) returns one match or, for two or more,
+  `ReasonConflict` and NO attribution — correct for the one-group world it was written in,
+  wrong now that Atlas permits the same repo in two groups (its dedup is per-workstream).
+  **Deferred 2026-09-17, not part of the Atlas work, written up in
+  `docs/notes/whats-next-attribution.md` → Smaller carried items.** Don't "fix" one matcher
+  to match the other without reading that note: the difference is deliberate on the wire
+  side. Claim: `matchesfor-reports-every-match`, Claim: `attribute-conflicts-on-multi-match`.
+
 - **Version skew HOLDS rather than quarantines** (`AttributeResult.RouteUnsupported`
   on a 404); a genuine quarantine emits `attribution.job_quarantined`.
 - **Quality.** `sidecar/app/test_attribution_quality.py` (opt-in,
