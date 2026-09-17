@@ -273,8 +273,17 @@ step_before_prompts() {
     f=$(find "$root" -name '*.jsonl' -type f -exec ls -t {} + 2>/dev/null | head -1)
     [ -n "$f" ] && probe_blocks "$f"
   done
-  say_block_events
-  step_assert "$SETTLE" "" $BEFORE
+  # ⚠️ **AFTER THE SETTLE, AND ONLY ON A FAILURE.** These lines used to print
+  # HERE, before step_assert waited for anything, so they reported "0 bodies at
+  # the mock Atlas mention blocks" at a moment when the emitter had not yet had
+  # a sweep to publish in — a confident negative from a check that looked too
+  # early, which is the same defect the checkpoints exist to catch. It read as
+  # proof that nothing was reaching Atlas and cost several rounds chasing that.
+  # On a PASS they say nothing new; on a failure they are the whole diagnosis.
+  local rc=0
+  step_assert "$SETTLE" "" $BEFORE || rc=1
+  [ "$rc" = 0 ] || say_block_events
+  return $rc
 }
 
 step_detect() {

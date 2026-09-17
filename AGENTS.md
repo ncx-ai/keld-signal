@@ -1424,6 +1424,46 @@ machine off without editing JSON. The key exists at all because an env-only togg
 environment block and the Windows task is a bare `/TR "<exe>" run`, so there is
 nowhere to put `KELD_BLOCKS` that the daemon would see.
 
+⚠️ **`KELD_DEV_BLOCKS` NEEDS BOTH HALVES OF THE DAEMON TO AGREE, AND FOR ITS
+WHOLE LIFE THEY DID NOT — SO THE FEATURE WAS DEAD AND SAID NOTHING.** The
+developer granularities (`prompt`/`bin`/`minute`, `sidecar/app/analysis/devblocks.py`)
+exist so a test can produce a CLOSED block in seconds rather than waiting out the
+20-minute cap or the 15-minute idle, and each cuts blocks whose two boundary
+reasons are the MODE NAME — deliberately not drawn from `blocks.REASONS`. The Go
+client's version-skew gate (`enrich.BlockReasons`, applied in
+`BlocksCharacterised`) had never heard of those names, so it DISCARDED every one
+of those blocks, with a bare `continue`. Measured in the conformance chain: the
+sidecar holding one closed block, the emitter enabled, no error reported
+anywhere, and zero blocks at the mock Atlas — with "the sidecar closed nothing"
+and "this binary threw away everything it was handed" indistinguishable from
+outside. Four CI rounds went into narrowing that, and what finally answered it
+was one log line naming what each SWEEP asked and got (`KELD_BLOCKS_DEBUG`).
+Three things now hold, and each was absent:
+- `enrich.DevBlockReasons` mirrors `devblocks.MODES`, **pinned by reading that
+  Python file** the way `DynamicStatuses` is — a hand-mirrored list is what
+  allowed the drift.
+- The two vocabularies stay DISJOINT and the dev one is admitted per client
+  (`Client.AdmitDevBlockReasons`), only by the caller that already resolved the
+  granularity. So a binary nobody configured still refuses a dev boundary.
+- **A refusal that discards work now SAYS SO** (`BlocksAnswer.DroppedUnreadableReason`,
+  one loud line per daemon run). A silent `continue` is the same defect class as
+  a check that cannot see what it reports on.
+
+⚠️ **AND THE REFUSAL THAT KEEPS DEV BLOCKS OFF A REAL ATLAS WAS ITSELF INERT.**
+`settings.DevBlocksMode` refuses the granularity unless the configured Atlas is a
+LOOPBACK mock — a minute-long block is a false statement about somebody's work
+and must never reach the org's numbers — and `daemon.devBlocksMode` exists to say
+so out loud. **Nothing called either.** The sidecar reads `KELD_DEV_BLOCKS` out
+of its own environment and INHERITS the daemon's, so a developer who exported the
+variable got dev blocks on any machine, including one publishing to a real Atlas,
+while the refusal sat in a function with no callers. `sidecarEnv` now assigns the
+RESOLVED value **always, empty included** (the treatment `KELD_ANALYZE_ROOTS`
+already gets): refused resolves to `""`, which OVERRIDES the inherited value in
+the child rather than deferring to it. The same resolved value decides
+`AdmitDevBlockReasons`, from ONE call — resolved twice, the two could disagree,
+and the disagreement that matters is a machine cutting minute-long blocks that
+the publisher happily forwards.
+
 ⚠️ **`make install-linux` routes through `keld-agent install` too** (`Makefile`'s
 `install-service` target), so a dev machine converges on `deterministic` like
 everyone else — pass `--backend auto` to keep exercising GLiNER2 locally. And

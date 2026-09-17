@@ -76,7 +76,21 @@ import (
 // KELD_TEXTEMBED=0 explicitly — set-if-absent means that wins — and accepts
 // that /attribute then answers `skipped:disabled` for every block, which is a
 // stated skip rather than a silent narrowing.
-func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []string, encoderNeeded bool) []string {
+// devBlocks is the RESOLVED developer block granularity and is ALWAYS
+// assigned, empty included — the one other variable here treated that way, for
+// the same reason KELD_ANALYZE_ROOTS is.
+//
+// ⚠️ **SET-IF-ABSENT WOULD MAKE THE REFUSAL UNENFORCEABLE, AND UNTIL NOW
+// NOTHING ASSIGNED IT AT ALL.** The sidecar reads KELD_DEV_BLOCKS out of its
+// own environment, and it INHERITS the daemon's — so a developer who exported
+// the variable got dev blocks on any machine, including one publishing to a
+// real Atlas, while settings.DevBlocksMode's refusal (a minute-long block is a
+// false statement about somebody's work and must never reach the org's
+// numbers) sat in a function no caller invoked. Assigning the resolved value
+// unconditionally is what turns that refusal from documentation into a
+// mechanism: refused resolves to "", which OVERRIDES the inherited value in
+// the child rather than deferring to it.
+func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []string, encoderNeeded bool, devBlocks string) []string {
 	env := make([]string, 0, len(base)+10)
 	env = append(env, base...)
 	env = append(env, "KELD_GLINER2_DIR="+modelDir)
@@ -86,6 +100,8 @@ func sidecarEnv(base []string, modelDir, encoderDir string, analyzeRoots []strin
 	if encoderNeeded && !hasEnvKey(base, "KELD_TEXTEMBED") {
 		env = append(env, "KELD_TEXTEMBED=1")
 	}
+
+	env = append(env, "KELD_DEV_BLOCKS="+devBlocks)
 
 	if !hasEnvKey(base, "KELD_ANALYZE_ROOTS") {
 		env = append(env, "KELD_ANALYZE_ROOTS="+

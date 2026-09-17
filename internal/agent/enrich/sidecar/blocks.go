@@ -189,11 +189,19 @@ func (c *Client) BlocksCharacterised(path, source, sessionID string,
 		return enrich.BlocksAnswer{RouteUnsupported: res.RouteUnsupported}
 	}
 	out := make([]enrich.BlockCharacterisation, 0, len(res.Blocks))
+	dropped, example := 0, ""
 	for _, b := range res.Blocks {
 		if b.Evidence <= 0 || b.End <= b.Start {
 			continue
 		}
-		if !enrich.KnownBlockReason(b.StartReason) || !enrich.KnownBlockReason(b.EndReason) {
+		if !c.readableReason(b.StartReason) || !c.readableReason(b.EndReason) {
+			dropped++
+			if example == "" {
+				example = b.StartReason
+				if !c.readableReason(b.EndReason) {
+					example = b.EndReason
+				}
+			}
 			continue
 		}
 		out = append(out, enrich.BlockCharacterisation{
@@ -215,7 +223,34 @@ func (c *Client) BlocksCharacterised(path, source, sessionID string,
 			Requests: b.Requests,
 		})
 	}
-	return enrich.BlocksAnswer{Blocks: out, Watermark: res.Watermark, OK: true}
+	return enrich.BlocksAnswer{
+		Blocks: out, Watermark: res.Watermark, OK: true,
+		DroppedUnreadableReason: dropped, UnreadableReason: example,
+	}
+}
+
+// AdmitDevBlockReasons widens the boundary-reason gate to the DEVELOPER
+// granularities (enrich.DevBlockReasons).
+//
+// ⚠️ **ONLY THE CALLER THAT ALREADY RESOLVED THE GRANULARITY MAY CALL THIS, AND
+// IT MUST PASS WHAT THAT RESOLUTION RETURNED** — never a raw environment read.
+// `settings.DevBlocksMode` is where the refusal lives: a dev granularity
+// MISLABELS real work, so it is admitted when the configured Atlas is a
+// loopback mock and refused when it is a real one. Reading KELD_DEV_BLOCKS here
+// would be a second copy of that decision, free to disagree with the one that
+// governs what the sidecar actually cuts — and disagreeing in the direction
+// that publishes minute-long fictions into somebody's spend.
+//
+// Off by default, so a binary nobody configured cannot publish a boundary a
+// reader would misread.
+func (c *Client) AdmitDevBlockReasons(on bool) { c.devReasons = on }
+
+// readableReason is the gate BlocksCharacterised applies to both boundaries.
+func (c *Client) readableReason(r string) bool {
+	if enrich.KnownBlockReason(r) {
+		return true
+	}
+	return c.devReasons && enrich.KnownDevBlockReason(r)
 }
 
 // tokensFrom converts the sidecar's per-block spend, preserving ABSENCE: a

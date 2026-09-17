@@ -354,7 +354,7 @@ func TestSidecarEnvSetsTheEncoderDirOnlyWhenTheWeightsArePresent(t *testing.T) {
 			}
 
 			needed := features.TextEmbedEnabled()
-			env := sidecarEnv([]string{"PATH=/bin"}, "/models/gliner2", encoderDirForSpawn(needed), nil, needed)
+			env := sidecarEnv([]string{"PATH=/bin"}, "/models/gliner2", encoderDirForSpawn(needed), nil, needed, "")
 			got := hasEnvKey(env, "KELD_TEXTEMBED_DIR")
 			if got != tc.wantSet {
 				t.Fatalf("KELD_TEXTEMBED_DIR set = %v, want %v (env %v)", got, tc.wantSet, env)

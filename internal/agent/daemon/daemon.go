@@ -1526,10 +1526,10 @@ func wireEnrichment(ctx context.Context, set settings.Settings, secret string, q
 		// model to load means no warmup and, since provisioning now hangs off
 		// warmup, no download either.
 		log.Printf("keld-agent: enrichment running in deterministic mode (ml_backend=%s); the analysis service runs, the model is never loaded", set.MLBackend)
-		svc, gate := deterministicBackend(ctx, emitter, regions, encoderNeeded)
+		svc, gate := deterministicBackend(ctx, emitter, regions, encoderNeeded, devBlocksMode(set))
 		return ingress.Handler(q, secret, extra...), nil, svc, gate, nil, true
 	}
-	model, svc, gate, warmup = mlBackend(ctx, emitter, regions, encoderNeeded)
+	model, svc, gate, warmup = mlBackend(ctx, emitter, regions, encoderNeeded, devBlocksMode(set))
 	return ingress.Handler(q, secret, extra...), model, svc, gate, warmup, true
 }
 
@@ -1616,7 +1616,17 @@ func gliner2ModelDir() string { return paths.ModelsDir("gliner2-large-v1") }
 // read fresh here via settings.Load(), specifically so this function and its
 // callers never touch disk on every sidecar spawn/respawn — the caller in Run
 // resolves it once, from the settings already loaded there.
-func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderNeeded bool) (*sidecar.Client, *Supervisor, func() bool, bool, error) {
+//
+// devBlocks is the RESOLVED developer block granularity (devBlocksMode, which
+// is where the refusal against a real Atlas lives) and it is threaded for the
+// same reason encoderNeeded is. ⚠️ **IT FEEDS BOTH HALVES OF ONE DECISION FROM
+// ONE VALUE, AND THEY WERE PREVIOUSLY NEITHER CONNECTED NOR ENFORCED**: the
+// sidecar cuts at this granularity (KELD_DEV_BLOCKS in its spawn env) and this
+// binary must be willing to READ the boundary names that granularity produces
+// (AdmitDevBlockReasons). Resolved twice, they could disagree — and the
+// disagreement that matters is a machine cutting minute-long blocks that the
+// publisher happily forwards into a real org's numbers.
+func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderNeeded bool, devBlocks string) (*sidecar.Client, *Supervisor, func() bool, bool, error) {
 	binPath, hasBin := sidecarBinPath()
 	if !hasBin {
 		return nil, nil, nil, false, nil
@@ -1642,6 +1652,9 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 
 	scBaseURL := fmt.Sprintf("http://127.0.0.1:%d", scPort)
 	scClient := sidecar.NewCtx(ctx, scBaseURL, 5*time.Second)
+	// The same resolved value that will be in the child's environment, so what
+	// this binary is willing to read cannot drift from what that sidecar cuts.
+	scClient.AdmitDevBlockReasons(devBlocks != "")
 	healthFn := func() bool { return scClient.Healthy(ctx) }
 
 	modelDir := gliner2ModelDir()
@@ -1657,7 +1670,7 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 			// can return from (see stopChild), so there is nothing left for the
 			// context hook to do except get in the way.
 			cmd := exec.Command(binPath, fmt.Sprintf("--port=%d", p))
-			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(encoderNeeded), watch.AnalyzeRoots(), encoderNeeded)
+			cmd.Env = sidecarEnv(os.Environ(), modelDir, encoderDirForSpawn(encoderNeeded), watch.AnalyzeRoots(), encoderNeeded, devBlocks)
 			// ⚠️ **THE SIDECAR'S STDERR WENT TO /dev/null FOR THE WHOLE LIFE OF THIS DAEMON,
 			// AND THAT MADE EVERY log.warning IN THE SIDECAR DEAD CODE.** Go connects a child's
 			// Stdout/Stderr to the null device when the fields are nil, so `app/main.py`'s
@@ -1769,8 +1782,8 @@ func sidecarService(ctx context.Context, emitter *clientevents.Emitter, encoderN
 // That is not the degradation AGENTS.md forbids. Nothing lower-fidelity stands
 // in for window analysis; the facet is dropped entirely and reported dropped
 // via the pipeline's ordinary pipeline_status "partial" path.
-func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (serviceFacets, func() bool) {
-	scClient, sup, _, ok, err := sidecarService(ctx, emitter, encoderNeeded)
+func deterministicBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool, devBlocks string) (serviceFacets, func() bool) {
+	scClient, sup, _, ok, err := sidecarService(ctx, emitter, encoderNeeded, devBlocks)
 	if !ok {
 		// No service this run and no path to one before a restart, so waiting
 		// is pointless: run without window analysis rather than wedge.
@@ -1840,8 +1853,8 @@ func noAnalysisService(emitter *clientevents.Emitter, fields map[string]any) fun
 // deterministicBackend — because they belong to the SERVICE, not the model:
 // both modes derive them the same way, and returning them here means
 // wireEnrichment only passes them through instead of rederiving them.
-func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
-	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter, encoderNeeded)
+func mlBackend(ctx context.Context, emitter *clientevents.Emitter, regions func() []string, encoderNeeded bool, devBlocks string) (enrich.Model, serviceFacets, func() bool, func(context.Context) error) {
+	scClient, sup, healthFn, ok, err := sidecarService(ctx, emitter, encoderNeeded, devBlocks)
 	if !ok {
 		// The consequence of having no service is this caller's to state: an
 		// enrichment job queues/spools, which is not what a future non-ML

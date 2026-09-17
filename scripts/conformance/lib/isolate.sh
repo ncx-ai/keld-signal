@@ -314,6 +314,14 @@ JSON
   # checkpoint, rather than by quietly writing minute-long fictions into
   # somebody's spend.
   export KELD_DEV_BLOCKS=prompt
+  # ⚠️ **THE EMITTER IS SILENT ABOUT A SWEEP THAT FOUND NOTHING, and that cost a
+  # day of CI round trips.** A run reached the state where the sidecar held ONE
+  # closed block for the transcript, the emitter was enabled, no error was
+  # reported anywhere, and the mock Atlas received no block — with no way from
+  # outside to tell "asked and got 0" from "never asked". This prints one line
+  # per sweep naming the CURSOR, which is the one input that can silently
+  # exclude a block the sidecar would otherwise return.
+  export KELD_BLOCKS_DEBUG=1
   # named_terms loads spaCy (~619 MB) into a parent that is never recycled, and
   # no checkpoint reads it.
   export KELD_TERMS=0
@@ -548,6 +556,12 @@ for b in bs[:3]:
 
 # say_block_events — what the daemon SAID about cutting blocks.
 #
+# ⚠️ **CALL IT AFTER THE SETTLE, NEVER BEFORE.** Every count here is read from
+# state the emitter writes on its own sweep interval, so called before
+# step_assert has waited it reports zeros that mean "not yet" while reading as
+# "never" — which is exactly the confident-negative-from-a-check-that-could-not-
+# look failure this file's other comments keep naming.
+#
 # ⚠️ The emitter returns 0 SILENTLY when the sidecar "could not answer" — not
 # ready, restarting, store behind — and reports that only as a client event.
 # So a `blocks` checkpoint of 0 has three possible causes and the checkpoint
@@ -565,6 +579,21 @@ say_block_events() {
   local batches
   batches=$(grep -rlE '"blocks"' "$ATLAS_STATE" 2>/dev/null | wc -l | tr -d ' ')
   say "block events: $batches body/bodies at the mock Atlas mention \"blocks\""
+
+  # ⚠️ **AND WHAT THE EMITTER ITSELF SAW.** The events above say what the daemon
+  # REPORTED, which is nothing at all when a sweep simply came back empty. These
+  # lines (KELD_BLOCKS_DEBUG, set in iso_env) name the cursor each sweep asked
+  # with and the count it got back, which is what separates "never swept this
+  # path" from "swept it with a cursor past the block's start".
+  if [ -f "$DAEMON_LOG" ]; then
+    local swept
+    swept=$(grep -F 'blocks: swept' "$DAEMON_LOG" 2>/dev/null | tail -8)
+    if [ -n "$swept" ]; then
+      printf '%s\n' "$swept" | while read -r l; do say "emitter: ${l#*blocks: }"; done
+    else
+      say "emitter: NO sweep line in the daemon log — the emitter never swept any path"
+    fi
+  fi
 }
 
 # agent_json_field <key> — one field of ~/.keld/agent.json, empty when absent.
