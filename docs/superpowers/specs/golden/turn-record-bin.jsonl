@@ -15,8 +15,10 @@
 {"bin_ts": 1772442000, "level": "dir", "mode": "capture", "n": 2.0, "ref": "services/relay", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "dir", "mode": "plain", "n": 2.0, "ref": "services/relay", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "exe", "mode": "capture", "n": 1.0, "ref": "cd", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442000, "level": "exe", "mode": "capture", "n": 1.0, "ref": "pytest", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "exe", "mode": "capture", "n": 1.0, "ref": "uv", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "exe", "mode": "plain", "n": 1.0, "ref": "cd", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
+{"bin_ts": 1772442000, "level": "exe", "mode": "plain", "n": 1.0, "ref": "pytest", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "exe", "mode": "plain", "n": 1.0, "ref": "uv", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "ext", "mode": "capture", "n": 2.0, "ref": ".py", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442000, "level": "ext", "mode": "plain", "n": 2.0, "ref": ".py", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
@@ -79,6 +81,7 @@
 {"bin_ts": 1772442600, "level": "workspace", "mode": "capture", "n": 3.0, "ref": "nova-relay", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1772442600, "level": "workspace", "mode": "plain", "n": 3.0, "ref": "nova-relay", "session": "-workspace-fixture-golden-nova-relay/b7c2f1a3-5e04-4d19-9a76-1c3b8f2e0007.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "action", "mode": "capture", "n": 1.0, "ref": "edit", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "action", "mode": "capture", "n": 1.0, "ref": "install", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "action", "mode": "capture", "n": 1.0, "ref": "read", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "action", "mode": "capture", "n": 1.0, "ref": "run a service", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "action", "mode": "capture", "n": 1.0, "ref": "search", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
@@ -88,6 +91,7 @@
 {"bin_ts": 1786352400, "level": "action", "mode": "capture", "n": 2.0, "ref": "fetch", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "action", "mode": "capture", "n": 2.0, "ref": "run code", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "action", "mode": "plain", "n": 1.0, "ref": "edit", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "action", "mode": "plain", "n": 1.0, "ref": "install", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "action", "mode": "plain", "n": 1.0, "ref": "read", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "action", "mode": "plain", "n": 1.0, "ref": "run a service", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "action", "mode": "plain", "n": 1.0, "ref": "search", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
@@ -122,14 +126,18 @@
 {"bin_ts": 1786352400, "level": "exe", "mode": "capture", "n": 1.0, "ref": "curl", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "capture", "n": 1.0, "ref": "docker", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "capture", "n": 1.0, "ref": "git", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "exe", "mode": "capture", "n": 1.0, "ref": "pip", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "capture", "n": 1.0, "ref": "pytest", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "capture", "n": 1.0, "ref": "python3", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "exe", "mode": "capture", "n": 1.0, "ref": "sh", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "plain", "n": 1.0, "ref": "cat", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "plain", "n": 1.0, "ref": "curl", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "plain", "n": 1.0, "ref": "docker", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "plain", "n": 1.0, "ref": "git", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "exe", "mode": "plain", "n": 1.0, "ref": "pip", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "plain", "n": 1.0, "ref": "pytest", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "exe", "mode": "plain", "n": 1.0, "ref": "python3", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
+{"bin_ts": 1786352400, "level": "exe", "mode": "plain", "n": 1.0, "ref": "sh", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "ext", "mode": "capture", "n": 2.0, "ref": ".go", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "ext", "mode": "capture", "n": 2.0, "ref": ".md", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "ext", "mode": "capture", "n": 3.0, "ref": ".py", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
@@ -162,14 +170,12 @@
 {"bin_ts": 1786352400, "level": "term", "mode": "capture", "n": 1.0, "ref": "RiskGuard", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "term", "mode": "capture", "n": 1.0, "ref": "SettleFast", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "term", "mode": "capture", "n": 1.0, "ref": "SettleFast.io", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
-{"bin_ts": 1786352400, "level": "term", "mode": "capture", "n": 1.0, "ref": "TOP", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "term", "mode": "plain", "n": 1.0, "ref": "LEDGER-CORE", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "term", "mode": "plain", "n": 1.0, "ref": "OTEL", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "term", "mode": "plain", "n": 1.0, "ref": "README", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "term", "mode": "plain", "n": 1.0, "ref": "RiskGuard", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "term", "mode": "plain", "n": 1.0, "ref": "SettleFast", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "term", "mode": "plain", "n": 1.0, "ref": "SettleFast.io", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
-{"bin_ts": 1786352400, "level": "term", "mode": "plain", "n": 1.0, "ref": "TOP", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "tool", "mode": "capture", "n": 1.0, "ref": "Edit", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "tool", "mode": "capture", "n": 1.0, "ref": "Grep", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}
 {"bin_ts": 1786352400, "level": "tool", "mode": "capture", "n": 1.0, "ref": "Read", "session": "-workspace-fixture-corpus-anders-aurora-ledger/a1c93e40-11f2-4d9a-8b6d-402f7cf9a001.jsonl", "table": "bin"}

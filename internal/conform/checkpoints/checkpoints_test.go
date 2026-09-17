@@ -12,10 +12,10 @@ import (
 
 func fullFacts() Facts {
 	return Facts{
-		Transcripts:       []string{"projects/x/sess.jsonl"},
-		PromptIDs:         []string{"p-1"},
-		StorePromptRows:   1,
-		StoreEventRows:    9,
+		Transcripts:     []string{"projects/x/sess.jsonl"},
+		PromptIDs:       []string{"p-1"},
+		StorePromptRows: 1,
+		StoreEventRows:  9,
 		// ⚠️ BOTH publish routes, because they are now SEPARATE checkpoints:
 		// /v1/enrichments feeds `publish`, /v1/signal/blocks feeds `blocks`.
 		// While one checkpoint accepted either, this fixture never needed an

@@ -56,8 +56,10 @@ func startIntegrationsDetector(ctx context.Context) *integrations.Detector {
 		Params:    integrationsSetupParams,
 		Emit:      lateEmitter{},
 		Log:       log.Printf,
-		Snapshot:  func() []integrations.Integration { return integrations.Snapshot(integrations.Deps{}, integrations.Options{}).Integrations },
-		Sink:      currentIntegrationSink(),
+		Snapshot: func() []integrations.Integration {
+			return integrations.Snapshot(integrations.Deps{}, integrations.Options{}).Integrations
+		},
+		Sink: currentIntegrationSink(),
 	}
 	go d.Run(ctx)
 	return d

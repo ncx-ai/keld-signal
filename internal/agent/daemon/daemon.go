@@ -728,7 +728,6 @@ func Run(ctx context.Context) error {
 	}
 	set := settings.Load()
 
-
 	addr := bindAddr()
 	if svcSecret, err := serviceSecret(); err != nil {
 		return err

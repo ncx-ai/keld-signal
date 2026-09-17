@@ -4,8 +4,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ncx-ai/keld-signal/internal/agent/integrations"
 	"github.com/ncx-ai/keld-signal/internal/agent/ingress"
+	"github.com/ncx-ai/keld-signal/internal/agent/integrations"
 	"github.com/ncx-ai/keld-signal/internal/agent/queue"
 	"github.com/ncx-ai/keld-signal/internal/spool"
 )

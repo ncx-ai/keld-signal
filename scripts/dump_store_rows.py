@@ -55,6 +55,50 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "sidecar"))
 
+
+def _require_optional_deps():
+    """⚠️ **TWO OPTIONAL IMPORTS SILENTLY CHANGE WHAT IS STORED, AND THE FIRST DUMP WAS TAKEN
+    WITHOUT THEM.**
+
+    This file's header claims the dump is "a function of the code and the fixtures alone". That
+    was not true, and CI is where it showed: the dump was generated with the HOST python3, which
+    has neither package, while CI installs `sidecar/requirements.txt`, which pins both. Measured
+    on the first CI run of this gate:
+
+      * `bashlex` (app/analysis/shell.py) parses command strings. Absent, the parse is degraded
+        and fewer programs are extracted — CI produced `exe:pip`, `exe:pytest`, `exe:sh` and
+        `action:install` rows the dump did not have.
+      * `wordfreq` (app/analysis/terms.py) is the SHOUTING filter, and its own comment says
+        "without it, shouting is simply not filtered". Absent, `TOP` (zipf 5.6) survives as a
+        named term — the dump carried a `term:TOP` row that CI correctly drops.
+
+    So the oracle froze a DEGRADED environment, and a gate that pins the wrong baseline defends
+    the wrong thing. Both are real dependencies of the SHIPPED sidecar, so the dump is taken with
+    them present, and their absence is a hard refusal rather than a quieter answer — the same
+    rule the header already applies to spaCy and the retention horizons, which it holds fixed
+    precisely so the dump cannot depend on the machine.
+    """
+    missing = []
+    for mod, why in (("bashlex", "command parsing (exe/action levels)"),
+                     ("wordfreq", "the shouting filter (term level)")):
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(f"{mod} — {why}")
+    if missing:
+        sys.exit(
+            "REFUSING: this dump would not be reproducible.\n  missing: "
+            + "\n           ".join(missing)
+            + "\n\nBoth are pinned in sidecar/requirements.txt and both CHANGE WHICH ROWS ARE"
+            "\nSTORED, so a dump taken without them freezes a degraded environment and the"
+            "\ncheck then fails on every machine that has them (which is what CI found)."
+            "\n\nRun it with the sidecar venv, not the host python3:"
+            "\n  scripts/conformance/analysis-venv.sh <dir>   # prints a usable interpreter"
+        )
+
+
+_require_optional_deps()
+
 # Two fixture trees, and the second exists because the first cannot answer the question.
 #
 #   fixture-corpus/ — the committed identity floor (`build_fixture_corpus.py`). Two invented
