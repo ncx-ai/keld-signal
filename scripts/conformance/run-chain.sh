@@ -202,7 +202,24 @@ DETECT_BUDGET=${KELD_CONFORM_DETECT:-90}
 # lane is required, and after the upgrade all five are. That asymmetry is chain
 # B's whole point rendered as an expectation: the lane the old sidecar cannot
 # serve is the lane the upgrade must repair.
-PREV_NOT_EXPECTED=store_rows
+#
+# ⚠️ **AND IT DOES NOT REQUIRE `blocks` EITHER, FOR THE SAME REASON ONE LAYER
+# DOWN.** The chain produces a closed block in seconds only because
+# `KELD_DEV_BLOCKS` makes the sidecar cut one per prompt — and those blocks name
+# their boundaries after the MODE (`prompt`), a vocabulary the Go client learned
+# in THIS branch. Every release up to and including v3.0.3 discards them at
+# `BlocksCharacterised`'s skew gate, silently, so the previous release's step can
+# only ever read 0 block batches. Measured: chain B failed at `prev-prompts` with
+# `blocks 0` for both tools while every other lane was green.
+#
+# Requiring it there would be requiring a release to contain its own successor's
+# fix. `upgraded-prompts` still requires ALL SIX, so the upgrade must repair it —
+# which is chain B's whole point.
+#
+# ⚠️ REMOVE THIS once the previous release is one that carries the dev-reason
+# fix; an expectation that outlives its reason is indistinguishable from a
+# silenced test.
+PREV_NOT_EXPECTED=store_rows,blocks
 
 # ⚠️ **ON WINDOWS THE PREVIOUS RELEASE CANNOT ENRICH AT ALL, and that is a
 # PRODUCT fact this branch just fixed rather than a harness gap.** Every keld
