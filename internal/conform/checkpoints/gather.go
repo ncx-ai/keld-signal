@@ -139,6 +139,9 @@ func promptIDsIn(path, tool string) []string {
 	if tool == "codex" {
 		return codexPromptIDs(sc)
 	}
+	if tool == "gemini_cli" {
+		return geminiPromptIDs(sc)
+	}
 	var out []string
 	for sc.Scan() {
 		var rec struct {
@@ -402,4 +405,69 @@ func correlationID(raw []byte) string {
 		return env.Correlation.ID
 	}
 	return env.CorrID
+}
+
+// geminiPromptIDs reads Gemini CLI's chat JSONL and returns the correlation ids
+// the daemon publishes for it.
+//
+// ⚠️ **NOT THE RECORD'S UUID.** A Gemini chat line carries a random per-record
+// `id` that never appears in its OTEL telemetry, so an enrichment keyed on it
+// joins to nothing — and Atlas joins enrichment.corr_id to
+// tool_event.prompt_id. The id that matches is
+// "<sessionId>########<0-based ordinal among GENUINE user prompts>", which is
+// what `internal/agent/watch/gemini.go` emits.
+//
+// This mirrors that rule and must not drift from it: if it does, `pointer`
+// reports "no enrichment matched", which is indistinguishable from a real
+// break. Pinned by gemini_test.go.
+//
+// Two lines look like prompts and are not, and BOTH must be skipped without
+// consuming an ordinal — counting either shifts every later id by one and
+// mismatches the whole file:
+//
+//   - a `$set` MUTATION, which rewrites an earlier record;
+//   - a user line whose text is empty.
+func geminiPromptIDs(sc *bufio.Scanner) []string {
+	var (
+		out       []string
+		sessionID string
+		ordinal   int
+	)
+	for sc.Scan() {
+		var rec struct {
+			ID        string                  `json:"id"`
+			SessionID string                  `json:"sessionId"`
+			Type      string                  `json:"type"`
+			Content   []struct{ Text string } `json:"content"`
+			Set       json.RawMessage         `json:"$set"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
+			continue
+		}
+		// The meta line: a session id with no type. It names the session and is
+		// not a turn.
+		if rec.Type == "" && rec.SessionID != "" && sessionID == "" {
+			sessionID = rec.SessionID
+			continue
+		}
+		if len(rec.Set) > 0 || rec.Type != "user" || rec.ID == "" {
+			continue
+		}
+		text := ""
+		for _, c := range rec.Content {
+			text += c.Text
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		if sessionID == "" {
+			sessionID = rec.SessionID
+		}
+		if sessionID == "" {
+			continue // nothing to build an id from
+		}
+		out = append(out, fmt.Sprintf("%s########%d", sessionID, ordinal))
+		ordinal++
+	}
+	return out
 }
