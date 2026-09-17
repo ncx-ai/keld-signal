@@ -17,6 +17,22 @@
 # Both were declared "not expected" against a frozen sidecar, which is honest
 # and leaves the code unexercised. This runs the worktree's own.
 #
+# ⚠️ **KNOWN GAP: presidio-analyzer IS EXCLUDED, SO /pii ANSWERS 500 ON EVERY
+# PROMPT AND `sensitivity`'s SCAN HALF IS NEVER EXERCISED BY CONFORMANCE.**
+# Measured on a 3-tool chain A: 95 `pii scan failed: ModuleNotFoundError` lines
+# in one run. A 5xx is TRANSIENT by `retry.IsTransient`, so every enrichment job
+# RETRIES a call that can never succeed and pays the backoff — one job measured
+# 87 seconds from the watcher's offer to the publish, which is what forced
+# SETTLE up to 180s. On a real machine presidio IS installed and none of this
+# applies, so it is a harness cost, not a product defect.
+#
+# Measured cost of closing it: `pip install presidio-analyzer` takes **16s** and
+# brings the venv to **187 MB** (it pulls the spaCy LIBRARY; the sidecar needs no
+# spaCy MODEL since the NER came out — see AGENTS.md). That is affordable, and
+# the assertion at the bottom of this script would catch a broken install
+# loudly at venv-build time rather than mid-chain. Deliberately NOT done in the
+# same change as the block/Gemini fixes, so a green matrix means what it says.
+
 # ⚠️ **IT NEEDS NO ML STACK, AND THAT IS WHAT MAKES IT AFFORDABLE.** The sidecar
 # is an analysis service that loads GLiNER2 lazily on a first inference the
 # conformance chain never issues, so torch, transformers, spacy, presidio and
