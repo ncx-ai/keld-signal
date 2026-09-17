@@ -511,10 +511,23 @@ probe_blocks() {
   local path=$1 port
   port=$(agent_json_field sidecar_port)
   [ -n "$port" ] && [ "$port" != "0" ] || { say "probe_blocks: no sidecar port yet"; return 0; }
-  local body
-  body=$(curl -fsS -X POST "http://127.0.0.1:$port/blocks" \
-           -H 'content-type: application/json' \
-           -d "{\"path\": \"$path\", \"now\": $(date +%s)}" 2>/dev/null || echo "")
+  # ⚠️ **RETRIED, because the store is filled ASYNCHRONOUSLY.** /blocks for a
+  # non-`minute` mode does NOT ingest; the watcher signals the sidecar on its
+  # own poll, so a probe fired the instant the prompt returns sees a store that
+  # holds only the FIRST prompt — one block, trailing, not closable — and
+  # reports 0 for a reason that has nothing to do with cutting.
+  #
+  # Proven locally against the real functions before believing it: two prompts
+  # in one session cut TWO blocks, is_closed[0] is True and the digest returns
+  # 1. The mechanism works; what varies is whether the tail has arrived yet.
+  local body="" i
+  for i in $(seq 1 "${SETTLE:-60}"); do
+    body=$(curl -fsS -X POST "http://127.0.0.1:$port/blocks" \
+             -H 'content-type: application/json' \
+             -d "{\"path\": \"$path\", \"now\": $(date +%s)}" 2>/dev/null || echo "")
+    printf '%s' "$body" | grep -q '"blocks": *\[ *{' && break
+    sleep 1
+  done
   if [ -z "$body" ]; then
     say "probe_blocks: /blocks did not answer for $(basename "$path")"
     return 0
