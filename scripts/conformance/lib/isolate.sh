@@ -322,6 +322,10 @@ JSON
   # per sweep naming the CURSOR, which is the one input that can silently
   # exclude a block the sidecar would otherwise return.
   export KELD_BLOCKS_DEBUG=1
+  # The watcher's sibling: "forward-only skipped it" and "offered it" leave the
+  # SAME cursor, so without this the machine's own state cannot answer whether a
+  # transcript was ever offered.
+  export KELD_WATCH_DEBUG=1
   # named_terms loads spaCy (~619 MB) into a parent that is never recycled, and
   # no checkpoint reads it.
   export KELD_TERMS=0

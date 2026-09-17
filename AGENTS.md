@@ -291,6 +291,20 @@ accepted and DISCARDED** (counted, not silent): Gemini builds a trace exporter
 unconditionally with no per-signal switch, so with no route there every run
 printed a 404 for a signal Atlas does not read.
 
+⚠️ **AND THE MOCK MODEL COULD NOT ANSWER GEMINI'S ROUTER, WHICH READ AS A KELD
+FAILURE.** Gemini CLI classifies every prompt before choosing a model
+(`NumericalClassifierStrategy` → `BaseLlmClient.generateJson`) with
+`responseMimeType: "application/json"` and a `responseJsonSchema` — captured from
+0.37.1: `{complexity_reasoning: STRING, complexity_score: INTEGER}`. Answered
+with prose it reports "API returned invalid content after all retries" and the
+process **EXITS 41**. Measured: ~3 minutes of retries per prompt, then either a
+slow success (the router falls back) or a hard failure — so the same defect
+looked like "Gemini is slow" locally and killed all three chain A cells in CI, on
+macOS, Linux and Windows alike, while the harness reported it against Keld.
+`mockllm` now SYNTHESISES the reply FROM THE SCHEMA THE REQUEST CARRIES rather
+than hardcoding the one observed, because a fixed answer for a known schema is
+the "fixture that resembles the code rather than the tool" failure one level up.
+
 ⚠️ **AND FORWARD-ONLY FIRST SIGHT DROPPED EVERY ONE-SHOT GEMINI RUN.**
 Forward-only exists so installing Keld does not enrich a machine's entire past,
 and on a LINE source that is cheap: a transcript is appended to over time, so

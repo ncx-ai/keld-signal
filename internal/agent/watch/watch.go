@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -326,6 +327,11 @@ func (w *Watcher) scanDocument(source, path string) bool {
 		return false
 	}
 	if !known {
+		if watchDebug {
+			log.Printf("keld-agent: watch: first sight of %s — %d prompt(s), fresh=%v (file %s, watcher started %s)",
+				filepath.Base(path), len(s.Prompts), w.startedBefore(path),
+				fileModTime(path).Format(time.RFC3339), w.started.Format(time.RFC3339))
+		}
 		// ⚠️ **A SESSION THAT BEGAN AFTER THIS DAEMON DID IS NOT HISTORY, AND
 		// TREATING IT AS HISTORY DROPPED EVERY ONE-SHOT GEMINI RUN.** Forward-only
 		// exists so that installing Keld does not enrich a machine's entire past.
@@ -363,6 +369,10 @@ func (w *Watcher) scanDocument(source, path string) bool {
 	if int64(len(s.Prompts)) == done {
 		return false
 	}
+	if watchDebug {
+		log.Printf("keld-agent: watch: offering %d prompt(s) of %s (cursor %d -> %d)",
+			int64(len(s.Prompts))-done, filepath.Base(path), done, len(s.Prompts))
+	}
 	for _, p := range s.Prompts[done:] {
 		w.offer(spool.Pointer{
 			Source:      spool.Source{ID: source, Origin: "watch", Version: w.version},
@@ -375,6 +385,27 @@ func (w *Watcher) scanDocument(source, path string) bool {
 		w.advanced(source, path)
 	}
 	return true
+}
+
+// watchDebug prints what the DOCUMENT lane decided per transcript. Off unless
+// KELD_WATCH_DEBUG is set.
+//
+// ⚠️ **"FORWARD-ONLY SKIPPED IT" AND "OFFERED IT" LEAVE THE SAME CURSOR**, which
+// is how an afternoon went: a Gemini session showed cursor 1 in cursors.json and
+// published nothing, and 1 is exactly what BOTH paths write — the skip records
+// the prompts it declined to offer, the offer records the ones it sent. Nothing
+// else distinguished them, so the question "did the watcher offer this?" could
+// not be answered from the machine's own state.
+var watchDebug = os.Getenv("KELD_WATCH_DEBUG") != ""
+
+// fileModTime is path's mtime, or the zero time when it cannot be stat'd. For
+// the debug line only.
+func fileModTime(path string) time.Time {
+	st, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return st.ModTime()
 }
 
 // startedBefore reports whether path was written after this watcher started —

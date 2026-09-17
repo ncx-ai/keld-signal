@@ -36,8 +36,32 @@ func (s *Server) handleGemini(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported method "+method, http.StatusNotFound)
 		return
 	}
-	_, _, nInputs := readRequest(r)
+	raw, _, nInputs := readGeminiRequest(r)
 	s.log(record{Path: r.URL.Path, Model: model, Stream: stream, NInputs: nInputs})
+
+	// ⚠️ **GEMINI ASKS FOR STRUCTURED OUTPUT AND RETRIES FOREVER WITHOUT IT.**
+	// Its MODEL ROUTER classifies each prompt before choosing a model
+	// (`NumericalClassifierStrategy` -> `BaseLlmClient.generateJson`) with
+	// `responseMimeType: "application/json"` and a `responseJsonSchema`. Answered
+	// with prose, the client reports "API returned invalid content after all
+	// retries" and the process EXITS 41.
+	//
+	// Measured on gemini-cli 0.37.1: five identical flash-lite requests carrying
+	// {complexity_reasoning: STRING, complexity_score: INTEGER}, ~3 minutes of
+	// retries per prompt, and then — depending on whether the router falls back —
+	// either a slow success or a hard failure. Both happened in the same week:
+	// locally it looked like the tool being slow, and in CI all three chain A
+	// cells died with `gemini -p exited 41`, on macOS, Linux and Windows alike.
+	//
+	// The answer is SYNTHESISED FROM THE SCHEMA THE REQUEST CARRIES rather than
+	// hardcoded, so the next classifier Google adds needs no change here — the
+	// mock's job is to be a protocol-faithful stand-in, and a fixed reply for one
+	// known schema would be the "fixture that does not resemble production"
+	// failure one level up.
+	text := ReplyText
+	if js := structuredReply(raw); js != "" {
+		text = js
+	}
 
 	// The same fixed pair every route reports, under this protocol's key names.
 	usage := map[string]any{
@@ -50,7 +74,7 @@ func (s *Server) handleGemini(w http.ResponseWriter, r *http.Request) {
 			"candidates": []any{map[string]any{
 				"content": map[string]any{
 					"role":  "model",
-					"parts": []any{map[string]any{"text": ReplyText}},
+					"parts": []any{map[string]any{"text": text}},
 				},
 				"finishReason": "STOP",
 				"index":        0,
