@@ -992,6 +992,18 @@ jobs:
             ${{ runner.temp }}/conformance/npm-install.log
             ${{ runner.temp }}/conformance/home/.claude/settings.json
             ${{ runner.temp }}/conformance/home/.codex/config.toml
+            # ⚠️ **GEMINI'S CONFIG AND THE PROMPT OUTPUTS WERE BOTH MISSING, AND
+            # THAT COST A WHOLE CI ROUND TRIP.** Chain A died on every OS with
+            # `gemini -p exited 41`, and the harness prints only `tail -5` of the
+            # tool's output — which caught a deprecation warning rather than the
+            # actual error. The real line ("Invalid auth method selected.") was in
+            # prompt-after-detect-gemini_cli.out, which was never uploaded, and
+            # the config that explains it was ~/.gemini/settings.json, also never
+            # uploaded. Diagnosing it needed the tool installed locally at CI's
+            # exact version to reproduce. Both are cheap and both are the first
+            # thing anyone reads when a TOOL, rather than keld, refuses to run.
+            ${{ runner.temp }}/conformance/home/.gemini/settings.json
+            ${{ runner.temp }}/conformance/prompt-*.out
             ${{ runner.temp }}/conformance/home/hook.json
             # ⚠️ THE HOOK'S OWN LOG, and the one file that settles whether the
             # hook ever RAN. debuglog.Append writes $KELD_HOME/agent.log
