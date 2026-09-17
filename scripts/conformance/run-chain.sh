@@ -260,6 +260,13 @@ step_before_prompts() {
   local t
   for t in $BEFORE; do tool_prompt "$t" "after-signal"; done
   close_open_blocks $BEFORE
+  # Ask the sidecar what it HAS before asking Atlas what it RECEIVED: a 0 at the
+  # checkpoint is equally true for "nothing was cut" and "nothing was sent".
+  for t in $BEFORE; do
+    local root; root=$(tool_transcript_root "$t")
+    local f; f=$(find "$root" -name '*.jsonl' -type f 2>/dev/null | head -1)
+    [ -n "$f" ] && probe_blocks "$f"
+  done
   step_assert "$SETTLE" "" $BEFORE
 }
 

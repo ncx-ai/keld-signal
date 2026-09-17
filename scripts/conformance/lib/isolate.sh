@@ -497,6 +497,42 @@ assert_dev_blocks() {
   fi
 }
 
+# probe_blocks <transcript-path> — what the sidecar itself says it has to emit.
+#
+# ⚠️ **THIS SPLITS "NOTHING WAS CUT" FROM "NOTHING WAS PUBLISHED", and nothing
+# else could.** The `blocks` checkpoint reads the mock Atlas, so a 0 there is
+# equally true when the sidecar cut no closed block and when it cut one the
+# daemon never sent. Four rounds were spent narrowing that from the outside;
+# one POST answers it.
+#
+# Read-only and side-effect free for the run: it asks the same question the
+# emitter asks, with the same store, and prints the count.
+probe_blocks() {
+  local path=$1 port
+  port=$(agent_json_field sidecar_port)
+  [ -n "$port" ] && [ "$port" != "0" ] || { say "probe_blocks: no sidecar port yet"; return 0; }
+  local body
+  body=$(curl -fsS -X POST "http://127.0.0.1:$port/blocks" \
+           -H 'content-type: application/json' \
+           -d "{\"path\": \"$path\", \"now\": $(date +%s)}" 2>/dev/null || echo "")
+  if [ -z "$body" ]; then
+    say "probe_blocks: /blocks did not answer for $(basename "$path")"
+    return 0
+  fi
+  printf '%s' "$body" | python3 -c "
+import json,sys
+try: d = json.load(sys.stdin)
+except Exception as e:
+    print('probe_blocks: unreadable answer: %s' % e); raise SystemExit
+bs = d.get('blocks') or []
+print('probe_blocks: the sidecar has %d closed block(s) for this transcript; watermark=%s'
+      % (len(bs), d.get('watermark')))
+for b in bs[:3]:
+    print('    block %s -> %s  start_reason=%s end_reason=%s'
+          % (b.get('start'), b.get('end'), b.get('start_reason'), b.get('end_reason')))
+" 2>&1 | while read -r l; do say "$l"; done
+}
+
 # agent_json_field <key> — one field of ~/.keld/agent.json, empty when absent.
 agent_json_field() {
   python3 -c "import json,sys
