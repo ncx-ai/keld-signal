@@ -38,6 +38,10 @@ type Watcher struct {
 	poll       time.Duration
 	backfill   bool
 	extractors map[string]promptExtractor
+	// started is when this watcher was constructed. ⚠️ It is what separates
+	// HISTORY from a session happening NOW on a document source — see
+	// scanDocument's first-sight branch.
+	started time.Time
 }
 
 // promptExtractor detects a genuine user prompt within a single transcript
@@ -82,6 +86,7 @@ func New(offer func(spool.Pointer), observe func(source, transcriptPath string, 
 		version:  version,
 		poll:     poll,
 		backfill: backfill,
+		started:  time.Now(),
 		extractors: map[string]promptExtractor{
 			"claude_code": claudeExtractor{},
 			"cowork":      claudeExtractor{},
@@ -321,10 +326,27 @@ func (w *Watcher) scanDocument(source, path string) bool {
 		return false
 	}
 	if !known {
-		if !w.backfill {
-			// Forward-only, the same choice the line path makes at EOF: the
-			// prompts already in this file are history, and offering them all is
-			// the herd that rule exists to prevent.
+		// ⚠️ **A SESSION THAT BEGAN AFTER THIS DAEMON DID IS NOT HISTORY, AND
+		// TREATING IT AS HISTORY DROPPED EVERY ONE-SHOT GEMINI RUN.** Forward-only
+		// exists so that installing Keld does not enrich a machine's entire past.
+		// On a LINE source that rule is cheap, because a transcript is appended to
+		// over time: first sight lands on a file that is still growing and the
+		// next prompt is captured. A DOCUMENT is different — `gemini -p` creates a
+		// whole new session file per invocation, so its only prompt is already
+		// there the first time the watcher sees the file, and forward-only skips
+		// it FOREVER. There is no second chance and no hook to cover it: Gemini's
+		// BeforeAgent event carries no prompt id, which internal/hook already
+		// treats as a silent no-op. Measured in the conformance chain: transcripts
+		// found and read, 2 prompt ids in them, and 0 enrichments published.
+		//
+		// A file whose mtime is newer than this watcher's start cannot be the
+		// history that rule protects against: it is being written now. So it is
+		// read from the beginning. The bound on that is one SESSION — tens of
+		// prompts, not a machine's corpus — and the queue dedups by prompt id, so
+		// the cost of the one ambiguous case (a session that predates the daemon
+		// and is appended to afterwards) is that its earlier turns are offered
+		// once.
+		if !w.backfill && !w.startedBefore(path) {
 			w.cursors.Set(path, int64(len(s.Prompts)))
 			if w.signalFirstSight && w.advanced != nil {
 				w.firstSight = append(w.firstSight, advanceRef{source, path})
@@ -353,6 +375,17 @@ func (w *Watcher) scanDocument(source, path string) bool {
 		w.advanced(source, path)
 	}
 	return true
+}
+
+// startedBefore reports whether path was written after this watcher started —
+// i.e. whether the session is happening now rather than being history. A file
+// that cannot be stat'd reads as history, the conservative direction.
+func (w *Watcher) startedBefore(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return st.ModTime().After(w.started)
 }
 
 // transcriptFiles returns the transcripts of `source` under dir (recursively).

@@ -291,6 +291,22 @@ accepted and DISCARDED** (counted, not silent): Gemini builds a trace exporter
 unconditionally with no per-signal switch, so with no route there every run
 printed a 404 for a signal Atlas does not read.
 
+⚠️ **AND FORWARD-ONLY FIRST SIGHT DROPPED EVERY ONE-SHOT GEMINI RUN.**
+Forward-only exists so installing Keld does not enrich a machine's entire past,
+and on a LINE source that is cheap: a transcript is appended to over time, so
+first sight lands on a file still growing and the next prompt is captured.
+A DOCUMENT is different — `gemini -p` writes a whole NEW session file per
+invocation, so its only prompt is already in the file the first time the watcher
+sees it, and forward-only skipped it permanently. There is no second chance and
+**no hook to fall back on**: Gemini's `BeforeAgent` event carries no prompt id,
+which `internal/hook` already treats as a silent no-op, so the hook keld writes
+into `~/.gemini/settings.json` is structurally inert. So `scanDocument` reads
+from the beginning when the file's mtime is NEWER than the watcher's own start
+instant — a file being written now cannot be the history that rule protects
+against. The bound is one SESSION (tens of prompts, not a corpus) and the queue
+dedups by prompt id, so the one ambiguous case — a session predating the daemon
+that is appended to afterwards — costs its earlier turns being offered once.
+
 ⚠️ **AND THE TWO GEMINI CAPTURE LANES CALL THE TOOL BY DIFFERENT NAMES.** The
 watcher root, `resolve.GeminiReader`, and the conformance tool id all say
 `gemini_cli`; the hook keld writes into `~/.gemini/settings.json` says

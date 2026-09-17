@@ -165,3 +165,50 @@ func TestGeminiDocumentWalkTakesOnlyChatFiles(t *testing.T) {
 		t.Fatalf("a .jsonl source must not pick up Gemini's documents: %v", got)
 	}
 }
+
+// ⚠️ **A SESSION THAT BEGAN AFTER THE DAEMON DID IS NOT HISTORY, AND TREATING IT
+// AS HISTORY DROPPED EVERY ONE-SHOT GEMINI RUN.** `gemini -p` writes a whole new
+// session file per invocation, so its only prompt is already in the file the
+// first time the watcher sees it — and forward-only first sight then skips it
+// forever. There is no second chance and no hook to cover it: Gemini's
+// BeforeAgent event carries no prompt id, which internal/hook treats as a silent
+// no-op. Measured in the conformance chain: transcripts found and read, 2 prompt
+// ids in them, 0 enrichments published.
+func TestGeminiDocumentCapturesASessionStartedAfterTheWatcher(t *testing.T) {
+	dir := t.TempDir()
+	// The watcher exists FIRST — then the session appears, as it does when
+	// somebody runs the tool on a machine Keld is already watching.
+	w, got := newDocWatcher(t, dir, false)
+	writeChat(t, dir, geminiDoc("sess-live", "the only prompt"))
+
+	w.pollOnce()
+
+	if len(*got) != 1 {
+		t.Fatalf("got %d offers, want the one prompt of a session that began "+
+			"after the daemon: %+v", len(*got), *got)
+	}
+	if (*got)[0].Correlation.ID != "sess-live########0" {
+		t.Errorf("corr id = %q, want sess-live########0", (*got)[0].Correlation.ID)
+	}
+}
+
+// And the rule it must not break: a session that predates the watcher IS
+// history, and installing Keld must not enrich a machine's past.
+func TestGeminiDocumentStillSkipsAPreexistingSession(t *testing.T) {
+	dir := t.TempDir()
+	writeChat(t, dir, geminiDoc("sess-old", "yesterday's prompt"))
+	// Backdate it: the file must look older than the watcher that is about to
+	// exist, which is what "history" means here.
+	p := filepath.Join(dir, "tmp", "proj", "chats", "session-2026-09-17T11-54-219a0a4b.json")
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(p, old, old); err != nil {
+		t.Fatal(err)
+	}
+	w, got := newDocWatcher(t, dir, false)
+
+	w.pollOnce()
+
+	if len(*got) != 0 {
+		t.Fatalf("a session older than the watcher was offered as new: %+v", *got)
+	}
+}
