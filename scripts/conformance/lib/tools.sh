@@ -613,7 +613,25 @@ tool_not_expected() {
     # ⚠️ `blocks` follows `store_rows` for the same structural reason: a block is
     # CUT FROM the sidecar's reference series, so a source the store cannot read
     # can have no block to emit. Not an excuse — the two are one fact.
-    gemini_cli)  echo "${KELD_CONFORM_GEMINI_NOT_EXPECTED:-store_rows,blocks}" ;;
+    # ⚠️ **AND `pointer` CANNOT PASS ON THE PREVIOUS RELEASE**, which is chain
+    # B's `prev-prompts` step and nowhere else. `gemini -p` writes a WHOLE NEW
+    # session file per invocation, so its only prompt is already in the file the
+    # first time the watcher sees it — and every release up to v3.0.4 is
+    # forward-only on first sight, which skips it permanently. There is no hook
+    # to fall back on either: Gemini's BeforeAgent event carries no prompt id.
+    # Measured on 0.60.0, locally and in CI: transcript PASS, telemetry PASS,
+    # `pointer` 1 corr_id against 1 prompt id and no intersection.
+    #
+    # Scoped to the STEP and to THIS TOOL, never global: PREV_NOT_EXPECTED
+    # applies to every tool in the step, and claude_code's pointer DOES pass
+    # there — excusing it for everyone would hide a real regression in a lane
+    # that works. `upgraded-prompts` still requires it, so the upgrade must
+    # repair it, which is exactly what chain B is for.
+    gemini_cli)
+      local gextra=""
+      [ "${STEP:-}" = "prev-prompts" ] && gextra=",pointer"
+      echo "${KELD_CONFORM_GEMINI_NOT_EXPECTED:-store_rows,blocks$gextra}"
+      ;;
     *)           echo "" ;;
   esac
 }

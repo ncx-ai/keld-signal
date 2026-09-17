@@ -526,7 +526,7 @@ config_snapshot() {
   for t in $BEFORE $AFTER; do
     p=$(tool_config_path "$t")
     if [ -f "$p" ]; then
-      config_normalise "$p" > "$WORK/config-before-$t.txt"
+      config_normalise "$p" "$t" > "$WORK/config-before-$t.txt"
       $SHA256_CMD < "$WORK/config-before-$t.txt" > "$CONFIG_HASHES.$t"
     fi
   done
@@ -545,14 +545,14 @@ config_unchanged() {
     p=$(tool_config_path "$t")
     [ -f "$p" ] || { say "$t's config DISAPPEARED across the upgrade"; ok=0; continue; }
     before=$(cat "$CONFIG_HASHES.$t")
-    now=$(config_normalise "$p" | $SHA256_CMD)
+    now=$(config_normalise "$p" "$t" | $SHA256_CMD)
     if [ "$before" != "$now" ]; then
       say "$t's config CHANGED across the upgrade, outside the lines keld owns:"
       # ⚠️ PRINT THE DIFF. Two rounds were spent widening the blanking list by
       # guessing at what else had moved, on a message that named only what it
       # was NOT. A check that reports a mismatch without showing it costs a full
       # CI round trip per guess — the same lesson the npm shim resolver learned.
-      config_normalise "$p" > "$WORK/config-now-$t.txt"
+      config_normalise "$p" "$t" > "$WORK/config-now-$t.txt"
       if [ -f "$WORK/config-before-$t.txt" ]; then
         diff -u "$WORK/config-before-$t.txt" "$WORK/config-now-$t.txt" \
           | head -40 | sed 's/^/    /' >&2
@@ -581,6 +581,64 @@ config_unchanged() {
 # letting the repair through, which is strictly MORE precise than byte
 # equality — under the old rule a repair and a trampling were the same event.
 config_normalise() {
+  # ⚠️ **A LINE RULE CANNOT EQUALISE A KEY KELD STOPPED WRITING, and that is not
+  # a corner case — it is what an upgrade DOES.** This release drops `traces`
+  # from Gemini's telemetry block (the key current gemini-cli rejects) and moves
+  # the token from `?token=` into the path. Blanking a line keeps the line COUNT,
+  # so a removed key still reads as a diff, and removing the last key of an
+  # object also rewrites its neighbour's trailing comma — `"logPrompts": false,`
+  # became `"logPrompts": false`. Three keld-owned edits, reported as the user's
+  # config being trampled.
+  #
+  # For a JSON config the honest comparison is STRUCTURAL: drop the subtrees keld
+  # manages and compare what is left. That is exactly what the check is for — an
+  # upgrade must not touch content its OWNER put there — and it is strictly more
+  # precise than any line rule, because reformatting, key order and comma
+  # placement stop mattering while a single user key disappearing still fails.
+  if [ "${2:-}" = "gemini_cli" ]; then
+    python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        d = json.load(f)
+except Exception:
+    # Unreadable or not JSON: fall back to the raw bytes rather than reporting
+    # a match. A file the normaliser cannot parse must not compare equal to
+    # every other file it cannot parse.
+    sys.stdout.write(open(sys.argv[1], encoding="utf-8", errors="replace").read())
+    raise SystemExit
+if isinstance(d, dict):
+    # The whole telemetry block is keld|s: it is written by the adapter and
+    # every value in it moves with the daemon (a fresh loopback port each run).
+    d.pop("telemetry", None)
+    # Only KELD|S hook entries, so a user|s own BeforeAgent hook still has to
+    # survive the upgrade.
+    hooks = d.get("hooks")
+    if isinstance(hooks, dict):
+        for event, groups in list(hooks.items()):
+            if not isinstance(groups, list):
+                continue
+            kept = []
+            for g in groups:
+                inner = g.get("hooks") if isinstance(g, dict) else None
+                if isinstance(inner, list):
+                    inner = [h for h in inner
+                             if "__hook --source" not in str(h.get("command", ""))]
+                    if not inner:
+                        continue
+                    g = dict(g, hooks=inner)
+                kept.append(g)
+            if kept:
+                hooks[event] = kept
+            else:
+                hooks.pop(event, None)
+        if not hooks:
+            d.pop("hooks", None)
+json.dump(d, sys.stdout, indent=2, sort_keys=True)
+sys.stdout.write("\n")
+' "$1"
+    return 0
+  fi
   # Any LINE carrying keld's hook command is keld's own — Claude Code's JSON
   # object and Codex's TOML inline table both put the whole entry on one line —
   # so the line is replaced wholesale. A regex over the command VALUE was tried
