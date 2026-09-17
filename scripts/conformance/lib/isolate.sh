@@ -546,6 +546,27 @@ for b in bs[:3]:
 " 2>&1 | while read -r l; do say "$l"; done
 }
 
+# say_block_events — what the daemon SAID about cutting blocks.
+#
+# ⚠️ The emitter returns 0 SILENTLY when the sidecar "could not answer" — not
+# ready, restarting, store behind — and reports that only as a client event.
+# So a `blocks` checkpoint of 0 has three possible causes and the checkpoint
+# distinguishes none of them: nothing cut, cut-but-unsent, or never asked. The
+# probe answers the first; these events answer the other two.
+say_block_events() {
+  [ -d "$ATLAS_STATE" ] || return 0
+  local hits
+  hits=$(grep -rhoE '"code":"[a-z_.]*(block|cut)[a-z_.]*"' "$ATLAS_STATE" 2>/dev/null | sort | uniq -c | head -6)
+  if [ -n "$hits" ]; then
+    printf '%s\n' "$hits" | while read -r l; do say "block events: $l"; done
+  else
+    say "block events: the daemon reported NO block/cut client event at all"
+  fi
+  local batches
+  batches=$(grep -rlE '"blocks"' "$ATLAS_STATE" 2>/dev/null | wc -l | tr -d ' ')
+  say "block events: $batches body/bodies at the mock Atlas mention \"blocks\""
+}
+
 # agent_json_field <key> — one field of ~/.keld/agent.json, empty when absent.
 agent_json_field() {
   python3 -c "import json,sys

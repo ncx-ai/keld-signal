@@ -273,6 +273,7 @@ step_before_prompts() {
     f=$(find "$root" -name '*.jsonl' -type f -exec ls -t {} + 2>/dev/null | head -1)
     [ -n "$f" ] && probe_blocks "$f"
   done
+  say_block_events
   step_assert "$SETTLE" "" $BEFORE
 }
 

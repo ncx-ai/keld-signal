@@ -1002,6 +1002,12 @@ jobs:
             # answers it.
             ${{ runner.temp }}/conformance/home/agent.log
             ${{ runner.temp }}/conformance/home/agent.log.1
+            # ⚠️ THE MOCK ATLAS'S RECEIVED BODIES. `blocks` reads counts off
+            # these, so when it says 0 the bodies are the only thing that can
+            # say whether the daemon posted a block batch at all, what the
+            # client events reported about the cut, and what shape arrived.
+            # Two rounds were spent inferring that from the outside.
+            ${{ runner.temp }}/conformance/atlas-state/**
             ${{ runner.temp }}/conformance/home/.claude/projects/**/*.jsonl
 
       - name: File or update the issue (AC-11)
