@@ -262,9 +262,15 @@ step_before_prompts() {
   close_open_blocks $BEFORE
   # Ask the sidecar what it HAS before asking Atlas what it RECEIVED: a 0 at the
   # checkpoint is equally true for "nothing was cut" and "nothing was sent".
+  # ⚠️ THE NEWEST TRANSCRIPT, NOT WHICHEVER `find` YIELDS FIRST. `head -1` on an
+  # unordered walk probed an arbitrary file — often one no prompt in this step
+  # ever wrote to — and reported `watermark=None`, which reads exactly like an
+  # empty store and sent me looking for an ingest problem that was not there.
+  # The session this step just drove is the most recently MODIFIED one.
   for t in $BEFORE; do
     local root; root=$(tool_transcript_root "$t")
-    local f; f=$(find "$root" -name '*.jsonl' -type f 2>/dev/null | head -1)
+    local f
+    f=$(find "$root" -name '*.jsonl' -type f -exec ls -t {} + 2>/dev/null | head -1)
     [ -n "$f" ] && probe_blocks "$f"
   done
   step_assert "$SETTLE" "" $BEFORE
