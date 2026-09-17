@@ -337,11 +337,45 @@ tool_materialize() {
       # This is also the realistic case, like Codex's provider block: a config
       # that already holds the user's own content, which keld's adapter must
       # MERGE into rather than replace.
+      # ⚠️ **MERGED, NOT "WRITE IF ABSENT" — KELD LEGITIMATELY CREATES THIS FILE
+      # FIRST, AND THE GUARD THEN SKIPPED THE AUTH KEYS.** Measured on 0.60.0:
+      # `gemini --version` (tool_install, minutes earlier) creates ~/.gemini/,
+      # which is exactly how `tools.Detect` decides Gemini is installed — so the
+      # daemon's detector configured it ONE SECOND LATER and wrote settings.json
+      # itself, correctly, with only keld's two blocks. By the time this ran the
+      # file existed, the `[ ! -f ]` guard skipped, no auth method was ever
+      # chosen, and `gemini -p` exited 41 "Invalid auth method selected" — which
+      # the chain reported as a Keld failure in all three chain A cells.
+      #
+      # Nothing was destroyed and there is no product defect here: keld wrote a
+      # file that did not exist (there is no backup in ~/.keld/backups precisely
+      # because there was nothing to back up). What was missing is the half a
+      # REAL user supplies by answering the auth picker, which an unattended run
+      # has to supply for them — whenever it runs, before or after keld.
       mkdir -p "$ISO_HOME/.gemini"
-      if [ ! -f "$ISO_HOME/.gemini/settings.json" ]; then
-        printf '{\n  "selectedAuthType": "gemini-api-key",\n  "security": { "auth": { "selectedType": "gemini-api-key" } }\n}\n' \
-          > "$ISO_HOME/.gemini/settings.json"
-      fi
+      python3 - "$ISO_HOME/.gemini/settings.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+try:
+    with open(p) as f:
+        d = json.load(f)
+except Exception:
+    d = {}
+if not isinstance(d, dict):
+    d = {}
+# BOTH keys on purpose: 0.60.0 reads the nested security.auth.selectedType,
+# older builds the flat selectedAuthType, and a real machine carries both.
+d.setdefault("selectedAuthType", "gemini-api-key")
+sec = d.setdefault("security", {})
+if isinstance(sec, dict):
+    sec.setdefault("auth", {})
+    if isinstance(sec["auth"], dict):
+        sec["auth"].setdefault("selectedType", "gemini-api-key")
+tmp = p + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(d, f, indent=2)
+os.replace(tmp, p)
+PY
       ;;
     codex)
       # Codex needs a provider before it can run at all, so its config.toml is

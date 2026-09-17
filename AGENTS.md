@@ -244,21 +244,34 @@ session path/metadata. **Never emits prompt/response text.** Default source
 (TranscriptReader resolves user_message by session_id#ordinal for Codex, by message `id` for Gemini);
 telemetry via their native OTEL (config completed in the tool adapters), not host-side promptlog.
 
-⚠️ **GEMINI IS NOT JSONL, AND EVERY PART OF THIS CLIENT ASSUMED IT WAS — SO
-GEMINI CAPTURE HAD NEVER WORKED ON ANY REAL INSTALL.** A Gemini session is ONE
-JSON DOCUMENT at `~/.gemini/tmp/<project>/chats/session-<ts>-<id>.json`: the
-session id is at the TOP level and the turns are a `messages` array, each with
-`content` that is a bare STRING (258 of 262 measured messages) or an array of
-`{text}` blocks (4). The watcher walked for `*.jsonl` and so found nothing, the
-extractor parsed a LINE as a record carrying its own `sessionId`, and the
-resolver counted prompts by reading lines. Measured on one developer machine
-before any change: **55 real chat files, 262 messages, 58 user prompts, ZERO
-`.jsonl` files**, the oldest dating to 2025-09 — so this was never a regression
-against a format Gemini once wrote. The code was written against a shape that
-never existed and the tests passed because their fixtures were written to match
-the code; one of them introduced its fixture with the words "A real Gemini chat
-file". The conformance chain is what exposed it: `transcript` read "0
-transcript(s)" with the chat file in the directory it had just walked.
+⚠️ **GEMINI WRITES TWO DIFFERENT CHAT SHAPES AND BOTH ARE IN THE WILD; READING
+EITHER ALONE LEAVES A WHOLE POPULATION UNCAPTURED.** Under
+`~/.gemini/tmp/<project>/chats/`:
+- `session-<ts>-<id>.json` — ONE JSON DOCUMENT, session id at the top level and
+  the turns in a `messages` array, `content` a bare STRING (258 of 262 measured
+  messages) or an array of `{text}` blocks (4). Measured on a developer machine:
+  **55 files, 262 messages, 58 user prompts**, the oldest from 2025-09 — every
+  one written by builds up to and including **0.37.1**.
+- `session-<ts>-<id>.jsonl` — ONE OBJECT PER LINE: a session-meta first line
+  carrying `sessionId`, `{"$set":…}` MUTATION lines that are not turns, and one
+  line per message. Written by **0.60.0**, the version CI installs from npm
+  `@latest`.
+
+⚠️ **AND THE HISTORY IS THE OPPOSITE OF WHAT IT LOOKS LIKE.** This client
+originally parsed the LINE form only, and was written correctly for it — but
+`watch.transcriptFiles` filtered on the `.jsonl` EXTENSION, so on every machine
+running a build that had moved to the document form it read nothing at all and
+said nothing. The conformance chain exposed that: `transcript` reported "0
+transcript(s)" with the chat file sitting in the directory it had just walked.
+Switching wholesale to the document form then simply MOVED the blind spot to
+0.60.0 — three chain A cells green on the fix and still unable to find a
+transcript. So neither shape is "the" format and neither may be dropped.
+**`internal/geminichat` decides by CONTENT, not extension**: a file that parses
+as one object with a `sessionId` is a document, otherwise it is read as lines —
+so a build that renames the file without changing the format, or the reverse,
+cannot silently stop being readable. A `$set` line is NOT a turn: 0.60.0 puts
+the CLI's own `<session_context>` preamble inside the first one, so following it
+would take boilerplate for the user's first prompt and shift every later ordinal.
 **`internal/geminichat` is now the ONE place that knows the shape** — watch,
 resolve and the conformance checkpoint all read through it, so the predicate
 deciding which messages are genuine prompts, and therefore what every ordinal

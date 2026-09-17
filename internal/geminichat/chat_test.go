@@ -85,3 +85,67 @@ func TestIsChatFile(t *testing.T) {
 		}
 	}
 }
+
+// ⚠️ **THE SECOND REAL SHAPE, AND THE ONE THAT PROVED SUPPORTING EITHER ALONE IS
+// NOT ENOUGH.** Captured from gemini-cli 0.60.0 — the version CI installs from
+// npm @latest — with the CLI's own `<session_context>` preamble scrubbed because
+// it embeds the capturing machine's absolute paths and a directory listing.
+// Everything structural is verbatim: the session-meta first line, the `$set`
+// mutation lines, and the message lines.
+//
+// This client originally parsed ONLY this shape and was right for it; switching
+// wholesale to the document form moved the blind spot rather than removing it.
+const fixtureLines = "testdata/session-real-0.60.0.jsonl"
+
+func TestReadsTheLineFormToo(t *testing.T) {
+	s, ok := Read(fixtureLines)
+	if !ok {
+		t.Fatal("a real 0.60.0 chat file did not parse — every machine on that " +
+			"build would be uncaptured")
+	}
+	if s.ID != "637be05e-a0e5-4d8d-9fb9-8726fb7a269f" {
+		t.Errorf("session id = %q, want the meta line's sessionId", s.ID)
+	}
+	// ⚠️ EXACTLY ONE prompt. The first `$set` line carries the CLI's own
+	// `<session_context>` preamble inside a `messages` array; counting it would
+	// take boilerplate for the user's first prompt AND shift every later ordinal,
+	// so each real prompt would resolve to the text of the one before it.
+	if len(s.Prompts) != 1 {
+		t.Fatalf("got %d prompts, want 1 — a $set line is not a turn: %+v", len(s.Prompts), s.Prompts)
+	}
+	if s.Prompts[0].Text != "reply with one word" {
+		t.Errorf("text = %q", s.Prompts[0].Text)
+	}
+	if s.Prompts[0].Ordinal != 0 {
+		t.Errorf("ordinal = %d, want 0", s.Prompts[0].Ordinal)
+	}
+}
+
+// Both shapes are admitted by name, and nothing else in that directory is.
+func TestIsChatFileTakesBothExtensions(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/h/.gemini/tmp/p/chats/session-2026-09-17T14-17-637be05e.jsonl": true,
+		"/h/.gemini/tmp/p/chats/session-2026-09-17T11-54-219a0a4b.json":  true,
+		"/h/.gemini/tmp/p/chats/notes.jsonl":                             false,
+		"/h/.gemini/tmp/p/.project_root":                                 false,
+	} {
+		if got := IsChatFile(path); got != want {
+			t.Errorf("IsChatFile(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// A half-written trailing line must not lose the lines before it: the file is
+// appended to, so the next poll reads the rest.
+func TestLineFormToleratesAHalfWrittenTail(t *testing.T) {
+	body := `{"sessionId":"s1"}
+{"id":"u0","type":"user","content":[{"text":"first"}]}
+{"id":"u1","type":"user","content":[{"tex`
+	s, ok := Parse([]byte(body))
+	if !ok {
+		t.Fatal("a partial tail must not make the whole session unreadable")
+	}
+	if len(s.Prompts) != 1 || s.Prompts[0].Text != "first" {
+		t.Fatalf("got %+v, want just the complete prompt", s.Prompts)
+	}
+}

@@ -1,21 +1,33 @@
 // Package geminichat decodes the chat file Gemini CLI writes, and is the ONE
 // place that knows its shape.
 //
-// ⚠️ **GEMINI DOES NOT WRITE JSONL, AND EVERY PART OF THIS CLIENT ASSUMED IT
-// DID — SO GEMINI CAPTURE HAD NEVER WORKED ON ANY REAL INSTALL.** The watcher
-// walked `*.jsonl` (`watch.transcriptFiles`), the extractor parsed ONE LINE as
-// a record carrying its own `sessionId`, and the resolver counted prompts by
-// reading lines. Gemini writes ONE JSON DOCUMENT per session at
-// `~/.gemini/tmp/<project>/chats/session-<ts>-<id>.json`: the session id is at
-// the TOP level and the turns are a `messages` array.
+// ⚠️ **GEMINI WRITES TWO DIFFERENT PHYSICAL SHAPES AND BOTH ARE IN THE WILD, SO
+// SUPPORTING EITHER ONE ALONE LEAVES A POPULATION OF USERS UNCAPTURED.**
 //
-// Measured on this machine before changing anything: **55 real chat files, 262
-// messages, 58 of them user prompts — and ZERO files with a `.jsonl`
-// extension**, the oldest dating to 2025-09. So this was never a regression
-// against a format Gemini once wrote; the code was written against a shape that
-// never existed, and the tests passed because the fixtures were written to
-// match the code. The conformance chain is what finally showed it: `transcript`
-// read "0 transcript(s)" while the chat file sat on disk beside it.
+//	session-<ts>-<id>.json   ONE JSON DOCUMENT: sessionId at the top level, the
+//	                         turns in a `messages` array. Measured on a developer
+//	                         machine: 55 files, 262 messages, 58 user prompts,
+//	                         the oldest from 2025-09 — every one written by
+//	                         builds up to and including 0.37.1.
+//
+//	session-<ts>-<id>.jsonl  ONE JSON OBJECT PER LINE: a session-meta first line
+//	                         carrying sessionId, `{"$set":…}` MUTATION lines that
+//	                         are not turns, and one line per message. Measured on
+//	                         0.60.0, the version CI installs from npm @latest.
+//
+// ⚠️ **AND THE HISTORY IS THE OPPOSITE OF WHAT IT LOOKS LIKE.** This client
+// originally parsed the LINE form only — and was written correctly for it. It
+// then read nothing at all on every machine running a build that had moved to
+// the document form, because `watch.transcriptFiles` filtered on the `.jsonl`
+// EXTENSION: the conformance chain reported "0 transcript(s)" with the chat file
+// sitting in the directory it had just walked. Fixing that by switching to the
+// document form alone simply moved the blind spot to 0.60.0, which is how CI
+// caught it — three chain A cells green on the fix and still unable to find a
+// transcript.
+//
+// So neither shape is "the" format and neither may be dropped. What decides is
+// the CONTENT, not the extension: a chat file that parses as one object with a
+// `sessionId` is a document, otherwise it is read as lines.
 //
 // It is a PACKAGE rather than a helper in one of them because `watch` (which
 // decides a prompt's correlation id) and `resolve` (which reads that prompt's
@@ -26,6 +38,7 @@
 package geminichat
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -33,9 +46,10 @@ import (
 	"strings"
 )
 
-// Ext is the file extension a Gemini chat carries. Exported because the
-// watcher's file walk and the conformance harness both have to admit it.
-const Ext = ".json"
+// Exts are the file extensions a Gemini chat carries — BOTH of them. Exported
+// because the watcher's file walk and the conformance harness both have to
+// admit them, and admitting one is how a whole population went uncaptured.
+var Exts = []string{".json", ".jsonl"}
 
 // PromptSep separates the session id from the ordinal in a Gemini prompt id.
 //
@@ -97,20 +111,70 @@ func Read(path string) (Session, bool) {
 }
 
 // Parse is Read over bytes already in hand.
+//
+// The shape is decided by CONTENT, not by the file's extension: a build that
+// renames the file without changing the format, or the reverse, must not silently
+// stop being readable.
 func Parse(b []byte) (Session, bool) {
 	var d doc
-	if err := json.Unmarshal(b, &d); err != nil {
+	if err := json.Unmarshal(b, &d); err != nil || d.SessionID == "" {
+		return parseLines(b)
+	}
+	return fromMessages(d.SessionID, d.Messages)
+}
+
+// parseLines reads the LINE form: a session-meta first line carrying the
+// sessionId, `{"$set":…}` mutation lines, and one line per message.
+//
+// ⚠️ **A `$set` LINE IS NOT A TURN, and counting one shifts every later
+// ordinal.** 0.60.0 puts the whole `<session_context>` preamble inside the first
+// `$set` as a `messages` array — so a reader that followed it would take the
+// CLI's own boilerplate for the user's first prompt, and then resolve every real
+// prompt to the text of the one before it.
+func parseLines(b []byte) (Session, bool) {
+	var (
+		id   string
+		msgs []message
+	)
+	for _, line := range bytes.Split(b, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var probe struct {
+			SessionID string          `json:"sessionId"`
+			Set       json.RawMessage `json:"$set"`
+			message
+		}
+		if err := json.Unmarshal(line, &probe); err != nil {
+			continue // a half-written trailing line; the next poll reads it whole
+		}
+		if id == "" && probe.SessionID != "" {
+			id = probe.SessionID
+		}
+		if len(probe.Set) > 0 {
+			continue
+		}
+		if probe.message.Type != "" {
+			msgs = append(msgs, probe.message)
+		}
+	}
+	if id == "" {
 		return Session{}, false
 	}
-	if d.SessionID == "" {
-		return Session{}, false
-	}
-	s := Session{ID: d.SessionID}
-	for _, m := range d.Messages {
-		// THE PREDICATE. Every consumer counts prompts through this function,
-		// so there is one definition of "genuine user prompt" and ordinals
-		// cannot drift between the id a pointer is written under and the text
-		// resolved back for it.
+	return fromMessages(id, msgs)
+}
+
+// fromMessages applies THE PREDICATE to a session's messages, whichever shape
+// they were read from — so the two forms cannot disagree about which messages
+// are genuine prompts or what any ordinal means.
+func fromMessages(id string, msgs []message) (Session, bool) {
+	s := Session{ID: id}
+	for _, m := range msgs {
+		// THE PREDICATE. Every consumer counts prompts through here, so there is
+		// one definition of "genuine user prompt" and ordinals cannot drift
+		// between the id a pointer is written under and the text resolved back
+		// for it — nor between the two file shapes.
 		if m.Type != "user" || m.ID == "" {
 			continue
 		}
@@ -150,6 +214,14 @@ func Text(content json.RawMessage) string {
 // IsChatFile reports whether path looks like a Gemini chat file by NAME alone.
 // Cheap, so a directory walk can skip the read for everything else.
 func IsChatFile(path string) bool {
-	return filepath.Ext(path) == Ext &&
-		strings.HasPrefix(filepath.Base(path), "session-")
+	if !strings.HasPrefix(filepath.Base(path), "session-") {
+		return false
+	}
+	ext := filepath.Ext(path)
+	for _, e := range Exts {
+		if ext == e {
+			return true
+		}
+	}
+	return false
 }
