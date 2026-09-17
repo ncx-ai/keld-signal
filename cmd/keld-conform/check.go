@@ -39,6 +39,8 @@ func runCheck(args []string) error {
 			expect.Telemetry = false
 		case checkpoints.Publish:
 			expect.Publish = false
+		case checkpoints.Blocks:
+			expect.Blocks = false
 		default:
 			return fmt.Errorf("unknown checkpoint %q in --not-expected", name)
 		}

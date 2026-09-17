@@ -291,8 +291,29 @@ JSON
   export KELD_SIDECAR_BIN="${SIDECAR_LAUNCH:-$WORK/sidecar-wrapper}"
   export KELD_WATCH_POLL=2s
   export KELD_BLOCKS=1
+  # ⚠️ 20s, not the shipped default, because the chain's whole life is shorter
+  # than one production sweep.
   export KELD_BLOCKS_INTERVAL=20s
   export KELD_BLOCKS_BACKFILL=1
+  # ⚠️ **WITHOUT THIS THE CHAIN CANNOT PRODUCE A BLOCK AT ALL.** The cutter
+  # closes a block on 20 minutes elapsed or 15 minutes of silence; a run lasts
+  # seconds, so nothing ever closes and `publish` was passing on enrichments
+  # alone. The one signal Atlas actually RENDERS went untested on every tool and
+  # every platform.
+  #
+  # `prompt` is taken over `minute`: it cuts one block per HUMAN PROMPT, so a
+  # chain that sends exactly one prompt per step produces exactly one block per
+  # step — deterministic, and tied to the work the step performed rather than to
+  # a clock the run does not control.
+  #
+  # ⚠️ It is a DEVELOPER granularity and it MISLABELS real work, which is why
+  # the daemon refuses it against a real Atlas. It is admissible here for one
+  # reason only: this run publishes to a mock on 127.0.0.1, where there are no
+  # org numbers to corrupt. If the harness is ever pointed at a real Atlas the
+  # daemon will refuse it and blocks will stop appearing — loudly, in a
+  # checkpoint, rather than by quietly writing minute-long fictions into
+  # somebody's spend.
+  export KELD_DEV_BLOCKS=prompt
   # named_terms loads spaCy (~619 MB) into a parent that is never recycled, and
   # no checkpoint reads it.
   export KELD_TERMS=0

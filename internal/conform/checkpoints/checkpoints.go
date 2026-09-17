@@ -32,6 +32,12 @@ const (
 	StoreRows  = "store_rows"
 	Telemetry  = "telemetry"
 	Publish    = "publish"
+	// ⚠️ **BLOCKS ARE A CHECKPOINT OF THEIR OWN, because `publish` could never
+	// hold them to account.** That one passes on blocks OR enrichments, so
+	// every run reported "0 block batch(es)" and passed — the signal Atlas
+	// actually RENDERS went untested on every tool and every platform, which is
+	// the exact shape of the outage this harness exists to prevent.
+	Blocks = "blocks"
 )
 
 // Facts is everything the gatherers could read. A zero value means "nothing
@@ -57,12 +63,12 @@ type Facts struct {
 // Expectations says which checkpoints this tool is required to meet at this
 // point in the plan. Everything is required for Claude Code today.
 type Expectations struct {
-	Transcript, Pointer, StoreRows, Telemetry, Publish bool
+	Transcript, Pointer, StoreRows, Telemetry, Publish, Blocks bool
 }
 
-// AllRequired is the Claude Code expectation: all five.
+// AllRequired is the Claude Code expectation: all six.
 func AllRequired() Expectations {
-	return Expectations{true, true, true, true, true}
+	return Expectations{true, true, true, true, true, true}
 }
 
 // Result is one checkpoint's verdict.
@@ -120,8 +126,24 @@ func Evaluate(f Facts, e Expectations) []Result {
 		f.result(Telemetry, e.Telemetry, "mockatlas:counts", logs > 0,
 			fmt.Sprintf("%d OTLP request(s) forwarded (/v1/logs + /v1/metrics)", logs)),
 
-		f.result(Publish, e.Publish, "mockatlas:counts", blocks > 0 || enrich > 0,
-			fmt.Sprintf("%d block batch(es), %d enrichment(s)", blocks, enrich)),
+		// ⚠️ ENRICHMENTS ONLY. This used to accept blocks OR enrichments, which
+		// made `publish` pass on either and left NEITHER separately required —
+		// so "0 block batch(es)" rode along green on every run ever recorded.
+		// One fact per checkpoint is what lets a failure name its own cause,
+		// and TestEachMissingFactFailsExactlyItsOwnCheckpoint pins it.
+		f.result(Publish, e.Publish, "mockatlas:counts", enrich > 0,
+			fmt.Sprintf("%d enrichment(s)", enrich)),
+
+		// ⚠️ A BLOCK IS WHAT ATLAS RENDERS, and it is cut from the sidecar's
+		// store — so this can only pass for a source the store can read, and
+		// only once the run produces a CLOSED block. The shipped cutter closes
+		// on 20 minutes or 15 of silence, which a seconds-long chain never
+		// reaches; the harness sets KELD_DEV_BLOCKS=prompt so one human prompt
+		// closes one block. That granularity is refused against a real Atlas
+		// and admissible here only because this run publishes to a loopback
+		// mock.
+		f.result(Blocks, e.Blocks, "mockatlas:counts", blocks > 0,
+			fmt.Sprintf("%d block batch(es)", blocks)),
 	}
 }
 

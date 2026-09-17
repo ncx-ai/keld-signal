@@ -503,7 +503,9 @@ tool_not_expected() {
       if [ -n "${KELD_CONFORM_CODEX_NOT_EXPECTED:-}" ]; then
         echo "$KELD_CONFORM_CODEX_NOT_EXPECTED"
       elif [ -n "${FROZEN_SIDECAR:-}" ]; then
-        echo "store_rows${extra:+,$extra}"
+        # `blocks` travels with `store_rows`: a released sidecar that cannot
+        # read a Codex prompt id fills no series, and a block is cut from it.
+        echo "store_rows,blocks${extra:+,$extra}"
       else
         echo "$extra"
       fi
@@ -520,7 +522,10 @@ tool_not_expected() {
     # The catalogue says the same thing in its own vocabulary: gemini_cli
     # declares OTel and Watcher surfaces and NO hook lane, with
     # ReaderAvailable false.
-    gemini_cli)  echo "${KELD_CONFORM_GEMINI_NOT_EXPECTED:-store_rows}" ;;
+    # ⚠️ `blocks` follows `store_rows` for the same structural reason: a block is
+    # CUT FROM the sidecar's reference series, so a source the store cannot read
+    # can have no block to emit. Not an excuse — the two are one fact.
+    gemini_cli)  echo "${KELD_CONFORM_GEMINI_NOT_EXPECTED:-store_rows,blocks}" ;;
     *)           echo "" ;;
   esac
 }

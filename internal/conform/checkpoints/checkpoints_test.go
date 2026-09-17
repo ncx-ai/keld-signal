@@ -16,7 +16,12 @@ func fullFacts() Facts {
 		PromptIDs:         []string{"p-1"},
 		StorePromptRows:   1,
 		StoreEventRows:    9,
-		AtlasCounts:       map[string]int{"/v1/logs": 4, "/v1/signal/blocks": 1},
+		// ⚠️ BOTH publish routes, because they are now SEPARATE checkpoints:
+		// /v1/enrichments feeds `publish`, /v1/signal/blocks feeds `blocks`.
+		// While one checkpoint accepted either, this fixture never needed an
+		// enrichment count at all — which is how "0 block batch(es)" passed on
+		// every real run for the life of the harness.
+		AtlasCounts:       map[string]int{"/v1/logs": 4, "/v1/signal/blocks": 1, "/v1/enrichments": 2},
 		EnrichmentCorrIDs: []string{"p-1"},
 	}
 }
@@ -32,10 +37,10 @@ func byName(rs []Result, name string) Result {
 
 func TestEveryCheckpointPassesOnCompleteFacts(t *testing.T) {
 	rs := Evaluate(fullFacts(), AllRequired())
-	if len(rs) != 5 {
-		t.Fatalf("got %d checkpoints, want 5", len(rs))
+	if len(rs) != 6 {
+		t.Fatalf("got %d checkpoints, want 6", len(rs))
 	}
-	want := []string{"transcript", "pointer", "store_rows", "telemetry", "publish"}
+	want := []string{"transcript", "pointer", "store_rows", "telemetry", "publish", "blocks"}
 	for i, n := range want {
 		if rs[i].Name != n {
 			t.Fatalf("checkpoint %d = %q, want %q (order is the chain's order)", i, rs[i].Name, n)
@@ -58,7 +63,12 @@ func TestEachMissingFactFailsExactlyItsOwnCheckpoint(t *testing.T) {
 		{"pointer", func(f *Facts) { f.EnrichmentCorrIDs = nil }},
 		{"store_rows", func(f *Facts) { f.StorePromptRows = 0 }},
 		{"telemetry", func(f *Facts) { f.AtlasCounts["/v1/logs"] = 0 }},
-		{"publish", func(f *Facts) { f.AtlasCounts["/v1/signal/blocks"] = 0 }},
+		// ⚠️ publish now keys on ENRICHMENTS and blocks on BLOCK BATCHES — one
+		// fact each. While publish accepted either, "0 block batch(es)" passed
+		// on every run ever recorded and the signal Atlas renders went
+		// untested.
+		{"publish", func(f *Facts) { f.AtlasCounts["/v1/enrichments"] = 0 }},
+		{"blocks", func(f *Facts) { f.AtlasCounts["/v1/signal/blocks"] = 0 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
