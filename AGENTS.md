@@ -2255,6 +2255,11 @@ internal/
     service/         OS service install (darwin/linux/windows)
     daemon/          wires it all together; spawns/superwises the sidecar
                      procgroup_*.go: a kill reaps the GROUP, not the bare pid
+  geminichat/        THE ONE place that knows Gemini's chat file shape — BOTH of
+                     them (a JSON document and JSONL), decided by CONTENT rather
+                     than by extension. watch, resolve and the conformance
+                     checkpoint all read through it, so the predicate deciding
+                     which messages are genuine prompts cannot drift.
   spool/             durable on-disk pointer queue (hook fallback + re-spool/quarantine)
   auth/ cli/ tools/ diffview/ hook/ paths/ telemetry/ config/ console/ ...
 sidecar/
