@@ -1098,6 +1098,16 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   that session. While editing, `claimlock affected <paths>`; at the end of a
   phase, `claimlock check --changed main`. Not in a pre-commit hook — measured
   elsewhere at 27.6x re-reporting.
+  ⚠️ **LOCAL ONLY, decided 2026-09-17 — there is no CI gate and that is a
+  choice, not an omission.** claimlock installs from the private
+  `ncx-ai/claimlock` plugin repo, so a runner would need either a credential or
+  a vendored copy; neither was judged worth it while the store is small and one
+  person runs the gate. The honest consequence: **nothing automatic stops a
+  stale claim reaching `main`** — the same shape as the verifier freeze-check
+  under *Gotchas*, and named here rather than discovered later. Revisit when the
+  store outgrows one person's habit or a second contributor writes claims; the
+  cheapest fix is vendoring `bin/` + `lib/` (Python stdlib only, no install
+  step), not a credential.
 
 - **Never cut text mid-sentence.** Any text read as language — a prompt, a
   generated report, a conversation window handed to a model, a span shown to a
