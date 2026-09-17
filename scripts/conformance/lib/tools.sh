@@ -468,7 +468,28 @@ tool_not_expected() {
     # five are REQUIRED. KELD_CONFORM_CODEX_NOT_EXPECTED is the lever for a
     # machine where one is known-broken, so a narrowing is always visible in
     # the command line rather than hidden in this table.
-    codex)       echo "${KELD_CONFORM_CODEX_NOT_EXPECTED:-}" ;;
+    codex)
+      # ⚠️ **`store_rows` CANNOT PASS AGAINST A FROZEN SIDECAR, and that is the
+      # skew this harness already warns about out loud.** Codex IS
+      # workstreams-eligible (enrich.workstreamAnalyzableSources) and the reader
+      # that makes it so is NEW IN THIS BRANCH — so the released sidecar CI
+      # downloads predates it, answers nothing for a Codex prompt id, and the
+      # store stays empty. Measured: 0 prompt rows, 0 event rows, with every
+      # other Codex lane green.
+      #
+      # Requiring it here would be requiring a release to contain a change made
+      # after it shipped. The expectation is therefore conditioned on WHICH
+      # sidecar is running, so it clears itself the moment the run uses the
+      # worktree's (KELD_CONFORM_PYTHON) or a release that carries the reader —
+      # rather than being a constant somebody has to remember to delete.
+      if [ -n "${KELD_CONFORM_CODEX_NOT_EXPECTED:-}" ]; then
+        echo "$KELD_CONFORM_CODEX_NOT_EXPECTED"
+      elif [ -n "${FROZEN_SIDECAR:-}" ]; then
+        echo "store_rows"
+      else
+        echo ""
+      fi
+      ;;
     # ⚠️ TWO CHECKPOINTS ARE STRUCTURALLY UNREACHABLE FOR GEMINI, and saying so
     # is not the same as excusing them.
     #
