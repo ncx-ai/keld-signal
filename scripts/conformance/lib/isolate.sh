@@ -448,6 +448,36 @@ signal_install() {
   grep -q ingest_token "$ISO_HOME/hook.json" || fail "hook.json carries no ingest token"
 }
 
+# assert_dev_blocks — the sidecar is cutting at the granularity we asked for.
+#
+# ⚠️ **ASSERTED, BECAUSE THREE ROUNDS WERE SPENT GUESSING WHY `blocks` READ 0.**
+# The mode is read by the SIDECAR from its own environment
+# (devblocks.mode_from_env), so between the harness exporting it and a block
+# being cut there are several places it can be lost: the daemon's env, the
+# spawn env, a sidecar too old to have the module at all. Each guess cost a
+# full CI round trip; /health answers it in one request.
+#
+# Reported rather than fatal when the port is not yet known — the daemon writes
+# it into agent.json at startup and a missing one is a timing fact, not a
+# verdict.
+assert_dev_blocks() {
+  local want=${KELD_DEV_BLOCKS:-}
+  [ -n "$want" ] || return 0
+  local port; port=$(agent_json_field sidecar_port)
+  if [ -z "$port" ] || [ "$port" = "0" ]; then
+    say "dev blocks: sidecar port not in agent.json yet — cannot confirm the granularity"
+    return 0
+  fi
+  local got
+  got=$(curl -fsS "http://127.0.0.1:$port/health" 2>/dev/null \
+        | python3 -c "import json,sys; print(json.load(sys.stdin).get('dev_blocks',''))" 2>/dev/null || echo "")
+  if [ "$got" = "$want" ]; then
+    say "dev blocks: sidecar is cutting at '$got' (one block per prompt)"
+  else
+    fail "dev blocks: asked for '$want' and the sidecar reports '${got:-<none>}' — it cannot cut a short block, so \`blocks\` can never pass"
+  fi
+}
+
 # agent_json_field <key> — one field of ~/.keld/agent.json, empty when absent.
 agent_json_field() {
   python3 -c "import json,sys
@@ -500,6 +530,7 @@ daemon_start() {
   DAEMON_SECRET=$(agent_json_field secret)
   DAEMON_URL="http://127.0.0.1:$DAEMON_PORT"
   say "daemon on $DAEMON_URL"
+  assert_dev_blocks
 
   # The sidecar is spawned lazily; wait for the store file it creates, since
   # the store_rows checkpoint is meaningless before it exists.
