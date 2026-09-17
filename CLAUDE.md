@@ -7,6 +7,15 @@ source of truth:
 
 @AGENTS.md
 
+⚠️ **AGENTS.md was split on 2026-09-17** — it had reached 180k characters, past
+what loads safely. The rules and invariants stayed in it; the measurements,
+studies and incident post-mortems behind them moved **verbatim** into
+`docs/architecture/` (indexed under *Design docs* at the end of AGENTS.md, each
+file carrying a dated provenance header). **Nothing was deleted, and nothing in
+`docs/architecture/` is optional reading when you change that subsystem** — the
+rule in AGENTS.md says what you must not break; only the linked file says what it
+cost to learn.
+
 ## Claude Code specifics
 
 - **This repo is the on-device half of Keld.** The enrichment agent
