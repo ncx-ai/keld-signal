@@ -398,8 +398,17 @@ tool_prompt() {
   [ -n "$bin" ] || fail "tool_prompt: $tool was never resolved by tool_install"
   case "$tool" in
     claude_code)
-      say "prompt [$label]: claude -p"
-      ( cd "$WORK" && "$bin" -p "reply with one word" \
+      # ⚠️ **`--continue` ON THE CLOSING PROMPT, OR IT IS A NEW SESSION.**
+      # `claude -p` starts a fresh conversation every time, so a second prompt
+      # wrote a SECOND TRANSCRIPT — each with exactly one block, each of them
+      # trailing, none closable. Measured: "2 transcript(s)" and still
+      # "0 block batch(es)". A block closes when a LATER block exists IN THE
+      # SAME session, so the closer has to continue the one it is closing.
+      local cont=""
+      [ "$label" = "close-block" ] && cont="--continue"
+      say "prompt [$label]: claude -p${cont:+ $cont}"
+      # shellcheck disable=SC2086  # cont is one optional flag
+      ( cd "$WORK" && "$bin" -p $cont "reply with one word" \
           --output-format json --model "${CONFORM_MODEL:-claude-sonnet-4-6}" \
           < /dev/null > "$out" 2>&1 )
       local rc=$?
@@ -433,7 +442,11 @@ tool_prompt() {
       # until /hooks is run. The line below says so on every run.
       say "codex: passing --dangerously-bypass-hook-trust; a REAL user cannot," \
           "and without it Codex fires no hooks and says nothing (0.153.4)."
-      say "prompt [$label]: codex exec"
+      # ⚠️ Same rule as Claude Code: a fresh `codex exec` is a new session and a
+      # new rollout, so the closing turn RESUMES the most recent one instead.
+      local cont=""
+      [ "$label" = "close-block" ] && cont="resume --last"
+      say "prompt [$label]: codex exec${cont:+ (resume --last)}"
       # ⚠️ NOT `env -i`. The hook keld registers is `keld __hook --source codex`,
       # and it resolves the daemon's address through KELD_HOME — which an empty
       # environment drops. Measured: with `env -i HOME=… PATH=… CODEX_HOME=…`
@@ -442,9 +455,10 @@ tool_prompt() {
       # agent.json under $HOME/.keld while KELD_HOME points at $HOME itself. The
       # ambient environment is already the isolated one; the two provider
       # variables below are unset so a developer's own key cannot be picked up.
+      # shellcheck disable=SC2086  # cont must word-split into `resume --last`
       ( cd "$WORK" \
           && unset OPENAI_API_KEY OPENAI_BASE_URL CODEX_API_KEY \
-          && "$bin" exec --skip-git-repo-check --dangerously-bypass-hook-trust \
+          && "$bin" exec $cont --skip-git-repo-check --dangerously-bypass-hook-trust \
           "reply with one word" < /dev/null > "$out" 2>&1 )
       local rc=$?
       [ $rc -eq 0 ] || fail "codex exec exited $rc: $(tail -10 "$out")"
