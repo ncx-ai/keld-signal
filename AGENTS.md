@@ -1086,6 +1086,19 @@ PYTHONPATH=. ~/.keld/sidecar-venv/bin/python -m loadtest soak --minutes 45 --liv
   **unknown errors are permanent by design** (never hammer). The HF model download
   (`sidecar/hf.go`) uses it; settings-poll / publish / api adopt it when next
   touched — don't hand-roll new backoff loops.
+- **Claims about this codebase are ANCHORED, not asserted — for new work, from
+  2026-09-17.** `claimlock` (`.claimlock.toml`, `claims/`) pins a stated
+  behaviour to the content that enforces it, so an edit that invalidates the
+  claim reports itself instead of leaving the sentence true-looking and wrong.
+  This file is full of claims that predate it ("measured 92% on 61 blocks",
+  "`MIN_EVIDENCE` 5 is derived") and **none of them were imported** — importing
+  would launder a review nobody recorded the content of into a fresh pin. So the
+  store starts empty **on purpose**: a claim is written when the work that earns
+  it lands, and `claimlock verify` is run only against something re-checked in
+  that session. While editing, `claimlock affected <paths>`; at the end of a
+  phase, `claimlock check --changed main`. Not in a pre-commit hook — measured
+  elsewhere at 27.6x re-reporting.
+
 - **Never cut text mid-sentence.** Any text read as language — a prompt, a
   generated report, a conversation window handed to a model, a span shown to a
   person — is bounded at a **logical delimiter**: a sentence end, a line break, a
