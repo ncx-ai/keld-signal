@@ -678,6 +678,33 @@ jobs:
           echo "dir=$dest" >> "$GITHUB_OUTPUT"
           echo "tag=$tag"  >> "$GITHUB_OUTPUT"
 
+      # --- this branch's own analysis service ---------------------------------
+      #
+      # ⚠️ **A RELEASED SIDECAR CANNOT TEST A SIDECAR CHANGE**, and two
+      # checkpoints proved it in one day: `blocks` could never pass because
+      # v3.0.3 predates devblocks.py entirely, and Codex's `store_rows` could
+      # never pass because the reader that resolves a Codex prompt id is new
+      # here. Both were declared "not expected" against a frozen sidecar —
+      # honest, and leaving the code unexercised.
+      #
+      # ⚠️ It costs SIX WHEELS AND SECONDS, not the ~5 GB the full sidecar venv
+      # implies: the service loads GLiNER2 lazily on a first inference this
+      # chain never issues, so torch/transformers/spacy/presidio/llama-cpp are
+      # dead weight. analysis-venv.sh excludes them by NAME and then ASSERTS
+      # app.main still imports, so a heavy dependency creeping in fails there
+      # rather than as a sidecar that will not start.
+      #
+      # The frozen sidecar keeps its place on the RELEASE trigger, where proving
+      # the shipped artifact is the point. A pull request proves the branch.
+      - name: This branch's analysis service (not the released one)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          py=$(scripts/conformance/analysis-venv.sh "$RUNNER_TEMP/analysis-venv")
+          echo "KELD_CONFORM_PYTHON=$py" >> "$GITHUB_ENV"
+          echo "worktree analysis service: $py"
+
       # --- the chain --------------------------------------------------------
       - name: Run the chain
         id: chain
