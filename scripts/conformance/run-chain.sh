@@ -305,7 +305,23 @@ step_after_prompts() {
   [ -n "$AFTER" ] || { say "no tools in the after half — nothing to prompt"; return 0; }
   local t
   for t in $AFTER; do tool_prompt "$t" "after-detect"; done
-  step_assert "$SETTLE" "" $AFTER
+  # ⚠️ **THIS STEP DID NOT CLOSE ITS BLOCK, SO `blocks` COULD ONLY EVER PASS FOR
+  # THE BEFORE HALF.** One prompt cuts exactly one block, that block is TRAILING,
+  # and a trailing block settles only after 15 minutes of silence — so this step
+  # reported 0 block batches whatever the product did. Which tool it hit was
+  # decided by the SEEDED SPLIT, i.e. at random: the identical branch passed on
+  # seeds that put Claude Code in the before half and failed on seeds that did
+  # not. A checkpoint whose verdict depends on the shuffle is worse than one that
+  # is absent, because it reads as a product failure.
+  #
+  # The fix is the one step_before_prompts already uses and needs no new knob: a
+  # second prompt makes the first block non-trailing, which closes it at once.
+  close_open_blocks $AFTER
+  local rc=0
+  step_assert "$SETTLE" "" $AFTER || rc=1
+  # After the settle, and only on a failure — see say_block_events.
+  [ "$rc" = 0 ] || say_block_events
+  return $rc
 }
 
 # --- chain B's own steps -----------------------------------------------------

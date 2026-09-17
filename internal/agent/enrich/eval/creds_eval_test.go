@@ -125,14 +125,14 @@ var publishedCredentialValues = []string{
 	"16C7e42F292c6912E7710c838347Ae178B4a",     // GitHub docs example token body (ghp_/gho_/ghs_)
 	"4eC39HqLyjWDarjtT1zdp7dc",                 // Stripe docs example key body
 	"AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI",  // widely republished Google API key example
-	"Tr0ub4dor&3",                              // XKCD 936
-	"CorrectHorseBattery9!",                    // XKCD 936 derivative
-	"9b1deb4d3b7d4bad9bdd2b0d7b3dcb6f",         // ubiquitous example UUID body
-	"MIIEpAIBAAKCAQEA3Tz2mr7",                  // published RSA test-key body
-	"eyJzdWIiOiIxIn0",                          // jwt.io example payload
-	"0123456789abcdef",                         // sequential filler
-	"1234567890abcdef",                         // sequential filler
-	"EXAMPLE",                                  // gitleaks' own stopword
+	"Tr0ub4dor&3",                      // XKCD 936
+	"CorrectHorseBattery9!",            // XKCD 936 derivative
+	"9b1deb4d3b7d4bad9bdd2b0d7b3dcb6f", // ubiquitous example UUID body
+	"MIIEpAIBAAKCAQEA3Tz2mr7",          // published RSA test-key body
+	"eyJzdWIiOiIxIn0",                  // jwt.io example payload
+	"0123456789abcdef",                 // sequential filler
+	"1234567890abcdef",                 // sequential filler
+	"EXAMPLE",                          // gitleaks' own stopword
 }
 
 // TestCredsFixtureHasNoPublishedValues keeps creds.jsonl measuring the detector
