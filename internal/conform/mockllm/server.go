@@ -135,13 +135,22 @@ func (s *Server) log(rec record) {
 }
 
 // readRequest decodes only the three scalars the mock needs. The prompt text in
-// `messages` / `input` is decoded into a counter and then dropped on the floor.
+// `messages` / `input` / `contents` is decoded into a counter and then dropped
+// on the floor.
+//
+// ⚠️ **`contents` IS GOOGLE'S FIELD NAME AND WAS MISSING, so every Gemini call
+// logged `n_inputs: 0`.** That is not cosmetic: the log is what a person reads
+// to answer "did the tool actually send a prompt", and a hard zero against a
+// real request reads as "it sent nothing" — which is the confident answer from
+// a check that could not see, one more time. Measured while diagnosing a hung
+// Gemini run: 5 requests, every one reported as carrying no input.
 func readRequest(r *http.Request) (model string, stream bool, nInputs int) {
 	var body struct {
 		Model    string            `json:"model"`
 		Stream   bool              `json:"stream"`
 		Messages []json.RawMessage `json:"messages"`
 		Input    json.RawMessage   `json:"input"`
+		Contents []json.RawMessage `json:"contents"`
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
@@ -150,7 +159,7 @@ func readRequest(r *http.Request) (model string, stream bool, nInputs int) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return "", false, 0
 	}
-	n := len(body.Messages)
+	n := len(body.Messages) + len(body.Contents)
 	if len(body.Input) > 0 {
 		var arr []json.RawMessage
 		if err := json.Unmarshal(body.Input, &arr); err == nil {

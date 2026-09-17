@@ -92,13 +92,14 @@ func TestGeminiTelemetryEndpointCarriesToken(t *testing.T) {
 	p := SetupParams{Endpoint: "https://api.gemini.example.com", IngestToken: "tok123"}
 	tm := GeminiTelemetry(p)
 
-	// The ingest token rides in the otlpEndpoint query (gemini can't carry an
-	// auth header in an untrusted workspace); the base host/path is preserved
-	// and no /v1/logs path is baked in (the SDK appends it).
+	// The ingest token rides in the otlpEndpoint PATH (gemini can't carry an
+	// auth header in an untrusted workspace, and the query form does not
+	// survive the SDK's path append — see endpointWithToken); the base host is
+	// preserved and no /v1/logs path is baked in (the SDK appends it).
 	otlpVal, _ := tm.Get("otlpEndpoint")
 	s, _ := otlpVal.(string)
-	if s != "https://api.gemini.example.com?token=tok123" {
-		t.Fatalf("otlpEndpoint should be base + ?token=, got %q", otlpVal)
+	if s != "https://api.gemini.example.com/t/tok123" {
+		t.Fatalf("otlpEndpoint should be base + /t/<token>, got %q", otlpVal)
 	}
 	if strings.Contains(s, "/v1/logs") {
 		t.Errorf("otlpEndpoint must not bake in a signal path: %q", s)
@@ -153,16 +154,23 @@ func TestGeminiTelemetryEndpointCarriesToken(t *testing.T) {
 }
 
 func TestGeminiTelemetryTokenEndpointIsURLEncodable(t *testing.T) {
-	// A token with a URL-special char must be safely query-escaped so the
-	// resulting otlpEndpoint is still a valid parseable URL.
-	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "a b/c&d"}
+	// A token with URL-special chars must be escaped on the wire and decode
+	// back to the SAME secret — or the proxy compares the wrong bytes and 401s
+	// every export. (Double-escaping is the live failure mode here: writing an
+	// already-escaped token into url.URL.Path escapes the percent signs again.)
+	p := SetupParams{Endpoint: "https://atlas.keld.co", IngestToken: "a b&d"}
 	tm := GeminiTelemetry(p)
 	otlpVal, _ := tm.Get("otlpEndpoint")
-	u, err := url.Parse(otlpVal.(string))
+	raw := otlpVal.(string)
+	if strings.Contains(raw, " ") {
+		t.Errorf("the endpoint must be escaped on the wire: %q", raw)
+	}
+	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("otlpEndpoint not a valid URL: %v", err)
 	}
-	if got := u.Query().Get("token"); got != "a b/c&d" {
-		t.Fatalf("token round-trip failed: got %q", got)
+	// u.Path is the DECODED path — what a router hands a handler.
+	if want := "/t/a b&d"; u.Path != want {
+		t.Fatalf("decoded path = %q, want %q", u.Path, want)
 	}
 }

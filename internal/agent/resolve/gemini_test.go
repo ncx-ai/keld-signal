@@ -193,3 +193,22 @@ func TestGeminiReaderBothContentShapes(t *testing.T) {
 		t.Fatalf("array-form content: %q ok=%v", text, ok)
 	}
 }
+
+// ⚠️ **THE HOOK AND THE WATCHER CALL GEMINI BY DIFFERENT NAMES, AND Resolve
+// DISPATCHES ON THAT NAME.** keld writes `keld __hook --source gemini` into
+// ~/.gemini/settings.json (tools.GeminiAdapter is Name()d "gemini") while the
+// watcher root, this reader and the conformance tool id all say "gemini_cli".
+// An unregistered source is a deliberate SKIP, not an error, so every
+// hook-delivered Gemini prompt resolved no text and published nothing, silently.
+// Measured: `transcript` PASS with 2 prompt ids read, `publish` 0, hook verified
+// to fire.
+func TestBothGeminiSourceNamesResolve(t *testing.T) {
+	p := writeGeminiFixture(t)
+	for _, src := range []string{"gemini_cli", "gemini"} {
+		text, ok := Resolve(src, p, "sess_123########0", "")
+		if !ok || text != "hello world" {
+			t.Errorf("Resolve(%q) = %q ok=%v — a prompt this source delivers "+
+				"cannot be enriched at all", src, text, ok)
+		}
+	}
+}

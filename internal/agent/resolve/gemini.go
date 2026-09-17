@@ -23,12 +23,34 @@ import (
 // — and therefore what every ordinal means — has one definition. The two used to
 // hold a copy each, with comments asking the other to stay in step; a
 // disagreement of one silently resolves the wrong prompt's text.
-type GeminiReader struct{}
+type GeminiReader struct{ src string }
 
-// NewGeminiReader returns a reader for Gemini chat transcripts.
-func NewGeminiReader() *GeminiReader { return &GeminiReader{} }
+// NewGeminiReader returns a reader for Gemini chat transcripts, under the id the
+// WATCHER uses.
+func NewGeminiReader() *GeminiReader { return &GeminiReader{src: "gemini_cli"} }
 
-func (r *GeminiReader) Source() string { return "gemini_cli" }
+// NewGeminiReaderForSource returns the same reader under another source id.
+//
+// ⚠️ **THE TWO CAPTURE LANES CALL THIS TOOL BY DIFFERENT NAMES, AND THAT ALONE
+// BROKE GEMINI ENRICHMENT COMPLETELY.** The watcher's root, this reader and the
+// conformance tool id all say `gemini_cli`; the hook keld writes into
+// `~/.gemini/settings.json` says `--source gemini`, because tools.GeminiAdapter
+// is Name()d "gemini". `Resolve` dispatches on that string, so EVERY
+// hook-delivered Gemini prompt missed the map, resolved no text, and published
+// nothing — with no error, because an unregistered source is a deliberate skip.
+// Measured in the conformance chain, after the transcript format was fixed:
+// `transcript` PASS (2 files found, 2 prompt ids read) and `publish` 0, with the
+// hook verified to fire.
+//
+// Registering both names restores the lane without a wire change. It does NOT
+// resolve which name is right: a hook-sourced row publishes `source_id`
+// "gemini" and a watcher-sourced one "gemini_cli", so one tool wears two names
+// in the org's data. Unifying them is a deliberate Atlas-side decision about
+// existing rows, not a rename to be done in passing. Mirrors the
+// NewClaudeReaderForSource("cowork") idiom.
+func NewGeminiReaderForSource(src string) *GeminiReader { return &GeminiReader{src: src} }
+
+func (r *GeminiReader) Source() string { return r.src }
 
 const geminiPromptSep = geminichat.PromptSep
 

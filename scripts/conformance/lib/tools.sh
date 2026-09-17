@@ -387,6 +387,40 @@ tool_transcript_root() {
   esac
 }
 
+# tool_await_pid <pid> <budget-seconds> <what> — wait for a tool, and KILL it if
+# it outlives the budget.
+#
+# ⚠️ **NO TOOL PROMPT WAS BOUNDED, AND A HUNG TOOL HUNG THE WHOLE CHAIN.**
+# Measured on gemini-cli 0.37.1 against the mock: it entered a loop of auxiliary
+# `gemini-2.5-flash-lite:generateContent` calls and never returned, so the run
+# sat on one line — `prompt [before-install]: gemini -p` — indefinitely. In CI
+# that is the job's entire time limit spent producing no verdict and no
+# diagnosis, which is strictly worse than a failure: a failure names a step.
+#
+# Returns 124 on a kill, matching coreutils `timeout`, which is not available on
+# every runner this harness has to work on (macOS ships none).
+tool_await_pid() {
+  local pid=$1 budget=$2 what=$3 i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$i" -ge "$budget" ]; then
+      say "⏱  $what exceeded ${budget}s — killing it so this reads as a failure rather than a hang"
+      kill -TERM "$pid" 2>/dev/null
+      sleep 2
+      kill -KILL "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  wait "$pid"
+}
+
+# PROMPT_BUDGET bounds one headless prompt. Generous: a real tool talking to the
+# mock finishes in well under a minute, and the budget exists to catch a HANG,
+# not to police latency.
+PROMPT_BUDGET=${KELD_CONFORM_PROMPT_BUDGET:-300}
+
 # tool_prompt <tool> <label> — one headless prompt.
 #
 # The prompt is OURS ("reply with one word"), which is what makes the resulting
@@ -410,8 +444,10 @@ tool_prompt() {
       # shellcheck disable=SC2086  # cont is one optional flag
       ( cd "$WORK" && "$bin" -p $cont "reply with one word" \
           --output-format json --model "${CONFORM_MODEL:-claude-sonnet-4-6}" \
-          < /dev/null > "$out" 2>&1 )
-      local rc=$?
+          < /dev/null > "$out" 2>&1 ) &
+      local rc=0
+      tool_await_pid $! "$PROMPT_BUDGET" "claude -p" || rc=$?
+      [ $rc -eq 124 ] && fail "claude -p HUNG past ${PROMPT_BUDGET}s: $(tail -5 "$out")"
       [ $rc -eq 0 ] || fail "claude -p exited $rc: $(tail -5 "$out")"
       grep -q '"is_error":false' "$out" \
         || fail "claude -p reported an error: $(tail -5 "$out")"
@@ -425,8 +461,10 @@ tool_prompt() {
       # tool_env are what this run must use.
       ( cd "$WORK" \
           && unset GOOGLE_API_KEY GOOGLE_APPLICATION_CREDENTIALS \
-          && "$bin" -p "reply with one word" < /dev/null > "$out" 2>&1 )
-      local rc=$?
+          && "$bin" -p "reply with one word" < /dev/null > "$out" 2>&1 ) &
+      local rc=0
+      tool_await_pid $! "$PROMPT_BUDGET" "gemini -p" || rc=$?
+      [ $rc -eq 124 ] && fail "gemini -p HUNG past ${PROMPT_BUDGET}s (observed 0.37.1 looping on auxiliary flash-lite calls): $(tail -5 "$out")"
       [ $rc -eq 0 ] || fail "gemini -p exited $rc: $(tail -5 "$out")"
       ;;
     codex)
@@ -459,8 +497,10 @@ tool_prompt() {
       ( cd "$WORK" \
           && unset OPENAI_API_KEY OPENAI_BASE_URL CODEX_API_KEY \
           && "$bin" exec $cont --skip-git-repo-check --dangerously-bypass-hook-trust \
-          "reply with one word" < /dev/null > "$out" 2>&1 )
-      local rc=$?
+          "reply with one word" < /dev/null > "$out" 2>&1 ) &
+      local rc=0
+      tool_await_pid $! "$PROMPT_BUDGET" "codex exec" || rc=$?
+      [ $rc -eq 124 ] && fail "codex exec HUNG past ${PROMPT_BUDGET}s: $(tail -10 "$out")"
       [ $rc -eq 0 ] || fail "codex exec exited $rc: $(tail -10 "$out")"
       grep -q "MOCK OK" "$out" || fail "codex exec did not reach the mock model: $(tail -10 "$out")"
       ;;

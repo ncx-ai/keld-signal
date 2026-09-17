@@ -244,6 +244,81 @@ session path/metadata. **Never emits prompt/response text.** Default source
 (TranscriptReader resolves user_message by session_id#ordinal for Codex, by message `id` for Gemini);
 telemetry via their native OTEL (config completed in the tool adapters), not host-side promptlog.
 
+⚠️ **GEMINI IS NOT JSONL, AND EVERY PART OF THIS CLIENT ASSUMED IT WAS — SO
+GEMINI CAPTURE HAD NEVER WORKED ON ANY REAL INSTALL.** A Gemini session is ONE
+JSON DOCUMENT at `~/.gemini/tmp/<project>/chats/session-<ts>-<id>.json`: the
+session id is at the TOP level and the turns are a `messages` array, each with
+`content` that is a bare STRING (258 of 262 measured messages) or an array of
+`{text}` blocks (4). The watcher walked for `*.jsonl` and so found nothing, the
+extractor parsed a LINE as a record carrying its own `sessionId`, and the
+resolver counted prompts by reading lines. Measured on one developer machine
+before any change: **55 real chat files, 262 messages, 58 user prompts, ZERO
+`.jsonl` files**, the oldest dating to 2025-09 — so this was never a regression
+against a format Gemini once wrote. The code was written against a shape that
+never existed and the tests passed because their fixtures were written to match
+the code; one of them introduced its fixture with the words "A real Gemini chat
+file". The conformance chain is what exposed it: `transcript` read "0
+transcript(s)" with the chat file in the directory it had just walked.
+**`internal/geminichat` is now the ONE place that knows the shape** — watch,
+resolve and the conformance checkpoint all read through it, so the predicate
+deciding which messages are genuine prompts, and therefore what every ordinal
+means, has one definition rather than three copies each commented to stay in
+step. Its fixture is a REAL captured 0.37.1 file. The watcher's Gemini lane is
+therefore a DOCUMENT lane (`watch.scanDocument`): its cursor counts PROMPTS
+ALREADY OFFERED rather than bytes, because the file is rewritten whole on every
+turn and "bytes appended" names nothing; forward-only first sight and the
+first-sight ingest signal are unchanged.
+
+⚠️ **AND GEMINI'S TELEMETRY CREDENTIAL CANNOT RIDE A QUERY STRING.** Gemini
+cannot carry an auth HEADER (its `OTEL_EXPORTER_OTLP_HEADERS` is honoured only
+in a "trusted" workspace), so the token rides the URL — and it used to ride
+`?token=`, on the stated belief that "gemini's exporter preserves the URL's
+query string when it appends the signal path". It does not, and the composition
+is not URL-aware at all: the SDK does plain string concatenation,
+`${endpoint}/v1/logs`, over a base it first normalises through `new URL(...).href`
+— which appends the missing root slash. So `http://127.0.0.1:14318?token=SECRET`
+became `http://127.0.0.1:14318/?token=SECRET/v1/logs`: path `/`, token
+`SECRET/v1/logs`. Measured on gemini-cli 0.37.1 against a live proxy, every
+export failed, alternating **404** (no route at `/`) and **401** (that is not the
+secret), printed as raw `OTLPExporterError` stack traces in the user's terminal.
+The token is now a PATH SEGMENT (`telemetry.GeminiTokenPath`, `<base>/t/<token>`),
+which survives the concatenation because appending to a URL that already has a
+path is what the SDK assumes it is doing; the proxy serves both `/v1/…` and
+`/t/{token}/v1/…` and still ACCEPTS the query form, since a machine configured
+by an older release keeps its settings file across an upgrade and locking it out
+would add a second outage to the one it already has. **`/v1/traces` is now
+accepted and DISCARDED** (counted, not silent): Gemini builds a trace exporter
+unconditionally with no per-signal switch, so with no route there every run
+printed a 404 for a signal Atlas does not read.
+
+⚠️ **AND THE TWO GEMINI CAPTURE LANES CALL THE TOOL BY DIFFERENT NAMES.** The
+watcher root, `resolve.GeminiReader`, and the conformance tool id all say
+`gemini_cli`; the hook keld writes into `~/.gemini/settings.json` says
+`--source gemini`, because `tools.GeminiAdapter` is `Name()`d "gemini".
+`resolve.Resolve` dispatches on that string and an unregistered source is a
+deliberate SKIP rather than an error — so EVERY hook-delivered Gemini prompt
+resolved no text and published nothing, in silence. Measured in the conformance
+chain once the transcript format was fixed: `transcript` PASS (2 files, 2 prompt
+ids read), `publish` **0**, with the hook independently verified to fire.
+The reader is now registered under BOTH names (the
+`NewClaudeReaderForSource("cowork")` idiom), which restores the lane with no
+wire change. ⚠️ It does **not** settle which name is right: a hook-sourced row
+publishes `source_id` "gemini" and a watcher-sourced one "gemini_cli", so one
+tool wears two names in the org's data. Unifying them is a deliberate
+Atlas-side decision about existing rows, not a rename to be done in passing.
+
+⚠️ **`traces: false` IS NO LONGER WRITTEN INTO `~/.gemini/settings.json`.** It was
+belt-and-braces — span CONTENT is gated by `shouldIncludePayloads = traces &&
+logPrompts`, so setting both hardened the guarantee against a future build
+flipping the `logPrompts` default. That future arrived in the other direction:
+measured on 0.37.1, `"traces"` and `shouldIncludePayloads` appear ZERO times in
+its bundle, and every invocation printed "Invalid configuration in
+~/.gemini/settings.json … Unrecognized key(s) in object: 'traces' … Please fix
+the configuration" — about a file Keld wrote, blamed on the user. A key a tool
+does not recognise is not free insurance. `logPrompts: false` is the real control
+and is still set; the test assertion is INVERTED rather than deleted so the key
+cannot return as harmless hardening.
+
 **Enrichment pipeline (`internal/agent/enrich/`).** A staged registry of
 extractors ("sweeps") run over a swappable `Model` backend, producing a `Profile`.
 Single-flight (never fans out) so the shared model issues at most one inference at

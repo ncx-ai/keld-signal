@@ -29,10 +29,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ncx-ai/keld-signal/internal/agent/clientevents"
 	"github.com/ncx-ai/keld-signal/internal/agent/settings"
+	"github.com/ncx-ai/keld-signal/internal/telemetry"
 )
 
 // DefaultPort is the daemon's loopback OTLP port.
@@ -86,6 +88,8 @@ type Proxy struct {
 	// answer it: on a machine running Claude Code and Codex, Claude Code's
 	// forwards vouch for Codex's silence.
 	sources *sourceRecord
+	// dropped counts trace exports accepted and thrown away. See Handler.
+	dropped atomic.Int64
 
 	wg sync.WaitGroup
 }
@@ -224,13 +228,59 @@ func (p *Proxy) DrainSpools(ctx context.Context) {
 // never call it on the request path.
 func (p *Proxy) WaitIdle() { p.wg.Wait() }
 
-// Handler routes /v1/logs and /v1/metrics.
+// Handler routes the OTLP signals, each at two paths.
+//
+// ⚠️ **THE `/t/{token}/…` FORM IS NOT A CONVENIENCE — WITHOUT IT GEMINI CANNOT
+// AUTHENTICATE AT ALL.** Gemini's OTLP SDK composes its signal URL by plain
+// string concatenation, `${endpoint}/v1/logs`, over a base it first normalises
+// through `new URL(...).href`. So the `?token=` form this proxy was built for
+// arrives as path "/" with a token of "SECRET/v1/logs": measured on 0.37.1,
+// every export alternating 404 and 401, printed as raw stack traces in the
+// user's terminal. A token in the PATH survives that concatenation, because
+// appending to a URL that already has a path is what the SDK assumes it is
+// doing. telemetry.GeminiTokenPath is the shared constant.
+//
+// ⚠️ **AND /v1/traces IS ACCEPTED AND DISCARDED, DELIBERATELY.** Gemini builds a
+// trace exporter unconditionally whenever telemetry is on and there is no
+// per-signal switch, so with no route here every run printed a 404 for a signal
+// Atlas does not read. Answering 200 and dropping the body is the honest
+// version of what was already happening — nothing was ever forwarded — minus
+// the error the user cannot act on. It is COUNTED, not silent: a signal that is
+// dropped without a number beside it is the shape this file's other comments
+// keep warning about.
 func (p *Proxy) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/logs", p.receive(p.logs))
-	mux.HandleFunc("/v1/metrics", p.receive(p.metric))
+	for path, h := range map[string]http.HandlerFunc{
+		"/v1/logs":    p.receive(p.logs),
+		"/v1/metrics": p.receive(p.metric),
+		"/v1/traces":  p.discard(),
+	} {
+		mux.HandleFunc(path, h)
+		mux.HandleFunc(telemetry.GeminiTokenPath+"{token}"+path, h)
+	}
 	return mux
 }
+
+// discard authenticates a signal this daemon does not forward, answers 200, and
+// counts it. See Handler for why /v1/traces is here rather than absent.
+func (p *Proxy) discard() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !p.authorized(r) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		p.dropped.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// TracesDropped is how many trace exports were accepted and thrown away.
+func (p *Proxy) TracesDropped() int64 { return p.dropped.Load() }
 
 // receive authenticates, strips text, answers the tool immediately, and forwards
 // in the background.
@@ -332,6 +382,12 @@ func (p *Proxy) authorized(r *http.Request) bool {
 	for _, got := range []string{
 		r.Header.Get("x-keld-telemetry-secret"),
 		r.Header.Get("x-keld-ingest-token"),
+		// The PATH form is what Gemini can actually deliver; see Handler.
+		r.PathValue("token"),
+		// The query form is still ACCEPTED though nothing writes it any more:
+		// a machine configured by an older release keeps its settings file
+		// across an upgrade, and locking it out would be a second outage on top
+		// of the one it already has.
 		r.URL.Query().Get("token"),
 	} {
 		if got != "" && subtle.ConstantTimeCompare([]byte(got), want) == 1 {

@@ -188,23 +188,52 @@ func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 	return m
 }
 
-// endpointWithToken returns base with the ingest token as a ?token= query param.
-// Gemini CLI cannot reliably carry an auth *header*: its OTEL_EXPORTER_OTLP_HEADERS
-// env var is only honored when the workspace is "trusted" (and even then a closer
-// project .env shadows ~/.gemini/.env), so in a normal untrusted directory the
-// header never reaches the exporter — the request hits Atlas with no token and is
-// rejected 401 "missing ingest token". The otlpEndpoint in user settings.json, by
-// contrast, is always loaded regardless of trust/cwd, and gemini's exporter
-// preserves the URL's query string when it appends the signal path. Atlas accepts
-// the token via ?token= for ingest auth. No x-keld-actor: that header is deprecated.
+// GeminiTokenPath is the URL path segment that carries Gemini's credential, and
+// the proxy mirrors it. Exported so the two halves cannot drift.
+const GeminiTokenPath = "/t/"
+
+// endpointWithToken returns the OTLP base URL Gemini should post to, with the
+// ingest token as a PATH SEGMENT: "<base>/t/<token>".
+//
+// Gemini CLI cannot carry an auth HEADER: its OTEL_EXPORTER_OTLP_HEADERS env var
+// is only honoured when the workspace is "trusted" (and even then a closer
+// project .env shadows ~/.gemini/.env), so in an ordinary untrusted directory
+// the header never reaches the exporter. The endpoint in settings.json is always
+// loaded regardless of trust or cwd, so the credential has to ride the URL.
+//
+// ⚠️ **IT RODE THE QUERY STRING UNTIL NOW, AND THAT SILENTLY SENT EVERY GEMINI
+// USER'S TELEMETRY NOWHERE.** This function's comment asserted that "gemini's
+// exporter preserves the URL's query string when it appends the signal path".
+// It does not, and the composition is not even URL-aware: the SDK does plain
+// string concatenation, `${endpoint}/v1/logs`, over a base gemini first
+// normalises through `new URL(...).href` — which appends the missing root slash.
+// So `http://127.0.0.1:14318?token=SECRET` became
+//
+//	http://127.0.0.1:14318/?token=SECRET/v1/logs
+//
+// — path "/", and a token of "SECRET/v1/logs". Measured on gemini-cli 0.37.1
+// against a live proxy: every export failed, alternating 404 (no route at "/")
+// and 401 (that is not the secret), printed as raw OTLPExporterError stack
+// traces in the user's terminal. A path segment survives the concatenation
+// intact, because appending to a URL that already has a path is exactly what the
+// SDK assumes it is doing.
+//
+// The proxy still ACCEPTS the query form (see teleproxy.authorized), so a
+// machine configured by an older release is not locked out the moment it
+// upgrades — but nothing WRITES it any more, because on that machine the token
+// never arrives in readable form anyway.
 func endpointWithToken(base, token string) string {
 	u, err := url.Parse(base)
 	if err != nil {
 		return base
 	}
-	q := u.Query()
-	q.Set("token", token)
-	u.RawQuery = q.Encode()
+	// Any pre-existing ?token= is dropped: it is the broken form, and leaving it
+	// on would put the secret in a second place for no benefit.
+	u.RawQuery = ""
+	// u.Path is the DECODED path; u.String() escapes it on the way out. Passing
+	// an already-escaped token here would escape the percent signs a second
+	// time and the proxy would compare "a%2520b" against "a b".
+	u.Path = strings.TrimSuffix(u.Path, "/") + GeminiTokenPath + token
 	return u.String()
 }
 
