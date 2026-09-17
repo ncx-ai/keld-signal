@@ -121,12 +121,25 @@ sidecar_point_at() {
     SIDECAR_TARGET="\"$PY\" \"$ROOT/sidecar/serve.py\""
     SIDECAR_KIND="venv (worktree serve.py, $PY)"
     SIDECAR_VERSION_SEEN="dev"
+    # ⚠️ **THE EXPECTATIONS FOLLOW THE SIDECAR IN USE, AND USED TO FOLLOW THE
+    # ONE THE RUN STARTED WITH.** `FROZEN_SIDECAR` is what tells
+    # `tool_not_expected` that a lane whose sidecar half is NEW in this worktree
+    # cannot be required of a RELEASED sidecar — and chain B exists precisely to
+    # replace the sidecar mid-run, so a value snapshotted at startup is wrong
+    # for every step after the upgrade. Measured in CI: the run began on the
+    # worktree venv (FROZEN_SIDECAR empty), chain B upgraded to frozen v3.0.4,
+    # and Codex's `store_rows` was then REQUIRED of a release that predates the
+    # Codex reader — reported as a product failure with every other lane green.
+    # This function is the one place that knows which sidecar is in use, so the
+    # flag is set here rather than inferred anywhere else.
+    FROZEN_SIDECAR=""
   else
     local sc_bin=keld-agent-sidecar
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) sc_bin=keld-agent-sidecar.exe ;; esac
     SIDECAR_TARGET="\"$what/$sc_bin\""
     SIDECAR_VERSION_SEEN=$(cat "$what/VERSION" 2>/dev/null || echo "dev")
     SIDECAR_KIND="frozen $SIDECAR_VERSION_SEEN at $what"
+    FROZEN_SIDECAR="$what"
   fi
   # ⚠️ **WINDOWS CANNOT EXECUTE THE WRAPPER, SO IT DOES NOT GET ONE.** The
   # wrapper is a `#!/bin/sh` script and the thing that launches it is the Go
