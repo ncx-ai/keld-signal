@@ -168,7 +168,26 @@ trap 'teardown' EXIT
 # Each is a function; the chain is a list of them. The first one to fail stops
 # the chain and the rest are reported SKIPPED.
 
-SETTLE=${KELD_CONFORM_SETTLE:-60}
+# ⚠️ **60s WAS TOO TIGHT FOR ONE REAL LANE, AND THE VERDICT IT PRODUCED SAID
+# "KELD LOST THE PROMPT".** step_assert POLLS and returns the instant everything
+# is green, so this is a ceiling, not a wait: raising it costs nothing on a
+# passing run and only changes how long a genuine failure takes to report.
+#
+# Measured on a 3-tool chain A against the worktree sidecar: the watcher OFFERED
+# Gemini's prompt at 15:43:38 and the enrichment published at 15:45:05 — 87
+# seconds, against a 60s ceiling. The step failed with "0 corr_ids matched",
+# which is exactly what a dropped prompt looks like, and two rounds went into
+# proving the prompt was merely late.
+#
+# ⚠️ **WHY IT IS THAT SLOW IS THE MINIMAL VENV, AND IT IS WORTH KNOWING.**
+# `analysis-venv.sh` excludes presidio-analyzer by name, so the sidecar's /pii
+# answers 500 `ModuleNotFoundError` — 95 times in that run. A 5xx is TRANSIENT by
+# `retry.IsTransient`, so every enrichment job retries a call that can never
+# succeed, and pays the backoff. Two consequences: jobs are far slower here than
+# on a real machine (where presidio IS installed), and the `sensitivity` facet's
+# scan half is never actually exercised by conformance. Neither is a product
+# defect; both are worth fixing in the venv rather than absorbing here.
+SETTLE=${KELD_CONFORM_SETTLE:-180}
 # AC-3 requires a tool installed after Signal to be LISTED within one detector
 # poll, and integrations.DefaultPoll IS 60s — so a 60s budget is a coin flip on
 # where the tick falls, not the criterion. Measured on a passing run: 37s. The
