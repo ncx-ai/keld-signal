@@ -482,12 +482,30 @@ tool_not_expected() {
       # sidecar is running, so it clears itself the moment the run uses the
       # worktree's (KELD_CONFORM_PYTHON) or a release that carries the reader —
       # rather than being a constant somebody has to remember to delete.
+      #
+      # ⚠️ **AND `pointer` CANNOT PASS ON THE PREVIOUS RELEASE**, which is chain
+      # B's `prev-prompts` step and nowhere else. This branch re-keyed Codex
+      # capture onto `turn_id` (<session_meta.id>#<turn_context.turn_id>)
+      # because the id the watcher used before appears on 0 of 4,076 real
+      # user_message lines — which is why Codex captured exactly ZERO prompts
+      # for its whole life as a configured source. So the old release publishes
+      # an enrichment under an id the current checkpoint cannot match, and
+      # demanding it would be demanding a release contain its own successor's
+      # fix. Measured: 1 corr_id against 1 prompt id, and they differ.
+      #
+      # Scoped to the STEP, not made global: PREV_NOT_EXPECTED applies to every
+      # tool in the step, and claude_code's pointer DOES pass there — excusing
+      # it for everyone would hide a real regression in the one lane that works.
+      # `upgraded-prompts` still requires all five, so the upgrade must repair
+      # this, which is exactly what chain B is for.
+      local extra=""
+      [ "${STEP:-}" = "prev-prompts" ] && extra="pointer"
       if [ -n "${KELD_CONFORM_CODEX_NOT_EXPECTED:-}" ]; then
         echo "$KELD_CONFORM_CODEX_NOT_EXPECTED"
       elif [ -n "${FROZEN_SIDECAR:-}" ]; then
-        echo "store_rows"
+        echo "store_rows${extra:+,$extra}"
       else
-        echo ""
+        echo "$extra"
       fi
       ;;
     # ⚠️ TWO CHECKPOINTS ARE STRUCTURALLY UNREACHABLE FOR GEMINI, and saying so
