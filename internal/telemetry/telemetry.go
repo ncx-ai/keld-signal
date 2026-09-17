@@ -167,14 +167,24 @@ func GeminiTelemetry(p SetupParams) *orderedmap.OrderedMap {
 	m.Set("otlpProtocol", "http")
 	m.Set("otlpEndpoint", endpointWithToken(p.Endpoint, p.IngestToken))
 	m.Set("logPrompts", false)
-	// gemini-cli builds its OTLP trace exporter unconditionally when telemetry
-	// is enabled — there is no per-signal switch to stop trace *export* (spans
-	// still flow to /v1/traces; Atlas ignores them). What we can control is
-	// span *content*: shouldIncludePayloads = traces && logPrompts. Both are
-	// false here, so spans carry no prompt/response bodies. Setting traces
-	// explicitly (in addition to logPrompts) makes that guarantee robust even
-	// if a future gemini-cli flips the logPrompts default.
-	m.Set("traces", false)
+	// ⚠️ **`traces: false` WAS WRITTEN HERE AND CURRENT GEMINI REJECTS THE WHOLE
+	// TELEMETRY BLOCK OVER IT.** It was belt-and-braces: the comment argued that
+	// span CONTENT is gated by `shouldIncludePayloads = traces && logPrompts`,
+	// so setting both made the no-payloads guarantee robust against a future
+	// build flipping the logPrompts default. That future arrived in the other
+	// direction — the key is gone. Measured on gemini-cli 0.37.1: the strings
+	// `"traces"` and `shouldIncludePayloads` appear ZERO times in its bundle,
+	// and every invocation prints
+	//
+	//   Invalid configuration in ~/.gemini/settings.json:
+	//     Error in: telemetry
+	//         Unrecognized key(s) in object: 'traces'
+	//     Please fix the configuration.
+	//
+	// — a file KELD wrote, blamed on the user, on every single run. A key a tool
+	// does not recognise is not free insurance; it is a visible defect, and
+	// hardening against a hypothetical default cost more than the default ever
+	// could. `logPrompts: false` is the real control and is still set.
 	return m
 }
 

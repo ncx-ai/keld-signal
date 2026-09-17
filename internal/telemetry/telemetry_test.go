@@ -125,13 +125,19 @@ func TestGeminiTelemetryEndpointCarriesToken(t *testing.T) {
 		t.Errorf("logPrompts should be false, got %v", logPrompts)
 	}
 
-	// traces=false is the native knob that (with logPrompts) gates
-	// shouldIncludePayloads, keeping prompt/response bodies out of spans.
-	// Trace *export* itself cannot be disabled in gemini-cli, but stays
-	// content-free.
-	traces, ok := tm.Get("traces")
-	if !ok || traces != false {
-		t.Errorf("traces should be present and false, got %v (present=%v)", traces, ok)
+	// ⚠️ **`traces` MUST NOT BE WRITTEN, and this test used to REQUIRE it.**
+	// Current gemini-cli does not know the key, and rejects the whole telemetry
+	// block over it — printing "Invalid configuration in ~/.gemini/settings.json
+	// … Unrecognized key(s) in object: 'traces' … Please fix the configuration"
+	// on every invocation, about a file Keld wrote. Measured on 0.37.1: the
+	// strings `"traces"` and `shouldIncludePayloads` appear zero times in its
+	// bundle. `logPrompts: false`, asserted above, is the real control.
+	//
+	// The assertion is inverted rather than deleted so the key cannot come back
+	// as a "harmless" hardening.
+	if _, ok := tm.Get("traces"); ok {
+		t.Error("traces must not be written: gemini-cli rejects the telemetry " +
+			"block over it and blames the user's settings file")
 	}
 
 	// The token is intentionally in otlpEndpoint and NOWHERE else.

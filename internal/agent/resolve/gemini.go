@@ -1,202 +1,100 @@
 package resolve
 
 import (
-	"bufio"
-	"encoding/json"
-	"os"
 	"strconv"
 	"strings"
+
+	"github.com/ncx-ai/keld-signal/internal/geminichat"
 )
 
-// GeminiReader reads Gemini chat JSONL transcripts. Each line is a JSON object:
-// - Line 0: session meta with no `type` field: {sessionId, projectHash, startTime, lastUpdated, kind}
-// - Mutation lines: {"$set": {...}} — skip these
-// - User prompt: {"id":"<uuid>","timestamp":"...","type":"user","content":[{"text":"..."}]}
-// - Model turn: {"id","timestamp","type":"gemini","content",...}
+// GeminiReader reads Gemini CLI chat transcripts (source "gemini_cli").
 //
-// The correlation id (promptID) is Gemini's OTEL telemetry id
-// "<sessionId>########<0-based user-prompt ordinal>", NOT the record UUID (see
-// internal/agent/watch/gemini.go). So Read resolves by ordinal; a promptID with
-// no "########" is treated as a legacy record UUID.
+// ⚠️ **THIS FILE USED TO DECODE JSONL, LINE BY LINE, AND GEMINI HAS NEVER
+// WRITTEN JSONL.** Its doc comment described a format in detail — a session-meta
+// first line, `$set` mutation lines, one JSON object per turn — that no Gemini
+// build produces: a chat is ONE JSON DOCUMENT with the session id at the top and
+// the turns in a `messages` array. Measured before changing it: 55 real chat
+// files on one machine, 262 messages, zero of them a line in a `.jsonl` file,
+// the oldest from 2025-09. The tests passed because their fixtures were written
+// to match this code rather than the tool.
+//
+// The shape now lives in internal/geminichat, which both this reader and the
+// watcher use, so the PREDICATE that decides which messages are genuine prompts
+// — and therefore what every ordinal means — has one definition. The two used to
+// hold a copy each, with comments asking the other to stay in step; a
+// disagreement of one silently resolves the wrong prompt's text.
 type GeminiReader struct{}
 
-// NewGeminiReader returns a reader for Gemini chat transcripts (source "gemini_cli").
-func NewGeminiReader() *GeminiReader {
-	return &GeminiReader{}
-}
+// NewGeminiReader returns a reader for Gemini chat transcripts.
+func NewGeminiReader() *GeminiReader { return &GeminiReader{} }
 
 func (r *GeminiReader) Source() string { return "gemini_cli" }
 
-const geminiPromptSep = "########"
-
-// geminiLine is a tolerant view of a Gemini chat JSONL line.
-type geminiLine struct {
-	ID        string          `json:"id"`
-	Timestamp string          `json:"timestamp"`
-	Type      string          `json:"type"`
-	Content   json.RawMessage `json:"content"`
-	Set       json.RawMessage `json:"$set"` // If present, skip this line
-}
-
-// geminiContent represents a single content block in the content array.
-type geminiContent struct {
-	Text string `json:"text"`
-}
-
-// extractGeminiText extracts text from a content field that may be either an
-// array of {"text":...} objects or a bare string. Returns concatenated text.
-func extractGeminiText(content json.RawMessage) string {
-	if len(content) == 0 {
-		return ""
-	}
-	var blocks []geminiContent
-	if err := json.Unmarshal(content, &blocks); err == nil {
-		text := ""
-		for _, c := range blocks {
-			text += c.Text
-		}
-		return text
-	}
-	var s string
-	if err := json.Unmarshal(content, &s); err == nil {
-		return s
-	}
-	return ""
-}
+const geminiPromptSep = geminichat.PromptSep
 
 // Read resolves promptID to a prompt's text. promptID is
-// "<sessionId>########<ordinal>" (Gemini's telemetry id); resolution is by the
-// 0-based ordinal among genuine user prompts. A promptID with no "########"
-// falls back to a legacy record-UUID match (older spooled pointers).
+// "<sessionId>########<ordinal>" — Gemini's own OTEL id, which is what Atlas
+// joins on — and resolution is by the 0-based ordinal among genuine user
+// prompts. A promptID with no separator falls back to the record uuid, which is
+// how pointers spooled before that scheme existed are still readable.
 func (r *GeminiReader) Read(path, promptID string) (string, bool) {
-	if i := strings.LastIndex(promptID, geminiPromptSep); i >= 0 {
-		ordinal, err := strconv.Atoi(promptID[i+len(geminiPromptSep):])
-		if err != nil {
-			return "", false
-		}
-		return r.readByOrdinal(path, ordinal)
-	}
-	return r.readByRecordID(path, promptID)
-}
-
-// readByOrdinal returns the text of the ordinal-th (0-based) genuine user prompt.
-// The predicate MUST match watch/gemini.go's geminiPromptIndex counting exactly
-// (type=="user", id != "", non-$set, non-empty text) so ordinals agree.
-func (r *GeminiReader) readByOrdinal(path string, ordinal int) (string, bool) {
-	f, err := os.Open(path)
-	if err != nil {
+	s, ok := geminichat.Read(path)
+	if !ok {
 		return "", false
 	}
-	defer f.Close()
-
-	br := bufio.NewReaderSize(f, 64*1024)
-	idx := 0
-	for {
-		line, err := br.ReadString('\n')
-		if len(line) > 0 {
-			if text, id, ok := r.userMessage(line); ok && id != "" {
-				if idx == ordinal {
-					return text, true
-				}
-				idx++
+	if ordinal, byOrdinal := geminiOrdinal(promptID); byOrdinal {
+		for _, p := range s.Prompts {
+			if p.Ordinal == ordinal {
+				return p.Text, true
 			}
 		}
-		if err != nil {
-			break
+		return "", false
+	}
+	for _, p := range s.Prompts {
+		if p.RecordID == promptID {
+			return p.Text, true
 		}
 	}
 	return "", false
 }
 
-// readByRecordID resolves a legacy promptID equal to a record's UUID `id`.
-func (r *GeminiReader) readByRecordID(path, promptID string) (string, bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", false
-	}
-	defer f.Close()
-
-	br := bufio.NewReaderSize(f, 64*1024)
-	for {
-		line, err := br.ReadString('\n')
-		if len(line) > 0 {
-			if text, id, ok := r.userMessage(line); ok && id == promptID {
-				return text, true
-			}
-		}
-		if err != nil {
-			break
-		}
-	}
-	return "", false
-}
-
-// RecentUserPrompts returns up to n prior user-prompt texts (newest-first),
-// excluding the current prompt. The current prompt is identified by the ordinal
-// encoded in currentPromptID ("<sessionId>########<ordinal>"); a legacy UUID
-// currentPromptID excludes by matching record id. Scans from the start so
-// ordinals are absolute.
+// RecentUserPrompts returns up to n prior user-prompt texts, newest first,
+// excluding the current one.
 func (r *GeminiReader) RecentUserPrompts(path, currentPromptID string, n int) []string {
-	f, err := os.Open(path)
-	if err != nil {
+	if n <= 0 {
 		return nil
 	}
-	defer f.Close()
-
-	curOrdinal := -1
-	curID := ""
-	if i := strings.LastIndex(currentPromptID, geminiPromptSep); i >= 0 {
-		if o, err := strconv.Atoi(currentPromptID[i+len(geminiPromptSep):]); err == nil {
-			curOrdinal = o
-		}
-	} else {
-		curID = currentPromptID
+	s, ok := geminichat.Read(path)
+	if !ok {
+		return nil
 	}
-
-	type msg struct {
-		text string
-	}
-	var messages []msg
-	idx := 0
-	br := bufio.NewReaderSize(f, 64*1024)
-	for {
-		line, err := br.ReadString('\n')
-		if len(line) > 0 {
-			if text, id, ok := r.userMessage(line); ok && id != "" {
-				if idx != curOrdinal && id != curID {
-					messages = append(messages, msg{text: text})
-				}
-				idx++
-			}
-		}
-		if err != nil {
-			break
-		}
-	}
-
+	ordinal, byOrdinal := geminiOrdinal(currentPromptID)
 	out := make([]string, 0, n)
-	for i := len(messages) - 1; i >= 0 && len(out) < n; i-- {
-		out = append(out, messages[i].text)
+	for i := len(s.Prompts) - 1; i >= 0 && len(out) < n; i-- {
+		p := s.Prompts[i]
+		if byOrdinal && p.Ordinal == ordinal {
+			continue
+		}
+		if !byOrdinal && p.RecordID == currentPromptID {
+			continue
+		}
+		out = append(out, p.Text)
 	}
 	return out
 }
 
-// userMessage parses one JSONL line and returns (text, id, true) for a genuine
-// user message (non-$set, type=="user", non-empty text).
-func (r *GeminiReader) userMessage(line string) (text string, id string, ok bool) {
-	var ln geminiLine
-	if err := json.Unmarshal([]byte(line), &ln); err != nil {
-		return "", "", false
+// geminiOrdinal splits a prompt id into its ordinal, reporting whether the id
+// carried one at all. An id with the separator but an unparseable tail is NOT
+// treated as a record uuid: it is a malformed id of the new scheme, and falling
+// back would resolve some unrelated prompt rather than nothing.
+func geminiOrdinal(promptID string) (int, bool) {
+	i := strings.LastIndex(promptID, geminiPromptSep)
+	if i < 0 {
+		return 0, false
 	}
-	if ln.Set != nil && len(ln.Set) > 0 {
-		return "", "", false
+	o, err := strconv.Atoi(promptID[i+len(geminiPromptSep):])
+	if err != nil {
+		return -1, true
 	}
-	if ln.Type != "user" {
-		return "", "", false
-	}
-	text = extractGeminiText(ln.Content)
-	if text == "" {
-		return "", "", false
-	}
-	return text, ln.ID, true
+	return o, true
 }

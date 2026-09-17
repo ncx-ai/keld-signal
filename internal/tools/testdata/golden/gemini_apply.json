@@ -5,8 +5,7 @@
     "target": "local",
     "otlpProtocol": "http",
     "otlpEndpoint": "https://atlas.keld.co?token=tok",
-    "logPrompts": false,
-    "traces": false
+    "logPrompts": false
   },
   "hooks": {
     "BeforeAgent": [

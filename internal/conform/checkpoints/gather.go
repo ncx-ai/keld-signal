@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/geminichat"
 )
 
 // Options is what `keld-conform check` is told about the run.
@@ -100,7 +102,7 @@ func gatherTranscripts(f *Facts, root, tool string, since ...time.Time) {
 
 	seen := map[string]bool{}
 	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+		if err != nil || d.IsDir() || !isTranscript(path, tool) {
 			return nil
 		}
 		st, err := d.Info()
@@ -125,9 +127,39 @@ func gatherTranscripts(f *Facts, root, tool string, since ...time.Time) {
 	})
 }
 
+// isTranscript reports whether path is a transcript OF THIS TOOL.
+//
+// ⚠️ **IT WAS `.jsonl` FOR EVERY TOOL, AND GEMINI HAS NEVER WRITTEN A `.jsonl`
+// FILE.** A Gemini session is ONE JSON DOCUMENT at
+// `~/.gemini/tmp/<project>/chats/session-<ts>-<id>.json`, so this walk found
+// nothing on every run and the `transcript` checkpoint read "0 transcript(s)"
+// with the chat file sitting in the directory it had just walked. The daemon's
+// own watcher had the identical bug, which is why no lane contradicted it.
+func isTranscript(path, tool string) bool {
+	if tool == "gemini_cli" {
+		return geminichat.IsChatFile(path)
+	}
+	return strings.HasSuffix(path, ".jsonl")
+}
+
 // promptIDsIn reads the human-turn ids out of one transcript, in the shape the
 // tool writes them.
 func promptIDsIn(path, tool string) []string {
+	// Gemini is a whole document, so it is read whole — by the same package the
+	// daemon reads it with, which is what keeps the ids the checkpoint compares
+	// identical to the ids the daemon publishes.
+	if tool == "gemini_cli" {
+		s, ok := geminichat.Read(path)
+		if !ok {
+			return nil
+		}
+		out := make([]string, 0, len(s.Prompts))
+		for _, pr := range s.Prompts {
+			out = append(out, s.CorrID(pr.Ordinal))
+		}
+		return out
+	}
+
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -138,9 +170,6 @@ func promptIDsIn(path, tool string) []string {
 
 	if tool == "codex" {
 		return codexPromptIDs(sc)
-	}
-	if tool == "gemini_cli" {
-		return geminiPromptIDs(sc)
 	}
 	var out []string
 	for sc.Scan() {
@@ -405,69 +434,4 @@ func correlationID(raw []byte) string {
 		return env.Correlation.ID
 	}
 	return env.CorrID
-}
-
-// geminiPromptIDs reads Gemini CLI's chat JSONL and returns the correlation ids
-// the daemon publishes for it.
-//
-// ⚠️ **NOT THE RECORD'S UUID.** A Gemini chat line carries a random per-record
-// `id` that never appears in its OTEL telemetry, so an enrichment keyed on it
-// joins to nothing — and Atlas joins enrichment.corr_id to
-// tool_event.prompt_id. The id that matches is
-// "<sessionId>########<0-based ordinal among GENUINE user prompts>", which is
-// what `internal/agent/watch/gemini.go` emits.
-//
-// This mirrors that rule and must not drift from it: if it does, `pointer`
-// reports "no enrichment matched", which is indistinguishable from a real
-// break. Pinned by gemini_test.go.
-//
-// Two lines look like prompts and are not, and BOTH must be skipped without
-// consuming an ordinal — counting either shifts every later id by one and
-// mismatches the whole file:
-//
-//   - a `$set` MUTATION, which rewrites an earlier record;
-//   - a user line whose text is empty.
-func geminiPromptIDs(sc *bufio.Scanner) []string {
-	var (
-		out       []string
-		sessionID string
-		ordinal   int
-	)
-	for sc.Scan() {
-		var rec struct {
-			ID        string                  `json:"id"`
-			SessionID string                  `json:"sessionId"`
-			Type      string                  `json:"type"`
-			Content   []struct{ Text string } `json:"content"`
-			Set       json.RawMessage         `json:"$set"`
-		}
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
-			continue
-		}
-		// The meta line: a session id with no type. It names the session and is
-		// not a turn.
-		if rec.Type == "" && rec.SessionID != "" && sessionID == "" {
-			sessionID = rec.SessionID
-			continue
-		}
-		if len(rec.Set) > 0 || rec.Type != "user" || rec.ID == "" {
-			continue
-		}
-		text := ""
-		for _, c := range rec.Content {
-			text += c.Text
-		}
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		if sessionID == "" {
-			sessionID = rec.SessionID
-		}
-		if sessionID == "" {
-			continue // nothing to build an id from
-		}
-		out = append(out, fmt.Sprintf("%s########%d", sessionID, ordinal))
-		ordinal++
-	}
-	return out
 }

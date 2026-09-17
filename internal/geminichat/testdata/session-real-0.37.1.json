@@ -1,0 +1,63 @@
+{
+  "sessionId": "219a0a4b-89a2-43d1-818e-b762adc7bb98",
+  "projectHash": "60a93a6bd0a64a961ec60d5b26dcbe7a15d694217e4a78511da0f338ad87a182",
+  "startTime": "2026-09-17T11:54:47.948Z",
+  "lastUpdated": "2026-09-17T11:56:28.240Z",
+  "messages": [
+    {
+      "id": "e1490a00-45b0-4a2e-9928-d5cbe0582cee",
+      "timestamp": "2026-09-17T11:56:28.215Z",
+      "type": "user",
+      "content": [
+        {
+          "text": "reply with one word"
+        }
+      ]
+    },
+    {
+      "id": "f25a5e06-8812-4ff1-8b13-41f85b9538ce",
+      "timestamp": "2026-09-17T11:56:28.240Z",
+      "type": "gemini",
+      "content": "MOCK OK",
+      "thoughts": [],
+      "tokens": {
+        "input": 42,
+        "output": 3,
+        "cached": 0,
+        "thoughts": 0,
+        "tool": 0,
+        "total": 45
+      },
+      "model": "gemini-3.1-pro-preview"
+    },
+    {
+      "id": "aa11bb22-0000-4000-8000-000000000001",
+      "timestamp": "2026-09-17T11:57:01.000Z",
+      "type": "user",
+      "content": "and one more"
+    },
+    {
+      "id": "aa11bb22-0000-4000-8000-000000000002",
+      "timestamp": "2026-09-17T11:57:01.200Z",
+      "type": "gemini",
+      "content": "MOCK OK",
+      "thoughts": [],
+      "tokens": {
+        "input": 50,
+        "output": 3,
+        "cached": 0,
+        "thoughts": 0,
+        "tool": 0,
+        "total": 53
+      },
+      "model": "gemini-3.1-pro-preview"
+    },
+    {
+      "id": "aa11bb22-0000-4000-8000-000000000003",
+      "timestamp": "2026-09-17T11:57:02.000Z",
+      "type": "user",
+      "content": "   "
+    }
+  ],
+  "kind": "main"
+}
