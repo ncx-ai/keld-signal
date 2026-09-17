@@ -468,13 +468,32 @@ assert_dev_blocks() {
     say "dev blocks: sidecar port not in agent.json yet — cannot confirm the granularity"
     return 0
   fi
-  local got
-  got=$(curl -fsS "http://127.0.0.1:$port/health" 2>/dev/null \
-        | python3 -c "import json,sys; print(json.load(sys.stdin).get('dev_blocks',''))" 2>/dev/null || echo "")
+  # ⚠️ **AN UNREACHABLE SIDECAR AND A MISSING FIELD ARE DIFFERENT FACTS, and
+  # the first version of this check printed the same thing for both.** The
+  # sidecar is still starting when the daemon first answers, so a single
+  # immediate GET reads as "reports <none>" — which sent me looking for a lost
+  # environment variable that was never lost. Exactly the
+  # confident-negative-from-a-check-that-could-not-look failure this repo
+  # forbids, written into my own assertion.
+  local got="" reached=0 i
+  for i in $(seq 1 30); do
+    local body
+    body=$(curl -fsS "http://127.0.0.1:$port/health" 2>/dev/null || echo "")
+    if [ -n "$body" ]; then
+      reached=1
+      got=$(printf '%s' "$body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('dev_blocks',''))" 2>/dev/null || echo "")
+      [ -n "$got" ] && break
+    fi
+    sleep 1
+  done
+  if [ "$reached" = "0" ]; then
+    say "dev blocks: the sidecar never answered /health on $port in 30s — cannot confirm the granularity"
+    return 0
+  fi
   if [ "$got" = "$want" ]; then
     say "dev blocks: sidecar is cutting at '$got' (one block per prompt)"
   else
-    fail "dev blocks: asked for '$want' and the sidecar reports '${got:-<none>}' — it cannot cut a short block, so \`blocks\` can never pass"
+    fail "dev blocks: asked for '$want' and the sidecar reports '${got:-<none>}' — it cannot cut a short block, so blocks can never pass"
   fi
 }
 
