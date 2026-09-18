@@ -15,18 +15,6 @@ import (
 	"github.com/ncx-ai/keld-signal/internal/tools"
 )
 
-// eventEmitter adapts the client-events emitter to the narrow interface the
-// integrations package takes. integrations must not depend on the package that
-// batches and spools — its tests assert the event, not the transport.
-type eventEmitter struct{ e *clientevents.Emitter }
-
-func (a eventEmitter) Emit(code string, fields map[string]any) {
-	if a.e == nil {
-		return
-	}
-	a.e.Emit(code, clientevents.SevInfo, fields)
-}
-
 // startIntegrationsDetector runs the catalogue poll for the life of ctx.
 //
 // It is started unconditionally, because LISTING is the product even when

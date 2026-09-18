@@ -665,12 +665,6 @@ func (e *Emitter) publish(tgt target, blocks []enrich.BlockCharacterisation, now
 	return sent
 }
 
-// unixSeconds is an instant in the form every seam on this path speaks — epoch
-// seconds as a float, the same shape as the cursor and as a block's
-// StartTS/EndTS. Sub-second precision is kept: a range edge is compared against
-// record timestamps that carry milliseconds.
-func unixSeconds(t time.Time) float64 { return float64(t.UnixNano()) / 1e9 }
-
 // sessionIDFor is the session identifier a block row publishes: the
 // transcript's file stem.
 //

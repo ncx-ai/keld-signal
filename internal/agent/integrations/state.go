@@ -42,17 +42,6 @@ func Snapshot(d Deps, opts Options) Response {
 	return Respond(now, Compute(now, Catalogue, facts, opts), opts.AutoSetup)
 }
 
-// StateOf is the one row for one id, for a caller that has an id in hand
-// (the setup and report routes). Absent when the id is not in the catalogue.
-func StateOf(id string, r Response) (Integration, bool) {
-	for _, in := range r.Integrations {
-		if in.ID == id {
-			return in, true
-		}
-	}
-	return Integration{}, false
-}
-
 // SetupResult is POST /v1/integrations/{id}/setup's body.
 type SetupResult struct {
 	// Backup is where the previous config went, "" when there was none to
