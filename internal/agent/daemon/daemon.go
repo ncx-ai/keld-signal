@@ -993,7 +993,7 @@ func Run(ctx context.Context) error {
 	startHealth(ctx, sig, func() time.Time {
 		t, _ := TelemetryLastForward()
 		return t
-	}, set.AtlasEnabled())
+	}, set.AtlasEnabled(), pr.paired)
 	// B2 — Send to Atlas (docs/v3/contracts.md): drain any blocks this ledger
 	// captured while a previous run had Atlas off (or a publish attempt failed
 	// and was never retried). A no-op the instant it finds nothing to send —

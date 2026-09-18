@@ -93,6 +93,20 @@ func adoptOnboarding(ob *api.Onboarding, say func(string)) error {
 		return nil
 	}
 	m.Hook = &config.HookRecord{Version: version.CLI}
+	// ⚠️ **THE RECORDED ENDPOINT IS STAMPED HERE, NOT ONLY ON THE APPLY PATH.**
+	// It used to be written solely where runSetup rebuilds the whole manifest —
+	// i.e. only when a tool config actually changed — so on the ordinary upgrade
+	// where every tool reported "already configured" the field kept whatever
+	// Atlas it last saw. Measured on a real machine: the manifest named
+	// localhost:3000 while the daemon published to localhost:8000 out of
+	// hook.json.
+	//
+	// The field is KEPT rather than removed because manifest.json has always
+	// carried it and an older reader (the Python CLI's own manifest format) would
+	// break on its absence; nothing in this repo reads it back any more — see
+	// pairedEndpoint. Written from the same verified onboarding hook.json is
+	// written from, one line above, so the two cannot disagree.
+	m.Endpoint = &ob.Endpoint
 	return m.Save()
 }
 

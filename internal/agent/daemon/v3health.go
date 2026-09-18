@@ -75,7 +75,10 @@ func setSidecarProbe(p *sidecarHealthProbe) {
 // version comparison where either side reads "dev" is NOT skew: a source
 // checkout and a local build both report that, and a check that fires on every
 // developer machine is one nobody reads on the machine that matters.
-func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, atlasOn bool) {
+// paired reports whether this machine has an Atlas pairing yet. nil means "do
+// not ask" — every existing caller that has no pairing to consult keeps its
+// previous behaviour.
+func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, atlasOn bool, paired func() bool) {
 	if sig == nil {
 		return
 	}
@@ -154,6 +157,19 @@ func startHealth(ctx context.Context, sig *v3, telemetryLast func() time.Time, a
 
 		if !atlasOn {
 			sig.noteHealth(ledger.HealthAtlas, ledger.StatusNA, string(ledger.ReasonAtlasOff))
+		} else if paired != nil && !paired() {
+			// ⚠️ **COLLECTING, NOT PAIRED — AND THAT IS n/a, NEVER failed.**
+			// Since WS1 the daemon collects from its first second and waits for
+			// the pairing only to SEND, so on a machine between install and
+			// login this row is asked about an Atlas that has not been named
+			// yet. Left to the branch below it would report nothing at all
+			// (LastResponse is zero, so the row is absent and renders as
+			// unknown), which reads as "we could not tell" about the one thing
+			// the machine knows perfectly well. Stating it is the same call the
+			// sidecar row makes for a machine with no sidecar installed: a
+			// structural n/a with its reason, not a fault anybody should act on
+			// beyond finishing the pairing.
+			sig.noteHealth(ledger.HealthAtlas, ledger.StatusNA, string(ledger.ReasonNotPaired))
 		} else if sig.atlas != nil {
 			// ⚠️ **"REACHABLE" AND "NEVER TRIED" ARE DIFFERENT FACTS, and until
 			// this the health strip had no `atlas` row at all when Atlas was

@@ -197,7 +197,7 @@ func TestT8RouteUnsupportedIsPendingAndReflectedInHealth(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	startHealth(ctx, v, nil, true)
+	startHealth(ctx, v, nil, true, nil)
 
 	snap, err = v.ledger.Read(time.Time{}, 10)
 	if err != nil {
@@ -258,7 +258,7 @@ func TestT10TelemetryHealthReflectsWhetherItHasEverForwarded(t *testing.T) {
 		last := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		startHealth(ctx, v, func() time.Time { return last }, true)
+		startHealth(ctx, v, func() time.Time { return last }, true, nil)
 
 		snap, err := v.ledger.Read(time.Time{}, 10)
 		if err != nil {
@@ -275,7 +275,7 @@ func TestT10TelemetryHealthReflectsWhetherItHasEverForwarded(t *testing.T) {
 		v := &v3{ledger: ledger.New(), atlasOn: true}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		startHealth(ctx, v, func() time.Time { return time.Time{} }, true)
+		startHealth(ctx, v, func() time.Time { return time.Time{} }, true, nil)
 
 		snap, err := v.ledger.Read(time.Time{}, 10)
 		if err != nil {
@@ -307,7 +307,7 @@ func TestT35SidecarVersionSkewAndTheDevExemption(t *testing.T) {
 		v := &v3{ledger: ledger.New(), atlasOn: false}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		startHealth(ctx, v, nil, false)
+		startHealth(ctx, v, nil, false, nil)
 
 		snap, _ := v.ledger.Read(time.Time{}, 10)
 		health := healthByKey(snap)
@@ -326,7 +326,7 @@ func TestT35SidecarVersionSkewAndTheDevExemption(t *testing.T) {
 		v := &v3{ledger: ledger.New(), atlasOn: false}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		startHealth(ctx, v, nil, false)
+		startHealth(ctx, v, nil, false, nil)
 
 		snap, _ := v.ledger.Read(time.Time{}, 10)
 		health := healthByKey(snap)
@@ -345,7 +345,7 @@ func TestT35SidecarVersionSkewAndTheDevExemption(t *testing.T) {
 		v := &v3{ledger: ledger.New(), atlasOn: false}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		startHealth(ctx, v, nil, false)
+		startHealth(ctx, v, nil, false, nil)
 
 		snap, _ := v.ledger.Read(time.Time{}, 10)
 		health := healthByKey(snap)
@@ -366,7 +366,7 @@ func TestAtlasHealthReflectsLastResponseWhenOn(t *testing.T) {
 			atlas: &ledgerFakeAtlasClient{enabled: true, status: 201, at: time.Now()}}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		startHealth(ctx, v, nil, true)
+		startHealth(ctx, v, nil, true, nil)
 
 		snap, _ := v.ledger.Read(time.Time{}, 10)
 		health := healthByKey(snap)
@@ -393,7 +393,7 @@ func TestAtlasHealthReflectsLastResponseWhenOn(t *testing.T) {
 					atlas: &ledgerFakeAtlasClient{enabled: true, status: tc.status, at: time.Now()}}
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
-				startHealth(ctx, v, nil, true)
+				startHealth(ctx, v, nil, true, nil)
 
 				snap, _ := v.ledger.Read(time.Time{}, 10)
 				health := healthByKey(snap)
@@ -411,7 +411,7 @@ func TestAtlasHealthReflectsLastResponseWhenOn(t *testing.T) {
 			atlas: &ledgerFakeAtlasClient{enabled: true, status: 0, at: time.Time{}}}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		startHealth(ctx, v, nil, true)
+		startHealth(ctx, v, nil, true, nil)
 
 		snap, _ := v.ledger.Read(time.Time{}, 10)
 		health := healthByKey(snap)

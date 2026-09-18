@@ -58,6 +58,7 @@ const (
 	ReasonNoTokens           Reason = "no_tokens"           // store had no requests in the span
 	ReasonSpooled            Reason = "spooled"             // sent could not happen now; durable copy kept
 	ReasonWeightsUnavailable Reason = "weights_unavailable" // vector pass wanted, encoder absent
+	ReasonNotPaired          Reason = "not_paired"          // collecting, but no Atlas pairing yet
 )
 
 // Method is how a project was named.
