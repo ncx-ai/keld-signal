@@ -42,7 +42,39 @@ SESSIONS=${KELD_E2E_SESSIONS:-5}
 # (sessions, repos, tokens, run/break shape) is identical for a given seed
 # whatever the anchor; only the clock times move, and the visual baseline masks
 # those. Set KELD_E2E_END to an ISO instant to pin them too.
-END=${KELD_E2E_END:-$(python3 -c 'import datetime;print((datetime.datetime.now(datetime.UTC)-datetime.timedelta(minutes=30)).replace(microsecond=0).isoformat().replace("+00:00","Z"))')}
+#
+# ⚠️ THE ANCHOR MUST LAND INSIDE THE LOCAL DAY, AND "30 MINUTES AGO" DOES NOT
+# JUST AFTER MIDNIGHT. The Today pane asks the ledger for
+# `since=startOfLocalDay(now)` (app.js `todayLedgerURL`), so a corpus ending
+# before local midnight leaves that pane empty -- and five specs assert on a
+# block card, on two browsers. Measured 2026-09-19 at 00:16 CEST: the anchor
+# landed at 23:46 the previous day and the suite reported 10 failed / 94 passed,
+# with every failure reading as a product defect. The wall clock was the defect.
+#
+# So the anchor is clamped into the local day. When the local day is younger
+# than a block's own closing time (IDLE_BINS x BIN_SECONDS = 15 minutes of
+# quiet, plus margin) no anchor can satisfy both, and the run REFUSES with the
+# reason instead of producing ten failures whose cause is invisible from the
+# report. KELD_E2E_NOW pins "now" for the tests that exercise this rule.
+anchor_end() {
+  python3 - <<'ANCHOR_PY'
+import datetime, os, sys
+
+raw = os.environ.get('KELD_E2E_NOW')
+now = datetime.datetime.fromisoformat(raw).astimezone() if raw else datetime.datetime.now().astimezone()
+midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+anchor = now - datetime.timedelta(minutes=30)
+if anchor < midnight:
+    anchor = midnight + datetime.timedelta(minutes=1)
+# A block closes after 15 minutes of quiet; without that much of the local day
+# behind the anchor there is nothing closed for the Today pane to show.
+if now - anchor < datetime.timedelta(minutes=20):
+    print('TOO_EARLY')
+    sys.exit(0)
+print(anchor.astimezone(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'))
+ANCHOR_PY
+}
+END=${KELD_E2E_END:-$(anchor_end)}
 READY_TIMEOUT=${KELD_E2E_READY_TIMEOUT:-240}
 # After the first block lands, how long to wait for the REST of the corpus's
 # intended blocks before proceeding anyway (the specs assert on what they need
@@ -50,6 +82,8 @@ READY_TIMEOUT=${KELD_E2E_READY_TIMEOUT:-240}
 SETTLE_TIMEOUT=${KELD_E2E_SETTLE_TIMEOUT:-150}
 
 fail() { echo "e2e-up: FAIL: $*" >&2; [ -f "$LOG" ] && tail -40 "$LOG" >&2; exit 1; }
+
+[ "$END" != "TOO_EARLY" ] || fail "the local day is less than ~20 minutes old, and the Today pane is scoped to it (since=startOfLocalDay), so no corpus can hold a CLOSED block inside today. Re-run after 00:20 local, or pin KELD_E2E_END to an instant in a day that is old enough."
 
 [ -x "$PY" ] || fail "no sidecar interpreter at $PY (run 'make sidecar', or set KELD_E2E_PYTHON)"
 command -v go >/dev/null || fail "go toolchain not on PATH"
