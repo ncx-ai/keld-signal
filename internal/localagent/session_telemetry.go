@@ -5,12 +5,20 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ncx-ai/keld-signal/internal/agent/sessions"
 )
 
 // sessionActiveWindow is how recently a transcript must have been written for
 // its session to count as "in use right now". A tool that was closed an hour ago
 // cannot be restarted to fix anything, so reporting it would be a nag.
-const sessionActiveWindow = 30 * time.Minute
+//
+// ⚠️ IT IS THE SHARED CONSTANT NOW, not a restated one. A comment in
+// `integrations/version.go` used to say the two could not share a value because
+// localagent imports that package; `agent/sessions` imports nothing of ours, so
+// they can — and "is this window still open" must mean one thing on the pane and
+// in doctor, which both name a stale session id off it.
+const sessionActiveWindow = sessions.ActiveWindow
 
 // sessionSettling is how long a session must have been running before its
 // silence means anything. Exporters batch, so a session seconds old has simply
